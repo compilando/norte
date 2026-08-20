@@ -102,6 +102,19 @@ pub enum UiAction {
         /// Id de la task.
         task_id: u64,
     },
+    /// El tamaño de la ventana cambió.
+    ///
+    /// En CELDAS de layout, no en píxeles: los mínimos de cada panel están
+    /// declarados así y se comparten con el TUI, de modo que «esto no cabe»
+    /// significa lo mismo en las dos superficies. Redimensionar reparte otra
+    /// vez; jamás reescribe la disposición guardada, que es la intención del
+    /// usuario y no una función del tamaño de su ventana.
+    SetViewport {
+        /// Ancho en celdas.
+        width: u16,
+        /// Alto en celdas.
+        height: u16,
+    },
     /// Una tecla.
     ///
     /// El renderer manda la tecla NORMALIZADA y nada más: quién resuelve un

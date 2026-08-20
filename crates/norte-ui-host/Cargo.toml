@@ -16,13 +16,13 @@ norte-client.workspace = true
 norte-frontend.workspace = true
 norte-proto.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
 norte-testkit.workspace = true
-serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints]

@@ -6,7 +6,7 @@
 //! [`norte_client::RemoteBackend`] directamente.
 
 use futures::future::BoxFuture;
-use norte_proto::{Entry, Error, VPath};
+use norte_proto::{Entry, Error, VPath, methods};
 
 /// Lo que el controlador necesita saber pedir.
 ///
@@ -20,6 +20,23 @@ pub trait HostBackend: Send + Sync + 'static {
     /// drenaje por páginas es la tarea 2.3, y meterla antes de tener el
     /// controlador sería decidirla sin nadie que la use.
     fn list(&self, dir: VPath) -> BoxFuture<'static, Result<Vec<Entry>, Error>>;
+
+    /// La sesión de UI y si ESTA conexión es su dueña (ADR 0059).
+    ///
+    /// El core la guarda y la versiona pero no la lee: el documento es de los
+    /// frontends, y por eso viaja como JSON opaco.
+    fn session_get(&self) -> BoxFuture<'static, Result<(methods::Session, bool), Error>>;
+
+    /// Escribe la sesión sobre la revisión que se leyó. Devuelve la nueva.
+    ///
+    /// Un `Conflict` significa que otra ventana escribió en medio: se relee,
+    /// jamás se pisa.
+    fn session_put(
+        &self,
+        version: u32,
+        revision: u64,
+        body: serde_json::Value,
+    ) -> BoxFuture<'static, Result<u64, Error>>;
 }
 
 /// El backend de verdad: el SDK.
@@ -35,5 +52,20 @@ impl HostBackend for norte_client::RemoteBackend {
             }
             Ok(out)
         })
+    }
+
+    fn session_get(&self) -> BoxFuture<'static, Result<(methods::Session, bool), Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.session_get().await })
+    }
+
+    fn session_put(
+        &self,
+        version: u32,
+        revision: u64,
+        body: serde_json::Value,
+    ) -> BoxFuture<'static, Result<u64, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.session_put(version, revision, body).await })
     }
 }

@@ -25,6 +25,12 @@ struct Falso {
     listados: AtomicUsize,
     /// Retraso artificial, para provocar la carrera de una respuesta tardía.
     retraso_ms: u64,
+    /// La sesión que el daemon devuelve, y si esta ventana es su dueña.
+    sesion: std::sync::Mutex<(norte_proto::methods::Session, bool)>,
+    /// Lo ÚLTIMO que se escribió, para comprobar qué guarda el host.
+    escrito: std::sync::Mutex<Option<serde_json::Value>>,
+    /// La escritura falla con conflicto: otra ventana escribió en medio.
+    conflicto: bool,
 }
 
 impl Falso {
@@ -49,6 +55,30 @@ impl Falso {
 }
 
 impl HostBackend for Falso {
+    fn session_get(
+        &self,
+    ) -> BoxFuture<'static, Result<(norte_proto::methods::Session, bool), Error>> {
+        let s = self.sesion.lock().expect("sesión").clone();
+        Box::pin(async move { Ok(s) })
+    }
+
+    fn session_put(
+        &self,
+        _version: u32,
+        _revision: u64,
+        body: serde_json::Value,
+    ) -> BoxFuture<'static, Result<u64, Error>> {
+        if self.conflicto {
+            return Box::pin(async {
+                Err(Error::Conflict {
+                    conflict: norte_proto::ConflictKind::Exists,
+                })
+            });
+        }
+        *self.escrito.lock().expect("escrito") = Some(body);
+        Box::pin(async { Ok(9) })
+    }
+
     fn list(&self, dir: VPath) -> BoxFuture<'static, Result<Vec<Entry>, Error>> {
         self.listados.fetch_add(1, Ordering::SeqCst);
         let clave = dir.to_wire();
@@ -89,6 +119,8 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
         initial_dir: dir(),
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
     })
     .await
     .expect("arranca")
@@ -291,6 +323,8 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
         initial_dir: dir(),
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
     })
     .await
     .expect("arranca")
@@ -611,6 +645,8 @@ async fn el_contador_lo_resuelve_el_host() {
         locale: "es".to_owned(),
         // `vim` es el preset que habilita contadores.
         keymap: norte_ui_host::keys::keymap_de_preset("vim").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
     })
     .await
     .expect("arranca");
@@ -689,4 +725,310 @@ async fn una_tecla_que_no_se_entiende_no_se_inventa() {
         ActionAck::Unavailable { reason_key } => assert_eq!(reason_key, "host-key-unmapped"),
         otro => panic!("se esperaba no disponible: {otro:?}"),
     }
+}
+
+/// Arranca con una disposición concreta y un tamaño concreto.
+async fn host_con_layout(
+    backend: Arc<Falso>,
+    layout: &str,
+    viewport: (u16, u16),
+) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree(layout).expect("layout"),
+        viewport,
+    })
+    .await
+    .expect("arranca")
+}
+
+/// Las cinco disposiciones de fábrica resuelven a tamaños razonables, y
+/// ninguna deja una pantalla sin listado.
+#[tokio::test]
+async fn los_cinco_presets_de_disposicion_resuelven() {
+    for nombre in norte_frontend::layout::presets::NAMES {
+        for viewport in [(80u16, 24u16), (120, 40), (200, 60)] {
+            let (_h, snap) = host_con_layout(arbol(), nombre, viewport).await;
+            let listados = snap
+                .slots
+                .iter()
+                .filter(|s| matches!(s, SlotView::Browser(_)))
+                .count();
+            assert!(
+                listados >= 1,
+                "{nombre} a {viewport:?} se quedó sin listado usable"
+            );
+        }
+    }
+}
+
+/// Redimensionar reparte otra vez y NO reescribe la disposición: un layout
+/// guardado es la intención del usuario, no una función del tamaño de su
+/// ventana.
+#[tokio::test]
+async fn redimensionar_no_reescribe_la_disposicion() {
+    let (h, grande) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
+    let listados_antes = grande
+        .slots
+        .iter()
+        .filter(|s| matches!(s, SlotView::Browser(_)))
+        .count();
+    assert_eq!(listados_antes, 2, "ortodoxo tiene dos listados");
+
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::SetViewport {
+        width: 30,
+        height: 10,
+    })
+    .await
+    .expect("host vivo");
+    let apretado = siguiente_foto(&mut sub).await;
+    assert!(
+        apretado
+            .slots
+            .iter()
+            .any(|s| matches!(s, SlotView::Browser(_))),
+        "aunque no quepan los dos, queda un listado"
+    );
+
+    // Y al volver al tamaño de antes, vuelven los dos: el árbol no se tocó.
+    h.dispatch(UiAction::SetViewport {
+        width: 200,
+        height: 60,
+    })
+    .await
+    .expect("host vivo");
+    let otra_vez = siguiente_foto(&mut sub).await;
+    let listados = otra_vez
+        .slots
+        .iter()
+        .filter(|s| matches!(s, SlotView::Browser(_)))
+        .count();
+    assert_eq!(listados, 2, "la disposición sobrevivió al apretón");
+}
+
+/// Un hueco de un kind que este host aún no proyecta viaja en gris y con su
+/// nombre: preservar lo que no se entiende es la regla, y desaparecer sería
+/// peor que estar apagado.
+#[tokio::test]
+async fn un_kind_desconocido_viaja_apagado_y_con_nombre() {
+    let (_h, snap) = host_con_layout(arbol(), "simple", (120, 40)).await;
+    let nombres: Vec<&str> = snap
+        .slots
+        .iter()
+        .filter_map(|s| match s {
+            SlotView::Unsupported { kind_name, .. } => Some(kind_name.as_str()),
+            SlotView::Browser(_) => None,
+        })
+        .collect();
+    assert!(
+        nombres.contains(&"tasks") && nombres.contains(&"status"),
+        "los kinds que el host no proyecta siguen ahí: {nombres:?}"
+    );
+}
+
+/// El foco cambia de hueco, y con él el destino: el destino es SIEMPRE otro
+/// listado visible, jamás el mismo que tiene el foco.
+#[tokio::test]
+async fn el_foco_cambia_y_el_destino_lo_sigue() {
+    let (h, snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
+    assert_eq!(snap.focus, Some(1));
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    let despues = siguiente_foto(&mut sub).await;
+    assert_eq!(despues.focus, Some(2));
+}
+
+/// Enfocar un hueco que no se ve es una carrera con un reparto anterior, no
+/// una orden.
+#[tokio::test]
+async fn no_se_puede_enfocar_lo_que_no_se_ve() {
+    let (h, _snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
+    let ack = h
+        .dispatch(UiAction::FocusSlot { slot_id: 99 })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Stale {
+            reason: StaleAction::Generation
+        }
+    );
+}
+
+/// Lo que no se ve no se trae: un reparto que oculta un listado no le pide
+/// su directorio al daemon.
+#[tokio::test]
+async fn un_hueco_oculto_no_pide_listado() {
+    let backend = arbol();
+    // A lo ancho caben los dos listados de `orthodox`; a 30 columnas, no.
+    let (_h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (30, 10)).await;
+    assert_eq!(
+        backend.listados(),
+        1,
+        "solo el listado que se ve pide su directorio"
+    );
+}
+
+/// Construye una sesión guardada con un hueco en `dir`.
+fn sesion_guardada(
+    version: u32,
+    revision: u64,
+    slot: u32,
+    wire: &str,
+) -> norte_proto::methods::Session {
+    let mut body = norte_frontend::session::SessionBody::default();
+    body.slots.insert(
+        slot,
+        norte_frontend::session::SlotState {
+            path: VPath::parse(wire).expect("vpath"),
+            cursor: 0,
+            back: Vec::new(),
+            forward: Vec::new(),
+            sort: norte_frontend::SortSpec::default(),
+            columns: Vec::new(),
+            show_hidden: false,
+            touched_ms: 0,
+        },
+    );
+    norte_proto::methods::Session {
+        version,
+        revision,
+        body: serde_json::to_value(&body).expect("json"),
+    }
+}
+
+/// La sesión dice dónde estaba cada hueco, y el host arranca ahí.
+#[tokio::test]
+async fn la_sesion_coloca_los_huecos() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    falso.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+    let (_h, snap) = host_arbol(Arc::new(falso)).await;
+    assert!(
+        listado(&snap).path_display.ends_with("/casa/docs"),
+        "arrancó donde lo dejó la sesión: {}",
+        listado(&snap).path_display
+    );
+}
+
+/// Una sesión de un esquema MÁS NUEVO no se aplica y —sobre todo— no se
+/// sobrescribe: arrancar sin sesión es recuperable, machacar la de una
+/// versión futura no.
+#[tokio::test]
+async fn una_sesion_del_futuro_ni_se_aplica_ni_se_pisa() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    *falso.sesion.lock().expect("sesión") = (
+        sesion_guardada(
+            norte_frontend::session::SCHEMA_VERSION + 1,
+            7,
+            1,
+            "mem:///casa/docs",
+        ),
+        true,
+    );
+    let backend = Arc::new(falso);
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    assert!(
+        listado(&snap).path_display.ends_with("/casa"),
+        "se arranca de la configuración, no de lo que no se entiende"
+    );
+    h.shutdown().await.expect("apaga");
+    assert!(
+        backend.escrito.lock().expect("escrito").is_none(),
+        "y no se escribe encima"
+    );
+}
+
+/// Una ventana SUELTA no escribe: la sesión es un documento con un solo
+/// escritor.
+#[tokio::test]
+async fn una_ventana_suelta_no_escribe() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa"), false);
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let informe = h.shutdown().await.expect("apaga");
+    assert!(!informe.incomplete, "no escribir no es dejar algo a medias");
+    assert!(backend.escrito.lock().expect("escrito").is_none());
+}
+
+/// La dueña vuelca al cerrar —cerrar justo después de navegar guarda el
+/// directorio nuevo— y las MARCAS no entran en la sesión.
+#[tokio::test]
+async fn la_duena_vuelca_al_cerrar_y_sin_marcas() {
+    let mut falso = Falso::default();
+    falso.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"a".to_vec(), false)],
+    );
+    falso.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa"), true);
+    let backend = Arc::new(falso);
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+
+    // Marcar algo y navegar.
+    let fila = listado(&snap).rows[0].key;
+    h.dispatch(UiAction::ToggleMark {
+        slot_id: 1,
+        key: fila,
+    })
+    .await
+    .expect("host vivo");
+    let mut sub = h.subscribe();
+    let docs = listado(&snap)
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("el directorio está")
+        .key;
+    h.dispatch(UiAction::Activate {
+        slot_id: 1,
+        key: docs,
+    })
+    .await
+    .expect("host vivo");
+    siguiente_foto(&mut sub).await;
+
+    h.shutdown().await.expect("apaga");
+    let escrito = backend
+        .escrito
+        .lock()
+        .expect("escrito")
+        .clone()
+        .expect("escribió");
+    let texto = escrito.to_string();
+    assert!(
+        texto.contains("casa/docs"),
+        "guarda dónde acabó, no dónde empezó: {texto}"
+    );
+    assert!(
+        !texto.contains("marks") && !texto.contains("marcas"),
+        "las marcas no entran en la sesión: {texto}"
+    );
+}
+
+/// Un conflicto al escribir NO pisa lo de la otra ventana, y se DICE.
+#[tokio::test]
+async fn un_conflicto_no_pisa_a_nadie_y_se_dice() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///otro"), true);
+    falso.conflicto = true;
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let informe = h.shutdown().await.expect("apaga");
+    assert!(
+        informe.incomplete,
+        "lo nuestro no llegó, y apagar en silencio sería mentir"
+    );
+    assert!(backend.escrito.lock().expect("escrito").is_none());
 }
