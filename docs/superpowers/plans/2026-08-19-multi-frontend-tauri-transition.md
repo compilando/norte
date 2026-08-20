@@ -1,6 +1,10 @@
 # Multi-frontend architecture and Tauri GUI transition — implementation plan
 
-> **Status:** proposed; no implementation has started.
+> **Status:** proposed, with decision D1 AMENDED on 2026-08-20 (ADR 0065): the
+> GPUI frontend was retired BEFORE construction, not after it. Read D1, the
+> non-goals and phase 8 with that in mind — every "keep GPUI alive" and every
+> parity comparison against it is void, and the parity target is the TUI. No
+> other implementation has started.
 >
 > **Purpose:** preserve the complete TUI and the existing GPUI frontend while
 > creating reusable client/UI boundaries and a second graphical frontend. The
@@ -31,8 +35,10 @@ frontend only after the parity and release gates in this plan pass.
 ## Non-goals
 
 - Do not rewrite the TUI.
-- Do not delete, rename or freeze the GPUI frontend during the construction
-  phases.
+- ~~Do not delete, rename or freeze the GPUI frontend during the construction
+  phases.~~ **Void (ADR 0065):** the GPUI frontend was removed on 2026-08-20,
+  before phase 1. Parity is measured against the TUI and the feature ledger,
+  not against a running GPUI.
 - Do not move filesystem operations, policy, journalling, undo, task scheduling,
   provider dispatch or plugin execution into the renderer or UI host.
 - Do not expose an unrestricted `rpc(method, params)` or filesystem/shell API to
@@ -120,8 +126,13 @@ imports keep compiling through compatibility re-exports or small adapters.
 There is no flag day in which the TUI must migrate to an unfinished client SDK
 or host.
 
-The GPUI binary remains available as the graphical behavioural oracle until the
-new GUI has passed parity and shipped for at least one alpha release.
+**Amended 2026-08-20 (ADR 0065).** The GPUI binary is NOT the behavioural
+oracle, because it no longer exists: it was retired before phase 1, so that
+there is exactly one implementation of every presentation rule while the new
+frontend is built. The oracle is the TUI plus `norte-frontend`'s own tests, and
+the feature parity ledger below is measured against them. What stays true of D1
+is the part that matters: the boundaries are additive, `ntc` never has to
+migrate to an unfinished SDK, and no phase requires a flag day.
 
 ### D2 — Tauri is a renderer adapter, not an architecture layer
 

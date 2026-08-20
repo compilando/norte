@@ -178,12 +178,11 @@ pub fn collision_kind_key(kind: norte_proto::methods::RenameCollisionKind) -> &'
 /// resuelve solo, el segundo no, y una etiqueta de «comprobando…» que no
 /// avanza nunca es una mentira con forma de spinner.
 ///
-/// El tipo es COMPARTIDO por TUI y GUI, y con él toda la política de
-/// presentación del veredicto ([`Self::status_key`],
-/// [`Self::detail_lines`]): las dos superficies pintan nombres que un
-/// atacante controla, y una sola de las dos derivando por su cuenta es
-/// exactamente cómo se pierde el saneado en una de ellas sin que nadie lo
-/// note (`norte-gui` está FUERA del workspace y `just ci` no la compila).
+/// El tipo es COMPARTIDO por todas las superficies, y con él toda la política
+/// de presentación del veredicto ([`Self::status_key`],
+/// [`Self::detail_lines`]): cada superficie pinta nombres que un atacante
+/// controla, y una que derive por su cuenta es exactamente cómo se pierde el
+/// saneado en ella sin que nadie lo note.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BatchPlan {
     /// Pedido al core y en vuelo: el modal abre y se rellena.

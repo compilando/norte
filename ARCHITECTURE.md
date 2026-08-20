@@ -7,7 +7,7 @@ are recorded as [ADRs](docs/adr/README.md).
 ## System overview
 
 norte is an orthodox file manager with a headless Rust core. The core exposes a
-JSON-RPC protocol and a provider-independent virtual filesystem. The TUI, GUI,
+JSON-RPC protocol and a provider-independent virtual filesystem. The TUI,
 CLI, and agent integrations are clients of that core.
 
 Frontends contain no business logic. If an operation is not available through
@@ -33,8 +33,7 @@ the protocol, a frontend cannot provide it.
 | `norte-ai` | Model-provider abstraction (`AiProvider`) and implementations: Anthropic, Ollama, OpenAI-compatible. | AGPL-3.0-only |
 | `norte-cli` | A command-line client and manual core test bed. | AGPL-3.0-only |
 | `norte-tui` | The ratatui dual-pane terminal frontend. | AGPL-3.0-only |
-| `norte-gui` | The GPUI graphical frontend. | AGPL-3.0-only |
-| `norte-frontend` | UI-independent state and behaviour shared by the TUI and GUI. | MIT OR Apache-2.0 |
+| `norte-frontend` | UI-independent state and behaviour shared by every frontend. | MIT OR Apache-2.0 |
 | `norte-help` | Help corpus and markdown-lite model, consumed by TUI/GUI/CLI (ADR 0040). | MIT OR Apache-2.0 |
 | `norte-encoding` | Text encoding detection and decoding. | MIT OR Apache-2.0 |
 | `norte-i18n` | Fluent localization resources shared by the frontends. | MIT OR Apache-2.0 |

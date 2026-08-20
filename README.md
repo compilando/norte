@@ -4,7 +4,7 @@
 
 norte is a next-generation orthodox file manager built around a headless Rust
 core. The core provides a stable protocol and a provider-independent virtual
-filesystem. Its TUI, GUI, and CLI are interchangeable clients, while AI agents
+filesystem. Its TUI and CLI are interchangeable clients, while AI agents
 operate through the same governed interface with policy checks, journaling, and
 auditing.
 
@@ -36,13 +36,13 @@ To install from source, run `make setup`, followed by:
 ```sh
 cargo install --path crates/norte-cli --locked   # the `norte` command
 cargo install --path crates/norte-tui --locked   # the `ntc` file manager
-cargo install --path crates/norte-gui --locked   # graphical interface (optional, GPU)
 ```
 
-The graphical interface is **experimental and source-only**: a GPUI binary
-links against the graphics stack of the machine that built it, so shipping one
-would promise more than it can keep. It needs a Wayland or X session with
-working Vulkan.
+There is **no graphical interface right now.** The GPUI one was retired on
+2026-08-20 (ADR 0065) and its replacement is being built against the
+toolkit-independent boundary described in
+`docs/superpowers/plans/2026-08-19-multi-frontend-tauri-transition.md`. Until
+it lands, the TUI and the CLI are the frontends.
 
 ## Run
 
@@ -50,15 +50,11 @@ working Vulkan.
 norte tui              # terminal interface, in the current directory
 norte tui ~/code       # ...in another directory
 norte tui --preset vim # ...with a keymap preset (orthodox|vim|cua)
-norte gui              # graphical interface
-norte gui ~/code       # ...in another directory
 ```
 
-`norte tui` and `norte gui` hand the process over to `ntc` and
-`norte-gui`, which can also be launched directly — both take `[DIR]` and
-`--socket` (`--help` lists the rest). They read the same configuration. The
-TUI runs the core embedded unless `--daemon` says otherwise; the GUI always
-talks to the daemon.
+`norte tui` hands the process over to `ntc`, which can also be launched
+directly — it takes `[DIR]` and `--socket` (`--help` lists the rest). The TUI
+runs the core embedded unless `--daemon` says otherwise.
 
 The `norte` command itself is the non-interactive side: `ls`, `cp`, `mv`,
 `rm`, `mkdir`, `connect`, `daemon`, `mcp`, `policy`, `undo`, `index`, `ai`,

@@ -2,22 +2,6 @@
 
 [graph]
 all-features = true
-# `norte-gui` entra en el grafo de cargo (miembro del workspace, fuera de
-# `default-members`) pero NO en esta auditoría, y el motivo es de alcance, no
-# de comodidad.
-#
-# Su árbol es el de GPUI: 26 dependencias de git (Zed no publica en crates.io)
-# y nueve licencias que este fichero no permite —GPL-3.0-or-later, MPL-2.0,
-# BSD-2-Clause, CC0-1.0, bzip2— todas defendibles DENTRO de un binario
-# AGPL, y ninguna defendible como política del workspace: este `deny.toml`
-# gobierna también `norte-proto`, `norte-vfs` y `norte-testkit`, que son
-# MIT/Apache y existen para que los consuma un tercero. Escribir esas
-# excepciones aquí relajaría la auditoría de lo que PUBLICAMOS para acomodar a
-# un binario que no publicamos.
-#
-# La GUI se audita igual, contra sus propias reglas: `crates/norte-gui/
-# deny.toml`, que corre en `just gui-ci`. Excluida de aquí, no sin auditar.
-exclude = ["norte-gui"]
 
 [licenses]
 allow = [

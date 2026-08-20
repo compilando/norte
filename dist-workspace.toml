@@ -18,10 +18,10 @@ installers = ["shell", "powershell"]
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Un `cargo build --package` POR aplicación, no un `--workspace` para todas.
 #
-# No es una preferencia de estilo: sin esto dist construye el workspace entero
-# en una invocación, y eso mete `norte-gui` —que no se distribuye— en el mismo
-# `cargo` que `ntc` y `norte`. Las features se unifican por invocación, así que
-# `serde_json/preserve_order` de GPUI acabaría COMPILADO DENTRO de los binarios
-# que publicamos: orden de claves distinto al que prueba el gate, en binarios
-# que nadie probó así. Ver `core_pkgs` en el justfile, misma frontera.
+# No es una preferencia de estilo: las features de cargo se unifican POR
+# invocación, así que construir el workspace entero de una vez mete las
+# features de cualquier miembro dentro de los binarios que publicamos —fue
+# exactamente lo que pasó con el `serde_json/preserve_order` de la GUI GPUI,
+# que cambiaba el orden de claves del JSON publicado—. Un paquete por
+# invocación es lo que garantiza que se distribuye lo que el gate probó.
 precise-builds = true

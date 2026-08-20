@@ -9,13 +9,13 @@ Run the release checklist without publishing:
    because at equal versions the tool skips every check and reports success —
    so bump the version FIRST, then run this. It covers the publishable
    MIT/Apache libraries only; the AGPL binaries have no public API to break.
-2. Run `cargo deny check` for licenses and advisories, and
-   `cargo deny --manifest-path crates/norte-gui/Cargo.toml check --config
-   crates/norte-gui/deny.toml` for the GUI, which the workspace graph excludes.
+2. Run `cargo deny check` for licenses and advisories. It now covers the whole
+   workspace: the GPUI frontend, which had its own policy because its tree
+   pulled git sources and licences the workspace does not allow, was retired
+   (ADR 0065).
 3. Confirm that release-plz can derive changelog entries from commits since the
    latest tag.
-4. Run `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude norte-gui
-   --no-deps`.
+4. Run `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`.
 5. Regenerate the protocol JSON Schema and compare it with
    `norte-proto/schema/`. Any change without a protocol version bump is a
    BLOCKER.
