@@ -88,6 +88,17 @@ pub enum UiAction {
         /// Cuántas caben.
         count: u32,
     },
+    /// Ordena el listado por una columna (un click en su cabecera).
+    ///
+    /// La columna va por su ID, no por su posición ni por su etiqueta: qué
+    /// significa ordenar por ella —y si se invierte o empieza de nuevo— lo
+    /// decide la regla compartida (`SortSpec::after_click`), no el renderer.
+    SortBy {
+        /// Hueco.
+        slot_id: u32,
+        /// Id de la columna, tal como viajó en su cabecera.
+        column: String,
+    },
     /// Cambia el foco de teclado de hueco.
     FocusSlot {
         /// Hueco.

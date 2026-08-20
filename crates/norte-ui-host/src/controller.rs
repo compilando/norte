@@ -28,9 +28,9 @@ use crate::bridge::{
 };
 use crate::commands::{Efecto, efecto_de};
 use crate::dto::{
-    BrowserSlotView, ConnectionView, DialogChoice, DialogView, LayoutView, PendingView, RowKind,
-    RowView, SlotPlacement, SlotRole, SlotState, SlotView, StatusView, TaskStateView, TaskView,
-    UiNotice, UiUpdate, ViewChange, ViewPatch, ViewSnapshot,
+    BrowserSlotView, ColumnHeader, ConnectionView, DialogChoice, DialogView, LayoutView,
+    PendingView, RowKind, RowView, SlotPlacement, SlotRole, SlotState, SlotView, StatusView,
+    TaskStateView, TaskView, UiNotice, UiUpdate, ViewChange, ViewPatch, ViewSnapshot,
 };
 
 /// Capacidad del buzón del actor. Acotado a propósito: si el renderer manda
@@ -127,6 +127,10 @@ pub struct UiHost {
     instance: InstanceId,
 }
 
+/// Lo que vuelve de un listado: el testigo que lo pidió, el hueco al que va,
+/// el directorio y el resultado.
+type RespuestaListado = (RequestToken, u32, VPath, Result<Vec<Entry>, Error>);
+
 enum Mensaje {
     Accion(Box<UiAction>, oneshot::Sender<ActionAck>),
     /// La respuesta de un listado que se pidió antes. Vuelve al actor como
@@ -135,7 +139,7 @@ enum Mensaje {
     /// Lleva el HUECO que lo pidió y no se resuelve al llegar: si mientras
     /// volaba el foco se movió al panel de al lado, aterrizar «en el activo»
     /// sería meter un directorio en la pantalla equivocada.
-    Listado(Box<(RequestToken, u32, VPath, Result<Vec<Entry>, Error>)>),
+    Listado(Box<RespuestaListado>),
     /// El catálogo de atributos de un esquema, ya resuelto.
     Catalogo(Box<(String, norte_proto::AttrCatalog)>),
     /// Una op de agente espera decisión humana.
@@ -824,15 +828,9 @@ impl Estado {
         }
     }
 
-    /// Aplica el resultado de un listado. El orden y el cursor los decide
-    /// `PaneState`, que es quien sabe qué hacer con la memoria del cursor y
-    /// con un foco pendiente.
-    fn aterriza(&mut self, dir: VPath, res: Result<Vec<Entry>, Error>) {
-        let id = self.activo();
-        self.aterriza_en(id, dir, res);
-    }
-
-    /// Igual, sobre un hueco concreto.
+    /// Aplica el resultado de un listado sobre SU hueco. El orden y el
+    /// cursor los decide `PaneState`, que es quien sabe qué hacer con la
+    /// memoria del cursor y con un foco pendiente.
     fn aterriza_en(&mut self, id: u32, dir: VPath, res: Result<Vec<Entry>, Error>) {
         let Some(hueco) = self.huecos.get_mut(&id) else {
             return;
@@ -930,6 +928,7 @@ impl Estado {
                 self.sondear(slot_id, backend, buzon);
                 (self.aplicada(), vec![self.parche_filas_de(slot_id)])
             }
+            UiAction::SortBy { slot_id, column } => self.ordenar_por(*slot_id, column),
             UiAction::FocusSlot { slot_id } => {
                 let slot_id = *slot_id;
                 // Enfocar algo que no existe o que no se ve es una carrera
@@ -1177,60 +1176,8 @@ impl Estado {
                 self.hueco_mut().pane.clear_marks();
                 (self.aplicada(), vec![self.parche_filas()])
             }
-            Efecto::Foco { atras } => {
-                // El recorrido es el COMPARTIDO: `focus_order` ya se salta lo
-                // que no se ve y lo que no se enfoca (una barra de estado no
-                // recibe el foco), así que aquí no hay una segunda regla que
-                // pueda divergir de la del TUI.
-                let actual = SlotId(self.activo());
-                let siguiente = if atras {
-                    norte_frontend::layout::focus_prev(&self.reparto, actual)
-                } else {
-                    norte_frontend::layout::focus_next(&self.reparto, actual)
-                };
-                let Some(SlotId(id)) = siguiente else {
-                    // Un solo hueco: no hay a dónde ir, y decirlo es más
-                    // honesto que fingir que pasó algo.
-                    return (
-                        ActionAck::Unavailable {
-                            reason_key: "host-no-other-slot".to_owned(),
-                        },
-                        Vec::new(),
-                    );
-                };
-                self.roles.set(RoleId::Active, SlotId(id));
-                self.reconcilia_roles();
-                let cambio = ViewChange::Layout(self.disposicion());
-                (self.aplicada(), vec![self.parche(vec![cambio])])
-            }
-            Efecto::Destino => {
-                // El siguiente que NO sea el enfocado: designarse a uno mismo
-                // como destino es pedirle a una copia que se copie encima.
-                // Misma regla que el TUI.
-                let activo = self.activo();
-                let candidatos: Vec<u32> = self
-                    .huecos
-                    .keys()
-                    .copied()
-                    .filter(|id| *id != activo && !self.oculto(*id))
-                    .collect();
-                let actual = self.roles.get(RoleId::Target).map(|SlotId(id)| id);
-                let siguiente = match actual.and_then(|a| candidatos.iter().position(|c| *c == a)) {
-                    Some(i) => candidatos.get((i + 1) % candidatos.len()).copied(),
-                    None => candidatos.first().copied(),
-                };
-                let Some(id) = siguiente else {
-                    return (
-                        ActionAck::Unavailable {
-                            reason_key: "host-no-other-slot".to_owned(),
-                        },
-                        Vec::new(),
-                    );
-                };
-                self.roles.set(RoleId::Target, SlotId(id));
-                let cambio = ViewChange::Layout(self.disposicion());
-                (self.aplicada(), vec![self.parche(vec![cambio])])
-            }
+            Efecto::Foco { atras } => self.mover_foco(atras),
+            Efecto::Destino => self.designar_destino(),
             Efecto::BuscarRapido => {
                 // Filtrar es el modo por defecto: es el que no mueve el
                 // listado bajo el cursor mientras se teclea.
@@ -2251,7 +2198,7 @@ impl Estado {
         for (slot, _) in &self.reparto.placements {
             let SlotId(id) = *slot;
             if let Some(hueco) = self.huecos.get(&id) {
-                slots.push(SlotView::Browser(self.browser(id, hueco)));
+                slots.push(SlotView::Browser(Box::new(self.browser(id, hueco))));
             } else {
                 let nombre = kind_de(&self.arbol, *slot)
                     .map_or_else(|| "unknown".to_owned(), |k| k.as_str().to_owned());
@@ -2323,6 +2270,143 @@ impl Estado {
         }
     }
 
+    /// Mueve el foco al siguiente hueco enfocable, o al anterior.
+    fn mover_foco(&mut self, atras: bool) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // El recorrido es el COMPARTIDO: `focus_order` ya se salta lo
+        // que no se ve y lo que no se enfoca (una barra de estado no
+        // recibe el foco), así que aquí no hay una segunda regla que
+        // pueda divergir de la del TUI.
+        let actual = SlotId(self.activo());
+        let siguiente = if atras {
+            norte_frontend::layout::focus_prev(&self.reparto, actual)
+        } else {
+            norte_frontend::layout::focus_next(&self.reparto, actual)
+        };
+        let Some(SlotId(id)) = siguiente else {
+            // Un solo hueco: no hay a dónde ir, y decirlo es más
+            // honesto que fingir que pasó algo.
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-other-slot".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        self.roles.set(RoleId::Active, SlotId(id));
+        self.reconcilia_roles();
+        let cambio = ViewChange::Layout(self.disposicion());
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Designa OTRO hueco visible como destino de la siguiente operación.
+    fn designar_destino(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // El siguiente que NO sea el enfocado: designarse a uno mismo
+        // como destino es pedirle a una copia que se copie encima.
+        // Misma regla que el TUI.
+        let activo = self.activo();
+        let candidatos: Vec<u32> = self
+            .huecos
+            .keys()
+            .copied()
+            .filter(|id| *id != activo && !self.oculto(*id))
+            .collect();
+        let actual = self.roles.get(RoleId::Target).map(|SlotId(id)| id);
+        let siguiente = match actual.and_then(|a| candidatos.iter().position(|c| *c == a)) {
+            Some(i) => candidatos.get((i + 1) % candidatos.len()).copied(),
+            None => candidatos.first().copied(),
+        };
+        let Some(id) = siguiente else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-other-slot".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        self.roles.set(RoleId::Target, SlotId(id));
+        let cambio = ViewChange::Layout(self.disposicion());
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Ordena un listado por una columna, con la regla compartida.
+    ///
+    /// El id viaja como texto porque así viajó su cabecera; lo que significa
+    /// —y si invierte o empieza de nuevo— lo resuelve `norte-frontend`, no
+    /// una tabla de aquí (ADR 0066, decisión D14).
+    fn ordenar_por(
+        &mut self,
+        slot_id: u32,
+        column: &str,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        use norte_frontend::columns::{ColumnId, sort_column_id};
+        if !self.huecos.contains_key(&slot_id) || self.oculto(slot_id) {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let col = self
+            .columnas
+            .iter()
+            .find(|c| c.to_string() == *column)
+            .and_then(sort_column_id)
+            .or_else(|| {
+                // Un id que no está configurado pero que ES una columna
+                // conocida sigue pudiendo ordenar: un menú de orden ofrece
+                // más columnas de las que se pintan.
+                column
+                    .parse::<ColumnId>()
+                    .ok()
+                    .as_ref()
+                    .and_then(sort_column_id)
+            });
+        let Some(col) = col else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-column-not-sortable".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        let Some(h) = self.huecos.get_mut(&slot_id) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        let spec = h.pane.sort().after_click(col);
+        h.pane.set_sort(spec);
+        // Re-ordenar mueve TODAS las filas, así que sube la generación y lo
+        // que viaja es la ventana visible entera.
+        (self.aplicada(), vec![self.parche_filas_de(slot_id)])
+    }
+
+    /// Las cabeceras del listado, con la etiqueta ya traducida y la marca de
+    /// orden puesta.
+    ///
+    /// `header_label` y `sort_column_id` son las MISMAS funciones que usa el
+    /// TUI: cómo se llama una columna y si ordena no puede depender de quién
+    /// pinta.
+    fn cabeceras(&self, hueco: &Hueco) -> Vec<ColumnHeader> {
+        use norte_frontend::columns::{ColumnStyle, header_label, sort_column_id};
+        let spec = hueco.pane.sort();
+        let catalogo = self.catalogo_de(hueco.pane.dir());
+        self.columnas
+            .iter()
+            .map(|id| {
+                let estilo = ColumnStyle::default_for_id(id, catalogo);
+                let ordena = sort_column_id(id);
+                let sort = ordena.filter(|c| *c == spec.column).map(|_| {
+                    match spec.dir {
+                        norte_frontend::SortDir::Asc => "asc",
+                        norte_frontend::SortDir::Desc => "desc",
+                    }
+                    .to_owned()
+                });
+                ColumnHeader {
+                    id: id.to_string(),
+                    label: clamp_display(header_label(id, &estilo, catalogo)),
+                    sort,
+                    sortable: ordena.is_some(),
+                }
+            })
+            .collect()
+    }
+
     /// La proyección de UN listado.
     fn browser(&self, id: u32, hueco: &Hueco) -> BrowserSlotView {
         let (path, hostil) = norte_frontend::path_display(hueco.pane.dir());
@@ -2337,6 +2421,7 @@ impl Estado {
             cursor: (!hueco.pane.entries().is_empty())
                 .then_some(RowKey(hueco.pane.cursor() as u64)),
             marks: hueco.pane.marks_len() as u64,
+            columns: self.cabeceras(hueco),
             state: hueco.estado.clone(),
             quick: hueco.pane.quick().map(|q| crate::dto::QuickView {
                 query: clamp_display(q.query_display()),

@@ -62,6 +62,10 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
         rows: [fila(0, "a.txt"), fila(1, "b.txt")],
         cursor: 0,
         marks: 0,
+        columns: [
+          { id: "name", label: "Nombre", sort: "asc", sortable: true },
+          { id: "size", label: "Tamaño", sort: null, sortable: true },
+        ],
         state: { state: "ready" },
         quick: null,
         ...browser,
@@ -259,5 +263,37 @@ describe("Screen", () => {
     const boton = document.querySelector(".choices button") as HTMLButtonElement;
     boton.click();
     expect(enviadas.at(-1)).toEqual({ action: "dialog", id: 7, choice: "cancel" });
+  });
+});
+
+describe("la cabecera", () => {
+  it("pinta las etiquetas que vinieron de Rust y marca la que ordena", () => {
+    const { screen, root } = montar();
+    screen.paint(vista({}));
+    const cols = root.querySelectorAll(".slot-columns .col");
+    expect([...cols].map((c) => c.textContent)).toEqual(["Nombre▲", "Tamaño"]);
+    expect(cols[0]?.getAttribute("aria-sort")).toBe("ascending");
+    expect(cols[1]?.getAttribute("aria-sort")).toBe("none");
+  });
+
+  it("un click en la cabecera manda el ID de la columna, no su posición", () => {
+    const { screen, enviadas, root } = montar();
+    screen.paint(vista({}));
+    const size = root.querySelectorAll(".slot-columns .col")[1] as HTMLElement;
+    size.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(enviadas.at(-1)).toEqual({ action: "sort_by", slot_id: 1, column: "size" });
+  });
+
+  it("una columna que no ordena no ofrece el gesto", () => {
+    const { screen, enviadas, root } = montar();
+    const v = vista({});
+    const slot = v.slots[0];
+    if (slot?.kind === "browser") {
+      slot.columns = [{ id: "plugin:x/y", label: "X", sort: null, sortable: false }];
+    }
+    screen.paint(v);
+    const col = root.querySelector(".slot-columns .col") as HTMLElement;
+    col.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(enviadas.some((a) => a.action === "sort_by")).toBe(false);
   });
 });

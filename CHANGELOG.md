@@ -9,6 +9,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The graphical listing has column headers, and they sort.** Bridge
+  version **3**: every listing carries its headers with the label already
+  translated in Rust, which column is sorting and in which direction. A click
+  sorts by that column's id — never by its position or its label — and what a
+  second click on the same column means (invert, rather than start again) is
+  `SortSpec::after_click`, the rule the terminal frontend already used.
+  Directories keep their own group: inverting the order does not touch it.
+
+- **Two panes behave like two panes.** The wheel over the pane that does not
+  have the focus now moves *that* pane without stealing focus — saying which
+  rows are visible is not an action on the listing, it is where the reader is
+  looking. The background fill of a listing announces itself in its own pane
+  instead of always in the active one, and a listing answer lands in the pane
+  that asked for it, not in whichever pane happens to be focused when it
+  arrives. `pane.switch`, `layout.focus-next`, `layout.focus-prev` and
+  `layout.set-target` reach the host through the shared focus order, so the
+  keyboard can change panes and the focus never lands on the status bar.
+
 - **norte has a graphical window again, and it is a spike, not a product.**
   Phase 3 of the multi-frontend plan: `norte-gui-tauri` is a Tauri 2
   application over `norte-ui-host`, with a plain-TypeScript webview that

@@ -78,6 +78,36 @@ body {
   margin-left: 4px;
 }
 
+.slot-columns {
+  flex: 0 0 var(--cell-h);
+  display: flex;
+  gap: 8px;
+  padding: 0 6px;
+  white-space: nowrap;
+  color: var(--title-fg);
+  border-bottom: 1px solid var(--border);
+}
+
+.col {
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+
+.col[data-sortable="true"] {
+  cursor: pointer;
+}
+
+.col-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sort-mark {
+  margin-left: 4px;
+  color: var(--border-focus);
+}
+
 .scroller {
   flex: 1 1 auto;
   overflow-y: auto;

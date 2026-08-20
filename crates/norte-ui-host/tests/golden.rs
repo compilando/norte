@@ -16,9 +16,9 @@ use std::path::Path;
 use norte_ui_host::action::UiAction;
 use norte_ui_host::bridge::{ActionAck, BridgeEnvelope, InstanceId, ModalId, RowKey, StaleAction};
 use norte_ui_host::dto::{
-    BrowserSlotView, CellView, ConnectionView, DialogChoice, DialogView, LayoutView, RowKind,
-    RowView, SlotPlacement, SlotRole, SlotState, SlotView, StatusView, TaskStateView, TaskView,
-    UiNotice, UiUpdate, ViewChange, ViewPatch, ViewSnapshot,
+    BrowserSlotView, CellView, ColumnHeader, ConnectionView, DialogChoice, DialogView, LayoutView,
+    RowKind, RowView, SlotPlacement, SlotRole, SlotState, SlotView, StatusView, TaskStateView,
+    TaskView, UiNotice, UiUpdate, ViewChange, ViewPatch, ViewSnapshot,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -125,6 +125,13 @@ fn acciones() {
                     slot_id: 1,
                     from: RowKey(2),
                     to: RowKey(5),
+                },
+            ),
+            (
+                "sort_by",
+                UiAction::SortBy {
+                    slot_id: 1,
+                    column: "size".to_owned(),
                 },
             ),
             (
@@ -264,7 +271,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         connection: ConnectionView::Connected,
         layout: disposicion_de_referencia(),
         slots: vec![
-            SlotView::Browser(BrowserSlotView {
+            SlotView::Browser(Box::new(BrowserSlotView {
                 slot_id: 1,
                 generation: 4,
                 path_display: "⟨file⟩/home/oscar".to_owned(),
@@ -277,13 +284,27 @@ fn snapshot_de_referencia() -> ViewSnapshot {
                 ],
                 cursor: Some(RowKey(1)),
                 marks: 0,
+                columns: vec![
+                    ColumnHeader {
+                        id: "name".to_owned(),
+                        label: "Nombre".to_owned(),
+                        sort: Some("asc".to_owned()),
+                        sortable: true,
+                    },
+                    ColumnHeader {
+                        id: "size".to_owned(),
+                        label: "Tamaño".to_owned(),
+                        sort: None,
+                        sortable: true,
+                    },
+                ],
                 state: SlotState::Ready,
                 quick: Some(norte_ui_host::dto::QuickView {
                     query: "no".to_owned(),
                     mode: "filter".to_owned(),
                     matches: 1,
                 }),
-            }),
+            })),
             SlotView::Unsupported {
                 slot_id: 2,
                 kind_name: "processes".to_owned(),

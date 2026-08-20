@@ -64,6 +64,11 @@
     "first": 100,
     "slot_id": 1
   },
+  "sort_by": {
+    "action": "sort_by",
+    "column": "size",
+    "slot_id": 1
+  },
   "toggle_mark": {
     "action": "toggle_mark",
     "key": 7,

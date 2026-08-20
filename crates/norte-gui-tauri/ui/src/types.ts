@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 2;
+export const BRIDGE_VERSION = 3;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -71,6 +71,13 @@ export interface QuickView {
   matches: number;
 }
 
+export interface ColumnHeader {
+  id: string;
+  label: string;
+  sort: "asc" | "desc" | null;
+  sortable: boolean;
+}
+
 export interface BrowserSlotView {
   kind: "browser";
   slot_id: number;
@@ -82,6 +89,7 @@ export interface BrowserSlotView {
   rows: RowView[];
   cursor: RowKey | null;
   marks: number;
+  columns: ColumnHeader[];
   state: SlotState;
   quick: QuickView | null;
 }
@@ -191,6 +199,7 @@ export type UiAction =
   | { action: "history"; slot_id: number; back: boolean }
   | { action: "set_visible_range"; slot_id: number; first: number; count: number }
   | { action: "focus_slot"; slot_id: number }
+  | { action: "sort_by"; slot_id: number; column: string }
   | { action: "dialog"; id: ModalId; choice: string }
   | { action: "dialog_input"; id: ModalId; text: string }
   | { action: "cancel_task"; task_id: number }

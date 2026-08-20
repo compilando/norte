@@ -151,6 +151,20 @@
     "locale": "es",
     "slots": [
       {
+        "columns": [
+          {
+            "id": "name",
+            "label": "Nombre",
+            "sort": "asc",
+            "sortable": true
+          },
+          {
+            "id": "size",
+            "label": "Tamaño",
+            "sort": null,
+            "sortable": true
+          }
+        ],
         "cursor": 1,
         "first_visible": 0,
         "generation": 4,

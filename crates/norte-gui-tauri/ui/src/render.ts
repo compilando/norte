@@ -31,6 +31,7 @@ type Send = (action: UiAction) => void;
 interface SlotDom {
   root: HTMLElement;
   title: HTMLElement;
+  header: HTMLElement;
   scroller: HTMLElement;
   canvas: HTMLElement;
   rows: Map<number, HTMLElement>;
@@ -95,16 +96,20 @@ export class Screen {
       place(el, p, cell);
       const title = document.createElement("header");
       title.className = "slot-title";
+      const header = document.createElement("div");
+      header.className = "slot-columns";
+      header.setAttribute("role", "row");
       const scroller = document.createElement("div");
       scroller.className = "scroller";
       const canvas = document.createElement("div");
       canvas.className = "canvas";
       scroller.append(canvas);
-      el.append(title, scroller);
+      el.append(title, header, scroller);
       this.root.append(el);
       const dom: SlotDom = {
         root: el,
         title,
+        header,
         scroller,
         canvas,
         rows: new Map(),
@@ -116,6 +121,23 @@ export class Screen {
   }
 
   private wire(slotId: number, dom: SlotDom): void {
+    dom.header.addEventListener("mousedown", (e) => {
+      const target = e.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      const col = target.closest('[data-sortable="true"]');
+      if (!(col instanceof HTMLElement)) {
+        return;
+      }
+      const id = col.dataset["column"];
+      if (id === undefined) {
+        return;
+      }
+      e.preventDefault();
+      // Qué hace un click en la MISMA columna —invertir— lo decide el host.
+      this.send({ action: "sort_by", slot_id: slotId, column: id });
+    });
     dom.scroller.addEventListener("scroll", () => {
       this.scheduleRange(slotId, dom);
     });
@@ -246,6 +268,8 @@ export class Screen {
     }
     dom.root.setAttribute("aria-label", slot.path_display);
 
+    this.paintHeader(dom, slot);
+
     const total = slot.total_rows ?? slot.rows.length;
     dom.canvas.style.setProperty("height", `${total * cell.h}px`);
     dom.scroller.setAttribute("role", "grid");
@@ -287,6 +311,31 @@ export class Screen {
       dom.canvas.replaceChildren(emptyNode(this.t("listing-empty")));
       dom.rows.clear();
     }
+  }
+
+  /** La cabecera: etiquetas y marca de orden, ambas resueltas en Rust. */
+  private paintHeader(dom: SlotDom, slot: BrowserSlotView): void {
+    const nodes = slot.columns.map((c) => {
+      const el = document.createElement("span");
+      el.className = c.id === "name" ? "col col-name" : "col";
+      el.setAttribute("role", "columnheader");
+      el.dataset["column"] = c.id;
+      // `aria-sort` va en la cabecera que ordena y en ninguna otra.
+      el.setAttribute("aria-sort", c.sort === null ? "none" : `${c.sort}ending`);
+      el.textContent = c.label;
+      if (c.sort !== null) {
+        const marca = document.createElement("span");
+        marca.className = "sort-mark";
+        marca.textContent = c.sort === "asc" ? "▲" : "▼";
+        el.append(marca);
+      }
+      if (c.sortable) {
+        el.dataset["sortable"] = "true";
+        el.setAttribute("tabindex", "-1");
+      }
+      return el;
+    });
+    dom.header.replaceChildren(...nodes);
   }
 
   private paintDialogs(dialogs: DialogView[]): void {

@@ -105,7 +105,11 @@ pub enum ConnectionView {
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum SlotView {
     /// Un listado.
-    Browser(BrowserSlotView),
+    ///
+    /// En caja: un listado con su ventana de filas es un orden de magnitud
+    /// más grande que un hueco sin proyectar, y un enum que mide lo que su
+    /// variante mayor se paga en cada `Vec<SlotView>` que se construye.
+    Browser(Box<BrowserSlotView>),
     /// Un hueco de un tipo que este host todavía no proyecta. Se enseña
     /// vacío y con su nombre: preservar lo que no se entiende es la regla de
     /// la sesión (ADR 0059), y desaparecer sería peor que estar en gris.
@@ -140,6 +144,9 @@ pub struct BrowserSlotView {
     pub cursor: Option<RowKey>,
     /// Cuántas filas están marcadas en el hueco (no solo en la ventana).
     pub marks: u64,
+    /// Las cabeceras de las columnas configuradas, en su orden. Incluye el
+    /// nombre, que en las filas viaja aparte (`display_name`).
+    pub columns: Vec<ColumnHeader>,
     /// En qué anda el hueco.
     pub state: SlotState,
     /// El buscador incremental, si está abierto. Mientras lo esté, las
@@ -195,6 +202,25 @@ pub struct RowView {
     pub marked: bool,
     /// Celdas de las columnas configuradas, en el orden de la cabecera.
     pub cells: Vec<CellView>,
+}
+
+/// La cabecera de UNA columna.
+///
+/// La etiqueta viene TRADUCIDA y saneada (`columns::header_label`, la misma
+/// que pinta el TUI): un renderer no traduce, y una cabecera de plugin es
+/// texto ajeno que ya llega enmascarado.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColumnHeader {
+    /// Id estable de la columna (`name`, `size`, `attr:posix.mode`…). Es lo
+    /// que se manda de vuelta para ordenar: el renderer no nombra columnas
+    /// por su posición ni por su etiqueta.
+    pub id: String,
+    /// Etiqueta ya traducida.
+    pub label: String,
+    /// `asc`/`desc` si el listado se ordena por ESTA columna; `None` si no.
+    pub sort: Option<String>,
+    /// La columna ordena. Una que no, se pinta sin afordancia de click.
+    pub sortable: bool,
 }
 
 /// La clase de una entrada, en lo que al pintado le importa.

@@ -13,11 +13,13 @@ use serde::{Deserialize, Serialize};
 /// por motivos distintos. Un renderer que no reconoce esta versión NO
 /// interpreta el mensaje: enseña una pantalla de incompatibilidad (ADR 0066).
 ///
+/// - **3**: cada listado lleva sus CABECERAS (etiqueta traducida, columna
+///   que ordena y sentido), y se puede pedir orden por columna.
 /// - **2**: el snapshot lleva el reparto de la pantalla
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 2;
+pub const BRIDGE_VERSION: u32 = 3;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

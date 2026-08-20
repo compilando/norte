@@ -2122,3 +2122,97 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
         "el destino es SIEMPRE otro hueco"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Cabeceras y orden (fase 4, tarea 4.2).
+// ---------------------------------------------------------------------------
+
+/// El listado viaja con sus CABECERAS: etiqueta ya traducida, alineación y
+/// cuál manda el orden. El renderer las pinta; no las inventa ni las traduce.
+#[tokio::test]
+async fn el_listado_lleva_sus_cabeceras() {
+    let (_h, snap) = host_arbol(arbol()).await;
+    let b = listado(&snap);
+    let ids: Vec<&str> = b.columns.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["name", "size", "mtime"],
+        "las columnas configuradas, en orden y con el nombre delante"
+    );
+    for c in &b.columns {
+        assert!(!c.label.is_empty(), "cada cabecera trae su etiqueta: {c:?}");
+    }
+    let nombre = &b.columns[0];
+    assert_eq!(
+        nombre.sort.as_deref(),
+        Some("asc"),
+        "y dice cuál ordena y en qué sentido"
+    );
+    assert!(b.columns[1].sort.is_none(), "las demás, no");
+}
+
+/// Ordenar por una columna es del host: misma regla que el TUI —la misma
+/// columna invierte, otra columna empieza ascendente— y el cursor se queda
+/// en la MISMA entrada, no en la misma fila.
+#[tokio::test]
+async fn ordenar_por_columna_usa_la_regla_compartida() {
+    let (h, snap) = host_arbol(arbol()).await;
+    // Los FICHEROS, sin el directorio: `dirs_first` los agrupa aparte y ese
+    // grupo va siempre ascendente — invertir el orden no lo toca.
+    let ficheros = |s: &norte_ui_host::ViewSnapshot| -> Vec<String> {
+        listado(s)
+            .rows
+            .iter()
+            .filter(|r| r.kind != norte_ui_host::dto::RowKind::Dir)
+            .map(|r| r.display_name.clone())
+            .collect()
+    };
+    let antes = ficheros(&snap);
+    assert!(antes.len() >= 2, "hay ficheros que ordenar: {antes:?}");
+    let mut sub = h.subscribe();
+
+    h.dispatch(UiAction::SortBy {
+        slot_id: 1,
+        column: "name".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let _ = sub.recv().await.expect("el host sigue vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let invertido = siguiente_foto(&mut sub).await;
+    let despues = ficheros(&invertido);
+    let mut al_reves = antes.clone();
+    al_reves.reverse();
+    assert_eq!(
+        despues, al_reves,
+        "la misma columna dos veces invierte el sentido"
+    );
+    assert_eq!(
+        listado(&invertido).rows[0].kind,
+        norte_ui_host::dto::RowKind::Dir,
+        "y los directorios siguen primero: invertir no toca su grupo"
+    );
+    assert_eq!(
+        listado(&invertido).columns[0].sort.as_deref(),
+        Some("desc"),
+        "y la cabecera lo dice"
+    );
+}
+
+/// Una columna que no ordena —o que no está— no altera el listado, y se
+/// responde en vez de callarse.
+#[tokio::test]
+async fn ordenar_por_una_columna_que_no_ordena_se_dice() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let ack = h
+        .dispatch(UiAction::SortBy {
+            slot_id: 1,
+            column: "no-existe".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Unavailable { .. }),
+        "se dice que esa columna no ordena: {ack:?}"
+    );
+}
