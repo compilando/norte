@@ -505,6 +505,15 @@ struct Hueco {
     /// testigo llegó tarde: se descarta aquí, en Rust, no se esconde en el
     /// renderer.
     en_vuelo: Option<RequestToken>,
+    /// El drenaje que sigue trayendo lotes por detrás, si lo hay.
+    ///
+    /// SEPARADO de `en_vuelo` porque son dos vidas distintas: la primera
+    /// página aterriza y limpia `en_vuelo`, pero el resto del stream sigue
+    /// llegando. Compartir un testigo hacía que `aplicar_lote` rechazara
+    /// TODOS los lotes de una navegación —un directorio de cinco mil
+    /// entradas se quedaba en cien— y que el arranque tuviera que
+    /// restituirlo a mano para funcionar.
+    drenando: Option<RequestToken>,
     estado: SlotState,
     /// Los paths que ya se sondearon (hayan contestado o no). Sin esta
     /// memoria, un `stat` que falla vuelve a pedirse en cada repintado y el
@@ -677,6 +686,7 @@ impl Estado {
                         primera_visible: 0,
                         visibles: 64,
                         en_vuelo: None,
+                        drenando: None,
                         estado: SlotState::Loading,
                         sondeados: std::collections::HashSet::new(),
                     },
@@ -851,17 +861,12 @@ impl Estado {
             let token = RequestToken(self.token);
             if let Some(h) = self.huecos.get_mut(&id) {
                 h.en_vuelo = Some(token);
+                h.drenando = Some(token);
             }
             self.pedir_catalogo(&dir, backend_arc, buzon);
             let stream = backend.list(dir.clone(), self.attrs.clone()).await;
             let res = Self::primera_pagina(stream, id, token, buzon.clone()).await;
             self.aterriza_en(id, dir, res);
-            // `aterriza_en` limpia el testigo al aterrizar la primera
-            // página; el drenaje del resto sigue usándolo, así que se
-            // restituye mientras quede stream detrás.
-            if let Some(h) = self.huecos.get_mut(&id) {
-                h.en_vuelo = Some(token);
-            }
         }
     }
 
@@ -873,6 +878,12 @@ impl Estado {
             return;
         };
         hueco.en_vuelo = None;
+        // El listado es OTRO: lo sondeado antes no dice nada de estas
+        // entradas, que nacen perezosas otra vez. Sin este vaciado, volver a
+        // un directorio ya visitado deja las columnas de tamaño y fecha en
+        // blanco para el resto de la sesión — y de paso el conjunto crecía
+        // con un `VPath` por fichero visto en toda la vida del proceso.
+        hueco.sondeados.clear();
         match res {
             Ok(entradas) => {
                 hueco.pane.set_listing(dir, entradas);
@@ -904,8 +915,16 @@ impl Estado {
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match accion {
             UiAction::MoveCursor { slot_id, delta } => self.mover_cursor(*slot_id, *delta),
-            UiAction::SelectRow { slot_id, key } => self.poner_cursor(*slot_id, *key),
-            UiAction::ToggleMark { slot_id, key } => self.marcar(*slot_id, *key),
+            UiAction::SelectRow {
+                slot_id,
+                key,
+                generation,
+            } => self.poner_cursor(*slot_id, *key, *generation),
+            UiAction::ToggleMark {
+                slot_id,
+                key,
+                generation,
+            } => self.marcar(*slot_id, *key, *generation),
             UiAction::SetVisibleRange {
                 slot_id,
                 first,
@@ -947,15 +966,23 @@ impl Estado {
                 let cambio = ViewChange::Layout(self.disposicion());
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
-            UiAction::MarkRange { slot_id, from, to } => {
-                let (slot_id, from, to) = (*slot_id, *from, *to);
-                if slot_id != self.activo() {
-                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
-                }
-                // Los DOS extremos tienen que ser de esta generación: medio
-                // rango válido significa marcar hasta un sitio que ya no es
-                // el que el usuario señaló.
-                let (Some(a), Some(b)) = (self.fila_valida(from), self.fila_valida(to)) else {
+            UiAction::MarkRange {
+                slot_id,
+                from,
+                to,
+                generation,
+            } => {
+                let (slot_id, from, to, generation) = (*slot_id, *from, *to, *generation);
+                // Los DOS extremos tienen que existir en ESTA generación.
+                // Medio rango válido significa marcar hasta un sitio que ya
+                // no es el que el usuario señaló — y `PaneState::mark_range`
+                // RECORTA por contrato, así que un extremo desbordado
+                // marcaría el listado entero, incluidas filas que el renderer
+                // nunca recibió. Lo marcado es la entrada de un borrado.
+                let (Some(a), Some(b)) = (
+                    self.fila_de(slot_id, from, generation),
+                    self.fila_de(slot_id, to, generation),
+                ) else {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 };
                 self.hueco_mut().pane.mark_range(a, b);
@@ -1321,8 +1348,19 @@ impl Estado {
                 (self.aplicada(), vec![self.parche_cursor()])
             }
             Efecto::Entrar => {
+                // Una tecla actúa sobre lo que hay AHORA bajo el cursor, así
+                // que la generación es la de este mismo instante.
                 let key = RowKey(self.hueco().pane.cursor() as u64);
-                self.navegacion(&UiAction::Activate { slot_id: slot, key }, backend, buzon)
+                let generation = self.hueco().pane.listing_epoch();
+                self.navegacion(
+                    &UiAction::Activate {
+                        slot_id: slot,
+                        key,
+                        generation,
+                    },
+                    backend,
+                    buzon,
+                )
             }
             Efecto::Subir => self.navegacion(&UiAction::Parent { slot_id: slot }, backend, buzon),
             Efecto::Rastro { atras } => self.navegacion(
@@ -1335,7 +1373,8 @@ impl Estado {
             ),
             Efecto::Marcar => {
                 let key = RowKey(self.hueco().pane.cursor() as u64);
-                self.aplicar(&UiAction::ToggleMark { slot_id: slot, key }, backend, buzon)
+                let generation = self.hueco().pane.listing_epoch();
+                self.marcar(slot, key, generation)
             }
             Efecto::DesmarcarTodo => {
                 self.hueco_mut().pane.clear_marks();
@@ -1852,12 +1891,13 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match accion {
-            UiAction::Activate { slot_id, key } => {
-                let (slot_id, key) = (*slot_id, *key);
-                if slot_id != self.activo() {
-                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
-                }
-                let Some(i) = self.fila_valida(key) else {
+            UiAction::Activate {
+                slot_id,
+                key,
+                generation,
+            } => {
+                let (slot_id, key, generation) = (*slot_id, *key, *generation);
+                let Some(i) = self.fila_de(slot_id, key, generation) else {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 };
                 let Some(entrada) = self.hueco().pane.entries().get(i) else {
@@ -1962,6 +2002,9 @@ impl Estado {
         self.token += 1;
         let token = RequestToken(self.token);
         self.hueco_mut().en_vuelo = Some(token);
+        // El drenaje vive MÁS que la primera página: se marca aquí y solo lo
+        // releva otra navegación del mismo hueco.
+        self.hueco_mut().drenando = Some(token);
 
         self.pedir_catalogo(&destino, backend, buzon);
         let backend = Arc::clone(backend);
@@ -2161,7 +2204,9 @@ impl Estado {
         batch: Vec<Entry>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         let hueco = self.huecos.get_mut(&slot)?;
-        if hueco.en_vuelo != Some(token) {
+        if hueco.drenando != Some(token) {
+            // Un lote de una navegación que ya fue relevada: pegarlo sería
+            // mezclar dos árboles en una pantalla.
             return None;
         }
         hueco.pane.extend(batch);
@@ -2497,8 +2542,9 @@ impl Estado {
         &mut self,
         slot_id: u32,
         key: RowKey,
+        generation: u64,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(i) = self.fila_de(slot_id, key) else {
+        let Some(i) = self.fila_de(slot_id, key, generation) else {
             // Una fila que ya no existe: el listado cambió bajo el click. Ni
             // se interpreta ni es un error.
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
@@ -2508,8 +2554,13 @@ impl Estado {
     }
 
     /// Marca o desmarca una fila.
-    fn marcar(&mut self, slot_id: u32, key: RowKey) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(i) = self.fila_de(slot_id, key) else {
+    fn marcar(
+        &mut self,
+        slot_id: u32,
+        key: RowKey,
+        generation: u64,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(i) = self.fila_de(slot_id, key, generation) else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
         let marcada = self
@@ -2523,11 +2574,18 @@ impl Estado {
     }
 
     /// La fila que una acción nombra, si el hueco es el activo y la clave
-    /// sigue valiendo.
-    fn fila_de(&self, slot_id: u32, key: RowKey) -> Option<usize> {
-        (slot_id == self.activo())
-            .then(|| self.fila_valida(key))
-            .flatten()
+    /// sigue valiendo EN LA GENERACIÓN que el renderer dijo.
+    ///
+    /// El par `(clave, generación)` es lo que hace que la clave signifique
+    /// algo: sola es un índice, y un índice de la pantalla anterior nombra
+    /// otro fichero. Un lote de relleno que aterriza entre el pintado y el
+    /// click reordena el listado y sube la época; sin esta comparación, el
+    /// click marca lo que haya caído en esa fila.
+    fn fila_de(&self, slot_id: u32, key: RowKey, generation: u64) -> Option<usize> {
+        if slot_id != self.activo() || self.hueco().pane.listing_epoch() != generation {
+            return None;
+        }
+        self.fila_valida(key)
     }
 
     /// Este frontend todavía no muta, y lo DICE.

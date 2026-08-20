@@ -86,9 +86,10 @@ async fn dos_asas_un_escritor_y_las_secuencias_no_saltan() {
 /// Un click sobre una fila que ya no existe no muta nada, y lo dice.
 #[tokio::test]
 async fn una_fila_que_no_existe_es_una_carrera_no_un_error() {
-    let (h, _snap) = host(vec!["a"]).await;
+    let (h, snap) = host(vec!["a"]).await;
     let ack = h
         .dispatch(UiAction::SelectRow {
+            generation: listado(&snap).generation,
             slot_id: 1,
             key: RowKey(99),
         })
@@ -320,6 +321,7 @@ async fn activar_un_directorio_navega() {
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs.key,
+        generation: listado(&snap).generation,
     })
     .await
     .expect("host vivo");
@@ -349,6 +351,7 @@ async fn subir_devuelve_el_cursor_al_directorio_de_origen() {
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs.key,
+        generation: listado(&snap).generation,
     })
     .await
     .expect("host vivo");
@@ -384,6 +387,7 @@ async fn el_rastro_va_y_vuelve_y_cuando_se_acaba_lo_dice() {
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs.key,
+        generation: listado(&snap).generation,
     })
     .await
     .expect("host vivo");
@@ -441,6 +445,7 @@ async fn una_respuesta_tardia_no_pisa_la_navegacion_nueva() {
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs,
+        generation: listado(&snap).generation,
     })
     .await
     .expect("host vivo");
@@ -933,6 +938,7 @@ async fn la_duena_vuelca_al_cerrar_y_sin_marcas() {
     h.dispatch(UiAction::ToggleMark {
         slot_id: 1,
         key: fila,
+        generation: listado(&snap).generation,
     })
     .await
     .expect("host vivo");
@@ -946,6 +952,7 @@ async fn la_duena_vuelca_al_cerrar_y_sin_marcas() {
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs,
+        generation: listado(&snap).generation,
     })
     .await
     .expect("host vivo");
@@ -1782,12 +1789,14 @@ async fn un_resync_no_se_come_las_tasks_vivas() {
 async fn un_rango_se_marca_de_una_vez() {
     let (h, snap) = host(vec!["a", "b", "c", "d", "e"]).await;
     assert_eq!(listado(&snap).marks, 0);
+    let epoca = listado(&snap).generation;
     let mut sub = h.subscribe();
     let ack = h
         .dispatch(UiAction::MarkRange {
             slot_id: 1,
             from: RowKey(3),
             to: RowKey(1),
+            generation: epoca,
         })
         .await
         .expect("host vivo");
@@ -1806,12 +1815,14 @@ async fn un_rango_se_marca_de_una_vez() {
 /// sitio que ya no es el que el usuario señaló es peor que no marcar nada.
 #[tokio::test]
 async fn un_rango_con_un_extremo_viejo_no_marca_nada() {
-    let (h, _snap) = host(vec!["a", "b"]).await;
+    let (h, snap) = host(vec!["a", "b"]).await;
+    let epoca = listado(&snap).generation;
     let ack = h
         .dispatch(UiAction::MarkRange {
             slot_id: 1,
             from: RowKey(0),
             to: RowKey(99),
+            generation: epoca,
         })
         .await
         .expect("host vivo");
@@ -2412,4 +2423,115 @@ async fn en_modo_completo_borrar_sigue_pidiendo_confirmacion() {
     h.dispatch(tecla("F8")).await.expect("host vivo");
     let dialogos = siguientes_dialogos(&mut sub).await;
     assert_eq!(dialogos.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Los dos BLOCKER de la revisión.
+// ---------------------------------------------------------------------------
+
+/// Navegar a un directorio grande trae el directorio ENTERO, no la primera
+/// página.
+///
+/// `aterriza_en` limpia el testigo al aterrizar la primera página, y la task
+/// de drenaje seguía mandando los lotes con ese mismo testigo: `aplicar_lote`
+/// los rechazaba todos. El arranque no lo veía porque `listar_inicial`
+/// restituye el testigo a mano.
+#[tokio::test]
+async fn navegar_a_un_directorio_grande_lo_trae_entero() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"docs".to_vec(), true)]);
+    let muchas: Vec<(Vec<u8>, bool)> = (0..300)
+        .map(|i| (format!("f{i:04}.txt").into_bytes(), false))
+        .collect();
+    f.pon("mem:///casa/docs", muchas);
+    let (h, snap) = host_arbol(Arc::new(f)).await;
+    let docs = listado(&snap)
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("docs está")
+        .key;
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Activate {
+        slot_id: 1,
+        key: docs,
+        generation: listado(&snap).generation,
+    })
+    .await
+    .expect("host vivo");
+
+    for _ in 0..60 {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        if listado(&foto).total_rows == Some(300) {
+            return;
+        }
+    }
+    panic!("el listado se quedó en la primera página: el relleno no aterriza");
+}
+
+/// Una fila de una generación anterior NO se toca.
+///
+/// El contrato del bridge lo promete desde el principio («un doble click
+/// tardío no actúa sobre el fichero que ocupó esa fila DESPUÉS») y no había
+/// nada que lo implementara: las acciones no llevaban generación.
+#[tokio::test]
+async fn una_fila_de_otra_generacion_no_se_marca() {
+    let (h, snap) = host(vec!["a", "b", "c"]).await;
+    let vieja = listado(&snap).generation;
+    // Reordenar mueve TODAS las filas y sube la generación.
+    h.dispatch(UiAction::SortBy {
+        slot_id: 1,
+        column: "name".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    let ack = h
+        .dispatch(UiAction::ToggleMark {
+            slot_id: 1,
+            key: RowKey(0),
+            generation: vieja,
+        })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Stale {
+            reason: StaleAction::Generation
+        },
+        "la clave era de la pantalla anterior: {ack:?}"
+    );
+}
+
+/// Y un rango con un extremo fuera de la ventana no se recorta: se rechaza.
+///
+/// `PaneState::mark_range` recorta a propósito (su contrato), así que un
+/// `to: u64::MAX` marcaba el listado ENTERO — incluidas filas que el renderer
+/// nunca recibió— y lo marcado es la entrada de un borrado.
+#[tokio::test]
+async fn un_rango_desbordado_no_marca_el_listado_entero() {
+    let (h, snap) = host(vec!["a", "b", "c", "d", "e"]).await;
+    let epoca = listado(&snap).generation;
+    let ack = h
+        .dispatch(UiAction::MarkRange {
+            slot_id: 1,
+            from: RowKey(0),
+            to: RowKey(u64::MAX),
+            generation: epoca,
+        })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Stale {
+            reason: StaleAction::Generation
+        },
+        "un extremo que no existe invalida el rango entero"
+    );
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(listado(&foto).marks, 0, "y no marcó nada");
 }

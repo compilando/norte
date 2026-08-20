@@ -18,7 +18,7 @@ const CELL_H = 20;
 
 function catalogo(): HostCatalog {
   return {
-    bridge_version: 2,
+    bridge_version: 5,
     instance_id: "host-1",
     locale: "es",
     strings: { "listing-empty": "vacío", "hostile-name": "nombre hostil" },
@@ -182,9 +182,19 @@ describe("Screen", () => {
     screen.paint(vista({}));
     const fila1 = root.querySelectorAll(".row")[1] as HTMLElement;
     fila1.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    expect(enviadas.at(-1)).toEqual({ action: "select_row", slot_id: 1, key: 1 });
+    expect(enviadas.at(-1)).toEqual({
+      action: "select_row",
+      slot_id: 1,
+      key: 1,
+      generation: 1,
+    });
     fila1.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-    expect(enviadas.at(-1)).toEqual({ action: "activate", slot_id: 1, key: 1 });
+    expect(enviadas.at(-1)).toEqual({
+      action: "activate",
+      slot_id: 1,
+      key: 1,
+      generation: 1,
+    });
   });
 
   it("shift+click manda UN rango: quién entra en él lo decide el host", () => {
@@ -194,7 +204,13 @@ describe("Screen", () => {
     );
     const tercera = root.querySelectorAll(".row")[2] as HTMLElement;
     tercera.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, shiftKey: true }));
-    expect(enviadas.at(-1)).toEqual({ action: "mark_range", slot_id: 1, from: 0, to: 2 });
+    expect(enviadas.at(-1)).toEqual({
+      action: "mark_range",
+      slot_id: 1,
+      from: 0,
+      to: 2,
+      generation: 1,
+    });
   });
 
   it("ctrl+click marca una sola", () => {
@@ -202,7 +218,12 @@ describe("Screen", () => {
     screen.paint(vista({}));
     const fila0 = root.querySelector(".row") as HTMLElement;
     fila0.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, ctrlKey: true }));
-    expect(enviadas.at(-1)).toEqual({ action: "toggle_mark", slot_id: 1, key: 0 });
+    expect(enviadas.at(-1)).toEqual({
+      action: "toggle_mark",
+      slot_id: 1,
+      key: 0,
+      generation: 1,
+    });
   });
 
   it("el scroll no cruza: cruza QUÉ filas hacen falta", () => {
@@ -375,5 +396,32 @@ describe("el visor", () => {
     const body = document.querySelector(".viewer-body") as HTMLElement;
     expect(body.querySelector("script")).toBeNull();
     expect(body.textContent).toBe("<script>alert(1)</script>");
+  });
+});
+
+describe("la generación", () => {
+  it("viaja con cada gesto de fila, y es la que se PINTÓ", () => {
+    const { screen, enviadas, root } = montar();
+    const v = vista({ generation: 7 });
+    screen.paint(v);
+    const fila = root.querySelector(".row") as HTMLElement;
+    fila.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    const accion = enviadas.at(-1);
+    expect(accion?.action).toBe("select_row");
+    if (accion?.action === "select_row") {
+      expect(accion.generation).toBe(7);
+    }
+  });
+
+  it("se actualiza al repintar: un gesto posterior lleva la nueva", () => {
+    const { screen, enviadas, root } = montar();
+    screen.paint(vista({ generation: 7 }));
+    screen.paint(vista({ generation: 8 }));
+    const fila = root.querySelector(".row") as HTMLElement;
+    fila.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    const accion = enviadas.at(-1);
+    if (accion?.action === "select_row") {
+      expect(accion.generation).toBe(8);
+    }
   });
 });

@@ -117,7 +117,7 @@ async fn un_parche_de_cursor_no_llega_ni_a_un_kilobyte() {
 /// pantalla, no del tamaño del directorio.
 #[tokio::test]
 async fn un_parche_de_filas_pesa_lo_que_la_ventana() {
-    let (h, _snap) = host_grande().await;
+    let (h, snap) = host_grande().await;
     h.dispatch(UiAction::SetVisibleRange {
         slot_id: 1,
         first: 0,
@@ -129,6 +129,10 @@ async fn un_parche_de_filas_pesa_lo_que_la_ventana() {
     h.dispatch(UiAction::ToggleMark {
         slot_id: 1,
         key: norte_ui_host::RowKey(3),
+        generation: match &snap.slots[0] {
+            norte_ui_host::dto::SlotView::Browser(b) => b.generation,
+            norte_ui_host::dto::SlotView::Unsupported { .. } => 0,
+        },
     })
     .await
     .expect("host vivo");

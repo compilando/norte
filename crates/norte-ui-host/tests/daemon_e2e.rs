@@ -152,11 +152,13 @@ async fn navegar_contra_el_daemon() {
         .find(|r| r.display_name == "docs")
         .expect("docs está")
         .key;
+    let epoca = listado(&snap).generation;
     let mut sub = h.subscribe();
 
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs,
+        generation: epoca,
     })
     .await
     .expect("host vivo");
@@ -186,10 +188,12 @@ async fn la_sesion_sobrevive_al_cierre() {
         .find(|r| r.display_name == "docs")
         .expect("docs está")
         .key;
+    let epoca = listado(&snap).generation;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs,
+        generation: epoca,
     })
     .await
     .expect("host vivo");

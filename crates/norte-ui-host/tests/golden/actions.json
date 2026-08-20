@@ -1,6 +1,7 @@
 {
   "activate": {
     "action": "activate",
+    "generation": 4,
     "key": 9,
     "slot_id": 1
   },
@@ -38,6 +39,7 @@
   "mark_range": {
     "action": "mark_range",
     "from": 2,
+    "generation": 4,
     "slot_id": 1,
     "to": 5
   },
@@ -55,8 +57,14 @@
   },
   "select_row": {
     "action": "select_row",
+    "generation": 4,
     "key": 7,
     "slot_id": 1
+  },
+  "set_viewport": {
+    "action": "set_viewport",
+    "height": 40,
+    "width": 120
   },
   "set_visible_range": {
     "action": "set_visible_range",
@@ -71,6 +79,7 @@
   },
   "toggle_mark": {
     "action": "toggle_mark",
+    "generation": 4,
     "key": 7,
     "slot_id": 1
   }

@@ -5,8 +5,16 @@
 //! se expone es lo que un renderer puede hacer, y un renderer no debe poder
 //! pedir un `rpc(method, params)` arbitrario (ADR 0066, decisión D11).
 //!
-//! Ninguna acción nombra un path. Se actúa sobre filas por su [`RowKey`], que
-//! es opaca y caduca con la generación de su hueco.
+//! Ninguna acción nombra un path. Se actúa sobre filas por su [`RowKey`], y
+//! toda acción que nombre una fila lleva TAMBIÉN la generación en la que el
+//! renderer la vio. Sin ese par la clave no dice nada: es un índice, y un
+//! índice de una pantalla anterior nombra otro fichero. El host compara la
+//! generación con la época del listado y responde
+//! [`crate::ActionAck::Stale`] cuando no coinciden — que es lo que impide que
+//! un click tardío actúe sobre lo que ocupó esa fila DESPUÉS.
+//!
+//! Y ninguna acción acepta una cadena de ruta, ni la aceptará: lo que el
+//! renderer puede nombrar es lo que el host le dio.
 
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +42,8 @@ pub enum UiAction {
         slot_id: u32,
         /// Fila.
         key: RowKey,
+        /// La generación en la que el renderer vio esa fila.
+        generation: u64,
     },
     /// Marca o desmarca una fila.
     ToggleMark {
@@ -41,6 +51,8 @@ pub enum UiAction {
         slot_id: u32,
         /// Fila.
         key: RowKey,
+        /// La generación en la que el renderer vio esa fila.
+        generation: u64,
     },
     /// Marca TODO el rango entre dos filas, extremos incluidos.
     ///
@@ -55,6 +67,8 @@ pub enum UiAction {
         from: RowKey,
         /// El otro.
         to: RowKey,
+        /// La generación en la que el renderer vio esas filas.
+        generation: u64,
     },
     /// Abre lo que haya bajo esa fila: entra en el directorio, o abre el
     /// fichero por el camino de siempre.
@@ -63,6 +77,8 @@ pub enum UiAction {
         slot_id: u32,
         /// Fila.
         key: RowKey,
+        /// La generación en la que el renderer vio esa fila.
+        generation: u64,
     },
     /// Sube al directorio padre.
     Parent {

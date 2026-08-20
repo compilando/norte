@@ -84,6 +84,7 @@ fn acciones() {
                 UiAction::Activate {
                     slot_id: 1,
                     key: RowKey(9),
+                    generation: 4,
                 },
             ),
             ("cancel_task", UiAction::CancelTask { task_id: 42 }),
@@ -125,6 +126,14 @@ fn acciones() {
                     slot_id: 1,
                     from: RowKey(2),
                     to: RowKey(5),
+                    generation: 4,
+                },
+            ),
+            (
+                "set_viewport",
+                UiAction::SetViewport {
+                    width: 120,
+                    height: 40,
                 },
             ),
             (
@@ -148,6 +157,7 @@ fn acciones() {
                 UiAction::SelectRow {
                     slot_id: 1,
                     key: RowKey(7),
+                    generation: 4,
                 },
             ),
             (
@@ -163,6 +173,7 @@ fn acciones() {
                 UiAction::ToggleMark {
                     slot_id: 1,
                     key: RowKey(7),
+                    generation: 4,
                 },
             ),
         ],

@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 4;
+export const BRIDGE_VERSION = 5;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -206,10 +206,16 @@ export interface KeyInput {
 
 export type UiAction =
   | { action: "move_cursor"; slot_id: number; delta: number }
-  | { action: "select_row"; slot_id: number; key: RowKey }
-  | { action: "toggle_mark"; slot_id: number; key: RowKey }
-  | { action: "mark_range"; slot_id: number; from: RowKey; to: RowKey }
-  | { action: "activate"; slot_id: number; key: RowKey }
+  | { action: "select_row"; slot_id: number; key: RowKey; generation: number }
+  | { action: "toggle_mark"; slot_id: number; key: RowKey; generation: number }
+  | {
+      action: "mark_range";
+      slot_id: number;
+      from: RowKey;
+      to: RowKey;
+      generation: number;
+    }
+  | { action: "activate"; slot_id: number; key: RowKey; generation: number }
   | { action: "parent"; slot_id: number }
   | { action: "history"; slot_id: number; back: boolean }
   | { action: "set_visible_range"; slot_id: number; first: number; count: number }

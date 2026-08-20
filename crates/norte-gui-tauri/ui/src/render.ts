@@ -37,6 +37,12 @@ interface SlotDom {
   canvas: HTMLElement;
   rows: Map<number, HTMLElement>;
   lastRange: { first: number; count: number } | null;
+  /**
+   * La generación que se PINTÓ. Toda acción de fila la lleva: sin ella la
+   * clave es un índice, y un índice de la pantalla anterior nombra otro
+   * fichero. El host la compara y responde `stale` si no coincide.
+   */
+  generation: number;
 }
 
 export class Screen {
@@ -167,6 +173,7 @@ export class Screen {
         canvas,
         rows: new Map(),
         lastRange: null,
+        generation: 0,
       };
       this.slots.set(p.slot_id, dom);
       this.wire(p.slot_id, dom);
@@ -216,15 +223,31 @@ export class Screen {
         // es una regla de selección compartida, no una del renderer.
         const from = this.cursorOf(slotId);
         if (from !== null) {
-          this.send({ action: "mark_range", slot_id: slotId, from, to: rowKey });
+          this.send({
+            action: "mark_range",
+            slot_id: slotId,
+            from,
+            to: rowKey,
+            generation: dom.generation,
+          });
           return;
         }
       }
       if (e.ctrlKey || e.metaKey) {
-        this.send({ action: "toggle_mark", slot_id: slotId, key: rowKey });
+        this.send({
+          action: "toggle_mark",
+          slot_id: slotId,
+          key: rowKey,
+          generation: dom.generation,
+        });
         return;
       }
-      this.send({ action: "select_row", slot_id: slotId, key: rowKey });
+      this.send({
+        action: "select_row",
+        slot_id: slotId,
+        key: rowKey,
+        generation: dom.generation,
+      });
     });
     dom.scroller.addEventListener("dblclick", (e) => {
       const target = e.target;
@@ -237,7 +260,12 @@ export class Screen {
       }
       const rowKey = Number(rowEl.dataset["key"]);
       if (!Number.isNaN(rowKey)) {
-        this.send({ action: "activate", slot_id: slotId, key: rowKey });
+        this.send({
+          action: "activate",
+          slot_id: slotId,
+          key: rowKey,
+          generation: dom.generation,
+        });
       }
     });
   }
@@ -320,6 +348,7 @@ export class Screen {
       dom.title.append(badge(this.t("hostile-name")));
     }
     dom.root.setAttribute("aria-label", slot.path_display);
+    dom.generation = slot.generation;
 
     this.paintHeader(dom, slot);
 

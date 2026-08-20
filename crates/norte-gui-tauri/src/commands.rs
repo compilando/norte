@@ -240,6 +240,7 @@ mod tests {
             "action": "activate",
             "slot_id": 1,
             "key": 3,
+            "generation": 4,
             "path": "/etc/passwd"
         });
         // Se ignora el campo sobrante: lo que actúa es la clave opaca, y una
@@ -249,7 +250,8 @@ mod tests {
             a,
             UiAction::Activate {
                 slot_id: 1,
-                key: norte_ui_host::RowKey(3)
+                key: norte_ui_host::RowKey(3),
+                generation: 4
             }
         );
     }

@@ -9,6 +9,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A row is named by key and generation.** Bridge version **5**, ADR 0068.
+  Every action that names a row now also names the screen it was named on, and
+  the host refuses it when the listing has moved on since. The contract had
+  promised this from the start — "a late double click does not act on the file
+  that took that row afterwards" — and nothing implemented it: the key was the
+  index and the guard was a bounds check. A range whose endpoint is outside the
+  window is now refused rather than clamped, because clamping widened a mark —
+  and what is marked is what gets deleted — to rows the renderer was never
+  shown.
+
 - **The graphical frontend can look at a file.** Bridge version **4**: F3
   opens a viewer over the listing, reading a bounded 256 KiB head — the rest of
   the file is not read, the same budget the terminal uses — decoding it through
@@ -193,6 +203,18 @@ independently through `PROTOCOL_VERSION`.
   and were waiting for the commands to exist.
 
 ### Fixed
+
+- **Entering a large directory showed only its first hundred entries.** The
+  listing's first page cleared the request token, and the background drain kept
+  sending its batches with that same token, so every one of them was dropped:
+  `/usr/lib` showed 100 rows and a resync did not help, because the entries had
+  never been merged. Start-up worked only because it restored the token by
+  hand. The drain has its own token now, and the hand-restore is gone.
+
+- **Coming back to a directory left its size and date columns blank.** The set
+  of already-probed paths was never cleared, so a re-listing — whose entries
+  are lazy again — filtered every candidate out, permanently, for the rest of
+  the session. It also grew by one path per file ever seen.
 
 - **Two kinds of bridge patch could never be serialized.** `ViewChange::Tasks`
   and `ViewChange::Dialogs` wrapped a sequence in a newtype variant of an

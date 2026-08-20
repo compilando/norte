@@ -179,6 +179,10 @@ async fn via_host(pasos: &[Paso]) -> Vec<Semantico> {
     .expect("arranca");
     let mut sub = host.subscribe();
     let mut salida = vec![foto_host(&primera)];
+    // La generación VIVA del listado. Una acción de fila la lleva porque sin
+    // ella la clave es un índice, y este arnés navega entre pasos: el índice
+    // de la pantalla anterior nombraría otro fichero.
+    let mut epoca = listado_de(&primera).generation;
 
     for paso in pasos {
         let (accion, navega) = match paso {
@@ -195,6 +199,7 @@ async fn via_host(pasos: &[Paso]) -> Vec<Semantico> {
                     UiAction::ToggleMark {
                         slot_id: 1,
                         key: norte_ui_host::RowKey(u64::try_from(actual.cursor).unwrap_or(0)),
+                        generation: epoca,
                     },
                     false,
                 )
@@ -205,6 +210,7 @@ async fn via_host(pasos: &[Paso]) -> Vec<Semantico> {
                     UiAction::Activate {
                         slot_id: 1,
                         key: norte_ui_host::RowKey(u64::try_from(actual.cursor).unwrap_or(0)),
+                        generation: epoca,
                     },
                     true,
                 )
@@ -230,13 +236,13 @@ async fn via_host(pasos: &[Paso]) -> Vec<Semantico> {
         // que no es directorio) deja la pantalla como estaba: es el MISMO
         // desenlace que en las primitivas.
         let hubo_cd = navega && matches!(ack, norte_ui_host::ActionAck::Applied { .. });
-        if hubo_cd {
-            let foto = espera_foto(&mut sub).await;
-            salida.push(foto_host(&foto));
+        let foto = if hubo_cd {
+            espera_foto(&mut sub).await
         } else {
-            let foto = pide_foto(&host, &mut sub).await;
-            salida.push(foto_host(&foto));
-        }
+            pide_foto(&host, &mut sub).await
+        };
+        epoca = listado_de(&foto).generation;
+        salida.push(foto_host(&foto));
     }
     salida
 }
@@ -259,6 +265,19 @@ async fn espera_foto(sub: &mut UiSubscription) -> ViewSnapshot {
 async fn pide_foto(host: &UiHost, sub: &mut UiSubscription) -> ViewSnapshot {
     host.dispatch(UiAction::Resync).await.expect("host vivo");
     espera_foto(sub).await
+}
+
+/// El listado de una foto.
+fn listado_de(snap: &ViewSnapshot) -> &norte_ui_host::dto::BrowserSlotView {
+    let SlotView::Browser(b) = snap
+        .slots
+        .iter()
+        .find(|s| matches!(s, SlotView::Browser(_)))
+        .expect("hay listado")
+    else {
+        unreachable!("filtrado arriba")
+    };
+    b
 }
 
 fn foto_host(snap: &ViewSnapshot) -> Semantico {
