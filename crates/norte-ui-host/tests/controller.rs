@@ -207,6 +207,25 @@ async fn solo_viaja_la_ventana_visible() {
     }
 }
 
+/// El mismo árbol, sin envolver: para los tests que necesitan tocar sus
+/// canales antes de arrancar el host.
+fn arbol_como_falso() -> Falso {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![
+            (b"docs".to_vec(), true),
+            (b"notas.txt".to_vec(), false),
+            (vec![0x63, 0x61, 0x66, 0xC3, 0x28], false),
+        ],
+    );
+    f.pon(
+        "mem:///casa/docs",
+        vec![(b"a.md".to_vec(), false), (b"b.md".to_vec(), false)],
+    );
+    f
+}
+
 /// Un árbol de dos niveles para navegar de verdad.
 fn arbol() -> Arc<Falso> {
     let mut f = Falso::default();
@@ -1219,4 +1238,94 @@ async fn el_buscador_se_queda_el_texto_y_filtra() {
     let cerrado = siguiente_foto(&mut sub).await;
     assert!(listado(&cerrado).quick.is_none());
     assert_eq!(listado(&cerrado).rows.len(), 3, "el listado sigue entero");
+}
+
+/// Perder el daemon se pinta Y se dice: notarlo solo en un icono no basta
+/// cuando pasa a mitad de una operación.
+#[tokio::test]
+async fn la_conexion_perdida_se_pinta_y_se_dice() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.eventos.lock().expect("eventos") = Some(rx);
+    let (host, snap) = host_arbol(Arc::new(falso)).await;
+    assert_eq!(
+        snap.connection,
+        norte_ui_host::dto::ConnectionView::Connected
+    );
+
+    let mut sub = host.subscribe();
+    tx.send(norte_client::ConnEvent::Lost)
+        .expect("el host escucha");
+
+    let mut vista = None;
+    let mut dicho = false;
+    for _ in 0..10 {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("llega")
+            .expect("el host sigue vivo")
+        {
+            Update::Message(m) => match &m.payload {
+                UiUpdate::Patch(p) => {
+                    for c in &p.changes {
+                        if let norte_ui_host::dto::ViewChange::Connection(v) = c {
+                            vista = Some(v.clone());
+                        }
+                    }
+                }
+                UiUpdate::Notice(norte_ui_host::dto::UiNotice::Message { key, .. }) => {
+                    if key == "msg-daemon-lost" {
+                        dicho = true;
+                    }
+                }
+                UiUpdate::Snapshot(_) | UiUpdate::Notice(_) => {}
+            },
+            Update::Lagged => {}
+        }
+        if vista.is_some() && dicho {
+            break;
+        }
+    }
+    assert_eq!(
+        vista,
+        Some(norte_ui_host::dto::ConnectionView::Reconnecting),
+        "se pinta reconectando"
+    );
+    assert!(dicho, "y se dice");
+}
+
+/// Una task que lanzó OTRO cliente de la misma sesión aparece en el tablero,
+/// y el tablero dice que es ajena: una operación que uno no ha pedido y no se
+/// distingue de las suyas es una sorpresa.
+#[tokio::test]
+async fn una_task_ajena_se_ve_y_se_dice_ajena() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    let (host, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = host.subscribe();
+
+    let progreso = norte_proto::TaskProgress {
+        task_id: norte_proto::TaskId::new(11),
+        kind: norte_proto::TaskKind::Copy,
+        state: norte_proto::TaskState::Running,
+        bytes_done: 0,
+        bytes_total: None,
+        entries_done: 0,
+        entries_total: None,
+        current: None,
+    };
+    let (_ptx, prx) = tokio::sync::watch::channel(progreso);
+    tx.send(norte_ui_host::backend::HostTask {
+        id: norte_proto::TaskId::new(11),
+        progress: prx,
+        cancel: Arc::new(|| {}),
+        foreign: true,
+    })
+    .expect("el host escucha");
+
+    let tasks = siguientes_tasks(&mut sub).await;
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_id, 11);
+    assert!(tasks[0].foreign, "el tablero dice que es ajena");
 }

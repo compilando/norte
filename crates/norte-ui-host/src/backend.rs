@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use norte_client::EntryStream;
+use norte_client::{ConnEvent, EntryStream};
 use norte_proto::{DeleteMode, Error, TaskId, TaskProgress, VPath, methods};
 use tokio::sync::watch;
 
@@ -27,6 +27,11 @@ pub struct HostTask {
     /// Pide la cancelación cooperativa. Llamarla dos veces no es un error:
     /// cancelar es idempotente por contrato.
     pub cancel: Arc<dyn Fn() + Send + Sync>,
+    /// La lanzó OTRO cliente de la misma sesión. Se pinta igual y se puede
+    /// cancelar igual —es la misma sesión—, pero el tablero lo dice: una
+    /// operación que uno no ha pedido y no se distingue de las suyas es una
+    /// sorpresa.
+    pub foreign: bool,
 }
 
 impl std::fmt::Debug for HostTask {
@@ -72,6 +77,14 @@ pub trait HostBackend: Send + Sync + 'static {
         body: serde_json::Value,
     ) -> BoxFuture<'static, Result<u64, Error>>;
 
+    /// El canal de eventos de conexión (perdida y restaurada), si esta
+    /// conexión lo tiene y nadie lo ha tomado ya.
+    fn take_conn_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>>;
+
+    /// El canal de tasks AJENAS: las que otro cliente de la misma sesión
+    /// lanzó y este observa.
+    fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>>;
+
     /// Borra UNA entrada: a la papelera o permanente. Devuelve la Task ya
     /// encolada — el desenlace llega por su progreso, no por esta llamada.
     ///
@@ -106,6 +119,32 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move { backend.session_put(version, revision, body).await })
     }
 
+    fn take_conn_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>> {
+        norte_client::RemoteBackend::take_conn_events(self)
+    }
+
+    fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>> {
+        let mut origen = norte_client::RemoteBackend::take_foreign_tasks(self)?;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        // Un canal no se mapea en el sitio: el puente es una task de reenvío
+        // que muere con el canal que la alimenta.
+        tokio::spawn(async move {
+            while let Some(t) = origen.recv().await {
+                let canceller = t.canceller();
+                let task = HostTask {
+                    id: t.id(),
+                    progress: t.progress(),
+                    cancel: Arc::new(move || canceller.cancel()),
+                    foreign: true,
+                };
+                if tx.send(task).is_err() {
+                    return;
+                }
+            }
+        });
+        Some(rx)
+    }
+
     fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>> {
         let backend = self.clone();
         Box::pin(async move {
@@ -115,6 +154,7 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
             })
         })
     }

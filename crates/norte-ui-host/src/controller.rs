@@ -130,6 +130,8 @@ enum Mensaje {
     TaskNueva(Box<crate::backend::HostTask>),
     /// Encolarla falló. El usuario tiene que enterarse: pidió un borrado.
     TaskFallida(Box<Error>),
+    /// La conexión con el daemon cambió de estado.
+    Conexion(norte_client::ConnEvent),
     /// Un snapshot de progreso. Por la MISMA cola que todo lo demás, que es
     /// lo que garantiza que un estado terminal no se adelante ni se pierda.
     Progreso(Box<norte_proto::TaskProgress>),
@@ -170,6 +172,34 @@ impl UiHost {
         estado.listar_inicial(options.backend.as_ref(), &tx2).await;
         let primero = estado.snapshot();
 
+        // Los dos canales de la conexión son del PRIMER dueño, así que se
+        // toman una vez, aquí, y su contenido entra por el mismo buzón que
+        // todo lo demás: un aviso de conexión perdida tiene que ordenarse
+        // con lo que estaba pasando cuando se perdió.
+        if let Some(mut eventos) = options.backend.take_conn_events() {
+            let buzon = tx.clone();
+            tokio::spawn(async move {
+                while let Some(ev) = eventos.recv().await {
+                    if buzon.send(Mensaje::Conexion(ev)).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+        if let Some(mut ajenas) = options.backend.take_foreign_tasks() {
+            let buzon = tx.clone();
+            tokio::spawn(async move {
+                while let Some(task) = ajenas.recv().await {
+                    if buzon
+                        .send(Mensaje::TaskNueva(Box::new(task)))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            });
+        }
         let host = Self {
             inbox: tx,
             updates: updates.clone(),
@@ -277,6 +307,26 @@ async fn actor(
                 hueco.pane.extend(batch);
                 let u = estado.parche_filas();
                 let _ = updates.send(u);
+            }
+            Mensaje::Conexion(ev) => {
+                let (vista, clave) = match ev {
+                    norte_client::ConnEvent::Lost => {
+                        (ConnectionView::Reconnecting, "msg-daemon-lost")
+                    }
+                    norte_client::ConnEvent::Restored => {
+                        (ConnectionView::Connected, "msg-daemon-restored")
+                    }
+                };
+                estado.conexion = vista.clone();
+                let u = estado.parche(vec![ViewChange::Connection(vista)]);
+                let _ = updates.send(u);
+                // Y se DICE, además de pintarse: perder el daemon a mitad de
+                // una operación no puede notarse solo en un icono.
+                let n = estado.sobre(UiUpdate::Notice(UiNotice::Message {
+                    key: clave.to_owned(),
+                    detail: None,
+                }));
+                let _ = updates.send(n);
             }
             Mensaje::TaskNueva(task) => {
                 for u in estado.registrar_task(*task, &buzon) {
@@ -1146,6 +1196,7 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let id = task.id.get();
+        let ajena = task.foreign;
         if self.tasks.len() >= MAX_TASKS {
             // El tablero está acotado: lo más viejo TERMINADO se cae antes de
             // que la memoria del host dependa de cuántas operaciones lanzó
@@ -1160,7 +1211,8 @@ impl Estado {
             }
         }
         let mut rx = task.progress.clone();
-        let vista = Self::vista_de(&rx.borrow());
+        let mut vista = Self::vista_de(&rx.borrow());
+        vista.foreign = ajena;
         self.tasks.insert(
             id,
             TaskViva {
@@ -1202,7 +1254,10 @@ impl Estado {
         let Some(viva) = self.tasks.get_mut(&p.task_id.get()) else {
             return Vec::new();
         };
+        let ajena = viva.vista.foreign;
         viva.vista = Self::vista_de(p);
+        // De quién es la task no lo dice el progreso: lo dice de dónde vino.
+        viva.vista.foreign = ajena;
         let cambio = ViewChange::Tasks(self.vistas_de_tasks());
         vec![self.parche(vec![cambio])]
     }
