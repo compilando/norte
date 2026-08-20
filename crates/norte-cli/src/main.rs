@@ -656,9 +656,8 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // Un frontend es un proceso APARTE (el TUI toma la terminal; el gráfico,
     // cuando lo haya, abrirá ventana): este CLI solo lo localiza y le cede el
     // proceso — nada de engine ni daemon aquí.
-    match cli.cmd {
-        Cmd::Tui { ref args } => return exec_frontend(TUI_BIN, args),
-        _ => {}
+    if let Cmd::Tui { ref args } = cli.cmd {
+        return exec_frontend(TUI_BIN, args);
     }
     // Doctor es solo-lectura sobre config/keymaps (H2): ni engine ni daemon.
     if let Cmd::Doctor { json } = cli.cmd {
