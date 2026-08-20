@@ -9,6 +9,33 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **norte has a graphical window again, and it is a spike, not a product.**
+  Phase 3 of the multi-frontend plan: `norte-gui-tauri` is a Tauri 2
+  application over `norte-ui-host`, with a plain-TypeScript webview that
+  paints and does nothing else (ADR 0067). It lists, navigates, moves the
+  cursor, marks (including a range in one gesture), quick-searches, shows the
+  task strip and the status bar, and asks for confirmation before a delete —
+  all of it against a real daemon, with two panes laid out by Rust. The
+  webview has no filesystem, no shell, no HTTP, no `rpc(method, params)` and
+  no `window.__TAURI__`: four commands are the whole surface, and a test
+  fails if a fifth appears. It exists to answer a question with measurements;
+  the go/no-go is in `docs/spike-tauri-2026-08-20.md`.
+
+- **The bridge projects the screen's layout, and its snapshots are complete.**
+  Bridge version **2**. `ViewSnapshot` now carries a `LayoutView` — where each
+  slot goes, in layout cells, with its role — so the renderer no longer has to
+  invent where two panes live or which one is the target; that rule stays in
+  `norte-frontend`, shared with the terminal. Changing focus travels as a
+  patch rather than a whole screen. And a snapshot now includes the open
+  dialogs and the live task board: it did not, so a renderer that resynced
+  while a delete confirmation was up would have painted the question away
+  while the operation waited for an answer.
+
+- **A range of rows is marked in one action.** `UiAction::MarkRange` — what
+  belongs to a range (and what does not, like `..`) is a selection rule, and
+  those live in `norte-frontend`, not in whoever paints. Shift-click in the
+  new window goes through it.
+
 - **The graphical frontend can paste.** It could not — at all: no input
   handler, no clipboard read for text, and `Cmd+V` filtered out before it
   reached any field. So a path, a rename, a search term or a filter had to be
@@ -134,6 +161,14 @@ independently through `PROTOCOL_VERSION`.
   and were waiting for the commands to exist.
 
 ### Fixed
+
+- **Two kinds of bridge patch could never be serialized.** `ViewChange::Tasks`
+  and `ViewChange::Dialogs` wrapped a sequence in a newtype variant of an
+  internally tagged enum, which serde refuses at run time: every task-board
+  and dialog update would have failed on the wire the moment a non-Rust
+  renderer existed. They are struct variants now, and the golden corpus covers
+  every `ViewChange` one by one instead of two by example.
+
 
 - **A comparison asks each directory, not just the two roots.** Under one
   `file://` there are mounts — an exFAT stick, an ext4 subtree in `+F`, a

@@ -3,3 +3,11 @@
 lcov.info
 .DS_Store
 *.snap.new
+
+# Fase 3 (spike de Tauri): lo que instala y produce la cadena de JS. El
+# lockfile SÍ se versiona (`package-lock.json`); lo demás es reconstruible con
+# `just gui-deps` y `just gui-build`.
+crates/norte-gui-tauri/ui/node_modules/
+crates/norte-gui-tauri/ui/dist/
+crates/norte-gui-tauri/ui/coverage/
+crates/norte-gui-tauri/gen/

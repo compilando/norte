@@ -1,0 +1,32 @@
+{
+  "name": "norte-gui-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "El renderer del spike de Tauri: TypeScript a secas, sin framework ni dependencias de runtime.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests",
+    "fmt": "prettier --write src tests *.json *.ts *.html",
+    "fmt:check": "prettier --check src tests *.json *.ts *.html",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@tauri-apps/cli": "2.11.4",
+    "@types/node": "24.13.3",
+    "@vitest/coverage-v8": "4.1.11",
+    "eslint": "10.8.1",
+    "jsdom": "30.0.1",
+    "prettier": "3.9.6",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.67.0",
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1"
+  }
+}

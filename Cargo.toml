@@ -21,6 +21,7 @@ members = [
     "crates/norte-cli",
     "crates/norte-tui",
     "crates/norte-ui-host",
+    "crates/norte-gui-tauri",
     "crates/norte-frontend",
     "crates/norte-help",
     "crates/norte-encoding",
@@ -230,6 +231,12 @@ thiserror = "2"
 base64 = "0.22"
 bitflags = { version = "2", features = ["serde"] }
 anyhow = "1"
+
+# Tauri 2 — SOLO `norte-gui-tauri` puede nombrarlo (ADR 0066, decisión D2).
+# Versiones fijadas aquí y en `Cargo.lock`: el spike existe para medir, y una
+# medida sobre una versión que se mueve sola no vale nada.
+tauri = { version = "2", default-features = false, features = ["wry", "common-controls-v6"] }
+tauri-build = { version = "2", default-features = false }
 async-trait = "0.1"
 bytes = "1"
 futures = "0.3"
