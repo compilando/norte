@@ -38,6 +38,17 @@ use crate::dto::{
 /// sin límite.
 const INBOX: usize = 256;
 
+/// Entradas de la PRIMERA página: lo que se pinta antes de seguir drenando.
+///
+/// El mismo número que usa el TUI (`navigate::FIRST_PAGE`) y por el mismo
+/// motivo: el primer frame no espera al listado entero, y un directorio de
+/// medio millón de entradas se ve igual de rápido que uno de diez.
+const FIRST_PAGE: usize = 100;
+
+/// Entradas por lote mientras se drena el resto. Ni una a una —un mensaje
+/// por entrada ahoga el buzón del actor— ni todas de golpe.
+const FILL_BATCH: usize = 500;
+
 /// Actualizaciones retenidas para un suscriptor lento. Al pasarse, el
 /// suscriptor se entera de que se quedó atrás y pide un snapshot: es la
 /// recuperación barata, y la que no gasta memoria del host.
@@ -113,10 +124,14 @@ enum Mensaje {
     /// La respuesta de un listado que se pidió antes. Vuelve al actor como
     /// un mensaje más: así el estado lo sigue tocando un solo escritor.
     Listado(Box<(RequestToken, VPath, Result<Vec<Entry>, Error>)>),
+    /// Más entradas del listado que se está drenando por detrás.
+    MasEntradas(Box<(RequestToken, u32, Vec<Entry>)>),
     /// Una Task recién encolada, con su progreso y su cancelación.
     TaskNueva(Box<crate::backend::HostTask>),
     /// Encolarla falló. El usuario tiene que enterarse: pidió un borrado.
     TaskFallida(Box<Error>),
+    /// La conexión con el daemon cambió de estado.
+    Conexion(norte_client::ConnEvent),
     /// Un snapshot de progreso. Por la MISMA cola que todo lo demás, que es
     /// lo que garantiza que un estado terminal no se adelante ni se pierda.
     Progreso(Box<norte_proto::TaskProgress>),
@@ -154,9 +169,37 @@ impl UiHost {
         estado.leer_sesion(options.backend.as_ref()).await;
         // El primer listado se pide ANTES de publicar nada: el snapshot 0
         // describe una pantalla que ya existe, no una promesa.
-        estado.listar_inicial(options.backend.as_ref()).await;
+        estado.listar_inicial(options.backend.as_ref(), &tx2).await;
         let primero = estado.snapshot();
 
+        // Los dos canales de la conexión son del PRIMER dueño, así que se
+        // toman una vez, aquí, y su contenido entra por el mismo buzón que
+        // todo lo demás: un aviso de conexión perdida tiene que ordenarse
+        // con lo que estaba pasando cuando se perdió.
+        if let Some(mut eventos) = options.backend.take_conn_events() {
+            let buzon = tx.clone();
+            tokio::spawn(async move {
+                while let Some(ev) = eventos.recv().await {
+                    if buzon.send(Mensaje::Conexion(ev)).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+        if let Some(mut ajenas) = options.backend.take_foreign_tasks() {
+            let buzon = tx.clone();
+            tokio::spawn(async move {
+                while let Some(task) = ajenas.recv().await {
+                    if buzon
+                        .send(Mensaje::TaskNueva(Box::new(task)))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            });
+        }
         let host = Self {
             inbox: tx,
             updates: updates.clone(),
@@ -249,6 +292,41 @@ async fn actor(
                 // enumerar parches que el renderer tendría que casar.
                 let snap = estado.snapshot();
                 let _ = updates.send(estado.sobre(UiUpdate::Snapshot(snap)));
+            }
+            Mensaje::MasEntradas(datos) => {
+                let (token, slot, batch) = *datos;
+                let Some(hueco) = estado.huecos.get_mut(&slot) else {
+                    continue;
+                };
+                if hueco.en_vuelo != Some(token) {
+                    // Un lote de una navegación que ya fue relevada. Se
+                    // descarta aquí: pegarlo al listado de otro directorio
+                    // sería mezclar dos árboles en una pantalla.
+                    continue;
+                }
+                hueco.pane.extend(batch);
+                let u = estado.parche_filas();
+                let _ = updates.send(u);
+            }
+            Mensaje::Conexion(ev) => {
+                let (vista, clave) = match ev {
+                    norte_client::ConnEvent::Lost => {
+                        (ConnectionView::Reconnecting, "msg-daemon-lost")
+                    }
+                    norte_client::ConnEvent::Restored => {
+                        (ConnectionView::Connected, "msg-daemon-restored")
+                    }
+                };
+                estado.conexion = vista.clone();
+                let u = estado.parche(vec![ViewChange::Connection(vista)]);
+                let _ = updates.send(u);
+                // Y se DICE, además de pintarse: perder el daemon a mitad de
+                // una operación no puede notarse solo en un icono.
+                let n = estado.sobre(UiUpdate::Notice(UiNotice::Message {
+                    key: clave.to_owned(),
+                    detail: None,
+                }));
+                let _ = updates.send(n);
             }
             Mensaje::TaskNueva(task) => {
                 for u in estado.registrar_task(*task, &buzon) {
@@ -548,13 +626,67 @@ impl Estado {
         self.reparto.hidden.contains(&SlotId(id))
     }
 
+    /// Toma la primera página de un stream y deja el resto drenando hacia el
+    /// actor.
+    ///
+    /// El resto llega por el MISMO buzón que todo lo demás, con el testigo de
+    /// su petición: un lote de una navegación abandonada se descarta igual
+    /// que su primera página.
+    async fn primera_pagina(
+        stream: Result<norte_client::EntryStream, Error>,
+        slot: u32,
+        token: RequestToken,
+        buzon: mpsc::Sender<Mensaje>,
+    ) -> Result<Vec<Entry>, Error> {
+        use futures::StreamExt as _;
+        let mut stream = stream?;
+        let mut primera = Vec::with_capacity(FIRST_PAGE);
+        while primera.len() < FIRST_PAGE {
+            match stream.next().await {
+                Some(Ok(e)) => primera.push(e),
+                // Un error a mitad de página se cuenta como el error del
+                // listado: media página no es un listado.
+                Some(Err(e)) => return Err(e),
+                None => return Ok(primera),
+            }
+        }
+        tokio::spawn(async move {
+            let mut lote = Vec::with_capacity(FILL_BATCH);
+            while let Some(entrada) = stream.next().await {
+                let Ok(entrada) = entrada else {
+                    // El resto se cortó. Lo que ya se pintó sigue siendo
+                    // válido; callarlo es mejor que tirar el listado entero.
+                    break;
+                };
+                lote.push(entrada);
+                if lote.len() >= FILL_BATCH {
+                    let batch = std::mem::take(&mut lote);
+                    if buzon
+                        .send(Mensaje::MasEntradas(Box::new((token, slot, batch))))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    lote = Vec::with_capacity(FILL_BATCH);
+                }
+            }
+            if !lote.is_empty() {
+                let _ = buzon
+                    .send(Mensaje::MasEntradas(Box::new((token, slot, lote))))
+                    .await;
+            }
+        });
+        Ok(primera)
+    }
+
     /// El listado inicial de cada hueco VISIBLE, el único que se espera EN
     /// LÍNEA: hasta que exista no hay pantalla que enseñar, así que no hay
     /// nada que congelar.
     ///
     /// Un hueco oculto no se lista: lo que no se ve no se trae, y en cuanto
     /// el reparto lo saque a la luz se pedirá entonces.
-    async fn listar_inicial(&mut self, backend: &dyn HostBackend) {
+    async fn listar_inicial(&mut self, backend: &dyn HostBackend, buzon: &mpsc::Sender<Mensaje>) {
         let visibles: Vec<u32> = self
             .huecos
             .keys()
@@ -563,8 +695,20 @@ impl Estado {
             .collect();
         for id in visibles {
             let dir = self.huecos[&id].pane.dir().clone();
-            let res = backend.list(dir.clone()).await;
+            self.token += 1;
+            let token = RequestToken(self.token);
+            if let Some(h) = self.huecos.get_mut(&id) {
+                h.en_vuelo = Some(token);
+            }
+            let stream = backend.list(dir.clone()).await;
+            let res = Self::primera_pagina(stream, id, token, buzon.clone()).await;
             self.aterriza_en(id, dir, res);
+            // `aterriza_en` limpia el testigo al aterrizar la primera
+            // página; el drenaje del resto sigue usándolo, así que se
+            // restituye mientras quede stream detrás.
+            if let Some(h) = self.huecos.get_mut(&id) {
+                h.en_vuelo = Some(token);
+            }
         }
     }
 
@@ -721,6 +865,14 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Con el buscador abierto, las teclas de TEXTO son suyas. Es el
+        // contexto de entrada del listado, y dejar que el resolver se las
+        // quede convertiría teclear «d» en «borrar».
+        if self.hueco().pane.quick().is_some()
+            && let Some(salida) = self.tecla_en_quick(k)
+        {
+            return salida;
+        }
         let Ok(chord) = k.to_chord() else {
             // Una tecla que el adaptador no entiende no se adivina.
             return (
@@ -795,6 +947,39 @@ impl Estado {
         }
     }
 
+    /// La tecla, cuando el buscador incremental está abierto.
+    ///
+    /// `None` = esta tecla no es suya y sigue su camino normal (una tecla de
+    /// función, un atajo con modificador): abrir el buscador NO desconecta el
+    /// resto del teclado, solo se queda el texto, el borrado y las tres
+    /// teclas que lo gobiernan.
+    fn tecla_en_quick(
+        &mut self,
+        k: &crate::keys::KeyInput,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        if k.ctrl || k.alt || k.meta {
+            return None;
+        }
+        let pane = &mut self.hueco_mut().pane;
+        match k.key.as_str() {
+            "Escape" | "esc" => pane.quick_cancel(),
+            "Enter" | "enter" => {
+                pane.quick_confirm();
+            }
+            "Backspace" | "backspace" => pane.quick_backspace(),
+            "ArrowDown" | "down" => pane.quick_down(),
+            "ArrowUp" | "up" => pane.quick_up(),
+            otro => {
+                let mut chars = otro.chars();
+                let (Some(c), None) = (chars.next(), chars.next()) else {
+                    return None;
+                };
+                pane.quick_char(c);
+            }
+        }
+        Some((self.aplicada(), vec![self.parche_filas()]))
+    }
+
     /// Ejecuta lo que un comando pide sobre el hueco con el foco.
     ///
     /// Es el MISMO camino que toman las acciones directas del renderer (un
@@ -854,6 +1039,14 @@ impl Estado {
             }
             Efecto::DesmarcarTodo => {
                 self.hueco_mut().pane.clear_marks();
+                (self.aplicada(), vec![self.parche_filas()])
+            }
+            Efecto::BuscarRapido => {
+                // Filtrar es el modo por defecto: es el que no mueve el
+                // listado bajo el cursor mientras se teclea.
+                self.hueco_mut()
+                    .pane
+                    .quick_start(norte_frontend::nav::Mode::Filter);
                 (self.aplicada(), vec![self.parche_filas()])
             }
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
@@ -1003,6 +1196,7 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let id = task.id.get();
+        let ajena = task.foreign;
         if self.tasks.len() >= MAX_TASKS {
             // El tablero está acotado: lo más viejo TERMINADO se cae antes de
             // que la memoria del host dependa de cuántas operaciones lanzó
@@ -1017,7 +1211,8 @@ impl Estado {
             }
         }
         let mut rx = task.progress.clone();
-        let vista = Self::vista_de(&rx.borrow());
+        let mut vista = Self::vista_de(&rx.borrow());
+        vista.foreign = ajena;
         self.tasks.insert(
             id,
             TaskViva {
@@ -1059,7 +1254,10 @@ impl Estado {
         let Some(viva) = self.tasks.get_mut(&p.task_id.get()) else {
             return Vec::new();
         };
+        let ajena = viva.vista.foreign;
         viva.vista = Self::vista_de(p);
+        // De quién es la task no lo dice el progreso: lo dice de dónde vino.
+        viva.vista.foreign = ajena;
         let cambio = ViewChange::Tasks(self.vistas_de_tasks());
         vec![self.parche(vec![cambio])]
     }
@@ -1244,8 +1442,10 @@ impl Estado {
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         let dir = destino.clone();
+        let slot = self.activo();
         tokio::spawn(async move {
-            let res = backend.list(dir.clone()).await;
+            let stream = backend.list(dir.clone()).await;
+            let res = Estado::primera_pagina(stream, slot, token, buzon.clone()).await;
             // Si el actor ya no está, la respuesta no le importa a nadie.
             let _ = buzon
                 .send(Mensaje::Listado(Box::new((token, dir, res))))
@@ -1529,6 +1729,15 @@ impl Estado {
                 .then_some(RowKey(hueco.pane.cursor() as u64)),
             marks: hueco.pane.marks_len() as u64,
             state: hueco.estado.clone(),
+            quick: hueco.pane.quick().map(|q| crate::dto::QuickView {
+                query: clamp_display(q.query_display()),
+                mode: match q.mode() {
+                    norte_frontend::nav::Mode::Filter => "filter",
+                    norte_frontend::nav::Mode::Jump => "jump",
+                }
+                .to_owned(),
+                matches: q.visible().len() as u64,
+            }),
         }
     }
 }

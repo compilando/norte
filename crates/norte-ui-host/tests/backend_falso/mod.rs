@@ -35,6 +35,11 @@ pub struct Falso {
     pub cancelaciones: Arc<AtomicUsize>,
     /// El emisor del progreso de la última task, para que el test lo mueva.
     pub progreso: std::sync::Mutex<Option<tokio::sync::watch::Sender<norte_proto::TaskProgress>>>,
+    /// Los canales de la conexión, para que el test empuje eventos y tasks
+    /// ajenas como haría un daemon.
+    pub eventos:
+        std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<norte_client::ConnEvent>>>,
+    pub ajenas: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>>>,
 }
 
 impl Falso {
@@ -104,7 +109,17 @@ pub fn arbol_de_prueba() -> Falso {
 }
 
 impl HostBackend for Falso {
-    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<Vec<Entry>, Error>> {
+    fn take_conn_events(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<norte_client::ConnEvent>> {
+        self.eventos.lock().expect("eventos").take()
+    }
+
+    fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>> {
+        self.ajenas.lock().expect("ajenas").take()
+    }
+
+    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<norte_client::EntryStream, Error>> {
         self.listados.fetch_add(1, Ordering::SeqCst);
         if !self.arbol.contains_key(&dir.to_wire()) {
             return Box::pin(async { Err(Error::NotFound) });
@@ -134,7 +149,9 @@ impl HostBackend for Falso {
             if retraso > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
             }
-            Ok(entradas)
+            let stream: norte_client::EntryStream =
+                Box::pin(futures::stream::iter(entradas.into_iter().map(Ok)));
+            Ok(stream)
         })
     }
 
@@ -184,6 +201,7 @@ impl HostBackend for Falso {
                 cancel: Arc::new(move || {
                     cancelaciones.fetch_add(1, Ordering::SeqCst);
                 }),
+                foreign: false,
             })
         })
     }

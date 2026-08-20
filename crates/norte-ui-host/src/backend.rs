@@ -8,7 +8,8 @@
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use norte_proto::{DeleteMode, Entry, Error, TaskId, TaskProgress, VPath, methods};
+use norte_client::{ConnEvent, EntryStream};
+use norte_proto::{DeleteMode, Error, TaskId, TaskProgress, VPath, methods};
 use tokio::sync::watch;
 
 /// Una Task en marcha, en la forma mínima que el host necesita: su id, su
@@ -26,6 +27,11 @@ pub struct HostTask {
     /// Pide la cancelación cooperativa. Llamarla dos veces no es un error:
     /// cancelar es idempotente por contrato.
     pub cancel: Arc<dyn Fn() + Send + Sync>,
+    /// La lanzó OTRO cliente de la misma sesión. Se pinta igual y se puede
+    /// cancelar igual —es la misma sesión—, pero el tablero lo dice: una
+    /// operación que uno no ha pedido y no se distingue de las suyas es una
+    /// sorpresa.
+    pub foreign: bool,
 }
 
 impl std::fmt::Debug for HostTask {
@@ -45,12 +51,14 @@ impl std::fmt::Debug for HostTask {
 /// `Arc<dyn HostBackend>` y un test mete el suyo sin genéricos que se
 /// propaguen por toda la API.
 pub trait HostBackend: Send + Sync + 'static {
-    /// El listado COMPLETO de un directorio.
+    /// El listado de un directorio, como STREAM.
     ///
-    /// Completo y no paginado a propósito en esta fase: la política de
-    /// drenaje por páginas es la tarea 2.3, y meterla antes de tener el
-    /// controlador sería decidirla sin nadie que la use.
-    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<Vec<Entry>, Error>>;
+    /// Paginado y no completo: un directorio de medio millón de entradas no
+    /// puede viajar entero antes de pintar la primera fila. El host toma la
+    /// primera página, pinta, y sigue drenando el resto por detrás
+    /// ([`crate::controller`] lo extiende con `PaneState::extend`, el mismo
+    /// camino que el TUI).
+    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<EntryStream, Error>>;
 
     /// La sesión de UI y si ESTA conexión es su dueña (ADR 0059).
     ///
@@ -69,6 +77,14 @@ pub trait HostBackend: Send + Sync + 'static {
         body: serde_json::Value,
     ) -> BoxFuture<'static, Result<u64, Error>>;
 
+    /// El canal de eventos de conexión (perdida y restaurada), si esta
+    /// conexión lo tiene y nadie lo ha tomado ya.
+    fn take_conn_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>>;
+
+    /// El canal de tasks AJENAS: las que otro cliente de la misma sesión
+    /// lanzó y este observa.
+    fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>>;
+
     /// Borra UNA entrada: a la papelera o permanente. Devuelve la Task ya
     /// encolada — el desenlace llega por su progreso, no por esta llamada.
     ///
@@ -80,16 +96,11 @@ pub trait HostBackend: Send + Sync + 'static {
 
 /// El backend de verdad: el SDK.
 impl HostBackend for norte_client::RemoteBackend {
-    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<Vec<Entry>, Error>> {
+    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<EntryStream, Error>> {
         let backend = self.clone();
         Box::pin(async move {
-            use futures::StreamExt as _;
-            let (mut stream, _total) = backend.list_stream(&dir, Vec::new()).await?;
-            let mut out = Vec::new();
-            while let Some(e) = stream.next().await {
-                out.push(e?);
-            }
-            Ok(out)
+            let (stream, _total) = backend.list_stream(&dir, Vec::new()).await?;
+            Ok(stream)
         })
     }
 
@@ -108,6 +119,32 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move { backend.session_put(version, revision, body).await })
     }
 
+    fn take_conn_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>> {
+        norte_client::RemoteBackend::take_conn_events(self)
+    }
+
+    fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>> {
+        let mut origen = norte_client::RemoteBackend::take_foreign_tasks(self)?;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        // Un canal no se mapea en el sitio: el puente es una task de reenvío
+        // que muere con el canal que la alimenta.
+        tokio::spawn(async move {
+            while let Some(t) = origen.recv().await {
+                let canceller = t.canceller();
+                let task = HostTask {
+                    id: t.id(),
+                    progress: t.progress(),
+                    cancel: Arc::new(move || canceller.cancel()),
+                    foreign: true,
+                };
+                if tx.send(task).is_err() {
+                    return;
+                }
+            }
+        });
+        Some(rx)
+    }
+
     fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>> {
         let backend = self.clone();
         Box::pin(async move {
@@ -117,6 +154,7 @@ impl HostBackend for norte_client::RemoteBackend {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
             })
         })
     }

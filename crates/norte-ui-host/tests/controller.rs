@@ -207,6 +207,25 @@ async fn solo_viaja_la_ventana_visible() {
     }
 }
 
+/// El mismo árbol, sin envolver: para los tests que necesitan tocar sus
+/// canales antes de arrancar el host.
+fn arbol_como_falso() -> Falso {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![
+            (b"docs".to_vec(), true),
+            (b"notas.txt".to_vec(), false),
+            (vec![0x63, 0x61, 0x66, 0xC3, 0x28], false),
+        ],
+    );
+    f.pon(
+        "mem:///casa/docs",
+        vec![(b"a.md".to_vec(), false), (b"b.md".to_vec(), false)],
+    );
+    f
+}
+
 /// Un árbol de dos niveles para navegar de verdad.
 fn arbol() -> Arc<Falso> {
     let mut f = Falso::default();
@@ -256,7 +275,9 @@ async fn siguiente_foto(sub: &mut norte_ui_host::UiSubscription) -> norte_ui_hos
                     return s;
                 }
             }
-            Update::Lagged => panic!("sin retraso en este test"),
+            // Quedarse atrás no rompe la espera: significa «pide una foto»,
+            // y una foto es justo lo que se está esperando.
+            Update::Lagged => {}
         }
     }
 }
@@ -476,35 +497,50 @@ async fn mover_el_cursor_no_reenvia_las_filas() {
     );
 }
 
-/// Cien mil entradas no cruzan el bridge para pintar cuarenta filas.
+/// Un listado grande: la primera página se pinta enseguida, el resto llega
+/// por detrás, y del total solo cruzan las filas visibles.
 #[tokio::test]
-async fn un_listado_enorme_no_cruza_entero() {
-    let mut f = Falso::default();
-    let muchas: Vec<(Vec<u8>, bool)> = (0..100_000u32)
-        .map(|i| (format!("f{i:06}").into_bytes(), false))
+async fn un_listado_grande_ni_espera_ni_cruza_entero() {
+    let mut falso = Falso::default();
+    let muchas: Vec<(Vec<u8>, bool)> = (0..5_000u32)
+        .map(|i| (format!("f{i:05}").into_bytes(), false))
         .collect();
-    f.pon("mem:///casa", muchas);
-    let (h, snap) = host_arbol(Arc::new(f)).await;
-    assert_eq!(listado(&snap).total_rows, Some(100_000));
+    falso.pon("mem:///casa", muchas);
+    let (host, snap) = host_arbol(Arc::new(falso)).await;
 
-    let mut sub = h.subscribe();
-    h.dispatch(UiAction::SetVisibleRange {
+    // La primera foto NO espera al listado entero.
+    let primeras = listado(&snap).total_rows.expect("hay total");
+    assert!(
+        primeras <= 100,
+        "la primera página se pinta sin esperar al resto: {primeras}"
+    );
+
+    // El resto llega por detrás. Se sondea, en vez de contar mensajes: los
+    // lotes son asíncronos y el número exacto no es el contrato.
+    let mut sub = host.subscribe();
+    let mut total = primeras;
+    for _ in 0..100 {
+        if total >= 5_000 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        host.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        total = listado(&foto).total_rows.expect("hay total");
+    }
+    assert_eq!(total, 5_000, "acaba entero");
+
+    // Y de las cinco mil, cruzan cuarenta.
+    host.dispatch(UiAction::SetVisibleRange {
         slot_id: 1,
-        first: 50_000,
+        first: 2_000,
         count: 40,
     })
     .await
     .expect("host vivo");
-    let Update::Message(m) = sub.recv().await.expect("llega") else {
-        panic!("sin retraso");
-    };
-    let UiUpdate::Patch(p) = &m.payload else {
-        panic!("un parche");
-    };
-    match &p.changes[0] {
-        norte_ui_host::dto::ViewChange::Rows { rows, .. } => assert_eq!(rows.len(), 40),
-        otro => panic!("se esperaban filas: {otro:?}"),
-    }
+    host.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(listado(&foto).rows.len(), 40);
 }
 
 fn tecla(k: &str) -> UiAction {
@@ -1168,4 +1204,128 @@ async fn cancelar_lo_que_no_existe_es_una_carrera() {
             reason: StaleAction::Generation
         }
     );
+}
+
+/// El buscador incremental se abre por su comando, se queda las teclas de
+/// TEXTO y filtra el listado. Es el contexto de entrada del listado: dejar
+/// que el resolver se quedara la «d» convertiría teclear en borrar.
+#[tokio::test]
+async fn el_buscador_se_queda_el_texto_y_filtra() {
+    let (host, _snap) = host_arbol(arbol()).await;
+    let mut sub = host.subscribe();
+
+    host.dispatch(tecla("/")).await.expect("host vivo");
+    host.dispatch(UiAction::Resync).await.expect("host vivo");
+    let abierto = siguiente_foto(&mut sub).await;
+    assert!(
+        listado(&abierto).quick.is_some(),
+        "el buscador está abierto"
+    );
+
+    // Teclear NO ejecuta comandos: filtra.
+    for c in ["n", "o"] {
+        host.dispatch(tecla(c)).await.expect("host vivo");
+    }
+    host.dispatch(UiAction::Resync).await.expect("host vivo");
+    let filtrado = siguiente_foto(&mut sub).await;
+    let quick = listado(&filtrado).quick.clone().expect("sigue abierto");
+    assert_eq!(quick.query, "no");
+    assert_eq!(quick.matches, 1, "solo `notas.txt` casa");
+
+    // Y Esc lo cierra sin tocar el listado.
+    host.dispatch(tecla("Escape")).await.expect("host vivo");
+    host.dispatch(UiAction::Resync).await.expect("host vivo");
+    let cerrado = siguiente_foto(&mut sub).await;
+    assert!(listado(&cerrado).quick.is_none());
+    assert_eq!(listado(&cerrado).rows.len(), 3, "el listado sigue entero");
+}
+
+/// Perder el daemon se pinta Y se dice: notarlo solo en un icono no basta
+/// cuando pasa a mitad de una operación.
+#[tokio::test]
+async fn la_conexion_perdida_se_pinta_y_se_dice() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.eventos.lock().expect("eventos") = Some(rx);
+    let (host, snap) = host_arbol(Arc::new(falso)).await;
+    assert_eq!(
+        snap.connection,
+        norte_ui_host::dto::ConnectionView::Connected
+    );
+
+    let mut sub = host.subscribe();
+    tx.send(norte_client::ConnEvent::Lost)
+        .expect("el host escucha");
+
+    let mut vista = None;
+    let mut dicho = false;
+    for _ in 0..10 {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("llega")
+            .expect("el host sigue vivo")
+        {
+            Update::Message(m) => match &m.payload {
+                UiUpdate::Patch(p) => {
+                    for c in &p.changes {
+                        if let norte_ui_host::dto::ViewChange::Connection(v) = c {
+                            vista = Some(v.clone());
+                        }
+                    }
+                }
+                UiUpdate::Notice(norte_ui_host::dto::UiNotice::Message { key, .. }) => {
+                    if key == "msg-daemon-lost" {
+                        dicho = true;
+                    }
+                }
+                UiUpdate::Snapshot(_) | UiUpdate::Notice(_) => {}
+            },
+            Update::Lagged => {}
+        }
+        if vista.is_some() && dicho {
+            break;
+        }
+    }
+    assert_eq!(
+        vista,
+        Some(norte_ui_host::dto::ConnectionView::Reconnecting),
+        "se pinta reconectando"
+    );
+    assert!(dicho, "y se dice");
+}
+
+/// Una task que lanzó OTRO cliente de la misma sesión aparece en el tablero,
+/// y el tablero dice que es ajena: una operación que uno no ha pedido y no se
+/// distingue de las suyas es una sorpresa.
+#[tokio::test]
+async fn una_task_ajena_se_ve_y_se_dice_ajena() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    let (host, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = host.subscribe();
+
+    let progreso = norte_proto::TaskProgress {
+        task_id: norte_proto::TaskId::new(11),
+        kind: norte_proto::TaskKind::Copy,
+        state: norte_proto::TaskState::Running,
+        bytes_done: 0,
+        bytes_total: None,
+        entries_done: 0,
+        entries_total: None,
+        current: None,
+    };
+    let (_ptx, prx) = tokio::sync::watch::channel(progreso);
+    tx.send(norte_ui_host::backend::HostTask {
+        id: norte_proto::TaskId::new(11),
+        progress: prx,
+        cancel: Arc::new(|| {}),
+        foreign: true,
+    })
+    .expect("el host escucha");
+
+    let tasks = siguientes_tasks(&mut sub).await;
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_id, 11);
+    assert!(tasks[0].foreign, "el tablero dice que es ajena");
 }

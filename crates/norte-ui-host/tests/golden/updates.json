@@ -99,6 +99,11 @@
         "marks": 0,
         "path_display": "⟨file⟩/home/oscar",
         "path_hostile": false,
+        "quick": {
+          "matches": 1,
+          "mode": "filter",
+          "query": "no"
+        },
         "rows": [
           {
             "cells": [
