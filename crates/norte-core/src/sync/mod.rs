@@ -51,21 +51,13 @@ pub use spool::{
 /// lote no se llene.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Lo que la Task de `sync.plan` emite por su canal, en orden.
+/// Lo que un `sync.plan` va emitiendo.
 ///
-/// **Un solo canal para las dos notificaciones, y ese es el punto.** El
-/// contrato de `sync.plan_done` es que CIERRA el plan: llega después del último
-/// `sync.steps` y no antes. Con dos canales ese orden dependería de cómo el
-/// runtime despierte dos receptores; con uno es la propia cola FIFO quien lo
-/// garantiza, y la bomba del daemon no tiene que reordenar nada.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SyncPlanEvent {
-    /// Un lote de pasos, acotado por
-    /// [`SYNC_STEPS_MAX_BATCH`].
-    Steps(SyncStepsBatch),
-    /// El cierre del plan. Como mucho UNO por Task, y siempre el último.
-    Done(SyncPlanDone),
-}
+/// Lo define el SDK ([`norte_client::SyncPlanEvent`], ADR 0066) y se
+/// re-exporta aquí. Sus dos variantes SON tipos del wire, y el plan embebido
+/// y el remoto emiten exactamente lo mismo: dos definiciones serían dos
+/// sitios donde añadir una variante.
+pub use norte_client::SyncPlanEvent;
 
 /// Filtro de [`SyncPlanParams::include`](norte_proto::methods::SyncPlanParams::include).
 ///

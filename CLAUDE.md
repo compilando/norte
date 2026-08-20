@@ -274,6 +274,9 @@ renamed `norte-tui`→`ntc` once already and the installed copy kept the old nam
   provider must not know about other providers.
 - `crates/norte-core`: task scheduler, daemon, policy engine, journal, and
   sessions.
+- `crates/norte-client`: the daemon client SDK (ADR 0066). It may depend on
+  `norte-proto` and runtime crates and NOTHING else of ours; its
+  `tests/dependency_boundary.rs` fails the build otherwise.
 - `crates/norte-{index,ai,mcp,plugin-host}`: core subsystems.
 - `crates/norte-{tui,cli}`: frontends. Business logic belongs in the core or
   a UI-independent shared crate. The GPUI `norte-gui` was retired on 2026-08-20

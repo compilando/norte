@@ -1,22 +1,25 @@
-//! Cliente del daemon (ADR 0011): conexión UDS, handshake `initialize`,
-//! requests correlacionadas por id y stream de notificaciones. Los
-//! frontends lo cablean en la fase 3; hasta entonces lo ejercitan la CLI
-//! (`norte daemon stop`) y los tests E2E.
+//! El JSON-RPC ENMARCADO del daemon (ADR 0011): handshake `initialize`,
+//! requests correlacionadas por id y stream de notificaciones.
+//!
+//! No sabe por dónde viaja. Recibe una mitad de lectura y otra de escritura
+//! —quién las abrió y cómo autenticó al peer es asunto del módulo privado
+//! `transport`— para que un transporte nuevo no obligue a copiar la
+//! correlación ni el enmarcado (ADR 0066).
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use norte_proto::methods;
 use norte_proto::wire::{
     FrameDecoder, JsonRpcVersion, Message, Notification, Request, RequestId, RpcError, codes,
     encode_frame,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
+
+use crate::transport::unix;
 
 /// Errores del cliente.
 #[derive(Debug, thiserror::Error)]
@@ -61,35 +64,15 @@ impl Client {
     /// Conecta al socket del daemon (sin handshake: ver [`Self::initialize`]).
     ///
     /// # Errors
-    /// I/O de conexión.
+    /// I/O de conexión, o que el socket lo sirva otro usuario.
     pub async fn connect(socket: &Path) -> Result<Self, ClientError> {
-        let stream = UnixStream::connect(socket).await?;
-        Self::authenticated(stream).await
-    }
-
-    /// El cliente TAMBIÉN autentica al servidor (simetría de la spec
-    /// §17.6): el peer del socket debe ser NUESTRO uid — en el fallback
-    /// /tmp, un dir pre-creado por otro usuario podría servir un daemon
-    /// impostor (M2 del security-reviewer).
-    async fn authenticated(stream: UnixStream) -> Result<Self, ClientError> {
-        let peer = stream.peer_cred()?;
-        // uid propio sin unsafe (regla 5), en spawn_blocking (regla 2).
-        let my_uid = tokio::task::spawn_blocking(super::process_uid_best_effort)
-            .await
-            .map_err(|e| ClientError::Io(std::io::Error::other(e)))?;
-        if peer.uid() != my_uid {
-            return Err(ClientError::ForeignDaemon);
-        }
-        Ok(Self::from_stream(stream))
+        let (reader, writer) = unix::connect(socket).await?;
+        Ok(Self::from_halves(reader, writer))
     }
 
     /// Conecta, y si el socket no existe o nadie escucha, ARRANCA el daemon
     /// (`spawn` produce el `Command` ya configurado — los frontends deciden
     /// binario y flags) y reintenta con backoff hasta ~3 s.
-    ///
-    /// El hijo no se espera (`wait`): si el daemon muere antes que este
-    /// proceso queda un zombie hasta que salgamos — coste asumido de no
-    /// hacer double-fork (exigiría unsafe).
     ///
     /// # Errors
     /// I/O, o [`ClientError::SpawnTimeout`] si el daemon no llega a aceptar.
@@ -97,33 +80,16 @@ impl Client {
         socket: &Path,
         spawn: impl FnOnce() -> std::process::Command,
     ) -> Result<Self, ClientError> {
-        match UnixStream::connect(socket).await {
-            Ok(stream) => return Self::authenticated(stream).await,
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-                ) => {}
-            Err(e) => return Err(e.into()),
-        }
-        let mut cmd = spawn();
-        // El daemon es un proceso INDEPENDIENTE del frontend que lo parió.
-        cmd.stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        let _child = cmd.spawn()?;
-        // Backoff total ≈ 3,2 s (documentado: "hasta ~3 s").
-        for backoff_ms in [25u64, 50, 100, 200, 400, 800, 1600] {
-            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-            if let Ok(stream) = UnixStream::connect(socket).await {
-                return Self::authenticated(stream).await;
-            }
-        }
-        Err(ClientError::SpawnTimeout)
+        let (reader, writer) = unix::connect_or_spawn(socket, spawn).await?;
+        Ok(Self::from_halves(reader, writer))
     }
 
-    fn from_stream(stream: UnixStream) -> Self {
-        let (mut reader, mut writer) = stream.into_split();
+    /// Monta el cliente sobre un transporte YA abierto y autenticado.
+    fn from_halves<R, W>(mut reader: R, mut writer: W) -> Self
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
         let (frames_out, mut frames_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (notif_tx, notifications) = mpsc::unbounded_channel::<Notification>();
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));

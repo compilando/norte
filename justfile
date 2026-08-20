@@ -83,7 +83,7 @@ cov:
     # integración es otro crate y no hereda el `cfg(test)` de la lib. Roto desde
     # que entró ese test, y no se vio porque `cov` es lo último de `just ci` y
     # `ci-fast` no lo incluye.
-    CARGO_INCREMENTAL=0 cargo llvm-cov nextest -p norte-proto -p norte-vfs -p norte-core -p norte-vfs-local --features norte-core/testing --fail-under-lines 85
+    CARGO_INCREMENTAL=0 cargo llvm-cov nextest -p norte-proto -p norte-vfs -p norte-core -p norte-vfs-local -p norte-client --features norte-core/testing --fail-under-lines 85
 
 docs:
     RUSTDOCFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo doc {{core_pkgs}} --no-deps

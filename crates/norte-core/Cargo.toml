@@ -31,6 +31,10 @@ futures.workspace = true
 # El motor de `fs.compare` (plan 2026-08-11): función pura de dos providers,
 # sin daemon ni scheduler. El core le pone la Task, el gate y el lote — la
 # comparación en sí no conoce ninguna de las tres cosas.
+# El lado CLIENTE del daemon (ADR 0066): el core lo USA para su
+# `Backend::Remote`, pero el SDK no puede verlo a él — su test de frontera lo
+# vigila.
+norte-client.workspace = true
 norte-compare.workspace = true
 # El PLANIFICADOR de sincronización (plan 2026-08-11, ADR 0049): transductor
 # puro de filas de comparación a pasos de plan, sin daemon ni provider. El core
