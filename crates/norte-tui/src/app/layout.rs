@@ -695,3 +695,94 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::testutil::*;
+
+    /// #136: el árbol se abre anclado DONDE está el listado, no en la raíz del
+    /// sistema: un árbol que colgara siempre de `/` enseñaría diez mil ramas
+    /// para llegar a donde ya estás.
+    #[test]
+    fn el_arbol_se_ancla_donde_esta_el_listado() {
+        let mut app = app_dos_panes();
+        let dir = app.focused().dir().clone();
+        app.toggle_tree();
+        assert_eq!(app.tree().and_then(|t| t.root().cloned()), Some(dir));
+        assert_eq!(app.key_owner(), KeyOwner::Tree, "se lleva el teclado");
+    }
+
+    /// **Un layout RESTAURADO con el árbol dentro trae su estado.**
+    ///
+    /// Es el fallo que encontró pilotar la TUI: la sesión de ayer guarda el
+    /// árbol, al arrancar el hueco vuelve… y se pinta en blanco, porque el
+    /// toggle que habría creado su estado no se va a pulsar — el panel ya está
+    /// ahí. `set_layout` siembra el estado de CADA kind por esta razón, y el
+    /// árbol tenía que entrar en esa lista.
+    #[test]
+    fn un_layout_con_arbol_trae_su_estado() {
+        use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
+
+        let mut app = app_dos_panes();
+        let tree = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Fixed(24), Size::Weight(1)],
+            children: vec![
+                Node::slot(SlotId(90), KindId::new(crate::tree::KIND)),
+                Node::slot(SlotId(91), KindId::browser()),
+            ],
+        };
+        app.set_layout(tree);
+        assert!(
+            app.panes.tree(SlotId(90)).is_some(),
+            "el hueco del árbol llegó sin estado y se pintaría vacío"
+        );
+        assert!(
+            app.panes.tree(SlotId(90)).and_then(|t| t.root()).is_some(),
+            "y anclado en algún sitio, o no pide nada"
+        );
+    }
+
+    /// Y el hueco del árbol SE COLOCA en el reparto: sin esto el layout le
+    /// reserva sitio y nadie lo pinta, que es una columna en blanco.
+    #[test]
+    fn el_hueco_del_arbol_se_coloca() {
+        use norte_frontend::layout::{KindRegistry, Rect, resolve};
+
+        let mut app = app_dos_panes();
+        app.toggle_tree();
+        let id = app.tree_slot().expect("abierto");
+        let res = resolve(
+            Rect::new(0, 0, 110, 30),
+            &app.layout,
+            &KindRegistry::builtin(),
+        );
+        assert!(
+            res.placements.iter().any(|(p, _)| *p == id),
+            "el hueco del árbol no se colocó: {:?}",
+            res.placements
+        );
+        assert!(app.panes.tree(id).is_some(), "y su panel está");
+    }
+
+    /// Tres pulsaciones, como el sidebar: abre y enfoca, vuelve a enfocar,
+    /// cierra. La del medio es la que hace que soltar el teclado no cierre el
+    /// panel.
+    #[test]
+    fn el_arbol_abre_enfoca_y_cierra() {
+        let mut app = app_dos_panes();
+        app.toggle_tree();
+        assert!(app.tree_slot().is_some());
+        app.return_keys_to_panes();
+        app.toggle_tree();
+        assert!(
+            app.tree_slot().is_some(),
+            "la segunda solo recupera el teclado"
+        );
+        assert_eq!(app.key_owner(), KeyOwner::Tree);
+        app.toggle_tree();
+        assert!(app.tree_slot().is_none(), "y la tercera cierra");
+        assert_eq!(app.key_owner(), KeyOwner::Panes);
+    }
+}

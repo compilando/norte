@@ -1014,3 +1014,274 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::App;
+    use crate::app::pane::Pane;
+    use crate::app::testutil::*;
+    use norte_proto::{Entry, EntryKind, VPath};
+
+    /// #132: la sugerencia del diálogo de empaquetar puede salir con pérdidas
+    /// —el nombre del origen no siempre es UTF-8—, y confirmarla tal cual
+    /// crearía un fichero con el carácter de reemplazo dentro.
+    ///
+    /// Dos nombres distintos que no se pueden leer dan la MISMA sugerencia, así
+    /// que el segundo empaquetado chocaría contra el archivo del primero. Es el
+    /// mismo rechazo, y la misma clave, que el prompt de renombrar.
+    #[test]
+    fn empaquetar_rehusa_un_nombre_con_el_caracter_de_reemplazo() {
+        let mut app = app_dos_panes();
+        app.modal = Some(Modal::Pack {
+            name: "caf\u{FFFD}.zip".to_owned(),
+            error: None,
+        });
+        assert!(app.pack_confirm().is_none(), "no se empaqueta con eso");
+        let Some(Modal::Pack { error, .. }) = &app.modal else {
+            panic!("el diálogo sigue abierto para corregirlo");
+        };
+        assert_eq!(error.as_deref(), Some(t("msg-transfer-name-fffd").as_str()));
+    }
+
+    /// Y una extensión que norte no sabe ESCRIBIR se dice en el diálogo, en vez
+    /// de empaquetar un zip con nombre de rar.
+    #[test]
+    fn empaquetar_rehusa_una_extension_que_no_se_escribe() {
+        let mut app = app_dos_panes();
+        app.modal = Some(Modal::Pack {
+            name: "cosas.rar".to_owned(),
+            error: None,
+        });
+        assert!(app.pack_confirm().is_none());
+        let Some(Modal::Pack { error, .. }) = &app.modal else {
+            panic!("sigue abierto");
+        };
+        assert!(error.is_some(), "y dice por qué");
+    }
+
+    /// #105: F5 de UN ítem abre el nombre editable prefijado con el nombre
+    /// ORIGINAL. Sin tocar, el confirm usa los BYTES crudos (regla 1: un
+    /// nombre no-UTF8 copiado sin editar jamás pasa por el lossy).
+    #[test]
+    fn transfer_name_sin_editar_conserva_los_bytes_originales() {
+        let dir = VPath::parse("mem:///").unwrap();
+        let hostile = dir
+            .clone()
+            .join(norte_proto::Segment::new(b"informe\xFF\xFE.dat".to_vec()).unwrap());
+        let mut app = App::new(
+            Pane::new(
+                dir.clone(),
+                vec![Entry {
+                    attrs: std::collections::BTreeMap::new(),
+                    path: hostile.clone(),
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                }],
+            ),
+            Pane::new(VPath::parse("mem:///dst").unwrap(), Vec::new()),
+        );
+        app.open_transfer(TransferKind::Copy, 0, 1, None);
+        let (kind, from, dest) = app.transfer_name_confirm().expect("válido");
+        assert_eq!(kind, TransferKind::Copy);
+        assert_eq!(from, hostile);
+        assert_eq!(
+            dest,
+            VPath::parse("mem:///dst")
+                .unwrap()
+                .join(norte_proto::Segment::new(b"informe\xFF\xFE.dat".to_vec()).unwrap()),
+            "bytes crudos al destino, jamás la forma lossy"
+        );
+    }
+
+    /// #105: editar sustituye el nombre por el TEXTO tecleado; y un texto
+    /// que aún contiene U+FFFD (residuo del prefill lossy de un nombre
+    /// hostil) se RECHAZA — confirmarlo escribiría mojibake en disco.
+    #[test]
+    fn transfer_name_editado_usa_el_texto_y_rechaza_fffd() {
+        let dir = VPath::parse("mem:///").unwrap();
+        let hostile = dir
+            .clone()
+            .join(norte_proto::Segment::new(b"x\xFF.dat".to_vec()).unwrap());
+        let mut app = App::new(
+            Pane::new(
+                dir.clone(),
+                vec![Entry {
+                    attrs: std::collections::BTreeMap::new(),
+                    path: hostile,
+                    kind: EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                }],
+            ),
+            Pane::new(VPath::parse("mem:///dst").unwrap(), Vec::new()),
+        );
+        app.open_transfer(TransferKind::Copy, 0, 1, None);
+        // Tocar el campo (borra el último char del prefill lossy): el texto
+        // sigue llevando el U+FFFD del prefill → rechazo con diagnóstico.
+        app.transfer_name_pop();
+        assert!(app.transfer_name_confirm().is_none());
+        assert!(matches!(
+            &app.modal,
+            Some(Modal::TransferName { error: Some(_), .. })
+        ));
+        // Reescrito limpio: vale, y son los bytes del texto.
+        while matches!(&app.modal, Some(Modal::TransferName { name, .. }) if !name.is_empty()) {
+            app.transfer_name_pop();
+        }
+        for c in "limpio.dat".chars() {
+            app.transfer_name_push(c);
+        }
+        let (_, _, dest) = app.transfer_name_confirm().expect("limpio");
+        assert_eq!(dest, VPath::parse("mem:///dst/limpio.dat").unwrap());
+    }
+
+    /// #105: shift+F6 — rename in situ: destino = MISMO dir; confirmar sin
+    /// cambiar el nombre es error (no-op), y un nombre nuevo construye el
+    /// destino en el propio dir.
+    #[test]
+    fn rename_construye_en_el_mismo_dir_y_rechaza_el_mismo_nombre() {
+        let mut app = app_with_entries(&["a.txt"]);
+        app.open_rename();
+        assert!(
+            app.transfer_name_confirm().is_none(),
+            "mismo nombre = no-op, jamás un submit"
+        );
+        assert!(matches!(
+            &app.modal,
+            Some(Modal::TransferName { error: Some(_), .. })
+        ));
+        app.transfer_name_push('2'); // "a.txt2"
+        let (kind, from, dest) = app.transfer_name_confirm().expect("nombre nuevo");
+        assert_eq!(kind, TransferKind::Move);
+        assert_eq!(from, VPath::parse("mem:///a.txt").unwrap());
+        assert_eq!(dest, VPath::parse("mem:///a.txt2").unwrap());
+    }
+
+    /// #105 (regla 1, corpus canónico): renombrar un nombre hostil a uno
+    /// limpio conserva el `from` BYTE-EXACTO para cada nombre del corpus —
+    /// el origen jamás pasa por texto, solo el nombre nuevo es tecleado.
+    #[test]
+    fn rename_de_cada_nombre_hostil_del_corpus_conserva_el_from() {
+        let dir = VPath::parse("mem:///").unwrap();
+        for (i, hostile) in norte_testkit::corpus::hostile_names().iter().enumerate() {
+            let from = dir
+                .clone()
+                .join(norte_proto::Segment::new(hostile.bytes.clone()).unwrap());
+            let mut app = App::new(
+                Pane::new(
+                    dir.clone(),
+                    vec![Entry {
+                        attrs: std::collections::BTreeMap::new(),
+                        path: from.clone(),
+                        kind: EntryKind::File,
+                        size: None,
+                        mtime_ms: None,
+                    }],
+                ),
+                Pane::new(dir.clone(), Vec::new()),
+            );
+            app.open_rename();
+            while matches!(&app.modal, Some(Modal::TransferName { name, .. }) if !name.is_empty()) {
+                app.transfer_name_pop();
+            }
+            for c in "limpio".chars() {
+                app.transfer_name_push(c);
+            }
+            let (_, got_from, dest) = app
+                .transfer_name_confirm()
+                .unwrap_or_else(|| panic!("corpus[{i}] {}", hostile.id));
+            assert_eq!(got_from, from, "corpus[{i}]: from byte-exacto");
+            assert_eq!(dest, VPath::parse("mem:///limpio").unwrap());
+        }
+    }
+
+    /// #104: el modal de F7 valida con las reglas del `VPath` y devuelve el
+    /// destino completo; inválido = diagnóstico en el modal, jamás submit.
+    #[test]
+    fn el_modal_mkdir_valida_y_construye_el_destino() {
+        let mut app = app_with_entries(&["a"]);
+        app.open_mkdir();
+        for c in "docs".chars() {
+            app.mkdir_push(c);
+        }
+        let target = app.mkdir_confirm().expect("nombre válido");
+        assert_eq!(target, VPath::parse("mem:///docs").unwrap());
+        assert!(
+            app.modal.is_some(),
+            "confirmar NO cierra: cierra el submit que encoló (MINOR-1)"
+        );
+        // Un submit fallido deja el diagnóstico y conserva el nombre…
+        app.mkdir_set_error("policy".into());
+        assert!(matches!(
+            &app.modal,
+            Some(Modal::Mkdir { error: Some(_), name }) if name == "docs"
+        ));
+        // …y el que encoló, cierra.
+        app.mkdir_submitted();
+        assert!(app.modal.is_none(), "submitted cierra el modal");
+
+        // Vacío: error, modal abierto.
+        app.open_mkdir();
+        assert!(app.mkdir_confirm().is_none());
+        assert!(
+            matches!(&app.modal, Some(Modal::Mkdir { error: Some(_), .. })),
+            "el diagnóstico queda en el modal"
+        );
+
+        // `..` es DotSegment: jamás un destino.
+        app.mkdir_push('.');
+        app.mkdir_push('.');
+        assert!(app.mkdir_confirm().is_none());
+        assert!(matches!(
+            &app.modal,
+            Some(Modal::Mkdir { error: Some(_), .. })
+        ));
+
+        // `/` embebido: InvalidByte.
+        app.cancel_mkdir();
+        app.open_mkdir();
+        for c in "a/b".chars() {
+            app.mkdir_push(c);
+        }
+        assert!(app.mkdir_confirm().is_none());
+
+        // Cancelar cierra sin nada.
+        app.cancel_mkdir();
+        assert!(app.modal.is_none());
+    }
+
+    /// #103 T9: el modal de patrón marca/desmarca y reporta cuántas marcas
+    /// cambió — camino feliz (glob válido, matches reales).
+    #[test]
+    fn the_pattern_modal_marks_and_reports_how_many() {
+        let mut app = app_with_entries(&["a.rs", "b.rs", "c.txt"]);
+        app.open_mark_pattern(true);
+        assert!(matches!(
+            app.modal,
+            Some(Modal::MarkPattern { mark: true, .. })
+        ));
+        app.mark_pattern_push('*');
+        app.mark_pattern_push('.');
+        app.mark_pattern_push('r');
+        app.mark_pattern_push('s');
+        let changed = app.mark_pattern_confirm().expect("valid glob");
+        assert_eq!(changed, 2);
+        assert!(app.modal.is_none());
+        assert_eq!(app.focused().marks_len(), 2);
+    }
+
+    /// Un patrón inválido (glob que no compila) deja el modal ABIERTO con el
+    /// diagnóstico — el usuario conserva lo tecleado para corregirlo — y no
+    /// marca nada.
+    #[test]
+    fn an_invalid_pattern_keeps_the_modal_open_and_marks_nothing() {
+        let mut app = app_with_entries(&["a.rs"]);
+        app.open_mark_pattern(true);
+        app.mark_pattern_push('[');
+        assert!(app.mark_pattern_confirm().is_err());
+        assert!(app.modal.is_some(), "the user keeps their text to fix it");
+        assert_eq!(app.focused().marks_len(), 0);
+    }
+}
