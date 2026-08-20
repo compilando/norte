@@ -1,4 +1,16 @@
 {
+  "columns": {
+    "change": "columns",
+    "columns": [
+      {
+        "id": "size",
+        "label": "Tamaño",
+        "sort": "desc",
+        "sortable": true
+      }
+    ],
+    "slot_id": 1
+  },
   "connection": {
     "change": "connection",
     "reason_key": "conn-lost",
@@ -110,5 +122,23 @@
         "task_id": 7
       }
     ]
+  },
+  "viewer": {
+    "change": "viewer",
+    "viewer": {
+      "encoding": "UTF-8",
+      "eol": "lf",
+      "first_line": 4,
+      "forced": false,
+      "had_errors": false,
+      "hex": false,
+      "lines": [
+        "quinta línea"
+      ],
+      "path_display": "⟨file⟩/home/oscar/notas.txt",
+      "path_hostile": false,
+      "total_rows": 120,
+      "truncated": true
+    }
   }
 }

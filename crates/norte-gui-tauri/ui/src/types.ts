@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 5;
+export const BRIDGE_VERSION = 6;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -179,7 +179,9 @@ export type ViewChange =
   | { change: "tasks"; tasks: TaskView[] }
   | { change: "dialogs"; dialogs: DialogView[] }
   | ({ change: "connection" } & ConnectionView)
-  | ({ change: "layout" } & LayoutView);
+  | ({ change: "layout" } & LayoutView)
+  | { change: "columns"; slot_id: number; columns: ColumnHeader[] }
+  | { change: "viewer"; viewer: ViewerView | null };
 
 export interface ViewPatch {
   base_sequence: number;
@@ -227,6 +229,7 @@ export type UiAction =
   | { action: "cancel_task"; task_id: number }
   | { action: "set_viewport"; width: number; height: number }
   | ({ action: "key" } & KeyInput)
+  | { action: "set_viewer_rows"; rows: number }
   | { action: "resync" };
 
 export type StaleReason = "instance" | "generation" | "modal";

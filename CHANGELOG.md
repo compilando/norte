@@ -9,6 +9,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Column headers and the viewer travel as patches.** Bridge version **6**.
+  Sorting used to move the rows and leave the `▲` describing the previous
+  order — the screen contradicted itself, and `aria-sort` said the wrong thing
+  out loud — because no patch could carry headers. And every keystroke in the
+  viewer shipped a whole snapshot, which meant the visible rows of both
+  listings underneath, per line of scroll. The renderer also declares how many
+  lines fit in the viewer instead of the host guessing it from layout cells
+  minus an assumed chrome: the guess sent more lines than were shown (clipped
+  in silence) and paged by a different number, so every page-down skipped what
+  had been clipped.
+
 - **A row is named by key and generation.** Bridge version **5**, ADR 0068.
   Every action that names a row now also names the screen it was named on, and
   the host refuses it when the listing has moved on since. The contract had

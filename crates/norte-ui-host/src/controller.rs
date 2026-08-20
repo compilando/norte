@@ -652,6 +652,11 @@ struct Estado {
     resolver_visor: Resolver,
     /// Si este frontend puede escribir.
     efectos: crate::commands::Efectos,
+    /// Cuántas líneas caben en el visor, según el renderer.
+    ///
+    /// `None` mientras no lo diga: se cae al tamaño en celdas menos el cromo,
+    /// que es una estimación y se comporta como tal.
+    visor_filas: Option<usize>,
     /// El testigo de la lectura del visor en vuelo, si la hay.
     ///
     /// Sin él, una lectura lenta abría el visor DESPUÉS de que el usuario lo
@@ -793,6 +798,7 @@ impl Estado {
             resolver: Resolver::new(keymap),
             resolver_visor: Resolver::new(keymap_visor),
             efectos,
+            visor_filas: None,
             visor_en_vuelo: None,
             visor: None,
             arbol,
@@ -1098,6 +1104,13 @@ impl Estado {
                 )
             }
             UiAction::Key(k) => self.tecla(k, backend, buzon),
+            UiAction::SetViewerRows { rows } => {
+                self.visor_filas = Some(usize::try_from(*rows).unwrap_or(1).max(1));
+                let cambio = ViewChange::Viewer {
+                    viewer: self.vista_visor(),
+                };
+                (self.aplicada(), vec![self.parche(vec![cambio])])
+            }
             UiAction::Resync => {
                 let snap = self.snapshot();
                 (
@@ -1262,7 +1275,7 @@ impl Estado {
                 vec![self.parche(vec![cambio])],
             );
         };
-        let alto = usize::from(self.viewport.1.saturating_sub(2)).max(1);
+        let alto = self.alto_del_visor();
         let Some(v) = self.visor.as_mut() else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
@@ -1286,13 +1299,12 @@ impl Estado {
             crate::commands::EfectoVisor::Encoding => v.cycle_encoding(),
             crate::commands::EfectoVisor::EncodingAuto => v.reset_encoding(),
         }
-        // Una foto: el visor tapa la pantalla, así que enumerar parches sería
-        // describir con detalle algo que no se ve.
-        let snap = self.snapshot();
-        (
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
-        )
+        // Un PARCHE del visor. La foto entera mandaba, por cada línea de
+        // scroll, las filas visibles de todos los listados que hay debajo.
+        let cambio = ViewChange::Viewer {
+            viewer: self.vista_visor(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
     /// Guarda el catálogo de atributos de un esquema y repinta.
@@ -2632,13 +2644,25 @@ impl Estado {
         }
     }
 
+    /// Cuántas líneas se le mandan al visor y cuánto avanza una página.
+    ///
+    /// Lo dice el renderer (`SetViewerRows`); mientras no lo haya dicho, se
+    /// estima con las celdas de la ventana menos el cromo. Es UN número para
+    /// las dos cosas a propósito: cuando la estimación y lo que se pinta no
+    /// coinciden, una página salta en silencio las líneas recortadas.
+    fn alto_del_visor(&self) -> usize {
+        self.visor_filas
+            .unwrap_or_else(|| usize::from(self.viewport.1.saturating_sub(2)))
+            .max(1)
+    }
+
     /// La proyección del visor, con la ventana de líneas que cabe.
     ///
     /// El alto sale del viewport en CELDAS —la misma rejilla que reparte la
     /// pantalla—, menos el cromo: el visor ocupa la ventana entera.
     fn vista_visor(&self) -> Option<crate::dto::ViewerView> {
         let v = self.visor.as_ref()?;
-        let alto = usize::from(self.viewport.1.saturating_sub(2)).max(1);
+        let alto = self.alto_del_visor();
         let (path, hostil) = norte_frontend::path_display(&v.path);
         Some(crate::dto::ViewerView {
             path_display: clamp_display(path),
@@ -2891,9 +2915,18 @@ impl Estado {
         };
         let spec = h.pane.sort().after_click(col);
         h.pane.set_sort(spec);
-        // Re-ordenar mueve TODAS las filas, así que sube la generación y lo
-        // que viaja es la ventana visible entera.
-        (self.aplicada(), vec![self.parche_filas_de(slot_id)])
+        // Re-ordenar mueve TODAS las filas —así que sube la generación y
+        // viaja la ventana entera— Y la marca de orden de la cabecera. Sin lo
+        // segundo, el listado se repintaba en el orden nuevo y el `▲` seguía
+        // describiendo el anterior.
+        let filas = self.parche_filas_de(slot_id);
+        let cabeceras = self.huecos.get(&slot_id).map(|h| self.cabeceras(h));
+        let mut salidas = vec![filas];
+        if let Some(columns) = cabeceras {
+            let cambio = ViewChange::Columns { slot_id, columns };
+            salidas.push(self.parche(vec![cambio]));
+        }
+        (self.aplicada(), salidas)
     }
 
     /// Las cabeceras del listado, con la etiqueta ya traducida y la marca de

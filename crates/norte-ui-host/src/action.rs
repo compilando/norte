@@ -163,6 +163,17 @@ pub enum UiAction {
     /// el mismo resolver y los mismos presets que el TUI. Dos keymaps serían
     /// dos sitios donde divergir sin que nadie lo note.
     Key(KeyInput),
+    /// Cuántas líneas caben en el visor.
+    ///
+    /// El host no puede saberlo: su rejilla son celdas de disposición y el
+    /// cromo del visor lo pinta el renderer. Adivinarlo hacía dos cosas mal a
+    /// la vez —mandar más líneas de las que caben, que se recortan sin
+    /// decirlo, y avanzar una página por un número distinto del que se ve—,
+    /// así que cada página saltaba en silencio lo recortado.
+    SetViewerRows {
+        /// Líneas visibles.
+        rows: u32,
+    },
     /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
     Resync,
 }

@@ -135,6 +135,16 @@ export class Session {
         s.connection = rest;
         return true;
       }
+      case "columns": {
+        const slot = browser(s, c.slot_id);
+        if (slot !== null) {
+          slot.columns = c.columns;
+        }
+        return true;
+      }
+      case "viewer":
+        s.viewer = c.viewer;
+        return true;
       case "layout": {
         s.layout = { cells: c.cells, placements: c.placements };
         // El foco es de quien tenga el papel `active`, y lo dice el host.

@@ -58,6 +58,7 @@ describe("el contrato con el host", () => {
     // Rust que este renderer no sepa aplicar tiene que romper AQUÍ.
     const changes = Object.keys(golden("changes.json")).sort();
     expect(changes).toEqual([
+      "columns",
       "connection",
       "cursor",
       "dialogs",
@@ -66,6 +67,7 @@ describe("el contrato con el host", () => {
       "slot_state",
       "status",
       "tasks",
+      "viewer",
     ]);
   });
 

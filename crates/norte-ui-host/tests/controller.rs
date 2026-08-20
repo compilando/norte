@@ -1611,6 +1611,35 @@ async fn el_catalogo_da_sentido_a_un_attr() {
 // La disposición proyectada, y un snapshot que de verdad reemplaza (fase 3).
 // ---------------------------------------------------------------------------
 
+/// Espera la siguiente actualización que traiga el VISOR.
+///
+/// Viaja como parche desde la versión 6: una foto entera por cada línea de
+/// scroll mandaba las filas de todos los listados de debajo.
+async fn siguiente_visor(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> Option<norte_ui_host::dto::ViewerView> {
+    for _ in 0..20 {
+        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("una actualización con visor, no un cuelgue")
+            .expect("el host sigue vivo");
+        if let Update::Message(m) = siguiente {
+            match &m.payload {
+                UiUpdate::Patch(p) => {
+                    for c in &p.changes {
+                        if let norte_ui_host::dto::ViewChange::Viewer { viewer } = c {
+                            return viewer.clone();
+                        }
+                    }
+                }
+                UiUpdate::Snapshot(s) => return s.viewer.clone(),
+                UiUpdate::Notice(_) => {}
+            }
+        }
+    }
+    panic!("no llegó ninguna actualización con visor");
+}
+
 /// Espera la siguiente actualización que traiga disposición.
 async fn siguiente_disposicion(
     sub: &mut norte_ui_host::UiSubscription,
@@ -2259,8 +2288,9 @@ async fn ver_un_fichero_lo_decodifica_y_lo_pinta() {
     let mut sub = h.subscribe();
 
     h.dispatch(tecla("F3")).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let v = foto.viewer.as_ref().expect("el visor está abierto");
+    let v = siguiente_visor(&mut sub)
+        .await
+        .expect("el visor está abierto");
     assert!(v.path_display.ends_with("notas.txt"));
     assert_eq!(v.total_rows, 3, "tres líneas");
     assert!(
@@ -2289,24 +2319,26 @@ async fn con_el_visor_abierto_las_teclas_son_del_visor() {
     let (h, _snap) = host_arbol(Arc::new(f)).await;
     let mut sub = h.subscribe();
     h.dispatch(tecla("F3")).await.expect("host vivo");
-    let abierto = siguiente_foto(&mut sub).await;
-    assert_eq!(abierto.viewer.as_ref().expect("visor").first_line, 0);
+    let abierto = siguiente_visor(&mut sub).await.expect("visor abierto");
+    assert_eq!(abierto.first_line, 0);
 
     // `down` en el visor DESPLAZA el visor; no mueve el cursor del listado.
-    let cursor_antes = listado(&abierto).cursor;
     h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
-    let bajado = siguiente_foto(&mut sub).await;
-    assert_eq!(bajado.viewer.as_ref().expect("visor").first_line, 1);
-    assert_eq!(
-        listado(&bajado).cursor,
-        cursor_antes,
-        "el listado no se movió por debajo"
-    );
+    let bajado = siguiente_visor(&mut sub).await.expect("visor abierto");
+    assert_eq!(bajado.first_line, 1);
 
     // Y `esc` lo cierra.
     h.dispatch(tecla("Escape")).await.expect("host vivo");
-    let cerrado = siguiente_foto(&mut sub).await;
-    assert!(cerrado.viewer.is_none(), "el visor se cierra");
+    assert!(
+        siguiente_visor(&mut sub).await.is_none(),
+        "el visor se cierra"
+    );
+
+    // El listado de debajo no se movió, y para verlo hace falta una foto:
+    // el visor viaja en parches justo para no mandarla en cada tecla.
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(listado(&foto).cursor, Some(RowKey(0)));
 }
 
 /// Un binario no se pinta como si fuera texto: se enseña en hexadecimal, y

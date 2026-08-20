@@ -140,6 +140,7 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
                 generation: 4,
             },
         ),
+        ("set_viewer_rows", UiAction::SetViewerRows { rows: 40 }),
         (
             "set_viewport",
             UiAction::SetViewport {
@@ -288,6 +289,23 @@ fn disposicion_de_referencia() -> LayoutView {
     }
 }
 
+/// El visor que clavan las fixtures.
+fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
+    norte_ui_host::dto::ViewerView {
+        path_display: "⟨file⟩/home/oscar/notas.txt".to_owned(),
+        path_hostile: false,
+        encoding: "UTF-8".to_owned(),
+        eol: "lf".to_owned(),
+        hex: false,
+        forced: false,
+        had_errors: false,
+        truncated: true,
+        total_rows: 120,
+        first_line: 4,
+        lines: vec!["quinta línea".to_owned()],
+    }
+}
+
 fn snapshot_de_referencia() -> ViewSnapshot {
     ViewSnapshot {
         connection: ConnectionView::Connected,
@@ -343,19 +361,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         },
         dialogs: vec![dialogo_de_referencia()],
         tasks: vec![task_de_referencia()],
-        viewer: Some(norte_ui_host::dto::ViewerView {
-            path_display: "⟨file⟩/home/oscar/notas.txt".to_owned(),
-            path_hostile: false,
-            encoding: "UTF-8".to_owned(),
-            eol: "lf".to_owned(),
-            hex: false,
-            forced: false,
-            had_errors: false,
-            truncated: true,
-            total_rows: 120,
-            first_line: 4,
-            lines: vec!["quinta línea".to_owned()],
-        }),
+        viewer: Some(visor_de_referencia()),
         locale: "es".to_owned(),
     }
 }
@@ -500,6 +506,18 @@ fn cada_cambio_cruza_el_bridge() {
                     dialogs: vec![dialogo_de_referencia()],
                 },
             ),
+            (
+                "columns",
+                ViewChange::Columns {
+                    slot_id: 1,
+                    columns: vec![ColumnHeader {
+                        id: "size".to_owned(),
+                        label: "Tamaño".to_owned(),
+                        sort: Some("desc".to_owned()),
+                        sortable: true,
+                    }],
+                },
+            ),
             ("layout", ViewChange::Layout(disposicion_de_referencia())),
             (
                 "rows",
@@ -524,6 +542,12 @@ fn cada_cambio_cruza_el_bridge() {
                     banners: Vec::new(),
                     pending: None,
                 }),
+            ),
+            (
+                "viewer",
+                ViewChange::Viewer {
+                    viewer: Some(visor_de_referencia()),
+                },
             ),
             (
                 "tasks",

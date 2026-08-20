@@ -443,6 +443,32 @@ pub enum ViewChange {
     /// El reparto cambió: la ventana se redimensionó, o el foco (y con él
     /// los papeles) se movió de hueco.
     Layout(LayoutView),
+    /// Las cabeceras de un listado cambiaron.
+    ///
+    /// Ordenar mueve las filas Y la marca de orden. Sin este cambio, tras un
+    /// click en la cabecera el listado se repintaba en el orden nuevo y el
+    /// `▲` seguía describiendo el anterior: la pantalla se contradecía, y un
+    /// lector de pantalla leía `aria-sort` mintiendo.
+    Columns {
+        /// Hueco.
+        slot_id: u32,
+        /// Las cabeceras, en su orden.
+        columns: Vec<ColumnHeader>,
+    },
+    /// El visor cambió (se abrió, se desplazó, se cerró).
+    ///
+    /// Un parche y no una foto: el visor tapa la pantalla, y mandar el estado
+    /// entero por cada línea de scroll enviaba las filas visibles de TODOS
+    /// los listados que hay debajo, que es el derroche que la decisión D7
+    /// existe para evitar.
+    /// Variante de STRUCT, no de tupla: un enum etiquetado por dentro
+    /// tampoco puede serializar una variante que envuelva un `Option`. Es la
+    /// MISMA trampa que se llevó por delante a `Tasks` y `Dialogs`, y esta
+    /// vez la cazó el corpus antes de salir.
+    Viewer {
+        /// El visor, o `None` si se cerró.
+        viewer: Option<ViewerView>,
+    },
 }
 
 /// Algo que decir que no es un cambio de pantalla.

@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 /// por motivos distintos. Un renderer que no reconoce esta versión NO
 /// interpreta el mensaje: enseña una pantalla de incompatibilidad (ADR 0066).
 ///
+/// - **6**: las cabeceras y el visor viajan como PARCHE, y el renderer
+///   declara cuántas líneas caben en el visor.
 /// - **5**: toda acción que nombra una fila lleva TAMBIÉN la generación en
 ///   la que el renderer la vio, y el host la compara con la época del
 ///   listado. Sin ese par la clave es un índice, y un índice de la pantalla
@@ -25,7 +27,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 5;
+pub const BRIDGE_VERSION: u32 = 6;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

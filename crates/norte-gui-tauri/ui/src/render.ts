@@ -50,6 +50,8 @@ export class Screen {
   private placementsKey = "";
   /** El diálogo cuyo campo de texto ya se sembró. */
   private dialogoPintado: number | null = null;
+  /** Las líneas de visor que ya se declararon. */
+  private viewerRows = 0;
   private pendingRange = new Map<number, number>();
 
   constructor(
@@ -102,6 +104,7 @@ export class Screen {
     if (viewer === null) {
       this.viewerRoot.replaceChildren();
       this.viewerRoot.dataset["open"] = "false";
+      this.viewerRows = 0;
       return;
     }
     this.viewerRoot.dataset["open"] = "true";
@@ -145,6 +148,15 @@ export class Screen {
 
     box.append(head, body);
     this.viewerRoot.replaceChildren(box);
+    // Cuántas líneas caben lo sabe QUIEN PINTA. El host lo estimaba con
+    // celdas de disposición menos un cromo adivinado, así que mandaba más
+    // líneas de las que se ven —se recortaban sin decirlo— y avanzaba una
+    // página por un número distinto: cada página saltaba lo recortado.
+    const filas = Math.max(1, Math.floor(body.clientHeight / this.cell().h));
+    if (filas !== this.viewerRows) {
+      this.viewerRows = filas;
+      this.send({ action: "set_viewer_rows", rows: filas });
+    }
   }
 
   private rebuild(view: ViewSnapshot, cell: { w: number; h: number }): void {

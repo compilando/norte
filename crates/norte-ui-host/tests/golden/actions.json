@@ -61,6 +61,10 @@
     "key": 7,
     "slot_id": 1
   },
+  "set_viewer_rows": {
+    "action": "set_viewer_rows",
+    "rows": 40
+  },
   "set_viewport": {
     "action": "set_viewport",
     "height": 40,
