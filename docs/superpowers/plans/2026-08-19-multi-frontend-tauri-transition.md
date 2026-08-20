@@ -959,7 +959,7 @@ Acceptance:
 
 ## Phase 2 — Build the toolkit-independent `norte-ui-host`
 
-> **Tasks 2.1, 2.2, the core of 2.3 and the core of 2.4 DONE 2026-08-20.** The crate exists with `bridge.rs`
+> **Tasks 2.1, 2.2 and the core of 2.3, 2.4 and 2.5 DONE 2026-08-20.** The crate exists with `bridge.rs`
 > (envelope, `BRIDGE_VERSION`, opaque `RowKey`/`ModalId`/`RequestToken`, caps),
 > `dto.rs` (renderer-safe views; no raw path crosses), `action.rs` (semantic
 > actions) and `controller.rs` (bounded inbox, one writer, broadcast
@@ -998,7 +998,23 @@ Acceptance:
 > slots to mean anything, so it lands with task 2.5) and text-entry contexts
 > (they need dialogs, task 2.6).
 >
-> **Next: task 2.5** (layout and session lifecycle).
+> **Task 2.5, done:** the host holds the configured layout tree, resolved
+> with the shared engine and the shared minimums. Resizing re-resolves and
+> never rewrites the tree; hidden slots ask for nothing; an unprojected kind
+> travels greyed out with its name; the target role is always another VISIBLE
+> browser or nothing. Session (ADR 0059) reads at start, applies what it
+> understands, and flushes at shutdown under its three rules — a detached
+> window does not write, a future schema is neither applied nor overwritten,
+> and a conflict is reported instead of overwriting someone. Marks never
+> enter the session.
+>
+> **Task 2.5, still owed:** the coalesced periodic `session.put` (only the
+> shutdown flush exists), ownership acquired later in the session's life,
+> reconnect/handover persistence, and the unsupported-kind `params`
+> round-trip (the host preserves the tree it was given, but does not yet
+> merge a session that carries kinds it cannot project).
+>
+> **Next: task 2.6** (tasks, dialogs and safe effects).
 
 Implement one vertical feature at a time. The host should be useful to a
 headless test before Tauri exists.
