@@ -58,7 +58,18 @@ pub trait HostBackend: Send + Sync + 'static {
     /// primera página, pinta, y sigue drenando el resto por detrás
     /// ([`crate::controller`] lo extiende con `PaneState::extend`, el mismo
     /// camino que el TUI).
-    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<EntryStream, Error>>;
+    ///
+    /// `attrs` son los ids de atributo que las columnas configuradas piden:
+    /// un provider solo manda lo que se le pide, así que pedir de menos deja
+    /// una columna en blanco para siempre.
+    fn list(
+        &self,
+        dir: VPath,
+        attrs: Vec<String>,
+    ) -> BoxFuture<'static, Result<EntryStream, Error>>;
+
+    /// Crea UN directorio. Devuelve la Task ya encolada.
+    fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>>;
 
     /// La sesión de UI y si ESTA conexión es su dueña (ADR 0059).
     ///
@@ -96,11 +107,29 @@ pub trait HostBackend: Send + Sync + 'static {
 
 /// El backend de verdad: el SDK.
 impl HostBackend for norte_client::RemoteBackend {
-    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<EntryStream, Error>> {
+    fn list(
+        &self,
+        dir: VPath,
+        attrs: Vec<String>,
+    ) -> BoxFuture<'static, Result<EntryStream, Error>> {
         let backend = self.clone();
         Box::pin(async move {
-            let (stream, _total) = backend.list_stream(&dir, Vec::new()).await?;
+            let (stream, _total) = backend.list_stream(&dir, attrs).await?;
             Ok(stream)
+        })
+    }
+
+    fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.mkdir(&path).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
         })
     }
 

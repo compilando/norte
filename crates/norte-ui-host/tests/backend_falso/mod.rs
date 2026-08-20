@@ -40,6 +40,8 @@ pub struct Falso {
     pub eventos:
         std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<norte_client::ConnEvent>>>,
     pub ajenas: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>>>,
+    /// Los directorios que se pidió crear.
+    pub creados: std::sync::Mutex<Vec<VPath>>,
 }
 
 impl Falso {
@@ -77,7 +79,9 @@ impl Falso {
                 } else {
                     EntryKind::File
                 },
-                size: Some(1),
+                // Un directorio no tiene tamaño, como en la vida real: es lo
+                // que hace que la AUSENCIA de celda se pueda probar.
+                size: if es_dir { None } else { Some(1) },
                 mtime_ms: None,
                 attrs: std::collections::BTreeMap::new(),
             })
@@ -119,7 +123,34 @@ impl HostBackend for Falso {
         self.ajenas.lock().expect("ajenas").take()
     }
 
-    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<norte_client::EntryStream, Error>> {
+    fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.creados.lock().expect("creados").push(path);
+        let progreso = norte_proto::TaskProgress {
+            task_id: norte_proto::TaskId::new(8),
+            kind: norte_proto::TaskKind::Mkdir,
+            state: norte_proto::TaskState::Completed,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 1,
+            entries_total: Some(1),
+            current: None,
+        };
+        let (_tx, rx) = tokio::sync::watch::channel(progreso);
+        Box::pin(async move {
+            Ok(HostTask {
+                id: norte_proto::TaskId::new(8),
+                progress: rx,
+                cancel: Arc::new(|| {}),
+                foreign: false,
+            })
+        })
+    }
+
+    fn list(
+        &self,
+        dir: VPath,
+        _attrs: Vec<String>,
+    ) -> BoxFuture<'static, Result<norte_client::EntryStream, Error>> {
         self.listados.fetch_add(1, Ordering::SeqCst);
         if !self.arbol.contains_key(&dir.to_wire()) {
             return Box::pin(async { Err(Error::NotFound) });
@@ -139,7 +170,9 @@ impl HostBackend for Falso {
                 } else {
                     EntryKind::File
                 },
-                size: Some(1),
+                // Un directorio no tiene tamaño, como en la vida real: es lo
+                // que hace que la AUSENCIA de celda se pueda probar.
+                size: if es_dir { None } else { Some(1) },
                 mtime_ms: None,
                 attrs: std::collections::BTreeMap::new(),
             })

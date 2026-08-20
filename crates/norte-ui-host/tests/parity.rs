@@ -171,6 +171,7 @@ async fn via_host(pasos: &[Paso]) -> Vec<Semantico> {
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
+        columns: norte_ui_host::columnas_por_defecto(),
     })
     .await
     .expect("arranca");

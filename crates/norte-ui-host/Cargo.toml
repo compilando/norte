@@ -14,6 +14,7 @@ authors.workspace = true
 futures.workspace = true
 norte-client.workspace = true
 norte-frontend.workspace = true
+norte-i18n.workspace = true
 norte-proto.workspace = true
 serde.workspace = true
 serde_json.workspace = true

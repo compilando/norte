@@ -34,3 +34,19 @@ pub use bridge::{
 pub use controller::{ShutdownReport, UiHost, UiHostOptions, UiSubscription, Update};
 pub use dto::{UiNotice, UiUpdate, ViewPatch, ViewSnapshot};
 pub use keys::KeyInput;
+
+/// Las columnas con las que arranca un host sin configuración: nombre,
+/// tamaño y fecha.
+///
+/// Existe para que un test o un primer arranque no tengan que construir la
+/// lista a mano; un host de verdad la lee de la configuración del usuario y
+/// se la pasa en [`UiHostOptions`].
+#[must_use]
+pub fn columnas_por_defecto() -> Vec<norte_frontend::columns::ColumnId> {
+    use norte_frontend::columns::{Builtin, ColumnId};
+    vec![
+        ColumnId::Builtin(Builtin::Name),
+        ColumnId::Builtin(Builtin::Size),
+        ColumnId::Builtin(Builtin::Mtime),
+    ]
+}
