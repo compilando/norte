@@ -177,3 +177,206 @@ impl App {
         self.session.detached.then(|| t("status-session-detached"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::pane::Pane;
+    use crate::app::testutil::*;
+
+    /// #44 guardaba la degradación como PROSA ya formateada: el scheme y el
+    /// host se metían en el mensaje y se tiraban, así que «¿qué conexión se
+    /// degradó?» no tenía respuesta. H3d la necesita por pane.
+    #[test]
+    fn la_degradacion_se_guarda_por_scheme() {
+        let mut app = app_dos_panes();
+        app.note_degraded(degradacion_de_test("sftp", "ejemplo.org"));
+        let d = app.degraded_for("sftp").expect("la degradación se retuvo");
+        assert_eq!(d.host, "ejemplo.org", "el host sobrevive, no solo la frase");
+        assert_eq!(d.reason, "ftp-plaintext");
+        assert!(app.degraded_for("file").is_none());
+    }
+
+    /// Y dos conexiones degradadas no se pisan: antes la última ganaba y la
+    /// primera desaparecía de la barra sin que nada la hubiera resuelto.
+    #[test]
+    fn dos_degradaciones_conviven() {
+        let mut app = app_dos_panes();
+        app.note_degraded(degradacion_de_test("sftp", "a.org"));
+        app.note_degraded(degradacion_de_test("ftp", "b.org"));
+        assert!(app.degraded_for("sftp").is_some());
+        assert!(app.degraded_for("ftp").is_some());
+        // Y la barra deja de mentir sobre cuántas hay. Nombra la ÚLTIMA y dice
+        // cuántas más: un recuento pelado («2 conexiones en texto plano»), con
+        // el aviso que jamás se limpia, dejaba al lector sin poder averiguar
+        // NUNCA cuáles eran — y esa es la única pregunta que este indicador
+        // existe para contestar.
+        let banner = app.connection_banner().expect("hay aviso");
+        assert!(
+            banner.contains("b.org"),
+            "la más reciente se nombra: {banner}"
+        );
+        assert!(banner.contains('1'), "y cuántas más hay: {banner}");
+    }
+
+    /// #177: «esta sesión no queda registrada» tiene que sobrevivir a la
+    /// siguiente tecla. Llega UNA vez, en mitad de una operación que el usuario
+    /// acaba de lanzar, y `app.message` lo borra la pulsación siguiente — que
+    /// es como decir que no se avisó.
+    /// #203: el ocupante SIN daemon que lo explique se dice con otra frase.
+    ///
+    /// El hecho es el mismo que un `Busy` —la sesión muta sin quedar
+    /// registrada— y por eso el indicador sigue encendido; lo que cambia es que
+    /// la frase suave sale también cuando hay un daemon vivo, o sea casi
+    /// siempre, y es la que el lector ya aprendió a no mirar.
+    #[test]
+    fn el_ocupante_sin_daemon_tiene_su_propia_frase() {
+        let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
+        app.note_no_journal(norte_core::embedded::NoJournal::Busy);
+        let soft = app.journal_banner().expect("indicador encendido");
+
+        app.note_journal_squatted();
+        let strong = app.journal_banner().expect("sigue encendido");
+        assert_ne!(soft, strong, "dos hechos distintos, dos frases");
+
+        // Y se apaga igual: una recuperación borra los dos.
+        app.note_journal_recovered();
+        assert!(app.journal_banner().is_none());
+
+        // Un `Busy` posterior vuelve a la frase suave y no se queda con la
+        // fuerte pegada.
+        app.note_no_journal(norte_core::embedded::NoJournal::Busy);
+        assert_eq!(app.journal_banner().as_deref(), Some(soft.as_str()));
+    }
+
+    #[test]
+    fn la_sesion_sin_journal_tiene_indicador_persistente() {
+        let mut app = app_dos_panes();
+        assert!(app.journal_banner().is_none(), "por defecto sí se registra");
+
+        app.message = Some("algo".to_owned());
+        app.note_no_journal(norte_core::embedded::NoJournal::Busy);
+        // Lo que borra el `message` en el run loop, tecla a tecla.
+        app.message = None;
+        assert!(
+            app.journal_banner().is_some(),
+            "el indicador no se va con el mensaje"
+        );
+    }
+
+    /// Y no compite con el de #44: los dos son persistentes, de la misma clase
+    /// y simultáneos, así que elegir uno escondería el otro para el resto de la
+    /// sesión.
+    #[test]
+    fn los_dos_indicadores_persistentes_caben_juntos() {
+        let mut app = app_dos_panes();
+        app.note_no_journal(norte_core::embedded::NoJournal::Busy);
+        app.note_degraded(degradacion_de_test("sftp", "a.org"));
+        let banner = app.persistent_banner().expect("hay aviso");
+        assert!(
+            banner.contains("a.org"),
+            "la conexión sigue nombrada: {banner}"
+        );
+        assert!(
+            banner.starts_with(&app.journal_banner().expect("hay journal_banner")),
+            "y el del journal va primero: {banner}"
+        );
+    }
+
+    /// #232: una ventana SUELTA lo dice una vez y luego se le olvida.
+    ///
+    /// El mensaje de arranque lo borra la siguiente tecla, y a partir de ahí
+    /// la ventana no guarda la pantalla sin nada en pantalla que lo diga.
+    #[test]
+    fn la_ventana_suelta_tiene_indicador_persistente() {
+        let mut app = app_dos_panes();
+        assert!(app.session_banner().is_none(), "la dueña no avisa de nada");
+
+        app.session.detached = true;
+        app.message = Some("algo".to_owned());
+        // Lo que borra el `message` en el run loop, tecla a tecla.
+        app.message = None;
+        let banner = app.persistent_banner().expect("hay aviso");
+        assert_eq!(
+            banner,
+            app.session_banner().expect("hay session_banner"),
+            "sin nada más encendido, la barra es justo ese aviso: {banner}"
+        );
+    }
+
+    /// Y convive con los otros dos: son tres hechos simultáneos de la misma
+    /// clase, y el de la sesión es el que menos pesa, así que va el último.
+    #[test]
+    fn los_tres_indicadores_persistentes_caben_juntos() {
+        let mut app = app_dos_panes();
+        app.note_no_journal(norte_core::embedded::NoJournal::Busy);
+        app.note_degraded(degradacion_de_test("sftp", "a.org"));
+        app.session.detached = true;
+        let banner = app.persistent_banner().expect("hay aviso");
+        assert!(
+            banner.starts_with(&app.journal_banner().expect("hay journal_banner")),
+            "el del journal sigue primero: {banner}"
+        );
+        assert!(
+            banner.contains("a.org"),
+            "la conexión sigue nombrada: {banner}"
+        );
+        assert!(
+            banner.ends_with(&app.session_banner().expect("hay session_banner")),
+            "y el de la sesión cierra: {banner}"
+        );
+    }
+
+    /// MINOR-5: el `Option<String>` de #44 estaba acotado por construcción;
+    /// una colección con clave que viene del WIRE no lo está. El tope es
+    /// generoso —hay siete schemes— así que solo lo alcanza algo anómalo, y
+    /// cuando pasa se tira lo más viejo y se conserva lo que acaba de llegar.
+    #[test]
+    fn las_degradaciones_tienen_tope() {
+        let mut app = app_dos_panes();
+        for i in 0..(super::DEGRADED_MAX + 10) {
+            app.note_degraded(degradacion_de_test(&format!("s{i}"), "host"));
+        }
+        assert_eq!(app.degraded.len(), super::DEGRADED_MAX);
+        assert!(
+            app.degraded_for("s0").is_none(),
+            "la más vieja es la que se cae"
+        );
+        assert!(
+            app.degraded_for(&format!("s{}", super::DEGRADED_MAX + 9))
+                .is_some(),
+            "la última en llegar se queda"
+        );
+    }
+
+    /// El host lo elige el OTRO extremo, y la barra de estado es el sitio
+    /// donde llegaba crudo mientras el resto de la TUI enmascara. Un host con
+    /// controles o bidi es exactamente lo que se le manda a un indicador de
+    /// seguridad para que mienta.
+    #[test]
+    fn el_aviso_enmascara_un_host_hostil() {
+        let mut app = app_dos_panes();
+        app.note_degraded(degradacion_de_test("sftp", "ma\u{202e}gro.org\n"));
+        let banner = app.connection_banner().expect("hay aviso");
+        assert!(
+            !banner.contains('\u{202e}') && !banner.contains('\n'),
+            "el host llegó crudo a la barra: {banner:?}"
+        );
+        assert!(
+            banner.contains('\u{FFFD}'),
+            "y el enmascarado se VE (jamás pérdida silenciosa): {banner:?}"
+        );
+    }
+
+    /// Sin degradación no hay aviso, y con UNA el aviso es el de siempre
+    /// (#44): scheme y host, formateados desde el valor estructurado.
+    #[test]
+    fn el_aviso_de_una_sola_degradacion_nombra_la_conexion() {
+        let mut app = app_dos_panes();
+        assert!(app.connection_banner().is_none());
+        app.note_degraded(degradacion_de_test("sftp", "remoto.example"));
+        let banner = app.connection_banner().expect("hay aviso");
+        assert!(banner.contains("sftp"), "{banner}");
+        assert!(banner.contains("remoto.example"), "{banner}");
+    }
+}

@@ -227,3 +227,197 @@ impl App {
         self.help_chords = std::sync::Arc::new(self.help_chords.with_plugins(active, titles));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::pane::Pane;
+    use crate::app::testutil::*;
+    use norte_proto::{Entry, EntryKind};
+
+    /// Las caps se cachean por LOCALIZACIÓN, y por la misma razón que el
+    /// catálogo de atributos se pide: `fs.capabilities` devuelve las dos
+    /// mitades en UNA llamada y la TUI ya la hace para las columnas. Tirar la
+    /// mitad de caps y luego sondear otra vez sería pagar dos rondas por un
+    /// dato que ya llegó.
+    #[test]
+    fn las_caps_se_cachean_por_localizacion() {
+        let mut app = app_dos_panes();
+        let mem = vp("mem:///");
+        assert!(app.caps(&mem).is_none(), "sin sembrar, no se inventa nada");
+        app.insert_caps(&mem, caps_de_test());
+        assert!(app.caps(&mem).is_some());
+        assert!(
+            app.caps(&vp("sftp://ejemplo.org/")).is_none(),
+            "un scheme no responde por otro"
+        );
+    }
+
+    /// MAJOR-1: `sftp` no es UN sitio. Dos hosts del mismo scheme son dos
+    /// backends distintos, y el caché tiene que contarlos aparte o el primero
+    /// que contesta decide por todos los demás durante la sesión entera. Hoy
+    /// ningún provider del árbol declara `READ_ONLY` por localización (el
+    /// archivo y los plugins lo deciden por scheme), así que la clave por
+    /// scheme sola no fallaba — por suerte, no por diseño, y `App::caps` es un
+    /// accesor general que invita a leer cualquier flag.
+    #[test]
+    fn dos_authorities_del_mismo_scheme_no_se_responden() {
+        let a = vp("sftp://a.org/");
+        let b = vp("sftp://b.org/");
+        let mut app = App::new(
+            Pane::new(a.clone(), Vec::new()),
+            Pane::new(b.clone(), Vec::new()),
+        );
+        app.insert_caps(
+            &a,
+            norte_proto::Capabilities {
+                flags: norte_proto::CapabilityFlags::READ_ONLY,
+                max_path: None,
+            },
+        );
+        assert!(app.pane_read_only(0), "a.org dijo que es de solo lectura");
+        assert!(
+            app.caps(&b).is_none(),
+            "a b.org no se le ha preguntado nada todavía"
+        );
+        assert!(
+            !app.pane_read_only(1),
+            "b.org no puede heredar el veto de a.org: son dos backends"
+        );
+    }
+
+    /// Antes de que llegue la primera respuesta, la respuesta honesta es «no
+    /// lo sé», y quien pregunta cae al criterio SINTÁCTICO (el scheme dice si
+    /// es un archivo comprimido). Lo que no puede hacer es afirmar que se
+    /// puede escribir.
+    #[test]
+    fn sin_caps_todavia_el_solo_lectura_lo_decide_el_scheme() {
+        let app = app_dos_panes();
+        assert!(!app.pane_read_only(0), "mem:// no es de solo lectura");
+
+        let inside_a_zip = app_en("zip+file:///a.zip/!", "file:///casa");
+        assert!(
+            inside_a_zip.pane_read_only(0),
+            "un scheme de archivo es de solo lectura por construcción"
+        );
+        assert!(!inside_a_zip.pane_read_only(1));
+    }
+
+    /// Cuando las caps SÍ llegaron mandan ellas: un provider que anuncia
+    /// `READ_ONLY` sobre un scheme que sintácticamente no lo es (un montaje
+    /// remoto en solo lectura) se veta igual.
+    #[test]
+    fn con_caps_manda_el_flag_read_only() {
+        let mut app = app_dos_panes();
+        let dir = app.panes[0].dir().clone();
+        app.insert_caps(
+            &dir,
+            norte_proto::Capabilities {
+                flags: norte_proto::CapabilityFlags::READ_ONLY,
+                max_path: None,
+            },
+        );
+        assert!(app.pane_read_only(0));
+        app.insert_caps(&dir, caps_de_test());
+        assert!(!app.pane_read_only(0), "sin el flag, escribible");
+    }
+
+    /// Los hechos que la ayuda congela salen de los MISMOS predicados que usan
+    /// los brazos de `dispatch`: un `.zip` se ENTRA en la TUI (`nav.enter`
+    /// compone el scheme) aunque sea un File, y `pane.view` quiere File o
+    /// Symlink. Derivarlos otra vez aquí sería atenuar filas que la app
+    /// ejecutaría.
+    #[test]
+    fn los_hechos_de_la_ayuda_siguen_a_los_predicados_del_dispatch() {
+        let mut app = app_dos_panes();
+        // El cursor está sobre un File normal: no se entra, se ve.
+        let f = app.help_facts();
+        assert!(!f.enterable, "un fichero cualquiera no se entra");
+        assert!(f.viewable);
+        assert!(f.rename_single, "shift+F6 renombra UNA: la del cursor");
+        assert!(!f.source_read_only && !f.dest_read_only);
+        assert!(!f.degraded);
+
+        // Un `.zip` ES entrable en la TUI aunque su kind sea File.
+        let zip = Pane::new(
+            root(),
+            vec![Entry {
+                attrs: std::collections::BTreeMap::new(),
+                path: root().join(norte_proto::Segment::new(b"a.zip".to_vec()).unwrap()),
+                kind: EntryKind::File,
+                size: Some(1),
+                mtime_ms: None,
+            }],
+        );
+        let app_zip = App::new(zip, pane_con(&["b"]));
+        assert!(
+            app_zip.help_facts().enterable,
+            "en la TUI un .zip se entra: la ayuda no puede decir lo contrario"
+        );
+
+        // Y la degradación del scheme del pane con foco llega al hecho.
+        app.note_degraded(degradacion_de_test("mem", "sin-host"));
+        assert!(app.help_facts().degraded);
+    }
+
+    /// Con VARIAS marcas la ayuda NO atenúa shift+F6, porque la TUI lo
+    /// ejecuta: `Command::PaneRename` va a `open_rename`, que renombra
+    /// `selected()` y no mira las marcas. Atenuarlo sería el fallo exacto que
+    /// H3d existe para no cometer — apagar una fila que la app habría corrido,
+    /// que enseña al lector a no volver a intentarlo.
+    ///
+    /// (La GUI sí se niega con selección múltiple, y su menú lo sigue haciendo:
+    /// `norte_gui::context_menu`, `renombrar_es_una_sola_entrada_y_la_de_ia_es_otra`.
+    /// El hecho es del llamador precisamente porque las dos respuestas son
+    /// correctas.)
+    #[test]
+    fn con_varias_marcas_la_ayuda_no_atenua_renombrar() {
+        use norte_help::ChordResolver as _;
+
+        let mut app = App::new(pane_con(&["a", "b", "c"]), pane_con(&["z"]));
+        app.focused_mut().toggle_mark_and_advance();
+        app.focused_mut().toggle_mark_and_advance();
+        assert_eq!(
+            app.focused().marked_paths().len(),
+            2,
+            "hay DOS marcas: el caso que se atenuaba"
+        );
+        assert!(app.help_facts().rename_single);
+
+        app.freeze_help_facts();
+        assert!(
+            app.help_chords.availability("pane.rename").is_available(),
+            "la TUI renombra la del cursor con marcas puestas: la ayuda no puede negarlo"
+        );
+        // Y dentro de un archivo sí se apaga, por el backend — el veto real
+        // sigue en pie.
+        let mut zip = App::new(
+            Pane::new(vp("zip+file:///a.zip/!"), Vec::new()),
+            pane_con(&["z"]),
+        );
+        zip.freeze_help_facts();
+        assert_eq!(
+            zip.help_chords.availability("pane.rename").reason(),
+            Some(norte_help::Reason::ReadOnlyBackend)
+        );
+    }
+
+    /// Congelar los hechos al abrir la ayuda: el resolver que la vista usa
+    /// pasa a responder con los hechos de ESE momento.
+    #[test]
+    fn congelar_los_hechos_reescribe_el_resolver_de_la_ayuda() {
+        use norte_help::ChordResolver as _;
+
+        let mut app = app_en("zip+file:///a.zip/!", "zip+file:///b.zip/!");
+        assert!(
+            app.help_chords.availability("pane.copy").is_available(),
+            "antes de congelar el resolver no sabe nada del contexto"
+        );
+        app.freeze_help_facts();
+        assert_eq!(
+            app.help_chords.availability("pane.copy").reason(),
+            Some(norte_help::Reason::ReadOnlyBackend),
+            "los dos panes son de solo lectura: copiar no tiene destino"
+        );
+    }
+}

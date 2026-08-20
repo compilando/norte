@@ -283,3 +283,118 @@ impl App {
         self.compare_generation
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::pane::Pane;
+    use crate::app::testutil::*;
+    use norte_proto::EntryKind;
+
+    /// #157: un huérfano `File` sin `size` es candidato a la sonda de la fila
+    /// seleccionada, y deja de serlo en cuanto `hydrate_compare_size` lo
+    /// resuelve — con éxito o sin él, para no reintentarlo cada frame.
+    #[test]
+    fn compare_size_probe_targets_solo_file_sin_size_y_no_repite() {
+        let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
+        let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
+        let row = fila_huerfana(1, EntryKind::File, None);
+        let path = row.left.as_ref().unwrap().path.clone();
+        view.pane.extend(vec![row]);
+        app.compare = Some(view);
+
+        assert_eq!(
+            app.compare_size_probe_targets(),
+            vec![path.clone()],
+            "huérfano File sin size es candidato"
+        );
+
+        // Sondeado con ÉXITO: ya no es candidato, y el hint queda puesto.
+        app.hydrate_compare_size(app.compare_generation(), path.clone(), Some(42));
+        assert!(
+            app.compare_size_probe_targets().is_empty(),
+            "ya hidratado, no se repite"
+        );
+        assert_eq!(app.compare_size_hints.get(&path), Some(&42));
+    }
+
+    /// #198: una sonda lanzada para la comparación A no puede aterrizar en
+    /// la B. La sonda vive en el run loop y `launch_compare` no la ve, así
+    /// que la única defensa es que el resultado traiga la generación bajo la
+    /// que se pidió — sin eso, la caché que el rustdoc llama «de ESTA
+    /// comparación» tiene dentro un tamaño de la anterior, en el panel cuyo
+    /// asunto entero es si lo que estás mirando es exacto.
+    #[test]
+    fn una_sonda_de_la_comparacion_anterior_no_aterriza_en_la_nueva() {
+        let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
+        let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
+        let row = fila_huerfana(1, EntryKind::File, None);
+        let path = row.left.as_ref().expect("izquierda").path.clone();
+        view.pane.extend(vec![row.clone()]);
+        app.compare = Some(view);
+        let old = app.compare_generation();
+
+        // Otra comparación empieza: la caché se vacía y la generación avanza.
+        app.begin_compare_generation();
+        let mut view = CompareView::new(vp("mem:///c"), vp("mem:///d"), 0, None, None);
+        view.pane.extend(vec![row]);
+        app.compare = Some(view);
+        assert_ne!(app.compare_generation(), old);
+
+        // Llega la sonda de la comparación VIEJA.
+        app.hydrate_compare_size(old, path.clone(), Some(42));
+        assert!(
+            app.compare_size_hints.is_empty(),
+            "ni el tamaño de la anterior"
+        );
+        assert_eq!(
+            app.compare_size_probe_targets(),
+            vec![path.clone()],
+            "ni marcado sondeado: la nueva todavía tiene que pedirlo"
+        );
+
+        // Y la de la nueva sí.
+        let now = app.compare_generation();
+        app.hydrate_compare_size(now, path.clone(), Some(7));
+        assert_eq!(app.compare_size_hints.get(&path), Some(&7));
+    }
+
+    /// Un `stat` que falla (`None`) también se marca sondeado: no se
+    /// reintenta cada frame contra un provider roto, mismo criterio que
+    /// `last_probed` en el pane normal.
+    #[test]
+    fn compare_size_probe_targets_no_reintenta_un_stat_fallido() {
+        let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
+        let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
+        let row = fila_huerfana(1, EntryKind::File, None);
+        let path = row.left.as_ref().unwrap().path.clone();
+        view.pane.extend(vec![row]);
+        app.compare = Some(view);
+
+        app.hydrate_compare_size(app.compare_generation(), path, None);
+        assert!(
+            app.compare_size_probe_targets().is_empty(),
+            "un fallo también se marca sondeado"
+        );
+        assert!(app.compare_size_hints.is_empty(), "sin hint sobre un fallo");
+    }
+
+    /// Un directorio o un huérfano que YA trae `size` no son candidatos —
+    /// mismo criterio que `focused_needs_stat` para el pane normal: un `Dir`
+    /// no tiene un tamaño que un `stat` corriente resuelva.
+    #[test]
+    fn compare_size_probe_targets_ignora_dir_y_lo_ya_hidratado() {
+        let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
+        let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
+        view.pane.extend(vec![
+            fila_huerfana(1, EntryKind::Dir, None),
+            fila_huerfana(2, EntryKind::File, Some(7)),
+        ]);
+        app.compare = Some(view);
+
+        assert!(
+            app.compare_size_probe_targets().is_empty(),
+            "un Dir sin size y un File que ya lo trae no son candidatos"
+        );
+    }
+}

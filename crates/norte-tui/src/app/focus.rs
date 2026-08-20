@@ -190,3 +190,159 @@ impl App {
         self.set_focus(usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::pane::Pane;
+    use crate::app::testutil::*;
+    use norte_proto::EntryKind;
+
+    /// #52: `needs_stat_window` hidrata lo VISIBLE, no solo lo enfocado —
+    /// las columnas Tamaño/Fecha salían en blanco en todas las filas salvo
+    /// la del cursor. Los dos panes se pintan a la vez, así que los dos
+    /// aportan candidatas (el enfocado primero); fuera del radio, no; un
+    /// Dir, nunca; ya hidratada, tampoco.
+    #[test]
+    fn needs_stat_window_cubre_los_dos_panes_dentro_del_radio() {
+        let lazy = |n: &str| {
+            let mut e = file(n);
+            e.size = None;
+            e
+        };
+        let mut dir_lazy = lazy("z-dir");
+        dir_lazy.kind = EntryKind::Dir;
+        let left = vec![lazy("a.txt"), lazy("b.txt"), lazy("c.txt"), dir_lazy];
+        let right = vec![lazy("d.txt"), file("e.txt")];
+        let mut app = App::new(Pane::new(root(), left), Pane::new(root(), right));
+        // `Pane::new` ordena (dirs primero): [z-dir, a, b, c].
+        app.panes[0].set_cursor(1);
+
+        let window = app.needs_stat_window(1);
+        let names: Vec<String> = window
+            .iter()
+            .map(|(p, path)| format!("{p}:{}", path.display_lossy()))
+            .collect();
+        assert!(
+            names
+                .iter()
+                .any(|n| n.starts_with("0:") && n.ends_with("/a.txt"))
+                && names
+                    .iter()
+                    .any(|n| n.starts_with("0:") && n.ends_with("/b.txt")),
+            "cursor ± radio del pane con foco: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("c.txt")),
+            "fuera del radio no se sondea: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("z-dir")),
+            "un Dir jamás se sondea: {names:?}"
+        );
+        assert!(
+            names
+                .iter()
+                .any(|n| n.starts_with("1:") && n.ends_with("/d.txt")),
+            "el pane SIN foco también se pinta: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("e.txt")),
+            "ya hidratada, no es candidata: {names:?}"
+        );
+        assert_eq!(window[0].0, 0, "el pane con foco va primero");
+
+        // Un radio generoso alcanza el listado entero de ambos panes.
+        assert_eq!(app.needs_stat_window(64).len(), 4);
+    }
+
+    /// #52: `focused_needs_stat` señala la entrada File enfocada SIN `size`
+    /// (candidata a la sonda lazy). Ya hidratada o siendo un Dir, no aplica.
+    #[test]
+    fn focused_needs_stat_solo_file_lazy() {
+        let mut lazy = file("a.txt");
+        lazy.size = None;
+        let mut app = App::new(
+            Pane::new(root(), vec![lazy.clone()]),
+            Pane::new(root(), vec![]),
+        );
+        assert_eq!(
+            app.focused_needs_stat(),
+            Some((0, lazy.path.clone())),
+            "File sin size es candidato"
+        );
+
+        // Ya hidratada: deja de ser candidata.
+        app.panes[0].hydrate(&lazy.path, Some(5), None);
+        assert!(app.focused_needs_stat().is_none(), "ya tiene size");
+
+        // Un Dir jamás se sondea, aunque venga sin size.
+        let mut dir_lazy = file("b");
+        dir_lazy.kind = EntryKind::Dir;
+        dir_lazy.size = None;
+        app.panes[0] = Pane::new(root(), vec![dir_lazy]);
+        assert!(app.focused_needs_stat().is_none(), "un Dir no se sondea");
+    }
+
+    /// El intercambio cruza el pane Y su historial, y deja el foco en el
+    /// mismo LADO: quien miraba a la izquierda sigue mirando a la izquierda,
+    /// y ahora ahí está lo que había a la derecha.
+    #[test]
+    fn el_intercambio_cruza_pane_e_historial_y_no_mueve_el_foco() {
+        let mut app = app_en("mem:///izq", "mem:///der");
+        app.history[0].record(vp("mem:///rastro-izq"));
+        app.history[1].record(vp("mem:///rastro-der"));
+        app.set_focus(0);
+
+        app.swap_panes();
+
+        assert_eq!(app.panes[0].dir(), &vp("mem:///der"));
+        assert_eq!(app.panes[1].dir(), &vp("mem:///izq"));
+        assert_eq!(app.focus(), 0, "el foco se queda en su lado");
+        // El rastro viaja con el CONTENIDO, no con el lado: si no, el popup
+        // ofrecería llevar «atrás» a sitios donde ese contenido nunca estuvo.
+        assert_eq!(
+            app.history[0].entries().front(),
+            Some(&vp("mem:///rastro-der"))
+        );
+        assert_eq!(
+            app.history[1].entries().front(),
+            Some(&vp("mem:///rastro-izq"))
+        );
+        // Y el RASTRO de atrás/adelante viaja también, no solo la MRU que
+        // pinta el popup: son dos estructuras dentro del mismo `History`.
+        assert_eq!(app.history[0].back_len(), 1);
+        assert_eq!(
+            app.history[0].step_back(vp("mem:///der")),
+            Some(vp("mem:///rastro-der")),
+            "el atrás del pane 0 apunta al rastro que llegó con su contenido"
+        );
+    }
+
+    /// Dos intercambios son la identidad.
+    #[test]
+    fn dos_intercambios_dejan_todo_como_estaba() {
+        let mut app = app_en("mem:///izq", "mem:///der");
+        app.swap_panes();
+        app.swap_panes();
+        assert_eq!(app.panes[0].dir(), &vp("mem:///izq"));
+        assert_eq!(app.panes[1].dir(), &vp("mem:///der"));
+    }
+
+    /// El foco se queda en el LADO también cuando estaba a la derecha: el
+    /// intercambio no toca `focus` en absoluto. (Mutación de control:
+    /// añadir `self.focus ^= 1` a `swap_panes` rompe aquí y en el test de
+    /// arriba a la vez.)
+    #[test]
+    fn el_intercambio_con_el_foco_a_la_derecha_tampoco_lo_mueve() {
+        let mut app = app_en("mem:///izq", "mem:///der");
+        app.set_focus(1);
+        app.swap_panes();
+        assert_eq!(app.focus(), 1);
+        assert_eq!(
+            app.focused().dir(),
+            &vp("mem:///izq"),
+            "en el lado derecho ahora está lo que había a la izquierda"
+        );
+    }
+}
