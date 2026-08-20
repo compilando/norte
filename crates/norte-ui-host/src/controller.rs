@@ -11,16 +11,18 @@
 //! no se le acumulan parches: se le manda un snapshot y vuelve a estar al
 //! día (ADR 0066).
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use norte_proto::{Entry, EntryKind, VPath};
+use norte_frontend::PaneState;
+use norte_frontend::nav::{History, Trail, TrailStep};
+use norte_proto::{Entry, EntryKind, Error, VPath};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::action::UiAction;
 use crate::backend::HostBackend;
 use crate::bridge::{
-    ActionAck, BridgeEnvelope, InstanceId, MAX_ROWS_PER_BATCH, RowKey, StaleAction, clamp_display,
+    ActionAck, BridgeEnvelope, InstanceId, MAX_ROWS_PER_BATCH, RequestToken, RowKey, StaleAction,
+    clamp_display,
 };
 use crate::dto::{
     BrowserSlotView, ConnectionView, RowKind, RowView, SlotState, SlotView, StatusView, UiNotice,
@@ -92,6 +94,9 @@ pub struct UiHost {
 
 enum Mensaje {
     Accion(Box<UiAction>, oneshot::Sender<ActionAck>),
+    /// La respuesta de un listado que se pidió antes. Vuelve al actor como
+    /// un mensaje más: así el estado lo sigue tocando un solo escritor.
+    Listado(Box<(RequestToken, VPath, Result<Vec<Entry>, Error>)>),
     Apagar(oneshot::Sender<ShutdownReport>),
 }
 
@@ -109,11 +114,14 @@ impl UiHost {
         let instance = InstanceId::new(nueva_instancia());
         let (updates, _) = broadcast::channel(UPDATE_BUFFER);
         let (tx, rx) = mpsc::channel(INBOX);
+        // El actor conserva un remite a SU propio buzón: por ahí vuelven las
+        // respuestas de lo que tarda.
+        let tx2 = tx.clone();
 
         let mut estado = Estado::nuevo(instance.clone(), options.locale, options.initial_dir);
         // El primer listado se pide ANTES de publicar nada: el snapshot 0
         // describe una pantalla que ya existe, no una promesa.
-        estado.listar(options.backend.as_ref()).await;
+        estado.listar_inicial(options.backend.as_ref()).await;
         let primero = estado.snapshot();
 
         let host = Self {
@@ -121,7 +129,7 @@ impl UiHost {
             updates: updates.clone(),
             instance,
         };
-        tokio::spawn(actor(rx, estado, options.backend, updates));
+        tokio::spawn(actor(rx, estado, options.backend, updates, tx2));
         Ok((host, primero))
     }
 
@@ -180,19 +188,34 @@ pub enum UiError {
 async fn actor(
     mut rx: mpsc::Receiver<Mensaje>,
     mut estado: Estado,
-    _backend: Arc<dyn HostBackend>,
+    backend: Arc<dyn HostBackend>,
     updates: broadcast::Sender<BridgeEnvelope<UiUpdate>>,
+    buzon: mpsc::Sender<Mensaje>,
 ) {
     while let Some(msg) = rx.recv().await {
         match msg {
             Mensaje::Accion(accion, responde) => {
-                let (ack, salidas) = estado.aplicar(&accion);
+                let (ack, salidas) = estado.aplicar(&accion, &backend, &buzon);
                 for u in salidas {
                     // Sin suscriptores no es un error: el host sigue vivo
                     // aunque el renderer se haya ido a hacer otra cosa.
                     let _ = updates.send(u);
                 }
                 let _ = responde.send(ack);
+            }
+            Mensaje::Listado(datos) => {
+                let (token, dir, res) = *datos;
+                if estado.hueco.en_vuelo != Some(token) {
+                    // Llegó tarde: otra navegación la relevó. Se descarta
+                    // AQUÍ, no se esconde en el renderer.
+                    continue;
+                }
+                estado.aterriza(dir, res);
+                // Un `cd` cambia la pantalla entera —directorio, filas,
+                // cursor, marcas—, así que se manda una foto en vez de
+                // enumerar parches que el renderer tendría que casar.
+                let snap = estado.snapshot();
+                let _ = updates.send(estado.sobre(UiUpdate::Snapshot(snap)));
             }
             Mensaje::Apagar(responde) => {
                 let informe = Estado::apagar();
@@ -217,15 +240,23 @@ fn nueva_instancia() -> String {
 }
 
 /// Un listado abierto en un hueco.
+///
+/// El estado del listado NO es de este crate: es
+/// [`norte_frontend::pane::PaneState`], el mismo que usa el TUI. Cursor,
+/// marcas, ocultos, memoria de cursor por directorio y la ÉPOCA del listado
+/// salen de ahí, así que las dos superficies no pueden divergir en lo que
+/// significa «bajar el cursor» (ADR 0066, D14).
 struct Hueco {
     id: u32,
-    generacion: u64,
-    dir: VPath,
-    entradas: Vec<Entry>,
-    cursor: usize,
-    marcas: BTreeSet<usize>,
+    pane: PaneState,
+    /// De dónde vengo y a dónde vuelvo. También compartido.
+    historial: History,
     primera_visible: u64,
     visibles: u32,
+    /// La petición de listado EN VUELO, si la hay. Una respuesta con otro
+    /// testigo llegó tarde: se descarta aquí, en Rust, no se esconde en el
+    /// renderer.
+    en_vuelo: Option<RequestToken>,
     estado: SlotState,
 }
 
@@ -233,6 +264,9 @@ struct Hueco {
 struct Estado {
     instance: InstanceId,
     sequence: u64,
+    /// Contador de peticiones. Cada listado se lleva el suyo, y una
+    /// respuesta con un testigo viejo se descarta.
+    token: u64,
     locale: String,
     hueco: Hueco,
     status: StatusView,
@@ -244,16 +278,15 @@ impl Estado {
         Self {
             instance,
             sequence: 0,
+            token: 0,
             locale,
             hueco: Hueco {
                 id: 1,
-                generacion: 0,
-                dir,
-                entradas: Vec::new(),
-                cursor: 0,
-                marcas: BTreeSet::new(),
+                pane: PaneState::new(dir, Vec::new()),
+                historial: History::default(),
                 primera_visible: 0,
                 visibles: 64,
+                en_vuelo: None,
                 estado: SlotState::Loading,
             },
             status: StatusView::default(),
@@ -261,22 +294,27 @@ impl Estado {
         }
     }
 
-    /// Pide el listado y lo deja ORDENADO con el mismo comparador que el
-    /// resto de frontends: dos superficies que ordenan distinto se leen como
-    /// si dijeran cosas distintas.
-    async fn listar(&mut self, backend: &dyn HostBackend) {
-        let dir = self.hueco.dir.clone();
-        match backend.list(dir).await {
-            Ok(mut entradas) => {
-                norte_frontend::sort_entries(&mut entradas);
-                self.hueco.entradas = entradas;
-                self.hueco.cursor = 0;
-                self.hueco.marcas.clear();
-                self.hueco.generacion += 1;
+    /// El listado inicial, el único que se espera EN LÍNEA: hasta que exista
+    /// no hay pantalla que enseñar, así que no hay nada que congelar.
+    async fn listar_inicial(&mut self, backend: &dyn HostBackend) {
+        let dir = self.hueco.pane.dir().clone();
+        let res = backend.list(dir.clone()).await;
+        self.aterriza(dir, res);
+    }
+
+    /// Aplica el resultado de un listado. El orden y el cursor los decide
+    /// `PaneState`, que es quien sabe qué hacer con la memoria del cursor y
+    /// con un foco pendiente.
+    fn aterriza(&mut self, dir: VPath, res: Result<Vec<Entry>, Error>) {
+        self.hueco.en_vuelo = None;
+        match res {
+            Ok(entradas) => {
+                self.hueco.pane.set_listing(dir, entradas);
+                self.hueco.primera_visible = 0;
                 self.hueco.estado = SlotState::Ready;
             }
             Err(e) => {
-                self.hueco.entradas.clear();
+                self.hueco.pane.set_listing(dir, Vec::new());
                 self.hueco.estado = SlotState::Error {
                     reason_key: norte_frontend::error::error_key(&e).to_owned(),
                     detail: None,
@@ -287,32 +325,33 @@ impl Estado {
 
     /// Aplica una acción y devuelve su acuse más lo que haya que publicar.
     ///
-    /// Síncrona MIENTRAS ninguna acción hable con el daemon. En cuanto entre
-    /// la navegación (tarea 2.3) volverá a ser `async`, y el contrato que hay
-    /// que conservar entonces es el de ahora: el actor sigue siendo el único
-    /// escritor, así que aquí no puede quedarse tomado ningún lock mientras
-    /// se espera al backend — no hay ninguno que tomar.
-    fn aplicar(&mut self, accion: &UiAction) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    /// Lo que TARDA no se hace aquí. Una navegación deja la petición en
+    /// vuelo y devuelve; su respuesta vuelve al actor como un mensaje más y
+    /// se aplica en [`Estado::aterriza`]. Por eso el cursor sigue
+    /// respondiendo mientras un NFS muerto piensa: el único escritor no está
+    /// esperando a nadie.
+    fn aplicar(
+        &mut self,
+        accion: &UiAction,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match accion {
             UiAction::MoveCursor { slot_id, delta } => {
                 let (slot_id, delta) = (*slot_id, *delta);
                 if slot_id != self.hueco.id {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 }
-                let n = self.hueco.entradas.len();
-                if n == 0 {
+                if self.hueco.pane.entries().is_empty() {
                     return (self.aplicada(), Vec::new());
                 }
-                let actual = i128::try_from(self.hueco.cursor).unwrap_or(0);
-                let destino =
-                    (actual + i128::from(delta)).clamp(0, i128::try_from(n - 1).unwrap_or(0));
-                self.hueco.cursor = usize::try_from(destino).unwrap_or(0);
-                let cambio = ViewChange::Cursor {
-                    slot_id: self.hueco.id,
-                    generation: self.hueco.generacion,
-                    cursor: Some(RowKey(self.hueco.cursor as u64)),
-                };
-                (self.aplicada(), vec![self.parche(vec![cambio])])
+                let actual = i128::try_from(self.hueco.pane.cursor()).unwrap_or(0);
+                let ultimo = i128::try_from(self.hueco.pane.entries().len() - 1).unwrap_or(0);
+                let destino = (actual + i128::from(delta)).clamp(0, ultimo);
+                self.hueco
+                    .pane
+                    .set_cursor(usize::try_from(destino).unwrap_or(0));
+                (self.aplicada(), vec![self.parche_cursor()])
             }
             UiAction::SelectRow { slot_id, key } | UiAction::ToggleMark { slot_id, key } => {
                 let (slot_id, key) = (*slot_id, *key);
@@ -320,29 +359,23 @@ impl Estado {
                 if slot_id != self.hueco.id {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 }
-                let Ok(i) = usize::try_from(key.0) else {
-                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
-                };
-                if i >= self.hueco.entradas.len() {
+                let Some(i) = self.fila_valida(key) else {
                     // Una fila que ya no existe: el listado cambió bajo el
                     // click. Ni se interpreta ni es un error.
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
-                }
-                if marcar {
-                    if !self.hueco.marcas.remove(&i) {
-                        self.hueco.marcas.insert(i);
-                    }
-                } else {
-                    self.hueco.cursor = i;
-                }
-                let filas = self.filas_visibles();
-                let cambio = ViewChange::Rows {
-                    slot_id: self.hueco.id,
-                    generation: self.hueco.generacion,
-                    first_visible: self.hueco.primera_visible,
-                    rows: filas,
                 };
-                (self.aplicada(), vec![self.parche(vec![cambio])])
+                if marcar {
+                    let marcada = self
+                        .hueco
+                        .pane
+                        .entries()
+                        .get(i)
+                        .is_some_and(|e| self.hueco.pane.is_marked(e));
+                    self.hueco.pane.set_mark(i, !marcada);
+                } else {
+                    self.hueco.pane.set_cursor(i);
+                }
+                (self.aplicada(), vec![self.parche_filas()])
             }
             UiAction::SetVisibleRange {
                 slot_id,
@@ -356,14 +389,7 @@ impl Estado {
                 self.hueco.primera_visible = first;
                 self.hueco.visibles =
                     count.min(u32::try_from(MAX_ROWS_PER_BATCH).unwrap_or(u32::MAX));
-                let filas = self.filas_visibles();
-                let cambio = ViewChange::Rows {
-                    slot_id: self.hueco.id,
-                    generation: self.hueco.generacion,
-                    first_visible: self.hueco.primera_visible,
-                    rows: filas,
-                };
-                (self.aplicada(), vec![self.parche(vec![cambio])])
+                (self.aplicada(), vec![self.parche_filas()])
             }
             UiAction::FocusSlot { slot_id } => {
                 if *slot_id != self.hueco.id {
@@ -371,17 +397,17 @@ impl Estado {
                 }
                 (self.aplicada(), Vec::new())
             }
+            UiAction::Activate { .. } | UiAction::Parent { .. } | UiAction::History { .. } => {
+                self.navegacion(accion, backend, buzon)
+            }
             UiAction::Resync => {
                 let snap = self.snapshot();
                 (self.aplicada(), vec![self.sobre(UiUpdate::Snapshot(snap))])
             }
             // Lo que todavía no hace este host se DICE, no se traga: un
-            // renderer que pida navegar tiene que poder distinguir «aún no»
-            // de «no pasó nada» (tareas 2.3 a 2.6).
-            UiAction::Activate { .. }
-            | UiAction::Parent { .. }
-            | UiAction::History { .. }
-            | UiAction::Dialog { .. }
+            // renderer tiene que poder distinguir «aún no» de «no pasó nada»
+            // (tareas 2.4 a 2.6).
+            UiAction::Dialog { .. }
             | UiAction::DialogInput { .. }
             | UiAction::CancelTask { .. } => (
                 ActionAck::Unavailable {
@@ -392,9 +418,152 @@ impl Estado {
         }
     }
 
-    /// Qué queda sin terminar al apagar. Hoy nada: las tasks y la sesión
-    /// entran en las tareas 2.5 y 2.6, y entonces esto tendrá algo que
-    /// contar.
+    /// Las tres acciones que CAMBIAN de directorio.
+    ///
+    /// Aparte de las de arriba porque son las únicas que dejan trabajo en
+    /// vuelo: las demás terminan dentro de esta función.
+    fn navegacion(
+        &mut self,
+        accion: &UiAction,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match accion {
+            UiAction::Activate { slot_id, key } => {
+                let (slot_id, key) = (*slot_id, *key);
+                if slot_id != self.hueco.id {
+                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                }
+                let Some(i) = self.fila_valida(key) else {
+                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                };
+                let Some(entrada) = self.hueco.pane.entries().get(i) else {
+                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                };
+                if entrada.kind != EntryKind::Dir {
+                    // Abrir un FICHERO es otra cosa (visor, opener externo) y
+                    // llega con la tarea 2.6: decirlo es más honesto que
+                    // navegar a algo que no es un directorio.
+                    return (
+                        ActionAck::Unavailable {
+                            reason_key: "host-open-file-not-implemented".to_owned(),
+                        },
+                        Vec::new(),
+                    );
+                }
+                let destino = entrada.path.clone();
+                (
+                    self.aplicada(),
+                    self.navegar(&destino, Trail::Record, backend, buzon),
+                )
+            }
+            UiAction::Parent { slot_id } => {
+                if *slot_id != self.hueco.id {
+                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                }
+                let actual = self.hueco.pane.dir().clone();
+                let Some(padre) = actual.parent() else {
+                    return (
+                        ActionAck::Unavailable {
+                            reason_key: "msg-nav-at-root".to_owned(),
+                        },
+                        Vec::new(),
+                    );
+                };
+                // El cursor aterriza en el directorio del que se sale, no en
+                // la primera fila: es lo que hace que subir y bajar sea
+                // reversible. Lo resuelve `PaneState` al recibir el listado.
+                self.hueco.pane.set_pending_focus(actual);
+                (
+                    self.aplicada(),
+                    self.navegar(&padre, Trail::Record, backend, buzon),
+                )
+            }
+            UiAction::History { slot_id, back } => {
+                let (slot_id, back) = (*slot_id, *back);
+                if slot_id != self.hueco.id {
+                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                }
+                let actual = self.hueco.pane.dir().clone();
+                let paso = if back {
+                    TrailStep::Back
+                } else {
+                    TrailStep::Forward
+                };
+                let destino = if back {
+                    self.hueco.historial.step_back(actual)
+                } else {
+                    self.hueco.historial.step_forward(actual)
+                };
+                let Some(destino) = destino else {
+                    // Una tecla que se queda muda no se distingue de una
+                    // rota: el rastro agotado lo DICE.
+                    return (
+                        ActionAck::Unavailable {
+                            reason_key: paso.empty_message().to_owned(),
+                        },
+                        Vec::new(),
+                    );
+                };
+                (
+                    self.aplicada(),
+                    self.navegar(&destino, Trail::Replay(paso), backend, buzon),
+                )
+            }
+            _ => (Self::obsoleta(StaleAction::Generation), Vec::new()),
+        }
+    }
+
+    /// Arranca una navegación: registra el paso en el rastro, marca el hueco
+    /// como cargando y deja la petición EN VUELO con su testigo.
+    fn navegar(
+        &mut self,
+        destino: &VPath,
+        trail: Trail,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let anterior = self.hueco.pane.dir().clone();
+        let destino = destino.clone();
+        // Un `Replay` es el rastro reproduciéndose: registrar ahí haría que
+        // `back` se alimentara de sí mismo y el lector oscilara entre dos
+        // directorios.
+        if anterior != destino && trail == Trail::Record {
+            self.hueco.historial.record(anterior);
+        }
+        // La memoria del cursor se toma con el dir que se ABANDONA todavía
+        // puesto (contrato de `remember_cursor`).
+        self.hueco.pane.remember_cursor();
+        self.hueco.estado = SlotState::Loading;
+
+        self.token += 1;
+        let token = RequestToken(self.token);
+        self.hueco.en_vuelo = Some(token);
+
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        let dir = destino.clone();
+        tokio::spawn(async move {
+            let res = backend.list(dir.clone()).await;
+            // Si el actor ya no está, la respuesta no le importa a nadie.
+            let _ = buzon
+                .send(Mensaje::Listado(Box::new((token, dir, res))))
+                .await;
+        });
+
+        let cambio = ViewChange::SlotState {
+            slot_id: self.hueco.id,
+            state: SlotState::Loading,
+        };
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// El índice de una fila, si la clave es de ESTA generación y existe.
+    fn fila_valida(&self, key: RowKey) -> Option<usize> {
+        let i = usize::try_from(key.0).ok()?;
+        (i < self.hueco.pane.entries().len()).then_some(i)
+    }
+
     fn apagar() -> ShutdownReport {
         ShutdownReport { incomplete: false }
     }
@@ -430,13 +599,42 @@ impl Estado {
         let primera = usize::try_from(self.hueco.primera_visible).unwrap_or(0);
         let cuantas = usize::try_from(self.hueco.visibles).unwrap_or(0);
         self.hueco
-            .entradas
+            .pane
+            .entries()
             .iter()
             .enumerate()
             .skip(primera)
             .take(cuantas.min(MAX_ROWS_PER_BATCH))
             .map(|(i, e)| self.fila(i, e))
             .collect()
+    }
+
+    /// La generación de un listado: la ÉPOCA de `PaneState`, que sube en
+    /// cada cosa que mueve los índices —un re-listado, un re-orden, un
+    /// filtro de ocultos—, no solo al cambiar de directorio.
+    fn generacion(&self) -> u64 {
+        self.hueco.pane.listing_epoch()
+    }
+
+    /// Mover el cursor manda el cursor, no el listado.
+    fn parche_cursor(&mut self) -> BridgeEnvelope<UiUpdate> {
+        let cambio = ViewChange::Cursor {
+            slot_id: self.hueco.id,
+            generation: self.generacion(),
+            cursor: Some(RowKey(self.hueco.pane.cursor() as u64)),
+        };
+        self.parche(vec![cambio])
+    }
+
+    /// Lo que cambia una marca o un scroll: las filas visibles.
+    fn parche_filas(&mut self) -> BridgeEnvelope<UiUpdate> {
+        let cambio = ViewChange::Rows {
+            slot_id: self.hueco.id,
+            generation: self.generacion(),
+            first_visible: self.hueco.primera_visible,
+            rows: self.filas_visibles(),
+        };
+        self.parche(vec![cambio])
     }
 
     fn fila(&self, i: usize, e: &Entry) -> RowView {
@@ -455,27 +653,27 @@ impl Estado {
                 EntryKind::Symlink => RowKind::Symlink,
                 EntryKind::Other => RowKind::Other,
             },
-            selected: i == self.hueco.cursor,
-            marked: self.hueco.marcas.contains(&i),
+            selected: i == self.hueco.pane.cursor(),
+            marked: self.hueco.pane.is_marked(e),
             cells: Vec::new(),
         }
     }
 
     fn snapshot(&self) -> ViewSnapshot {
-        let (path, hostil) = norte_frontend::path_display(&self.hueco.dir);
+        let (path, hostil) = norte_frontend::path_display(self.hueco.pane.dir());
         ViewSnapshot {
             connection: self.conexion.clone(),
             slots: vec![SlotView::Browser(BrowserSlotView {
                 slot_id: self.hueco.id,
-                generation: self.hueco.generacion,
+                generation: self.generacion(),
                 path_display: clamp_display(path),
                 path_hostile: hostil,
-                total_rows: Some(self.hueco.entradas.len() as u64),
+                total_rows: Some(self.hueco.pane.entries().len() as u64),
                 first_visible: self.hueco.primera_visible,
                 rows: self.filas_visibles(),
-                cursor: (!self.hueco.entradas.is_empty())
-                    .then_some(RowKey(self.hueco.cursor as u64)),
-                marks: self.hueco.marcas.len() as u64,
+                cursor: (!self.hueco.pane.entries().is_empty())
+                    .then_some(RowKey(self.hueco.pane.cursor() as u64)),
+                marks: self.hueco.pane.marks_len() as u64,
                 state: self.hueco.estado.clone(),
             })],
             focus: Some(self.hueco.id),

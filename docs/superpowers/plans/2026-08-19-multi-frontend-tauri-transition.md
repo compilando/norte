@@ -959,7 +959,7 @@ Acceptance:
 
 ## Phase 2 — Build the toolkit-independent `norte-ui-host`
 
-> **Tasks 2.1 and 2.2 DONE 2026-08-20.** The crate exists with `bridge.rs`
+> **Tasks 2.1, 2.2 and the core of 2.3 DONE 2026-08-20.** The crate exists with `bridge.rs`
 > (envelope, `BRIDGE_VERSION`, opaque `RowKey`/`ModalId`/`RequestToken`, caps),
 > `dto.rs` (renderer-safe views; no raw path crosses), `action.rs` (semantic
 > actions) and `controller.rs` (bounded inbox, one writer, broadcast
@@ -971,9 +971,22 @@ Acceptance:
 > `list` only for now; the golden corpus lives at `tests/golden/` and no JSON
 > Schema is generated yet (schemars is not a dependency of this crate).
 >
-> **Next: task 2.3** (browser pane, listing and navigation), which is where
-> `aplicar` becomes async again and `PaneState` from `norte-frontend` starts
-> being reused instead of the placeholder slot state in `controller.rs`.
+> **Task 2.3, done:** the slot IS `norte_frontend::PaneState` plus
+> `norte_frontend::nav::History` — cursor, marks, hidden, cursor memory and
+> the listing epoch (which is the bridge's `generation`) all come from the
+> shared layer. `History` and `Trail`/`TrailStep` moved OUT of `norte-tui`
+> into `norte-frontend` to make that possible; the TUI re-exports them and no
+> call site changed. Navigation (activate directory, parent with pending
+> focus, history back/forward) leaves the request in flight with a token and
+> its answer returns to the actor as another message, so a superseded listing
+> is discarded in Rust with a test to prove it.
+>
+> **Task 2.3, still owed:** pagination/stream drain policy (the host asks for
+> the whole listing today), quick search, configured columns and the attr
+> catalogue, watcher refresh and degradation, and the hidden-slot lifecycle.
+> Those need tasks 2.4 and 2.5 around them to mean anything.
+>
+> **Next: task 2.4** (command/keymap/availability over the shared catalogue).
 
 Implement one vertical feature at a time. The host should be useful to a
 headless test before Tauri exists.
