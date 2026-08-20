@@ -3,7 +3,7 @@
 //! la hoja de propiedades con su hidratación.
 
 use super::App;
-use super::modal::{Modal, TransferKind};
+use super::modal::{Modal, PromptKind, TransferKind};
 use norte_proto::VPath;
 
 impl App {
@@ -69,16 +69,7 @@ impl App {
     /// del allowlist "solo modales de texto libre" algo que el compilador
     /// de tests, no la disciplina del caller, hace cumplir.
     pub fn cancel_mark_pattern(&mut self) {
-        if !matches!(self.modal, Some(Modal::MarkPattern { .. })) {
-            debug_assert!(
-                false,
-                "solo los modales de texto libre se cierran sin decisión; \
-                 un modal de DECISIÓN debe denegar por on_dialog_key"
-            );
-            return;
-        }
-        self.modal = None;
-        self.open_next_pending();
+        self.cancel_prompt(PromptKind::MarkPattern);
     }
 
     /// Abre la confirmación de una copia o un movimiento `from` → `to`.

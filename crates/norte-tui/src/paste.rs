@@ -164,53 +164,19 @@ pub fn route_paste(app: &mut App, text: &str) {
             PasteOutcome::Ignored // help navigation: keymap context, not free text
         }
     } else if app.modal.is_some() {
-        match &app.modal {
-            Some(Modal::MarkPattern { .. }) => {
-                for c in first_line.chars() {
-                    app.mark_pattern_push(c);
-                }
-                PasteOutcome::Inserted
+        // Todo prompt de TEXTO LIBRE recibe el pegado igual, y son los nueve
+        // que `prompt_kind` reconoce: antes esto era una lista escrita a mano
+        // y se le habían quedado fuera dos (empaquetar y partir), que aceptan
+        // teclas pero rechazaban un pegado. Los demás modales
+        // —confirmaciones, TOFU, colisión— resuelven por el contexto `dialog`
+        // del keymap: aquí no hay nada que rellenar.
+        if let Some(kind) = app.modal.as_ref().and_then(Modal::prompt_kind) {
+            for c in first_line.chars() {
+                app.prompt_push(kind, c);
             }
-            Some(Modal::Mkdir { .. }) => {
-                for c in first_line.chars() {
-                    app.mkdir_push(c);
-                }
-                PasteOutcome::Inserted
-            }
-            Some(Modal::TransferDest { .. }) => {
-                for c in first_line.chars() {
-                    app.transfer_dest_push(c);
-                }
-                PasteOutcome::Inserted
-            }
-            Some(Modal::CommandLine { .. }) => {
-                for c in first_line.chars() {
-                    app.command_line_push(c);
-                }
-                PasteOutcome::Inserted
-            }
-            Some(Modal::AiRenameInstruction { .. }) => {
-                for c in first_line.chars() {
-                    app.ai_rename_push(c);
-                }
-                PasteOutcome::Inserted
-            }
-            Some(Modal::SemanticQuery { .. }) => {
-                for c in first_line.chars() {
-                    app.semantic_push(c);
-                }
-                PasteOutcome::Inserted
-            }
-            Some(Modal::TransferName { .. }) => {
-                for c in first_line.chars() {
-                    app.transfer_name_push(c);
-                }
-                PasteOutcome::Inserted
-            }
-            // Every other modal (confirmations, TOFU prompts, the collision
-            // dialog…) resolves keys through the `dialog` keymap context, not
-            // as free text: nothing here to fill.
-            _ => PasteOutcome::Ignored,
+            PasteOutcome::Inserted
+        } else {
+            PasteOutcome::Ignored
         }
     } else if app.viewer.is_none() && app.focused().quick().is_some() {
         for c in first_line.chars() {
@@ -564,5 +530,35 @@ mod paste_tests {
         // Not a free-text modal: the paste is inert, and — the point of the
         // test — it did NOT fall through to the settings filter behind it.
         assert_eq!(a.message, None);
+    }
+
+    /// Empaquetar y partir aceptan un pegado como cualquier otro prompt de
+    /// texto. La lista escrita a mano que había antes se los dejaba fuera:
+    /// teclear valía, pegar no hacía nada y no lo decía.
+    #[test]
+    fn empaquetar_y_partir_tambien_reciben_el_pegado() {
+        let mut a = app();
+        a.modal = Some(Modal::Pack {
+            name: String::new(),
+            error: None,
+        });
+        route_paste(&mut a, "cosas.zip");
+        assert!(
+            matches!(&a.modal, Some(Modal::Pack { name, .. }) if name.ends_with("cosas.zip")),
+            "el pegado no llegó al nombre del archivo: {:?}",
+            a.modal
+        );
+
+        let mut b = app();
+        b.modal = Some(Modal::Split {
+            size: String::new(),
+            error: None,
+        });
+        route_paste(&mut b, "700M");
+        assert!(
+            matches!(&b.modal, Some(Modal::Split { size, .. }) if size == "700M"),
+            "el pegado no llegó al tamaño del trozo: {:?}",
+            b.modal
+        );
     }
 }

@@ -4,12 +4,72 @@
 //! Todos siguen la misma forma: `open_*`, `*_push`, `*_pop`, `cancel_*`,
 //! `*_confirm`, `*_submitted` y `*_set_error`.
 
-use super::modal::{
-    MARK_PATTERN_MAX_CHARS, Modal, TRANSFER_DEST_MAX_CHARS, TransferKind, pop_wire_char,
-};
+use super::modal::{Modal, PromptKind, TextPrompt, TransferKind};
 use super::{AI_RENAME_PAIR_LIMIT, App, SEMANTIC_HIT_LIMIT, format_by_name, parse_size};
 use norte_i18n::{t, ta};
 use norte_proto::{EntryKind, VPath};
+
+impl App {
+    /// Teclea en el prompt `kind`, si es el que está abierto. No-op si no lo
+    /// es: cada tabla de despacho llama a la suya y una tecla no debe
+    /// escribir en el campo de otro modal.
+    pub(crate) fn prompt_push(&mut self, kind: PromptKind, c: char) {
+        if let Some(prompt) = self.open_prompt(kind) {
+            prompt.push(c);
+        }
+    }
+
+    /// Borra hacia atrás en el prompt `kind`. No-op si no es el abierto.
+    pub(crate) fn prompt_pop(&mut self, kind: PromptKind) {
+        if let Some(prompt) = self.open_prompt(kind) {
+            prompt.pop();
+        }
+    }
+
+    /// Deja el diagnóstico de un submit fallido y CONSERVA lo tecleado: el
+    /// usuario corrige y reintenta.
+    fn prompt_set_error(&mut self, kind: PromptKind, msg: String) {
+        if let Some(prompt) = self.open_prompt(kind) {
+            prompt.set_error(msg);
+        }
+    }
+
+    /// Cierra el prompt `kind` tras ENCOLAR lo que pedía, y abre el pendiente
+    /// siguiente. La disciplina es la misma en los nueve: `*_confirm` valida
+    /// y NO cierra; cierra esto, y solo cuando el submit salió.
+    fn prompt_submitted(&mut self, kind: PromptKind) {
+        if self.modal.as_ref().and_then(Modal::prompt_kind) == Some(kind) {
+            self.modal = None;
+            self.open_next_pending();
+        }
+    }
+
+    /// Esc sobre un prompt de texto: cierra sin escribir nada y abre el
+    /// pendiente siguiente.
+    ///
+    /// Solo los modales de TEXTO LIBRE se cierran por aquí. Uno de DECISIÓN
+    /// —colisión, aprobación, TOFU— tiene que denegar por `on_dialog_key`, y
+    /// llegar aquí con uno abierto es un bug de enrutado: se asegura en debug
+    /// y se ignora en release, jamás se cierra a ciegas la decisión de otro.
+    pub(crate) fn cancel_prompt(&mut self, kind: PromptKind) {
+        if self.modal.as_ref().and_then(Modal::prompt_kind) != Some(kind) {
+            debug_assert!(
+                false,
+                "solo los modales de texto libre se cierran sin decisión; \
+                 un modal de DECISIÓN debe denegar por on_dialog_key"
+            );
+            return;
+        }
+        self.modal = None;
+        self.open_next_pending();
+    }
+
+    /// El campo de texto del prompt `kind`, si es justo el que está abierto.
+    fn open_prompt(&mut self, kind: PromptKind) -> Option<TextPrompt<'_>> {
+        let modal = self.modal.as_mut()?;
+        (modal.prompt_kind() == Some(kind)).then(|| modal.text_prompt())?
+    }
+}
 
 impl App {
     /// Abre el modal de marcado por patrón (#103).
@@ -23,25 +83,12 @@ impl App {
 
     /// Añade un carácter al patrón en curso. No-op sin modal de patrón.
     pub fn mark_pattern_push(&mut self, c: char) {
-        if let Some(Modal::MarkPattern { pattern, error, .. }) = &mut self.modal {
-            // #103 T9 review MINOR: un patrón pegado por accidente (varios
-            // KB de portapapeles) desbordaría el ancho del modal y recortaría
-            // el hint — tope silencioso, como el resto de campos de texto de
-            // este overlay no tienen un límite de terminal que los frene.
-            if pattern.chars().count() >= MARK_PATTERN_MAX_CHARS {
-                return;
-            }
-            pattern.push(c);
-            *error = None;
-        }
+        self.prompt_push(PromptKind::MarkPattern, c);
     }
 
     /// Borra el último carácter del patrón. No-op sin modal de patrón.
     pub fn mark_pattern_pop(&mut self) {
-        if let Some(Modal::MarkPattern { pattern, error, .. }) = &mut self.modal {
-            pattern.pop();
-            *error = None;
-        }
+        self.prompt_pop(PromptKind::MarkPattern);
     }
 
     /// Aplica el patrón: cierra el modal y devuelve cuántas marcas cambió.
@@ -130,52 +177,20 @@ impl App {
     /// Añade un carácter al nombre en curso (#105). Marca `touched`: desde
     /// el primer edit, el nombre es el TEXTO. No-op sin el modal.
     pub fn transfer_name_push(&mut self, c: char) {
-        if let Some(Modal::TransferName {
-            name,
-            touched,
-            error,
-            ..
-        }) = &mut self.modal
-        {
-            if name.chars().count() >= MARK_PATTERN_MAX_CHARS {
-                return;
-            }
-            name.push(c);
-            *touched = true;
-            *error = None;
-        }
+        self.prompt_push(PromptKind::TransferName, c);
     }
 
     /// Borra el último carácter (#105). Marca `touched` SOLO si borró algo
     /// (review MINOR-5: un pop vacío no debe estrechar la vía de bytes
     /// originales).
     pub fn transfer_name_pop(&mut self) {
-        if let Some(Modal::TransferName {
-            name,
-            touched,
-            error,
-            ..
-        }) = &mut self.modal
-            && name.pop().is_some()
-        {
-            *touched = true;
-            *error = None;
-        }
+        self.prompt_pop(PromptKind::TransferName);
     }
 
     /// Cancela sin transferir — mismo contrato guarded que
     /// [`Self::cancel_mkdir`].
     pub fn cancel_transfer_name(&mut self) {
-        if !matches!(self.modal, Some(Modal::TransferName { .. })) {
-            debug_assert!(
-                false,
-                "solo los modales de texto libre se cierran sin decisión; \
-                 un modal de DECISIÓN debe denegar por on_dialog_key"
-            );
-            return;
-        }
-        self.modal = None;
-        self.open_next_pending();
+        self.cancel_prompt(PromptKind::TransferName);
     }
 
     /// Valida y devuelve `(kind, from, dest)` SIN cerrar el modal (misma
@@ -239,20 +254,19 @@ impl App {
     /// consumen.
     pub fn transfer_name_submitted(&mut self) {
         if let Some(Modal::TransferName { from_marks, .. }) = &self.modal {
+            // Lo que este submit tiene de propio, y por lo que no es el
+            // cierre genérico a secas: el lote se consume al ENVIAR.
             if *from_marks {
                 self.focused_mut().clear_marks();
             }
-            self.modal = None;
-            self.open_next_pending();
         }
+        self.prompt_submitted(PromptKind::TransferName);
     }
 
     /// Deja el diagnóstico de un intento fallido (#105): el texto tecleado
     /// sobrevive para corregir.
     pub fn transfer_name_set_error(&mut self, msg: String) {
-        if let Some(Modal::TransferName { error, .. }) = &mut self.modal {
-            *error = Some(msg);
-        }
+        self.prompt_set_error(PromptKind::TransferName, msg);
     }
 
     /// Abre el diálogo de empaquetar (#132), o deja el motivo si no se puede.
@@ -303,34 +317,17 @@ impl App {
 
     /// Añade un carácter al nombre del archivo. No-op sin su modal.
     pub fn pack_push(&mut self, c: char) {
-        if let Some(Modal::Pack { name, error }) = &mut self.modal {
-            if name.chars().count() >= MARK_PATTERN_MAX_CHARS {
-                return;
-            }
-            name.push(c);
-            *error = None;
-        }
+        self.prompt_push(PromptKind::Pack, c);
     }
 
     /// Borra el último carácter. No-op sin su modal.
     pub fn pack_pop(&mut self) {
-        if let Some(Modal::Pack { name, error }) = &mut self.modal {
-            name.pop();
-            *error = None;
-        }
+        self.prompt_pop(PromptKind::Pack);
     }
 
     /// Cancela el diálogo de empaquetar sin escribir nada.
     pub fn cancel_pack(&mut self) {
-        if !matches!(self.modal, Some(Modal::Pack { .. })) {
-            debug_assert!(
-                false,
-                "solo los modales de texto libre se cierran sin decisión"
-            );
-            return;
-        }
-        self.modal = None;
-        self.open_next_pending();
+        self.cancel_prompt(PromptKind::Pack);
     }
 
     /// Los params de `archive.pack` que el diálogo describe, o `None` si el
@@ -378,17 +375,12 @@ impl App {
 
     /// El diálogo se cerró porque la task encoló.
     pub fn pack_submitted(&mut self) {
-        if matches!(self.modal, Some(Modal::Pack { .. })) {
-            self.modal = None;
-            self.open_next_pending();
-        }
+        self.prompt_submitted(PromptKind::Pack);
     }
 
     /// Deja el diagnóstico y conserva lo tecleado.
     pub fn pack_set_error(&mut self, msg: String) {
-        if let Some(Modal::Pack { error, .. }) = &mut self.modal {
-            *error = Some(msg);
-        }
+        self.prompt_set_error(PromptKind::Pack, msg);
     }
 
     /// El panel al que van los trozos de un split: el siguiente VISIBLE, o el
@@ -439,34 +431,17 @@ impl App {
 
     /// Añade un carácter al tamaño. No-op sin su modal.
     pub fn split_push(&mut self, c: char) {
-        if let Some(Modal::Split { size, error }) = &mut self.modal {
-            if size.chars().count() >= 32 {
-                return;
-            }
-            size.push(c);
-            *error = None;
-        }
+        self.prompt_push(PromptKind::Split, c);
     }
 
     /// Borra el último carácter. No-op sin su modal.
     pub fn split_pop(&mut self) {
-        if let Some(Modal::Split { size, error }) = &mut self.modal {
-            size.pop();
-            *error = None;
-        }
+        self.prompt_pop(PromptKind::Split);
     }
 
     /// Cancela el diálogo de partir.
     pub fn cancel_split(&mut self) {
-        if !matches!(self.modal, Some(Modal::Split { .. })) {
-            debug_assert!(
-                false,
-                "solo los modales de texto libre se cierran sin decisión"
-            );
-            return;
-        }
-        self.modal = None;
-        self.open_next_pending();
+        self.cancel_prompt(PromptKind::Split);
     }
 
     /// Los params de `file.split` que el diálogo describe, o `None` si el
@@ -497,17 +472,12 @@ impl App {
 
     /// El diálogo se cerró porque la task encoló.
     pub fn split_submitted(&mut self) {
-        if matches!(self.modal, Some(Modal::Split { .. })) {
-            self.modal = None;
-            self.open_next_pending();
-        }
+        self.prompt_submitted(PromptKind::Split);
     }
 
     /// Deja el diagnóstico y conserva lo tecleado.
     pub fn split_set_error(&mut self, msg: String) {
-        if let Some(Modal::Split { error, .. }) = &mut self.modal {
-            *error = Some(msg);
-        }
+        self.prompt_set_error(PromptKind::Split, msg);
     }
 
     /// Abre el modal de crear directorio (F7, #104).
@@ -522,37 +492,19 @@ impl App {
     /// Tope en `chars` como el patrón (#103): un paste accidental no
     /// desborda el modal; el límite REAL del nombre lo pone el provider.
     pub fn mkdir_push(&mut self, c: char) {
-        if let Some(Modal::Mkdir { name, error }) = &mut self.modal {
-            if name.chars().count() >= MARK_PATTERN_MAX_CHARS {
-                return;
-            }
-            name.push(c);
-            *error = None;
-        }
+        self.prompt_push(PromptKind::Mkdir, c);
     }
 
     /// Borra el último carácter del nombre. No-op sin modal de mkdir.
     pub fn mkdir_pop(&mut self) {
-        if let Some(Modal::Mkdir { name, error }) = &mut self.modal {
-            name.pop();
-            *error = None;
-        }
+        self.prompt_pop(PromptKind::Mkdir);
     }
 
     /// Cancela `Modal::Mkdir` sin crear nada — el Esc de ESTE modal de
     /// texto libre (mismo contrato y guard que [`Self::cancel_mark_pattern`]:
     /// un modal de DECISIÓN jamás se cierra por aquí).
     pub fn cancel_mkdir(&mut self) {
-        if !matches!(self.modal, Some(Modal::Mkdir { .. })) {
-            debug_assert!(
-                false,
-                "solo los modales de texto libre se cierran sin decisión; \
-                 un modal de DECISIÓN debe denegar por on_dialog_key"
-            );
-            return;
-        }
-        self.modal = None;
-        self.open_next_pending();
+        self.cancel_prompt(PromptKind::Mkdir);
     }
 
     /// Valida el nombre y devuelve el DESTINO completo (dir del pane con
@@ -581,18 +533,13 @@ impl App {
     /// disciplina de cierre que el resto (jamás dejar una pendiente
     /// esperando).
     pub fn mkdir_submitted(&mut self) {
-        if matches!(self.modal, Some(Modal::Mkdir { .. })) {
-            self.modal = None;
-            self.open_next_pending();
-        }
+        self.prompt_submitted(PromptKind::Mkdir);
     }
 
     /// Deja el diagnóstico de un submit fallido en el modal (#104): el
     /// nombre tecleado sobrevive para corregir y reintentar.
     pub fn mkdir_set_error(&mut self, msg: String) {
-        if let Some(Modal::Mkdir { error, .. }) = &mut self.modal {
-            *error = Some(msg);
-        }
+        self.prompt_set_error(PromptKind::Mkdir, msg);
     }
 
     /// Abre el prompt de destino de una transferencia ([`Modal::TransferDest`]).
@@ -615,20 +562,7 @@ impl App {
     /// Añade un carácter al destino en curso. No-op sin su modal. Mismo tope
     /// que el resto de los prompts de texto libre.
     pub fn transfer_dest_push(&mut self, c: char) {
-        if let Some(Modal::TransferDest { input, error, .. }) = &mut self.modal {
-            if input.chars().count() >= TRANSFER_DEST_MAX_CHARS {
-                // Se DICE, como en la línea de comandos: este prompt había
-                // copiado la variante muda, y justo en el camino que designa
-                // un destino (#246 M3).
-                *error = Some(ta(
-                    "modal-command-line-too-long",
-                    &[("max", &TRANSFER_DEST_MAX_CHARS.to_string())],
-                ));
-                return;
-            }
-            input.push(c);
-            *error = None;
-        }
+        self.prompt_push(PromptKind::TransferDest, c);
     }
 
     /// Borra el último CARÁCTER del destino, escape porcentual incluido.
@@ -639,23 +573,12 @@ impl App {
     /// (`BadEscape`) — una pulsación no borraba una letra del nombre, corrompía
     /// un escape (#246 M3).
     pub fn transfer_dest_pop(&mut self) {
-        if let Some(Modal::TransferDest { input, error, .. }) = &mut self.modal {
-            pop_wire_char(input);
-            *error = None;
-        }
+        self.prompt_pop(PromptKind::TransferDest);
     }
 
     /// Cancela el prompt de destino sin transferir nada.
     pub fn cancel_transfer_dest(&mut self) {
-        if !matches!(self.modal, Some(Modal::TransferDest { .. })) {
-            debug_assert!(
-                false,
-                "solo los modales de texto libre se cierran sin decisión"
-            );
-            return;
-        }
-        self.modal = None;
-        self.open_next_pending();
+        self.cancel_prompt(PromptKind::TransferDest);
     }
 
     /// Lee el destino tecleado y ABRE la transferencia por la puerta de
@@ -714,41 +637,19 @@ impl App {
     /// orden distinta, no journaleada y no deshacible. Callarse el recorte
     /// aquí es dejar pulsar Enter a ciegas.
     pub fn command_line_push(&mut self, c: char) {
-        if let Some(Modal::CommandLine { command, error }) = &mut self.modal {
-            if command.chars().count() >= MARK_PATTERN_MAX_CHARS {
-                *error = Some(ta(
-                    "modal-command-line-too-long",
-                    &[("max", &MARK_PATTERN_MAX_CHARS.to_string())],
-                ));
-                return;
-            }
-            command.push(c);
-            *error = None;
-        }
+        self.prompt_push(PromptKind::CommandLine, c);
     }
 
     /// Borra el último carácter de la línea. No-op sin su modal.
     pub fn command_line_pop(&mut self) {
-        if let Some(Modal::CommandLine { command, error }) = &mut self.modal {
-            command.pop();
-            *error = None;
-        }
+        self.prompt_pop(PromptKind::CommandLine);
     }
 
     /// Cancela `Modal::CommandLine` sin ejecutar nada (mismo contrato y guard
     /// que [`Self::cancel_mkdir`]: un modal de DECISIÓN jamás se cierra por
     /// aquí).
     pub fn cancel_command_line(&mut self) {
-        if !matches!(self.modal, Some(Modal::CommandLine { .. })) {
-            debug_assert!(
-                false,
-                "solo los modales de texto libre se cierran sin decisión; \
-                 un modal de DECISIÓN debe denegar por on_dialog_key"
-            );
-            return;
-        }
-        self.modal = None;
-        self.open_next_pending();
+        self.cancel_prompt(PromptKind::CommandLine);
     }
 
     /// Valida y devuelve la línea; NO cierra el modal — el caller cierra con
@@ -773,10 +674,7 @@ impl App {
     /// Cierra el prompt tras dejar la suspensión encolada (misma disciplina
     /// de cierre que [`Self::ai_rename_submitted`]).
     pub fn command_line_submitted(&mut self) {
-        if matches!(self.modal, Some(Modal::CommandLine { .. })) {
-            self.modal = None;
-            self.open_next_pending();
-        }
+        self.prompt_submitted(PromptKind::CommandLine);
     }
 
     /// Abre el prompt de instrucción del rename IA (M4-IA).
@@ -791,21 +689,12 @@ impl App {
     /// Tope en `chars` como el patrón (#103): un paste accidental no
     /// desborda el modal; el límite REAL (4 KiB) lo pone el daemon.
     pub fn ai_rename_push(&mut self, c: char) {
-        if let Some(Modal::AiRenameInstruction { instruction, error }) = &mut self.modal {
-            if instruction.chars().count() >= MARK_PATTERN_MAX_CHARS {
-                return;
-            }
-            instruction.push(c);
-            *error = None;
-        }
+        self.prompt_push(PromptKind::AiRename, c);
     }
 
     /// Borra el último carácter de la instrucción. No-op sin su modal.
     pub fn ai_rename_pop(&mut self) {
-        if let Some(Modal::AiRenameInstruction { instruction, error }) = &mut self.modal {
-            instruction.pop();
-            *error = None;
-        }
+        self.prompt_pop(PromptKind::AiRename);
     }
 
     /// Cancela `Modal::AiRenameInstruction` sin lanzar nada — el Esc de ESTE
@@ -813,16 +702,7 @@ impl App {
     /// [`Self::cancel_mkdir`]: un modal de DECISIÓN jamás se cierra por
     /// aquí).
     pub fn cancel_ai_rename(&mut self) {
-        if !matches!(self.modal, Some(Modal::AiRenameInstruction { .. })) {
-            debug_assert!(
-                false,
-                "solo los modales de texto libre se cierran sin decisión; \
-                 un modal de DECISIÓN debe denegar por on_dialog_key"
-            );
-            return;
-        }
-        self.modal = None;
-        self.open_next_pending();
+        self.cancel_prompt(PromptKind::AiRename);
     }
 
     /// Valida y devuelve la instrucción; NO cierra el modal — el caller
@@ -847,10 +727,7 @@ impl App {
     /// disciplina de cierre que [`Self::mkdir_submitted`] (jamás dejar una
     /// pendiente esperando).
     pub fn ai_rename_submitted(&mut self) {
-        if matches!(self.modal, Some(Modal::AiRenameInstruction { .. })) {
-            self.modal = None;
-            self.open_next_pending();
-        }
+        self.prompt_submitted(PromptKind::AiRename);
     }
 
     /// Deja un diagnóstico bajo el campo con el texto CONSERVADO. Audit
@@ -859,9 +736,7 @@ impl App {
     /// [`Self::ai_rename_confirm`]); un fallo del modelo llega ASYNC con el
     /// prompt ya cerrado y va a la barra, jamás por aquí.
     pub fn ai_rename_set_error(&mut self, msg: String) {
-        if let Some(Modal::AiRenameInstruction { error, .. }) = &mut self.modal {
-            *error = Some(msg);
-        }
+        self.prompt_set_error(PromptKind::AiRename, msg);
     }
 
     /// Desplaza la ventana del plan IA (audit MAJOR-3): `down` avanza una
@@ -912,37 +787,19 @@ impl App {
     /// Mismo tope en `chars` que la instrucción IA: un paste accidental no
     /// desborda el modal; el límite REAL lo pone el daemon.
     pub fn semantic_push(&mut self, c: char) {
-        if let Some(Modal::SemanticQuery { query, error }) = &mut self.modal {
-            if query.chars().count() >= MARK_PATTERN_MAX_CHARS {
-                return;
-            }
-            query.push(c);
-            *error = None;
-        }
+        self.prompt_push(PromptKind::Semantic, c);
     }
 
     /// Borra el último carácter de la consulta. No-op sin su modal.
     pub fn semantic_pop(&mut self) {
-        if let Some(Modal::SemanticQuery { query, error }) = &mut self.modal {
-            query.pop();
-            *error = None;
-        }
+        self.prompt_pop(PromptKind::Semantic);
     }
 
     /// Cancela `Modal::SemanticQuery` sin lanzar nada — el Esc de ESTE modal
     /// de texto libre (mismo contrato y guard que [`Self::cancel_ai_rename`]:
     /// un modal de DECISIÓN jamás se cierra por aquí).
     pub fn cancel_semantic(&mut self) {
-        if !matches!(self.modal, Some(Modal::SemanticQuery { .. })) {
-            debug_assert!(
-                false,
-                "solo los modales de texto libre se cierran sin decisión; \
-                 un modal de DECISIÓN debe denegar por on_dialog_key"
-            );
-            return;
-        }
-        self.modal = None;
-        self.open_next_pending();
+        self.cancel_prompt(PromptKind::Semantic);
     }
 
     /// Valida y devuelve la consulta; NO cierra el modal — el caller cierra
@@ -967,10 +824,7 @@ impl App {
     /// disciplina de cierre que [`Self::ai_rename_submitted`] (jamás dejar
     /// una pendiente esperando).
     pub fn semantic_submitted(&mut self) {
-        if matches!(self.modal, Some(Modal::SemanticQuery { .. })) {
-            self.modal = None;
-            self.open_next_pending();
-        }
+        self.prompt_submitted(PromptKind::Semantic);
     }
 
     /// Deja un diagnóstico bajo el campo con el texto CONSERVADO. Como
@@ -979,9 +833,7 @@ impl App {
     /// [`Self::semantic_confirm`]); un fallo del modelo llega ASYNC con el
     /// prompt ya cerrado y va a la barra, jamás por aquí.
     pub fn semantic_set_error(&mut self, msg: String) {
-        if let Some(Modal::SemanticQuery { error, .. }) = &mut self.modal {
-            *error = Some(msg);
-        }
+        self.prompt_set_error(PromptKind::Semantic, msg);
     }
 
     /// Mueve el cursor de hits (`down` = true baja); la ventana sigue al

@@ -2,6 +2,7 @@
 //! confirmación.
 
 use super::trail::Trail;
+use norte_i18n::ta;
 use norte_proto::VPath;
 
 /// Tipo de transferencia pendiente de confirmación/colisión.
@@ -432,4 +433,419 @@ pub enum DialogOutcome {
     Confirmed,
     /// Reintentar la transferencia con esta política.
     Retry(norte_proto::CollisionPolicy),
+}
+
+/// Cuál de los nueve prompts de texto libre está abierto.
+///
+/// Los métodos con nombre propio (`mkdir_push`, `pack_set_error`…) siguen
+/// existiendo porque son lo que nombran las tablas de despacho; lo que
+/// comparten es UNA implementación, y esta es la etiqueta con la que cada
+/// uno dice de qué prompt habla.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptKind {
+    /// [`Modal::MarkPattern`].
+    MarkPattern,
+    /// [`Modal::TransferName`].
+    TransferName,
+    /// [`Modal::TransferDest`].
+    TransferDest,
+    /// [`Modal::Pack`].
+    Pack,
+    /// [`Modal::Split`].
+    Split,
+    /// [`Modal::Mkdir`].
+    Mkdir,
+    /// [`Modal::CommandLine`].
+    CommandLine,
+    /// [`Modal::AiRenameInstruction`].
+    AiRename,
+    /// [`Modal::SemanticQuery`].
+    Semantic,
+}
+
+/// Qué hace un prompt cuando lo tecleado llega al tope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OverLimit {
+    /// Frena y calla: el campo se ve lleno y el usuario lo ve.
+    Silent,
+    /// Lo DICE (`modal-command-line-too-long`): en un prompt que puede ABRIR
+    /// ya largo —una dirección wire, una línea de comandos— frenar en mudo
+    /// convierte cada tecla en un no-op sin explicación (#246 M3).
+    Say,
+}
+
+/// Qué borra el retroceso.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PopMode {
+    /// Un carácter del texto.
+    Char,
+    /// Un carácter del NOMBRE, escape porcentual entero incluido
+    /// ([`pop_wire_char`]).
+    WireChar,
+}
+
+/// El campo de texto de un prompt abierto, con la política que lo gobierna.
+///
+/// Se pide a [`Modal::text_prompt`] y se consume en una operación: es un
+/// préstamo mutable del modal, no un estado que se guarde.
+pub struct TextPrompt<'a> {
+    text: &'a mut String,
+    error: &'a mut Option<String>,
+    touched: Option<&'a mut bool>,
+    limit: usize,
+    over_limit: OverLimit,
+    pop: PopMode,
+}
+
+impl TextPrompt<'_> {
+    /// Lo tecleado hasta ahora.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        self.text
+    }
+
+    /// El diagnóstico que se pinta bajo el campo, si lo hay.
+    #[must_use]
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    /// Añade un carácter. En el tope, frena — y lo dice o no según el prompt.
+    pub fn push(self, c: char) {
+        if self.text.chars().count() >= self.limit {
+            if self.over_limit == OverLimit::Say {
+                *self.error = Some(ta(
+                    "modal-command-line-too-long",
+                    &[("max", &self.limit.to_string())],
+                ));
+            }
+            return;
+        }
+        self.text.push(c);
+        if let Some(touched) = self.touched {
+            *touched = true;
+        }
+        *self.error = None;
+    }
+
+    /// Borra hacia atrás.
+    ///
+    /// El diagnóstico se va aunque no haya nada que borrar: quien pulsa
+    /// retroceso está corrigiendo, y el aviso del intento anterior ya no
+    /// describe lo que hay. El `touched` del nombre editable NO: ese solo se
+    /// fija si de verdad borró algo (#105 review MINOR-5, un pop vacío no
+    /// debe estrechar la vía de los bytes originales).
+    pub fn pop(self) {
+        let borro = match self.pop {
+            PopMode::Char => self.text.pop().is_some(),
+            PopMode::WireChar => {
+                let antes = self.text.len();
+                pop_wire_char(self.text);
+                self.text.len() != antes
+            }
+        };
+        if borro && let Some(touched) = self.touched {
+            *touched = true;
+        }
+        *self.error = None;
+    }
+
+    /// Deja el diagnóstico y CONSERVA lo tecleado: un submit que falla se
+    /// corrige y se reintenta, no se vuelve a escribir.
+    pub fn set_error(self, msg: String) {
+        *self.error = Some(msg);
+    }
+}
+
+impl Modal {
+    /// Qué prompt de texto libre es este modal, o `None` si es de DECISIÓN.
+    ///
+    /// La frontera importa: un modal de decisión jamás se cierra por la vía
+    /// de los prompts (`cancel_*`), tiene que denegar por `on_dialog_key`.
+    #[must_use]
+    pub const fn prompt_kind(&self) -> Option<PromptKind> {
+        Some(match self {
+            Self::MarkPattern { .. } => PromptKind::MarkPattern,
+            Self::TransferName { .. } => PromptKind::TransferName,
+            Self::TransferDest { .. } => PromptKind::TransferDest,
+            Self::Pack { .. } => PromptKind::Pack,
+            Self::Split { .. } => PromptKind::Split,
+            Self::Mkdir { .. } => PromptKind::Mkdir,
+            Self::CommandLine { .. } => PromptKind::CommandLine,
+            Self::AiRenameInstruction { .. } => PromptKind::AiRename,
+            Self::SemanticQuery { .. } => PromptKind::Semantic,
+            _ => return None,
+        })
+    }
+
+    /// El campo de texto de este modal y su política, o `None` si no es un
+    /// prompt.
+    ///
+    /// Aquí está, en un solo sitio, TODO lo que distingue a los nueve: cómo
+    /// se llama el campo, cuánto admite, si el tope se dice, qué borra el
+    /// retroceso y si hay un `touched` que fijar.
+    pub fn text_prompt(&mut self) -> Option<TextPrompt<'_>> {
+        let (text, error, touched, limit, over_limit, pop) = match self {
+            Self::MarkPattern { pattern, error, .. } => (
+                pattern,
+                error,
+                None,
+                MARK_PATTERN_MAX_CHARS,
+                OverLimit::Silent,
+                PopMode::Char,
+            ),
+            Self::TransferName {
+                name,
+                touched,
+                error,
+                ..
+            } => (
+                name,
+                error,
+                Some(touched),
+                MARK_PATTERN_MAX_CHARS,
+                OverLimit::Silent,
+                PopMode::Char,
+            ),
+            Self::TransferDest { input, error, .. } => (
+                input,
+                error,
+                None,
+                TRANSFER_DEST_MAX_CHARS,
+                OverLimit::Say,
+                PopMode::WireChar,
+            ),
+            Self::Pack { name, error } | Self::Mkdir { name, error } => (
+                name,
+                error,
+                None,
+                MARK_PATTERN_MAX_CHARS,
+                OverLimit::Silent,
+                PopMode::Char,
+            ),
+            Self::Split { size, error } => (
+                size,
+                error,
+                None,
+                SPLIT_SIZE_MAX_CHARS,
+                OverLimit::Silent,
+                PopMode::Char,
+            ),
+            Self::CommandLine { command, error } => (
+                command,
+                error,
+                None,
+                MARK_PATTERN_MAX_CHARS,
+                OverLimit::Say,
+                PopMode::Char,
+            ),
+            Self::AiRenameInstruction { instruction, error } => (
+                instruction,
+                error,
+                None,
+                MARK_PATTERN_MAX_CHARS,
+                OverLimit::Silent,
+                PopMode::Char,
+            ),
+            Self::SemanticQuery { query, error } => (
+                query,
+                error,
+                None,
+                MARK_PATTERN_MAX_CHARS,
+                OverLimit::Silent,
+                PopMode::Char,
+            ),
+            _ => return None,
+        };
+        Some(TextPrompt {
+            text,
+            error,
+            touched,
+            limit,
+            over_limit,
+            pop,
+        })
+    }
+}
+
+/// Tope de caracteres del tamaño de trozo de [`Modal::Split`]: corto a
+/// propósito, porque lo que cabe ahí es `700M`, no una frase.
+pub const SPLIT_SIZE_MAX_CHARS: usize = 32;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mark_pattern() -> Modal {
+        Modal::MarkPattern {
+            mark: true,
+            pattern: String::new(),
+            error: None,
+        }
+    }
+
+    fn transfer_name() -> Modal {
+        Modal::TransferName {
+            kind: TransferKind::Move,
+            from: VPath::root(norte_proto::Scheme::new("mem").unwrap(), None),
+            to_dir: VPath::root(norte_proto::Scheme::new("mem").unwrap(), None),
+            name: String::from("ab"),
+            original: b"ab".to_vec(),
+            touched: false,
+            from_marks: false,
+            enc: None,
+            error: None,
+        }
+    }
+
+    fn los_nueve() -> Vec<(PromptKind, Modal)> {
+        vec![
+            (PromptKind::MarkPattern, mark_pattern()),
+            (PromptKind::TransferName, transfer_name()),
+            (
+                PromptKind::TransferDest,
+                Modal::TransferDest {
+                    kind: TransferKind::Copy,
+                    input: String::new(),
+                    error: None,
+                },
+            ),
+            (
+                PromptKind::Pack,
+                Modal::Pack {
+                    name: String::new(),
+                    error: None,
+                },
+            ),
+            (
+                PromptKind::Split,
+                Modal::Split {
+                    size: String::new(),
+                    error: None,
+                },
+            ),
+            (
+                PromptKind::Mkdir,
+                Modal::Mkdir {
+                    name: String::new(),
+                    error: None,
+                },
+            ),
+            (
+                PromptKind::CommandLine,
+                Modal::CommandLine {
+                    command: String::new(),
+                    error: None,
+                },
+            ),
+            (
+                PromptKind::AiRename,
+                Modal::AiRenameInstruction {
+                    instruction: String::new(),
+                    error: None,
+                },
+            ),
+            (
+                PromptKind::Semantic,
+                Modal::SemanticQuery {
+                    query: String::new(),
+                    error: None,
+                },
+            ),
+        ]
+    }
+
+    /// Los nueve prompts de texto se dicen prompts, y teclear llega al campo
+    /// que cada uno llama de otra manera.
+    #[test]
+    fn los_nueve_prompts_exponen_su_campo() {
+        for (kind, mut m) in los_nueve() {
+            assert_eq!(m.prompt_kind(), Some(kind), "{kind:?} no se dice prompt");
+            m.text_prompt().expect("campo de texto").push('x');
+            let tp = m.text_prompt().expect("campo de texto");
+            assert!(tp.text().ends_with('x'), "{kind:?} no recibió la tecla");
+        }
+    }
+
+    /// Un modal de DECISIÓN no tiene campo que teclear.
+    #[test]
+    fn un_modal_de_decision_no_es_prompt() {
+        let mut m = Modal::ConfirmQuit;
+        assert_eq!(m.prompt_kind(), None);
+        assert!(m.text_prompt().is_none());
+    }
+
+    /// El tope es por prompt, y el de partir es el corto.
+    #[test]
+    fn el_tope_de_partir_para_en_silencio() {
+        let mut m = Modal::Split {
+            size: "9".repeat(32),
+            error: None,
+        };
+        m.text_prompt().expect("campo").push('9');
+        let tp = m.text_prompt().expect("campo");
+        assert_eq!(tp.text().chars().count(), 32, "el tope no frenó");
+        assert!(tp.error().is_none(), "el tope de partir es mudo");
+    }
+
+    /// El de la línea de comandos SÍ lo dice (#246 M3).
+    #[test]
+    fn el_tope_de_la_linea_de_comandos_se_dice() {
+        let mut m = Modal::CommandLine {
+            command: "x".repeat(MARK_PATTERN_MAX_CHARS),
+            error: None,
+        };
+        m.text_prompt().expect("campo").push('y');
+        let tp = m.text_prompt().expect("campo");
+        assert_eq!(tp.text().chars().count(), MARK_PATTERN_MAX_CHARS);
+        assert!(tp.error().is_some(), "el tope de la línea se dice");
+    }
+
+    /// El retroceso del destino borra el ESCAPE entero, no un carácter del
+    /// texto wire (#246 M3).
+    #[test]
+    fn el_retroceso_del_destino_borra_un_escape_entero() {
+        let mut m = Modal::TransferDest {
+            kind: TransferKind::Copy,
+            input: String::from("mem:///caf%C3%A9"),
+            error: None,
+        };
+        m.text_prompt().expect("campo").pop();
+        let tp = m.text_prompt().expect("campo");
+        assert_eq!(tp.text(), "mem:///caf");
+    }
+
+    /// El nombre editable marca `touched` solo si el retroceso borró algo
+    /// (#105 review MINOR-5).
+    #[test]
+    fn el_nombre_editable_marca_touched_solo_si_borro() {
+        let mut m = transfer_name();
+        m.text_prompt().expect("campo").pop();
+        assert!(
+            matches!(m, Modal::TransferName { touched: true, .. }),
+            "un pop que borra fija touched"
+        );
+
+        let mut vacio = transfer_name();
+        if let Modal::TransferName { name, touched, .. } = &mut vacio {
+            name.clear();
+            *touched = false;
+        }
+        vacio.text_prompt().expect("campo").pop();
+        assert!(
+            matches!(vacio, Modal::TransferName { touched: false, .. }),
+            "un pop vacío no estrecha la vía de bytes originales"
+        );
+    }
+
+    /// El retroceso limpia el diagnóstico aunque no borre nada.
+    #[test]
+    fn el_retroceso_en_vacio_limpia_el_diagnostico() {
+        let mut m = Modal::Mkdir {
+            name: String::new(),
+            error: Some(String::from("ya existe")),
+        };
+        m.text_prompt().expect("campo").pop();
+        assert!(m.text_prompt().expect("campo").error().is_none());
+    }
 }
