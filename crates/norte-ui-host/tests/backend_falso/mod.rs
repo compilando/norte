@@ -42,6 +42,14 @@ pub struct Falso {
     pub ajenas: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>>>,
     /// Los directorios que se pidió crear.
     pub creados: std::sync::Mutex<Vec<VPath>>,
+    /// El catálogo de atributos que devuelve el falso daemon.
+    pub catalogo: std::sync::Mutex<norte_proto::AttrCatalog>,
+    /// El canal de aprobaciones, para que el test empuje una.
+    pub aprobaciones: std::sync::Mutex<
+        Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::PolicyApprovalRequired>>,
+    >,
+    /// Las decisiones que se mandaron: `(id, aprobada)`.
+    pub decisiones: std::sync::Mutex<Vec<(u64, bool)>>,
 }
 
 impl Falso {
@@ -113,6 +121,33 @@ pub fn arbol_de_prueba() -> Falso {
 }
 
 impl HostBackend for Falso {
+    fn attr_catalog(
+        &self,
+        _dir: VPath,
+    ) -> BoxFuture<'static, Result<norte_proto::AttrCatalog, Error>> {
+        let c = self.catalogo.lock().expect("catálogo").clone();
+        Box::pin(async move { Ok(c) })
+    }
+
+    fn take_approvals(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::PolicyApprovalRequired>>
+    {
+        self.aprobaciones.lock().expect("aprobaciones").take()
+    }
+
+    fn policy_decide(
+        &self,
+        approval_id: u64,
+        approve: bool,
+    ) -> BoxFuture<'static, Result<(), Error>> {
+        self.decisiones
+            .lock()
+            .expect("decisiones")
+            .push((approval_id, approve));
+        Box::pin(async { Ok(()) })
+    }
+
     fn take_conn_events(
         &self,
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<norte_client::ConnEvent>> {
@@ -174,7 +209,13 @@ impl HostBackend for Falso {
                 // que hace que la AUSENCIA de celda se pueda probar.
                 size: if es_dir { None } else { Some(1) },
                 mtime_ms: None,
-                attrs: std::collections::BTreeMap::new(),
+                attrs: {
+                    let mut m = std::collections::BTreeMap::new();
+                    // 0o100644: lo que un provider POSIX manda de verdad, y
+                    // lo que sin catálogo se pintaría como «33188».
+                    m.insert("posix.mode".to_owned(), norte_proto::AttrValue::Uint(33188));
+                    m
+                },
             })
             .collect();
         let retraso = self.retraso_ms;

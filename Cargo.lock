@@ -4579,6 +4579,7 @@ dependencies = [
  "futures",
  "norte-client",
  "norte-core",
+ "norte-encoding",
  "norte-frontend",
  "norte-i18n",
  "norte-proto",

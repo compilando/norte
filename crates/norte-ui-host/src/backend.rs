@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use norte_client::{ConnEvent, EntryStream};
-use norte_proto::{DeleteMode, Error, TaskId, TaskProgress, VPath, methods};
+use norte_proto::{AttrCatalog, DeleteMode, Error, TaskId, TaskProgress, VPath, methods};
 use tokio::sync::watch;
 
 /// Una Task en marcha, en la forma mínima que el host necesita: su id, su
@@ -71,6 +71,26 @@ pub trait HostBackend: Send + Sync + 'static {
     /// Crea UN directorio. Devuelve la Task ya encolada.
     fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>>;
 
+    /// El catálogo de atributos de una localización.
+    ///
+    /// Sin él, una columna `attr:` no sabe si lo que trae es un tamaño, una
+    /// fecha o un modo, y se pinta como el número crudo que es: el catálogo
+    /// es lo que convierte `33188` en `-rw-r--r--`.
+    fn attr_catalog(&self, dir: VPath) -> BoxFuture<'static, Result<AttrCatalog, Error>>;
+
+    /// El canal de aprobaciones de policy pendientes: cada op de agente bajo
+    /// regla `ask` que el daemon difunde, y que espera una respuesta humana.
+    fn take_approvals(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::PolicyApprovalRequired>>;
+
+    /// Responde a una aprobación. `approve = false` deniega.
+    fn policy_decide(
+        &self,
+        approval_id: u64,
+        approve: bool,
+    ) -> BoxFuture<'static, Result<(), Error>>;
+
     /// La sesión de UI y si ESTA conexión es su dueña (ADR 0059).
     ///
     /// El core la guarda y la versiona pero no la lee: el documento es de los
@@ -117,6 +137,26 @@ impl HostBackend for norte_client::RemoteBackend {
             let (stream, _total) = backend.list_stream(&dir, attrs).await?;
             Ok(stream)
         })
+    }
+
+    fn attr_catalog(&self, dir: VPath) -> BoxFuture<'static, Result<AttrCatalog, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.attr_catalog(&dir).await })
+    }
+
+    fn take_approvals(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::PolicyApprovalRequired>> {
+        norte_client::RemoteBackend::take_approvals(self)
+    }
+
+    fn policy_decide(
+        &self,
+        approval_id: u64,
+        approve: bool,
+    ) -> BoxFuture<'static, Result<(), Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.policy_decide(approval_id, approve).await })
     }
 
     fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>> {
