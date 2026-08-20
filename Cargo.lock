@@ -4575,6 +4575,7 @@ dependencies = [
 name = "norte-ui-host"
 version = "0.3.0-alpha.2"
 dependencies = [
+ "futures",
  "norte-client",
  "norte-frontend",
  "norte-proto",

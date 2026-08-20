@@ -11,6 +11,7 @@ authors.workspace = true
 # Este crate NO conoce renderer alguno: ni Tauri, ni web, ni GPUI, ni ratatui
 # (ADR 0066, decisión D2). Su test de frontera lo vigila igual que el del SDK.
 [dependencies]
+futures.workspace = true
 norte-client.workspace = true
 norte-frontend.workspace = true
 norte-proto.workspace = true

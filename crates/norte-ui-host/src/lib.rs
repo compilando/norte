@@ -18,12 +18,16 @@
 //!   saneado y claves opacas.
 
 pub mod action;
+pub mod backend;
 pub mod bridge;
+pub mod controller;
 pub mod dto;
 
 pub use action::UiAction;
+pub use backend::HostBackend;
 pub use bridge::{
     ActionAck, BRIDGE_VERSION, BridgeEnvelope, InstanceId, ModalId, RequestToken, RowKey,
     StaleAction,
 };
+pub use controller::{ShutdownReport, UiHost, UiHostOptions, UiSubscription, Update};
 pub use dto::{UiNotice, UiUpdate, ViewPatch, ViewSnapshot};
