@@ -104,7 +104,7 @@ pub fn arbol_de_prueba() -> Falso {
 }
 
 impl HostBackend for Falso {
-    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<Vec<Entry>, Error>> {
+    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<norte_client::EntryStream, Error>> {
         self.listados.fetch_add(1, Ordering::SeqCst);
         if !self.arbol.contains_key(&dir.to_wire()) {
             return Box::pin(async { Err(Error::NotFound) });
@@ -134,7 +134,9 @@ impl HostBackend for Falso {
             if retraso > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
             }
-            Ok(entradas)
+            let stream: norte_client::EntryStream =
+                Box::pin(futures::stream::iter(entradas.into_iter().map(Ok)));
+            Ok(stream)
         })
     }
 

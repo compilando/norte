@@ -256,7 +256,9 @@ async fn siguiente_foto(sub: &mut norte_ui_host::UiSubscription) -> norte_ui_hos
                     return s;
                 }
             }
-            Update::Lagged => panic!("sin retraso en este test"),
+            // Quedarse atrás no rompe la espera: significa «pide una foto»,
+            // y una foto es justo lo que se está esperando.
+            Update::Lagged => {}
         }
     }
 }
@@ -476,35 +478,50 @@ async fn mover_el_cursor_no_reenvia_las_filas() {
     );
 }
 
-/// Cien mil entradas no cruzan el bridge para pintar cuarenta filas.
+/// Un listado grande: la primera página se pinta enseguida, el resto llega
+/// por detrás, y del total solo cruzan las filas visibles.
 #[tokio::test]
-async fn un_listado_enorme_no_cruza_entero() {
-    let mut f = Falso::default();
-    let muchas: Vec<(Vec<u8>, bool)> = (0..100_000u32)
-        .map(|i| (format!("f{i:06}").into_bytes(), false))
+async fn un_listado_grande_ni_espera_ni_cruza_entero() {
+    let mut falso = Falso::default();
+    let muchas: Vec<(Vec<u8>, bool)> = (0..5_000u32)
+        .map(|i| (format!("f{i:05}").into_bytes(), false))
         .collect();
-    f.pon("mem:///casa", muchas);
-    let (h, snap) = host_arbol(Arc::new(f)).await;
-    assert_eq!(listado(&snap).total_rows, Some(100_000));
+    falso.pon("mem:///casa", muchas);
+    let (host, snap) = host_arbol(Arc::new(falso)).await;
 
-    let mut sub = h.subscribe();
-    h.dispatch(UiAction::SetVisibleRange {
+    // La primera foto NO espera al listado entero.
+    let primeras = listado(&snap).total_rows.expect("hay total");
+    assert!(
+        primeras <= 100,
+        "la primera página se pinta sin esperar al resto: {primeras}"
+    );
+
+    // El resto llega por detrás. Se sondea, en vez de contar mensajes: los
+    // lotes son asíncronos y el número exacto no es el contrato.
+    let mut sub = host.subscribe();
+    let mut total = primeras;
+    for _ in 0..100 {
+        if total >= 5_000 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        host.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        total = listado(&foto).total_rows.expect("hay total");
+    }
+    assert_eq!(total, 5_000, "acaba entero");
+
+    // Y de las cinco mil, cruzan cuarenta.
+    host.dispatch(UiAction::SetVisibleRange {
         slot_id: 1,
-        first: 50_000,
+        first: 2_000,
         count: 40,
     })
     .await
     .expect("host vivo");
-    let Update::Message(m) = sub.recv().await.expect("llega") else {
-        panic!("sin retraso");
-    };
-    let UiUpdate::Patch(p) = &m.payload else {
-        panic!("un parche");
-    };
-    match &p.changes[0] {
-        norte_ui_host::dto::ViewChange::Rows { rows, .. } => assert_eq!(rows.len(), 40),
-        otro => panic!("se esperaban filas: {otro:?}"),
-    }
+    host.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(listado(&foto).rows.len(), 40);
 }
 
 fn tecla(k: &str) -> UiAction {

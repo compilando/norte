@@ -8,7 +8,8 @@
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use norte_proto::{DeleteMode, Entry, Error, TaskId, TaskProgress, VPath, methods};
+use norte_client::EntryStream;
+use norte_proto::{DeleteMode, Error, TaskId, TaskProgress, VPath, methods};
 use tokio::sync::watch;
 
 /// Una Task en marcha, en la forma mínima que el host necesita: su id, su
@@ -45,12 +46,14 @@ impl std::fmt::Debug for HostTask {
 /// `Arc<dyn HostBackend>` y un test mete el suyo sin genéricos que se
 /// propaguen por toda la API.
 pub trait HostBackend: Send + Sync + 'static {
-    /// El listado COMPLETO de un directorio.
+    /// El listado de un directorio, como STREAM.
     ///
-    /// Completo y no paginado a propósito en esta fase: la política de
-    /// drenaje por páginas es la tarea 2.3, y meterla antes de tener el
-    /// controlador sería decidirla sin nadie que la use.
-    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<Vec<Entry>, Error>>;
+    /// Paginado y no completo: un directorio de medio millón de entradas no
+    /// puede viajar entero antes de pintar la primera fila. El host toma la
+    /// primera página, pinta, y sigue drenando el resto por detrás
+    /// ([`crate::controller`] lo extiende con `PaneState::extend`, el mismo
+    /// camino que el TUI).
+    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<EntryStream, Error>>;
 
     /// La sesión de UI y si ESTA conexión es su dueña (ADR 0059).
     ///
@@ -80,16 +83,11 @@ pub trait HostBackend: Send + Sync + 'static {
 
 /// El backend de verdad: el SDK.
 impl HostBackend for norte_client::RemoteBackend {
-    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<Vec<Entry>, Error>> {
+    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<EntryStream, Error>> {
         let backend = self.clone();
         Box::pin(async move {
-            use futures::StreamExt as _;
-            let (mut stream, _total) = backend.list_stream(&dir, Vec::new()).await?;
-            let mut out = Vec::new();
-            while let Some(e) = stream.next().await {
-                out.push(e?);
-            }
-            Ok(out)
+            let (stream, _total) = backend.list_stream(&dir, Vec::new()).await?;
+            Ok(stream)
         })
     }
 
