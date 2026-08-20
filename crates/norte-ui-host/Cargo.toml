@@ -22,7 +22,15 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+# El e2e levanta un daemon REAL y conecta el SDK contra él. Son
+# dev-dependencies: el test de frontera solo mira el árbol de release, que es
+# donde el core no puede estar.
+bytes.workspace = true
+norte-core.workspace = true
 norte-testkit.workspace = true
+norte-vfs.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints]

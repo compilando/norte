@@ -4575,13 +4575,17 @@ dependencies = [
 name = "norte-ui-host"
 version = "0.3.0-alpha.2"
 dependencies = [
+ "bytes",
  "futures",
  "norte-client",
+ "norte-core",
  "norte-frontend",
  "norte-proto",
  "norte-testkit",
+ "norte-vfs",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

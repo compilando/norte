@@ -5,145 +5,16 @@
 //! headless antes de que exista renderer alguno.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 
-use futures::future::BoxFuture;
-use norte_proto::{Entry, EntryKind, Error, VPath};
+use norte_proto::VPath;
 use norte_ui_host::action::UiAction;
-use norte_ui_host::backend::HostBackend;
 use norte_ui_host::bridge::{ActionAck, RowKey, StaleAction};
 use norte_ui_host::controller::{UiHost, UiHostOptions, Update};
 use norte_ui_host::dto::{SlotView, UiNotice, UiUpdate};
 
-/// Un backend de tabla: para cada directorio, los nombres que contiene y de
-/// qué clase son. Determinista y sin daemon, que es lo que hace que estos
-/// tests digan algo sobre el host y no sobre la red.
-#[derive(Default)]
-struct Falso {
-    /// `wire del dir` → `(nombre, es_dir)`.
-    arbol: std::collections::HashMap<String, Vec<(Vec<u8>, bool)>>,
-    listados: AtomicUsize,
-    /// Retraso artificial, para provocar la carrera de una respuesta tardía.
-    retraso_ms: u64,
-    /// La sesión que el daemon devuelve, y si esta ventana es su dueña.
-    sesion: std::sync::Mutex<(norte_proto::methods::Session, bool)>,
-    /// Lo ÚLTIMO que se escribió, para comprobar qué guarda el host.
-    escrito: std::sync::Mutex<Option<serde_json::Value>>,
-    /// La escritura falla con conflicto: otra ventana escribió en medio.
-    conflicto: bool,
-    /// Lo que se pidió borrar, en orden.
-    borrados: std::sync::Mutex<Vec<(VPath, norte_proto::DeleteMode)>>,
-    /// Cuántas veces se pidió cancelar la task que se lanzó.
-    cancelaciones: Arc<AtomicUsize>,
-    /// El emisor del progreso de la última task, para que el test lo mueva.
-    progreso: std::sync::Mutex<Option<tokio::sync::watch::Sender<norte_proto::TaskProgress>>>,
-}
-
-impl Falso {
-    /// Un directorio con ficheros sueltos.
-    fn con(nombres: &[&'static str]) -> Arc<Self> {
-        let mut f = Self::default();
-        f.pon(
-            "mem:///casa",
-            nombres.iter().map(|n| (n.as_bytes().to_vec(), false)),
-        );
-        Arc::new(f)
-    }
-
-    fn pon(&mut self, dir: &str, entradas: impl IntoIterator<Item = (Vec<u8>, bool)>) {
-        self.arbol
-            .insert(dir.to_owned(), entradas.into_iter().collect());
-    }
-
-    fn listados(&self) -> usize {
-        self.listados.load(Ordering::SeqCst)
-    }
-}
-
-impl HostBackend for Falso {
-    fn session_get(
-        &self,
-    ) -> BoxFuture<'static, Result<(norte_proto::methods::Session, bool), Error>> {
-        let s = self.sesion.lock().expect("sesión").clone();
-        Box::pin(async move { Ok(s) })
-    }
-
-    fn session_put(
-        &self,
-        _version: u32,
-        _revision: u64,
-        body: serde_json::Value,
-    ) -> BoxFuture<'static, Result<u64, Error>> {
-        if self.conflicto {
-            return Box::pin(async {
-                Err(Error::Conflict {
-                    conflict: norte_proto::ConflictKind::Exists,
-                })
-            });
-        }
-        *self.escrito.lock().expect("escrito") = Some(body);
-        Box::pin(async { Ok(9) })
-    }
-
-    fn delete(
-        &self,
-        path: VPath,
-        mode: norte_proto::DeleteMode,
-    ) -> BoxFuture<'static, Result<norte_ui_host::backend::HostTask, Error>> {
-        self.borrados.lock().expect("borrados").push((path, mode));
-        let progreso = norte_proto::TaskProgress {
-            task_id: norte_proto::TaskId::new(7),
-            kind: norte_proto::TaskKind::Delete,
-            state: norte_proto::TaskState::Running,
-            bytes_done: 0,
-            bytes_total: Some(10),
-            entries_done: 0,
-            entries_total: Some(1),
-            current: None,
-        };
-        let (tx, rx) = tokio::sync::watch::channel(progreso);
-        *self.progreso.lock().expect("progreso") = Some(tx);
-        let cancelaciones = Arc::clone(&self.cancelaciones);
-        Box::pin(async move {
-            Ok(norte_ui_host::backend::HostTask {
-                id: norte_proto::TaskId::new(7),
-                progress: rx,
-                cancel: Arc::new(move || {
-                    cancelaciones.fetch_add(1, Ordering::SeqCst);
-                }),
-            })
-        })
-    }
-
-    fn list(&self, dir: VPath) -> BoxFuture<'static, Result<Vec<Entry>, Error>> {
-        self.listados.fetch_add(1, Ordering::SeqCst);
-        let clave = dir.to_wire();
-        let Some(contenido) = self.arbol.get(&clave).cloned() else {
-            return Box::pin(async { Err(Error::NotFound) });
-        };
-        let entradas: Vec<Entry> = contenido
-            .into_iter()
-            .map(|(nombre, es_dir)| Entry {
-                path: dir.join(norte_proto::Segment::new(nombre).expect("segmento")),
-                kind: if es_dir {
-                    EntryKind::Dir
-                } else {
-                    EntryKind::File
-                },
-                size: Some(1),
-                mtime_ms: None,
-                attrs: std::collections::BTreeMap::new(),
-            })
-            .collect();
-        let retraso = self.retraso_ms;
-        Box::pin(async move {
-            if retraso > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
-            }
-            Ok(entradas)
-        })
-    }
-}
+mod backend_falso;
+use backend_falso::Falso;
 
 fn dir() -> VPath {
     VPath::parse("mem:///casa").expect("vpath de test")
