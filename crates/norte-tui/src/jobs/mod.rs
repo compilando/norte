@@ -20,11 +20,13 @@
 //! `norte-frontend/src/layout/` ya demuestra en este repo: ningún fichero de
 //! producción por encima de las mil líneas.
 
+mod ai;
 mod compare;
 mod inflight;
 mod search;
 mod sync;
 
+pub use ai::{harvest_ai_rename, harvest_rename_batch, harvest_semantic};
 pub use compare::{
     COMPARE_PAGE_STEP, CompareKey, CompareRun, compare_key, drain_compare, launch_compare,
     on_compare_enter, on_compare_key,

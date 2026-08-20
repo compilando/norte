@@ -16,42 +16,38 @@
 //! sino el diagnóstico que `anyhow` imprime al morir el proceso, que es
 //! exactamente el uso que el `.context` anterior les daba.
 
-use crate::app::{App, CompareState, Modal, SearchState, Trail, detail_for_bar, error_category};
+use crate::app::{App, CompareState, SearchState, detail_for_bar, error_category};
 use crate::config::{self, Layers};
 use crate::config_reload::reload_config;
 use crate::dispatch::dispatch;
 use crate::fill::{Fill, apply_fill_msg};
 use crate::gestures::launch_opener;
 use crate::jobs::{
-    InFlight, PendingAiPlan, RenameBatchRun, SearchRun, SyncTick, drain_compare, drain_search,
-    drain_sync_plan, harvest_sync_apply, launch_compare, launch_sync_apply, launch_sync_plan,
+    InFlight, SearchRun, SyncTick, drain_compare, drain_search, drain_sync_plan, harvest_ai_rename,
+    harvest_rename_batch, harvest_semantic, harvest_sync_apply,
 };
 use crate::keymap::{Command, Resolver};
 use crate::keys::on_key;
-use crate::lua::{RunOutcome, load_lua, refresh_lua_status, start_lua_run};
+use crate::lua::{RunOutcome, load_lua, start_lua_run};
 use crate::mouse;
 use crate::nav;
-use crate::navigate::{apply_cd, cd, cd_in, settle_cd};
-use crate::overlays::{fetch_plugin_page, settle_help_over_modal, watch_refresh_allowed};
+use crate::navigate::settle_cd;
+use crate::overlays::watch_refresh_allowed;
 use crate::paste::route_paste;
-use crate::probes::{
-    DecorateFetch, Probed, STAT_BATCH_MAX, STAT_WINDOW_RADIUS, spawn_compare_stat_probe,
-    spawn_preview_fetch, spawn_stat_probe,
-};
+use crate::probes::{DecorateFetch, Probed};
 use crate::refresh::{after_panes_refresh, on_tick, reap_search_run, refresh_panes};
-use crate::screens::{pane_attr_ids, refresh_places_drives};
+use crate::screens::pane_attr_ids;
 use crate::session_push::{
     JOURNAL_IDLE, SessionPush, capture_session, drain_notices, push_session,
 };
-use crate::suspend::run_suspended;
 use crate::tty;
+use crate::turn;
 use crate::ui;
 use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
 use norte_core::backend::{Backend, ConnEvent};
 use norte_frontend::layout::BySlot;
 use norte_i18n::{t, ta};
-use norte_proto::VPath;
 
 /// Lo que aborta el bucle de eventos.
 #[derive(Debug, thiserror::Error)]
@@ -300,206 +296,9 @@ pub async fn run(
         if dir_watch.take_degraded_notice() {
             app.message = Some(t("status-watch-degraded"));
         }
-        // #135: la suspensión se drena AQUÍ y en NINGÚN otro sitio. El opener
-        // de #28 se lanza en tres puntos (el despacho de teclas, el de la
-        // palette y el de la ayuda) porque cada uno tiene su propio
-        // `continue`; una suspensión también la deja pendiente el Enter de
-        // `Modal::CommandLine`, que vive en un cuarto brazo con su propio
-        // `continue` — así que el sitio que los cubre a todos, presentes y
-        // futuros, es la cabecera de la vuelta. Antes del draw: los paneles
-        // que se repinten ya son los del listado refrescado.
-        // `Shift+F2`: el despacho resolvió QUÉ comparar; el run loop es el
-        // dueño del canal y de la Task, así que lanza. Mismo reparto que
-        // `pending_shell`/`pending_open`, y en la misma cabecera de vuelta,
-        // por la misma razón: los brazos que responden teclas tienen sus
-        // propios `continue`.
-        if let Some(params) = app.pending_compare.take() {
-            launch_compare(app, backend, &mut work.compare, params).await;
-        }
-        // #149 y #164: ¿cabe en el destino, y sabe el destino sujetar lo que se
-        // escriba en él? Las dos son I/O, así que el modal se abre SIN los
-        // avisos y esta vuelta los rellena. El reparto es el de
-        // `pending_compare`: el despacho decide QUÉ, el run loop lo pregunta.
-        //
-        // Las dos preguntas fallan de forma DISTINTA, y es deliberado.
-        //
-        // El espacio se traga el fallo: no poder enumerar volúmenes no puede
-        // impedir una copia ni pintar una alarma, y «no lo sé» se dice callando
-        // — ese es el contrato de `space::warning`.
-        //
-        // El confinamiento no. Ahí el silencio SIGNIFICA «este destino sujeta
-        // sus escrituras», así que tragarse el fallo sería afirmarlo sin
-        // saberlo: fail-open en una línea de seguridad. Si no se sabe, se
-        // avisa (revisión de seguridad de W5 B).
-        if let Some(check) = app.pending_dest_check.take() {
-            let free = match check.total {
-                // Sin total no hay pregunta de espacio que hacer, y enumerar
-                // volúmenes para tirar la respuesta es I/O por nada.
-                None => None,
-                Some(_) => backend
-                    .volumes(false)
-                    .await
-                    .ok()
-                    .and_then(|vols| norte_frontend::space::free_for(&check.to, &vols)),
-            };
-            let space_notice =
-                norte_frontend::space::warning(check.total, free, norte_i18n::active());
-            let confinement_notice = match backend.capabilities(&check.to).await {
-                Ok(caps) => norte_frontend::confine::warning(caps, norte_i18n::active()),
-                Err(_) => norte_frontend::confine::warning(
-                    norte_proto::Capabilities {
-                        flags: norte_proto::CapabilityFlags::empty(),
-                        max_path: None,
-                    },
-                    norte_i18n::active(),
-                ),
-            };
-            if let Some(Modal::ConfirmTransfer { space, confine, .. }) = app.modal.as_mut() {
-                *space = space_notice;
-                *confine = confinement_notice;
-            }
-        }
-        // `Ctrl+Y` / `s` / `m`: el despacho resolvió QUÉ sincronizar, y aquí
-        // se lanza — mismo reparto que la comparación, en la misma cabecera de
-        // vuelta y por la misma razón.
-        if let Some(params) = app.pending_sync.take() {
-            launch_sync_plan(app, backend, &mut work.sync, params).await;
-        }
-        // Y la aprobación, que es la SEGUNDA Task del mismo diálogo. Lo único
-        // que viaja es el hash (ADR 0049).
-        if let Some(hash) = app.pending_sync_apply.take() {
-            launch_sync_apply(app, backend, &mut work.sync, &hash).await;
-        }
-        // #140: el panel que acaba de desconectar vuelve a casa por el mismo
-        // `cd` que cualquier otra navegación, con su ritual de vuelta.
-        if let Some(casa) = app.pending_disconnect_home.take() {
-            let outcome = cd(app, backend, &mut events, casa).await;
-            apply_cd(
-                &app.panes,
-                &mut work.fill,
-                &mut work.decorate,
-                &mut work.probed,
-                &mut work.search,
-                outcome,
-            );
-        }
-        if let Some(pending) = app.pending_shell.take() {
-            let crate::app::PendingShell {
-                argv,
-                cwd,
-                wait_for_key,
-            } = pending;
-            // Auditoría (review de S4): el journal NO ve nada de esto a
-            // propósito (design §D), así que el rastro de que aquí hubo un
-            // shell vive en el log. Sin la línea de comandos —es del usuario
-            // y no tiene por qué acabar en un fichero— y con el programa a
-            // secas.
-            let launched = argv.first().map(|a| a.to_string_lossy().into_owned());
-            tracing::info!(
-                program = launched.as_deref().unwrap_or("(none)"),
-                wait_for_key,
-                "TUI suspended for a user-started program (not journalled: no actor, no reversal)"
-            );
-            // Nada que ejecutar = `app.toggle-panels`: solo enseña la
-            // terminal anfitriona. Refrescar tras él costaría un re-listado
-            // completo (remoto incluido) por una tecla que no toca el disco.
-            let launched_something = !argv.is_empty();
-            if let Err(e) = run_suspended(terminal, capture, argv, cwd, wait_for_key).await {
-                // `detail_for_bar`, jamás el `Display` crudo del OS (review
-                // de S4, L1/m4): el sistema lo localiza por su cuenta, no
-                // tiene tope y —si el error viene de un join roto— arrastra
-                // el payload de un panic. Y se NOMBRA el programa, como hace
-                // `msg-open-failed`: si no, un `$SHELL` borrado y una
-                // pantalla alternativa que no cerró dan el mismo texto.
-                app.message = Some(ta(
-                    "msg-shell-failed",
-                    &[
-                        ("program", launched.as_deref().unwrap_or("-")),
-                        ("error", &crate::app::detail_for_bar(&e.to_string())),
-                    ],
-                ));
-            }
-            // Lo que el shell haya hecho en disco se ve al volver, por el
-            // MISMO camino que `pane.refresh` (#118): refresh cancelable +
-            // el ritual completo, jamás un `set_listing` a mano.
-            //
-            // GATEADO igual que el refresh del watcher (review de S4, M2):
-            // `refresh_panes` polea `events` y se come toda tecla que no sea
-            // Esc/Ctrl+C, y reinterpreta Esc como «abandona el refresh». Con
-            // un modal delante —una aprobación de agente puede haberse
-            // plantado al cerrarse el prompt— eso se traga la respuesta del
-            // usuario hasta que la aprobación caduca. Si no se puede
-            // refrescar ahora, el watcher (canal de capacidad 1) o el tick
-            // lo hacen al cerrarse el overlay.
-            if launched_something && watch_refresh_allowed(app) {
-                let refreshed = refresh_panes(app, backend, &mut events).await;
-                after_panes_refresh(
-                    app,
-                    refreshed,
-                    &mut work.fill,
-                    &mut work.probed,
-                    &mut work.search,
-                );
-            }
-        }
-        // Review MINOR-1: `over_modal` describe el modal que hay AHORA, no uno
-        // que ya se contestó. Antes de plantar los modales retenidos de abajo,
-        // que tienen que encontrar la bandera ya limpia.
-        settle_help_over_modal(app);
-        // Plan IA retenido (M4-IA): abre en cuanto el modal activo se cierra.
-        // Las aprobaciones no compiten aquí: con la cola no vacía y sin modal,
-        // `open_next_pending` ya habría abierto una al cerrarse el anterior.
-        if app.modal.is_none()
-            && let Some(pendiente) = work.pending_ai_plan.take()
-        {
-            app.modal = Some(Modal::AiRenamePlan {
-                dir: pendiente.dir,
-                entries: pendiente.entries,
-                offset: 0,
-                plan: pendiente.plan,
-            });
-        }
-        // Hits semánticos retenidos (M4-IA-2): misma disciplina. Si el plan
-        // IA de arriba acaba de abrir, el `is_none` los deja esperando.
-        if app.modal.is_none()
-            && let Some(hits) = work.pending_semantic.take()
-        {
-            app.modal = Some(Modal::SemanticHits {
-                hits,
-                offset: 0,
-                cursor: 0,
-            });
-        }
-        // Barra Lua en cada vuelta, ANTES del draw (cacheada en el host).
-        refresh_lua_status(app, lua_host.as_ref());
-        // H3b: la ayuda se MAQUETA para el terminal sobre el que va a
-        // pintarse, justo antes del draw — el modelo acota su scroll contra
-        // el número de líneas que salieron, y solo el render lo sabe (ver
-        // `HelpView::refresh`). Cada vuelta, no solo al cambiar de tema: un
-        // resize no pasa por ninguna tecla.
-        if let Some(lang) = app.help.as_ref().map(|h| h.state.lang()) {
-            // H3e: la página de un nodo de plugin se pide AQUÍ, bajo demanda y
-            // una sola vez por overlay (`fetch_plugin_page`). Antes de
-            // maquetar, para que la página recién llegada se pinte en ESTE
-            // frame y no en el siguiente.
-            fetch_plugin_page(backend, app).await;
-            let size = terminal.size().map_err(RunError::Terminal)?;
-            let (width, height) = ui::help_body_size(
-                ratatui::layout::Rect::new(0, 0, size.width, size.height),
-                lang,
-            );
-            app.refresh_help(width, height);
-        }
-        // La ventana de cada pane se reconcilia ANTES de pintar (#124 + el
-        // scroll pegajoso): el cursor ya está donde lo dejó la tecla, así que
-        // esto decide qué filas se ven y el draw las pinta. Hacerlo DESPUÉS
-        // costaba un frame de retraso — el cursor podía caer fuera de la
-        // ventana pintada, o sea desaparecer de la pantalla justo al llegar
-        // al borde.
-        {
-            let s = terminal.size().map_err(RunError::Terminal)?;
-            ui::before_frame(app, ratatui::layout::Rect::new(0, 0, s.width, s.height));
-        }
+        turn::drain_pending(app, backend, terminal, capture, &mut events, &mut work).await;
+        turn::open_retained_modals(app, &mut work);
+        turn::prepare_frame(app, backend, terminal, lua_host.as_ref()).await?;
         // Exención puntual de la regla 2: el draw escribe la terminal de
         // control síncronamente (patrón async oficial de ratatui; acotado,
         // runtime multi-thread).
@@ -523,132 +322,8 @@ pub async fn run(
             session_push.close(last).await;
             return Ok(());
         }
-        // #124: el alto REAL del viewport vuelve al modelo tras cada frame —
-        // la paginación (`page_step`) y el radio de la sonda de stat salen de
-        // ahí en vez de constantes que mienten en cualquier terminal que no
-        // mida justo eso. Con el visor abierto son 0 filas (ningún pane
-        // pintado) y el modelo vuelve a sus fallbacks.
-        // El alto REAL del frame que se acaba de pintar: si la terminal cambió
-        // de tamaño entre `before_frame` y el draw, este es el bueno, y de él
-        // salen la paginación y el radio de la sonda de stat.
-        ui::before_frame(app, painted.area);
-        // MISMO trato para la geometría del ratón: el draw es quien sabe
-        // dónde cayó cada pane y con qué scroll, así que la devuelve al
-        // modelo y el hit test resuelve contra la pantalla que el usuario
-        // está mirando. Sin esto habría que recalcular el layout en cada
-        // click, y un click resuelto contra un layout que no es el pintado
-        // no falla ruidosamente: marca el fichero de al lado.
-        mouse::after_frame(
-            app,
-            ui::pane_geometry(app, painted.area),
-            ui::tab_zones(app, painted.area),
-            ui::menu_zones(app, painted.area),
-            ui::places_zones(app, painted.area),
-        );
-        // L3: el visor acoplado sigue al cursor del listado activo. Lo que se
-        // pide sale de `preview::want`, que devuelve `None` cuando el hueco no
-        // se colocó — cerrado, detrás de una pestaña, o colapsado por falta de
-        // sitio. Por eso la suspensión de un hueco oculto no es una
-        // comprobación que alguien pueda olvidarse de escribir: sin objetivo
-        // no hay nada que pedir.
-        {
-            let res = ui::resolved_for(app, painted.area);
-            match crate::preview::want(app, &res) {
-                Some((slot, crate::preview::Want::File(path))) => {
-                    let ya = app
-                        .panes
-                        .preview(slot)
-                        .and_then(|p| p.shown().cloned())
-                        .is_some_and(|s| s == path);
-                    let in_flight = work.preview.get(slot).is_some_and(|f| f.path == path);
-                    if !ya && !in_flight {
-                        // Empezar otra SUSTITUYE la que hubiera: el `Receiver`
-                        // viejo se cae aquí y su respuesta no se aplica nunca.
-                        work.preview
-                            .set(slot, Some(spawn_preview_fetch(backend, path)));
-                    }
-                }
-                Some((slot, crate::preview::Want::Note(clave))) => {
-                    // Un directorio no se lee: se dice lo que es. Y lo que
-                    // hubiera en vuelo deja de importar.
-                    work.preview.remove(slot);
-                    let text = t(clave);
-                    if let Some(p) = app.panes.preview_mut(slot)
-                        && (p.note().is_none_or(|n| n != text) || p.shown().is_some())
-                    {
-                        p.say(None, text);
-                    }
-                }
-                None => {}
-            }
-            // #136: el árbol SÍ pide, y por eso pide UNA rama por vuelta: un
-            // directorio de diez mil entradas o un remoto lento no pueden
-            // trabar el bucle, y la siguiente vuelta pide la siguiente.
-            if let Some(dir) = app.tree().and_then(crate::tree::Tree::wants) {
-                let child_dirs = match backend.list(&dir).await {
-                    Ok(mut entries) => {
-                        // El MISMO orden que el listado de al lado, con el
-                        // mismo comparador: dos columnas que enseñan lo mismo
-                        // en distinto orden se leen como si dijeran cosas
-                        // distintas.
-                        norte_frontend::sort_entries(&mut entries);
-                        entries
-                            .into_iter()
-                            .filter(|e| e.kind == norte_proto::EntryKind::Dir)
-                            .map(|e| e.path)
-                            .collect()
-                    }
-                    // Una rama que no se deja leer se marca como leída y VACÍA:
-                    // sin esto se volvería a pedir en cada vuelta, que es un
-                    // bucle de peticiones contra un directorio prohibido.
-                    Err(_) => Vec::new(),
-                };
-                if let Some(t) = app.tree_mut() {
-                    t.insert_children(dir, child_dirs);
-                }
-            }
-            // La hoja de atributos NO pide nada: lo que enseña ya vino en el
-            // listado, así que esto es una copia, no una petición. Un hueco
-            // que el reparto no colocó no produce objetivo y no se toca.
-            match crate::metadata::want(app, &res) {
-                Some((slot, crate::metadata::Want::Entry(e))) => {
-                    if let Some(hoja) = app.panes.metadata_mut(slot) {
-                        *hoja = Some(*e);
-                    }
-                }
-                Some((slot, crate::metadata::Want::Note(_))) => {
-                    if let Some(hoja) = app.panes.metadata_mut(slot) {
-                        *hoja = None;
-                    }
-                }
-                None => {}
-            }
-        }
-        // #52: listado lazy — las entradas VISIBLES sin size se hidratan por
-        // tandas (máx. una en vuelo; dedup por (pane, path) en `work.probed`).
-        if work.stat.is_none() {
-            let tanda: Vec<(usize, VPath)> = app
-                .needs_stat_window(STAT_WINDOW_RADIUS)
-                .into_iter()
-                .filter(|c| !work.probed.contains(c))
-                .take(STAT_BATCH_MAX)
-                .collect();
-            if !tanda.is_empty() {
-                work.probed.extend(tanda.iter().cloned());
-                work.stat = Some(spawn_stat_probe(backend, tanda));
-            }
-        }
-        // #157: la fila seleccionada del panel de diferencias, mismo trato.
-        if work.compare_stat.is_none() {
-            let targets = app.compare_size_probe_targets();
-            if !targets.is_empty() {
-                work.compare_stat = Some(spawn_compare_stat_probe(
-                    backend,
-                    targets,
-                    app.compare_generation(),
-                ));
-            }
-        }
+        turn::after_frame(app, backend, &mut work, painted.area).await;
+        turn::spawn_probes(app, backend, &mut work);
         tokio::select! {
             _ = session_tick.tick() => {
                 push_session(app, &mut session_push);
@@ -972,91 +647,7 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                if let Some(run) = work.ai_rename.take() {
-                    match res {
-                        Ok(Ok(plan)) if plan.entries.is_empty() => {
-                            app.message = Some(t("msg-ai-rename-empty"));
-                        }
-                        // Cinturón de INGESTIÓN (quality review 78eb243
-                        // MINOR-5): un plan legítimo del engine queda muy
-                        // por debajo del tope; superarlo delata un daemon
-                        // hostil/N+1 inflando la respuesta — rechazo en
-                        // bloque, ni se abre el modal.
-                        Ok(Ok(plan))
-                            if plan.entries.len() > norte_frontend::MAX_AI_PLAN_ENTRIES =>
-                        {
-                            app.message = Some(t("msg-ai-rename-invalid-plan"));
-                        }
-                        Ok(Ok(plan)) => {
-                            // §17: el plan del LOTE se pide AQUÍ, en el mismo
-                            // viaje que el plan IA — el modal necesita el
-                            // `plan_hash` para que confirmar haga algo, y un
-                            // plan retenido tras otro modal no tendría quién
-                            // se lo pidiera después.
-                            //
-                            // SPAWNEADO, como la llamada al modelo: contra un
-                            // dir enorme o un daemon lento esto es un `fs.list`
-                            // entero, y esperarlo aquí congelaría el loop —
-                            // sin dibujo, sin teclas, sin Esc. El modal abre en
-                            // `Pending` y se rellena solo.
-                            //
-                            // Cinturón fail-loud COMPARTIDO con la GUI (audit
-                            // MAJOR-2): una pareja que no es un `Segment`
-                            // delata un daemon hostil/roto — ni se le pide
-                            // plan al core, y confirmar queda muerto.
-                            let state = if let Some(pairs) =
-                                norte_frontend::rename_pairs(&plan.entries)
-                            {
-                                let b = backend.clone();
-                                let d = run.dir.clone();
-                                let handle =
-                                    tokio::spawn(
-                                        async move { b.rename_batch_plan(&d, &pairs).await },
-                                    );
-                                if let Some(old) =
-                                    work.rename_batch.replace(RenameBatchRun { handle })
-                                {
-                                    old.handle.abort();
-                                }
-                                app.message = None;
-                                norte_frontend::BatchPlan::Pending
-                            } else {
-                                app.message = Some(t("msg-ai-rename-invalid-plan"));
-                                norte_frontend::BatchPlan::Failed
-                            };
-                            let ready = PendingAiPlan {
-                                dir: run.dir,
-                                entries: plan.entries,
-                                plan: state,
-                            };
-                            if app.modal.is_none() {
-                                app.modal = Some(Modal::AiRenamePlan {
-                                    dir: ready.dir,
-                                    entries: ready.entries,
-                                    offset: 0,
-                                    plan: ready.plan,
-                                });
-                            } else {
-                                // Otro modal abierto (aprobación, colisión…):
-                                // el plan espera su turno, jamás lo pisa. A
-                                // diferencia de la GUI (banner superseded), aquí
-                                // el overwrite es inalcanzable: run único en
-                                // vuelo y el prompt no abre sobre otro modal.
-                                work.pending_ai_plan = Some(ready);
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            app.message = Some(ta(
-                                "msg-ai-rename-failed",
-                                &[("error", &detail_for_bar(&error_category(&e)))],
-                            ));
-                        }
-                        // Abortado por Esc: silencio, la barra ya se limpió.
-                        // (Un pánico del future del backend cae aquí también:
-                        // no hay plan que abrir, el run ya está cosechado.)
-                        Err(_join) => {}
-                    }
-                }
+                harvest_ai_rename(app, backend, &mut work, res);
             }
             res = async {
                 // fs.rename_batch_plan en vuelo (§17): cosecha sin bloquear,
@@ -1066,31 +657,7 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                if work.rename_batch.take().is_some() {
-                    let state = match res {
-                        Ok(Ok(plan)) => norte_frontend::BatchPlan::Ready(Box::new(plan)),
-                        Ok(Err(e)) => {
-                            app.message = Some(ta(
-                                "msg-rename-batch-plan-failed",
-                                &[("error", &detail_for_bar(&error_category(&e)))],
-                            ));
-                            norte_frontend::BatchPlan::Failed
-                        }
-                        // Abortado (otra petición lo relevó) o pánico del
-                        // future: no hay plan y no hay nada más que decir —
-                        // quien lo relevó ya puso SU mensaje.
-                        Err(_join) => norte_frontend::BatchPlan::Failed,
-                    };
-                    // El modal puede estar abierto, RETENIDO tras otro, o ya
-                    // cerrado por el humano. En los dos primeros casos se
-                    // rellena; en el tercero la respuesta se tira.
-                    if !app.settle_ai_batch_plan(&state)
-                        && let Some(p) = &mut work.pending_ai_plan
-                        && p.plan == norte_frontend::BatchPlan::Pending
-                    {
-                        p.plan = state;
-                    }
-                }
+                harvest_rename_batch(app, &mut work, res);
             }
             res = async {
                 // index.search_semantic en vuelo (M4-IA-2): cosecha sin
@@ -1100,47 +667,7 @@ pub async fn run(
                     None => std::future::pending().await,
                 }
             } => {
-                work.semantic = None;
-                match res {
-                    Ok(Ok(hits)) if hits.is_empty() => {
-                        app.message = Some(t("msg-semantic-empty"));
-                    }
-                    // Cinturón de INGESTIÓN (paridad IA-1): una respuesta
-                    // por encima del techo contractual del server o con un
-                    // score no finito delata un daemon hostil/N+1 — rechazo
-                    // en bloque, ni se abre el modal (el guard es
-                    // `norte_frontend::validate_semantic_hits`, pura y
-                    // compartida con la GUI).
-                    Ok(Ok(hits)) => match norte_frontend::validate_semantic_hits(hits) {
-                        None => {
-                            app.message = Some(t("msg-semantic-invalid"));
-                        }
-                        Some(hits) => {
-                            app.message = None;
-                            if app.modal.is_none() {
-                                app.modal = Some(Modal::SemanticHits {
-                                    hits,
-                                    offset: 0,
-                                    cursor: 0,
-                                });
-                            } else {
-                                // Otro modal abierto (aprobación, colisión…):
-                                // los hits esperan su turno, jamás lo pisan.
-                                work.pending_semantic = Some(hits);
-                            }
-                        }
-                    },
-                    Ok(Err(e)) => {
-                        app.message = Some(ta(
-                            "msg-semantic-failed",
-                            &[("error", &detail_for_bar(&error_category(&e)))],
-                        ));
-                    }
-                    // Abortado por Esc: silencio, la barra ya se limpió.
-                    // (Un pánico del future del backend cae aquí también:
-                    // no hay hits que abrir, el run ya está cosechado.)
-                    Err(_join) => {}
-                }
+                harvest_semantic(app, &mut work, res);
             }
             outcome = async {
                 match &mut work.lua {
@@ -1263,110 +790,22 @@ pub async fn run(
                 // transferir) vive en `norte-frontend` (regla 7); aquí solo
                 // se resuelve la celda y se aplica.
                 if let Event::Mouse(me) = event {
-                    match mouse::handle(app, me) {
-                        mouse::After::Nothing => {}
-                        // Pulsar un elemento del menú: el ratón ya
-                        // dejó el cursor encima; ejecutarlo es
-                        // asíncrono y necesita el backend, así que se
-                        // remata aquí — el MISMO camino que `Enter`,
-                        // que es lo que hace que un menú y una tecla no
-                        // puedan divergir.
-                        mouse::After::MenuAccept => {
-                            let chosen = app
-                                .menu
-                                .as_ref()
-                                .and_then(norte_frontend::menu::MenuState::selected);
-                            app.menu = None;
-                            if let Some(id) = chosen
-                                && let Some(cmd) = Command::parse(id)
-                            {
-                                let outcome = dispatch(
-                                    app,
-                                    backend,
-                                    &mut events,
-                                    help_lines,
-                                    lang,
-                                    quick_mode,
-                                    confirm_quit,
-                                    &cfg,
-                                    cmd,
-                                )
-                                .await;
-                                apply_cd(
-                                    &app.panes,
-                                    &mut work.fill,
-                                    &mut work.decorate,
-                                    &mut work.probed,
-                                    &mut work.search,
-                                    outcome,
-                                );
-                                reap_search_run(app, &mut work.search);
-                                launch_pending_open(app, terminal, capture).await;
-                            }
-                        }
-                        // Doble click = `nav.enter`, por el MISMO `dispatch`
-                        // que la tecla: mismo cd, mismo relleno paginado,
-                        // misma cosecha de la búsqueda viva. Un segundo
-                        // camino para entrar en un directorio sería un
-                        // segundo sitio donde arreglar cada bug de cd.
-                        mouse::After::Enter => {
-                            // K3a: un gesto es OTRA entrada. La secuencia que
-                            // el lector estuviera tecleando se abandona con su
-                            // panel — no la completa el ratón, y dejarla
-                            // armada haría que la siguiente tecla disparase un
-                            // comando pedido antes de cambiar de directorio.
-                            app.abandon_pending(resolver);
-                            // Paridad con el sitio del resolver: entrar en
-                            // un hit apaga el modo virtual del pane, y hay
-                            // que cosechar el run (regla 3).
-                            run_command(
-                                app,
-                                backend,
-                                &mut events,
-                                help_lines,
-                                lang,
-                                quick_mode,
-                                confirm_quit,
-                                &cfg,
-                                &mut work.fill,
-                                &mut work.decorate,
-                                &mut work.probed,
-                                &mut work.search,
-                                Command::NavEnter,
-                            )
-                            .await;
-                        }
-                        // #226: el sidebar con el ratón toma los MISMOS
-                        // caminos que su teclado. Desplegar las unidades
-                        // es el momento de volver a pedirlas —y plegarlas,
-                        // el de no pedirlas—, así que el ratón no puede
-                        // ser un cuarto disparador de refresco: es este.
-                        mouse::After::PlacesFolded => {
-                            if app.places_drives_visible() {
-                                refresh_places_drives(app, backend).await;
-                            }
-                        }
-                        // Y activar una fila lleva el listado por el
-                        // flujo de `cd` de siempre, igual que `Enter`
-                        // dentro del sidebar.
-                        mouse::After::PlacesActivate => {
-                            app.abandon_pending(resolver);
-                            if let Some(path) = app.places_activate() {
-                                let pane = app.focus();
-                                let outcome =
-                                    cd_in(app, backend, &mut events, pane, path, Trail::Record)
-                                        .await;
-                                apply_cd(
-                                    &app.panes,
-                                    &mut work.fill,
-                                    &mut work.decorate,
-                                    &mut work.probed,
-                                    &mut work.search,
-                                    outcome,
-                                );
-                            }
-                        }
-                    }
+                    mouse::on_mouse(
+                        app,
+                        backend,
+                        terminal,
+                        capture,
+                        &mut events,
+                        resolver,
+                        help_lines,
+                        lang,
+                        quick_mode,
+                        confirm_quit,
+                        &cfg,
+                        &mut work,
+                        me,
+                    )
+                    .await;
                 } else if let Event::Key(key) = event
                     && key.kind == crossterm::event::KeyEventKind::Press
                 {

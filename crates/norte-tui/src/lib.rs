@@ -42,6 +42,7 @@ pub mod theme;
 pub mod trail;
 pub mod tree;
 pub mod tty;
+pub mod turn;
 pub mod ui;
 pub mod viewer;
 pub mod viewer_open;

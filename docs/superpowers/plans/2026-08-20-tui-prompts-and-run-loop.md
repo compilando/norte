@@ -1,10 +1,10 @@
 # Los prompts y el bucle de eventos — lo hecho
 
-> **Estado:** COMPLETO lo que esta ronda se propuso. Las nueve familias de
-> prompts comparten UNA implementación; el enrutado de teclas vive fuera del
-> bucle. `run`: **2.244 → 1.217 líneas**; `event_loop.rs`: 2.622 → 1.418.
-> `just ci-fast` verde: **5.077 tests**. Prueba manual bajo tmux, además del
-> gate.
+> **Estado:** COMPLETO. Las nueve familias de prompts comparten UNA
+> implementación; el enrutado de teclas, el del ratón y la vuelta entera del
+> bucle viven fuera de `run`, que pasa de **2.244 a 660 líneas**
+> (`event_loop.rs`: 2.622 → 857). `just ci-fast` verde: **5.077 tests**.
+> Prueba manual bajo tmux, además del gate.
 >
 > **Fecha:** 2026-08-20. Continúa `2026-08-20-tui-app-impl-split.md`.
 
@@ -59,17 +59,25 @@ Tres movimientos, en este orden, cada uno habilitando el siguiente:
    cosmética: eran las que hacían que cualquier función extraída del bucle
    naciera con quince parámetros.
 
-Con eso, **`keys.rs`**: la cadena de precedencia entera (mil líneas: quién se
-queda una tecla, del menú al resolver) sale de `run`. Los `continue` del bucle
-son ahí `return`, que es lo mismo dicho sin bucle.
+Con eso salen, en este orden:
+
+| adónde | qué | líneas |
+| --- | --- | --- |
+| `keys.rs` | la cadena de precedencia entera: quién se queda una tecla, del menú al resolver | 1.039 |
+| `mouse::on_mouse` | el gemelo de `on_key`: un gesto es OTRA entrada y toma los mismos caminos | 104 |
+| `turn.rs` | la cabecera y el cierre de cada vuelta, en cinco funciones con nombre | 350 |
+| `jobs/ai.rs` | las tres cosechas largas (plan IA, plan del lote, hits semánticos) | 150 |
+
+Los `continue` del bucle son en la función extraída `return`, que es lo mismo
+dicho sin bucle.
 
 ## 3. Lo que sigue sin hacerse
 
-- **El `select!` de 23 brazos sigue en `run`**, y con él las 1.200 líneas que
-  quedan. Sus brazos cortos ya no son el problema; el bloque del prólogo
-  («drenar lo pendiente») sí se puede repartir igual que las teclas.
+- **El `select!` de 23 brazos sigue en `run`**, y es lo que queda: 660 líneas
+  donde vive el ORDEN —qué va antes del draw, qué después— que es la única
+  responsabilidad de verdad de ese bucle.
 - **El despacho del ratón no pide decoraciones** tras un cd, y los otros ocho
   sitios sí. Se dejó como estaba —esta ronda no cambia comportamiento sin
-  test— pero es una diferencia que no parece querida.
+  test— y se decidió no abrir issue.
 - **La palette no se pudo probar bajo tmux**: su atajo en el preset activo es
   `ctrl+shift+p` y ningún modificador sobre esa tecla llega bajo tmux (#159).
