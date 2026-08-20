@@ -131,7 +131,23 @@ fn nombre_canonico(key: &str) -> Option<String> {
 /// # Errors
 /// [`KeymapError`] si el preset no existe o no valida.
 pub fn keymap_de_preset(nombre: &str) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    efectivo(nombre, norte_frontend::keymap::Screen::Browse)
+    keymap_de_preset_con(nombre, crate::commands::Efectos::Completo)
+}
+
+/// El keymap del listado para un frontend con los efectos DICHOS.
+///
+/// En solo lectura, los comandos que escriben no entran en la lista de
+/// conocidos, así que una tecla atada a `pane.delete` resuelve a
+/// [`norte_frontend::keymap::Availability::NotHere`] y se dice — que es lo
+/// que un usuario necesita leer, en vez de una tecla muda.
+///
+/// # Errors
+/// [`KeymapError`] si el preset no existe o no valida.
+pub fn keymap_de_preset_con(
+    nombre: &str,
+    efectos: crate::commands::Efectos,
+) -> Result<norte_frontend::keymap::Effective, KeymapError> {
+    efectivo_con(nombre, norte_frontend::keymap::Screen::Browse, efectos)
 }
 
 /// El keymap efectivo de la pantalla del VISOR, del mismo preset.
@@ -152,11 +168,24 @@ fn efectivo(
     nombre: &str,
     pantalla: norte_frontend::keymap::Screen,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
+    efectivo_con(nombre, pantalla, crate::commands::Efectos::Completo)
+}
+
+fn efectivo_con(
+    nombre: &str,
+    pantalla: norte_frontend::keymap::Screen,
+    efectos: crate::commands::Efectos,
+) -> Result<norte_frontend::keymap::Effective, KeymapError> {
     let fuente = norte_frontend::keymap::presets::source(nombre).ok_or(KeymapError::BadChord {
         chord: nombre.to_owned(),
     })?;
     let preset = norte_frontend::keymap::parse_keymap(fuente)?;
-    norte_frontend::keymap::Effective::build_for(&preset, &[], &crate::commands::todos(), pantalla)
+    norte_frontend::keymap::Effective::build_for(
+        &preset,
+        &[],
+        &crate::commands::todos_con(efectos),
+        pantalla,
+    )
 }
 
 #[cfg(test)]

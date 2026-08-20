@@ -17,6 +17,15 @@ use norte_proto::methods::ClientInfo;
 use norte_theme::Theme;
 use norte_ui_host::{UiHost, UiHostOptions, ViewSnapshot};
 
+/// Hasta dónde llega esta ventana HOY.
+///
+/// Solo lectura, y es una decisión escrita: la revisión de seguridad de la
+/// tarea 3.3 encontró que el preset ya ataba F7/F8 a crear y borrar, y que
+/// `Dialog{choice:"approve"}` aprobaba la operación de un agente — o sea que
+/// la rebanada «de solo lectura» tenía autoridad destructiva y de policy. Se
+/// levanta en la fase 5, junto con el camino seguro que esa fase define.
+pub const EFECTOS: norte_ui_host::commands::Efectos = norte_ui_host::commands::Efectos::SoloLectura;
+
 /// La ayuda. Corta a propósito: el spike no tiene superficie que documentar.
 pub const USAGE: &str = "\
 norte-gui — el renderer gráfico de norte (spike de la fase 3)
@@ -170,8 +179,14 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         .preset
         .clone()
         .unwrap_or_else(|| cfg.common.preset.clone());
-    let keymap = norte_ui_host::keys::keymap_de_preset(&preset)
-        .or_else(|_| norte_ui_host::keys::keymap_de_preset("orthodox"))
+    // SOLO LECTURA hasta la fase 5. El preset ata F7/F8 a crear y borrar, y
+    // que la tecla exista no es permiso: el gate de salida de la fase 4 dice
+    // que ninguna mutación está viva hasta que la fase 5 traiga su camino
+    // seguro. Aquí eso significa que esos comandos no entran en el keymap
+    // efectivo —la tecla se responde «aquí no» en vez de quedarse muda— y que
+    // el host los rechaza aunque llegaran por otra vía.
+    let keymap = norte_ui_host::keys::keymap_de_preset_con(&preset, EFECTOS)
+        .or_else(|_| norte_ui_host::keys::keymap_de_preset_con("orthodox", EFECTOS))
         .map_err(|e| StartupError::Config(e.to_string()))?;
     // El visor es otra PANTALLA, con el mismo preset: `esc` cierra y `e`
     // recarga con otro encoding porque eso es lo que dice el preset, no
@@ -211,6 +226,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
             .into_iter()
             .map(|(id, _)| id)
             .collect(),
+        effects: EFECTOS,
     })
     .await?;
     Ok(Boot {

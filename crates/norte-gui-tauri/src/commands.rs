@@ -174,6 +174,7 @@ pub(crate) mod tests_soporte {
             layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
             viewport: (120, 40),
             columns: norte_ui_host::columnas_por_defecto(),
+            effects: norte_ui_host::commands::Efectos::Completo,
         })
         .await
         .expect("arranca");

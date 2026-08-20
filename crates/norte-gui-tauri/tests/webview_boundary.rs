@@ -145,10 +145,13 @@ fn la_superficie_de_comandos_es_la_declarada() {
 fn el_bundle_no_llama_a_casa() {
     let dist = raiz().join("ui/dist");
     let index = dist.join("index.html");
-    if !index.exists() {
-        eprintln!("sin bundle en {}: `just gui-build` primero", dist.display());
-        return;
-    }
+    assert!(
+        index.exists(),
+        "no hay bundle en {}: córrelo con `just gui-build` antes. Un «no había \
+         nada que mirar» que se lee como verde es peor que un rojo — y esto lo \
+         decía su propio comentario mientras hacía lo contrario.",
+        dist.display()
+    );
     let mut mirados = 0usize;
     for entrada in walk(&dist) {
         let Some(ext) = entrada.extension().and_then(|e| e.to_str()) else {
@@ -191,4 +194,101 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+/// La webview no navega fuera de sus propios assets.
+///
+/// Dos de los puntos de aceptación de la tarea 3.3 («navegar a
+/// `https://example.invalid` se rechaza», «`window.open` no crea una webview
+/// sin restricciones») no tenían implementación NI prueba: la CSP no cubre la
+/// navegación de primer nivel. Esto clava la guardia que sí lo hace.
+#[test]
+fn la_webview_no_navega_a_ninguna_parte() {
+    let src = std::fs::read_to_string(raiz().join("src/main.rs")).expect("main.rs");
+    assert!(
+        src.contains("guardia_de_navegacion"),
+        "el binario tiene que instalar la guardia de navegación"
+    );
+    assert!(
+        src.contains(r#"const ESQUEMAS_DE_PAGINA: &[&str] = &["tauri", "ipc"];"#),
+        "y la lista de esquemas es EXACTAMENTE esa: cualquier añadido es una \
+         decisión que se ve en el diff"
+    );
+}
+
+/// La instrumentación de la 3.6 no viaja en el binario por defecto.
+///
+/// El test que clava la lista de comandos lee el `main.rs`, así que pasaría
+/// igual con `default = ["metrics"]` en el manifiesto: el quinto comando
+/// entraría por la puerta de las features y ninguna prueba lo vería.
+#[test]
+fn la_feature_de_medida_no_es_la_de_por_defecto() {
+    let toml = std::fs::read_to_string(raiz().join("Cargo.toml")).expect("Cargo.toml");
+    let features = toml
+        .split_once("[features]")
+        .map(|(_, resto)| resto.split("\n[").next().unwrap_or_default().to_owned())
+        .unwrap_or_default();
+    assert!(
+        features.contains("metrics"),
+        "la feature existe y se declara aquí"
+    );
+    assert!(
+        !features.contains("default"),
+        "y NO hay `default`: la medida se pide a mano o no está"
+    );
+}
+
+/// El renderer no llama a un comando que el binario no expone.
+///
+/// Se mira la FUENTE y no el bundle: el bundler minifica la llamada
+/// (`t(`dispatch`)`), así que en `dist` el nombre ya no está pegado a
+/// `invoke(` y cualquier barrido allí es adivinar. En `ui/src` sí está, y es
+/// donde alguien añadiría un comando nuevo.
+#[test]
+fn el_renderer_solo_invoca_comandos_conocidos() {
+    let src = raiz().join("ui/src");
+    let conocidos: Vec<&str> = norte_gui_tauri::commands::COMANDOS
+        .iter()
+        .copied()
+        // `metrics` solo existe con su feature; el renderer lo llama sin
+        // condición y el binario de producción lo rechaza.
+        .chain(std::iter::once("metrics"))
+        .collect();
+    let mut vistos = Vec::new();
+    for entrada in walk(&src) {
+        if entrada.extension().and_then(|e| e.to_str()) != Some("ts") {
+            continue;
+        }
+        let texto = std::fs::read_to_string(&entrada).unwrap_or_default();
+        for trozo in texto.split("invoke").skip(1) {
+            // `invoke<T>("nombre"` o `invoke("nombre"`.
+            let Some(abre) = trozo.find('(') else {
+                continue;
+            };
+            let resto = &trozo[abre + 1..];
+            let Some(nombre) = resto
+                .trim_start()
+                .strip_prefix('"')
+                .and_then(|r| r.split('"').next())
+            else {
+                continue;
+            };
+            vistos.push(nombre.to_owned());
+        }
+    }
+    assert!(!vistos.is_empty(), "el renderer invoca algo");
+    for n in &vistos {
+        assert!(
+            conocidos.contains(&n.as_str()),
+            "el renderer invoca `{n}`, que no está en la superficie declarada"
+        );
+    }
+    // Y los cuatro de producción se usan: una superficie declarada que nadie
+    // llama es una superficie que nadie mantiene.
+    for c in norte_gui_tauri::commands::COMANDOS {
+        assert!(
+            vistos.iter().any(|v| v == c),
+            "nadie invoca `{c}`: ¿sobra en la lista?"
+        );
+    }
 }

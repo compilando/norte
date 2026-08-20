@@ -30,6 +30,7 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
     })
     .await
     .expect("arranca")
@@ -243,6 +244,7 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
     })
     .await
     .expect("arranca")
@@ -584,6 +586,7 @@ async fn el_contador_lo_resuelve_el_host() {
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
     })
     .await
     .expect("arranca");
@@ -679,6 +682,7 @@ async fn host_con_layout(
         layout: norte_frontend::layout::presets::tree(layout).expect("layout"),
         viewport,
         columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
     })
     .await
     .expect("arranca")
@@ -1571,6 +1575,7 @@ async fn el_catalogo_da_sentido_a_un_attr() {
             norte_frontend::columns::ColumnId::Builtin(norte_frontend::columns::Builtin::Name),
             norte_frontend::columns::ColumnId::Attr("posix.mode".to_owned()),
         ],
+        effects: norte_ui_host::commands::Efectos::Completo,
     })
     .await
     .expect("arranca");
@@ -2095,6 +2100,7 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (200, 60),
         columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
     })
     .await
     .expect("arranca");
@@ -2311,4 +2317,99 @@ async fn un_binario_se_enseña_en_hexadecimal() {
         v.hex,
         "un binario entra en hexadecimal aunque se llame .txt"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Solo lectura: la ventana todavía no muta (revisión de seguridad de la
+// tarea 3.3; el gate de salida de la fase 4 lo exige literalmente).
+// ---------------------------------------------------------------------------
+
+async fn host_solo_lectura(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset_con(
+            "orthodox",
+            norte_ui_host::commands::Efectos::SoloLectura,
+        )
+        .expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::SoloLectura,
+    })
+    .await
+    .expect("arranca")
+}
+
+/// En solo lectura, F8 no abre la confirmación de borrado: lo DICE.
+///
+/// Un frontend que no tiene todavía el camino seguro de la fase 5 no puede
+/// tener la tecla viva y el diálogo detrás; que la tecla exista en el preset
+/// no es permiso.
+#[tokio::test]
+async fn en_solo_lectura_borrar_no_abre_nada() {
+    let backend = arbol();
+    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let ack = h.dispatch(tecla("F8")).await.expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Unavailable { .. }),
+        "F8 se responde, no se ejecuta: {ack:?}"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        backend.borrados.lock().expect("borrados").is_empty(),
+        "y no borra nada"
+    );
+}
+
+/// Lo mismo con crear directorio.
+#[tokio::test]
+async fn en_solo_lectura_crear_no_crea() {
+    let backend = arbol();
+    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let ack = h.dispatch(tecla("F7")).await.expect("host vivo");
+    assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(backend.creados.lock().expect("creados").is_empty());
+}
+
+/// Y una aprobación de policy no llega siquiera a plantearse: un renderer que
+/// no puede mutar tampoco puede aprobar que mute un agente.
+#[tokio::test]
+async fn en_solo_lectura_no_hay_aprobaciones_que_responder() {
+    let backend = arbol();
+    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let ack = h
+        .dispatch(UiAction::Dialog {
+            id: norte_ui_host::ModalId(1),
+            choice: "approve".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Stale {
+            reason: StaleAction::Modal
+        },
+        "no hay diálogo que responder"
+    );
+    assert!(
+        backend.decisiones.lock().expect("decisiones").is_empty(),
+        "y ninguna decisión llegó al daemon"
+    );
+}
+
+/// En modo completo, la misma tecla SÍ abre la confirmación: el gate es una
+/// decisión de arranque, no una amputación del host.
+#[tokio::test]
+async fn en_modo_completo_borrar_sigue_pidiendo_confirmacion() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogos.len(), 1);
 }

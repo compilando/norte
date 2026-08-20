@@ -117,6 +117,18 @@ this list is revisited before general availability, not after: an unmaintained
 GTK3 binding under a shipped file manager is a different decision from an
 unmaintained GTK3 binding under an experiment.
 
+## What the window is allowed to do, and since when
+
+The first version of this ADR described a read-only slice. It was not: the
+factory preset bound `F7`/`F8` to create and delete, and the approval dialog
+could answer an agent's policy request. The security review of task 3.3 found
+it, and the answer is not a promise but a mode — `norte_ui_host::commands::Efectos`,
+chosen at startup. The window passes `SoloLectura`, which removes the mutating
+commands from its effective keymap (a bound key answers "not here" rather than
+going silent), refuses them at the point of execution, and never takes the
+policy-approval channel. The host still implements all of it, and its tests
+still cover it; what changed is who is allowed to ask.
+
 ## Consequences
 
 ### Positive

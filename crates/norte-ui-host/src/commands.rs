@@ -7,6 +7,43 @@
 //! la única declaración honesta de hasta dónde llega el host, en vez de un
 //! `match` que se traga en silencio lo que no reconoce.
 
+/// Hasta dónde llega un frontend: si puede MUTAR o solo mirar.
+///
+/// No es una amputación del host —el host sabe borrar y crear, y sus tests lo
+/// prueban— sino una decisión de ARRANQUE de quien lo monta. La ventana
+/// gráfica arranca en solo lectura hasta que la fase 5 le dé el camino seguro
+/// (el gate de salida de la fase 4 lo exige), y hasta entonces una tecla
+/// atada a `pane.delete` en el preset se responde en vez de ejecutarse: que
+/// la tecla exista no es permiso.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Efectos {
+    /// Solo mirar: navegar, marcar, ordenar, ver. Nada que escriba, y
+    /// tampoco aprobar que escriba un agente.
+    SoloLectura,
+    /// Todo lo que el host implementa.
+    Completo,
+}
+
+/// Los comandos que el host ejecuta en cada modo.
+///
+/// La lista de solo lectura es la de siempre MENOS lo que muta; se deriva de
+/// una sola fuente para que añadir un comando destructivo no se olvide de
+/// quitarlo aquí.
+#[must_use]
+pub fn implementados(efectos: Efectos) -> Vec<&'static str> {
+    match efectos {
+        Efectos::Completo => IMPLEMENTADOS.to_vec(),
+        Efectos::SoloLectura => IMPLEMENTADOS
+            .iter()
+            .copied()
+            .filter(|c| !MUTAN.contains(c))
+            .collect(),
+    }
+}
+
+/// Los comandos de [`IMPLEMENTADOS`] que ESCRIBEN.
+pub const MUTAN: &[&str] = &["pane.mkdir", "pane.delete", "pane.delete-permanent"];
+
 /// Los comandos que el host ejecuta HOY.
 ///
 /// Crece con cada tarea de la fase 2. Todo lo demás del catálogo resuelve a
@@ -62,7 +99,13 @@ pub const IMPLEMENTADOS_VISOR: &[&str] = &[
 /// de «norte no lo tiene», y esa pregunta no es por pantalla.
 #[must_use]
 pub fn todos() -> Vec<&'static str> {
-    let mut v = IMPLEMENTADOS.to_vec();
+    todos_con(Efectos::Completo)
+}
+
+/// Igual, con el modo de efectos dicho.
+#[must_use]
+pub fn todos_con(efectos: Efectos) -> Vec<&'static str> {
+    let mut v = implementados(efectos);
     v.extend_from_slice(IMPLEMENTADOS_VISOR);
     v
 }
@@ -259,6 +302,24 @@ mod tests {
                 "{c} no está en el catálogo compartido"
             );
         }
+    }
+
+    /// Lo que muta está DENTRO de lo implementado: una lista de mutaciones
+    /// con un comando que el host no ejecuta sería un filtro que no filtra.
+    #[test]
+    fn lo_que_muta_es_un_subconjunto_de_lo_implementado() {
+        for c in MUTAN {
+            assert!(IMPLEMENTADOS.contains(c), "{c} no está implementado");
+        }
+        let solo_lectura = implementados(Efectos::SoloLectura);
+        for c in MUTAN {
+            assert!(!solo_lectura.contains(c), "{c} sobrevive a solo lectura");
+        }
+        assert_eq!(
+            solo_lectura.len() + MUTAN.len(),
+            IMPLEMENTADOS.len(),
+            "solo lectura quita EXACTAMENTE lo que muta"
+        );
     }
 
     /// El contador multiplica lo que se puede repetir.

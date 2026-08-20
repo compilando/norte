@@ -70,6 +70,7 @@ async fn el_tamano_y_la_fecha_no_van_en_blanco() {
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
     })
     .await
     .expect("arranca");

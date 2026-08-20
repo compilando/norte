@@ -88,6 +88,12 @@ pub struct UiHostOptions {
     /// El tamaño INICIAL de la ventana, en celdas de layout. El renderer lo
     /// corrige en cuanto sepa el suyo ([`UiAction::SetViewport`]).
     pub viewport: (u16, u16),
+    /// Hasta dónde llega este frontend: solo mirar, o también escribir.
+    ///
+    /// La ventana gráfica arranca en [`crate::commands::Efectos::SoloLectura`]
+    /// hasta que la fase 5 le dé el camino seguro; el TUI y los tests usan
+    /// [`crate::commands::Efectos::Completo`].
+    pub effects: crate::commands::Efectos,
     /// Las columnas configuradas, en orden. El nombre lo pinta el renderer
     /// aparte (es la columna que nunca se descarta), así que aquí van las
     /// demás: tamaño, fecha, un atributo del provider, una columna de plugin.
@@ -221,7 +227,14 @@ impl UiHost {
                 }
             });
         }
-        if let Some(mut aprobaciones) = backend.take_approvals() {
+        // Las aprobaciones de policy son una MUTACIÓN por delegación: decir
+        // que sí a la operación de un agente. Un frontend que todavía no
+        // puede escribir tampoco puede autorizar que escriba otro, así que
+        // en solo lectura el canal ni se toma (y el diálogo no existe, que es
+        // más honesto que uno que no responde).
+        if estado.efectos == crate::commands::Efectos::Completo
+            && let Some(mut aprobaciones) = backend.take_approvals()
+        {
             let buzon = tx.clone();
             tokio::spawn(async move {
                 while let Some(req) = aprobaciones.recv().await {
@@ -552,6 +565,8 @@ struct Estado {
     /// El resolver de la pantalla del visor. Mientras el visor esté abierto,
     /// las teclas pasan por AQUÍ.
     resolver_visor: Resolver,
+    /// Si este frontend puede escribir.
+    efectos: crate::commands::Efectos,
     /// El visor abierto, si lo hay. El modelo es el COMPARTIDO
     /// (`norte_frontend::viewer::Viewer`): decodificación, hexadecimal y
     /// desplazamiento son suyos.
@@ -635,6 +650,7 @@ impl Estado {
             layout: arbol,
             viewport,
             columns: columnas,
+            effects: efectos,
         } = options;
         let dir = &initial_dir;
         let attrs: Vec<String> = columnas
@@ -681,6 +697,7 @@ impl Estado {
             locale,
             resolver: Resolver::new(keymap),
             resolver_visor: Resolver::new(keymap_visor),
+            efectos,
             visor: None,
             arbol,
             kinds,
@@ -886,45 +903,9 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match accion {
-            UiAction::MoveCursor { slot_id, delta } => {
-                let (slot_id, delta) = (*slot_id, *delta);
-                if slot_id != self.activo() {
-                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
-                }
-                if self.hueco().pane.entries().is_empty() {
-                    return (self.aplicada(), Vec::new());
-                }
-                let actual = i128::try_from(self.hueco().pane.cursor()).unwrap_or(0);
-                let ultimo = i128::try_from(self.hueco().pane.entries().len() - 1).unwrap_or(0);
-                let destino = (actual + i128::from(delta)).clamp(0, ultimo);
-                let i = usize::try_from(destino).unwrap_or(0);
-                self.hueco_mut().pane.set_cursor(i);
-                (self.aplicada(), vec![self.parche_cursor()])
-            }
-            UiAction::SelectRow { slot_id, key } | UiAction::ToggleMark { slot_id, key } => {
-                let (slot_id, key) = (*slot_id, *key);
-                let marcar = matches!(accion, UiAction::ToggleMark { .. });
-                if slot_id != self.activo() {
-                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
-                }
-                let Some(i) = self.fila_valida(key) else {
-                    // Una fila que ya no existe: el listado cambió bajo el
-                    // click. Ni se interpreta ni es un error.
-                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
-                };
-                if marcar {
-                    let marcada = self
-                        .hueco()
-                        .pane
-                        .entries()
-                        .get(i)
-                        .is_some_and(|e| self.hueco().pane.is_marked(e));
-                    self.hueco_mut().pane.set_mark(i, !marcada);
-                } else {
-                    self.hueco_mut().pane.set_cursor(i);
-                }
-                (self.aplicada(), vec![self.parche_filas()])
-            }
+            UiAction::MoveCursor { slot_id, delta } => self.mover_cursor(*slot_id, *delta),
+            UiAction::SelectRow { slot_id, key } => self.poner_cursor(*slot_id, *key),
+            UiAction::ToggleMark { slot_id, key } => self.marcar(*slot_id, *key),
             UiAction::SetVisibleRange {
                 slot_id,
                 first,
@@ -1369,6 +1350,11 @@ impl Estado {
                     .pane
                     .quick_start(norte_frontend::nav::Mode::Filter);
                 (self.aplicada(), vec![self.parche_filas()])
+            }
+            Efecto::CrearDirectorio | Efecto::Borrar { .. }
+                if self.efectos == crate::commands::Efectos::SoloLectura =>
+            {
+                Self::no_muta()
             }
             Efecto::Ver => self.pedir_visor(backend, buzon),
             Efecto::CrearDirectorio => self.pedir_mkdir(),
@@ -2484,6 +2470,77 @@ impl Estado {
             cells: self.viewport,
             placements,
         }
+    }
+
+    /// Mueve el cursor del hueco, topando en los extremos.
+    fn mover_cursor(
+        &mut self,
+        slot_id: u32,
+        delta: i64,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if slot_id != self.activo() {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        if self.hueco().pane.entries().is_empty() {
+            return (self.aplicada(), Vec::new());
+        }
+        let actual = i128::try_from(self.hueco().pane.cursor()).unwrap_or(0);
+        let ultimo = i128::try_from(self.hueco().pane.entries().len() - 1).unwrap_or(0);
+        let destino = (actual + i128::from(delta)).clamp(0, ultimo);
+        let i = usize::try_from(destino).unwrap_or(0);
+        self.hueco_mut().pane.set_cursor(i);
+        (self.aplicada(), vec![self.parche_cursor()])
+    }
+
+    /// Pone el cursor en una fila concreta (un click).
+    fn poner_cursor(
+        &mut self,
+        slot_id: u32,
+        key: RowKey,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(i) = self.fila_de(slot_id, key) else {
+            // Una fila que ya no existe: el listado cambió bajo el click. Ni
+            // se interpreta ni es un error.
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        self.hueco_mut().pane.set_cursor(i);
+        (self.aplicada(), vec![self.parche_filas()])
+    }
+
+    /// Marca o desmarca una fila.
+    fn marcar(&mut self, slot_id: u32, key: RowKey) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(i) = self.fila_de(slot_id, key) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        let marcada = self
+            .hueco()
+            .pane
+            .entries()
+            .get(i)
+            .is_some_and(|e| self.hueco().pane.is_marked(e));
+        self.hueco_mut().pane.set_mark(i, !marcada);
+        (self.aplicada(), vec![self.parche_filas()])
+    }
+
+    /// La fila que una acción nombra, si el hueco es el activo y la clave
+    /// sigue valiendo.
+    fn fila_de(&self, slot_id: u32, key: RowKey) -> Option<usize> {
+        (slot_id == self.activo())
+            .then(|| self.fila_valida(key))
+            .flatten()
+    }
+
+    /// Este frontend todavía no muta, y lo DICE.
+    ///
+    /// Una tecla muda es peor que un «aquí no»: el usuario que pulsa F8 y no
+    /// ve nada no sabe si borró.
+    fn no_muta() -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        (
+            ActionAck::Unavailable {
+                reason_key: "host-read-only".to_owned(),
+            },
+            Vec::new(),
+        )
     }
 
     /// Mueve el foco al siguiente hueco enfocable, o al anterior.

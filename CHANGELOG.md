@@ -47,7 +47,10 @@ independently through `PROTOCOL_VERSION`.
   all of it against a real daemon, with two panes laid out by Rust. The
   webview has no filesystem, no shell, no HTTP, no `rpc(method, params)` and
   no `window.__TAURI__`: four commands are the whole surface, and a test
-  fails if a fifth appears. It exists to answer a question with measurements;
+  fails if a fifth appears. It does not write: the host takes a read-only mode
+  at startup and the window uses it, so the mutating commands are absent from
+  its keymap, refused at execution, and the policy-approval channel is never
+  taken. Phase 5 lifts that. It exists to answer a question with measurements;
   the go/no-go is in `docs/spike-tauri-2026-08-20.md`.
 
 - **The bridge projects the screen's layout, and its snapshots are complete.**

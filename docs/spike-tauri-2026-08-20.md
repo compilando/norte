@@ -109,6 +109,23 @@ The slice was the instrument, and it caught four things no unit test had:
 Each of these was invisible to a suite that was green, and visible in the first
 window that painted real files.
 
+## A correction, from the security review
+
+This report first said the slice was read-only. **It was not.** The `orthodox`
+preset binds `F7` and `F8`, `pane.mkdir` and `pane.delete` were in the host's
+implemented list, and `UiAction::Dialog { choice: "approve" }` reached
+`policy_decide` — so the window could create directories, delete files (through
+the confirmation, through the daemon, journalled) and **approve an agent's
+policy request**. Nothing bypassed the daemon or the journal; what was wrong was
+the claim, and the claim is what a security review is read against.
+
+It is read-only now, and by construction rather than by assertion: the host
+takes an `Efectos` mode at startup, the window passes `SoloLectura`, and in that
+mode the mutating commands are absent from the effective keymap (so the key says
+"not here" instead of going quiet) *and* refused at the point of execution,
+while the policy-approval channel is never taken. Phase 5 lifts it along with
+the safe effect path it defines.
+
 ## Test matrix: what ran
 
 Automated, and in the gate (`just gui-ci`):
@@ -170,8 +187,11 @@ The conditions:
    60 Hz. On this machine WebKitGTK presents at ~30 Hz whatever the display
    does; "p95 ≤ 20 ms" cannot be met by anything that waits for a frame, and
    measuring against the idle floor is the question that has an answer.
-2. **A security review before the first mutation is wired.** The slice is
-   read-only today; task 3.3 asks for the review while it still is.
+2. **A security review before the first mutation is wired.** Done — four
+   reviewers ran over `7ffd004b..HEAD`, and the security one is why the
+   paragraph above exists. Its three MAJORs (live mutation authority, a
+   world-readable log, and no navigation guard) are fixed; its verdict on the
+   *shape* of the boundary was "narrow enough for phase 5".
 
 The number to accept: **≈ 563 MB of resident memory to display 27 filenames**,
 about half of it WebKit's. If that is unacceptable, this is a no-go regardless

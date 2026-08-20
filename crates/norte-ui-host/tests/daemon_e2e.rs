@@ -97,6 +97,7 @@ async fn host_contra(d: &DaemonDePrueba) -> (UiHost, ViewSnapshot) {
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
     })
     .await
     .expect("arranca")

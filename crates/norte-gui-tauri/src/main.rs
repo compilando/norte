@@ -157,6 +157,7 @@ fn main() -> ExitCode {
     let resultado = tauri::Builder::default()
         .manage(state)
         .invoke_handler(handler())
+        .plugin(guardia_de_navegacion())
         .setup(|app| {
             let estado: tauri::State<'_, AppState> = app.state();
             if let Ok(bridge) = estado.bridge() {
@@ -197,6 +198,36 @@ fn main() -> ExitCode {
     }
 }
 
+/// Los esquemas desde los que la webview puede cargar una página.
+///
+/// `tauri:` es el bundle empaquetado; `ipc:` es cómo la webview habla con
+/// este proceso. Nada más.
+const ESQUEMAS_DE_PAGINA: &[&str] = &["tauri", "ipc"];
+
+/// La webview NO navega fuera de sus assets.
+///
+/// La CSP no cubre la navegación de PRIMER NIVEL —`form-action` son
+/// formularios y no existe `navigate-to`—, así que sin esto un
+/// `window.location = "https://…"` sustituye la interfaz entera por una
+/// página ajena DENTRO del marco de la aplicación: la ventana que el usuario
+/// cree estar mirando es la de norte. Tauri sigue rechazando los comandos
+/// desde un origen remoto, así que lo que esto cierra es la SUPLANTACIÓN, no
+/// el IPC (ADR 0066, decisión D11).
+fn guardia_de_navegacion<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("norte-navegacion")
+        .on_navigation(|_webview, url| {
+            let permitido = ESQUEMAS_DE_PAGINA.contains(&url.scheme());
+            if !permitido {
+                tracing::warn!(scheme = url.scheme(), "navegación rechazada");
+            }
+            permitido
+        })
+        .build()
+}
+
+/// Ficheros de log que sobreviven a la rotación.
+const RETENCION: usize = 7;
+
 /// El log va al FICHERO y solo al fichero.
 ///
 /// Montado aquí y no con el del core a propósito: este binario habla con el
@@ -210,10 +241,41 @@ fn logging() {
     let Some(dir) = norte_config::dirs::state_dir().map(|d| d.join("logs")) else {
         return;
     };
+    // 0700 en el directorio y 0600 en cada fichero: aquí dentro va por dónde
+    // ha navegado el usuario. El helper del core lo endurece así, y duplicar
+    // el MONTAJE (ADR 0066) no era licencia para dejarse la protección.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+        if !dir.exists()
+            && std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&dir)
+                .is_err()
+        {
+            return;
+        }
+        if let Ok(md) = std::fs::metadata(&dir) {
+            let mut perms = md.permissions();
+            perms.set_mode(0o700);
+            let _ = std::fs::set_permissions(&dir, perms);
+        }
+    }
+    #[cfg(not(unix))]
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let appender = tracing_appender::rolling::daily(&dir, "norte-gui.log");
+    let appender = tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("norte-gui.log")
+        // Retención acotada: un log que crece para siempre es un log que
+        // nadie borra.
+        .max_log_files(RETENCION)
+        .build(&dir);
+    let Ok(appender) = appender else {
+        return;
+    };
     // NO bloqueante: escribir el log es I/O, y este proceso lo hace desde
     // dentro del runtime (regla 2). El guard se filtra a propósito — vive lo
     // que el proceso, y soltarlo dejaría de escribir.
