@@ -959,7 +959,7 @@ Acceptance:
 
 ## Phase 2 — Build the toolkit-independent `norte-ui-host`
 
-> **Tasks 2.1, 2.2 and the core of 2.3, 2.4 and 2.5 DONE 2026-08-20.** The crate exists with `bridge.rs`
+> **Tasks 2.1, 2.2 and the core of 2.3, 2.4, 2.5 and 2.6 DONE 2026-08-20.** The crate exists with `bridge.rs`
 > (envelope, `BRIDGE_VERSION`, opaque `RowKey`/`ModalId`/`RequestToken`, caps),
 > `dto.rs` (renderer-safe views; no raw path crosses), `action.rs` (semantic
 > actions) and `controller.rs` (bounded inbox, one writer, broadcast
@@ -1014,7 +1014,20 @@ Acceptance:
 > round-trip (the host preserves the tree it was given, but does not yet
 > merge a session that carries kinds it cannot project).
 >
-> **Next: task 2.6** (tasks, dialogs and safe effects).
+> **Task 2.6, done:** delete is the first effect the host runs, and it goes
+> in through the door every effect must use — the confirmation. The dialog
+> declares which choice destroys; a choice it did not offer is not
+> interpreted; modal ids are monotonic so confirming twice does not delete
+> twice (`Stale{Modal}`). The task board projects progress and the TERMINAL
+> state cannot be lost: it travels on the same ordered queue and is sent
+> before the channel is dropped. Cancel is idempotent. Dialog bodies are
+> sanitised and capped like listing rows.
+>
+> **Task 2.6, still owed:** foreign tasks, connection lost/restored and
+> degradation notices, policy approvals, journal status, quit confirmation,
+> and dialogs with a text field (they need the mutations that open them).
+>
+> **Next: task 2.7** (headless parity harness).
 
 Implement one vertical feature at a time. The host should be useful to a
 headless test before Tauri exists.
