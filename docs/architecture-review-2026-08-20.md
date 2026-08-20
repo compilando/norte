@@ -206,3 +206,61 @@ Con eso: **139 GB → 64 GB**. Lo que queda son artefactos de hoy; decaen solos.
 Lo que **no** haría: tocar `methods.rs`, aplanar más `server.rs`, ni empezar
 por `backend.rs`. Los tres son grandes por razones que ya están escritas y
 revisadas, y ninguno duele hoy.
+
+---
+
+## Addendum — el estado al cerrar la fase 2 (mismo día, más tarde)
+
+Esta revisión se escribió por la mañana. Lo que vino después la contesta en
+parte, así que aquí queda la foto, para que el documento no envejezca
+mintiendo.
+
+### Lo que cambió
+
+| | antes | ahora |
+| --- | --- | --- |
+| crates | 25 | **26** (`norte-client`, `norte-ui-host`; fuera `norte-gui`) |
+| producción (sin GUI) | 145.330 | **148.073** |
+| test / producción | 0,96 | **0,99** |
+| tests del gate | 5.077 | **5.141** |
+| cobertura (proto, vfs, core, vfs-local, client) | 88,10 % | 88 % largo, con el SDK dentro |
+| `norte-core/src/backend.rs` | 5.271 | **2.416** |
+| funciones ≥ 300 líneas | 6 | **3**, y las tres son tests de corpus |
+| `target/` | 139 GB | **74 GB** |
+
+### Los hallazgos, uno a uno
+
+- **H1 (`norte-gui`): RESUELTO.** Retirado (ADR 0065). Con él se fueron el
+  `--exclude` del gate, `gui-ci`, `check-gui`, su `deny.toml` con nueve
+  licencias que la política del workspace prohíbe, y el reparto
+  `members`/`default-members`. **El gate cubre ahora el workspace entero.**
+- **H5 (`backend.rs`, la fachada a vigilar): RESUELTO por otra vía.** No hizo
+  falta partirla por familias: la mitad que era cliente remoto se fue al SDK
+  y quedó en 2.416 líneas.
+- **H6 (el crate del `unsafe`, sin cobertura): RESUELTO.**
+  `norte-vfs-local` está en `just cov`, y enseña lo que la media tapaba:
+  `confined.rs` al 79,8 % es el punto flojo, y es justo el `openat2` que
+  sujeta las escrituras de un agente.
+- **H10 (disco): RESUELTO, y era un bug.** `just prune` llevaba roto desde
+  siempre en una máquina que solo compila en debug: `find` sobre un
+  `release/deps` inexistente mataba la receta antes de barrer nada.
+- **H2 (el host de Lua dentro de la TUI): SIGUE.** Sin cambios.
+- **H3 (modelos compartibles en la TUI): a medias.** `History` y `Trail`
+  subieron a `norte-frontend` porque el host los necesitaba —que es
+  exactamente el mecanismo que esta revisión predijo: se suben cuando el
+  segundo frontend los pide—. Quedan `tree.rs`, `tasks.rs`, `palette.rs`.
+- **H4 (`norte-frontend`, la segunda cocina): SIGUE, y ahora con más razón.**
+  Es el crate del que cuelgan TUI y host: `sync.rs` (4.566) y `pane.rs`
+  (4.372) siguen siendo los dos ficheros más grandes del repositorio después
+  de `methods.rs` y `daemon/server.rs`.
+- **H7 (ficheros > 1.500 líneas), H8 (82 esperas de reloj), H9 (208 crates
+  duplicados): SIGUEN.** Ninguno se tocó.
+
+### Lo que la fase 2 dejó a deber
+
+Está escrito task por task en el plan multi-frontend, y es deuda ELEGIDA, no
+olvidada: paginación del listado en el host, quick search, columnas y
+catálogo de atributos, watcher; el panel which-key y las vistas de
+menú/palette/atajos; el `session.put` periódico y la propiedad adquirida más
+tarde; tasks ajenas, avisos de conexión, aprobaciones de policy y diálogos
+con campo de texto.
