@@ -166,6 +166,63 @@ fn journal_warning_i18n(why: &norte_core::embedded::NoJournal) -> String {
     }
 }
 
+/// Corre un comando y asienta su desenlace: el `cd` que pueda traer
+/// ([`settle_cd`]) y la cosecha de la búsqueda viva —regla 3: un cd apaga el
+/// pane virtual y su Task tiene que morir con él, y no en la tecla siguiente.
+///
+/// Lo que NO hace, a propósito, es lanzar el comando externo que `pane.open`
+/// pudiera dejar resuelto: eso solo lo hacen los sitios que son ENTRADA del
+/// usuario sobre un listado, y se lee en cada uno ([`launch_pending_open`]).
+/// El resolver de teclas tampoco pasa por aquí: necesita leer `nav_stalled`
+/// ANTES de que el desenlace se consuma, y frena el contador con él.
+#[allow(clippy::too_many_arguments)] // wiring del bucle, no API
+async fn run_command(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    help_lines: &mut Vec<ratatui::text::Line<'static>>,
+    lang: norte_i18n::Lang,
+    quick_mode: nav::Mode,
+    confirm_quit: config::ConfirmQuit,
+    cfg: &config::LoadedConfig,
+    fill: &mut BySlot<Fill>,
+    decorate_fetch: &mut BySlot<DecorateFetch>,
+    last_probed: &mut Probed,
+    search_run: &mut Option<SearchRun>,
+    cmd: Command,
+) {
+    let outcome = dispatch(
+        app,
+        backend,
+        events,
+        help_lines,
+        lang,
+        quick_mode,
+        confirm_quit,
+        cfg,
+        cmd,
+    )
+    .await;
+    settle_cd(
+        app,
+        backend,
+        fill,
+        decorate_fetch,
+        last_probed,
+        search_run,
+        outcome,
+    );
+    reap_search_run(app, search_run);
+}
+
+/// Lanza el comando externo que `pane.open` (#28) dejara resuelto. Vive en el
+/// run loop porque es quien tiene la terminal: abrir un opener la suspende.
+async fn launch_pending_open(app: &mut App, terminal: &mut tty::Tui, capture: &mut mouse::Capture) {
+    if let Some(pending) = app.pending_open.take() {
+        app.message = Some(launch_opener(terminal, capture, pending).await);
+    }
+}
+
 /// El bucle de eventos: dibuja, espera, enruta la tecla y drena lo que las
 /// tareas de fondo hayan traído, hasta que `app.quit`.
 ///
@@ -1321,11 +1378,7 @@ pub async fn run(
                                     outcome,
                                 );
                                 reap_search_run(app, &mut search_run);
-                                if let Some(pending) = app.pending_open.take() {
-                                    app.message = Some(
-                                        launch_opener(terminal, capture, pending).await,
-                                    );
-                                }
+                                launch_pending_open(app, terminal, capture).await;
                             }
                         }
                         // Doble click = `nav.enter`, por el MISMO `dispatch`
@@ -1340,7 +1393,10 @@ pub async fn run(
                             // armada haría que la siguiente tecla disparase un
                             // comando pedido antes de cambiar de directorio.
                             app.abandon_pending(resolver);
-                            let outcome = dispatch(
+                            // Paridad con el sitio del resolver: entrar en
+                            // un hit apaga el modo virtual del pane, y hay
+                            // que cosechar el run (regla 3).
+                            run_command(
                                 app,
                                 backend,
                                 &mut events,
@@ -1349,22 +1405,13 @@ pub async fn run(
                                 quick_mode,
                                 confirm_quit,
                                 &cfg,
-                                Command::NavEnter,
-                            )
-                            .await;
-                            settle_cd(
-                                app,
-                                backend,
                                 &mut fill,
                                 &mut decorate_fetch,
                                 &mut last_probed,
                                 &mut search_run,
-                                outcome,
-                            );
-                            // Paridad con el sitio del resolver: entrar en
-                            // un hit apaga el modo virtual del pane, y hay
-                            // que cosechar el run (regla 3).
-                            reap_search_run(app, &mut search_run);
+                                Command::NavEnter,
+                            )
+                            .await;
                         }
                         // #226: el sidebar con el ratón toma los MISMOS
                         // caminos que su teclado. Desplegar las unidades
@@ -1457,7 +1504,7 @@ pub async fn run(
                                     // `terminal`, `capture`— o refactorizar
                                     // el run loop, y ninguna de las dos
                                     // cabe en el cambio que trae el menú.
-                                    let outcome = dispatch(
+                                    run_command(
                                         app,
                                         backend,
                                         &mut events,
@@ -1466,24 +1513,14 @@ pub async fn run(
                                         quick_mode,
                                         confirm_quit,
                                         &cfg,
-                                        cmd,
-                                    )
-                                    .await;
-                                    settle_cd(
-                                        app,
-                                        backend,
                                         &mut fill,
                                         &mut decorate_fetch,
                                         &mut last_probed,
                                         &mut search_run,
-                                        outcome,
-                                    );
-                                    reap_search_run(app, &mut search_run);
-                                    if let Some(pending) = app.pending_open.take() {
-                                        app.message = Some(
-                                            launch_opener(terminal, capture, pending).await,
-                                        );
-                                    }
+                                        cmd,
+                                    )
+                                    .await;
+                                    launch_pending_open(app, terminal, capture).await;
                                 }
                             }
                             _ => {}
@@ -1759,7 +1796,14 @@ pub async fn run(
                                         debug_assert!(false, "palette fuera de COMMANDS");
                                         continue;
                                     };
-                                    let outcome = dispatch(
+                                    // Paridad con el sitio del resolver (#118
+                                    // review): un cd elegido en la palette
+                                    // (nav.parent…) también puede apagar el
+                                    // modo virtual — cosecha del run (regla 3);
+                                    // y un `pane.open` de la palette deja su
+                                    // comando externo resuelto — lanzarlo YA,
+                                    // no en la siguiente tecla.
+                                    run_command(
                                         app,
                                         backend,
                                         &mut events,
@@ -1768,29 +1812,14 @@ pub async fn run(
                                         quick_mode,
                                         confirm_quit,
                                         &cfg,
-                                        cmd,
-                                    )
-                                    .await;
-                                    settle_cd(
-                                        app,
-                                        backend,
                                         &mut fill,
                                         &mut decorate_fetch,
                                         &mut last_probed,
                                         &mut search_run,
-                                        outcome,
-                                    );
-                                    // Paridad con el sitio del resolver (#118
-                                    // review): un cd elegido en la palette
-                                    // (nav.parent…) también puede apagar el
-                                    // modo virtual — cosecha del run (regla 3);
-                                    // y un `pane.open` de la palette deja su
-                                    // comando externo resuelto — lanzarlo YA,
-                                    // no en la siguiente tecla.
-                                    reap_search_run(app, &mut search_run);
-                                    if let Some(pending) = app.pending_open.take() {
-                                        app.message = Some(launch_opener(terminal, capture, pending).await);
-                                    }
+                                        cmd,
+                                    )
+                                    .await;
+                                    launch_pending_open(app, terminal, capture).await;
                                 }
                             }
                             _ => {}
@@ -1854,7 +1883,7 @@ pub async fn run(
                             // así que el camino del cd (relleno paginado,
                             // decoración, cosecha de la búsqueda viva, opener
                             // externo pendiente) tiene que ser el mismo.
-                            let outcome = dispatch(
+                            run_command(
                                 app,
                                 backend,
                                 &mut events,
@@ -1863,23 +1892,14 @@ pub async fn run(
                                 quick_mode,
                                 confirm_quit,
                                 &cfg,
-                                cmd,
-                            )
-                            .await;
-                            settle_cd(
-                                app,
-                                backend,
                                 &mut fill,
                                 &mut decorate_fetch,
                                 &mut last_probed,
                                 &mut search_run,
-                                outcome,
-                            );
-                            reap_search_run(app, &mut search_run);
-                            if let Some(pending) = app.pending_open.take() {
-                                app.message =
-                                    Some(launch_opener(terminal, capture, pending).await);
-                            }
+                                cmd,
+                            )
+                            .await;
+                            launch_pending_open(app, terminal, capture).await;
                             }
                         }
                     } else if app.modal.is_some() {
@@ -2241,7 +2261,13 @@ pub async fn run(
                                     // entrada que el usuario no veía (review
                                     // MAJOR T4).
                                     if app.focused_mut().quick_confirm() {
-                                        let outcome = dispatch(
+                                        // Paridad con el sitio del resolver
+                                        // (#118 review): el Enter del quick
+                                        // search ES un nav.enter — entrar en
+                                        // un hit apaga el modo virtual del
+                                        // pane; sin cosecha, la Task de
+                                        // búsqueda quedaba viva (regla 3).
+                                        run_command(
                                             app,
                                             backend,
                                             &mut events,
@@ -2250,25 +2276,13 @@ pub async fn run(
                                             quick_mode,
                                             confirm_quit,
                                             &cfg,
-                                            Command::NavEnter,
-                                        )
-                                        .await;
-                                        settle_cd(
-                                            app,
-                                            backend,
                                             &mut fill,
                                             &mut decorate_fetch,
                                             &mut last_probed,
                                             &mut search_run,
-                                            outcome,
-                                        );
-                                        // Paridad con el sitio del resolver
-                                        // (#118 review): el Enter del quick
-                                        // search ES un nav.enter — entrar en
-                                        // un hit apaga el modo virtual del
-                                        // pane; sin cosecha, la Task de
-                                        // búsqueda quedaba viva (regla 3).
-                                        reap_search_run(app, &mut search_run);
+                                            Command::NavEnter,
+                                        )
+                                        .await;
                                     }
                                     continue;
                                 }
@@ -2415,11 +2429,7 @@ pub async fn run(
                                         // externo resuelto — el run loop (dueño
                                         // de la terminal) sondea el binario y
                                         // lo lanza.
-                                        if let Some(pending) = app.pending_open.take() {
-                                            app.message = Some(
-                                                launch_opener(terminal, capture, pending).await,
-                                            );
-                                        }
+                                        launch_pending_open(app, terminal, capture).await;
                                         // Parar en seco si la app se va:
                                         // `9999` seguido de una tecla de salida
                                         // no puede encolar 9998 salidas más. El
