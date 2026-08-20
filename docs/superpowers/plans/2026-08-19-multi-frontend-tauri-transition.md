@@ -1,6 +1,7 @@
 # Multi-frontend architecture and Tauri GUI transition — implementation plan
 
-> **Status:** proposed, with decision D1 AMENDED on 2026-08-20 (ADR 0065): the
+> **Status:** phase 0 and phase 1 DONE on 2026-08-20 (ADR 0065 and ADR 0066);
+> phases 2 onwards not started. Decision D1 AMENDED on 2026-08-20 (ADR 0065): the
 > GPUI frontend was retired BEFORE construction, not after it. Read D1, the
 > non-goals and phase 8 with that in mind — every "keep GPUI alive" and every
 > parity comparison against it is void, and the parity target is the TUI. No
@@ -723,6 +724,28 @@ docs(gui): make the current frontend status honest
 ---
 
 ## Phase 1 — Extract `norte-client` without behaviour change
+
+> **DONE 2026-08-20.** `crates/norte-client` exists with transport, framed
+> JSON-RPC, socket vocabulary, remote task primitives and the typed
+> `RemoteBackend` split into `remote/{mod,routes,paging,calls}.rs`.
+> `norte-core/src/backend.rs`: 5.271 → 2.416 lines. Compatibility re-exports
+> keep `norte_core::daemon::{Client, ClientError, default_socket_path,
+> is_version_mismatch}` and `norte_core::backend::remote` working, so MCP, the
+> CLI and the e2e tests did not change a line. `just ci-fast` green (5.077
+> tests), coverage 88,12 % with the SDK inside the gate.
+>
+> Deviations from the task text, all deliberate:
+>
+> - Task 0.2 (GUI baselines) is void: ADR 0065 retired the GPUI frontend
+>   before this phase, so there was nothing to measure.
+> - `TransferOptions` took option 3 (SDK value type + exhaustive `From` in the
+>   core). `SyncPlanEvent` and `ConnEvent` took a shorter route than the task
+>   describes: the SDK owns them and `norte-core` RE-EXPORTS them, because
+>   their variants are wire types and two definitions would be two places to
+>   add a variant.
+> - `take_foreign_tasks` needed a forwarding task in the core: a channel
+>   cannot be mapped in place, and the bridge dies with the connection that
+>   feeds it.
 
 This is a move/refactor phase. Do not mix new frontend features into it.
 
