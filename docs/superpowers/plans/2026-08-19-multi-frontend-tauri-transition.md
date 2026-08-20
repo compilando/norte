@@ -1067,10 +1067,18 @@ Acceptance:
 >   validates the name with the same rule as any other segment before queuing
 >   anything.
 >
-> Still owed from phase 2: the attr CATALOGUE (styles fall back to opaque
-> defaults), watcher refresh, the which-key panel and menu/palette/shortcuts
-> views, the periodic coalesced `session.put`, ownership acquired later, and
-> policy approvals.
+> - **Attr catalogue.** Requested once per scheme and only when `attr:`
+>   columns are configured; when it arrives the host sends a SNAPSHOT, because
+>   it changes how cells that already travelled are read.
+> - **Policy approvals.** An agent op under an `ask` rule opens its dialog
+>   with masked paths and says when the list is TRUNCATED. Only `approve`
+>   approves: any other answer denies, and so does closing the dialog —
+>   leaving the agent waiting is worse than telling it no. The affirmative id
+>   differs from the normal `confirm` on purpose.
+>
+> Still owed from phase 2: watcher refresh, the which-key panel and
+> menu/palette/shortcuts views, the periodic coalesced `session.put`, and
+> ownership acquired later in the session's life.
 >
 > **Next: phase 3** — the Tauri vertical-slice spike and its go/no-go. That is
 > the first time a renderer appears at all.

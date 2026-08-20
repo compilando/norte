@@ -128,6 +128,10 @@ enum Mensaje {
     /// La respuesta de un listado que se pidió antes. Vuelve al actor como
     /// un mensaje más: así el estado lo sigue tocando un solo escritor.
     Listado(Box<(RequestToken, VPath, Result<Vec<Entry>, Error>)>),
+    /// El catálogo de atributos de un esquema, ya resuelto.
+    Catalogo(Box<(String, norte_proto::AttrCatalog)>),
+    /// Una op de agente espera decisión humana.
+    Aprobacion(Box<norte_proto::methods::PolicyApprovalRequired>),
     /// Más entradas del listado que se está drenando por detrás.
     MasEntradas(Box<(RequestToken, u32, Vec<Entry>)>),
     /// Una Task recién encolada, con su progreso y su cancelación.
@@ -174,7 +178,7 @@ impl UiHost {
         estado.leer_sesion(options.backend.as_ref()).await;
         // El primer listado se pide ANTES de publicar nada: el snapshot 0
         // describe una pantalla que ya existe, no una promesa.
-        estado.listar_inicial(options.backend.as_ref(), &tx2).await;
+        estado.listar_inicial(&options.backend, &tx2).await;
         let primero = estado.snapshot();
 
         // Los dos canales de la conexión son del PRIMER dueño, así que se
@@ -186,6 +190,20 @@ impl UiHost {
             tokio::spawn(async move {
                 while let Some(ev) = eventos.recv().await {
                     if buzon.send(Mensaje::Conexion(ev)).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+        if let Some(mut aprobaciones) = options.backend.take_approvals() {
+            let buzon = tx.clone();
+            tokio::spawn(async move {
+                while let Some(req) = aprobaciones.recv().await {
+                    if buzon
+                        .send(Mensaje::Aprobacion(Box::new(req)))
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -283,6 +301,21 @@ async fn actor(
                     let _ = updates.send(u);
                 }
                 let _ = responde.send(ack);
+            }
+            Mensaje::Catalogo(datos) => {
+                let (scheme, catalogo) = *datos;
+                estado.catalogos.insert(scheme, catalogo);
+                // El catálogo cambia cómo se PINTAN las celdas que ya
+                // viajaron, así que se manda una foto: un modo que llegó
+                // como número y ahora es `rwx` no es un parche de fila, es
+                // otra lectura de todo lo que hay.
+                let snap = estado.snapshot();
+                let _ = updates.send(estado.sobre(UiUpdate::Snapshot(snap)));
+            }
+            Mensaje::Aprobacion(req) => {
+                for u in estado.abrir_aprobacion(&req) {
+                    let _ = updates.send(u);
+                }
             }
             Mensaje::Listado(datos) => {
                 let (token, dir, res) = *datos;
@@ -456,6 +489,12 @@ enum Pendiente {
         /// Permanente (sin papelera): el diálogo lo AVISA.
         permanente: bool,
     },
+    /// Decidir sobre una op de agente. La op real la tiene el daemon ligada
+    /// al id: aquí solo viaja el sí o el no.
+    Decidir {
+        /// El id que el daemon espera de vuelta.
+        approval_id: u64,
+    },
     /// Crear un directorio dentro de este otro. El nombre lo teclea el
     /// usuario y se valida al confirmar, no al teclear: corregir un nombre a
     /// medias es peor que verlo rechazado al final.
@@ -500,6 +539,10 @@ struct Estado {
     /// Los ids de atributo que esas columnas piden: se mandan en cada
     /// listado, porque un provider solo entrega lo que se le pide.
     attrs: Vec<String>,
+    /// El catálogo de atributos de la localización de cada hueco, cacheado
+    /// por ESQUEMA: es lo que dice si un `attr:` es un tamaño, una fecha o un
+    /// modo, y sin él se pinta el número crudo.
+    catalogos: std::collections::HashMap<String, norte_proto::AttrCatalog>,
     /// Los huecos con estado, por id.
     huecos: std::collections::BTreeMap<u32, Hueco>,
     /// Los diálogos abiertos, en orden de apertura. Cada uno con su id: un
@@ -596,6 +639,7 @@ impl Estado {
             roles,
             columnas,
             attrs,
+            catalogos: std::collections::HashMap::new(),
             huecos,
             dialogos: Vec::new(),
             siguiente_modal: 1,
@@ -721,7 +765,12 @@ impl Estado {
     ///
     /// Un hueco oculto no se lista: lo que no se ve no se trae, y en cuanto
     /// el reparto lo saque a la luz se pedirá entonces.
-    async fn listar_inicial(&mut self, backend: &dyn HostBackend, buzon: &mpsc::Sender<Mensaje>) {
+    async fn listar_inicial(
+        &mut self,
+        backend_arc: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let backend = backend_arc.as_ref();
         let visibles: Vec<u32> = self
             .huecos
             .keys()
@@ -735,6 +784,7 @@ impl Estado {
             if let Some(h) = self.huecos.get_mut(&id) {
                 h.en_vuelo = Some(token);
             }
+            self.pedir_catalogo(&dir, backend_arc, buzon);
             let stream = backend.list(dir.clone(), self.attrs.clone()).await;
             let res = Self::primera_pagina(stream, id, token, buzon.clone()).await;
             self.aterriza_en(id, dir, res);
@@ -1154,6 +1204,99 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
+    /// Pide el catálogo de atributos de esta localización, si hace falta.
+    ///
+    /// Solo si hay columnas `attr:` configuradas y aún no se tiene el de su
+    /// esquema: preguntar por un catálogo que nadie va a leer es un viaje de
+    /// más en cada `cd`.
+    fn pedir_catalogo(
+        &self,
+        dir: &VPath,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        if self.attrs.is_empty() || self.catalogos.contains_key(dir.scheme()) {
+            return;
+        }
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        let dir = dir.clone();
+        let scheme = dir.scheme().to_owned();
+        tokio::spawn(async move {
+            // Un catálogo que no llega no rompe nada: las celdas se pintan
+            // opacas, que es exactamente lo que se sabe de ellas.
+            if let Ok(catalogo) = backend.attr_catalog(dir).await {
+                let _ = buzon
+                    .send(Mensaje::Catalogo(Box::new((scheme, catalogo))))
+                    .await;
+            }
+        });
+    }
+
+    /// Abre el diálogo de una op de agente que espera decisión.
+    ///
+    /// Las rutas vienen REDACTADAS del servidor y son solo display: jamás se
+    /// reparsean a una operación —la op real va ligada al `approval_id`—, y
+    /// se pintan con el saneado canónico porque las controla quien pidió la
+    /// operación.
+    fn abrir_aprobacion(
+        &mut self,
+        req: &norte_proto::methods::PolicyApprovalRequired,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let mut cuerpo: Vec<String> = Vec::new();
+        cuerpo.push(clamp_display(norte_encoding::mask_terminal_hazards(
+            &req.op,
+        )));
+        for p in req.paths.iter().take(16) {
+            cuerpo.push(clamp_display(norte_encoding::mask_terminal_hazards(p)));
+        }
+        // Si la lista viene RECORTADA hay que decirlo: aprobar creyendo que
+        // son tres rutas cuando son mil es aprobar otra cosa (0.36.0).
+        let total = if req.paths_total == 0 {
+            req.paths.len() as u64
+        } else {
+            req.paths_total
+        };
+        if total > req.paths.len() as u64 {
+            cuerpo.push(clamp_display(norte_i18n::ta(
+                "modal-approval-truncated",
+                &[("total", &total.to_string())],
+            )));
+        }
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: "modal-approval-title".to_owned(),
+            body: cuerpo,
+            choices: vec![
+                DialogChoice {
+                    id: "approve".to_owned(),
+                    label_key: "dialog-approve".to_owned(),
+                    // Aprobar una mutación de un agente ES destructivo: el
+                    // renderer la pinta como tal, y Enter no la dispara sola
+                    // porque no hay respuesta por defecto.
+                    destructive: true,
+                },
+                DialogChoice {
+                    id: "deny".to_owned(),
+                    label_key: "dialog-deny".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: None,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista: vista.clone(),
+            al_confirmar: Some(Pendiente::Decidir {
+                approval_id: req.approval_id,
+            }),
+        });
+        let cambio = ViewChange::Dialogs(self.vistas_de_dialogos());
+        vec![self.parche(vec![cambio])]
+    }
+
     /// Abre el prompt de crear directorio, con su campo de texto vacío.
     fn pedir_mkdir(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let dir = self.hueco().pane.dir().clone();
@@ -1239,7 +1382,11 @@ impl Estado {
         }
         let dialogo = self.dialogos.remove(pos);
         let mut salidas = Vec::new();
-        if choice == "confirm" {
+        // `confirm` es la respuesta afirmativa de los diálogos normales;
+        // `approve`, la de una aprobación. Nombres distintos a propósito: en
+        // una superficie de seguridad, «confirmar» y «aprobar» no deberían
+        // poder confundirse en un renderer.
+        if choice == "confirm" || choice == "approve" {
             match dialogo.al_confirmar {
                 Some(Pendiente::Borrar { paths, permanente }) => {
                     Self::lanzar_borrado(paths, permanente, backend, buzon);
@@ -1271,8 +1418,24 @@ impl Estado {
                         }
                     });
                 }
+                Some(Pendiente::Decidir { approval_id }) => {
+                    // Solo `approve` aprueba. Cualquier otra respuesta —y el
+                    // cierre del diálogo— DENIEGA: una decisión de seguridad
+                    // no tiene respuesta por defecto que diga «sí».
+                    let backend = Arc::clone(backend);
+                    tokio::spawn(async move {
+                        let _ = backend.policy_decide(approval_id, true).await;
+                    });
+                }
                 None => {}
             }
+        } else if let Some(Pendiente::Decidir { approval_id }) = dialogo.al_confirmar {
+            // Denegar explícitamente, y también al cerrar: dejar al agente
+            // esperando una respuesta que no llega es peor que decirle que no.
+            let backend = Arc::clone(backend);
+            tokio::spawn(async move {
+                let _ = backend.policy_decide(approval_id, false).await;
+            });
         }
         let cambio = ViewChange::Dialogs(self.vistas_de_dialogos());
         salidas.push(self.parche(vec![cambio]));
@@ -1558,6 +1721,7 @@ impl Estado {
         let token = RequestToken(self.token);
         self.hueco_mut().en_vuelo = Some(token);
 
+        self.pedir_catalogo(&destino, backend, buzon);
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         let dir = destino.clone();
@@ -1722,6 +1886,11 @@ impl Estado {
         }
     }
 
+    /// El catálogo de la localización de un path, si ya llegó.
+    fn catalogo_de(&self, path: &VPath) -> Option<&norte_proto::AttrCatalog> {
+        self.catalogos.get(path.scheme())
+    }
+
     /// Las celdas de una fila, una por columna configurada.
     ///
     /// Las construye `norte_frontend::columns::styled_cell`, que es la misma
@@ -1743,10 +1912,12 @@ impl Estado {
                         &norte_frontend::columns::plugin_display_id(plugin, column),
                         &e.path,
                     ),
-                    // Sin catálogo de atributos todavía (el host aún no lo
-                    // pide): un attr sin hint se alinea a la izquierda y se
-                    // pinta opaco, que es lo que `default_for_id` decide.
-                    otra => styled_cell(e, otra, ahora, &ColumnStyle::default_for_id(otra, None)),
+                    otra => styled_cell(
+                        e,
+                        otra,
+                        ahora,
+                        &ColumnStyle::default_for_id(otra, self.catalogo_de(&e.path)),
+                    ),
                 };
                 crate::dto::CellView {
                     column: col.to_string(),

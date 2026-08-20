@@ -1451,3 +1451,131 @@ async fn no_se_teclea_en_un_dialogo_de_decision() {
         }
     );
 }
+
+/// Una aprobación de policy abre su diálogo, con las rutas SANEADAS y
+/// diciendo si la lista viene recortada. Aprobar es una decisión de
+/// seguridad: viene marcada como destructiva y no tiene respuesta por
+/// defecto.
+#[tokio::test]
+async fn una_aprobacion_abre_su_dialogo() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let backend = Arc::new(falso);
+    let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = host.subscribe();
+
+    tx.send(norte_proto::methods::PolicyApprovalRequired {
+        approval_id: 5,
+        session: Some("agente-1".to_owned()),
+        op: "delete".to_owned(),
+        // Con un control dentro: el diálogo lo enmascara, jamás lo pinta.
+        paths: vec!["mem:///casa/borra\u{202E}me".to_owned()],
+        paths_total: 40,
+        ttl_ms: 30_000,
+    })
+    .expect("el host escucha");
+
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogos.len(), 1);
+    let d = &dialogos[0];
+    assert!(
+        d.choices.iter().any(|c| c.id == "approve" && c.destructive),
+        "aprobar una op de agente es destructivo y se dice"
+    );
+    assert!(
+        d.body.iter().all(|l| !l.contains('\u{202E}')),
+        "las rutas van enmascaradas: {:?}",
+        d.body
+    );
+    assert!(
+        d.body.len() >= 3,
+        "y se dice que la lista viene recortada: {:?}",
+        d.body
+    );
+}
+
+/// Denegar es lo que pasa por defecto: cualquier respuesta que no sea
+/// aprobar deniega, y cerrar el diálogo también. Dejar al agente esperando
+/// sería peor que decirle que no.
+#[tokio::test]
+async fn cualquier_respuesta_que_no_sea_aprobar_deniega() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let backend = Arc::new(falso);
+    let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = host.subscribe();
+
+    tx.send(norte_proto::methods::PolicyApprovalRequired {
+        approval_id: 9,
+        session: None,
+        op: "copy".to_owned(),
+        paths: vec!["mem:///casa/x".to_owned()],
+        paths_total: 1,
+        ttl_ms: 30_000,
+    })
+    .expect("el host escucha");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+
+    host.dispatch(UiAction::Dialog {
+        id,
+        choice: "deny".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert_eq!(
+        backend.decisiones.lock().expect("decisiones").clone(),
+        vec![(9, false)],
+        "se deniega, y se dice al daemon"
+    );
+}
+
+/// Con catálogo, un `attr:` numérico se pinta como lo que ES: un modo se lee
+/// `rwx`, no `33188`.
+#[tokio::test]
+async fn el_catalogo_da_sentido_a_un_attr() {
+    let falso = arbol_como_falso();
+    *falso.catalogo.lock().expect("catálogo") =
+        norte_proto::AttrCatalog::new(vec![norte_proto::attrs::AttrInfo {
+            id: "posix.mode".to_owned(),
+            label: "modo".to_owned(),
+            ty: norte_proto::attrs::AttrType::Uint,
+            hint: norte_proto::attrs::AttrHint::Mode,
+        }]);
+    let backend = Arc::new(falso);
+    let (host, _snap) = UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        columns: vec![
+            norte_frontend::columns::ColumnId::Builtin(norte_frontend::columns::Builtin::Name),
+            norte_frontend::columns::ColumnId::Attr("posix.mode".to_owned()),
+        ],
+    })
+    .await
+    .expect("arranca");
+
+    // El catálogo llega después del primer listado y trae su propia foto.
+    let mut sub = host.subscribe();
+    let foto = siguiente_foto(&mut sub).await;
+    let fila = listado(&foto)
+        .rows
+        .iter()
+        .find(|r| r.display_name == "notas.txt")
+        .expect("el fichero está");
+    let celda = fila
+        .cells
+        .iter()
+        .find(|c| c.column == "attr:posix.mode")
+        .expect("la celda existe");
+    assert_eq!(
+        celda.text.as_deref(),
+        Some("-rw-r--r--"),
+        "el catálogo convierte el número en un modo legible"
+    );
+}
