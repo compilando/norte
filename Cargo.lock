@@ -4222,6 +4222,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "norte-client"
+version = "0.3.0-alpha.2"
+dependencies = [
+ "base64 0.22.1",
+ "futures",
+ "norte-proto",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "norte-compare"
 version = "0.3.0-alpha.2"
 dependencies = [
@@ -4307,6 +4321,7 @@ dependencies = [
  "libunftp",
  "memchr",
  "norte-ai",
+ "norte-client",
  "norte-compare",
  "norte-config",
  "norte-connect",

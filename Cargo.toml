@@ -10,6 +10,7 @@ members = [
     "crates/norte-vfs-object",
     "crates/norte-vfs-archive",
     "crates/norte-vfs-rar",
+    "crates/norte-client",
     "crates/norte-connect",
     "crates/norte-config",
     "crates/norte-testkit",
@@ -111,6 +112,7 @@ norte-vfs-sftp = { path = "crates/norte-vfs-sftp", version = "0.3.0-alpha.2" }
 norte-vfs-object = { path = "crates/norte-vfs-object", version = "0.3.0-alpha.2" }
 norte-vfs-archive = { path = "crates/norte-vfs-archive", version = "0.3.0-alpha.2" }
 norte-vfs-rar = { path = "crates/norte-vfs-rar", version = "0.3.0-alpha.2" }
+norte-client = { path = "crates/norte-client", version = "0.3.0-alpha.2" }
 norte-connect = { path = "crates/norte-connect", version = "0.3.0-alpha.2" }
 norte-testkit = { path = "crates/norte-testkit", version = "0.3.0-alpha.2" }
 norte-core = { path = "crates/norte-core", version = "0.3.0-alpha.2" }
