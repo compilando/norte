@@ -1,0 +1,160 @@
+{
+  "notice_fatal": {
+    "key": "host-internal-error",
+    "notice": "fatal",
+    "update": "notice"
+  },
+  "notice_message": {
+    "detail": null,
+    "key": "msg-connection-lost",
+    "notice": "message",
+    "update": "notice"
+  },
+  "notice_shutdown": {
+    "incomplete": false,
+    "notice": "shutdown",
+    "update": "notice"
+  },
+  "patch_cursor": {
+    "base_sequence": 11,
+    "changes": [
+      {
+        "change": "cursor",
+        "cursor": 2,
+        "generation": 4,
+        "slot_id": 1
+      }
+    ],
+    "update": "patch"
+  },
+  "patch_rows": {
+    "base_sequence": 12,
+    "changes": [
+      {
+        "change": "rows",
+        "first_visible": 40,
+        "generation": 5,
+        "rows": [
+          {
+            "cells": [
+              {
+                "column": "size",
+                "text": "1.2 KiB"
+              }
+            ],
+            "display_name": "otro.txt",
+            "hostile": false,
+            "key": 41,
+            "kind": "file",
+            "marked": false,
+            "selected": false
+          }
+        ],
+        "slot_id": 1
+      },
+      {
+        "change": "slot_state",
+        "slot_id": 1,
+        "state": {
+          "state": "loading"
+        }
+      }
+    ],
+    "update": "patch"
+  },
+  "snapshot": {
+    "connection": {
+      "state": "connected"
+    },
+    "dialogs": [
+      {
+        "body": [
+          "/home/oscar"
+        ],
+        "choices": [
+          {
+            "destructive": false,
+            "id": "confirm",
+            "label_key": "dialog-confirm"
+          },
+          {
+            "destructive": false,
+            "id": "cancel",
+            "label_key": "dialog-cancel"
+          }
+        ],
+        "id": 3,
+        "input": "",
+        "title_key": "modal-mkdir-title"
+      }
+    ],
+    "focus": 1,
+    "locale": "es",
+    "slots": [
+      {
+        "cursor": 1,
+        "first_visible": 0,
+        "generation": 4,
+        "kind": "browser",
+        "marks": 0,
+        "path_display": "⟨file⟩/home/oscar",
+        "path_hostile": false,
+        "rows": [
+          {
+            "cells": [
+              {
+                "column": "size",
+                "text": "1.2 KiB"
+              }
+            ],
+            "display_name": "notas.txt",
+            "hostile": false,
+            "key": 1,
+            "kind": "file",
+            "marked": false,
+            "selected": false
+          },
+          {
+            "cells": [
+              {
+                "column": "size",
+                "text": "1.2 KiB"
+              }
+            ],
+            "display_name": "caf�.txt",
+            "hostile": true,
+            "key": 2,
+            "kind": "file",
+            "marked": false,
+            "selected": false
+          }
+        ],
+        "slot_id": 1,
+        "state": {
+          "state": "ready"
+        },
+        "total_rows": 2
+      },
+      {
+        "kind": "unsupported",
+        "kind_name": "processes",
+        "slot_id": 2
+      }
+    ],
+    "status": {
+      "banners": [],
+      "message": "2 entradas"
+    },
+    "tasks": [
+      {
+        "detail": "notas.txt",
+        "foreign": false,
+        "kind": "copy",
+        "percent": 40,
+        "state": "running",
+        "task_id": 7
+      }
+    ],
+    "update": "snapshot"
+  }
+}

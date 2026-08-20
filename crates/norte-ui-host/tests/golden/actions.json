@@ -1,0 +1,58 @@
+{
+  "activate": {
+    "action": "activate",
+    "key": 9,
+    "slot_id": 1
+  },
+  "cancel_task": {
+    "action": "cancel_task",
+    "task_id": 42
+  },
+  "dialog": {
+    "action": "dialog",
+    "choice": "confirm",
+    "id": 3
+  },
+  "dialog_input": {
+    "action": "dialog_input",
+    "id": 3,
+    "text": "carpeta nueva"
+  },
+  "focus_slot": {
+    "action": "focus_slot",
+    "slot_id": 2
+  },
+  "history": {
+    "action": "history",
+    "back": true,
+    "slot_id": 1
+  },
+  "move_cursor": {
+    "action": "move_cursor",
+    "delta": -1,
+    "slot_id": 1
+  },
+  "parent": {
+    "action": "parent",
+    "slot_id": 1
+  },
+  "resync": {
+    "action": "resync"
+  },
+  "select_row": {
+    "action": "select_row",
+    "key": 7,
+    "slot_id": 1
+  },
+  "set_visible_range": {
+    "action": "set_visible_range",
+    "count": 40,
+    "first": 100,
+    "slot_id": 1
+  },
+  "toggle_mark": {
+    "action": "toggle_mark",
+    "key": 7,
+    "slot_id": 1
+  }
+}

@@ -1,0 +1,29 @@
+[package]
+name = "norte-ui-host"
+description = "El estado semántico de un frontend gráfico, independiente del toolkit que lo pinte"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Este crate NO conoce renderer alguno: ni Tauri, ni web, ni GPUI, ni ratatui
+# (ADR 0066, decisión D2). Su test de frontera lo vigila igual que el del SDK.
+[dependencies]
+futures.workspace = true
+norte-client.workspace = true
+norte-frontend.workspace = true
+norte-proto.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+norte-testkit.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true
