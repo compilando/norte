@@ -2092,7 +2092,20 @@ The architecture transition is complete only when:
 
 ## First action when this plan is resumed
 
-Do not scaffold Tauri first. Start with **Task 0.1**, validate that the current
-ADRs and protocol version have not moved, refresh the code/line metrics, and
-then execute the `norte-client` extraction. That order is what makes the work
-produce reusable architecture instead of a second GUI-specific bridge.
+> **Superseded 2026-08-20.** Phases 0, 1 and 2 are done (ADR 0065, ADR 0066);
+> `norte-client` and `norte-ui-host` exist, with their dependency boundaries
+> enforced by tests. The instruction below is kept because its REASON still
+> holds for whoever resumes at phase 3: check first, scaffold second.
+
+**Resuming at phase 3:** do not scaffold Tauri first either. Read ADR 0066 and
+this plan's decisions D2, D7, D8 and D11; confirm the host's public surface
+has not moved (`cargo doc -p norte-ui-host`); and only then start Task 3.1.
+The spike exists to answer a question with measurements — Task 3.6 — not to
+produce a window as fast as possible. A vertical slice that looks good and
+starts in three seconds is a NO-GO, and finding that out is the point.
+
+*(Original instruction, now done: start with Task 0.1, validate that the
+current ADRs and protocol version have not moved, refresh the code/line
+metrics, and then execute the `norte-client` extraction. That order is what
+makes the work produce reusable architecture instead of a second GUI-specific
+bridge.)*
