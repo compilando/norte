@@ -705,3 +705,328 @@ impl SearchDialog {
         !self.name.is_empty() || !self.content.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::sort_entries;
+    use crate::app::testutil::*;
+    use norte_proto::{EntryKind, VPath};
+
+    /// `extend_listing` re-ordena TODO el listado (primera página + lote).
+    #[test]
+    fn extend_reordena_todo() {
+        let mut first = vec![file("b.txt"), file("d.txt")];
+        sort_entries(&mut first);
+        let mut p = Pane::new(root(), first);
+        p.set_loading(true);
+        p.extend_listing(vec![file("a.txt"), file("c.txt")]);
+        assert_eq!(names(&p), vec!["a.txt", "b.txt", "c.txt", "d.txt"]);
+    }
+
+    /// El cursor se re-ancla al PATH seleccionado, no al índice: rellenar no
+    /// mueve la selección del usuario bajo sus pies.
+    #[test]
+    fn extend_reancla_el_cursor_por_path() {
+        let mut first = vec![file("m.txt"), file("z.txt")];
+        sort_entries(&mut first);
+        let mut p = Pane::new(root(), first);
+        p.set_cursor(1); // "z.txt"
+        // Llega un lote de nombres que ordenan ANTES: z.txt se desplaza.
+        p.extend_listing(vec![file("a.txt"), file("b.txt")]);
+        assert_eq!(names(&p), vec!["a.txt", "b.txt", "m.txt", "z.txt"]);
+        assert_eq!(
+            p.selected().unwrap().path.file_name().unwrap().as_bytes(),
+            b"z.txt"
+        );
+    }
+
+    /// Un lote vacío no altera nada (fin del drenado sin cola).
+    #[test]
+    fn extend_vacio_es_noop() {
+        let mut p = Pane::new(root(), vec![file("a.txt")]);
+        p.set_cursor(0);
+        p.extend_listing(vec![]);
+        assert_eq!(names(&p), vec!["a.txt"]);
+        assert_eq!(p.cursor(), 0);
+    }
+
+    /// `finish_listing` limpia el flag de carga.
+    #[test]
+    fn finish_limpia_loading() {
+        let mut p = Pane::new(root(), vec![]);
+        p.set_loading(true);
+        p.finish_listing();
+        assert!(!p.loading());
+    }
+
+    /// Filtro activo: `selected()` (la base de F5/F8/F3…) apunta a la
+    /// selección DENTRO del filtro; cancelar restaura el listado completo
+    /// con el cursor real donde estaba (el filtro jamás lo movió).
+    #[test]
+    fn quick_filter_redirige_seleccion_y_ops() {
+        let mut p = pane_con(&["a1", "b", "a2"]);
+        p.quick_start(crate::nav::Mode::Filter);
+        p.quick_char('a');
+        assert_eq!(
+            p.selected().unwrap().path,
+            vp("mem:///a1"),
+            "selected respeta el filtro"
+        );
+        p.quick_down();
+        assert_eq!(p.selected().unwrap().path, vp("mem:///a2"));
+        p.quick_cancel();
+        assert_eq!(
+            p.selected().unwrap().path,
+            vp("mem:///a1"),
+            "restaurado: cursor al último real"
+        );
+    }
+
+    /// Confirmar fija el cursor REAL a lo seleccionado en el filtro y cierra
+    /// (Enter: la op siguiente —cd, view— parte de ese cursor).
+    #[test]
+    fn quick_confirm_fija_el_cursor_real() {
+        let mut p = pane_con(&["a1", "b", "a2"]);
+        p.quick_start(crate::nav::Mode::Filter);
+        p.quick_char('a');
+        p.quick_down();
+        p.quick_confirm();
+        assert!(p.quick().is_none(), "confirmar cierra el quick search");
+        // #54: normalizado, el orden real es [a1, a2, b] — a2 al índice 1.
+        assert_eq!(p.cursor(), 1, "cursor real = índice real de a2");
+        assert_eq!(p.selected().unwrap().path, vp("mem:///a2"));
+    }
+
+    /// Un lote nuevo del fill re-aplica el filtro (spec: al llegar lotes
+    /// nuevos el filtro se re-aplica, no se congela).
+    #[test]
+    fn extend_listing_reaplica_el_filtro() {
+        let mut p = pane_con(&["a1"]);
+        p.quick_start(crate::nav::Mode::Filter);
+        p.quick_char('a');
+        p.extend_listing(vec![file("a2"), file("zz")]);
+        assert_eq!(p.quick_visible().unwrap().len(), 2, "a2 entra, zz no");
+    }
+
+    /// review MAJOR T4: con el filtro SIN matches la pantalla lista vacío —
+    /// Enter jamás debe actuar sobre la entrada del cursor real (invisible
+    /// para el usuario). `quick_confirm` devuelve false y no toca el cursor.
+    #[test]
+    fn enter_sin_matches_no_actua_sobre_entrada_invisible() {
+        let mut p = pane_con(&["a1", "b", "a2"]);
+        p.set_cursor(1);
+        p.quick_start(crate::nav::Mode::Filter);
+        p.quick_char('x'); // cero matches
+        assert!(p.selected().is_none(), "sin matches no hay selección");
+        assert!(
+            !p.quick_confirm(),
+            "confirmar sin matches NO fija selección"
+        );
+        assert!(p.quick().is_none(), "el quick search sí se cierra");
+        assert_eq!(p.cursor(), 1, "el cursor real queda intacto");
+    }
+
+    /// Modo salto: el listado NO cambia; teclear mueve el cursor REAL al
+    /// primer match y Tab (`quick_next`) al siguiente con wrap.
+    #[test]
+    fn quick_jump_mueve_el_cursor_real() {
+        // #54: normalizado, el orden real es [ab, ac, zz] — ab y ac casan.
+        let mut p = pane_con(&["ab", "zz", "ac"]);
+        p.quick_start(crate::nav::Mode::Jump);
+        p.quick_char('a');
+        assert_eq!(p.cursor(), 0, "salta al primer match");
+        assert!(
+            p.quick_visible().is_none(),
+            "en salto el listado queda intacto"
+        );
+        p.quick_next();
+        assert_eq!(p.cursor(), 1, "Tab: siguiente match");
+        p.quick_next();
+        assert_eq!(p.cursor(), 0, "wrap");
+        assert_eq!(p.selected().unwrap().path, vp("mem:///ab"));
+    }
+
+    /// El contrato de `QuickSearch::refresh` (T1) de punta a punta:
+    /// `extend_listing` RE-SORTEA el listado entero, así que la selección
+    /// del filtro se conserva por PATH, jamás por índice.
+    #[test]
+    fn extend_con_resort_conserva_seleccion_por_path() {
+        let mut p = pane_con(&["a1", "a2"]);
+        p.quick_start(crate::nav::Mode::Filter);
+        p.quick_char('a');
+        p.quick_down(); // selecciona a2 (índice real 1)
+        assert_eq!(p.selected().unwrap().path, vp("mem:///a2"));
+        // "a0" ordena ANTES: a2 pasa del índice real 1 al 2 tras el sort.
+        p.extend_listing(vec![file("a0")]);
+        assert_eq!(
+            p.selected().unwrap().path,
+            vp("mem:///a2"),
+            "la selección sigue en el MISMO path tras el resort"
+        );
+    }
+
+    /// Edge de T4 (review): en Jump con query SIN matches el listado se
+    /// pinta ENTERO — el cursor real es visible por definición, así que
+    /// Enter SÍ puede operar sobre él (en Filter sigue siendo `false`).
+    #[test]
+    fn enter_en_jump_sin_matches_opera_sobre_el_cursor_visible() {
+        let mut p = pane_con(&["a1", "b"]);
+        p.set_cursor(1);
+        p.quick_start(crate::nav::Mode::Jump);
+        p.quick_char('x'); // cero matches; el listado no cambió
+        assert!(
+            p.quick_confirm(),
+            "en Jump el cursor real ES visible: Enter opera"
+        );
+        assert!(p.quick().is_none(), "el quick search se cierra");
+        assert_eq!(p.cursor(), 1, "el cursor real queda donde estaba");
+
+        // Con el pane VACÍO ni Jump confirma (no hay nada visible).
+        let mut empty = pane_con(&[]);
+        empty.quick_start(crate::nav::Mode::Jump);
+        assert!(
+            !empty.quick_confirm(),
+            "sin entradas no hay nada que operar"
+        );
+    }
+
+    /// #103 review MAJOR-4: `Pane` delega la API de marcas en `PaneState`
+    /// sin reimplementar nada — pero el set de partida debe ser ASIMÉTRICO
+    /// en cada paso, o `mark_all`/`invert_marks`/`clear_marks` quedan
+    /// indistinguibles entre sí (p. ej. sobre un set vacío, `mark_all` e
+    /// `invert_marks` dan el mismo resultado). Cada aserción de abajo
+    /// falsaría si esa llamada se sustituyera por CUALQUIER otra delegada.
+    #[test]
+    fn pane_delegates_the_mark_api() {
+        let mut p = Pane::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+                e("mem:///c", EntryKind::File),
+            ],
+        );
+        let a = p.entries()[0].clone();
+        let b = p.entries()[1].clone();
+        let c = p.entries()[2].clone();
+
+        // toggle_mark: marca SOLO la entrada bajo el cursor ("a").
+        p.toggle_mark();
+        assert_eq!(p.marks_len(), 1);
+        assert!(p.is_marked(&a) && !p.is_marked(&b) && !p.is_marked(&c));
+
+        // mark_all desde {a}: las TRES, incluida "a" — si esto llamara a
+        // invert_marks en su lugar, "a" se desmarcaría y el total sería 2.
+        p.mark_all();
+        assert_eq!(p.marks_len(), 3);
+        assert!(p.is_marked(&a) && p.is_marked(&b) && p.is_marked(&c));
+
+        // Reset a un set asimétrico de nuevo para poder distinguir invert.
+        p.clear_marks();
+        p.toggle_mark(); // {a}
+
+        // invert_marks desde {a}: exactamente LAS OTRAS DOS — ni el set
+        // vacío que daría clear_marks, ni las tres que daría mark_all.
+        p.invert_marks();
+        assert_eq!(p.marks_len(), 2);
+        assert!(!p.is_marked(&a) && p.is_marked(&b) && p.is_marked(&c));
+
+        // clear_marks desde {b, c}: vacío — invert_marks aquí daría {a}
+        // (marks_len 1), mark_all daría 3.
+        p.clear_marks();
+        assert_eq!(p.marks_len(), 0);
+    }
+
+    /// El dispatch real de `mark.toggle` (main.rs) es una ÚNICA llamada a
+    /// `toggle_mark_and_advance` (#103 review MAJOR-2: la composición
+    /// "marca + avanza" ya no se parte en dos llamadas del dispatch —
+    /// vive entera en el modelo compartido, que decide avanzar dentro del
+    /// filtro o el cursor real; ver
+    /// `norte_frontend::pane::tests::toggle_mark_and_advance_stays_inside_an_active_filter`
+    /// para el caso con filtro). `dispatch` en sí no es testeable aquí sin
+    /// un daemon real (pide `&Backend`/`&mut EventStream`), así que este
+    /// test pinea la misma llamada al nivel de `Pane`: marca Y avanza, y en
+    /// la última fila no envuelve.
+    #[test]
+    fn mark_toggle_advances_without_wrapping_at_the_end() {
+        let mut p = Pane::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+            ],
+        );
+        let a = p.entries()[0].clone();
+        let b = p.entries()[1].clone();
+        assert_eq!(p.cursor(), 0);
+
+        p.toggle_mark_and_advance();
+        assert_eq!(p.marks_len(), 1);
+        assert!(p.is_marked(&a), "la fila 0 quedó marcada");
+        assert_eq!(p.cursor(), 1, "el cursor avanzó tras marcar");
+
+        // Última fila: togglear + avanzar NO debe envolver a 0.
+        p.toggle_mark_and_advance();
+        assert_eq!(p.marks_len(), 2);
+        assert!(p.is_marked(&b), "la fila 1 (última) también quedó marcada");
+        assert_eq!(p.cursor(), 1, "clampado en la última fila, no envuelve");
+    }
+
+    /// #107 review MAJOR-1: los hits de una búsqueda son EXPLÍCITOS — el
+    /// pane virtual suspende el filtro de ocultos. Con `[ui] show_hidden =
+    /// false`, buscar "env" DEBE enseñar `.env`: tragárselo en silencio
+    /// (mientras el contador de hits decía 1 sobre un pane vacío) era el
+    /// bug. Al volver a un listado real, la preferencia vuelve a mandar.
+    #[test]
+    fn el_pane_virtual_de_busqueda_ensena_hits_ocultos() {
+        let mut p = Pane::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///.env", EntryKind::File),
+                e("mem:///a", EntryKind::File),
+            ],
+        );
+        p.set_show_hidden(false); // seed de config: ocultar
+        assert_eq!(p.entries().len(), 1, "el listado real filtra");
+
+        p.begin_search(VPath::parse("mem:///").unwrap());
+        p.extend_listing(vec![e("mem:///sub/.env", EntryKind::File)]);
+        assert_eq!(
+            p.entries().len(),
+            1,
+            "el hit oculto ES visible en el pane virtual"
+        );
+
+        // Ctrl+H dentro del pane virtual filtra los RESULTADOS…
+        p.toggle_hidden();
+        assert_eq!(p.entries().len(), 0);
+
+        // …pero NO toca la preferencia: el listado real vuelve filtrando
+        // (y un toggle en el real sí la cambia).
+        p.set_listing(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///.env", EntryKind::File),
+                e("mem:///a", EntryKind::File),
+            ],
+        );
+        assert_eq!(p.entries().len(), 1, "la preferencia (ocultar) manda");
+        p.toggle_hidden();
+        assert_eq!(p.entries().len(), 2, "toggle real: mostrar");
+        p.begin_listing(
+            VPath::parse("mem:///sub").unwrap(),
+            vec![
+                e("mem:///sub/.git", EntryKind::Dir),
+                e("mem:///sub/x", EntryKind::File),
+            ],
+            false,
+            None,
+        );
+        assert_eq!(
+            p.entries().len(),
+            2,
+            "begin_listing respeta la preferencia nueva (mostrar)"
+        );
+    }
+}
