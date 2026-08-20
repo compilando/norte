@@ -1,0 +1,12 @@
+{
+  "shutdown": {
+    "bridge_version": 1,
+    "instance_id": "host-1",
+    "payload": {
+      "incomplete": true,
+      "notice": "shutdown",
+      "update": "notice"
+    },
+    "sequence": 0
+  }
+}

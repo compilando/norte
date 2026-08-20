@@ -4572,6 +4572,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "norte-ui-host"
+version = "0.3.0-alpha.2"
+dependencies = [
+ "norte-client",
+ "norte-frontend",
+ "norte-proto",
+ "norte-testkit",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "norte-vfs"
 version = "0.3.0-alpha.2"
 dependencies = [

@@ -1,0 +1,22 @@
+{
+  "applied": {
+    "sequence": 12,
+    "status": "applied"
+  },
+  "stale_generation": {
+    "reason": "generation",
+    "status": "stale"
+  },
+  "stale_instance": {
+    "reason": "instance",
+    "status": "stale"
+  },
+  "stale_modal": {
+    "reason": "modal",
+    "status": "stale"
+  },
+  "unavailable": {
+    "reason_key": "cmd-unavailable-read-only",
+    "status": "unavailable"
+  }
+}
