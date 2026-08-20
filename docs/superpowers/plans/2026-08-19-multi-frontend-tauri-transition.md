@@ -959,7 +959,9 @@ Acceptance:
 
 ## Phase 2 — Build the toolkit-independent `norte-ui-host`
 
-> **Tasks 2.1, 2.2 and the core of 2.3, 2.4, 2.5 and 2.6 DONE 2026-08-20.** The crate exists with `bridge.rs`
+> **Phase 2 DONE 2026-08-20** in the sense its exit gate asks for: tasks 2.1,
+> 2.2 and 2.7 complete, and the core of 2.3–2.6 with the rest written down
+> below as owed. The crate exists with `bridge.rs`
 > (envelope, `BRIDGE_VERSION`, opaque `RowKey`/`ModalId`/`RequestToken`, caps),
 > `dto.rs` (renderer-safe views; no raw path crosses), `action.rs` (semantic
 > actions) and `controller.rs` (bounded inbox, one writer, broadcast
@@ -1027,7 +1029,22 @@ Acceptance:
 > degradation notices, policy approvals, journal status, quit confirmation,
 > and dialogs with a text field (they need the mutations that open them).
 >
-> **Next: task 2.7** (headless parity harness).
+> **Task 2.7, done:** `tests/parity.rs` runs each scenario twice — against
+> `PaneState` + `History` directly and against the host's actions and
+> snapshots — and compares semantic state step by step, so "the host does not
+> reimplement the rules" is a test and not a comment. `tests/daemon_e2e.rs`
+> drives the host against a REAL daemon over a temp socket: initial listing,
+> navigation with the trail, and the session written at shutdown and read
+> back by the host's next life. No display, no Node.
+>
+> **Phase 2 exit gate:** host tests run without display and without Node ✔;
+> navigation/session scenarios work against a real daemon ✔; no Tauri types
+> in the graph ✔ (boundary test); the host serializes bounded windowed views
+> ✔ (40 of 100.000 rows); hostile corpus and session round-trip ✔; the TUI
+> is green and unchanged ✔ (the GPUI frontend no longer exists, ADR 0065).
+>
+> **Next: phase 3** — the Tauri vertical-slice spike and its go/no-go. That is
+> the first time a renderer appears at all.
 
 Implement one vertical feature at a time. The host should be useful to a
 headless test before Tauri exists.
