@@ -54,7 +54,7 @@ impl App {
 
     /// Cancela `Modal::MarkPattern` SIN marcar nada — el equivalente de un
     /// `DialogOutcome::Cancelled` para ESTE modal de texto libre (#103 T9),
-    /// que no pasa por el ALLOWLIST de [`dialog_action`] y por tanto no
+    /// que no pasa por el ALLOWLIST de [`super::dialog_action`] y por tanto no
     /// tiene su propio Esc en `on_dialog_key`. Abre la siguiente pendiente
     /// en cola, misma disciplina que cerrar cualquier otro modal (jamás
     /// pisar una aprobación/colisión que llegó mientras este estaba

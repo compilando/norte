@@ -70,7 +70,7 @@ impl App {
     }
 
     /// Abre el popup de volúmenes (`pane.select-drive`/`-left`/`-right`,
-    /// design §D) con `items` YA construidos por [`volume_items`] — `main.rs`
+    /// design §D) con `items` YA construidos por [`super::nav_popup::volume_items`] — `main.rs`
     /// hace el fetch async contra `Backend::volumes` y llama aquí, mismo
     /// reparto que el resto de este popup: main.rs es I/O, app.rs es estado y
     /// presentación.

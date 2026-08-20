@@ -97,14 +97,6 @@ pub fn parse_size(s: &str) -> Option<u64> {
 /// baste.
 pub use norte_frontend::compare::{CompareState, CompareView};
 
-/// Las dos raíces de una sincronización y cómo se leen sus nombres.
-///
-/// Vive en [`norte_frontend::sync`] desde #161, con la función que las decide:
-/// la GUI llegó a tener la MISMA regla escrita a mano (su brazo «el pane con
-/// foco es el origen»), y dos copias de «qué árbol se sobrescribe» es la clase
-/// de divergencia que produce un plan perfectamente plausible sobre el árbol
-/// equivocado.
-
 /// El estado del run (`SyncRunState`) y el panel abierto (`SyncView`) viven en
 /// [`norte_frontend::sync`] (#161, el mismo argumento que ya llevó
 /// [`CompareView`] allí): la GUI necesita exactamente este envoltorio del run

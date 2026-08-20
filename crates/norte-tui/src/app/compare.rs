@@ -3,6 +3,13 @@
 //! hidrata la fila seleccionada del panel de diferencias (#157).
 
 use super::{App, CompareView};
+/// Las dos raíces de una sincronización y cómo se leen sus nombres.
+///
+/// Vive en [`norte_frontend::sync`] desde #161, con la función que las decide:
+/// la GUI llegó a tener la MISMA regla escrita a mano (su brazo «el pane con
+/// foco es el origen»), y dos copias de «qué árbol se sobrescribe» es la clase
+/// de divergencia que produce un plan perfectamente plausible sobre el árbol
+/// equivocado.
 use norte_frontend::sync::SyncRoots;
 use norte_i18n::t;
 use norte_proto::{EntryKind, VPath};

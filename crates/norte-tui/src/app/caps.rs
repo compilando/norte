@@ -160,7 +160,7 @@ impl App {
     ///
     /// Both halves of one snapshot, so they cannot disagree: the sidebar offers
     /// a page for every plugin with a `help.md`
-    /// ([`HelpView::set_plugins`]), and the resolver dims the command rows of
+    /// ([`super::HelpView::set_plugins`]), and the resolver dims the command rows of
     /// the ones that are not approved-and-enabled
     /// ([`crate::help::TuiChords::with_plugins`]).
     ///
@@ -175,7 +175,7 @@ impl App {
     /// exactly as `with_facts` carries the plugins across — so the re-freeze the
     /// refresh funnel performs mid-overlay cannot drop either half.
     pub fn freeze_help_plugins(&mut self, plugins: &[norte_proto::methods::PluginInfo]) {
-        // The id gate of [`HelpView::set_plugins`], applied to the resolver's
+        // The id gate of [`super::HelpView::set_plugins`], applied to the resolver's
         // half of the snapshot as well, so no structure the help owns can hold
         // an id the host had no business announcing. `set_plugins` re-applies it
         // rather than trusting this: it is public and exercised directly by
