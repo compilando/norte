@@ -326,7 +326,7 @@ pub struct SyncView {
     /// Raíz ORIGEN. De ella cuelgan las `rel` de casi todos los pasos.
     pub source_root: VPath,
     /// Raíz DESTINO. De ella cuelgan las de un `DeleteTree` y las de un `Skip`
-    /// ilegible ([`anchor_of`]).
+    /// ilegible ([`crate::sync::anchor_of`]).
     pub dest_root: VPath,
     /// Reinterpretación de nombres (#57) del pane ORIGEN, congelada al abrir.
     pub source_encoding: Option<norte_encoding::NameEncoding>,
@@ -416,7 +416,7 @@ impl SyncView {
     }
 
     /// Las dos reinterpretaciones, juntas y nombradas, para pasárselas a
-    /// [`render_step`] de una pieza — que es lo que evita cruzarlas (#152).
+    /// [`crate::sync::render_step`] de una pieza — que es lo que evita cruzarlas (#152).
     #[must_use]
     pub fn encodings(&self) -> SyncEncodings {
         SyncEncodings {

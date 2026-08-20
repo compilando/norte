@@ -11,7 +11,7 @@ use norte_proto::methods::{
 
 use super::{IncludeError, RelAnchor, StepUndo};
 
-/// The sentence for a refusal from [`include_from_rows`].
+/// The sentence for a refusal from [`crate::sync::include_from_rows`].
 ///
 /// Here and not in a frontend because BOTH have to say it: the terminal grew
 /// the marks first and kept this translation to itself, and when the graphical
@@ -178,14 +178,14 @@ pub fn anchor_label(anchor: RelAnchor, lang: Lang) -> Option<String> {
     }
 }
 
-/// The reader's parenthetical for [`StepCells::dest_rel_twin`] /
-/// [`FailureCells::dest_rel_twin`] (#192), shaped exactly like
+/// The reader's parenthetical for [`crate::sync::StepCells::dest_rel_twin`] /
+/// [`crate::sync::FailureCells::dest_rel_twin`] (#192), shaped exactly like
 /// [`anchor_label`] so a painter drops it in the same way: `None` when there
 /// is nothing to say, `Some` otherwise.
 ///
 /// A hostile badge would be a LIE about the name — `café.txt` (NFC) and
 /// `café.txt` (NFD) are both valid UTF-8 and neither is hostile — so this is
-/// a separate sentence, never a badge folded into [`RelDisplay::hostile`].
+/// a separate sentence, never a badge folded into [`crate::sync::RelDisplay::hostile`].
 ///
 /// ```
 /// use norte_frontend::sync::dest_twin_label;
@@ -258,7 +258,7 @@ pub fn failure_cause_label(cause: SyncFailureCause, lang: Lang) -> String {
 
 /// What the destination's trash means for the human, in words.
 ///
-/// [`UndoOutlook`] answers "does the undo give it back", and for both bad
+/// [`crate::sync::UndoOutlook`] answers "does the undo give it back", and for both bad
 /// trashes that answer is no — but they are not the same situation and a
 /// dialog must not print one sentence for both: with a [`DestTrash::Opaque`]
 /// trash (macOS, Windows) what was replaced is sitting in the system trash and

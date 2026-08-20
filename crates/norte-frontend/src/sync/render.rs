@@ -39,8 +39,8 @@ impl SyncEncodings {
     ///
     /// Es la mitad del #152 que no estaba escrita en ninguna parte: la
     /// ortografía del destino se leía con la del destino (eso ya lo hacía cada
-    /// frontend a mano), pero el `rel` de un [`SyncStepKind::DeleteTree`]
-    /// —que cuelga del DESTINO, ver [`anchor_of`]— se leía con la del ORIGEN.
+    /// frontend a mano), pero el `rel` de un [`norte_proto::methods::SyncStepKind::DeleteTree`]
+    /// —que cuelga del DESTINO, ver [`crate::sync::anchor_of`]— se leía con la del ORIGEN.
     /// Con dos panes con overrides distintos, eso nombra el subárbol que se va
     /// a borrar con el codepage del árbol que NO se toca, en la pantalla donde
     /// se aprueba borrarlo.
@@ -59,8 +59,8 @@ impl SyncEncodings {
     ///   leído con el codepage del otro lado llega marcado como «este texto no
     ///   son los bytes» a las dos superficies;
     /// * **para un PASO**, el único camino destructivo hasta `Either` es un
-    ///   [`SyncStepKind::Unknown`] ([`anchor_of`]), y un solo paso así deja el
-    ///   plan en [`PlanIntegrity::Unnameable`], que no se puede aprobar. Lo
+    ///   [`norte_proto::methods::SyncStepKind::Unknown`] ([`crate::sync::anchor_of`]), y un solo paso así deja el
+    ///   plan en [`crate::sync::PlanIntegrity::Unnameable`], que no se puede aprobar. Lo
     ///   que queda bajo `Either` es un `Skip`, que no escribe nada.
     ///
     /// **Ese segundo punto NO vale para un FALLO del informe**
@@ -134,7 +134,7 @@ pub struct StepCells {
     /// `char`, `'e' + '\u{301}'` is two), valid UTF-8 on both sides so
     /// neither half is `hostile`, and rendered to the SAME glyph by any font
     /// that composes combining marks. Nothing else says the pane is not just
-    /// repeating itself (#192). See [`dest_twin_label`].
+    /// repeating itself (#192). See [`crate::sync::dest_twin_label`].
     pub dest_rel_twin: bool,
     /// Bytes the step moves, when the provider said.
     pub size: Option<u64>,
@@ -262,11 +262,11 @@ pub struct FailureCells {
 ///   ancla (#152): existe precisamente para nombrar el fichero de allí.
 ///
 /// # El ancla de un fallo casi nunca consta, y entonces es `Either`
-/// [`SyncStep::rel`] es «casi siempre» del origen y [`anchor_of`] usa la CLASE
+/// [`SyncStep::rel`] es «casi siempre» del origen y [`crate::sync::anchor_of`] usa la CLASE
 /// del paso para saber cuándo no lo es —un `DeleteTree` habla del destino—.
 /// Un [`norte_proto::methods::SyncFailure`] no lleva clase: el informe se lee
 /// sin el plan delante. Queda UNA prueba, y es la misma que usa
-/// [`anchor_of`]: si el informe manda `dest_rel`, entonces `rel` es la mitad
+/// [`crate::sync::anchor_of`]: si el informe manda `dest_rel`, entonces `rel` es la mitad
 /// del ORIGEN de la pareja (misma regla y mismo campo, ver
 /// [`norte_proto::methods::SyncFailure::dest_rel`]). Sin `dest_rel` no se
 /// sabe, y decir «origen» sería justo lo que [`RelAnchor::Either`] existe
@@ -289,7 +289,7 @@ pub struct FailureCells {
 /// (#195 lo puso en el wire, #208 lo consume):
 /// [`norte_proto::methods::SyncFailure::kind`] lleva la clase que el core tenía
 /// en la mano y tiraba, así que un `DeleteTree` que falló ya se puede anclar en
-/// el DESTINO con la misma regla que [`anchor_of`] aplica a un paso, en vez de
+/// el DESTINO con la misma regla que [`crate::sync::anchor_of`] aplica a un paso, en vez de
 /// caer en `Either`. Cambiar lo que este módulo devuelve cambia lo que dos
 /// frontends pintan, así que no viaja en el bump del wire.
 ///

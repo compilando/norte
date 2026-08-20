@@ -241,7 +241,7 @@ pub const PLAN_STEPS_RETAINED_MAX: usize = 20_000;
 /// A plan being received: the steps so far, and what they add up to.
 ///
 /// The counters are summed with [`SyncCounts::add`] — the same function the
-/// daemon used — so the comparison in [`SyncState::on_plan_done`] is between
+/// daemon used — so the comparison in [`crate::sync::SyncState::on_plan_done`] is between
 /// two numbers produced by one rule, not by two.
 #[derive(Debug, Clone, Default)]
 pub struct Planning {
@@ -283,7 +283,7 @@ impl Planning {
     /// Does a notification for `task_id` belong to this plan?
     ///
     /// A [`Planning`] with no task accepts everything — that is the
-    /// constructed-plan door ([`SyncState::ready`] and tests), where the
+    /// constructed-plan door ([`crate::sync::SyncState::ready`] and tests), where the
     /// caller already did the correlating. One WITH a task accepts only its
     /// own, which is what stops a second plan's steps from being appended to
     /// the first plan's list.

@@ -59,7 +59,7 @@ pub fn anchor_of(step: &SyncStep) -> RelAnchor {
 }
 
 /// The rule itself, stated ONCE (#208): [`anchor_of`] answers it for a step and
-/// [`render_failure`] for a failure row, and since 0.42.0 both have the same
+/// [`crate::sync::render_failure`] for a failure row, and since 0.42.0 both have the same
 /// input — the class.
 ///
 /// Before that bump a failure row carried no class, so `render_failure` had to
@@ -100,7 +100,7 @@ pub(super) fn anchor_for(
 }
 
 /// Which root a [`SyncBlocker`]'s `rel` hangs from — the third member of the
-/// family [`anchor_of`] and [`render_failure`] already form (#189).
+/// family [`anchor_of`] and [`crate::sync::render_failure`] already form (#189).
 ///
 /// [`SyncBlocker::side`] is normative when it is present: the wire's
 /// convention is [`Side::Left`] for the source and [`Side::Right`] for the

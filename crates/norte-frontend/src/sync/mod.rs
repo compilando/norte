@@ -18,7 +18,7 @@
 //! which reverts entirely and one of which reverts nothing.
 //!
 //! What separates them is [`DestTrash`], which is why it travels on
-//! [`SyncPlanDone`] and why every claim this module makes is a function of the
+//! [`norte_proto::methods::SyncPlanDone`] and why every claim this module makes is a function of the
 //! PAIR `(step, dest_trash)`:
 //!
 //! | destination | what this model says |
@@ -36,7 +36,7 @@
 //! # Two more things this model refuses to assume
 //!
 //! * **The steps that arrived are cross-checked against
-//!   [`SyncPlanDone::counts`]**, not trusted. The feed closes on a dropped
+//!   [`norte_proto::methods::SyncPlanDone::counts`]**, not trusted. The feed closes on a dropped
 //!   batch (task 10), but a model that can count should count: a plan whose
 //!   steps do not add up to what the daemon closed with cannot be approved.
 //! * **[`SyncStep::rel`] is not always relative to the source root.** A
