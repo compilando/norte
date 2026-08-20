@@ -1058,10 +1058,19 @@ Acceptance:
 >   painted AND said, and a task another client started shows in the board
 >   marked as foreign.
 >
-> Still owed from phase 2: columns and the attr catalogue, watcher refresh,
-> the which-key panel and menu/palette/shortcuts views, the periodic
-> coalesced `session.put`, ownership acquired later, policy approvals, and
-> dialogs with a text field.
+> - **Columns.** The configured set travels as cells built by
+>   `norte_frontend::columns::styled_cell` — the same function the TUI uses —
+>   and the attr ids those columns need ride along with every listing, because
+>   a provider only sends what it is asked for. Absence travels as absence.
+> - **Dialogs with a text field.** `pane.mkdir` opens one; the renderer sends
+>   the whole text after each edit (the caret is its own) and confirming
+>   validates the name with the same rule as any other segment before queuing
+>   anything.
+>
+> Still owed from phase 2: the attr CATALOGUE (styles fall back to opaque
+> defaults), watcher refresh, the which-key panel and menu/palette/shortcuts
+> views, the periodic coalesced `session.put`, ownership acquired later, and
+> policy approvals.
 >
 > **Next: phase 3** — the Tauri vertical-slice spike and its go/no-go. That is
 > the first time a renderer appears at all.
