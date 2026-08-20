@@ -26,17 +26,17 @@ use crate::dispatch::dispatch;
 use crate::fill::{Fill, apply_fill_msg};
 use crate::gestures::{keyboard_owner, launch_opener, submit_command_line};
 use crate::jobs::{
-    CompareRun, SearchRun, SyncRun, SyncTick, drain_compare, drain_search, drain_sync_plan,
-    harvest_sync_apply, launch_compare, launch_search, launch_sync_apply, launch_sync_plan,
-    on_compare_key, on_search_dialog_key, on_search_enter, on_search_escape, on_sync_key,
+    AiRenameRun, InFlight, PendingAiPlan, RenameBatchRun, SearchRun, SemanticRun, SyncTick,
+    drain_compare, drain_search, drain_sync_plan, harvest_sync_apply, launch_compare,
+    launch_search, launch_sync_apply, launch_sync_plan, on_compare_key, on_search_dialog_key,
+    on_search_enter, on_search_escape, on_sync_key,
 };
 use crate::keymap::{
     Command, Count, Resolution, Resolver, chord_from_crossterm, count_ignored_message,
     parse_plugin_key, unavailable_message,
 };
 use crate::lua::{
-    CommandRun, RunOutcome, load_lua, refresh_lua_status, resolve_lua_trust, run_lua_command,
-    start_lua_run,
+    RunOutcome, load_lua, refresh_lua_status, resolve_lua_trust, run_lua_command, start_lua_run,
 };
 use crate::mouse;
 use crate::mutations::{on_dialog_key, submit_transfer};
@@ -48,8 +48,8 @@ use crate::overlays::{
 };
 use crate::paste::route_paste;
 use crate::probes::{
-    CompareStatProbe, DecorateFetch, PreviewFetch, Probed, STAT_BATCH_MAX, STAT_WINDOW_RADIUS,
-    StatProbe, spawn_compare_stat_probe, spawn_preview_fetch, spawn_stat_probe,
+    DecorateFetch, Probed, STAT_BATCH_MAX, STAT_WINDOW_RADIUS, spawn_compare_stat_probe,
+    spawn_preview_fetch, spawn_stat_probe,
 };
 use crate::refresh::{after_panes_refresh, on_tick, reap_search_run, refresh_panes};
 use crate::screens::{
@@ -76,9 +76,7 @@ use norte_core::backend::{Backend, ConnEvent};
 use norte_frontend::SEMANTIC_K;
 use norte_frontend::layout::BySlot;
 use norte_i18n::{t, ta};
-use norte_proto::{Error, VPath};
-use std::collections::VecDeque;
-use tokio_util::sync::CancellationToken;
+use norte_proto::VPath;
 
 /// Lo que aborta el bucle de eventos.
 #[derive(Debug, thiserror::Error)]
@@ -91,53 +89,6 @@ pub enum RunError {
     /// para no perder la última foto de la sesión.
     #[error("evento de terminal: {0}")]
     Event(#[source] std::io::Error),
-}
-
-/// Petición `ai.rename_plan` EN VUELO (M4-IA). Abortar el `JoinHandle`
-/// cancela (regla 3): el abort dropea el future del backend en el runtime →
-/// `CancelOnAbandon` envía `rpc.cancel` (remoto) / el timeout+drop aborta el
-/// stream (embebido). OJO: DROPEAR el handle solo DESVINCULA la task de
-/// tokio — cancelar exige `abort()` explícito.
-struct AiRenameRun {
-    /// La llamada al modelo, spawneada (es la única llamada larga del loop).
-    handle: tokio::task::JoinHandle<Result<norte_proto::methods::AiRenamePlanResult, Error>>,
-    /// Dir del pane al LANZAR; el plan se aplica AQUÍ aunque el usuario
-    /// navegue mientras el modelo piensa.
-    dir: VPath,
-}
-
-/// Un plan IA YA cosechado que espera a que se cierre el modal de turno
-/// (M4-IA). Lleva el estado del plan del LOTE (§17), que se pide en cuanto
-/// llega el plan IA: sin él, el modal abriría sin hash aprobado y confirmar
-/// quedaría mudo hasta un segundo viaje que nadie dispara.
-struct PendingAiPlan {
-    /// Dir del pane al LANZAR (donde aterriza el lote).
-    dir: VPath,
-    /// Parejas from→to del modelo.
-    entries: Vec<norte_proto::methods::AiRenameEntry>,
-    /// Veredicto del lote: en vuelo, resuelto, o fallido.
-    plan: norte_frontend::BatchPlan,
-}
-
-/// Petición `fs.rename_batch_plan` EN VUELO (§17). Spawneada por el mismo
-/// motivo que [`AiRenameRun`]: es un `fs.list` del dir entero contra el
-/// provider que toque, y esperarla dentro del `select!` dejaría el loop sin
-/// dibujar, sin leer teclas y sin poder cancelar. A lo sumo una — el prompt
-/// del rename IA no abre sobre otro modal, así que no hay dos planes IA
-/// vivos a la vez que pudieran pisarse.
-struct RenameBatchRun {
-    /// La llamada al core, spawneada.
-    handle: tokio::task::JoinHandle<Result<norte_proto::methods::FsRenameBatchPlanResult, Error>>,
-}
-
-/// Petición `index.search_semantic` EN VUELO (M4-IA-2). Mismo contrato de
-/// cancelación que [`AiRenameRun`] (regla 3): `abort()` dropea el future del
-/// backend → `rpc.cancel` (remoto) / drop (embebido); DROPEAR el handle solo
-/// desvincula. Sin dir capturado: la consulta va contra TODOS los roots del
-/// índice (`root = None`), navegar mientras piensa no la invalida.
-struct SemanticRun {
-    /// La llamada al índice+modelo, spawneada.
-    handle: tokio::task::JoinHandle<Result<Vec<norte_proto::methods::SemanticHit>, Error>>,
 }
 
 /// La frase TRADUCIDA de «esta sesión no queda registrada» (#167/#177).
@@ -318,58 +269,41 @@ pub async fn run(
     // Listados paginados rellenándose en background (ADR 0017): un hueco POR
     // PANE — los dos panes pueden estar paginando a la vez, y con un hueco
     // global el cd de uno mataba el drenador del otro (ver [`Fill`]).
-    let mut fill: BySlot<Fill> = BySlot::new();
-    // Por dónde sigue el barrido de `fill` (ver el brazo del `select!`).
-    let mut fill_cursor: usize = 0;
+    // Por dónde sigue el barrido de `work.fill` (ver el brazo del `select!`).
     // Búsqueda viva en curso (liveSearch T6): a lo sumo una (el pane virtual
     // es uno). Molde `Fill`: se drena en el select y se suelta al salir.
-    let mut search_run: Option<SearchRun> = None;
     // Comparación de directorios en curso (`Shift+F2`): a lo sumo una — el
-    // panel de diferencias es uno. Mismo molde que `search_run`.
-    let mut compare_run: Option<CompareRun> = None;
+    // panel de diferencias es uno. Mismo molde que `work.search`.
     // Sincronización en curso (`Ctrl+Y`): a lo sumo una — el panel es uno, y
     // aprobar un plan mientras otro se aplica sería aprobar a ciegas.
-    let mut sync_run: Option<SyncRun> = None;
     // Petición ai.rename_plan en vuelo (M4-IA): a lo sumo una — relanzar
     // aborta la anterior. Se cosecha en el select y Esc (BROWSE) la cancela.
-    let mut ai_rename_run: Option<AiRenameRun> = None;
     // Plan IA listo llegado con OTRO modal abierto: se RETIENE aquí (la cola
     // de `App` es específica de aprobaciones) y se abre en cuanto no haya
     // modal — jamás pisar (disciplina `open_next_pending`).
-    let mut pending_ai_plan: Option<PendingAiPlan> = None;
     // Petición fs.rename_batch_plan en vuelo (§17): a lo sumo una, cosechada
-    // en el select como `ai_rename_run`.
-    let mut rename_batch_run: Option<RenameBatchRun> = None;
-    // Búsqueda semántica en vuelo (M4-IA-2): mismo molde que `ai_rename_run`
+    // en el select como `work.ai_rename`.
+    // Búsqueda semántica en vuelo (M4-IA-2): mismo molde que `work.ai_rename`
     // — a lo sumo una, relanzar aborta la anterior, Esc (BROWSE) cancela.
-    let mut semantic_run: Option<SemanticRun> = None;
     // Hits listos llegados con OTRO modal abierto: se RETIENEN aquí y se
-    // abren en cuanto no haya modal (disciplina `pending_ai_plan`).
-    let mut pending_semantic: Option<Vec<norte_proto::methods::SemanticHit>> = None;
+    // abren en cuanto no haya modal (disciplina `work.pending_ai_plan`).
     // Scripting Lua (M4, ADR 0026): host por capas con trust TOFU. Como
-    // `fill`, el estado vive en el run loop. El run en vuelo (a lo sumo UNO:
+    // `work.fill`, el estado vive en el run loop. El run en vuelo (a lo sumo UNO:
     // el estado Lua es uno) se pollea inline en el select — `CommandRun` es
     // !Send y este future corre en block_on, jamás en spawn.
     let mut lua_host = load_lua(app, &layers).await;
-    let mut lua_run: Option<(CommandRun, CancellationToken)> = None;
-    let mut lua_queue: VecDeque<String> = VecDeque::new();
     // Sonda de stat on-focus (#52, listado lazy): a lo sumo una en vuelo,
     // dedup por (pane, path) — dos panes sobre el MISMO dir deben hidratar
     // cada uno la suya (no reintenta un stat fallido hasta cambiar
     // selección).
-    let mut stat_probe: Option<StatProbe> = None;
-    let mut last_probed: Probed = Probed::new();
     // Sonda de stat de la fila SELECCIONADA del panel de diferencias (#157):
-    // mismo molde que `stat_probe`, a lo sumo una en vuelo. El dedup vive en
+    // mismo molde que `work.stat`, a lo sumo una en vuelo. El dedup vive en
     // `App::compare_size_probed` y no en una variable local del run loop
-    // (a diferencia de `last_probed`) porque `App::compare_size_probe_targets`
+    // (a diferencia de `work.probed`) porque `App::compare_size_probe_targets`
     // ya lo consulta para decidir qué falta por pedir.
-    let mut compare_stat_probe: Option<CompareStatProbe> = None;
     // Fetch de decoraciones de plugin en vuelo (G3b, ADR 0037): a lo sumo
-    // uno, molde de `stat_probe`/`fill`.
-    let mut decorate_fetch: BySlot<DecorateFetch> = BySlot::new();
+    // uno, molde de `work.stat`/`work.fill`.
     // L3: una lectura de preview en vuelo por hueco, superseded al moverse.
-    let mut preview_fetch: BySlot<PreviewFetch> = BySlot::new();
     // #106 (watching): vigilancia de los dirs visibles — notify con
     // fallback a sondeo (pitfall inotify). El conjunto vigilado se
     // re-sincroniza en CADA vuelta (diff barato, no-op sin cambios).
@@ -377,6 +311,9 @@ pub async fn run(
     // watch()/unwatch() de rewatch son syscalls cortas inline (mismo
     // criterio documentado que el draw síncrono de ratatui más abajo);
     // solo corren al arrancar o al CAMBIAR de dir.
+    // Todo lo que este bucle deja pedido y aún no ha cosechado (ver
+    // [`InFlight`]): rellenos, sondas y los trabajos de fondo.
+    let mut work = InFlight::default();
     let mut dir_watch = norte_frontend::watch::DirWatch::new();
     let mut dir_watch_alive = true;
     loop {
@@ -398,7 +335,7 @@ pub async fn run(
         // por la misma razón: los brazos que responden teclas tienen sus
         // propios `continue`.
         if let Some(params) = app.pending_compare.take() {
-            launch_compare(app, backend, &mut compare_run, params).await;
+            launch_compare(app, backend, &mut work.compare, params).await;
         }
         // #149 y #164: ¿cabe en el destino, y sabe el destino sujetar lo que se
         // escriba en él? Las dos son I/O, así que el modal se abre SIN los
@@ -447,12 +384,12 @@ pub async fn run(
         // se lanza — mismo reparto que la comparación, en la misma cabecera de
         // vuelta y por la misma razón.
         if let Some(params) = app.pending_sync.take() {
-            launch_sync_plan(app, backend, &mut sync_run, params).await;
+            launch_sync_plan(app, backend, &mut work.sync, params).await;
         }
         // Y la aprobación, que es la SEGUNDA Task del mismo diálogo. Lo único
         // que viaja es el hash (ADR 0049).
         if let Some(hash) = app.pending_sync_apply.take() {
-            launch_sync_apply(app, backend, &mut sync_run, &hash).await;
+            launch_sync_apply(app, backend, &mut work.sync, &hash).await;
         }
         // #140: el panel que acaba de desconectar vuelve a casa por el mismo
         // `cd` que cualquier otra navegación, con su ritual de vuelta.
@@ -460,10 +397,10 @@ pub async fn run(
             let outcome = cd(app, backend, &mut events, casa).await;
             apply_cd(
                 &app.panes,
-                &mut fill,
-                &mut decorate_fetch,
-                &mut last_probed,
-                &mut search_run,
+                &mut work.fill,
+                &mut work.decorate,
+                &mut work.probed,
+                &mut work.search,
                 outcome,
             );
         }
@@ -517,7 +454,13 @@ pub async fn run(
             // lo hacen al cerrarse el overlay.
             if launched_something && watch_refresh_allowed(app) {
                 let refreshed = refresh_panes(app, backend, &mut events).await;
-                after_panes_refresh(app, refreshed, &mut fill, &mut last_probed, &mut search_run);
+                after_panes_refresh(
+                    app,
+                    refreshed,
+                    &mut work.fill,
+                    &mut work.probed,
+                    &mut work.search,
+                );
             }
         }
         // Review MINOR-1: `over_modal` describe el modal que hay AHORA, no uno
@@ -528,7 +471,7 @@ pub async fn run(
         // Las aprobaciones no compiten aquí: con la cola no vacía y sin modal,
         // `open_next_pending` ya habría abierto una al cerrarse el anterior.
         if app.modal.is_none()
-            && let Some(pendiente) = pending_ai_plan.take()
+            && let Some(pendiente) = work.pending_ai_plan.take()
         {
             app.modal = Some(Modal::AiRenamePlan {
                 dir: pendiente.dir,
@@ -540,7 +483,7 @@ pub async fn run(
         // Hits semánticos retenidos (M4-IA-2): misma disciplina. Si el plan
         // IA de arriba acaba de abrir, el `is_none` los deja esperando.
         if app.modal.is_none()
-            && let Some(hits) = pending_semantic.take()
+            && let Some(hits) = work.pending_semantic.take()
         {
             app.modal = Some(Modal::SemanticHits {
                 hits,
@@ -638,17 +581,18 @@ pub async fn run(
                         .preview(slot)
                         .and_then(|p| p.shown().cloned())
                         .is_some_and(|s| s == path);
-                    let in_flight = preview_fetch.get(slot).is_some_and(|f| f.path == path);
+                    let in_flight = work.preview.get(slot).is_some_and(|f| f.path == path);
                     if !ya && !in_flight {
                         // Empezar otra SUSTITUYE la que hubiera: el `Receiver`
                         // viejo se cae aquí y su respuesta no se aplica nunca.
-                        preview_fetch.set(slot, Some(spawn_preview_fetch(backend, path)));
+                        work.preview
+                            .set(slot, Some(spawn_preview_fetch(backend, path)));
                     }
                 }
                 Some((slot, crate::preview::Want::Note(clave))) => {
                     // Un directorio no se lee: se dice lo que es. Y lo que
                     // hubiera en vuelo deja de importar.
-                    preview_fetch.remove(slot);
+                    work.preview.remove(slot);
                     let text = t(clave);
                     if let Some(p) = app.panes.preview_mut(slot)
                         && (p.note().is_none_or(|n| n != text) || p.shown().is_some())
@@ -702,24 +646,24 @@ pub async fn run(
             }
         }
         // #52: listado lazy — las entradas VISIBLES sin size se hidratan por
-        // tandas (máx. una en vuelo; dedup por (pane, path) en `last_probed`).
-        if stat_probe.is_none() {
+        // tandas (máx. una en vuelo; dedup por (pane, path) en `work.probed`).
+        if work.stat.is_none() {
             let tanda: Vec<(usize, VPath)> = app
                 .needs_stat_window(STAT_WINDOW_RADIUS)
                 .into_iter()
-                .filter(|c| !last_probed.contains(c))
+                .filter(|c| !work.probed.contains(c))
                 .take(STAT_BATCH_MAX)
                 .collect();
             if !tanda.is_empty() {
-                last_probed.extend(tanda.iter().cloned());
-                stat_probe = Some(spawn_stat_probe(backend, tanda));
+                work.probed.extend(tanda.iter().cloned());
+                work.stat = Some(spawn_stat_probe(backend, tanda));
             }
         }
         // #157: la fila seleccionada del panel de diferencias, mismo trato.
-        if compare_stat_probe.is_none() {
+        if work.compare_stat.is_none() {
             let targets = app.compare_size_probe_targets();
             if !targets.is_empty() {
-                compare_stat_probe = Some(spawn_compare_stat_probe(
+                work.compare_stat = Some(spawn_compare_stat_probe(
                     backend,
                     targets,
                     app.compare_generation(),
@@ -750,7 +694,7 @@ pub async fn run(
                 // (drenador/sonda #52/búsqueda) vive en `after_panes_refresh`
                 // — ÚNICO para los tres disparadores del refresh (#117).
                 let refreshed = on_tick(app, backend, &mut events).await;
-                after_panes_refresh(app, refreshed, &mut fill, &mut last_probed, &mut search_run);
+                after_panes_refresh(app, refreshed, &mut work.fill, &mut work.probed, &mut work.search);
             }
             ev = dir_watch.rx.recv(), if dir_watch_alive && watch_refresh_allowed(app) => {
                 // #106: cambio EXTERNO en un dir vigilado (debounced) —
@@ -765,9 +709,9 @@ pub async fn run(
                     after_panes_refresh(
                         app,
                         refreshed,
-                        &mut fill,
-                        &mut last_probed,
-                        &mut search_run,
+                        &mut work.fill,
+                        &mut work.probed,
+                        &mut work.search,
                     );
                 } else {
                     // Inalcanzable con `dir_watch` vivo (retiene el emisor
@@ -864,22 +808,22 @@ pub async fn run(
                 }
             }
             res = async {
-                match &mut stat_probe {
+                match &mut work.stat {
                     Some(pr) => (&mut pr.rx).await.ok(),
                     None => std::future::pending().await,
                 }
             } => {
                 // Sonda de stat del viewport (#52): el slot se limpia SIEMPRE
                 // (haya hidratado algo, fallara el stat o se cerrara el canal)
-                // — la dedup por `last_probed` evita reintentar hasta que un
+                // — la dedup por `work.probed` evita reintentar hasta que un
                 // listado nuevo la vacíe.
-                stat_probe = None;
+                work.stat = None;
                 for (pane, path, entry) in res.unwrap_or_default() {
                     app.panes[pane].hydrate(&path, entry.size, entry.mtime_ms);
                 }
             }
             (generation, res) = async {
-                match &mut compare_stat_probe {
+                match &mut work.compare_stat {
                     Some(pr) => (pr.generation, (&mut pr.rx).await.ok()),
                     None => std::future::pending().await,
                 }
@@ -890,7 +834,7 @@ pub async fn run(
                 // la próxima vez que la selección lo vuelva a pedir se
                 // reintenta, en vez de dejar la fila huérfana para siempre
                 // porque la task que la pedía murió a medio camino.
-                compare_stat_probe = None;
+                work.compare_stat = None;
                 for (path, entry) in res.unwrap_or_default() {
                     // La generación es la del PEDIDO, no la de ahora: si otra
                     // comparación empezó mientras volaba, `hydrate` la tira.
@@ -901,7 +845,7 @@ pub async fn run(
                 // Uno por HUECO, y tantos como huecos haya. `oneshot::Receiver`
                 // es `Unpin`, así que se sondea a mano; `select!` tiene aridad
                 // fija y aquí la aridad la pone el layout.
-                for (id, f) in decorate_fetch.iter_mut() {
+                for (id, f) in work.decorate.iter_mut() {
                     if let std::task::Poll::Ready(r) =
                         std::pin::Pin::new(&mut f.rx).poll(cx)
                     {
@@ -916,7 +860,7 @@ pub async fn run(
                 // DESCARTA — nunca pinta badges de un listado que ya no se
                 // ve (mismo criterio anti-stale que el drain-guard de
                 // `apply_fill_msg` para búsqueda virtual).
-                if let Some(f) = decorate_fetch.remove(slot)
+                if let Some(f) = work.decorate.remove(slot)
                     && let Some((map, cols)) = res
                     && let Some(p) = app.panes.browser_mut(f.slot)
                     && p.dir() == &f.dir
@@ -932,7 +876,7 @@ pub async fn run(
                 // Lecturas del preview, una por hueco. Mismo sondeo a mano
                 // que las decoraciones y por el mismo motivo: la aridad la
                 // pone el layout, no `select!`.
-                for (id, f) in preview_fetch.iter_mut() {
+                for (id, f) in work.preview.iter_mut() {
                     if let std::task::Poll::Ready(r) =
                         std::pin::Pin::new(&mut f.rx).poll(cx)
                     {
@@ -946,7 +890,7 @@ pub async fn run(
                 // Y un error se PINTA, jamás se pregunta — el preview sigue
                 // al cursor, así que un diálogo por pulsación convertiría
                 // bajar por un directorio en una ráfaga de modales.
-                if let Some(f) = preview_fetch.remove(slot) {
+                if let Some(f) = work.preview.remove(slot) {
                     match res {
                         Some(Ok(viewer)) => {
                             if let Some(p) = app.panes.preview_mut(slot) {
@@ -975,13 +919,13 @@ pub async fn run(
                 // desde el principio deja que un drenador rápido en el primer
                 // hueco no deje hablar nunca a los demás — con dos paneles
                 // `select!` lo evitaba solo, porque elige al azar.
-                let n = fill.len();
+                let n = work.fill.len();
                 for k in 0..n {
-                    let Some((id, f)) = fill.iter_mut().nth((fill_cursor + k) % n) else {
+                    let Some((id, f)) = work.fill.iter_mut().nth((work.fill_cursor + k) % n) else {
                         break;
                     };
                     if let std::task::Poll::Ready(m) = f.rx.poll_recv(cx) {
-                        fill_cursor = (fill_cursor + k + 1) % n;
+                        work.fill_cursor = (work.fill_cursor + k + 1) % n;
                         return std::task::Poll::Ready((id, m));
                     }
                 }
@@ -989,34 +933,34 @@ pub async fn run(
             }) => {
                 // Lote del drenador del listado paginado (ADR 0017): al pane
                 // de SU hueco. `None` = canal cerrado (fin del drenado).
-                apply_fill_msg(app, &mut fill, pane, msg);
+                apply_fill_msg(app, &mut work.fill, pane, msg);
             }
             hits = async {
                 // Solo se drena mientras el run sigue vivo (`Running`): un
                 // canal cerrado devolvería `None` en bucle (spin) — al leer el
                 // `None` se pasa a terminal y este brazo queda pendiente.
-                match &mut search_run {
+                match &mut work.search {
                     Some(s) if s.state == SearchState::Running => s.rx.recv().await,
                     _ => std::future::pending().await,
                 }
             } => {
-                drain_search(app, &mut search_run, hits);
+                drain_search(app, &mut work.search, hits);
             }
             batch = async {
                 // Igual que el brazo de hits: solo se drena con el run VIVO,
                 // porque un canal cerrado devolvería `None` en bucle (spin).
-                match &mut compare_run {
+                match &mut work.compare {
                     Some(c) if c.state == CompareState::Running => c.rx.recv().await,
                     _ => std::future::pending().await,
                 }
             } => {
-                drain_compare(app, &mut compare_run, batch);
+                drain_compare(app, &mut work.compare, batch);
             }
             // UN solo brazo para las dos Tasks del diálogo: `select!` no deja
-            // tomar prestado `sync_run` dos veces, y son fases sucesivas del
+            // tomar prestado `work.sync` dos veces, y son fases sucesivas del
             // mismo run — nunca hay plan y aplicación a la vez.
             tick = async {
-                let Some(s) = &mut sync_run else {
+                let Some(s) = &mut work.sync else {
                     return std::future::pending().await;
                 };
                 if s.applying {
@@ -1035,21 +979,21 @@ pub async fn run(
                 }
             } => {
                 match tick {
-                    SyncTick::Plan(event) => drain_sync_plan(app, &mut sync_run, event),
+                    SyncTick::Plan(event) => drain_sync_plan(app, &mut work.sync, event),
                     SyncTick::Applied { alive } => {
-                        harvest_sync_apply(app, backend, &mut sync_run, alive).await;
+                        harvest_sync_apply(app, backend, &mut work.sync, alive).await;
                     }
                 }
             }
             res = async {
                 // ai.rename_plan en vuelo (M4-IA): cosecha sin bloquear —
-                // el brazo solo se arma con un run vivo (molde stat_probe).
-                match &mut ai_rename_run {
+                // el brazo solo se arma con un run vivo (molde work.stat).
+                match &mut work.ai_rename {
                     Some(r) => (&mut r.handle).await,
                     None => std::future::pending().await,
                 }
             } => {
-                if let Some(run) = ai_rename_run.take() {
+                if let Some(run) = work.ai_rename.take() {
                     match res {
                         Ok(Ok(plan)) if plan.entries.is_empty() => {
                             app.message = Some(t("msg-ai-rename-empty"));
@@ -1091,7 +1035,7 @@ pub async fn run(
                                         async move { b.rename_batch_plan(&d, &pairs).await },
                                     );
                                 if let Some(old) =
-                                    rename_batch_run.replace(RenameBatchRun { handle })
+                                    work.rename_batch.replace(RenameBatchRun { handle })
                                 {
                                     old.handle.abort();
                                 }
@@ -1119,7 +1063,7 @@ pub async fn run(
                                 // diferencia de la GUI (banner superseded), aquí
                                 // el overwrite es inalcanzable: run único en
                                 // vuelo y el prompt no abre sobre otro modal.
-                                pending_ai_plan = Some(ready);
+                                work.pending_ai_plan = Some(ready);
                             }
                         }
                         Ok(Err(e)) => {
@@ -1137,13 +1081,13 @@ pub async fn run(
             }
             res = async {
                 // fs.rename_batch_plan en vuelo (§17): cosecha sin bloquear,
-                // molde del brazo de `ai_rename_run`.
-                match &mut rename_batch_run {
+                // molde del brazo de `work.ai_rename`.
+                match &mut work.rename_batch {
                     Some(r) => (&mut r.handle).await,
                     None => std::future::pending().await,
                 }
             } => {
-                if rename_batch_run.take().is_some() {
+                if work.rename_batch.take().is_some() {
                     let state = match res {
                         Ok(Ok(plan)) => norte_frontend::BatchPlan::Ready(Box::new(plan)),
                         Ok(Err(e)) => {
@@ -1162,7 +1106,7 @@ pub async fn run(
                     // cerrado por el humano. En los dos primeros casos se
                     // rellena; en el tercero la respuesta se tira.
                     if !app.settle_ai_batch_plan(&state)
-                        && let Some(p) = &mut pending_ai_plan
+                        && let Some(p) = &mut work.pending_ai_plan
                         && p.plan == norte_frontend::BatchPlan::Pending
                     {
                         p.plan = state;
@@ -1171,13 +1115,13 @@ pub async fn run(
             }
             res = async {
                 // index.search_semantic en vuelo (M4-IA-2): cosecha sin
-                // bloquear — molde del brazo de `ai_rename_run`.
-                match &mut semantic_run {
+                // bloquear — molde del brazo de `work.ai_rename`.
+                match &mut work.semantic {
                     Some(r) => (&mut r.handle).await,
                     None => std::future::pending().await,
                 }
             } => {
-                semantic_run = None;
+                work.semantic = None;
                 match res {
                     Ok(Ok(hits)) if hits.is_empty() => {
                         app.message = Some(t("msg-semantic-empty"));
@@ -1203,7 +1147,7 @@ pub async fn run(
                             } else {
                                 // Otro modal abierto (aprobación, colisión…):
                                 // los hits esperan su turno, jamás lo pisan.
-                                pending_semantic = Some(hits);
+                                work.pending_semantic = Some(hits);
                             }
                         }
                     },
@@ -1220,7 +1164,7 @@ pub async fn run(
                 }
             }
             outcome = async {
-                match &mut lua_run {
+                match &mut work.lua {
                     Some((run, _)) => run.await,
                     None => std::future::pending().await,
                 }
@@ -1228,7 +1172,7 @@ pub async fn run(
                 // DROP INMEDIATO del CommandRun resuelto (contrato del
                 // driver): retenerlo mantendría `run_active` encendido y la
                 // statusbar Lua congelada.
-                lua_run = None;
+                work.lua = None;
                 match outcome {
                     RunOutcome::Ok { messages } => {
                         if !messages.is_empty() {
@@ -1250,11 +1194,11 @@ pub async fn run(
                 // no existe (hot-reload lo quitó → `err-lua-unknown`), el
                 // resto de la cola no se queda atascado.
                 if let Some(host) = lua_host.as_ref() {
-                    while lua_run.is_none() {
-                        let Some(next) = lua_queue.pop_front() else {
+                    while work.lua.is_none() {
+                        let Some(next) = work.lua_queue.pop_front() else {
                             break;
                         };
-                        lua_run = start_lua_run(app, host, backend, &next);
+                        work.lua = start_lua_run(app, host, backend, &next);
                     }
                 }
             }
@@ -1313,9 +1257,9 @@ pub async fn run(
                     after_panes_refresh(
                         app,
                         refreshed,
-                        &mut fill,
-                        &mut last_probed,
-                        &mut search_run,
+                        &mut work.fill,
+                        &mut work.probed,
+                        &mut work.search,
                     );
                 }
                 // Hot-reload del scripting Lua (ADR 0026): host NUEVO entero
@@ -1325,7 +1269,7 @@ pub async fn run(
                 // cola también: sus nombres apuntaban al registro viejo
                 // (y si `load_lua` dio None, no quedaría quién drenarla).
                 lua_host = load_lua(app, &layers).await;
-                lua_queue.clear();
+                work.lua_queue.clear();
             }
             maybe = events.next() => {
                 // EOF del terminal —te cierran la ventana—: se sale por
@@ -1371,13 +1315,13 @@ pub async fn run(
                                 .await;
                                 apply_cd(
                                     &app.panes,
-                                    &mut fill,
-                                    &mut decorate_fetch,
-                                    &mut last_probed,
-                                    &mut search_run,
+                                    &mut work.fill,
+                                    &mut work.decorate,
+                                    &mut work.probed,
+                                    &mut work.search,
                                     outcome,
                                 );
-                                reap_search_run(app, &mut search_run);
+                                reap_search_run(app, &mut work.search);
                                 launch_pending_open(app, terminal, capture).await;
                             }
                         }
@@ -1405,10 +1349,10 @@ pub async fn run(
                                 quick_mode,
                                 confirm_quit,
                                 &cfg,
-                                &mut fill,
-                                &mut decorate_fetch,
-                                &mut last_probed,
-                                &mut search_run,
+                                &mut work.fill,
+                                &mut work.decorate,
+                                &mut work.probed,
+                                &mut work.search,
                                 Command::NavEnter,
                             )
                             .await;
@@ -1435,10 +1379,10 @@ pub async fn run(
                                         .await;
                                 apply_cd(
                                     &app.panes,
-                                    &mut fill,
-                                    &mut decorate_fetch,
-                                    &mut last_probed,
-                                    &mut search_run,
+                                    &mut work.fill,
+                                    &mut work.decorate,
+                                    &mut work.probed,
+                                    &mut work.search,
                                     outcome,
                                 );
                             }
@@ -1513,10 +1457,10 @@ pub async fn run(
                                         quick_mode,
                                         confirm_quit,
                                         &cfg,
-                                        &mut fill,
-                                        &mut decorate_fetch,
-                                        &mut last_probed,
-                                        &mut search_run,
+                                        &mut work.fill,
+                                        &mut work.decorate,
+                                        &mut work.probed,
+                                        &mut work.search,
                                         cmd,
                                     )
                                     .await;
@@ -1540,10 +1484,10 @@ pub async fn run(
                                     let outcome = cd(app, backend, &mut events, destino).await;
                                     apply_cd(
                                         &app.panes,
-                                        &mut fill,
-                                        &mut decorate_fetch,
-                                        &mut last_probed,
-                                        &mut search_run,
+                                        &mut work.fill,
+                                        &mut work.decorate,
+                                        &mut work.probed,
+                                        &mut work.search,
                                         outcome,
                                     );
                                 }
@@ -1573,9 +1517,9 @@ pub async fn run(
                             after_panes_refresh(
                                 app,
                                 refreshed,
-                                &mut fill,
-                                &mut last_probed,
-                                &mut search_run,
+                                &mut work.fill,
+                                &mut work.probed,
+                                &mut work.search,
                             );
                         }
                     } else if app.extensions.is_some() && !modal_wins(app) {
@@ -1605,10 +1549,10 @@ pub async fn run(
                         .await;
                         apply_cd(
                             &app.panes,
-                            &mut fill,
-                            &mut decorate_fetch,
-                            &mut last_probed,
-                            &mut search_run,
+                            &mut work.fill,
+                            &mut work.decorate,
+                            &mut work.probed,
+                            &mut work.search,
                             outcome,
                         );
                     } else if app.key_owner() == crate::app::KeyOwner::Places
@@ -1629,10 +1573,10 @@ pub async fn run(
                         settle_cd(
                             app,
                             backend,
-                            &mut fill,
-                            &mut decorate_fetch,
-                            &mut last_probed,
-                            &mut search_run,
+                            &mut work.fill,
+                            &mut work.decorate,
+                            &mut work.probed,
+                            &mut work.search,
                             outcome,
                         );
                     } else if app.key_owner() == crate::app::KeyOwner::Processes
@@ -1662,10 +1606,10 @@ pub async fn run(
                         settle_cd(
                             app,
                             backend,
-                            &mut fill,
-                            &mut decorate_fetch,
-                            &mut last_probed,
-                            &mut search_run,
+                            &mut work.fill,
+                            &mut work.decorate,
+                            &mut work.probed,
+                            &mut work.search,
                             outcome,
                         );
                     } else if app.search_dialog.is_some() && !modal_wins(app) {
@@ -1676,7 +1620,7 @@ pub async fn run(
                         if let Some(params) =
                             on_search_dialog_key(app, key.modifiers, key.code)
                         {
-                            launch_search(app, backend, &mut fill, &mut search_run, params)
+                            launch_search(app, backend, &mut work.fill, &mut work.search, params)
                                 .await;
                         }
                     } else if app.sync.is_some() && !modal_wins(app) {
@@ -1684,7 +1628,7 @@ pub async fn run(
                         // de diferencias. Va ANTES que él porque se pinta
                         // encima: el de diferencias sigue vivo detrás con sus
                         // marcas, y el teclado tiene que ir a lo que se ve.
-                        on_sync_key(app, &mut sync_run, key.modifiers, key.code);
+                        on_sync_key(app, &mut work.sync, key.modifiers, key.code);
                     } else if app.compare.is_some() && !modal_wins(app) {
                         // Panel de diferencias (`Shift+F2`): teclas FIJAS,
                         // como el diálogo de búsqueda y la palette. No resuelve
@@ -1697,11 +1641,11 @@ pub async fn run(
                             app,
                             backend,
                             &mut events,
-                            &mut fill,
-                            &mut decorate_fetch,
-                            &mut last_probed,
-                            &mut search_run,
-                            &mut compare_run,
+                            &mut work.fill,
+                            &mut work.decorate,
+                            &mut work.probed,
+                            &mut work.search,
+                            &mut work.compare,
                             key.modifiers,
                             key.code,
                         )
@@ -1812,10 +1756,10 @@ pub async fn run(
                                         quick_mode,
                                         confirm_quit,
                                         &cfg,
-                                        &mut fill,
-                                        &mut decorate_fetch,
-                                        &mut last_probed,
-                                        &mut search_run,
+                                        &mut work.fill,
+                                        &mut work.decorate,
+                                        &mut work.probed,
+                                        &mut work.search,
                                         cmd,
                                     )
                                     .await;
@@ -1892,10 +1836,10 @@ pub async fn run(
                                 quick_mode,
                                 confirm_quit,
                                 &cfg,
-                                &mut fill,
-                                &mut decorate_fetch,
-                                &mut last_probed,
-                                &mut search_run,
+                                &mut work.fill,
+                                &mut work.decorate,
+                                &mut work.probed,
+                                &mut work.search,
                                 cmd,
                             )
                             .await;
@@ -1919,7 +1863,7 @@ pub async fn run(
                         // `close_stale_overlays`.
                         close_stale_overlays(app);
                         // El TOFU de Lua se resuelve AQUÍ (necesita el host,
-                        // que vive en este loop): no navega ni toca `fill`.
+                        // que vive en este loop): no navega ni toca `work.fill`.
                         if matches!(app.modal, Some(Modal::TrustLuaInit { .. })) {
                             resolve_lua_trust(app, lua_host.as_ref(), key.code).await;
                             continue;
@@ -2018,14 +1962,14 @@ pub async fn run(
                                             // (dropear el handle solo desvincula):
                                             // a lo sumo una petición en vuelo.
                                             let run = AiRenameRun { handle, dir };
-                                            if let Some(old) = ai_rename_run.replace(run) {
+                                            if let Some(old) = work.ai_rename.replace(run) {
                                                 old.handle.abort();
                                             }
                                             // Invariante: lanzar VACÍA el stash —
                                             // un plan retenido de una petición
                                             // ANTERIOR jamás debe abrirse como si
                                             // fuera de esta.
-                                            pending_ai_plan = None;
+                                            work.pending_ai_plan = None;
                                             app.message = Some(t("msg-ai-rename-running"));
                                             app.ai_rename_submitted();
                                         }
@@ -2043,7 +1987,7 @@ pub async fn run(
                                             // (dropear el handle solo desvincula):
                                             // a lo sumo una consulta en vuelo.
                                             if let Some(old) =
-                                                semantic_run.replace(SemanticRun { handle })
+                                                work.semantic.replace(SemanticRun { handle })
                                             {
                                                 old.handle.abort();
                                             }
@@ -2051,7 +1995,7 @@ pub async fn run(
                                             // unos hits retenidos de una consulta
                                             // ANTERIOR jamás deben abrirse como si
                                             // fueran de esta.
-                                            pending_semantic = None;
+                                            work.pending_semantic = None;
                                             app.message = Some(t("msg-semantic-running"));
                                             app.semantic_submitted();
                                         }
@@ -2103,10 +2047,10 @@ pub async fn run(
                         settle_cd(
                             app,
                             backend,
-                            &mut fill,
-                            &mut decorate_fetch,
-                            &mut last_probed,
-                            &mut search_run,
+                            &mut work.fill,
+                            &mut work.decorate,
+                            &mut work.probed,
+                            &mut work.search,
                             outcome,
                         );
                     } else {
@@ -2116,7 +2060,7 @@ pub async fn run(
                         if app.viewer.is_none()
                             && key.modifiers.is_empty()
                             && key.code == KeyCode::Esc
-                            && let Some((_, token)) = &lua_run
+                            && let Some((_, token)) = &work.lua
                         {
                             token.cancel();
                             // K3a: la tecla se CONSUME aquí, así que el
@@ -2133,7 +2077,7 @@ pub async fn run(
                         if app.viewer.is_none()
                             && key.modifiers.is_empty()
                             && key.code == KeyCode::Esc
-                            && let Some(run) = ai_rename_run.take()
+                            && let Some(run) = work.ai_rename.take()
                         {
                             run.handle.abort();
                             app.message = None;
@@ -2147,7 +2091,7 @@ pub async fn run(
                         if app.viewer.is_none()
                             && key.modifiers.is_empty()
                             && key.code == KeyCode::Esc
-                            && let Some(run) = semantic_run.take()
+                            && let Some(run) = work.semantic.take()
                         {
                             run.handle.abort();
                             app.message = None;
@@ -2155,7 +2099,7 @@ pub async fn run(
                             continue;
                         }
                         // Pane virtual de búsqueda (liveSearch T6): con un
-                        // search_run en el pane con foco (y sin quick vivo),
+                        // work.search en el pane con foco (y sin quick vivo),
                         // Esc y Enter tienen semántica propia ANTES del
                         // resolver. El RESTO de teclas (cursor, F5/F8/F3…) cae
                         // al resolver y opera sobre el hit bajo el cursor.
@@ -2163,7 +2107,7 @@ pub async fn run(
                             && key.modifiers.is_empty()
                             && app.focused().quick().is_none()
                             && app.focused().virtual_search
-                            && search_run
+                            && work.search
                                 .as_ref()
                                 .is_some_and(|s| s.pane == app.focus())
                         {
@@ -2177,10 +2121,10 @@ pub async fn run(
                                         app,
                                         backend,
                                         &mut events,
-                                        &mut fill,
-                                        &mut decorate_fetch,
-                                        &mut last_probed,
-                                        &mut search_run,
+                                        &mut work.fill,
+                                        &mut work.decorate,
+                                        &mut work.probed,
+                                        &mut work.search,
                                     )
                                     .await;
                                     continue;
@@ -2192,10 +2136,10 @@ pub async fn run(
                                         app,
                                         backend,
                                         &mut events,
-                                        &mut fill,
-                                        &mut decorate_fetch,
-                                        &mut last_probed,
-                                        &mut search_run,
+                                        &mut work.fill,
+                                        &mut work.decorate,
+                                        &mut work.probed,
+                                        &mut work.search,
                                     )
                                     .await;
                                     continue;
@@ -2276,10 +2220,10 @@ pub async fn run(
                                             quick_mode,
                                             confirm_quit,
                                             &cfg,
-                                            &mut fill,
-                                            &mut decorate_fetch,
-                                            &mut last_probed,
-                                            &mut search_run,
+                                            &mut work.fill,
+                                            &mut work.decorate,
+                                            &mut work.probed,
+                                            &mut work.search,
                                             Command::NavEnter,
                                         )
                                         .await;
@@ -2372,8 +2316,8 @@ pub async fn run(
                                             lua_host.as_ref(),
                                             backend,
                                             name,
-                                            &mut lua_run,
-                                            &mut lua_queue,
+                                            &mut work.lua,
+                                            &mut work.lua_queue,
                                         );
                                         continue;
                                     }
@@ -2415,16 +2359,16 @@ pub async fn run(
                                         settle_cd(
                                             app,
                                             backend,
-                                            &mut fill,
-                                            &mut decorate_fetch,
-                                            &mut last_probed,
-                                            &mut search_run,
+                                            &mut work.fill,
+                                            &mut work.decorate,
+                                            &mut work.probed,
+                                            &mut work.search,
                                             outcome,
                                         );
                                         // Un cd (nav.parent…) apagó el modo
                                         // virtual del pane de búsqueda: suelta
                                         // el run y cancela.
-                                        reap_search_run(app, &mut search_run);
+                                        reap_search_run(app, &mut work.search);
                                         // #28: `pane.open` dejó un comando
                                         // externo resuelto — el run loop (dueño
                                         // de la terminal) sondea el binario y

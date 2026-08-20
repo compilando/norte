@@ -21,6 +21,7 @@
 //! producción por encima de las mil líneas.
 
 mod compare;
+mod inflight;
 mod search;
 mod sync;
 
@@ -28,6 +29,7 @@ pub use compare::{
     COMPARE_PAGE_STEP, CompareKey, CompareRun, compare_key, drain_compare, launch_compare,
     on_compare_enter, on_compare_key,
 };
+pub use inflight::{AiRenameRun, InFlight, PendingAiPlan, RenameBatchRun, SemanticRun};
 pub use search::{
     SEARCH_MAX_HITS, SearchRun, drain_search, finalize_search_state, launch_search,
     on_search_dialog_key, on_search_enter, on_search_escape, search_params,
