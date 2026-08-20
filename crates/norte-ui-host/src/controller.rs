@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use norte_frontend::PaneState;
 use norte_frontend::keymap::{Availability, Effective, Resolution, Resolver};
+use norte_frontend::layout::{KindRegistry, Node, Rect, Resolved, RoleId, Roles, SlotId, resolve};
 use norte_frontend::nav::{History, Trail, TrailStep};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -54,6 +55,13 @@ pub struct UiHostOptions {
     /// leer configuración no es asunto suyo—; [`crate::keys::keymap_de_preset`]
     /// hace lo mínimo para un test o un arranque sin configuración.
     pub keymap: Effective,
+    /// La disposición: el árbol de huecos. De un preset de fábrica
+    /// (`norte_frontend::layout::presets::tree`) o de la configuración del
+    /// usuario; el host no lee ficheros.
+    pub layout: Node,
+    /// El tamaño INICIAL de la ventana, en celdas de layout. El renderer lo
+    /// corrige en cuanto sepa el suyo ([`UiAction::SetViewport`]).
+    pub viewport: (u16, u16),
 }
 
 /// Lo que un suscriptor recibe.
@@ -128,9 +136,14 @@ impl UiHost {
         let mut estado = Estado::nuevo(
             instance.clone(),
             options.locale,
-            options.initial_dir,
+            &options.initial_dir,
             options.keymap,
+            options.layout,
+            options.viewport,
         );
+        // La sesión primero: dice DÓNDE estaba cada hueco, y listar antes
+        // sería traer un directorio para tirarlo.
+        estado.leer_sesion(options.backend.as_ref()).await;
         // El primer listado se pide ANTES de publicar nada: el snapshot 0
         // describe una pantalla que ya existe, no una promesa.
         estado.listar_inicial(options.backend.as_ref()).await;
@@ -217,7 +230,7 @@ async fn actor(
             }
             Mensaje::Listado(datos) => {
                 let (token, dir, res) = *datos;
-                if estado.hueco.en_vuelo != Some(token) {
+                if estado.hueco().en_vuelo != Some(token) {
                     // Llegó tarde: otra navegación la relevó. Se descarta
                     // AQUÍ, no se esconde en el renderer.
                     continue;
@@ -230,7 +243,7 @@ async fn actor(
                 let _ = updates.send(estado.sobre(UiUpdate::Snapshot(snap)));
             }
             Mensaje::Apagar(responde) => {
-                let informe = Estado::apagar();
+                let informe = estado.apagar(backend.as_ref()).await;
                 let _ = updates.send(estado.sobre(UiUpdate::Notice(UiNotice::Shutdown {
                     incomplete: informe.incomplete,
                 })));
@@ -239,6 +252,40 @@ async fn actor(
             }
         }
     }
+}
+
+/// El área que el renderer dice tener, en celdas de layout.
+///
+/// El árbol se reparte en una rejilla y no en píxeles a propósito: los
+/// mínimos de cada kind están declarados así y los comparte con el TUI, que
+/// es lo que hace que «este panel no cabe» signifique lo mismo en las dos
+/// superficies.
+fn rect((width, height): (u16, u16)) -> Rect {
+    Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    }
+}
+
+/// ¿Este hueco del árbol es un listado?
+fn es_listado(arbol: &Node, slot: SlotId, kinds: &KindRegistry) -> bool {
+    kind_de(arbol, slot).is_some_and(|k| k.as_str() == "browser" && kinds.get(&k).is_some())
+}
+
+/// El kind declarado de un hueco del árbol.
+fn kind_de(arbol: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId> {
+    fn buscar(n: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId> {
+        match n {
+            Node::Slot { id, kind, .. } if *id == slot => Some(kind.clone()),
+            Node::Slot { .. } => None,
+            Node::Split { children, .. } | Node::Tabs { children, .. } => {
+                children.iter().find_map(|c| buscar(c, slot))
+            }
+        }
+    }
+    buscar(arbol, slot)
 }
 
 /// Identidad única de una instancia: pid más el instante de arranque. No
@@ -259,7 +306,6 @@ fn nueva_instancia() -> String {
 /// salen de ahí, así que las dos superficies no pueden divergir en lo que
 /// significa «bajar el cursor» (ADR 0066, D14).
 struct Hueco {
-    id: u32,
     pane: PaneState,
     /// De dónde vengo y a dónde vuelvo. También compartido.
     historial: History,
@@ -283,55 +329,200 @@ struct Estado {
     /// El resolver de teclas, con SU keymap efectivo dentro (mismo tipo y
     /// mismo contrato que el del TUI).
     resolver: Resolver,
-    hueco: Hueco,
+    /// La disposición: el árbol que el usuario configuró. NO se toca al
+    /// redimensionar — un layout guardado es su intención, y reescribirlo
+    /// porque la ventana encogió significa que abrir el host un minuto se
+    /// come el layout del TUI (ADR 0058 D5).
+    arbol: Node,
+    /// Los kinds que este host sabe declarar (mínimos, foco, roles).
+    kinds: KindRegistry,
+    /// El reparto del ÚLTIMO tamaño conocido: quién se pinta, quién no, y en
+    /// qué orden se tabula. Vive y muere con el tamaño, no con el árbol.
+    reparto: Resolved,
+    /// Quién tiene el foco y quién es el destino.
+    roles: Roles,
+    /// Los huecos con estado, por id.
+    huecos: std::collections::BTreeMap<u32, Hueco>,
+    /// La sesión de UI: qué revisión se leyó, si esta ventana es su dueña, y
+    /// si el esquema que hay guardado es de una versión que este host no
+    /// entiende (ADR 0059).
+    sesion: Sesion,
     status: StatusView,
     conexion: ConnectionView,
 }
 
+/// Lo que el host sabe de la sesión guardada.
+#[derive(Debug)]
+struct Sesion {
+    /// La revisión sobre la que se escribe. Escribir sobre otra es pisar a
+    /// quien escribió en medio, y el core lo rechaza.
+    revision: u64,
+    /// Esta ventana es la dueña. Una SUELTA (`detached`) no escribe: la
+    /// sesión es un documento con un solo escritor.
+    owner: bool,
+    /// Lo guardado es de un esquema MÁS NUEVO que el que este host entiende.
+    /// Entonces no se aplica y —sobre todo— no se sobrescribe: arrancar de la
+    /// configuración es recuperable; machacar la sesión de una versión futura
+    /// no lo es.
+    futuro: bool,
+    /// La política compartida de escritura: qué recortar, cuándo no repetir
+    /// y cada cuánto vuelve a preguntar una ventana suelta.
+    policy: norte_frontend::session::PushPolicy,
+}
+
 impl Estado {
-    fn nuevo(instance: InstanceId, locale: String, dir: VPath, keymap: Effective) -> Self {
+    fn nuevo(
+        instance: InstanceId,
+        locale: String,
+        dir: &VPath,
+        keymap: Effective,
+        arbol: Node,
+        viewport: (u16, u16),
+    ) -> Self {
+        let kinds = KindRegistry::builtin();
+        let reparto = resolve(rect(viewport), &arbol, &kinds);
+        // Un hueco de listado por cada `browser` del árbol, todos en el
+        // mismo directorio: de dónde arranca cada uno es cosa de la sesión
+        // (y hasta que exista, arrancar los dos donde arrancó el host es lo
+        // honesto).
+        let mut huecos = std::collections::BTreeMap::new();
+        for SlotId(id) in arbol.slot_ids() {
+            if es_listado(&arbol, SlotId(id), &kinds) {
+                huecos.insert(
+                    id,
+                    Hueco {
+                        pane: PaneState::new(dir.clone(), Vec::new()),
+                        historial: History::default(),
+                        primera_visible: 0,
+                        visibles: 64,
+                        en_vuelo: None,
+                        estado: SlotState::Loading,
+                    },
+                );
+            }
+        }
+        let activo = huecos.keys().copied().next().unwrap_or(1);
+        let mut roles = Roles::con_active(SlotId(activo));
+        // El DESTINO es el otro listado visible, si lo hay: es lo que hace
+        // que copiar tenga a dónde ir sin preguntar.
+        if let Some(otro) = huecos.keys().copied().find(|k| *k != activo) {
+            roles.set(RoleId::Target, SlotId(otro));
+        }
         Self {
             instance,
             sequence: 0,
             token: 0,
             locale,
             resolver: Resolver::new(keymap),
-            hueco: Hueco {
-                id: 1,
-                pane: PaneState::new(dir, Vec::new()),
-                historial: History::default(),
-                primera_visible: 0,
-                visibles: 64,
-                en_vuelo: None,
-                estado: SlotState::Loading,
+            arbol,
+            kinds,
+            reparto,
+            roles,
+            huecos,
+            sesion: Sesion {
+                revision: 0,
+                owner: false,
+                futuro: false,
+                // Una ventana suelta vuelve a preguntar por la propiedad
+                // cada treinta ticks: la dueña puede cerrarse en cualquier
+                // momento y entonces alguien tiene que recogerla.
+                policy: norte_frontend::session::PushPolicy::new(30),
             },
             status: StatusView::default(),
             conexion: ConnectionView::Connected,
         }
     }
 
-    /// El listado inicial, el único que se espera EN LÍNEA: hasta que exista
-    /// no hay pantalla que enseñar, así que no hay nada que congelar.
+    /// El hueco con el foco. Siempre hay uno: si el rol apunta a un hueco
+    /// que ya no existe, cae al primero que haya.
+    fn activo(&self) -> u32 {
+        let preferido = self.roles.get(RoleId::Active).map(|SlotId(id)| id);
+        preferido
+            .filter(|id| self.huecos.contains_key(id))
+            .or_else(|| self.huecos.keys().copied().next())
+            .unwrap_or(1)
+    }
+
+    fn hueco(&self) -> &Hueco {
+        let id = self.activo();
+        self.huecos.get(&id).expect("el hueco activo existe")
+    }
+
+    fn hueco_mut(&mut self) -> &mut Hueco {
+        let id = self.activo();
+        self.huecos.get_mut(&id).expect("el hueco activo existe")
+    }
+
+    /// Deja los roles apuntando a huecos que EXISTEN y se VEN.
+    ///
+    /// El destino es el otro listado visible; si no hay otro, no hay
+    /// destino — y eso es más honesto que apuntar al mismo hueco que tiene el
+    /// foco, que haría que copiar pareciera posible cuando no lo es.
+    fn reconcilia_roles(&mut self) {
+        let activo = self.activo();
+        self.roles.set(RoleId::Active, SlotId(activo));
+        let otro = self
+            .huecos
+            .keys()
+            .copied()
+            .find(|id| *id != activo && !self.oculto(*id));
+        match otro {
+            Some(id) => self.roles.set(RoleId::Target, SlotId(id)),
+            None => self.roles.clear(RoleId::Target),
+        }
+    }
+
+    /// ¿Está este hueco fuera del reparto de ESTE tamaño?
+    ///
+    /// Un hueco oculto —una pestaña de atrás, un panel que no cabe— no pide
+    /// listados ni proyecta filas: lo que no se ve no se trae.
+    fn oculto(&self, id: u32) -> bool {
+        self.reparto.hidden.contains(&SlotId(id))
+    }
+
+    /// El listado inicial de cada hueco VISIBLE, el único que se espera EN
+    /// LÍNEA: hasta que exista no hay pantalla que enseñar, así que no hay
+    /// nada que congelar.
+    ///
+    /// Un hueco oculto no se lista: lo que no se ve no se trae, y en cuanto
+    /// el reparto lo saque a la luz se pedirá entonces.
     async fn listar_inicial(&mut self, backend: &dyn HostBackend) {
-        let dir = self.hueco.pane.dir().clone();
-        let res = backend.list(dir.clone()).await;
-        self.aterriza(dir, res);
+        let visibles: Vec<u32> = self
+            .huecos
+            .keys()
+            .copied()
+            .filter(|id| !self.oculto(*id))
+            .collect();
+        for id in visibles {
+            let dir = self.huecos[&id].pane.dir().clone();
+            let res = backend.list(dir.clone()).await;
+            self.aterriza_en(id, dir, res);
+        }
     }
 
     /// Aplica el resultado de un listado. El orden y el cursor los decide
     /// `PaneState`, que es quien sabe qué hacer con la memoria del cursor y
     /// con un foco pendiente.
     fn aterriza(&mut self, dir: VPath, res: Result<Vec<Entry>, Error>) {
-        self.hueco.en_vuelo = None;
+        let id = self.activo();
+        self.aterriza_en(id, dir, res);
+    }
+
+    /// Igual, sobre un hueco concreto.
+    fn aterriza_en(&mut self, id: u32, dir: VPath, res: Result<Vec<Entry>, Error>) {
+        let Some(hueco) = self.huecos.get_mut(&id) else {
+            return;
+        };
+        hueco.en_vuelo = None;
         match res {
             Ok(entradas) => {
-                self.hueco.pane.set_listing(dir, entradas);
-                self.hueco.primera_visible = 0;
-                self.hueco.estado = SlotState::Ready;
+                hueco.pane.set_listing(dir, entradas);
+                hueco.primera_visible = 0;
+                hueco.estado = SlotState::Ready;
             }
             Err(e) => {
-                self.hueco.pane.set_listing(dir, Vec::new());
-                self.hueco.estado = SlotState::Error {
+                hueco.pane.set_listing(dir, Vec::new());
+                hueco.estado = SlotState::Error {
                     reason_key: norte_frontend::error::error_key(&e).to_owned(),
                     detail: None,
                 };
@@ -355,24 +546,23 @@ impl Estado {
         match accion {
             UiAction::MoveCursor { slot_id, delta } => {
                 let (slot_id, delta) = (*slot_id, *delta);
-                if slot_id != self.hueco.id {
+                if slot_id != self.activo() {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 }
-                if self.hueco.pane.entries().is_empty() {
+                if self.hueco().pane.entries().is_empty() {
                     return (self.aplicada(), Vec::new());
                 }
-                let actual = i128::try_from(self.hueco.pane.cursor()).unwrap_or(0);
-                let ultimo = i128::try_from(self.hueco.pane.entries().len() - 1).unwrap_or(0);
+                let actual = i128::try_from(self.hueco().pane.cursor()).unwrap_or(0);
+                let ultimo = i128::try_from(self.hueco().pane.entries().len() - 1).unwrap_or(0);
                 let destino = (actual + i128::from(delta)).clamp(0, ultimo);
-                self.hueco
-                    .pane
-                    .set_cursor(usize::try_from(destino).unwrap_or(0));
+                let i = usize::try_from(destino).unwrap_or(0);
+                self.hueco_mut().pane.set_cursor(i);
                 (self.aplicada(), vec![self.parche_cursor()])
             }
             UiAction::SelectRow { slot_id, key } | UiAction::ToggleMark { slot_id, key } => {
                 let (slot_id, key) = (*slot_id, *key);
                 let marcar = matches!(accion, UiAction::ToggleMark { .. });
-                if slot_id != self.hueco.id {
+                if slot_id != self.activo() {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 }
                 let Some(i) = self.fila_valida(key) else {
@@ -382,14 +572,14 @@ impl Estado {
                 };
                 if marcar {
                     let marcada = self
-                        .hueco
+                        .hueco()
                         .pane
                         .entries()
                         .get(i)
-                        .is_some_and(|e| self.hueco.pane.is_marked(e));
-                    self.hueco.pane.set_mark(i, !marcada);
+                        .is_some_and(|e| self.hueco().pane.is_marked(e));
+                    self.hueco_mut().pane.set_mark(i, !marcada);
                 } else {
-                    self.hueco.pane.set_cursor(i);
+                    self.hueco_mut().pane.set_cursor(i);
                 }
                 (self.aplicada(), vec![self.parche_filas()])
             }
@@ -399,22 +589,37 @@ impl Estado {
                 count,
             } => {
                 let (slot_id, first, count) = (*slot_id, *first, *count);
-                if slot_id != self.hueco.id {
+                if slot_id != self.activo() {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 }
-                self.hueco.primera_visible = first;
-                self.hueco.visibles =
+                self.hueco_mut().primera_visible = first;
+                self.hueco_mut().visibles =
                     count.min(u32::try_from(MAX_ROWS_PER_BATCH).unwrap_or(u32::MAX));
                 (self.aplicada(), vec![self.parche_filas()])
             }
             UiAction::FocusSlot { slot_id } => {
-                if *slot_id != self.hueco.id {
+                let slot_id = *slot_id;
+                // Enfocar algo que no existe o que no se ve es una carrera
+                // con un reparto anterior, no una orden.
+                if !self.huecos.contains_key(&slot_id) || self.oculto(slot_id) {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 }
-                (self.aplicada(), Vec::new())
+                self.roles.set(RoleId::Active, SlotId(slot_id));
+                self.reconcilia_roles();
+                let snap = self.snapshot();
+                (self.aplicada(), vec![self.sobre(UiUpdate::Snapshot(snap))])
             }
             UiAction::Activate { .. } | UiAction::Parent { .. } | UiAction::History { .. } => {
                 self.navegacion(accion, backend, buzon)
+            }
+            UiAction::SetViewport { width, height } => {
+                self.reparto = resolve(rect((*width, *height)), &self.arbol, &self.kinds);
+                // El destino no puede apuntar a algo que no se ve: una copia
+                // que aterriza en un panel oculto es una copia que el usuario
+                // no verá llegar.
+                self.reconcilia_roles();
+                let snap = self.snapshot();
+                (self.aplicada(), vec![self.sobre(UiUpdate::Snapshot(snap))])
             }
             UiAction::Key(k) => self.tecla(k, backend, buzon),
             UiAction::Resync => {
@@ -533,7 +738,7 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let slot = self.hueco.id;
+        let slot = self.activo();
         match efecto {
             Efecto::Cursor(delta) => self.aplicar(
                 &UiAction::MoveCursor {
@@ -544,7 +749,7 @@ impl Estado {
                 buzon,
             ),
             Efecto::Pagina(paginas) => {
-                let filas = i64::from(self.hueco.visibles.max(1));
+                let filas = i64::from(self.hueco().visibles.max(1));
                 self.aplicar(
                     &UiAction::MoveCursor {
                         slot_id: slot,
@@ -556,14 +761,14 @@ impl Estado {
             }
             Efecto::Extremo { al_final } => {
                 if al_final {
-                    self.hueco.pane.end();
+                    self.hueco_mut().pane.end();
                 } else {
-                    self.hueco.pane.home();
+                    self.hueco_mut().pane.home();
                 }
                 (self.aplicada(), vec![self.parche_cursor()])
             }
             Efecto::Entrar => {
-                let key = RowKey(self.hueco.pane.cursor() as u64);
+                let key = RowKey(self.hueco().pane.cursor() as u64);
                 self.navegacion(&UiAction::Activate { slot_id: slot, key }, backend, buzon)
             }
             Efecto::Subir => self.navegacion(&UiAction::Parent { slot_id: slot }, backend, buzon),
@@ -576,11 +781,11 @@ impl Estado {
                 buzon,
             ),
             Efecto::Marcar => {
-                let key = RowKey(self.hueco.pane.cursor() as u64);
+                let key = RowKey(self.hueco().pane.cursor() as u64);
                 self.aplicar(&UiAction::ToggleMark { slot_id: slot, key }, backend, buzon)
             }
             Efecto::DesmarcarTodo => {
-                self.hueco.pane.clear_marks();
+                self.hueco_mut().pane.clear_marks();
                 (self.aplicada(), vec![self.parche_filas()])
             }
         }
@@ -599,13 +804,13 @@ impl Estado {
         match accion {
             UiAction::Activate { slot_id, key } => {
                 let (slot_id, key) = (*slot_id, *key);
-                if slot_id != self.hueco.id {
+                if slot_id != self.activo() {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 }
                 let Some(i) = self.fila_valida(key) else {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 };
-                let Some(entrada) = self.hueco.pane.entries().get(i) else {
+                let Some(entrada) = self.hueco().pane.entries().get(i) else {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 };
                 if entrada.kind != EntryKind::Dir {
@@ -626,10 +831,10 @@ impl Estado {
                 )
             }
             UiAction::Parent { slot_id } => {
-                if *slot_id != self.hueco.id {
+                if *slot_id != self.activo() {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 }
-                let actual = self.hueco.pane.dir().clone();
+                let actual = self.hueco().pane.dir().clone();
                 let Some(padre) = actual.parent() else {
                     return (
                         ActionAck::Unavailable {
@@ -641,7 +846,7 @@ impl Estado {
                 // El cursor aterriza en el directorio del que se sale, no en
                 // la primera fila: es lo que hace que subir y bajar sea
                 // reversible. Lo resuelve `PaneState` al recibir el listado.
-                self.hueco.pane.set_pending_focus(actual);
+                self.hueco_mut().pane.set_pending_focus(actual);
                 (
                     self.aplicada(),
                     self.navegar(&padre, Trail::Record, backend, buzon),
@@ -649,19 +854,19 @@ impl Estado {
             }
             UiAction::History { slot_id, back } => {
                 let (slot_id, back) = (*slot_id, *back);
-                if slot_id != self.hueco.id {
+                if slot_id != self.activo() {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 }
-                let actual = self.hueco.pane.dir().clone();
+                let actual = self.hueco().pane.dir().clone();
                 let paso = if back {
                     TrailStep::Back
                 } else {
                     TrailStep::Forward
                 };
                 let destino = if back {
-                    self.hueco.historial.step_back(actual)
+                    self.hueco_mut().historial.step_back(actual)
                 } else {
-                    self.hueco.historial.step_forward(actual)
+                    self.hueco_mut().historial.step_forward(actual)
                 };
                 let Some(destino) = destino else {
                     // Una tecla que se queda muda no se distingue de una
@@ -691,22 +896,22 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let anterior = self.hueco.pane.dir().clone();
+        let anterior = self.hueco().pane.dir().clone();
         let destino = destino.clone();
         // Un `Replay` es el rastro reproduciéndose: registrar ahí haría que
         // `back` se alimentara de sí mismo y el lector oscilara entre dos
         // directorios.
         if anterior != destino && trail == Trail::Record {
-            self.hueco.historial.record(anterior);
+            self.hueco_mut().historial.record(anterior);
         }
         // La memoria del cursor se toma con el dir que se ABANDONA todavía
         // puesto (contrato de `remember_cursor`).
-        self.hueco.pane.remember_cursor();
-        self.hueco.estado = SlotState::Loading;
+        self.hueco_mut().pane.remember_cursor();
+        self.hueco_mut().estado = SlotState::Loading;
 
         self.token += 1;
         let token = RequestToken(self.token);
-        self.hueco.en_vuelo = Some(token);
+        self.hueco_mut().en_vuelo = Some(token);
 
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
@@ -720,7 +925,7 @@ impl Estado {
         });
 
         let cambio = ViewChange::SlotState {
-            slot_id: self.hueco.id,
+            slot_id: self.activo(),
             state: SlotState::Loading,
         };
         vec![self.parche(vec![cambio])]
@@ -729,10 +934,47 @@ impl Estado {
     /// El índice de una fila, si la clave es de ESTA generación y existe.
     fn fila_valida(&self, key: RowKey) -> Option<usize> {
         let i = usize::try_from(key.0).ok()?;
-        (i < self.hueco.pane.entries().len()).then_some(i)
+        (i < self.hueco().pane.entries().len()).then_some(i)
     }
 
-    fn apagar() -> ShutdownReport {
+    /// Apaga: vuelca la sesión si esta ventana es su dueña, y DICE si algo
+    /// quedó sin escribir.
+    ///
+    /// Volcar aquí y no solo en un tick es lo que hace que cerrar justo
+    /// después de navegar guarde el directorio nuevo y no el anterior. Un
+    /// conflicto en el último momento no se reintenta a lo loco: se informa,
+    /// que es lo único honesto cuando ya no hay pantalla que corregir.
+    async fn apagar(&mut self, backend: &dyn HostBackend) -> ShutdownReport {
+        if !self.sesion.owner || self.sesion.futuro {
+            // Una ventana suelta no escribe, y una sesión del futuro no se
+            // machaca.
+            return ShutdownReport { incomplete: false };
+        }
+        let mut body = self.capturar_sesion();
+        let vivos: Vec<SlotId> = self.huecos.keys().map(|id| SlotId(*id)).collect();
+        if self.sesion.policy.prepare(&mut body, &vivos, 0).is_none() {
+            // Nada cambió desde lo último que se mandó.
+            return ShutdownReport { incomplete: false };
+        }
+        let Ok(json) = serde_json::to_value(&body) else {
+            return ShutdownReport { incomplete: true };
+        };
+        let puesta = backend
+            .session_put(
+                norte_frontend::session::SCHEMA_VERSION,
+                self.sesion.revision,
+                json,
+            )
+            .await;
+        // Un conflicto es otra ventana que escribió en medio: lo suyo se
+        // queda, y se dice que lo nuestro no llegó. Pisarlo sería perder la
+        // sesión de alguien.
+        let Ok(rev) = puesta else {
+            self.sesion.policy.resend();
+            return ShutdownReport { incomplete: true };
+        };
+        self.sesion.revision = rev;
+        self.sesion.policy.sent(std::sync::Arc::new(body));
         ShutdownReport { incomplete: false }
     }
 
@@ -764,16 +1006,21 @@ impl Estado {
     /// Solo la ventana visible viaja: un directorio de cien mil entradas no
     /// cruza el bridge para pintar cuarenta filas.
     fn filas_visibles(&self) -> Vec<RowView> {
-        let primera = usize::try_from(self.hueco.primera_visible).unwrap_or(0);
-        let cuantas = usize::try_from(self.hueco.visibles).unwrap_or(0);
-        self.hueco
+        Self::filas_de(self.hueco())
+    }
+
+    /// Las filas visibles de un hueco cualquiera.
+    fn filas_de(hueco: &Hueco) -> Vec<RowView> {
+        let primera = usize::try_from(hueco.primera_visible).unwrap_or(0);
+        let cuantas = usize::try_from(hueco.visibles).unwrap_or(0);
+        hueco
             .pane
             .entries()
             .iter()
             .enumerate()
             .skip(primera)
             .take(cuantas.min(MAX_ROWS_PER_BATCH))
-            .map(|(i, e)| self.fila(i, e))
+            .map(|(i, e)| Self::fila(hueco, i, e))
             .collect()
     }
 
@@ -781,15 +1028,15 @@ impl Estado {
     /// cada cosa que mueve los índices —un re-listado, un re-orden, un
     /// filtro de ocultos—, no solo al cambiar de directorio.
     fn generacion(&self) -> u64 {
-        self.hueco.pane.listing_epoch()
+        self.hueco().pane.listing_epoch()
     }
 
     /// Mover el cursor manda el cursor, no el listado.
     fn parche_cursor(&mut self) -> BridgeEnvelope<UiUpdate> {
         let cambio = ViewChange::Cursor {
-            slot_id: self.hueco.id,
+            slot_id: self.activo(),
             generation: self.generacion(),
-            cursor: Some(RowKey(self.hueco.pane.cursor() as u64)),
+            cursor: Some(RowKey(self.hueco().pane.cursor() as u64)),
         };
         self.parche(vec![cambio])
     }
@@ -797,15 +1044,15 @@ impl Estado {
     /// Lo que cambia una marca o un scroll: las filas visibles.
     fn parche_filas(&mut self) -> BridgeEnvelope<UiUpdate> {
         let cambio = ViewChange::Rows {
-            slot_id: self.hueco.id,
+            slot_id: self.activo(),
             generation: self.generacion(),
-            first_visible: self.hueco.primera_visible,
+            first_visible: self.hueco().primera_visible,
             rows: self.filas_visibles(),
         };
         self.parche(vec![cambio])
     }
 
-    fn fila(&self, i: usize, e: &Entry) -> RowView {
+    fn fila(hueco: &Hueco, i: usize, e: &Entry) -> RowView {
         let bytes = e
             .path
             .file_name()
@@ -821,34 +1068,139 @@ impl Estado {
                 EntryKind::Symlink => RowKind::Symlink,
                 EntryKind::Other => RowKind::Other,
             },
-            selected: i == self.hueco.pane.cursor(),
-            marked: self.hueco.pane.is_marked(e),
+            selected: i == hueco.pane.cursor(),
+            marked: hueco.pane.is_marked(e),
             cells: Vec::new(),
         }
     }
 
+    /// Lee la sesión y la aplica, si se puede.
+    ///
+    /// Tres cosas se deciden aquí, y las tres son de ADR 0059:
+    ///
+    /// - **Quién escribe.** Una ventana SUELTA no escribe. La sesión es un
+    ///   documento con un solo escritor, y dos ventanas guardando la suya
+    ///   encima de la otra es exactamente lo que produce una pantalla que
+    ///   nadie pidió.
+    /// - **Qué se aplica.** Solo lo que este host entiende. Un hueco de un
+    ///   kind desconocido NO se toca, ni siquiera para borrarlo.
+    /// - **Qué NO se sobrescribe.** Si lo guardado es de un esquema más
+    ///   nuevo, se arranca de la configuración y se deja quieto: arrancar sin
+    ///   sesión es recuperable; machacar la de una versión futura no.
+    async fn leer_sesion(&mut self, backend: &dyn HostBackend) {
+        let Ok((sesion, owner)) = backend.session_get().await else {
+            // Sin sesión legible se arranca igual: es memoria de dónde
+            // estabas, no un requisito para existir.
+            return;
+        };
+        self.sesion.revision = sesion.revision;
+        self.sesion.owner = owner;
+        if sesion.version > norte_frontend::session::SCHEMA_VERSION {
+            self.sesion.futuro = true;
+            return;
+        }
+        if sesion.version == 0 {
+            // Nadie la ha escrito todavía.
+            return;
+        }
+        let Ok(body) = serde_json::from_value::<norte_frontend::session::SessionBody>(sesion.body)
+        else {
+            return;
+        };
+        self.aplicar_sesion(&body);
+    }
+
+    /// Coloca cada hueco donde la sesión dice que estaba.
+    fn aplicar_sesion(&mut self, body: &norte_frontend::session::SessionBody) {
+        for (id, hueco) in &mut self.huecos {
+            let Some(estado) = body.slots.get(id) else {
+                continue;
+            };
+            hueco.pane.begin_loading(estado.path.clone());
+            hueco
+                .historial
+                .seed(estado.back.clone(), estado.forward.clone());
+        }
+    }
+
+    /// La pantalla de AHORA como cuerpo de sesión.
+    ///
+    /// Las MARCAS no entran: son una selección de trabajo, no un sitio donde
+    /// estabas, y restaurarlas haría que una ventana nueva abriese con media
+    /// docena de ficheros elegidos que nadie eligió.
+    fn capturar_sesion(&self) -> norte_frontend::session::SessionBody {
+        let mut body = norte_frontend::session::SessionBody::default();
+        body.layouts
+            .insert("default".to_owned(), self.arbol.clone());
+        for (id, hueco) in &self.huecos {
+            body.slots.insert(
+                *id,
+                norte_frontend::session::SlotState {
+                    path: hueco.pane.dir().clone(),
+                    cursor: hueco.pane.cursor() as u64,
+                    back: hueco.historial.trail().to_vec(),
+                    forward: hueco.historial.forward_trail().to_vec(),
+                    sort: hueco.pane.sort(),
+                    columns: Vec::new(),
+                    show_hidden: hueco.pane.show_hidden(),
+                    // El sello de edad lo pone quien escribe, con su reloj:
+                    // aquí no hay ninguno, y una hora inventada haría que la
+                    // barrida de huérfanos se llevara lo que no toca.
+                    touched_ms: 0,
+                },
+            );
+        }
+        body
+    }
+
+    /// La pantalla entera: TODOS los huecos que el reparto pinta, cada uno
+    /// proyectado según lo que es.
+    ///
+    /// Los ocultos no viajan. Un kind que este host todavía no proyecta sí
+    /// viaja, en gris y con su nombre: preservar lo que no se entiende es la
+    /// regla de la sesión (ADR 0059), y hacerlo desaparecer sería peor que
+    /// enseñarlo apagado.
     fn snapshot(&self) -> ViewSnapshot {
-        let (path, hostil) = norte_frontend::path_display(self.hueco.pane.dir());
+        let mut slots = Vec::new();
+        for (slot, _) in &self.reparto.placements {
+            let SlotId(id) = *slot;
+            if let Some(hueco) = self.huecos.get(&id) {
+                slots.push(SlotView::Browser(Self::browser(id, hueco)));
+            } else {
+                let nombre = kind_de(&self.arbol, *slot)
+                    .map_or_else(|| "unknown".to_owned(), |k| k.as_str().to_owned());
+                slots.push(SlotView::Unsupported {
+                    slot_id: id,
+                    kind_name: clamp_display(nombre),
+                });
+            }
+        }
         ViewSnapshot {
             connection: self.conexion.clone(),
-            slots: vec![SlotView::Browser(BrowserSlotView {
-                slot_id: self.hueco.id,
-                generation: self.generacion(),
-                path_display: clamp_display(path),
-                path_hostile: hostil,
-                total_rows: Some(self.hueco.pane.entries().len() as u64),
-                first_visible: self.hueco.primera_visible,
-                rows: self.filas_visibles(),
-                cursor: (!self.hueco.pane.entries().is_empty())
-                    .then_some(RowKey(self.hueco.pane.cursor() as u64)),
-                marks: self.hueco.pane.marks_len() as u64,
-                state: self.hueco.estado.clone(),
-            })],
-            focus: Some(self.hueco.id),
+            slots,
+            focus: Some(self.activo()),
             status: self.status.clone(),
             dialogs: Vec::new(),
             tasks: Vec::new(),
             locale: self.locale.clone(),
+        }
+    }
+
+    /// La proyección de UN listado.
+    fn browser(id: u32, hueco: &Hueco) -> BrowserSlotView {
+        let (path, hostil) = norte_frontend::path_display(hueco.pane.dir());
+        BrowserSlotView {
+            slot_id: id,
+            generation: hueco.pane.listing_epoch(),
+            path_display: clamp_display(path),
+            path_hostile: hostil,
+            total_rows: Some(hueco.pane.entries().len() as u64),
+            first_visible: hueco.primera_visible,
+            rows: Self::filas_de(hueco),
+            cursor: (!hueco.pane.entries().is_empty())
+                .then_some(RowKey(hueco.pane.cursor() as u64)),
+            marks: hueco.pane.marks_len() as u64,
+            state: hueco.estado.clone(),
         }
     }
 }
