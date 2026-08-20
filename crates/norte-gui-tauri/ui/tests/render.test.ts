@@ -76,6 +76,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     status: { message: "2 entradas", banners: [], pending: null },
     dialogs: [],
     tasks: [],
+    viewer: null,
     locale: "es",
   };
 }
@@ -83,12 +84,15 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
 function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
   document.body.replaceChildren();
   const root = document.createElement("main");
+  const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
-  document.body.append(root, dialogs);
+  document.body.append(root, viewer, dialogs);
   document.documentElement.style.setProperty("--cell-h", `${CELL_H}px`);
   document.documentElement.style.setProperty("--cell-w", "8px");
   const enviadas: UiAction[] = [];
-  const screen = new Screen(root, dialogs, catalogo(), (a) => enviadas.push(a));
+  const screen = new Screen(root, viewer, dialogs, catalogo(), (a: UiAction) =>
+    enviadas.push(a),
+  );
   return { screen, enviadas, root };
 }
 
@@ -295,5 +299,81 @@ describe("la cabecera", () => {
     const col = root.querySelector(".slot-columns .col") as HTMLElement;
     col.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     expect(enviadas.some((a) => a.action === "sort_by")).toBe(false);
+  });
+});
+
+describe("el visor", () => {
+  it("tapa la pantalla y dice con qué encoding está leyendo", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.viewer = {
+      path_display: "⟨file⟩/casa/notas.txt",
+      path_hostile: false,
+      encoding: "UTF-8",
+      eol: "lf",
+      hex: false,
+      forced: false,
+      had_errors: false,
+      truncated: true,
+      total_rows: 120,
+      first_line: 0,
+      lines: ["primera", "segunda"],
+    };
+    screen.paint(v);
+    const doc = document.querySelector('[role="document"]') as HTMLElement;
+    expect(doc.getAttribute("aria-label")).toContain("notas.txt");
+    expect(doc.querySelector(".viewer-body")?.textContent).toBe("primera\nsegunda");
+    expect(doc.querySelector(".viewer-meta")?.textContent).toContain("UTF-8");
+  });
+
+  it("un binario se pinta como hexadecimal y lo dice", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.viewer = {
+      path_display: "⟨file⟩/casa/raro.bin",
+      path_hostile: false,
+      encoding: "binario",
+      eol: "none",
+      hex: true,
+      forced: false,
+      had_errors: false,
+      truncated: false,
+      total_rows: 1,
+      first_line: 0,
+      lines: ["00000000  00 01 02 ff"],
+    };
+    screen.paint(v);
+    expect(document.querySelector(".viewer-body")?.classList.contains("hexview")).toBe(
+      true,
+    );
+    expect(document.querySelector(".viewer-meta")?.textContent).toContain("hex");
+  });
+
+  it("sin visor abierto, no hay nada que tape la pantalla", () => {
+    const { screen } = montar();
+    screen.paint(vista({}));
+    expect(document.querySelector('[role="document"]')).toBeNull();
+  });
+
+  it("el contenido de un fichero es TEXTO, nunca marcado", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.viewer = {
+      path_display: "x",
+      path_hostile: false,
+      encoding: "UTF-8",
+      eol: "lf",
+      hex: false,
+      forced: false,
+      had_errors: false,
+      truncated: false,
+      total_rows: 1,
+      first_line: 0,
+      lines: ["<script>alert(1)</script>"],
+    };
+    screen.paint(v);
+    const body = document.querySelector(".viewer-body") as HTMLElement;
+    expect(body.querySelector("script")).toBeNull();
+    expect(body.textContent).toBe("<script>alert(1)</script>");
   });
 });

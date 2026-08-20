@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 3;
+export const BRIDGE_VERSION = 4;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -138,6 +138,20 @@ export interface TaskView {
   foreign: boolean;
 }
 
+export interface ViewerView {
+  path_display: string;
+  path_hostile: boolean;
+  encoding: string;
+  eol: string;
+  hex: boolean;
+  forced: boolean;
+  had_errors: boolean;
+  truncated: boolean;
+  total_rows: number;
+  first_line: number;
+  lines: string[];
+}
+
 export interface ViewSnapshot {
   connection: ConnectionView;
   layout: LayoutView;
@@ -146,6 +160,7 @@ export interface ViewSnapshot {
   status: StatusView;
   dialogs: DialogView[];
   tasks: TaskView[];
+  viewer: ViewerView | null;
   locale: string;
 }
 

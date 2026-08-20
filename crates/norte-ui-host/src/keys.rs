@@ -131,16 +131,32 @@ fn nombre_canonico(key: &str) -> Option<String> {
 /// # Errors
 /// [`KeymapError`] si el preset no existe o no valida.
 pub fn keymap_de_preset(nombre: &str) -> Result<norte_frontend::keymap::Effective, KeymapError> {
+    efectivo(nombre, norte_frontend::keymap::Screen::Browse)
+}
+
+/// El keymap efectivo de la pantalla del VISOR, del mismo preset.
+///
+/// Es OTRA pantalla, no otra capa: con el visor abierto las teclas son suyas
+/// —`esc` cierra, `e` cambia el encoding— y mezclarlas con las del listado
+/// sería un contexto de entrada que no existe en ningún preset.
+///
+/// # Errors
+/// [`KeymapError`] si el preset no existe o no valida.
+pub fn keymap_visor_de_preset(
+    nombre: &str,
+) -> Result<norte_frontend::keymap::Effective, KeymapError> {
+    efectivo(nombre, norte_frontend::keymap::Screen::Viewer)
+}
+
+fn efectivo(
+    nombre: &str,
+    pantalla: norte_frontend::keymap::Screen,
+) -> Result<norte_frontend::keymap::Effective, KeymapError> {
     let fuente = norte_frontend::keymap::presets::source(nombre).ok_or(KeymapError::BadChord {
         chord: nombre.to_owned(),
     })?;
     let preset = norte_frontend::keymap::parse_keymap(fuente)?;
-    norte_frontend::keymap::Effective::build_for(
-        &preset,
-        &[],
-        crate::commands::IMPLEMENTADOS,
-        norte_frontend::keymap::Screen::Browse,
-    )
+    norte_frontend::keymap::Effective::build_for(&preset, &[], &crate::commands::todos(), pantalla)
 }
 
 #[cfg(test)]

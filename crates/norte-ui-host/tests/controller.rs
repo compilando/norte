@@ -26,6 +26,7 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
         initial_dir: dir(),
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         columns: norte_ui_host::columnas_por_defecto(),
@@ -238,6 +239,7 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
         initial_dir: dir(),
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         columns: norte_ui_host::columnas_por_defecto(),
@@ -259,7 +261,7 @@ async fn siguiente_foto(sub: &mut norte_ui_host::UiSubscription) -> norte_ui_hos
         match sub.recv().await.expect("el host sigue vivo") {
             Update::Message(m) => {
                 if let UiUpdate::Snapshot(s) = m.payload {
-                    return s;
+                    return *s;
                 }
             }
             // Quedarse atrás no rompe la espera: significa «pide una foto»,
@@ -578,6 +580,7 @@ async fn el_contador_lo_resuelve_el_host() {
         locale: "es".to_owned(),
         // `vim` es el preset que habilita contadores.
         keymap: norte_ui_host::keys::keymap_de_preset("vim").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("vim").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         columns: norte_ui_host::columnas_por_defecto(),
@@ -672,6 +675,7 @@ async fn host_con_layout(
         initial_dir: dir(),
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree(layout).expect("layout"),
         viewport,
         columns: norte_ui_host::columnas_por_defecto(),
@@ -1560,6 +1564,7 @@ async fn el_catalogo_da_sentido_a_un_attr() {
         initial_dir: dir(),
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         columns: vec![
@@ -2086,6 +2091,7 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
         initial_dir: dir(),
         locale: "es".to_owned(),
         keymap,
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (200, 60),
         columns: norte_ui_host::columnas_por_defecto(),
@@ -2214,5 +2220,95 @@ async fn ordenar_por_una_columna_que_no_ordena_se_dice() {
     assert!(
         matches!(ack, ActionAck::Unavailable { .. }),
         "se dice que esa columna no ordena: {ack:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// El visor (fase 4, tarea 4.3).
+// ---------------------------------------------------------------------------
+
+/// F3 sobre un fichero lo ABRE: se lee una cabecera acotada, se decodifica
+/// con la detección compartida y lo que viaja son líneas ya saneadas.
+#[tokio::test]
+async fn ver_un_fichero_lo_decodifica_y_lo_pinta() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    f.contenido.insert(
+        "mem:///casa/notas.txt".to_owned(),
+        b"primera\nsegunda\ntercera\n".to_vec(),
+    );
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let v = foto.viewer.as_ref().expect("el visor está abierto");
+    assert!(v.path_display.ends_with("notas.txt"));
+    assert_eq!(v.total_rows, 3, "tres líneas");
+    assert!(
+        v.lines.iter().any(|l| l == "primera"),
+        "y el texto llega decodificado: {:?}",
+        v.lines
+    );
+    assert!(!v.hex, "un texto no se enseña en hexadecimal");
+    assert_eq!(v.encoding.to_ascii_uppercase(), "UTF-8");
+}
+
+/// Con el visor abierto, las teclas son SUYAS: el mismo mapa de la pantalla
+/// `viewer` que usa el TUI, no un segundo keymap escrito aquí.
+#[tokio::test]
+async fn con_el_visor_abierto_las_teclas_son_del_visor() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let mut cuerpo = String::new();
+    for i in 0..200 {
+        use std::fmt::Write as _;
+        let _ = writeln!(cuerpo, "linea {i}");
+    }
+    let cuerpo = cuerpo.into_bytes();
+    f.contenido
+        .insert("mem:///casa/notas.txt".to_owned(), cuerpo);
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    let abierto = siguiente_foto(&mut sub).await;
+    assert_eq!(abierto.viewer.as_ref().expect("visor").first_line, 0);
+
+    // `down` en el visor DESPLAZA el visor; no mueve el cursor del listado.
+    let cursor_antes = listado(&abierto).cursor;
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    let bajado = siguiente_foto(&mut sub).await;
+    assert_eq!(bajado.viewer.as_ref().expect("visor").first_line, 1);
+    assert_eq!(
+        listado(&bajado).cursor,
+        cursor_antes,
+        "el listado no se movió por debajo"
+    );
+
+    // Y `esc` lo cierra.
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    let cerrado = siguiente_foto(&mut sub).await;
+    assert!(cerrado.viewer.is_none(), "el visor se cierra");
+}
+
+/// Un binario no se pinta como si fuera texto: se enseña en hexadecimal, y
+/// lo decide la capa compartida por el CONTENIDO, no por la extensión.
+#[tokio::test]
+async fn un_binario_se_enseña_en_hexadecimal() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"raro.txt".to_vec(), false)]);
+    f.contenido.insert(
+        "mem:///casa/raro.txt".to_owned(),
+        vec![0x00, 0x01, 0x02, 0xff, 0xfe, 0x00, 0x03],
+    );
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let v = foto.viewer.as_ref().expect("visor");
+    assert!(
+        v.hex,
+        "un binario entra en hexadecimal aunque se llame .txt"
     );
 }

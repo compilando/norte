@@ -321,6 +321,19 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         },
         dialogs: vec![dialogo_de_referencia()],
         tasks: vec![task_de_referencia()],
+        viewer: Some(norte_ui_host::dto::ViewerView {
+            path_display: "⟨file⟩/home/oscar/notas.txt".to_owned(),
+            path_hostile: false,
+            encoding: "UTF-8".to_owned(),
+            eol: "lf".to_owned(),
+            hex: false,
+            forced: false,
+            had_errors: false,
+            truncated: true,
+            total_rows: 120,
+            first_line: 4,
+            lines: vec!["quinta línea".to_owned()],
+        }),
         locale: "es".to_owned(),
     }
 }
@@ -384,7 +397,7 @@ fn actualizaciones() {
                     changes: vec![ViewChange::Layout(disposicion_de_referencia())],
                 }),
             ),
-            ("snapshot", UiUpdate::Snapshot(snapshot)),
+            ("snapshot", UiUpdate::Snapshot(Box::new(snapshot))),
         ],
     );
 }

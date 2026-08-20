@@ -80,6 +80,16 @@ pub trait HostBackend: Send + Sync + 'static {
     /// ventana visible; este es el mismo camino para el host.
     fn stat(&self, path: VPath, attrs: Vec<String>) -> BoxFuture<'static, Result<Entry, Error>>;
 
+    /// Lee un TROZO de un fichero.
+    ///
+    /// Acotado siempre: el visor enseña una cabecera, no el fichero entero
+    /// (el resto no se lee), y quien llama decide el presupuesto.
+    fn read(
+        &self,
+        path: VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> BoxFuture<'static, Result<Vec<u8>, Error>>;
+
     /// El catálogo de atributos de una localización.
     ///
     /// Sin él, una columna `attr:` no sabe si lo que trae es un tamaño, una
@@ -151,6 +161,15 @@ impl HostBackend for norte_client::RemoteBackend {
     fn stat(&self, path: VPath, attrs: Vec<String>) -> BoxFuture<'static, Result<Entry, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.stat(&path, attrs).await })
+    }
+
+    fn read(
+        &self,
+        path: VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> BoxFuture<'static, Result<Vec<u8>, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.read(&path, range).await })
     }
 
     fn attr_catalog(&self, dir: VPath) -> BoxFuture<'static, Result<AttrCatalog, Error>> {

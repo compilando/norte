@@ -24,7 +24,11 @@ impl Bridge {
     /// Monta el puente sobre un host ya arrancado.
     #[must_use]
     pub fn new(host: UiHost, snapshot: norte_ui_host::ViewSnapshot, catalog: HostCatalog) -> Self {
-        let inicial = BridgeEnvelope::new(host.instance().clone(), 0, UiUpdate::Snapshot(snapshot));
+        let inicial = BridgeEnvelope::new(
+            host.instance().clone(),
+            0,
+            UiUpdate::Snapshot(Box::new(snapshot)),
+        );
         Self {
             host,
             inicial,
@@ -166,6 +170,7 @@ pub(crate) mod tests_soporte {
             initial_dir: vp("mem:///casa"),
             locale: "es".to_owned(),
             keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+            keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
             layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
             viewport: (120, 40),
             columns: norte_ui_host::columnas_por_defecto(),

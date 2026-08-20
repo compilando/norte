@@ -9,6 +9,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The graphical frontend can look at a file.** Bridge version **4**: F3
+  opens a viewer over the listing, reading a bounded 256 KiB head — the rest of
+  the file is not read, the same budget the terminal uses — decoding it through
+  the shared detection, and travelling as lines that are already sanitised. A
+  binary goes to a hex view because of its *content*, not its extension. While
+  the viewer is open the keys are its own: it is the `viewer` screen of the
+  same keymap preset, so `esc` closes, `e` reloads with the next encoding and
+  `F8` does **not** reach the listing underneath. Encoding, line ending,
+  forced-encoding, decoding-errors and truncation all travel as facts the host
+  resolved; the renderer paints them and computes none of them.
+
 - **The graphical listing has column headers, and they sort.** Bridge
   version **3**: every listing carries its headers with the label already
   translated in Rust, which column is sorting and in which direction. A click

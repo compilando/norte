@@ -49,6 +49,11 @@ const FIRST_PAGE: usize = 100;
 /// por entrada ahoga el buzón del actor— ni todas de golpe.
 const FILL_BATCH: usize = 500;
 
+/// Lo que el visor lee de un fichero: una cabecera de 256 KiB. El resto NO
+/// se lee — el mismo presupuesto que el TUI, y por el mismo motivo (ADR
+/// 0005): un visor no es una excusa para traerse un fichero de un giga.
+const VISOR_CAP: u64 = 256 * 1024;
+
 /// Cuántas entradas se sondean de una tanda. Es una PANTALLA con holgura:
 /// más no se ve, y cada sondeo es un viaje al daemon.
 const MAX_SONDEOS: usize = 200;
@@ -71,6 +76,11 @@ pub struct UiHostOptions {
     /// leer configuración no es asunto suyo—; [`crate::keys::keymap_de_preset`]
     /// hace lo mínimo para un test o un arranque sin configuración.
     pub keymap: Effective,
+    /// El keymap efectivo de la pantalla del VISOR, con las mismas capas.
+    /// Va aparte porque es otra pantalla: con el visor abierto las teclas son
+    /// suyas, igual que en el TUI, y mezclarlas sería inventarse un tercer
+    /// contexto de entrada que no existe en ningún preset.
+    pub keymap_viewer: Effective,
     /// La disposición: el árbol de huecos. De un preset de fábrica
     /// (`norte_frontend::layout::presets::tree`) o de la configuración del
     /// usuario; el host no lee ficheros.
@@ -146,6 +156,8 @@ enum Mensaje {
     Aprobacion(Box<norte_proto::methods::PolicyApprovalRequired>),
     /// Más entradas del listado que se está drenando por detrás.
     MasEntradas(Box<(RequestToken, u32, Vec<Entry>)>),
+    /// El contenido que el visor pidió.
+    Contenido(Box<(VPath, Result<Vec<u8>, Error>)>),
     /// Lo que un sondeo averiguó de unas cuantas entradas (tamaño y fecha de
     /// un listado perezoso).
     Hidratado(Box<(RequestToken, u32, Vec<Entry>)>),
@@ -179,27 +191,19 @@ impl UiHost {
         // respuestas de lo que tarda.
         let tx2 = tx.clone();
 
-        let mut estado = Estado::nuevo(
-            instance.clone(),
-            options.locale,
-            &options.initial_dir,
-            options.keymap,
-            options.layout,
-            options.viewport,
-            options.columns,
-        );
+        let (mut estado, backend) = Estado::nuevo(instance.clone(), options);
         // La sesión primero: dice DÓNDE estaba cada hueco, y listar antes
         // sería traer un directorio para tirarlo.
-        estado.leer_sesion(options.backend.as_ref()).await;
+        estado.leer_sesion(backend.as_ref()).await;
         // El primer listado se pide ANTES de publicar nada: el snapshot 0
         // describe una pantalla que ya existe, no una promesa.
-        estado.listar_inicial(&options.backend, &tx2).await;
+        estado.listar_inicial(&backend, &tx2).await;
         // Y se sondea lo que ya se ve: el listado local no trae tamaño ni
         // fecha (#52), así que sin esto la primera pantalla nace con dos
         // columnas en blanco y no se llenan hasta que algo la mueva.
         let visibles: Vec<u32> = estado.huecos.keys().copied().collect();
         for slot in visibles {
-            estado.sondear(slot, &options.backend, &tx2);
+            estado.sondear(slot, &backend, &tx2);
         }
         let primero = estado.snapshot();
 
@@ -207,7 +211,7 @@ impl UiHost {
         // toman una vez, aquí, y su contenido entra por el mismo buzón que
         // todo lo demás: un aviso de conexión perdida tiene que ordenarse
         // con lo que estaba pasando cuando se perdió.
-        if let Some(mut eventos) = options.backend.take_conn_events() {
+        if let Some(mut eventos) = backend.take_conn_events() {
             let buzon = tx.clone();
             tokio::spawn(async move {
                 while let Some(ev) = eventos.recv().await {
@@ -217,7 +221,7 @@ impl UiHost {
                 }
             });
         }
-        if let Some(mut aprobaciones) = options.backend.take_approvals() {
+        if let Some(mut aprobaciones) = backend.take_approvals() {
             let buzon = tx.clone();
             tokio::spawn(async move {
                 while let Some(req) = aprobaciones.recv().await {
@@ -231,7 +235,7 @@ impl UiHost {
                 }
             });
         }
-        if let Some(mut ajenas) = options.backend.take_foreign_tasks() {
+        if let Some(mut ajenas) = backend.take_foreign_tasks() {
             let buzon = tx.clone();
             tokio::spawn(async move {
                 while let Some(task) = ajenas.recv().await {
@@ -250,7 +254,7 @@ impl UiHost {
             updates: updates.clone(),
             instance,
         };
-        tokio::spawn(actor(rx, estado, options.backend, updates, tx2));
+        tokio::spawn(actor(rx, estado, backend, updates, tx2));
         Ok((host, primero))
     }
 
@@ -326,13 +330,7 @@ async fn actor(
             }
             Mensaje::Catalogo(datos) => {
                 let (scheme, catalogo) = *datos;
-                estado.catalogos.insert(scheme, catalogo);
-                // El catálogo cambia cómo se PINTAN las celdas que ya
-                // viajaron, así que se manda una foto: un modo que llegó
-                // como número y ahora es `rwx` no es un parche de fila, es
-                // otra lectura de todo lo que hay.
-                let snap = estado.snapshot();
-                let _ = updates.send(estado.sobre(UiUpdate::Snapshot(snap)));
+                let _ = updates.send(estado.aplicar_catalogo(scheme, catalogo));
             }
             Mensaje::Aprobacion(req) => {
                 for u in estado.abrir_aprobacion(&req) {
@@ -352,7 +350,11 @@ async fn actor(
                 // cursor, marcas—, así que se manda una foto en vez de
                 // enumerar parches que el renderer tendría que casar.
                 let snap = estado.snapshot();
-                let _ = updates.send(estado.sobre(UiUpdate::Snapshot(snap)));
+                let _ = updates.send(estado.sobre(UiUpdate::Snapshot(Box::new(snap))));
+            }
+            Mensaje::Contenido(datos) => {
+                let (path, leido) = *datos;
+                let _ = updates.send(estado.abrir_visor(path, leido));
             }
             Mensaje::Hidratado(datos) => {
                 let (token, slot, sondas) = *datos;
@@ -547,6 +549,13 @@ struct Estado {
     /// El resolver de teclas, con SU keymap efectivo dentro (mismo tipo y
     /// mismo contrato que el del TUI).
     resolver: Resolver,
+    /// El resolver de la pantalla del visor. Mientras el visor esté abierto,
+    /// las teclas pasan por AQUÍ.
+    resolver_visor: Resolver,
+    /// El visor abierto, si lo hay. El modelo es el COMPARTIDO
+    /// (`norte_frontend::viewer::Viewer`): decodificación, hexadecimal y
+    /// desplazamiento son suyos.
+    visor: Option<norte_frontend::viewer::Viewer>,
     /// La disposición: el árbol que el usuario configuró. NO se toca al
     /// redimensionar — un layout guardado es su intención, y reescribirlo
     /// porque la ventana encogió significa que abrir el host un minuto se
@@ -611,15 +620,23 @@ struct Sesion {
 }
 
 impl Estado {
-    fn nuevo(
-        instance: InstanceId,
-        locale: String,
-        dir: &VPath,
-        keymap: Effective,
-        arbol: Node,
-        viewport: (u16, u16),
-        columnas: Vec<norte_frontend::columns::ColumnId>,
-    ) -> Self {
+    /// Construye el estado a partir de las opciones de arranque.
+    ///
+    /// Toma las opciones ENTERAS y no ocho parámetros sueltos: son los
+    /// mismos datos, y una lista de ocho posiciones es donde dos `Effective`
+    /// del mismo tipo se intercambian sin que el compilador diga nada.
+    fn nuevo(instance: InstanceId, options: UiHostOptions) -> (Self, Arc<dyn HostBackend>) {
+        let UiHostOptions {
+            backend,
+            initial_dir,
+            locale,
+            keymap,
+            keymap_viewer: keymap_visor,
+            layout: arbol,
+            viewport,
+            columns: columnas,
+        } = options;
+        let dir = &initial_dir;
         let attrs: Vec<String> = columnas
             .iter()
             .filter_map(|c| match c {
@@ -657,12 +674,14 @@ impl Estado {
         if let Some(otro) = huecos.keys().copied().find(|k| *k != activo) {
             roles.set(RoleId::Target, SlotId(otro));
         }
-        Self {
+        let estado = Self {
             instance,
             sequence: 0,
             token: 0,
             locale,
             resolver: Resolver::new(keymap),
+            resolver_visor: Resolver::new(keymap_visor),
+            visor: None,
             arbol,
             kinds,
             reparto,
@@ -686,7 +705,8 @@ impl Estado {
             },
             status: StatusView::default(),
             conexion: ConnectionView::Connected,
-        }
+        };
+        (estado, backend)
     }
 
     /// El hueco con el foco. Siempre hay uno: si el rol apunta a un hueco
@@ -971,12 +991,18 @@ impl Estado {
                 // no verá llegar.
                 self.reconcilia_roles();
                 let snap = self.snapshot();
-                (self.aplicada(), vec![self.sobre(UiUpdate::Snapshot(snap))])
+                (
+                    self.aplicada(),
+                    vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+                )
             }
             UiAction::Key(k) => self.tecla(k, backend, buzon),
             UiAction::Resync => {
                 let snap = self.snapshot();
-                (self.aplicada(), vec![self.sobre(UiUpdate::Snapshot(snap))])
+                (
+                    self.aplicada(),
+                    vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+                )
             }
             UiAction::Dialog { id, choice } => self.responder_dialogo(*id, choice, backend, buzon),
             UiAction::CancelTask { task_id } => self.cancelar(*task_id),
@@ -1000,6 +1026,11 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Con el VISOR abierto, la pantalla es otra y las teclas son suyas:
+        // el mismo `Screen::Viewer` del TUI, resuelto por su propio mapa.
+        if self.visor.is_some() {
+            return self.tecla_en_visor(k);
+        }
         // Con el buscador abierto, las teclas de TEXTO son suyas. Es el
         // contexto de entrada del listado, y dejar que el resolver se las
         // quede convertiría teclear «d» en «borrar».
@@ -1088,6 +1119,159 @@ impl Estado {
     /// función, un atajo con modificador): abrir el buscador NO desconecta el
     /// resto del teclado, solo se queda el texto, el borrado y las tres
     /// teclas que lo gobiernan.
+    /// Las teclas mientras el visor está abierto.
+    ///
+    /// Resuelven con el mapa de la pantalla `viewer`, y lo que no está ligado
+    /// ahí NO cae al listado: un visor abierto que dejara pasar `F8` sería un
+    /// borrado con la pantalla tapada.
+    fn tecla_en_visor(
+        &mut self,
+        k: &crate::keys::KeyInput,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Ok(chord) = k.to_chord() else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-key-unmapped".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        let Resolution::Run { command, count } = self.resolver_visor.push(chord) else {
+            // Prefijo a medias, contador o nada: el visor no tiene barra de
+            // estado propia todavía, así que no hay nada que pintar.
+            return (self.aplicada(), Vec::new());
+        };
+        let Some(efecto) = crate::commands::efecto_visor_de(&command, count.times()) else {
+            // En el catálogo y ligado a esta pantalla, pero este host no lo
+            // hace: se dice, con la misma frase que el TUI.
+            let frase =
+                norte_frontend::keymap::unavailable_message(&command, Availability::NotHere);
+            self.status.message = Some(clamp_display(frase));
+            let cambio = ViewChange::Status(self.status.clone());
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "cmd-not-here".to_owned(),
+                },
+                vec![self.parche(vec![cambio])],
+            );
+        };
+        let alto = usize::from(self.viewport.1.saturating_sub(2)).max(1);
+        let Some(v) = self.visor.as_mut() else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        let pasos = |n: i64| usize::try_from(n.abs()).unwrap_or(usize::MAX);
+        match efecto {
+            crate::commands::EfectoVisor::Cerrar => self.visor = None,
+            crate::commands::EfectoVisor::Linea(n) if n < 0 => v.scroll_up(pasos(n)),
+            crate::commands::EfectoVisor::Linea(n) => v.scroll_down(pasos(n)),
+            crate::commands::EfectoVisor::Pagina(n) if n < 0 => {
+                v.scroll_up(pasos(n).saturating_mul(alto));
+            }
+            crate::commands::EfectoVisor::Pagina(n) => {
+                v.scroll_down(pasos(n).saturating_mul(alto));
+            }
+            crate::commands::EfectoVisor::Extremo { al_final: false } => v.scroll_top(),
+            crate::commands::EfectoVisor::Extremo { al_final: true } => v.scroll_bottom(),
+            crate::commands::EfectoVisor::Hex => v.toggle_hex(),
+            crate::commands::EfectoVisor::Encoding => v.cycle_encoding(),
+            crate::commands::EfectoVisor::EncodingAuto => v.reset_encoding(),
+        }
+        // Una foto: el visor tapa la pantalla, así que enumerar parches sería
+        // describir con detalle algo que no se ve.
+        let snap = self.snapshot();
+        (
+            self.aplicada(),
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+        )
+    }
+
+    /// Guarda el catálogo de atributos de un esquema y repinta.
+    ///
+    /// Manda una FOTO y no un parche: el catálogo cambia cómo se leen celdas
+    /// que ya viajaron —un modo que llegó como número y ahora es `rwx`—, y
+    /// eso no es un cambio de filas, es otra lectura de todo lo que hay.
+    fn aplicar_catalogo(
+        &mut self,
+        scheme: String,
+        catalogo: norte_proto::AttrCatalog,
+    ) -> BridgeEnvelope<UiUpdate> {
+        self.catalogos.insert(scheme, catalogo);
+        let snap = self.snapshot();
+        self.sobre(UiUpdate::Snapshot(Box::new(snap)))
+    }
+
+    /// Pide el contenido de la entrada bajo el cursor para abrir el visor.
+    fn pedir_visor(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(entrada) = self.hueco().pane.selected().cloned() else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-nothing-to-view".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        if entrada.kind == EntryKind::Dir {
+            // Ver un directorio es entrar en él, y eso ya tiene su tecla.
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-cannot-view-dir".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        let path = entrada.path.clone();
+        tokio::spawn(async move {
+            // Un byte de más que el presupuesto: es lo que delata que el
+            // fichero seguía. El resto NO se lee.
+            let leido = backend
+                .read(
+                    path.clone(),
+                    Some(norte_proto::ByteRange {
+                        offset: 0,
+                        len: Some(VISOR_CAP + 1),
+                    }),
+                )
+                .await;
+            let _ = buzon
+                .send(Mensaje::Contenido(Box::new((path, leido))))
+                .await;
+        });
+        (self.aplicada(), Vec::new())
+    }
+
+    /// Abre el visor con lo que se leyó.
+    fn abrir_visor(
+        &mut self,
+        path: VPath,
+        leido: Result<Vec<u8>, Error>,
+    ) -> BridgeEnvelope<UiUpdate> {
+        match leido {
+            Ok(mut bytes) => {
+                let cap = usize::try_from(VISOR_CAP).unwrap_or(usize::MAX);
+                let truncado = bytes.len() > cap;
+                if truncado {
+                    bytes.truncate(cap);
+                }
+                self.visor = Some(norte_frontend::viewer::Viewer::new(path, bytes, truncado));
+            }
+            Err(e) => {
+                // No se pudo leer: se DICE y no se abre un visor vacío que
+                // parezca un fichero de cero bytes.
+                self.status.message = Some(clamp_display(format!("{e}")));
+                let cambio = ViewChange::Status(self.status.clone());
+                return self.parche(vec![cambio]);
+            }
+        }
+        let snap = self.snapshot();
+        self.sobre(UiUpdate::Snapshot(Box::new(snap)))
+    }
+
     fn tecla_en_quick(
         &mut self,
         k: &crate::keys::KeyInput,
@@ -1186,6 +1370,7 @@ impl Estado {
                     .quick_start(norte_frontend::nav::Mode::Filter);
                 (self.aplicada(), vec![self.parche_filas()])
             }
+            Efecto::Ver => self.pedir_visor(backend, buzon),
             Efecto::CrearDirectorio => self.pedir_mkdir(),
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
         }
@@ -2221,8 +2406,39 @@ impl Estado {
             // viva. Lo mismo con el tablero.
             dialogs: self.vistas_de_dialogos(),
             tasks: self.vistas_de_tasks(),
+            viewer: self.vista_visor(),
             locale: self.locale.clone(),
         }
+    }
+
+    /// La proyección del visor, con la ventana de líneas que cabe.
+    ///
+    /// El alto sale del viewport en CELDAS —la misma rejilla que reparte la
+    /// pantalla—, menos el cromo: el visor ocupa la ventana entera.
+    fn vista_visor(&self) -> Option<crate::dto::ViewerView> {
+        let v = self.visor.as_ref()?;
+        let alto = usize::from(self.viewport.1.saturating_sub(2)).max(1);
+        let (path, hostil) = norte_frontend::path_display(&v.path);
+        Some(crate::dto::ViewerView {
+            path_display: clamp_display(path),
+            path_hostile: hostil,
+            encoding: v.encoding_name().to_owned(),
+            eol: match v.eol() {
+                norte_encoding::Eol::Lf => "lf",
+                norte_encoding::Eol::CrLf => "crlf",
+                norte_encoding::Eol::Cr => "cr",
+                norte_encoding::Eol::Mixed => "mixed",
+                norte_encoding::Eol::None => "none",
+            }
+            .to_owned(),
+            hex: v.hex,
+            forced: v.is_forced(),
+            had_errors: v.had_errors(),
+            truncated: v.truncated,
+            total_rows: v.total_rows() as u64,
+            first_line: v.scroll as u64,
+            lines: v.rows(alto).into_iter().map(clamp_display).collect(),
+        })
     }
 
     /// El reparto de ESTE tamaño, con los papeles puestos.

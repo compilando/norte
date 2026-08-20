@@ -32,6 +32,8 @@ pub struct Falso {
     /// El listado viene PEREZOSO, como el del provider local: sin tamaño ni
     /// fecha. Quien las quiera, que sondee.
     pub lazy: bool,
+    /// Contenido por path, para el visor.
+    pub contenido: HashMap<String, Vec<u8>>,
     /// Los paths que se sondearon, en orden: es lo que permite comprobar que
     /// un sondeo fallido no se repite en bucle.
     pub sondeos: std::sync::Mutex<Vec<VPath>>,
@@ -127,6 +129,25 @@ pub fn arbol_de_prueba() -> Falso {
 }
 
 impl HostBackend for Falso {
+    fn read(
+        &self,
+        path: VPath,
+        range: Option<norte_proto::ByteRange>,
+    ) -> BoxFuture<'static, Result<Vec<u8>, Error>> {
+        let bytes = self.contenido.get(&path.to_wire()).cloned();
+        Box::pin(async move {
+            let mut b = bytes.ok_or(Error::NotFound)?;
+            if let Some(r) = range {
+                let off = usize::try_from(r.offset).unwrap_or(usize::MAX).min(b.len());
+                b = b.split_off(off);
+                if let Some(len) = r.len {
+                    b.truncate(usize::try_from(len).unwrap_or(usize::MAX));
+                }
+            }
+            Ok(b)
+        })
+    }
+
     fn stat(&self, path: VPath, _attrs: Vec<String>) -> BoxFuture<'static, Result<Entry, Error>> {
         self.sondeos.lock().expect("sondeos").push(path.clone());
         // El padre del path dice en qué directorio buscarlo; la entrada sale

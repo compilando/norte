@@ -35,8 +35,50 @@ pub struct ViewSnapshot {
     pub dialogs: Vec<DialogView>,
     /// Tasks vivas y las que acaban de terminar.
     pub tasks: Vec<TaskView>,
+    /// El visor, si hay uno abierto. Ocupa la pantalla: mientras esté, las
+    /// teclas son suyas y el listado no se mueve por debajo.
+    pub viewer: Option<ViewerView>,
     /// Idioma negociado, para que el renderer pida el catálogo correcto.
     pub locale: String,
+}
+
+/// Lo que el visor enseña.
+///
+/// Cinco banderas y no un estado: cada una es un HECHO independiente que el
+/// host resolvió (es hexadecimal, el encoding lo forzó el usuario, la
+/// decodificación tuvo errores, el fichero seguía, el nombre difiere del
+/// real), y juntarlas en un enum obligaría a inventar combinaciones que no
+/// existen.
+#[allow(clippy::struct_excessive_bools)]
+///
+/// El texto viene DECODIFICADO y en líneas por `norte_frontend::viewer`, que
+/// es el mismo modelo que pinta el TUI: la detección de encoding, el salto a
+/// hexadecimal de un binario y el recorte de la ventana visible son suyos, no
+/// del renderer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerView {
+    /// El fichero, ya saneado para pintar.
+    pub path_display: String,
+    /// El texto de arriba DIFIERE del nombre real.
+    pub path_hostile: bool,
+    /// Nombre del encoding con el que se está leyendo.
+    pub encoding: String,
+    /// Final de línea detectado (`lf`, `crlf`, `cr`, `mixed`).
+    pub eol: String,
+    /// Se está enseñando en hexadecimal (binario, o a mano).
+    pub hex: bool,
+    /// El encoding lo forzó el usuario, no la detección.
+    pub forced: bool,
+    /// La decodificación tuvo errores: hay bytes que no eran de ese encoding.
+    pub had_errors: bool,
+    /// Solo se leyó una cabecera: el fichero seguía.
+    pub truncated: bool,
+    /// Líneas totales de lo leído.
+    pub total_rows: u64,
+    /// Primera línea visible.
+    pub first_line: u64,
+    /// Las líneas de la ventana visible, ya saneadas y acotadas.
+    pub lines: Vec<String>,
 }
 
 /// El reparto de la pantalla: quién se pinta, dónde, y con qué papel.
@@ -431,7 +473,11 @@ pub enum UiNotice {
 #[serde(rename_all = "snake_case", tag = "update")]
 pub enum UiUpdate {
     /// Reemplaza TODO el estado del renderer.
-    Snapshot(ViewSnapshot),
+    ///
+    /// En caja: una foto entera es un orden de magnitud más grande que un
+    /// parche o un aviso, y sin la caja ese tamaño lo paga CADA mensaje que
+    /// cruza, la mayoría de los cuales son parches de cursor.
+    Snapshot(Box<ViewSnapshot>),
     /// Cambia lo que dice, sobre la base que dice.
     Patch(ViewPatch),
     /// Algo que decir, en el mismo orden que lo demás.

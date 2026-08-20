@@ -21,6 +21,7 @@ import type {
   TaskView,
   UiAction,
   ViewSnapshot,
+  ViewerView,
 } from "./types";
 
 /** Filas de más que se piden por arriba y por abajo del hueco visible. */
@@ -45,6 +46,7 @@ export class Screen {
 
   constructor(
     private readonly root: HTMLElement,
+    private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
     private readonly catalog: HostCatalog,
     private readonly send: Send,
@@ -83,7 +85,58 @@ export class Screen {
       dom.root.setAttribute("aria-current", p.role === "active" ? "true" : "false");
       this.paintSlot(dom, slot, view, cell);
     }
+    this.paintViewer(view.viewer);
     this.paintDialogs(view.dialogs);
+  }
+
+  /** El visor tapa la pantalla mientras está abierto. */
+  private paintViewer(viewer: ViewerView | null): void {
+    if (viewer === null) {
+      this.viewerRoot.replaceChildren();
+      this.viewerRoot.dataset["open"] = "false";
+      return;
+    }
+    this.viewerRoot.dataset["open"] = "true";
+    const box = document.createElement("section");
+    box.className = "viewer";
+    box.setAttribute("role", "document");
+    box.setAttribute("aria-label", viewer.path_display);
+
+    const head = document.createElement("header");
+    head.className = "viewer-head";
+    head.append(document.createTextNode(viewer.path_display));
+    if (viewer.path_hostile) {
+      head.append(badge(this.t("hostile-name")));
+    }
+    const meta = document.createElement("span");
+    meta.className = "viewer-meta";
+    // Cada marca es un DATO que el host resolvió: encoding, fin de línea, si
+    // lo forzó el usuario, si la decodificación tuvo errores, si el fichero
+    // seguía. Ninguna se calcula aquí.
+    const marcas = [viewer.encoding, viewer.eol];
+    if (viewer.hex) {
+      marcas.push("hex");
+    }
+    if (viewer.forced) {
+      marcas.push(this.t("viewer-forced"));
+    }
+    if (viewer.had_errors) {
+      marcas.push(this.t("viewer-errors"));
+    }
+    if (viewer.truncated) {
+      marcas.push(this.t("viewer-truncated"));
+    }
+    meta.textContent = marcas.join(" · ");
+    head.append(meta);
+
+    const body = document.createElement("pre");
+    body.className = viewer.hex ? "viewer-body hexview" : "viewer-body";
+    body.setAttribute("tabindex", "-1");
+    body.setAttribute("aria-describedby", `viewer-meta-${String(viewer.first_line)}`);
+    body.textContent = viewer.lines.join("\n");
+
+    box.append(head, body);
+    this.viewerRoot.replaceChildren(box);
   }
 
   private rebuild(view: ViewSnapshot, cell: { w: number; h: number }): void {

@@ -173,6 +173,12 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     let keymap = norte_ui_host::keys::keymap_de_preset(&preset)
         .or_else(|_| norte_ui_host::keys::keymap_de_preset("orthodox"))
         .map_err(|e| StartupError::Config(e.to_string()))?;
+    // El visor es otra PANTALLA, con el mismo preset: `esc` cierra y `e`
+    // recarga con otro encoding porque eso es lo que dice el preset, no
+    // porque el renderer lo decida.
+    let keymap_viewer = norte_ui_host::keys::keymap_visor_de_preset(&preset)
+        .or_else(|_| norte_ui_host::keys::keymap_visor_de_preset("orthodox"))
+        .map_err(|e| StartupError::Config(e.to_string()))?;
 
     let nombre_layout = cli
         .layout
@@ -195,6 +201,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
             Lang::En => "en".to_owned(),
         },
         keymap,
+        keymap_viewer,
         layout,
         // El renderer corrige el tamaño en cuanto sepa el suyo; esto es lo
         // que se reparte mientras tanto.

@@ -18,9 +18,10 @@ export interface Metrics {
 
 export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const screenEl = doc.getElementById("screen");
+  const viewerEl = doc.getElementById("viewer");
   const dialogsEl = doc.getElementById("dialogs");
   const fatalEl = doc.getElementById("fatal");
-  if (screenEl === null || dialogsEl === null || fatalEl === null) {
+  if (screenEl === null || viewerEl === null || dialogsEl === null || fatalEl === null) {
     throw new Error("el documento no tiene los anclajes del renderer");
   }
   const metrics: Metrics = { keyToPaint: [], scrollToPaint: [], updates: 0, resyncs: 0 };
@@ -39,7 +40,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
       }
     });
   };
-  const screen = new Screen(screenEl, dialogsEl, catalog, send);
+  const screen = new Screen(screenEl, viewerEl, dialogsEl, catalog, send);
 
   const repaint = (): void => {
     const view = session.view();

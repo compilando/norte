@@ -29,11 +29,87 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.focus-next",
     "layout.focus-prev",
     "layout.set-target",
+    "pane.view",
     "pane.quick-search",
     "pane.mkdir",
     "pane.delete",
     "pane.delete-permanent",
 ];
+
+/// Los comandos de la pantalla del VISOR que el host ejecuta.
+///
+/// Lista aparte porque es otra pantalla, y su keymap efectivo se construye
+/// con `Screen::Viewer`: un comando que no esté aquí resuelve a
+/// [`norte_frontend::keymap::Availability::NotHere`] y se DICE, igual que en
+/// el listado.
+pub const IMPLEMENTADOS_VISOR: &[&str] = &[
+    "viewer.close",
+    "viewer.up",
+    "viewer.down",
+    "viewer.page-up",
+    "viewer.page-down",
+    "viewer.top",
+    "viewer.bottom",
+    "viewer.hex",
+    "viewer.encoding",
+    "viewer.encoding-auto",
+];
+
+/// Todo lo que el host implementa, en las dos pantallas.
+///
+/// Es lo que se le pasa a `Effective::build_for` en AMBAS: el keymap efectivo
+/// necesita saber qué existe para poder distinguir «este frontend no lo hace»
+/// de «norte no lo tiene», y esa pregunta no es por pantalla.
+#[must_use]
+pub fn todos() -> Vec<&'static str> {
+    let mut v = IMPLEMENTADOS.to_vec();
+    v.extend_from_slice(IMPLEMENTADOS_VISOR);
+    v
+}
+
+/// Lo que un comando del VISOR le pide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EfectoVisor {
+    /// Cierra el visor.
+    Cerrar,
+    /// Desplaza tantas líneas (negativo hacia arriba).
+    Linea(i64),
+    /// Desplaza tantas PÁGINAS (negativo hacia arriba).
+    Pagina(i64),
+    /// Al principio o al final.
+    Extremo {
+        /// `true` = al final.
+        al_final: bool,
+    },
+    /// Alterna el hexadecimal.
+    Hex,
+    /// Recarga con el siguiente encoding del ciclo.
+    Encoding,
+    /// Vuelve a la detección automática.
+    EncodingAuto,
+}
+
+/// Traduce un comando de la pantalla del visor a su efecto.
+///
+/// `None` = el host no lo implementa; quien llama lo convierte en un
+/// `Unavailable` que el usuario ve.
+#[must_use]
+pub fn efecto_visor_de(command: &str, veces: u32) -> Option<EfectoVisor> {
+    let n = i64::from(veces.max(1).min(u32::from(u16::MAX)));
+    Some(match command {
+        "viewer.close" => EfectoVisor::Cerrar,
+        "viewer.up" => EfectoVisor::Linea(-n),
+        "viewer.down" => EfectoVisor::Linea(n),
+        "viewer.page-up" => EfectoVisor::Pagina(-n),
+        "viewer.page-down" => EfectoVisor::Pagina(n),
+        "viewer.top" => EfectoVisor::Extremo { al_final: false },
+        "viewer.bottom" => EfectoVisor::Extremo { al_final: true },
+        "viewer.hex" => EfectoVisor::Hex,
+        "viewer.encoding" => EfectoVisor::Encoding,
+        "viewer.encoding-auto" => EfectoVisor::EncodingAuto,
+        _ => return None,
+    })
+}
 
 /// Lo que un comando le pide al hueco con el foco.
 ///
@@ -76,6 +152,8 @@ pub enum Efecto {
     },
     /// Designa OTRO hueco como destino de la siguiente operación.
     Destino,
+    /// Abre el visor sobre la entrada bajo el cursor.
+    Ver,
     /// Abre el buscador incremental del listado.
     BuscarRapido,
     /// Abre el prompt de crear directorio.
@@ -119,6 +197,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.switch" | "layout.focus-next" => Efecto::Foco { atras: false },
         "layout.focus-prev" => Efecto::Foco { atras: true },
         "layout.set-target" => Efecto::Destino,
+        "pane.view" => Efecto::Ver,
         "pane.quick-search" => Efecto::BuscarRapido,
         "pane.mkdir" => Efecto::CrearDirectorio,
         "pane.delete" => Efecto::Borrar { permanente: false },
@@ -144,15 +223,39 @@ mod tests {
         }
     }
 
+    /// Lo mismo para la pantalla del visor.
+    #[test]
+    fn la_lista_del_visor_y_sus_efectos_no_pueden_separarse() {
+        for c in IMPLEMENTADOS_VISOR {
+            assert!(
+                efecto_visor_de(c, 1).is_some(),
+                "{c} está en la lista del visor y no tiene efecto"
+            );
+        }
+    }
+
+    /// Y las dos listas son disjuntas: un comando en las dos significaría que
+    /// una tecla hace dos cosas distintas según la pantalla sin que nadie lo
+    /// declare.
+    #[test]
+    fn las_dos_pantallas_no_comparten_comandos() {
+        for c in IMPLEMENTADOS_VISOR {
+            assert!(
+                !IMPLEMENTADOS.contains(c),
+                "{c} está declarado en las dos pantallas"
+            );
+        }
+    }
+
     /// Y todo lo declarado existe en el catálogo compartido: un comando
     /// inventado aquí no lo ligaría ningún preset.
     #[test]
     fn todo_lo_declarado_esta_en_el_catalogo() {
-        for c in IMPLEMENTADOS {
+        for c in todos() {
             assert!(
                 norte_frontend::keymap::CATALOGUE
                     .iter()
-                    .any(|d| d.name == *c),
+                    .any(|d| d.name == c),
                 "{c} no está en el catálogo compartido"
             );
         }

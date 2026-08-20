@@ -169,6 +169,7 @@ async fn via_host(pasos: &[Paso]) -> Vec<Semantico> {
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         columns: norte_ui_host::columnas_por_defecto(),
@@ -248,7 +249,7 @@ async fn espera_foto(sub: &mut UiSubscription) -> ViewSnapshot {
         if let Update::Message(m) = siguiente
             && let UiUpdate::Snapshot(s) = m.payload
         {
-            return s;
+            return *s;
         }
     }
     panic!("no llegó ninguna foto");

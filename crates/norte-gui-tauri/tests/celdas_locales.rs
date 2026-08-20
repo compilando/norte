@@ -66,6 +66,7 @@ async fn el_tamano_y_la_fecha_no_van_en_blanco() {
         initial_dir: inicio,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         columns: norte_ui_host::columnas_por_defecto(),

@@ -179,6 +179,18 @@ of everything above, and the plan's fallback applies — keep `norte-client` and
 `norte-ui-host`, archive the renderer, and evaluate a small Slint/Iced one
 against the same host. Nothing in phases 1 and 2 depends on this answer.
 
+## Two things about driving this window from a script
+
+- **`GDK_BACKEND=x11` renders a blank webview here.** The process starts, the
+  window opens, the title is right — and the page never paints. Under Wayland
+  the same binary paints correctly. Practical consequence: on this machine the
+  app is Wayland-only, and therefore `xdotool` cannot drive it (it only reaches
+  X clients), which is why the scripted checks go through synthetic DOM events
+  in the measurement pass rather than through the compositor.
+- **Screenshots go through `spectacle -b -n -a -o <file>`.** `grim` refuses
+  (the compositor does not expose the screencopy protocol) and `import -window
+  root` captures only the X layer.
+
 ## Debt this spike leaves
 
 - Watcher, which-key, menu/palette/shortcut views and periodic `session.put`

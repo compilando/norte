@@ -196,6 +196,54 @@ body {
   gap: 8px;
 }
 
+#viewer[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+}
+
+#viewer[data-open="false"] {
+  display: none;
+}
+
+.viewer {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-focus);
+  overflow: hidden;
+}
+
+.viewer-head {
+  flex: 0 0 var(--cell-h);
+  padding: 0 6px;
+  color: var(--title-fg);
+  background: var(--status-bg);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.viewer-meta {
+  opacity: 0.8;
+}
+
+.viewer-body {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  white-space: pre;
+  font: inherit;
+}
+
+.hexview {
+  letter-spacing: 0.02em;
+}
+
 #dialogs:empty {
   display: none;
 }
