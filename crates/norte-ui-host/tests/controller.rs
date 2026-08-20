@@ -28,6 +28,7 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
+        columns: norte_ui_host::columnas_por_defecto(),
     })
     .await
     .expect("arranca")
@@ -97,21 +98,6 @@ async fn una_fila_que_no_existe_es_una_carrera_no_un_error() {
             reason: StaleAction::Generation
         }
     );
-}
-
-/// Lo que el host aún no hace se DICE. Un renderer tiene que poder
-/// distinguir «aún no» de «no pasó nada».
-#[tokio::test]
-async fn lo_no_implementado_se_dice() {
-    let (h, _snap) = host(vec!["a"]).await;
-    let ack = h
-        .dispatch(UiAction::DialogInput {
-            id: norte_ui_host::ModalId(1),
-            text: "algo".to_owned(),
-        })
-        .await
-        .expect("host vivo");
-    assert!(matches!(ack, ActionAck::Unavailable { .. }));
 }
 
 /// Un suscriptor lento NO hace crecer la memoria del host: se entera de que
@@ -254,6 +240,7 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
+        columns: norte_ui_host::columnas_por_defecto(),
     })
     .await
     .expect("arranca")
@@ -593,6 +580,7 @@ async fn el_contador_lo_resuelve_el_host() {
         keymap: norte_ui_host::keys::keymap_de_preset("vim").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
+        columns: norte_ui_host::columnas_por_defecto(),
     })
     .await
     .expect("arranca");
@@ -686,6 +674,7 @@ async fn host_con_layout(
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree(layout).expect("layout"),
         viewport,
+        columns: norte_ui_host::columnas_por_defecto(),
     })
     .await
     .expect("arranca")
@@ -1328,4 +1317,137 @@ async fn una_task_ajena_se_ve_y_se_dice_ajena() {
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].task_id, 11);
     assert!(tasks[0].foreign, "el tablero dice que es ajena");
+}
+
+/// Las columnas configuradas llegan como celdas, con el MISMO formato que
+/// pinta el TUI, y la ausencia viaja como ausencia: un directorio sin tamaño
+/// no lleva un `0` fabricado.
+#[tokio::test]
+async fn las_columnas_configuradas_llegan_como_celdas() {
+    let (_h, snap) = host_arbol(arbol()).await;
+    let filas = &listado(&snap).rows;
+    let dir = filas
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("el directorio está");
+    let fichero = filas
+        .iter()
+        .find(|r| r.display_name == "notas.txt")
+        .expect("el fichero está");
+
+    let columnas: Vec<&str> = fichero.cells.iter().map(|c| c.column.as_str()).collect();
+    assert_eq!(
+        columnas,
+        vec!["size", "mtime"],
+        "nombre aparte, el resto aquí"
+    );
+
+    let size_dir = dir
+        .cells
+        .iter()
+        .find(|c| c.column == "size")
+        .expect("la celda existe");
+    assert_eq!(size_dir.text, None, "un dir sin tamaño no inventa un cero");
+
+    let size_fichero = fichero
+        .cells
+        .iter()
+        .find(|c| c.column == "size")
+        .expect("la celda existe");
+    assert!(
+        size_fichero.text.is_some(),
+        "y un fichero con tamaño lo trae formateado"
+    );
+}
+
+/// Crear directorio: el diálogo lleva CAMPO DE TEXTO, lo tecleado viaja, y
+/// confirmar encola la task.
+#[tokio::test]
+async fn crear_directorio_teclea_y_encola() {
+    let backend = arbol();
+    let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = host.subscribe();
+
+    host.dispatch(tecla("F7")).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let id = dialogos[0].id;
+    assert_eq!(
+        dialogos[0].input.as_deref(),
+        Some(""),
+        "el diálogo dice que aquí se teclea"
+    );
+
+    host.dispatch(UiAction::DialogInput {
+        id,
+        text: "carpeta nueva".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let tecleado = siguientes_dialogos(&mut sub).await;
+    assert_eq!(tecleado[0].input.as_deref(), Some("carpeta nueva"));
+
+    host.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let creados = backend.creados.lock().expect("creados").clone();
+    assert_eq!(creados.len(), 1, "se encoló una creación");
+    assert!(
+        creados[0].to_wire().ends_with("carpeta nueva"),
+        "con el nombre tecleado: {}",
+        creados[0].to_wire()
+    );
+}
+
+/// Un nombre que no vale no encola nada y se dice.
+#[tokio::test]
+async fn un_nombre_invalido_no_crea_nada() {
+    let backend = arbol();
+    let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = host.subscribe();
+    host.dispatch(tecla("F7")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+
+    host.dispatch(UiAction::DialogInput {
+        id,
+        text: "..".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    host.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        backend.creados.lock().expect("creados").is_empty(),
+        "`..` no es un nombre de directorio"
+    );
+}
+
+/// Escribir en un diálogo de DECISIÓN no se interpreta: no tiene dónde.
+#[tokio::test]
+async fn no_se_teclea_en_un_dialogo_de_decision() {
+    let (host, _snap) = host_arbol(arbol()).await;
+    let mut sub = host.subscribe();
+    host.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    let ack = host
+        .dispatch(UiAction::DialogInput {
+            id,
+            text: "lo que sea".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Stale {
+            reason: StaleAction::Modal
+        }
+    );
 }

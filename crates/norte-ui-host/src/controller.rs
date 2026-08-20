@@ -74,6 +74,10 @@ pub struct UiHostOptions {
     /// El tamaño INICIAL de la ventana, en celdas de layout. El renderer lo
     /// corrige en cuanto sepa el suyo ([`UiAction::SetViewport`]).
     pub viewport: (u16, u16),
+    /// Las columnas configuradas, en orden. El nombre lo pinta el renderer
+    /// aparte (es la columna que nunca se descarta), así que aquí van las
+    /// demás: tamaño, fecha, un atributo del provider, una columna de plugin.
+    pub columns: Vec<norte_frontend::columns::ColumnId>,
 }
 
 /// Lo que un suscriptor recibe.
@@ -163,6 +167,7 @@ impl UiHost {
             options.keymap,
             options.layout,
             options.viewport,
+            options.columns,
         );
         // La sesión primero: dice DÓNDE estaba cada hueco, y listar antes
         // sería traer un directorio para tirarlo.
@@ -396,6 +401,14 @@ fn kind_de(arbol: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId>
     buscar(arbol, slot)
 }
 
+/// El ahora, en milisegundos. Lo inyecta el proyector para que el formato de
+/// una fecha relativa («hace 3 días») no dependa de cuándo se serializó.
+fn ahora_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
 /// Identidad única de una instancia: pid más el instante de arranque. No
 /// necesita ser impredecible —no autoriza nada—, solo distinta de la de la
 /// vida anterior del proceso.
@@ -443,6 +456,13 @@ enum Pendiente {
         /// Permanente (sin papelera): el diálogo lo AVISA.
         permanente: bool,
     },
+    /// Crear un directorio dentro de este otro. El nombre lo teclea el
+    /// usuario y se valida al confirmar, no al teclear: corregir un nombre a
+    /// medias es peor que verlo rechazado al final.
+    CrearDirectorio {
+        /// Dónde se crea.
+        dir: VPath,
+    },
 }
 
 /// Una task viva en el tablero.
@@ -475,6 +495,11 @@ struct Estado {
     reparto: Resolved,
     /// Quién tiene el foco y quién es el destino.
     roles: Roles,
+    /// Las columnas configuradas.
+    columnas: Vec<norte_frontend::columns::ColumnId>,
+    /// Los ids de atributo que esas columnas piden: se mandan en cada
+    /// listado, porque un provider solo entrega lo que se le pide.
+    attrs: Vec<String>,
     /// Los huecos con estado, por id.
     huecos: std::collections::BTreeMap<u32, Hueco>,
     /// Los diálogos abiertos, en orden de apertura. Cada uno con su id: un
@@ -521,7 +546,15 @@ impl Estado {
         keymap: Effective,
         arbol: Node,
         viewport: (u16, u16),
+        columnas: Vec<norte_frontend::columns::ColumnId>,
     ) -> Self {
+        let attrs: Vec<String> = columnas
+            .iter()
+            .filter_map(|c| match c {
+                norte_frontend::columns::ColumnId::Attr(id) => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
         let kinds = KindRegistry::builtin();
         let reparto = resolve(rect(viewport), &arbol, &kinds);
         // Un hueco de listado por cada `browser` del árbol, todos en el
@@ -561,6 +594,8 @@ impl Estado {
             kinds,
             reparto,
             roles,
+            columnas,
+            attrs,
             huecos,
             dialogos: Vec::new(),
             siguiente_modal: 1,
@@ -700,7 +735,7 @@ impl Estado {
             if let Some(h) = self.huecos.get_mut(&id) {
                 h.en_vuelo = Some(token);
             }
-            let stream = backend.list(dir.clone()).await;
+            let stream = backend.list(dir.clone(), self.attrs.clone()).await;
             let res = Self::primera_pagina(stream, id, token, buzon.clone()).await;
             self.aterriza_en(id, dir, res);
             // `aterriza_en` limpia el testigo al aterrizar la primera
@@ -843,12 +878,7 @@ impl Estado {
             // Un diálogo con campo de texto llega con la tarea que lo traiga
             // (crear directorio, renombrar). Decirlo es más honesto que
             // aceptar texto que nadie va a leer.
-            UiAction::DialogInput { .. } => (
-                ActionAck::Unavailable {
-                    reason_key: "host-action-not-implemented".to_owned(),
-                },
-                Vec::new(),
-            ),
+            UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
         }
     }
 
@@ -1049,6 +1079,7 @@ impl Estado {
                     .quick_start(norte_frontend::nav::Mode::Filter);
                 (self.aplicada(), vec![self.parche_filas()])
             }
+            Efecto::CrearDirectorio => self.pedir_mkdir(),
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
         }
     }
@@ -1123,6 +1154,64 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
+    /// Abre el prompt de crear directorio, con su campo de texto vacío.
+    fn pedir_mkdir(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let dir = self.hueco().pane.dir().clone();
+        let (donde, _hostil) = norte_frontend::path_display(&dir);
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: "modal-mkdir-title".to_owned(),
+            body: vec![clamp_display(donde)],
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            // Con campo de texto: es lo que hace que el renderer sepa que
+            // aquí se teclea, sin que tenga que deducirlo del título.
+            input: Some(String::new()),
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista: vista.clone(),
+            al_confirmar: Some(Pendiente::CrearDirectorio { dir }),
+        });
+        let cambio = ViewChange::Dialogs(self.vistas_de_dialogos());
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Teclea en el campo de un diálogo.
+    ///
+    /// El renderer manda el texto ENTERO tras la edición y no un delta: el
+    /// caret es suyo, y reconstruirlo en Rust sería mantener dos ideas de
+    /// dónde está el cursor.
+    fn escribir_en_dialogo(
+        &mut self,
+        id: ModalId,
+        texto: &str,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(dialogo) = self.dialogos.iter_mut().find(|d| d.id == id) else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        if dialogo.vista.input.is_none() {
+            // Un diálogo de decisión no tiene dónde escribir, y aceptar texto
+            // que nadie va a leer sería peor que decirlo.
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        dialogo.vista.input = Some(clamp_display(texto.to_owned()));
+        let cambio = ViewChange::Dialogs(self.vistas_de_dialogos());
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
     /// Responde a un diálogo.
     ///
     /// Un id que no es el del diálogo abierto —porque ya se contestó, porque
@@ -1150,10 +1239,40 @@ impl Estado {
         }
         let dialogo = self.dialogos.remove(pos);
         let mut salidas = Vec::new();
-        if choice == "confirm"
-            && let Some(Pendiente::Borrar { paths, permanente }) = dialogo.al_confirmar
-        {
-            Self::lanzar_borrado(paths, permanente, backend, buzon);
+        if choice == "confirm" {
+            match dialogo.al_confirmar {
+                Some(Pendiente::Borrar { paths, permanente }) => {
+                    Self::lanzar_borrado(paths, permanente, backend, buzon);
+                }
+                Some(Pendiente::CrearDirectorio { dir }) => {
+                    let nombre = dialogo.vista.input.unwrap_or_default();
+                    // El nombre se valida AQUÍ, con la misma regla que
+                    // cualquier otro segmento: ni vacío, ni `/`, ni NUL, ni
+                    // `.`/`..`. Un nombre que no vale no encola nada y lo
+                    // dice; el texto tecleado no se pierde porque el diálogo
+                    // se vuelve a abrir con él.
+                    let Ok(seg) = norte_proto::Segment::new(nombre.clone().into_bytes()) else {
+                        self.status.message = Some(clamp_display(norte_i18n::t("err-bad-name")));
+                        let cambio = ViewChange::Status(self.status.clone());
+                        salidas.push(self.parche(vec![cambio]));
+                        return (self.aplicada(), salidas);
+                    };
+                    let destino = dir.join(seg);
+                    let backend = Arc::clone(backend);
+                    let buzon = buzon.clone();
+                    tokio::spawn(async move {
+                        match backend.mkdir(destino).await {
+                            Ok(task) => {
+                                let _ = buzon.send(Mensaje::TaskNueva(Box::new(task))).await;
+                            }
+                            Err(e) => {
+                                let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
+                            }
+                        }
+                    });
+                }
+                None => {}
+            }
         }
         let cambio = ViewChange::Dialogs(self.vistas_de_dialogos());
         salidas.push(self.parche(vec![cambio]));
@@ -1443,8 +1562,9 @@ impl Estado {
         let buzon = buzon.clone();
         let dir = destino.clone();
         let slot = self.activo();
+        let attrs = self.attrs.clone();
         tokio::spawn(async move {
-            let stream = backend.list(dir.clone()).await;
+            let stream = backend.list(dir.clone(), attrs).await;
             let res = Estado::primera_pagina(stream, slot, token, buzon.clone()).await;
             // Si el actor ya no está, la respuesta no le importa a nadie.
             let _ = buzon
@@ -1534,11 +1654,11 @@ impl Estado {
     /// Solo la ventana visible viaja: un directorio de cien mil entradas no
     /// cruza el bridge para pintar cuarenta filas.
     fn filas_visibles(&self) -> Vec<RowView> {
-        Self::filas_de(self.hueco())
+        self.filas_de(self.hueco())
     }
 
     /// Las filas visibles de un hueco cualquiera.
-    fn filas_de(hueco: &Hueco) -> Vec<RowView> {
+    fn filas_de(&self, hueco: &Hueco) -> Vec<RowView> {
         let primera = usize::try_from(hueco.primera_visible).unwrap_or(0);
         let cuantas = usize::try_from(hueco.visibles).unwrap_or(0);
         hueco
@@ -1548,7 +1668,7 @@ impl Estado {
             .enumerate()
             .skip(primera)
             .take(cuantas.min(MAX_ROWS_PER_BATCH))
-            .map(|(i, e)| Self::fila(hueco, i, e))
+            .map(|(i, e)| self.fila(hueco, i, e))
             .collect()
     }
 
@@ -1580,7 +1700,7 @@ impl Estado {
         self.parche(vec![cambio])
     }
 
-    fn fila(hueco: &Hueco, i: usize, e: &Entry) -> RowView {
+    fn fila(&self, hueco: &Hueco, i: usize, e: &Entry) -> RowView {
         let bytes = e
             .path
             .file_name()
@@ -1598,8 +1718,42 @@ impl Estado {
             },
             selected: i == hueco.pane.cursor(),
             marked: hueco.pane.is_marked(e),
-            cells: Vec::new(),
+            cells: self.celdas(hueco, e),
         }
+    }
+
+    /// Las celdas de una fila, una por columna configurada.
+    ///
+    /// Las construye `norte_frontend::columns::styled_cell`, que es la misma
+    /// función que usa el TUI: el formato de un tamaño o de una fecha no
+    /// puede depender de quién pinta. `None` es AUSENCIA —un directorio sin
+    /// tamaño, un atributo que el provider no mandó— y viaja como tal: jamás
+    /// un `0` fabricado.
+    fn celdas(&self, hueco: &Hueco, e: &Entry) -> Vec<crate::dto::CellView> {
+        use norte_frontend::columns::{ColumnId, ColumnStyle, styled_cell};
+        let ahora = ahora_ms();
+        self.columnas
+            .iter()
+            .filter(|c| !matches!(c, ColumnId::Builtin(norte_frontend::columns::Builtin::Name)))
+            .map(|col| {
+                let texto = match col {
+                    // Las de plugin no viven en la `Entry` sino en el
+                    // side-map del pane: se resuelven por ese camino.
+                    ColumnId::Plugin { plugin, column } => hueco.pane.plugin_cell(
+                        &norte_frontend::columns::plugin_display_id(plugin, column),
+                        &e.path,
+                    ),
+                    // Sin catálogo de atributos todavía (el host aún no lo
+                    // pide): un attr sin hint se alinea a la izquierda y se
+                    // pinta opaco, que es lo que `default_for_id` decide.
+                    otra => styled_cell(e, otra, ahora, &ColumnStyle::default_for_id(otra, None)),
+                };
+                crate::dto::CellView {
+                    column: col.to_string(),
+                    text: texto.map(clamp_display),
+                }
+            })
+            .collect()
     }
 
     /// Lee la sesión y la aplica, si se puede.
@@ -1693,7 +1847,7 @@ impl Estado {
         for (slot, _) in &self.reparto.placements {
             let SlotId(id) = *slot;
             if let Some(hueco) = self.huecos.get(&id) {
-                slots.push(SlotView::Browser(Self::browser(id, hueco)));
+                slots.push(SlotView::Browser(self.browser(id, hueco)));
             } else {
                 let nombre = kind_de(&self.arbol, *slot)
                     .map_or_else(|| "unknown".to_owned(), |k| k.as_str().to_owned());
@@ -1715,7 +1869,7 @@ impl Estado {
     }
 
     /// La proyección de UN listado.
-    fn browser(id: u32, hueco: &Hueco) -> BrowserSlotView {
+    fn browser(&self, id: u32, hueco: &Hueco) -> BrowserSlotView {
         let (path, hostil) = norte_frontend::path_display(hueco.pane.dir());
         BrowserSlotView {
             slot_id: id,
@@ -1724,7 +1878,7 @@ impl Estado {
             path_hostile: hostil,
             total_rows: Some(hueco.pane.entries().len() as u64),
             first_visible: hueco.primera_visible,
-            rows: Self::filas_de(hueco),
+            rows: self.filas_de(hueco),
             cursor: (!hueco.pane.entries().is_empty())
                 .then_some(RowKey(hueco.pane.cursor() as u64)),
             marks: hueco.pane.marks_len() as u64,

@@ -4580,6 +4580,7 @@ dependencies = [
  "norte-client",
  "norte-core",
  "norte-frontend",
+ "norte-i18n",
  "norte-proto",
  "norte-testkit",
  "norte-vfs",
