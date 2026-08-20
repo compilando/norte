@@ -5,8 +5,39 @@
 //! deterministas sin daemon—. Todo lo demás se le pide al
 //! [`norte_client::RemoteBackend`] directamente.
 
+use std::sync::Arc;
+
 use futures::future::BoxFuture;
-use norte_proto::{Entry, Error, VPath, methods};
+use norte_proto::{DeleteMode, Entry, Error, TaskId, TaskProgress, VPath, methods};
+use tokio::sync::watch;
+
+/// Una Task en marcha, en la forma mínima que el host necesita: su id, su
+/// progreso y cómo pedirle que pare.
+///
+/// No es el `RemoteTask` del SDK a propósito. El host solo necesita estas
+/// tres cosas, y pedirlas así es lo que permite que un test las fabrique sin
+/// daemon —que es donde se comprueban las reglas que de verdad importan: que
+/// un estado terminal no se pierda y que cancelar sea idempotente—.
+pub struct HostTask {
+    /// Id de la task en el daemon.
+    pub id: TaskId,
+    /// Snapshots vivos del progreso.
+    pub progress: watch::Receiver<TaskProgress>,
+    /// Pide la cancelación cooperativa. Llamarla dos veces no es un error:
+    /// cancelar es idempotente por contrato.
+    pub cancel: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl std::fmt::Debug for HostTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // A mano porque una función no es `Debug`, y `finish_non_exhaustive`
+        // lo DICE en vez de dar a entender que la task son dos campos.
+        f.debug_struct("HostTask")
+            .field("id", &self.id)
+            .field("progress", &self.progress.borrow().state)
+            .finish_non_exhaustive()
+    }
+}
 
 /// Lo que el controlador necesita saber pedir.
 ///
@@ -37,6 +68,14 @@ pub trait HostBackend: Send + Sync + 'static {
         revision: u64,
         body: serde_json::Value,
     ) -> BoxFuture<'static, Result<u64, Error>>;
+
+    /// Borra UNA entrada: a la papelera o permanente. Devuelve la Task ya
+    /// encolada — el desenlace llega por su progreso, no por esta llamada.
+    ///
+    /// Una por entrada y no un lote porque el método del wire es así; un
+    /// borrado de varias marcas son varias Tasks, y el tablero las enseña
+    /// todas.
+    fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>>;
 }
 
 /// El backend de verdad: el SDK.
@@ -67,5 +106,18 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<u64, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.session_put(version, revision, body).await })
+    }
+
+    fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.delete(&path, mode).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+            })
+        })
     }
 }
