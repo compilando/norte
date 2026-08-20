@@ -143,7 +143,11 @@
     ],
     "status": {
       "banners": [],
-      "message": "2 entradas"
+      "message": "2 entradas",
+      "pending": {
+        "chords": "ctrl+x",
+        "count": 12
+      }
     },
     "tasks": [
       {

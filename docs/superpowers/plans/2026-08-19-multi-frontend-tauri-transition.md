@@ -959,7 +959,7 @@ Acceptance:
 
 ## Phase 2 — Build the toolkit-independent `norte-ui-host`
 
-> **Tasks 2.1, 2.2 and the core of 2.3 DONE 2026-08-20.** The crate exists with `bridge.rs`
+> **Tasks 2.1, 2.2, the core of 2.3 and the core of 2.4 DONE 2026-08-20.** The crate exists with `bridge.rs`
 > (envelope, `BRIDGE_VERSION`, opaque `RowKey`/`ModalId`/`RequestToken`, caps),
 > `dto.rs` (renderer-safe views; no raw path crosses), `action.rs` (semantic
 > actions) and `controller.rs` (bounded inbox, one writer, broadcast
@@ -986,7 +986,19 @@ Acceptance:
 > catalogue, watcher refresh and degradation, and the hidden-slot lifecycle.
 > Those need tasks 2.4 and 2.5 around them to mean anything.
 >
-> **Next: task 2.4** (command/keymap/availability over the shared catalogue).
+> **Task 2.4, done:** the renderer sends normalized keys through a thin
+> adapter (`keys.rs`) and Rust resolves counts, prefixes and commands with the
+> shared `Resolver`, presets and catalogue. `commands.rs` declares what this
+> host implements — which is what makes `Availability::NotHere` mean
+> something — with tests that stop the list and the effects from drifting
+> apart. Pending sequences and counts are projected into the status view.
+>
+> **Task 2.4, still owed:** which-key panel projection beyond the pending
+> string, menu/palette/shortcuts views, the sacred-key rule (it needs two
+> slots to mean anything, so it lands with task 2.5) and text-entry contexts
+> (they need dialogs, task 2.6).
+>
+> **Next: task 2.5** (layout and session lifecycle).
 
 Implement one vertical feature at a time. The host should be useful to a
 headless test before Tauri exists.

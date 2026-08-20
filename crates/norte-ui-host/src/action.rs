@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::bridge::{ModalId, RowKey};
+use crate::keys::KeyInput;
 
 /// Una petición del renderer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +102,13 @@ pub enum UiAction {
         /// Id de la task.
         task_id: u64,
     },
+    /// Una tecla.
+    ///
+    /// El renderer manda la tecla NORMALIZADA y nada más: quién resuelve un
+    /// contador, un prefijo a medias o qué comando lleva ligado es Rust, con
+    /// el mismo resolver y los mismos presets que el TUI. Dos keymaps serían
+    /// dos sitios donde divergir sin que nadie lo note.
+    Key(KeyInput),
     /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
     Resync,
 }

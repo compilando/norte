@@ -163,6 +163,19 @@ pub struct StatusView {
     pub message: Option<String>,
     /// Avisos persistentes (degradación, journal, sesión), acotados.
     pub banners: Vec<String>,
+    /// Lo que hay tecleado a medias: una secuencia, un contador, o las dos
+    /// cosas. Se pinta SIEMPRE que exista — un prefijo pendiente que no se
+    /// ve es un prefijo que no se puede cancelar.
+    pub pending: Option<PendingView>,
+}
+
+/// Una secuencia o un contador a medio teclear.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingView {
+    /// Los acordes tecleados, ya pintados (`ctrl+x g`).
+    pub chords: String,
+    /// El contador acumulado, si el preset los habilita y se está tecleando.
+    pub count: Option<u32>,
 }
 
 /// Un diálogo abierto.

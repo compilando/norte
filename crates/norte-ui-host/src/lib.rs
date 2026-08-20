@@ -20,8 +20,10 @@
 pub mod action;
 pub mod backend;
 pub mod bridge;
+pub mod commands;
 pub mod controller;
 pub mod dto;
+pub mod keys;
 
 pub use action::UiAction;
 pub use backend::HostBackend;
@@ -31,3 +33,4 @@ pub use bridge::{
 };
 pub use controller::{ShutdownReport, UiHost, UiHostOptions, UiSubscription, Update};
 pub use dto::{UiNotice, UiUpdate, ViewPatch, ViewSnapshot};
+pub use keys::KeyInput;

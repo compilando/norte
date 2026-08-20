@@ -14,6 +14,7 @@
 use std::sync::Arc;
 
 use norte_frontend::PaneState;
+use norte_frontend::keymap::{Availability, Effective, Resolution, Resolver};
 use norte_frontend::nav::{History, Trail, TrailStep};
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -24,9 +25,10 @@ use crate::bridge::{
     ActionAck, BridgeEnvelope, InstanceId, MAX_ROWS_PER_BATCH, RequestToken, RowKey, StaleAction,
     clamp_display,
 };
+use crate::commands::{Efecto, efecto_de};
 use crate::dto::{
-    BrowserSlotView, ConnectionView, RowKind, RowView, SlotState, SlotView, StatusView, UiNotice,
-    UiUpdate, ViewChange, ViewPatch, ViewSnapshot,
+    BrowserSlotView, ConnectionView, PendingView, RowKind, RowView, SlotState, SlotView,
+    StatusView, UiNotice, UiUpdate, ViewChange, ViewPatch, ViewSnapshot,
 };
 
 /// Capacidad del buzón del actor. Acotado a propósito: si el renderer manda
@@ -47,6 +49,11 @@ pub struct UiHostOptions {
     pub initial_dir: VPath,
     /// Idioma ya negociado, para que el renderer pida su catálogo.
     pub locale: String,
+    /// El keymap EFECTIVO de la pantalla de listado, ya fusionado
+    /// (preset + capas del usuario). Lo construye quien arranca el host —
+    /// leer configuración no es asunto suyo—; [`crate::keys::keymap_de_preset`]
+    /// hace lo mínimo para un test o un arranque sin configuración.
+    pub keymap: Effective,
 }
 
 /// Lo que un suscriptor recibe.
@@ -118,7 +125,12 @@ impl UiHost {
         // respuestas de lo que tarda.
         let tx2 = tx.clone();
 
-        let mut estado = Estado::nuevo(instance.clone(), options.locale, options.initial_dir);
+        let mut estado = Estado::nuevo(
+            instance.clone(),
+            options.locale,
+            options.initial_dir,
+            options.keymap,
+        );
         // El primer listado se pide ANTES de publicar nada: el snapshot 0
         // describe una pantalla que ya existe, no una promesa.
         estado.listar_inicial(options.backend.as_ref()).await;
@@ -268,18 +280,22 @@ struct Estado {
     /// respuesta con un testigo viejo se descarta.
     token: u64,
     locale: String,
+    /// El resolver de teclas, con SU keymap efectivo dentro (mismo tipo y
+    /// mismo contrato que el del TUI).
+    resolver: Resolver,
     hueco: Hueco,
     status: StatusView,
     conexion: ConnectionView,
 }
 
 impl Estado {
-    fn nuevo(instance: InstanceId, locale: String, dir: VPath) -> Self {
+    fn nuevo(instance: InstanceId, locale: String, dir: VPath, keymap: Effective) -> Self {
         Self {
             instance,
             sequence: 0,
             token: 0,
             locale,
+            resolver: Resolver::new(keymap),
             hueco: Hueco {
                 id: 1,
                 pane: PaneState::new(dir, Vec::new()),
@@ -400,6 +416,7 @@ impl Estado {
             UiAction::Activate { .. } | UiAction::Parent { .. } | UiAction::History { .. } => {
                 self.navegacion(accion, backend, buzon)
             }
+            UiAction::Key(k) => self.tecla(k, backend, buzon),
             UiAction::Resync => {
                 let snap = self.snapshot();
                 (self.aplicada(), vec![self.sobre(UiUpdate::Snapshot(snap))])
@@ -415,6 +432,157 @@ impl Estado {
                 },
                 Vec::new(),
             ),
+        }
+    }
+
+    /// Una tecla: la resuelve el keymap COMPARTIDO y el host solo ejecuta.
+    ///
+    /// Los cuatro desenlaces son los del resolver, y ninguno se queda
+    /// callado: un comando corre, un prefijo o un contador a medias se
+    /// PINTAN (lo que no se ve no se puede cancelar), una tecla ligada a algo
+    /// que aquí no se puede hacer lo dice, y una tecla sin binding se
+    /// descarta dejando el estado limpio.
+    fn tecla(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Ok(chord) = k.to_chord() else {
+            // Una tecla que el adaptador no entiende no se adivina.
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-key-unmapped".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        match self.resolver.push(chord) {
+            Resolution::Run { command, count } => {
+                let veces = count.times();
+                let Some(efecto) = efecto_de(&command, veces) else {
+                    // En el catálogo, ligada, y este host no la hace. Se
+                    // dice con la MISMA frase que el TUI.
+                    let frase = norte_frontend::keymap::unavailable_message(
+                        &command,
+                        Availability::NotHere,
+                    );
+                    self.status.message = Some(clamp_display(frase));
+                    self.status.pending = None;
+                    let cambio = ViewChange::Status(self.status.clone());
+                    return (
+                        ActionAck::Unavailable {
+                            reason_key: "cmd-not-here".to_owned(),
+                        },
+                        vec![self.parche(vec![cambio])],
+                    );
+                };
+                self.status.pending = None;
+                self.aplicar_efecto(efecto, backend, buzon)
+            }
+            Resolution::Pending(_) | Resolution::Counting(_) => {
+                self.status.pending = Some(PendingView {
+                    chords: self
+                        .resolver
+                        .pending()
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    count: self.resolver.count(),
+                });
+                let cambio = ViewChange::Status(self.status.clone());
+                (self.aplicada(), vec![self.parche(vec![cambio])])
+            }
+            Resolution::Unavailable { command, why } => {
+                let frase = norte_frontend::keymap::unavailable_message(&command, why);
+                self.status.message = Some(clamp_display(frase));
+                self.status.pending = None;
+                let cambio = ViewChange::Status(self.status.clone());
+                (
+                    ActionAck::Unavailable {
+                        reason_key: match why {
+                            Availability::Here => "cmd-here",
+                            Availability::NotBuilt { .. } => "cmd-not-built",
+                            Availability::NotHere => "cmd-not-here",
+                        }
+                        .to_owned(),
+                    },
+                    vec![self.parche(vec![cambio])],
+                )
+            }
+            Resolution::Reset => {
+                let habia = self.status.pending.take().is_some();
+                if habia {
+                    let cambio = ViewChange::Status(self.status.clone());
+                    return (self.aplicada(), vec![self.parche(vec![cambio])]);
+                }
+                (self.aplicada(), Vec::new())
+            }
+        }
+    }
+
+    /// Ejecuta lo que un comando pide sobre el hueco con el foco.
+    ///
+    /// Es el MISMO camino que toman las acciones directas del renderer (un
+    /// click, un arrastre): que una tecla y un gesto que significan lo mismo
+    /// hagan lo mismo no puede depender de que alguien se acuerde.
+    fn aplicar_efecto(
+        &mut self,
+        efecto: Efecto,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let slot = self.hueco.id;
+        match efecto {
+            Efecto::Cursor(delta) => self.aplicar(
+                &UiAction::MoveCursor {
+                    slot_id: slot,
+                    delta,
+                },
+                backend,
+                buzon,
+            ),
+            Efecto::Pagina(paginas) => {
+                let filas = i64::from(self.hueco.visibles.max(1));
+                self.aplicar(
+                    &UiAction::MoveCursor {
+                        slot_id: slot,
+                        delta: paginas.saturating_mul(filas),
+                    },
+                    backend,
+                    buzon,
+                )
+            }
+            Efecto::Extremo { al_final } => {
+                if al_final {
+                    self.hueco.pane.end();
+                } else {
+                    self.hueco.pane.home();
+                }
+                (self.aplicada(), vec![self.parche_cursor()])
+            }
+            Efecto::Entrar => {
+                let key = RowKey(self.hueco.pane.cursor() as u64);
+                self.navegacion(&UiAction::Activate { slot_id: slot, key }, backend, buzon)
+            }
+            Efecto::Subir => self.navegacion(&UiAction::Parent { slot_id: slot }, backend, buzon),
+            Efecto::Rastro { atras } => self.navegacion(
+                &UiAction::History {
+                    slot_id: slot,
+                    back: atras,
+                },
+                backend,
+                buzon,
+            ),
+            Efecto::Marcar => {
+                let key = RowKey(self.hueco.pane.cursor() as u64);
+                self.aplicar(&UiAction::ToggleMark { slot_id: slot, key }, backend, buzon)
+            }
+            Efecto::DesmarcarTodo => {
+                self.hueco.pane.clear_marks();
+                (self.aplicada(), vec![self.parche_filas()])
+            }
         }
     }
 
