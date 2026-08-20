@@ -1043,6 +1043,26 @@ Acceptance:
 > ✔ (40 of 100.000 rows); hostile corpus and session round-trip ✔; the TUI
 > is green and unchanged ✔ (the GPUI frontend no longer exists, ADR 0065).
 >
+> **Debt paid after closing the phase (2026-08-20, same day):**
+>
+> - **Pagination.** `HostBackend::list` returns a stream; the host paints the
+>   first hundred entries and drains the rest in batches of five hundred
+>   through the actor's own inbox, extending with `PaneState::extend`. A batch
+>   from a superseded navigation is discarded by its token.
+> - **Quick search.** `pane.quick-search` opens the shared `QuickSearch`, and
+>   while it is open the TEXT keys are its own — typing does not run commands.
+>   It does not disconnect the rest of the keyboard: modifier chords still
+>   take their normal path. Its state travels to the renderer.
+> - **Connection notices and foreign tasks.** Both channels are taken once at
+>   start and travel through the same ordered inbox; losing the daemon is
+>   painted AND said, and a task another client started shows in the board
+>   marked as foreign.
+>
+> Still owed from phase 2: columns and the attr catalogue, watcher refresh,
+> the which-key panel and menu/palette/shortcuts views, the periodic
+> coalesced `session.put`, ownership acquired later, policy approvals, and
+> dialogs with a text field.
+>
 > **Next: phase 3** — the Tauri vertical-slice spike and its go/no-go. That is
 > the first time a renderer appears at all.
 
