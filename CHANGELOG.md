@@ -204,6 +204,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The size and date columns stopped filling after the first two hundred
+  rows.** Each probing round is capped, and nothing asked for the next one: a
+  tall window got 200 sizes and the rest stayed blank until the user scrolled.
+  Worse, the round claimed its candidates as "already probed" *before*
+  deciding whether to run, so an overlapping round marked rows nobody ever
+  stat'ed and they were never asked for again. Rounds now re-arm until the
+  window is done.
+
+- **Probes are answered by the path that was asked for.** A provider may echo
+  a different spelling of the same name — NFD on HFS+, another case on SMB, a
+  symlink's target — and the reply then matched nothing while the requested
+  path was already marked as probed, so that row's size stayed blank for good.
+
+- **Probing a directory no longer costs one round trip at a time.** Up to
+  eight run at once with a five-second deadline each, one round per pane, and
+  a relisting cancels what is in flight — a hung provider used to stall the
+  other 199 stats behind it and lose the whole batch.
+
 - **Entering a large directory showed only its first hundred entries.** The
   listing's first page cleared the request token, and the background drain kept
   sending its batches with that same token, so every one of them was dropped:

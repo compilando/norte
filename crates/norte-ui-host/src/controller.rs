@@ -54,6 +54,14 @@ const FILL_BATCH: usize = 500;
 /// 0005): un visor no es una excusa para traerse un fichero de un giga.
 const VISOR_CAP: u64 = 256 * 1024;
 
+/// Sondas simultáneas contra el daemon. El mismo número que el TUI, y por el
+/// mismo motivo: una sesión remota no puede pagar N viajes en serie.
+const SONDEOS_A_LA_VEZ: usize = 8;
+
+/// Lo que se espera a UNA sonda. Un provider colgado no puede llevarse por
+/// delante el resto de la tanda.
+const PLAZO_SONDEO: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Cuántas entradas se sondean de una tanda. Es una PANTALLA con holgura:
 /// más no se ve, y cada sondeo es un viaje al daemon.
 const MAX_SONDEOS: usize = 200;
@@ -147,6 +155,10 @@ pub struct UiHost {
 /// el directorio y el resultado.
 type RespuestaListado = (RequestToken, u32, VPath, Result<Vec<Entry>, Error>);
 
+/// Lo que vuelve de una tanda de sondeo: el directorio que se sondeaba, el
+/// hueco, y las parejas `(lo que se pidió, lo que contestó el provider)`.
+type Sondas = (VPath, u32, Vec<(VPath, Entry)>);
+
 enum Mensaje {
     Accion(Box<UiAction>, oneshot::Sender<ActionAck>),
     /// La respuesta de un listado que se pidió antes. Vuelve al actor como
@@ -166,7 +178,18 @@ enum Mensaje {
     Contenido(Box<(VPath, Result<Vec<u8>, Error>)>),
     /// Lo que un sondeo averiguó de unas cuantas entradas (tamaño y fecha de
     /// un listado perezoso).
-    Hidratado(Box<(RequestToken, u32, Vec<Entry>)>),
+    ///
+    /// Lleva el DIRECTORIO que se estaba sondeando, y no un testigo ni una
+    /// época. El testigo vale `None` en cuanto la primera página aterriza —o
+    /// sea que el guard que lo miraba no guardaba nada—, y la época sube con
+    /// cada lote de relleno, que no invalida un sondeo: lo que invalida un
+    /// tamaño es que el listado sea de OTRO sitio. Como la hidratación casa
+    /// por ruta, un índice desplazado da igual.
+    ///
+    /// Y lleva PAREJAS `(pedido, respuesta)`, porque un provider puede
+    /// contestar con otra ortografía del mismo nombre y la entrada que hay
+    /// que hidratar es la que se pidió.
+    Hidratado(Box<Sondas>),
     /// Una Task recién encolada, con su progreso y su cancelación.
     TaskNueva(Box<crate::backend::HostTask>),
     /// Encolarla falló. El usuario tiene que enterarse: pidió un borrado.
@@ -370,9 +393,13 @@ async fn actor(
                 let _ = updates.send(estado.abrir_visor(path, leido));
             }
             Mensaje::Hidratado(datos) => {
-                let (token, slot, sondas) = *datos;
-                if let Some(u) = estado.aplicar_sondas(slot, token, &sondas) {
+                let (dir, slot, sondas) = *datos;
+                if let Some(u) = estado.aplicar_sondas(slot, &dir, &sondas) {
                     let _ = updates.send(u);
+                    // Y se pide la siguiente tanda: `MAX_SONDEOS` acota cada
+                    // vuelta, no la ventana. Sin esto, una ventana más alta
+                    // que una tanda se quedaba a medias en silencio.
+                    estado.sondear(slot, &backend, &buzon);
                 }
             }
             Mensaje::MasEntradas(datos) => {
@@ -515,6 +542,11 @@ struct Hueco {
     /// restituirlo a mano para funcionar.
     drenando: Option<RequestToken>,
     estado: SlotState,
+    /// Hay una tanda de sondeo en vuelo para este hueco.
+    sondeando: bool,
+    /// Se levanta cuando el listado cambia: lo que vuelva de la tanda en
+    /// vuelo ya no describe esta pantalla.
+    cancelar_sondeo: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Los paths que ya se sondearon (hayan contestado o no). Sin esta
     /// memoria, un `stat` que falla vuelve a pedirse en cada repintado y el
     /// sondeo se convierte en un bucle contra el daemon.
@@ -687,6 +719,8 @@ impl Estado {
                         visibles: 64,
                         en_vuelo: None,
                         drenando: None,
+                        sondeando: false,
+                        cancelar_sondeo: std::sync::Arc::default(),
                         estado: SlotState::Loading,
                         sondeados: std::collections::HashSet::new(),
                     },
@@ -884,6 +918,13 @@ impl Estado {
         // blanco para el resto de la sesión — y de paso el conjunto crecía
         // con un `VPath` por fichero visto en toda la vida del proceso.
         hueco.sondeados.clear();
+        // Y lo que esté volando ya no vale: se marca para que su respuesta se
+        // descarte en vez de pegarse a otro directorio.
+        hueco
+            .cancelar_sondeo
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        hueco.cancelar_sondeo = std::sync::Arc::default();
+        hueco.sondeando = false;
         match res {
             Ok(entradas) => {
                 hueco.pane.set_listing(dir, entradas);
@@ -2157,6 +2198,14 @@ impl Estado {
         let Some(hueco) = self.huecos.get_mut(&slot) else {
             return;
         };
+        // Una sonda por hueco, y se comprueba ANTES de elegir candidatos: si
+        // se eligen y luego se abandona la tanda, esos paths quedan marcados
+        // como sondeados sin haberlo sido, y no se piden nunca más. Sin este
+        // orden, un scroll con debounce apilaba tandas de doscientos viajes
+        // contra la misma conexión y además se comía filas por el camino.
+        if hueco.sondeando {
+            return;
+        }
         let primera = usize::try_from(hueco.primera_visible).unwrap_or(0);
         let cuantas = usize::try_from(hueco.visibles).unwrap_or(0);
         let candidatos: Vec<VPath> = hueco
@@ -2172,23 +2221,46 @@ impl Estado {
         for p in &candidatos {
             hueco.sondeados.insert(p.clone());
         }
-        let token = hueco.en_vuelo.unwrap_or(RequestToken(0));
+        let dir = hueco.pane.dir().clone();
+        hueco.sondeando = true;
+        let cancelar = hueco.cancelar_sondeo.clone();
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let mut sondas = Vec::with_capacity(candidatos.len());
-            for p in candidatos {
-                // Un sondeo que falla no es un error de pantalla: esa celda
-                // se queda en blanco y no se vuelve a pedir.
-                if let Ok(e) = backend.stat(p, attrs.clone()).await {
-                    sondas.push(e);
-                }
-            }
-            if sondas.is_empty() {
+            use futures::StreamExt as _;
+            // En PARALELO acotado: una sesión remota no puede pagar N viajes
+            // en serie (200 sondas a 80 ms de ida y vuelta son dieciséis
+            // segundos), y con plazo, porque un provider colgado no puede
+            // llevarse por delante las otras 199.
+            let sondas: Vec<(VPath, Entry)> = futures::stream::iter(candidatos)
+                .map(|p| {
+                    let backend = Arc::clone(&backend);
+                    let attrs = attrs.clone();
+                    async move {
+                        let stat = backend.stat(p.clone(), attrs);
+                        match tokio::time::timeout(PLAZO_SONDEO, stat).await {
+                            // Un sondeo que falla o que tarda no es un error
+                            // de pantalla: esa celda se queda en blanco y no
+                            // se vuelve a pedir.
+                            Ok(Ok(e)) => Some((p, e)),
+                            _ => None,
+                        }
+                    }
+                })
+                .buffer_unordered(SONDEOS_A_LA_VEZ)
+                .filter_map(|x| async move { x })
+                .collect()
+                .await;
+            if cancelar.load(std::sync::atomic::Ordering::SeqCst) || sondas.is_empty() {
+                // El listado cambió mientras se sondeaba: lo que vuelve no
+                // describe la pantalla que hay.
+                let _ = buzon
+                    .send(Mensaje::Hidratado(Box::new((dir, slot, Vec::new()))))
+                    .await;
                 return;
             }
             let _ = buzon
-                .send(Mensaje::Hidratado(Box::new((token, slot, sondas))))
+                .send(Mensaje::Hidratado(Box::new((dir, slot, sondas))))
                 .await;
         });
     }
@@ -2221,15 +2293,24 @@ impl Estado {
     fn aplicar_sondas(
         &mut self,
         slot: u32,
-        token: RequestToken,
-        sondas: &[Entry],
+        dir: &VPath,
+        sondas: &[(VPath, Entry)],
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         let hueco = self.huecos.get_mut(&slot)?;
-        if hueco.en_vuelo.is_some() && hueco.en_vuelo != Some(token) {
+        hueco.sondeando = false;
+        if hueco.pane.dir() != dir {
+            // El hueco está en OTRO directorio: pegarle estos tamaños sería
+            // mentir sobre lo que se ve. (Un lote de relleno, en cambio, no
+            // invalida nada: sube la época y desplaza índices, y aquí se casa
+            // por ruta.)
             return None;
         }
-        for e in sondas {
-            hueco.pane.hydrate(&e.path, e.size, e.mtime_ms);
+        for (pedido, e) in sondas {
+            // Por la ruta que se PIDIÓ: la que devuelve el provider puede ser
+            // otra ortografía del mismo nombre (NFD en HFS+, otra caja en
+            // SMB, el destino de un enlace) y entonces no casa con nada — y
+            // como ya está en `sondeados`, no se reintenta jamás.
+            hueco.pane.hydrate(pedido, e.size, e.mtime_ms);
         }
         Some(self.parche_filas_de(slot))
     }

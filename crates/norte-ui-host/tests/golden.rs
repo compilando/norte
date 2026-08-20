@@ -76,108 +76,118 @@ fn fila(key: u64, nombre: &str, hostile: bool) -> RowView {
 
 #[test]
 fn acciones() {
-    check_family(
-        "actions.json",
-        &[
-            (
-                "activate",
-                UiAction::Activate {
-                    slot_id: 1,
-                    key: RowKey(9),
-                    generation: 4,
-                },
-            ),
-            ("cancel_task", UiAction::CancelTask { task_id: 42 }),
-            (
-                "dialog",
-                UiAction::Dialog {
-                    id: ModalId(3),
-                    choice: "confirm".to_owned(),
-                },
-            ),
-            (
-                "dialog_input",
-                UiAction::DialogInput {
-                    id: ModalId(3),
-                    text: "carpeta nueva".to_owned(),
-                },
-            ),
-            ("focus_slot", UiAction::FocusSlot { slot_id: 2 }),
-            (
-                "key",
-                UiAction::Key(norte_ui_host::keys::KeyInput {
-                    key: "ArrowDown".to_owned(),
-                    ctrl: false,
-                    alt: false,
-                    shift: false,
-                    meta: false,
-                }),
-            ),
-            (
-                "history",
-                UiAction::History {
-                    slot_id: 1,
-                    back: true,
-                },
-            ),
-            (
-                "mark_range",
-                UiAction::MarkRange {
-                    slot_id: 1,
-                    from: RowKey(2),
-                    to: RowKey(5),
-                    generation: 4,
-                },
-            ),
-            (
-                "set_viewport",
-                UiAction::SetViewport {
-                    width: 120,
-                    height: 40,
-                },
-            ),
-            (
-                "sort_by",
-                UiAction::SortBy {
-                    slot_id: 1,
-                    column: "size".to_owned(),
-                },
-            ),
-            (
-                "move_cursor",
-                UiAction::MoveCursor {
-                    slot_id: 1,
-                    delta: -1,
-                },
-            ),
-            ("parent", UiAction::Parent { slot_id: 1 }),
-            ("resync", UiAction::Resync),
-            (
-                "select_row",
-                UiAction::SelectRow {
-                    slot_id: 1,
-                    key: RowKey(7),
-                    generation: 4,
-                },
-            ),
-            (
-                "set_visible_range",
-                UiAction::SetVisibleRange {
-                    slot_id: 1,
-                    first: 100,
-                    count: 40,
-                },
-            ),
-            (
-                "toggle_mark",
-                UiAction::ToggleMark {
-                    slot_id: 1,
-                    key: RowKey(7),
-                    generation: 4,
-                },
-            ),
-        ],
-    );
+    let mut casos = acciones_de_fila();
+    casos.extend(acciones_de_pantalla());
+    check_family("actions.json", &casos);
+}
+
+/// Las que nombran una fila: llevan clave Y generación (ADR 0068).
+fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
+    vec![
+        (
+            "activate",
+            UiAction::Activate {
+                slot_id: 1,
+                key: RowKey(9),
+                generation: 4,
+            },
+        ),
+        ("cancel_task", UiAction::CancelTask { task_id: 42 }),
+        (
+            "dialog",
+            UiAction::Dialog {
+                id: ModalId(3),
+                choice: "confirm".to_owned(),
+            },
+        ),
+        (
+            "dialog_input",
+            UiAction::DialogInput {
+                id: ModalId(3),
+                text: "carpeta nueva".to_owned(),
+            },
+        ),
+    ]
+}
+
+/// Las demás: pantalla, teclado, diálogos y tasks.
+fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
+    vec![
+        ("focus_slot", UiAction::FocusSlot { slot_id: 2 }),
+        (
+            "key",
+            UiAction::Key(norte_ui_host::keys::KeyInput {
+                key: "ArrowDown".to_owned(),
+                ctrl: false,
+                alt: false,
+                shift: false,
+                meta: false,
+            }),
+        ),
+        (
+            "history",
+            UiAction::History {
+                slot_id: 1,
+                back: true,
+            },
+        ),
+        (
+            "mark_range",
+            UiAction::MarkRange {
+                slot_id: 1,
+                from: RowKey(2),
+                to: RowKey(5),
+                generation: 4,
+            },
+        ),
+        (
+            "set_viewport",
+            UiAction::SetViewport {
+                width: 120,
+                height: 40,
+            },
+        ),
+        (
+            "sort_by",
+            UiAction::SortBy {
+                slot_id: 1,
+                column: "size".to_owned(),
+            },
+        ),
+        (
+            "move_cursor",
+            UiAction::MoveCursor {
+                slot_id: 1,
+                delta: -1,
+            },
+        ),
+        ("parent", UiAction::Parent { slot_id: 1 }),
+        ("resync", UiAction::Resync),
+        (
+            "select_row",
+            UiAction::SelectRow {
+                slot_id: 1,
+                key: RowKey(7),
+                generation: 4,
+            },
+        ),
+        (
+            "set_visible_range",
+            UiAction::SetVisibleRange {
+                slot_id: 1,
+                first: 100,
+                count: 40,
+            },
+        ),
+        (
+            "toggle_mark",
+            UiAction::ToggleMark {
+                slot_id: 1,
+                key: RowKey(7),
+                generation: 4,
+            },
+        ),
+    ]
 }
 
 #[test]

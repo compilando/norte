@@ -32,6 +32,9 @@ pub struct Falso {
     /// El listado viene PEREZOSO, como el del provider local: sin tamaño ni
     /// fecha. Quien las quiera, que sondee.
     pub lazy: bool,
+    /// El `stat` contesta con el nombre en MAYÚSCULAS: otra ortografía de lo
+    /// mismo, como un servidor sin distinción de caja o un HFS+ en NFD.
+    pub stat_grita: bool,
     /// Contenido por path, para el visor.
     pub contenido: HashMap<String, Vec<u8>>,
     /// Los paths que se sondearon, en orden: es lo que permite comprobar que
@@ -107,6 +110,21 @@ impl Falso {
     }
 }
 
+/// El mismo path con el último segmento en mayúsculas.
+fn otra_ortografia(path: &VPath) -> VPath {
+    let Some(nombre) = path.file_name() else {
+        return path.clone();
+    };
+    let gritado: Vec<u8> = nombre.as_bytes().to_ascii_uppercase();
+    let Some(padre) = path.parent() else {
+        return path.clone();
+    };
+    match norte_proto::Segment::new(gritado) {
+        Ok(seg) => padre.join(seg),
+        Err(_) => path.clone(),
+    }
+}
+
 /// El árbol que usan los escenarios de paridad: un directorio con dos
 /// subdirectorios y un nombre hostil.
 pub fn arbol_de_prueba() -> Falso {
@@ -150,6 +168,8 @@ impl HostBackend for Falso {
 
     fn stat(&self, path: VPath, _attrs: Vec<String>) -> BoxFuture<'static, Result<Entry, Error>> {
         self.sondeos.lock().expect("sondeos").push(path.clone());
+        let grita = self.stat_grita;
+        let retraso = self.retraso_ms;
         // El padre del path dice en qué directorio buscarlo; la entrada sale
         // del mismo árbol, pero AHORA con tamaño: es lo que hace un `stat`.
         let entrada = path.parent().and_then(|dir| {
@@ -158,7 +178,14 @@ impl HostBackend for Falso {
                     .iter()
                     .find(|(n, _)| path.file_name().is_some_and(|f| f.as_bytes() == n))
                     .map(|(_, es_dir)| Entry {
-                        path: path.clone(),
+                        // Un provider puede contestar con OTRA ortografía del
+                        // mismo nombre; el host tiene que hidratar la entrada
+                        // que pidió, no la que le devuelven.
+                        path: if grita {
+                            otra_ortografia(&path)
+                        } else {
+                            path.clone()
+                        },
                         kind: if *es_dir {
                             EntryKind::Dir
                         } else {
@@ -170,7 +197,12 @@ impl HostBackend for Falso {
                     })
             })
         });
-        Box::pin(async move { entrada.ok_or(Error::NotFound) })
+        Box::pin(async move {
+            if retraso > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
+            }
+            entrada.ok_or(Error::NotFound)
+        })
     }
 
     fn attr_catalog(

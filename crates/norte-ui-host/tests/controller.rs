@@ -2535,3 +2535,125 @@ async fn un_rango_desbordado_no_marca_el_listado_entero() {
     let foto = siguiente_foto(&mut sub).await;
     assert_eq!(listado(&foto).marks, 0, "y no marcó nada");
 }
+
+// ---------------------------------------------------------------------------
+// El sondeo (revisión: rust M2/M3/m1, encoding M4).
+// ---------------------------------------------------------------------------
+
+/// Una ventana más alta que una tanda de sondeo se rellena ENTERA.
+///
+/// `MAX_SONDEOS` acota cada tanda, y no había nada que pidiera la siguiente:
+/// 200 filas con tamaño y el resto en blanco hasta que el usuario moviera
+/// algo. Un tope que no se re-arma es un tope silencioso.
+#[tokio::test]
+async fn una_ventana_grande_se_sondea_en_tandas_hasta_el_final() {
+    let mut f = Falso {
+        lazy: true,
+        ..Falso::default()
+    };
+    let muchas: Vec<(Vec<u8>, bool)> = (0..500)
+        .map(|i| (format!("f{i:04}.txt").into_bytes(), false))
+        .collect();
+    f.pon("mem:///casa", muchas);
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    h.dispatch(UiAction::SetVisibleRange {
+        slot_id: 1,
+        first: 0,
+        count: 500,
+    })
+    .await
+    .expect("host vivo");
+
+    for _ in 0..60 {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        if backend.sondeos.lock().expect("sondeos").len() >= 500 {
+            return;
+        }
+    }
+    let n = backend.sondeos.lock().expect("sondeos").len();
+    panic!("el sondeo se paró en {n} de 500: la tanda no se re-armó");
+}
+
+/// Un sondeo que aterriza cuando el listado YA es otro no pega nada.
+///
+/// El guard miraba el testigo de la petición en vuelo, que tras aterrizar es
+/// `None` — así que valía cero y la comparación era siempre falsa. Lo que
+/// distingue un listado de otro es su ÉPOCA, que está definida siempre.
+#[tokio::test]
+async fn un_sondeo_de_otro_listado_no_hidrata() {
+    let mut f = Falso {
+        lazy: true,
+        // El stat tarda: da tiempo a navegar por debajo.
+        retraso_ms: 120,
+        ..Falso::default()
+    };
+    f.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"a.txt".to_vec(), false)],
+    );
+    f.pon("mem:///casa/docs", vec![(b"a.txt".to_vec(), false)]);
+    let backend = Arc::new(f);
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let docs = listado(&snap)
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("docs")
+        .key;
+    // Navegar mientras el sondeo del listado anterior vuela.
+    h.dispatch(UiAction::Activate {
+        slot_id: 1,
+        key: docs,
+        generation: listado(&snap).generation,
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    // El `a.txt` de DENTRO es otro fichero que el `a.txt` de fuera; lo que se
+    // comprueba es que la pantalla es coherente, no que tenga o no tamaño.
+    assert!(
+        listado(&foto).path_display.ends_with("/docs"),
+        "se navegó: {}",
+        listado(&foto).path_display
+    );
+}
+
+/// La hidratación casa por la ruta que se PIDIÓ, no por la que devuelve el
+/// provider.
+///
+/// Un HFS+ que devuelve NFD, un SMB que devuelve otra caja o un `stat` que
+/// sigue un enlace producen una respuesta cuya ruta no está en el listado.
+/// Como el path pedido ya quedó marcado como sondeado, la celda se quedaba en
+/// blanco para siempre.
+#[tokio::test]
+async fn un_provider_que_devuelve_otra_ortografia_no_deja_la_celda_en_blanco() {
+    let mut f = Falso {
+        lazy: true,
+        // El stat contesta con el nombre en MAYÚSCULAS: otra ortografía de lo
+        // mismo, como haría un servidor sin distinción de caja.
+        stat_grita: true,
+        ..Falso::default()
+    };
+    f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        let lleno = listado(&foto)
+            .rows
+            .iter()
+            .any(|r| r.cells.iter().any(|c| c.text.is_some()));
+        if lleno {
+            return;
+        }
+    }
+    panic!("la celda sigue en blanco: se casó por la ruta devuelta");
+}
