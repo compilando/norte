@@ -215,6 +215,9 @@ pub enum UiAction {
     PickerSelectRow {
         /// Fila, en el orden en que viajaron.
         row: u32,
+        /// La generación con la que se pintó esa fila. El selector de
+        /// volúmenes se abre vacío y se llena después: misma carrera.
+        generation: u64,
     },
     /// Elige una fila de la barra lateral de sitios (un click) y la ACTIVA:
     /// navega a ella, o pliega su sección si es una cabecera.
@@ -225,6 +228,13 @@ pub enum UiAction {
     PlaceActivateRow {
         /// Fila, en el orden en que viajaron.
         row: u32,
+        /// La generación con la que se pintó esa fila.
+        ///
+        /// Obligatoria porque esta lista CAMBIA sola: los volúmenes llegan de
+        /// una tarea de fondo y se insertan antes que los favoritos, así que
+        /// un índice sin generación puede nombrar una fila que ya no es la
+        /// que se pulsó. Una que no case se rechaza.
+        generation: u64,
     },
     /// Elige una disposición del selector (un click) y la APLICA.
     LayoutActivateRow {

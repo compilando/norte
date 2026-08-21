@@ -9,6 +9,7 @@ import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Screen } from "../src/render";
+import { catalogoReal } from "./fixtures";
 import type {
   BrowserSlotView,
   HostCatalog,
@@ -24,7 +25,9 @@ function catalogo(): HostCatalog {
     bridge_version: 5,
     instance_id: "host-1",
     locale: "es",
-    strings: { "listing-empty": "vacío", "hostile-name": "nombre hostil" },
+    // El catálogo DE VERDAD, no dos claves inventadas: con un fixture
+    // inventado, una clave que falta se pinta igual que una que está.
+    strings: catalogoReal(),
     theme: {},
     measure: false,
   };
@@ -997,7 +1000,9 @@ describe("los ajustes", () => {
     }
     screen.paint(v);
     const cabecera = document.querySelector(".settings-group");
-    expect(cabecera?.textContent).toContain("settings-restart-badge");
+    expect(cabecera?.textContent).toContain(
+      catalogoReal()["settings-restart-badge"] ?? "",
+    );
     // Y ninguna fila la repite.
     expect(document.querySelectorAll(".settings-row .settings-badge")).toHaveLength(0);
   });
@@ -1020,7 +1025,7 @@ describe("los ajustes", () => {
     screen.paint(v);
     expect(document.querySelectorAll(".settings-row .settings-badge")).toHaveLength(1);
     expect(document.querySelector(".settings-group")?.textContent).not.toContain(
-      "settings-restart-badge",
+      catalogoReal()["settings-restart-badge"] ?? "",
     );
   });
 
@@ -1114,7 +1119,9 @@ describe("el gestor de extensiones", () => {
     expect(document.querySelector(".extensions-note")?.getAttribute("role")).toBe(
       "status",
     );
-    expect(document.querySelector(".extensions-note")?.textContent).toBe("ext-loading");
+    expect(document.querySelector(".extensions-note")?.textContent).toBe(
+      catalogoReal()["ext-loading"] ?? "",
+    );
 
     const vacio = conExtensiones();
     if (vacio.extensions !== null) {
@@ -1122,7 +1129,9 @@ describe("el gestor de extensiones", () => {
       vacio.extensions.rows = [];
     }
     screen.paint(vacio);
-    expect(document.querySelector(".extensions-note")?.textContent).toBe("ext-empty");
+    expect(document.querySelector(".extensions-note")?.textContent).toBe(
+      catalogoReal()["ext-empty"] ?? "",
+    );
   });
 
   it("la ficha marca el valor que ya no es el del esquema", () => {
@@ -1246,6 +1255,7 @@ describe("el tema y el selector", () => {
       ],
       cursor: 1,
       empty: "",
+      generation: 1,
     };
     screen.paint(v);
     const filas = [...document.querySelectorAll(".picker-row")];
@@ -1256,13 +1266,14 @@ describe("el tema y el selector", () => {
     const lista = document.querySelector(".picker-rows") as HTMLElement;
     expect(lista.getAttribute("aria-activedescendant")).toBe("picker-row-1");
     (filas[0] as HTMLElement).click();
-    expect(enviadas).toEqual([{ action: "picker_select_row", row: 0 }]);
+    expect(enviadas).toEqual([{ action: "picker_select_row", row: 0, generation: 1 }]);
 
     const vacio = vista({});
     vacio.picker = {
       title: "Volúmenes",
       rows: [],
       cursor: null,
+      generation: 1,
       empty: "preguntando al host…",
     };
     screen.paint(vacio);
@@ -1369,7 +1380,7 @@ describe("los huecos que no son listados", () => {
     ];
     screen.paint(v);
     expect(document.querySelector(".processes .slot-note")?.textContent).toBe(
-      "processes-empty",
+      catalogoReal()["processes-empty"] ?? "",
     );
   });
 });
@@ -1407,6 +1418,7 @@ describe("la barra lateral de sitios", () => {
           },
         ],
         cursor,
+        generation: 3,
       },
     ];
     v.layout.placements = [
@@ -1437,7 +1449,7 @@ describe("la barra lateral de sitios", () => {
     screen.paint(conSitios(0));
     const filas = [...document.querySelectorAll(".places-row")];
     (filas[1] as HTMLElement).click();
-    expect(enviadas).toEqual([{ action: "place_activate_row", row: 1 }]);
+    expect(enviadas).toEqual([{ action: "place_activate_row", row: 1, generation: 3 }]);
     // También sobre una cabecera: ahí activar es PLEGAR, y lo decide el host.
     (filas[2] as HTMLElement).click();
     expect(enviadas).toHaveLength(2);
@@ -1480,7 +1492,7 @@ describe("el selector de disposiciones", () => {
     // El aviso no es adorno: elegirla no cambia ninguna tecla.
     expect(filas[0]?.querySelector(".layouts-warn")).not.toBeNull();
     expect(filas[0]?.querySelector(".layouts-tag")?.textContent).toBe(
-      "layout-picker-factory",
+      catalogoReal()["layout-picker-factory"] ?? "",
     );
     expect(filas[1]?.getAttribute("data-broken")).toBe("true");
     expect(filas[1]?.querySelector(".layouts-tag")).toBeNull();

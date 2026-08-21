@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 16;
+export const BRIDGE_VERSION = 17;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -135,6 +135,12 @@ export interface PlacesSlotView {
   slot_id: number;
   rows: PlaceRowView[];
   cursor: number;
+  /**
+   * Sube cada vez que cambia el conjunto de filas. Va de vuelta en el click:
+   * los volúmenes llegan de una tarea de fondo y se insertan EN MEDIO, así
+   * que un índice sin generación puede nombrar la fila de al lado.
+   */
+  generation: number;
 }
 
 export type SlotView =
@@ -362,6 +368,8 @@ export interface PickerView {
   rows: PickerRowView[];
   cursor: number | null;
   empty: string;
+  /** Ver `PlacesSlotView.generation`: se abre vacío y se llena después. */
+  generation: number;
 }
 
 export interface LayoutRowView {
@@ -497,8 +505,8 @@ export type UiAction =
   | { action: "help_activate"; index: number }
   | { action: "settings_select_row"; row: number }
   | { action: "extension_select_row"; row: number }
-  | { action: "picker_select_row"; row: number }
-  | { action: "place_activate_row"; row: number }
+  | { action: "picker_select_row"; row: number; generation: number }
+  | { action: "place_activate_row"; row: number; generation: number }
   | { action: "layout_activate_row"; row: number }
   | { action: "search_activate_row"; row: number }
   | { action: "resync" };

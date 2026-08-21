@@ -599,6 +599,13 @@ pub struct PickerView {
     /// «No hay ninguna» y «todavía no ha contestado» no son lo mismo, y una
     /// lista vacía sin frase se lee siempre como lo primero.
     pub empty: String,
+    /// Sube cada vez que cambia el CONJUNTO de filas.
+    ///
+    /// El selector de volúmenes se abre VACÍO y se llena cuando contesta el
+    /// daemon, así que tiene la misma carrera que la barra lateral: un click
+    /// pintado sobre una lista y atendido sobre otra. Ver
+    /// [`PlacesSlotView::generation`].
+    pub generation: u64,
 }
 
 /// Una fila de un selector.
@@ -648,6 +655,15 @@ pub struct PlacesSlotView {
     pub rows: Vec<PlaceRowView>,
     /// Qué fila tiene el cursor.
     pub cursor: u64,
+    /// Sube cada vez que cambia el CONJUNTO de filas.
+    ///
+    /// Sin esto un click no era seguro. Los volúmenes llegan de una tarea de
+    /// fondo y se insertan EN MEDIO de la lista —las unidades van antes que
+    /// los favoritos—, así que entre que el usuario suelta el botón sobre
+    /// `~/proyectos` y el host atiende la acción, esa fila puede ser `/boot`.
+    /// El índice viaja acompañado de la generación con la que se pintó, y una
+    /// que no case se rechaza en vez de navegar a otro sitio (ADR 0068).
+    pub generation: u64,
 }
 
 /// Una fila de la barra lateral.

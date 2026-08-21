@@ -70,14 +70,20 @@
   },
   "picker_select_row": {
     "action": "picker_select_row",
-    "row": 0
+    "row": 0,
+    "generation": 3
   },
   "place_activate_row": {
     "action": "place_activate_row",
-    "row": 1
+    "row": 1,
+    "generation": 4
   },
   "resync": {
     "action": "resync"
+  },
+  "search_activate_row": {
+    "action": "search_activate_row",
+    "row": 2
   },
   "select_row": {
     "action": "select_row",

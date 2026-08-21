@@ -6,6 +6,7 @@ import type { HostPort } from "./bridge";
 import { keyAction, keyInputOf } from "./keys";
 import { Screen } from "./render";
 import { Session } from "./session";
+import { BRIDGE_VERSION } from "./types";
 import type { UiAction } from "./types";
 
 /** Medidas del spike: latencia tecla→pintado. Las lee el arnés de la 3.6. */
@@ -137,7 +138,9 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
       case "incompatible":
         showFatal(
           fatalEl,
-          `bridge ${String(out.version)} ≠ ${String(catalog.bridge_version)}`,
+          // La del RENDERER, que es contra la que se comparó. `catalog`
+          // trae la del host, así que decía `bridge 17 ≠ 17`.
+          `bridge ${String(out.version)} ≠ ${String(BRIDGE_VERSION)}`,
         );
         return;
       case "notice":
@@ -162,10 +165,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const inicial = session.receive(first);
   if (inicial.kind === "incompatible") {
     muerto = true;
-    showFatal(
-      fatalEl,
-      `bridge ${String(inicial.version)} ≠ ${String(catalog.bridge_version)}`,
-    );
+    showFatal(fatalEl, `bridge ${String(inicial.version)} ≠ ${String(BRIDGE_VERSION)}`);
     return metrics;
   }
   repaint();

@@ -1156,7 +1156,13 @@ export class Screen {
       fila.setAttribute("role", "option");
       fila.setAttribute("aria-selected", String(picker.cursor === i));
       fila.addEventListener("click", () => {
-        this.send({ action: "picker_select_row", row: i });
+        // La generación de ESTA pintada: si la lista cambió entre el
+        // pintado y el click, el host lo rechaza en vez de elegir otra fila.
+        this.send({
+          action: "picker_select_row",
+          row: i,
+          generation: picker.generation,
+        });
       });
       const label = document.createElement("span");
       label.className = "picker-label";
@@ -1262,6 +1268,10 @@ export class Screen {
       const el = document.createElement("section");
       el.className = "slot";
       el.setAttribute("role", "group");
+      // Quién es este hueco, en el DOM. Sin esto la única forma de dar con él
+      // era su POSICIÓN entre hermanos, que es una correspondencia implícita
+      // entre el orden de `placements` y el del DOM.
+      el.dataset["slotId"] = String(p.slot_id);
       place(el, p, cell);
       const title = document.createElement("header");
       title.className = "slot-title";
@@ -1435,7 +1445,16 @@ export class Screen {
       this.paintAux(dom, slot.kind_name, view);
       return;
     }
-    this.paintBrowser(dom, slot, cell);
+    if (slot.kind === "browser") {
+      this.paintBrowser(dom, slot, cell);
+      return;
+    }
+    // Un `kind` que este renderer no conoce se pinta como lo que ES: un hueco
+    // que no sabe pintar. Antes caía al listado por defecto —TypeScript ya
+    // había estrechado el tipo, así que compilaba— y un hueco nuevo del host
+    // se habría pintado como un listado con `rows` a `undefined`, o sea una
+    // tabla vacía indistinguible de un directorio vacío.
+    this.paintAux(dom, (slot as { kind: string }).kind, view);
   }
 
   /**
@@ -1461,7 +1480,14 @@ export class Screen {
       fila.setAttribute("role", "option");
       fila.setAttribute("aria-selected", String(slot.cursor === i));
       fila.addEventListener("click", () => {
-        this.send({ action: "place_activate_row", row: i });
+        // La generación de ESTA pintada. Los volúmenes llegan solos y se
+        // insertan antes que los favoritos, así que sin ella un click podía
+        // navegar a un sitio que nadie pulsó.
+        this.send({
+          action: "place_activate_row",
+          row: i,
+          generation: slot.generation,
+        });
       });
       if (r.row === "header") {
         fila.setAttribute("aria-expanded", String(!r.folded));

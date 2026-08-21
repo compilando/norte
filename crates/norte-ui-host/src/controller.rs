@@ -786,6 +786,10 @@ struct Estado {
     tema: crate::pickers::HostTheme,
     /// Se está mirando el tema por dentro.
     mirando_tema: bool,
+    /// Sube cada vez que cambia el conjunto de filas de la barra lateral.
+    gen_sitios: u64,
+    /// Sube cada vez que cambia el conjunto de filas del selector.
+    gen_selector: u64,
     /// La búsqueda abierta, si la hay.
     busqueda: Option<Busqueda>,
     /// Cuántas búsquedas ha lanzado esta ventana. Es la identidad de la
@@ -983,6 +987,8 @@ impl Estado {
             mirando_tema: false,
             cursor_procesos: 0,
             sitios: None,
+            gen_sitios: 0,
+            gen_selector: 0,
             busqueda: None,
             epoca_busqueda: 0,
             disposiciones: user_layouts,
@@ -1392,14 +1398,42 @@ impl Estado {
             // (crear directorio, renombrar). Decirlo es más honesto que
             // aceptar texto que nadie va a leer.
             UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
+            otra => self.fila_por_indice(otra, backend, buzon),
+        }
+    }
+
+    /// Las acciones que nombran una fila de un OVERLAY por su índice.
+    ///
+    /// Juntas y aparte porque comparten el mismo riesgo: el renderer pinta
+    /// una lista y el usuario pulsa sobre la lista que TENÍA delante, no
+    /// sobre la que el host tiene ahora. Las dos cuyo conjunto de filas puede
+    /// cambiar solo —la barra lateral y el selector, que se llenan desde una
+    /// tarea de fondo— llevan generación; las demás no pueden cambiar sin un
+    /// gesto del usuario, y lo que sí hacen todas es RECHAZAR un índice fuera
+    /// de rango en vez de recortarlo.
+    fn fila_por_indice(
+        &mut self,
+        accion: &UiAction,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match accion {
             UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row, backend, buzon),
             UiAction::SettingsSelectRow { row } => self.elegir_ajuste(*row),
             UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
-            UiAction::PickerSelectRow { row } => self.elegir_fila_del_selector(*row),
-            UiAction::PlaceActivateRow { row } => self.activar_sitio(*row, backend, buzon),
+            UiAction::PickerSelectRow { row, generation } => {
+                self.elegir_fila_del_selector(*row, *generation)
+            }
+            UiAction::PlaceActivateRow { row, generation } => {
+                self.activar_sitio(*row, *generation, backend, buzon)
+            }
             UiAction::LayoutActivateRow { row } => self.elegir_disposicion(*row, backend, buzon),
             UiAction::SearchActivateRow { row } => self.ir_al_resultado(*row, backend, buzon),
             UiAction::HelpActivate { index } => self.activar_en_ayuda(*index, backend, buzon),
+            // El resto lo trató `aplicar`; llegar aquí sería un brazo que se
+            // le olvidó, y contestar `Applied` a algo que no se hizo es peor
+            // que decir que no se pudo.
+            _ => (Self::obsoleta(StaleAction::Modal), Vec::new()),
         }
     }
 
@@ -2122,10 +2156,14 @@ impl Estado {
         let Some(b) = self.busqueda.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        b.cursor = (fila as usize).min(b.hits.len().saturating_sub(1));
-        let Some(hit) = b.hits.get(b.cursor).cloned() else {
-            return (self.aplicada(), Vec::new());
+        // Fuera de rango no se recorta: recortar navegaba al ÚLTIMO hallazgo
+        // en vez de no hacer nada. Los hallazgos solo se añaden por el final,
+        // así que un índice válido nombra siempre el mismo y esta lista no
+        // necesita generación; uno que se pasa es que la lista se vació.
+        let Some(hit) = b.hits.get(fila as usize).cloned() else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
+        b.cursor = fila as usize;
         // Un directorio se abre por dentro; un fichero, en su carpeta con el
         // cursor encima.
         let (destino, foco) = if hit.kind == EntryKind::Dir {
@@ -2244,6 +2282,13 @@ impl Estado {
         let Some(p) = self.selector_disposicion.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
+        // Fuera de rango NO se recorta: el `while` de abajo para en la
+        // última fila, así que un índice viejo aplicaba LA ÚLTIMA disposición
+        // de la lista —la operación más invasiva del host— en vez de no hacer
+        // nada. Las tres acciones hermanas que solo señalan ya lo hacen así.
+        if row as usize >= p.rows().len() {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
         // El selector compartido no tiene un `set_cursor`: se camina hasta
         // la fila, que para una lista de cinco a diez es lo mismo y no le
         // añade superficie a un modelo que ya está probado.
@@ -2503,6 +2548,7 @@ impl Estado {
             .sitios
             .get_or_insert_with(norte_frontend::places::PlacesState::new);
         estado.set_favorites(&items);
+        self.gen_sitios += 1;
     }
 
     /// Pide los volúmenes para la barra lateral.
@@ -2542,6 +2588,9 @@ impl Estado {
         self.sitios
             .get_or_insert_with(norte_frontend::places::PlacesState::new)
             .set_drives(&vols);
+        // Las unidades se insertan ANTES que los favoritos: todo indice
+        // pintado hasta ahora nombra otra fila.
+        self.gen_sitios += 1;
         let snap = self.snapshot();
         Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
     }
@@ -2550,12 +2599,23 @@ impl Estado {
     fn activar_sitio(
         &mut self,
         row: u32,
+        generation: u64,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if generation != self.gen_sitios {
+            // Lo pulsado y lo que hay ahora no son la misma lista: los
+            // volúmenes aterrizan EN MEDIO. Rechazar es lo único correcto —
+            // `set_cursor` recorta al último, así que seguir habría navegado
+            // al último sitio de la barra.
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
         let Some(estado) = self.sitios.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
+        if row as usize >= estado.rows().len() {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
         estado.set_cursor(row as usize);
         self.activar_sitio_del_cursor(backend, buzon)
     }
@@ -2584,6 +2644,7 @@ impl Estado {
         // volver a pedirlas — un disco montado o desmontado desde que se
         // abrió la ventana se ve aquí, sin un reloj de por medio.
         estado.toggle_fold();
+        self.gen_sitios += 1;
         let desplegadas = estado
             .rows()
             .iter()
@@ -2606,6 +2667,7 @@ impl Estado {
     /// volúmenes.
     fn barra_de_sitios(&self, id: u32) -> crate::dto::PlacesSlotView {
         use norte_frontend::places::{PlaceRow, PlacesState};
+        let generation = self.gen_sitios;
 
         let vacia = PlacesState::new();
         let estado = self.sitios.as_ref().unwrap_or(&vacia);
@@ -2660,6 +2722,7 @@ impl Estado {
             slot_id: id,
             rows,
             cursor: estado.cursor() as u64,
+            generation,
         }
     }
 
@@ -2814,6 +2877,7 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.selector = Some(crate::pickers::Selector::volumenes());
+        self.gen_selector += 1;
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
@@ -2843,6 +2907,7 @@ impl Estado {
         let lang = self.lang;
         let s = self.selector.as_mut()?;
         s.set_volumenes(&res.unwrap_or_default(), lang);
+        self.gen_selector += 1;
         let cambio = ViewChange::Picker {
             picker: self.vista_selector(),
         };
@@ -2851,7 +2916,9 @@ impl Estado {
 
     /// La proyección del selector.
     fn vista_selector(&self) -> Option<crate::dto::PickerView> {
-        Some(self.selector.as_ref()?.vista(self.lang))
+        let mut v = self.selector.as_ref()?.vista(self.lang);
+        v.generation = self.gen_selector;
+        Some(v)
     }
 
     /// Las teclas mientras se mira el tema. Solo se cierra.
@@ -2924,7 +2991,14 @@ impl Estado {
     }
 
     /// Un click en una fila del selector: la elige.
-    fn elegir_fila_del_selector(&mut self, row: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    fn elegir_fila_del_selector(
+        &mut self,
+        row: u32,
+        generation: u64,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if generation != self.gen_selector {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
         let Some(s) = self.selector.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };

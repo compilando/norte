@@ -16,3 +16,29 @@ export function golden(name: string): Record<string, unknown> {
     unknown
   >;
 }
+
+const I18N = resolve(process.cwd(), "../../norte-i18n/i18n");
+
+/**
+ * El catálogo de verdad, leído del mismo `.ftl` que usa el host.
+ *
+ * Los tests montaban un catálogo de DOS claves inventadas, así que ninguno
+ * podía notar que faltara una: `t` contesta la clave ausente con la clave, y
+ * con un fixture inventado eso es indistinguible de lo normal. Ocho
+ * superficies pintaron `hostile-name` literal por esto.
+ *
+ * El parser es de una línea: `clave = valor`. Fluent tiene más gramática
+ * —atributos, selectores, continuaciones— y aquí no hace falta ninguna: lo
+ * que se necesita es saber qué claves EXISTEN y con qué texto simple.
+ */
+export function catalogoReal(lang: "es" | "en" = "es"): Record<string, string> {
+  const ftl = readFileSync(resolve(I18N, `${lang}.ftl`), "utf8");
+  const out: Record<string, string> = {};
+  for (const linea of ftl.split("\n")) {
+    const m = /^([a-z][a-z0-9-]*) = (.*)$/.exec(linea);
+    if (m?.[1] !== undefined && m[2] !== undefined) {
+      out[m[1]] = m[2];
+    }
+  }
+  return out;
+}

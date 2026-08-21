@@ -1,9 +1,59 @@
 import { describe, expect, it } from "vitest";
 
+import { Screen } from "../src/render";
 import { Session } from "../src/session";
 import { BRIDGE_VERSION } from "../src/types";
-import type { UiUpdate, ViewSnapshot } from "../src/types";
-import { golden } from "./fixtures";
+import type { HostCatalog, UiAction, UiUpdate, ViewSnapshot } from "../src/types";
+import { catalogoReal, golden } from "./fixtures";
+
+/** Una pantalla montada sobre un DOM limpio, con el catálogo de verdad. */
+function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
+  document.body.replaceChildren();
+  const nodos = Array.from({ length: 13 }, () => document.createElement("div"));
+  const root = document.createElement("main");
+  document.body.append(root, ...nodos);
+  document.documentElement.style.setProperty("--cell-h", "20px");
+  document.documentElement.style.setProperty("--cell-w", "8px");
+  const catalog: HostCatalog = {
+    bridge_version: BRIDGE_VERSION,
+    instance_id: "host-1",
+    locale: "es",
+    strings: catalogoReal(),
+    theme: {},
+    measure: false,
+  };
+  const enviadas: UiAction[] = [];
+  const [
+    palette,
+    whichkey,
+    help,
+    settings,
+    extensions,
+    theme,
+    picker,
+    layouts,
+    search,
+    viewer,
+    dialogs,
+  ] = nodos as HTMLDivElement[];
+  const screen = new Screen(
+    root,
+    palette as HTMLElement,
+    whichkey as HTMLElement,
+    help as HTMLElement,
+    settings as HTMLElement,
+    extensions as HTMLElement,
+    theme as HTMLElement,
+    picker as HTMLElement,
+    layouts as HTMLElement,
+    search as HTMLElement,
+    viewer as HTMLElement,
+    dialogs as HTMLElement,
+    catalog,
+    (a: UiAction) => enviadas.push(a),
+  );
+  return { screen, enviadas, root };
+}
 
 describe("el contrato con el host", () => {
   it("lee el snapshot del corpus golden y lo pinta como estado", () => {
@@ -78,6 +128,43 @@ describe("el contrato con el host", () => {
       "viewer",
       "which_key",
     ]);
+  });
+
+  it("PINTA el snapshot del corpus, hueco a hueco y overlay a overlay", () => {
+    // El contrato no se comprueba de verdad hasta que el renderer pinta los
+    // datos de referencia del host. Antes solo se metían en la `Session`, así
+    // que una variante que el renderer no supiera pintar —`SlotView::Places`
+    // era una, y encima es la única con newtype dentro de un enum etiquetado
+    // por `kind`— cruzaba el corpus sin que nada la tocara.
+    const updates = golden("updates.json");
+    const snapshot = updates["snapshot"] as UiUpdate & { update: "snapshot" };
+    const s = new Session();
+    s.receive({
+      bridge_version: BRIDGE_VERSION,
+      instance_id: "host-1",
+      sequence: 0,
+      payload: snapshot,
+    });
+    const view = s.view() as ViewSnapshot;
+    const { screen, root } = montar();
+    screen.paint(view);
+
+    // Cada hueco del corpus tiene que haberse pintado como LO QUE ES.
+    for (const slot of view.slots) {
+      const el = root.querySelector(`[data-slot-id="${String(slot.slot_id)}"]`);
+      expect(el, `el hueco ${String(slot.slot_id)} se pinta`).not.toBeNull();
+    }
+    // Y la barra lateral con sus tres clases de fila, que es la que no
+    // cruzaba por ningún test.
+    expect(document.querySelectorAll(".places-row").length).toBeGreaterThan(0);
+    // Ninguna clave del catálogo se ha escapado sin traducir.
+    const texto = document.body.textContent ?? "";
+    for (const sospechosa of ["dialog-", "modal-", "host-", "msg-", "cmd-"]) {
+      expect(
+        texto.includes(sospechosa),
+        `algo se pintó como su clave Fluent (${sospechosa}…): ${texto.slice(0, 200)}`,
+      ).toBe(false);
+    }
   });
 
   it("habla la misma versión del bridge que el host", () => {

@@ -54,6 +54,33 @@
             "width": 60,
             "x": 60,
             "y": 0
+          },
+          {
+            "focus_index": 2,
+            "height": 2,
+            "role": null,
+            "slot_id": 5,
+            "width": 40,
+            "x": 0,
+            "y": 38
+          },
+          {
+            "focus_index": 3,
+            "height": 2,
+            "role": null,
+            "slot_id": 6,
+            "width": 40,
+            "x": 40,
+            "y": 38
+          },
+          {
+            "focus_index": 4,
+            "height": 2,
+            "role": null,
+            "slot_id": 7,
+            "width": 40,
+            "x": 80,
+            "y": 38
           }
         ]
       }
@@ -316,6 +343,33 @@
           "width": 60,
           "x": 60,
           "y": 0
+        },
+        {
+          "focus_index": 2,
+          "height": 2,
+          "role": null,
+          "slot_id": 5,
+          "width": 40,
+          "x": 0,
+          "y": 38
+        },
+        {
+          "focus_index": 3,
+          "height": 2,
+          "role": null,
+          "slot_id": 6,
+          "width": 40,
+          "x": 40,
+          "y": 38
+        },
+        {
+          "focus_index": 4,
+          "height": 2,
+          "role": null,
+          "slot_id": 7,
+          "width": 40,
+          "x": 80,
+          "y": 38
         }
       ]
     },
@@ -361,6 +415,7 @@
     "picker": {
       "cursor": 0,
       "empty": "",
+      "generation": 2,
       "rows": [
         {
           "detail": "ext4 · 12 GiB libres de 100 GiB",
@@ -511,6 +566,44 @@
         "cursor": 0,
         "kind": "processes",
         "slot_id": 6
+      },
+      {
+        "cursor": 1,
+        "generation": 5,
+        "kind": "places",
+        "rows": [
+          {
+            "folded": false,
+            "label": "Unidades",
+            "row": "header"
+          },
+          {
+            "detail": "ext4 · 12 GiB libres de 100 GiB",
+            "hostile": false,
+            "label": "⟨file⟩/",
+            "row": "drive"
+          },
+          {
+            "folded": false,
+            "label": "Favoritos",
+            "row": "header"
+          },
+          {
+            "broken": "",
+            "hostile": true,
+            "name": "caf�",
+            "row": "favorite",
+            "target": "⟨file⟩/home/oscar/caf�"
+          },
+          {
+            "broken": "esa ruta no parsea",
+            "hostile": false,
+            "name": "rota",
+            "row": "favorite",
+            "target": ""
+          }
+        ],
+        "slot_id": 7
       },
       {
         "kind": "unsupported",

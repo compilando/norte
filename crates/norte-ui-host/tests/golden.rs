@@ -5,9 +5,12 @@
 //! exactamente el fallo del que protegen — un campo renombrado en Rust que
 //! deja al renderer leyendo `null` sin que nada se ponga rojo.
 //!
-//! La cobertura es 1:1 en los dos sentidos: cada variante tiene su fixture y
-//! cada fixture su variante, así que añadir una acción sin clavarla también
-//! falla.
+//! La cobertura es 1:1 entre las fixtures y los casos de este fichero, y
+//! ADEMÁS `tag_de_accion` es un `match` exhaustivo sin comodín: añadir una
+//! variante a `UiAction` deja de compilar aquí. Sin eso la promesa era falsa
+//! —se comparaba el JSON contra una lista escrita a mano, no contra el
+//! enum— y ya se había colado `search_activate_row`, que cruzaba el cable
+//! sin fixture mientras esta cabecera decía que era imposible.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -77,8 +80,55 @@ fn fila(key: u64, nombre: &str, hostile: bool) -> RowView {
 #[test]
 fn acciones() {
     let mut casos = acciones_de_fila();
+    casos.extend(acciones_de_overlay());
     casos.extend(acciones_de_pantalla());
+    // Cada caso se llama como su variante: es lo que hace que la cobertura la
+    // vigile el COMPILADOR y no una lista.
+    for (nombre, accion) in &casos {
+        assert_eq!(
+            *nombre,
+            tag_de_accion(accion),
+            "el caso `{nombre}` no se llama como su variante"
+        );
+    }
     check_family("actions.json", &casos);
+}
+
+/// El tag de cada acción, en un `match` EXHAUSTIVO y sin comodín.
+///
+/// Es el guardia que faltaba. `check_family` compara las fixtures con una
+/// lista de casos escrita a mano, así que una variante nueva sin caso pasaba
+/// sin que nada dijera nada —y pasó: `SearchActivateRow` cruzaba el cable sin
+/// fixture—. Con esto, añadir una variante rompe la compilación de este
+/// fichero, que es donde hay que enterarse.
+fn tag_de_accion(a: &UiAction) -> &'static str {
+    match a {
+        UiAction::MoveCursor { .. } => "move_cursor",
+        UiAction::SelectRow { .. } => "select_row",
+        UiAction::ToggleMark { .. } => "toggle_mark",
+        UiAction::MarkRange { .. } => "mark_range",
+        UiAction::Activate { .. } => "activate",
+        UiAction::Parent { .. } => "parent",
+        UiAction::History { .. } => "history",
+        UiAction::SetVisibleRange { .. } => "set_visible_range",
+        UiAction::SortBy { .. } => "sort_by",
+        UiAction::FocusSlot { .. } => "focus_slot",
+        UiAction::Dialog { .. } => "dialog",
+        UiAction::DialogInput { .. } => "dialog_input",
+        UiAction::CancelTask { .. } => "cancel_task",
+        UiAction::SetViewport { .. } => "set_viewport",
+        UiAction::Key(_) => "key",
+        UiAction::SetViewerRows { .. } => "set_viewer_rows",
+        UiAction::HelpSelectTopic { .. } => "help_select_topic",
+        UiAction::HelpActivate { .. } => "help_activate",
+        UiAction::SettingsSelectRow { .. } => "settings_select_row",
+        UiAction::ExtensionSelectRow { .. } => "extension_select_row",
+        UiAction::PickerSelectRow { .. } => "picker_select_row",
+        UiAction::PlaceActivateRow { .. } => "place_activate_row",
+        UiAction::LayoutActivateRow { .. } => "layout_activate_row",
+        UiAction::SearchActivateRow { .. } => "search_activate_row",
+        UiAction::Resync => "resync",
+    }
 }
 
 /// Las que nombran una fila: llevan clave Y generación (ADR 0068).
@@ -107,6 +157,48 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
                 text: "carpeta nueva".to_owned(),
             },
         ),
+    ]
+}
+
+/// Las que nombran una fila de un OVERLAY por su índice.
+///
+/// Dos llevan generación —la barra lateral y el selector se llenan desde una
+/// tarea de fondo, así que su lista cambia sin que el usuario toque nada— y
+/// las demás no, porque no pueden cambiar sin un gesto suyo.
+fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
+    vec![
+        (
+            "settings_select_row",
+            UiAction::SettingsSelectRow { row: 2 },
+        ),
+        (
+            "extension_select_row",
+            UiAction::ExtensionSelectRow { row: 1 },
+        ),
+        (
+            "picker_select_row",
+            UiAction::PickerSelectRow {
+                row: 0,
+                generation: 3,
+            },
+        ),
+        (
+            "place_activate_row",
+            UiAction::PlaceActivateRow {
+                row: 1,
+                generation: 4,
+            },
+        ),
+        (
+            "layout_activate_row",
+            UiAction::LayoutActivateRow { row: 0 },
+        ),
+        (
+            "search_activate_row",
+            UiAction::SearchActivateRow { row: 2 },
+        ),
+        ("help_select_topic", UiAction::HelpSelectTopic { row: 3 }),
+        ("help_activate", UiAction::HelpActivate { index: 1 }),
     ]
 }
 
@@ -163,22 +255,6 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("parent", UiAction::Parent { slot_id: 1 }),
-        (
-            "settings_select_row",
-            UiAction::SettingsSelectRow { row: 2 },
-        ),
-        (
-            "extension_select_row",
-            UiAction::ExtensionSelectRow { row: 1 },
-        ),
-        ("picker_select_row", UiAction::PickerSelectRow { row: 0 }),
-        ("place_activate_row", UiAction::PlaceActivateRow { row: 1 }),
-        (
-            "layout_activate_row",
-            UiAction::LayoutActivateRow { row: 0 },
-        ),
-        ("help_select_topic", UiAction::HelpSelectTopic { row: 3 }),
-        ("help_activate", UiAction::HelpActivate { index: 1 }),
         ("resync", UiAction::Resync),
         (
             "select_row",
@@ -301,6 +377,37 @@ fn disposicion_de_referencia() -> LayoutView {
                 role: Some(SlotRole::Target),
                 focus_index: 1,
             },
+            // Los otros tres huecos de `slots` también se COLOCAN. Sin esto
+            // el corpus describía una pantalla que nombra cinco huecos y
+            // pinta dos, así que un renderer podía pasar el contrato sin
+            // saber pintar la barra lateral, la ficha ni los procesos.
+            SlotPlacement {
+                slot_id: 5,
+                x: 0,
+                y: 38,
+                width: 40,
+                height: 2,
+                role: None,
+                focus_index: 2,
+            },
+            SlotPlacement {
+                slot_id: 6,
+                x: 40,
+                y: 38,
+                width: 40,
+                height: 2,
+                role: None,
+                focus_index: 3,
+            },
+            SlotPlacement {
+                slot_id: 7,
+                x: 80,
+                y: 38,
+                width: 40,
+                height: 2,
+                role: None,
+                focus_index: 4,
+            },
         ],
     }
 }
@@ -373,6 +480,43 @@ fn slots_de_referencia() -> Vec<SlotView> {
             slot_id: 6,
             cursor: Some(0),
         },
+        // La barra lateral cruza JSON AQUÍ y en ningún otro sitio hasta hoy,
+        // y es la única variante de `SlotView` con newtype dentro de un enum
+        // etiquetado por `kind`: su forma en el cable no se parece a la de
+        // sus hermanas y no había nada que la clavara. Sus tres clases de
+        // fila van las tres, incluida la rota con su motivo.
+        SlotView::Places(Box::new(norte_ui_host::dto::PlacesSlotView {
+            slot_id: 7,
+            rows: vec![
+                norte_ui_host::dto::PlaceRowView::Header {
+                    label: "Unidades".to_owned(),
+                    folded: false,
+                },
+                norte_ui_host::dto::PlaceRowView::Drive {
+                    label: "\u{27e8}file\u{27e9}/".to_owned(),
+                    hostile: false,
+                    detail: "ext4 · 12 GiB libres de 100 GiB".to_owned(),
+                },
+                norte_ui_host::dto::PlaceRowView::Header {
+                    label: "Favoritos".to_owned(),
+                    folded: false,
+                },
+                norte_ui_host::dto::PlaceRowView::Favorite {
+                    name: "caf\u{fffd}".to_owned(),
+                    target: "\u{27e8}file\u{27e9}/home/oscar/caf\u{fffd}".to_owned(),
+                    hostile: true,
+                    broken: String::new(),
+                },
+                norte_ui_host::dto::PlaceRowView::Favorite {
+                    name: "rota".to_owned(),
+                    target: String::new(),
+                    hostile: false,
+                    broken: "esa ruta no parsea".to_owned(),
+                },
+            ],
+            cursor: 1,
+            generation: 5,
+        })),
         SlotView::Unsupported {
             slot_id: 2,
             kind_name: "compare".to_owned(),
@@ -527,6 +671,7 @@ fn selector_de_referencia() -> norte_ui_host::dto::PickerView {
         }],
         cursor: Some(0),
         empty: String::new(),
+        generation: 2,
     }
 }
 

@@ -146,6 +146,10 @@ impl Selector {
             } else {
                 String::new()
             },
+            // La pone el controlador, que es quien sabe cuántas veces ha
+            // cambiado el conjunto: el selector no se entera de sus propias
+            // reaperturas.
+            generation: 0,
         }
     }
 }

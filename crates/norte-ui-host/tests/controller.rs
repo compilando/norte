@@ -5021,16 +5021,17 @@ async fn la_barra_de_sitios_navega_el_listado_y_no_se_lo_queda() {
             .iter()
             .position(|r| matches!(r, norte_ui_host::dto::PlaceRowView::Drive { .. }))
         {
-            fila_del_disco = Some(i);
+            fila_del_disco = Some((i, v.generation));
             break;
         }
     }
-    let i = fila_del_disco.expect("los discos llegan");
+    let (i, generacion) = fila_del_disco.expect("los discos llegan");
 
     // Un click en el disco: elige Y activa, porque una barra lateral existe
     // para ir a sitios.
     h.dispatch(UiAction::PlaceActivateRow {
         row: u32::try_from(i).expect("cabe"),
+        generation: generacion,
     })
     .await
     .expect("host vivo");
@@ -5045,6 +5046,119 @@ async fn la_barra_de_sitios_navega_el_listado_y_no_se_lo_queda() {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
     }
     assert!(llego, "el LISTADO navegó al volumen, no la barra");
+}
+
+/// Un click en la barra lateral no puede navegar a un sitio que no se pulsó.
+///
+/// Los volúmenes llegan de una tarea de fondo y se insertan EN MEDIO —las
+/// unidades van antes que los favoritos—, así que entre que el usuario suelta
+/// el botón sobre un favorito y el host atiende la acción, esa fila es otra.
+/// Sin generación el host la aceptaba, y `set_cursor` recorta en vez de
+/// rechazar, así que el peor caso era navegar al ÚLTIMO sitio de la lista con
+/// un acuse `Applied`. Es la carrera que el ADR 0068 existe para cerrar.
+#[tokio::test]
+async fn un_click_en_la_barra_no_navega_a_otro_sitio_si_la_lista_cambio() {
+    let mut cfg = norte_ui_host::ajustes_por_defecto();
+    cfg.common.hotlist = vec![norte_config::HotlistItem {
+        name: "proyectos".to_owned(),
+        target: norte_proto::VPath::parse("mem:///proyectos").map_err(|_| "err".to_owned()),
+    }];
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    f.pon("mem:///proyectos", vec![(b"p.txt".to_vec(), false)]);
+    f.pon("mem:///boot", vec![(b"vmlinuz".to_vec(), false)]);
+    f.pon("mem:///datos", vec![(b"d.txt".to_vec(), false)]);
+    // DOS discos: desplazan el favorito lo justo para que su índice caiga
+    // sobre un disco y no sobre una cabecera. Con uno el click habría plegado
+    // una sección, que también está mal pero se nota menos.
+    f.volumenes = vec![
+        volumen("mem:///boot", "ext4", false),
+        volumen("mem:///datos", "ext4", false),
+    ];
+    let (h, snap) = UiHost::start(UiHostOptions {
+        backend: Arc::new(f),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("full").expect("layout"),
+        viewport: (200, 60),
+        settings: cfg,
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+
+    // La foto que el usuario TIENE DELANTE, antes de que lleguen los discos.
+    let antes = sitios(&snap).expect("colocada").clone();
+    let fila_pulsada = antes
+        .rows
+        .iter()
+        .position(|r| matches!(r, norte_ui_host::dto::PlaceRowView::Favorite { .. }))
+        .expect("el favorito está desde el principio");
+
+    // Los discos aterrizan y la lista es OTRA.
+    let mut despues = None;
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let v = sitios(&siguiente_foto(&mut sub).await)
+            .expect("colocada")
+            .clone();
+        if v.generation != antes.generation {
+            despues = Some(v);
+            break;
+        }
+    }
+    let despues = despues.expect("los volúmenes llegan y suben la generación");
+    assert!(
+        matches!(
+            despues.rows.get(fila_pulsada),
+            Some(norte_ui_host::dto::PlaceRowView::Drive { .. })
+        ),
+        "la fila que se pulsó es ahora un DISCO, que es lo que hace peligroso \
+         el índice desnudo: {:?}",
+        despues.rows.get(fila_pulsada)
+    );
+
+    // El click en vuelo, con la generación de la pantalla que se vio.
+    let ack = h
+        .dispatch(UiAction::PlaceActivateRow {
+            row: u32::try_from(fila_pulsada).expect("cabe"),
+            generation: antes.generation,
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, norte_ui_host::ActionAck::Stale { .. }),
+        "se rechaza en vez de navegar a otro sitio: {ack:?}"
+    );
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    for _ in 0..8 {
+        let foto = siguiente_foto(&mut sub).await;
+        assert!(
+            !primer_listado(&foto).path_display.contains("boot"),
+            "y el panel NO se fue al disco que nadie pulsó"
+        );
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+    }
+
+    // Con la generación buena, el mismo click sí va.
+    let ack = h
+        .dispatch(UiAction::PlaceActivateRow {
+            row: u32::try_from(fila_pulsada).expect("cabe"),
+            generation: despues.generation,
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, norte_ui_host::ActionAck::Applied { .. }),
+        "y la generación buena sí vale: {ack:?}"
+    );
 }
 
 /// Un favorito cuya ruta no parsea se PINTA con su motivo: uno que
