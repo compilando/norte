@@ -161,7 +161,18 @@ pub const PLUGIN_NAME_WIRE_CAP: usize = 120;
 ///
 /// Ellipsis on the RIGHT and not in the middle: these labels are told apart by
 /// their beginning (`middle_ellipsis` exists for paths, where what identifies
-/// is at the end). Capped BEFORE masking, which is safe because over text that
+/// is at the end).
+///
+/// [`plugin_badge`] above middle-ellipsises the PUBLISHER, and that looks like
+/// a contradiction with this paragraph until you ask what each cut is
+/// protecting. This one protects an IDENTITY the reader compares against
+/// another — two extensions in one sidebar, told apart by how their names
+/// start — so the beginning is the half that must survive. The badge's cut
+/// protects a SENTENCE the host is making about that extension, where the
+/// segments after the publisher (`cut short`, `some bytes did not decode`) are
+/// the part that must stay on screen, and a publisher that keeps both of its
+/// own ends is still boxed inside a labelled segment that announces it as a
+/// publisher. Same file, two cuts, two different things being defended. Capped BEFORE masking, which is safe because over text that
 /// is already UTF-8 `display_name` is 1:1 in chars (it maps char to char, never
 /// inserts nor deletes). The other way round would mask the 50 000 chars a
 /// hostile daemon cares to send in order to keep 120.

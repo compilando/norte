@@ -1155,6 +1155,10 @@ gui-menu-copied = { $n } ruta(s) copiada(s) al portapapeles
 reason-read-only = backend de solo lectura
 reason-wrong-target = no aplica a esta selección
 reason-answered-by-overlay = lo contesta el propio overlay abierto
+# H3f/4.4: una fila de la pantalla del VISOR, leída desde una página de ayuda
+# sin visor abierto. No es «este frontend no lo hace» —sí lo hace— ni es de la
+# selección: la tecla es de otra pantalla.
+reason-viewer-only = solo con el visor abierto
 reason-unsupported = el backend no lo soporta
 reason-plugin-inactive = la extensión está desactivada o sin aprobar
 reason-policy-denied = la policy lo deniega

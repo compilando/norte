@@ -48,6 +48,15 @@ pub struct Falso {
     pub cancelaciones: Arc<AtomicUsize>,
     /// El emisor del progreso de la última task, para que el test lo mueva.
     pub progreso: std::sync::Mutex<Option<tokio::sync::watch::Sender<norte_proto::TaskProgress>>>,
+    /// El catálogo de extensiones que contesta `plugin.list`.
+    pub plugins: Vec<norte_proto::methods::PluginInfo>,
+    /// El `help.md` de cada extensión, por id. Un id ausente contesta como
+    /// un daemon que no tiene la página: markdown vacío.
+    pub paginas: HashMap<String, String>,
+    /// Los ids que se pidieron a `plugin.help`, en orden: es lo que permite
+    /// comprobar que una página se pide UNA vez y que un id inválido jamás
+    /// llega al wire.
+    pub paginas_pedidas: std::sync::Mutex<Vec<String>>,
     /// Los canales de la conexión, para que el test empuje eventos y tasks
     /// ajenas como haría un daemon.
     pub eventos:
@@ -149,6 +158,36 @@ pub fn arbol_de_prueba() -> Falso {
 }
 
 impl HostBackend for Falso {
+    fn plugin_list(
+        &self,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::PluginListResult, Error>> {
+        let plugins = self.plugins.clone();
+        Box::pin(async move {
+            Ok(norte_proto::methods::PluginListResult {
+                plugins,
+                errors: Vec::new(),
+            })
+        })
+    }
+
+    fn plugin_help(
+        &self,
+        id: String,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::PluginHelpResult, Error>> {
+        self.paginas_pedidas
+            .lock()
+            .expect("mutex de páginas")
+            .push(id.clone());
+        let markdown = self.paginas.get(&id).cloned().unwrap_or_default();
+        Box::pin(async move {
+            Ok(norte_proto::methods::PluginHelpResult {
+                markdown,
+                truncated: false,
+                lossy: false,
+            })
+        })
+    }
+
     fn read(
         &self,
         path: VPath,

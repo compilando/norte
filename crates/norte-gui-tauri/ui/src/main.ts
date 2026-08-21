@@ -168,6 +168,13 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     if (target instanceof HTMLInputElement && esTexto) {
       return;
     }
+    // Con la ayuda leyendo su CUERPO, las teclas de página son del scroll y
+    // no del host: el cuerpo de una página cruza entero y quien lo desplaza
+    // es el DOM. Sin esta salida, `preventDefault` mataba el scroll nativo y
+    // una página más alta que la caja solo se podía leer con la rueda.
+    if (screen.helpBodyScrolls() && (k.key === "PageDown" || k.key === "PageUp")) {
+      return;
+    }
     e.preventDefault();
     pending ??= { at: performance.now(), what: "key" };
     send(keyAction(k));

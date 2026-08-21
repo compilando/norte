@@ -5993,6 +5993,57 @@ pub struct PluginColumnInfo {
     pub header: String,
 }
 
+/// `true` si `id` es un identificador de plugin reverse-DNS válido: uno o más
+/// segmentos `[A-Za-z0-9-]+` separados por puntos, con al menos un punto,
+/// ningún segmento vacío (ni punto inicial ni final), y longitud total
+/// `1..=128`.
+///
+/// Vive JUNTO a [`PluginInfo`], que es donde el id entra al proceso, y no en
+/// el crate que parsea manifiestos, porque la pregunta tiene dos entradas y
+/// una sola respuesta: el host la hace al leer un `plugin.toml`, y todo el
+/// que RECIBE un `PluginInfo` por el wire la hace otra vez, porque el proceso
+/// que lo manda no es de fiar por defecto. `norte-plugin-host` la re-exporta
+/// para que su parseo siga llamándose igual; dos implementaciones del mismo
+/// alfabeto serían dos, y una acabaría siendo más laxa.
+///
+/// El alfabeto es tan estrecho a propósito: un id NO es prosa. Es clave de
+/// búsqueda contra el catálogo, argumento de [`PLUGIN_HELP`] por el wire, y
+/// lo que el filtro de la barra lateral de la ayuda pliega en cada tecla. Con
+/// este alfabeto no puede pintar peligros de terminal ni suplantar a otro
+/// plugin, y por eso un id que no lo cumple se DESCARTA en vez de
+/// enmascararse: enmascarar no es inyectivo, así que mapearía dos plugins
+/// distintos a la misma fila.
+///
+/// El tope de 128 también acota el trabajo: un megabyte de `id` cuesta una
+/// comparación rechazada, no una copia enmascarada por plugin.
+///
+/// ```
+/// use norte_proto::methods::is_valid_plugin_id;
+///
+/// assert!(is_valid_plugin_id("acme.ftp"));
+/// assert!(!is_valid_plugin_id("acme"), "hace falta al menos un punto");
+/// assert!(!is_valid_plugin_id("acme.\u{202E}ftp"), "alfabeto cerrado");
+/// ```
+#[must_use]
+pub fn is_valid_plugin_id(id: &str) -> bool {
+    if id.is_empty() || id.len() > 128 {
+        return false;
+    }
+    let mut segments = 0_usize;
+    for segment in id.split('.') {
+        if segment.is_empty()
+            || !segment
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        {
+            return false;
+        }
+        segments += 1;
+    }
+    // Al menos un punto ⇒ al menos dos segmentos.
+    segments >= 2
+}
+
 /// Un plugin descubierto (elemento de [`PluginListResult::plugins`], M4-P3).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

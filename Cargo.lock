@@ -5306,6 +5306,7 @@ version = "0.3.0-alpha.2"
 dependencies = [
  "anyhow",
  "libunftp",
+ "norte-proto",
  "serde",
  "sha2 0.10.9",
  "tempfile",

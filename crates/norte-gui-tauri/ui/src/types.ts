@@ -186,7 +186,7 @@ export type HelpSpanView =
   | { span: "emph"; text: string }
   | { span: "code"; text: string }
   | { span: "command"; text: string; is_chord: boolean }
-  | { span: "link"; topic: string; text: string };
+  | { span: "link"; text: string };
 
 export interface HelpKeyRowView {
   chord: string;
@@ -201,7 +201,7 @@ export type HelpBlockView =
   | { block: "bullets"; items: HelpSpanView[][] }
   | { block: "code"; lang: string | null; text: string }
   | { block: "table"; header: string[]; rows: string[][] }
-  | { block: "callout"; kind: string; spans: HelpSpanView[] }
+  | { block: "callout"; kind: "note" | "warn" | "tip"; spans: HelpSpanView[] }
   | { block: "keys"; rows: HelpKeyRowView[] };
 
 export type HelpSidebarRowView =

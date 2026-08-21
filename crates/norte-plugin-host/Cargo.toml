@@ -9,6 +9,12 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# El alfabeto de un id de plugin vive junto al tipo del wire que lo transporta
+# (`norte_proto::methods::is_valid_plugin_id`): la pregunta la hacen este crate
+# al parsear un manifiesto y CUALQUIERA que reciba un `PluginInfo`, y dos
+# implementaciones acabarían divergiendo. `norte-proto` es la base del
+# workspace y no depende de nada nuestro, así que no hay inversión de capas.
+norte-proto.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 toml.workspace = true

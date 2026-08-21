@@ -52,6 +52,30 @@ const FILL_BATCH: usize = 500;
 /// Lo que se espera a la lectura del visor.
 const PLAZO_VISOR: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// Los contextos de ayuda que ESTA ventana puede estar viviendo.
+///
+/// Escrita a mano y cerrada, como la del TUI (`norte_tui::help_context`), y
+/// por el mismo motivo: derivada del corpus coincidiría consigo misma por
+/// construcción y no cazaría nada. Un test la contrasta contra las páginas
+/// del corpus EN LOS DOS SENTIDOS — un contexto que ninguna página reclama es
+/// un hallazgo, y una página que reclama un contexto que no está aquí también
+/// —, que es lo que impide que renombrar una portada deje a `F1` abriendo el
+/// índice en silencio.
+pub const CONTEXTOS: &[&str] = &[
+    "browse",
+    "viewer",
+    "dialog.confirm",
+    "dialog.approval",
+    "dialog.mkdir",
+];
+
+/// Plazo de una llamada de extensiones (catálogo o página).
+///
+/// La ayuda se pinta sin esperarla, así que este plazo no gobierna una
+/// pantalla: gobierna una tarea que si no volviera jamás dejaría un `id`
+/// reclamado y una página en blanco para siempre.
+const PLAZO_PLUGINS: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Tope de un nombre tecleado, en bytes. Ni `NAME_MAX` (que es del sistema
 /// de ficheros y no lo sabemos aquí) ni el de pantalla: un tope generoso que
 /// impide que un renderer mande un megabyte, y que RECHAZA en vez de
@@ -195,6 +219,20 @@ enum Mensaje {
     Aprobacion(Box<norte_proto::methods::PolicyApprovalRequired>),
     /// Más entradas del listado que se está drenando por detrás.
     MasEntradas(Box<(RequestToken, u32, Vec<Entry>)>),
+    /// El catálogo de plugins que la ayuda pidió al abrirse.
+    ///
+    /// Vuelve al actor como un mensaje más —un solo escritor— y llega tarde
+    /// a propósito: la ayuda se PINTA sin esperarlo. La documentación es
+    /// cosmética, y una ventana que se queda en blanco hasta que el daemon
+    /// conteste es peor que una lateral que gana filas medio segundo después.
+    Plugins(Box<Result<norte_proto::methods::PluginListResult, Error>>),
+    /// La página de UN plugin, pedida bajo demanda al abrirla.
+    PaginaDePlugin(
+        Box<(
+            String,
+            Result<norte_proto::methods::PluginHelpResult, Error>,
+        )>,
+    ),
     /// El contenido que el visor pidió.
     Contenido(Box<(RequestToken, VPath, Result<Vec<u8>, Error>)>),
     /// Lo que un sondeo averiguó de unas cuantas entradas (tamaño y fecha de
@@ -427,6 +465,17 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
+            Mensaje::Plugins(res) => {
+                for u in estado.aplicar_catalogo_de_plugins(*res, &backend, &buzon) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::PaginaDePlugin(datos) => {
+                let (id, res) = *datos;
+                if let Some(u) = estado.aplicar_pagina_de_plugin(&id, res.as_ref().ok()) {
+                    let _ = updates.send(u);
+                }
+            }
             Mensaje::Hidratado(datos) => {
                 let (dir, slot, sondas) = *datos;
                 if let Some(u) = estado.aplicar_sondas(slot, &dir, &sondas) {
@@ -445,24 +494,9 @@ async fn actor(
                 }
             }
             Mensaje::Conexion(ev) => {
-                let (vista, clave) = match ev {
-                    norte_client::ConnEvent::Lost => {
-                        (ConnectionView::Reconnecting, "msg-daemon-lost")
-                    }
-                    norte_client::ConnEvent::Restored => {
-                        (ConnectionView::Connected, "msg-daemon-restored")
-                    }
-                };
-                estado.conexion = vista.clone();
-                let u = estado.parche(vec![ViewChange::Connection(vista)]);
-                let _ = updates.send(u);
-                // Y se DICE, además de pintarse: perder el daemon a mitad de
-                // una operación no puede notarse solo en un icono.
-                let n = estado.sobre(UiUpdate::Notice(UiNotice::Message {
-                    key: clave.to_owned(),
-                    detail: None,
-                }));
-                let _ = updates.send(n);
+                for u in estado.cambio_de_conexion(ev) {
+                    let _ = updates.send(u);
+                }
             }
             Mensaje::TaskNueva(task) => {
                 for u in estado.registrar_task(*task, &buzon) {
@@ -1165,16 +1199,8 @@ impl Estado {
             // (crear directorio, renombrar). Decirlo es más honesto que
             // aceptar texto que nadie va a leer.
             UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
-            UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row),
-            UiAction::HelpActivate { index } => {
-                let accion = self.ayuda.as_ref().and_then(|a| a.accion(*index as usize));
-                if accion.is_none() {
-                    // Un click sobre una fila que ya no existe: el renderer
-                    // iba un frame por detrás, y eso no es un error.
-                    return (Self::obsoleta(StaleAction::Modal), Vec::new());
-                }
-                self.actuar_en_ayuda(accion, backend, buzon)
-            }
+            UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row, backend, buzon),
+            UiAction::HelpActivate { index } => self.activar_en_ayuda(*index, backend, buzon),
         }
     }
 
@@ -1193,8 +1219,16 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        // La AYUDA va primero, incluso antes que el visor, y no por gusto:
+        // se abre ENCIMA de lo que hubiera —también encima del visor, que es
+        // desde donde se pide la página del visor— y quien está arriba se
+        // queda las teclas. Al revés, `F1` en el visor abría una ayuda que no
+        // recibía ni una tecla y que ninguna podía cerrar.
+        if self.ayuda.is_some() {
+            return Some(self.tecla_en_ayuda(k, backend, buzon));
+        }
         if self.visor.is_some() {
-            return Some(self.tecla_en_visor(k));
+            return Some(self.tecla_en_visor(k, backend, buzon));
         }
         // Cualquier tecla del LISTADO cancela una lectura de visor en vuelo.
         // El usuario pulsó F3, se cansó y siguió a lo suyo: abrirle el visor
@@ -1202,9 +1236,6 @@ impl Estado {
         // cambiarle el teclado de mapa sin gesto suyo. (Un segundo F3 pide su
         // propia lectura y se queda con el testigo nuevo.)
         self.visor_en_vuelo = None;
-        if self.ayuda.is_some() {
-            return Some(self.tecla_en_ayuda(k, backend, buzon));
-        }
         if self.paleta.is_some() {
             return Some(self.tecla_en_paleta(k, backend, buzon));
         }
@@ -1327,12 +1358,6 @@ impl Estado {
         }
     }
 
-    /// La tecla, cuando el buscador incremental está abierto.
-    ///
-    /// `None` = esta tecla no es suya y sigue su camino normal (una tecla de
-    /// función, un atajo con modificador): abrir el buscador NO desconecta el
-    /// resto del teclado, solo se queda el texto, el borrado y las tres
-    /// teclas que lo gobiernan.
     /// Las teclas mientras la paleta está abierta.
     ///
     /// Fijas a propósito: `esc` cierra, `enter` corre lo seleccionado, las
@@ -1416,19 +1441,166 @@ impl Estado {
     /// (`dialog.confirm`, `viewer`, `browse`) y quién la reclama lo dice el
     /// propio corpus en su portada, así que añadir una página para un
     /// diálogo nuevo no toca este código.
-    fn abrir_ayuda(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    fn abrir_ayuda(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Sobre un diálogo que se está TECLEANDO, no. La ayuda se queda el
+        // teclado mientras está abierta, así que abrirla encima de un campo
+        // de texto convierte el `⌫` que corrige una errata en un paso atrás
+        // de la ayuda y el `enter` que confirma en otra cosa. El TUI lo
+        // prohíbe por su nombre desde H3c y con el mismo razonamiento.
+        if self
+            .dialogos
+            .last()
+            .is_some_and(|d| d.vista.input.is_some())
+        {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-help-over-input".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
         let contexto = self.contexto_de_ayuda();
         self.ayuda = Some(crate::help::Ayuda::abrir(
             self.lang,
-            Some(contexto),
+            contexto,
             &self.efectivo,
             &self.efectivo_visor,
             self.hechos(),
         ));
+        // El catálogo de extensiones se pide y NO se espera: la ayuda se
+        // pinta ya. La documentación es cosmética, y una ventana en blanco
+        // hasta que el daemon conteste es peor que una lateral que gana
+        // filas medio segundo más tarde. Un fallo no se dice: se pinta la
+        // ayuda sin páginas de extensión.
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_list()).await {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon.send(Mensaje::Plugins(Box::new(res))).await;
+        });
         let cambio = ViewChange::Help {
             help: self.vista_ayuda(),
         };
         (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// La conexión con el daemon cambió de estado: se PINTA y se DICE.
+    ///
+    /// Las dos cosas, y por la misma cola: perder el daemon a mitad de una
+    /// operación no puede notarse solo en un icono.
+    fn cambio_de_conexion(&mut self, ev: norte_client::ConnEvent) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let (vista, clave) = match ev {
+            norte_client::ConnEvent::Lost => (ConnectionView::Reconnecting, "msg-daemon-lost"),
+            norte_client::ConnEvent::Restored => (ConnectionView::Connected, "msg-daemon-restored"),
+        };
+        self.conexion = vista.clone();
+        let parche = self.parche(vec![ViewChange::Connection(vista)]);
+        let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
+            key: clave.to_owned(),
+            detail: None,
+        }));
+        vec![parche, aviso]
+    }
+
+    /// El parche de la ayuda, y de paso la página que haya que pedir.
+    ///
+    /// UN sitio para las dos cosas a propósito: cualquier gesto que cambie de
+    /// página —una flecha, un click, un enlace— puede aterrizar en la de una
+    /// extensión, y esa página no está en el corpus, hay que pedirla. Un
+    /// segundo camino que solo pintara sería una página de extensión que se
+    /// queda en blanco según cómo se llegue a ella.
+    fn parche_de_ayuda(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.pedir_pagina_de_plugin(backend, buzon);
+        let cambio = ViewChange::Help {
+            help: self.vista_ayuda(),
+        };
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// El catálogo llegó: entra al modelo y, si el lector ya está sobre una
+    /// página de extensión, se pide esa página.
+    ///
+    /// Si la ayuda se cerró mientras volaba, no hay nada que hacer: la foto
+    /// era de una apertura que ya no existe, y guardarla para la siguiente
+    /// sería enseñar un catálogo viejo.
+    fn aplicar_catalogo_de_plugins(
+        &mut self,
+        res: Result<norte_proto::methods::PluginListResult, Error>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Ok(lista) = res else {
+            return Vec::new();
+        };
+        let Some(a) = self.ayuda.as_mut() else {
+            return Vec::new();
+        };
+        let antes = a.estado.rows().to_vec();
+        a.set_plugins(&lista.plugins);
+        if a.estado.rows() == antes {
+            // Un catálogo que no añade ninguna fila —ninguna extensión, o
+            // ninguna con página y con id válido— no cambia la pantalla, y
+            // un parche que no cambia nada obliga a un renderer a repintar
+            // la ayuda entera para nada.
+            return Vec::new();
+        }
+        self.parche_de_ayuda(backend, buzon)
+    }
+
+    /// Pide la página de la extensión abierta, si hay una y no se ha pedido
+    /// ya en esta apertura de la ayuda.
+    fn pedir_pagina_de_plugin(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let Some(id) = self
+            .ayuda
+            .as_mut()
+            .and_then(crate::help::Ayuda::reclamar_pagina)
+        else {
+            return;
+        };
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let res =
+                match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_help(id.clone())).await {
+                    Ok(r) => r,
+                    Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+                };
+            let _ = buzon
+                .send(Mensaje::PaginaDePlugin(Box::new((id, res))))
+                .await;
+        });
+    }
+
+    /// La página de una extensión llegó. Un fallo deja la página VACÍA con su
+    /// nombre, que es mejor respuesta que un error encima de la ayuda — y es
+    /// también lo que ve un daemon N-1 sin el método. Se pide una vez por
+    /// apertura: cerrar y volver a abrir la ayuda es el reintento.
+    fn aplicar_pagina_de_plugin(
+        &mut self,
+        id: &str,
+        res: Option<&norte_proto::methods::PluginHelpResult>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        let a = self.ayuda.as_mut()?;
+        a.instalar_pagina(id, res?);
+        let cambio = ViewChange::Help {
+            help: self.vista_ayuda(),
+        };
+        Some(self.parche(vec![cambio]))
     }
 
     /// Dónde está el lector, en el vocabulario del corpus.
@@ -1437,6 +1609,15 @@ impl Estado {
     /// lector está mirando. Un diálogo que solo informa no tiene página
     /// propia y cae al listado, que es de lo que estaba hablando.
     fn contexto_de_ayuda(&self) -> &'static str {
+        debug_assert!(
+            CONTEXTOS.contains(&self.contexto_calculado()),
+            "un contexto fuera del vocabulario declarado"
+        );
+        self.contexto_calculado()
+    }
+
+    /// El cálculo, sin el ancla.
+    fn contexto_calculado(&self) -> &'static str {
         if let Some(d) = self.dialogos.last() {
             return match d.al_confirmar {
                 Some(Pendiente::Borrar { .. }) => "dialog.confirm",
@@ -1463,8 +1644,15 @@ impl Estado {
         let hueco = self.hueco();
         let entrada = hueco.pane.entries().get(hueco.pane.cursor());
         norte_frontend::availability::Facts {
+            // `enterable` SÍ es exactamente `Dir`, porque eso es lo que
+            // acepta la navegación. La asimetría con `viewable` de abajo es
+            // deliberada: cada uno refleja lo que su camino rehúsa.
             enterable: entrada.is_some_and(|e| e.kind == EntryKind::Dir),
-            viewable: entrada.is_some_and(|e| e.kind == EntryKind::File),
+            // Lo MISMO que rehúsa `pedir_visor`, que solo rehúsa un
+            // directorio: un symlink se abre en el visor sin problema, y
+            // atenuar F3 sobre uno decía «esto no aplica» de una tecla que
+            // funciona. Los dos sitios se mueven juntos.
+            viewable: entrada.is_some_and(|e| e.kind != EntryKind::Dir),
             rename_single: hueco.pane.marks_len() <= 1,
             source_read_only: false,
             dest_read_only: false,
@@ -1484,7 +1672,7 @@ impl Estado {
     /// La proyección de la ayuda.
     fn vista_ayuda(&self) -> Option<crate::dto::HelpView> {
         let a = self.ayuda.as_ref()?;
-        Some(a.vista(self.lang, &crate::commands::todos_con(self.efectos)))
+        Some(a.vista(self.lang, self.efectos, self.visor.is_some()))
     }
 
     /// Las teclas mientras la ayuda está abierta.
@@ -1532,16 +1720,13 @@ impl Estado {
             "Tab" | "tab" => a.estado.toggle_focus(),
             "ArrowDown" | "down" => a.estado.down(),
             "ArrowUp" | "up" => a.estado.up(),
-            "PageDown" | "pgdn" => {
-                for _ in 0..PAGINA_DE_AYUDA {
-                    a.estado.down();
-                }
-            }
-            "PageUp" | "pgup" => {
-                for _ in 0..PAGINA_DE_AYUDA {
-                    a.estado.up();
-                }
-            }
+            // La página la da el MODELO, que sabe lo que significa en cada
+            // mitad: en la lateral camina y enseña UNA vez, y en el cuerpo
+            // mueve el scroll y no el cursor, porque una página es un
+            // movimiento sobre prosa. Repetir `down()` diez veces hacía diez
+            // transiciones de página por tecla.
+            "PageDown" | "pgdn" => a.estado.page_down(PAGINA_DE_AYUDA),
+            "PageUp" | "pgup" => a.estado.page_up(PAGINA_DE_AYUDA),
             "Backspace" | "backspace" => {
                 if a.estado.filtering() {
                     a.estado.backspace();
@@ -1568,10 +1753,7 @@ impl Estado {
                 }
             }
         }
-        let cambio = ViewChange::Help {
-            help: self.vista_ayuda(),
-        };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), self.parche_de_ayuda(backend, buzon))
     }
 
     /// `enter` sobre la ayuda: abrir la página elegida, seguir un enlace o
@@ -1586,13 +1768,58 @@ impl Estado {
         };
         if a.estado.focus() == norte_frontend::help::Focus::Topics {
             a.estado.open_selected();
-            let cambio = ViewChange::Help {
-                help: self.vista_ayuda(),
-            };
-            return (self.aplicada(), vec![self.parche(vec![cambio])]);
+            return (self.aplicada(), self.parche_de_ayuda(backend, buzon));
         }
-        let accion = a.accion(a.estado.action_cursor());
-        self.actuar_en_ayuda(accion, backend, buzon)
+        let i = a.estado.action_cursor();
+        self.activar_en_ayuda(u32::try_from(i).unwrap_or(u32::MAX), backend, buzon)
+    }
+
+    /// Actúa sobre la fila `i` del cuerpo, venga de `enter` o de un click.
+    ///
+    /// La comprobación de si se PUEDE vive aquí, en el host, y no en quien
+    /// pinta: el renderer no le pone escuchador a una fila apagada, pero el
+    /// teclado no pasa por ahí, así que delegarla dejaba que `enter` corriera
+    /// una fila atenuada.
+    fn activar_en_ayuda(
+        &mut self,
+        i: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let (lang, efectos, hay_visor) = (self.lang, self.efectos, self.visor.is_some());
+        let Some(a) = self.ayuda.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let i = i as usize;
+        let veredicto = a.accion_ejecutable(i, lang, efectos, hay_visor);
+        // Señalar la fila es la mitad del click que NO ejecuta, y se hace
+        // igual: tras seguir un enlace, la siguiente flecha se mueve por
+        // donde el lector señaló.
+        a.senalar(i);
+        match veredicto {
+            Ok(accion) => self.actuar_en_ayuda(Some(accion), backend, buzon),
+            Err(clave) if clave.is_empty() => {
+                // Una fila que ya no existe: el renderer iba un frame por
+                // detrás, y eso no es un error.
+                (Self::obsoleta(StaleAction::Modal), Vec::new())
+            }
+            Err(clave) => {
+                // Atenuada: se dice por qué y la página SIGUE abierta. Cerrar
+                // la ayuda para negarse sería quitarle al lector la página
+                // donde está la explicación.
+                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, &clave)));
+                let cambios = vec![
+                    ViewChange::Status(self.status.clone()),
+                    ViewChange::Help {
+                        help: self.vista_ayuda(),
+                    },
+                ];
+                (
+                    ActionAck::Unavailable { reason_key: clave },
+                    vec![self.parche(cambios)],
+                )
+            }
+        }
     }
 
     /// Lo que hace una acción del cuerpo, venga de `enter` o de un click.
@@ -1607,10 +1834,7 @@ impl Estado {
                 if let Some(a) = self.ayuda.as_mut() {
                     a.estado.open(&id);
                 }
-                let cambio = ViewChange::Help {
-                    help: self.vista_ayuda(),
-                };
-                (self.aplicada(), vec![self.parche(vec![cambio])])
+                (self.aplicada(), self.parche_de_ayuda(backend, buzon))
             }
             Some(norte_frontend::help::Action::Run(cmd)) => {
                 // Correr cierra la ayuda: el comando actúa sobre el listado
@@ -1636,15 +1860,17 @@ impl Estado {
 
     /// Un click en una fila de la lateral de la ayuda: ENSEÑA lo que haya,
     /// que es lo mismo que hace la flecha.
-    fn elegir_pagina(&mut self, row: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    fn elegir_pagina(
+        &mut self,
+        row: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(a) = self.ayuda.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
         a.estado.click_row(row as usize);
-        let cambio = ViewChange::Help {
-            help: self.vista_ayuda(),
-        };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), self.parche_de_ayuda(backend, buzon))
     }
 
     /// Las teclas mientras el visor está abierto.
@@ -1655,6 +1881,8 @@ impl Estado {
     fn tecla_en_visor(
         &mut self,
         k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Ok(chord) = k.to_chord() else {
             return (
@@ -1674,7 +1902,7 @@ impl Estado {
             // su lista de comandos —y no puede estarlo: las dos listas son
             // disjuntas a propósito—. Se atiende aquí para que `F1` con el
             // visor abierto abra la página del visor y no conteste «aquí no».
-            return self.abrir_ayuda();
+            return self.abrir_ayuda(backend, buzon);
         }
         let Some(efecto) = crate::commands::efecto_visor_de(&command, count.times()) else {
             // En el catálogo y ligado a esta pantalla, pero este host no lo
@@ -1832,6 +2060,12 @@ impl Estado {
         Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
     }
 
+    /// La tecla, cuando el buscador incremental está abierto.
+    ///
+    /// `None` = esta tecla no es suya y sigue su camino normal (una tecla de
+    /// función, un atajo con modificador): abrir el buscador NO desconecta el
+    /// resto del teclado, solo se queda el texto, el borrado y las tres
+    /// teclas que lo gobiernan.
     fn tecla_en_quick(
         &mut self,
         k: &crate::keys::KeyInput,
@@ -1959,7 +2193,7 @@ impl Estado {
                 };
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
-            Efecto::Ayuda => self.abrir_ayuda(),
+            Efecto::Ayuda => self.abrir_ayuda(backend, buzon),
             Efecto::Ver => self.pedir_visor(backend, buzon),
             Efecto::CrearDirectorio => self.pedir_mkdir(),
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),

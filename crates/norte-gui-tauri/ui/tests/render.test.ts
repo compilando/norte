@@ -3,6 +3,9 @@
 // Todo con un bridge FALSO. No hace falta ni ventana ni WebKitGTK para
 // comprobar lo que este renderer promete.
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Screen } from "../src/render";
@@ -733,7 +736,60 @@ describe("la ayuda", () => {
     expect(filas).toHaveLength(2);
     expect(filas[0]?.querySelector("th")?.textContent).toBe("F5");
     expect(filas[1]?.getAttribute("data-enabled")).toBe("false");
-    expect(filas[1]?.textContent).toContain("aquí no");
+    // El motivo va en su PROPIA celda, no pegado a la etiqueta: compuestos
+    // en banda quedan en la misma corrida bidi, y una etiqueta que acabe en
+    // RTL fuerte se lleva el separador al lado que no es.
+    expect(filas[1]?.querySelector(".help-key-label")?.textContent).toBe("mover");
+    expect(filas[1]?.querySelector(".help-key-reason")?.textContent).toBe("aquí no");
+  });
+
+  it("cada dato del host dentro de la prosa es su propia corrida bidi", () => {
+    const { screen } = montar();
+    screen.paint(conAyuda());
+    // Un `<p>` hecho de spans es UNA corrida: sin aislar, prosa RTL de un
+    // tercero puede mover de sitio la tecla que la frase dice que se pulse,
+    // y ahí no hay nada que enmascarar — son letras, no controles.
+    //
+    // Se comprueba sobre la HOJA como texto y no con `getComputedStyle`:
+    // jsdom no aplica la hoja del documento, así que el valor calculado
+    // sería vacío para todo y el test pasaría sin comprobar nada. Lo que
+    // hay que impedir es que la regla desaparezca, y eso sí se ve aquí.
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    const bloque = css
+      .split("}")
+      .find((b) => b.includes("unicode-bidi: isolate") && b.includes(".help-chord"));
+    expect(bloque, "no hay regla de aislamiento para la ayuda").toBeDefined();
+    for (const clase of [
+      ".help-chord",
+      ".help-cmd",
+      ".help-link",
+      ".help-key-chord",
+      ".help-key-label",
+      ".help-key-reason",
+      ".help-action-chord",
+      ".help-action-label",
+      ".help-action-reason",
+    ]) {
+      expect(bloque, `${clase} sin aislar`).toContain(clase);
+    }
+    // Y las clases existen de verdad en lo pintado, no solo en la hoja.
+    for (const sel of [".help-chord", ".help-key-chord", ".help-action-chord"]) {
+      expect(document.querySelector(sel), `falta ${sel}`).not.toBeNull();
+    }
+  });
+
+  it("un enlace de la prosa no es un control ni lleva la clave de destino", () => {
+    const { screen } = montar();
+    const v = conAyuda();
+    if (v.help !== null) {
+      v.help.blocks = [{ block: "paragraph", spans: [{ span: "link", text: "Marcar" }] }];
+    }
+    screen.paint(v);
+    const enlace = document.querySelector(".help-link");
+    expect(enlace?.tagName).toBe("SPAN");
+    // Una marca `[[topic]]` no está en la lista de acciones, así que no hay
+    // nada que activar: un `button` que no hace nada es peor que un texto.
+    expect(enlace?.getAttribute("data-topic")).toBeNull();
   });
 
   it("un click en la lateral pide ESA página", () => {

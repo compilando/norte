@@ -436,7 +436,6 @@ fn ayuda_de_referencia() -> norte_ui_host::dto::HelpView {
                         is_chord: true,
                     },
                     HelpSpanView::Link {
-                        topic: "marking".to_owned(),
                         text: "Marcar".to_owned(),
                     },
                 ],
@@ -455,7 +454,7 @@ fn ayuda_de_referencia() -> norte_ui_host::dto::HelpView {
                 rows: vec![vec!["F5".to_owned()]],
             },
             HelpBlockView::Callout {
-                kind: "warn".to_owned(),
+                kind: norte_ui_host::dto::HelpCalloutView::Warn,
                 spans: vec![HelpSpanView::Emph {
                     text: "Cuidado".to_owned(),
                 }],

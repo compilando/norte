@@ -608,6 +608,34 @@ body {
   white-space: nowrap;
 }
 
+/* Cada dato que pone el HOST dentro de una corrida de prosa de tercero es su
+   propia corrida bidi. `isolate` en el contenedor solo separa a los hermanos
+   entre sí: un `<p>` construido de varios spans es UNA corrida, así que una
+   frase con texto RTL fuerte podía mover de sitio la tecla que la frase dice
+   que hay que pulsar — sin un solo carácter de control, o sea sin que
+   enmascarar sirviera de nada. Es lo que hace `<bdi>` por defecto. */
+.help-chord,
+.help-cmd,
+.help-link,
+.help-key-chord,
+.help-key-label,
+.help-key-reason,
+.help-action-chord,
+.help-action-label,
+.help-action-reason,
+.help-action-opens {
+  unicode-bidi: isolate;
+}
+
+.help-key-reason {
+  opacity: 0.9;
+}
+
+.help-action-opens {
+  flex: 0 0 auto;
+  color: var(--border-focus);
+}
+
 .help-cmd {
   color: var(--title-fg);
 }

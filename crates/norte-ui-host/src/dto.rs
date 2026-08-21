@@ -124,7 +124,19 @@ pub struct WhichKeyRowView {
 pub struct HelpView {
     /// El título de la página abierta, ya acotado.
     pub title: String,
-    /// Su id, para que el renderer pueda marcar la fila viva de la lateral.
+    /// Su id: una IDENTIDAD OPACA, no algo que se pinte.
+    ///
+    /// Viaja ENTERA o no viaja. No pasa por el recorte de pantalla, que es lo
+    /// que hace el resto de este módulo, porque recortar no es inyectivo y
+    /// esto es una clave: dos ids que coincidieran en sus primeros miles de
+    /// bytes llegarían como una sola (ADR 0061, y el mismo motivo por el que
+    /// `norte_help::parse_untrusted` copia el id verbatim). Un id que no
+    /// cupiera viaja VACÍO, que es una identidad que no casa con nada, en vez
+    /// de una que casa con la equivocada.
+    ///
+    /// Tampoco está enmascarada, y por eso **el renderer no la pinta jamás**:
+    /// quien quiera marcar la fila viva de la lateral tiene
+    /// [`HelpSidebarRowView::Topic::current`], que ya viene resuelto.
     pub topic_id: String,
     /// La línea de procedencia de una página de plugin (quién la publica, si
     /// se recortó, si hubo bytes que no decodificaron). `None` en una página
@@ -221,8 +233,8 @@ pub enum HelpBlockView {
     },
     /// Un aviso destacado.
     Callout {
-        /// De qué clase (`note`, `warn`, `tip`).
-        kind: String,
+        /// De qué clase.
+        kind: HelpCalloutView,
         /// Su contenido.
         spans: Vec<HelpSpanView>,
     },
@@ -237,6 +249,23 @@ pub enum HelpBlockView {
         /// Las filas, en orden.
         rows: Vec<HelpKeyRowView>,
     },
+}
+
+/// De qué clase es un aviso destacado.
+///
+/// Un enum y no una cadena: el renderer compone una clave Fluent con esto
+/// (`help-callout-{kind}`) y `t` contesta una clave que no tiene con la clave
+/// misma, así que una clase inesperada pintaría `help-callout-…` al lector —
+/// el mismo eco que el resto de este módulo se cuida de no producir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HelpCalloutView {
+    /// Nota neutra.
+    Note,
+    /// Aviso: algo puede salir mal.
+    Warn,
+    /// Truco: algo va más rápido.
+    Tip,
 }
 
 /// Un fragmento dentro de un bloque.
@@ -275,10 +304,15 @@ pub enum HelpSpanView {
         /// Es una TECLA y no un nombre. El renderer la pinta como tal.
         is_chord: bool,
     },
-    /// Un enlace a otra página.
+    /// Un enlace a otra página, YA resuelto a su título.
+    ///
+    /// No lleva el id de destino, y no es un olvido: una marca `[[topic]]` en
+    /// la prosa no está en la lista de acciones —esa la forman los comandos
+    /// de la página y sus «ver también»—, así que no hay nada que activar con
+    /// ella. Mandar la clave a un renderer que no puede usarla solo conseguía
+    /// que un id de tercero, que nadie enmascara porque es una clave, acabara
+    /// en un atributo del DOM.
     Link {
-        /// El id de destino.
-        topic: String,
         /// Su título, o el id si el corpus de este idioma no la tiene.
         text: String,
     },

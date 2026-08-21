@@ -682,45 +682,15 @@ pub const COMMAND_TITLE_MAX_CHARS: usize = 120;
 /// Tope de `contributions.command[].id` (P1 encoding audit M2).
 pub const COMMAND_ID_MAX_CHARS: usize = 64;
 
-/// `true` si `id` es un identificador reverse-DNS válido: uno o más segmentos
-/// `[A-Za-z0-9-]+` separados por puntos, con al menos un punto, ningún segmento
-/// vacío (ni punto inicial/final), longitud total `1..=128`.
+/// El alfabeto de un id de plugin, definido junto al tipo del wire que lo
+/// transporta ([`norte_proto::methods::is_valid_plugin_id`]).
 ///
-/// Público desde H3e para el PUNTO DE ENTRADA de un frontend: los ids de plugin
-/// llegan por el wire y el proceso que los recibe no valida nada, así que quien
-/// construye una fila o un nodo a partir de uno tiene que poder DESCARTARLO. El
-/// alfabeto es tan estrecho a propósito — es lo que hace que un id no pueda
-/// pintar peligros de terminal ni suplantar a otro plugin —, así que la
-/// alternativa a exportarlo era que cada frontend se escribiera su propia copia
-/// y una de ellas fuera más laxa. `norte-core` lo re-exporta para los frontends,
-/// que no dependen de este crate.
-///
-/// ```
-/// use norte_plugin_host::is_valid_plugin_id;
-///
-/// assert!(is_valid_plugin_id("acme.ftp"));
-/// assert!(!is_valid_plugin_id("acme"), "hace falta al menos un punto");
-/// assert!(!is_valid_plugin_id("acme.\u{202E}ftp"), "alfabeto cerrado");
-/// ```
-#[must_use]
-pub fn is_valid_plugin_id(id: &str) -> bool {
-    if id.is_empty() || id.len() > 128 {
-        return false;
-    }
-    let mut segments = 0_usize;
-    for segment in id.split('.') {
-        if segment.is_empty()
-            || !segment
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        {
-            return false;
-        }
-        segments += 1;
-    }
-    // Al menos un punto ⇒ al menos dos segmentos.
-    segments >= 2
-}
+/// Se re-exporta con el nombre de siempre porque la pregunta es UNA y tiene
+/// dos entradas: este crate la hace al parsear un `plugin.toml`, y todo el que
+/// recibe un `PluginInfo` por el wire la hace otra vez. Dos implementaciones
+/// del mismo alfabeto acabarían con una más laxa que la otra. `norte-core` lo
+/// re-exporta a su vez para los frontends que no dependen de este crate.
+pub use norte_proto::methods::is_valid_plugin_id;
 
 impl Manifest {
     /// Parsea y VALIDA un `plugin.toml`.

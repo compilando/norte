@@ -142,6 +142,29 @@ pub trait HostBackend: Send + Sync + 'static {
     /// borrado de varias marcas son varias Tasks, y el tablero las enseña
     /// todas.
     fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>>;
+
+    /// El catálogo de plugins descubiertos, con su estado aprobado/activo.
+    ///
+    /// Lo pide la AYUDA, para saber qué extensiones tienen página y cuáles
+    /// están encendidas. Un fallo aquí no es un fallo de la ayuda: se pinta
+    /// sin páginas de extensión, porque la documentación es cosmética y
+    /// jamás tumba nada.
+    fn plugin_list(&self) -> BoxFuture<'static, Result<methods::PluginListResult, Error>>;
+
+    /// El `help.md` de UN plugin, bajo demanda.
+    ///
+    /// `id` es una CLAVE DE BÚSQUEDA contra el catálogo, jamás un trozo de
+    /// ruta: quien la manda tiene que haberla validado
+    /// ([`norte_proto::methods::is_valid_plugin_id`]), y el daemon la resuelve
+    /// contra lo que descubrió.
+    ///
+    /// El markdown que vuelve NO está enmascarado: es texto de tercero y se
+    /// PARSEA antes de pintarse (`norte_help::parse_untrusted`), nunca se
+    /// vuelca crudo.
+    fn plugin_help(
+        &self,
+        id: String,
+    ) -> BoxFuture<'static, Result<methods::PluginHelpResult, Error>>;
 }
 
 /// El backend de verdad: el SDK.
@@ -245,6 +268,19 @@ impl HostBackend for norte_client::RemoteBackend {
             }
         });
         Some(rx)
+    }
+
+    fn plugin_list(&self) -> BoxFuture<'static, Result<methods::PluginListResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.plugins_list().await })
+    }
+
+    fn plugin_help(
+        &self,
+        id: String,
+    ) -> BoxFuture<'static, Result<methods::PluginHelpResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.plugin_help(&id).await })
     }
 
     fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>> {

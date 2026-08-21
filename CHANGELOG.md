@@ -253,7 +253,44 @@ independently through `PROTOCOL_VERSION`.
   and Alt+N closes it. The four transcribed presets already bound these names
   and were waiting for the commands to exist.
 
+- **The help serves an extension's own page.** `plugin.list` and `plugin.help`
+  reach the graphical host, so an extension with a `help.md` gets a row in the
+  sidebar and its page on demand — with the provenance line a third party's
+  page always carries, including while it is still being fetched. The
+  catalogue is asked for and *not* waited on: documentation is cosmetic, and a
+  window blank until the daemon answers is worse than a sidebar that gains
+  rows half a second later. An id that is not valid reverse-DNS is DROPPED at
+  the entry point rather than masked — masking is not injective, so it would
+  quietly map two extensions onto one row — and the alphabet that decides that
+  now lives beside the wire type that carries it, so the manifest parser and
+  every receiver ask one question with one answer.
+
 ### Fixed
+
+- **`F1` with the viewer open opened a help nobody could see or close.** The
+  viewer took keys before the help and painted over it opaquely, so the
+  overlay was built, shipped, and then received not one keystroke — including
+  the one that closes it. The help is opened last, so it goes last: first in
+  the key routing, last in the document.
+
+- **`F1` over a text prompt stole the keystrokes.** Opening the help over a
+  dialog being typed into turned the `⌫` that fixes a typo into the help's
+  "go back". It is refused now, as the terminal has refused it since H3c.
+
+- **A dimmed help row ran anyway when activated with the keyboard.** The check
+  lived only in the renderer, which does not attach a listener to a disabled
+  row — but the keyboard does not go through the renderer. It lives in the
+  host now, for both doors, and a refusal keeps the page open, because the
+  page is where the explanation is.
+
+- **Rows belonging to another screen were offered wrong in both directions.**
+  Asking one flat command list meant a dialog's page came out entirely dimmed
+  as "this window does not do it" while a working dialog was on screen, and
+  the viewer's rows came out lit with no viewer open, only to refuse when
+  pressed. Each row is now judged against the screen it belongs to.
+
+- **F3 was dimmed on a symlink the viewer opens happily.** The fact the help
+  dims by said "file", the code it describes refuses only directories.
 
 - **Running a command from the palette did not close the palette.** It closed
   in the host's state and in the next full snapshot, but no patch said so: a

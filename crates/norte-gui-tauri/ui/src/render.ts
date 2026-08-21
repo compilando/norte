@@ -29,6 +29,19 @@ import type {
   WhichKeyView,
 } from "./types";
 
+/**
+ * Desplaza lo justo para que `el` se vea, si el entorno sabe hacerlo.
+ *
+ * `scrollIntoView` no existe en jsdom, donde corren los tests del renderer:
+ * sin la guarda, comprobar el pintado de una lista tumbaba el test en una
+ * llamada que no es del pintado.
+ */
+function revelar(el: Element | undefined): void {
+  if (el instanceof HTMLElement && typeof el.scrollIntoView === "function") {
+    el.scrollIntoView({ block: "nearest" });
+  }
+}
+
 /** Filas de más que se piden por arriba y por abajo del hueco visible. */
 const OVERSCAN = 8;
 
@@ -57,6 +70,8 @@ export class Screen {
   private dialogoPintado: number | null = null;
   /** Las líneas de visor que ya se declararon. */
   private viewerRows = 0;
+  /** La ayuda está abierta con el CUERPO enfocado. */
+  private helpBodyFocused = false;
   private pendingRange = new Map<number, number>();
 
   constructor(
@@ -69,6 +84,14 @@ export class Screen {
     private readonly catalog: HostCatalog,
     private readonly send: Send,
   ) {}
+
+  /**
+   * La ayuda está abierta y su cuerpo tiene el foco, así que las teclas de
+   * página son del scroll del DOM y no del host.
+   */
+  helpBodyScrolls(): boolean {
+    return this.helpBodyFocused;
+  }
 
   /** Texto de una clave Fluent, traducido EN RUST. La clave, si no está. */
   t(key: string): string {
@@ -235,9 +258,11 @@ export class Screen {
     if (help === null) {
       this.helpRoot.replaceChildren();
       this.helpRoot.dataset["open"] = "false";
+      this.helpBodyFocused = false;
       return;
     }
     this.helpRoot.dataset["open"] = "true";
+    this.helpBodyFocused = help.focus === "body";
     const caja = document.createElement("section");
     caja.className = "help";
     // Modal: mientras está abierta, las teclas son suyas — y el host lo
@@ -292,6 +317,9 @@ export class Screen {
     }
     lista.setAttribute("aria-activedescendant", `help-topic-${String(help.cursor)}`);
     nav.append(lista);
+    // La lateral es más larga que su caja: sin esto, pasar del pliegue mueve
+    // un cursor que no se ve.
+    revelar(lista.children[help.cursor]);
     return nav;
   }
 
@@ -300,6 +328,10 @@ export class Screen {
     const cuerpo = document.createElement("article");
     cuerpo.className = "help-body";
     cuerpo.dataset["focused"] = String(help.focus === "body");
+    // Enfocable: es lo que hace que las teclas de página desplacen ESTA caja
+    // y no la ventana. `-1` porque al orden de tabulación se entra con la
+    // tecla que la propia ayuda usa para cambiar de mitad.
+    cuerpo.setAttribute("tabindex", "-1");
 
     const titulo = document.createElement("h1");
     titulo.textContent = help.title;
@@ -332,8 +364,17 @@ export class Screen {
         chord.textContent = a.chord;
         const label = document.createElement("span");
         label.className = "help-action-label";
-        label.textContent = a.opens_topic ? `${a.label} →` : a.label;
+        label.textContent = a.label;
         fila.append(chord, label);
+        if (a.opens_topic) {
+          // La flecha es lo ÚNICO que distingue «abre una página» de «corre
+          // un comando», así que va en su propio nodo: pegada al texto queda
+          // en la misma corrida bidi que la etiqueta y puede acabar delante.
+          const abre = document.createElement("span");
+          abre.className = "help-action-opens";
+          abre.textContent = "→";
+          fila.append(abre);
+        }
         if (!a.enabled && a.reason !== "") {
           const motivo = document.createElement("span");
           motivo.className = "help-action-reason";
@@ -352,6 +393,7 @@ export class Screen {
           "aria-activedescendant",
           `help-action-${String(help.action_cursor)}`,
         );
+        revelar(lista.children[help.action_cursor]);
       }
       cuerpo.append(lista);
     }
@@ -444,11 +486,19 @@ export class Screen {
           chord.textContent = r.chord;
           const label = document.createElement("td");
           label.className = "help-key-label";
-          // Atenuar sin decir por qué deja al lector adivinando si la
-          // ventana está rota; el motivo ya viene traducido del host.
-          label.textContent =
-            r.enabled || r.reason === "" ? r.label : `${r.label} — ${r.reason}`;
+          label.textContent = r.label;
           tr.append(chord, label);
+          // Atenuar sin decir por qué deja al lector adivinando si la
+          // ventana está rota. El motivo va en su PROPIA celda y no pegado
+          // al texto: compuestos en banda, el guion y el motivo quedan en la
+          // misma corrida bidi que la etiqueta, y una etiqueta que acabe en
+          // RTL fuerte se los lleva al lado que no es.
+          if (!r.enabled && r.reason !== "") {
+            const motivo = document.createElement("td");
+            motivo.className = "help-key-reason";
+            motivo.textContent = r.reason;
+            tr.append(motivo);
+          }
           tbody.append(tr);
         }
         tabla.append(tbody);
@@ -497,7 +547,6 @@ export class Screen {
         // misma decisión que tomó el TUI.
         const el = document.createElement("span");
         el.className = "help-link";
-        el.dataset["topic"] = s.topic;
         el.textContent = s.text;
         return el;
       }

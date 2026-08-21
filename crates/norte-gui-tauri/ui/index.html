@@ -10,9 +10,14 @@
     <main id="screen" role="application" aria-label="norte"></main>
     <div id="palette" data-open="false"></div>
     <div id="whichkey" data-open="false"></div>
-    <div id="help" data-open="false"></div>
     <div id="viewer" data-open="false"></div>
     <div id="dialogs"></div>
+    <!-- La ayuda va la ÚLTIMA a propósito: se abre encima de lo que
+         hubiera —también encima del visor y de un diálogo— y el orden del
+         documento es lo que decide quién tapa a quién sin inventarse un
+         `z-index`. Con la ayuda antes del visor, `F1` en el visor pintaba una
+         ayuda debajo de un fondo opaco. -->
+    <div id="help" data-open="false"></div>
     <div id="fatal" role="alert"></div>
     <script type="module" src="./src/main.ts"></script>
   </body>

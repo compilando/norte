@@ -1155,6 +1155,10 @@ gui-menu-copied = { $n } path(s) copied to the clipboard
 reason-read-only = read-only backend
 reason-wrong-target = does not apply to this selection
 reason-answered-by-overlay = the open overlay answers this key itself
+# H3f/4.4: a row of the VIEWER screen, read from a help page with no viewer
+# open. It is not "this frontend does not do it" — it does — and it is not
+# about the selection either: the key belongs to another screen.
+reason-viewer-only = only while the viewer is open
 reason-unsupported = the backend does not support it
 reason-plugin-inactive = the plugin is disabled or unapproved
 reason-policy-denied = the policy denies it
