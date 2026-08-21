@@ -577,14 +577,32 @@ async fn actor(
 /// mínimos de cada kind están declarados así y los comparte con el TUI, que
 /// es lo que hace que «este panel no cabe» signifique lo mismo en las dos
 /// superficies.
-/// El id de una columna, listo para pintar.
+/// El id de una columna: una IDENTIDAD, entera o vacía.
 ///
-/// Un id `attr:` o `plugin:` es texto de CONFIGURACIÓN —puede venir de la
-/// capa de proyecto— y `ColumnId::Display` lo escribe crudo. Lo que cruza va
-/// enmascarado, como cualquier otra cosa ajena.
-fn id_pintable(id: &norte_frontend::columns::ColumnId) -> String {
-    let (pintable, _) = norte_frontend::display_name(id.to_string().as_bytes());
-    pintable
+/// NO se enmascara y NO se recorta, al contrario que todo lo demás. Es lo que
+/// vuelve para ordenar y lo que nombra la columna de cada celda, así que las
+/// dos transformaciones lo rompen, y de formas distintas:
+///
+/// - Enmascarar no es inyectivo. Un `norte.toml` con dos columnas `attr:`
+///   que solo se diferencien en un carácter invisible daba DOS cabeceras con
+///   el MISMO id enmascarado, y la resolución hace `find`: pulsar la segunda
+///   ordenaba por la primera. Es la regla del ADR 0061 —«recortar no es
+///   inyectivo, y esto es una clave»— aplicada al enmascarado, en una
+///   superficie que el ADR no cubría.
+/// - Recortar era además ASIMÉTRICO: el id salía con `clamp_display` y se
+///   comparaba sin él, así que uno largo no casaba nunca con su propia
+///   columna y caía a un `parse` sobre una cadena acabada en `…`.
+///
+/// Un id que no cabe en el tope del bridge se manda VACÍO: una clave que no
+/// casa con nada es un fallo visible; una que casa con la equivocada, no. Lo
+/// que se PINTA es `label`, que sí va enmascarado, y el renderer solo usa el
+/// id en un `data-` y para mandarlo de vuelta.
+fn identidad_de_columna(id: &norte_frontend::columns::ColumnId) -> String {
+    let s = id.to_string();
+    if s.len() > crate::bridge::MAX_STRING_BYTES {
+        return String::new();
+    }
+    s
 }
 
 fn rect((width, height): (u16, u16)) -> Rect {
@@ -2705,12 +2723,17 @@ impl Estado {
                         Ok(v) => norte_frontend::display::path_display(v),
                         Err(_) => (String::new(), false),
                     };
+                    let (nombre, nombre_hostil) = norte_frontend::display_name(name.as_bytes());
                     crate::dto::PlaceRowView::Favorite {
                         // El nombre lo escribe el usuario, pero puede venir
                         // de la capa de PROYECTO: se enmascara igual.
-                        name: clamp_display(norte_frontend::display_name(name.as_bytes()).0),
+                        name: clamp_display(nombre),
                         target: clamp_display(destino),
-                        hostile: hostil,
+                        // El nombre O el destino. La bandera documentaba el
+                        // destino y el nombre se enmascaraba tirando la suya,
+                        // así que un favorito llamado con un override bidi
+                        // llegaba sin marca ninguna.
+                        hostile: hostil || nombre_hostil,
                         broken: target.as_ref().err().map_or_else(String::new, |clave| {
                             clamp_display(norte_i18n::t_in(self.lang, clave))
                         }),
@@ -2839,10 +2862,27 @@ impl Estado {
             let col = ColumnId::Attr(attr.clone());
             let style = ColumnStyle::default_for_id(&col, catalogo);
             if let Some(celda) = styled_cell(e, &col, ahora, &style) {
+                // La marca se saca del valor CRUDO, no de la celda ya
+                // formateada: `styled_cell` enmascara por dentro y no
+                // devuelve la bandera, y volver a preguntársela a lo ya
+                // enmascarado no contesta nada —U+FFFD no es un peligro de
+                // terminal, así que un valor ya convertido se declara fiel—.
+                // Aquí se ponía `false` a mano, o sea que la hoja de
+                // atributos decía que todo era fiel mientras la COLUMNA
+                // equivalente sí marcaba los mismos bytes.
+                let hostil = match e.attrs.get(attr) {
+                    Some(norte_proto::AttrValue::Text(t)) => {
+                        norte_frontend::display_name(t.as_bytes()).1
+                    }
+                    Some(norte_proto::AttrValue::Bytes(b)) => norte_frontend::display_name(b).1,
+                    // Los demás son números o marcas de tiempo que formatea
+                    // norte: no hay texto de tercero que enmascarar.
+                    _ => false,
+                };
                 fields.push(crate::dto::MetadataFieldView {
                     label: clamp_display(header_label(&col, &style, catalogo)),
                     value: clamp_display(celda),
-                    hostile: false,
+                    hostile: hostil,
                 });
             }
         }
@@ -3141,7 +3181,17 @@ impl Estado {
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         let lang = self.lang;
         let e = self.extensiones.as_mut()?;
-        e.set_ficha(id, res?, lang);
+        match res {
+            Some(r) => e.set_ficha(id, r, lang),
+            // Un fallo también se APLICA: solo salir dejaba `pedida` puesta,
+            // así que `reclamar_ficha` devolvía `None` para siempre y esa
+            // fila no se podía volver a abrir —`enter` no hacía nada y no
+            // decía nada— salvo moviendo el cursor a otra y volviendo. Es el
+            // mismo criterio que este fichero ya aplica dos veces al
+            // catálogo: quedarse cargando para siempre es la única respuesta
+            // peor que un error.
+            None => e.cerrar_ficha(),
+        }
         let cambio = ViewChange::Extensions {
             extensions: self.vista_extensiones(),
         };
@@ -5083,7 +5133,8 @@ impl Estado {
                     ),
                 };
                 crate::dto::CellView {
-                    column: clamp_display(id_pintable(col)),
+                    // Identidad: entera o vacía, jamás recortada.
+                    column: identidad_de_columna(col),
                     text: texto.map(clamp_display),
                 }
             })
@@ -5556,7 +5607,7 @@ impl Estado {
             .unwrap_or_default();
         let col = configuradas
             .iter()
-            .find(|c| id_pintable(c) == *column)
+            .find(|c| identidad_de_columna(c) == *column)
             .and_then(sort_column_id)
             .or_else(|| {
                 // Un id que no está configurado pero que ES una columna
@@ -5639,12 +5690,7 @@ impl Estado {
                     .to_owned()
                 });
                 ColumnHeader {
-                    // El id se acota y se enmascara como todo lo demás: sale
-                    // de la configuración (una columna `plugin:` de una capa
-                    // de proyecto es texto ajeno) y viaja en CADA fila. Era
-                    // la excepción que nadie había clavado al tope del
-                    // bridge.
-                    id: clamp_display(id_pintable(id)),
+                    id: identidad_de_columna(id),
                     label: clamp_display(header_label(id, &estilo, catalogo)),
                     sort,
                     sortable: ordena.is_some(),

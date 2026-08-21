@@ -133,10 +133,7 @@ async fn un_parche_de_filas_pesa_lo_que_la_ventana() {
     h.dispatch(UiAction::ToggleMark {
         slot_id: 1,
         key: norte_ui_host::RowKey(3),
-        generation: match &snap.slots[0] {
-            norte_ui_host::dto::SlotView::Browser(b) => b.generation,
-            _ => 0,
-        },
+        generation: generacion_de(&snap.slots[0]),
     })
     .await
     .expect("host vivo");
@@ -173,19 +170,43 @@ async fn un_parche_de_filas_pesa_lo_que_la_ventana() {
     println!("parche de {filas} filas sobre {GRANDE} entradas: {n} bytes");
 }
 
+/// La generación del hueco, que en esta disposición es siempre un listado.
+///
+/// Un hueco que no lo sea aquí sería un test que dejó de probar lo que dice,
+/// así que se PARA en vez de mandar una generación inventada que el host
+/// rechazaría como obsoleta.
+fn generacion_de(s: &norte_ui_host::dto::SlotView) -> u64 {
+    match s {
+        norte_ui_host::dto::SlotView::Browser(b) => b.generation,
+        otro => panic!("el hueco 0 de esta disposición es un listado: {otro:?}"),
+    }
+}
+
+/// Cuántas FILAS lleva un hueco en la foto.
+///
+/// `match` exhaustivo y SIN comodín a propósito. El guardia de tamaño mide
+/// que la foto inicial no lleve el directorio entero, y un `_ => 0` lo
+/// desarmaba en silencio: los huecos de sitios y de procesos también mandan
+/// filas y contaban cero, así que la cuenta medía un quinto del mensaje. Y de
+/// paso perdía el canario que obliga a mirar esto al crecer `SlotView`.
+fn filas_de(s: &norte_ui_host::dto::SlotView) -> usize {
+    use norte_ui_host::dto::SlotView;
+    match s {
+        SlotView::Browser(b) => b.rows.len(),
+        SlotView::Places(p) => p.rows.len(),
+        SlotView::Metadata(m) => m.fields.len(),
+        // El panel de procesos no lleva sus filas en el hueco: las lleva
+        // `ViewSnapshot::tasks`, que es una sola lista para toda la pantalla.
+        SlotView::Processes { .. } | SlotView::Unsupported { .. } => 0,
+    }
+}
+
 /// La foto de arranque tampoco lleva el directorio entero.
 #[tokio::test]
 async fn la_foto_inicial_no_lleva_cien_mil_filas() {
     let (_h, snap) = host_grande().await;
     let n = serde_json::to_vec(&snap).expect("serializa").len();
-    let filas: usize = snap
-        .slots
-        .iter()
-        .map(|s| match s {
-            norte_ui_host::dto::SlotView::Browser(b) => b.rows.len(),
-            _ => 0,
-        })
-        .sum();
+    let filas: usize = snap.slots.iter().map(filas_de).sum();
     assert!(
         filas <= 2 * 64,
         "los dos listados mandan su ventana ({filas} filas), no {GRANDE}"

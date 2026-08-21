@@ -909,6 +909,7 @@ describe("los ajustes", () => {
               name: "Confirmar al salir",
               desc: "Pregunta antes de cerrar norte",
               value: "siempre",
+              hostile: false,
               restart_required: true,
             },
           ],
@@ -994,6 +995,7 @@ describe("los ajustes", () => {
           name: "Tema",
           desc: "El tema",
           value: "tokyonight",
+          hostile: false,
           restart_required: true,
         });
       }
@@ -1018,6 +1020,7 @@ describe("los ajustes", () => {
           name: "Tema",
           desc: "El tema",
           value: "tokyonight",
+          hostile: false,
           restart_required: false,
         });
       }

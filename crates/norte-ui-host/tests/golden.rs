@@ -757,13 +757,26 @@ fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
         sections: vec![
             SettingsSectionView::Settings {
                 title: "General".to_owned(),
-                rows: vec![SettingRowView {
-                    id: "ui.confirm-quit".to_owned(),
-                    name: "Confirmar al salir".to_owned(),
-                    desc: "Pregunta antes de cerrar norte".to_owned(),
-                    value: "siempre".to_owned(),
-                    restart_required: true,
-                }],
+                rows: vec![
+                    SettingRowView {
+                        id: "ui.confirm-quit".to_owned(),
+                        name: "Confirmar al salir".to_owned(),
+                        desc: "Pregunta antes de cerrar norte".to_owned(),
+                        value: "siempre".to_owned(),
+                        hostile: false,
+                        restart_required: true,
+                    },
+                    // Un valor que el USUARIO escribió en su `norte.toml` con
+                    // un override bidi dentro: llega enmascarado y marcado.
+                    SettingRowView {
+                        id: "ui.font".to_owned(),
+                        name: "Tipografía".to_owned(),
+                        desc: "La fuente de la ventana".to_owned(),
+                        value: "Fira\u{fffd}Code".to_owned(),
+                        hostile: true,
+                        restart_required: true,
+                    },
+                ],
             },
             SettingsSectionView::Paths {
                 title: "Dónde vive cada cosa".to_owned(),

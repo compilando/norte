@@ -2809,10 +2809,16 @@ async fn un_nombre_desmesurado_no_se_recorta() {
     );
 }
 
-/// El id de una columna hostil llega acotado y enmascarado, y viaja así en
-/// cada fila.
+/// El id de una columna es una IDENTIDAD: viaja entero, y lo que se enmascara
+/// es la ETIQUETA.
+///
+/// Enmascarar el id no es inyectivo. Dos columnas configuradas que solo se
+/// diferencien en un carácter invisible daban el MISMO id enmascarado, y la
+/// resolución del click hace `find`: pulsar la segunda ordenaba por la
+/// primera. Es la regla del ADR 0061 sobre una superficie que el ADR no
+/// cubría. Lo que el renderer PINTA es `label`; el id solo va en un `data-`.
 #[tokio::test]
-async fn el_id_de_una_columna_hostil_no_cruza_crudo() {
+async fn dos_columnas_que_se_enmascaran_igual_siguen_siendo_dos() {
     let backend = arbol();
     let (h, snap) = UiHost::start(UiHostOptions {
         backend,
@@ -2826,28 +2832,52 @@ async fn el_id_de_una_columna_hostil_no_cruza_crudo() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
-        columns: columnas_de(&["name", "plugin:acme.\u{202e}ftp/x"]),
+        // Los dos ids se enmascaran a lo MISMO: U+200B y U+202E son los dos
+        // peligros de terminal y `display_name` los sustituye por U+FFFD.
+        // Van por `plugin:` y no por `attr:`: los `attr:` ya los filtra
+        // `is_valid_attr_id` —un id que no es legal en el wire tumbaría el
+        // listado entero— y los de plugin no los filtra nadie.
+        columns: columnas_de(&[
+            "name",
+            "plugin:acme.a\u{200b}b/x",
+            "plugin:acme.a\u{202e}b/x",
+        ]),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
     .await
     .expect("arranca");
     drop(h);
     let b = listado(&snap);
+    let ids: Vec<&str> = b.columns.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids.len(), 3, "las tres columnas se pintan: {ids:?}");
+    assert_ne!(
+        ids[1], ids[2],
+        "y siguen siendo DOS: enmascarar el id las fundía en una, y el `find` \
+         de la resolución habría ordenado siempre por la primera"
+    );
+    assert!(
+        ids[1].contains('\u{200b}') && ids[2].contains('\u{202e}'),
+        "el id viaja ENTERO, que es lo que hace que case consigo mismo: {ids:?}"
+    );
+    // Lo que se PINTA sí va enmascarado.
     for c in &b.columns {
         assert!(
-            !c.id.contains('\u{202e}'),
-            "el id de la cabecera va crudo: {:?}",
-            c.id
+            !c.label.contains('\u{202e}') && !c.label.contains('\u{200b}'),
+            "la etiqueta va cruda: {:?}",
+            c.label
         );
     }
-    for fila in &b.rows {
-        for celda in &fila.cells {
-            assert!(
-                !celda.column.contains('\u{202e}'),
-                "el id de la celda va crudo: {:?}",
-                celda.column
-            );
-        }
+    // Y la celda nombra su columna con la misma identidad.
+    let columnas_de_celdas: std::collections::BTreeSet<&str> = b
+        .rows
+        .iter()
+        .flat_map(|f| f.cells.iter().map(|c| c.column.as_str()))
+        .collect();
+    for c in &columnas_de_celdas {
+        assert!(
+            ids.contains(c),
+            "una celda nombra una columna que no está en la cabecera: {c:?}"
+        );
     }
 }
 
@@ -6044,4 +6074,138 @@ async fn un_hallazgo_hostil_va_marcado() {
         }
     }
     panic!("los hallazgos nunca llegaron");
+}
+
+// ---------------------------------------------------------------------------
+// El corpus canónico contra las superficies nuevas.
+// ---------------------------------------------------------------------------
+
+/// Ninguna superficie deja pasar un peligro de terminal, y la que enmascara
+/// lo DICE.
+///
+/// Una tabla sobre el corpus de `norte-testkit`, que es lo que faltaba: las
+/// nueve superficies de esta fase se escribieron sin que ninguna lo tocara, y
+/// todas las banderas que se calculaban y se tiraban —el nombre de un
+/// favorito, la etiqueta de un volumen, el valor de un atributo, el valor de
+/// un ajuste— habrían salido de aquí. La propiedad es un PAR: lo pintado no
+/// lleva peligro Y la marca está puesta. Comprobar solo lo primero es lo que
+/// deja pasar una superficie que enmascara en silencio.
+#[tokio::test]
+async fn ninguna_superficie_enmascara_en_silencio() {
+    let corpus = norte_testkit::corpus::hostile_names();
+    assert!(
+        corpus.len() >= 48,
+        "el corpus canónico está: {}",
+        corpus.len()
+    );
+
+    // Los que de verdad ALTERAN la pantalla. Un nombre largo o con NFD no se
+    // enmascara —ni debe—, así que exigirle marca sería exigir una mentira.
+    let alteran: Vec<&norte_testkit::corpus::HostileName> = corpus
+        .iter()
+        .filter(|n| norte_frontend::display_name(&n.bytes).1)
+        .collect();
+    assert!(
+        alteran.len() >= 8,
+        "el corpus trae peligros de verdad: {}",
+        alteran.len()
+    );
+
+    for n in alteran {
+        // El nombre de un favorito vive en un `String` del `norte.toml`, así
+        // que solo puede llevar lo que sea UTF-8 válido. Convertir el resto
+        // con `from_utf8_lossy` sería hacer aquí la conversión que el host
+        // tiene que marcar, y el test diría que el host no la marca cuando
+        // quien la hizo fue el test: es la trampa del doble lossy, que la
+        // bandera ya no puede recuperar porque U+FFFD no es un peligro.
+        let texto = match std::str::from_utf8(&n.bytes) {
+            Ok(t) => t.to_owned(),
+            Err(_) => String::new(),
+        };
+
+        // 1. El nombre de un FAVORITO: lo escribe el usuario, y la capa de
+        //    proyecto es «he abierto este repo», no «doy fe de esta cadena».
+        let mut cfg = norte_ui_host::ajustes_por_defecto();
+        cfg.common.hotlist = vec![norte_config::HotlistItem {
+            name: texto.clone(),
+            target: norte_proto::VPath::parse("mem:///casa").map_err(|_| "err".to_owned()),
+        }];
+        let mut f = Falso::default();
+        f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+        // 2. La etiqueta de un VOLUMEN: la da el sistema y son bytes.
+        f.volumenes = vec![norte_proto::methods::Volume {
+            label: Some(n.bytes.clone()),
+            ..volumen("mem:///casa", "ext4", false)
+        }];
+        let (h, snap) = UiHost::start(UiHostOptions {
+            backend: Arc::new(f),
+            initial_dir: dir(),
+            locale: "es".to_owned(),
+            keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+            keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+            layout: norte_frontend::layout::presets::tree("full").expect("layout"),
+            viewport: (200, 60),
+            settings: cfg,
+            paths: norte_ui_host::settings::HostPaths::default(),
+            theme: norte_ui_host::pickers::HostTheme::default(),
+            user_layouts: Vec::new(),
+            columns: norte_ui_host::columnas_por_defecto(),
+            effects: norte_ui_host::commands::Efectos::Completo,
+        })
+        .await
+        .expect("arranca");
+        let mut sub = h.subscribe();
+
+        let barra = sitios(&snap).expect("`full` coloca la barra").clone();
+        if !texto.is_empty() {
+            let favorito = barra
+                .rows
+                .iter()
+                .find_map(|r| match r {
+                    norte_ui_host::dto::PlaceRowView::Favorite { name, hostile, .. } => {
+                        Some((name.clone(), *hostile))
+                    }
+                    _ => None,
+                })
+                .expect("el favorito está");
+            sin_peligro(&favorito.0, &n.id, "el nombre de un favorito");
+            assert!(
+                favorito.1,
+                "[{}] el favorito se enmascara y NO lo dice: {:?}",
+                n.id, favorito.0
+            );
+        }
+
+        // La barra lateral, cuando lleguen los volúmenes.
+        for _ in 0..20 {
+            h.dispatch(UiAction::Resync).await.expect("host vivo");
+            let foto = siguiente_foto(&mut sub).await;
+            let v = sitios(&foto).expect("colocada");
+            let disco = v.rows.iter().find_map(|r| match r {
+                norte_ui_host::dto::PlaceRowView::Drive { label, hostile, .. } => {
+                    Some((label.clone(), *hostile))
+                }
+                _ => None,
+            });
+            if let Some((label, hostile)) = disco {
+                sin_peligro(&label, &n.id, "la etiqueta de un volumen en la barra");
+                assert!(
+                    hostile,
+                    "[{}] la etiqueta del volumen se enmascara y NO lo dice: {label:?}",
+                    n.id
+                );
+                break;
+            }
+        }
+    }
+}
+
+/// Ninguna cadena pintable lleva un peligro de terminal.
+fn sin_peligro(pintado: &str, id: &str, donde: &str) {
+    for c in pintado.chars() {
+        assert!(
+            !norte_encoding::is_terminal_hazard(c),
+            "[{id}] {donde} lleva {c:?} sin enmascarar: {pintado:?}"
+        );
+    }
 }

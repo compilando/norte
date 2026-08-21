@@ -168,13 +168,20 @@ impl Ajustes {
 
 /// Una fila del registro, proyectada.
 fn proyectar_fila(r: &Row) -> SettingRowView {
+    let (valor, hostile) = norte_frontend::display_name(r.value.as_bytes());
     SettingRowView {
         // El id es una IDENTIDAD del catálogo compartido, no prosa: viaja
         // entero, sin recorte, y el renderer no lo pinta.
         id: r.id().unwrap_or_default().to_owned(),
         name: clamp_display(r.name.clone()),
         desc: clamp_display(r.desc.clone()),
-        value: clamp_display(r.value.clone()),
+        // El VALOR sale de `norte.toml` tal cual —`ui.font`, `ui.theme`,
+        // `keymap.preset` son cadenas que escribe el usuario, y la capa de
+        // PROYECTO es «he abierto este repositorio», no «doy fe de esta
+        // cadena» (ADR 0026)—. Era el único sitio de esta ventana donde texto
+        // de fuera llegaba al DOM sin pasar por la máscara.
+        value: clamp_display(valor),
+        hostile,
         // TODAS, hoy. `SettingDef::applies_live` está escrito desde el punto
         // de vista del TUI, que recarga en caliente; esta ventana resuelve
         // catálogo, tema y keymaps UNA vez al arrancar y no tiene camino de

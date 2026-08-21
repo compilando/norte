@@ -418,8 +418,16 @@ pub struct SettingRowView {
     /// Qué hace.
     pub desc: String,
     /// Su valor EFECTIVO, ya resuelto sobre las capas de configuración y como
-    /// texto para pintar.
+    /// texto para pintar. YA ENMASCARADO.
     pub value: String,
+    /// El valor se pinta DISTINTO de lo que es.
+    ///
+    /// Sale de un `norte.toml` que puede ser el de PROYECTO, y esa capa
+    /// significa «he abierto este repositorio», no «doy fe de esta cadena»
+    /// (ADR 0026). En la misma lista viven las filas de `PathRowView`, que
+    /// siempre tuvieron su bandera: dos clases de fila prometiendo cosas
+    /// distintas sobre la misma columna era la incoherencia que había.
+    pub hostile: bool,
     /// Cambiarlo pide reiniciar la ventana.
     pub restart_required: bool,
 }
@@ -1049,6 +1057,12 @@ pub struct ColumnHeader {
     /// Id estable de la columna (`name`, `size`, `attr:posix.mode`…). Es lo
     /// que se manda de vuelta para ordenar: el renderer no nombra columnas
     /// por su posición ni por su etiqueta.
+    ///
+    /// Una IDENTIDAD, así que viaja ENTERA o VACÍA: ni enmascarada ni
+    /// recortada. Las dos cosas la rompen —enmascarar no es inyectivo y dos
+    /// columnas configuradas podían colapsar en una, recortar la dejaba sin
+    /// casar con la suya— y no hace falta ninguna: quien la pinta es `label`,
+    /// y el renderer solo mete el id en un atributo `data-`.
     pub id: String,
     /// Etiqueta ya traducida.
     pub label: String,

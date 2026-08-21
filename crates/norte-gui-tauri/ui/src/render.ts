@@ -656,7 +656,13 @@ export class Screen {
           nombre.textContent = r.name;
           const valor = document.createElement("span");
           valor.className = "settings-value";
+          valor.dataset["hostile"] = String(r.hostile);
           valor.textContent = r.value;
+          if (r.hostile) {
+            // La fila de RUTA de esta misma lista siempre lo dijo; la de
+            // ajuste no, y las dos pintan en la misma columna.
+            valor.append(badge(this.t("hostile-name")));
+          }
           fila.append(nombre, valor);
           if (r.restart_required && !todas) {
             const marca = document.createElement("span");

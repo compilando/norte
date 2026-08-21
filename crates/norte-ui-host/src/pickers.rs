@@ -97,11 +97,20 @@ impl Selector {
                 // Un punto de montaje es un `VPath`, o sea BYTES: se pinta
                 // por el camino compartido y viaja con su marca.
                 let (pintable, hostile) = norte_frontend::display::path_display(&v.mount);
+                let (detail, detail_hostil) = detalle_de(v, lang);
                 Fila {
                     vista: PickerRowView {
                         label: clamp_display(pintable),
-                        hostile,
-                        detail: clamp_display(detalle_de(v, lang)),
+                        // El punto de montaje O la ETIQUETA. La etiqueta es
+                        // `Option<Vec<u8>>` y en Windows cruza como WTF-8: un
+                        // surrogate suelto que una etiqueta FAT/NTFS puede
+                        // llevar legalmente sobrevive en vez de convertirse
+                        // en U+FFFD. Se enmascaraba y la marca se TIRABA,
+                        // mientras la MISMA etiqueta en la barra lateral sí
+                        // se marcaba: dos superficies, dos respuestas, los
+                        // mismos bytes.
+                        hostile: hostile || detail_hostil,
+                        detail: clamp_display(detail),
                     },
                     destino: Some(v.mount.clone()),
                 }
@@ -159,7 +168,11 @@ impl Selector {
 ///
 /// El espacio que el sistema no contestó se DICE, jamás se pinta un `0`: cero
 /// libre se lee como «lleno», que es lo contrario de «no lo sé».
-fn detalle_de(v: &norte_proto::methods::Volume, lang: Lang) -> String {
+///
+/// Devuelve TAMBIÉN si lo pintado difiere de lo real: la etiqueta la da el
+/// sistema y son bytes, así que la marca la produce esta función y quien la
+/// llama tiene que llevarla a la fila. Antes se calculaba y se tiraba.
+fn detalle_de(v: &norte_proto::methods::Volume, lang: Lang) -> (String, bool) {
     let mut trozos: Vec<String> = Vec::new();
     if !v.fs_type.is_empty() {
         trozos.push(norte_frontend::display_name(v.fs_type.as_bytes()).0);
@@ -180,8 +193,11 @@ fn detalle_de(v: &norte_proto::methods::Volume, lang: Lang) -> String {
     }
     // La etiqueta que da el sistema son BYTES —ninguna plataforma promete
     // UTF-8— así que entra por el mismo camino que un nombre de fichero.
+    let mut hostil = false;
     if let Some(label) = &v.label {
-        trozos.push(norte_frontend::display_name(label).0);
+        let (pintable, h) = norte_frontend::display_name(label);
+        hostil = h;
+        trozos.push(pintable);
     }
-    trozos.join(" · ")
+    (trozos.join(" · "), hostil)
 }

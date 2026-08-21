@@ -282,7 +282,10 @@ export interface SettingRowView {
   id: string;
   name: string;
   desc: string;
+  /** Ya enmascarado: sale del `norte.toml` que escribe el usuario. */
   value: string;
+  /** El valor se pinta DISTINTO de lo que es. */
+  hostile: boolean;
   restart_required: boolean;
 }
 

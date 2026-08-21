@@ -13,6 +13,18 @@ use serde::{Deserialize, Serialize};
 /// por motivos distintos. Un renderer que no reconoce esta versión NO
 /// interpreta el mensaje: enseña una pantalla de incompatibilidad (ADR 0066).
 ///
+/// **La regla de cuándo se mueve el número está en el ADR 0068**, sección
+/// «And the version rule, written down», y es de UN SOLO NIVEL: cualquier
+/// cambio de forma —también uno puramente aditivo— sube el número, y no hay
+/// nivel compatible. Es deliberado y tiene precondiciones escritas: un nivel
+/// compatible solo es honesto si un peer viejo puede decodificar un payload
+/// nuevo, lo que exige `#[serde(default)]` en cada campo añadido y un
+/// renderer que se resincronice ante un parche que no conoce en vez de
+/// tirarlo. Ninguna de las dos se cumple hoy, y poner los `default` sin la
+/// otra dejaría que un payload viejo decodificara como uno nuevo con la
+/// pantalla a medias — que es peor que una que dice que no sabe leerla.
+/// Reabrir la regla es un ADR nuevo, no un parche aquí.
+///
 /// - **17**: la barra lateral y el selector llevan GENERACIÓN, y un click con
 ///   una que no case se rechaza. Rompe: los volúmenes llegan de una tarea de
 ///   fondo y se insertan en medio de la lista, así que un índice desnudo

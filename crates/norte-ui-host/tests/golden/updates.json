@@ -467,10 +467,19 @@
           "rows": [
             {
               "desc": "Pregunta antes de cerrar norte",
+              "hostile": false,
               "id": "ui.confirm-quit",
               "name": "Confirmar al salir",
               "restart_required": true,
               "value": "siempre"
+            },
+            {
+              "desc": "La fuente de la ventana",
+              "hostile": true,
+              "id": "ui.font",
+              "name": "Tipografía",
+              "restart_required": true,
+              "value": "Fira�Code"
             }
           ],
           "section": "settings",
