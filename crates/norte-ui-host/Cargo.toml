@@ -15,6 +15,11 @@ futures.workspace = true
 norte-client.workspace = true
 norte-encoding.workspace = true
 norte-frontend.workspace = true
+# La configuración YA cargada entra en el host para la vista de ajustes en
+# solo lectura (tarea 4.5). El host no la LEE de disco —quien lo arranca se la
+# pasa—, pero sí necesita nombrar su tipo. Ya estaba en el grafo vía
+# `norte-frontend`, y era dev-dependency de este crate: no compila nada nuevo.
+norte-config.workspace = true
 # La ayuda (tarea 4.4): el corpus y su modelo de bloques. La dependencia va
 # host → help y nunca al revés (`norte_help::resolve` explica por qué): un
 # `norte-help` que conociera un frontend solo podría servir a uno. Ya está en
@@ -29,9 +34,6 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
-# Para construir unos ajustes de columnas por su forma de configuración, que
-# es como los construye un arranque de verdad.
-norte-config.workspace = true
 # El e2e levanta un daemon REAL y conecta el SDK contra él. Son
 # dev-dependencies: el test de frontera solo mira el árbol de release, que es
 # donde el core no puede estar.

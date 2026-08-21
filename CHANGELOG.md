@@ -9,6 +9,20 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window shows its settings, and where they come from.** Bridge version
+  **10**: `F11` opens the shared registry — the same catalogue the terminal
+  shows, with the same stable ids — each entry with its *effective* value, plus
+  a section the terminal does not have: where each thing lives (the config
+  layers in precedence order, the state directory, the logs, the daemon
+  socket). A layer nobody has created says so instead of painting a path that
+  looks like it is there, and a directory whose name carries hostile bytes
+  arrives masked and flagged, down the same road a filename takes. Locations
+  only — never a value, so nothing secret. Read-only, and it *says* so rather
+  than offering an `Enter` that would refuse: this window does not write
+  settings until Phase 5 supplies the safe path, and every entry needs a
+  restart because the window resolves theme, fonts and keymaps once at
+  start-up. It is told once per section instead of on every row.
+
 - **The window has help, and the help teaches the reader's own keys.** Bridge
   version **9**: `F1` opens the shared corpus over the page for *where the
   reader is standing* — a dialog, the viewer, the listing — and never on an

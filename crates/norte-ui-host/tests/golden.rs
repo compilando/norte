@@ -163,6 +163,10 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("parent", UiAction::Parent { slot_id: 1 }),
+        (
+            "settings_select_row",
+            UiAction::SettingsSelectRow { row: 2 },
+        ),
         ("help_select_topic", UiAction::HelpSelectTopic { row: 3 }),
         ("help_activate", UiAction::HelpActivate { index: 1 }),
         ("resync", UiAction::Resync),
@@ -394,8 +398,48 @@ fn snapshot_de_referencia() -> ViewSnapshot {
             ],
         }),
         help: Some(ayuda_de_referencia()),
+        settings: Some(ajustes_de_referencia()),
         viewer: Some(visor_de_referencia()),
         locale: "es".to_owned(),
+    }
+}
+
+/// Los ajustes de referencia: una entrada del registro con su valor efectivo,
+/// y una sección de ubicaciones con una que falta.
+fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
+    use norte_ui_host::dto::{PathRowView, SettingRowView, SettingsSectionView, SettingsView};
+    SettingsView {
+        sections: vec![
+            SettingsSectionView::Settings {
+                title: "General".to_owned(),
+                rows: vec![SettingRowView {
+                    id: "ui.confirm-quit".to_owned(),
+                    name: "Confirmar al salir".to_owned(),
+                    desc: "Pregunta antes de cerrar norte".to_owned(),
+                    value: "siempre".to_owned(),
+                    restart_required: true,
+                }],
+            },
+            SettingsSectionView::Paths {
+                title: "Dónde vive cada cosa".to_owned(),
+                rows: vec![
+                    PathRowView {
+                        label: "Tu configuración".to_owned(),
+                        display: "/home/oscar/.config/norte".to_owned(),
+                        hostile: false,
+                        missing: false,
+                    },
+                    PathRowView {
+                        label: "Configuración del proyecto".to_owned(),
+                        display: ".norte".to_owned(),
+                        hostile: false,
+                        missing: true,
+                    },
+                ],
+            },
+        ],
+        cursor: 0,
+        read_only: true,
     }
 }
 
@@ -655,6 +699,12 @@ fn cambios_del_listado() -> Vec<(&'static str, ViewChange)> {
 fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
     vec![
         ("layout", ViewChange::Layout(disposicion_de_referencia())),
+        (
+            "settings",
+            ViewChange::Settings {
+                settings: Some(ajustes_de_referencia()),
+            },
+        ),
         (
             "help",
             ViewChange::Help {

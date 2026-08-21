@@ -68,6 +68,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.set-target",
     "app.palette",
     "app.help",
+    "app.settings",
     "pane.view",
     "pane.quick-search",
     "pane.mkdir",
@@ -199,6 +200,8 @@ pub enum Efecto {
     Destino,
     /// Abre la paleta de comandos.
     Paleta,
+    /// Abre los ajustes, en solo lectura.
+    Ajustes,
     /// Abre la ayuda. Sobre la página del CONTEXTO donde está el lector —
     /// un diálogo abierto, el visor, el listado— y no siempre sobre el
     /// índice: quien pulsa F1 mirando una pregunta quiere esa respuesta.
@@ -250,6 +253,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "layout.set-target" => Efecto::Destino,
         "app.palette" => Efecto::Paleta,
         "app.help" => Efecto::Ayuda,
+        "app.settings" => Efecto::Ajustes,
         "pane.view" => Efecto::Ver,
         "pane.quick-search" => Efecto::BuscarRapido,
         "pane.mkdir" => Efecto::CrearDirectorio,

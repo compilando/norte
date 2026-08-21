@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 9;
+export const BRIDGE_VERSION = 10;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -230,6 +230,31 @@ export interface HelpView {
   can_back: boolean;
 }
 
+export interface SettingRowView {
+  id: string;
+  name: string;
+  desc: string;
+  value: string;
+  restart_required: boolean;
+}
+
+export interface PathRowView {
+  label: string;
+  display: string;
+  hostile: boolean;
+  missing: boolean;
+}
+
+export type SettingsSectionView =
+  | { section: "settings"; title: string; rows: SettingRowView[] }
+  | { section: "paths"; title: string; rows: PathRowView[] };
+
+export interface SettingsView {
+  sections: SettingsSectionView[];
+  cursor: number;
+  read_only: boolean;
+}
+
 export interface ViewSnapshot {
   connection: ConnectionView;
   layout: LayoutView;
@@ -241,6 +266,7 @@ export interface ViewSnapshot {
   palette: PaletteView | null;
   whichkey: WhichKeyView | null;
   help: HelpView | null;
+  settings: SettingsView | null;
   viewer: ViewerView | null;
   locale: string;
 }
@@ -264,7 +290,8 @@ export type ViewChange =
   | { change: "viewer"; viewer: ViewerView | null }
   | { change: "which_key"; whichkey: WhichKeyView | null }
   | { change: "palette"; palette: PaletteView | null }
-  | { change: "help"; help: HelpView | null };
+  | { change: "help"; help: HelpView | null }
+  | { change: "settings"; settings: SettingsView | null };
 
 export interface ViewPatch {
   base_sequence: number;
@@ -315,6 +342,7 @@ export type UiAction =
   | { action: "set_viewer_rows"; rows: number }
   | { action: "help_select_topic"; row: number }
   | { action: "help_activate"; index: number }
+  | { action: "settings_select_row"; row: number }
   | { action: "resync" };
 
 export type StaleReason = "instance" | "generation" | "modal";

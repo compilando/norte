@@ -274,6 +274,43 @@
       ],
       "total": 42
     },
+    "settings": {
+      "cursor": 0,
+      "read_only": true,
+      "sections": [
+        {
+          "rows": [
+            {
+              "desc": "Pregunta antes de cerrar norte",
+              "id": "ui.confirm-quit",
+              "name": "Confirmar al salir",
+              "restart_required": true,
+              "value": "siempre"
+            }
+          ],
+          "section": "settings",
+          "title": "General"
+        },
+        {
+          "rows": [
+            {
+              "display": "/home/oscar/.config/norte",
+              "hostile": false,
+              "label": "Tu configuración",
+              "missing": false
+            },
+            {
+              "display": ".norte",
+              "hostile": false,
+              "label": "Configuración del proyecto",
+              "missing": true
+            }
+          ],
+          "section": "paths",
+          "title": "Dónde vive cada cosa"
+        }
+      ]
+    },
     "slots": [
       {
         "columns": [

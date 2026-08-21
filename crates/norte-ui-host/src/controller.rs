@@ -142,6 +142,14 @@ pub struct UiHostOptions {
     /// hasta que la fase 5 le dé el camino seguro; el TUI y los tests usan
     /// [`crate::commands::Efectos::Completo`].
     pub effects: crate::commands::Efectos,
+    /// La configuración YA cargada, para los ajustes en solo lectura.
+    ///
+    /// La lee quien arranca el host, UNA vez, como todo lo demás: un
+    /// frontend que la relee por su cuenta acaba enseñando unos ajustes que
+    /// no son los que está usando.
+    pub settings: norte_frontend::config::FrontendConfig,
+    /// Dónde vive cada cosa, ya resuelto. Ver [`crate::settings::HostPaths`].
+    pub paths: crate::settings::HostPaths,
     /// La configuración de columnas ENTERA, no una lista ya resuelta.
     ///
     /// Las columnas se configuran POR ESQUEMA (`[ui.columns.schemes.sftp]`),
@@ -701,6 +709,12 @@ struct Estado {
     /// Es un contexto de entrada más, como el buscador incremental y el
     /// visor: mientras esté abierta, las teclas de texto son suyas.
     paleta: Option<norte_frontend::palette_state::Palette>,
+    /// La configuración con la que arrancó esta ventana, para enseñarla.
+    config: norte_frontend::config::FrontendConfig,
+    /// Dónde vive cada cosa.
+    paths: crate::settings::HostPaths,
+    /// Los ajustes, si están abiertos.
+    ajustes: Option<crate::settings::Ajustes>,
     /// La ayuda, si está abierta. Tapa la pantalla y se queda las teclas,
     /// como el visor: sus teclas son FIJAS (no hay vocabulario `dialog.*`
     /// para «filtrar esta lista» ni para «seguir este enlace»), que es lo
@@ -820,6 +834,8 @@ impl Estado {
             viewport,
             columns: columnas,
             effects: efectos,
+            settings,
+            paths,
         } = options;
         let dir = &initial_dir;
         // El idioma negociado, para las etiquetas de las continuaciones.
@@ -867,6 +883,9 @@ impl Estado {
             locale,
             paleta: None,
             ayuda: None,
+            ajustes: None,
+            config: settings,
+            paths,
             efectivo_visor: keymap_visor.clone(),
             efectivo: keymap.clone(),
             lang,
@@ -1200,6 +1219,7 @@ impl Estado {
             // aceptar texto que nadie va a leer.
             UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
             UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row, backend, buzon),
+            UiAction::SettingsSelectRow { row } => self.elegir_ajuste(*row),
             UiAction::HelpActivate { index } => self.activar_en_ayuda(*index, backend, buzon),
         }
     }
@@ -1226,6 +1246,9 @@ impl Estado {
         // recibía ni una tecla y que ninguna podía cerrar.
         if self.ayuda.is_some() {
             return Some(self.tecla_en_ayuda(k, backend, buzon));
+        }
+        if self.ajustes.is_some() {
+            return Some(self.tecla_en_ajustes(k));
         }
         if self.visor.is_some() {
             return Some(self.tecla_en_visor(k, backend, buzon));
@@ -1432,6 +1455,81 @@ impl Estado {
             },
             vec![self.parche(vec![cambio])],
         )
+    }
+
+    /// Abre los ajustes, en solo lectura.
+    ///
+    /// Las filas se construyen AQUÍ y se congelan, como las de la paleta y
+    /// por el mismo motivo: `build_rows` resuelve el valor efectivo de cada
+    /// entrada y formatea dos cadenas Fluent por fila. La configuración es la
+    /// que el host recibió al arrancar, que es la que está usando.
+    fn abrir_ajustes(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.ajustes = Some(crate::settings::Ajustes::abrir(
+            &self.config,
+            &self.paths,
+            self.lang,
+        ));
+        let cambio = ViewChange::Settings {
+            settings: self.vista_ajustes(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Un click en una fila de los ajustes: solo mueve el cursor.
+    fn elegir_ajuste(&mut self, row: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(a) = self.ajustes.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        a.senalar(row as usize);
+        let cambio = ViewChange::Settings {
+            settings: self.vista_ajustes(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// La proyección de los ajustes.
+    fn vista_ajustes(&self) -> Option<crate::dto::SettingsView> {
+        Some(self.ajustes.as_ref()?.vista(self.lang))
+    }
+
+    /// Las teclas mientras los ajustes están abiertos.
+    ///
+    /// FIJAS, como las de la paleta y la ayuda: el catálogo no tiene
+    /// comandos para «bajar por esta lista». `enter` no edita —esta ventana
+    /// no escribe ajustes todavía— y lo DICE, en vez de no hacer nada.
+    fn tecla_en_ajustes(
+        &mut self,
+        k: &crate::keys::KeyInput,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        /// Cuántas filas mueve una página.
+        const PAGINA: i64 = 10;
+        let Some(a) = self.ajustes.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match k.key.as_str() {
+            "Escape" | "esc" => self.ajustes = None,
+            "ArrowDown" | "down" => a.mover(1),
+            "ArrowUp" | "up" => a.mover(-1),
+            "PageDown" | "pgdn" => a.mover(PAGINA),
+            "PageUp" | "pgup" => a.mover(-PAGINA),
+            "Home" | "home" => a.mover(i64::MIN / 2),
+            "End" | "end" => a.mover(i64::MAX / 2),
+            "Enter" | "enter" => {
+                // No es un descarte silencioso: quien pulsa `enter` sobre un
+                // ajuste espera editarlo, y esta ventana todavía no escribe.
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: "host-settings-read-only".to_owned(),
+                    },
+                    Vec::new(),
+                );
+            }
+            _ => return (self.aplicada(), Vec::new()),
+        }
+        let cambio = ViewChange::Settings {
+            settings: self.vista_ajustes(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
     /// Abre la ayuda sobre la página del CONTEXTO donde está el lector.
@@ -2194,6 +2292,7 @@ impl Estado {
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
             Efecto::Ayuda => self.abrir_ayuda(backend, buzon),
+            Efecto::Ajustes => self.abrir_ajustes(),
             Efecto::Ver => self.pedir_visor(backend, buzon),
             Efecto::CrearDirectorio => self.pedir_mkdir(),
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
@@ -3323,6 +3422,7 @@ impl Estado {
             palette: self.vista_paleta(),
             whichkey: self.vista_whichkey(),
             help: self.vista_ayuda(),
+            settings: self.vista_ajustes(),
             viewer: self.vista_visor(),
             locale: self.locale.clone(),
         }

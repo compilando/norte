@@ -15,6 +15,7 @@ use norte_i18n::Lang;
 use norte_proto::VPath;
 use norte_proto::methods::ClientInfo;
 use norte_theme::Theme;
+use norte_ui_host::settings::{ConfigLayer, HostPaths};
 use norte_ui_host::{UiHost, UiHostOptions, ViewSnapshot};
 
 /// Hasta dónde llega esta ventana HOY.
@@ -136,6 +137,35 @@ pub struct Boot {
     pub theme: Theme,
 }
 
+/// Dónde vive cada cosa, para la vista de diagnóstico de los ajustes.
+///
+/// Se construye con las capas que el arranque ACABA de leer y con el socket
+/// al que acaba de conectar: preguntarlo otra vez podría contestar otra cosa
+/// (un `NORTE_CONFIG_DIR` que cambie, un `--socket` que se ignore) y la
+/// ventana diría que su configuración sale de un sitio distinto de donde
+/// salió de verdad.
+fn rutas(capas: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
+    HostPaths {
+        config_layers: capas
+            .dirs
+            .iter()
+            .map(|(dir, kind)| {
+                let capa = match kind {
+                    norte_config::Layer::System => ConfigLayer::System,
+                    norte_config::Layer::User => ConfigLayer::User,
+                    norte_config::Layer::Project => ConfigLayer::Project,
+                };
+                (capa, dir.clone())
+            })
+            .collect(),
+        state_dir: norte_config::dirs::state_dir(),
+        // El MISMO sitio al que escribe `logging()`, que es lo único que hace
+        // útil enseñarlo.
+        logs_dir: norte_config::dirs::state_dir().map(|d| d.join("logs")),
+        socket: Some(socket.to_path_buf()),
+    }
+}
+
 /// Monta el host: configuración, socket, directorio, keymap y disposición.
 ///
 /// # Errors
@@ -144,6 +174,10 @@ pub struct Boot {
 pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // Las MISMAS capas que el TUI, leídas fuera del runtime (regla 2).
     let capas = norte_config::standard_layers();
+    // Se guardan para la vista de «dónde vive cada cosa»: el host no descubre
+    // ficheros, así que la lista de capas se la damos ya resuelta y es
+    // exactamente la que se acaba de LEER, no una que se vuelva a calcular.
+    let capas_vistas = capas.clone();
     let cfg = match tokio::task::spawn_blocking(move || norte_frontend::config::load(&capas)).await
     {
         Ok(res) => res.map_err(|e| StartupError::Config(e.to_string()))?,
@@ -267,6 +301,8 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         // configuración en cuanto un panel navegaba a un `sftp://`.
         columns: columnas,
         effects: EFECTOS,
+        settings: cfg.clone(),
+        paths: rutas(&capas_vistas, &socket),
     })
     .await?;
     Ok(Boot {

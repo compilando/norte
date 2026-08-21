@@ -227,6 +227,46 @@
     ],
     "slot_id": 1
   },
+  "settings": {
+    "change": "settings",
+    "settings": {
+      "cursor": 0,
+      "read_only": true,
+      "sections": [
+        {
+          "rows": [
+            {
+              "desc": "Pregunta antes de cerrar norte",
+              "id": "ui.confirm-quit",
+              "name": "Confirmar al salir",
+              "restart_required": true,
+              "value": "siempre"
+            }
+          ],
+          "section": "settings",
+          "title": "General"
+        },
+        {
+          "rows": [
+            {
+              "display": "/home/oscar/.config/norte",
+              "hostile": false,
+              "label": "Tu configuración",
+              "missing": false
+            },
+            {
+              "display": ".norte",
+              "hostile": false,
+              "label": "Configuración del proyecto",
+              "missing": true
+            }
+          ],
+          "section": "paths",
+          "title": "Dónde vive cada cosa"
+        }
+      ]
+    }
+  },
   "slot_state": {
     "change": "slot_state",
     "slot_id": 1,

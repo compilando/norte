@@ -198,6 +198,14 @@ pub enum UiAction {
         /// Índice dentro de `actions`.
         index: u32,
     },
+    /// Pone el cursor de los ajustes en esa fila (un click).
+    ///
+    /// Solo mueve. Esta ventana no edita ajustes todavía, así que no hay una
+    /// acción para activar una fila: no habría nada que activar.
+    SettingsSelectRow {
+        /// Fila, contando TODAS las de todas las secciones en orden.
+        row: u32,
+    },
     /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
     Resync,
 }

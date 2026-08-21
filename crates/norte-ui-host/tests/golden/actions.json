@@ -84,6 +84,10 @@
     "first": 100,
     "slot_id": 1
   },
+  "settings_select_row": {
+    "action": "settings_select_row",
+    "row": 2
+  },
   "sort_by": {
     "action": "sort_by",
     "column": "size",

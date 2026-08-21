@@ -732,3 +732,107 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* --- Los ajustes (F11), en solo lectura ------------------------------- */
+
+#settings[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+#settings[data-open="false"] {
+  display: none;
+}
+
+.settings {
+  width: min(110ch, 92vw);
+  height: min(80vh, 100%);
+  display: flex;
+  flex-direction: column;
+  padding: 0 12px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  overflow: hidden;
+}
+
+.settings h1 {
+  margin-bottom: 2px;
+  padding-bottom: 4px;
+  font-size: 1.35em;
+  color: var(--title-fg);
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-note {
+  margin: 0 0 6px;
+  color: var(--hostile-fg);
+}
+
+.settings-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: auto;
+}
+
+.settings-group {
+  padding: 8px 0 0;
+  color: var(--title-fg);
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: 34ch 1fr auto;
+  gap: 0 12px;
+  padding: 0 6px;
+  cursor: pointer;
+  /* Un valor puede ser una RUTA, y una ruta puede traer marcas de dirección:
+     cada celda es su propia corrida bidi. */
+  unicode-bidi: isolate;
+}
+
+.settings-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.settings-name,
+.settings-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  unicode-bidi: isolate;
+}
+
+.settings-value {
+  color: var(--border-focus);
+}
+
+.settings-value[data-hostile="true"] {
+  color: var(--hostile-fg);
+}
+
+.settings-badge,
+.settings-missing {
+  color: var(--hostile-fg);
+  white-space: nowrap;
+  unicode-bidi: isolate;
+}
+
+/* La descripción ocupa la fila entera bajo el nombre, y solo se lee en la
+   fila elegida: con todas visibles, la lista deja de poder recorrerse. */
+.settings-desc {
+  grid-column: 1 / -1;
+  display: none;
+  padding-left: 2ch;
+  opacity: 0.8;
+  unicode-bidi: isolate;
+}
+
+.settings-row[aria-selected="true"] .settings-desc {
+  display: block;
+}

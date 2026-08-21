@@ -32,6 +32,7 @@ pub mod dto;
 /// La ayuda (F1): el corpus compartido proyectado al vocabulario del bridge.
 mod help;
 pub mod keys;
+pub mod settings;
 
 pub use action::UiAction;
 pub use backend::HostBackend;
@@ -42,6 +43,19 @@ pub use bridge::{
 pub use controller::{ShutdownReport, UiHost, UiHostOptions, UiSubscription, Update};
 pub use dto::{UiNotice, UiUpdate, ViewPatch, ViewSnapshot};
 pub use keys::KeyInput;
+
+/// La configuración de un host SIN ficheros: los valores de fábrica.
+///
+/// Existe para que un test o un primer arranque no tengan que fabricarla; un
+/// host de verdad recibe la que su arranque cargó de las capas del usuario.
+///
+/// # Panics
+/// Nunca: cargar CERO capas no puede fallar (no hay fichero que parsear mal).
+#[must_use]
+pub fn ajustes_por_defecto() -> norte_frontend::config::FrontendConfig {
+    norte_frontend::config::load(&norte_config::Layers { dirs: Vec::new() })
+        .expect("cargar cero capas no puede fallar")
+}
 
 /// La configuración de columnas de un host sin configuración: las de fábrica
 /// (nombre, tamaño y fecha), iguales para todos los esquemas.

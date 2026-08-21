@@ -154,6 +154,9 @@ export class Session {
       case "help":
         s.help = c.help;
         return true;
+      case "settings":
+        s.settings = c.settings;
+        return true;
       case "layout": {
         s.layout = { cells: c.cells, placements: c.placements };
         // El foco es de quien tenga el papel `active`, y lo dice el host.

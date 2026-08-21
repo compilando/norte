@@ -38,6 +38,8 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -253,6 +255,8 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -599,6 +603,8 @@ async fn el_contador_lo_resuelve_el_host() {
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("vim").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -695,6 +701,8 @@ async fn host_con_layout(
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree(layout).expect("layout"),
         viewport,
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -1587,6 +1595,8 @@ async fn el_catalogo_da_sentido_a_un_attr() {
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
         columns: columnas_de(&["name", "attr:posix.mode"]),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -2145,6 +2155,8 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (200, 60),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -2386,6 +2398,8 @@ async fn host_solo_lectura(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewS
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::SoloLectura,
     })
@@ -2794,6 +2808,8 @@ async fn el_id_de_una_columna_hostil_no_cruza_crudo() {
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
         columns: columnas_de(&["name", "plugin:acme.\u{202e}ftp/x"]),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -2869,6 +2885,8 @@ async fn una_disposicion_sin_listado_no_arranca() {
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: arbol_sin_listado,
         viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -2912,6 +2930,8 @@ async fn las_columnas_de_otro_esquema_no_estan_muertas() {
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
         columns: norte_frontend::columns::ColumnsSettings::resolve(&cfg),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -2985,6 +3005,8 @@ prepend_keymap = [
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -4014,4 +4036,226 @@ async fn ninguna_cadena_de_la_ayuda_lleva_un_peligro_de_terminal() {
             v.topic_id
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Los ajustes en solo lectura (tarea 4.5).
+// ---------------------------------------------------------------------------
+
+/// Espera la siguiente actualización que traiga los ajustes.
+async fn siguiente_ajustes(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> Option<norte_ui_host::dto::SettingsView> {
+    for _ in 0..20 {
+        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("una actualización antes del plazo")
+            .expect("el host sigue vivo");
+        if let Update::Message(m) = siguiente
+            && let UiUpdate::Patch(p) = &m.payload
+        {
+            for c in &p.changes {
+                if let norte_ui_host::dto::ViewChange::Settings { settings } = c {
+                    return settings.clone();
+                }
+            }
+        }
+    }
+    panic!("no llegó ninguna actualización con ajustes");
+}
+
+/// Un host con unas rutas dichas, para la sección de diagnóstico.
+async fn host_con_rutas(paths: norte_ui_host::settings::HostPaths) -> UiHost {
+    UiHost::start(UiHostOptions {
+        backend: arbol(),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca")
+    .0
+}
+
+/// `F11` abre los ajustes con el registro COMPARTIDO y su valor efectivo, y
+/// dice que esta ventana todavía no los escribe.
+#[tokio::test]
+async fn los_ajustes_ensenan_el_registro_compartido_con_su_valor() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F11")).await.expect("host vivo");
+    let a = siguiente_ajustes(&mut sub).await.expect("abren");
+
+    assert!(
+        a.read_only,
+        "y lo DICE, en vez de ofrecer un enter que no va"
+    );
+    let general = a
+        .sections
+        .iter()
+        .find_map(|s| match s {
+            norte_ui_host::dto::SettingsSectionView::Settings { rows, .. } => Some(rows),
+            norte_ui_host::dto::SettingsSectionView::Paths { .. } => None,
+        })
+        .expect("hay sección general");
+    assert_eq!(
+        general.len(),
+        norte_frontend::settings::catalog().len(),
+        "ni una entrada del catálogo compartido se queda fuera"
+    );
+    for r in general {
+        assert!(!r.id.is_empty(), "cada fila lleva su id estable");
+        assert!(!r.name.is_empty(), "y su nombre traducido: {r:?}");
+        assert!(
+            !r.name.starts_with("setting-"),
+            "ninguna pinta una clave Fluent: {r:?}"
+        );
+        assert!(
+            r.restart_required,
+            "esta ventana resuelve tema y keymap al arrancar: TODO pide \
+             reiniciar, y decir lo contrario manda a buscar un bug que no hay"
+        );
+    }
+}
+
+/// La sección de ubicaciones dice dónde vive cada cosa, marca lo que falta y
+/// no enseña ni un valor.
+#[tokio::test]
+async fn las_ubicaciones_se_dicen_y_lo_que_falta_se_marca() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let existe = tmp.path().join("config");
+    std::fs::create_dir(&existe).expect("mkdir");
+    let no_existe = tmp.path().join("no-esta");
+    let h = host_con_rutas(norte_ui_host::settings::HostPaths {
+        config_layers: vec![
+            (norte_ui_host::settings::ConfigLayer::User, existe.clone()),
+            (norte_ui_host::settings::ConfigLayer::Project, no_existe),
+        ],
+        state_dir: None,
+        logs_dir: None,
+        socket: Some(tmp.path().join("daemon.sock")),
+    })
+    .await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F11")).await.expect("host vivo");
+    let a = siguiente_ajustes(&mut sub).await.expect("abren");
+
+    let rutas = a
+        .sections
+        .iter()
+        .find_map(|s| match s {
+            norte_ui_host::dto::SettingsSectionView::Paths { rows, .. } => Some(rows),
+            norte_ui_host::dto::SettingsSectionView::Settings { .. } => None,
+        })
+        .expect("hay sección de rutas");
+    assert_eq!(rutas.len(), 3, "dos capas y el socket");
+    assert!(!rutas[0].missing, "la capa que existe no se marca");
+    assert!(
+        rutas[1].missing,
+        "la que no existe SÍ: no se pinta como si estuviera"
+    );
+    for r in rutas {
+        assert!(!r.label.is_empty(), "cada una dice QUÉ es: {r:?}");
+        assert!(!r.display.is_empty(), "y dónde: {r:?}");
+    }
+}
+
+/// Un directorio de configuración con bytes hostiles llega ENMASCARADO y
+/// marcado, por el mismo camino que un nombre del listado.
+#[tokio::test]
+async fn una_ruta_hostil_llega_enmascarada_y_marcada() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    // Un nombre con un override bidi: legal como fichero, y una mentira en
+    // pantalla si se pinta crudo.
+    let hostil = tmp.path().join("conf\u{202e}gif");
+    std::fs::create_dir(&hostil).expect("mkdir");
+    let h = host_con_rutas(norte_ui_host::settings::HostPaths {
+        config_layers: vec![(norte_ui_host::settings::ConfigLayer::User, hostil)],
+        state_dir: None,
+        logs_dir: None,
+        socket: None,
+    })
+    .await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F11")).await.expect("host vivo");
+    let a = siguiente_ajustes(&mut sub).await.expect("abren");
+    let rutas = a
+        .sections
+        .iter()
+        .find_map(|s| match s {
+            norte_ui_host::dto::SettingsSectionView::Paths { rows, .. } => Some(rows),
+            norte_ui_host::dto::SettingsSectionView::Settings { .. } => None,
+        })
+        .expect("hay sección de rutas");
+    assert!(
+        !rutas[0].display.contains('\u{202e}'),
+        "un override bidi cruzó crudo: {:?}",
+        rutas[0].display
+    );
+    assert!(rutas[0].hostile, "y se MARCA que difiere del nombre real");
+}
+
+/// El cursor se mueve y no se sale, y `enter` dice que aquí no se edita.
+#[tokio::test]
+async fn el_cursor_no_se_sale_y_enter_lo_dice() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F11")).await.expect("host vivo");
+    let a = siguiente_ajustes(&mut sub).await.expect("abren");
+    assert_eq!(a.cursor, 0);
+
+    h.dispatch(tecla("ArrowUp")).await.expect("host vivo");
+    let arriba = siguiente_ajustes(&mut sub).await.expect("sigue abierto");
+    assert_eq!(arriba.cursor, 0, "arriba del todo no se sale por arriba");
+
+    h.dispatch(tecla("End")).await.expect("host vivo");
+    let final_ = siguiente_ajustes(&mut sub).await.expect("sigue abierto");
+    let total: usize = final_
+        .sections
+        .iter()
+        .map(|s| match s {
+            norte_ui_host::dto::SettingsSectionView::Settings { rows, .. } => rows.len(),
+            norte_ui_host::dto::SettingsSectionView::Paths { rows, .. } => rows.len(),
+        })
+        .sum();
+    assert_eq!(
+        usize::try_from(final_.cursor).expect("cabe"),
+        total - 1,
+        "y por abajo tampoco"
+    );
+
+    let ack = h.dispatch(tecla("Enter")).await.expect("host vivo");
+    assert!(
+        matches!(ack, norte_ui_host::ActionAck::Unavailable { .. }),
+        "enter no edita, y lo dice en vez de no hacer nada: {ack:?}"
+    );
+
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    assert!(
+        siguiente_ajustes(&mut sub).await.is_none(),
+        "esc los cierra"
+    );
+}
+
+/// Con los ajustes abiertos, una tecla del listado no se cuela.
+#[tokio::test]
+async fn con_los_ajustes_abiertos_el_listado_no_se_mueve() {
+    let (h, snap) = host_arbol(arbol()).await;
+    let antes = listado(&snap).cursor;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F11")).await.expect("host vivo");
+    let _ = siguiente_ajustes(&mut sub).await.expect("abren");
+
+    h.dispatch(tecla("j")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(listado(&foto).cursor, antes, "el listado no se movió");
+    assert!(foto.settings.is_some(), "y los ajustes siguen abiertos");
 }

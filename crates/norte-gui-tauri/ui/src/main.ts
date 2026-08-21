@@ -21,6 +21,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const paletteEl = doc.getElementById("palette");
   const whichKeyEl = doc.getElementById("whichkey");
   const helpEl = doc.getElementById("help");
+  const settingsEl = doc.getElementById("settings");
   const viewerEl = doc.getElementById("viewer");
   const dialogsEl = doc.getElementById("dialogs");
   const fatalEl = doc.getElementById("fatal");
@@ -29,6 +30,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     paletteEl === null ||
     whichKeyEl === null ||
     helpEl === null ||
+    settingsEl === null ||
     viewerEl === null ||
     dialogsEl === null ||
     fatalEl === null
@@ -74,6 +76,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     paletteEl,
     whichKeyEl,
     helpEl,
+    settingsEl,
     viewerEl,
     dialogsEl,
     catalog,

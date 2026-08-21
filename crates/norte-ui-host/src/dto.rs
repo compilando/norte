@@ -42,6 +42,9 @@ pub struct ViewSnapshot {
     /// La ayuda, si está abierta. Como el visor, ocupa la pantalla: mientras
     /// esté, las teclas son suyas.
     pub help: Option<HelpView>,
+    /// Los ajustes, si están abiertos. Solo LECTURA: esta ventana enseña lo
+    /// que hay y no escribe nada hasta que la fase 5 dé el camino seguro.
+    pub settings: Option<SettingsView>,
     /// El visor, si hay uno abierto. Ocupa la pantalla: mientras esté, las
     /// teclas son suyas y el listado no se mueve por debajo.
     pub viewer: Option<ViewerView>,
@@ -347,6 +350,92 @@ pub struct HelpActionView {
     pub opens_topic: bool,
 }
 
+/// Los ajustes abiertos (solo lectura).
+///
+/// El registro, el valor efectivo de cada entrada y su texto localizado son
+/// los COMPARTIDOS (`norte_frontend::settings`): el mismo catálogo que pinta
+/// el TUI, con los mismos ids estables. Lo que este host añade es la
+/// proyección y una sección más —dónde vive cada cosa—, que es diagnóstico y
+/// no configuración.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingsView {
+    /// Las secciones, en su orden.
+    pub sections: Vec<SettingsSectionView>,
+    /// Qué fila tiene el cursor, contando TODAS las filas de todas las
+    /// secciones en orden (las cabeceras no cuentan: no se pueden elegir).
+    pub cursor: u64,
+    /// Esta ventana no escribe ajustes todavía, y lo DICE en vez de ofrecer
+    /// un `enter` que se negaría. Lo pinta el renderer como un aviso, no como
+    /// un botón apagado que invita a probar.
+    pub read_only: bool,
+}
+
+/// Una sección de los ajustes: entradas del registro, o ubicaciones.
+///
+/// Un enum y no un struct con dos listas: una sección es de una clase o de la
+/// otra, y un struct con `rows` y `paths` obligaría a cada renderer a decidir
+/// qué hacer cuando llegan las dos llenas — una combinación que no existe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "section")]
+pub enum SettingsSectionView {
+    /// Entradas del registro con su valor efectivo.
+    Settings {
+        /// Su título, ya traducido.
+        title: String,
+        /// Sus filas.
+        rows: Vec<SettingRowView>,
+    },
+    /// Dónde vive cada cosa.
+    Paths {
+        /// Su título, ya traducido.
+        title: String,
+        /// Sus filas.
+        rows: Vec<PathRowView>,
+    },
+}
+
+/// Una entrada del registro con su valor efectivo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingRowView {
+    /// El id estable del catálogo (`ui.confirm-quit`). Una IDENTIDAD, no algo
+    /// que se pinte: viaja para que un renderer pueda anclar una fila entre
+    /// dos pintados, y por eso no pasa por el recorte de pantalla.
+    pub id: String,
+    /// Cómo se llama, en el idioma del lector.
+    pub name: String,
+    /// Qué hace.
+    pub desc: String,
+    /// Su valor EFECTIVO, ya resuelto sobre las capas de configuración y como
+    /// texto para pintar.
+    pub value: String,
+    /// Cambiarlo pide reiniciar la ventana.
+    pub restart_required: bool,
+}
+
+/// Dónde vive cada cosa: las capas de configuración, el estado, los logs y el
+/// socket del daemon.
+///
+/// Es una sección de los ajustes y no una vista aparte porque responde a la
+/// misma pregunta que el resto —«¿de dónde sale lo que estoy viendo?»— y
+/// porque el catálogo no tiene comando para abrirla.
+///
+/// Lleva RUTAS y por eso lleva la misma marca que un nombre de fichero: el
+/// texto ya saneado, y una bandera de si difiere del real. Ningún valor
+/// secreto entra aquí: son ubicaciones, no contenidos.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathRowView {
+    /// Qué es, ya traducido.
+    pub label: String,
+    /// Dónde, ya saneado para pintar.
+    pub display: String,
+    /// El texto de arriba DIFIERE de la ruta real.
+    pub hostile: bool,
+    /// El sitio no existe (una capa que nadie ha creado). Se DICE, en vez de
+    /// enseñar una ruta que parece estar ahí.
+    pub missing: bool,
+}
+
+/// Lo que el visor enseña.
 /// Lo que el visor enseña.
 ///
 /// Cinco banderas y no un estado: cada una es un HECHO independiente que el
@@ -778,6 +867,11 @@ pub enum ViewChange {
     Help {
         /// La ayuda, o `None` si se cerró.
         help: Option<HelpView>,
+    },
+    /// Los ajustes se abrieron, movieron el cursor o se cerraron.
+    Settings {
+        /// Los ajustes, o `None` si se cerraron.
+        settings: Option<SettingsView>,
     },
     /// El visor cambió (se abrió, se desplazó, se cerró).
     ///

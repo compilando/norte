@@ -82,6 +82,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     palette: null,
     whichkey: null,
     help: null,
+    settings: null,
     viewer: null,
     locale: "es",
   };
@@ -93,9 +94,10 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
   const palette = document.createElement("div");
   const whichkey = document.createElement("div");
   const help = document.createElement("div");
+  const settings = document.createElement("div");
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
-  document.body.append(root, palette, whichkey, help, viewer, dialogs);
+  document.body.append(root, palette, whichkey, help, settings, viewer, dialogs);
   document.documentElement.style.setProperty("--cell-h", `${CELL_H}px`);
   document.documentElement.style.setProperty("--cell-w", "8px");
   const enviadas: UiAction[] = [];
@@ -104,6 +106,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     palette,
     whichkey,
     help,
+    settings,
     viewer,
     dialogs,
     catalogo(),
@@ -807,5 +810,152 @@ describe("la ayuda", () => {
     const { screen } = montar();
     screen.paint(vista({}));
     expect(document.querySelector(".help")).toBeNull();
+  });
+});
+
+describe("los ajustes", () => {
+  function conAjustes(): ViewSnapshot {
+    const v = vista({});
+    v.settings = {
+      sections: [
+        {
+          section: "settings",
+          title: "General",
+          rows: [
+            {
+              id: "ui.confirm-quit",
+              name: "Confirmar al salir",
+              desc: "Pregunta antes de cerrar norte",
+              value: "siempre",
+              restart_required: true,
+            },
+          ],
+        },
+        {
+          section: "paths",
+          title: "Dónde vive cada cosa",
+          rows: [
+            {
+              label: "Tu configuración",
+              display: "/home/oscar/.config/norte",
+              hostile: false,
+              missing: false,
+            },
+            {
+              label: "Configuración del proyecto",
+              display: ".norte",
+              hostile: false,
+              missing: true,
+            },
+          ],
+        },
+      ],
+      cursor: 1,
+      read_only: true,
+    };
+    return v;
+  }
+
+  it("es modal, avisa de que no escribe y numera solo las filas elegibles", () => {
+    const { screen } = montar();
+    screen.paint(conAjustes());
+    const caja = document.querySelector(".settings") as HTMLElement;
+    expect(caja.getAttribute("aria-modal")).toBe("true");
+    // El aviso es una NOTA, no un botón apagado: apagar un control invita a
+    // probarlo, y esta ventana todavía no escribe ajustes.
+    expect(caja.querySelector(".settings-note")?.getAttribute("role")).toBe("note");
+    // Dos cabeceras, tres filas: el cursor cuenta filas, no cabeceras.
+    expect(caja.querySelectorAll(".settings-group")).toHaveLength(2);
+    const filas = [...caja.querySelectorAll(".settings-row")];
+    expect(filas).toHaveLength(3);
+    expect(filas.map((f) => f.id)).toEqual([
+      "settings-row-0",
+      "settings-row-1",
+      "settings-row-2",
+    ]);
+    const lista = caja.querySelector(".settings-rows") as HTMLElement;
+    expect(lista.getAttribute("aria-activedescendant")).toBe("settings-row-1");
+  });
+
+  it("una ubicación que falta lo dice, y una hostil se marca", () => {
+    const { screen } = montar();
+    const v = conAjustes();
+    if (v.settings !== null) {
+      const sec = v.settings.sections[1];
+      if (sec?.section === "paths") {
+        sec.rows[0] = {
+          label: "Tu configuración",
+          display: "/home/oscar/conf�gif",
+          hostile: true,
+          missing: false,
+        };
+      }
+    }
+    screen.paint(v);
+    const filas = [...document.querySelectorAll(".settings-row")];
+    expect(filas[1]?.querySelector(".settings-value")?.getAttribute("data-hostile")).toBe(
+      "true",
+    );
+    expect(filas[2]?.querySelector(".settings-missing")).not.toBeNull();
+    // La que está no se marca como que falta.
+    expect(filas[1]?.querySelector(".settings-missing")).toBeNull();
+  });
+
+  it("si toda la sección pide reiniciar, se dice una vez y no cinco", () => {
+    const { screen } = montar();
+    const v = conAjustes();
+    if (v.settings !== null) {
+      const sec = v.settings.sections[0];
+      if (sec?.section === "settings") {
+        sec.rows.push({
+          id: "ui.theme",
+          name: "Tema",
+          desc: "El tema",
+          value: "tokyonight",
+          restart_required: true,
+        });
+      }
+    }
+    screen.paint(v);
+    const cabecera = document.querySelector(".settings-group");
+    expect(cabecera?.textContent).toContain("settings-restart-badge");
+    // Y ninguna fila la repite.
+    expect(document.querySelectorAll(".settings-row .settings-badge")).toHaveLength(0);
+  });
+
+  it("si solo algunas lo piden, la insignia va en la fila", () => {
+    const { screen } = montar();
+    const v = conAjustes();
+    if (v.settings !== null) {
+      const sec = v.settings.sections[0];
+      if (sec?.section === "settings") {
+        sec.rows.push({
+          id: "ui.theme",
+          name: "Tema",
+          desc: "El tema",
+          value: "tokyonight",
+          restart_required: false,
+        });
+      }
+    }
+    screen.paint(v);
+    expect(document.querySelectorAll(".settings-row .settings-badge")).toHaveLength(1);
+    expect(document.querySelector(".settings-group")?.textContent).not.toContain(
+      "settings-restart-badge",
+    );
+  });
+
+  it("un click pide ESA fila, contando por encima de las cabeceras", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conAjustes());
+    const filas = [...document.querySelectorAll(".settings-row")];
+    (filas[2] as HTMLElement).click();
+    expect(enviadas).toEqual([{ action: "settings_select_row", row: 2 }]);
+  });
+
+  it("cerrados, no tapan nada", () => {
+    const { screen } = montar();
+    screen.paint(vista({}));
+    expect(document.querySelector(".settings")).toBeNull();
   });
 });

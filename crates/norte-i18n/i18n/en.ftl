@@ -510,6 +510,18 @@ settings-plugins-open-hint = [enter] open this plugin's settings
 settings-plugins-key-count = {$count} settings
 # --- GUI settings view (S4) — mouse-driven full-view swap over the same
 # catalog/state machine as the overlay above.
+# Task 4.5: the read-only settings view of the graphical window. The paths
+# section is DIAGNOSTIC, not configuration: it answers "where does what I am
+# looking at come from". Locations only — never a value, so nothing secret.
+settings-section-paths = Where things live
+settings-path-config-system = System config
+settings-path-config-user = Your config
+settings-path-config-project = Project config
+settings-path-state = State (session, history)
+settings-path-logs = Logs
+settings-path-socket = Daemon socket
+settings-path-missing = not there
+settings-read-only = This window shows settings but does not write them yet.
 settings-restart-badge = restart required
 settings-hint-gui = [↑/↓/pgup/pgdn/click] navigate · [enter/click] edit · [ctrl+k] shortcuts · [esc] close
 # P1: prefix on a plugin-contributed row (`palette::plugin_rows`) — no

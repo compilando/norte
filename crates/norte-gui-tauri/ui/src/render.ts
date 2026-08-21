@@ -25,6 +25,7 @@ import type {
   HelpSpanView,
   HelpView,
   PaletteView,
+  SettingsView,
   ViewerView,
   WhichKeyView,
 } from "./types";
@@ -79,6 +80,7 @@ export class Screen {
     private readonly paletteRoot: HTMLElement,
     private readonly whichKeyRoot: HTMLElement,
     private readonly helpRoot: HTMLElement,
+    private readonly settingsRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
     private readonly catalog: HostCatalog,
@@ -129,6 +131,7 @@ export class Screen {
     this.paintPalette(view.palette);
     this.paintWhichKey(view.whichkey);
     this.paintHelp(view.help);
+    this.paintSettings(view.settings);
     this.paintViewer(view.viewer);
     this.paintDialogs(view.dialogs);
   }
@@ -553,6 +556,140 @@ export class Screen {
         return el;
       }
     }
+  }
+
+  /**
+   * Los ajustes (F11), en solo lectura.
+   *
+   * Dos clases de sección y ninguna decisión aquí: el host manda el registro
+   * con su valor ya resuelto y las ubicaciones ya saneadas. Lo único que este
+   * método sabe es que una fila de ruta que falta se dice, y que la lista es
+   * un `listbox` con un cursor que el host lleva.
+   */
+  private paintSettings(settings: SettingsView | null): void {
+    if (settings === null) {
+      this.settingsRoot.replaceChildren();
+      this.settingsRoot.dataset["open"] = "false";
+      return;
+    }
+    this.settingsRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "settings";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", this.t("settings-title"));
+
+    const titulo = document.createElement("h1");
+    titulo.textContent = this.t("settings-title");
+    caja.append(titulo);
+    if (settings.read_only) {
+      // Un AVISO y no un botón apagado: apagar un control invita a probarlo,
+      // y esta ventana no escribe ajustes todavía.
+      const nota = document.createElement("p");
+      nota.className = "settings-note";
+      nota.setAttribute("role", "note");
+      nota.textContent = this.t("settings-read-only");
+      caja.append(nota);
+    }
+
+    const lista = document.createElement("ul");
+    lista.className = "settings-rows";
+    lista.setAttribute("role", "listbox");
+    // El cursor cuenta filas ELEGIBLES: las cabeceras no entran, así que el
+    // índice se lleva aparte del recorrido de las secciones.
+    let i = 0;
+    for (const sec of settings.sections) {
+      const cabecera = document.createElement("li");
+      cabecera.className = "settings-group";
+      cabecera.setAttribute("role", "presentation");
+      cabecera.textContent = sec.title;
+      // Si TODAS las filas de la sección piden reiniciar, se dice UNA vez en
+      // su cabecera. Cinco insignias idénticas no informan de nada: hacen
+      // ruido justo encima de lo que sí varía, que es el valor.
+      const todas =
+        sec.section === "settings" &&
+        sec.rows.length > 0 &&
+        sec.rows.every((r) => r.restart_required);
+      if (todas) {
+        const marca = document.createElement("span");
+        marca.className = "settings-badge";
+        marca.textContent = this.t("settings-restart-badge");
+        cabecera.append(" ", marca);
+      }
+      lista.append(cabecera);
+      // El `switch` va FUERA del bucle de filas: dentro, TypeScript no
+      // puede estrechar el tipo de la fila a partir de la sección, y una
+      // fila de ruta y una de ajuste no comparten ni un campo.
+      if (sec.section === "settings") {
+        for (const r of sec.rows) {
+          const fila = this.settingsRow(i, settings.cursor);
+          const nombre = document.createElement("span");
+          nombre.className = "settings-name";
+          nombre.textContent = r.name;
+          const valor = document.createElement("span");
+          valor.className = "settings-value";
+          valor.textContent = r.value;
+          fila.append(nombre, valor);
+          if (r.restart_required && !todas) {
+            const marca = document.createElement("span");
+            marca.className = "settings-badge";
+            marca.textContent = this.t("settings-restart-badge");
+            fila.append(marca);
+          }
+          const desc = document.createElement("span");
+          desc.className = "settings-desc";
+          desc.textContent = r.desc;
+          fila.append(desc);
+          lista.append(fila);
+          i += 1;
+        }
+      } else {
+        for (const r of sec.rows) {
+          const fila = this.settingsRow(i, settings.cursor);
+          const nombre = document.createElement("span");
+          nombre.className = "settings-name";
+          nombre.textContent = r.label;
+          const valor = document.createElement("span");
+          valor.className = "settings-value";
+          valor.dataset["hostile"] = String(r.hostile);
+          valor.textContent = r.display;
+          fila.append(nombre, valor);
+          if (r.hostile) {
+            valor.append(badge(this.t("hostile-name")));
+          }
+          if (r.missing) {
+            // Que un sitio no exista es un HECHO del diagnóstico y no un
+            // error: una capa que nadie ha creado es lo normal.
+            const falta = document.createElement("span");
+            falta.className = "settings-missing";
+            falta.textContent = this.t("settings-path-missing");
+            fila.append(falta);
+          }
+          lista.append(fila);
+          i += 1;
+        }
+      }
+    }
+    lista.setAttribute(
+      "aria-activedescendant",
+      `settings-row-${String(settings.cursor)}`,
+    );
+    caja.append(lista);
+    this.settingsRoot.replaceChildren(caja);
+    revelar(lista.querySelector(`#settings-row-${String(settings.cursor)}`) ?? undefined);
+  }
+
+  /** El `<li>` de una fila de ajustes, con su cursor y su click. */
+  private settingsRow(i: number, cursor: number): HTMLElement {
+    const fila = document.createElement("li");
+    fila.className = "settings-row";
+    fila.id = `settings-row-${String(i)}`;
+    fila.setAttribute("role", "option");
+    fila.setAttribute("aria-selected", String(cursor === i));
+    fila.addEventListener("click", () => {
+      this.send({ action: "settings_select_row", row: i });
+    });
+    return fila;
   }
 
   /** El visor tapa la pantalla mientras está abierto. */

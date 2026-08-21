@@ -519,6 +519,18 @@ settings-plugins-open-hint = [enter] abrir los ajustes de este plugin
 settings-plugins-key-count = {$count} ajustes
 # --- Vista de ajustes de la GUI (S4) — swap a pantalla completa por ratón
 # sobre el mismo catálogo/máquina de estado que el overlay de arriba.
+# Tarea 4.5: la vista de ajustes en solo lectura de la ventana gráfica. La
+# sección de rutas es DIAGNÓSTICO, no configuración: contesta «de dónde sale
+# lo que estoy viendo». Solo ubicaciones — nunca un valor, o sea nada secreto.
+settings-section-paths = Dónde vive cada cosa
+settings-path-config-system = Configuración del sistema
+settings-path-config-user = Tu configuración
+settings-path-config-project = Configuración del proyecto
+settings-path-state = Estado (sesión, historial)
+settings-path-logs = Logs
+settings-path-socket = Socket del daemon
+settings-path-missing = no está
+settings-read-only = Esta ventana enseña los ajustes pero todavía no los escribe.
 settings-restart-badge = requiere reinicio
 settings-hint-gui = [↑/↓/pgup/pgdn/click] navegar · [enter/click] editar · [ctrl+k] atajos · [esc] cerrar
 # P1: prefijo de una fila aportada por un plugin (`palette::plugin_rows`) —
