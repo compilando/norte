@@ -652,6 +652,14 @@ struct Estado {
     /// El resolver de teclas, con SU keymap efectivo dentro (mismo tipo y
     /// mismo contrato que el del TUI).
     resolver: Resolver,
+    /// El keymap efectivo del VISOR, para que la paleta pueda decir el
+    /// atajo de un comando de esa pantalla.
+    efectivo_visor: Effective,
+    /// La paleta de comandos, si está abierta.
+    ///
+    /// Es un contexto de entrada más, como el buscador incremental y el
+    /// visor: mientras esté abierta, las teclas de texto son suyas.
+    paleta: Option<norte_frontend::palette_state::Palette>,
     /// Una COPIA del keymap efectivo del listado.
     ///
     /// El resolver se queda con el suyo, y construir el panel de
@@ -811,6 +819,8 @@ impl Estado {
             sequence: 0,
             token: 0,
             locale,
+            paleta: None,
+            efectivo_visor: keymap_visor.clone(),
             efectivo: keymap.clone(),
             lang,
             whichkey: None,
@@ -1169,6 +1179,12 @@ impl Estado {
         // cambiarle el teclado de mapa sin gesto suyo. (Un segundo F3 pide su
         // propia lectura y se queda con el testigo nuevo.)
         self.visor_en_vuelo = None;
+        // Con la PALETA abierta, las teclas son suyas: es un editor de texto
+        // libre, y no hay vocabulario `dialog.*` para «teclear un carácter» o
+        // «correr lo seleccionado» (mismo criterio que el TUI).
+        if self.paleta.is_some() {
+            return self.tecla_en_paleta(k, backend, buzon);
+        }
         // Con el buscador abierto, las teclas de TEXTO son suyas. Es el
         // contexto de entrada del listado, y dejar que el resolver se las
         // quede convertiría teclear «d» en «borrar».
@@ -1280,6 +1296,73 @@ impl Estado {
     /// función, un atajo con modificador): abrir el buscador NO desconecta el
     /// resto del teclado, solo se queda el texto, el borrado y las tres
     /// teclas que lo gobiernan.
+    /// Las teclas mientras la paleta está abierta.
+    ///
+    /// Fijas a propósito: `esc` cierra, `enter` corre lo seleccionado, las
+    /// flechas mueven y lo demás teclea. Es lo mismo que hace el TUI, y por
+    /// el mismo motivo — el catálogo no tiene comandos para esto.
+    fn tecla_en_paleta(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(p) = self.paleta.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let alto = 10;
+        match k.key.as_str() {
+            "Escape" | "esc" => {
+                self.paleta = None;
+            }
+            "Enter" | "enter" => {
+                let elegido = p.selected();
+                self.paleta = None;
+                if let Some(cmd) = elegido {
+                    // Se ejecuta por el MISMO camino que una tecla: la
+                    // paleta es otra puerta al catálogo, no un segundo
+                    // despachador.
+                    let Some(efecto) = efecto_de(&cmd, 1) else {
+                        return self.no_implementado(&cmd);
+                    };
+                    return self.aplicar_efecto(efecto, backend, buzon);
+                }
+            }
+            "ArrowDown" | "down" => p.down(),
+            "ArrowUp" | "up" => p.up(),
+            "PageDown" | "pgdn" => p.page_down(alto),
+            "PageUp" | "pgup" => p.page_up(alto),
+            "Backspace" | "backspace" => p.backspace(),
+            otra => {
+                // Una tecla de TEXTO es un punto de código, no una unidad
+                // UTF-16 ni un nombre de tecla: `ArrowLeft` no se teclea.
+                let mut chars = otra.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) if !k.ctrl && !k.alt && !k.meta => p.push_char(c),
+                    _ => return (self.aplicada(), Vec::new()),
+                }
+            }
+        }
+        let cambio = ViewChange::Palette {
+            palette: self.vista_paleta(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Un comando del catálogo que este host no ejecuta, dicho con la misma
+    /// frase que el TUI.
+    fn no_implementado(&mut self, cmd: &str) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let frase = norte_frontend::keymap::unavailable_message(cmd, Availability::NotHere);
+        self.status.message = Some(clamp_display(frase));
+        let cambio = ViewChange::Status(self.status.clone());
+        (
+            ActionAck::Unavailable {
+                reason_key: "cmd-not-here".to_owned(),
+            },
+            vec![self.parche(vec![cambio])],
+        )
+    }
+
     /// Las teclas mientras el visor está abierto.
     ///
     /// Resuelven con el mapa de la pantalla `viewer`, y lo que no está ligado
@@ -1572,6 +1655,18 @@ impl Estado {
                 if self.efectos == crate::commands::Efectos::SoloLectura =>
             {
                 Self::no_muta()
+            }
+            Efecto::Paleta => {
+                // Las filas se construyen AQUÍ, al abrir, y se congelan: es
+                // lo que el modelo compartido espera (pliega el haystack de
+                // cada fila una vez, no por tecla).
+                self.paleta = Some(norte_frontend::palette_state::Palette::new(
+                    self.filas_de_paleta(),
+                ));
+                let cambio = ViewChange::Palette {
+                    palette: self.vista_paleta(),
+                };
+                (self.aplicada(), vec![self.parche(vec![cambio])])
             }
             Efecto::Ver => self.pedir_visor(backend, buzon),
             Efecto::CrearDirectorio => self.pedir_mkdir(),
@@ -2699,6 +2794,7 @@ impl Estado {
             // viva. Lo mismo con el tablero.
             dialogs: self.vistas_de_dialogos(),
             tasks: self.vistas_de_tasks(),
+            palette: self.vista_paleta(),
             whichkey: self.vista_whichkey(),
             viewer: self.vista_visor(),
             locale: self.locale.clone(),
@@ -2715,6 +2811,55 @@ impl Estado {
         self.visor_filas
             .unwrap_or_else(|| usize::from(self.viewport.1.saturating_sub(2)))
             .max(1)
+    }
+
+    /// Las filas de la paleta: TODO lo que este host implementa.
+    ///
+    /// La descripción sale del catálogo Fluent compartido y el atajo del
+    /// keymap efectivo, igual que en el TUI: una paleta construida de una
+    /// lista a mano enseña atajos que el preset del usuario no tiene.
+    fn filas_de_paleta(&self) -> Vec<norte_frontend::palette::Row> {
+        use norte_frontend::palette::first_chord;
+        crate::commands::todos()
+            .into_iter()
+            .map(|cmd| norte_frontend::palette::Row {
+                key: cmd.to_owned(),
+                text: cmd.to_owned(),
+                desc: norte_i18n::t_in(self.lang, &format!("help-cmd-{}", cmd.replace('.', "-"))),
+                chord: first_chord(cmd, &self.efectivo)
+                    .or_else(|| first_chord(cmd, self.resolver_visor_efectivo()))
+                    .unwrap_or_else(|| "—".to_owned()),
+            })
+            .collect()
+    }
+
+    /// El efectivo del visor, para buscar el atajo de un comando suyo.
+    fn resolver_visor_efectivo(&self) -> &Effective {
+        &self.efectivo_visor
+    }
+
+    /// La proyección de la paleta.
+    fn vista_paleta(&self) -> Option<crate::dto::PaletteView> {
+        let p = self.paleta.as_ref()?;
+        let filas = p.rows();
+        let visibles = p.visible();
+        Some(crate::dto::PaletteView {
+            query: clamp_display(p.query_display()),
+            rows: visibles
+                .iter()
+                .filter_map(|i| filas.get(*i))
+                .map(|r| crate::dto::PaletteRowView {
+                    text: clamp_display(r.text.clone()),
+                    desc: clamp_display(r.desc.clone()),
+                    chord: clamp_display(r.chord.clone()),
+                    // Todo lo que la paleta ofrece lo implementa este host:
+                    // las filas salen de su propia lista.
+                    enabled: true,
+                })
+                .collect(),
+            cursor: (!visibles.is_empty()).then_some(p.cursor() as u64),
+            total: filas.len() as u64,
+        })
     }
 
     /// La proyección del panel de continuaciones.

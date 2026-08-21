@@ -361,6 +361,17 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         },
         dialogs: vec![dialogo_de_referencia()],
         tasks: vec![task_de_referencia()],
+        palette: Some(norte_ui_host::dto::PaletteView {
+            query: "orde".to_owned(),
+            rows: vec![norte_ui_host::dto::PaletteRowView {
+                text: "pane.sort-name".to_owned(),
+                desc: "Ordenar por nombre".to_owned(),
+                chord: "ctrl+f3".to_owned(),
+                enabled: true,
+            }],
+            cursor: Some(0),
+            total: 42,
+        }),
         whichkey: Some(norte_ui_host::dto::WhichKeyView {
             title: "ctrl+x".to_owned(),
             rows: vec![
@@ -502,93 +513,119 @@ fn nada_serializado_lleva_una_ruta_cruda() {
 /// nada se ponga rojo. Aquí la cobertura 1:1 es contra la lista de variantes.
 #[test]
 fn cada_cambio_cruza_el_bridge() {
-    check_family(
-        "changes.json",
-        &[
-            (
-                "connection",
-                ViewChange::Connection(ConnectionView::Lost {
-                    reason_key: "conn-lost".to_owned(),
-                }),
-            ),
-            (
-                "cursor",
-                ViewChange::Cursor {
-                    slot_id: 1,
-                    generation: 4,
-                    cursor: Some(RowKey(2)),
-                },
-            ),
-            (
-                "dialogs",
-                ViewChange::Dialogs {
-                    dialogs: vec![dialogo_de_referencia()],
-                },
-            ),
-            (
-                "columns",
-                ViewChange::Columns {
-                    slot_id: 1,
-                    columns: vec![ColumnHeader {
-                        id: "size".to_owned(),
-                        label: "Tamaño".to_owned(),
-                        sort: Some("desc".to_owned()),
-                        sortable: true,
+    let mut casos = cambios_del_listado();
+    casos.extend(cambios_de_pantalla());
+    check_family("changes.json", &casos);
+}
+
+/// Los que describen un LISTADO.
+fn cambios_del_listado() -> Vec<(&'static str, ViewChange)> {
+    vec![
+        (
+            "connection",
+            ViewChange::Connection(ConnectionView::Lost {
+                reason_key: "conn-lost".to_owned(),
+            }),
+        ),
+        (
+            "cursor",
+            ViewChange::Cursor {
+                slot_id: 1,
+                generation: 4,
+                cursor: Some(RowKey(2)),
+            },
+        ),
+        (
+            "dialogs",
+            ViewChange::Dialogs {
+                dialogs: vec![dialogo_de_referencia()],
+            },
+        ),
+        (
+            "columns",
+            ViewChange::Columns {
+                slot_id: 1,
+                columns: vec![ColumnHeader {
+                    id: "size".to_owned(),
+                    label: "Tamaño".to_owned(),
+                    sort: Some("desc".to_owned()),
+                    sortable: true,
+                }],
+            },
+        ),
+    ]
+}
+
+/// Los que describen la PANTALLA: disposición, overlays y estado global.
+fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
+    vec![
+        ("layout", ViewChange::Layout(disposicion_de_referencia())),
+        (
+            "rows",
+            ViewChange::Rows {
+                slot_id: 1,
+                generation: 5,
+                first_visible: 40,
+                rows: vec![fila(41, "otro.txt", false)],
+            },
+        ),
+        (
+            "slot_state",
+            ViewChange::SlotState {
+                slot_id: 1,
+                state: SlotState::Loading,
+            },
+        ),
+        (
+            "status",
+            ViewChange::Status(StatusView {
+                message: Some("2 entradas".to_owned()),
+                banners: Vec::new(),
+                pending: None,
+            }),
+        ),
+        (
+            "palette",
+            ViewChange::Palette {
+                palette: Some(norte_ui_host::dto::PaletteView {
+                    query: "orde".to_owned(),
+                    rows: vec![norte_ui_host::dto::PaletteRowView {
+                        text: "pane.sort-name".to_owned(),
+                        desc: "Ordenar por nombre".to_owned(),
+                        chord: "ctrl+f3".to_owned(),
+                        enabled: true,
                     }],
-                },
-            ),
-            ("layout", ViewChange::Layout(disposicion_de_referencia())),
-            (
-                "rows",
-                ViewChange::Rows {
-                    slot_id: 1,
-                    generation: 5,
-                    first_visible: 40,
-                    rows: vec![fila(41, "otro.txt", false)],
-                },
-            ),
-            (
-                "slot_state",
-                ViewChange::SlotState {
-                    slot_id: 1,
-                    state: SlotState::Loading,
-                },
-            ),
-            (
-                "status",
-                ViewChange::Status(StatusView {
-                    message: Some("2 entradas".to_owned()),
-                    banners: Vec::new(),
-                    pending: None,
+                    cursor: Some(0),
+                    total: 42,
                 }),
-            ),
-            (
-                "which_key",
-                ViewChange::WhichKey {
-                    whichkey: Some(norte_ui_host::dto::WhichKeyView {
-                        title: "ctrl+x".to_owned(),
-                        rows: vec![norte_ui_host::dto::WhichKeyRowView {
-                            chord: "g".to_owned(),
-                            label: "Ir al principio".to_owned(),
-                            enabled: true,
-                            opens_sequence: false,
-                            reason: String::new(),
-                        }],
-                    }),
-                },
-            ),
-            (
-                "viewer",
-                ViewChange::Viewer {
-                    viewer: Some(visor_de_referencia()),
-                },
-            ),
-            (
-                "tasks",
-                ViewChange::Tasks {
-                    tasks: vec![task_de_referencia()],
-                },
-            ),
-        ],
-    );
+            },
+        ),
+        (
+            "which_key",
+            ViewChange::WhichKey {
+                whichkey: Some(norte_ui_host::dto::WhichKeyView {
+                    title: "ctrl+x".to_owned(),
+                    rows: vec![norte_ui_host::dto::WhichKeyRowView {
+                        chord: "g".to_owned(),
+                        label: "Ir al principio".to_owned(),
+                        enabled: true,
+                        opens_sequence: false,
+                        reason: String::new(),
+                    }],
+                }),
+            },
+        ),
+        (
+            "viewer",
+            ViewChange::Viewer {
+                viewer: Some(visor_de_referencia()),
+            },
+        ),
+        (
+            "tasks",
+            ViewChange::Tasks {
+                tasks: vec![task_de_referencia()],
+            },
+        ),
+    ]
 }

@@ -66,6 +66,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.focus-next",
     "layout.focus-prev",
     "layout.set-target",
+    "app.palette",
     "pane.view",
     "pane.quick-search",
     "pane.mkdir",
@@ -195,6 +196,8 @@ pub enum Efecto {
     },
     /// Designa OTRO hueco como destino de la siguiente operación.
     Destino,
+    /// Abre la paleta de comandos.
+    Paleta,
     /// Abre el visor sobre la entrada bajo el cursor.
     Ver,
     /// Abre el buscador incremental del listado.
@@ -240,6 +243,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.switch" | "layout.focus-next" => Efecto::Foco { atras: false },
         "layout.focus-prev" => Efecto::Foco { atras: true },
         "layout.set-target" => Efecto::Destino,
+        "app.palette" => Efecto::Paleta,
         "pane.view" => Efecto::Ver,
         "pane.quick-search" => Efecto::BuscarRapido,
         "pane.mkdir" => Efecto::CrearDirectorio,

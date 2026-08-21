@@ -9,6 +9,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window has a command palette.** Bridge version **8**: `Ctrl+P` opens
+  every command this frontend implements, each with what it does in the
+  reader's language and the shortcut the *user's own preset* binds to it —
+  never a hand-written list. Typing narrows over what is painted (name and
+  description, the way the terminal's palette folds it), the arrows move,
+  `Enter` runs the selection through the same path a keystroke takes, and
+  `Esc` closes without running anything. The model — filtering, cursor, what is
+  selected — moved out of `norte-tui` into `norte-frontend`, because two
+  frontends with two copies are two palettes that drift without anyone
+  noticing.
+
 - **A half-typed prefix shows what continues it.** Bridge version **7**: the
   window paints a which-key panel while a key sequence is pending — which key
   follows, what each one does in the reader's language, which ones open another

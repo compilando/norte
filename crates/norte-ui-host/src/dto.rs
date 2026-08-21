@@ -35,6 +35,8 @@ pub struct ViewSnapshot {
     pub dialogs: Vec<DialogView>,
     /// Tasks vivas y las que acaban de terminar.
     pub tasks: Vec<TaskView>,
+    /// La paleta de comandos, si está abierta.
+    pub palette: Option<PaletteView>,
     /// El panel de continuaciones, si hay un prefijo a medias.
     pub whichkey: Option<WhichKeyView>,
     /// El visor, si hay uno abierto. Ocupa la pantalla: mientras esté, las
@@ -42,6 +44,38 @@ pub struct ViewSnapshot {
     pub viewer: Option<ViewerView>,
     /// Idioma negociado, para que el renderer pida el catálogo correcto.
     pub locale: String,
+}
+
+/// La paleta de comandos abierta.
+///
+/// El filtrado, el cursor y qué está seleccionado los decide
+/// `norte_frontend::palette_state`, el mismo modelo que el TUI: teclear para
+/// acotar una lista es una regla de presentación, y dos copias son dos
+/// paletas que se comportan distinto sin que nadie lo note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaletteView {
+    /// Lo tecleado, ya saneado para pintar.
+    pub query: String,
+    /// Las filas que CASAN, en orden.
+    pub rows: Vec<PaletteRowView>,
+    /// Cuál está seleccionada, si hay alguna.
+    pub cursor: Option<u64>,
+    /// Cuántas filas hay en total, para decir cuánto se está acotando.
+    pub total: u64,
+}
+
+/// Un comando ofrecido por la paleta.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaletteRowView {
+    /// Lo que se enseña (el nombre del comando, o el título ya enmascarado
+    /// de un comando de plugin). NUNCA la clave de despacho.
+    pub text: String,
+    /// Qué hace, en el idioma del usuario.
+    pub desc: String,
+    /// El atajo que lo corre, o `—` si no tiene ninguno en este preset.
+    pub chord: String,
+    /// Este frontend puede ejecutarlo.
+    pub enabled: bool,
 }
 
 /// Lo que puede seguir a un prefijo a medias.
@@ -487,6 +521,11 @@ pub enum ViewChange {
         slot_id: u32,
         /// Las cabeceras, en su orden.
         columns: Vec<ColumnHeader>,
+    },
+    /// La paleta se abrió, se filtró, se movió o se cerró.
+    Palette {
+        /// La paleta, o `None` si se cerró.
+        palette: Option<PaletteView>,
     },
     /// El panel de continuaciones apareció, cambió o se fue.
     WhichKey {

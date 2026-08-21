@@ -76,6 +76,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     status: { message: "2 entradas", banners: [], pending: null },
     dialogs: [],
     tasks: [],
+    palette: null,
     whichkey: null,
     viewer: null,
     locale: "es",
@@ -85,15 +86,22 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
 function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
   document.body.replaceChildren();
   const root = document.createElement("main");
+  const palette = document.createElement("div");
   const whichkey = document.createElement("div");
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
-  document.body.append(root, whichkey, viewer, dialogs);
+  document.body.append(root, palette, whichkey, viewer, dialogs);
   document.documentElement.style.setProperty("--cell-h", `${CELL_H}px`);
   document.documentElement.style.setProperty("--cell-w", "8px");
   const enviadas: UiAction[] = [];
-  const screen = new Screen(root, whichkey, viewer, dialogs, catalogo(), (a: UiAction) =>
-    enviadas.push(a),
+  const screen = new Screen(
+    root,
+    palette,
+    whichkey,
+    viewer,
+    dialogs,
+    catalogo(),
+    (a: UiAction) => enviadas.push(a),
   );
   return { screen, enviadas, root };
 }
@@ -521,5 +529,59 @@ describe("which-key", () => {
     const { screen } = montar();
     screen.paint(vista({}));
     expect(document.querySelector(".whichkey")).toBeNull();
+  });
+});
+
+describe("la paleta", () => {
+  function conPaleta(cursor: number | null) {
+    const v = vista({});
+    v.palette = {
+      query: "cur",
+      rows: [
+        { text: "cursor.up", desc: "subir el cursor", chord: "Up", enabled: true },
+        { text: "cursor.down", desc: "bajar el cursor", chord: "Down", enabled: true },
+      ],
+      cursor,
+      total: 24,
+    };
+    return v;
+  }
+
+  it("es modal, dice cuánto acota y marca la selección", () => {
+    const { screen } = montar();
+    screen.paint(conPaleta(1));
+    const caja = document.querySelector(".palette") as HTMLElement;
+    expect(caja.getAttribute("aria-modal")).toBe("true");
+    expect(document.querySelector(".palette-count")?.textContent).toBe("2/24");
+    const lista = document.querySelector(".palette-rows") as HTMLElement;
+    expect(lista.getAttribute("aria-activedescendant")).toBe("palette-row-1");
+    const sel = document.querySelectorAll('.palette-row[aria-selected="true"]');
+    expect(sel).toHaveLength(1);
+    expect(sel[0]?.textContent).toContain("cursor.down");
+  });
+
+  it("cada fila enseña su atajo real", () => {
+    const { screen } = montar();
+    screen.paint(conPaleta(0));
+    const chords = [...document.querySelectorAll(".palette-chord")].map(
+      (c) => c.textContent,
+    );
+    expect(chords).toEqual(["Up", "Down"]);
+  });
+
+  it("sin coincidencias lo dice en vez de quedarse en blanco", () => {
+    const { screen } = montar();
+    const v = conPaleta(null);
+    if (v.palette !== null) {
+      v.palette.rows = [];
+    }
+    screen.paint(v);
+    expect(document.querySelector(".palette-rows .empty")).not.toBeNull();
+  });
+
+  it("cerrada, no tapa nada", () => {
+    const { screen } = montar();
+    screen.paint(vista({}));
+    expect(document.querySelector(".palette")).toBeNull();
   });
 });

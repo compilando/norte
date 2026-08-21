@@ -21,6 +21,7 @@ import type {
   TaskView,
   UiAction,
   ViewSnapshot,
+  PaletteView,
   ViewerView,
   WhichKeyView,
 } from "./types";
@@ -57,6 +58,7 @@ export class Screen {
 
   constructor(
     private readonly root: HTMLElement,
+    private readonly paletteRoot: HTMLElement,
     private readonly whichKeyRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
@@ -97,9 +99,73 @@ export class Screen {
       dom.root.setAttribute("aria-current", p.role === "active" ? "true" : "false");
       this.paintSlot(dom, slot, view, cell);
     }
+    this.paintPalette(view.palette);
     this.paintWhichKey(view.whichkey);
     this.paintViewer(view.viewer);
     this.paintDialogs(view.dialogs);
+  }
+
+  /** La paleta de comandos. */
+  private paintPalette(palette: PaletteView | null): void {
+    if (palette === null) {
+      this.paletteRoot.replaceChildren();
+      this.paletteRoot.dataset["open"] = "false";
+      return;
+    }
+    this.paletteRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "palette";
+    // Modal: mientras está abierta, las teclas son suyas — y el host lo
+    // sabe, así que el lector de pantalla debe saberlo también.
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", this.t("palette-title"));
+
+    const query = document.createElement("div");
+    query.className = "palette-query";
+    query.textContent = palette.query;
+    const cuenta = document.createElement("span");
+    cuenta.className = "palette-count";
+    cuenta.textContent = `${String(palette.rows.length)}/${String(palette.total)}`;
+    query.append(cuenta);
+    caja.append(query);
+
+    const lista = document.createElement("ul");
+    lista.className = "palette-rows";
+    lista.setAttribute("role", "listbox");
+    for (const [i, r] of palette.rows.entries()) {
+      const fila = document.createElement("li");
+      fila.className = "palette-row";
+      fila.id = `palette-row-${String(i)}`;
+      fila.setAttribute("role", "option");
+      fila.setAttribute("aria-selected", String(palette.cursor === i));
+      fila.dataset["enabled"] = String(r.enabled);
+      const texto = document.createElement("span");
+      texto.className = "palette-text";
+      texto.textContent = r.text;
+      const desc = document.createElement("span");
+      desc.className = "palette-desc";
+      desc.textContent = r.desc;
+      const chord = document.createElement("span");
+      chord.className = "palette-chord";
+      chord.textContent = r.chord;
+      fila.append(texto, desc, chord);
+      lista.append(fila);
+    }
+    if (palette.cursor !== null) {
+      lista.setAttribute(
+        "aria-activedescendant",
+        `palette-row-${String(palette.cursor)}`,
+      );
+    }
+    if (palette.rows.length === 0) {
+      const vacio = document.createElement("li");
+      vacio.className = "empty";
+      vacio.textContent = this.t("palette-empty");
+      lista.append(vacio);
+    }
+    caja.append(lista);
+    this.paletteRoot.replaceChildren(caja);
   }
 
   /** Lo que puede seguir a un prefijo a medias. */

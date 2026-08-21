@@ -18,12 +18,14 @@ export interface Metrics {
 
 export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const screenEl = doc.getElementById("screen");
+  const paletteEl = doc.getElementById("palette");
   const whichKeyEl = doc.getElementById("whichkey");
   const viewerEl = doc.getElementById("viewer");
   const dialogsEl = doc.getElementById("dialogs");
   const fatalEl = doc.getElementById("fatal");
   if (
     screenEl === null ||
+    paletteEl === null ||
     whichKeyEl === null ||
     viewerEl === null ||
     dialogsEl === null ||
@@ -65,7 +67,15 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
         console.error("el host no aceptó la acción:", e);
       });
   };
-  const screen = new Screen(screenEl, whichKeyEl, viewerEl, dialogsEl, catalog, send);
+  const screen = new Screen(
+    screenEl,
+    paletteEl,
+    whichKeyEl,
+    viewerEl,
+    dialogsEl,
+    catalog,
+    send,
+  );
 
   const repaint = (): void => {
     const view = session.view();

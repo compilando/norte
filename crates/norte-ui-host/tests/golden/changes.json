@@ -75,6 +75,22 @@
       }
     ]
   },
+  "palette": {
+    "change": "palette",
+    "palette": {
+      "cursor": 0,
+      "query": "orde",
+      "rows": [
+        {
+          "chord": "ctrl+f3",
+          "desc": "Ordenar por nombre",
+          "enabled": true,
+          "text": "pane.sort-name"
+        }
+      ],
+      "total": 42
+    }
+  },
   "rows": {
     "change": "rows",
     "first_visible": 40,

@@ -148,6 +148,9 @@ export class Session {
       case "which_key":
         s.whichkey = c.whichkey;
         return true;
+      case "palette":
+        s.palette = c.palette;
+        return true;
       case "layout": {
         s.layout = { cells: c.cells, placements: c.placements };
         // El foco es de quien tenga el papel `active`, y lo dice el host.
