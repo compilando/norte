@@ -179,6 +179,37 @@ pub trait HostBackend: Send + Sync + 'static {
         id: String,
     ) -> BoxFuture<'static, Result<methods::PluginGetConfigResult, Error>>;
 
+    /// Las DECORACIONES que los plugins ponen sobre un lote de rutas.
+    ///
+    /// Cosmético y fail-soft por contrato: sin decoradores consentidos, con
+    /// el catálogo caído o con la RPC rota, la respuesta es «ninguna» y el
+    /// listado se pinta igual. Una insignia que no llega no puede tumbar una
+    /// pantalla.
+    ///
+    /// El lote es la VENTANA VISIBLE, no el directorio: cada llamada levanta
+    /// una instancia de wasm por plugin (#224 midió 167 ms por página de 20
+    /// sobre 2000 entradas), así que pedirlas para lo que no se ve es pagar
+    /// ese precio por nada.
+    fn plugin_decorate(
+        &self,
+        paths: Vec<VPath>,
+    ) -> BoxFuture<'static, Result<Vec<methods::PluginDecorations>, Error>>;
+
+    /// Los valores de UNA columna aportada por un plugin, para un lote.
+    ///
+    /// La forma «sin datos» es un vector de `None` del TAMAÑO de `paths`, no
+    /// un vector vacío: el contrato es posicional y quien lo consume espera
+    /// siempre una celda por ruta, también cuando la columna no aplica.
+    ///
+    /// Fail-soft igual que [`Self::plugin_decorate`]: una columna que falla
+    /// se queda en blanco, jamás convierte el listado en un error.
+    fn plugin_column_values(
+        &self,
+        plugin: String,
+        column: String,
+        paths: Vec<VPath>,
+    ) -> BoxFuture<'static, Result<Vec<Option<String>>, Error>>;
+
     /// Los volúmenes del HOST: discos, montajes de red, medios extraíbles.
     ///
     /// No es una llamada de provider y por eso no vive en la familia `fs.*`:
@@ -323,6 +354,24 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<methods::PluginGetConfigResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.plugin_get_config(&id).await })
+    }
+
+    fn plugin_decorate(
+        &self,
+        paths: Vec<VPath>,
+    ) -> BoxFuture<'static, Result<Vec<methods::PluginDecorations>, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.plugin_decorate(&paths).await })
+    }
+
+    fn plugin_column_values(
+        &self,
+        plugin: String,
+        column: String,
+        paths: Vec<VPath>,
+    ) -> BoxFuture<'static, Result<Vec<Option<String>>, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.plugin_column_values(&plugin, &column, &paths).await })
     }
 
     fn search(

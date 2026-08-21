@@ -25,6 +25,9 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **18**: una fila puede llevar la INSIGNIA que un plugin le puso, con el
+///   rol del tema con el que pintarla, y una columna `plugin:` trae su valor.
+///   Se piden solo para la VENTANA visible.
 /// - **17**: la barra lateral y el selector llevan GENERACIÓN, y un click con
 ///   una que no case se rechaza. Rompe: los volúmenes llegan de una tarea de
 ///   fondo y se insertan en medio de la lista, así que un índice desnudo
@@ -63,7 +66,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 17;
+pub const BRIDGE_VERSION: u32 = 18;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

@@ -6313,3 +6313,172 @@ fn sin_peligro(pintado: &str, id: &str, donde: &str) {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Decoraciones y columnas de plugin (tarea 4.2).
+// ---------------------------------------------------------------------------
+
+/// Un backend con `n` entradas, una insignia en la primera y una columna de
+/// plugin con valor para todas.
+fn arbol_grande_con_plugins(n: usize) -> Arc<Falso> {
+    let nombres: Vec<(Vec<u8>, bool)> = (0..n)
+        .map(|i| (format!("f{i:05}.txt").into_bytes(), false))
+        .collect();
+    let mut f = Falso::default();
+    f.arbol.insert("mem:///casa".to_owned(), nombres);
+    f.decoraciones
+        .insert("mem:///casa/f00000.txt".to_owned(), "M".to_owned());
+    f.plugins = vec![{
+        let mut p = extension("acme.git", "Git", true);
+        // DECLARADA en el catálogo: `validated_plugin_requests` no pide una
+        // columna que su plugin no dice tener, para no atribuirla a quien no
+        // es.
+        p.columns = vec![norte_proto::methods::PluginColumnInfo {
+            id: "status".to_owned(),
+            header: "Estado".to_owned(),
+        }];
+        p
+    }];
+    for i in 0..n {
+        f.valores_de_columna.insert(
+            ("status".to_owned(), format!("mem:///casa/f{i:05}.txt")),
+            "limpio".to_owned(),
+        );
+    }
+    Arc::new(f)
+}
+
+/// Solo se le pregunta a los plugins por lo que se VE.
+///
+/// Cada llamada levanta una instancia de wasm por plugin: #224 midió 167 ms
+/// por página de 20 sobre 2000 entradas. Preguntar por el directorio entero
+/// multiplica ese precio por el tamaño del directorio, y para nada — el
+/// renderer solo puede pintar su ventana. Es donde esto se separa del TUI,
+/// que decora todo lo cargado porque su pane no declara ventana.
+#[tokio::test]
+async fn a_los_plugins_solo_se_les_pregunta_por_la_ventana() {
+    const TOTAL: usize = 2000;
+    let backend = arbol_grande_con_plugins(TOTAL);
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: columnas_de(&["name", "size", "plugin:acme.git/status"]),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+
+    h.dispatch(UiAction::SetVisibleRange {
+        slot_id: 1,
+        first: 0,
+        count: 20,
+    })
+    .await
+    .expect("host vivo");
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let _ = siguiente_foto(&mut sub).await;
+    }
+
+    let lotes = backend.decorados.lock().expect("mutex").clone();
+    assert!(!lotes.is_empty(), "se pregunta a los plugins");
+    for lote in &lotes {
+        assert!(
+            lote.len() <= 20,
+            "un lote de {} rutas sobre {TOTAL} entradas: se está pidiendo más \
+             que la ventana",
+            lote.len()
+        );
+    }
+    let pedidas: usize = lotes.iter().map(Vec::len).sum();
+    assert!(
+        pedidas <= 40,
+        "en total se pidieron {pedidas} de {TOTAL}: la ventana es 20"
+    );
+
+    // Y la columna de plugin viaja por el mismo lote, no por otro barrido.
+    let cols = backend.columnas_pedidas.lock().expect("mutex").clone();
+    assert!(!cols.is_empty(), "la columna configurada se pide");
+    for (plugin, columna, paths) in &cols {
+        assert_eq!(plugin, "acme.git");
+        assert_eq!(columna, "status");
+        assert!(
+            paths.len() <= 20,
+            "la columna se pide para {} rutas, no para la ventana",
+            paths.len()
+        );
+    }
+}
+
+/// La insignia y el valor de columna llegan a la fila, marcados como lo que
+/// son: texto de un TERCERO.
+#[tokio::test]
+async fn la_insignia_de_un_plugin_llega_a_la_fila() {
+    let backend = arbol_grande_con_plugins(3);
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: columnas_de(&["name", "plugin:acme.git/status"]),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+
+    // Lo que hace el renderer nada más montarse. El arranque NO adorna ni
+    // sondea: espera a que se declare la ventana, igual que con los tamaños
+    // —pedir por una ventana inventada es pedir de más—.
+    h.dispatch(UiAction::SetVisibleRange {
+        slot_id: 1,
+        first: 0,
+        count: 10,
+    })
+    .await
+    .expect("host vivo");
+
+    let mut adornada = None;
+    for _ in 0..30 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        let b = listado(&foto);
+        if let Some(f) = b.rows.iter().find(|r| !r.badge.is_empty()) {
+            adornada = Some(f.clone());
+            break;
+        }
+    }
+    let fila = adornada.expect("la insignia llega a la fila");
+    assert_eq!(fila.display_name, "f00000.txt");
+    assert_eq!(fila.badge, "M");
+    assert_eq!(
+        fila.badge_role, "warning",
+        "el rol viene del vocabulario CERRADO del tema, no de una cadena \
+         libre que el plugin elija"
+    );
+
+    // Y la celda de la columna del plugin.
+    let celda = fila
+        .cells
+        .iter()
+        .find(|c| c.column == "plugin:acme.git/status")
+        .expect("la columna configurada tiene su celda");
+    assert_eq!(celda.text.as_deref(), Some("limpio"));
+}

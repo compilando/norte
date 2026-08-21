@@ -485,6 +485,7 @@ mod entry_item_columns_tests {
         };
         let deco = norte_frontend::Decoration {
             badge: Some("全全全全全全全全".to_owned()),
+            badge_hostile: false,
             role: None,
         };
         let theme = TuiTheme::default();

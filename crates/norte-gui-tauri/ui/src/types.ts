@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 17;
+export const BRIDGE_VERSION = 18;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -58,6 +58,15 @@ export interface RowView {
   selected: boolean;
   marked: boolean;
   cells: CellView[];
+  /** La insignia que un plugin puso, ya enmascarada. Vacía = ninguna. */
+  badge: string;
+  /** La insignia se pinta DISTINTO de lo que es: la escribe un plugin. */
+  badge_hostile: boolean;
+  /**
+   * El rol del tema con el que pintarla (`warning`, `error`…). Vacío =
+   * ninguno. Es un vocabulario CERRADO: un plugin no elige su propio color.
+   */
+  badge_role: string;
 }
 
 export type SlotState =

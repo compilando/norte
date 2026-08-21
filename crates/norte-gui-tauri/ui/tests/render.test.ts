@@ -42,6 +42,9 @@ function fila(key: number, nombre: string, extra: Partial<RowView> = {}): RowVie
     selected: false,
     marked: false,
     cells: [{ column: "size", text: "1.2 KiB" }],
+    badge: "",
+    badge_hostile: false,
+    badge_role: "",
     ...extra,
   };
 }
@@ -560,6 +563,46 @@ describe("el campo de texto de un diálogo", () => {
     screen.paint(conDialogo("caf\ufffde.txt", true));
     const aviso = document.querySelector('.dialog [role="alert"]');
     expect(aviso).not.toBeNull();
+  });
+});
+
+describe("la insignia de un plugin en una fila", () => {
+  it("va en su propio nodo, con el rol del tema y sin tocar el nombre", () => {
+    const { screen } = montar();
+    const v = vista({});
+    const slot = v.slots[0];
+    if (slot?.kind === "browser") {
+      slot.rows = [
+        fila(1, "limpio.rs"),
+        fila(2, "cambiado.rs", { badge: "M", badge_role: "warning" }),
+      ];
+      slot.total_rows = 2;
+    }
+    screen.paint(v);
+    const filas = [...document.querySelectorAll(".row")];
+    expect(filas[0]?.querySelector(".cell-badge")).toBeNull();
+    const marca = filas[1]?.querySelector(".cell-badge");
+    expect(marca?.textContent).toBe("M");
+    // El ROL, no un color que el plugin elija.
+    expect(marca?.getAttribute("data-role")).toBe("warning");
+    // Y en su propio nodo: unirla al nombre deja que una reordene a la otra.
+    expect(filas[1]?.querySelector(".cell-name")?.textContent).toBe("cambiado.rs");
+  });
+
+  it("una insignia que se pinta distinta de lo que es lo DICE", () => {
+    const { screen } = montar();
+    const v = vista({});
+    const slot = v.slots[0];
+    if (slot?.kind === "browser") {
+      slot.rows = [
+        fila(1, "x.rs", { badge: "a\uFFFDb", badge_hostile: true, badge_role: "error" }),
+      ];
+      slot.total_rows = 1;
+    }
+    screen.paint(v);
+    const marca = document.querySelector(".cell-badge");
+    expect(marca?.getAttribute("data-hostile")).toBe("true");
+    expect(marca?.querySelector(".hostile-badge")).not.toBeNull();
   });
 });
 

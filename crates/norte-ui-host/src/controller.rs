@@ -277,6 +277,15 @@ enum Mensaje {
 /// Un enum aparte y no cinco variantes de [`Mensaje`]: el actor es un
 /// reparto, y cinco brazos que hacen lo mismo —comprobar que su superficie
 /// siga abierta y devolver parches— son un brazo con cinco casos.
+/// La respuesta de una tanda de decoración: qué hueco, qué directorio, las
+/// insignias por ruta y las celdas de cada columna `plugin:`.
+type Adornos = (
+    u32,
+    VPath,
+    std::collections::HashMap<VPath, norte_frontend::Decoration>,
+    std::collections::HashMap<String, std::collections::HashMap<VPath, String>>,
+);
+
 enum Fondo {
     /// El catálogo de plugins que pidió la AYUDA, para su lateral.
     PluginsDeAyuda(Result<norte_proto::methods::PluginListResult, Error>),
@@ -307,6 +316,11 @@ enum Fondo {
     Volumenes(u64, Result<Vec<norte_proto::methods::Volume>, Error>),
     /// Un lote de resultados, con la época de la búsqueda que lo pidió.
     Resultados(u64, Box<norte_proto::methods::SearchHits>),
+    /// Lo que los plugins dijeron de la ventana visible de un hueco.
+    ///
+    /// Insignias y valores de columna juntos: son la misma pregunta sobre las
+    /// mismas rutas y viajan en la misma respuesta.
+    Adornos(Box<Adornos>),
     /// La búsqueda de esta época ya tiene Task: este es su id.
     ///
     /// Llega por su cuenta y no dentro del primer lote porque puede no haber
@@ -680,6 +694,48 @@ fn clase_de_task(kind: norte_proto::TaskKind) -> &'static str {
     }
 }
 
+/// Los valores de las columnas `plugin:` CONFIGURADAS del esquema.
+///
+/// La validación de pertenencia y el dedupe de colisiones viven en el modelo
+/// COMPARTIDO (`validated_plugin_requests`): una sola definición para los dos
+/// frontends, y una colisión de id bare se queda en blanco antes que atribuir
+/// una columna al plugin equivocado.
+///
+/// Fail-soft POR COLUMNA: una que falla deja celdas vacías, jamás convierte
+/// el listado en un error. Y `superado` corta entre RPCs, porque una tanda a
+/// la que el listado ya relevó no tiene por qué gastar las que le quedan.
+async fn celdas_de_plugin(
+    backend: &Arc<dyn HostBackend>,
+    pedidas: &[(String, String)],
+    paths: &[VPath],
+    superado: impl Fn() -> bool,
+) -> std::collections::HashMap<String, std::collections::HashMap<VPath, String>> {
+    let mut out = std::collections::HashMap::new();
+    if pedidas.is_empty() {
+        return out;
+    }
+    let Ok(lista) = backend.plugin_list().await else {
+        return out;
+    };
+    for (plugin, columna) in
+        norte_frontend::columns::validated_plugin_requests(pedidas, &lista.plugins)
+    {
+        if superado() {
+            return out;
+        }
+        let crudos = backend
+            .plugin_column_values(plugin.clone(), columna.clone(), paths.to_vec())
+            .await
+            .unwrap_or_default();
+        let sanos = norte_frontend::columns::sanitize_column_values(paths, &crudos);
+        out.insert(
+            norte_frontend::columns::plugin_display_id(&plugin, &columna),
+            sanos,
+        );
+    }
+    out
+}
+
 fn ahora_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -732,6 +788,20 @@ struct Hueco {
     /// memoria, un `stat` que falla vuelve a pedirse en cada repintado y el
     /// sondeo se convierte en un bucle contra el daemon.
     sondeados: std::collections::HashSet<VPath>,
+    /// La decoración que los plugins pusieron sobre cada ruta.
+    ///
+    /// Por RUTA y no por índice: las decoraciones llegan asíncronas y el
+    /// listado se reordena por debajo, así que un índice nombraría otra fila
+    /// para cuando aterrizan.
+    adornos: std::collections::HashMap<VPath, norte_frontend::Decoration>,
+    /// Los valores de cada columna `plugin:`, por id de columna y ruta.
+    celdas_plugin: std::collections::HashMap<String, std::collections::HashMap<VPath, String>>,
+    /// Hay una tanda de decoración en vuelo para este hueco.
+    adornando: bool,
+    /// Las rutas que ya se pidieron decorar (hayan contestado o no). Misma
+    /// memoria que `sondeados` y por el mismo motivo: sin ella, un plugin
+    /// que no decora nada se vuelve a preguntar en cada repintado.
+    adornadas: std::collections::HashSet<VPath>,
 }
 
 /// Una búsqueda viva y lo que lleva encontrado.
@@ -1005,7 +1075,22 @@ impl Hueco {
             cancelar_sondeo: std::sync::Arc::default(),
             estado: SlotState::Loading,
             sondeados: std::collections::HashSet::new(),
+            adornos: std::collections::HashMap::new(),
+            celdas_plugin: std::collections::HashMap::new(),
+            adornando: false,
+            adornadas: std::collections::HashSet::new(),
         }
+    }
+
+    /// Olvida lo que los plugins dijeron: el listado es OTRO.
+    ///
+    /// Una insignia de `git status` de un directorio no puede sobrevivir a un
+    /// `cd`: la ruta sería otra y no casaría, pero la MEMORIA de «ya se pidió»
+    /// sí sobreviviría y dejaría el listado nuevo sin decorar para siempre.
+    fn olvidar_adornos(&mut self) {
+        self.adornos.clear();
+        self.celdas_plugin.clear();
+        self.adornadas.clear();
     }
 }
 
@@ -1352,6 +1437,11 @@ impl Estado {
             .store(true, std::sync::atomic::Ordering::SeqCst);
         hueco.cancelar_sondeo = std::sync::Arc::default();
         hueco.sondeando = false;
+        // Y lo mismo con lo que dijeron los plugins: la ruta de otro
+        // directorio no casaría, pero la memoria de «ya se pidió» sí, y
+        // dejaría el listado nuevo sin decorar para siempre.
+        hueco.olvidar_adornos();
+        hueco.adornando = false;
         match res {
             Ok(entradas) => {
                 hueco.pane.set_listing(dir, entradas);
@@ -1414,6 +1504,7 @@ impl Estado {
                 // Scroll = filas nuevas a la vista, y puede que sin tamaño
                 // todavía: el sondeo va con la ventana, no con el cursor.
                 self.sondear(slot_id, backend, buzon);
+                self.adornar(slot_id, backend, buzon);
                 (self.aplicada(), vec![self.parche_filas_de(slot_id)])
             }
             UiAction::SortBy { slot_id, column } => self.ordenar_por(*slot_id, column),
@@ -1853,6 +1944,7 @@ impl Estado {
         }
         self.aterriza_en(slot, dir, res);
         self.sondear(slot, backend, buzon);
+        self.adornar(slot, backend, buzon);
         // Un `cd` cambia la pantalla entera —directorio, filas, cursor,
         // marcas—, así que se manda una foto en vez de enumerar parches que
         // el renderer tendría que casar.
@@ -1873,7 +1965,44 @@ impl Estado {
         let (dir, slot, sondas) = datos;
         let u = self.aplicar_sondas(slot, &dir, &sondas)?;
         self.sondear(slot, backend, buzon);
+        self.adornar(slot, backend, buzon);
         Some(u)
+    }
+
+    /// Lo que los plugins dijeron, pegado al hueco que lo pidió.
+    ///
+    /// `None` si el hueco desapareció o si el listado es OTRO: pegar unas
+    /// insignias de un directorio a las filas de otro es exactamente el
+    /// fallo que la clave por RUTA evita, y aun así se comprueba el
+    /// directorio — las rutas de dos directorios distintos no casan, pero
+    /// gastar un parche entero para no pintar nada sí se puede evitar.
+    fn aplicar_adornos(&mut self, datos: Adornos) -> Option<BridgeEnvelope<UiUpdate>> {
+        let (slot, dir, adornos, celdas) = datos;
+        let hueco = self.huecos.get_mut(&slot)?;
+        hueco.adornando = false;
+        if *hueco.pane.dir() != dir {
+            return None;
+        }
+        if adornos.is_empty() && celdas.is_empty() {
+            // Ningún decorador consentido y ninguna columna de plugin. No es
+            // un fallo y no repinta nada.
+            return None;
+        }
+        hueco.adornos.extend(adornos);
+        for (columna, valores) in celdas {
+            hueco
+                .celdas_plugin
+                .entry(columna)
+                .or_default()
+                .extend(valores);
+        }
+        // Y al pane, que es quien las sirve: sus setters REEMPLAZAN, así que
+        // se le pasa el acumulado entero y no el lote.
+        hueco.pane.set_decorations(hueco.adornos.clone());
+        hueco.pane.set_plugin_columns(hueco.celdas_plugin.clone());
+        // Las FILAS, que es lo único que cambia: una insignia no mueve el
+        // cursor ni el directorio.
+        Some(self.parche_filas())
     }
 
     /// Un lote más del listado que se está drenando por detrás.
@@ -1886,6 +2015,7 @@ impl Estado {
         let (token, slot, batch) = datos;
         let u = self.aplicar_lote(slot, token, batch)?;
         self.sondear(slot, backend, buzon);
+        self.adornar(slot, backend, buzon);
         Some(u)
     }
 
@@ -3194,6 +3324,7 @@ impl Estado {
             Fondo::Resultados(epoca, lote) => {
                 self.aplicar_resultados(epoca, &lote).into_iter().collect()
             }
+            Fondo::Adornos(datos) => self.aplicar_adornos(*datos).into_iter().collect(),
             Fondo::BusquedaViva(epoca, id) => {
                 if let Some(b) = self.busqueda.as_mut()
                     && b.epoca == epoca
@@ -5019,6 +5150,89 @@ impl Estado {
     /// TUI lo hace desde su bucle, y esto es lo mismo con la ventana que el
     /// renderer declaró. La regla de QUÉ hace falta es la compartida
     /// (`needs_stat_at`), no una de aquí.
+    /// Pide a los plugins lo que quieran decir de la VENTANA VISIBLE.
+    ///
+    /// Dos cosas en un viaje —insignias y valores de columna `plugin:`—
+    /// porque son la misma pregunta sobre las mismas rutas, y el TUI ya lo
+    /// hace así.
+    ///
+    /// De la ventana y NO del listado, que es donde esto se separa del TUI:
+    /// el terminal decora «todas las entradas cargadas» porque su pane no
+    /// declara una ventana, y aquí el renderer sí la declara. Cada llamada
+    /// levanta una instancia de wasm por plugin y #224 midió **167 ms por
+    /// página de 20 sobre 2000 entradas**: pedirlo para lo que no se ve es
+    /// pagar ese precio por nada, multiplicado por el tamaño del directorio.
+    ///
+    /// Un hueco OCULTO no pregunta. Lo que no se ve no se trae, igual que su
+    /// listado.
+    ///
+    /// Todo fail-soft: sin decoradores consentidos, con el catálogo caído o
+    /// con la RPC rota, el listado se pinta igual y sin insignias. Una
+    /// decoración es cosmética por contrato (ADR 0037).
+    fn adornar(
+        &mut self,
+        slot: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        if self.oculto(slot) {
+            return;
+        }
+        let columnas = self
+            .huecos
+            .get(&slot)
+            .map(|h| self.columnas.plugin_ids_for(h.pane.dir().scheme()))
+            .unwrap_or_default();
+        let Some(hueco) = self.huecos.get_mut(&slot) else {
+            return;
+        };
+        // Una tanda por hueco, comprobada ANTES de elegir candidatos: al
+        // revés, los elegidos quedarían marcados como pedidos sin haberlo
+        // sido y no se pedirían nunca más. Es la misma trampa que `sondear`
+        // documenta, y se cae en ella igual de fácil.
+        if hueco.adornando {
+            return;
+        }
+        let primera = usize::try_from(hueco.primera_visible).unwrap_or(0);
+        let cuantas = usize::try_from(hueco.visibles).unwrap_or(0);
+        let candidatos: Vec<VPath> = hueco
+            .pane
+            .entries()
+            .iter()
+            .skip(primera)
+            .take(cuantas)
+            .map(|e| e.path.clone())
+            .filter(|p| !hueco.adornadas.contains(p))
+            .collect();
+        if candidatos.is_empty() {
+            return;
+        }
+        for p in &candidatos {
+            hueco.adornadas.insert(p.clone());
+        }
+        let dir = hueco.pane.dir().clone();
+        hueco.adornando = true;
+        let cancelar = hueco.cancelar_sondeo.clone();
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let crudas = backend
+                .plugin_decorate(candidatos.clone())
+                .await
+                .unwrap_or_default();
+            let adornos = norte_frontend::merge_decorations(&candidatos, &crudas);
+            let celdas = celdas_de_plugin(&backend, &columnas, &candidatos, || {
+                cancelar.load(std::sync::atomic::Ordering::SeqCst)
+            })
+            .await;
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::Adornos(Box::new((
+                    slot, dir, adornos, celdas,
+                ))))))
+                .await;
+        });
+    }
+
     fn sondear(
         &mut self,
         slot: u32,
@@ -5182,6 +5396,9 @@ impl Estado {
             .file_name()
             .map_or(&[][..], norte_proto::Segment::as_bytes);
         let (texto, hostil) = norte_frontend::display_name(bytes);
+        // Lo sirve el PANE, que re-enmascara al servir: el host acumula pero
+        // no es quien decide qué se pinta.
+        let adorno = hueco.pane.decoration_for(&e.path);
         RowView {
             key: RowKey(i as u64),
             display_name: clamp_display(texto),
@@ -5195,6 +5412,14 @@ impl Estado {
             selected: i == hueco.pane.cursor(),
             marked: hueco.pane.is_marked(e),
             cells: self.celdas(hueco, e),
+            badge: adorno
+                .and_then(|d| d.badge.clone())
+                .map(clamp_display)
+                .unwrap_or_default(),
+            badge_hostile: adorno.is_some_and(|d| d.badge_hostile),
+            badge_role: adorno
+                .and_then(|d| d.role)
+                .map_or_else(String::new, |r| r.as_kebab().to_owned()),
         }
     }
 

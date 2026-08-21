@@ -96,6 +96,9 @@
         "generation": 5,
         "rows": [
           {
+            "badge": "",
+            "badge_hostile": false,
+            "badge_role": "",
             "cells": [
               {
                 "column": "size",
@@ -536,6 +539,9 @@
         },
         "rows": [
           {
+            "badge": "",
+            "badge_hostile": false,
+            "badge_role": "",
             "cells": [
               {
                 "column": "size",
@@ -550,6 +556,9 @@
             "selected": false
           },
           {
+            "badge": "",
+            "badge_hostile": false,
+            "badge_role": "",
             "cells": [
               {
                 "column": "size",
@@ -562,13 +571,30 @@
             "kind": "file",
             "marked": false,
             "selected": false
+          },
+          {
+            "badge": "M",
+            "badge_hostile": false,
+            "badge_role": "warning",
+            "cells": [
+              {
+                "column": "size",
+                "text": "1.2 KiB"
+              }
+            ],
+            "display_name": "cambiado.rs",
+            "hostile": false,
+            "key": 3,
+            "kind": "file",
+            "marked": false,
+            "selected": false
           }
         ],
         "slot_id": 1,
         "state": {
           "state": "ready"
         },
-        "total_rows": 2
+        "total_rows": 3
       },
       {
         "fields": [

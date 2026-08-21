@@ -74,6 +74,22 @@ fn fila(key: u64, nombre: &str, hostile: bool) -> RowView {
             column: "size".to_owned(),
             text: Some("1.2 KiB".to_owned()),
         }],
+        badge: String::new(),
+        badge_hostile: false,
+        badge_role: String::new(),
+    }
+}
+
+/// La misma fila, con la insignia que le puso un plugin.
+///
+/// La insignia y su rol cruzan JSON aquí y en ningún otro sitio: son lo que
+/// un TERCERO pinta pegado a un nombre de fichero.
+fn fila_adornada(key: u64, nombre: &str) -> RowView {
+    RowView {
+        badge: "M".to_owned(),
+        badge_hostile: false,
+        badge_role: "warning".to_owned(),
+        ..fila(key, nombre, false)
     }
 }
 
@@ -438,11 +454,12 @@ fn slots_de_referencia() -> Vec<SlotView> {
             generation: 4,
             path_display: "⟨file⟩/home/oscar".to_owned(),
             path_hostile: false,
-            total_rows: Some(2),
+            total_rows: Some(3),
             first_visible: 0,
             rows: vec![
                 fila(1, "notas.txt", false),
                 fila(2, "caf\u{FFFD}.txt", true),
+                fila_adornada(3, "cambiado.rs"),
             ],
             cursor: Some(RowKey(1)),
             marks: 0,

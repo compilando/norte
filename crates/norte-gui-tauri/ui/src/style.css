@@ -16,6 +16,8 @@
   --status-bg: #191d24;
   --title-fg: #9fb6cc;
   --error-fg: #e06c75;
+  --warning-fg: #e5c07b;
+  --info-fg: #61afef;
 }
 
 * {
@@ -148,8 +150,20 @@ body {
   box-shadow: inset 3px 0 0 var(--mark-bg);
 }
 
-.cell-name {
+/* El nombre y lo que lo decora. Es el que CRECE, así que el nombre de dentro
+   se recorta con elipsis sin empujar fuera de la vista ni el △ de hostil ni
+   la insignia de un plugin — que desaparecerían en silencio, y una insignia
+   que desaparece dice lo contrario de lo que hay. */
+.name-block {
   flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  overflow: hidden;
+}
+
+.cell-name {
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   /* Un nombre en escritura RTL —hebreo, árabe— es legítimo y NO lleva
@@ -1507,4 +1521,28 @@ body {
 .extensions-key-domain,
 .extensions-meta > span {
   unicode-bidi: isolate;
+}
+
+/* La insignia que un PLUGIN pone en una fila. Su color sale del `data-role`,
+   que es vocabulario cerrado del tema: un plugin no elige el suyo. Aislada
+   porque es texto de tercero pegado a un nombre de fichero. */
+.cell-badge {
+  /* Dentro del bloque del nombre, justo detrás. No es una columna, y no se
+     encoge: el nombre es lo que cede sitio. */
+  flex: 0 0 auto;
+  margin-left: 6px;
+  unicode-bidi: isolate;
+  color: var(--title-fg);
+}
+
+.cell-badge[data-role="warning"] {
+  color: var(--warning-fg);
+}
+
+.cell-badge[data-role="error"] {
+  color: var(--error-fg);
+}
+
+.cell-badge[data-role="info"] {
+  color: var(--info-fg);
 }

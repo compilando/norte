@@ -29,6 +29,13 @@ pub const BADGE_MAX_CHARS: usize = 8;
 pub struct Decoration {
     /// Badge corto ya enmascarado y acotado, o `None` = sin badge.
     pub badge: Option<String>,
+    /// El badge se pinta DISTINTO de lo que es.
+    ///
+    /// Lo escribe un plugin y se pinta pegado a un nombre de fichero, que es
+    /// el sitio donde una diferencia entre lo que se ve y lo que hay importa
+    /// más. La marca se calculaba y se tiraba, como en otras seis
+    /// superficies de la ventana gráfica.
+    pub badge_hostile: bool,
     /// Rol semántico ya validado, o `None` = sin rol reconocido.
     pub role: Option<norte_theme::Role>,
 }
@@ -41,13 +48,23 @@ pub struct Decoration {
 /// re-interpretar — mismo criterio que ADR 0037 aplica a `SpanWire::role`).
 #[must_use]
 pub fn sanitize_decoration(w: &DecorationWire) -> Decoration {
+    let mut badge_hostile = false;
     let badge = w.badge.as_deref().and_then(|b| {
-        let (masked, _hostil) = crate::display_name(b.as_bytes());
+        let (masked, hostil) = crate::display_name(b.as_bytes());
         let truncated: String = masked.chars().take(BADGE_MAX_CHARS).collect();
-        (!truncated.is_empty()).then_some(truncated)
+        // La marca se queda solo si queda badge: un badge que se enmascara
+        // ENTERO a vacío no se pinta, y decir que lo pintado difiere de lo
+        // real cuando no se pinta nada es ruido.
+        let hay = !truncated.is_empty();
+        badge_hostile = hostil && hay;
+        hay.then_some(truncated)
     });
     let role = w.role.as_deref().and_then(norte_theme::Role::from_kebab);
-    Decoration { badge, role }
+    Decoration {
+        badge,
+        badge_hostile,
+        role,
+    }
 }
 
 /// Aplana la SUPERPOSICIÓN de decoradores del wire

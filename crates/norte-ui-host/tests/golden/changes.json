@@ -355,6 +355,9 @@
     "generation": 5,
     "rows": [
       {
+        "badge": "",
+        "badge_hostile": false,
+        "badge_role": "",
         "cells": [
           {
             "column": "size",

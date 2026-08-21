@@ -1026,6 +1026,11 @@ pub enum SlotState {
 }
 
 /// Una fila del listado.
+// Cuatro bools, y cada uno es un hecho INDEPENDIENTE que el renderer pinta
+// distinto: el nombre difiere de lo real, está bajo el cursor, está marcada,
+// su insignia difiere de lo real. No es un estado que se pueda plegar — el
+// lint apunta a parámetros y a máquinas de estado, no a una fila de wire.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RowView {
     /// Clave opaca, válida para esta generación.
@@ -1043,6 +1048,22 @@ pub struct RowView {
     pub marked: bool,
     /// Celdas de las columnas configuradas, en el orden de la cabecera.
     pub cells: Vec<CellView>,
+    /// La insignia que un plugin puso en esta fila, ya enmascarada y acotada.
+    /// Vacía = ninguna.
+    ///
+    /// Cosmética por contrato (ADR 0037): un decorador que no contesta, o un
+    /// catálogo caído, dejan la fila sin insignia y el listado igual.
+    pub badge: String,
+    /// La insignia se pinta DISTINTO de lo que es. La escribe un plugin y va
+    /// pegada a un nombre de fichero.
+    pub badge_hostile: bool,
+    /// El rol semántico que el plugin pidió para la fila (`warning`,
+    /// `error`…), del vocabulario CERRADO de `norte-theme`. Vacío = ninguno.
+    ///
+    /// Un nombre que no está en el vocabulario llega vacío, no crudo: el
+    /// renderer lo usa para elegir un color del tema, y una cadena libre ahí
+    /// sería un plugin eligiendo su propio estilo.
+    pub badge_role: String,
 }
 
 /// La cabecera de UNA columna.

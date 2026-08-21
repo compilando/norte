@@ -85,6 +85,12 @@ pub fn variables(theme: &Theme) -> BTreeMap<String, String> {
     poner("status-bg", Role::StatusBar, true);
     poner("title-fg", Role::Title, false);
     poner("error-fg", Role::Error, false);
+    // Los dos roles que una DECORACIÓN de plugin puede pedir además de
+    // `error`. Sin ellos, una insignia `warning` caía al color del título y
+    // era indistinguible de una `info`: el rol es vocabulario cerrado
+    // justamente para que signifique algo en pantalla.
+    poner("warning-fg", Role::Warning, false);
+    poner("info-fg", Role::Info, false);
     out
 }
 

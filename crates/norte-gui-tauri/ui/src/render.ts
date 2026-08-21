@@ -1874,10 +1874,40 @@ function updateRow(el: HTMLElement, row: RowView, index: number, rowH: number): 
   name.className = row.hostile ? "cell-name hostile" : "cell-name";
   name.setAttribute("role", "gridcell");
   name.textContent = row.display_name;
-  const nodes: Node[] = [name];
+  // El nombre y lo que lo decora, juntos y a la IZQUIERDA; las celdas de las
+  // columnas siguen a la derecha. El bloque es quien crece, así que el nombre
+  // se puede recortar con elipsis SIN llevarse por delante la insignia: el
+  // TUI, que no puede hacer eso, tiene que tirar la decoración entera cuando
+  // el nombre no cabe.
+  const bloque = document.createElement("span");
+  bloque.className = "name-block";
+  bloque.append(name);
+  const nodes: Node[] = [bloque];
   if (row.hostile) {
     // Un nombre que se pinta distinto del real se DICE. Nunca se esconde.
     name.append(badge("△"));
+  }
+  if (row.badge !== "") {
+    // Lo que un PLUGIN dice de esta fila, DENTRO del bloque del nombre y
+    // justo detrás, como en el TUI. Suelta entre el nombre y la primera
+    // celda flotaba a la derecha —`.cell-name` es `flex: 1`— y se leía como
+    // parte de la columna de tamaño: la misma insignia decía dos cosas
+    // distintas según quién pintara.
+    //
+    // En su propio NODO, no en el mismo texto: son dos datos de dos orígenes
+    // y `unicode-bidi: isolate` no separa dos cosas concatenadas.
+    //
+    // El color sale del ROL, vocabulario cerrado del tema: un plugin no
+    // elige el suyo.
+    const marca = document.createElement("span");
+    marca.className = "cell-badge";
+    marca.dataset["role"] = row.badge_role;
+    marca.dataset["hostile"] = String(row.badge_hostile);
+    marca.textContent = row.badge;
+    if (row.badge_hostile) {
+      marca.append(badge("△"));
+    }
+    bloque.append(marca);
   }
   for (const c of row.cells) {
     const cell = document.createElement("span");

@@ -53,6 +53,16 @@ pub struct Falso {
     /// El `help.md` de cada extensión, por id. Un id ausente contesta como
     /// un daemon que no tiene la página: markdown vacío.
     pub paginas: HashMap<String, String>,
+    /// La insignia que un decorador pone en cada ruta, por wire. Vacío =
+    /// NINGÚN decorador consentido, que es lo que contesta el daemon.
+    pub decoraciones: HashMap<String, String>,
+    /// Los lotes que se pidieron decorar, en orden. Es lo que permite
+    /// comprobar que solo se pide la VENTANA.
+    pub decorados: std::sync::Mutex<Vec<Vec<VPath>>>,
+    /// El valor de una columna de plugin, por `(columna, wire)`.
+    pub valores_de_columna: HashMap<(String, String), String>,
+    /// Lo que se pidió a `plugin.column_values`, en orden.
+    pub columnas_pedidas: std::sync::Mutex<Vec<(String, String, Vec<VPath>)>>,
     /// Lo que contesta una búsqueda, por patrón: `(glob, hallazgos)`.
     pub hallazgos: HashMap<String, Vec<VPath>>,
     /// Los patrones que se buscaron, en orden.
@@ -292,6 +302,58 @@ impl HostBackend for Falso {
                 },
                 rx,
             ))
+        })
+    }
+
+    fn plugin_decorate(
+        &self,
+        paths: Vec<VPath>,
+    ) -> BoxFuture<'static, Result<Vec<norte_proto::methods::PluginDecorations>, Error>> {
+        self.decorados
+            .lock()
+            .expect("mutex de decorados")
+            .push(paths.clone());
+        let tabla = self.decoraciones.clone();
+        Box::pin(async move {
+            if tabla.is_empty() {
+                // Sin decoradores consentidos: «ninguna», que es lo que
+                // contesta el daemon de verdad. NO una lista de vacíos.
+                return Ok(Vec::new());
+            }
+            Ok(vec![norte_proto::methods::PluginDecorations {
+                plugin_id: "acme.git".to_owned(),
+                decorations: paths
+                    .iter()
+                    .map(|p| {
+                        let d = tabla.get(&p.to_wire()).cloned();
+                        norte_proto::methods::DecorationWire {
+                            badge: d.clone(),
+                            role: d.map(|_| "warning".to_owned()),
+                        }
+                    })
+                    .collect(),
+            }])
+        })
+    }
+
+    fn plugin_column_values(
+        &self,
+        plugin: String,
+        column: String,
+        paths: Vec<VPath>,
+    ) -> BoxFuture<'static, Result<Vec<Option<String>>, Error>> {
+        self.columnas_pedidas
+            .lock()
+            .expect("mutex de columnas")
+            .push((plugin, column.clone(), paths.clone()));
+        let tabla = self.valores_de_columna.clone();
+        Box::pin(async move {
+            // Posicional 1:1 con `paths`, SIEMPRE: es el contrato, y un
+            // vector corto es la forma de romperlo sin que se note.
+            Ok(paths
+                .iter()
+                .map(|p| tabla.get(&(column.clone(), p.to_wire())).cloned())
+                .collect())
         })
     }
 

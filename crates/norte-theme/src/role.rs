@@ -135,11 +135,67 @@ impl Role {
     pub fn from_kebab(s: &str) -> Option<Role> {
         serde_json::from_value(serde_json::Value::String(s.to_owned())).ok()
     }
+
+    /// El nombre kebab de un rol: el inverso exacto de [`Self::from_kebab`].
+    ///
+    /// Hace falta para los frontends que no comparten memoria con el host —el
+    /// renderer gráfico recibe una CADENA, no un enum— y para que un rol que
+    /// cruza y vuelve sea el mismo rol.
+    ///
+    /// ```
+    /// use norte_theme::Role;
+    /// assert_eq!(Role::HostileBadge.as_kebab(), "hostile-badge");
+    /// assert_eq!(Role::from_kebab(Role::PaneBackground.as_kebab()), Some(Role::PaneBackground));
+    /// ```
+    ///
+    /// El `match` es exhaustivo y sin comodín, así que un rol nuevo deja de
+    /// compilar aquí; y `as_kebab_es_el_nombre_de_serde` comprueba, rol a rol
+    /// sobre [`Self::ALL`], que dice lo mismo que la serialización — que es
+    /// lo que impide que las dos tablas se separen.
+    #[must_use]
+    pub const fn as_kebab(self) -> &'static str {
+        match self {
+            Self::Background => "background",
+            Self::Regular => "regular",
+            Self::Selection => "selection",
+            Self::BorderFocus => "border-focus",
+            Self::BorderUnfocused => "border-unfocused",
+            Self::ModalBorder => "modal-border",
+            Self::StatusBar => "status-bar",
+            Self::Title => "title",
+            Self::HostileBadge => "hostile-badge",
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Info => "info",
+            Self::Match => "match",
+            Self::Mark => "mark",
+            Self::PaneBackground => "pane-background",
+            Self::PaneFocusBackground => "pane-focus-background",
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Role;
+
+    /// `as_kebab` dice lo MISMO que serde, rol a rol.
+    ///
+    /// Sin esto son dos tablas que se separan en el primer rol nuevo: el
+    /// `match` deja de compilar, sí, pero nada obliga a que el nombre que se
+    /// escriba allí sea el que sale por el cable.
+    #[test]
+    fn as_kebab_es_el_nombre_de_serde() {
+        for &role in Role::ALL {
+            let por_serde = serde_json::to_value(role).expect("serializa");
+            assert_eq!(
+                por_serde.as_str(),
+                Some(role.as_kebab()),
+                "{role:?} se llama distinto según quién pregunte"
+            );
+            assert_eq!(Role::from_kebab(role.as_kebab()), Some(role));
+        }
+    }
 
     #[test]
     fn from_kebab_todos_los_roles_hacen_roundtrip() {
