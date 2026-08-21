@@ -1537,6 +1537,26 @@ evidence. Renderer tests alone are insufficient.
 
 ### Task 5.1: mkdir, copy, move and delete
 
+> **DONE 2026-08-21** (`main b4b4e607`, bridge **23**, ADR **0070**). All four
+> operations go through confirmation, a daemon Task, the journal, the board,
+> cancellation and a refresh of the directories they changed. The renderer
+> names neither operand: `pane.copy` carries nothing, and Rust derives the
+> sources from the focused slot's marks and the destination from the slot
+> holding `RoleId::Target` — which now follows the shared rule of ADR 0058 D7
+> instead of a local one, so with several candidates and none designated the
+> transfer asks you to pick.
+>
+> Drag-and-drop has nothing to attach to yet: the renderer has no drag
+> handlers. When it grows them, the design already forces the right answer —
+> there is no action shape that carries a path, so a drop can only dispatch the
+> same pending transfer.
+>
+> Three reviews ran before the commit (`security-reviewer`, `encoding-auditor`,
+> `rust-reviewer`): one BLOCKER and eight MAJOR applied, four findings deferred
+> as issues #268–#271. Effects stay `SoloLectura` until task 5.4, and
+> `webview_boundary.rs` now pins that.
+
+
 For each operation:
 
 - derive selected paths in Rust from current slot state;
