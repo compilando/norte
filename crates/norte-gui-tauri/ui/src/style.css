@@ -468,6 +468,72 @@ body {
 /* El destino, separado del cuerpo y con su etiqueta: es OTRA cosa que las
    rutas de abajo, y distinguirlo por posición o por un separador dentro del
    texto es lo que permitía que un nombre de directorio simulara dos rutas. */
+/* La revisión de un plan de renombrado. Los dos nombres de una pareja van en
+   elementos hermanos y el separador lo pone ESTE archivo: un nombre puede
+   contener una flecha, y escrita en el texto la fila se leería como otra
+   pareja. */
+.ai-rename {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  min-width: 420px;
+  max-width: 80vw;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  padding: 12px;
+}
+
+#ai-rename[data-open="false"] {
+  display: none;
+}
+
+.ai-rename h2 {
+  margin: 0 0 8px;
+  font-size: 1em;
+  color: var(--title-fg);
+}
+
+.ai-rename p {
+  margin: 2px 0;
+  unicode-bidi: isolate;
+}
+
+.ai-rename-status[data-confirmable="false"] {
+  color: var(--hostile-fg);
+}
+
+.ai-rename-pairs {
+  margin: 8px 0;
+  padding-left: 2.5em;
+}
+
+.ai-rename-pair {
+  unicode-bidi: isolate;
+}
+
+.ai-rename-from,
+.ai-rename-to {
+  unicode-bidi: isolate;
+}
+
+/* El destino, en su propia línea y con su propio color: separarlo del origen
+   con una flecha en la MISMA línea lo separaba con un glifo que un nombre
+   puede contener. */
+.ai-rename-to {
+  padding-left: 1.5em;
+  color: var(--title-fg);
+}
+
+.ai-rename-to::before {
+  content: "→ ";
+}
+
+.ai-rename-more,
+.ai-rename-hint {
+  color: var(--dim-fg, var(--title-fg));
+}
+
 .dialog-destination {
   display: flex;
   gap: 6px;

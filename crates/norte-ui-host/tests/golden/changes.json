@@ -1,4 +1,36 @@
 {
+  "ai_rename": {
+    "change": "ai_rename",
+    "ai_rename": {
+      "dir": {
+        "text": "⟨file⟩/home/oscar/series",
+        "hostile": false
+      },
+      "pairs": [
+        {
+          "from": {
+            "text": "ep1.mkv",
+            "hostile": false
+          },
+          "to": {
+            "text": "caf�.mkv",
+            "hostile": true
+          }
+        }
+      ],
+      "first_visible": 0,
+      "total": 3,
+      "status": "lote: aplicable — una task, un deshacer",
+      "detail": [
+        {
+          "text": "✗ 2. ya existe: otro.mkv",
+          "hostile": false
+        }
+      ],
+      "confirmable": true,
+      "real_steps": 2
+    }
+  },
   "columns": {
     "change": "columns",
     "columns": [

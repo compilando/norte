@@ -1578,6 +1578,22 @@ delete, cancellation and daemon loss.
 
 ### Task 5.2: batch rename and AI rename plan
 
+> **DONE 2026-08-22** (bridge **24**, ADR 0070 extended). Single rename
+> (`shift+F6`) and the AI plan both land. The rules that matter: an untouched
+> name field sends the ORIGINAL BYTES and a touched one carrying U+FFFD is
+> refused; a plan is validated WHOLE before it is shown and the core's verdict
+> arrives in a second trip; approving sends the `plan_hash` the core returned.
+> A request carries its own directory, so a plan landing after the reader
+> navigated opens over the directory it was planned for — and one that arrives
+> after they closed the review does not reopen it.
+>
+> Two things this task did NOT build, deliberately: a MANUAL batch rename (the
+> TUI has no such surface either — the batch path is reached through the AI
+> plan) and `fs.rename_batch_report` beyond the `HostBackend` method. The
+> report is the only signal that a batch left the directory half-done, and
+> showing it belongs with the task board in 5.3.
+
+
 - manual batch rename plan and collision display;
 - AI plan request, journal precondition and limits;
 - review/edit/approve path;

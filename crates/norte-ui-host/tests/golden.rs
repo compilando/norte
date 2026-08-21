@@ -366,6 +366,36 @@ fn dialogo_de_referencia() -> DialogView {
     }
 }
 
+/// El plan de renombrado que clavan las fixtures.
+fn plan_ia_de_referencia() -> norte_ui_host::dto::AiRenameView {
+    use norte_ui_host::dto::{AiRenamePairView, AiRenameView, DialogLine};
+    AiRenameView {
+        dir: DialogLine {
+            text: "⟨file⟩/home/oscar/series".to_owned(),
+            hostile: false,
+        },
+        pairs: vec![AiRenamePairView {
+            from: DialogLine {
+                text: "ep1.mkv".to_owned(),
+                hostile: false,
+            },
+            to: DialogLine {
+                text: "caf\u{FFFD}.mkv".to_owned(),
+                hostile: true,
+            },
+        }],
+        first_visible: 0,
+        total: 3,
+        status: "lote: aplicable — una task, un deshacer".to_owned(),
+        detail: vec![DialogLine {
+            text: "✗ 2. ya existe: otro.mkv".to_owned(),
+            hostile: false,
+        }],
+        confirmable: true,
+        real_steps: 2,
+    }
+}
+
 /// La task que clavan las fixtures.
 fn task_de_referencia() -> TaskView {
     TaskView {
@@ -619,6 +649,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         columns: Some(columnas_de_referencia()),
         picker: Some(selector_de_referencia()),
         viewer: Some(visor_de_referencia()),
+        ai_rename: None,
         locale: "es".to_owned(),
     }
 }
@@ -1266,6 +1297,12 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
             "viewer",
             ViewChange::Viewer {
                 viewer: Some(visor_de_referencia()),
+            },
+        ),
+        (
+            "ai_rename",
+            ViewChange::AiRename {
+                ai_rename: Some(plan_ia_de_referencia()),
             },
         ),
         (

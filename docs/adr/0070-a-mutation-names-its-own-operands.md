@@ -212,6 +212,27 @@ For a graphical frontend over `norte-ui-host`:
 - Refreshing became something the reader does not notice, which also fixed the
   column picker's re-list — it shared the defect and nobody had looked.
 
+### Extended by task 5.2
+
+Renaming reached the same three rules from a different direction, and they are
+worth recording next to the ones above because the second one is not obvious:
+
+- **A single rename** (`shift+F6`) seeds its field with what the row PAINTS,
+  and an untouched field sends the ORIGINAL BYTES. The seed is a screen
+  projection and for a name that is not UTF-8 it is not reversible; a touched
+  field that still contains U+FFFD is refused. "Untouched" is recognised by
+  comparing against the seed rather than by a flag, because the renderer sends
+  the whole text on every event, not a delta.
+- **A plan proposed by a model** is validated whole before it is shown, and the
+  core's verdict is a second trip — so the review opens in a "checking" state
+  and fills itself in. Approving sends the `plan_hash` the core returned: what
+  executes is exactly what was displayed.
+- **A pending request carries its own directory.** A plan asked for `series/`
+  and landing while the reader is in `descargas/` would open promising to
+  rename what is on screen and rename something else. The epoch that discards a
+  stale answer is not enough on its own; the operand has to travel with the
+  request, which is the same rule as point 3 above one layer down.
+
 ### Negative
 
 - Bridge **22 → 23**, and old renderers break on purpose (ADR 0068). The four

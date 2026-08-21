@@ -25,6 +25,11 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **24**: la pantalla puede llevar un PLAN DE RENOMBRADO en revisión: las
+///   parejas que el modelo propone (de nombre a nombre, cada uno entero y por
+///   separado — nunca concatenados con una flecha), el veredicto del core y
+///   sus colisiones. Llega en dos tiempos: primero el plan, y el veredicto
+///   después, porque comprobarlo contra el directorio es otro viaje.
 /// - **23**: un diálogo deja de ser texto plano. Su cuerpo son LÍNEAS
 ///   ([`crate::dto::DialogLine`]), cada una diciendo si lo pintado difiere de
 ///   lo real; el DESTINO viaja en su propio campo y no como una línea con una
@@ -81,7 +86,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 23;
+pub const BRIDGE_VERSION: u32 = 24;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

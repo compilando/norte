@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 23;
+export const BRIDGE_VERSION = 24;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -200,6 +200,28 @@ export interface DialogView {
   choices: DialogChoice[];
   input: string | null;
   input_hostile: boolean;
+}
+
+/** Una pareja del plan: de qué nombre a qué nombre. */
+export interface AiRenamePairView {
+  from: DialogLine;
+  to: DialogLine;
+}
+
+/** El plan de renombrado que un modelo propuso, en revisión. */
+export interface AiRenameView {
+  dir: DialogLine;
+  /** La ventana que viaja, NO el plan entero. */
+  pairs: AiRenamePairView[];
+  first_visible: number;
+  total: number;
+  /** El veredicto del core, ya traducido. */
+  status: string;
+  /** Maquinaria y colisiones, cada línea con su marca. */
+  detail: DialogLine[];
+  /** Aprobar puede hacer algo. Lo dice el core. */
+  confirmable: boolean;
+  real_steps: number;
 }
 
 export type TaskStateView = "queued" | "running" | "done" | "failed" | "cancelled";
@@ -513,6 +535,7 @@ export interface ViewSnapshot {
   columns: ColumnsPickerView | null;
   picker: PickerView | null;
   viewer: ViewerView | null;
+  ai_rename: AiRenameView | null;
   locale: string;
 }
 
@@ -533,6 +556,7 @@ export type ViewChange =
   | ({ change: "layout" } & LayoutView)
   | { change: "columns"; slot_id: number; columns: ColumnHeader[] }
   | { change: "viewer"; viewer: ViewerView | null }
+  | { change: "ai_rename"; ai_rename: AiRenameView | null }
   | { change: "which_key"; whichkey: WhichKeyView | null }
   | { change: "palette"; palette: PaletteView | null }
   | { change: "help"; help: HelpView | null }

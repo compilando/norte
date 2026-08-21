@@ -67,6 +67,7 @@ pub const CONTEXTOS: &[&str] = &[
     "dialog.confirm",
     "dialog.approval",
     "dialog.mkdir",
+    "dialog.ai-rename",
 ];
 
 /// Plazo de una llamada de extensiones (catálogo o página).
@@ -352,6 +353,18 @@ enum Fondo {
     Volumenes(u64, Result<Vec<norte_proto::methods::Volume>, Error>),
     /// Un lote de resultados, con la época de la búsqueda que lo pidió.
     Resultados(u64, Box<norte_proto::methods::SearchHits>),
+    /// Lo que el modelo propuso, con la época de la petición que lo pidió.
+    PlanIa(
+        u64,
+        Box<Result<norte_proto::methods::AiRenamePlanResult, Error>>,
+    ),
+    /// El veredicto del core sobre ese plan, con la MISMA época: entre pedir
+    /// el uno y el otro el lector puede haber descartado la revisión, y un
+    /// veredicto sobre un plan que ya no está en pantalla no se aplica.
+    PlanDeLote(
+        u64,
+        Box<Result<norte_proto::methods::FsRenameBatchPlanResult, Error>>,
+    ),
     /// Lo que los plugins dijeron de la ventana visible de un hueco.
     ///
     /// Insignias y valores de columna juntos: son la misma pregunta sobre las
@@ -990,6 +1003,12 @@ enum Pendiente {
         /// Dónde se crea.
         dir: VPath,
     },
+    /// Pedirle a un modelo un plan de renombrado para este directorio. Lo
+    /// que se teclea es la INSTRUCCIÓN, no un nombre: no muta nada todavía.
+    InstruccionIa {
+        /// El directorio sobre el que planear.
+        dir: VPath,
+    },
     /// Renombrar UNA entrada dentro de su propio directorio.
     ///
     /// Lleva la SIEMBRA del campo, no solo la ruta, y esa es la pieza que
@@ -1038,6 +1057,30 @@ enum Pendiente {
         /// `true` = mover.
         mover: bool,
     },
+}
+
+/// El plan de renombrado que un modelo propuso, mientras se revisa.
+///
+/// Guarda las PAREJAS ya validadas y no el texto que contestó el daemon: la
+/// validación es un cinturón fail-loud (`norte_frontend::validate_ai_plan`) y
+/// una sola pareja que no sea un `Segment` legal tumba el lote entero, así
+/// que lo que sobrevive hasta aquí ya es aplicable byte a byte.
+struct RevisionIa {
+    /// El directorio sobre el que se planeó.
+    dir: VPath,
+    /// Lo que el modelo propuso, tal como lo contestó.
+    entradas: Vec<norte_proto::methods::AiRenameEntry>,
+    /// Las mismas parejas en la forma que pide el core. Es lo que se manda a
+    /// pedir el veredicto Y lo que se manda a ejecutar: los dos viajes llevan
+    /// la MISMA intención, que es lo que hace que el `plan_hash` valga.
+    parejas: Vec<norte_proto::methods::RenamePair>,
+    /// El veredicto del core. Nace `Pending` —la revisión abre y se rellena—
+    /// porque comprobarlo contra el directorio es otro viaje.
+    plan: norte_frontend::BatchPlan,
+    /// Primera pareja visible: la revisión es de todo el plan, por scroll.
+    primera: usize,
+    /// La época que la pidió.
+    epoca: u64,
 }
 
 /// Una task viva en el tablero.
@@ -1201,6 +1244,19 @@ struct Estado {
     /// El siguiente id de diálogo. Monótono: un id no se reutiliza jamás,
     /// que es lo que hace que «viejo» se pueda distinguir de «actual».
     siguiente_modal: u64,
+    /// El plan de renombrado en revisión, si lo hay.
+    revision_ia: Option<RevisionIa>,
+    /// La época de la revisión: sube en cada PETICIÓN y al abandonar una en
+    /// vuelo. Una respuesta con otra época llegó tarde y se descarta en Rust.
+    epoca_ia: u64,
+    /// La petición de plan EN VUELO: su época y el DIRECTORIO para el que se
+    /// pidió.
+    ///
+    /// El directorio viaja aquí y no se lee del hueco al aterrizar, porque
+    /// entre pedir el plan y que llegue el lector puede haber navegado: un
+    /// plan de `series/` abierto diciendo `descargas/` estaría prometiendo
+    /// renombrar lo que se ve, y renombraría otra cosa.
+    ia_en_vuelo: Option<(u64, VPath)>,
     /// El tablero: lo que está en marcha, por id de task.
     tasks: std::collections::BTreeMap<u64, TaskViva>,
     /// La sesión de UI: qué revisión se leyó, si esta ventana es su dueña, y
@@ -1372,6 +1428,9 @@ impl Estado {
             huecos,
             dialogos: Vec::new(),
             siguiente_modal: 1,
+            revision_ia: None,
+            epoca_ia: 0,
+            ia_en_vuelo: None,
             tasks: std::collections::BTreeMap::new(),
             sesion: Sesion {
                 revision: 0,
@@ -1904,6 +1963,14 @@ impl Estado {
         if self.ayuda.is_some() {
             return Some(self.tecla_en_ayuda(k, backend, buzon));
         }
+        // La REVISIÓN de un plan de renombrado va antes que el resto de
+        // overlays y solo por detrás del diálogo y de la ayuda: es una
+        // pantalla que se lee entera antes de aprobar una mutación, y una
+        // tecla que se le escapara al listado de debajo movería el cursor
+        // bajo un plan que sigue esperando un sí.
+        if self.revision_ia.is_some() {
+            return Some(self.tecla_en_revision_ia(k, backend, buzon));
+        }
         if self.busqueda.is_some() {
             return Some(self.tecla_en_busqueda(k, backend, buzon));
         }
@@ -1933,6 +2000,22 @@ impl Estado {
         // medio segundo después es abrir una ventana que ya nadie pidió — y
         // cambiarle el teclado de mapa sin gesto suyo. (Un segundo F3 pide su
         // propia lectura y se queda con el testigo nuevo.)
+        // Y `Escape` abandona un plan de renombrado que siga pensando. No
+        // cualquier tecla, como el visor: el modelo tarda de verdad, y seguir
+        // navegando mientras piensa es lo normal. Lo que no puede pasar es
+        // que el plan se abra encima de la pantalla medio minuto después de
+        // que su dueño se haya ido a otra cosa — con las teclas puestas sobre
+        // él y prometiendo renombrar un directorio que ya no es el que se ve.
+        if self.ia_en_vuelo.is_some() && (k.key == "Escape" || k.key == "esc") {
+            self.epoca_ia += 1;
+            self.ia_en_vuelo = None;
+            self.status.message = Some(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "host-plan-abandoned",
+            )));
+            let cambio = ViewChange::Status(self.status.clone());
+            return Some((self.aplicada(), vec![self.parche(vec![cambio])]));
+        }
         self.visor_en_vuelo = None;
         if self.paleta.is_some() {
             return Some(self.tecla_en_paleta(k, backend, buzon));
@@ -3707,6 +3790,8 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         match f {
+            Fondo::PlanIa(epoca, res) => self.aplicar_plan_ia(epoca, *res, backend, buzon),
+            Fondo::PlanDeLote(epoca, res) => self.aplicar_plan_de_lote(epoca, *res),
             Fondo::PluginsDeAyuda(res) => self.aplicar_catalogo_de_plugins(res, backend, buzon),
             Fondo::PaginaDePlugin(id, res) => self
                 .aplicar_pagina_de_plugin(&id, res.as_ref().ok())
@@ -4160,6 +4245,7 @@ impl Estado {
                 // Renombrar comparte página con crear y con buscar: los tres
                 // son el diálogo que pide que teclees algo, y el corpus tiene
                 // UNA que habla de eso.
+                Some(Pendiente::InstruccionIa { .. }) => "dialog.ai-rename",
                 Some(
                     Pendiente::CrearDirectorio { .. }
                     | Pendiente::Buscar { .. }
@@ -4786,6 +4872,63 @@ impl Estado {
         }
         let slot = self.activo();
         match efecto {
+            Efecto::Cursor(_)
+            | Efecto::Pagina(_)
+            | Efecto::Extremo { .. }
+            | Efecto::Entrar
+            | Efecto::Subir
+            | Efecto::Rastro { .. }
+            | Efecto::Marcar
+            | Efecto::DesmarcarTodo => self.efecto_de_listado(efecto, slot, backend, buzon),
+            Efecto::Foco { atras } => self.mover_foco(atras),
+            Efecto::Destino => self.designar_destino(),
+            Efecto::Tamano(_) | Efecto::Igualar | Efecto::Disposiciones => {
+                self.efecto_de_disposicion(efecto, backend, buzon)
+            }
+            Efecto::Columnas => self.abrir_columnas(),
+            Efecto::Buscar => self.pedir_busqueda(),
+            Efecto::BuscarRapido => {
+                // Filtrar es el modo por defecto: es el que no mueve el
+                // listado bajo el cursor mientras se teclea.
+                self.hueco_mut()
+                    .pane
+                    .quick_start(norte_frontend::nav::Mode::Filter);
+                (self.aplicada(), vec![self.parche_filas()])
+            }
+            Efecto::CrearDirectorio
+            | Efecto::Borrar { .. }
+            | Efecto::Transferir { .. }
+            | Efecto::Renombrar
+            | Efecto::RenameIa
+                if self.efectos == crate::commands::Efectos::SoloLectura =>
+            {
+                Self::no_muta()
+            }
+            Efecto::Paleta
+            | Efecto::Ayuda
+            | Efecto::Ajustes
+            | Efecto::Extensiones
+            | Efecto::Tema
+            | Efecto::Volumenes
+            | Efecto::Ver => self.efecto_que_abre(efecto, backend, buzon),
+            Efecto::CrearDirectorio
+            | Efecto::Borrar { .. }
+            | Efecto::Transferir { .. }
+            | Efecto::Renombrar
+            | Efecto::RenameIa => self.efecto_que_muta(efecto),
+        }
+    }
+
+    /// Los efectos que mueven el CURSOR o el listado: recorrer, entrar,
+    /// subir, volver y marcar. Nada de esto escribe.
+    fn efecto_de_listado(
+        &mut self,
+        efecto: Efecto,
+        slot: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match efecto {
             Efecto::Cursor(delta) => self.aplicar(
                 &UiAction::MoveCursor {
                     slot_id: slot,
@@ -4846,29 +4989,19 @@ impl Estado {
                 self.hueco_mut().pane.clear_marks();
                 (self.aplicada(), vec![self.parche_filas()])
             }
-            Efecto::Foco { atras } => self.mover_foco(atras),
-            Efecto::Destino => self.designar_destino(),
-            Efecto::Tamano(_) | Efecto::Igualar | Efecto::Disposiciones => {
-                self.efecto_de_disposicion(efecto, backend, buzon)
-            }
-            Efecto::Columnas => self.abrir_columnas(),
-            Efecto::Buscar => self.pedir_busqueda(),
-            Efecto::BuscarRapido => {
-                // Filtrar es el modo por defecto: es el que no mueve el
-                // listado bajo el cursor mientras se teclea.
-                self.hueco_mut()
-                    .pane
-                    .quick_start(norte_frontend::nav::Mode::Filter);
-                (self.aplicada(), vec![self.parche_filas()])
-            }
-            Efecto::CrearDirectorio
-            | Efecto::Borrar { .. }
-            | Efecto::Transferir { .. }
-            | Efecto::Renombrar
-                if self.efectos == crate::commands::Efectos::SoloLectura =>
-            {
-                Self::no_muta()
-            }
+            // Los demás no llegan aquí: el `match` de arriba los reparte.
+            _ => Self::no_muta(),
+        }
+    }
+
+    /// Los efectos que abren una PANTALLA sobre el listado y no tocan nada.
+    fn efecto_que_abre(
+        &mut self,
+        efecto: Efecto,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match efecto {
             Efecto::Paleta => self.abrir_paleta(),
             Efecto::Ayuda => self.abrir_ayuda(backend, buzon),
             Efecto::Ajustes => self.abrir_ajustes(),
@@ -4876,11 +5009,364 @@ impl Estado {
             Efecto::Tema => self.abrir_tema(),
             Efecto::Volumenes => self.abrir_volumenes(backend, buzon),
             Efecto::Ver => self.pedir_visor(backend, buzon),
+            // Los demás no llegan aquí: el `match` de arriba los reparte.
+            _ => Self::no_muta(),
+        }
+    }
+
+    /// Los efectos que ESCRIBEN. Ninguno muta aquí: los cinco abren la
+    /// pregunta por la que pasa la mutación, que es la única puerta.
+    fn efecto_que_muta(&mut self, efecto: Efecto) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match efecto {
             Efecto::CrearDirectorio => self.pedir_mkdir(),
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
             Efecto::Transferir { mover } => self.pedir_transferencia(mover),
             Efecto::Renombrar => self.pedir_rename(),
+            Efecto::RenameIa => self.pedir_instruccion_ia(),
+            // Los demás no llegan aquí: el `match` de arriba los reparte.
+            _ => Self::no_muta(),
         }
+    }
+
+    /// Abre el prompt de la instrucción para un plan de renombrado.
+    ///
+    /// Lo que se teclea NO es un nombre: es lo que se le pide a un modelo.
+    /// Nada muta aquí, y por eso el prompt no lleva la disciplina de bytes
+    /// que lleva el de renombrar — el texto es para el daemon, no para el
+    /// disco.
+    fn pedir_instruccion_ia(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let dir = self.hueco().pane.dir().clone();
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: "modal-ai-rename".to_owned(),
+            destination: None,
+            body: vec![Self::linea_de_ruta(&dir)],
+            overflow_note: String::new(),
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: Some(String::new()),
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista: vista.clone(),
+            input_crudo: String::new(),
+            al_confirmar: Some(Pendiente::InstruccionIa { dir }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Le pide el plan al modelo. La respuesta vuelve al actor.
+    ///
+    /// Una época nueva por petición: entre pedirlo y que llegue, el lector
+    /// puede haber descartado la revisión o haber pedido otra, y un plan
+    /// viejo no se abre encima del que hay.
+    fn lanzar_plan_ia(
+        &mut self,
+        dir: VPath,
+        instruccion: String,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        if instruccion.trim().is_empty() {
+            self.status.message = Some(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "modal-ai-rename-empty-instruction",
+            )));
+            let cambio = ViewChange::Status(self.status.clone());
+            return vec![self.parche(vec![cambio])];
+        }
+        self.epoca_ia += 1;
+        let epoca = self.epoca_ia;
+        self.ia_en_vuelo = Some((epoca, dir.clone()));
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let res = backend.ai_rename_plan(dir, instruccion).await;
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::PlanIa(
+                    epoca,
+                    Box::new(res),
+                ))))
+                .await;
+        });
+        Vec::new()
+    }
+
+    /// Lo que contestó el modelo, revisado antes de enseñarlo.
+    ///
+    /// Dos cinturones, y los dos son de INGESTIÓN —no de presentación—, así
+    /// que rechazan EN BLOQUE y ni abren la revisión:
+    ///
+    /// - un plan con más parejas de las que un directorio puede tener delata
+    ///   a un daemon hostil inflando la respuesta;
+    /// - una pareja que no es un `Segment` legal delata a uno roto o
+    ///   adulterado, y aplicar «lo que valga» de un plan adulterado es
+    ///   exactamente lo que no se puede hacer.
+    fn aplicar_plan_ia(
+        &mut self,
+        epoca: u64,
+        res: Result<norte_proto::methods::AiRenamePlanResult, Error>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        // La petición EN VUELO tiene que ser esta. Un plan de otra época es
+        // uno que el lector abandonó, y abrirlo es la aplicación moviéndose
+        // sola.
+        let Some((_, dir)) = self.ia_en_vuelo.take().filter(|(e, _)| *e == epoca) else {
+            return Vec::new();
+        };
+        let plan = match res {
+            Ok(p) => p,
+            Err(e) => return self.decir_de_ia(norte_frontend::error::error_key(&e)),
+        };
+        if plan.entries.is_empty() {
+            return self.decir_de_ia("msg-ai-rename-empty");
+        }
+        if plan.entries.len() > norte_frontend::MAX_AI_PLAN_ENTRIES {
+            return self.decir_de_ia("msg-ai-rename-invalid-plan");
+        }
+        let Some(parejas) = norte_frontend::rename_pairs(&plan.entries) else {
+            return self.decir_de_ia("msg-ai-rename-invalid-plan");
+        };
+        // El veredicto se pide EN EL MISMO viaje: la revisión necesita el
+        // `plan_hash` para que aprobar haga algo, y un plan que se quedara
+        // esperando a que alguien se lo pidiera después no tendría quién.
+        // Va spawneado porque contra un directorio enorme es un `fs.list`
+        // entero, y esperarlo aquí congelaría el actor.
+        let b = Arc::clone(backend);
+        let buz = buzon.clone();
+        let d = dir.clone();
+        let p = parejas.clone();
+        tokio::spawn(async move {
+            let res = b.rename_batch_plan(d, p).await;
+            let _ = buz
+                .send(Mensaje::Fondo(Box::new(Fondo::PlanDeLote(
+                    epoca,
+                    Box::new(res),
+                ))))
+                .await;
+        });
+        self.revision_ia = Some(RevisionIa {
+            dir,
+            entradas: plan.entries,
+            parejas,
+            plan: norte_frontend::BatchPlan::Pending,
+            primera: 0,
+            epoca,
+        });
+        let cambio = ViewChange::AiRename {
+            ai_rename: self.vista_ia(),
+        };
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// El veredicto del core sobre el plan que hay en revisión.
+    fn aplicar_plan_de_lote(
+        &mut self,
+        epoca: u64,
+        res: Result<norte_proto::methods::FsRenameBatchPlanResult, Error>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(r) = self.revision_ia.as_mut().filter(|r| r.epoca == epoca) else {
+            return Vec::new();
+        };
+        let fallo = res.as_ref().err().map(norte_frontend::error::error_key);
+        r.plan = match res {
+            Ok(p) => norte_frontend::BatchPlan::Ready(Box::new(p)),
+            // `Failed` no es «no aplicable»: es «no hay plan», o sea que no
+            // hay `plan_hash` aprobado que mandar. El motivo concreto va a la
+            // barra; aquí solo se sabe que aprobar no puede hacer nada.
+            Err(_) => norte_frontend::BatchPlan::Failed,
+        };
+        let mut cambios = vec![ViewChange::AiRename {
+            ai_rename: self.vista_ia(),
+        }];
+        if let Some(clave) = fallo {
+            self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+            cambios.push(ViewChange::Status(self.status.clone()));
+        }
+        vec![self.parche(cambios)]
+    }
+
+    /// La proyección de la revisión, o `None` si no hay ninguna.
+    ///
+    /// Los nombres los propone un MODELO sobre nombres que escribió cualquiera:
+    /// van los dos por el saneado canónico y cada uno dice si lo pintado
+    /// difiere de lo real. Y van ENTEROS y por separado, jamás concatenados
+    /// con una flecha — el mismo motivo que el destino de una transferencia.
+    fn vista_ia(&self) -> Option<crate::dto::AiRenameView> {
+        let r = self.revision_ia.as_ref()?;
+        let linea = |texto: &str| {
+            let (pintable, hostil) = norte_frontend::display_name(texto.as_bytes());
+            crate::dto::DialogLine {
+                text: clamp_display(pintable),
+                hostile: hostil,
+            }
+        };
+        let pairs = r
+            .entradas
+            .iter()
+            .skip(r.primera)
+            .take(norte_frontend::AI_RENAME_PAIR_LIMIT)
+            .map(|e| crate::dto::AiRenamePairView {
+                from: linea(&e.from),
+                to: linea(&e.to),
+            })
+            .collect();
+        Some(crate::dto::AiRenameView {
+            dir: Self::linea_de_ruta(&r.dir),
+            pairs,
+            first_visible: r.primera as u64,
+            total: r.entradas.len() as u64,
+            // Traducido AQUÍ: un renderer no traduce, y de todo el cuerpo
+            // esta es la línea que no se puede perder.
+            status: clamp_display(norte_i18n::t_in(self.lang, r.plan.status_key())),
+            // El detalle sale ENTERO de la capa compartida, marcas incluidas:
+            // cada superficie pinta nombres que un atacante controla, y una
+            // que lo derive por su cuenta es donde se pierde el saneado.
+            detail: r
+                .plan
+                .detail_lines(r.parejas.len())
+                .into_iter()
+                .map(|(text, hostile)| crate::dto::DialogLine {
+                    text: clamp_display(text),
+                    hostile,
+                })
+                .collect(),
+            confirmable: r.plan.confirmable(),
+            real_steps: r.plan.real_steps() as u64,
+        })
+    }
+
+    /// Las teclas mientras la revisión está abierta.
+    ///
+    /// FIJAS, como las de la paleta y la ayuda, y por el mismo motivo: el
+    /// catálogo no tiene comandos para «recorrer este plan» ni «aprobarlo».
+    /// Son las que la propia pantalla anuncia en su pie.
+    fn tecla_en_revision_ia(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let total = self.revision_ia.as_ref().map_or(0, |r| r.entradas.len());
+        let ventana = norte_frontend::AI_RENAME_PAIR_LIMIT;
+        let tope = total.saturating_sub(ventana);
+        let pagina = i64::try_from(ventana).unwrap_or(1);
+        let mover = |r: &mut RevisionIa, delta: i64| {
+            let destino = i64::try_from(r.primera).unwrap_or(0).saturating_add(delta);
+            r.primera = usize::try_from(destino.max(0)).unwrap_or(0).min(tope);
+        };
+        match k.key.as_str() {
+            "ArrowDown" | "j" => {
+                if let Some(r) = self.revision_ia.as_mut() {
+                    mover(r, 1);
+                }
+            }
+            "ArrowUp" | "k" => {
+                if let Some(r) = self.revision_ia.as_mut() {
+                    mover(r, -1);
+                }
+            }
+            "PageDown" => {
+                if let Some(r) = self.revision_ia.as_mut() {
+                    mover(r, pagina);
+                }
+            }
+            "PageUp" => {
+                if let Some(r) = self.revision_ia.as_mut() {
+                    mover(r, -pagina);
+                }
+            }
+            "Escape" | "n" | "N" => return self.cerrar_revision_ia(),
+            "Enter" | "y" | "Y" => return self.aprobar_revision_ia(backend, buzon),
+            _ => {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: "host-key-unmapped".to_owned(),
+                    },
+                    Vec::new(),
+                );
+            }
+        }
+        let cambio = ViewChange::AiRename {
+            ai_rename: self.vista_ia(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Descarta el plan sin aplicar nada.
+    fn cerrar_revision_ia(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // No hace falta subir la época aquí, y decirlo evita que alguien lo
+        // añada «por si acaso»: el veredicto tardío ya no encuentra revisión
+        // que actualizar, y una petición NUEVA sube la época ella misma. Lo
+        // que sí se suelta es una petición en vuelo — esa sí podría abrir una
+        // pantalla que su dueño acaba de cerrar.
+        self.revision_ia = None;
+        self.ia_en_vuelo = None;
+        let cambio = ViewChange::AiRename { ai_rename: None };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Aprueba el plan: UNA Task para el lote entero, un solo deshacer.
+    ///
+    /// Solo si el CORE lo marcó aplicable, y con el `plan_hash` que él mismo
+    /// devolvió: lo que se ejecuta es exactamente lo que se enseñó. Un plan
+    /// sin veredicto, o con uno que dice que no, no se aprueba y se dice.
+    fn aprobar_revision_ia(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(r) = self.revision_ia.as_ref() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let Some(plan) = r.plan.ready().filter(|p| p.executable) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-plan-not-applicable".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        let (dir, parejas, hash) = (r.dir.clone(), r.parejas.clone(), plan.plan_hash.clone());
+        let afectados = vec![dir.clone()];
+        let backend2 = Arc::clone(backend);
+        let buzon2 = buzon.clone();
+        tokio::spawn(async move {
+            let mensaje = match backend2.rename_batch(dir, parejas, hash).await {
+                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados))),
+                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+            };
+            let _ = buzon2.send(mensaje).await;
+        });
+        self.cerrar_revision_ia()
+    }
+
+    /// Lo dice en la barra y no abre nada. Cierra la revisión si la había:
+    /// un plan que no se pudo pedir no deja media pantalla abierta.
+    fn decir_de_ia(&mut self, clave: &str) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+        let mut cambios = vec![ViewChange::Status(self.status.clone())];
+        if self.revision_ia.take().is_some() {
+            cambios.push(ViewChange::AiRename { ai_rename: None });
+        }
+        vec![self.parche(cambios)]
     }
 
     /// Abre el nombre de la entrada bajo el cursor, para editarlo. NO
@@ -5442,6 +5928,10 @@ impl Estado {
         match dialogo.al_confirmar {
             Some(Pendiente::Borrar { paths, permanente }) => {
                 Self::lanzar_borrado(paths, permanente, backend, buzon);
+            }
+            Some(Pendiente::InstruccionIa { dir }) => {
+                let instruccion = dialogo.input_crudo.clone();
+                salidas.extend(self.lanzar_plan_ia(dir, instruccion, backend, buzon));
             }
             Some(Pendiente::Renombrar { from, siembra }) => {
                 salidas.extend(self.confirmar_rename(
@@ -6939,6 +7429,7 @@ impl Estado {
             columns: self.vista_columnas(),
             picker: self.vista_selector(),
             viewer: self.vista_visor(),
+            ai_rename: self.vista_ia(),
             locale: self.locale.clone(),
         }
     }

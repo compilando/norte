@@ -49,6 +49,7 @@ pub const MUTAN: &[&str] = &[
     "pane.copy",
     "pane.move",
     "pane.rename",
+    "pane.ai-rename",
 ];
 
 /// Los comandos que el host ejecuta HOY.
@@ -93,6 +94,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.copy",
     "pane.move",
     "pane.rename",
+    "pane.ai-rename",
 ];
 
 /// Los comandos de la pantalla del VISOR que el host ejecuta.
@@ -265,6 +267,9 @@ pub enum Efecto {
         /// distintos, así que esto no elige una opción: elige el verbo.
         mover: bool,
     },
+    /// Pide un plan de renombrado para el directorio ENTERO. Abre el prompt
+    /// de la instrucción; el plan llega después y se revisa antes de nada.
+    RenameIa,
     /// Pide renombrar la entrada bajo el cursor. NO renombra: abre el nombre
     /// para editarlo.
     ///
@@ -325,6 +330,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.copy" => Efecto::Transferir { mover: false },
         "pane.move" => Efecto::Transferir { mover: true },
         "pane.rename" => Efecto::Renombrar,
+        "pane.ai-rename" => Efecto::RenameIa,
         _ => return None,
     })
 }

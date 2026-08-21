@@ -11,6 +11,7 @@
 // el atributo `style`.
 
 import type {
+  AiRenameView,
   BrowserSlotView,
   DialogView,
   HostCatalog,
@@ -119,6 +120,7 @@ export class Screen {
     private readonly searchRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
+    private readonly aiRenameRoot: HTMLElement,
     private readonly catalog: HostCatalog,
     private readonly send: Send,
     /**
@@ -181,6 +183,7 @@ export class Screen {
     this.paintColumns(view.columns);
     this.paintSearch(view.search);
     this.paintViewer(view.viewer);
+    this.paintAiRename(view.ai_rename);
     this.paintDialogs(view.dialogs);
   }
 
@@ -1997,6 +2000,109 @@ export class Screen {
       return el;
     });
     dom.header.replaceChildren(...nodes);
+  }
+
+  /**
+   * El plan de renombrado en revisión.
+   *
+   * Los dos nombres de cada pareja van en ELEMENTOS distintos, jamás
+   * concatenados con una flecha: un nombre puede contener la flecha, y la
+   * fila se leería como otra pareja. El separador lo pone el CSS, que un
+   * nombre no puede escribir.
+   */
+  private paintAiRename(plan: AiRenameView | null): void {
+    if (plan === null) {
+      this.aiRenameRoot.replaceChildren();
+      this.aiRenameRoot.dataset["open"] = "false";
+      return;
+    }
+    this.aiRenameRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "ai-rename";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    const h = document.createElement("h2");
+    h.id = "ai-rename-title";
+    h.textContent = this.t("modal-ai-rename-plan");
+    caja.setAttribute("aria-labelledby", h.id);
+    caja.append(h);
+
+    const donde = document.createElement("p");
+    donde.className = "ai-rename-dir";
+    donde.textContent = plan.dir.text;
+    donde.dataset["hostile"] = String(plan.dir.hostile);
+    if (plan.dir.hostile) {
+      donde.classList.add("hostile");
+      donde.append(badge(this.t("hostile-name")));
+    }
+    caja.append(donde);
+
+    // El VEREDICTO va arriba, junto al directorio: de todo el cuerpo es la
+    // línea que no se puede perder si la pantalla se queda corta.
+    const estado = document.createElement("p");
+    estado.className = "ai-rename-status";
+    estado.dataset["confirmable"] = String(plan.confirmable);
+    estado.setAttribute("role", "status");
+    estado.textContent = plan.status;
+    caja.append(estado);
+
+    const lista = document.createElement("ol");
+    lista.className = "ai-rename-pairs";
+    lista.setAttribute("start", String(plan.first_visible + 1));
+    for (const par of plan.pairs) {
+      const fila = document.createElement("li");
+      fila.className = "ai-rename-pair";
+      // Los dos nombres en LÍNEAS distintas, y la segunda con su propio
+      // color. Ponerlos en la misma línea separados por una flecha los
+      // separaba con un glifo que un nombre puede contener: `cap 2 → final`
+      // se leía como una pareja distinta de la que es. La numeración la pinta
+      // el `<ol>`, que un nombre tampoco puede falsificar.
+      for (const [clase, linea] of [
+        ["ai-rename-from", par.from],
+        ["ai-rename-to", par.to],
+      ] as const) {
+        const el = document.createElement("div");
+        el.className = clase;
+        el.textContent = linea.text;
+        el.dataset["hostile"] = String(linea.hostile);
+        if (linea.hostile) {
+          el.classList.add("hostile");
+          el.append(badge(this.t("hostile-name")));
+        }
+        fila.append(el);
+      }
+      lista.append(fila);
+    }
+    caja.append(lista);
+
+    if (plan.total > plan.pairs.length) {
+      const mas = document.createElement("p");
+      mas.className = "ai-rename-more";
+      // Lo que se ve de lo que hay, y CÓMO se ve el resto. Un contador
+      // suelto no dice que se pueda recorrer.
+      mas.textContent = this.t("modal-ai-rename-more")
+        .replace("{ $shown }", String(plan.first_visible + plan.pairs.length))
+        .replace("{ $total }", String(plan.total));
+      caja.append(mas);
+    }
+
+    for (const linea of plan.detail) {
+      const p = document.createElement("p");
+      p.className = "ai-rename-detail";
+      p.textContent = linea.text;
+      p.dataset["hostile"] = String(linea.hostile);
+      if (linea.hostile) {
+        p.classList.add("hostile");
+        p.append(badge(this.t("hostile-name")));
+      }
+      caja.append(p);
+    }
+
+    const pie = document.createElement("p");
+    pie.className = "ai-rename-hint";
+    pie.textContent = this.t("modal-ai-rename-plan-hint");
+    caja.append(pie);
+    this.aiRenameRoot.replaceChildren(caja);
   }
 
   private paintDialogs(dialogs: DialogView[]): void {

@@ -171,6 +171,57 @@ pub trait HostBackend: Send + Sync + 'static {
         on_collision: CollisionPolicy,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
+    /// Le pide al modelo un plan de renombrado para un DIRECTORIO.
+    ///
+    /// NO muta nada: lo que vuelve es una propuesta que hay que revisar,
+    /// comprobar contra el core y aprobar. Respuesta DIRECTA y no Task
+    /// (ADR 0042): abandonar la espera corta el dispatch en el daemon.
+    ///
+    /// Lo que vuelve es de un MODELO, o sea lo menos confiable que hay en
+    /// todo el sistema: quien llama lo valida entero antes de enseñarlo
+    /// (`norte_frontend::validate_ai_plan`), y una sola pareja inválida tumba
+    /// el lote — jamás se aplica «lo que valga» de un plan adulterado.
+    fn ai_rename_plan(
+        &self,
+        dir: VPath,
+        instruction: String,
+    ) -> BoxFuture<'static, Result<methods::AiRenamePlanResult, Error>>;
+
+    /// El plan REVISABLE de un lote de renombrados dentro de `dir`.
+    ///
+    /// Tampoco muta: lo que se manda es INTENCIÓN —parejas de nombres base—
+    /// y lo que vuelve es el veredicto del core (si es aplicable, por qué
+    /// no, cuántos pasos son maquinaria) más el `plan_hash` que hay que
+    /// devolver para ejecutar EXACTAMENTE lo que se enseñó.
+    fn rename_batch_plan(
+        &self,
+        dir: VPath,
+        pairs: Vec<methods::RenamePair>,
+    ) -> BoxFuture<'static, Result<methods::FsRenameBatchPlanResult, Error>>;
+
+    /// Ejecuta el lote: UNA Task para todas las parejas, un solo deshacer.
+    ///
+    /// Se manda la MISMA intención que produjo el `plan_hash`; el ORDEN de
+    /// los pasos y los temporales que rompen un ciclo los decide el core y
+    /// jamás cruzan el wire.
+    fn rename_batch(
+        &self,
+        dir: VPath,
+        pairs: Vec<methods::RenamePair>,
+        plan_hash: methods::PlanHash,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
+
+    /// El informe de un lote ya terminado.
+    ///
+    /// Es la ÚNICA señal de que un lote dejó el directorio a medias, así que
+    /// no se degrada en silencio: un daemon que no conozca el método
+    /// contesta [`Error::Unsupported`], que quien llama distingue de un fallo
+    /// de verdad.
+    fn rename_batch_report(
+        &self,
+        task_id: TaskId,
+    ) -> BoxFuture<'static, Result<methods::FsRenameBatchReportResult, Error>>;
+
     /// Mueve UNA entrada a un destino EXACTO. Mismas reglas que
     /// [`Self::copy`].
     ///
@@ -487,6 +538,51 @@ impl HostBackend for norte_client::RemoteBackend {
         on_collision: CollisionPolicy,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         transferir(self, Verbo::Copiar, from, to, on_collision)
+    }
+
+    fn ai_rename_plan(
+        &self,
+        dir: VPath,
+        instruction: String,
+    ) -> BoxFuture<'static, Result<methods::AiRenamePlanResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.ai_rename_plan(&dir, &instruction).await })
+    }
+
+    fn rename_batch_plan(
+        &self,
+        dir: VPath,
+        pairs: Vec<methods::RenamePair>,
+    ) -> BoxFuture<'static, Result<methods::FsRenameBatchPlanResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.rename_batch_plan(&dir, &pairs).await })
+    }
+
+    fn rename_batch(
+        &self,
+        dir: VPath,
+        pairs: Vec<methods::RenamePair>,
+        plan_hash: methods::PlanHash,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.rename_batch(&dir, &pairs, &plan_hash).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
+        })
+    }
+
+    fn rename_batch_report(
+        &self,
+        task_id: TaskId,
+    ) -> BoxFuture<'static, Result<methods::FsRenameBatchReportResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.rename_batch_report(task_id).await })
     }
 
     fn move_(

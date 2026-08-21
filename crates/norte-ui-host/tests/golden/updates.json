@@ -786,6 +786,7 @@
         }
       ],
       "title": "ctrl+x"
-    }
+    },
+    "ai_rename": null
   }
 }

@@ -97,6 +97,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     columns: null,
     search: null,
     viewer: null,
+    ai_rename: null,
     locale: "es",
   };
 }
@@ -120,6 +121,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
   const search = document.createElement("div");
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
+  const aiRename = document.createElement("div");
   document.body.append(
     root,
     palette,
@@ -134,6 +136,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
     search,
     viewer,
     dialogs,
+    aiRename,
   );
   document.documentElement.style.setProperty("--cell-h", `${CELL_H}px`);
   document.documentElement.style.setProperty("--cell-w", "8px");
@@ -152,6 +155,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
     search,
     viewer,
     dialogs,
+    aiRename,
     catalogo(),
     (a: UiAction) => enviadas.push(a),
     opciones.imageBytes ?? (() => Promise.resolve(new ArrayBuffer(0))),
@@ -2148,5 +2152,88 @@ describe("el tablero de tareas", () => {
     const task = root.querySelector(".task") as HTMLElement;
     expect(task).not.toBeNull();
     expect(task.textContent ?? "").toContain("nombre alterado");
+  });
+});
+
+describe("la revisión de un plan de renombrado", () => {
+  it("separa los dos nombres de una pareja SIN un glifo que un nombre pueda tener", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.ai_rename = {
+      dir: { text: "⟨mem⟩/casa/series", hostile: false },
+      pairs: [
+        // Un nombre de ORIGEN con una flecha dentro: en una sola línea
+        // separada por `→`, la fila se leería como otra pareja.
+        {
+          from: { text: "cap 2 → final.mkv", hostile: false },
+          to: { text: "ep0�2.mkv", hostile: true },
+        },
+      ],
+      first_visible: 0,
+      total: 7,
+      status: "lote: aplicable",
+      detail: [{ text: "✗ 3. ya existe: ep03.mkv", hostile: false }],
+      confirmable: true,
+      real_steps: 6,
+    };
+    screen.paint(v);
+    const caja = document.querySelector(".ai-rename") as HTMLElement;
+    expect(caja).not.toBeNull();
+    expect(caja.getAttribute("aria-modal")).toBe("true");
+
+    const from = caja.querySelector(".ai-rename-from") as HTMLElement;
+    const to = caja.querySelector(".ai-rename-to") as HTMLElement;
+    expect(from.textContent).toBe("cap 2 → final.mkv");
+    expect(to.textContent).toContain("ep0�2.mkv");
+    // El separador NO está en el texto: lo pinta el CSS, que un nombre no
+    // puede escribir.
+    expect(to.textContent?.startsWith("→")).toBe(false);
+    expect(from.contains(to)).toBe(false);
+
+    expect(to.dataset["hostile"]).toBe("true");
+    expect(to.textContent).toContain("nombre alterado");
+    expect(from.dataset["hostile"]).toBe("false");
+
+    const estado = caja.querySelector(".ai-rename-status") as HTMLElement;
+    expect(estado.dataset["confirmable"]).toBe("true");
+    expect(caja.querySelector(".ai-rename-more")?.textContent).toContain("7");
+  });
+
+  it("un plan que el core no acepta lo dice en su estado", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.ai_rename = {
+      dir: { text: "⟨mem⟩/casa", hostile: false },
+      pairs: [],
+      first_visible: 0,
+      total: 0,
+      status: "lote: NO aplicable",
+      detail: [],
+      confirmable: false,
+      real_steps: 0,
+    };
+    screen.paint(v);
+    const estado = document.querySelector(".ai-rename-status") as HTMLElement;
+    expect(estado.dataset["confirmable"]).toBe("false");
+  });
+
+  it("sin plan no queda nada pintado", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.ai_rename = {
+      dir: { text: "⟨mem⟩/casa", hostile: false },
+      pairs: [],
+      first_visible: 0,
+      total: 0,
+      status: "…",
+      detail: [],
+      confirmable: false,
+      real_steps: 0,
+    };
+    screen.paint(v);
+    expect(document.querySelector(".ai-rename")).not.toBeNull();
+    v.ai_rename = null;
+    screen.paint(v);
+    expect(document.querySelector(".ai-rename")).toBeNull();
   });
 });

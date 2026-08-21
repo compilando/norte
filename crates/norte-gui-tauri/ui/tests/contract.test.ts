@@ -36,6 +36,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     search,
     viewer,
     dialogs,
+    aiRename,
   ] = nodos;
   const screen = new Screen(
     root,
@@ -51,6 +52,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     search as HTMLElement,
     viewer as HTMLElement,
     dialogs as HTMLElement,
+    aiRename as HTMLElement,
     catalog,
     (a: UiAction) => enviadas.push(a),
   );
@@ -110,6 +112,7 @@ describe("el contrato con el host", () => {
     // Rust que este renderer no sepa aplicar tiene que romper AQUÍ.
     const changes = Object.keys(golden("changes.json")).sort();
     expect(changes).toEqual([
+      "ai_rename",
       "columns",
       "columns_picker",
       "connection",

@@ -113,6 +113,25 @@ pub struct Falso {
     pub errores_de_carga: Vec<(String, String)>,
     /// El esquema `[config]` de cada extensión, por id.
     pub esquemas: HashMap<String, Vec<norte_proto::methods::PluginConfigKeyWire>>,
+    /// Lo que contesta `ai.rename_plan`. `None` = el daemon falla.
+    pub plan_ia: Option<Vec<(String, String)>>,
+    /// Lo que TARDA el modelo. Es lo que abre la ventana en la que el lector
+    /// puede descartar la revisión antes de que llegue el plan.
+    pub retraso_ia_ms: u64,
+    /// Las instrucciones que se pidieron, en orden.
+    pub instrucciones: std::sync::Mutex<Vec<String>>,
+    /// El veredicto que contesta `fs.rename_batch_plan`. `None` = falla.
+    pub veredicto: Option<norte_proto::methods::FsRenameBatchPlanResult>,
+    /// Las parejas con las que se pidió el veredicto, en orden.
+    pub veredictos_pedidos: std::sync::Mutex<Vec<Vec<norte_proto::methods::RenamePair>>>,
+    /// Los lotes que se mandaron EJECUTAR: `(dir, parejas, hash)`.
+    pub lotes: std::sync::Mutex<
+        Vec<(
+            VPath,
+            Vec<norte_proto::methods::RenamePair>,
+            norte_proto::methods::PlanHash,
+        )>,
+    >,
     /// Los ids cuya ficha se pidió, en orden.
     pub fichas_pedidas: std::sync::Mutex<Vec<String>>,
     /// Los ids que se pidieron a `plugin.help`, en orden: es lo que permite
@@ -716,6 +735,91 @@ impl HostBackend for Falso {
         on_collision: norte_proto::CollisionPolicy,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.transferir(from, to, false, on_collision)
+    }
+
+    fn ai_rename_plan(
+        &self,
+        _dir: VPath,
+        instruction: String,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::AiRenamePlanResult, Error>> {
+        self.instrucciones
+            .lock()
+            .expect("instrucciones")
+            .push(instruction);
+        let plan = self.plan_ia.clone();
+        let retraso = self.retraso_ia_ms;
+        Box::pin(async move {
+            if retraso > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
+            }
+            let Some(pares) = plan else {
+                return Err(Error::Unsupported);
+            };
+            Ok(norte_proto::methods::AiRenamePlanResult {
+                entries: pares
+                    .into_iter()
+                    .map(|(from, to)| norte_proto::methods::AiRenameEntry { from, to })
+                    .collect(),
+            })
+        })
+    }
+
+    fn rename_batch_plan(
+        &self,
+        _dir: VPath,
+        pairs: Vec<norte_proto::methods::RenamePair>,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::FsRenameBatchPlanResult, Error>> {
+        self.veredictos_pedidos
+            .lock()
+            .expect("veredictos")
+            .push(pairs);
+        let v = self.veredicto.clone();
+        Box::pin(async move { v.ok_or(Error::Unsupported) })
+    }
+
+    fn rename_batch(
+        &self,
+        dir: VPath,
+        pairs: Vec<norte_proto::methods::RenamePair>,
+        plan_hash: norte_proto::methods::PlanHash,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.lotes
+            .lock()
+            .expect("lotes")
+            .push((dir, pairs, plan_hash));
+        let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
+        let id = norte_proto::TaskId::new(200 + n as u64);
+        let progreso = norte_proto::TaskProgress {
+            task_id: id,
+            kind: norte_proto::TaskKind::RenameBatch,
+            state: norte_proto::TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: Some(1),
+            current: None,
+        };
+        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        *self.progreso.lock().expect("progreso") = Some(tx.clone());
+        self.progresos
+            .lock()
+            .expect("progresos")
+            .insert(id.get(), tx);
+        Box::pin(async move {
+            Ok(HostTask {
+                id,
+                progress: rx,
+                cancel: Arc::new(|| {}),
+                foreign: false,
+            })
+        })
+    }
+
+    fn rename_batch_report(
+        &self,
+        _task_id: norte_proto::TaskId,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::FsRenameBatchReportResult, Error>> {
+        Box::pin(async { Err(Error::Unsupported) })
     }
 
     fn move_(

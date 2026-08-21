@@ -32,6 +32,26 @@ independently through `PROTOCOL_VERSION`.
   seeing the file's bytes. A previewer that fails, stalls or does not apply is
   not an error: the viewer falls back to the raw view, because a plugin cannot
   leave a file unopenable.
+- **The window asks a model for a rename plan, and shows it before anything
+  happens** (bridge **24**). The plan arrives, gets validated whole — one pair
+  that is not a legal name kills the batch, because applying "whatever is
+  valid" of a tampered plan is the failure this belt exists to prevent — and
+  only then does the core get asked whether it is applicable. That verdict is a
+  second trip, so the review opens saying it is still checking and fills itself
+  in. Approving sends the batch with the hash the core itself returned: what
+  runs is exactly what was shown, as one task with one undo. A plan the core
+  did not accept cannot be approved and says why.
+- **A pair's two names are on separate lines, not joined by an arrow.** Painting
+  it found the reason: a file called `cap 2 → final.mkv` made the row read as a
+  different pair. The separator is now drawn by the stylesheet and the numbering
+  by the list itself — neither is something a filename can write.
+- **A plan that arrives late does not reopen what its owner closed**, and it
+  opens over the directory it was PLANNED for, not the one on screen. The model
+  takes real time and browsing while it thinks is normal; what must not happen
+  is a plan appearing half a minute later, taking the keyboard, and promising to
+  rename what is visible now. `Escape` at the listing abandons a plan still in
+  flight and says so.
+
 - **The window renames** (`shift+F6`). The field is seeded with what the row
   paints, and the rule underneath it is the one the TUI already had: leave it
   alone and the ORIGINAL BYTES travel, because for a name that is not UTF-8 the

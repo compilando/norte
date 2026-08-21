@@ -62,6 +62,9 @@ pub struct ViewSnapshot {
     /// El visor, si hay uno abierto. Ocupa la pantalla: mientras esté, las
     /// teclas son suyas y el listado no se mueve por debajo.
     pub viewer: Option<ViewerView>,
+    /// El plan de renombrado en revisión, si lo hay. Se abre encima del
+    /// listado y las teclas son suyas hasta que se apruebe o se descarte.
+    pub ai_rename: Option<AiRenameView>,
     /// Idioma negociado, para que el renderer pida el catálogo correcto.
     pub locale: String,
 }
@@ -1321,6 +1324,50 @@ pub struct DialogLine {
     pub hostile: bool,
 }
 
+/// El plan de renombrado que un modelo propuso, en revisión.
+///
+/// Una pantalla propia y no un diálogo, por lo que TIENE que enseñar: parejas
+/// que se recorren, un veredicto del core que llega DESPUÉS de abrirse, y un
+/// detalle de colisiones. Un diálogo es una pregunta con respuestas; esto es
+/// un documento que se lee antes de aprobarlo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiRenameView {
+    /// El directorio sobre el que se planeó.
+    pub dir: DialogLine,
+    /// La ventana de parejas que viaja, NO el plan entero.
+    pub pairs: Vec<AiRenamePairView>,
+    /// La primera pareja de `pairs` dentro del plan.
+    pub first_visible: u64,
+    /// Cuántas parejas tiene el plan.
+    pub total: u64,
+    /// El veredicto del core, ya traducido: comprobando, aplicable, no
+    /// aplicable, o no comprobado. Es la línea que no se puede perder.
+    pub status: String,
+    /// La maquinaria del planificador y las colisiones, una por línea y ya
+    /// traducidas, cada una diciendo si lo pintado difiere de lo real.
+    pub detail: Vec<DialogLine>,
+    /// Aprobar puede hacer algo. Lo dice el CORE (`executable`), no una
+    /// cuenta de colisiones: el campo es normativo y un veredicto futuro
+    /// puede parar un plan sin nombre ofensor que listar.
+    pub confirmable: bool,
+    /// Cuántos renombrados hará DE VERDAD. No es `total`: el planificador
+    /// tira las parejas nulas, y prometer las pedidas sería prometer de más.
+    pub real_steps: u64,
+}
+
+/// Una pareja del plan: de qué nombre a qué nombre.
+///
+/// Los dos nombres van ENTEROS y por separado, jamás concatenados con una
+/// flecha: el mismo motivo que el destino de una transferencia
+/// ([`DialogView::destination`]) — un nombre puede contener la flecha.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiRenamePairView {
+    /// El nombre de ahora.
+    pub from: DialogLine,
+    /// El que propone el modelo.
+    pub to: DialogLine,
+}
+
 /// Una respuesta posible de un diálogo.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DialogChoice {
@@ -1517,6 +1564,12 @@ pub enum ViewChange {
     Viewer {
         /// El visor, o `None` si se cerró.
         viewer: Option<ViewerView>,
+    },
+    /// El plan de renombrado en revisión cambió: se abrió, llegó el veredicto
+    /// del core, se recorrió, o se cerró.
+    AiRename {
+        /// El plan, o `None` si se cerró.
+        ai_rename: Option<AiRenameView>,
     },
 }
 

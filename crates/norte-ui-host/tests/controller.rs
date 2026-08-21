@@ -8720,3 +8720,421 @@ async fn en_solo_lectura_renombrar_no_abre_nada() {
             .is_empty()
     );
 }
+
+// ---------------------------------------------------------------------------
+// El plan de renombrado que propone un modelo (tarea 5.2).
+// ---------------------------------------------------------------------------
+
+fn hash_de_prueba() -> norte_proto::methods::PlanHash {
+    norte_proto::methods::PlanHash::parse(&"a".repeat(norte_proto::methods::PLAN_HASH_LEN))
+        .expect("hex válido")
+}
+
+/// Un veredicto del core: aplicable, con `n` pasos reales.
+fn veredicto_ok(pares: &[(&str, &str)]) -> norte_proto::methods::FsRenameBatchPlanResult {
+    norte_proto::methods::FsRenameBatchPlanResult {
+        steps: pares
+            .iter()
+            .map(|(f, t)| norte_proto::methods::RenameStep {
+                from: norte_proto::Segment::new(f.as_bytes().to_vec()).expect("seg"),
+                to: norte_proto::Segment::new(t.as_bytes().to_vec()).expect("seg"),
+                temp: false,
+            })
+            .collect(),
+        collisions: Vec::new(),
+        executable: true,
+        plan_hash: hash_de_prueba(),
+    }
+}
+
+/// Un backend con un plan de IA y su veredicto.
+fn falso_con_plan(
+    pares: &[(&str, &str)],
+    veredicto: Option<norte_proto::methods::FsRenameBatchPlanResult>,
+) -> Arc<Falso> {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        pares
+            .iter()
+            .map(|(from, _)| (from.as_bytes().to_vec(), false))
+            .collect::<Vec<_>>(),
+    );
+    f.plan_ia = Some(
+        pares
+            .iter()
+            .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+            .collect(),
+    );
+    f.veredicto = veredicto;
+    Arc::new(f)
+}
+
+/// Espera la siguiente actualización que traiga la revisión del plan.
+async fn siguiente_revision(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> Option<norte_ui_host::dto::AiRenameView> {
+    for _ in 0..40 {
+        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("una actualización, no un cuelgue")
+            .expect("el host sigue vivo");
+        match siguiente {
+            Update::Message(m) => {
+                if let UiUpdate::Patch(p) = &m.payload {
+                    for c in &p.changes {
+                        if let norte_ui_host::dto::ViewChange::AiRename { ai_rename } = c {
+                            return ai_rename.clone();
+                        }
+                    }
+                }
+                if let UiUpdate::Snapshot(s) = &m.payload
+                    && s.ai_rename.is_some()
+                {
+                    return s.ai_rename.clone();
+                }
+            }
+            Update::Lagged => panic!("sin retraso en este test"),
+        }
+    }
+    panic!("la revisión no llegó");
+}
+
+/// Pide un plan: abre el prompt de la instrucción y lo contesta.
+///
+/// `pane.ai-rename` no lo ata ningún preset de fábrica, así que llega por la
+/// paleta, que es la otra puerta del catálogo.
+async fn pedir_plan(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) {
+    por_la_paleta(h, sub, "ai-rename").await;
+    let id = siguientes_dialogos(sub).await[0].id;
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: "numera los episodios".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+}
+
+/// El plan se REVISA antes de nada: llega, se pinta pareja a pareja, y el
+/// veredicto del core llega DESPUÉS, en su propio viaje.
+#[tokio::test]
+async fn un_plan_se_revisa_antes_de_aplicarse() {
+    let pares = [("ep1.mkv", "ep01.mkv"), ("ep2.mkv", "ep02.mkv")];
+    let backend = falso_con_plan(&pares, Some(veredicto_ok(&pares)));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+
+    let primera = siguiente_revision(&mut sub).await.expect("abre");
+    assert_eq!(primera.total, 2, "las dos parejas");
+    assert_eq!(primera.pairs[0].from.text, "ep1.mkv");
+    assert_eq!(primera.pairs[0].to.text, "ep01.mkv");
+    assert!(
+        backend.lotes.lock().expect("lotes").is_empty(),
+        "revisar no aplica nada"
+    );
+
+    // El veredicto llega en su propio viaje, y hasta entonces no se puede
+    // aprobar.
+    let mut v = primera;
+    for _ in 0..40 {
+        if v.confirmable {
+            break;
+        }
+        v = siguiente_revision(&mut sub).await.expect("sigue abierta");
+    }
+    assert!(v.confirmable, "el core dijo que es aplicable");
+    assert_eq!(v.real_steps, 2, "y cuántos renombra DE VERDAD");
+    assert!(!v.status.is_empty() && !v.status.starts_with("modal-"));
+}
+
+/// Aprobar manda UNA task para el lote, con el `plan_hash` que devolvió el
+/// core: se ejecuta EXACTAMENTE lo que se enseñó.
+#[tokio::test]
+async fn aprobar_manda_el_lote_con_el_hash_del_core() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let backend = falso_con_plan(&pares, Some(veredicto_ok(&pares)));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    let mut v = siguiente_revision(&mut sub).await.expect("abre");
+    for _ in 0..40 {
+        if v.confirmable {
+            break;
+        }
+        v = siguiente_revision(&mut sub).await.expect("sigue abierta");
+    }
+
+    h.dispatch(tecla("y")).await.expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let lotes = backend.lotes.lock().expect("lotes");
+    assert_eq!(lotes.len(), 1, "UNA task para el lote entero");
+    let (dir, parejas, hash) = &lotes[0];
+    assert_eq!(dir.to_wire(), "mem:///casa");
+    assert_eq!(parejas.len(), 1);
+    assert_eq!(parejas[0].from.as_bytes(), b"ep1.mkv");
+    assert_eq!(parejas[0].to.as_bytes(), b"ep01.mkv");
+    assert_eq!(hash, &hash_de_prueba(), "el hash es el que dio el core");
+}
+
+/// Un plan que el core NO acepta no se puede aprobar, y se dice.
+#[tokio::test]
+async fn un_plan_no_aplicable_no_se_aprueba() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let mut v = veredicto_ok(&pares);
+    v.executable = false;
+    v.steps.clear();
+    v.collisions = vec![norte_proto::methods::RenameCollision {
+        pair_index: 0,
+        kind: norte_proto::methods::RenameCollisionKind::External,
+        name: norte_proto::Segment::new(b"ep01.mkv".to_vec()).expect("seg"),
+    }];
+    let backend = falso_con_plan(&pares, Some(v));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    let mut r = siguiente_revision(&mut sub).await.expect("abre");
+    for _ in 0..40 {
+        if !r.detail.is_empty() {
+            break;
+        }
+        r = siguiente_revision(&mut sub).await.expect("sigue abierta");
+    }
+    assert!(!r.confirmable, "el core dijo que no");
+    assert!(!r.detail.is_empty(), "y la colisión se LEE: {:?}", r.detail);
+
+    let ack = h.dispatch(tecla("y")).await.expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Unavailable {
+            reason_key: "host-plan-not-applicable".to_owned()
+        },
+        "{ack:?}"
+    );
+    assert!(backend.lotes.lock().expect("lotes").is_empty());
+}
+
+/// Una pareja que no es un nombre legal tumba el plan ENTERO: aplicar «lo que
+/// valga» de un plan adulterado es lo que este cinturón existe para impedir.
+#[tokio::test]
+async fn una_pareja_invalida_tumba_el_plan_entero() {
+    let pares = [("ep1.mkv", "ep01.mkv"), ("ep2.mkv", "../fuera")];
+    let backend = falso_con_plan(&pares, Some(veredicto_ok(&[("ep1.mkv", "ep01.mkv")])));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(
+        foto.ai_rename.is_none(),
+        "ni se abre la revisión: {:?}",
+        foto.ai_rename
+    );
+    assert!(
+        backend
+            .veredictos_pedidos
+            .lock()
+            .expect("veredictos")
+            .is_empty(),
+        "ni se le pide veredicto al core a un plan adulterado"
+    );
+    assert!(foto.status.message.is_some(), "y se dice");
+}
+
+/// Un plan que llega TARDE, después de que el lector cerrara la revisión, no
+/// la reabre.
+///
+/// El modelo tarda, y en esa ventana el lector puede descartar. Sin subir la
+/// época al cerrar, el plan aterrizaba encima de una pantalla que su dueño ya
+/// había quitado — y con las teclas puestas sobre él.
+#[tokio::test]
+async fn un_plan_que_llega_tarde_no_reabre_lo_cerrado() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
+    f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
+    f.veredicto = Some(veredicto_ok(&pares));
+    f.retraso_ia_ms = 150;
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+
+    // Antes de que el modelo conteste, se descarta.
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(
+        foto.ai_rename.is_none(),
+        "el plan tardío no reabre lo cerrado: {:?}",
+        foto.ai_rename
+    );
+    assert!(backend.lotes.lock().expect("lotes").is_empty());
+}
+
+/// Descartar no aplica nada, y la revisión se queda cerrada.
+#[tokio::test]
+async fn descartar_cierra_y_no_aplica_nada() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let backend = falso_con_plan(&pares, Some(veredicto_ok(&pares)));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    siguiente_revision(&mut sub).await.expect("abre");
+
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(foto.ai_rename.is_none(), "se cerró y sigue cerrada");
+    assert!(backend.lotes.lock().expect("lotes").is_empty());
+}
+
+/// Los nombres del plan los propone un MODELO sobre nombres que escribió
+/// cualquiera: se enmascaran y se DICE.
+#[tokio::test]
+async fn un_nombre_hostil_del_plan_va_marcado() {
+    let pares = [("ep1.mkv", "ep\u{202E}01.mkv")];
+    let backend = falso_con_plan(&pares, None);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    let r = siguiente_revision(&mut sub).await.expect("abre");
+    assert!(
+        !r.pairs[0].to.text.contains('\u{202E}'),
+        "enmascarado: {:?}",
+        r.pairs[0].to
+    );
+    assert!(r.pairs[0].to.hostile, "y marcado: {:?}", r.pairs[0].to);
+    assert!(!r.pairs[0].from.hostile, "el de origen no lo es");
+}
+
+/// Un plan más largo que la ventana se recorre entero.
+#[tokio::test]
+async fn un_plan_largo_se_recorre() {
+    let pares: Vec<(String, String)> = (0..12)
+        .map(|i| (format!("a{i:02}.mkv"), format!("b{i:02}.mkv")))
+        .collect();
+    let refs: Vec<(&str, &str)> = pares
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let backend = falso_con_plan(&refs, None);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    let r = siguiente_revision(&mut sub).await.expect("abre");
+    assert_eq!(r.total, 12);
+    assert!(
+        r.pairs.len() < 12,
+        "solo la ventana viaja: {}",
+        r.pairs.len()
+    );
+    assert_eq!(r.first_visible, 0);
+
+    h.dispatch(tecla("PageDown")).await.expect("host vivo");
+    // El veredicto del core viaja por el MISMO canal ordenado, así que puede
+    // haber una actualización suya por delante de la del recorrido.
+    let mut bajado = siguiente_revision(&mut sub).await.expect("sigue abierta");
+    for _ in 0..10 {
+        if bajado.first_visible > 0 {
+            break;
+        }
+        bajado = siguiente_revision(&mut sub).await.expect("sigue abierta");
+    }
+    assert!(bajado.first_visible > 0, "se recorrió: {bajado:?}");
+
+    for _ in 0..10 {
+        h.dispatch(tecla("PageDown")).await.expect("host vivo");
+    }
+    let tope = siguiente_revision(&mut sub).await.expect("sigue abierta");
+    assert!(
+        tope.first_visible + tope.pairs.len() as u64 <= tope.total,
+        "la ventana no se sale del plan: {tope:?}"
+    );
+}
+
+/// En solo lectura no se le pide un plan a nadie.
+#[tokio::test]
+async fn en_solo_lectura_no_se_pide_plan() {
+    let backend = falso_con_plan(&[("a", "b")], None);
+    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    // Ni la paleta lo ofrece: una ventana de solo lectura no lista lo que
+    // muta. Y aunque llegara por otra puerta, la guarda lo rehúsa.
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "p".to_owned(),
+        ctrl: true,
+        alt: false,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+    let p = siguiente_paleta(&mut sub).await.expect("la paleta abre");
+    assert!(
+        !p.rows.iter().any(|r| r.text == "pane.ai-rename"),
+        "una ventana de solo lectura no ofrece pedir un plan"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    assert!(
+        backend
+            .instrucciones
+            .lock()
+            .expect("instrucciones")
+            .is_empty()
+    );
+}
+
+/// Un plan se abre sobre el directorio para el que se PIDIÓ, aunque el lector
+/// haya navegado mientras el modelo pensaba.
+///
+/// Leer el directorio del hueco al aterrizar prometía renombrar lo que se ve
+/// —que ya es otra cosa— y habría renombrado lo de antes.
+#[tokio::test]
+async fn un_plan_se_abre_sobre_el_directorio_que_se_planeo() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"ep1.mkv".to_vec(), false)],
+    );
+    f.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
+    f.retraso_ia_ms = 150;
+    let backend = Arc::new(f);
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let b = listado(&snap);
+    let docs = b
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("está");
+    let (key, generation) = (docs.key, b.generation);
+    pedir_plan(&h, &mut sub).await;
+
+    // Y mientras el modelo piensa, el lector se va a otro directorio.
+    h.dispatch(UiAction::Activate {
+        slot_id: 1,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+
+    let r = siguiente_revision(&mut sub).await.expect("abre igual");
+    assert!(
+        r.dir.text.ends_with("/casa"),
+        "el plan es del directorio que se planeó, no del que se ve ahora: {:?}",
+        r.dir
+    );
+}
