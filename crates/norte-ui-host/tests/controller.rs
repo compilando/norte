@@ -556,6 +556,17 @@ async fn un_listado_grande_ni_espera_ni_cruza_entero() {
     assert_eq!(listado(&foto).rows.len(), 40);
 }
 
+/// Una tecla CON modificadores.
+fn tecla_mod(k: &str, ctrl: bool, shift: bool) -> UiAction {
+    UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: k.to_owned(),
+        ctrl,
+        alt: false,
+        shift,
+        meta: false,
+    })
+}
+
 fn tecla(k: &str) -> UiAction {
     UiAction::Key(norte_ui_host::keys::KeyInput {
         key: k.to_owned(),
@@ -8459,4 +8470,253 @@ async fn mover_relista_el_origen_aunque_el_provider_lo_escriba_distinto() {
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     panic!("el panel de origen se quedó sin relistar");
+}
+
+// ---------------------------------------------------------------------------
+// Renombrar UNA entrada (tarea 5.2).
+// ---------------------------------------------------------------------------
+
+/// `shift+F6` abre el nombre EDITABLE, sembrado con lo que la fila pinta.
+#[tokio::test]
+async fn renombrar_abre_el_nombre_para_editarlo() {
+    let backend = arbol();
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    // El cursor, sobre `notas.txt`.
+    let b = listado(&snap);
+    let notas = b
+        .rows
+        .iter()
+        .find(|r| r.display_name == "notas.txt")
+        .expect("está");
+    let (key, generation) = (notas.key, b.generation);
+    h.dispatch(UiAction::SelectRow {
+        slot_id: 1,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+
+    h.dispatch(tecla_mod("F6", false, true))
+        .await
+        .expect("host vivo");
+    let d = siguientes_dialogos(&mut sub).await[0].clone();
+    assert_eq!(d.title_key, "modal-rename-title");
+    assert_eq!(
+        d.input.as_deref(),
+        Some("notas.txt"),
+        "el campo nace con el nombre de ahora"
+    );
+    assert!(d.destination.is_none(), "un rename no va a otro sitio");
+    assert!(
+        backend
+            .transferencias
+            .lock()
+            .expect("transferencias")
+            .is_empty(),
+        "abrir el diálogo no renombra"
+    );
+}
+
+/// Sin tocar el campo, lo que se manda son los BYTES ORIGINALES.
+///
+/// Es la regla 1 en la costura: el campo se siembra con lo que la fila
+/// PINTA, y para un nombre que no es UTF-8 eso lleva un U+FFFD. Mandar el
+/// texto sin más escribiría mojibake de verdad en el disco.
+#[tokio::test]
+async fn un_nombre_sin_tocar_manda_sus_bytes() {
+    let backend = arbol();
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let b = listado(&snap);
+    let hostil = b.rows.iter().find(|r| r.hostile).expect("hay uno");
+    let (key, generation) = (hostil.key, b.generation);
+    h.dispatch(UiAction::SelectRow {
+        slot_id: 1,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(tecla_mod("F6", false, true))
+        .await
+        .expect("host vivo");
+    let d = siguientes_dialogos(&mut sub).await[0].clone();
+    assert!(d.input_hostile, "el campo dice que lo sembrado no es fiel");
+
+    // Se confirma SIN escribir nada. No hay renombrado posible —el destino
+    // sería el mismo— y eso se dice.
+    let ack = h
+        .dispatch(UiAction::Dialog {
+            id: d.id,
+            choice: "confirm".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        backend
+            .transferencias
+            .lock()
+            .expect("transferencias")
+            .is_empty(),
+        "el mismo nombre en el mismo sitio no es una operación"
+    );
+}
+
+/// Un nombre TOCADO que aún lleva el carácter de sustitución se RECHAZA:
+/// confirmarlo escribiría el mojibake que la pantalla inventó.
+#[tokio::test]
+async fn un_nombre_tocado_con_fffd_se_rechaza() {
+    let backend = arbol();
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let b = listado(&snap);
+    let hostil = b.rows.iter().find(|r| r.hostile).expect("hay uno");
+    let (key, generation, pintado) = (hostil.key, b.generation, hostil.display_name.clone());
+    h.dispatch(UiAction::SelectRow {
+        slot_id: 1,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(tecla_mod("F6", false, true))
+        .await
+        .expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+
+    // Se edita: el renderer devuelve lo que había MÁS una letra, y lo que
+    // había lleva el U+FFFD que puso la pantalla.
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: format!("{pintado}x"),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        backend
+            .transferencias
+            .lock()
+            .expect("transferencias")
+            .is_empty(),
+        "no se escribe un nombre que la pantalla se inventó"
+    );
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(
+        foto.status.message.is_some_and(|m| !m.starts_with("msg-")),
+        "y se dice, traducido"
+    );
+}
+
+/// Un nombre nuevo sale como un `fs.move` dentro del MISMO directorio.
+#[tokio::test]
+async fn un_nombre_nuevo_sale_como_movimiento_al_mismo_sitio() {
+    let backend = arbol();
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let b = listado(&snap);
+    let notas = b
+        .rows
+        .iter()
+        .find(|r| r.display_name == "notas.txt")
+        .expect("está");
+    let (key, generation) = (notas.key, b.generation);
+    h.dispatch(UiAction::SelectRow {
+        slot_id: 1,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(tecla_mod("F6", false, true))
+        .await
+        .expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: "apuntes.md".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let ts = backend.transferencias.lock().expect("transferencias");
+    assert_eq!(ts.len(), 1);
+    let (from, to, mover, colision) = &ts[0];
+    assert!(mover, "renombrar es mover");
+    assert_eq!(from.to_wire(), "mem:///casa/notas.txt");
+    assert_eq!(
+        to.to_wire(),
+        "mem:///casa/apuntes.md",
+        "al MISMO directorio"
+    );
+    assert_eq!(*colision, norte_proto::CollisionPolicy::Fail);
+}
+
+/// Con VARIAS marcas, esta ventana se niega: cuál renombrar no lo dice
+/// nadie. Es la asimetría que `Facts::rename_single` documenta, y este host
+/// ya la declaraba en `hechos()`.
+#[tokio::test]
+async fn renombrar_con_varias_marcas_se_niega() {
+    let backend = arbol();
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let b = listado(&snap);
+    let generation = b.generation;
+    for r in b.rows.iter().take(2) {
+        h.dispatch(UiAction::ToggleMark {
+            slot_id: 1,
+            key: r.key,
+            generation,
+        })
+        .await
+        .expect("host vivo");
+    }
+    let ack = h
+        .dispatch(tecla_mod("F6", false, true))
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Unavailable {
+            reason_key: "reason-wrong-target".to_owned()
+        },
+        "{ack:?}"
+    );
+}
+
+/// Y en solo lectura, ni se abre.
+#[tokio::test]
+async fn en_solo_lectura_renombrar_no_abre_nada() {
+    let backend = arbol();
+    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let ack = h
+        .dispatch(tecla_mod("F6", false, true))
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        backend
+            .transferencias
+            .lock()
+            .expect("transferencias")
+            .is_empty()
+    );
 }

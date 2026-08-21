@@ -1524,6 +1524,7 @@ dialog-cancel = Cancelar
 dialog-approve = Aprobar
 dialog-deny = Denegar
 modal-mkdir-title = Nuevo directorio
+modal-rename-title = Renombrar
 modal-delete-title = ¿Mover a la papelera?
 # Los tres veredictos del resolver compartido, para una tecla que SÍ está ligada.
 cmd-here = es lo que ya hace aquí

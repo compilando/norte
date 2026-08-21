@@ -32,6 +32,16 @@ independently through `PROTOCOL_VERSION`.
   seeing the file's bytes. A previewer that fails, stalls or does not apply is
   not an error: the viewer falls back to the raw view, because a plugin cannot
   leave a file unopenable.
+- **The window renames** (`shift+F6`). The field is seeded with what the row
+  paints, and the rule underneath it is the one the TUI already had: leave it
+  alone and the ORIGINAL BYTES travel, because for a name that is not UTF-8 the
+  seed carries a replacement character and is not reversible. Touch it and the
+  text travels — unless it still contains that character, which is refused,
+  because confirming it would write the mojibake the screen invented. Same
+  name, same place is not an operation and says so. With more than one entry
+  marked this window declines and explains, which is what its own availability
+  facts already claimed and what the help page was already dimming.
+
 - **The window copies, moves, creates and deletes** (ADR **0070**). Bridge
   **23**. The renderer names neither operand: it sends "copy", and Rust derives
   the sources from the marks of the focused pane and the destination from the

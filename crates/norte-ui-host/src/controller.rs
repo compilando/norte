@@ -990,6 +990,21 @@ enum Pendiente {
         /// Dónde se crea.
         dir: VPath,
     },
+    /// Renombrar UNA entrada dentro de su propio directorio.
+    ///
+    /// Lleva la SIEMBRA del campo, no solo la ruta, y esa es la pieza que
+    /// hace que la regla 1 se sostenga aquí: si lo que se confirma es
+    /// EXACTAMENTE lo que se sembró, no se ha tocado nada y lo que viaja son
+    /// los bytes de siempre. Comparar contra la siembra en vez de llevar un
+    /// `bool` de «tocado» es lo que sobrevive a que el renderer devuelva el
+    /// texto entero en cada evento en vez de un delta.
+    Renombrar {
+        /// La entrada que se renombra.
+        from: VPath,
+        /// Lo que se puso en el campo, TAL CUAL (la proyección pintable del
+        /// nombre, que para un nombre que no es UTF-8 lleva un U+FFFD).
+        siembra: String,
+    },
     /// Copiar o mover estas entradas AL directorio de otro hueco.
     ///
     /// El destino viaja ya resuelto —el directorio del hueco con el rol
@@ -4142,9 +4157,14 @@ impl Estado {
                 // Buscar comparte página con crear: los dos son el diálogo
                 // que pide que teclees un nombre, y el corpus tiene UNA que
                 // habla de eso.
-                Some(Pendiente::CrearDirectorio { .. } | Pendiente::Buscar { .. }) => {
-                    "dialog.mkdir"
-                }
+                // Renombrar comparte página con crear y con buscar: los tres
+                // son el diálogo que pide que teclees algo, y el corpus tiene
+                // UNA que habla de eso.
+                Some(
+                    Pendiente::CrearDirectorio { .. }
+                    | Pendiente::Buscar { .. }
+                    | Pendiente::Renombrar { .. },
+                ) => "dialog.mkdir",
                 None => "browse",
             };
         }
@@ -4841,7 +4861,10 @@ impl Estado {
                     .quick_start(norte_frontend::nav::Mode::Filter);
                 (self.aplicada(), vec![self.parche_filas()])
             }
-            Efecto::CrearDirectorio | Efecto::Borrar { .. } | Efecto::Transferir { .. }
+            Efecto::CrearDirectorio
+            | Efecto::Borrar { .. }
+            | Efecto::Transferir { .. }
+            | Efecto::Renombrar
                 if self.efectos == crate::commands::Efectos::SoloLectura =>
             {
                 Self::no_muta()
@@ -4856,7 +4879,123 @@ impl Estado {
             Efecto::CrearDirectorio => self.pedir_mkdir(),
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
             Efecto::Transferir { mover } => self.pedir_transferencia(mover),
+            Efecto::Renombrar => self.pedir_rename(),
         }
+    }
+
+    /// Abre el nombre de la entrada bajo el cursor, para editarlo. NO
+    /// renombra.
+    ///
+    /// Con VARIAS marcas se niega, y eso NO es lo mismo que hace el TUI: el
+    /// TUI renombra la del cursor e ignora las marcas. La tabla compartida
+    /// documenta la asimetría en `Facts::rename_single` y deja que cada
+    /// frontend conteste; este host ya contestaba «una sola» en `hechos()`,
+    /// así que atenuar la fila y luego renombrar de todas formas habría sido
+    /// la ayuda mintiendo sobre la tecla.
+    fn pedir_rename(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let hueco = self.hueco();
+        if hueco.pane.marks_len() > 1 {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: norte_frontend::availability::reason_key(
+                        norte_help::Reason::WrongTarget,
+                    )
+                    .to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        let Some(from) = hueco.pane.selected().map(|e| e.path.clone()) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-nothing-selected".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        let Some(nombre) = from.file_name() else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-cannot-transfer-root".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        // La siembra es lo que la FILA pinta, con el saneado canónico: editar
+        // produce el texto que se ve. Para un nombre que no es UTF-8 eso
+        // lleva un U+FFFD, y ese residuo es justo lo que el guard de la
+        // confirmación no deja escribir.
+        let (pintable, hostil) = norte_frontend::display_name(nombre.as_bytes());
+        let siembra = clamp_display(pintable);
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: "modal-rename-title".to_owned(),
+            // Un rename no va a ninguna parte: se queda donde está.
+            destination: None,
+            body: vec![Self::linea_de_ruta(&from)],
+            overflow_note: String::new(),
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: Some(siembra.clone()),
+            input_hostile: hostil,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista: vista.clone(),
+            // El crudo arranca IGUAL que la siembra: es lo que permite
+            // reconocer «no lo ha tocado» sin llevar una bandera aparte.
+            input_crudo: siembra.clone(),
+            al_confirmar: Some(Pendiente::Renombrar { from, siembra }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Los bytes que un rename confirmado va a escribir, o la clave del
+    /// motivo por el que no hay ninguno.
+    ///
+    /// Tres reglas, y las tres son de la regla 1:
+    ///
+    /// - **Sin tocar**, viajan los BYTES ORIGINALES. La siembra es una
+    ///   proyección de pantalla y para un nombre que no es UTF-8 no es
+    ///   reversible.
+    /// - **Tocado y con un U+FFFD dentro**, se rehúsa: ese carácter lo puso
+    ///   la pantalla, y confirmarlo escribiría mojibake de verdad. El guard
+    ///   no distingue residuo de intención, así que también rehúsa un U+FFFD
+    ///   TECLEADO — asimetría deliberada con crear un directorio, que no
+    ///   tiene siembra de la que heredar residuos.
+    /// - **El mismo nombre en el mismo sitio** no es una operación.
+    fn bytes_del_rename(from: &VPath, siembra: &str, escrito: &str) -> Result<VPath, &'static str> {
+        let bytes = if escrito == siembra {
+            from.file_name()
+                .map(|n| n.as_bytes().to_vec())
+                .unwrap_or_default()
+        } else {
+            if escrito.contains('\u{FFFD}') {
+                return Err("msg-transfer-name-fffd");
+            }
+            escrito.as_bytes().to_vec()
+        };
+        let seg = norte_proto::Segment::new(bytes).map_err(|_| "err-bad-name")?;
+        let destino = from.parent().ok_or("host-cannot-transfer-root")?.join(seg);
+        if destino == *from {
+            return Err("msg-transfer-name-same");
+        }
+        Ok(destino)
     }
 
     /// El DIRECTORIO al que va una transferencia, o por qué no hay uno.
@@ -5287,6 +5426,115 @@ impl Estado {
     /// Un id que no es el del diálogo abierto —porque ya se contestó, porque
     /// el renderer tardó— no hace nada y lo dice: confirmar dos veces NO
     /// borra dos veces.
+    /// Lo que la respuesta AFIRMATIVA de un diálogo pone en marcha.
+    ///
+    /// Separado de [`Self::responder_dialogo`], que se queda con lo que es
+    /// igual para todos: que el id sea el del diálogo abierto, que la
+    /// respuesta esté entre las que se ofrecieron, la cerradura de solo
+    /// lectura y el cierre. Aquí solo vive lo que cada pendiente hace.
+    fn ejecutar_pendiente(
+        &mut self,
+        dialogo: Dialogo,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let mut salidas = Vec::new();
+        match dialogo.al_confirmar {
+            Some(Pendiente::Borrar { paths, permanente }) => {
+                Self::lanzar_borrado(paths, permanente, backend, buzon);
+            }
+            Some(Pendiente::Renombrar { from, siembra }) => {
+                salidas.extend(self.confirmar_rename(
+                    &from,
+                    &siembra,
+                    &dialogo.input_crudo,
+                    backend,
+                    buzon,
+                ));
+            }
+            Some(Pendiente::Transferir {
+                origen,
+                origen_dir,
+                paths,
+                destino,
+                mover,
+            }) => {
+                Self::lanzar_transferencia(&paths, &origen_dir, &destino, mover, backend, buzon);
+                // Las marcas las CONSUME el envío, no el desenlace (mismo
+                // criterio que el TUI y que mc): una selección a medio
+                // consumir significaría cosas distintas según qué task de
+                // las N terminó.
+                //
+                // Y las del hueco de ORIGEN, no las del que tenga el foco
+                // ahora: `FocusSlot` no está vedada mientras hay un
+                // diálogo abierto, así que un clic en el otro panel entre
+                // la pregunta y la respuesta borraba las marcas del panel
+                // equivocado y dejaba intactas las que se acababan de
+                // enviar — y el lector volvía a pulsar F5 sobre lo mismo.
+                if let Some(h) = self.huecos.get_mut(&origen) {
+                    h.pane.clear_marks();
+                }
+                salidas.push(self.parche_filas());
+            }
+            Some(Pendiente::Buscar { root }) => {
+                let patron = dialogo.input_crudo.clone();
+                if patron.is_empty() {
+                    // Un patrón vacío casaría el árbol entero: no es una
+                    // búsqueda, es un listado recursivo, y se dice en vez
+                    // de lanzarlo.
+                    self.status.message = Some(clamp_display(norte_i18n::t_in(
+                        self.lang,
+                        "err-empty-pattern",
+                    )));
+                    let cambio = ViewChange::Status(self.status.clone());
+                    salidas.push(self.parche(vec![cambio]));
+                } else {
+                    salidas.extend(self.lanzar_busqueda(root, patron, backend, buzon));
+                }
+            }
+            Some(Pendiente::CrearDirectorio { dir }) => {
+                let nombre = dialogo.input_crudo.clone();
+                // El nombre se valida AQUÍ, con la misma regla que
+                // cualquier otro segmento: ni vacío, ni `/`, ni NUL, ni
+                // `.`/`..`. Un nombre que no vale no encola nada y lo
+                // dice; el texto tecleado no se pierde porque el diálogo
+                // se vuelve a abrir con él.
+                let Ok(seg) = norte_proto::Segment::new(nombre.clone().into_bytes()) else {
+                    self.status.message = Some(clamp_display(norte_i18n::t("err-bad-name")));
+                    let cambio = ViewChange::Status(self.status.clone());
+                    salidas.push(self.parche(vec![cambio]));
+                    return salidas;
+                };
+                let destino = dir.join(seg);
+                let backend = Arc::clone(backend);
+                let buzon = buzon.clone();
+                tokio::spawn(async move {
+                    match backend.mkdir(destino).await {
+                        Ok(task) => {
+                            let _ = buzon
+                                .send(Mensaje::TaskNueva(Box::new((task, vec![dir]))))
+                                .await;
+                        }
+                        Err(e) => {
+                            let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
+                        }
+                    }
+                });
+            }
+            Some(Pendiente::Decidir { approval_id }) => {
+                // Solo `approve` aprueba. Cualquier otra respuesta —y el
+                // cierre del diálogo— DENIEGA: una decisión de seguridad
+                // no tiene respuesta por defecto que diga «sí».
+                let backend = Arc::clone(backend);
+                tokio::spawn(async move {
+                    let _ = backend.policy_decide(approval_id, true).await;
+                });
+            }
+            None => {}
+        }
+        salidas
+    }
+
     fn responder_dialogo(
         &mut self,
         id: ModalId,
@@ -5317,97 +5565,7 @@ impl Estado {
         // una superficie de seguridad, «confirmar» y «aprobar» no deberían
         // poder confundirse en un renderer.
         if choice == "confirm" || choice == "approve" {
-            match dialogo.al_confirmar {
-                Some(Pendiente::Borrar { paths, permanente }) => {
-                    Self::lanzar_borrado(paths, permanente, backend, buzon);
-                }
-                Some(Pendiente::Transferir {
-                    origen,
-                    origen_dir,
-                    paths,
-                    destino,
-                    mover,
-                }) => {
-                    Self::lanzar_transferencia(
-                        &paths,
-                        &origen_dir,
-                        &destino,
-                        mover,
-                        backend,
-                        buzon,
-                    );
-                    // Las marcas las CONSUME el envío, no el desenlace (mismo
-                    // criterio que el TUI y que mc): una selección a medio
-                    // consumir significaría cosas distintas según qué task de
-                    // las N terminó.
-                    //
-                    // Y las del hueco de ORIGEN, no las del que tenga el foco
-                    // ahora: `FocusSlot` no está vedada mientras hay un
-                    // diálogo abierto, así que un clic en el otro panel entre
-                    // la pregunta y la respuesta borraba las marcas del panel
-                    // equivocado y dejaba intactas las que se acababan de
-                    // enviar — y el lector volvía a pulsar F5 sobre lo mismo.
-                    if let Some(h) = self.huecos.get_mut(&origen) {
-                        h.pane.clear_marks();
-                    }
-                    salidas.push(self.parche_filas());
-                }
-                Some(Pendiente::Buscar { root }) => {
-                    let patron = dialogo.input_crudo.clone();
-                    if patron.is_empty() {
-                        // Un patrón vacío casaría el árbol entero: no es una
-                        // búsqueda, es un listado recursivo, y se dice en vez
-                        // de lanzarlo.
-                        self.status.message = Some(clamp_display(norte_i18n::t_in(
-                            self.lang,
-                            "err-empty-pattern",
-                        )));
-                        let cambio = ViewChange::Status(self.status.clone());
-                        salidas.push(self.parche(vec![cambio]));
-                    } else {
-                        salidas.extend(self.lanzar_busqueda(root, patron, backend, buzon));
-                    }
-                }
-                Some(Pendiente::CrearDirectorio { dir }) => {
-                    let nombre = dialogo.input_crudo.clone();
-                    // El nombre se valida AQUÍ, con la misma regla que
-                    // cualquier otro segmento: ni vacío, ni `/`, ni NUL, ni
-                    // `.`/`..`. Un nombre que no vale no encola nada y lo
-                    // dice; el texto tecleado no se pierde porque el diálogo
-                    // se vuelve a abrir con él.
-                    let Ok(seg) = norte_proto::Segment::new(nombre.clone().into_bytes()) else {
-                        self.status.message = Some(clamp_display(norte_i18n::t("err-bad-name")));
-                        let cambio = ViewChange::Status(self.status.clone());
-                        salidas.push(self.parche(vec![cambio]));
-                        return (self.aplicada(), salidas);
-                    };
-                    let destino = dir.join(seg);
-                    let backend = Arc::clone(backend);
-                    let buzon = buzon.clone();
-                    tokio::spawn(async move {
-                        match backend.mkdir(destino).await {
-                            Ok(task) => {
-                                let _ = buzon
-                                    .send(Mensaje::TaskNueva(Box::new((task, vec![dir]))))
-                                    .await;
-                            }
-                            Err(e) => {
-                                let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
-                            }
-                        }
-                    });
-                }
-                Some(Pendiente::Decidir { approval_id }) => {
-                    // Solo `approve` aprueba. Cualquier otra respuesta —y el
-                    // cierre del diálogo— DENIEGA: una decisión de seguridad
-                    // no tiene respuesta por defecto que diga «sí».
-                    let backend = Arc::clone(backend);
-                    tokio::spawn(async move {
-                        let _ = backend.policy_decide(approval_id, true).await;
-                    });
-                }
-                None => {}
-            }
+            salidas.extend(self.ejecutar_pendiente(dialogo, backend, buzon));
         } else if let Some(Pendiente::Decidir { approval_id }) = dialogo.al_confirmar {
             // Denegar explícitamente, y también al cerrar: dejar al agente
             // esperando una respuesta que no llega es peor que decirle que no.
@@ -5498,6 +5656,62 @@ impl Estado {
             },
             vec![self.parche(vec![cambio])],
         ))
+    }
+
+    /// Resuelve el nombre confirmado y encola el rename, o dice por qué no.
+    fn confirmar_rename(
+        &mut self,
+        from: &VPath,
+        siembra: &str,
+        escrito: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        match Self::bytes_del_rename(from, siembra, escrito) {
+            Ok(destino) => {
+                Self::lanzar_rename(from.clone(), destino, backend, buzon);
+                Vec::new()
+            }
+            Err(clave) => {
+                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+                let cambio = ViewChange::Status(self.status.clone());
+                vec![self.parche(vec![cambio])]
+            }
+        }
+    }
+
+    /// Encola el `fs.move` de UN rename, con el destino ya compuesto.
+    ///
+    /// Aparte de [`Self::lanzar_transferencia`] porque el destino de un
+    /// rename es una RUTA COMPLETA y el de una transferencia es un
+    /// DIRECTORIO sobre el que se compone el nombre del origen. Pasar el uno
+    /// por el otro renombraría a `nuevo/nombre-viejo`, que es exactamente el
+    /// tipo de error que un parámetro con dos significados produce.
+    ///
+    /// Mismo verbo del wire, misma entrada de journal y mismo camino de
+    /// deshacer que mover: lo que cambia es la pregunta, no el efecto.
+    fn lanzar_rename(
+        from: VPath,
+        to: VPath,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        // El directorio del que sale y al que llega es el MISMO, así que una
+        // sola entrada: relistarlo dos veces sería pedir el mismo listado dos
+        // veces.
+        let afectados: Vec<VPath> = from.parent().into_iter().collect();
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let mensaje = match backend
+                .move_(from, to, norte_proto::CollisionPolicy::Fail)
+                .await
+            {
+                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados))),
+                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+            };
+            let _ = buzon.send(mensaje).await;
+        });
     }
 
     /// Encola las Tasks del lote y engancha su progreso al actor.

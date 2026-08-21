@@ -48,6 +48,7 @@ pub const MUTAN: &[&str] = &[
     "pane.delete-permanent",
     "pane.copy",
     "pane.move",
+    "pane.rename",
 ];
 
 /// Los comandos que el host ejecuta HOY.
@@ -91,6 +92,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.delete-permanent",
     "pane.copy",
     "pane.move",
+    "pane.rename",
 ];
 
 /// Los comandos de la pantalla del VISOR que el host ejecuta.
@@ -263,6 +265,15 @@ pub enum Efecto {
         /// distintos, así que esto no elige una opción: elige el verbo.
         mover: bool,
     },
+    /// Pide renombrar la entrada bajo el cursor. NO renombra: abre el nombre
+    /// para editarlo.
+    ///
+    /// Por el WIRE es un movimiento al mismo directorio, y aun así es un
+    /// efecto propio: lo que pregunta es otra cosa (un nombre, no un sitio),
+    /// lo que rehúsa es otra cosa (una selección múltiple, no un destino que
+    /// falta) y lo que siembra el campo tiene una regla que ninguna otra
+    /// superficie tiene — el nombre SIN TOCAR viaja como bytes.
+    Renombrar,
 }
 
 /// Traduce un comando del catálogo al efecto que el host aplica.
@@ -313,6 +324,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.delete-permanent" => Efecto::Borrar { permanente: true },
         "pane.copy" => Efecto::Transferir { mover: false },
         "pane.move" => Efecto::Transferir { mover: true },
+        "pane.rename" => Efecto::Renombrar,
         _ => return None,
     })
 }

@@ -1497,6 +1497,7 @@ dialog-cancel = Cancel
 dialog-approve = Approve
 dialog-deny = Deny
 modal-mkdir-title = New directory
+modal-rename-title = Rename
 modal-delete-title = Move to trash?
 # The three verdicts of the shared resolver, for a key that IS bound.
 cmd-here = that is already what this does here
