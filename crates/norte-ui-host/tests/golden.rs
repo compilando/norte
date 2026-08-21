@@ -143,6 +143,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::PlaceActivateRow { .. } => "place_activate_row",
         UiAction::LayoutActivateRow { .. } => "layout_activate_row",
         UiAction::SearchActivateRow { .. } => "search_activate_row",
+        UiAction::AiRenameDecide { .. } => "ai_rename_decide",
         UiAction::Resync => "resync",
     }
 }
@@ -271,6 +272,10 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("parent", UiAction::Parent { slot_id: 1 }),
+        (
+            "ai_rename_decide",
+            UiAction::AiRenameDecide { approve: true },
+        ),
         ("resync", UiAction::Resync),
         (
             "select_row",
@@ -391,8 +396,11 @@ fn plan_ia_de_referencia() -> norte_ui_host::dto::AiRenameView {
             text: "✗ 2. ya existe: otro.mkv".to_owned(),
             hostile: false,
         }],
+        more_note: "… 1/3 (desplazar: ↓/↑)".to_owned(),
+        hidden_hostile: true,
         confirmable: true,
-        real_steps: 2,
+        real_steps_note: "se renombrarán 2 de verdad".to_owned(),
+        seen_all: false,
     }
 }
 
@@ -649,7 +657,9 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         columns: Some(columnas_de_referencia()),
         picker: Some(selector_de_referencia()),
         viewer: Some(visor_de_referencia()),
-        ai_rename: None,
+        // Con plan, como el resto de overlays de esta foto: si va a `None`,
+        // el sitio del campo dentro del snapshot no lo clava nadie.
+        ai_rename: Some(plan_ia_de_referencia()),
         locale: "es".to_owned(),
     }
 }

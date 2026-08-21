@@ -29,6 +29,20 @@ const FUENTES: &[(&str, &str)] = &[
 /// Los campos cuyo valor ES una clave Fluent.
 const CAMPOS: &[&str] = &["reason_key", "title_key", "label_key"];
 
+/// Las LLAMADAS que traducen una clave en el sitio.
+///
+/// Los campos de arriba solo ven las claves que VIAJAN al renderer. Una que el
+/// host traduce él mismo —para la barra de estado, para una línea de un
+/// diálogo— no pasa por ningún campo `*_key`, así que este barrido no la veía:
+/// `err-bad-name` llevaba desde la fase 2 sin existir en ningún idioma, y
+/// confirmar un nombre ilegal ponía el identificador crudo en la barra.
+const LLAMADAS: &[&str] = &[
+    "norte_i18n::t(",
+    "norte_i18n::t_in(",
+    "norte_i18n::ta(",
+    "norte_i18n::ta_in(",
+];
+
 /// Las funciones COMPARTIDAS que devuelven una clave, con su fichero.
 ///
 /// El host no las escribe, las llama, así que el barrido de literales no las
@@ -63,6 +77,10 @@ const CALCULADAS: &[&str] = &[
     "empty_message()",
     // La devuelve `elegir_pagina`, y es una de las de `availability`.
     "reason_key: clave",
+    // El motivo por el que una respuesta de diálogo NO hizo nada. Sale de
+    // `bytes_del_rename` / `segmento_tecleado`, que devuelven claves
+    // literales y por tanto SÍ las ve este barrido en su origen.
+    "reason_key: reason_key",
 ];
 
 /// Cuánto texto se mira tras un campo para encontrar sus literales.
@@ -116,6 +134,33 @@ fn claves_elegidas() -> BTreeMap<String, Vec<String>> {
                     );
                     continue;
                 }
+                out.entry(format!("{nombre}:{linea}"))
+                    .or_default()
+                    .extend(encontradas);
+            }
+        }
+    }
+    // Las que el host traduce en el sitio. Se toma el PRIMER literal que
+    // parezca una clave dentro de la ventana: `t_in` lleva el idioma delante y
+    // `ta_in` los argumentos detrás, así que el primero es siempre el id.
+    for (nombre, fuente) in FUENTES {
+        for llamada in LLAMADAS {
+            let mut desde = 0usize;
+            while let Some(i) = fuente[desde..].find(llamada) {
+                let inicio = desde + i + llamada.len();
+                desde = inicio;
+                let fin = (inicio + VENTANA).min(fuente.len());
+                let encontradas: Vec<String> = literales(&fuente[inicio..fin])
+                    .into_iter()
+                    .filter(|s| parece_clave(s))
+                    .take(1)
+                    .collect();
+                if encontradas.is_empty() {
+                    // Una clave calculada: la trae una variable, y su origen
+                    // tiene que ser algo que este test SÍ mire.
+                    continue;
+                }
+                let linea = fuente[..inicio].lines().count();
                 out.entry(format!("{nombre}:{linea}"))
                     .or_default()
                     .extend(encontradas);

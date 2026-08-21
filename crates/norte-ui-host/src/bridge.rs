@@ -25,6 +25,11 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **25**: la revisión de un plan dice lo que le faltaba para poder
+///   aprobarse a conciencia: cuánto se ve de cuánto hay y cuántos renombrados
+///   hará DE VERDAD —los dos ya traducidos, porque el catálogo no sustituye
+///   variables—, si hay un nombre alterado FUERA de la ventana, y si el
+///   lector ha recorrido el plan entero. Y se puede contestar con el ratón.
 /// - **24**: la pantalla puede llevar un PLAN DE RENOMBRADO en revisión: las
 ///   parejas que el modelo propone (de nombre a nombre, cada uno entero y por
 ///   separado — nunca concatenados con una flecha), el veredicto del core y
@@ -86,7 +91,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 24;
+pub const BRIDGE_VERSION: u32 = 25;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

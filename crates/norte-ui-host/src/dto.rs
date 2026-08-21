@@ -1340,6 +1340,23 @@ pub struct AiRenameView {
     pub first_visible: u64,
     /// Cuántas parejas tiene el plan.
     pub total: u64,
+    /// Cuánto se ve de cuánto hay, ya traducido. Vacío = se ve todo.
+    ///
+    /// Traducido AQUÍ y no en el renderer, y esta vez con una razón medida:
+    /// el catálogo que cruza el puente lleva las cadenas YA formateadas y sin
+    /// argumentos, y Fluent escribe una variable ausente como `{$shown}` —
+    /// sin espacios. El renderer sustituía `{ $shown }`, que no casa nunca,
+    /// así que la línea que dice cuánto del plan se está mirando pintaba dos
+    /// identificadores crudos en la pantalla donde se aprueba un lote.
+    pub more_note: String,
+    /// FUERA de la ventana hay algún nombre que se pinta distinto de lo que
+    /// es.
+    ///
+    /// La ventana son cinco parejas de hasta 256, y cada línea visible lleva
+    /// su marca. Sin esto, la marca solo existe para lo que se ve: basta con
+    /// poner la pareja alterada en la posición doce para que se apruebe un
+    /// plan sin que ninguna insignia haya aparecido jamás.
+    pub hidden_hostile: bool,
     /// El veredicto del core, ya traducido: comprobando, aplicable, no
     /// aplicable, o no comprobado. Es la línea que no se puede perder.
     pub status: String,
@@ -1350,9 +1367,20 @@ pub struct AiRenameView {
     /// cuenta de colisiones: el campo es normativo y un veredicto futuro
     /// puede parar un plan sin nombre ofensor que listar.
     pub confirmable: bool,
-    /// Cuántos renombrados hará DE VERDAD. No es `total`: el planificador
-    /// tira las parejas nulas, y prometer las pedidas sería prometer de más.
-    pub real_steps: u64,
+    /// Cuántos renombrados hará DE VERDAD, ya dicho y traducido. No es
+    /// `total`: el planificador tira las parejas nulas, y prometer las
+    /// pedidas sería prometer de más.
+    ///
+    /// Vacío mientras no haya veredicto: hasta que el core conteste no se
+    /// sabe, y un cero se leería como «no hará nada».
+    pub real_steps_note: String,
+    /// El lector ha recorrido el plan ENTERO.
+    ///
+    /// Aprobar lo exige. Con 256 parejas permitidas y cinco visibles, la
+    /// pareja doscientos se ejecutaba sin que nadie la hubiera pintado nunca
+    /// — y la revisión es toda la defensa que hay contra un plan que un
+    /// modelo escribió a partir de nombres que un atacante controla.
+    pub seen_all: bool,
 }
 
 /// Una pareja del plan: de qué nombre a qué nombre.

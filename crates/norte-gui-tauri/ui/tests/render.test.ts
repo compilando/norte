@@ -2173,8 +2173,11 @@ describe("la revisión de un plan de renombrado", () => {
       total: 7,
       status: "lote: aplicable",
       detail: [{ text: "✗ 3. ya existe: ep03.mkv", hostile: false }],
+      more_note: "… 1/7 (desplazar: ↓/↑)",
+      hidden_hostile: true,
       confirmable: true,
-      real_steps: 6,
+      real_steps_note: "se renombrarán 6 de verdad",
+      seen_all: true,
     };
     screen.paint(v);
     const caja = document.querySelector(".ai-rename") as HTMLElement;
@@ -2209,8 +2212,11 @@ describe("la revisión de un plan de renombrado", () => {
       total: 0,
       status: "lote: NO aplicable",
       detail: [],
+      more_note: "",
+      hidden_hostile: false,
       confirmable: false,
-      real_steps: 0,
+      real_steps_note: "lote: NO aplicable",
+      seen_all: true,
     };
     screen.paint(v);
     const estado = document.querySelector(".ai-rename-status") as HTMLElement;
@@ -2227,8 +2233,11 @@ describe("la revisión de un plan de renombrado", () => {
       total: 0,
       status: "…",
       detail: [],
+      more_note: "",
+      hidden_hostile: false,
       confirmable: false,
-      real_steps: 0,
+      real_steps_note: "lote: NO aplicable",
+      seen_all: true,
     };
     screen.paint(v);
     expect(document.querySelector(".ai-rename")).not.toBeNull();

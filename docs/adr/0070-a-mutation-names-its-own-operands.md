@@ -218,11 +218,17 @@ Renaming reached the same three rules from a different direction, and they are
 worth recording next to the ones above because the second one is not obvious:
 
 - **A single rename** (`shift+F6`) seeds its field with what the row PAINTS,
-  and an untouched field sends the ORIGINAL BYTES. The seed is a screen
-  projection and for a name that is not UTF-8 it is not reversible; a touched
-  field that still contains U+FFFD is refused. "Untouched" is recognised by
-  comparing against the seed rather than by a flag, because the renderer sends
-  the whole text on every event, not a delta.
+  and an untouched field reconstructs the ORIGINAL BYTES — which makes the
+  destination equal the source, so nothing is renamed. That is the protection
+  rather than a gap: the seed is a screen projection, for a name that is not
+  UTF-8 it is not reversible, and it must never become the operand. A touched
+  field still containing U+FFFD is refused, and a name whose projection does
+  not fit on screen cannot be edited here at all (the clamp appends `…`, a
+  legal filename character that nothing masks and nothing flags). "Untouched"
+  is recognised by comparing against the seed rather than by a flag, because
+  the renderer sends the whole text on every event, not a delta. The honest
+  consequence: a name that is not valid UTF-8, or that is longer than the
+  display budget, cannot be renamed from this window.
 - **A plan proposed by a model** is validated whole before it is shown, and the
   core's verdict is a second trip — so the review opens in a "checking" state
   and fills itself in. Approving sends the `plan_hash` the core returned: what

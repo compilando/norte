@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 24;
+export const BRIDGE_VERSION = 25;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -215,13 +215,20 @@ export interface AiRenameView {
   pairs: AiRenamePairView[];
   first_visible: number;
   total: number;
+  /** Cuánto se ve de cuánto hay, ya traducido. Vacío = se ve todo. */
+  more_note: string;
+  /** Fuera de la ventana hay un nombre que se pinta distinto de lo que es. */
+  hidden_hostile: boolean;
   /** El veredicto del core, ya traducido. */
   status: string;
   /** Maquinaria y colisiones, cada línea con su marca. */
   detail: DialogLine[];
   /** Aprobar puede hacer algo. Lo dice el core. */
   confirmable: boolean;
-  real_steps: number;
+  /** Cuántos renombrados hará DE VERDAD, ya dicho y traducido. */
+  real_steps_note: string;
+  /** El lector ha recorrido el plan entero. Aprobar lo exige. */
+  seen_all: boolean;
 }
 
 export type TaskStateView = "queued" | "running" | "done" | "failed" | "cancelled";
@@ -623,6 +630,7 @@ export type UiAction =
   | { action: "place_activate_row"; row: number; generation: number }
   | { action: "layout_activate_row"; row: number }
   | { action: "search_activate_row"; row: number }
+  | { action: "ai_rename_decide"; approve: boolean }
   | { action: "resync" };
 
 export type StaleReason = "instance" | "generation" | "modal";

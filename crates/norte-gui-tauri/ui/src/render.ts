@@ -2075,15 +2075,26 @@ export class Screen {
     }
     caja.append(lista);
 
-    if (plan.total > plan.pairs.length) {
+    if (plan.more_note !== "") {
+      // Ya traducido y ya sustituido POR EL HOST. Sustituirlo aquí no
+      // funcionaba: el catálogo lleva las cadenas ya formateadas y sin
+      // argumentos, y Fluent escribe una variable ausente como `{$shown}` —
+      // sin espacios—, así que el `.replace` no casaba nunca y la línea que
+      // dice cuánto del plan se está viendo pintaba dos identificadores.
       const mas = document.createElement("p");
       mas.className = "ai-rename-more";
-      // Lo que se ve de lo que hay, y CÓMO se ve el resto. Un contador
-      // suelto no dice que se pueda recorrer.
-      mas.textContent = this.t("modal-ai-rename-more")
-        .replace("{ $shown }", String(plan.first_visible + plan.pairs.length))
-        .replace("{ $total }", String(plan.total));
+      mas.textContent = plan.more_note;
       caja.append(mas);
+    }
+    if (plan.hidden_hostile) {
+      // Lo que se enmascara se dice TAMBIÉN cuando no cabe en la ventana: la
+      // marca de una línea solo existe para esa línea, y la pareja alterada
+      // puede estar en la posición doce.
+      const aviso = document.createElement("p");
+      aviso.className = "ai-rename-hidden-hostile hostile";
+      aviso.setAttribute("role", "alert");
+      aviso.textContent = this.t("modal-ai-rename-hidden-hostile");
+      caja.append(aviso);
     }
 
     for (const linea of plan.detail) {
@@ -2098,9 +2109,43 @@ export class Screen {
       caja.append(p);
     }
 
+    if (plan.real_steps_note !== "") {
+      // Cuántos renombra DE VERDAD: el planificador tira las parejas nulas, y
+      // enseñar solo las pedidas promete de más.
+      const reales = document.createElement("p");
+      reales.className = "ai-rename-real";
+      reales.textContent = plan.real_steps_note;
+      caja.append(reales);
+    }
+
+    // Botones, y no solo teclas. Un clic es un gesto DIRIGIDO a esta
+    // pantalla, así que no necesita el reconocimiento que sí necesita una
+    // tecla; y sin ellos un lector con el ratón no podía ni quitarse de
+    // encima una pantalla que se abrió sola.
+    const botones = document.createElement("div");
+    botones.className = "choices";
+    // Las dos claves, LITERALES: una `t(variable)` es una clave que el
+    // barrido del catálogo no puede seguir, y una clave que no se sigue se
+    // pinta como su propio identificador el día que falte.
+    const aplicar = document.createElement("button");
+    aplicar.type = "button";
+    aplicar.textContent = this.t("modal-ai-rename-apply");
+    aplicar.disabled = !plan.confirmable;
+    aplicar.addEventListener("click", () => {
+      this.send({ action: "ai_rename_decide", approve: true });
+    });
+    const descartar = document.createElement("button");
+    descartar.type = "button";
+    descartar.textContent = this.t("modal-ai-rename-discard");
+    descartar.addEventListener("click", () => {
+      this.send({ action: "ai_rename_decide", approve: false });
+    });
+    botones.append(aplicar, descartar);
+    caja.append(botones);
+
     const pie = document.createElement("p");
     pie.className = "ai-rename-hint";
-    pie.textContent = this.t("modal-ai-rename-plan-hint");
+    pie.textContent = this.t("gui-modal-ai-rename-plan-hint");
     caja.append(pie);
     this.aiRenameRoot.replaceChildren(caja);
   }

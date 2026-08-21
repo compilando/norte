@@ -251,6 +251,18 @@ pub enum UiAction {
         /// Fila, en el orden en que viajaron.
         row: u32,
     },
+    /// Contesta a la revisión de un plan de renombrado: aplicarlo o
+    /// descartarlo.
+    ///
+    /// Existe además de las teclas porque la revisión se abre SOLA y se queda
+    /// el teclado: sin ella, la única forma de contestar era una tecla, y un
+    /// lector con el ratón no podía ni quitársela de encima. Y a diferencia de
+    /// una tecla, un clic en un botón es un gesto DIRIGIDO a esta pantalla —
+    /// no puede ser una tecla que iba a otro sitio.
+    AiRenameDecide {
+        /// `true` = aplicar. `false` = descartar.
+        approve: bool,
+    },
     /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
     Resync,
 }

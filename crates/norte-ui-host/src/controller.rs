@@ -77,6 +77,14 @@ pub const CONTEXTOS: &[&str] = &[
 /// reclamado y una página en blanco para siempre.
 const PLAZO_PLUGINS: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Plazo de una petición de plan a un modelo.
+///
+/// Generoso: pensar es lo que hace. Es el tope de ARRIBA, para que una
+/// llamada que no vuelva jamás no deje la petición en vuelo para siempre —
+/// con `Escape` como única salida y sin nada en pantalla que diga que sigue
+/// viva.
+const PLAZO_IA: std::time::Duration = std::time::Duration::from_mins(2);
+
 /// Tope de un nombre tecleado, en bytes. Ni `NAME_MAX` (que es del sistema
 /// de ficheros y no lo sabemos aquí) ni el de pantalla: un tope generoso que
 /// impide que un renderer mande un megabyte, y que RECHAZA en vez de
@@ -1079,6 +1087,19 @@ struct RevisionIa {
     plan: norte_frontend::BatchPlan,
     /// Primera pareja visible: la revisión es de todo el plan, por scroll.
     primera: usize,
+    /// Hasta dónde ha LLEGADO el lector. Aprobar lo exige: la revisión es
+    /// toda la defensa que hay contra un plan escrito a partir de nombres que
+    /// controla quien escribe en el directorio, y con cinco parejas visibles
+    /// de doscientas cincuenta y seis esa defensa cubría el 2 %.
+    visto_hasta: usize,
+    /// Esta revisión ya se ha ENSEÑADO al menos una vez, así que la siguiente
+    /// tecla es una respuesta y no una tecla que iba a otro sitio.
+    ///
+    /// La pantalla se abre SOLA, del todo, decenas de segundos después del
+    /// gesto que la pidió, y se queda el teclado. Sin esto, la `y` de quien
+    /// estaba tecleando `yes.txt` en el filtro rápido aprobaba el renombrado
+    /// del directorio entero.
+    reconocida: bool,
     /// La época que la pidió.
     epoca: u64,
 }
@@ -1834,6 +1855,9 @@ impl Estado {
                 };
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
+            UiAction::AiRenameDecide { approve } => {
+                self.decidir_revision_ia(*approve, backend, buzon)
+            }
             UiAction::Resync => {
                 let snap = self.snapshot();
                 (
@@ -2000,12 +2024,24 @@ impl Estado {
         // medio segundo después es abrir una ventana que ya nadie pidió — y
         // cambiarle el teclado de mapa sin gesto suyo. (Un segundo F3 pide su
         // propia lectura y se queda con el testigo nuevo.)
-        // Y `Escape` abandona un plan de renombrado que siga pensando. No
-        // cualquier tecla, como el visor: el modelo tarda de verdad, y seguir
-        // navegando mientras piensa es lo normal. Lo que no puede pasar es
-        // que el plan se abra encima de la pantalla medio minuto después de
-        // que su dueño se haya ido a otra cosa — con las teclas puestas sobre
-        // él y prometiendo renombrar un directorio que ya no es el que se ve.
+        self.visor_en_vuelo = None;
+        if self.paleta.is_some() {
+            return Some(self.tecla_en_paleta(k, backend, buzon));
+        }
+        if self.hueco().pane.quick().is_some() {
+            return self.tecla_en_quick(k);
+        }
+        // Y, cuando NADIE más la quería, `Escape` abandona un plan de
+        // renombrado que siga pensando. Va la ÚLTIMA, que es la única
+        // posición en la que «no la quería nadie» es verdad: por encima se
+        // comía el `Escape` que cierra la paleta y el que cancela el filtro
+        // rápido —una tecla haciendo dos cosas mal a la vez— y se saltaba el
+        // corte del visor en vuelo.
+        //
+        // Y solo `Escape`, no cualquier tecla como el visor: el modelo tarda
+        // de verdad y seguir navegando mientras piensa es lo normal. Lo que
+        // no puede pasar es que el plan se abra encima de la pantalla medio
+        // minuto después de que su dueño se haya ido a otra cosa.
         if self.ia_en_vuelo.is_some() && (k.key == "Escape" || k.key == "esc") {
             self.epoca_ia += 1;
             self.ia_en_vuelo = None;
@@ -2015,13 +2051,6 @@ impl Estado {
             )));
             let cambio = ViewChange::Status(self.status.clone());
             return Some((self.aplicada(), vec![self.parche(vec![cambio])]));
-        }
-        self.visor_en_vuelo = None;
-        if self.paleta.is_some() {
-            return Some(self.tecla_en_paleta(k, backend, buzon));
-        }
-        if self.hueco().pane.quick().is_some() {
-            return self.tecla_en_quick(k);
         }
         None
     }
@@ -5097,7 +5126,9 @@ impl Estado {
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let res = backend.ai_rename_plan(dir, instruccion).await;
+            let res = (tokio::time::timeout(PLAZO_IA, backend.ai_rename_plan(dir, instruccion))
+                .await)
+                .unwrap_or(Err(Error::ProviderUnavailable { retryable: true }));
             let _ = buzon
                 .send(Mensaje::Fondo(Box::new(Fondo::PlanIa(
                     epoca,
@@ -5105,7 +5136,15 @@ impl Estado {
                 ))))
                 .await;
         });
-        Vec::new()
+        // Y se DICE que se está pidiendo. Sin esto la tecla no producía nada
+        // visible, así que el lector la volvía a pulsar — que es justo lo que
+        // destapaba la carrera de las dos peticiones.
+        self.status.message = Some(clamp_display(norte_i18n::t_in(
+            self.lang,
+            "host-plan-asking",
+        )));
+        let cambio = ViewChange::Status(self.status.clone());
+        vec![self.parche(vec![cambio])]
     }
 
     /// Lo que contestó el modelo, revisado antes de enseñarlo.
@@ -5128,21 +5167,26 @@ impl Estado {
         // La petición EN VUELO tiene que ser esta. Un plan de otra época es
         // uno que el lector abandonó, y abrirlo es la aplicación moviéndose
         // sola.
-        let Some((_, dir)) = self.ia_en_vuelo.take().filter(|(e, _)| *e == epoca) else {
+        // `take_if` y NO `take().filter(...)`: `take` vacía el hueco ANTES de
+        // que el filtro mire, así que una respuesta VIEJA se llevaba por
+        // delante la petición VIVA. La secuencia era normal —pedir, no ver
+        // nada, volver a pedir— y se quedaban las dos sin abrir, sin decir
+        // nada y sin poder distinguirse de un daemon muerto.
+        let Some((_, dir)) = self.ia_en_vuelo.take_if(|(e, _)| *e == epoca) else {
             return Vec::new();
         };
         let plan = match res {
             Ok(p) => p,
-            Err(e) => return self.decir_de_ia(norte_frontend::error::error_key(&e)),
+            Err(e) => return self.decir_de_ia(epoca, norte_frontend::error::error_key(&e)),
         };
         if plan.entries.is_empty() {
-            return self.decir_de_ia("msg-ai-rename-empty");
+            return self.decir_de_ia(epoca, "msg-ai-rename-empty");
         }
         if plan.entries.len() > norte_frontend::MAX_AI_PLAN_ENTRIES {
-            return self.decir_de_ia("msg-ai-rename-invalid-plan");
+            return self.decir_de_ia(epoca, "msg-ai-rename-invalid-plan");
         }
         let Some(parejas) = norte_frontend::rename_pairs(&plan.entries) else {
-            return self.decir_de_ia("msg-ai-rename-invalid-plan");
+            return self.decir_de_ia(epoca, "msg-ai-rename-invalid-plan");
         };
         // El veredicto se pide EN EL MISMO viaje: la revisión necesita el
         // `plan_hash` para que aprobar haga algo, y un plan que se quedara
@@ -5168,6 +5212,8 @@ impl Estado {
             parejas,
             plan: norte_frontend::BatchPlan::Pending,
             primera: 0,
+            visto_hasta: norte_frontend::AI_RENAME_PAIR_LIMIT,
+            reconocida: false,
             epoca,
         });
         let cambio = ViewChange::AiRename {
@@ -5228,11 +5274,34 @@ impl Estado {
                 to: linea(&e.to),
             })
             .collect();
+        let total = r.entradas.len();
+        let hasta = (r.primera + norte_frontend::AI_RENAME_PAIR_LIMIT).min(total);
         Some(crate::dto::AiRenameView {
             dir: Self::linea_de_ruta(&r.dir),
             pairs,
             first_visible: r.primera as u64,
-            total: r.entradas.len() as u64,
+            total: total as u64,
+            more_note: if hasta >= total {
+                String::new()
+            } else {
+                clamp_display(norte_i18n::ta_in(
+                    self.lang,
+                    "modal-ai-rename-more",
+                    &[("shown", &hasta.to_string()), ("total", &total.to_string())],
+                ))
+            },
+            // Lo que NO se ve también se dice: la marca de una línea solo
+            // existe para la línea, y la pareja alterada puede estar en la
+            // posición doce.
+            hidden_hostile: r
+                .entradas
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i < r.primera || *i >= hasta)
+                .any(|(_, e)| {
+                    norte_frontend::display_name(e.from.as_bytes()).1
+                        || norte_frontend::display_name(e.to.as_bytes()).1
+                }),
             // Traducido AQUÍ: un renderer no traduce, y de todo el cuerpo
             // esta es la línea que no se puede perder.
             status: clamp_display(norte_i18n::t_in(self.lang, r.plan.status_key())),
@@ -5248,8 +5317,20 @@ impl Estado {
                     hostile,
                 })
                 .collect(),
-            confirmable: r.plan.confirmable(),
-            real_steps: r.plan.real_steps() as u64,
+            // Aprobar exige las DOS cosas: que el core lo acepte y que el
+            // lector haya llegado al final. Lo segundo no lo puede saber el
+            // core y lo primero no lo puede saber el lector.
+            confirmable: r.plan.confirmable() && r.visto_hasta >= total,
+            real_steps_note: if r.plan.ready().is_none() {
+                String::new()
+            } else {
+                clamp_display(norte_i18n::ta_in(
+                    self.lang,
+                    "modal-ai-rename-real-steps",
+                    &[("n", &r.plan.real_steps().to_string())],
+                ))
+            },
+            seen_all: r.visto_hasta >= total,
         })
     }
 
@@ -5264,6 +5345,41 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Un acorde CON modificador no es una respuesta a esta pantalla: es
+        // una tecla que iba a otro sitio. `tecla_en_quick` los rehúsa por lo
+        // mismo, y aquí importa más — `ctrl+y` aprobaba un lote.
+        if k.ctrl || k.alt || k.meta {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-key-unmapped".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        // La PRIMERA tecla solo reconoce la pantalla. Esta se abre sola,
+        // decenas de segundos después del gesto que la pidió, y se queda el
+        // teclado: sin este paso, la tecla que el lector iba a mandar a otra
+        // cosa contestaba una pregunta que aún no sabía que tenía delante.
+        // `Escape` es la excepción y no necesita reconocimiento: descartar es
+        // seguro en los dos estados, y quien no quiere esto tiene que poder
+        // quitárselo de encima a la primera.
+        let reconocida = self.revision_ia.as_ref().is_some_and(|r| r.reconocida);
+        if !reconocida && k.key != "Escape" && k.key != "esc" {
+            if let Some(r) = self.revision_ia.as_mut() {
+                r.reconocida = true;
+            }
+            self.status.message = Some(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "host-plan-acknowledge",
+            )));
+            let cambios = vec![
+                ViewChange::AiRename {
+                    ai_rename: self.vista_ia(),
+                },
+                ViewChange::Status(self.status.clone()),
+            ];
+            return (self.aplicada(), vec![self.parche(cambios)]);
+        }
         let total = self.revision_ia.as_ref().map_or(0, |r| r.entradas.len());
         let ventana = norte_frontend::AI_RENAME_PAIR_LIMIT;
         let tope = total.saturating_sub(ventana);
@@ -5271,6 +5387,9 @@ impl Estado {
         let mover = |r: &mut RevisionIa, delta: i64| {
             let destino = i64::try_from(r.primera).unwrap_or(0).saturating_add(delta);
             r.primera = usize::try_from(destino.max(0)).unwrap_or(0).min(tope);
+            // La marca de agua solo SUBE: recorrer hacia atrás no deshace lo
+            // que ya se leyó.
+            r.visto_hasta = r.visto_hasta.max((r.primera + ventana).min(total));
         };
         match k.key.as_str() {
             "ArrowDown" | "j" => {
@@ -5294,7 +5413,16 @@ impl Estado {
                 }
             }
             "Escape" | "n" | "N" => return self.cerrar_revision_ia(),
-            "Enter" | "y" | "Y" => return self.aprobar_revision_ia(backend, buzon),
+            // `Enter` NO aprueba, y esto rompe la paridad con el TUI a
+            // propósito. Allí el plan lo abre una tecla del lector y la
+            // siguiente tecla es una respuesta; aquí la pantalla se abre sola
+            // decenas de segundos después, y `Enter` es justo la tecla con la
+            // que se estaba recorriendo el árbol mientras el modelo pensaba.
+            // Dos `Enter` seguidos entrando en directorios anidados son
+            // normales; que el segundo apruebe un renombrado de lote, no.
+            // Queda `y` —que el reconocimiento protege— y el botón, que es un
+            // gesto que no se puede confundir con otra cosa.
+            "y" | "Y" => return self.aprobar_revision_ia(backend, buzon),
             _ => {
                 return (
                     ActionAck::Unavailable {
@@ -5310,15 +5438,43 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
+    /// Contesta a la revisión con un gesto DIRIGIDO a ella (un botón).
+    ///
+    /// No necesita el reconocimiento que sí necesita una tecla: un clic en
+    /// un botón de esta pantalla no puede ser un gesto que iba a otro sitio.
+    fn decidir_revision_ia(
+        &mut self,
+        approve: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.revision_ia.is_none() {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        if let Some(r) = self.revision_ia.as_mut() {
+            r.reconocida = true;
+        }
+        if approve {
+            self.aprobar_revision_ia(backend, buzon)
+        } else {
+            self.cerrar_revision_ia()
+        }
+    }
+
     /// Descarta el plan sin aplicar nada.
     fn cerrar_revision_ia(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // No hace falta subir la época aquí, y decirlo evita que alguien lo
-        // añada «por si acaso»: el veredicto tardío ya no encuentra revisión
-        // que actualizar, y una petición NUEVA sube la época ella misma. Lo
-        // que sí se suelta es una petición en vuelo — esa sí podría abrir una
-        // pantalla que su dueño acaba de cerrar.
+        // No se sube la época, y no se toca `ia_en_vuelo`. Las dos cosas
+        // parecen prudencia y una de ellas era un bug:
+        //
+        // - La época no hace falta. El veredicto tardío ya no encuentra
+        //   revisión que actualizar, y una petición NUEVA sube la época ella
+        //   misma.
+        // - `ia_en_vuelo` NO puede ser la petición de esta revisión: se la
+        //   llevó `aplicar_plan_ia` al abrirla. Si hay algo ahí es una
+        //   petición POSTERIOR, y soltarla aquí la mataba en silencio —
+        //   descartar un plan que se está leyendo no es abandonar el que se
+        //   acaba de pedir.
         self.revision_ia = None;
-        self.ia_en_vuelo = None;
         let cambio = ViewChange::AiRename { ai_rename: None };
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
@@ -5336,6 +5492,17 @@ impl Estado {
         let Some(r) = self.revision_ia.as_ref() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
+        if r.visto_hasta < r.entradas.len() {
+            // Y se dice CUÁL de las dos cosas falta: «el core no lo acepta» y
+            // «todavía no lo has leído entero» se arreglan de formas
+            // distintas.
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-plan-unseen".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
         let Some(plan) = r.plan.ready().filter(|p| p.executable) else {
             return (
                 ActionAck::Unavailable {
@@ -5360,10 +5527,13 @@ impl Estado {
 
     /// Lo dice en la barra y no abre nada. Cierra la revisión si la había:
     /// un plan que no se pudo pedir no deja media pantalla abierta.
-    fn decir_de_ia(&mut self, clave: &str) -> Vec<BridgeEnvelope<UiUpdate>> {
+    fn decir_de_ia(&mut self, epoca: u64, clave: &str) -> Vec<BridgeEnvelope<UiUpdate>> {
         self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
         let mut cambios = vec![ViewChange::Status(self.status.clone())];
-        if self.revision_ia.take().is_some() {
+        // Solo se cierra la revisión de ESTA época. Cerrar la que hubiera
+        // tiraba un plan bueno, ya con veredicto y a punto de aprobarse,
+        // porque OTRA petición posterior había fallado.
+        if self.revision_ia.take_if(|r| r.epoca == epoca).is_some() {
             cambios.push(ViewChange::AiRename { ai_rename: None });
         }
         vec![self.parche(cambios)]
@@ -5412,7 +5582,22 @@ impl Estado {
         // lleva un U+FFFD, y ese residuo es justo lo que el guard de la
         // confirmación no deja escribir.
         let (pintable, hostil) = norte_frontend::display_name(nombre.as_bytes());
-        let siembra = clamp_display(pintable);
+        let siembra = clamp_display(pintable.clone());
+        if siembra != pintable {
+            // El recorte le pega una elipsis al final, y `…` es un carácter
+            // LEGAL en un nombre: ni se enmascara ni se marca. Editar ese
+            // campo y confirmar escribiría el recorte en el disco como parte
+            // del nombre, sin que nada lo dijera — y el guard del U+FFFD no
+            // lo ve, porque el recorte pasa DESPUÉS de que `display_name`
+            // haya dado su veredicto. Se rehúsa abrirlo, que es lo único
+            // honesto: el nombre no cabe, así que aquí no se puede editar.
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-name-not-editable".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
@@ -5456,9 +5641,18 @@ impl Estado {
     ///
     /// Tres reglas, y las tres son de la regla 1:
     ///
-    /// - **Sin tocar**, viajan los BYTES ORIGINALES. La siembra es una
-    ///   proyección de pantalla y para un nombre que no es UTF-8 no es
-    ///   reversible.
+    /// - **Sin tocar**, se reconstruyen los BYTES ORIGINALES — y entonces el
+    ///   destino es el origen, así que el resultado es siempre «mismo nombre,
+    ///   mismo sitio». La rama no renombra NADA, y está para que la siembra
+    ///   no pueda convertirse en el operando: la proyección de pantalla no es
+    ///   reversible para un nombre que no es UTF-8.
+    ///
+    ///   La consecuencia hay que decirla porque no es evidente: un nombre que
+    ///   no es UTF-8 válido **no se puede renombrar desde esta ventana**. Sin
+    ///   tocar da «mismo nombre»; tocado lleva el U+FFFD que la pantalla puso
+    ///   y no se puede teclear alrededor de él. Es fail-closed y deliberado
+    ///   —lo contrario sería escribir mojibake— pero es una limitación, no una
+    ///   protección que funcione.
     /// - **Tocado y con un U+FFFD dentro**, se rehúsa: ese carácter lo puso
     ///   la pantalla, y confirmarlo escribiría mojibake de verdad. El guard
     ///   no distingue residuo de intención, así que también rehúsa un U+FFFD
@@ -5923,8 +6117,11 @@ impl Estado {
         dialogo: Dialogo,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
-    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+    ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         let mut salidas = Vec::new();
+        // El motivo por el que la respuesta NO hizo nada, si lo hubo: viaja al
+        // acuse en vez de quedarse solo en la barra.
+        let mut rehusado: Option<&'static str> = None;
         match dialogo.al_confirmar {
             Some(Pendiente::Borrar { paths, permanente }) => {
                 Self::lanzar_borrado(paths, permanente, backend, buzon);
@@ -5934,13 +6131,10 @@ impl Estado {
                 salidas.extend(self.lanzar_plan_ia(dir, instruccion, backend, buzon));
             }
             Some(Pendiente::Renombrar { from, siembra }) => {
-                salidas.extend(self.confirmar_rename(
-                    &from,
-                    &siembra,
-                    &dialogo.input_crudo,
-                    backend,
-                    buzon,
-                ));
+                let (motivo, partes) =
+                    self.confirmar_rename(&from, &siembra, &dialogo.input_crudo, backend, buzon);
+                rehusado = motivo;
+                salidas.extend(partes);
             }
             Some(Pendiente::Transferir {
                 origen,
@@ -5989,11 +6183,22 @@ impl Estado {
                 // `.`/`..`. Un nombre que no vale no encola nada y lo
                 // dice; el texto tecleado no se pierde porque el diálogo
                 // se vuelve a abrir con él.
-                let Ok(seg) = norte_proto::Segment::new(nombre.clone().into_bytes()) else {
-                    self.status.message = Some(clamp_display(norte_i18n::t("err-bad-name")));
-                    let cambio = ViewChange::Status(self.status.clone());
-                    salidas.push(self.parche(vec![cambio]));
-                    return salidas;
+                // El mismo cinturón que el rename: un nombre TOCADO que aún
+                // lleva el carácter de sustitución no se escribe. La
+                // asimetría de antes («crear no tiene siembra de la que
+                // heredar residuos») era falsa del ROUND TRIP: el host pinta
+                // su propia proyección enmascarada en el campo, y el renderer
+                // vuelve a sembrarlo con ella si tuvo que reconstruir el nodo
+                // — un diálogo de aprobación que se cuele por encima basta.
+                let seg = match Self::segmento_tecleado(&nombre) {
+                    Ok(seg) => seg,
+                    Err(clave) => {
+                        self.status.message =
+                            Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+                        let cambio = ViewChange::Status(self.status.clone());
+                        salidas.push(self.parche(vec![cambio]));
+                        return (Some(clave), salidas);
+                    }
                 };
                 let destino = dir.join(seg);
                 let backend = Arc::clone(backend);
@@ -6022,7 +6227,23 @@ impl Estado {
             }
             None => {}
         }
-        salidas
+        (rehusado, salidas)
+    }
+
+    /// Un nombre TECLEADO, como `Segment`, o la clave del motivo por el que
+    /// no vale.
+    ///
+    /// El guard del carácter de sustitución vive aquí y no solo en el rename
+    /// porque el camino de VUELTA lo comparten: `escribir_en_dialogo` proyecta
+    /// `clamp_display(display_name(texto))` en cada tecla, y el renderer
+    /// vuelve a sembrar el campo con esa proyección si tuvo que reconstruir el
+    /// nodo. Sin el guard, crear un directorio escribía en el disco el U+FFFD
+    /// que había puesto la pantalla.
+    fn segmento_tecleado(nombre: &str) -> Result<norte_proto::Segment, &'static str> {
+        if nombre.contains('\u{FFFD}') {
+            return Err("msg-transfer-name-fffd");
+        }
+        norte_proto::Segment::new(nombre.as_bytes().to_vec()).map_err(|_| "err-bad-name")
     }
 
     fn responder_dialogo(
@@ -6054,8 +6275,11 @@ impl Estado {
         // `approve`, la de una aprobación. Nombres distintos a propósito: en
         // una superficie de seguridad, «confirmar» y «aprobar» no deberían
         // poder confundirse en un renderer.
+        let mut rehusado = None;
         if choice == "confirm" || choice == "approve" {
-            salidas.extend(self.ejecutar_pendiente(dialogo, backend, buzon));
+            let (motivo, partes) = self.ejecutar_pendiente(dialogo, backend, buzon);
+            rehusado = motivo;
+            salidas.extend(partes);
         } else if let Some(Pendiente::Decidir { approval_id }) = dialogo.al_confirmar {
             // Denegar explícitamente, y también al cerrar: dejar al agente
             // esperando una respuesta que no llega es peor que decirle que no.
@@ -6068,7 +6292,19 @@ impl Estado {
             dialogs: self.vistas_de_dialogos(),
         };
         salidas.push(self.parche(vec![cambio]));
-        (self.aplicada(), salidas)
+        // Un rechazo se ACUSA como tal. Contestar `Applied` a un nombre que
+        // no se escribió le dice al renderer que la operación salió, y la
+        // misma superficie ya contestaba `Unavailable` cuando el rechazo era
+        // por tener varias marcas: dos respuestas para la misma cosa.
+        match rehusado {
+            Some(reason_key) => (
+                ActionAck::Unavailable {
+                    reason_key: reason_key.to_owned(),
+                },
+                salidas,
+            ),
+            None => (self.aplicada(), salidas),
+        }
     }
 
     /// Encola una Task por entrada y engancha su progreso al actor.
@@ -6131,6 +6367,12 @@ impl Estado {
                         | Pendiente::Transferir { .. }
                         | Pendiente::CrearDirectorio { .. }
                         | Pendiente::Decidir { .. }
+                        | Pendiente::Renombrar { .. }
+                        // Pedir un plan no escribe en el disco, y aun así
+                        // entra: manda el contenido de un directorio a un
+                        // modelo, que no es algo que deba hacer una ventana
+                        // que se declara de solo lectura.
+                        | Pendiente::InstruccionIa { .. }
                 )
             });
         if !muta {
@@ -6156,16 +6398,20 @@ impl Estado {
         escrito: &str,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
-    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+    ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         match Self::bytes_del_rename(from, siembra, escrito) {
             Ok(destino) => {
                 Self::lanzar_rename(from.clone(), destino, backend, buzon);
-                Vec::new()
+                (None, Vec::new())
             }
             Err(clave) => {
+                // El motivo vuelve para que el ACUSE lo diga, no solo la
+                // barra: un renderer que recibe `Applied` cree que la
+                // operación salió, y la misma superficie contestaba
+                // `Unavailable` cuando el rechazo era por las marcas.
                 self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
                 let cambio = ViewChange::Status(self.status.clone());
-                vec![self.parche(vec![cambio])]
+                (Some(clave), vec![self.parche(vec![cambio])])
             }
         }
     }

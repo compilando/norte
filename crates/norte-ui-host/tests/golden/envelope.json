@@ -1,6 +1,6 @@
 {
   "shutdown": {
-    "bridge_version": 24,
+    "bridge_version": 25,
     "instance_id": "host-1",
     "payload": {
       "incomplete": true,

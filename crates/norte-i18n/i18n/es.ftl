@@ -57,6 +57,11 @@ modal-ai-rename-dir = en: { $dir }
 modal-ai-rename-pair-from = { $n }. { $from }
 modal-ai-rename-pair-to = → { $to }
 modal-ai-rename-more = … { $shown }/{ $total } (desplazar: ↓/↑)
+modal-ai-rename-real-steps = se renombrarán { $n } de verdad
+modal-ai-rename-hidden-hostile = ⚠ un nombre que no se ve se pinta distinto de lo que es
+modal-ai-rename-apply = Aplicar
+modal-ai-rename-discard = Descartar
+gui-modal-ai-rename-plan-hint = y o Aplicar: aplicar · n/Esc o Descartar: descartar
 modal-ai-rename-plan-hint = y/Enter: aplicar · n/Esc: descartar
 # El plan no se puede aplicar (colisiones, o aún comprobándose): el pie no
 # puede ofrecer una tecla que no hace nada.
@@ -782,7 +787,6 @@ err-empty-pattern = teclea un patrón: uno vacío casa el árbol entero
 # coincidencia es una trampa.
 layout-picker-factory = de fábrica
 layout-picker-shares-keymap = también es un preset de teclado — no cambia ninguna tecla
-layout-picker-factory = de fábrica
 layout-picker-mine = tuya
 layout-picker-keymap-note = la disposición no cambia tus teclas (eso es [keymap] preset)
 help-cmd-cursor-up = subir el cursor
@@ -1538,11 +1542,16 @@ host-column-not-sortable = por esa columna no se ordena
 host-help-over-input = la ayuda no se abre sobre un campo de texto
 host-layout-broken = ese fichero de disposición no parsea
 host-name-too-long = ese nombre es demasiado largo
+host-name-not-editable = ese nombre no cabe en pantalla: aquí no se puede editar sin recortarlo
 host-cannot-transfer-root = una raíz no se copia ni se mueve
 host-no-other-slot = no hay otro panel
+err-bad-name = eso no es un nombre legal aquí
 host-no-target-designated = hay más de un panel: designa antes un destino
 host-plan-not-applicable = el core no aceptó este plan: no se renombraría nada
 host-plan-abandoned = el plan de renombrado se abandonó
+host-plan-asking = pidiéndole al modelo un plan de renombrado…
+host-plan-acknowledge = pulsa otra vez para contestar: esta ventana se abrió sola
+host-plan-unseen = recorre el plan entero antes de aplicarlo
 host-same-directory = el origen y el destino son el mismo directorio
 host-read-only = esta ventana todavía no escribe
 host-settings-read-only = los ajustes aquí son de solo lectura

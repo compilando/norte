@@ -56,6 +56,11 @@ modal-ai-rename-dir = in: { $dir }
 modal-ai-rename-pair-from = { $n }. { $from }
 modal-ai-rename-pair-to = → { $to }
 modal-ai-rename-more = … { $shown }/{ $total } (scroll: ↓/↑)
+modal-ai-rename-real-steps = { $n } will actually be renamed
+modal-ai-rename-hidden-hostile = ⚠ a name you cannot see is painted differently from what it is
+modal-ai-rename-apply = Apply
+modal-ai-rename-discard = Discard
+gui-modal-ai-rename-plan-hint = y or Apply: apply · n/Esc or Discard: discard
 modal-ai-rename-plan-hint = y/Enter: apply · n/Esc: discard
 # The plan cannot be applied (collisions, or still being checked): the footer
 # must not offer a key that does nothing.
@@ -785,7 +790,6 @@ err-empty-pattern = type a pattern: an empty one matches the whole tree
 # share a namespace, and without the line the coincidence is a trap.
 layout-picker-factory = factory
 layout-picker-shares-keymap = also a keyboard preset — no keys change
-layout-picker-factory = built in
 layout-picker-mine = yours
 layout-picker-keymap-note = the layout does not change your keys ([keymap] preset does)
 help-cmd-cursor-up = move cursor up
@@ -1511,11 +1515,16 @@ host-column-not-sortable = that column does not sort
 host-help-over-input = help does not open over a text field
 host-layout-broken = that layout file does not parse
 host-name-too-long = that name is too long
+host-name-not-editable = that name does not fit on screen: it cannot be edited here without truncating it
 host-cannot-transfer-root = a root cannot be copied or moved
 host-no-other-slot = there is no other panel
+err-bad-name = that is not a legal name here
 host-no-target-designated = there is more than one panel: designate a destination first
 host-plan-not-applicable = the core did not accept this plan: nothing would be renamed
 host-plan-abandoned = the rename plan was abandoned
+host-plan-asking = asking the model for a rename plan…
+host-plan-acknowledge = press a key again to answer: this window opened on its own
+host-plan-unseen = scroll through the whole plan before applying it
 host-same-directory = source and destination are the same directory
 host-read-only = this window does not write yet
 host-settings-read-only = settings are read-only here

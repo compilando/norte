@@ -5,6 +5,10 @@
     "key": 9,
     "slot_id": 1
   },
+  "ai_rename_decide": {
+    "action": "ai_rename_decide",
+    "approve": true
+  },
   "cancel_task": {
     "action": "cancel_task",
     "task_id": 42

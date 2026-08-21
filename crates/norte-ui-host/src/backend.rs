@@ -213,6 +213,9 @@ pub trait HostBackend: Send + Sync + 'static {
 
     /// El informe de un lote ya terminado.
     ///
+    /// TODO(#272): todavía no lo enseña nadie. Va con el tablero de la tarea
+    /// 5.3, y es bloqueante de la 5.4.
+    ///
     /// Es la ÚNICA señal de que un lote dejó el directorio a medias, así que
     /// no se degrada en silencio: un daemon que no conozca el método
     /// contesta [`Error::Unsupported`], que quien llama distingue de un fallo

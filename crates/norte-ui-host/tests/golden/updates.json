@@ -787,6 +787,37 @@
       ],
       "title": "ctrl+x"
     },
-    "ai_rename": null
+    "ai_rename": {
+      "confirmable": true,
+      "detail": [
+        {
+          "text": "✗ 2. ya existe: otro.mkv",
+          "hostile": false
+        }
+      ],
+      "dir": {
+        "text": "⟨file⟩/home/oscar/series",
+        "hostile": false
+      },
+      "first_visible": 0,
+      "hidden_hostile": true,
+      "more_note": "… 1/3 (desplazar: ↓/↑)",
+      "pairs": [
+        {
+          "from": {
+            "text": "ep1.mkv",
+            "hostile": false
+          },
+          "to": {
+            "text": "caf�.mkv",
+            "hostile": true
+          }
+        }
+      ],
+      "real_steps_note": "se renombrarán 2 de verdad",
+      "seen_all": false,
+      "status": "lote: aplicable — una task, un deshacer",
+      "total": 3
+    }
   }
 }

@@ -160,3 +160,44 @@ pub fn message_ids(lang: Lang) -> Vec<String> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod sin_duplicados {
+    use std::collections::BTreeSet;
+
+    /// Ninguna clave se define dos veces.
+    ///
+    /// Fluent se queda con la PRIMERA definición y tira la segunda EN
+    /// SILENCIO, así que un duplicado es una traducción que alguien escribió,
+    /// que el fichero enseña, y que nadie va a leer nunca. Había uno
+    /// (`layout-picker-factory`, con dos textos distintos en inglés) y lo
+    /// encontró una auditoría, no el catálogo.
+    #[test]
+    fn ninguna_clave_se_define_dos_veces() {
+        for (lang, fuente) in [
+            ("en", include_str!("../i18n/en.ftl")),
+            ("es", include_str!("../i18n/es.ftl")),
+        ] {
+            let mut vistas: BTreeSet<&str> = BTreeSet::new();
+            let mut repetidas: Vec<&str> = Vec::new();
+            for linea in fuente.lines() {
+                // Una definición empieza en la columna cero; una
+                // continuación va indentada y un comentario lleva `#`.
+                let Some((id, _)) = linea.split_once(" = ") else {
+                    continue;
+                };
+                if id.starts_with([' ', '#', '.', '*', '[']) || id.is_empty() {
+                    continue;
+                }
+                if !vistas.insert(id) {
+                    repetidas.push(id);
+                }
+            }
+            assert!(
+                repetidas.is_empty(),
+                "{lang}.ftl define dos veces: {repetidas:?} — Fluent se queda \
+                 con la primera y tira la otra sin decir nada"
+            );
+        }
+    }
+}

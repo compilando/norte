@@ -529,6 +529,14 @@ body {
   content: "→ ";
 }
 
+.ai-rename-hidden-hostile {
+  color: var(--hostile-fg);
+}
+
+.ai-rename-real {
+  color: var(--title-fg);
+}
+
 .ai-rename-more,
 .ai-rename-hint {
   color: var(--dim-fg, var(--title-fg));

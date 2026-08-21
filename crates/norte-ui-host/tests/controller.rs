@@ -8519,13 +8519,15 @@ async fn renombrar_abre_el_nombre_para_editarlo() {
     );
 }
 
-/// Sin tocar el campo, lo que se manda son los BYTES ORIGINALES.
+/// Sin tocar el campo NO se renombra nada, y esa es la protección.
 ///
-/// Es la regla 1 en la costura: el campo se siembra con lo que la fila
-/// PINTA, y para un nombre que no es UTF-8 eso lleva un U+FFFD. Mandar el
-/// texto sin más escribiría mojibake de verdad en el disco.
+/// Es la regla 1 en la costura: el campo se siembra con lo que la fila PINTA,
+/// y para un nombre que no es UTF-8 eso lleva un U+FFFD. Sin tocar se
+/// reconstruyen los bytes ORIGINALES — que son los de ahora, o sea «mismo
+/// nombre, mismo sitio»—, así que la siembra nunca puede convertirse en el
+/// operando. Mandar el texto sin más escribiría mojibake de verdad.
 #[tokio::test]
-async fn un_nombre_sin_tocar_manda_sus_bytes() {
+async fn un_nombre_sin_tocar_no_renombra_nada() {
     let backend = arbol();
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -8546,7 +8548,7 @@ async fn un_nombre_sin_tocar_manda_sus_bytes() {
     assert!(d.input_hostile, "el campo dice que lo sembrado no es fiel");
 
     // Se confirma SIN escribir nada. No hay renombrado posible —el destino
-    // sería el mismo— y eso se dice.
+    // sería el mismo— y eso se DICE en el acuse, no solo en la barra.
     let ack = h
         .dispatch(UiAction::Dialog {
             id: d.id,
@@ -8554,7 +8556,13 @@ async fn un_nombre_sin_tocar_manda_sus_bytes() {
         })
         .await
         .expect("host vivo");
-    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    assert_eq!(
+        ack,
+        ActionAck::Unavailable {
+            reason_key: "msg-transfer-name-same".to_owned()
+        },
+        "{ack:?}"
+    );
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(
         backend
@@ -8850,7 +8858,11 @@ async fn un_plan_se_revisa_antes_de_aplicarse() {
         v = siguiente_revision(&mut sub).await.expect("sigue abierta");
     }
     assert!(v.confirmable, "el core dijo que es aplicable");
-    assert_eq!(v.real_steps, 2, "y cuántos renombra DE VERDAD");
+    assert!(
+        v.real_steps_note.contains('2'),
+        "y cuántos renombra DE VERDAD, dicho y traducido: {}",
+        v.real_steps_note
+    );
     assert!(!v.status.is_empty() && !v.status.starts_with("modal-"));
 }
 
@@ -8871,6 +8883,14 @@ async fn aprobar_manda_el_lote_con_el_hash_del_core() {
         v = siguiente_revision(&mut sub).await.expect("sigue abierta");
     }
 
+    // La PRIMERA tecla solo reconoce la pantalla: se abrió sola y se quedó
+    // el teclado, así que la tecla que venía en camino no puede ser una
+    // respuesta. La segunda ya aprueba.
+    h.dispatch(tecla("y")).await.expect("host vivo");
+    assert!(
+        backend.lotes.lock().expect("lotes").is_empty(),
+        "la primera tecla no aprueba nada"
+    );
     h.dispatch(tecla("y")).await.expect("host vivo");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let lotes = backend.lotes.lock().expect("lotes");
@@ -8909,6 +8929,8 @@ async fn un_plan_no_aplicable_no_se_aprueba() {
     assert!(!r.confirmable, "el core dijo que no");
     assert!(!r.detail.is_empty(), "y la colisión se LEE: {:?}", r.detail);
 
+    // La primera tecla reconoce la pantalla; la segunda intenta aprobar.
+    h.dispatch(tecla("y")).await.expect("host vivo");
     let ack = h.dispatch(tecla("y")).await.expect("host vivo");
     assert_eq!(
         ack,
@@ -9003,7 +9025,11 @@ async fn descartar_cierra_y_no_aplica_nada() {
 /// cualquiera: se enmascaran y se DICE.
 #[tokio::test]
 async fn un_nombre_hostil_del_plan_va_marcado() {
-    let pares = [("ep1.mkv", "ep\u{202E}01.mkv")];
+    // Del corpus canónico, no escrito a mano: un nombre inventado en el test
+    // prueba lo que el test cree, y el corpus prueba lo que de verdad hay.
+    let bytes = hostil("rtl_override");
+    let alterado = String::from_utf8(bytes).expect("el del corpus es UTF-8");
+    let pares = [("ep1.mkv", alterado.as_str())];
     let backend = falso_con_plan(&pares, None);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -9041,6 +9067,8 @@ async fn un_plan_largo_se_recorre() {
     );
     assert_eq!(r.first_visible, 0);
 
+    // La primera tecla reconoce la pantalla; a partir de ahí se recorre.
+    h.dispatch(tecla("PageDown")).await.expect("host vivo");
     h.dispatch(tecla("PageDown")).await.expect("host vivo");
     // El veredicto del core viaja por el MISMO canal ordenado, así que puede
     // haber una actualización suya por delante de la del recorrido.
@@ -9136,5 +9164,529 @@ async fn un_plan_se_abre_sobre_el_directorio_que_se_planeo() {
         r.dir.text.ends_with("/casa"),
         "el plan es del directorio que se planeó, no del que se ve ahora: {:?}",
         r.dir
+    );
+}
+
+/// DOS peticiones vivas a la vez: la respuesta de la primera no puede matar a
+/// la segunda.
+///
+/// `Option::take` vacía el hueco ANTES de que el filtro mire, así que una
+/// respuesta vieja se llevaba por delante la petición viva y se quedaban las
+/// DOS sin abrir — sin decir nada, y sin poder distinguirse de un daemon
+/// muerto. Y la secuencia es la normal: pedir, no ver nada, volver a pedir.
+#[tokio::test]
+async fn dos_peticiones_a_la_vez_y_la_segunda_sigue_abriendo() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
+    f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
+    f.veredicto = Some(veredicto_ok(&pares));
+    f.retraso_ia_ms = 120;
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    // Dos peticiones seguidas, sin esperar a la primera.
+    pedir_plan(&h, &mut sub).await;
+    pedir_plan(&h, &mut sub).await;
+
+    let r = siguiente_revision(&mut sub).await.expect("la segunda abre");
+    assert_eq!(r.total, 1);
+    assert_eq!(
+        backend.instrucciones.lock().expect("instrucciones").len(),
+        2,
+        "se pidieron las dos"
+    );
+}
+
+/// Con un plan en vuelo, `Escape` cierra la PALETA y no mata el plan.
+///
+/// La rama que abandona el plan estaba por encima del reparto de overlays, así
+/// que una sola tecla hacía dos cosas mal: dejaba la paleta abierta y se
+/// llevaba por delante el plan que el lector sí quería.
+#[tokio::test]
+async fn con_un_plan_en_vuelo_escape_cierra_la_paleta() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
+    f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
+    f.veredicto = Some(veredicto_ok(&pares));
+    f.retraso_ia_ms = 120;
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "p".to_owned(),
+        ctrl: true,
+        alt: false,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+    let _ = siguiente_paleta(&mut sub).await.expect("abre");
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(foto.palette.is_none(), "el Escape cerró la paleta");
+
+    // Y el plan sigue vivo: llega y abre.
+    let r = siguiente_revision(&mut sub)
+        .await
+        .expect("el plan sobrevivió");
+    assert_eq!(r.total, 1);
+}
+
+/// Lo mismo con el filtro rápido: `Escape` lo cancela, y el plan sigue.
+#[tokio::test]
+async fn con_un_plan_en_vuelo_escape_cancela_el_filtro() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
+    f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
+    f.veredicto = Some(veredicto_ok(&pares));
+    f.retraso_ia_ms = 120;
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+
+    // `pane.quick-search` es `ctrl+s` en el preset ortodoxo; se llega por la
+    // paleta para no depender de la tecla.
+    por_la_paleta(&h, &mut sub, "quick-search").await;
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(
+        listado(&foto).quick.is_none(),
+        "el Escape canceló el filtro"
+    );
+    let r = siguiente_revision(&mut sub)
+        .await
+        .expect("el plan sobrevivió");
+    assert_eq!(r.total, 1);
+}
+
+/// Descartar una revisión no mata una petición POSTERIOR.
+///
+/// Con una revisión abierta, el teclado es suyo — así que la única forma de
+/// tener dos peticiones y una revisión a la vez es la real: se pide la
+/// primera, se abre el prompt de la segunda mientras el modelo piensa, la
+/// primera revisión aterriza DEBAJO de ese diálogo, se confirma la segunda
+/// petición, y solo entonces se descarta la revisión que quedó a la vista.
+/// Soltar ahí la petición en vuelo la mataba en silencio.
+#[tokio::test]
+async fn descartar_una_revision_no_mata_la_peticion_siguiente() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
+    f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
+    f.veredicto = Some(veredicto_ok(&pares));
+    f.retraso_ia_ms = 120;
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    // Petición 1, y el prompt de la 2 abierto mientras el modelo piensa.
+    pedir_plan(&h, &mut sub).await;
+    por_la_paleta(&h, &mut sub, "ai-rename").await;
+    let id2 = siguientes_dialogos(&mut sub).await[0].id;
+
+    // La revisión 1 aterriza DEBAJO del diálogo.
+    let r1 = siguiente_revision(&mut sub).await.expect("la primera abre");
+    assert_eq!(r1.total, 1);
+
+    // Se confirma la petición 2 y se descarta la revisión 1.
+    h.dispatch(UiAction::DialogInput {
+        id: id2,
+        text: "otra cosa".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id: id2,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+
+    // Y la petición 2 sigue viva. La señal que NO se puede confundir con un
+    // parche rezagado de la revisión 1 es que el core reciba un SEGUNDO
+    // veredicto: solo lo pide un plan que llegó y se abrió.
+    for _ in 0..40 {
+        if backend.veredictos_pedidos.lock().expect("veredictos").len() == 2 {
+            assert_eq!(
+                backend.instrucciones.lock().expect("instrucciones").len(),
+                2
+            );
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("descartar una revisión se llevó por delante la petición siguiente");
+}
+
+/// La primera tecla que llega a la revisión solo la RECONOCE.
+///
+/// La pantalla se abre sola, decenas de segundos después del gesto que la
+/// pidió, y se queda el teclado. Sin este paso, la `y` de quien estaba
+/// tecleando `yes.txt` en el filtro rápido aprobaba el renombrado del
+/// directorio entero.
+#[tokio::test]
+async fn la_primera_tecla_solo_reconoce_la_revision() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let backend = falso_con_plan(&pares, Some(veredicto_ok(&pares)));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    let mut v = siguiente_revision(&mut sub).await.expect("abre");
+    for _ in 0..40 {
+        if v.confirmable {
+            break;
+        }
+        v = siguiente_revision(&mut sub).await.expect("sigue abierta");
+    }
+
+    h.dispatch(tecla("y")).await.expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    assert!(
+        backend.lotes.lock().expect("lotes").is_empty(),
+        "la tecla que venía en camino no aprueba nada"
+    );
+    h.dispatch(tecla("y")).await.expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    assert_eq!(
+        backend.lotes.lock().expect("lotes").len(),
+        1,
+        "la segunda sí: ya es una respuesta"
+    );
+}
+
+/// `Escape` NO necesita reconocimiento: descartar es seguro en los dos
+/// estados, y quien no quiere esto tiene que poder quitárselo de encima a la
+/// primera.
+#[tokio::test]
+async fn escape_descarta_la_revision_a_la_primera() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let backend = falso_con_plan(&pares, Some(veredicto_ok(&pares)));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    siguiente_revision(&mut sub).await.expect("abre");
+
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(foto.ai_rename.is_none(), "se fue a la primera");
+}
+
+/// Un acorde CON modificador no es una respuesta a esta pantalla.
+#[tokio::test]
+async fn un_acorde_con_modificador_no_aprueba_el_plan() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let backend = falso_con_plan(&pares, Some(veredicto_ok(&pares)));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    siguiente_revision(&mut sub).await.expect("abre");
+    // Reconocida, para que lo único que quede en pie sea el modificador.
+    h.dispatch(tecla("j")).await.expect("host vivo");
+
+    for (ctrl, shift) in [(true, false), (false, false)] {
+        let ack = h
+            .dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+                key: "y".to_owned(),
+                ctrl,
+                alt: false,
+                shift,
+                meta: true,
+            }))
+            .await
+            .expect("host vivo");
+        assert_eq!(
+            ack,
+            ActionAck::Unavailable {
+                reason_key: "host-key-unmapped".to_owned()
+            },
+            "ctrl={ctrl}: {ack:?}"
+        );
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    assert!(backend.lotes.lock().expect("lotes").is_empty());
+}
+
+/// No se aprueba un plan que no se ha recorrido ENTERO.
+///
+/// La ventana son cinco parejas de hasta doscientas cincuenta y seis: sin
+/// esto, la pareja doscientos se ejecutaba sin que nadie la hubiera pintado
+/// jamás, y la revisión es toda la defensa que hay contra un plan que un
+/// modelo escribió a partir de nombres que controla quien escribe en el
+/// directorio.
+#[tokio::test]
+async fn no_se_aprueba_un_plan_sin_recorrerlo_entero() {
+    let pares: Vec<(String, String)> = (0..12)
+        .map(|i| (format!("a{i:02}.mkv"), format!("b{i:02}.mkv")))
+        .collect();
+    let refs: Vec<(&str, &str)> = pares
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let backend = falso_con_plan(&refs, Some(veredicto_ok(&refs)));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    let mut v = siguiente_revision(&mut sub).await.expect("abre");
+    for _ in 0..40 {
+        if !v.status.is_empty() && v.total == 12 && v.more_note.contains("12") {
+            break;
+        }
+        v = siguiente_revision(&mut sub).await.expect("sigue abierta");
+    }
+    assert!(!v.seen_all, "todavía no se ha visto entero");
+    assert!(!v.confirmable, "y por eso no se puede aprobar");
+
+    // Reconocer, e intentar aprobar sin haber bajado.
+    h.dispatch(tecla("y")).await.expect("host vivo");
+    let ack = h.dispatch(tecla("y")).await.expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Unavailable {
+            reason_key: "host-plan-unseen".to_owned()
+        },
+        "{ack:?}"
+    );
+
+    // Se recorre hasta el final y ya sí.
+    for _ in 0..6 {
+        h.dispatch(tecla("PageDown")).await.expect("host vivo");
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    h.dispatch(tecla("y")).await.expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    assert_eq!(backend.lotes.lock().expect("lotes").len(), 1);
+}
+
+/// Un nombre alterado FUERA de la ventana también se dice.
+#[tokio::test]
+async fn un_nombre_alterado_que_no_se_ve_tambien_se_dice() {
+    let hostil =
+        String::from_utf8(hostil("control_escape")).unwrap_or_else(|_| "\u{1b}x".to_owned());
+    let mut pares: Vec<(String, String)> = (0..12)
+        .map(|i| (format!("a{i:02}.mkv"), format!("b{i:02}.mkv")))
+        .collect();
+    // En la posición ONCE: fuera de la primera ventana de cinco.
+    pares[11].1 = hostil;
+    let refs: Vec<(&str, &str)> = pares
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let backend = falso_con_plan(&refs, None);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    let r = siguiente_revision(&mut sub).await.expect("abre");
+    assert!(
+        r.pairs.iter().all(|p| !p.to.hostile),
+        "ninguna de las visibles está alterada"
+    );
+    assert!(
+        r.hidden_hostile,
+        "y aun así se dice que hay una que no se ve: {r:?}"
+    );
+}
+
+/// La línea de «cuánto se ve» va TRADUCIDA, no como un patrón sin sustituir.
+#[tokio::test]
+async fn la_linea_de_cuanto_se_ve_va_traducida() {
+    let pares: Vec<(String, String)> = (0..12)
+        .map(|i| (format!("a{i:02}.mkv"), format!("b{i:02}.mkv")))
+        .collect();
+    let refs: Vec<(&str, &str)> = pares
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let backend = falso_con_plan(&refs, None);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    let r = siguiente_revision(&mut sub).await.expect("abre");
+    assert!(
+        !r.more_note.contains('$') && !r.more_note.contains('{'),
+        "sin patrones sin sustituir: {}",
+        r.more_note
+    );
+    assert!(
+        r.more_note.contains("12"),
+        "y con el total: {}",
+        r.more_note
+    );
+}
+
+/// Crear un directorio tampoco escribe el carácter que puso la pantalla.
+#[tokio::test]
+async fn crear_un_directorio_con_fffd_se_rechaza() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F7")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: "caf\u{FFFD}".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let ack = h
+        .dispatch(UiAction::Dialog {
+            id,
+            choice: "confirm".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Unavailable {
+            reason_key: "msg-transfer-name-fffd".to_owned()
+        },
+        "{ack:?}"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    assert!(
+        backend.creados.lock().expect("creados").is_empty(),
+        "no se crea un directorio con el U+FFFD que inventó la pantalla"
+    );
+}
+
+/// `Enter` NO aprueba el plan.
+///
+/// Rompe la paridad con el TUI a propósito: allí el plan lo abre una tecla del
+/// lector y la siguiente es una respuesta. Aquí la pantalla se abre sola
+/// decenas de segundos después, y `Enter` es justo la tecla con la que se
+/// estaba recorriendo el árbol mientras el modelo pensaba — dos seguidos
+/// entrando en directorios anidados son normales.
+#[tokio::test]
+async fn enter_no_aprueba_el_plan() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let backend = falso_con_plan(&pares, Some(veredicto_ok(&pares)));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    let mut v = siguiente_revision(&mut sub).await.expect("abre");
+    for _ in 0..40 {
+        if v.confirmable {
+            break;
+        }
+        v = siguiente_revision(&mut sub).await.expect("sigue abierta");
+    }
+    for _ in 0..3 {
+        h.dispatch(tecla("Enter")).await.expect("host vivo");
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    assert!(
+        backend.lotes.lock().expect("lotes").is_empty(),
+        "ningún Enter aprueba un lote"
+    );
+}
+
+/// Un clic en el botón SÍ contesta a la primera: es un gesto dirigido a esta
+/// pantalla, no una tecla que iba a otro sitio.
+#[tokio::test]
+async fn el_boton_aprueba_sin_reconocimiento_previo() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let backend = falso_con_plan(&pares, Some(veredicto_ok(&pares)));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    let mut v = siguiente_revision(&mut sub).await.expect("abre");
+    for _ in 0..40 {
+        if v.confirmable {
+            break;
+        }
+        v = siguiente_revision(&mut sub).await.expect("sigue abierta");
+    }
+    let ack = h
+        .dispatch(UiAction::AiRenameDecide { approve: true })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    assert_eq!(backend.lotes.lock().expect("lotes").len(), 1);
+}
+
+/// Y descartar con el botón cierra sin aplicar nada.
+#[tokio::test]
+async fn el_boton_de_descartar_cierra_sin_aplicar() {
+    let pares = [("ep1.mkv", "ep01.mkv")];
+    let backend = falso_con_plan(&pares, Some(veredicto_ok(&pares)));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    siguiente_revision(&mut sub).await.expect("abre");
+    h.dispatch(UiAction::AiRenameDecide { approve: false })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(foto.ai_rename.is_none());
+    assert!(backend.lotes.lock().expect("lotes").is_empty());
+}
+
+/// Un nombre de plan que EMPIEZA por la flecha no puede fingir ser el destino
+/// de otra pareja.
+///
+/// Fixture `arrow_leading_row_spoof` del corpus: `arrow_join_spoof` pone la
+/// flecha en medio y falsifica UNA pareja; esta la pone al principio y
+/// falsifica el PAPEL de la fila. El papel lo lleva el campo —`from` o `to`—,
+/// no el texto, así que el host manda los dos por separado y el renderer los
+/// pone en elementos distintos.
+#[tokio::test]
+async fn un_nombre_que_empieza_por_la_flecha_no_finge_ser_un_destino() {
+    let bytes = hostil("arrow_leading_row_spoof");
+    let trampa = String::from_utf8(bytes).expect("el del corpus es UTF-8");
+    let pares = [(trampa.as_str(), "ep02.mkv")];
+    let backend = falso_con_plan(&pares, None);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    pedir_plan(&h, &mut sub).await;
+    let r = siguiente_revision(&mut sub).await.expect("abre");
+    // El nombre viaja ENTERO y en el campo que le toca: la flecha que lleva
+    // dentro no lo convierte en un destino, porque el papel no está en el
+    // texto.
+    assert!(
+        r.pairs[0].from.text.starts_with('\u{2192}'),
+        "el nombre real empieza por la flecha: {:?}",
+        r.pairs[0].from
+    );
+    assert_eq!(r.pairs[0].to.text, "ep02.mkv");
+    assert_eq!(r.pairs.len(), 1, "una pareja, no dos: {:?}", r.pairs);
+}
+
+/// Un nombre cuya proyección NO cabe en pantalla no se puede editar aquí, y
+/// se dice.
+///
+/// El recorte le pega una elipsis, y `…` es un carácter legal en un nombre:
+/// ni se enmascara ni se marca. Editar el campo y confirmar escribiría el
+/// recorte en el disco como parte del nombre. Fixture
+/// `display_expansion_over_clamp`.
+#[tokio::test]
+async fn un_nombre_que_no_cabe_en_pantalla_no_se_edita() {
+    let bytes = hostil("display_expansion_over_clamp");
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(bytes, false)]);
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let ack = h
+        .dispatch(tecla_mod("F6", false, true))
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Unavailable {
+            reason_key: "host-name-not-editable".to_owned()
+        },
+        "{ack:?}"
     );
 }

@@ -45,6 +45,22 @@ independently through `PROTOCOL_VERSION`.
   it found the reason: a file called `cap 2 → final.mkv` made the row read as a
   different pair. The separator is now drawn by the stylesheet and the numbering
   by the list itself — neither is something a filename can write.
+- **A review that opened by itself does not answer with the next keystroke.**
+  The plan lands tens of seconds after the gesture that asked for it and takes
+  the keyboard; the first key only acknowledges that. Without it, the `y` of
+  someone typing `yes.txt` into the quick filter approved renaming the whole
+  directory. `Enter` stopped approving entirely — that is a deliberate break
+  with the TUI, where the plan is opened by the reader's own keystroke and the
+  next key is an answer; here `Enter` is the key you were navigating with.
+  Chords with a modifier are refused, and there are now buttons: a click is a
+  gesture aimed at this screen and cannot be a key meant for somewhere else.
+- **A plan cannot be approved before it has been read through.** Five pairs of
+  up to two hundred and fifty-six were visible, and pair two hundred executed
+  without ever having been painted. Approving now needs the core's verdict AND
+  the reader having reached the end, and the two refusals say which is missing.
+  A name painted differently from what it is OUTSIDE the visible window is
+  announced too — the mark of a line only ever existed for that line.
+
 - **A plan that arrives late does not reopen what its owner closed**, and it
   opens over the directory it was PLANNED for, not the one on screen. The model
   takes real time and browsing while it thinks is normal; what must not happen
@@ -54,11 +70,17 @@ independently through `PROTOCOL_VERSION`.
 
 - **The window renames** (`shift+F6`). The field is seeded with what the row
   paints, and the rule underneath it is the one the TUI already had: leave it
-  alone and the ORIGINAL BYTES travel, because for a name that is not UTF-8 the
-  seed carries a replacement character and is not reversible. Touch it and the
-  text travels — unless it still contains that character, which is refused,
-  because confirming it would write the mojibake the screen invented. Same
-  name, same place is not an operation and says so. With more than one entry
+  alone and the ORIGINAL BYTES are what get reconstructed — which means the
+  destination is the source, so nothing is renamed. That is the protection, not
+  a gap: the seed is a screen projection and for a name that is not UTF-8 it is
+  not reversible, so it must never become the operand. Touch it and the text
+  travels — unless it still contains the replacement character, which is
+  refused, because confirming it would write the mojibake the screen invented.
+  The consequence, said out loud because it is not obvious: a name that is not
+  valid UTF-8 cannot be renamed from this window at all. A name too long to
+  fit on screen cannot either, and says so — the clamp appends an ellipsis, and
+  `…` is a perfectly legal filename character that nothing masks and nothing
+  flags. With more than one entry
   marked this window declines and explains, which is what its own availability
   facts already claimed and what the help page was already dimming.
 
