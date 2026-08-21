@@ -932,6 +932,36 @@ pub struct ViewerView {
     /// decodificaciones distintas y confundirlas culpa al fichero de lo que
     /// hizo la lectura.
     pub preview_lossy: bool,
+    /// Esto es una IMAGEN que se puede pintar, y así de grande dice ser.
+    ///
+    /// `None` = no es una imagen, o es una que esta ventana se NIEGA a
+    /// pintar; en el segundo caso [`Self::image_refused`] dice por qué. El
+    /// renderer pide los bytes aparte —no viajan en la foto— y hasta que
+    /// llegan enseña la vista cruda.
+    pub image: Option<ImageView>,
+    /// Por qué NO se va a pintar una imagen que sí se reconoció, ya
+    /// traducido. Vacío = no hay nada que explicar.
+    ///
+    /// Se dice en vez de caer en silencio al hexview: un fichero que el
+    /// usuario sabe que es una foto y que aparece como bytes sin una palabra
+    /// parece norte roto, no norte prudente.
+    pub image_refused: String,
+}
+
+/// Una imagen reconocida y aceptada: qué es y cuánto dice medir.
+///
+/// Lo que declara su CABECERA, no lo que mida de verdad — nadie la ha
+/// decodificado todavía, y ese es justo el punto: el tamaño declarado es lo
+/// que se compara con el presupuesto ANTES de dársela a un decodificador.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageView {
+    /// Su formato, reconocido por bytes MÁGICOS y jamás por la extensión: una
+    /// extensión es una afirmación de quien nombró el fichero.
+    pub format: String,
+    /// Ancho declarado, en píxeles.
+    pub width: u32,
+    /// Alto declarado, en píxeles.
+    pub height: u32,
 }
 
 /// El reparto de la pantalla: quién se pinta, dónde, y con qué papel.

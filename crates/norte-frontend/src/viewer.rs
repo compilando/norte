@@ -69,6 +69,132 @@ pub fn image_format(bytes: &[u8]) -> Option<ImageFmt> {
     }
 }
 
+/// El presupuesto de píxeles de una preview: 40 megapíxeles.
+///
+/// No es un límite de estética sino de MEMORIA. Un PNG de 64 KB puede declarar
+/// 60000×60000 y costarle gigabytes al decodificador: es la bomba de
+/// descompresión, y la única defensa barata es leerle la cabecera y negarse
+/// ANTES de darle los bytes a nadie que decodifique. Cuarenta megapíxeles
+/// cubren con holgura cualquier foto real (una de 50 Mpx es un sensor de gama
+/// alta) y son ~160 MB en RGBA, que es caro pero no letal.
+pub const PIXEL_BUDGET: u64 = 40_000_000;
+
+/// Las dimensiones que la cabecera DECLARA, sin decodificar nada.
+///
+/// `None` cuando no se reconoce el formato, cuando la cabecera está incompleta
+/// o cuando dice algo que no se entiende: quien llama trata ese `None` como
+/// «no se puede prometer nada de esta imagen» y se niega, que es lo contrario
+/// de tratarlo como «adelante».
+///
+/// Lee OFFSETS FIJOS y no asigna nada en función de lo que lea. Es código que
+/// mira bytes de un tercero para decidir un número, así que es del tipo
+/// aburrido a propósito: sin bucles sobre longitudes del fichero salvo el
+/// recorrido acotado de segmentos de JPEG, y sin aritmética que pueda
+/// desbordar (todo en `u64`).
+///
+/// ```
+/// use norte_frontend::viewer::image_dimensions;
+/// // Un PNG mínimo: firma, longitud del IHDR, tipo, y ancho/alto.
+/// let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+/// png.extend_from_slice(&[0, 0, 0, 13]);
+/// png.extend_from_slice(b"IHDR");
+/// png.extend_from_slice(&800u32.to_be_bytes());
+/// png.extend_from_slice(&600u32.to_be_bytes());
+/// assert_eq!(image_dimensions(&png), Some((800, 600)));
+/// assert_eq!(image_dimensions(b"no soy una imagen"), None);
+/// ```
+#[must_use]
+pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    match image_format(bytes)? {
+        // IHDR es SIEMPRE el primer chunk y está en un offset fijo.
+        ImageFmt::Png => (bytes.len() >= 24 && &bytes[12..16] == b"IHDR")
+            .then(|| (be32(bytes, 16), be32(bytes, 20))),
+        // Logical Screen Descriptor, little-endian, justo tras la firma.
+        ImageFmt::Gif => {
+            (bytes.len() >= 10).then(|| (u32::from(le16(bytes, 6)), u32::from(le16(bytes, 8))))
+        }
+        // DIB header: ancho y alto con signo; el alto NEGATIVO significa
+        // filas de arriba abajo, no una imagen de tamaño negativo.
+        ImageFmt::Bmp => (bytes.len() >= 26).then(|| {
+            (
+                le32(bytes, 18).unsigned_abs(),
+                le32(bytes, 22).unsigned_abs(),
+            )
+        }),
+        ImageFmt::Webp => webp_dimensions(bytes),
+        ImageFmt::Jpeg => jpeg_dimensions(bytes),
+    }
+}
+
+fn be32(b: &[u8], at: usize) -> u32 {
+    u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
+}
+
+fn le16(b: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes([b[at], b[at + 1]])
+}
+
+fn le32(b: &[u8], at: usize) -> i32 {
+    i32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
+}
+
+/// WebP tiene TRES sabores y cada uno guarda el tamaño en otro sitio. Uno que
+/// no se reconozca es `None`: negarse es la respuesta correcta a «no sé».
+fn webp_dimensions(b: &[u8]) -> Option<(u32, u32)> {
+    if b.len() < 30 {
+        return None;
+    }
+    match &b[12..16] {
+        // Simple lossy: el keyframe de VP8 lleva 14 bits por eje.
+        b"VP8 " => Some((
+            u32::from(le16(b, 26) & 0x3FFF),
+            u32::from(le16(b, 28) & 0x3FFF),
+        )),
+        // Lossless: 14 bits por eje, empaquetados y menos uno.
+        b"VP8L" => {
+            let v = u32::from_le_bytes([b[21], b[22], b[23], b[24]]);
+            Some(((v & 0x3FFF) + 1, ((v >> 14) & 0x3FFF) + 1))
+        }
+        // Extendido: 24 bits por eje, menos uno.
+        // El `+ 1` es del VALOR entero, no del último desplazamiento: sin
+        // los paréntesis se ata al `<< 16` y el ancho sale mal por 65536.
+        // Lo cazó clippy, y es justo la clase de error que esta función
+        // tiene prohibida.
+        b"VP8X" => Some((
+            (u32::from(b[24]) | (u32::from(b[25]) << 8) | (u32::from(b[26]) << 16)) + 1,
+            (u32::from(b[27]) | (u32::from(b[28]) << 8) | (u32::from(b[29]) << 16)) + 1,
+        )),
+        _ => None,
+    }
+}
+
+/// JPEG no tiene offset fijo: hay que recorrer segmentos hasta el SOF. El
+/// recorrido está ACOTADO por la longitud de lo leído y avanza siempre, así
+/// que no puede quedarse dando vueltas sobre un fichero manipulado.
+fn jpeg_dimensions(b: &[u8]) -> Option<(u32, u32)> {
+    let mut i = 2usize;
+    while i + 9 < b.len() {
+        if b[i] != 0xFF {
+            // Fuera de sincronía: no se adivina, se abandona.
+            return None;
+        }
+        let marcador = b[i + 1];
+        // SOF0..SOF15, saltando los que no llevan tamaño (DHT, JPG, DAC).
+        if (0xC0..=0xCF).contains(&marcador) && !matches!(marcador, 0xC4 | 0xC8 | 0xCC) {
+            return Some((
+                u32::from(u16::from_be_bytes([b[i + 7], b[i + 8]])),
+                u32::from(u16::from_be_bytes([b[i + 5], b[i + 6]])),
+            ));
+        }
+        let largo = usize::from(u16::from_be_bytes([b[i + 2], b[i + 3]]));
+        if largo < 2 {
+            return None;
+        }
+        i += 2 + largo;
+    }
+    None
+}
+
 /// Preview producido por un plugin (M4-P5): reemplaza la vista cruda mientras
 /// está presente. Líneas con estilo (#29): la salida del plugin se parsea con
 /// el saneador ANSI-SGR ([`crate::ansi::parse_sgr`]) — que DESCARTA cualquier
@@ -499,7 +625,7 @@ fn hex_rows(bytes: &[u8], scroll: usize, height: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::Viewer;
+    use super::{PIXEL_BUDGET, Viewer, image_dimensions};
     use norte_proto::VPath;
 
     fn vp() -> VPath {
@@ -522,6 +648,86 @@ mod tests {
         assert!(!v.hex);
         v.toggle_hex();
         assert!(v.hex);
+    }
+
+    /// La cabecera declara el tamaño, y una que no se entiende se NIEGA.
+    ///
+    /// Negarse ante lo que no se entiende es la mitad del valor: el llamante
+    /// usa esto para decidir si le da los bytes a un decodificador, y un
+    /// `None` tratado como «adelante» sería la bomba de descompresión
+    /// entrando por la puerta que existe para pararla.
+    #[test]
+    fn image_dimensions_lee_la_cabecera_y_niega_lo_que_no_entiende() {
+        // PNG: IHDR en offset fijo.
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&[0, 0, 0, 13]);
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&1920u32.to_be_bytes());
+        png.extend_from_slice(&1080u32.to_be_bytes());
+        assert_eq!(image_dimensions(&png), Some((1920, 1080)));
+
+        // GIF: little-endian tras la firma.
+        let mut gif = b"GIF89a".to_vec();
+        gif.extend_from_slice(&640u16.to_le_bytes());
+        gif.extend_from_slice(&480u16.to_le_bytes());
+        gif.extend_from_slice(&[0, 0]);
+        assert_eq!(image_dimensions(&gif), Some((640, 480)));
+
+        // BMP: alto NEGATIVO = filas de arriba abajo, no tamaño negativo.
+        let mut bmp = b"BM".to_vec();
+        bmp.resize(18, 0);
+        bmp.extend_from_slice(&300i32.to_le_bytes());
+        bmp.extend_from_slice(&(-200i32).to_le_bytes());
+        assert_eq!(image_dimensions(&bmp), Some((300, 200)));
+
+        // JPEG: hay que recorrer hasta el SOF0.
+        let mut jpg = vec![0xFF, 0xD8];
+        // Un APP0 que hay que saltar.
+        jpg.extend_from_slice(&[0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00]);
+        jpg.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x11, 0x08]);
+        jpg.extend_from_slice(&768u16.to_be_bytes());
+        jpg.extend_from_slice(&1024u16.to_be_bytes());
+        jpg.extend_from_slice(&[0; 8]);
+        assert_eq!(image_dimensions(&jpg), Some((1024, 768)));
+
+        // Lo que no se entiende se NIEGA, en vez de adivinar.
+        assert_eq!(image_dimensions(b"no soy una imagen"), None);
+        assert_eq!(
+            image_dimensions(b"\x89PNG\r\n\x1a\n"),
+            None,
+            "una cabecera PNG incompleta no promete nada"
+        );
+        let mut sin_ihdr = b"\x89PNG\r\n\x1a\n".to_vec();
+        sin_ihdr.extend_from_slice(&[0, 0, 0, 13]);
+        sin_ihdr.extend_from_slice(b"iTXt");
+        sin_ihdr.resize(32, 0);
+        assert_eq!(
+            image_dimensions(&sin_ihdr),
+            None,
+            "un PNG cuyo primer chunk no es IHDR no es uno que sepamos leer"
+        );
+        // Un JPEG cuyos segmentos no encajan: se abandona, no se da vueltas.
+        assert_eq!(
+            image_dimensions(&[0xFF, 0xD8, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]),
+            None
+        );
+    }
+
+    /// Una cabecera puede DECLARAR una imagen imposible, y eso es el ataque.
+    #[test]
+    fn una_cabecera_puede_declarar_una_bomba() {
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&[0, 0, 0, 13]);
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&60000u32.to_be_bytes());
+        png.extend_from_slice(&60000u32.to_be_bytes());
+        let (w, h) = image_dimensions(&png).expect("la cabecera se lee");
+        assert!(
+            u64::from(w) * u64::from(h) > PIXEL_BUDGET,
+            "36 gigapíxeles en 24 bytes de cabecera: es la bomba de \
+             descompresión, y el presupuesto existe para verla antes de que \
+             nadie decodifique"
+        );
     }
 
     /// `image_format` reconoce cada formato soportado por bytes MÁGICOS y

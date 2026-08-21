@@ -90,6 +90,21 @@ fn metrics(sample: MetricSample) {
     );
 }
 
+/// Los bytes de la imagen abierta, CRUDOS.
+///
+/// `tauri::ipc::Response` y no un `Vec<u8>` serializado: por el camino de
+/// serde, un vector de bytes cruza como un array JSON de números —cuatro o
+/// cinco bytes de texto por byte real—, que para ocho megas es absurdo.
+///
+/// Un vector VACÍO significa «no hay imagen», que es lo que el renderer ya
+/// sabe por la foto: esto no es una segunda fuente de verdad sobre si hay
+/// imagen, solo el transporte de sus bytes.
+#[tauri::command]
+async fn image_bytes(state: tauri::State<'_, AppState>) -> Result<tauri::ipc::Response, String> {
+    let bytes = state.bridge()?.image_bytes().await?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 fn catalog(
@@ -101,7 +116,13 @@ fn catalog(
 /// Los comandos registrados. Con `metrics`, uno más — y solo entonces.
 #[cfg(not(feature = "metrics"))]
 fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
-    tauri::generate_handler![initial_snapshot, dispatch, request_snapshot, catalog]
+    tauri::generate_handler![
+        initial_snapshot,
+        dispatch,
+        request_snapshot,
+        catalog,
+        image_bytes
+    ]
 }
 
 #[cfg(feature = "metrics")]
@@ -111,6 +132,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         dispatch,
         request_snapshot,
         catalog,
+        image_bytes,
         metrics
     ]
 }

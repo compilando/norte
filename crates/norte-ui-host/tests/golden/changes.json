@@ -550,6 +550,12 @@
       "forced": false,
       "had_errors": false,
       "hex": false,
+      "image": {
+        "format": "PNG",
+        "height": 1080,
+        "width": 1920
+      },
+      "image_refused": "",
       "lines": [
         "quinta línea"
       ],

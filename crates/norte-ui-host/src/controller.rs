@@ -87,6 +87,13 @@ const MAX_NOMBRE: usize = 4096;
 /// 0005): un visor no es una excusa para traerse un fichero de un giga.
 const VISOR_CAP: u64 = 256 * 1024;
 
+/// Lo más que se lee de una IMAGEN para previsualizarla: 8 MiB.
+///
+/// Aparte del tope del visor de texto, que es una CABECERA a propósito —una
+/// imagen no se puede enseñar a medias—. Una foto de móvil cabe de sobra;
+/// un TIFF de escáner no, y entonces no se pinta y se dice (ADR 0069).
+const IMAGEN_CAP: u64 = 8 * 1024 * 1024;
+
 /// Sondas simultáneas contra el daemon. El mismo número que el TUI, y por el
 /// mismo motivo: una sesión remota no puede pagar N viajes en serie.
 const SONDEOS_A_LA_VEZ: usize = 8;
@@ -238,6 +245,12 @@ type Sondas = (VPath, u32, Vec<(VPath, Entry)>);
 
 enum Mensaje {
     Accion(Box<UiAction>, oneshot::Sender<ActionAck>),
+    /// Los BYTES de la imagen que el visor tiene abierta, si los hay.
+    ///
+    /// Una consulta y no una acción: no cambia nada y no produce parche. Va
+    /// por el buzón igual porque el estado es del actor, y contestarla desde
+    /// fuera sería leer lo que otro está escribiendo.
+    BytesDeImagen(oneshot::Sender<Option<std::sync::Arc<Vec<u8>>>>),
     /// La respuesta de un listado que se pidió antes. Vuelve al actor como
     /// un mensaje más: así el estado lo sigue tocando un solo escritor.
     ///
@@ -343,6 +356,8 @@ enum Fondo {
     /// Insignias y valores de columna juntos: son la misma pregunta sobre las
     /// mismas rutas y viajan en la misma respuesta.
     Adornos(Box<Adornos>),
+    /// Los bytes enteros de una imagen que el visor aceptó.
+    Imagen(RequestToken, Result<Vec<u8>, Error>),
     /// La búsqueda de esta época ya tiene Task: este es su id.
     ///
     /// Llega por su cuenta y no dentro del primer lote porque puede no haber
@@ -478,6 +493,27 @@ impl UiHost {
         rx.await.map_err(|_| UiError::Down)
     }
 
+    /// Los bytes de la imagen que el visor tiene abierta, si ya llegaron.
+    ///
+    /// Aparte de la foto A PROPÓSITO: ocho megas en el flujo de parches es un
+    /// mensaje que se reenvía entero en cada `Resync`. El renderer los pide
+    /// por aquí, hace un `blob:` y lo revoca al cerrar (ADR 0069).
+    ///
+    /// No lleva RUTA. El renderer no nombra ficheros —ni aquí ni en ningún
+    /// otro sitio— así que lo que se sirve es la imagen que el host mismo
+    /// decidió abrir, y no la que alguien pida.
+    ///
+    /// # Errors
+    /// [`UiError::Down`] si el actor ya no está.
+    pub async fn image_bytes(&self) -> Result<Option<std::sync::Arc<Vec<u8>>>, UiError> {
+        let (tx, rx) = oneshot::channel();
+        self.inbox
+            .send(Mensaje::BytesDeImagen(tx))
+            .await
+            .map_err(|_| UiError::Down)?;
+        rx.await.map_err(|_| UiError::Down)
+    }
+
     /// Se engancha a las actualizaciones. Varios suscriptores son legales; el
     /// escritor sigue siendo uno.
     #[must_use]
@@ -537,6 +573,9 @@ async fn actor(
                 }
                 let _ = responde.send(ack);
             }
+            Mensaje::BytesDeImagen(responde) => {
+                let _ = responde.send(estado.imagen.clone());
+            }
             Mensaje::Catalogo(datos) => {
                 let (scheme, catalogo) = *datos;
                 let _ = updates.send(estado.aplicar_catalogo(scheme, catalogo));
@@ -553,7 +592,7 @@ async fn actor(
             }
             Mensaje::Contenido(datos) => {
                 let (token, path, leido, preview) = *datos;
-                if let Some(u) = estado.abrir_visor(token, path, leido, preview) {
+                if let Some(u) = estado.abrir_visor(token, path, leido, preview, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
@@ -980,6 +1019,13 @@ struct Estado {
     gen_selector: u64,
     /// Cuántas veces se ha abierto el gestor de extensiones.
     gen_extensiones: u64,
+    /// Los bytes de la imagen que el visor enseña, si ya llegaron.
+    ///
+    /// NO viajan en la foto: una imagen de ocho megas en el flujo de parches
+    /// es un mensaje que se reenvía entero en cada `Resync` y que rompe la
+    /// garantía de tamaño que `payload.rs` vigila. El renderer los pide
+    /// aparte y hace un `blob:` con ellos (ADR 0069).
+    imagen: Option<std::sync::Arc<Vec<u8>>>,
     /// La búsqueda abierta, si la hay.
     busqueda: Option<Busqueda>,
     /// Cuántas búsquedas ha lanzado esta ventana. Es la identidad de la
@@ -1041,6 +1087,12 @@ struct Estado {
     /// «hay visor», la siguiente tecla la interpretaba otro mapa sin que
     /// nadie hubiera pedido nada.
     visor_en_vuelo: Option<RequestToken>,
+    /// El testigo del visor que está ABIERTO, no del que se está pidiendo.
+    ///
+    /// Separado de `visor_en_vuelo`, que se limpia al abrirse: los bytes de
+    /// la imagen llegan DESPUÉS, y sin esto no habría con qué comprobar que
+    /// son de este visor y no del anterior.
+    visor_token: Option<RequestToken>,
     /// El visor abierto, si lo hay. El modelo es el COMPARTIDO
     /// (`norte_frontend::viewer::Viewer`): decodificación, hexadecimal y
     /// desplazamiento son suyos.
@@ -1213,6 +1265,7 @@ impl Estado {
             gen_sitios: 0,
             gen_selector: 0,
             gen_extensiones: 0,
+            imagen: None,
             busqueda: None,
             epoca_busqueda: 0,
             disposiciones: user_layouts,
@@ -1230,6 +1283,7 @@ impl Estado {
             efectos,
             visor_filas: None,
             visor_en_vuelo: None,
+            visor_token: None,
             visor: None,
             arbol,
             kinds,
@@ -3582,6 +3636,7 @@ impl Estado {
                 self.aplicar_resultados(epoca, &lote).into_iter().collect()
             }
             Fondo::Adornos(datos) => self.aplicar_adornos(*datos).into_iter().collect(),
+            Fondo::Imagen(token, leido) => self.aplicar_imagen(token, leido).into_iter().collect(),
             Fondo::BusquedaViva(epoca, id) => {
                 if let Some(b) = self.busqueda.as_mut()
                     && b.epoca == epoca
@@ -4315,6 +4370,10 @@ impl Estado {
             crate::commands::EfectoVisor::Cerrar => {
                 self.visor = None;
                 self.visor_en_vuelo = None;
+                self.visor_token = None;
+                // La imagen se SUELTA al cerrar: son megas, y un visor
+                // cerrado no tiene nada que enseñar.
+                self.imagen = None;
             }
             crate::commands::EfectoVisor::Linea(n) if n < 0 => v.scroll_up(pasos(n)),
             crate::commands::EfectoVisor::Linea(n) => v.scroll_down(pasos(n)),
@@ -4428,6 +4487,8 @@ impl Estado {
         path: VPath,
         leido: Result<Vec<u8>, Error>,
         preview: Option<norte_proto::methods::PluginPreviewStyled>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         if self.visor_en_vuelo != Some(token) {
             // El usuario cerró el visor, pidió otro fichero o se fue a otro
@@ -4436,6 +4497,10 @@ impl Estado {
             return None;
         }
         self.visor_en_vuelo = None;
+        self.visor_token = Some(token);
+        // Un visor nuevo: la imagen del anterior sobra. Y hay que soltarla,
+        // no solo dejar de pintarla: son megas.
+        self.imagen = None;
         match leido {
             Ok(mut bytes) => {
                 let cap = usize::try_from(VISOR_CAP).unwrap_or(usize::MAX);
@@ -4443,6 +4508,7 @@ impl Estado {
                 if truncado {
                     bytes.truncate(cap);
                 }
+                let ruta = path.clone();
                 self.visor = Some(match preview {
                     // Un previewer aplicó: se enseña LO SUYO. Los bytes ya
                     // leídos no se tiran —hicieron falta para saber que el
@@ -4456,6 +4522,7 @@ impl Estado {
                     ),
                     None => norte_frontend::viewer::Viewer::new(path, bytes, truncado),
                 });
+                self.pedir_imagen(&ruta, token, backend, buzon);
             }
             Err(e) => {
                 // No se pudo leer: se DICE y no se abre un visor vacío que
@@ -4472,6 +4539,88 @@ impl Estado {
         }
         let snap = self.snapshot();
         Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+    }
+
+    /// Trae los bytes ENTEROS de la imagen, si el visor tiene una aceptada.
+    ///
+    /// La cabecera ya se leyó con el visor y ya dijo que sí; esto trae el
+    /// resto. Si el fichero cabía en lo que se leyó no hay segundo viaje: los
+    /// bytes ya están.
+    ///
+    /// El tope es una NEGATIVA, no un recorte. Media imagen decodificada es
+    /// una imagen de otra cosa, así que un fichero por encima de
+    /// [`IMAGEN_CAP`] no se pinta y se dice.
+    fn pedir_imagen(
+        &mut self,
+        path: &VPath,
+        token: RequestToken,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let Some(v) = self.visor.as_ref() else {
+            return;
+        };
+        if !matches!(Self::imagen_de(v), Ok(Some(_))) {
+            return;
+        }
+        if !v.truncated {
+            // Cabía entera en la lectura del visor: no hay nada que pedir.
+            self.imagen = v.image_bytes().map(|b| std::sync::Arc::new(b.to_vec()));
+            return;
+        }
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        let path = path.clone();
+        tokio::spawn(async move {
+            // Un byte de más que el tope: es lo que delata que no cabe.
+            let lectura = backend.read(
+                path,
+                Some(norte_proto::ByteRange {
+                    offset: 0,
+                    len: Some(IMAGEN_CAP + 1),
+                }),
+            );
+            let leido = match tokio::time::timeout(PLAZO_VISOR, lectura).await {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::Imagen(token, leido))))
+                .await;
+        });
+    }
+
+    /// Los bytes de la imagen, llegados.
+    ///
+    /// Se descartan si el visor ya es otro: pintar la foto anterior sobre el
+    /// fichero de ahora es la misma clase de error que abrir un visor que
+    /// nadie pidió.
+    fn aplicar_imagen(
+        &mut self,
+        token: RequestToken,
+        leido: Result<Vec<u8>, Error>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        if self.visor_token != Some(token) {
+            return None;
+        }
+        let Ok(bytes) = leido else {
+            return None;
+        };
+        if bytes.len() as u64 > IMAGEN_CAP {
+            // No cabe. Se dice y se enseña la vista cruda: enseñarla a medias
+            // sería enseñar otra imagen.
+            self.status.message = Some(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "viewer-image-too-large",
+            )));
+            let cambio = ViewChange::Status(self.status.clone());
+            return Some(self.parche(vec![cambio]));
+        }
+        self.imagen = Some(std::sync::Arc::new(bytes));
+        let cambio = ViewChange::Viewer {
+            viewer: self.vista_visor(),
+        };
+        Some(self.parche(vec![cambio]))
     }
 
     /// La tecla, cuando el buscador incremental está abierto.
@@ -5996,6 +6145,7 @@ impl Estado {
     /// pantalla—, menos el cromo: el visor ocupa la ventana entera.
     fn vista_visor(&self) -> Option<crate::dto::ViewerView> {
         let v = self.visor.as_ref()?;
+        let imagen = Self::imagen_de(v);
         let alto = self.alto_del_visor();
         let (path, hostil) = norte_frontend::path_display(&v.path);
         Some(crate::dto::ViewerView {
@@ -6030,7 +6180,51 @@ impl Estado {
                 ))
             }),
             preview_lossy: v.preview_lossy(),
+            image: imagen.clone().ok().flatten(),
+            image_refused: match &imagen {
+                Err(clave) => clamp_display(norte_i18n::t_in(self.lang, clave)),
+                Ok(_) => String::new(),
+            },
         })
+    }
+
+    /// Si lo que hay en el visor es una imagen PINTABLE, y si no, por qué no.
+    ///
+    /// `Ok(None)` = no es una imagen. `Ok(Some(_))` = lo es y se acepta.
+    /// `Err(clave)` = lo es y se RECHAZA, con la clave que lo explica.
+    ///
+    /// Los tres topes del ADR 0069, y los tres son negativas y no recortes:
+    ///
+    /// - El **formato** sale de los bytes mágicos, nunca de la extensión: una
+    ///   extensión es una afirmación de quien nombró el fichero.
+    /// - Las **dimensiones declaradas** se comparan con el presupuesto ANTES
+    ///   de que nadie decodifique. Un PNG de 64 KB puede declarar 60000×60000
+    ///   y costar gigabytes; leerle la cabecera es la única defensa barata.
+    ///   Una cabecera que no se entiende también se rechaza: «no sé» tratado
+    ///   como «adelante» es la puerta que esto existe para cerrar.
+    /// - Los **bytes** los acota quien los sirve, y un fichero que no cabe no
+    ///   se pinta A MEDIAS: media imagen decodificada es una imagen de otra
+    ///   cosa.
+    fn imagen_de(
+        v: &norte_frontend::viewer::Viewer,
+    ) -> Result<Option<crate::dto::ImageView>, &'static str> {
+        let Some(fmt) = v.image_kind() else {
+            return Ok(None);
+        };
+        // La cabecera SIEMPRE cabe en lo que el visor ya leyó, así que
+        // rechazar aquí no cuesta un viaje.
+        let bytes = v.image_bytes().unwrap_or_default();
+        let Some((w, h)) = norte_frontend::viewer::image_dimensions(bytes) else {
+            return Err("viewer-image-unreadable");
+        };
+        if u64::from(w) * u64::from(h) > norte_frontend::viewer::PIXEL_BUDGET {
+            return Err("viewer-image-too-large");
+        }
+        Ok(Some(crate::dto::ImageView {
+            format: fmt.label().to_owned(),
+            width: w,
+            height: h,
+        }))
     }
 
     /// El reparto de ESTE tamaño, con los papeles puestos.

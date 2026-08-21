@@ -56,6 +56,23 @@ fn la_csp_no_deja_puertas() {
     ] {
         assert!(csp.contains(directiva), "falta `{directiva}`: {csp}");
     }
+    // Las imágenes: `blob:` SÍ, `data:` NO (ADR 0069).
+    //
+    // `blob:` no se puede fabricar desde el contenido —un blob URL existe
+    // solo porque este documento lo creó— así que es una concesión más
+    // estrecha que `data:`, que es una URL que cualquier cadena puede
+    // formar. La diferencia importa aunque hoy este documento no pinte
+    // markup ajeno: la CSP es del DOCUMENTO entero, no del elemento que
+    // teníamos en mente.
+    assert!(
+        csp.contains("img-src 'self' blob:"),
+        "las imágenes cruzan como blob (ADR 0069): {csp}"
+    );
+    assert!(
+        !csp.contains("data:"),
+        "`data:` no entra en la CSP sin cambiar el ADR 0069, que explica por \
+         qué se eligió `blob:`: {csp}"
+    );
 }
 
 /// La webview no tiene ni el objeto global de Tauri, ni protocolo de assets,

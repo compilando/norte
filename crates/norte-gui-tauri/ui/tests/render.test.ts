@@ -101,7 +101,11 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
   };
 }
 
-function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
+function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
+  screen: Screen;
+  enviadas: UiAction[];
+  root: HTMLElement;
+} {
   document.body.replaceChildren();
   const root = document.createElement("main");
   const palette = document.createElement("div");
@@ -150,6 +154,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     dialogs,
     catalogo(),
     (a: UiAction) => enviadas.push(a),
+    opciones.imageBytes ?? (() => Promise.resolve(new ArrayBuffer(0))),
   );
   return { screen, enviadas, root };
 }
@@ -401,6 +406,8 @@ describe("el visor", () => {
       lines: ["primera", "segunda"],
       preview_by: "",
       preview_lossy: false,
+      image: null,
+      image_refused: "",
     };
     screen.paint(v);
     const doc = document.querySelector('[role="document"]') as HTMLElement;
@@ -426,6 +433,8 @@ describe("el visor", () => {
       lines: ["00000000  00 01 02 ff"],
       preview_by: "",
       preview_lossy: false,
+      image: null,
+      image_refused: "",
     };
     screen.paint(v);
     expect(document.querySelector(".viewer-body")?.classList.contains("hexview")).toBe(
@@ -457,6 +466,8 @@ describe("el visor", () => {
       lines: ["<script>alert(1)</script>"],
       preview_by: "",
       preview_lossy: false,
+      image: null,
+      image_refused: "",
     };
     screen.paint(v);
     const body = document.querySelector(".viewer-body") as HTMLElement;
@@ -577,6 +588,104 @@ describe("el campo de texto de un diálogo", () => {
   });
 });
 
+describe("la imagen del visor", () => {
+  function conImagen(image: ViewSnapshot["viewer"]): ViewSnapshot {
+    const v = vista({});
+    v.viewer = image;
+    return v;
+  }
+
+  const base = {
+    path_display: "⟨file⟩/casa/foto.png",
+    path_hostile: false,
+    encoding: "binario",
+    eol: "none",
+    hex: true,
+    forced: false,
+    had_errors: false,
+    truncated: false,
+    total_rows: 1,
+    first_line: 0,
+    lines: ["00000000  89 50 4e 47"],
+    preview_by: "",
+    preview_lossy: false,
+  };
+
+  it("pide los bytes APARTE y los pinta como blob", async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const { screen } = montar({ imageBytes: () => Promise.resolve(bytes) });
+    screen.paint(
+      conImagen({
+        ...base,
+        image: { format: "PNG", width: 800, height: 600 },
+        image_refused: "",
+      }),
+    );
+    // La promesa se resuelve en el siguiente turno.
+    await Promise.resolve();
+    await Promise.resolve();
+    const img = document.querySelector<HTMLImageElement>(".viewer-image");
+    expect(img).not.toBeNull();
+    // `blob:`, jamás `file:` ni `data:` (ADR 0069).
+    expect(img?.src.startsWith("blob:")).toBe(true);
+    // Con el tamaño DECLARADO, para que la caja no salte al cargar.
+    expect(img?.width).toBe(800);
+    expect(img?.height).toBe(600);
+  });
+
+  it("y cerrar el visor REVOCA el blob", async () => {
+    const revocadas: string[] = [];
+    const revoke = URL.revokeObjectURL.bind(URL);
+    URL.revokeObjectURL = (u: string) => {
+      revocadas.push(u);
+      revoke(u);
+    };
+    try {
+      const bytes = new Uint8Array([1, 2, 3]).buffer;
+      const { screen } = montar({ imageBytes: () => Promise.resolve(bytes) });
+      screen.paint(
+        conImagen({
+          ...base,
+          image: { format: "PNG", width: 10, height: 10 },
+          image_refused: "",
+        }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      screen.paint(conImagen(null));
+      // Un object URL sin revocar retiene sus bytes mientras viva el
+      // documento, y esto son megas.
+      expect(revocadas).toHaveLength(1);
+    } finally {
+      URL.revokeObjectURL = revoke;
+    }
+  });
+
+  it("una imagen RECHAZADA se dice, y no se pide nada", () => {
+    let pedida = false;
+    const { screen } = montar({
+      imageBytes: () => {
+        pedida = true;
+        return Promise.resolve(new ArrayBuffer(0));
+      },
+    });
+    screen.paint(
+      conImagen({
+        ...base,
+        image: null,
+        image_refused: "imagen demasiado grande para previsualizarla",
+      }),
+    );
+    const no = document.querySelector(".viewer-image-refused");
+    expect(no?.textContent).toContain("demasiado grande");
+    // Anunciado, para quien no mira la pantalla: caer al hexview en silencio
+    // parece norte roto, no norte prudente.
+    expect(no?.getAttribute("role")).toBe("status");
+    expect(pedida).toBe(false);
+    expect(document.querySelector(".viewer-image")).toBeNull();
+  });
+});
+
 describe("la preview de un plugin en el visor", () => {
   it("dice de quién es lo que enseña, y aparte del aviso de pérdida", () => {
     const { screen } = montar();
@@ -595,6 +704,8 @@ describe("la preview de un plugin en el visor", () => {
       lines: ["Informe anual"],
       preview_by: "via PDF de ACME",
       preview_lossy: true,
+      image: null,
+      image_refused: "",
     };
     screen.paint(v);
     const via = document.querySelector(".viewer-via");
@@ -626,6 +737,8 @@ describe("la preview de un plugin en el visor", () => {
       lines: ["x"],
       preview_by: "via PDF de ACME",
       preview_lossy: true,
+      image: null,
+      image_refused: "",
     };
     screen.paint(v);
     const head = document.querySelector(".viewer-head");
@@ -656,6 +769,8 @@ describe("la preview de un plugin en el visor", () => {
       lines: ["hola"],
       preview_by: "",
       preview_lossy: false,
+      image: null,
+      image_refused: "",
     };
     screen.paint(v);
     expect(document.querySelector(".viewer-via")).toBeNull();

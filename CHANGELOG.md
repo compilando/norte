@@ -7,6 +7,42 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **The window shows what plugins say about each row.** Bridge **18**: a row
+  can carry the badge a plugin put on it, with the theme role to paint it in,
+  and a configured `plugin:` column brings its value. Both are asked for the
+  VISIBLE WINDOW only — every call spins up a wasm instance per plugin, and
+  asking about a directory nobody is looking at multiplies that cost by the
+  directory's size for nothing.
+- **A listing says how many entries the provider skipped.** Bridge **19**.
+  That count came off the wire and the window used to drop it, so a directory
+  whose provider skipped entries — no permission to stat them, over a limit of
+  its own — showed fewer rows and said nothing. It is the kind of failure you
+  cannot spot by looking: what is missing is not there, so the notice goes in
+  the pane's header and is announced, not left for a row nobody will find.
+- **A column picker.** Bridge **20**: which columns are painted, in what
+  order, with which format, and over which scheme. It applies to THIS window
+  and does not write `norte.toml` — this phase does not write configuration,
+  and the panel says so rather than leaving the user believing they had just
+  configured norte.
+- **The viewer shows a plugin's preview, and says whose it is.** Bridge
+  **21**. A previewer can show anything — that is its job: a PDF as text, a
+  formatted JSON — so whoever is looking is entitled to know they are not
+  seeing the file's bytes. A previewer that fails, stalls or does not apply is
+  not an error: the viewer falls back to the raw view, because a plugin cannot
+  leave a file unopenable.
+- **Image preview** (ADR **0069**). Bridge **22**. The bytes cross as a
+  `blob:` built from a read that goes through the daemon like every other
+  read, so the policy engine sees it. Three caps, all refusals rather than
+  truncations: a byte budget, the dimensions the header DECLARES checked
+  against a pixel budget before anything decodes — a 64 KB PNG can claim
+  60000×60000 and cost the decoder gigabytes — and a closed format list
+  decided by magic bytes, never by the filename extension. A header that
+  cannot be understood is refused too: treating "I don't know" as "go ahead"
+  is the door the budget exists to close. A refusal is said, not silently
+  swapped for the hex view.
+
 ### Fixed
 
 - **A click on the sidebar could navigate somewhere else.** Bridge version

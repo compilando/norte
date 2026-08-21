@@ -185,6 +185,14 @@ viewer-lossy = lossy (�)
 viewer-truncated = [head]
 viewer-binary = binary
 viewer-plugin-preview = via { $plugin }
+# The header declares a size this window will not decode. A 64 KB PNG can
+# claim 60000x60000 and cost the decoder gigabytes; reading the header and
+# refusing is the only cheap defence.
+viewer-image-too-large = image too large to preview
+# The header does not say anything we understand. Treating that as "go
+# ahead" is the door the budget exists to close.
+viewer-image-unreadable = image header not understood
+viewer-image-loading = loading image…
 viewer-plugin-preview-lossy = [lossy decode]
 eol-mixed = mixed EOL
 eol-none = no EOL

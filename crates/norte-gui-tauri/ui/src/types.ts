@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 21;
+export const BRIDGE_VERSION = 22;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -216,6 +216,26 @@ export interface ViewerView {
   preview_by: string;
   /** La decodificación que se le dio al previewer fue con PÉRDIDA. */
   preview_lossy: boolean;
+  /**
+   * Es una imagen PINTABLE y así de grande dice ser. `null` = no lo es, o es
+   * una que el host se niega a pintar (y entonces lo dice en
+   * `image_refused`). Los bytes NO vienen aquí: se piden aparte.
+   */
+  image: ImageView | null;
+  /** Por qué NO se pinta una imagen reconocida, ya traducido. */
+  image_refused: string;
+}
+
+/**
+ * Una imagen reconocida y aceptada. El tamaño es el que DECLARA su cabecera:
+ * nadie la ha decodificado todavía, y eso es el punto — el declarado es lo
+ * que el host comparó con su presupuesto (ADR 0069).
+ */
+export interface ImageView {
+  /** Reconocido por bytes MÁGICOS, jamás por la extensión. */
+  format: string;
+  width: number;
+  height: number;
 }
 
 export interface PaletteRowView {

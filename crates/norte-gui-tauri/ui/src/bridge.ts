@@ -20,6 +20,8 @@ export interface HostPort {
   dispatch(action: UiAction): Promise<ActionAck>;
   requestSnapshot(): Promise<ActionAck>;
   catalog(): Promise<HostCatalog>;
+  /** Los bytes de la imagen abierta. Vacío = no hay ninguna. */
+  imageBytes(): Promise<ArrayBuffer>;
   onUpdate(cb: (env: BridgeEnvelope<UiUpdate>) => void): Promise<() => void>;
   onLagged(cb: () => void): Promise<() => void>;
 }
@@ -36,6 +38,10 @@ export const tauriPort: HostPort = {
   dispatch: (action) => invoke<ActionAck>("dispatch", { action }),
   requestSnapshot: () => invoke<ActionAck>("request_snapshot"),
   catalog: () => invoke<HostCatalog>("catalog"),
+  // Los bytes de la imagen abierta, CRUDOS y sin ruta: el renderer no nombra
+  // ficheros, se le sirve la que el host decidió abrir. Vacío = no hay
+  // ninguna, que la foto ya dijo.
+  imageBytes: () => invoke<ArrayBuffer>("image_bytes"),
   onUpdate: async (cb) => {
     const un = await listen<BridgeEnvelope<UiUpdate>>(EVENT_UPDATE, (e) => {
       cb(e.payload);

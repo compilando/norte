@@ -1708,3 +1708,23 @@ body {
   color: var(--warning-fg);
   unicode-bidi: isolate;
 }
+
+/* La imagen del visor. Se pinta con su tamaño DECLARADO, que el host ya
+   comparó con el presupuesto, y encogida a la caja: una foto de 6000 px de
+   ancho no puede sacar barras de scroll horizontales en la ventana. */
+.viewer-image {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  margin: auto;
+}
+
+/* Se reconoció una imagen y esta ventana se niega a pintarla. Se DICE, en vez
+   de caer en silencio al hexview. */
+.viewer-image-refused {
+  flex: 0 0 auto;
+  margin: 0 0 0 8px;
+  color: var(--warning-fg);
+  unicode-bidi: isolate;
+}

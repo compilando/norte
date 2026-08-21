@@ -187,6 +187,14 @@ viewer-lossy = con pérdidas (�)
 viewer-truncated = [cabecera]
 viewer-binary = binario
 viewer-plugin-preview = via { $plugin }
+# La cabecera declara un tamaño que esta ventana no va a decodificar. Un PNG
+# de 64 KB puede declarar 60000x60000 y costarle gigabytes al decodificador;
+# leerle la cabecera y negarse es la única defensa barata.
+viewer-image-too-large = imagen demasiado grande para previsualizarla
+# La cabecera no dice nada que entendamos. Tratar eso como «adelante» es la
+# puerta que el presupuesto existe para cerrar.
+viewer-image-unreadable = no se entiende la cabecera de la imagen
+viewer-image-loading = cargando la imagen…
 viewer-plugin-preview-lossy = [decodificación con pérdida]
 eol-mixed = EOL mixto
 eol-none = sin EOL

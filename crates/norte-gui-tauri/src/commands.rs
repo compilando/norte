@@ -71,6 +71,26 @@ impl Bridge {
     pub fn catalog(&self) -> Arc<HostCatalog> {
         Arc::clone(&self.catalog)
     }
+
+    /// Los bytes de la imagen que el visor tiene abierta, si los hay.
+    ///
+    /// Aparte de la foto A PROPÓSITO (ADR 0069): ocho megas en el flujo de
+    /// parches es un mensaje que se reenvía entero en cada `Resync`.
+    ///
+    /// Sin RUTA. El renderer no nombra ficheros: se le sirve la imagen que el
+    /// host decidió abrir, ya validada contra los topes —formato por bytes
+    /// mágicos, dimensiones declaradas contra el presupuesto, tamaño— y no la
+    /// que alguien pida.
+    ///
+    /// # Errors
+    /// El motivo, ya en texto, si el host no está.
+    pub async fn image_bytes(&self) -> Result<Vec<u8>, String> {
+        self.host
+            .image_bytes()
+            .await
+            .map(|b| b.map(|a| a.as_slice().to_vec()).unwrap_or_default())
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// Lo que el proceso tiene: un puente vivo, o el motivo por el que no.
@@ -107,6 +127,7 @@ pub const COMANDOS: &[&str] = &[
     "dispatch",
     "request_snapshot",
     "catalog",
+    "image_bytes",
 ];
 
 #[cfg(test)]

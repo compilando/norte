@@ -100,6 +100,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     dialogsEl,
     catalog,
     send,
+    () => port.imageBytes(),
   );
 
   const repaint = (): void => {

@@ -90,6 +90,15 @@ export class Screen {
   private dialogoInput: HTMLInputElement | null = null;
   /// La página de ayuda que se pintó, para conservar su scroll.
   private helpPintada: string | null = null;
+  /// El `blob:` de la imagen que se está enseñando, para REVOCARLO.
+  ///
+  /// Un object URL sin revocar es un búfer retenido mientras viva el
+  /// documento. La revocación va en el mismo sitio que el cierre, no en un
+  /// `finally` que un refactor futuro pueda soltar (ADR 0069).
+  private imagenUrl: string | null = null;
+  /// Qué imagen se pidió, para no pedir dos veces la misma ni pintar la
+  /// anterior sobre el visor de ahora.
+  private imagenDe: string | null = null;
   /** Las líneas de visor que ya se declararon. */
   private viewerRows = 0;
   /** La ayuda está abierta con el CUERPO enfocado. */
@@ -112,6 +121,12 @@ export class Screen {
     private readonly dialogsRoot: HTMLElement,
     private readonly catalog: HostCatalog,
     private readonly send: Send,
+    /**
+     * Trae los bytes de la imagen abierta. Sin ruta: el renderer no nombra
+     * ficheros, se le sirve la que el host decidió abrir (ADR 0069).
+     */
+    private readonly fetchImage: () => Promise<ArrayBuffer> = () =>
+      Promise.resolve(new ArrayBuffer(0)),
   ) {}
 
   /**
@@ -1343,6 +1358,9 @@ export class Screen {
       this.viewerRoot.replaceChildren();
       this.viewerRoot.dataset["open"] = "false";
       this.viewerRows = 0;
+      // El visor se cerró: se SUELTA el búfer. Un object URL sin revocar
+      // retiene sus bytes mientras viva el documento.
+      this.soltarImagen();
       return;
     }
     this.viewerRoot.dataset["open"] = "true";
@@ -1408,6 +1426,18 @@ export class Screen {
       }
     }
 
+    if (viewer.image_refused !== "") {
+      // Se reconoció una imagen y esta ventana se NIEGA a pintarla. Se dice,
+      // en vez de caer en silencio al hexview: un fichero que el usuario
+      // sabe que es una foto y que aparece como bytes sin una palabra parece
+      // norte roto, no norte prudente.
+      const no = document.createElement("p");
+      no.className = "viewer-image-refused";
+      no.setAttribute("role", "status");
+      no.textContent = viewer.image_refused;
+      head.append(no);
+    }
+
     const body = document.createElement("pre");
     body.className = viewer.hex ? "viewer-body hexview" : "viewer-body";
     body.setAttribute("tabindex", "-1");
@@ -1415,6 +1445,12 @@ export class Screen {
     body.textContent = viewer.lines.join("\n");
 
     box.append(head, body);
+    if (viewer.image !== null) {
+      // Los bytes NO vienen en la foto: se piden aparte y se pintan cuando
+      // llegan. Hasta entonces se ve la vista cruda, que es lo honesto —el
+      // fichero es ese— en vez de un hueco vacío.
+      this.pintarImagen(viewer, box, body);
+    }
     this.viewerRoot.replaceChildren(box);
     // Cuántas líneas caben lo sabe QUIEN PINTA. El host lo estimaba con
     // celdas de disposición menos un cromo adivinado, así que mandaba más
@@ -1425,6 +1461,73 @@ export class Screen {
       this.viewerRows = filas;
       this.send({ action: "set_viewer_rows", rows: filas });
     }
+  }
+
+  /** Revoca el `blob:` vivo, si lo hay. Idempotente. */
+  private soltarImagen(): void {
+    if (this.imagenUrl !== null) {
+      URL.revokeObjectURL(this.imagenUrl);
+      this.imagenUrl = null;
+    }
+    this.imagenDe = null;
+  }
+
+  /**
+   * Pide los bytes de la imagen y la pinta cuando llegan.
+   *
+   * Una vez por fichero: la clave es la ruta MÁS lo que la cabecera declara,
+   * así que reabrir el mismo fichero tras cambiarlo vuelve a pedirlo pero un
+   * repintado cualquiera no.
+   *
+   * Los bytes ya vienen validados por el host —formato por bytes mágicos,
+   * dimensiones declaradas contra el presupuesto, tamaño— así que aquí no se
+   * decide nada: se envuelve y se pinta (ADR 0069).
+   */
+  private pintarImagen(viewer: ViewerView, box: HTMLElement, body: HTMLElement): void {
+    const img = viewer.image;
+    if (img === null) {
+      return;
+    }
+    const clave = `${viewer.path_display}|${img.format}|${String(img.width)}x${String(img.height)}`;
+    if (this.imagenDe === clave && this.imagenUrl !== null) {
+      // Ya está pedida —o pintada— y es la misma: no se vuelve a pedir.
+      box.replaceChildren(box.firstChild ?? body, this.nodoImagen(this.imagenUrl, img));
+      return;
+    }
+    this.soltarImagen();
+    this.imagenDe = clave;
+    void this.fetchImage()
+      .then((bytes) => {
+        // Mientras volaba, el visor pudo cambiar o cerrarse. Pintar la foto
+        // anterior sobre el fichero de ahora es la misma clase de error que
+        // abrir un visor que nadie pidió.
+        if (this.imagenDe !== clave || bytes.byteLength === 0) {
+          return;
+        }
+        const url = URL.createObjectURL(new Blob([bytes]));
+        this.imagenUrl = url;
+        body.replaceWith(this.nodoImagen(url, img));
+      })
+      .catch(() => {
+        // Sin imagen se queda la vista cruda, que es el fichero de verdad.
+        this.imagenDe = null;
+      });
+  }
+
+  /** El `<img>` con su tamaño declarado, para que no salte al cargar. */
+  private nodoImagen(
+    url: string,
+    img: { format: string; width: number; height: number },
+  ): HTMLElement {
+    const el = document.createElement("img");
+    el.className = "viewer-image";
+    el.src = url;
+    // El tamaño DECLARADO, que el host ya comparó con el presupuesto: sin
+    // él la caja salta cuando la imagen carga.
+    el.width = img.width;
+    el.height = img.height;
+    el.alt = img.format;
+    return el;
   }
 
   private rebuild(view: ViewSnapshot, cell: { w: number; h: number }): void {

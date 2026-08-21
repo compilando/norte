@@ -6961,3 +6961,159 @@ async fn el_nombre_del_previewer_llega_enmascarado() {
     }
     panic!("el visor abre");
 }
+
+// ---------------------------------------------------------------------------
+// La imagen del visor (tarea 4.3, ADR 0069).
+// ---------------------------------------------------------------------------
+
+/// Un PNG cuya CABECERA declara `w`x`h`, con relleno hasta `bytes`.
+fn png_de(w: u32, h: u32, bytes: usize) -> Vec<u8> {
+    let mut v = b"\x89PNG\r\n\x1a\n".to_vec();
+    v.extend_from_slice(&[0, 0, 0, 13]);
+    v.extend_from_slice(b"IHDR");
+    v.extend_from_slice(&w.to_be_bytes());
+    v.extend_from_slice(&h.to_be_bytes());
+    v.resize(bytes.max(v.len()), 0);
+    v
+}
+
+/// El visor abre la imagen: dice su formato y su tamaño DECLARADO, y sus
+/// bytes NO viajan en la foto.
+#[tokio::test]
+async fn una_imagen_se_acepta_y_sus_bytes_van_aparte() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"foto.png".to_vec(), false)]);
+    f.contenido
+        .insert("mem:///casa/foto.png".to_owned(), png_de(1920, 1080, 4096));
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    let mut v = None;
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if let Some(x) = siguiente_foto(&mut sub).await.viewer.clone() {
+            v = Some(x);
+            break;
+        }
+    }
+    let v = v.expect("el visor abre");
+    let img = v.image.clone().expect("se reconoce la imagen");
+    assert_eq!(img.format, "PNG", "por bytes MÁGICOS, no por la extensión");
+    assert_eq!((img.width, img.height), (1920, 1080));
+    assert!(v.image_refused.is_empty());
+
+    // Los bytes NO están en la foto: ocho megas en el flujo de parches es un
+    // mensaje que se reenvía entero en cada `Resync`.
+    let foto = serde_json::to_string(&v).expect("serializa");
+    assert!(
+        foto.len() < 4096,
+        "la vista del visor pesa {} bytes: los de la imagen se han colado",
+        foto.len()
+    );
+    // Y se sirven por su propio camino.
+    let bytes = h
+        .image_bytes()
+        .await
+        .expect("host vivo")
+        .expect("hay bytes");
+    assert_eq!(bytes.len(), 4096);
+}
+
+/// Una cabecera que declara una BOMBA se rechaza, y se dice.
+///
+/// Un PNG de cuatro kilobytes puede declarar 60000×60000 —36 gigapíxeles— y
+/// costarle gigabytes al decodificador. La cabecera se lee y se niega ANTES
+/// de que nadie decodifique, que es la única defensa barata (ADR 0069).
+#[tokio::test]
+async fn una_cabecera_que_declara_una_bomba_se_rechaza() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"bomba.png".to_vec(), false)]);
+    f.contenido.insert(
+        "mem:///casa/bomba.png".to_owned(),
+        png_de(60000, 60000, 4096),
+    );
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let Some(v) = siguiente_foto(&mut sub).await.viewer.clone() else {
+            continue;
+        };
+        assert!(v.image.is_none(), "no se pinta");
+        assert!(
+            !v.image_refused.is_empty(),
+            "y se DICE: caer al hexview en silencio parece norte roto, no \
+             norte prudente"
+        );
+        assert!(
+            !v.image_refused.starts_with("viewer-image"),
+            "traducido, no la clave: {:?}",
+            v.image_refused
+        );
+        assert!(
+            h.image_bytes().await.expect("host vivo").is_none(),
+            "y sus bytes no se sirven a nadie"
+        );
+        return;
+    }
+    panic!("el visor abre igual");
+}
+
+/// Una cabecera que no se entiende también se rechaza.
+///
+/// «No sé» tratado como «adelante» es la puerta que el presupuesto existe
+/// para cerrar.
+#[tokio::test]
+async fn una_cabecera_que_no_se_entiende_se_rechaza() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"raro.png".to_vec(), false)]);
+    // Firma PNG válida, pero el primer chunk NO es IHDR.
+    let mut roto = b"\x89PNG\r\n\x1a\n".to_vec();
+    roto.extend_from_slice(&[0, 0, 0, 13]);
+    roto.extend_from_slice(b"iTXt");
+    roto.resize(64, 0);
+    f.contenido.insert("mem:///casa/raro.png".to_owned(), roto);
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let Some(v) = siguiente_foto(&mut sub).await.viewer.clone() else {
+            continue;
+        };
+        assert!(v.image.is_none());
+        assert!(!v.image_refused.is_empty(), "se dice que no se entiende");
+        return;
+    }
+    panic!("el visor abre igual");
+}
+
+/// Cerrar el visor SUELTA los bytes: son megas.
+#[tokio::test]
+async fn cerrar_el_visor_suelta_la_imagen() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"foto.png".to_vec(), false)]);
+    f.contenido
+        .insert("mem:///casa/foto.png".to_owned(), png_de(64, 64, 2048));
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if siguiente_foto(&mut sub).await.viewer.is_some() {
+            break;
+        }
+    }
+    assert!(h.image_bytes().await.expect("host vivo").is_some());
+
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    assert!(
+        h.image_bytes().await.expect("host vivo").is_none(),
+        "un visor cerrado no retiene megas de imagen"
+    );
+}

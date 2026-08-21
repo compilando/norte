@@ -447,6 +447,12 @@ fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
         // derecho a saber que no está viendo los bytes del fichero.
         preview_by: "via PDF de ACME".to_owned(),
         preview_lossy: true,
+        image: Some(norte_ui_host::dto::ImageView {
+            format: "PNG".to_owned(),
+            width: 1920,
+            height: 1080,
+        }),
+        image_refused: String::new(),
     }
 }
 
