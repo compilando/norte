@@ -1481,3 +1481,34 @@ metadata-kind-dir = carpeta
 metadata-kind-file = fichero
 metadata-kind-symlink = enlace
 metadata-kind-other = otro
+
+# ---------------------------------------------------------------------------
+# El host gráfico: qué contestan sus diálogos, y por qué una acción no se pudo
+# hacer. Estas claves las elige RUST y las pinta el renderer con `t(key)`, así
+# que no aparecen en ningún literal `t("…")` de TypeScript y el test de
+# catálogo del renderer no las ve. Faltaban veintiuna y se pintaban como su
+# propio identificador —los dos botones del diálogo donde un humano aprueba la
+# mutación de un agente incluidos.
+dialog-confirm = Confirmar
+dialog-cancel = Cancelar
+dialog-approve = Aprobar
+dialog-deny = Denegar
+modal-mkdir-title = Nuevo directorio
+modal-delete-title = ¿Mover a la papelera?
+# Los tres veredictos del resolver compartido, para una tecla que SÍ está ligada.
+cmd-here = es lo que ya hace aquí
+cmd-not-built = todavía no está hecho
+cmd-not-here = aquí no
+host-key-unmapped = esa tecla no está ligada
+host-cannot-view-dir = un directorio no se ve
+host-nothing-to-view = nada que ver
+host-open-file-not-implemented = abrir ficheros todavía no está hecho
+host-column-not-sortable = por esa columna no se ordena
+host-help-over-input = la ayuda no se abre sobre un campo de texto
+host-layout-broken = ese fichero de disposición no parsea
+host-name-too-long = ese nombre es demasiado largo
+host-no-other-slot = no hay otro panel
+host-read-only = esta ventana todavía no escribe
+host-settings-read-only = los ajustes aquí son de solo lectura
+msg-nav-at-root = ya estás en la raíz
+msg-nothing-selected = nada seleccionado

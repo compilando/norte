@@ -227,6 +227,7 @@ impl HostBackend for Falso {
             .expect("mutex de búsquedas")
             .push(patron.clone());
         let hallazgos = self.hallazgos.get(&patron).cloned().unwrap_or_default();
+        let cancelaciones = Arc::clone(&self.cancelaciones);
         Box::pin(async move {
             let id = norte_proto::TaskId::new(77);
             let (tx, rx) = tokio::sync::mpsc::channel(8);
@@ -251,13 +252,20 @@ impl HostBackend for Falso {
                         attrs: std::collections::BTreeMap::new(),
                     })
                     .collect();
-                let _ = tx
-                    .send(norte_proto::methods::SearchHits {
-                        task_id: id,
-                        entries: entradas,
-                        matches: None,
-                    })
-                    .await;
+                // Un lote VACÍO no se manda: `norte-core` corta antes
+                // (`if batch.is_empty() { return FlushOutcome::Continue }`),
+                // y un doble que sí lo mande esconde todo lo que dependa de
+                // que el primer lote llegue. Es la divergencia que tapó que
+                // una búsqueda sin hallazgos no se cancelaba nunca.
+                if !entradas.is_empty() {
+                    let _ = tx
+                        .send(norte_proto::methods::SearchHits {
+                            task_id: id,
+                            entries: entradas,
+                            matches: None,
+                        })
+                        .await;
+                }
                 // Y termina: la vista deja de decir «buscando…».
                 let _ = ptx.send(norte_proto::TaskProgress {
                     task_id: id,
@@ -277,7 +285,9 @@ impl HostBackend for Falso {
                 norte_ui_host::backend::HostTask {
                     id,
                     progress: prx,
-                    cancel: Arc::new(|| {}),
+                    cancel: Arc::new(move || {
+                        cancelaciones.fetch_add(1, Ordering::SeqCst);
+                    }),
                     foreign: false,
                 },
                 rx,

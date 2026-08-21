@@ -4882,15 +4882,30 @@ async fn el_panel_de_procesos_toma_sus_teclas() {
     let mut sub = h.subscribe();
     let cursor_antes = primer_listado(&snap).cursor;
 
-    // Se lanzan dos borrados para que el tablero tenga filas.
+    // Se lanzan dos borrados para que el tablero tenga filas. El id del
+    // diálogo se LEE, y se espera al NUEVO: fijarlo a mano dejaba el segundo
+    // sin contestar, y un diálogo abierto se queda el teclado —que es justo
+    // lo que debe hacer—, así que el tabulador ya no llegaba a ningún lado.
+    // `Enter` no vale para confirmarlo: en un borrado `confirm` es
+    // destructivo y el teclado elige la primera respuesta que no lo es.
+    let mut contestado = norte_ui_host::ModalId(0);
     for _ in 0..2 {
         h.dispatch(tecla("F8")).await.expect("host vivo");
+        let id = loop {
+            h.dispatch(UiAction::Resync).await.expect("host vivo");
+            if let Some(d) = siguiente_foto(&mut sub).await.dialogs.last()
+                && d.id != contestado
+            {
+                break d.id;
+            }
+        };
+        contestado = id;
         h.dispatch(UiAction::Dialog {
-            id: norte_ui_host::ModalId(1),
+            id,
             choice: "confirm".to_owned(),
         })
         .await
-        .ok();
+        .expect("host vivo");
     }
 
     // Se rota el foco hasta el panel de procesos.
@@ -5305,6 +5320,87 @@ async fn una_disposicion_rota_se_ve_y_no_se_aplica() {
     );
 }
 
+/// Una disposición cuyo REPARTO no coloca ningún listado no puede dejar al
+/// host sin huecos.
+///
+/// `validate` garantiza que el árbol TENGA un `browser`, no que el reparto lo
+/// COLOQUE: un `Tabs` cuyo activo es otro kind manda el listado a `hidden`, y
+/// un split todo-ponderado que no quepa hace lo mismo con todos menos el hijo
+/// 0. Sembrar los huecos desde `placements` en vez de desde el árbol vaciaba
+/// el mapa, y la siguiente tecla moría en el `expect` de `hueco()` —dentro de
+/// la task del actor, sin log y sin caída visible, dejando la ventana muerta
+/// contestando `Down` para siempre. Es la forma de #242 en esta superficie.
+#[tokio::test]
+async fn una_disposicion_que_esconde_el_listado_deja_el_hueco_vivo() {
+    use norte_frontend::layout::{KindId, Node, SlotId};
+    let escondida = Node::Tabs {
+        children: vec![
+            Node::slot(SlotId(9), KindId::new("metadata")),
+            Node::slot(SlotId(1), KindId::browser()),
+        ],
+        active: 0,
+    };
+    norte_frontend::layout::validate(&escondida)
+        .expect("el árbol es VÁLIDO: tiene un browser, aunque el reparto no lo coloque");
+
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: arbol(),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: vec![norte_frontend::layout_picker::UserLayout {
+            name: std::ffi::OsString::from("escondida"),
+            tree: Ok(escondida),
+        }],
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+
+    por_la_paleta(&h, &mut sub, "layout.pick").await;
+    let mut picker = None;
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if let Some(l) = siguiente_foto(&mut sub).await.layouts.clone() {
+            picker = Some(l);
+            break;
+        }
+    }
+    let picker = picker.expect("el selector abre");
+    let i = picker
+        .rows
+        .iter()
+        .position(|r| r.name == "escondida")
+        .expect("la del usuario está");
+    h.dispatch(UiAction::LayoutActivateRow {
+        row: u32::try_from(i).expect("cabe"),
+    })
+    .await
+    .expect("host vivo");
+
+    // La tecla que mataba: cualquiera que toque el hueco activo.
+    h.dispatch(tecla("Down"))
+        .await
+        .expect("el host sigue VIVO tras elegir una disposición que esconde el listado");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let despues = siguiente_foto(&mut sub).await;
+    assert!(
+        despues
+            .slots
+            .iter()
+            .any(|s| matches!(s, SlotView::Metadata(_))),
+        "y la pantalla es la que se pidió: la pestaña activa es la ficha"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Buscar por el subárbol (tarea 6.1).
 // ---------------------------------------------------------------------------
@@ -5415,6 +5511,194 @@ async fn buscar_abre_su_vista_y_los_hallazgos_llegan_en_lotes() {
         backend.busquedas.lock().expect("mutex").as_slice(),
         &["*.txt".to_owned()],
         "y el patrón llegó al wire tal cual"
+    );
+}
+
+/// Lanza la búsqueda `patron` por el prompt y devuelve su primera vista.
+async fn buscar(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+    patron: &str,
+) -> norte_ui_host::dto::SearchView {
+    por_la_paleta(h, sub, "pane.search").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(sub).await;
+    let dialogo = foto
+        .dialogs
+        .iter()
+        .find(|d| d.input.is_some())
+        .expect("el prompt de buscar pide un patrón");
+    h.dispatch(UiAction::DialogInput {
+        id: dialogo.id,
+        text: patron.to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id: dialogo.id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    siguiente_busqueda(sub).await.expect("la vista abre")
+}
+
+/// Cerrar una búsqueda SIN hallazgos cancela igual.
+///
+/// La búsqueda se nombraba con el primer lote, y el core NO manda lotes
+/// vacíos (`norte-core/src/search.rs`: `if batch.is_empty() { return
+/// FlushOutcome::Continue }`). Así que sobre un árbol sin coincidencias el id
+/// no llegaba nunca, `esc` no tenía a quién cancelar y el daemon seguía
+/// caminando el subárbol entero para una superficie ya cerrada. La
+/// cancelación existía y era inalcanzable: la regla 3 rota por el lado de la
+/// UI.
+#[tokio::test]
+async fn cerrar_una_busqueda_sin_hallazgos_la_cancela() {
+    let backend = arbol_con_hallazgos("*.txt", &["mem:///casa/notas.txt"]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    let v = buscar(&h, &mut sub, "*.zzz").await;
+    assert_eq!(v.query, "*.zzz");
+    assert!(v.rows.is_empty(), "no hay nada que encontrar");
+
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert!(
+        siguiente_foto(&mut sub).await.search.is_none(),
+        "la vista se cierra"
+    );
+    assert_eq!(
+        backend.cancelaciones.load(Ordering::SeqCst),
+        1,
+        "y la Task se cancela AUNQUE no haya llegado ni un lote: es lo único \
+         que para al daemon"
+    );
+}
+
+/// Un lote rezagado de la búsqueda ANTERIOR no llena la lista de la nueva.
+///
+/// El reenviador de la búsqueda vieja no se aborta —su `tokio::spawn` no
+/// guarda handle— así que puede seguir escupiendo lotes después del `esc`.
+/// Con la búsqueda nombrándose por el primer lote, el primero que llegara la
+/// bautizaba: los hallazgos de la ANTERIOR llenaban la lista rotulada con la
+/// consulta NUEVA, y `enter` navegaba a un fichero que casaba el patrón viejo.
+#[tokio::test]
+async fn un_lote_de_la_busqueda_anterior_no_llena_la_nueva() {
+    let backend = arbol_con_hallazgos("*.txt", &["mem:///casa/notas.txt"]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    // La primera encuentra algo; se cierra antes de mirarlo.
+    let _ = buscar(&h, &mut sub, "*.txt").await;
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+
+    // La segunda no encuentra nada.
+    let v = buscar(&h, &mut sub, "*.zzz").await;
+    assert_eq!(v.query, "*.zzz");
+
+    // Y sigue sin encontrar nada por mucho que se drene el buzón: lo que
+    // quede de la primera no es suyo.
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        let Some(s) = foto.search else { continue };
+        assert!(
+            s.rows.is_empty(),
+            "un lote de `*.txt` no puede aparecer bajo `*.zzz`: {:?}",
+            s.rows
+        );
+    }
+}
+
+/// Un diálogo modal se queda el teclado.
+///
+/// `tecla_de_un_overlay` enrutaba nueve superficies y NO el diálogo, que es
+/// la única con `aria-modal` de verdad, así que las teclas caían al listado
+/// de DEBAJO: con el prompt de un nombre abierto, `Backspace` navegaba al
+/// padre y `Enter` entraba en el directorio bajo el cursor en vez de
+/// confirmar. Es la superficie donde se aprueban los bytes de un nombre de
+/// fichero, y la que en fase 5 preguntará antes de borrar.
+#[tokio::test]
+async fn un_dialogo_se_queda_el_teclado() {
+    let backend = arbol_con_hallazgos("*.txt", &["mem:///casa/notas.txt"]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    // El cursor se pone sobre un DIRECTORIO, que es lo que `Enter` abriría.
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let antes = siguiente_foto(&mut sub).await;
+    let SlotView::Browser(b0) = &antes.slots[0] else {
+        panic!("el primer hueco es un listado");
+    };
+    let donde = b0.path_display.clone();
+
+    por_la_paleta(&h, &mut sub, "pane.search").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let dialogo = foto
+        .dialogs
+        .iter()
+        .find(|d| d.input.is_some())
+        .expect("el prompt pide un patrón")
+        .clone();
+
+    // Las teclas de navegación NO llegan al listado de debajo.
+    for k in ["Backspace", "ArrowDown", "Home"] {
+        h.dispatch(tecla(k)).await.expect("host vivo");
+    }
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let durante = siguiente_foto(&mut sub).await;
+    let SlotView::Browser(b1) = &durante.slots[0] else {
+        panic!("el primer hueco es un listado");
+    };
+    assert_eq!(
+        b1.path_display, donde,
+        "el panel de debajo no se ha movido: el modal se queda las teclas"
+    );
+    assert!(
+        durante.dialogs.iter().any(|d| d.id == dialogo.id),
+        "y el diálogo sigue abierto"
+    );
+
+    // `Enter` CONFIRMA el diálogo, no abre el directorio bajo el cursor.
+    h.dispatch(UiAction::DialogInput {
+        id: dialogo.id,
+        text: "*.txt".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    let v = siguiente_busqueda(&mut sub)
+        .await
+        .expect("confirmar con el teclado lanza la búsqueda");
+    assert_eq!(v.query, "*.txt");
+}
+
+/// `Escape` cancela el diálogo, y solo el diálogo.
+#[tokio::test]
+async fn escape_cancela_el_dialogo_de_arriba() {
+    let backend = arbol_con_hallazgos("*.txt", &[]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    por_la_paleta(&h, &mut sub, "pane.search").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert!(
+        siguiente_foto(&mut sub)
+            .await
+            .dialogs
+            .iter()
+            .any(|d| d.input.is_some()),
+        "el prompt abre"
+    );
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(foto.dialogs.is_empty(), "y `esc` lo cierra");
+    assert!(
+        foto.search.is_none(),
+        "sin lanzar nada: cancelar es cancelar"
     );
 }
 

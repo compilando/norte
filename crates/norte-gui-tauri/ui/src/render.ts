@@ -85,6 +85,8 @@ export class Screen {
   private placementsKey = "";
   /** El diálogo cuyo campo de texto ya se sembró. */
   private dialogoPintado: number | null = null;
+  /// El campo de texto vivo del diálogo de arriba, para REUSARLO.
+  private dialogoInput: HTMLInputElement | null = null;
   /** Las líneas de visor que ya se declararon. */
   private viewerRows = 0;
   /** La ayuda está abierta con el CUERPO enfocado. */
@@ -1688,6 +1690,7 @@ export class Screen {
     if (dialogs.length === 0) {
       this.dialogsRoot.replaceChildren();
       this.dialogoPintado = null;
+      this.dialogoInput = null;
       return;
     }
     const top = dialogs[dialogs.length - 1];
@@ -1717,24 +1720,33 @@ export class Screen {
       aviso.textContent = this.t("hostile-name");
       box.append(aviso);
     }
-    if (top.input !== null) {
-      const input = document.createElement("input");
-      input.type = "text";
-      // El valor se pone UNA vez, al crear el campo. Reescribirlo en cada
-      // repintado devolvía al campo la proyección del host —enmascarada y
-      // acotada— y el siguiente evento la mandaba de vuelta como si fuera lo
-      // tecleado: el nombre se convertía en su propia sombra.
-      if (this.dialogoPintado !== top.id) {
+    if (top.input === null) {
+      this.dialogoInput = null;
+    } else {
+      // El campo se REUSA mientras sea el mismo diálogo. Antes se creaba uno
+      // nuevo en cada repintado y se le dejaba el valor sin poner —para no
+      // devolverle la proyección del host, enmascarada y acotada, que el
+      // siguiente evento habría mandado de vuelta como si fuera lo tecleado—,
+      // así que el campo salía VACÍO. Y como cada tecla provoca un parche,
+      // cada tecla lo vaciaba: lo que llegaba a `fs.mkdir` era el último
+      // carácter. Reusar el nodo conserva de paso el cursor y la selección.
+      const previo = this.dialogoPintado === top.id ? this.dialogoInput : null;
+      let input = previo;
+      if (input === null) {
+        input = document.createElement("input");
+        input.type = "text";
         input.value = top.input;
+        const vivo = input;
+        vivo.addEventListener("input", () => {
+          this.send({ action: "dialog_input", id: top.id, text: vivo.value });
+        });
+        queueMicrotask(() => {
+          vivo.focus();
+        });
       }
       input.setAttribute("aria-labelledby", h.id);
-      input.addEventListener("input", () => {
-        this.send({ action: "dialog_input", id: top.id, text: input.value });
-      });
+      this.dialogoInput = input;
       box.append(input);
-      queueMicrotask(() => {
-        input.focus();
-      });
     }
     const choices = document.createElement("div");
     choices.className = "choices";

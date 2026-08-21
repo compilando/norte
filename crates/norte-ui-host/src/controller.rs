@@ -298,8 +298,13 @@ enum Fondo {
     ),
     /// Los volúmenes del host, pedidos al abrir su selector.
     Volumenes(Result<Vec<norte_proto::methods::Volume>, Error>),
-    /// Un lote de resultados de una búsqueda viva.
-    Resultados(Box<norte_proto::methods::SearchHits>),
+    /// Un lote de resultados, con la época de la búsqueda que lo pidió.
+    Resultados(u64, Box<norte_proto::methods::SearchHits>),
+    /// La búsqueda de esta época ya tiene Task: este es su id.
+    ///
+    /// Llega por su cuenta y no dentro del primer lote porque puede no haber
+    /// primer lote: el core no manda lotes vacíos.
+    BusquedaViva(u64, norte_proto::TaskId),
     /// Los volúmenes, pedidos por la BARRA LATERAL.
     ///
     /// Aparte de los del selector por el mismo motivo que los dos catálogos
@@ -668,10 +673,21 @@ struct Hueco {
 
 /// Una búsqueda viva y lo que lleva encontrado.
 struct Busqueda {
-    /// La Task del daemon. Un lote de OTRA se descarta: una búsqueda
-    /// anterior que todavía escupe resultados no puede llenar la lista de la
-    /// nueva.
+    /// Cuál de todas las búsquedas de esta ventana es.
+    ///
+    /// La identidad NO puede ser la Task: el id lo trae el daemon y llega
+    /// tarde, así que hasta entonces no habría con qué distinguir un lote de
+    /// la búsqueda anterior. La época se conoce al LANZAR, que es cuando hace
+    /// falta.
+    epoca: u64,
+    /// La Task del daemon, en cuanto se sabe. Cero mientras no se sabe.
     task: norte_proto::TaskId,
+    /// La vista se cerró y lo que quede de esta búsqueda sobra.
+    ///
+    /// La comparte con su reenviador, que es quien puede cancelar antes de
+    /// que el id llegue al actor: `esc` justo tras lanzar es la ventana en la
+    /// que nadie más tiene a quién cancelar.
+    abandonada: Arc<std::sync::atomic::AtomicBool>,
     /// Lo que se buscó, para poder decirlo.
     query: String,
     /// Dónde se buscó.
@@ -772,6 +788,9 @@ struct Estado {
     mirando_tema: bool,
     /// La búsqueda abierta, si la hay.
     busqueda: Option<Busqueda>,
+    /// Cuántas búsquedas ha lanzado esta ventana. Es la identidad de la
+    /// búsqueda mientras el daemon no ha dicho la suya.
+    epoca_busqueda: u64,
     /// Las disposiciones del usuario, ya leídas por quien arrancó el host.
     disposiciones: Vec<norte_frontend::layout_picker::UserLayout>,
     /// El selector de disposiciones, si está abierto.
@@ -965,6 +984,7 @@ impl Estado {
             cursor_procesos: 0,
             sitios: None,
             busqueda: None,
+            epoca_busqueda: 0,
             disposiciones: user_layouts,
             selector_disposicion: None,
             selector: None,
@@ -1081,6 +1101,43 @@ impl Estado {
     /// listados ni proyecta filas: lo que no se ve no se trae.
     fn oculto(&self, id: u32) -> bool {
         self.reparto.hidden.contains(&SlotId(id))
+    }
+
+    /// Pide el listado de los huecos que se VEN y todavía no lo han pedido.
+    ///
+    /// Un hueco oculto no se lista —lo que no se ve no se trae—, así que
+    /// cuando el reparto lo saca a la luz hay que pedirlo ENTONCES. Nadie lo
+    /// hacía: un `browser` oculto al arrancar que aparecía al agrandar la
+    /// ventana se quedaba en `Loading` para siempre, con cero filas, y tras
+    /// cambiar de disposición ni siquiera existía su `Hueco`, así que
+    /// `snapshot()` caía al brazo por defecto y lo pintaba como
+    /// `Unsupported { kind_name: "browser" }`.
+    ///
+    /// Idempotente por diseño: solo despierta lo que está en `Loading` SIN
+    /// petición en vuelo, así que llamarlo en cada reparto no duplica nada.
+    fn despertar_visibles(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let dormidos: Vec<u32> = self
+            .huecos
+            .iter()
+            .filter(|(id, h)| {
+                !self.oculto(**id) && h.en_vuelo.is_none() && matches!(h.estado, SlotState::Loading)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in dormidos {
+            let dir = self.huecos[&id].pane.dir().clone();
+            self.token += 1;
+            let token = RequestToken(self.token);
+            if let Some(h) = self.huecos.get_mut(&id) {
+                h.en_vuelo = Some(token);
+                h.drenando = Some(token);
+            }
+            self.pedir_listado(id, &dir, token, backend, buzon);
+        }
     }
 
     /// Toma la primera página de un stream y deja el resto drenando hacia el
@@ -1305,6 +1362,9 @@ impl Estado {
                 // que aterriza en un panel oculto es una copia que el usuario
                 // no verá llegar.
                 self.reconcilia_roles();
+                // Agrandar la ventana saca huecos de `hidden`, y un hueco que
+                // aparece sin listado se queda cargando para siempre.
+                self.despertar_visibles(backend, buzon);
                 let snap = self.snapshot();
                 (
                     self.aplicada(),
@@ -1352,12 +1412,66 @@ impl Estado {
     /// entera; la ayuda tapa al listado y desde ella se puede abrir la
     /// paleta, así que va antes; la paleta es un editor de texto libre; y el
     /// buscador incremental solo se queda las teclas de TEXTO.
+    /// Las teclas de un diálogo: contestarlo o cancelarlo, y nada más.
+    ///
+    /// El TEXTO no pasa por aquí. Lo teclea el campo del renderer y llega por
+    /// `dialog_input`, que es lo que permite que los bytes aprobados sean los
+    /// tecleados y no una reconstrucción a partir de teclas sueltas.
+    ///
+    /// `Enter` elige la primera respuesta NO destructiva, así que en el
+    /// diálogo de aprobación de un agente elige `deny`: aprobar una mutación
+    /// que uno no pidió no puede ser lo que pasa por dejar el dedo en Enter.
+    ///
+    /// Una tecla que no es ninguna de las dos se COME igual: un modal que
+    /// deja pasar la tecla que no entiende no es un modal.
+    fn tecla_en_dialogo(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(d) = self.dialogos.last() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let id = d.id;
+        let elegido = match k.key.as_str() {
+            "Enter" | "enter" => d
+                .vista
+                .choices
+                .iter()
+                .find(|c| !c.destructive)
+                .map(|c| c.id.clone()),
+            "Escape" | "esc" => d
+                .vista
+                .choices
+                .iter()
+                .find(|c| c.id == "cancel" || c.id == "deny")
+                .or_else(|| d.vista.choices.iter().rfind(|c| !c.destructive))
+                .map(|c| c.id.clone()),
+            _ => None,
+        };
+        let Some(choice) = elegido else {
+            return (self.aplicada(), Vec::new());
+        };
+        self.responder_dialogo(id, &choice, backend, buzon)
+    }
+
     fn tecla_de_un_overlay(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        // El DIÁLOGO va antes que todo lo demás: es la única superficie
+        // modal de verdad —una pregunta que hay que contestar antes de
+        // seguir— y las teclas que no atrapaba caían al listado de DEBAJO.
+        // Con el prompt de un nombre abierto, `Backspace` navegaba al padre
+        // mientras se tecleaba y `Enter` entraba en el directorio bajo el
+        // cursor en vez de confirmar; con una confirmación de borrado
+        // abierta, `Enter` navegaba la pantalla que la pregunta tapaba.
+        if !self.dialogos.is_empty() {
+            return Some(self.tecla_en_dialogo(k, backend, buzon));
+        }
         // La AYUDA va primero, incluso antes que el visor, y no por gusto:
         // se abre ENCIMA de lo que hubiera —también encima del visor, que es
         // desde donde se pide la página del visor— y quien está arriba se
@@ -1795,6 +1909,10 @@ impl Estado {
         };
         let backend = Arc::clone(backend);
         let buzon2 = buzon.clone();
+        self.epoca_busqueda += 1;
+        let epoca = self.epoca_busqueda;
+        let abandonada = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let abandonada2 = Arc::clone(&abandonada);
         // La búsqueda se lanza y CONTESTA por el buzón, como todo lo demás:
         // el actor sigue atendiendo teclas mientras el daemon camina el árbol.
         tokio::spawn(async move {
@@ -1805,12 +1923,34 @@ impl Estado {
                     return;
                 }
             };
+            let id = task.id;
+            let cancel = Arc::clone(&task.cancel);
             let _ = buzon2.send(Mensaje::TaskNueva(Box::new(task))).await;
+            // Bautizada AQUÍ y no con el primer lote: puede no haber primer
+            // lote —el core no manda lotes vacíos— y entonces la búsqueda se
+            // quedaba sin nombre, sin poder terminar y sin poder cancelarse.
+            let _ = buzon2
+                .send(Mensaje::Fondo(Box::new(Fondo::BusquedaViva(epoca, id))))
+                .await;
+            // La vista pudo cerrarse mientras el daemon aceptaba la Task: en
+            // esa ventana el actor no tiene a quién cancelar, así que cancela
+            // quien sí lo tiene.
+            if abandonada2.load(std::sync::atomic::Ordering::SeqCst) {
+                cancel();
+                return;
+            }
             // La bomba vive lo que el canal: cuando el daemon lo cierra, la
             // búsqueda terminó y el progreso ya lo dijo por su lado.
             while let Some(lote) = rx.recv().await {
+                if abandonada2.load(std::sync::atomic::Ordering::SeqCst) {
+                    cancel();
+                    return;
+                }
                 if buzon2
-                    .send(Mensaje::Fondo(Box::new(Fondo::Resultados(Box::new(lote)))))
+                    .send(Mensaje::Fondo(Box::new(Fondo::Resultados(
+                        epoca,
+                        Box::new(lote),
+                    ))))
                     .await
                     .is_err()
                 {
@@ -1821,9 +1961,11 @@ impl Estado {
         // La vista se abre YA, vacía y diciendo que corre: esperar al primer
         // lote es una ventana que no reacciona a una tecla que sí hizo algo.
         self.busqueda = Some(Busqueda {
-            // Todavía no se sabe: el primer lote la nombra. Cero jamás es una
-            // Task real, así que ningún lote casa por accidente.
+            epoca,
+            // Todavía no se sabe: `Fondo::BusquedaViva` la trae. Cero jamás
+            // es una Task real.
             task: norte_proto::TaskId::new(0),
+            abandonada,
             query: patron,
             root,
             hits: Vec::new(),
@@ -1839,17 +1981,18 @@ impl Estado {
 
     /// Un lote de resultados.
     ///
-    /// El PRIMERO nombra la Task; los siguientes tienen que casar. Un lote de
-    /// otra búsqueda se descarta: una anterior que todavía escupe resultados
-    /// no puede llenar la lista de la nueva.
+    /// Casa por ÉPOCA, que se conoce al lanzar. Con el id de la Task no
+    /// bastaba: hasta que llegaba, `b.task` era cero y el primer lote que
+    /// apareciese bautizaba la búsqueda —incluido uno rezagado de la
+    /// ANTERIOR, cuyo reenviador sigue vivo—, así que los hallazgos de un
+    /// patrón llenaban la lista rotulada con otro.
     fn aplicar_resultados(
         &mut self,
+        epoca: u64,
         lote: &norte_proto::methods::SearchHits,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         let b = self.busqueda.as_mut()?;
-        if b.task.get() == 0 {
-            b.task = lote.task_id;
-        } else if b.task != lote.task_id {
+        if b.epoca != epoca {
             return None;
         }
         let sitio = usize::try_from(b.tope).unwrap_or(usize::MAX);
@@ -1937,6 +2080,8 @@ impl Estado {
                 // Cerrar la búsqueda CANCELA la Task: seguir caminando un
                 // árbol para nadie es gastar el daemon en un resultado que ya
                 // no tiene dónde aparecer.
+                b.abandonada
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
                 let task = b.task;
                 self.busqueda = None;
                 if task.get() != 0 {
@@ -2153,15 +2298,22 @@ impl Estado {
         let dir = self.hueco().pane.dir().clone();
         self.arbol = arbol;
         self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);
+        // Desde el ÁRBOL, no desde el reparto. `placements` y `hidden`
+        // PARTICIONAN el árbol, así que sembrar desde `placements` borra el
+        // hueco de un listado que el reparto no coloca —un `Tabs` cuyo activo
+        // es otro kind, o un split todo-ponderado que no cabe—, y con él
+        // puede irse el ÚLTIMO: `huecos` queda vacío y la siguiente tecla
+        // muere en el `expect` de `hueco()`, dentro de la task del actor.
+        // `validate` garantiza que el árbol TENGA un listado, no que el
+        // reparto lo coloque, así que la garantía hay que tomarla del árbol.
         let nuevos: Vec<u32> = self
-            .reparto
-            .placements
-            .iter()
-            .map(|(SlotId(id), _)| *id)
+            .arbol
+            .slot_ids()
+            .into_iter()
+            .map(|SlotId(id)| id)
             .filter(|id| es_listado(&self.arbol, SlotId(*id), &self.kinds))
             .collect();
         self.huecos.retain(|id, _| nuevos.contains(id));
-        let mut estrenados = Vec::new();
         for id in nuevos {
             if let std::collections::btree_map::Entry::Vacant(hueco) = self.huecos.entry(id) {
                 hueco.insert(Hueco {
@@ -2176,20 +2328,11 @@ impl Estado {
                     estado: SlotState::Loading,
                     sondeados: std::collections::HashSet::new(),
                 });
-                estrenados.push(id);
             }
         }
         self.roles.clear(RoleId::Active);
         self.reconcilia_roles();
-        for id in estrenados {
-            self.token += 1;
-            let token = RequestToken(self.token);
-            if let Some(h) = self.huecos.get_mut(&id) {
-                h.en_vuelo = Some(token);
-                h.drenando = Some(token);
-            }
-            self.pedir_listado(id, &dir, token, backend, buzon);
-        }
+        self.despertar_visibles(backend, buzon);
         if self.hueco_de_sitios().is_some() {
             self.sembrar_sitios();
             self.pedir_sitios(backend, buzon);
@@ -2224,10 +2367,12 @@ impl Estado {
     fn efecto_de_disposicion(
         &mut self,
         efecto: Efecto,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match efecto {
-            Efecto::Tamano(delta) => self.redimensionar(delta),
-            Efecto::Igualar => self.igualar(),
+            Efecto::Tamano(delta) => self.redimensionar(delta, backend, buzon),
+            Efecto::Igualar => self.igualar(backend, buzon),
             _ => self.abrir_disposiciones(),
         }
     }
@@ -2240,15 +2385,26 @@ impl Estado {
     ///
     /// Redimensionar es una decisión sobre EL ÁRBOL, así que se guarda en él:
     /// el reparto se recalcula desde el árbol nuevo, y no al revés.
-    fn redimensionar(&mut self, delta: i64) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    fn redimensionar(
+        &mut self,
+        delta: i64,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let paso = i16::try_from(delta.clamp(i64::from(i16::MIN), i64::from(i16::MAX)))
             .unwrap_or(if delta < 0 { -1 } else { 1 });
-        self.aplicar_arbol(self.arbol.resize(SlotId(self.enfocado()), paso))
+        let nuevo = self.arbol.resize(SlotId(self.enfocado()), paso);
+        self.aplicar_arbol(nuevo, backend, buzon)
     }
 
     /// Iguala el peso de los hermanos del hueco con el foco.
-    fn igualar(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.aplicar_arbol(self.arbol.equalize(SlotId(self.enfocado())))
+    fn igualar(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let nuevo = self.arbol.equalize(SlotId(self.enfocado()));
+        self.aplicar_arbol(nuevo, backend, buzon)
     }
 
     /// Sustituye el árbol y vuelve a repartir.
@@ -2257,7 +2413,12 @@ impl Estado {
     /// hermanos con los que repartir— NO se manda nada: un parche que no
     /// cambia nada obliga a repintar para nada, y la tecla ya dijo lo suyo
     /// sin moverse.
-    fn aplicar_arbol(&mut self, nuevo: Node) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    fn aplicar_arbol(
+        &mut self,
+        nuevo: Node,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let antes = self.reparto.clone();
         self.arbol = nuevo;
         self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);
@@ -2265,6 +2426,9 @@ impl Estado {
             return (self.aplicada(), Vec::new());
         }
         self.reconcilia_roles();
+        // El reparto cambió: lo que acaba de salir de `hidden` no tiene
+        // listado y nadie más se lo va a pedir.
+        self.despertar_visibles(backend, buzon);
         let cambio = ViewChange::Layout(self.disposicion());
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
@@ -2825,7 +2989,17 @@ impl Estado {
                 .collect(),
             Fondo::Volumenes(res) => self.aplicar_volumenes(res).into_iter().collect(),
             Fondo::SitiosVolumenes(res) => self.aplicar_sitios(res).into_iter().collect(),
-            Fondo::Resultados(lote) => self.aplicar_resultados(&lote).into_iter().collect(),
+            Fondo::Resultados(epoca, lote) => {
+                self.aplicar_resultados(epoca, &lote).into_iter().collect()
+            }
+            Fondo::BusquedaViva(epoca, id) => {
+                if let Some(b) = self.busqueda.as_mut()
+                    && b.epoca == epoca
+                {
+                    b.task = id;
+                }
+                Vec::new()
+            }
         }
     }
 
@@ -3796,7 +3970,7 @@ impl Estado {
             Efecto::Foco { atras } => self.mover_foco(atras),
             Efecto::Destino => self.designar_destino(),
             Efecto::Tamano(_) | Efecto::Igualar | Efecto::Disposiciones => {
-                self.efecto_de_disposicion(efecto)
+                self.efecto_de_disposicion(efecto, backend, buzon)
             }
             Efecto::Buscar => self.pedir_busqueda(),
             Efecto::BuscarRapido => {

@@ -1454,3 +1454,34 @@ gui-shortcuts-cmd-note = ⌘ is not reachable in the terminal frontend
 # write, and that rebuild is all-or-nothing. Saying "saved" alone would
 # describe a key that did not change.
 gui-msg-shortcut-saved-not-applied = saved, but this window kept the previous keymap
+
+# ---------------------------------------------------------------------------
+# The graphical host: what its dialogs answer, and why an action could not be
+# done. These keys are chosen in RUST and painted by the renderer through
+# `t(key)`, so they appear in no `t("…")` literal on the TypeScript side and
+# the renderer's own catalogue test cannot see them. Twenty-one of them were
+# missing and painted as their own identifiers — including both buttons of
+# the dialog where a human approves an agent's mutation.
+dialog-confirm = Confirm
+dialog-cancel = Cancel
+dialog-approve = Approve
+dialog-deny = Deny
+modal-mkdir-title = New directory
+modal-delete-title = Move to trash?
+# The three verdicts of the shared resolver, for a key that IS bound.
+cmd-here = that is already what this does here
+cmd-not-built = not built yet
+cmd-not-here = not available on this screen
+host-key-unmapped = that key is not bound
+host-cannot-view-dir = a directory has no viewer
+host-nothing-to-view = nothing to view
+host-open-file-not-implemented = opening files is not built yet
+host-column-not-sortable = that column does not sort
+host-help-over-input = help does not open over a text field
+host-layout-broken = that layout file does not parse
+host-name-too-long = that name is too long
+host-no-other-slot = there is no other panel
+host-read-only = this window does not write yet
+host-settings-read-only = settings are read-only here
+msg-nav-at-root = already at the root
+msg-nothing-selected = nothing selected

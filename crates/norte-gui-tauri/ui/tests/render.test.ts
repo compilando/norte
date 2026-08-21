@@ -491,14 +491,65 @@ describe("el campo de texto de un diálogo", () => {
     return v;
   }
 
+  // El campo VIVO, reconsultado del DOM.
+  //
+  // Capturarlo una vez no vale: el diálogo se repinta con
+  // `replaceChildren`, así que la referencia vieja queda desconectada y una
+  // aserción sobre ella pasa mientras el campo de la pantalla está vacío.
+  // Eso es exactamente lo que tapó que cada tecla vaciaba el campo.
+  function campoVivo(): HTMLInputElement {
+    const input = document.querySelector(".dialog input");
+    expect(input).not.toBeNull();
+    expect(input?.isConnected).toBe(true);
+    return input as HTMLInputElement;
+  }
+
   it("no se pisa en cada repintado: lo tecleado manda", () => {
     const { screen } = montar();
     screen.paint(conDialogo("", false));
-    const input = document.querySelector(".dialog input") as HTMLInputElement;
     // El usuario escribe; el host contesta con SU proyección.
-    input.value = "carpeta nueva";
+    campoVivo().value = "carpeta nueva";
     screen.paint(conDialogo("carpeta nu…", false));
-    expect(input.value).toBe("carpeta nueva");
+    expect(campoVivo().value).toBe("carpeta nueva");
+  });
+
+  it("sobrevive a una tecla por parche, que es como se teclea de verdad", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conDialogo("", false));
+    // Cada tecla provoca un `dialog_input` y el host contesta con un parche,
+    // o sea un repintado. Se teclea letra a letra, como una persona.
+    const nombre = "informe";
+    for (let i = 1; i <= nombre.length; i += 1) {
+      const campo = campoVivo();
+      campo.value = nombre.slice(0, i);
+      campo.dispatchEvent(new Event("input", { bubbles: true }));
+      screen.paint(conDialogo(nombre.slice(0, i), false));
+    }
+    expect(campoVivo().value).toBe("informe");
+    const ultima = enviadas.at(-1);
+    expect(ultima?.action).toBe("dialog_input");
+    if (ultima?.action === "dialog_input") {
+      expect(ultima.text).toBe("informe");
+    }
+  });
+
+  it("los bytes hostiles que se teclean llegan enteros, y se avisa", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conDialogo("", true));
+    // `rtl_override` del corpus: lo que se apruebe tiene que ser lo que se
+    // teclea, no una reconstrucción de ello.
+    const hostil = "fact\u202Egpj.exe";
+    const campo = campoVivo();
+    campo.value = hostil;
+    campo.dispatchEvent(new Event("input", { bubbles: true }));
+    // El host contesta con su proyección: enmascarada y distinta.
+    screen.paint(conDialogo("fact\uFFFDgpj.exe", true));
+    expect(campoVivo().value).toBe(hostil);
+    const ultima = enviadas.at(-1);
+    if (ultima?.action === "dialog_input") {
+      expect(ultima.text).toBe(hostil);
+    }
+    expect(document.querySelector('.dialog [role="alert"]')).not.toBeNull();
   });
 
   it("un nombre que se pinta distinto de lo que es lo DICE", () => {
