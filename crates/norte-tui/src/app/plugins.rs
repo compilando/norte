@@ -1,26 +1,16 @@
 //! Los plugins vistos desde la UI: cómo se recorta su descripción para la lista
 //! y el gestor de extensiones.
 
-use super::display_name;
-
-/// Tope defensivo sobre `PluginInfo.description` en el wire (P1 encoding
-/// audit F1): el manifiesto YA limita a 280 chars al PARSEAR
-/// (`norte-plugin-host` manifest.rs, `ManifestError::DescriptionTooLong`) —
-/// pero eso solo protege el camino honesto (un plugin bien formado, un
-/// daemon fiel al server que lo cargó). Un daemon hostil o comprometido
-/// podría mandar CUALQUIER longitud por el wire — el cliente no debe
-/// confiar en que el server respetó su propio límite. Mismo valor que el
-/// tope del manifiesto: mirror deliberado, no coincidencia.
-pub const PLUGIN_DESCRIPTION_WIRE_CAP: usize = 280;
-
 /// El tope y el enmascarado de las etiquetas cortas de un plugin (`name`,
 /// `publisher`, título de comando) viven en `norte-frontend` desde la tarea
 /// 4.4: la ayuda del host gráfico entra por la misma puerta y masquear texto
 /// de tercero no puede tener dos definiciones. Se re-exportan con su nombre
 /// de siempre para que ningún call site de este crate se mueva.
-pub use norte_frontend::help_badge::{PLUGIN_NAME_WIRE_CAP, plugin_label};
+pub use norte_frontend::help_badge::{
+    PLUGIN_DESCRIPTION_WIRE_CAP, PLUGIN_NAME_WIRE_CAP, plugin_description, plugin_label,
+};
 
-/// Clampa ([`PLUGIN_DESCRIPTION_WIRE_CAP`]) y enmascara ([`display_name`])
+/// Clampa ([`PLUGIN_DESCRIPTION_WIRE_CAP`]) y enmascara ([`norte_frontend::display_name`])
 /// la `description` de CADA plugin de `plugins`, IN PLACE — en el único
 /// punto donde un `PluginListResult` recién llegado del `Backend` entra al
 /// estado del TUI (`main::dispatch`, brazos `app.extensions`/
@@ -33,9 +23,7 @@ pub use norte_frontend::help_badge::{PLUGIN_NAME_WIRE_CAP, plugin_label};
 pub fn clamp_plugin_descriptions(plugins: &mut [norte_proto::methods::PluginInfo]) {
     for p in plugins {
         if let Some(raw) = &p.description {
-            let clamped: String = raw.chars().take(PLUGIN_DESCRIPTION_WIRE_CAP).collect();
-            let (masked, _) = display_name(clamped.as_bytes());
-            p.description = Some(masked);
+            p.description = Some(plugin_description(raw));
         }
     }
 }
@@ -45,7 +33,7 @@ pub fn clamp_plugin_descriptions(plugins: &mut [norte_proto::methods::PluginInfo
 /// fallaron al cargar, con un cursor de selección. Regla 7: el TUI no decide
 /// nada — aprobar/activar viaja al core por el `Backend`; aquí solo se navega y
 /// se refleja el estado. El `name`/`publisher` de cada plugin son texto LIBRE
-/// de un tercero: se enmascaran con [`display_name`] al pintar (superficie de
+/// de un tercero: se enmascaran con [`norte_frontend::display_name`] al pintar (superficie de
 /// decisión de seguridad).
 #[derive(Debug, Clone)]
 pub struct ExtensionManager {
@@ -201,14 +189,23 @@ mod clamp_plugin_descriptions_tests {
     /// longitud. `clamp_plugin_descriptions` es el único punto donde
     /// `plugins_list` entra al estado del TUI (`main::dispatch`); debe
     /// recortarla ahí, de una vez, para ambos consumidores.
+    /// El recorte se MARCA con `…`, así que son el tope MÁS uno.
+    ///
+    /// Cambió al izar la función a `norte-frontend` (tarea 4.5), y a
+    /// propósito: cortar en seco presenta una descripción truncada como si
+    /// estuviera completa, que es la misma clase de mentira que
+    /// `plugin_label` —su vecina, con el mismo tipo de texto— lleva
+    /// evitando desde H3e. El tope defensivo sigue siendo el mismo número.
     #[test]
     fn clampa_al_tope_del_wire() {
         let mut plugins = vec![plugin(Some(&"a".repeat(50_000)))];
         clamp_plugin_descriptions(&mut plugins);
+        let recortada = plugins[0].description.as_deref().unwrap();
         assert_eq!(
-            plugins[0].description.as_deref().unwrap().chars().count(),
-            crate::app::PLUGIN_DESCRIPTION_WIRE_CAP
+            recortada.chars().count(),
+            crate::app::PLUGIN_DESCRIPTION_WIRE_CAP + 1
         );
+        assert!(recortada.ends_with('…'), "el recorte se ve");
     }
 
     #[test]

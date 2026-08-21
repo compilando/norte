@@ -206,6 +206,11 @@ pub enum UiAction {
         /// Fila, contando TODAS las de todas las secciones en orden.
         row: u32,
     },
+    /// Elige una extensión del gestor (un click) y pide su ficha.
+    ExtensionSelectRow {
+        /// Fila, en el orden en que viajaron.
+        row: u32,
+    },
     /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
     Resync,
 }

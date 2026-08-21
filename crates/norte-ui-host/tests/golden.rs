@@ -167,6 +167,10 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             "settings_select_row",
             UiAction::SettingsSelectRow { row: 2 },
         ),
+        (
+            "extension_select_row",
+            UiAction::ExtensionSelectRow { row: 1 },
+        ),
         ("help_select_topic", UiAction::HelpSelectTopic { row: 3 }),
         ("help_activate", UiAction::HelpActivate { index: 1 }),
         ("resync", UiAction::Resync),
@@ -399,8 +403,68 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         }),
         help: Some(ayuda_de_referencia()),
         settings: Some(ajustes_de_referencia()),
+        extensions: Some(extensiones_de_referencia()),
         viewer: Some(visor_de_referencia()),
         locale: "es".to_owned(),
+    }
+}
+
+/// El gestor de extensiones de referencia: una extensión aprobada y
+/// encendida, otra que no, un directorio que no cargó y una ficha abierta.
+fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
+    use norte_ui_host::dto::{
+        ExtensionConfigRowView, ExtensionDetailView, ExtensionErrorView, ExtensionRowView,
+        ExtensionsView,
+    };
+    ExtensionsView {
+        rows: vec![
+            ExtensionRowView {
+                id: "acme.ftp".to_owned(),
+                name: "FTP de ACME".to_owned(),
+                publisher: "ACME".to_owned(),
+                version: "1.2.0".to_owned(),
+                category: "provider".to_owned(),
+                description: "Sirve ficheros por FTP".to_owned(),
+                approved: true,
+                enabled: true,
+                has_help: true,
+                commands: 2,
+                columns: 0,
+                capabilities: vec!["net".to_owned(), "fs-read".to_owned()],
+            },
+            ExtensionRowView {
+                id: "org.norte.demo".to_owned(),
+                name: "Demo".to_owned(),
+                publisher: String::new(),
+                version: "0.1.0".to_owned(),
+                category: "previewer".to_owned(),
+                description: String::new(),
+                approved: false,
+                enabled: false,
+                has_help: false,
+                commands: 1,
+                columns: 1,
+                capabilities: vec!["fs-read".to_owned()],
+            },
+        ],
+        cursor: 0,
+        detail: Some(ExtensionDetailView {
+            id: "acme.ftp".to_owned(),
+            config: vec![ExtensionConfigRowView {
+                key: "timeout".to_owned(),
+                kind: "int".to_owned(),
+                value: "30".to_owned(),
+                default: "10".to_owned(),
+                description: "Segundos antes de rendirse".to_owned(),
+                domain: "entre 1 y 300".to_owned(),
+            }],
+        }),
+        loading: false,
+        errors: vec![ExtensionErrorView {
+            dir: "/home/oscar/.config/norte/plugins/roto".to_owned(),
+            hostile: false,
+            reason: "el manifiesto no parsea".to_owned(),
+        }],
     }
 }
 
@@ -703,6 +767,12 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
             "settings",
             ViewChange::Settings {
                 settings: Some(ajustes_de_referencia()),
+            },
+        ),
+        (
+            "extensions",
+            ViewChange::Extensions {
+                extensions: Some(extensiones_de_referencia()),
             },
         ),
         (

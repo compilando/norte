@@ -165,6 +165,19 @@ pub trait HostBackend: Send + Sync + 'static {
         &self,
         id: String,
     ) -> BoxFuture<'static, Result<methods::PluginHelpResult, Error>>;
+
+    /// El esquema `[config]` de UN plugin con sus valores EFECTIVOS.
+    ///
+    /// Las dos cosas en un viaje porque el wire las manda juntas a propósito
+    /// (ADR 0037): pintar unos ajustes necesita el tipo y el valor, y pedirlos
+    /// por separado es una segunda ida y vuelta para nada.
+    ///
+    /// Un id desconocido contesta con CERO claves, jamás un error: el mismo
+    /// criterio indulgente que `plugin.list` con un catálogo vacío.
+    fn plugin_config(
+        &self,
+        id: String,
+    ) -> BoxFuture<'static, Result<methods::PluginGetConfigResult, Error>>;
 }
 
 /// El backend de verdad: el SDK.
@@ -281,6 +294,14 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<methods::PluginHelpResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.plugin_help(&id).await })
+    }
+
+    fn plugin_config(
+        &self,
+        id: String,
+    ) -> BoxFuture<'static, Result<methods::PluginGetConfigResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.plugin_get_config(&id).await })
     }
 
     fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>> {

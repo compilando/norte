@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 10;
+export const BRIDGE_VERSION = 11;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -255,6 +255,49 @@ export interface SettingsView {
   read_only: boolean;
 }
 
+export interface ExtensionRowView {
+  id: string;
+  name: string;
+  publisher: string;
+  version: string;
+  category: string;
+  description: string;
+  approved: boolean;
+  enabled: boolean;
+  has_help: boolean;
+  commands: number;
+  columns: number;
+  capabilities: string[];
+}
+
+export interface ExtensionErrorView {
+  dir: string;
+  hostile: boolean;
+  reason: string;
+}
+
+export interface ExtensionConfigRowView {
+  key: string;
+  kind: string;
+  value: string;
+  default: string;
+  description: string;
+  domain: string;
+}
+
+export interface ExtensionDetailView {
+  id: string;
+  config: ExtensionConfigRowView[];
+}
+
+export interface ExtensionsView {
+  rows: ExtensionRowView[];
+  cursor: number;
+  detail: ExtensionDetailView | null;
+  loading: boolean;
+  errors: ExtensionErrorView[];
+}
+
 export interface ViewSnapshot {
   connection: ConnectionView;
   layout: LayoutView;
@@ -267,6 +310,7 @@ export interface ViewSnapshot {
   whichkey: WhichKeyView | null;
   help: HelpView | null;
   settings: SettingsView | null;
+  extensions: ExtensionsView | null;
   viewer: ViewerView | null;
   locale: string;
 }
@@ -291,7 +335,8 @@ export type ViewChange =
   | { change: "which_key"; whichkey: WhichKeyView | null }
   | { change: "palette"; palette: PaletteView | null }
   | { change: "help"; help: HelpView | null }
-  | { change: "settings"; settings: SettingsView | null };
+  | { change: "settings"; settings: SettingsView | null }
+  | { change: "extensions"; extensions: ExtensionsView | null };
 
 export interface ViewPatch {
   base_sequence: number;
@@ -343,6 +388,7 @@ export type UiAction =
   | { action: "help_select_topic"; row: number }
   | { action: "help_activate"; index: number }
   | { action: "settings_select_row"; row: number }
+  | { action: "extension_select_row"; row: number }
   | { action: "resync" };
 
 export type StaleReason = "instance" | "generation" | "modal";

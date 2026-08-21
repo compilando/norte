@@ -53,6 +53,12 @@ pub struct Falso {
     /// El `help.md` de cada extensión, por id. Un id ausente contesta como
     /// un daemon que no tiene la página: markdown vacío.
     pub paginas: HashMap<String, String>,
+    /// Directorios de plugin que no cargaron: `(dir, motivo)`.
+    pub errores_de_carga: Vec<(String, String)>,
+    /// El esquema `[config]` de cada extensión, por id.
+    pub esquemas: HashMap<String, Vec<norte_proto::methods::PluginConfigKeyWire>>,
+    /// Los ids cuya ficha se pidió, en orden.
+    pub fichas_pedidas: std::sync::Mutex<Vec<String>>,
     /// Los ids que se pidieron a `plugin.help`, en orden: es lo que permite
     /// comprobar que una página se pide UNA vez y que un id inválido jamás
     /// llega al wire.
@@ -162,10 +168,18 @@ impl HostBackend for Falso {
         &self,
     ) -> BoxFuture<'static, Result<norte_proto::methods::PluginListResult, Error>> {
         let plugins = self.plugins.clone();
+        let errores = self
+            .errores_de_carga
+            .iter()
+            .map(|(dir, reason)| norte_proto::methods::PluginLoadError {
+                dir: dir.clone(),
+                reason: reason.clone(),
+            })
+            .collect();
         Box::pin(async move {
             Ok(norte_proto::methods::PluginListResult {
                 plugins,
-                errors: Vec::new(),
+                errors: errores,
             })
         })
     }
@@ -186,6 +200,18 @@ impl HostBackend for Falso {
                 lossy: false,
             })
         })
+    }
+
+    fn plugin_config(
+        &self,
+        id: String,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::PluginGetConfigResult, Error>> {
+        self.fichas_pedidas
+            .lock()
+            .expect("mutex de fichas")
+            .push(id.clone());
+        let keys = self.esquemas.get(&id).cloned().unwrap_or_default();
+        Box::pin(async move { Ok(norte_proto::methods::PluginGetConfigResult { keys }) })
     }
 
     fn read(

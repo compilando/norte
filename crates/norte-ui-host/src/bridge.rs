@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 /// por motivos distintos. Un renderer que no reconoce esta versión NO
 /// interpreta el mensaje: enseña una pantalla de incompatibilidad (ADR 0066).
 ///
+/// - **11**: la pantalla puede llevar el GESTOR DE EXTENSIONES en solo
+///   lectura: qué hay instalado, qué pide cada una y qué se le ha
+///   configurado.
 /// - **10**: la pantalla puede llevar los AJUSTES en solo lectura: el
 ///   registro compartido con su valor efectivo, y dónde vive cada cosa.
 /// - **9**: la pantalla puede llevar la AYUDA: el corpus en bloques cerrados,
@@ -35,7 +38,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 10;
+pub const BRIDGE_VERSION: u32 = 11;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

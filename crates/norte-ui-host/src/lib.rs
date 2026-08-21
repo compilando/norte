@@ -30,6 +30,8 @@ pub mod commands;
 pub mod controller;
 pub mod dto;
 /// La ayuda (F1): el corpus compartido proyectado al vocabulario del bridge.
+/// El gestor de extensiones (`app.extensions`), en solo lectura.
+mod extensions;
 mod help;
 pub mod keys;
 pub mod settings;

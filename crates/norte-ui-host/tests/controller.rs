@@ -4259,3 +4259,249 @@ async fn con_los_ajustes_abiertos_el_listado_no_se_mueve() {
     assert_eq!(listado(&foto).cursor, antes, "el listado no se movió");
     assert!(foto.settings.is_some(), "y los ajustes siguen abiertos");
 }
+
+// ---------------------------------------------------------------------------
+// El gestor de extensiones (tarea 4.5).
+// ---------------------------------------------------------------------------
+
+/// Espera la siguiente actualización que traiga el gestor.
+async fn siguiente_extensiones(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> Option<norte_ui_host::dto::ExtensionsView> {
+    for _ in 0..20 {
+        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("una actualización antes del plazo")
+            .expect("el host sigue vivo");
+        if let Update::Message(m) = siguiente
+            && let UiUpdate::Patch(p) = &m.payload
+        {
+            for c in &p.changes {
+                if let norte_ui_host::dto::ViewChange::Extensions { extensions } = c {
+                    return extensions.clone();
+                }
+            }
+        }
+    }
+    panic!("no llegó ninguna actualización con extensiones");
+}
+
+/// Espera a que el catálogo haya llegado (deje de estar cargando).
+async fn extensiones_cargadas(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> norte_ui_host::dto::ExtensionsView {
+    for _ in 0..20 {
+        let Some(v) = siguiente_extensiones(sub).await else {
+            continue;
+        };
+        if !v.loading {
+            return v;
+        }
+    }
+    panic!("el catálogo nunca llegó");
+}
+
+/// `F12` abre el gestor: primero diciendo que carga, luego con el catálogo
+/// saneado y su estado de aprobación.
+#[tokio::test]
+async fn el_gestor_ensena_lo_instalado_y_su_estado() {
+    let mut backend = arbol_con_plugins(
+        vec![extension("acme.ftp", "FTP de ACME", true), {
+            let mut p = extension("org.norte.demo", "Demo", false);
+            p.approved = false;
+            p.enabled = false;
+            p.capabilities = vec!["fs-read".to_owned()];
+            p
+        }],
+        &[],
+    );
+    // Un directorio que no cargó: se enseña, porque una extensión que
+    // desaparece en silencio es una que el usuario cree tener.
+    std::sync::Arc::get_mut(&mut backend)
+        .expect("única referencia")
+        .errores_de_carga = vec![(
+        "/plugins/roto".to_owned(),
+        "el manifiesto no parsea".to_owned(),
+    )];
+    let (h, _snap) = host_arbol(std::sync::Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let primera = siguiente_extensiones(&mut sub).await.expect("abre");
+    assert!(
+        primera.loading,
+        "se abre DICIENDO que carga: una lista vacía sin ese aviso se lee \
+         como «no tienes ninguna»"
+    );
+
+    let v = extensiones_cargadas(&mut sub).await;
+    assert_eq!(v.rows.len(), 2);
+    assert_eq!(v.rows[0].id, "acme.ftp");
+    assert!(v.rows[0].approved && v.rows[0].enabled);
+    assert!(!v.rows[1].approved, "y la que no está aprobada se ve");
+    assert_eq!(
+        v.rows[1].capabilities,
+        vec!["fs-read".to_owned()],
+        "las capabilities van en la FILA: son la decisión que se aprueba"
+    );
+    assert_eq!(v.errors.len(), 1, "y lo que no cargó se dice");
+}
+
+/// `enter` sobre una extensión pide su esquema `[config]` y lo enseña con el
+/// valor efectivo.
+#[tokio::test]
+async fn la_ficha_ensena_el_esquema_con_su_valor_efectivo() {
+    let mut backend = arbol_con_plugins(vec![extension("acme.ftp", "FTP de ACME", false)], &[]);
+    std::sync::Arc::get_mut(&mut backend)
+        .expect("única referencia")
+        .esquemas
+        .insert(
+            "acme.ftp".to_owned(),
+            vec![norte_proto::methods::PluginConfigKeyWire {
+                key: "timeout".to_owned(),
+                kind: "int".to_owned(),
+                default: "10".to_owned(),
+                min: Some(1),
+                max: Some(300),
+                values: Vec::new(),
+                description: Some("Segundos antes de rendirse".to_owned()),
+                value: "30".to_owned(),
+            }],
+        );
+    let (h, _snap) = host_arbol(std::sync::Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    let mut ficha = None;
+    for _ in 0..20 {
+        let Some(v) = siguiente_extensiones(&mut sub).await else {
+            continue;
+        };
+        if v.detail.is_some() {
+            ficha = v.detail;
+            break;
+        }
+    }
+    let d = ficha.expect("la ficha llega");
+    assert_eq!(d.id, "acme.ftp");
+    assert_eq!(d.config.len(), 1);
+    let k = &d.config[0];
+    assert_eq!(k.key, "timeout");
+    assert_eq!(k.value, "30", "el valor EFECTIVO, no el del esquema");
+    assert_eq!(k.default, "10", "y el del esquema, para ver qué se cambió");
+    assert!(!k.domain.is_empty(), "y qué lo acota: {k:?}");
+    assert!(
+        !k.domain.contains("ext-config-"),
+        "sin pintar una clave Fluent: {k:?}"
+    );
+}
+
+/// Moverse tira la ficha: describe otra extensión.
+#[tokio::test]
+async fn moverse_tira_la_ficha() {
+    let backend = arbol_con_plugins(
+        vec![
+            extension("acme.ftp", "FTP de ACME", false),
+            extension("org.norte.demo", "Demo", false),
+        ],
+        &[],
+    );
+    let (h, _snap) = host_arbol(backend).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    for _ in 0..20 {
+        let Some(v) = siguiente_extensiones(&mut sub).await else {
+            continue;
+        };
+        if v.detail.is_some() {
+            break;
+        }
+    }
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    let v = siguiente_extensiones(&mut sub)
+        .await
+        .expect("sigue abierto");
+    assert_eq!(v.cursor, 1);
+    assert!(
+        v.detail.is_none(),
+        "la ficha de la anterior no puede quedarse describiendo a otra"
+    );
+}
+
+/// El primer `esc` cierra la FICHA; el segundo, el gestor.
+#[tokio::test]
+async fn el_primer_esc_cierra_la_ficha_y_el_segundo_el_gestor() {
+    let backend = arbol_con_plugins(vec![extension("acme.ftp", "FTP de ACME", false)], &[]);
+    let (h, _snap) = host_arbol(backend).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    for _ in 0..20 {
+        let Some(v) = siguiente_extensiones(&mut sub).await else {
+            continue;
+        };
+        if v.detail.is_some() {
+            break;
+        }
+    }
+
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    let sin_ficha = siguiente_extensiones(&mut sub)
+        .await
+        .expect("sigue abierto");
+    assert!(sin_ficha.detail.is_none(), "el primer esc cierra la ficha");
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    assert!(
+        siguiente_extensiones(&mut sub).await.is_none(),
+        "el segundo cierra el gestor"
+    );
+}
+
+/// Un nombre, un publicador y una descripción hostiles llegan enmascarados;
+/// un id inválido no llega en absoluto.
+#[tokio::test]
+async fn el_texto_de_una_extension_llega_enmascarado() {
+    let mut malo = extension("acme.\u{202e}ftp", "Invisible", false);
+    malo.description = Some("desc".to_owned());
+    let mut hostil = extension("acme.ftp", "FTP\u{202e}de ACME", false);
+    hostil.publisher = "ACME\u{7}".to_owned();
+    hostil.description = Some("Sirve\u{202e}ficheros".to_owned());
+    hostil.version = "1.0\u{7}".to_owned();
+    let backend = arbol_con_plugins(vec![hostil, malo], &[]);
+    let (h, _snap) = host_arbol(backend).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let v = extensiones_cargadas(&mut sub).await;
+
+    assert_eq!(v.rows.len(), 1, "el id inválido se DESCARTA en la entrada");
+    let texto = format!("{:?}", v.rows[0]);
+    assert!(
+        !texto.contains('\u{202e}') && !texto.contains('\u{7}'),
+        "texto de tercero sin enmascarar: {texto}"
+    );
+    assert!(
+        !texto.contains("\\u{202e}") && !texto.contains("\\u{7}"),
+        "texto de tercero sin enmascarar: {texto}"
+    );
+}
+
+/// Con el gestor abierto, el listado no se mueve.
+#[tokio::test]
+async fn con_el_gestor_abierto_el_listado_no_se_mueve() {
+    let (h, snap) = host_arbol(arbol()).await;
+    let antes = listado(&snap).cursor;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = siguiente_extensiones(&mut sub).await.expect("abre");
+
+    h.dispatch(tecla("j")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(listado(&foto).cursor, antes);
+    assert!(foto.extensions.is_some(), "y el gestor sigue abierto");
+}

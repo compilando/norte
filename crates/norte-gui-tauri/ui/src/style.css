@@ -836,3 +836,185 @@ body {
 .settings-row[aria-selected="true"] .settings-desc {
   display: block;
 }
+
+/* --- El gestor de extensiones (F12), en solo lectura ------------------ */
+
+#extensions[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+#extensions[data-open="false"] {
+  display: none;
+}
+
+.extensions {
+  width: min(110ch, 92vw);
+  height: min(80vh, 100%);
+  display: flex;
+  flex-direction: column;
+  padding: 0 12px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  overflow: auto;
+}
+
+.extensions h1 {
+  margin-bottom: 2px;
+  padding-bottom: 4px;
+  font-size: 1.35em;
+  color: var(--title-fg);
+  border-bottom: 1px solid var(--border);
+}
+
+.extensions h2 {
+  margin: 8px 0 2px;
+  font-size: 1em;
+  color: var(--title-fg);
+}
+
+.extensions-note {
+  margin: 0 0 6px;
+  opacity: 0.85;
+}
+
+.extensions-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.extensions-row {
+  display: grid;
+  grid-template-columns: 32ch auto 1fr;
+  gap: 0 12px;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.extensions-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.extensions-name,
+.extensions-version,
+.extensions-state,
+.extensions-meta,
+.extensions-desc,
+.extensions-cap,
+.extensions-error-dir,
+.extensions-error-reason,
+.extensions-key,
+.extensions-key-value,
+.extensions-key-kind,
+.extensions-key-desc {
+  /* Casi todo esto lo escribe un TERCERO: cada dato es su propia corrida
+     bidi, o una descripción en RTL reordena lo que tiene al lado. */
+  unicode-bidi: isolate;
+}
+
+.extensions-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.extensions-version {
+  opacity: 0.8;
+}
+
+/* Sin aprobar es lo que hay que mirar, así que es lo que se ve. */
+.extensions-state[data-approved="false"] {
+  color: var(--error-fg);
+}
+
+.extensions-state[data-approved="true"][data-enabled="false"] {
+  color: var(--hostile-fg);
+}
+
+.extensions-state[data-approved="true"][data-enabled="true"] {
+  color: var(--title-fg);
+}
+
+.extensions-meta,
+.extensions-desc {
+  grid-column: 1 / -1;
+  padding-left: 2ch;
+  opacity: 0.85;
+}
+
+.extensions-caps {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0;
+  padding-left: 2ch;
+  list-style: none;
+}
+
+.extensions-cap {
+  padding: 0 6px;
+  color: var(--hostile-fg);
+  border: 1px solid var(--border);
+}
+
+.extensions-detail {
+  margin-top: 8px;
+  border-top: 1px solid var(--border-focus);
+}
+
+.extensions-config {
+  border-collapse: collapse;
+}
+
+.extensions-config th,
+.extensions-config td {
+  padding: 0 12px 0 0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.extensions-key {
+  width: 20ch;
+  color: var(--border-focus);
+}
+
+/* Un valor que ya no es el del esquema: es lo único que distingue «así
+   viene» de «así lo dejaste». */
+.extensions-config tr[data-changed="true"] .extensions-key-value {
+  color: var(--title-fg);
+}
+
+.extensions-key-kind,
+.extensions-key-desc {
+  opacity: 0.85;
+}
+
+/* El dominio de un `enum` puede ser largo: sin esto se pega a la
+   descripción y las dos se leen como una sola frase. */
+.extensions-key-kind {
+  padding-right: 3ch;
+}
+
+.extensions-detail-of {
+  color: var(--fg);
+  unicode-bidi: isolate;
+}
+
+.extensions-errors {
+  margin: 8px 0 0;
+  padding: 0 0 0 2ch;
+  color: var(--error-fg);
+}
+
+.extensions-error-reason {
+  padding-left: 2ch;
+  opacity: 0.9;
+}

@@ -545,6 +545,20 @@ msg-columns-saved = columnas guardadas
 ext-title = Extensiones
 ext-empty = no hay extensiones instaladas
 ext-unapproved = sin aprobar
+# Tarea 4.5: el gestor de extensiones en solo lectura de la ventana
+# gráfica reutiliza las tres de arriba y añade estas. El estado son DOS
+# hechos independientes —aprobada, y encendida— porque una aprobada y
+# luego apagada no es lo mismo que una que nadie ha mirado, y
+# «cargando» tampoco es «ninguna». Las `ext-config-*` dicen qué acota
+# una clave `[config]`; un `enum` enumera sus valores.
+ext-loading = preguntando al daemon qué hay instalado…
+ext-state-on = aprobada · encendida
+ext-state-off = aprobada · apagada
+ext-config-title = Sus ajustes
+ext-config-none = Esta extensión no declara ajustes.
+ext-config-range = entre {$min} y {$max}
+ext-config-min = al menos {$min}
+ext-config-max = como mucho {$max}
 history-title = Historial
 history-empty = todavía no hay historial
 hotlist-title = Favoritos

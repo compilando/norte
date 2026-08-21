@@ -25,6 +25,7 @@ import type {
   HelpSpanView,
   HelpView,
   PaletteView,
+  ExtensionsView,
   SettingsView,
   ViewerView,
   WhichKeyView,
@@ -81,6 +82,7 @@ export class Screen {
     private readonly whichKeyRoot: HTMLElement,
     private readonly helpRoot: HTMLElement,
     private readonly settingsRoot: HTMLElement,
+    private readonly extensionsRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
     private readonly catalog: HostCatalog,
@@ -132,6 +134,7 @@ export class Screen {
     this.paintWhichKey(view.whichkey);
     this.paintHelp(view.help);
     this.paintSettings(view.settings);
+    this.paintExtensions(view.extensions);
     this.paintViewer(view.viewer);
     this.paintDialogs(view.dialogs);
   }
@@ -677,6 +680,195 @@ export class Screen {
     caja.append(lista);
     this.settingsRoot.replaceChildren(caja);
     revelar(lista.querySelector(`#settings-row-${String(settings.cursor)}`) ?? undefined);
+  }
+
+  /**
+   * El gestor de extensiones (F12), en solo lectura.
+   *
+   * Las capabilities van en la FILA y no escondidas tras un gesto: son la
+   * decisión que un humano aprueba, y esta ventana la enseña sin poder
+   * tomarla. No hay ni un control para aprobar o encender: lo que no está no
+   * se pulsa por accidente.
+   */
+  private paintExtensions(ext: ExtensionsView | null): void {
+    if (ext === null) {
+      this.extensionsRoot.replaceChildren();
+      this.extensionsRoot.dataset["open"] = "false";
+      return;
+    }
+    this.extensionsRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "extensions";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", this.t("ext-title"));
+
+    const titulo = document.createElement("h1");
+    titulo.textContent = this.t("ext-title");
+    caja.append(titulo);
+
+    if (ext.loading) {
+      // «Cargando» y «ninguna» no son lo mismo, y una lista vacía sin este
+      // aviso se lee como lo segundo.
+      const cargando = document.createElement("p");
+      cargando.className = "extensions-note";
+      cargando.setAttribute("role", "status");
+      cargando.textContent = this.t("ext-loading");
+      caja.append(cargando);
+    } else if (ext.rows.length === 0) {
+      const vacio = document.createElement("p");
+      vacio.className = "extensions-note";
+      vacio.textContent = this.t("ext-empty");
+      caja.append(vacio);
+    }
+
+    const lista = document.createElement("ul");
+    lista.className = "extensions-rows";
+    lista.setAttribute("role", "listbox");
+    for (const [i, r] of ext.rows.entries()) {
+      const fila = document.createElement("li");
+      fila.className = "extensions-row";
+      fila.id = `extension-row-${String(i)}`;
+      fila.setAttribute("role", "option");
+      fila.setAttribute("aria-selected", String(ext.cursor === i));
+      fila.addEventListener("click", () => {
+        this.send({ action: "extension_select_row", row: i });
+      });
+
+      const nombre = document.createElement("span");
+      nombre.className = "extensions-name";
+      nombre.textContent = r.name;
+      const version = document.createElement("span");
+      version.className = "extensions-version";
+      version.textContent = r.version;
+      fila.append(nombre, version);
+
+      const estado = document.createElement("span");
+      estado.className = "extensions-state";
+      // DOS hechos independientes, y se dicen los dos: una extensión
+      // aprobada pero apagada no es lo mismo que una sin aprobar.
+      estado.dataset["approved"] = String(r.approved);
+      estado.dataset["enabled"] = String(r.enabled);
+      estado.textContent = r.approved
+        ? this.t(r.enabled ? "ext-state-on" : "ext-state-off")
+        : this.t("ext-unapproved");
+      fila.append(estado);
+
+      const meta = document.createElement("span");
+      meta.className = "extensions-meta";
+      const trozos = [r.category];
+      if (r.publisher !== "") {
+        trozos.push(r.publisher);
+      }
+      meta.textContent = trozos.join(" · ");
+      fila.append(meta);
+
+      if (r.description !== "") {
+        const desc = document.createElement("span");
+        desc.className = "extensions-desc";
+        desc.textContent = r.description;
+        fila.append(desc);
+      }
+
+      const caps = document.createElement("ul");
+      caps.className = "extensions-caps";
+      for (const c of r.capabilities) {
+        const cap = document.createElement("li");
+        cap.className = "extensions-cap";
+        cap.textContent = c;
+        caps.append(cap);
+      }
+      if (r.capabilities.length > 0) {
+        fila.append(caps);
+      }
+      lista.append(fila);
+    }
+    if (ext.rows.length > 0) {
+      lista.setAttribute("aria-activedescendant", `extension-row-${String(ext.cursor)}`);
+    }
+    caja.append(lista);
+
+    if (ext.detail !== null) {
+      // La ficha se titula con el NOMBRE de su extensión, no con «sus
+      // ajustes» a secas: con la lista desplazada, la fila elegida puede no
+      // estar a la vista y la ficha se quedaba sin dueño visible.
+      const suya = ext.rows.find((r) => r.id === ext.detail?.id);
+      caja.append(this.extensionDetail(ext.detail, suya?.name ?? ""));
+    }
+    if (ext.errors.length > 0) {
+      const errores = document.createElement("ul");
+      errores.className = "extensions-errors";
+      for (const e of ext.errors) {
+        const li = document.createElement("li");
+        const dir = document.createElement("span");
+        dir.className = "extensions-error-dir";
+        dir.dataset["hostile"] = String(e.hostile);
+        dir.textContent = e.dir;
+        if (e.hostile) {
+          dir.append(badge(this.t("hostile-name")));
+        }
+        const motivo = document.createElement("span");
+        motivo.className = "extensions-error-reason";
+        motivo.textContent = e.reason;
+        li.append(dir, motivo);
+        errores.append(li);
+      }
+      caja.append(errores);
+    }
+    this.extensionsRoot.replaceChildren(caja);
+    revelar(lista.querySelector(`#extension-row-${String(ext.cursor)}`) ?? undefined);
+  }
+
+  /** La ficha de una extensión: sus claves `[config]` con su valor. */
+  private extensionDetail(d: ExtensionsView["detail"], nombre: string): HTMLElement {
+    const ficha = document.createElement("article");
+    ficha.className = "extensions-detail";
+    if (d === null) {
+      return ficha;
+    }
+    const titulo = document.createElement("h2");
+    titulo.textContent = this.t("ext-config-title");
+    if (nombre !== "") {
+      const suya = document.createElement("span");
+      suya.className = "extensions-detail-of";
+      suya.textContent = nombre;
+      titulo.append(" · ", suya);
+    }
+    ficha.append(titulo);
+    if (d.config.length === 0) {
+      const nada = document.createElement("p");
+      nada.className = "extensions-note";
+      nada.textContent = this.t("ext-config-none");
+      ficha.append(nada);
+      return ficha;
+    }
+    const tabla = document.createElement("table");
+    tabla.className = "extensions-config";
+    const tbody = document.createElement("tbody");
+    for (const k of d.config) {
+      const tr = document.createElement("tr");
+      // Un valor que NO es el del esquema se marca: es lo único que
+      // distingue «así viene» de «así lo dejaste».
+      tr.dataset["changed"] = String(k.value !== k.default);
+      const clave = document.createElement("th");
+      clave.setAttribute("scope", "row");
+      clave.className = "extensions-key";
+      clave.textContent = k.key;
+      const valor = document.createElement("td");
+      valor.className = "extensions-key-value";
+      valor.textContent = k.value;
+      const tipo = document.createElement("td");
+      tipo.className = "extensions-key-kind";
+      tipo.textContent = k.domain === "" ? k.kind : `${k.kind} · ${k.domain}`;
+      const desc = document.createElement("td");
+      desc.className = "extensions-key-desc";
+      desc.textContent = k.description;
+      tr.append(clave, valor, tipo, desc);
+      tbody.append(tr);
+    }
+    tabla.append(tbody);
+    ficha.append(tabla);
+    return ficha;
   }
 
   /** El `<li>` de una fila de ajustes, con su cursor y su click. */

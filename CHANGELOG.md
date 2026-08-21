@@ -9,6 +9,21 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window shows what is installed and what it asked for.** Bridge version
+  **11**: `F12` lists the extensions with their state told as the TWO
+  independent facts it is — approved, and switched on — because one approved
+  and later switched off is not the same as one nobody has looked at yet, and
+  neither is "still asking the daemon" the same as "none". The capabilities a
+  plugin requests are on the ROW, not behind a second gesture: they are the
+  decision a human approves, and hiding them turns "this can read your files"
+  into something you have to go looking for. `Enter` opens its `[config]`
+  schema with the *effective* value of each key beside the schema default, so
+  what has been changed is visible. Read-only throughout, and structurally so:
+  the window's backend has no `set_approval` and no `set_enabled` — what is
+  not there cannot be called by accident. A directory that failed to load is
+  shown rather than dropped, because an extension that vanishes quietly is one
+  the user believes they have.
+
 - **The window shows its settings, and where they come from.** Bridge version
   **10**: `F11` opens the shared registry — the same catalogue the terminal
   shows, with the same stable ids — each entry with its *effective* value, plus
@@ -278,6 +293,14 @@ independently through `PROTOCOL_VERSION`.
   quietly map two extensions onto one row — and the alphabet that decides that
   now lives beside the wire type that carries it, so the manifest parser and
   every receiver ask one question with one answer.
+
+### Changed
+
+- **A cut plugin description now says it was cut.** It was truncated flush at
+  280 characters; it ends in `…` like every neighbouring cut in the codebase.
+  Cutting flush presents a truncated description as though it were complete —
+  the same class of lie `plugin_label` has been avoiding since H3e, and the
+  two are the same kind of text.
 
 ### Fixed
 

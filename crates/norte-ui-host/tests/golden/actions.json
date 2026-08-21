@@ -19,6 +19,10 @@
     "id": 3,
     "text": "carpeta nueva"
   },
+  "extension_select_row": {
+    "action": "extension_select_row",
+    "row": 1
+  },
   "focus_slot": {
     "action": "focus_slot",
     "slot_id": 2

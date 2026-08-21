@@ -234,6 +234,18 @@ enum Mensaje {
     /// cosmética, y una ventana que se queda en blanco hasta que el daemon
     /// conteste es peor que una lateral que gana filas medio segundo después.
     Plugins(Box<Result<norte_proto::methods::PluginListResult, Error>>),
+    /// El catálogo de extensiones que pidió el GESTOR.
+    ///
+    /// Aparte del de la ayuda: son dos superficies con dos vidas, y compartir
+    /// un mensaje obligaría a cada una a comprobar si la otra sigue abierta.
+    Extensiones(Box<Result<norte_proto::methods::PluginListResult, Error>>),
+    /// El esquema `[config]` de UNA extensión, pedido al abrir su ficha.
+    FichaDePlugin(
+        Box<(
+            String,
+            Result<norte_proto::methods::PluginGetConfigResult, Error>,
+        )>,
+    ),
     /// La página de UN plugin, pedida bajo demanda al abrirla.
     PaginaDePlugin(
         Box<(
@@ -453,19 +465,9 @@ async fn actor(
                 }
             }
             Mensaje::Listado(datos) => {
-                let (token, slot, dir, res) = *datos;
-                if estado.huecos.get(&slot).and_then(|h| h.en_vuelo) != Some(token) {
-                    // Llegó tarde: otra navegación la relevó. Se descarta
-                    // AQUÍ, no se esconde en el renderer.
-                    continue;
+                if let Some(u) = estado.aterrizar_listado(*datos, &backend, &buzon) {
+                    let _ = updates.send(u);
                 }
-                estado.aterriza_en(slot, dir, res);
-                estado.sondear(slot, &backend, &buzon);
-                // Un `cd` cambia la pantalla entera —directorio, filas,
-                // cursor, marcas—, así que se manda una foto en vez de
-                // enumerar parches que el renderer tendría que casar.
-                let snap = estado.snapshot();
-                let _ = updates.send(estado.sobre(UiUpdate::Snapshot(Box::new(snap))));
             }
             Mensaje::Contenido(datos) => {
                 let (token, path, leido) = *datos;
@@ -478,6 +480,17 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
+            Mensaje::Extensiones(res) => {
+                for u in estado.aplicar_catalogo_de_extensiones(*res, &backend, &buzon) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::FichaDePlugin(datos) => {
+                let (id, res) = *datos;
+                if let Some(u) = estado.aplicar_ficha(&id, res.as_ref().ok()) {
+                    let _ = updates.send(u);
+                }
+            }
             Mensaje::PaginaDePlugin(datos) => {
                 let (id, res) = *datos;
                 if let Some(u) = estado.aplicar_pagina_de_plugin(&id, res.as_ref().ok()) {
@@ -485,20 +498,13 @@ async fn actor(
                 }
             }
             Mensaje::Hidratado(datos) => {
-                let (dir, slot, sondas) = *datos;
-                if let Some(u) = estado.aplicar_sondas(slot, &dir, &sondas) {
+                if let Some(u) = estado.aterrizar_sondas(*datos, &backend, &buzon) {
                     let _ = updates.send(u);
-                    // Y se pide la siguiente tanda: `MAX_SONDEOS` acota cada
-                    // vuelta, no la ventana. Sin esto, una ventana más alta
-                    // que una tanda se quedaba a medias en silencio.
-                    estado.sondear(slot, &backend, &buzon);
                 }
             }
             Mensaje::MasEntradas(datos) => {
-                let (token, slot, batch) = *datos;
-                if let Some(u) = estado.aplicar_lote(slot, token, batch) {
+                if let Some(u) = estado.aterrizar_lote(*datos, &backend, &buzon) {
                     let _ = updates.send(u);
-                    estado.sondear(slot, &backend, &buzon);
                 }
             }
             Mensaje::Conexion(ev) => {
@@ -715,6 +721,8 @@ struct Estado {
     paths: crate::settings::HostPaths,
     /// Los ajustes, si están abiertos.
     ajustes: Option<crate::settings::Ajustes>,
+    /// El gestor de extensiones, si está abierto.
+    extensiones: Option<crate::extensions::Extensiones>,
     /// La ayuda, si está abierta. Tapa la pantalla y se queda las teclas,
     /// como el visor: sus teclas son FIJAS (no hay vocabulario `dialog.*`
     /// para «filtrar esta lista» ni para «seguir este enlace»), que es lo
@@ -884,6 +892,7 @@ impl Estado {
             paleta: None,
             ayuda: None,
             ajustes: None,
+            extensiones: None,
             config: settings,
             paths,
             efectivo_visor: keymap_visor.clone(),
@@ -1220,6 +1229,7 @@ impl Estado {
             UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
             UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row, backend, buzon),
             UiAction::SettingsSelectRow { row } => self.elegir_ajuste(*row),
+            UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
             UiAction::HelpActivate { index } => self.activar_en_ayuda(*index, backend, buzon),
         }
     }
@@ -1246,6 +1256,9 @@ impl Estado {
         // recibía ni una tecla y que ninguna podía cerrar.
         if self.ayuda.is_some() {
             return Some(self.tecla_en_ayuda(k, backend, buzon));
+        }
+        if self.extensiones.is_some() {
+            return Some(self.tecla_en_extensiones(k, backend, buzon));
         }
         if self.ajustes.is_some() {
             return Some(self.tecla_en_ajustes(k));
@@ -1455,6 +1468,218 @@ impl Estado {
             },
             vec![self.parche(vec![cambio])],
         )
+    }
+
+    /// Un listado que se pidió antes acaba de volver.
+    ///
+    /// `None` = llegó TARDE y otra navegación lo relevó. Se descarta aquí y
+    /// no se esconde en el renderer.
+    fn aterrizar_listado(
+        &mut self,
+        datos: RespuestaListado,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        let (token, slot, dir, res) = datos;
+        if self.huecos.get(&slot).and_then(|h| h.en_vuelo) != Some(token) {
+            return None;
+        }
+        self.aterriza_en(slot, dir, res);
+        self.sondear(slot, backend, buzon);
+        // Un `cd` cambia la pantalla entera —directorio, filas, cursor,
+        // marcas—, así que se manda una foto en vez de enumerar parches que
+        // el renderer tendría que casar.
+        let snap = self.snapshot();
+        Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+    }
+
+    /// Lo que un sondeo averiguó, aplicado; y se pide la siguiente tanda.
+    ///
+    /// `MAX_SONDEOS` acota cada VUELTA, no la ventana: sin volver a pedir,
+    /// una ventana más alta que una tanda se quedaba a medias en silencio.
+    fn aterrizar_sondas(
+        &mut self,
+        datos: Sondas,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        let (dir, slot, sondas) = datos;
+        let u = self.aplicar_sondas(slot, &dir, &sondas)?;
+        self.sondear(slot, backend, buzon);
+        Some(u)
+    }
+
+    /// Un lote más del listado que se está drenando por detrás.
+    fn aterrizar_lote(
+        &mut self,
+        datos: (RequestToken, u32, Vec<Entry>),
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        let (token, slot, batch) = datos;
+        let u = self.aplicar_lote(slot, token, batch)?;
+        self.sondear(slot, backend, buzon);
+        Some(u)
+    }
+
+    /// Abre el gestor de extensiones y PIDE el catálogo.
+    ///
+    /// Se abre vacío y diciendo que está cargando, no esperando: una ventana
+    /// congelada mientras el daemon contesta es peor que una lista que
+    /// aparece medio segundo después. Y «cargando» no es lo mismo que
+    /// «ninguna»: una lista vacía sin ese aviso se lee como que no hay nada
+    /// instalado.
+    fn abrir_extensiones(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.extensiones = Some(crate::extensions::Extensiones::abrir());
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_list()).await {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon.send(Mensaje::Extensiones(Box::new(res))).await;
+        });
+        let cambio = ViewChange::Extensions {
+            extensions: self.vista_extensiones(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// El catálogo llegó al gestor.
+    ///
+    /// Un fallo también se aplica: deja de estar «cargando» y la lista queda
+    /// vacía, que con el aviso apagado significa «no hay ninguna». Quedarse
+    /// cargando para siempre sería la única respuesta peor.
+    fn aplicar_catalogo_de_extensiones(
+        &mut self,
+        res: Result<norte_proto::methods::PluginListResult, Error>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(e) = self.extensiones.as_mut() else {
+            return Vec::new();
+        };
+        // Un fallo se aplica igual: deja de estar «cargando» con la lista
+        // vacía, que ya sabe decirse. Quedarse cargando para siempre es la
+        // única respuesta peor.
+        e.set_catalogo(&res.unwrap_or(norte_proto::methods::PluginListResult {
+            plugins: Vec::new(),
+            errors: Vec::new(),
+        }));
+        let _ = (backend, buzon);
+        let cambio = ViewChange::Extensions {
+            extensions: self.vista_extensiones(),
+        };
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// Pide la ficha de la extensión elegida.
+    fn pedir_ficha(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(e) = self.extensiones.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let Some(id) = e.reclamar_ficha() else {
+            return (self.aplicada(), Vec::new());
+        };
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_config(id.clone()))
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon
+                .send(Mensaje::FichaDePlugin(Box::new((id, res))))
+                .await;
+        });
+        (self.aplicada(), Vec::new())
+    }
+
+    /// La ficha llegó.
+    fn aplicar_ficha(
+        &mut self,
+        id: &str,
+        res: Option<&norte_proto::methods::PluginGetConfigResult>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        let lang = self.lang;
+        let e = self.extensiones.as_mut()?;
+        e.set_ficha(id, res?, lang);
+        let cambio = ViewChange::Extensions {
+            extensions: self.vista_extensiones(),
+        };
+        Some(self.parche(vec![cambio]))
+    }
+
+    /// La proyección del gestor.
+    fn vista_extensiones(&self) -> Option<crate::dto::ExtensionsView> {
+        Some(self.extensiones.as_ref()?.vista())
+    }
+
+    /// Las teclas mientras el gestor está abierto.
+    fn tecla_en_extensiones(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        /// Cuántas filas mueve una página.
+        const PAGINA: i64 = 10;
+        let Some(e) = self.extensiones.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match k.key.as_str() {
+            "Escape" | "esc" => {
+                // El primer `esc` cierra la FICHA, no el gestor: dejar la
+                // lista por cerrar un detalle pierde dónde estaba el lector.
+                if e.tiene_ficha() {
+                    e.cerrar_ficha();
+                } else {
+                    self.extensiones = None;
+                }
+            }
+            "ArrowDown" | "down" => e.mover(1),
+            "ArrowUp" | "up" => e.mover(-1),
+            "PageDown" | "pgdn" => e.mover(PAGINA),
+            "PageUp" | "pgup" => e.mover(-PAGINA),
+            "Home" | "home" => e.mover(i64::MIN / 2),
+            "End" | "end" => e.mover(i64::MAX / 2),
+            "Enter" | "enter" => return self.pedir_ficha(backend, buzon),
+            _ => return (self.aplicada(), Vec::new()),
+        }
+        let cambio = ViewChange::Extensions {
+            extensions: self.vista_extensiones(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Un click en una fila del gestor: la elige.
+    fn elegir_extension(
+        &mut self,
+        row: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(e) = self.extensiones.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        e.senalar(row as usize);
+        let (_, mut envios) = self.pedir_ficha(backend, buzon);
+        let cambio = ViewChange::Extensions {
+            extensions: self.vista_extensiones(),
+        };
+        envios.push(self.parche(vec![cambio]));
+        (self.aplicada(), envios)
     }
 
     /// Abre los ajustes, en solo lectura.
@@ -2293,6 +2518,7 @@ impl Estado {
             }
             Efecto::Ayuda => self.abrir_ayuda(backend, buzon),
             Efecto::Ajustes => self.abrir_ajustes(),
+            Efecto::Extensiones => self.abrir_extensiones(backend, buzon),
             Efecto::Ver => self.pedir_visor(backend, buzon),
             Efecto::CrearDirectorio => self.pedir_mkdir(),
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
@@ -3423,6 +3649,7 @@ impl Estado {
             whichkey: self.vista_whichkey(),
             help: self.vista_ayuda(),
             settings: self.vista_ajustes(),
+            extensions: self.vista_extensiones(),
             viewer: self.vista_visor(),
             locale: self.locale.clone(),
         }

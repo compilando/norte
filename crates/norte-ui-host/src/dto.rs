@@ -42,6 +42,9 @@ pub struct ViewSnapshot {
     /// La ayuda, si está abierta. Como el visor, ocupa la pantalla: mientras
     /// esté, las teclas son suyas.
     pub help: Option<HelpView>,
+    /// Las extensiones, si están abiertas. Solo LECTURA: se ve qué hay
+    /// instalado y en qué estado, y NO se aprueba ni se enciende nada.
+    pub extensions: Option<ExtensionsView>,
     /// Los ajustes, si están abiertos. Solo LECTURA: esta ventana enseña lo
     /// que hay y no escribe nada hasta que la fase 5 dé el camino seguro.
     pub settings: Option<SettingsView>,
@@ -435,6 +438,107 @@ pub struct PathRowView {
     pub missing: bool,
 }
 
+/// El gestor de extensiones abierto (solo lectura).
+///
+/// Aprobar una capability es una decisión de SEGURIDAD y es una mutación:
+/// esta ventana la enseña y no la toma, igual que no borra. El camino seguro
+/// lo da la fase 5.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionsView {
+    /// Lo instalado, en el orden que dio el catálogo.
+    pub rows: Vec<ExtensionRowView>,
+    /// Cuál está elegida.
+    pub cursor: u64,
+    /// La ficha de la elegida, cuando ya llegó su esquema. `None` mientras
+    /// se pide, o si no se pidió.
+    pub detail: Option<ExtensionDetailView>,
+    /// El catálogo todavía no ha llegado. Se DICE, en vez de enseñar una
+    /// lista vacía que se lee como «no tienes ninguna».
+    pub loading: bool,
+    /// Directorios que el daemon no pudo cargar, ya saneados. Se enseñan:
+    /// una extensión que falla al cargar y desaparece en silencio es una
+    /// extensión que el usuario cree tener.
+    pub errors: Vec<ExtensionErrorView>,
+}
+
+/// Una extensión del catálogo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionRowView {
+    /// Su id, reverse-DNS validado. Es una IDENTIDAD: viaja entera y sin
+    /// recortar, y sirve para pedir su ficha.
+    pub id: String,
+    /// Su nombre, ya enmascarado y acotado (texto de tercero).
+    pub name: String,
+    /// Quién la publica, ya enmascarado. Vacío si no lo declara.
+    pub publisher: String,
+    /// Su versión, ya enmascarada: la declara el manifiesto, o sea un
+    /// tercero, y acaba en una fila.
+    pub version: String,
+    /// Qué papel juega (`previewer`, `indexer`…), del vocabulario del core.
+    pub category: String,
+    /// Qué hace, ya enmascarada y acotada. Vacía si no lo declara.
+    pub description: String,
+    /// Un humano aprobó sus capabilities.
+    pub approved: bool,
+    /// Un humano la tiene encendida.
+    pub enabled: bool,
+    /// Trae página de ayuda (`F1` la abre en su sección).
+    pub has_help: bool,
+    /// Cuántos comandos aporta.
+    pub commands: u32,
+    /// Cuántas columnas aporta.
+    pub columns: u32,
+    /// Las capabilities que solicita, tal como las declara.
+    ///
+    /// En la FILA y no solo en la ficha, a propósito: son la decisión que un
+    /// humano aprueba, y esconderlas tras un segundo gesto convierte «esto
+    /// puede leer tus ficheros» en algo que hay que ir a buscar.
+    pub capabilities: Vec<String>,
+}
+
+/// Un directorio de extensión que no cargó.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionErrorView {
+    /// Dónde, ya saneado.
+    pub dir: String,
+    /// El texto de arriba DIFIERE de la ruta real.
+    pub hostile: bool,
+    /// Por qué, ya saneado: lo escribe el core, pero puede citar el
+    /// manifiesto del plugin.
+    pub reason: String,
+}
+
+/// La ficha de una extensión: lo que PIDE y lo que se le ha configurado.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionDetailView {
+    /// De quién es esta ficha.
+    pub id: String,
+    /// Sus claves `[config]` con el valor efectivo. Vacío si no declara
+    /// ninguna.
+    pub config: Vec<ExtensionConfigRowView>,
+}
+
+/// Una clave `[config.<key>]` con su esquema y su valor efectivo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionConfigRowView {
+    /// La clave. Charset validado por el manifiesto, segura tal cual.
+    pub key: String,
+    /// Su tipo (`string`, `bool`, `int`, `enum`). Un tipo que este frontend
+    /// no conozca —un peer más nuevo— se pinta como texto y no revienta.
+    pub kind: String,
+    /// El valor EFECTIVO: los defaults del esquema con el `config.toml`
+    /// superpuesto.
+    pub value: String,
+    /// El valor por defecto del esquema, para poder ver qué se ha cambiado.
+    pub default: String,
+    /// Qué es, ya enmascarada (texto del manifiesto). Vacía si no lo dice.
+    pub description: String,
+    /// Los valores válidos de un `enum`, o las cotas de un `int`, ya como
+    /// texto. Vacío cuando el tipo no tiene nada que acotar.
+    pub domain: String,
+}
+
+/// Lo que el visor enseña.
 /// Lo que el visor enseña.
 /// Lo que el visor enseña.
 ///
@@ -867,6 +971,11 @@ pub enum ViewChange {
     Help {
         /// La ayuda, o `None` si se cerró.
         help: Option<HelpView>,
+    },
+    /// Las extensiones se abrieron, cambiaron o se cerraron.
+    Extensions {
+        /// El gestor, o `None` si se cerró.
+        extensions: Option<ExtensionsView>,
     },
     /// Los ajustes se abrieron, movieron el cursor o se cerraron.
     Settings {

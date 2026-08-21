@@ -122,6 +122,65 @@
         "title_key": "modal-mkdir-title"
       }
     ],
+    "extensions": {
+      "cursor": 0,
+      "detail": {
+        "config": [
+          {
+            "default": "10",
+            "description": "Segundos antes de rendirse",
+            "domain": "entre 1 y 300",
+            "key": "timeout",
+            "kind": "int",
+            "value": "30"
+          }
+        ],
+        "id": "acme.ftp"
+      },
+      "errors": [
+        {
+          "dir": "/home/oscar/.config/norte/plugins/roto",
+          "hostile": false,
+          "reason": "el manifiesto no parsea"
+        }
+      ],
+      "loading": false,
+      "rows": [
+        {
+          "approved": true,
+          "capabilities": [
+            "net",
+            "fs-read"
+          ],
+          "category": "provider",
+          "columns": 0,
+          "commands": 2,
+          "description": "Sirve ficheros por FTP",
+          "enabled": true,
+          "has_help": true,
+          "id": "acme.ftp",
+          "name": "FTP de ACME",
+          "publisher": "ACME",
+          "version": "1.2.0"
+        },
+        {
+          "approved": false,
+          "capabilities": [
+            "fs-read"
+          ],
+          "category": "previewer",
+          "columns": 1,
+          "commands": 1,
+          "description": "",
+          "enabled": false,
+          "has_help": false,
+          "id": "org.norte.demo",
+          "name": "Demo",
+          "publisher": "",
+          "version": "0.1.0"
+        }
+      ]
+    },
     "focus": 1,
     "help": {
       "action_cursor": 0,

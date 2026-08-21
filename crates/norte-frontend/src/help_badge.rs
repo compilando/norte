@@ -196,6 +196,42 @@ pub fn plugin_label(raw: &str) -> String {
     out
 }
 
+/// Wire cap on a plugin's `description` (P1 encoding audit F1).
+///
+/// The manifest already caps it at 280 chars WHEN PARSING
+/// (`norte_plugin_host`'s `ManifestError::DescriptionTooLong`) — but that only
+/// protects the honest path: a well-formed plugin loaded by a faithful daemon.
+/// A hostile or compromised daemon can send any length over the wire, and a
+/// client must not trust that the server honoured its own limit. Same value as
+/// the manifest's: a deliberate mirror, not a coincidence.
+pub const PLUGIN_DESCRIPTION_WIRE_CAP: usize = 280;
+
+/// Caps ([`PLUGIN_DESCRIPTION_WIRE_CAP`]) and masks a plugin's `description`
+/// for display.
+///
+/// Same shape as [`plugin_label`] and for the same reasons, with one
+/// difference worth stating: a description is PROSE, not an identity, so
+/// nothing downstream compares it. What the cap protects is the painting and
+/// the filters that fold it, not a lookup.
+///
+/// ```
+/// use norte_frontend::help_badge::plugin_description;
+///
+/// assert_eq!(plugin_description("Sirve ficheros por FTP"), "Sirve ficheros por FTP");
+/// assert!(!plugin_description("a\u{7}b").contains('\u{7}'));
+/// ```
+#[must_use]
+pub fn plugin_description(raw: &str) -> String {
+    let mut chars = raw.chars();
+    let head: String = chars.by_ref().take(PLUGIN_DESCRIPTION_WIRE_CAP).collect();
+    let overflowed = chars.next().is_some();
+    let mut out = crate::display_name(head.as_bytes()).0;
+    if overflowed {
+        out.push('…');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

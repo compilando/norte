@@ -83,6 +83,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     whichkey: null,
     help: null,
     settings: null,
+    extensions: null,
     viewer: null,
     locale: "es",
   };
@@ -95,9 +96,19 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
   const whichkey = document.createElement("div");
   const help = document.createElement("div");
   const settings = document.createElement("div");
+  const extensions = document.createElement("div");
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
-  document.body.append(root, palette, whichkey, help, settings, viewer, dialogs);
+  document.body.append(
+    root,
+    palette,
+    whichkey,
+    help,
+    settings,
+    extensions,
+    viewer,
+    dialogs,
+  );
   document.documentElement.style.setProperty("--cell-h", `${CELL_H}px`);
   document.documentElement.style.setProperty("--cell-w", "8px");
   const enviadas: UiAction[] = [];
@@ -107,6 +118,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     whichkey,
     help,
     settings,
+    extensions,
     viewer,
     dialogs,
     catalogo(),
@@ -957,5 +969,163 @@ describe("los ajustes", () => {
     const { screen } = montar();
     screen.paint(vista({}));
     expect(document.querySelector(".settings")).toBeNull();
+  });
+});
+
+describe("el gestor de extensiones", () => {
+  function conExtensiones(): ViewSnapshot {
+    const v = vista({});
+    v.extensions = {
+      rows: [
+        {
+          id: "acme.ftp",
+          name: "FTP de ACME",
+          publisher: "ACME",
+          version: "1.2.0",
+          category: "provider",
+          description: "Sirve ficheros por FTP",
+          approved: true,
+          enabled: true,
+          has_help: true,
+          commands: 2,
+          columns: 0,
+          capabilities: ["net", "fs-read"],
+        },
+        {
+          id: "org.norte.demo",
+          name: "Demo",
+          publisher: "",
+          version: "0.1.0",
+          category: "previewer",
+          description: "",
+          approved: false,
+          enabled: false,
+          has_help: false,
+          commands: 1,
+          columns: 1,
+          capabilities: ["fs-read"],
+        },
+      ],
+      cursor: 0,
+      detail: null,
+      loading: false,
+      errors: [],
+    };
+    return v;
+  }
+
+  it("enseña el estado como DOS hechos y las capabilities en la fila", () => {
+    const { screen } = montar();
+    screen.paint(conExtensiones());
+    const filas = [...document.querySelectorAll(".extensions-row")];
+    expect(filas).toHaveLength(2);
+    const uno = filas[0]?.querySelector(".extensions-state");
+    expect(uno?.getAttribute("data-approved")).toBe("true");
+    expect(uno?.getAttribute("data-enabled")).toBe("true");
+    const dos = filas[1]?.querySelector(".extensions-state");
+    expect(dos?.getAttribute("data-approved")).toBe("false");
+    // Las capabilities NO están escondidas tras un gesto: son la decisión.
+    expect(filas[0]?.querySelectorAll(".extensions-cap")).toHaveLength(2);
+  });
+
+  it("no hay ni un control para aprobar o encender", () => {
+    const { screen } = montar();
+    screen.paint(conExtensiones());
+    const caja = document.querySelector(".extensions") as HTMLElement;
+    expect(caja.querySelectorAll("button")).toHaveLength(0);
+    expect(caja.querySelectorAll("input")).toHaveLength(0);
+  });
+
+  it("«cargando» no se pinta igual que «ninguna»", () => {
+    const { screen } = montar();
+    const v = conExtensiones();
+    if (v.extensions !== null) {
+      v.extensions.loading = true;
+      v.extensions.rows = [];
+    }
+    screen.paint(v);
+    expect(document.querySelector(".extensions-note")?.getAttribute("role")).toBe(
+      "status",
+    );
+    expect(document.querySelector(".extensions-note")?.textContent).toBe("ext-loading");
+
+    const vacio = conExtensiones();
+    if (vacio.extensions !== null) {
+      vacio.extensions.loading = false;
+      vacio.extensions.rows = [];
+    }
+    screen.paint(vacio);
+    expect(document.querySelector(".extensions-note")?.textContent).toBe("ext-empty");
+  });
+
+  it("la ficha marca el valor que ya no es el del esquema", () => {
+    const { screen } = montar();
+    const v = conExtensiones();
+    if (v.extensions !== null) {
+      v.extensions.detail = {
+        id: "acme.ftp",
+        config: [
+          {
+            key: "timeout",
+            kind: "int",
+            value: "30",
+            default: "10",
+            description: "Segundos",
+            domain: "entre 1 y 300",
+          },
+          {
+            key: "passive",
+            kind: "bool",
+            value: "true",
+            default: "true",
+            description: "",
+            domain: "",
+          },
+        ],
+      };
+    }
+    screen.paint(v);
+    const filas = [...document.querySelectorAll(".extensions-config tbody tr")];
+    expect(filas).toHaveLength(2);
+    expect(filas[0]?.getAttribute("data-changed")).toBe("true");
+    expect(filas[1]?.getAttribute("data-changed")).toBe("false");
+    expect(filas[0]?.querySelector(".extensions-key-kind")?.textContent).toContain(
+      "entre 1 y 300",
+    );
+    // La ficha dice DE QUIÉN es: con la lista desplazada, la fila elegida
+    // puede no estar a la vista.
+    expect(document.querySelector(".extensions-detail-of")?.textContent).toBe(
+      "FTP de ACME",
+    );
+  });
+
+  it("un directorio que no cargó se dice, y uno hostil se marca", () => {
+    const { screen } = montar();
+    const v = conExtensiones();
+    if (v.extensions !== null) {
+      v.extensions.errors = [
+        { dir: "/plugins/ro�to", hostile: true, reason: "el manifiesto no parsea" },
+      ];
+    }
+    screen.paint(v);
+    const err = document.querySelector(".extensions-error-dir");
+    expect(err?.getAttribute("data-hostile")).toBe("true");
+    expect(document.querySelector(".extensions-error-reason")?.textContent).toBe(
+      "el manifiesto no parsea",
+    );
+  });
+
+  it("un click elige ESA extensión", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conExtensiones());
+    const filas = [...document.querySelectorAll(".extensions-row")];
+    (filas[1] as HTMLElement).click();
+    expect(enviadas).toEqual([{ action: "extension_select_row", row: 1 }]);
+  });
+
+  it("cerrado, no tapa nada", () => {
+    const { screen } = montar();
+    screen.paint(vista({}));
+    expect(document.querySelector(".extensions")).toBeNull();
   });
 });

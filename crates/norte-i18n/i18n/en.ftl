@@ -536,6 +536,20 @@ msg-columns-saved = columns saved
 ext-title = Extensions
 ext-empty = no extensions installed
 ext-unapproved = not approved
+# Task 4.5: the graphical window's read-only extension manager reuses the
+# three above and adds these. The state is TWO independent facts —
+# approved, and switched on — because an extension approved and then
+# switched off is not the same as one nobody has looked at yet, and
+# "loading" is not "none" either. `ext-config-*` say what bounds a
+# plugin's `[config]` key; an `enum` lists its values instead.
+ext-loading = asking the daemon what is installed…
+ext-state-on = approved · on
+ext-state-off = approved · off
+ext-config-title = Its settings
+ext-config-none = This extension declares no settings.
+ext-config-range = between {$min} and {$max}
+ext-config-min = at least {$min}
+ext-config-max = at most {$max}
 history-title = History
 history-empty = no history yet
 hotlist-title = Favorites
