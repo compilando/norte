@@ -213,12 +213,24 @@ against the same host. Nothing in phases 1 and 2 depends on this answer.
 
 ## Debt this spike leaves
 
-- Watcher, which-key, menu/palette/shortcut views and periodic `session.put`
-  are phase-2 debt the renderer will want (already recorded in the plan).
-- The host emits ~200 row patches while filling a 100 000-entry listing, which
-  overruns a 64-deep subscriber buffer and costs a resync. Correct, but noisy:
-  the fill should coalesce to the visible window.
-- Log setup is duplicated (~25 lines) rather than shared with `norte-core`,
-  because a daemon-only frontend must not depend on the engine to write a line.
-- Packaging (`.deb`/AppImage) has not been exercised; `just gui-package` exists
-  and is untested.
+Filed as issues on 2026-08-21 rather than left in this document:
+
+- **#252** — the fill of a large listing floods the update channel and forces a
+  resync.
+- **#253** — the window ignores the user's keymap layers.
+- **#254** — a daemon-only frontend depends on a provider crate for one path
+  conversion.
+- **#255** — log setup duplicated instead of shared.
+- **#256** — packaging has never been exercised.
+- **#257** — the golden corpus checks coverage against a hand-written list, and
+  misses ten variants.
+- **#258** — `u64` counters become `f64` in the renderer.
+- **#259** — `HostCatalog` is a fifth wire message with no version and no
+  fixture.
+- **#260** — a project layer can choose the keymap preset, and a malformed one
+  denies startup (`norte-config`, shared with the terminal).
+- **#261** — the manual test matrix of task 3.5 has never been run, and
+  `GDK_BACKEND=x11` renders a blank webview here.
+
+Still only in the plan: watcher, which-key, menu/palette/shortcut views and
+periodic `session.put` are phase-2 debt the renderer will want.
