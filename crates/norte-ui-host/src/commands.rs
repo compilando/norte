@@ -66,6 +66,10 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.focus-next",
     "layout.focus-prev",
     "layout.set-target",
+    "layout.grow",
+    "layout.shrink",
+    "layout.equalize",
+    "layout.pick",
     "app.palette",
     "app.help",
     "app.settings",
@@ -201,6 +205,12 @@ pub enum Efecto {
     },
     /// Designa OTRO hueco como destino de la siguiente operación.
     Destino,
+    /// Cambia el tamaño del hueco con el foco. Negativo lo encoge.
+    Tamano(i64),
+    /// Iguala el peso de los hermanos del hueco con el foco.
+    Igualar,
+    /// Abre el selector de disposiciones.
+    Disposiciones,
     /// Abre la paleta de comandos.
     Paleta,
     /// Abre los ajustes, en solo lectura.
@@ -260,6 +270,10 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.switch" | "layout.focus-next" => Efecto::Foco { atras: false },
         "layout.focus-prev" => Efecto::Foco { atras: true },
         "layout.set-target" => Efecto::Destino,
+        "layout.grow" => Efecto::Tamano(n),
+        "layout.shrink" => Efecto::Tamano(-n),
+        "layout.equalize" => Efecto::Igualar,
+        "layout.pick" => Efecto::Disposiciones,
         "app.palette" => Efecto::Paleta,
         "app.help" => Efecto::Ayuda,
         "app.settings" => Efecto::Ajustes,

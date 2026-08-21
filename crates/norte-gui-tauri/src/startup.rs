@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use norte_client::RemoteBackend;
+use norte_frontend::layout_picker::UserLayout;
 use norte_i18n::Lang;
 use norte_proto::VPath;
 use norte_proto::methods::ClientInfo;
@@ -136,6 +137,33 @@ pub struct Boot {
     pub lang: Lang,
     /// El tema resuelto.
     pub theme: Theme,
+}
+
+/// Las disposiciones que el usuario tiene guardadas, YA leídas.
+///
+/// Leídas aquí y no por nombre porque el selector pinta la FORMA de cada una:
+/// leerlas al mover el cursor sería I/O en el bucle de eventos. Una que no
+/// parsea se conserva CON su motivo — el selector la enseña sin vista previa
+/// y explica por qué, que es más útil que una fila que no está.
+///
+/// Fuera del runtime no hace falta: esto corre en el arranque, antes de que
+/// exista ventana, y `list`/`load` son lecturas de un directorio pequeño.
+fn disposiciones_del_usuario(capas: &norte_config::Layers) -> Vec<UserLayout> {
+    let Some((dir, _)) = capas
+        .dirs
+        .iter()
+        .rev()
+        .find(|(_, k)| *k == norte_config::Layer::User)
+    else {
+        return Vec::new();
+    };
+    norte_frontend::layout::config::list(dir)
+        .into_iter()
+        .map(|name| UserLayout {
+            tree: norte_frontend::layout::config::load(dir, &name).map_err(|e| e.to_string()),
+            name,
+        })
+        .collect()
 }
 
 /// El tema, para poder verlo por dentro desde la ventana.
@@ -332,6 +360,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         settings: cfg.clone(),
         paths: rutas(&capas_vistas, &socket),
         theme: tema_visto(cfg.common.ui_theme.as_deref(), &theme),
+        user_layouts: disposiciones_del_usuario(&capas_vistas),
     })
     .await?;
     Ok(Boot {

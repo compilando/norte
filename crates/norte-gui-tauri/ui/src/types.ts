@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 14;
+export const BRIDGE_VERSION = 15;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -364,6 +364,22 @@ export interface PickerView {
   empty: string;
 }
 
+export interface LayoutRowView {
+  name: string;
+  hostile: boolean;
+  factory: boolean;
+  shares_keymap_name: boolean;
+  broken: boolean;
+}
+
+export interface LayoutPickerView {
+  title: string;
+  rows: LayoutRowView[];
+  cursor: number;
+  preview: string[];
+  problem: string;
+}
+
 export interface ViewSnapshot {
   connection: ConnectionView;
   layout: LayoutView;
@@ -378,6 +394,7 @@ export interface ViewSnapshot {
   settings: SettingsView | null;
   extensions: ExtensionsView | null;
   theme: ThemeView | null;
+  layouts: LayoutPickerView | null;
   picker: PickerView | null;
   viewer: ViewerView | null;
   locale: string;
@@ -406,7 +423,8 @@ export type ViewChange =
   | { change: "settings"; settings: SettingsView | null }
   | { change: "extensions"; extensions: ExtensionsView | null }
   | { change: "theme"; theme: ThemeView | null }
-  | { change: "picker"; picker: PickerView | null };
+  | { change: "picker"; picker: PickerView | null }
+  | { change: "layouts"; layouts: LayoutPickerView | null };
 
 export interface ViewPatch {
   base_sequence: number;
@@ -461,6 +479,7 @@ export type UiAction =
   | { action: "extension_select_row"; row: number }
   | { action: "picker_select_row"; row: number }
   | { action: "place_activate_row"; row: number }
+  | { action: "layout_activate_row"; row: number }
   | { action: "resync" };
 
 export type StaleReason = "instance" | "generation" | "modal";

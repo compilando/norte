@@ -226,6 +226,11 @@ pub enum UiAction {
         /// Fila, en el orden en que viajaron.
         row: u32,
     },
+    /// Elige una disposición del selector (un click) y la APLICA.
+    LayoutActivateRow {
+        /// Fila, en el orden en que viajaron.
+        row: u32,
+    },
     /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
     Resync,
 }

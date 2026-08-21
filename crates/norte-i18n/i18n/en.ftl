@@ -763,6 +763,11 @@ msg-session-too-large = the session is too big to store; history dropped
 msg-session-unreadable = the stored session could not be read; starting from the configured layout
 msg-layout-applied = layout applied: { $name }
 layout-picker-title = Layout
+# Task 4.1 in the graphical window: what each row of the layout picker says
+# about itself. The keymap-name warning is not decoration — the two settings
+# share a namespace, and without the line the coincidence is a trap.
+layout-picker-factory = factory
+layout-picker-shares-keymap = also a keyboard preset — no keys change
 layout-picker-factory = built in
 layout-picker-mine = yours
 layout-picker-keymap-note = the layout does not change your keys ([keymap] preset does)

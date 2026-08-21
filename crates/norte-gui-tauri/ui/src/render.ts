@@ -26,6 +26,7 @@ import type {
   HelpView,
   PaletteView,
   ExtensionsView,
+  LayoutPickerView,
   MetadataSlotView,
   PlacesSlotView,
   PickerView,
@@ -98,6 +99,7 @@ export class Screen {
     private readonly extensionsRoot: HTMLElement,
     private readonly themeRoot: HTMLElement,
     private readonly pickerRoot: HTMLElement,
+    private readonly layoutsRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
     private readonly catalog: HostCatalog,
@@ -152,6 +154,7 @@ export class Screen {
     this.paintExtensions(view.extensions);
     this.paintTheme(view.theme);
     this.paintPicker(view.picker);
+    this.paintLayouts(view.layouts);
     this.paintViewer(view.viewer);
     this.paintDialogs(view.dialogs);
   }
@@ -945,6 +948,89 @@ export class Screen {
     }
     caja.append(lista);
     this.themeRoot.replaceChildren(caja);
+  }
+
+  /**
+   * El selector de disposiciones, con la FORMA de la elegida al lado.
+   *
+   * La miniatura llega como líneas de texto pintadas por el mismo motor que
+   * reparte la pantalla de verdad, así que no puede mentir sobre lo que va a
+   * salir. Aquí solo se pone en un `<pre>`.
+   */
+  private paintLayouts(layouts: LayoutPickerView | null): void {
+    if (layouts === null) {
+      this.layoutsRoot.replaceChildren();
+      this.layoutsRoot.dataset["open"] = "false";
+      return;
+    }
+    this.layoutsRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "layouts";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", layouts.title);
+
+    const titulo = document.createElement("h1");
+    titulo.textContent = layouts.title;
+    caja.append(titulo);
+
+    const cuerpo = document.createElement("div");
+    cuerpo.className = "layouts-body";
+    const lista = document.createElement("ul");
+    lista.className = "layouts-rows";
+    lista.setAttribute("role", "listbox");
+    for (const [i, r] of layouts.rows.entries()) {
+      const fila = document.createElement("li");
+      fila.className = "layouts-row";
+      fila.id = `layout-row-${String(i)}`;
+      fila.setAttribute("role", "option");
+      fila.setAttribute("aria-selected", String(layouts.cursor === i));
+      fila.dataset["broken"] = String(r.broken);
+      fila.addEventListener("click", () => {
+        this.send({ action: "layout_activate_row", row: i });
+      });
+      const nombre = document.createElement("span");
+      nombre.className = "layouts-name";
+      nombre.dataset["hostile"] = String(r.hostile);
+      nombre.textContent = r.name;
+      if (r.hostile) {
+        nombre.append(badge(this.t("hostile-name")));
+      }
+      fila.append(nombre);
+      if (r.factory) {
+        const marca = document.createElement("span");
+        marca.className = "layouts-tag";
+        marca.textContent = this.t("layout-picker-factory");
+        fila.append(marca);
+      }
+      if (r.shares_keymap_name) {
+        // Se AVISA: elegir esta disposición no cambia ni una tecla, y sin la
+        // línea la coincidencia de nombre es una trampa.
+        const aviso = document.createElement("span");
+        aviso.className = "layouts-warn";
+        aviso.textContent = this.t("layout-picker-shares-keymap");
+        fila.append(aviso);
+      }
+      lista.append(fila);
+    }
+    lista.setAttribute("aria-activedescendant", `layout-row-${String(layouts.cursor)}`);
+    cuerpo.append(lista);
+
+    if (layouts.problem === "") {
+      const vista = document.createElement("pre");
+      vista.className = "layouts-preview";
+      vista.setAttribute("aria-hidden", "true");
+      vista.textContent = layouts.preview.join("\n");
+      cuerpo.append(vista);
+    } else {
+      const roto = document.createElement("p");
+      roto.className = "layouts-problem";
+      roto.textContent = layouts.problem;
+      cuerpo.append(roto);
+    }
+    caja.append(cuerpo);
+    this.layoutsRoot.replaceChildren(caja);
+    revelar(lista.querySelector(`#layout-row-${String(layouts.cursor)}`) ?? undefined);
   }
 
   /** El selector de volúmenes. */

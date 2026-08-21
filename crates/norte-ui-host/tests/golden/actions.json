@@ -48,6 +48,10 @@
     "meta": false,
     "shift": false
   },
+  "layout_activate_row": {
+    "action": "layout_activate_row",
+    "row": 0
+  },
   "mark_range": {
     "action": "mark_range",
     "from": 2,

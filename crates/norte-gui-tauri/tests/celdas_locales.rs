@@ -72,6 +72,7 @@ async fn el_tamano_y_la_fecha_no_van_en_blanco() {
         settings: norte_ui_host::ajustes_por_defecto(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })

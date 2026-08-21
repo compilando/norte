@@ -65,6 +65,7 @@ describe("el contrato con el host", () => {
       "extensions",
       "help",
       "layout",
+      "layouts",
       "palette",
       "picker",
       "rows",

@@ -759,6 +759,12 @@ msg-session-too-large = la sesión no cabe; se ha tirado el historial
 msg-session-unreadable = la sesión guardada no se pudo leer; se arranca con la disposición de la configuración
 msg-layout-applied = disposición aplicada: { $name }
 layout-picker-title = Disposición
+# Tarea 4.1 en la ventana gráfica: qué dice cada fila del selector de
+# disposiciones sobre sí misma. El aviso del nombre de teclado no es adorno:
+# los dos ajustes comparten espacio de nombres, y sin la línea la
+# coincidencia es una trampa.
+layout-picker-factory = de fábrica
+layout-picker-shares-keymap = también es un preset de teclado — no cambia ninguna tecla
 layout-picker-factory = de fábrica
 layout-picker-mine = tuya
 layout-picker-keymap-note = la disposición no cambia tus teclas (eso es [keymap] preset)

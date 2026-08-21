@@ -152,6 +152,12 @@ pub struct UiHostOptions {
     pub paths: crate::settings::HostPaths,
     /// El tema activo, ya resuelto a pares rol → color por quien arranca.
     pub theme: crate::pickers::HostTheme,
+    /// Las disposiciones que el usuario tiene en `layouts/*.toml`, YA leídas.
+    ///
+    /// Leídas y no por nombre: el selector PINTA la forma de cada una, y
+    /// leerlas al mover el cursor sería I/O en el bucle de eventos. Quien
+    /// tiene el disco delante es quien arranca la ventana, no el host.
+    pub user_layouts: Vec<norte_frontend::layout_picker::UserLayout>,
     /// La configuración de columnas ENTERA, no una lista ya resuelta.
     ///
     /// Las columnas se configuran POR ESQUEMA (`[ui.columns.schemes.sftp]`),
@@ -736,6 +742,10 @@ struct Estado {
     tema: crate::pickers::HostTheme,
     /// Se está mirando el tema por dentro.
     mirando_tema: bool,
+    /// Las disposiciones del usuario, ya leídas por quien arrancó el host.
+    disposiciones: Vec<norte_frontend::layout_picker::UserLayout>,
+    /// El selector de disposiciones, si está abierto.
+    selector_disposicion: Option<norte_frontend::layout_picker::LayoutPicker>,
     /// La barra lateral de sitios, si la disposición coloca una. Hay UNA
     /// como mucho: dos listas idénticas de discos no son una disposición,
     /// son un fallo (lo dice el registro compartido, `multi: false`).
@@ -870,6 +880,7 @@ impl Estado {
             settings,
             paths,
             theme,
+            user_layouts,
         } = options;
         let dir = &initial_dir;
         // El idioma negociado, para las etiquetas de las continuaciones.
@@ -923,6 +934,8 @@ impl Estado {
             mirando_tema: false,
             cursor_procesos: 0,
             sitios: None,
+            disposiciones: user_layouts,
+            selector_disposicion: None,
             selector: None,
             config: settings,
             paths,
@@ -1293,6 +1306,7 @@ impl Estado {
             UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
             UiAction::PickerSelectRow { row } => self.elegir_fila_del_selector(*row),
             UiAction::PlaceActivateRow { row } => self.activar_sitio(*row, backend, buzon),
+            UiAction::LayoutActivateRow { row } => self.elegir_disposicion(*row, backend, buzon),
             UiAction::HelpActivate { index } => self.activar_en_ayuda(*index, backend, buzon),
         }
     }
@@ -1319,6 +1333,9 @@ impl Estado {
         // recibía ni una tecla y que ninguna podía cerrar.
         if self.ayuda.is_some() {
             return Some(self.tecla_en_ayuda(k, backend, buzon));
+        }
+        if self.selector_disposicion.is_some() {
+            return Some(self.tecla_en_disposiciones(k, backend, buzon));
         }
         if self.selector.is_some() {
             return Some(self.tecla_en_selector(k, backend, buzon));
@@ -1645,6 +1662,268 @@ impl Estado {
             self.aplicada(),
             vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
         ))
+    }
+
+    /// Pide el listado de `dir` para `slot`, con el testigo ya reservado.
+    ///
+    /// Extraído de la navegación para que otra cosa que estrena huecos —un
+    /// cambio de disposición— pida por el MISMO camino: dos formas de pedir
+    /// un listado son dos sitios donde olvidarse del catálogo de atributos o
+    /// del testigo.
+    fn pedir_listado(
+        &mut self,
+        slot: u32,
+        dir: &VPath,
+        token: RequestToken,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        self.pedir_catalogo(dir, backend, buzon);
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        let dir = dir.clone();
+        let attrs = self.attrs_de(&dir);
+        tokio::spawn(async move {
+            let stream = backend.list(dir.clone(), attrs).await;
+            let res = Estado::primera_pagina(stream, slot, token, buzon.clone()).await;
+            // Si el actor ya no está, la respuesta no le importa a nadie.
+            let _ = buzon
+                .send(Mensaje::Listado(Box::new((token, slot, dir, res))))
+                .await;
+        });
+    }
+
+    /// Abre el selector de disposiciones.
+    ///
+    /// Las del usuario ya vienen leídas del arranque: el selector pinta la
+    /// FORMA de cada una, y leerlas al mover el cursor sería I/O en el bucle
+    /// de eventos.
+    fn abrir_disposiciones(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.selector_disposicion = Some(norte_frontend::layout_picker::LayoutPicker::open(
+            self.disposiciones.clone(),
+        ));
+        let cambio = ViewChange::Layouts {
+            layouts: self.vista_disposiciones(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// La proyección del selector de disposiciones, con su vista previa.
+    ///
+    /// La miniatura la pinta el MISMO motor que reparte la pantalla de
+    /// verdad, así que no puede mentir sobre lo que va a salir.
+    fn vista_disposiciones(&self) -> Option<crate::dto::LayoutPickerView> {
+        /// Tamaño de la miniatura, en caracteres.
+        const MINIATURA: (u16, u16) = (32, 12);
+
+        let p = self.selector_disposicion.as_ref()?;
+        let actual = p.current();
+        Some(crate::dto::LayoutPickerView {
+            title: clamp_display(norte_i18n::t_in(self.lang, "layout-picker-title")),
+            rows: p
+                .rows()
+                .iter()
+                .map(|r| {
+                    // El nombre es un nombre de FICHERO: bytes (regla 1). Se
+                    // pinta por la puerta compartida y NO viaja como clave —
+                    // para elegir una fila se manda su índice.
+                    let (pintable, hostil) =
+                        norte_frontend::display::display_os_name(r.name.as_os_str());
+                    crate::dto::LayoutRowView {
+                        name: clamp_display(pintable),
+                        hostile: hostil,
+                        factory: r.factory,
+                        shares_keymap_name: r.shares_keymap_name,
+                        broken: r.tree.is_none(),
+                    }
+                })
+                .collect(),
+            cursor: p.cursor() as u64,
+            preview: actual
+                .and_then(|r| r.tree.as_ref())
+                .map_or_else(Vec::new, |t| {
+                    norte_frontend::layout_picker::preview(t, MINIATURA.0, MINIATURA.1, &self.kinds)
+                }),
+            problem: actual
+                .and_then(|r| r.problem.clone())
+                .map_or_else(String::new, |p| {
+                    // El diagnóstico del parser puede citar el fichero del
+                    // usuario: entra por la misma puerta que el resto.
+                    clamp_display(norte_frontend::display_name(p.as_bytes()).0)
+                }),
+        })
+    }
+
+    /// Las teclas mientras el selector de disposiciones está abierto.
+    fn tecla_en_disposiciones(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(p) = self.selector_disposicion.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match k.key.as_str() {
+            "Escape" | "esc" => self.selector_disposicion = None,
+            "ArrowDown" | "down" => p.down(),
+            "ArrowUp" | "up" => p.up(),
+            "Enter" | "enter" => return self.aplicar_disposicion_elegida(backend, buzon),
+            _ => return (self.aplicada(), Vec::new()),
+        }
+        let cambio = ViewChange::Layouts {
+            layouts: self.vista_disposiciones(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Un click en una fila del selector: la elige Y la aplica.
+    fn elegir_disposicion(
+        &mut self,
+        row: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(p) = self.selector_disposicion.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        // El selector compartido no tiene un `set_cursor`: se camina hasta
+        // la fila, que para una lista de cinco a diez es lo mismo y no le
+        // añade superficie a un modelo que ya está probado.
+        while p.cursor() > row as usize {
+            p.up();
+        }
+        while p.cursor() < row as usize && p.cursor() + 1 < p.rows().len() {
+            p.down();
+        }
+        self.aplicar_disposicion_elegida(backend, buzon)
+    }
+
+    /// Aplica la disposición del cursor.
+    ///
+    /// Una que no parsea NO se aplica y lo dice: la fila ya lleva su motivo,
+    /// y cambiar la pantalla por un fichero roto sería peor que no hacer
+    /// nada. Se aplica para ESTA ventana y no se escribe en la
+    /// configuración: escribir es mutar, y llega con la fase 5.
+    fn aplicar_disposicion_elegida(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(p) = self.selector_disposicion.as_ref() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let Some(arbol) = p.current().and_then(|r| r.tree.clone()) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-layout-broken".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        self.selector_disposicion = None;
+        self.aplicar_disposicion(arbol, backend, buzon)
+    }
+
+    /// Cambia el ÁRBOL entero: otra disposición.
+    ///
+    /// Manda una FOTO y no un parche: cambia el reparto, qué huecos hay y qué
+    /// hay dentro de cada uno. Los listados que la disposición nueva coloca y
+    /// no existían arrancan en el directorio del que ya estaba, que es lo
+    /// menos sorprendente: cambiar de forma de pantalla no es irse a otro
+    /// sitio.
+    fn aplicar_disposicion(
+        &mut self,
+        arbol: Node,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let dir = self.hueco().pane.dir().clone();
+        self.arbol = arbol;
+        self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);
+        let nuevos: Vec<u32> = self
+            .reparto
+            .placements
+            .iter()
+            .map(|(SlotId(id), _)| *id)
+            .filter(|id| es_listado(&self.arbol, SlotId(*id), &self.kinds))
+            .collect();
+        self.huecos.retain(|id, _| nuevos.contains(id));
+        let mut estrenados = Vec::new();
+        for id in nuevos {
+            if let std::collections::btree_map::Entry::Vacant(hueco) = self.huecos.entry(id) {
+                hueco.insert(Hueco {
+                    pane: PaneState::new(dir.clone(), Vec::new()),
+                    historial: History::default(),
+                    primera_visible: 0,
+                    visibles: 64,
+                    en_vuelo: None,
+                    drenando: None,
+                    sondeando: false,
+                    cancelar_sondeo: std::sync::Arc::default(),
+                    estado: SlotState::Loading,
+                    sondeados: std::collections::HashSet::new(),
+                });
+                estrenados.push(id);
+            }
+        }
+        self.roles.clear(RoleId::Active);
+        self.reconcilia_roles();
+        for id in estrenados {
+            self.token += 1;
+            let token = RequestToken(self.token);
+            if let Some(h) = self.huecos.get_mut(&id) {
+                h.en_vuelo = Some(token);
+                h.drenando = Some(token);
+            }
+            self.pedir_listado(id, &dir, token, backend, buzon);
+        }
+        if self.hueco_de_sitios().is_some() {
+            self.sembrar_sitios();
+            self.pedir_sitios(backend, buzon);
+        }
+        let snap = self.snapshot();
+        (
+            self.aplicada(),
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+        )
+    }
+
+    /// Cambia el tamaño del hueco con el FOCO, no del listado activo.
+    ///
+    /// Del foco a propósito: la única forma de ensanchar la barra lateral es
+    /// tenerla enfocada y crecer, y `activo()` —que se salta lo que no es un
+    /// listado— habría redimensionado el panel de al lado.
+    ///
+    /// Redimensionar es una decisión sobre EL ÁRBOL, así que se guarda en él:
+    /// el reparto se recalcula desde el árbol nuevo, y no al revés.
+    fn redimensionar(&mut self, delta: i64) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let paso = i16::try_from(delta.clamp(i64::from(i16::MIN), i64::from(i16::MAX)))
+            .unwrap_or(if delta < 0 { -1 } else { 1 });
+        self.aplicar_arbol(self.arbol.resize(SlotId(self.enfocado()), paso))
+    }
+
+    /// Iguala el peso de los hermanos del hueco con el foco.
+    fn igualar(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.aplicar_arbol(self.arbol.equalize(SlotId(self.enfocado())))
+    }
+
+    /// Sustituye el árbol y vuelve a repartir.
+    ///
+    /// Si el reparto no cambia —el hueco estaba en su tope, o no tiene
+    /// hermanos con los que repartir— NO se manda nada: un parche que no
+    /// cambia nada obliga a repintar para nada, y la tecla ya dijo lo suyo
+    /// sin moverse.
+    fn aplicar_arbol(&mut self, nuevo: Node) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let antes = self.reparto.clone();
+        self.arbol = nuevo;
+        self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);
+        if self.reparto.placements == antes.placements {
+            return (self.aplicada(), Vec::new());
+        }
+        self.reconcilia_roles();
+        let cambio = ViewChange::Layout(self.disposicion());
+        (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
     /// El foco está en la barra lateral de sitios.
@@ -3167,6 +3446,9 @@ impl Estado {
             }
             Efecto::Foco { atras } => self.mover_foco(atras),
             Efecto::Destino => self.designar_destino(),
+            Efecto::Tamano(delta) => self.redimensionar(delta),
+            Efecto::Igualar => self.igualar(),
+            Efecto::Disposiciones => self.abrir_disposiciones(),
             Efecto::BuscarRapido => {
                 // Filtrar es el modo por defecto: es el que no mueve el
                 // listado bajo el cursor mientras se teclea.
@@ -3829,20 +4111,7 @@ impl Estado {
         // releva otra navegación del mismo hueco.
         self.hueco_mut().drenando = Some(token);
 
-        self.pedir_catalogo(&destino, backend, buzon);
-        let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
-        let dir = destino.clone();
-        let slot = self.activo();
-        let attrs = self.attrs_de(&destino);
-        tokio::spawn(async move {
-            let stream = backend.list(dir.clone(), attrs).await;
-            let res = Estado::primera_pagina(stream, slot, token, buzon.clone()).await;
-            // Si el actor ya no está, la respuesta no le importa a nadie.
-            let _ = buzon
-                .send(Mensaje::Listado(Box::new((token, slot, dir, res))))
-                .await;
-        });
+        self.pedir_listado(self.activo(), &destino, token, backend, buzon);
 
         let cambio = ViewChange::SlotState {
             slot_id: self.activo(),
@@ -4343,6 +4612,7 @@ impl Estado {
             settings: self.vista_ajustes(),
             extensions: self.vista_extensiones(),
             theme: self.vista_tema(),
+            layouts: self.vista_disposiciones(),
             picker: self.vista_selector(),
             viewer: self.vista_visor(),
             locale: self.locale.clone(),

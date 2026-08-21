@@ -86,6 +86,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     extensions: null,
     theme: null,
     picker: null,
+    layouts: null,
     viewer: null,
     locale: "es",
   };
@@ -101,6 +102,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
   const extensions = document.createElement("div");
   const theme = document.createElement("div");
   const picker = document.createElement("div");
+  const layouts = document.createElement("div");
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
   document.body.append(
@@ -112,6 +114,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     extensions,
     theme,
     picker,
+    layouts,
     viewer,
     dialogs,
   );
@@ -127,6 +130,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     extensions,
     theme,
     picker,
+    layouts,
     viewer,
     dialogs,
     catalogo(),
@@ -1382,5 +1386,75 @@ describe("la barra lateral de sitios", () => {
     // También sobre una cabecera: ahí activar es PLEGAR, y lo decide el host.
     (filas[2] as HTMLElement).click();
     expect(enviadas).toHaveLength(2);
+  });
+});
+
+describe("el selector de disposiciones", () => {
+  function conDisposiciones(cursor: number, problem = ""): ViewSnapshot {
+    const v = vista({});
+    v.layouts = {
+      title: "Disposiciones",
+      rows: [
+        {
+          name: "orthodox",
+          hostile: false,
+          factory: true,
+          shares_keymap_name: true,
+          broken: false,
+        },
+        {
+          name: "mia",
+          hostile: false,
+          factory: false,
+          shares_keymap_name: false,
+          broken: true,
+        },
+      ],
+      cursor,
+      preview: problem === "" ? ["··········", "·bbbbbbbb·"] : [],
+      problem,
+    };
+    return v;
+  }
+
+  it("avisa del nombre compartido y marca la que no parsea", () => {
+    const { screen } = montar();
+    screen.paint(conDisposiciones(0));
+    const filas = [...document.querySelectorAll(".layouts-row")];
+    expect(filas).toHaveLength(2);
+    // El aviso no es adorno: elegirla no cambia ninguna tecla.
+    expect(filas[0]?.querySelector(".layouts-warn")).not.toBeNull();
+    expect(filas[0]?.querySelector(".layouts-tag")?.textContent).toBe(
+      "layout-picker-factory",
+    );
+    expect(filas[1]?.getAttribute("data-broken")).toBe("true");
+    expect(filas[1]?.querySelector(".layouts-tag")).toBeNull();
+  });
+
+  it("la miniatura llega hecha y se pone tal cual", () => {
+    const { screen } = montar();
+    screen.paint(conDisposiciones(0));
+    const vista_previa = document.querySelector(".layouts-preview");
+    expect(vista_previa?.tagName).toBe("PRE");
+    expect(vista_previa?.textContent).toBe("··········\n·bbbbbbbb·");
+    // Es decorativa: lo que dice ya está en el nombre de la fila.
+    expect(vista_previa?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("una que no parsea enseña su motivo en vez de una miniatura", () => {
+    const { screen } = montar();
+    screen.paint(conDisposiciones(1, "no parsea: falta `kind`"));
+    expect(document.querySelector(".layouts-preview")).toBeNull();
+    expect(document.querySelector(".layouts-problem")?.textContent).toBe(
+      "no parsea: falta `kind`",
+    );
+  });
+
+  it("un click elige ESA disposición", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conDisposiciones(0));
+    const filas = [...document.querySelectorAll(".layouts-row")];
+    (filas[1] as HTMLElement).click();
+    expect(enviadas).toEqual([{ action: "layout_activate_row", row: 1 }]);
   });
 });

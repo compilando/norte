@@ -9,6 +9,21 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window can be reshaped, and pick another shape.** Bridge version
+  **15**: `layout.grow`/`shrink` resize the slot that has the FOCUS — which is
+  the only way to widen the sidebar, and the reason it is the focus and not
+  the active listing — and `layout.equalize` puts its weighted siblings back
+  on equal terms. `layout.pick` opens the picker: the five factory layouts
+  plus whatever is in `layouts/*.toml`, each with the *shape* it would produce
+  drawn by the same engine that lays out the real screen, so the preview
+  cannot lie about what comes next. A row whose name also names a keyboard
+  preset says so — choosing it changes no key, and without the line the
+  coincidence is a trap rather than a convenience — and one whose file does
+  not parse is offered with its reason instead of being dropped, but choosing
+  it changes nothing: swapping the screen for a broken file is worse than
+  doing nothing. The choice applies to this window and is not written to the
+  configuration; writing is mutating, and that is Phase 5.
+
 - **The places sidebar is a sidebar.** Bridge version **14**: the host's
   volumes with their space, and the user's favourites, each section foldable.
   Volumes are asked for at start-up and again when the drives section is

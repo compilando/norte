@@ -319,6 +319,31 @@
         }
       ]
     },
+    "layouts": {
+      "cursor": 0,
+      "preview": [
+        "··········",
+        "·bbbbbbbb·"
+      ],
+      "problem": "",
+      "rows": [
+        {
+          "broken": false,
+          "factory": true,
+          "hostile": false,
+          "name": "orthodox",
+          "shares_keymap_name": true
+        },
+        {
+          "broken": true,
+          "factory": false,
+          "hostile": false,
+          "name": "mia",
+          "shares_keymap_name": false
+        }
+      ],
+      "title": "Disposiciones"
+    },
     "locale": "es",
     "palette": {
       "cursor": 0,

@@ -166,6 +166,9 @@ export class Session {
       case "picker":
         s.picker = c.picker;
         return true;
+      case "layouts":
+        s.layouts = c.layouts;
+        return true;
       case "layout": {
         s.layout = { cells: c.cells, placements: c.placements };
         // El foco es de quien tenga el papel `active`, y lo dice el host.

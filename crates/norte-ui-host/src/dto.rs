@@ -45,6 +45,8 @@ pub struct ViewSnapshot {
     /// El tema, si se está mirando. Solo LECTURA: se ve qué colores tiene
     /// cada rol y qué efectos declara que este renderer no sabe pintar.
     pub theme: Option<ThemeView>,
+    /// El selector de disposiciones, si está abierto.
+    pub layouts: Option<LayoutPickerView>,
     /// Un selector abierto (conexiones o volúmenes), si lo hay.
     pub picker: Option<PickerView>,
     /// Las extensiones, si están abiertas. Solo LECTURA: se ve qué hay
@@ -685,6 +687,52 @@ pub enum PlaceRowView {
     },
 }
 
+/// El selector de disposiciones, con la vista previa de la elegida.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayoutPickerView {
+    /// Su título, ya traducido.
+    pub title: String,
+    /// Las filas: primero las cinco de fábrica, luego las del usuario.
+    pub rows: Vec<LayoutRowView>,
+    /// Cuál está elegida.
+    pub cursor: u64,
+    /// La FORMA de la disposición elegida, en caracteres: una línea por fila
+    /// de la miniatura, todas del mismo ancho.
+    ///
+    /// La pinta el host con el mismo motor que reparte la pantalla de verdad,
+    /// así que la vista previa no puede mentir sobre lo que va a salir.
+    pub preview: Vec<String>,
+    /// Por qué la elegida no tiene vista previa, ya traducido. Vacío cuando
+    /// sí la tiene.
+    pub problem: String,
+}
+
+/// Una disposición ofrecida.
+///
+/// Cuatro banderas y no un estado: cada una es un HECHO independiente —de
+/// fábrica, el nombre difiere del real, comparte nombre con un preset de
+/// teclado, su fichero no parsea— y juntarlas en un enum obligaría a
+/// inventar combinaciones que no existen.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayoutRowView {
+    /// Su nombre, ya saneado. El nombre REAL son bytes —acaba en
+    /// `layouts/<nombre>.toml`— y no viaja: para elegir una fila se manda su
+    /// índice, no su nombre.
+    pub name: String,
+    /// El texto de arriba DIFIERE del nombre real.
+    pub hostile: bool,
+    /// Es una de las de fábrica.
+    pub factory: bool,
+    /// Su nombre coincide con el de un preset de TECLADO, y elegirla no
+    /// cambia ni una tecla. Se avisa: sin la línea, la coincidencia es una
+    /// trampa en vez de una comodidad.
+    pub shares_keymap_name: bool,
+    /// Su fichero no parsea.
+    pub broken: bool,
+}
+
+/// Lo que el visor enseña.
 /// Lo que el visor enseña.
 /// Lo que el visor enseña.
 /// Lo que el visor enseña.
@@ -1147,6 +1195,11 @@ pub enum ViewChange {
     Theme {
         /// El tema, o `None` si se cerró.
         theme: Option<ThemeView>,
+    },
+    /// El selector de disposiciones se abrió, se movió o se cerró.
+    Layouts {
+        /// El selector, o `None` si se cerró.
+        layouts: Option<LayoutPickerView>,
     },
     /// Un selector se abrió, se movió o se cerró.
     Picker {

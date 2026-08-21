@@ -173,6 +173,10 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
         ),
         ("picker_select_row", UiAction::PickerSelectRow { row: 0 }),
         ("place_activate_row", UiAction::PlaceActivateRow { row: 1 }),
+        (
+            "layout_activate_row",
+            UiAction::LayoutActivateRow { row: 0 },
+        ),
         ("help_select_topic", UiAction::HelpSelectTopic { row: 3 }),
         ("help_activate", UiAction::HelpActivate { index: 1 }),
         ("resync", UiAction::Resync),
@@ -426,6 +430,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         settings: Some(ajustes_de_referencia()),
         extensions: Some(extensiones_de_referencia()),
         theme: Some(tema_de_referencia()),
+        layouts: Some(disposiciones_de_referencia()),
         picker: Some(selector_de_referencia()),
         viewer: Some(visor_de_referencia()),
         locale: "es".to_owned(),
@@ -448,6 +453,34 @@ fn tema_de_referencia() -> norte_ui_host::dto::ThemeView {
             },
         ],
         unsupported_effects: vec!["crt".to_owned()],
+    }
+}
+
+/// El selector de disposiciones de referencia: una de fábrica que comparte
+/// nombre con un preset de teclado, y una del usuario que no parsea.
+fn disposiciones_de_referencia() -> norte_ui_host::dto::LayoutPickerView {
+    use norte_ui_host::dto::{LayoutPickerView, LayoutRowView};
+    LayoutPickerView {
+        title: "Disposiciones".to_owned(),
+        rows: vec![
+            LayoutRowView {
+                name: "orthodox".to_owned(),
+                hostile: false,
+                factory: true,
+                shares_keymap_name: true,
+                broken: false,
+            },
+            LayoutRowView {
+                name: "mia".to_owned(),
+                hostile: false,
+                factory: false,
+                shares_keymap_name: false,
+                broken: true,
+            },
+        ],
+        cursor: 0,
+        preview: vec!["··········".to_owned(), "·bbbbbbbb·".to_owned()],
+        problem: String::new(),
     }
 }
 
@@ -816,10 +849,9 @@ fn cambios_del_listado() -> Vec<(&'static str, ViewChange)> {
     ]
 }
 
-/// Los que describen la PANTALLA: disposición, overlays y estado global.
-fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
+/// Los cambios que describen un OVERLAY: cada superficie que se abre encima.
+fn cambios_de_overlay() -> Vec<(&'static str, ViewChange)> {
     vec![
-        ("layout", ViewChange::Layout(disposicion_de_referencia())),
         (
             "settings",
             ViewChange::Settings {
@@ -845,11 +877,25 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
             },
         ),
         (
+            "layouts",
+            ViewChange::Layouts {
+                layouts: Some(disposiciones_de_referencia()),
+            },
+        ),
+        (
             "help",
             ViewChange::Help {
                 help: Some(ayuda_de_referencia()),
             },
         ),
+    ]
+}
+
+/// Los que describen la PANTALLA: disposición, overlays y estado global.
+fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
+    let mut casos = cambios_de_overlay();
+    casos.extend(vec![
+        ("layout", ViewChange::Layout(disposicion_de_referencia())),
         (
             "rows",
             ViewChange::Rows {
@@ -917,5 +963,6 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
                 tasks: vec![task_de_referencia()],
             },
         ),
-    ]
+    ]);
+    casos
 }

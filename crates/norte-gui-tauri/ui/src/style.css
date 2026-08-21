@@ -1268,3 +1268,109 @@ body {
 .places-broken {
   color: var(--error-fg);
 }
+
+/* --- El selector de disposiciones ------------------------------------- */
+
+#layouts[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+#layouts[data-open="false"] {
+  display: none;
+}
+
+.layouts {
+  width: min(90ch, 90vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0 12px 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  overflow: auto;
+}
+
+.layouts h1 {
+  margin-bottom: 2px;
+  padding-bottom: 4px;
+  font-size: 1.35em;
+  color: var(--title-fg);
+  border-bottom: 1px solid var(--border);
+}
+
+.layouts-body {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 16px;
+}
+
+.layouts-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  /* Sin esto, una fila larga ensancha su columna del grid en vez de
+     recortarse, y la miniatura de al lado se sale de la caja. Es la regla de
+     siempre: el mínimo de una pista de grid es su contenido. */
+  min-width: 0;
+}
+
+.layouts-row {
+  padding: 0 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  unicode-bidi: isolate;
+}
+
+.layouts-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.layouts-row[data-broken="true"] .layouts-name {
+  color: var(--error-fg);
+}
+
+.layouts-name {
+  unicode-bidi: isolate;
+}
+
+.layouts-name[data-hostile="true"] {
+  color: var(--hostile-fg);
+}
+
+.layouts-tag {
+  margin-left: 1ch;
+  opacity: 0.7;
+}
+
+/* El aviso del nombre de teclado NO es adorno: sin él, la coincidencia de
+   nombres es una trampa en vez de una comodidad. Va EN LÍNEA y corto: con
+   dos líneas por fila, la lista deja de poder recorrerse de un vistazo, y
+   este aviso hay que verlo ANTES de elegir — también al elegir con el ratón,
+   que no pasa por la selección. */
+.layouts-warn {
+  margin-left: 1ch;
+  color: var(--hostile-fg);
+}
+
+/* La miniatura la pinta el MISMO motor que reparte la pantalla de verdad:
+   aquí solo se pone en su sitio, con la rejilla intacta. */
+.layouts-preview {
+  margin: 0;
+  padding: 4px;
+  line-height: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.layouts-problem {
+  margin: 0;
+  color: var(--error-fg);
+}
