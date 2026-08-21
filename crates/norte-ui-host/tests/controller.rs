@@ -40,6 +40,7 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
         paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -257,6 +258,7 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
         paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -605,6 +607,7 @@ async fn el_contador_lo_resuelve_el_host() {
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
         paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -703,6 +706,7 @@ async fn host_con_layout(
         viewport,
         settings: norte_ui_host::ajustes_por_defecto(),
         paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -1597,6 +1601,7 @@ async fn el_catalogo_da_sentido_a_un_attr() {
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
         paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
         columns: columnas_de(&["name", "attr:posix.mode"]),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -2157,6 +2162,7 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
         viewport: (200, 60),
         settings: norte_ui_host::ajustes_por_defecto(),
         paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -2400,6 +2406,7 @@ async fn host_solo_lectura(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewS
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
         paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::SoloLectura,
     })
@@ -2810,6 +2817,7 @@ async fn el_id_de_una_columna_hostil_no_cruza_crudo() {
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
         paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
         columns: columnas_de(&["name", "plugin:acme.\u{202e}ftp/x"]),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -2887,6 +2895,7 @@ async fn una_disposicion_sin_listado_no_arranca() {
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
         paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -2932,6 +2941,7 @@ async fn las_columnas_de_otro_esquema_no_estan_muertas() {
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
         paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
         columns: norte_frontend::columns::ColumnsSettings::resolve(&cfg),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -3007,6 +3017,7 @@ prepend_keymap = [
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
         paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -4076,6 +4087,7 @@ async fn host_con_rutas(paths: norte_ui_host::settings::HostPaths) -> UiHost {
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
         paths,
+        theme: norte_ui_host::pickers::HostTheme::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -4504,4 +4516,238 @@ async fn con_el_gestor_abierto_el_listado_no_se_mueve() {
     let foto = siguiente_foto(&mut sub).await;
     assert_eq!(listado(&foto).cursor, antes);
     assert!(foto.extensions.is_some(), "y el gestor sigue abierto");
+}
+
+// ---------------------------------------------------------------------------
+// El tema y el selector de volúmenes (tarea 4.5).
+// ---------------------------------------------------------------------------
+
+/// Espera la siguiente actualización con el tema.
+async fn siguiente_tema(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> Option<norte_ui_host::dto::ThemeView> {
+    for _ in 0..20 {
+        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("una actualización antes del plazo")
+            .expect("el host sigue vivo");
+        if let Update::Message(m) = siguiente
+            && let UiUpdate::Patch(p) = &m.payload
+        {
+            for c in &p.changes {
+                if let norte_ui_host::dto::ViewChange::Theme { theme } = c {
+                    return theme.clone();
+                }
+            }
+        }
+    }
+    panic!("no llegó ninguna actualización con tema");
+}
+
+/// Espera la siguiente actualización con el selector.
+async fn siguiente_selector(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> Option<norte_ui_host::dto::PickerView> {
+    for _ in 0..20 {
+        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("una actualización antes del plazo")
+            .expect("el host sigue vivo");
+        if let Update::Message(m) = siguiente
+            && let UiUpdate::Patch(p) = &m.payload
+        {
+            for c in &p.changes {
+                if let norte_ui_host::dto::ViewChange::Picker { picker } = c {
+                    return picker.clone();
+                }
+            }
+        }
+    }
+    panic!("no llegó ninguna actualización con selector");
+}
+
+/// Un host con un tema dicho.
+async fn host_con_tema(theme: norte_ui_host::pickers::HostTheme) -> UiHost {
+    UiHost::start(UiHostOptions {
+        backend: arbol(),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca")
+    .0
+}
+
+/// `F9` enseña el tema rol a rol, y NOMBRA los efectos que esta ventana no
+/// sabe pintar: un tema retro que se ve idéntico se lee como roto.
+#[tokio::test]
+async fn el_tema_se_ve_por_dentro_y_dice_lo_que_no_pinta() {
+    let h = host_con_tema(norte_ui_host::pickers::HostTheme {
+        name: "retro".to_owned(),
+        roles: vec![
+            ("selection-bg".to_owned(), "#2d4f8a".to_owned()),
+            ("error-fg".to_owned(), "#f7768e".to_owned()),
+        ],
+        effects: vec!["crt".to_owned(), "scanlines".to_owned()],
+    })
+    .await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F9")).await.expect("host vivo");
+    let t = siguiente_tema(&mut sub).await.expect("abre");
+
+    assert_eq!(t.name, "retro");
+    assert_eq!(t.roles.len(), 2);
+    assert_eq!(t.roles[0].color, "#2d4f8a", "el color va como muestra");
+    assert_eq!(
+        t.unsupported_effects,
+        vec!["crt".to_owned(), "scanlines".to_owned()],
+        "los efectos se NOMBRAN, no se ignoran"
+    );
+
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    assert!(siguiente_tema(&mut sub).await.is_none(), "esc lo cierra");
+}
+
+/// Un tema sin efectos no inventa ninguno.
+#[tokio::test]
+async fn un_tema_sin_efectos_no_dice_nada_de_ellos() {
+    let h = host_con_tema(norte_ui_host::pickers::HostTheme {
+        name: "default".to_owned(),
+        roles: vec![("fg".to_owned(), "#d4d8de".to_owned())],
+        effects: Vec::new(),
+    })
+    .await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F9")).await.expect("host vivo");
+    let t = siguiente_tema(&mut sub).await.expect("abre");
+    assert!(t.unsupported_effects.is_empty());
+}
+
+/// Un volumen del host con lo que la vista mira.
+fn volumen(mount: &str, fs: &str, ro: bool) -> norte_proto::methods::Volume {
+    norte_proto::methods::Volume {
+        mount: norte_proto::VPath::parse(mount).expect("vpath"),
+        label: None,
+        fs_type: fs.to_owned(),
+        kind: norte_proto::methods::VolumeKind::Fixed,
+        total_bytes: Some(100 * 1024 * 1024 * 1024),
+        free_bytes: Some(12 * 1024 * 1024 * 1024),
+        read_only: ro,
+    }
+}
+
+/// El selector de volúmenes se abre PREGUNTANDO, y elegir uno navega el
+/// panel a su punto de montaje — que es lectura, y por eso sí se hace.
+#[tokio::test]
+async fn elegir_un_volumen_navega_el_panel() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    f.pon("mem:///otro", vec![(b"raiz.txt".to_vec(), false)]);
+    f.volumenes = vec![volumen("mem:///otro", "ext4", false)];
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    // `pane.select-drive` no lo ata el preset orthodox: se corre por la
+    // paleta, que es otra puerta al MISMO catálogo.
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "p".to_owned(),
+        ctrl: true,
+        alt: false,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+    let _ = siguiente_paleta(&mut sub).await.expect("la paleta abre");
+    for c in "select-drive".chars() {
+        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+    }
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+
+    let primero = siguiente_selector(&mut sub).await.expect("abre");
+    assert!(
+        !primero.empty.is_empty() || !primero.rows.is_empty(),
+        "o pregunta o trae filas, pero nunca se queda mudo"
+    );
+
+    let mut con_filas = None;
+    for _ in 0..20 {
+        let Some(v) = siguiente_selector(&mut sub).await else {
+            continue;
+        };
+        if !v.rows.is_empty() {
+            con_filas = Some(v);
+            break;
+        }
+    }
+    let v = con_filas.expect("la tabla de montaje llega");
+    assert_eq!(v.rows.len(), 1);
+    assert!(v.rows[0].detail.contains("ext4"), "{:?}", v.rows[0]);
+    assert!(
+        v.rows[0].detail.contains("12"),
+        "y cuánto queda: {:?}",
+        v.rows[0]
+    );
+
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(foto.picker.is_none(), "el selector se cierra");
+    assert!(
+        listado(&foto).path_display.contains("otro"),
+        "y el panel navegó al volumen: {}",
+        listado(&foto).path_display
+    );
+}
+
+/// Un espacio que el sistema no contestó se DICE; jamás se pinta un `0`, que
+/// se lee como «lleno» — lo contrario de «no lo sé».
+#[tokio::test]
+async fn un_volumen_sin_tamano_lo_dice() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    let mut v = volumen("mem:///otro", "nfs4", true);
+    v.total_bytes = None;
+    v.free_bytes = None;
+    f.volumenes = vec![v];
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "p".to_owned(),
+        ctrl: true,
+        alt: false,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+    let _ = siguiente_paleta(&mut sub).await.expect("la paleta abre");
+    for c in "select-drive".chars() {
+        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+    }
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+
+    for _ in 0..20 {
+        let Some(view) = siguiente_selector(&mut sub).await else {
+            continue;
+        };
+        if let Some(fila) = view.rows.first() {
+            assert!(!fila.detail.contains(" 0 "), "un cero se lee como lleno");
+            assert!(
+                fila.detail.contains("nfs4"),
+                "y sigue diciendo lo que sí sabe: {fila:?}"
+            );
+            return;
+        }
+    }
+    panic!("la tabla de montaje nunca llegó");
 }

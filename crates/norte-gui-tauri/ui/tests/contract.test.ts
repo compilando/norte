@@ -66,11 +66,13 @@ describe("el contrato con el host", () => {
       "help",
       "layout",
       "palette",
+      "picker",
       "rows",
       "settings",
       "slot_state",
       "status",
       "tasks",
+      "theme",
       "viewer",
       "which_key",
     ]);

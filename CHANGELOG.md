@@ -9,6 +9,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window shows the theme from the inside, and its volumes.** Bridge
+  version **12**: `F9` lists every semantic role with the colour it resolves
+  to — as a swatch, because `#2d4f8a` tells nobody anything until it is next
+  to the square it paints — and *names* the `effects` the theme declares that
+  this renderer cannot paint. Naming them is the point: a retro theme that
+  looks identical to every other reads as broken, and the user goes hunting a
+  bug that is not there. The volume picker asks the host for its mount table,
+  says so while it waits (which is not the same as "none"), and choosing one
+  navigates the pane to it — navigation is reading, so it is allowed. A size
+  the system did not answer is *said*, never painted as `0`, which reads as
+  "full" — the opposite of "unknown".
+
 - **The window shows what is installed and what it asked for.** Bridge version
   **11**: `F12` lists the extensions with their state told as the TWO
   independent facts it is — approved, and switched on — because one approved

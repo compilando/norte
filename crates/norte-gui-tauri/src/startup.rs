@@ -15,6 +15,7 @@ use norte_i18n::Lang;
 use norte_proto::VPath;
 use norte_proto::methods::ClientInfo;
 use norte_theme::Theme;
+use norte_ui_host::pickers::HostTheme;
 use norte_ui_host::settings::{ConfigLayer, HostPaths};
 use norte_ui_host::{UiHost, UiHostOptions, ViewSnapshot};
 
@@ -135,6 +136,33 @@ pub struct Boot {
     pub lang: Lang,
     /// El tema resuelto.
     pub theme: Theme,
+}
+
+/// El tema, para poder verlo por dentro desde la ventana.
+///
+/// Los roles salen de la MISMA correspondencia explícita que alimenta las
+/// variables CSS (`catalog::variables`), no de un volcado aparte: lo que la
+/// vista enseña es literalmente lo que pinta. Los efectos se nombran uno a
+/// uno como NO soportados, porque este renderer es una webview y no
+/// interpreta ninguno — y un tema retro que se ve idéntico se lee como roto.
+fn tema_visto(spec: Option<&str>, theme: &Theme) -> HostTheme {
+    HostTheme {
+        name: spec.unwrap_or("default").to_owned(),
+        roles: crate::catalog::variables(theme).into_iter().collect(),
+        effects: efectos_declarados(theme),
+    }
+}
+
+/// Los nombres de los efectos que el tema declara.
+///
+/// El bloque `[effects]` es libre a propósito (ADR 0036): cada renderer lo
+/// interpreta. Aquí solo se enumeran sus claves de primer nivel, que es lo
+/// que hace falta para decir cuáles no se pintan.
+fn efectos_declarados(theme: &Theme) -> Vec<String> {
+    // `Theme::effects` es un `toml::Value` y este crate no depende de `toml`
+    // (ni tiene por qué: no parsea configuración). Se pregunta por la forma
+    // a través del tipo que ya tiene delante.
+    theme.effect_names().unwrap_or_default()
 }
 
 /// Dónde vive cada cosa, para la vista de diagnóstico de los ajustes.
@@ -303,6 +331,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         effects: EFECTOS,
         settings: cfg.clone(),
         paths: rutas(&capas_vistas, &socket),
+        theme: tema_visto(cfg.common.ui_theme.as_deref(), &theme),
     })
     .await?;
     Ok(Boot {

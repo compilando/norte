@@ -34,6 +34,8 @@ pub mod dto;
 mod extensions;
 mod help;
 pub mod keys;
+/// El tema y los selectores de conexión y volumen, en solo lectura.
+pub mod pickers;
 pub mod settings;
 
 pub use action::UiAction;

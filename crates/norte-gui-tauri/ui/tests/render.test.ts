@@ -84,6 +84,8 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     help: null,
     settings: null,
     extensions: null,
+    theme: null,
+    picker: null,
     viewer: null,
     locale: "es",
   };
@@ -97,6 +99,8 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
   const help = document.createElement("div");
   const settings = document.createElement("div");
   const extensions = document.createElement("div");
+  const theme = document.createElement("div");
+  const picker = document.createElement("div");
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
   document.body.append(
@@ -106,6 +110,8 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     help,
     settings,
     extensions,
+    theme,
+    picker,
     viewer,
     dialogs,
   );
@@ -119,6 +125,8 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     help,
     settings,
     extensions,
+    theme,
+    picker,
     viewer,
     dialogs,
     catalogo(),
@@ -1127,5 +1135,87 @@ describe("el gestor de extensiones", () => {
     const { screen } = montar();
     screen.paint(vista({}));
     expect(document.querySelector(".extensions")).toBeNull();
+  });
+});
+
+describe("el tema y el selector", () => {
+  it("cada rol se ve, no solo se lee su hex", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.theme = {
+      name: "retro",
+      roles: [
+        { role: "selection-bg", color: "#2d4f8a" },
+        { role: "error-fg", color: "#f7768e" },
+      ],
+      unsupported_effects: ["crt", "scanlines"],
+    };
+    screen.paint(v);
+    const filas = [...document.querySelectorAll(".theme-role")];
+    expect(filas).toHaveLength(2);
+    const muestra = filas[0]?.querySelector(".theme-swatch") as HTMLElement;
+    // La muestra ES el dato: un `#2d4f8a` no dice nada hasta que se ve.
+    expect(muestra.style.backgroundColor).not.toBe("");
+    expect(filas[0]?.querySelector(".theme-role-hex")?.textContent).toBe("#2d4f8a");
+    // Y los efectos que esta ventana no pinta se NOMBRAN.
+    const aviso = document.querySelector(".theme-effects");
+    expect(aviso?.getAttribute("role")).toBe("note");
+    expect(aviso?.textContent).toContain("crt");
+    expect(aviso?.textContent).toContain("scanlines");
+  });
+
+  it("un tema sin efectos no pinta el aviso", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.theme = {
+      name: "default",
+      roles: [{ role: "fg", color: "#d4d8de" }],
+      unsupported_effects: [],
+    };
+    screen.paint(v);
+    expect(document.querySelector(".theme-effects")).toBeNull();
+  });
+
+  it("el selector marca un montaje hostil y dice por qué está vacío", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    v.picker = {
+      title: "Volúmenes",
+      rows: [
+        { label: "⟨file⟩/", hostile: false, detail: "ext4 · 12 GiB libres de 100 GiB" },
+        { label: "⟨file⟩/mnt/ro�to", hostile: true, detail: "ntfs · solo lectura" },
+      ],
+      cursor: 1,
+      empty: "",
+    };
+    screen.paint(v);
+    const filas = [...document.querySelectorAll(".picker-row")];
+    expect(filas).toHaveLength(2);
+    expect(filas[1]?.querySelector(".picker-label")?.getAttribute("data-hostile")).toBe(
+      "true",
+    );
+    const lista = document.querySelector(".picker-rows") as HTMLElement;
+    expect(lista.getAttribute("aria-activedescendant")).toBe("picker-row-1");
+    (filas[0] as HTMLElement).click();
+    expect(enviadas).toEqual([{ action: "picker_select_row", row: 0 }]);
+
+    const vacio = vista({});
+    vacio.picker = {
+      title: "Volúmenes",
+      rows: [],
+      cursor: null,
+      empty: "preguntando al host…",
+    };
+    screen.paint(vacio);
+    const nota = document.querySelector(".picker-empty");
+    expect(nota?.getAttribute("role")).toBe("status");
+    expect(nota?.textContent).toBe("preguntando al host…");
+  });
+
+  it("cerrados, no tapan nada", () => {
+    const { screen } = montar();
+    screen.paint(vista({}));
+    expect(document.querySelector(".theme")).toBeNull();
+    expect(document.querySelector(".picker")).toBeNull();
   });
 });

@@ -333,6 +333,18 @@
       ],
       "total": 42
     },
+    "picker": {
+      "cursor": 0,
+      "empty": "",
+      "rows": [
+        {
+          "detail": "ext4 · 12 GiB libres de 100 GiB",
+          "hostile": false,
+          "label": "⟨file⟩/"
+        }
+      ],
+      "title": "Volúmenes"
+    },
     "settings": {
       "cursor": 0,
       "read_only": true,
@@ -458,6 +470,22 @@
         "task_id": 7
       }
     ],
+    "theme": {
+      "name": "tokyonight",
+      "roles": [
+        {
+          "color": "#2d4f8a",
+          "role": "selection-bg"
+        },
+        {
+          "color": "#f7768e",
+          "role": "error-fg"
+        }
+      ],
+      "unsupported_effects": [
+        "crt"
+      ]
+    },
     "update": "snapshot",
     "viewer": {
       "encoding": "UTF-8",

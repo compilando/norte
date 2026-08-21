@@ -64,6 +64,10 @@
     "action": "parent",
     "slot_id": 1
   },
+  "picker_select_row": {
+    "action": "picker_select_row",
+    "row": 0
+  },
   "resync": {
     "action": "resync"
   },

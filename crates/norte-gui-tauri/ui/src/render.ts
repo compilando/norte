@@ -26,7 +26,9 @@ import type {
   HelpView,
   PaletteView,
   ExtensionsView,
+  PickerView,
   SettingsView,
+  ThemeView,
   ViewerView,
   WhichKeyView,
 } from "./types";
@@ -83,6 +85,8 @@ export class Screen {
     private readonly helpRoot: HTMLElement,
     private readonly settingsRoot: HTMLElement,
     private readonly extensionsRoot: HTMLElement,
+    private readonly themeRoot: HTMLElement,
+    private readonly pickerRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
     private readonly catalog: HostCatalog,
@@ -135,6 +139,8 @@ export class Screen {
     this.paintHelp(view.help);
     this.paintSettings(view.settings);
     this.paintExtensions(view.extensions);
+    this.paintTheme(view.theme);
+    this.paintPicker(view.picker);
     this.paintViewer(view.viewer);
     this.paintDialogs(view.dialogs);
   }
@@ -869,6 +875,126 @@ export class Screen {
     tabla.append(tbody);
     ficha.append(tabla);
     return ficha;
+  }
+
+  /**
+   * El tema por dentro (F9).
+   *
+   * Cada rol con su color como MUESTRA, no como texto: un `#2d4f8a` no le
+   * dice nada a nadie hasta que se ve al lado del cuadrado que pinta.
+   */
+  private paintTheme(theme: ThemeView | null): void {
+    if (theme === null) {
+      this.themeRoot.replaceChildren();
+      this.themeRoot.dataset["open"] = "false";
+      return;
+    }
+    this.themeRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "theme";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", this.t("theme-title"));
+
+    const titulo = document.createElement("h1");
+    titulo.textContent = `${this.t("theme-title")} · ${theme.name}`;
+    caja.append(titulo);
+
+    if (theme.unsupported_effects.length > 0) {
+      // Se NOMBRAN. Un tema retro que se ve idéntico a los demás se lee como
+      // roto, y el usuario va a buscar el bug donde no está.
+      const aviso = document.createElement("p");
+      aviso.className = "theme-effects";
+      aviso.setAttribute("role", "note");
+      aviso.textContent = `${this.t("theme-effects-unsupported")} ${theme.unsupported_effects.join(" · ")}`;
+      caja.append(aviso);
+    }
+
+    const sub = document.createElement("h2");
+    sub.textContent = this.t("theme-roles");
+    caja.append(sub);
+
+    const lista = document.createElement("ul");
+    lista.className = "theme-roles";
+    for (const r of theme.roles) {
+      const fila = document.createElement("li");
+      fila.className = "theme-role";
+      const muestra = document.createElement("span");
+      muestra.className = "theme-swatch";
+      // Por CSSOM y no por atributo `style`: la CSP lo bloquea.
+      muestra.style.setProperty("background-color", r.color);
+      const nombre = document.createElement("span");
+      nombre.className = "theme-role-name";
+      nombre.textContent = r.role;
+      const hex = document.createElement("span");
+      hex.className = "theme-role-hex";
+      hex.textContent = r.color;
+      fila.append(muestra, nombre, hex);
+      lista.append(fila);
+    }
+    caja.append(lista);
+    this.themeRoot.replaceChildren(caja);
+  }
+
+  /** El selector de volúmenes. */
+  private paintPicker(picker: PickerView | null): void {
+    if (picker === null) {
+      this.pickerRoot.replaceChildren();
+      this.pickerRoot.dataset["open"] = "false";
+      return;
+    }
+    this.pickerRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "picker";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", picker.title);
+
+    const titulo = document.createElement("h1");
+    titulo.textContent = picker.title;
+    caja.append(titulo);
+
+    if (picker.empty !== "") {
+      // La frase la escribe el host: distingue «todavía preguntando» de «no
+      // hay ninguno», que es la distinción que una lista vacía se come.
+      const vacio = document.createElement("p");
+      vacio.className = "picker-empty";
+      vacio.setAttribute("role", "status");
+      vacio.textContent = picker.empty;
+      caja.append(vacio);
+    }
+
+    const lista = document.createElement("ul");
+    lista.className = "picker-rows";
+    lista.setAttribute("role", "listbox");
+    for (const [i, r] of picker.rows.entries()) {
+      const fila = document.createElement("li");
+      fila.className = "picker-row";
+      fila.id = `picker-row-${String(i)}`;
+      fila.setAttribute("role", "option");
+      fila.setAttribute("aria-selected", String(picker.cursor === i));
+      fila.addEventListener("click", () => {
+        this.send({ action: "picker_select_row", row: i });
+      });
+      const label = document.createElement("span");
+      label.className = "picker-label";
+      label.dataset["hostile"] = String(r.hostile);
+      label.textContent = r.label;
+      if (r.hostile) {
+        label.append(badge(this.t("hostile-name")));
+      }
+      const detalle = document.createElement("span");
+      detalle.className = "picker-detail";
+      detalle.textContent = r.detail;
+      fila.append(label, detalle);
+      lista.append(fila);
+    }
+    if (picker.cursor !== null) {
+      lista.setAttribute("aria-activedescendant", `picker-row-${String(picker.cursor)}`);
+      revelar(lista.querySelector(`#picker-row-${String(picker.cursor)}`) ?? undefined);
+    }
+    caja.append(lista);
+    this.pickerRoot.replaceChildren(caja);
   }
 
   /** El `<li>` de una fila de ajustes, con su cursor y su click. */

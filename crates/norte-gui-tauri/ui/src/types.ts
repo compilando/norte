@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 11;
+export const BRIDGE_VERSION = 12;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -298,6 +298,30 @@ export interface ExtensionsView {
   errors: ExtensionErrorView[];
 }
 
+export interface ThemeRoleView {
+  role: string;
+  color: string;
+}
+
+export interface ThemeView {
+  name: string;
+  roles: ThemeRoleView[];
+  unsupported_effects: string[];
+}
+
+export interface PickerRowView {
+  label: string;
+  hostile: boolean;
+  detail: string;
+}
+
+export interface PickerView {
+  title: string;
+  rows: PickerRowView[];
+  cursor: number | null;
+  empty: string;
+}
+
 export interface ViewSnapshot {
   connection: ConnectionView;
   layout: LayoutView;
@@ -311,6 +335,8 @@ export interface ViewSnapshot {
   help: HelpView | null;
   settings: SettingsView | null;
   extensions: ExtensionsView | null;
+  theme: ThemeView | null;
+  picker: PickerView | null;
   viewer: ViewerView | null;
   locale: string;
 }
@@ -336,7 +362,9 @@ export type ViewChange =
   | { change: "palette"; palette: PaletteView | null }
   | { change: "help"; help: HelpView | null }
   | { change: "settings"; settings: SettingsView | null }
-  | { change: "extensions"; extensions: ExtensionsView | null };
+  | { change: "extensions"; extensions: ExtensionsView | null }
+  | { change: "theme"; theme: ThemeView | null }
+  | { change: "picker"; picker: PickerView | null };
 
 export interface ViewPatch {
   base_sequence: number;
@@ -389,6 +417,7 @@ export type UiAction =
   | { action: "help_activate"; index: number }
   | { action: "settings_select_row"; row: number }
   | { action: "extension_select_row"; row: number }
+  | { action: "picker_select_row"; row: number }
   | { action: "resync" };
 
 export type StaleReason = "instance" | "generation" | "modal";

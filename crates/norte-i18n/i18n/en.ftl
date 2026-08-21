@@ -550,6 +550,20 @@ ext-config-none = This extension declares no settings.
 ext-config-range = between {$min} and {$max}
 ext-config-min = at least {$min}
 ext-config-max = at most {$max}
+# Task 4.5: the two list pickers and the theme view of the graphical
+# window. The connections picker is NOT here: reading connections.toml
+# means pulling the connection crate — russh, opendal, suppaftp, age, the
+# keyring — into this window for a list it cannot act on yet. A theme's
+# `effects` are interpreted per renderer: the ones this one cannot paint
+# are NAMED, because a retro theme that looks identical reads as broken.
+picker-volumes-title = Volumes
+picker-volumes-loading = asking the host for its mount table…
+picker-volumes-empty = the host reported no volumes
+picker-volume-space = {$free} free of {$total}
+picker-volume-read-only = read-only
+theme-title = Theme
+theme-roles = What each role is painted with
+theme-effects-unsupported = This theme declares effects that this window does not paint:
 history-title = History
 history-empty = no history yet
 hotlist-title = Favorites

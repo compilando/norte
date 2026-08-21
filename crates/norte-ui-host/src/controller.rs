@@ -150,6 +150,8 @@ pub struct UiHostOptions {
     pub settings: norte_frontend::config::FrontendConfig,
     /// Dónde vive cada cosa, ya resuelto. Ver [`crate::settings::HostPaths`].
     pub paths: crate::settings::HostPaths,
+    /// El tema activo, ya resuelto a pares rol → color por quien arranca.
+    pub theme: crate::pickers::HostTheme,
     /// La configuración de columnas ENTERA, no una lista ya resuelta.
     ///
     /// Las columnas se configuran POR ESQUEMA (`[ui.columns.schemes.sftp]`),
@@ -227,32 +229,15 @@ enum Mensaje {
     Aprobacion(Box<norte_proto::methods::PolicyApprovalRequired>),
     /// Más entradas del listado que se está drenando por detrás.
     MasEntradas(Box<(RequestToken, u32, Vec<Entry>)>),
-    /// El catálogo de plugins que la ayuda pidió al abrirse.
+    /// Lo que contestó una petición que se lanzó para un OVERLAY.
     ///
-    /// Vuelve al actor como un mensaje más —un solo escritor— y llega tarde
-    /// a propósito: la ayuda se PINTA sin esperarlo. La documentación es
-    /// cosmética, y una ventana que se queda en blanco hasta que el daemon
-    /// conteste es peor que una lateral que gana filas medio segundo después.
-    Plugins(Box<Result<norte_proto::methods::PluginListResult, Error>>),
-    /// El catálogo de extensiones que pidió el GESTOR.
-    ///
-    /// Aparte del de la ayuda: son dos superficies con dos vidas, y compartir
-    /// un mensaje obligaría a cada una a comprobar si la otra sigue abierta.
-    Extensiones(Box<Result<norte_proto::methods::PluginListResult, Error>>),
-    /// El esquema `[config]` de UNA extensión, pedido al abrir su ficha.
-    FichaDePlugin(
-        Box<(
-            String,
-            Result<norte_proto::methods::PluginGetConfigResult, Error>,
-        )>,
-    ),
-    /// La página de UN plugin, pedida bajo demanda al abrirla.
-    PaginaDePlugin(
-        Box<(
-            String,
-            Result<norte_proto::methods::PluginHelpResult, Error>,
-        )>,
-    ),
+    /// Las cinco viajan juntas porque son la misma historia: una superficie
+    /// se abrió SIN esperar —la documentación y la tabla de montaje son
+    /// cosméticas, y una ventana en blanco hasta que el daemon conteste es
+    /// peor que una lista que gana filas medio segundo después—, y esto es
+    /// la respuesta llegando tarde. Cada una comprueba que su superficie
+    /// siga abierta antes de tocar nada.
+    Fondo(Box<Fondo>),
     /// El contenido que el visor pidió.
     Contenido(Box<(RequestToken, VPath, Result<Vec<u8>, Error>)>),
     /// Lo que un sondeo averiguó de unas cuantas entradas (tamaño y fecha de
@@ -279,6 +264,34 @@ enum Mensaje {
     /// lo que garantiza que un estado terminal no se adelante ni se pierda.
     Progreso(Box<norte_proto::TaskProgress>),
     Apagar(oneshot::Sender<ShutdownReport>),
+}
+
+/// La respuesta de una petición de fondo, por superficie.
+///
+/// Un enum aparte y no cinco variantes de [`Mensaje`]: el actor es un
+/// reparto, y cinco brazos que hacen lo mismo —comprobar que su superficie
+/// siga abierta y devolver parches— son un brazo con cinco casos.
+enum Fondo {
+    /// El catálogo de plugins que pidió la AYUDA, para su lateral.
+    PluginsDeAyuda(Result<norte_proto::methods::PluginListResult, Error>),
+    /// La página de un plugin, pedida al abrirla en la ayuda.
+    PaginaDePlugin(
+        String,
+        Result<norte_proto::methods::PluginHelpResult, Error>,
+    ),
+    /// El catálogo que pidió el GESTOR de extensiones.
+    ///
+    /// Aparte del de la ayuda: son dos superficies con dos vidas, y
+    /// compartir la respuesta obligaría a cada una a comprobar si la otra
+    /// sigue abierta.
+    Catalogo(Result<norte_proto::methods::PluginListResult, Error>),
+    /// El esquema `[config]` de una extensión, pedido al abrir su ficha.
+    FichaDePlugin(
+        String,
+        Result<norte_proto::methods::PluginGetConfigResult, Error>,
+    ),
+    /// Los volúmenes del host, pedidos al abrir su selector.
+    Volumenes(Result<Vec<norte_proto::methods::Volume>, Error>),
 }
 
 impl UiHost {
@@ -475,25 +488,8 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Plugins(res) => {
-                for u in estado.aplicar_catalogo_de_plugins(*res, &backend, &buzon) {
-                    let _ = updates.send(u);
-                }
-            }
-            Mensaje::Extensiones(res) => {
-                for u in estado.aplicar_catalogo_de_extensiones(*res, &backend, &buzon) {
-                    let _ = updates.send(u);
-                }
-            }
-            Mensaje::FichaDePlugin(datos) => {
-                let (id, res) = *datos;
-                if let Some(u) = estado.aplicar_ficha(&id, res.as_ref().ok()) {
-                    let _ = updates.send(u);
-                }
-            }
-            Mensaje::PaginaDePlugin(datos) => {
-                let (id, res) = *datos;
-                if let Some(u) = estado.aplicar_pagina_de_plugin(&id, res.as_ref().ok()) {
+            Mensaje::Fondo(f) => {
+                for u in estado.aplicar_de_fondo(*f, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
@@ -723,6 +719,12 @@ struct Estado {
     ajustes: Option<crate::settings::Ajustes>,
     /// El gestor de extensiones, si está abierto.
     extensiones: Option<crate::extensions::Extensiones>,
+    /// El tema, tal como lo resolvió el arranque.
+    tema: crate::pickers::HostTheme,
+    /// Se está mirando el tema por dentro.
+    mirando_tema: bool,
+    /// El selector abierto, si lo hay.
+    selector: Option<crate::pickers::Selector>,
     /// La ayuda, si está abierta. Tapa la pantalla y se queda las teclas,
     /// como el visor: sus teclas son FIJAS (no hay vocabulario `dialog.*`
     /// para «filtrar esta lista» ni para «seguir este enlace»), que es lo
@@ -844,6 +846,7 @@ impl Estado {
             effects: efectos,
             settings,
             paths,
+            theme,
         } = options;
         let dir = &initial_dir;
         // El idioma negociado, para las etiquetas de las continuaciones.
@@ -893,6 +896,9 @@ impl Estado {
             ayuda: None,
             ajustes: None,
             extensiones: None,
+            tema: theme,
+            mirando_tema: false,
+            selector: None,
             config: settings,
             paths,
             efectivo_visor: keymap_visor.clone(),
@@ -1230,6 +1236,7 @@ impl Estado {
             UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row, backend, buzon),
             UiAction::SettingsSelectRow { row } => self.elegir_ajuste(*row),
             UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
+            UiAction::PickerSelectRow { row } => self.elegir_fila_del_selector(*row),
             UiAction::HelpActivate { index } => self.activar_en_ayuda(*index, backend, buzon),
         }
     }
@@ -1256,6 +1263,12 @@ impl Estado {
         // recibía ni una tecla y que ninguna podía cerrar.
         if self.ayuda.is_some() {
             return Some(self.tecla_en_ayuda(k, backend, buzon));
+        }
+        if self.selector.is_some() {
+            return Some(self.tecla_en_selector(k, backend, buzon));
+        }
+        if self.mirando_tema {
+            return Some(self.tecla_en_tema(k));
         }
         if self.extensiones.is_some() {
             return Some(self.tecla_en_extensiones(k, backend, buzon));
@@ -1522,6 +1535,151 @@ impl Estado {
         Some(u)
     }
 
+    /// Enseña el tema activo por dentro.
+    fn abrir_tema(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.mirando_tema = true;
+        let cambio = ViewChange::Theme {
+            theme: self.vista_tema(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// La proyección del tema.
+    fn vista_tema(&self) -> Option<crate::dto::ThemeView> {
+        self.mirando_tema.then(|| self.tema.vista())
+    }
+
+    /// Abre el selector de volúmenes y PIDE la tabla de montaje.
+    ///
+    /// Igual que el catálogo de extensiones: se abre diciendo que está
+    /// preguntando, no esperando.
+    fn abrir_volumenes(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.selector = Some(crate::pickers::Selector::volumenes());
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.volumes()).await {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::Volumenes(res))))
+                .await;
+        });
+        let cambio = ViewChange::Picker {
+            picker: self.vista_selector(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// La tabla de montaje llegó.
+    ///
+    /// Un fallo se aplica igual: deja de estar preguntando con la lista
+    /// vacía, que ya sabe decirse. Y si el selector se cerró mientras volaba,
+    /// no hay nada que hacer.
+    fn aplicar_volumenes(
+        &mut self,
+        res: Result<Vec<norte_proto::methods::Volume>, Error>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        let lang = self.lang;
+        let s = self.selector.as_mut()?;
+        s.set_volumenes(&res.unwrap_or_default(), lang);
+        let cambio = ViewChange::Picker {
+            picker: self.vista_selector(),
+        };
+        Some(self.parche(vec![cambio]))
+    }
+
+    /// La proyección del selector.
+    fn vista_selector(&self) -> Option<crate::dto::PickerView> {
+        Some(self.selector.as_ref()?.vista(self.lang))
+    }
+
+    /// Las teclas mientras se mira el tema. Solo se cierra.
+    fn tecla_en_tema(
+        &mut self,
+        k: &crate::keys::KeyInput,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if !matches!(k.key.as_str(), "Escape" | "esc") {
+            return (self.aplicada(), Vec::new());
+        }
+        self.mirando_tema = false;
+        let cambio = ViewChange::Theme { theme: None };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Las teclas mientras un selector está abierto.
+    fn tecla_en_selector(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        /// Cuántas filas mueve una página.
+        const PAGINA: i64 = 10;
+        let Some(s) = self.selector.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match k.key.as_str() {
+            "Escape" | "esc" => self.selector = None,
+            "ArrowDown" | "down" => s.mover(1),
+            "ArrowUp" | "up" => s.mover(-1),
+            "PageDown" | "pgdn" => s.mover(PAGINA),
+            "PageUp" | "pgup" => s.mover(-PAGINA),
+            "Home" | "home" => s.mover(i64::MIN / 2),
+            "End" | "end" => s.mover(i64::MAX / 2),
+            "Enter" | "enter" => return self.elegir_del_selector(backend, buzon),
+            _ => return (self.aplicada(), Vec::new()),
+        }
+        let cambio = ViewChange::Picker {
+            picker: self.vista_selector(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Elegir del selector: navegar al volumen.
+    ///
+    /// Navegar es LECTURA, así que el volumen sí se abre — al contrario que
+    /// una conexión, que esta ventana ni enumera todavía.
+    ///
+    /// El cierre viaja en su PROPIO parche y antes de la navegación, como el
+    /// de la paleta y por lo mismo: un renderer que aplica parches se
+    /// quedaría el selector pintado encima del listado nuevo.
+    fn elegir_del_selector(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(s) = self.selector.as_ref() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let Some(destino) = s.elegir() else {
+            // Sin filas todavía (o la tabla llegó vacía): no hay a dónde ir.
+            return (self.aplicada(), Vec::new());
+        };
+        self.selector = None;
+        let cierre = self.parche(vec![ViewChange::Picker { picker: None }]);
+        let mut envios = vec![cierre];
+        envios.extend(self.navegar(&destino, Trail::Record, backend, buzon));
+        (self.aplicada(), envios)
+    }
+
+    /// Un click en una fila del selector: la elige.
+    fn elegir_fila_del_selector(&mut self, row: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(s) = self.selector.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        s.senalar(row as usize);
+        let cambio = ViewChange::Picker {
+            picker: self.vista_selector(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
     /// Abre el gestor de extensiones y PIDE el catálogo.
     ///
     /// Se abre vacío y diciendo que está cargando, no esperando: una ventana
@@ -1542,12 +1700,40 @@ impl Estado {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon.send(Mensaje::Extensiones(Box::new(res))).await;
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::Catalogo(res))))
+                .await;
         });
         let cambio = ViewChange::Extensions {
             extensions: self.vista_extensiones(),
         };
         (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Reparte una respuesta de fondo a la superficie que la pidió.
+    ///
+    /// UN sitio para las cinco: todas comprueban lo mismo —que su superficie
+    /// siga abierta— y todas contestan lo mismo: los parches que haya que
+    /// mandar, o ninguno.
+    fn aplicar_de_fondo(
+        &mut self,
+        f: Fondo,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        match f {
+            Fondo::PluginsDeAyuda(res) => self.aplicar_catalogo_de_plugins(res, backend, buzon),
+            Fondo::PaginaDePlugin(id, res) => self
+                .aplicar_pagina_de_plugin(&id, res.as_ref().ok())
+                .into_iter()
+                .collect(),
+            Fondo::Catalogo(res) => self.aplicar_catalogo_de_extensiones(res, backend, buzon),
+            Fondo::FichaDePlugin(id, res) => self
+                .aplicar_ficha(&id, res.as_ref().ok())
+                .into_iter()
+                .collect(),
+            Fondo::Volumenes(res) => self.aplicar_volumenes(res).into_iter().collect(),
+        }
     }
 
     /// El catálogo llegó al gestor.
@@ -1600,7 +1786,7 @@ impl Estado {
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
             let _ = buzon
-                .send(Mensaje::FichaDePlugin(Box::new((id, res))))
+                .send(Mensaje::Fondo(Box::new(Fondo::FichaDePlugin(id, res))))
                 .await;
         });
         (self.aplicada(), Vec::new())
@@ -1806,7 +1992,9 @@ impl Estado {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon.send(Mensaje::Plugins(Box::new(res))).await;
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::PluginsDeAyuda(res))))
+                .await;
         });
         let cambio = ViewChange::Help {
             help: self.vista_ayuda(),
@@ -1904,7 +2092,7 @@ impl Estado {
                     Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
                 };
             let _ = buzon
-                .send(Mensaje::PaginaDePlugin(Box::new((id, res))))
+                .send(Mensaje::Fondo(Box::new(Fondo::PaginaDePlugin(id, res))))
                 .await;
         });
     }
@@ -2519,6 +2707,8 @@ impl Estado {
             Efecto::Ayuda => self.abrir_ayuda(backend, buzon),
             Efecto::Ajustes => self.abrir_ajustes(),
             Efecto::Extensiones => self.abrir_extensiones(backend, buzon),
+            Efecto::Tema => self.abrir_tema(),
+            Efecto::Volumenes => self.abrir_volumenes(backend, buzon),
             Efecto::Ver => self.pedir_visor(backend, buzon),
             Efecto::CrearDirectorio => self.pedir_mkdir(),
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
@@ -3650,6 +3840,8 @@ impl Estado {
             help: self.vista_ayuda(),
             settings: self.vista_ajustes(),
             extensions: self.vista_extensiones(),
+            theme: self.vista_tema(),
+            picker: self.vista_selector(),
             viewer: self.vista_visor(),
             locale: self.locale.clone(),
         }

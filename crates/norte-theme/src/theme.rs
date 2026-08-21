@@ -75,4 +75,30 @@ impl Theme {
     pub fn has_effects(&self) -> bool {
         self.effects.is_some()
     }
+
+    /// Los nombres de los efectos declarados, si el bloque es una tabla.
+    ///
+    /// El bloque `[effects]` es LIBRE a propósito (ADR 0036): lo interpreta
+    /// cada renderer, y este crate no sabe qué significa ninguno. Lo que sí
+    /// puede decir es cómo se llaman, que es lo que un frontend necesita para
+    /// enumerar los que NO sabe pintar — un tema retro que se ve idéntico se
+    /// lee como roto, así que la degradación tiene que ser visible.
+    ///
+    /// `None` = no hay bloque, o no es una tabla. Las dos son «no hay nada
+    /// que nombrar» y no se distinguen a propósito: un `[effects]` que no es
+    /// una tabla es un tema mal escrito, no una lista vacía de efectos.
+    ///
+    /// ```
+    /// use norte_theme::Theme;
+    ///
+    /// let t = Theme::preset_default();
+    /// assert!(t.effect_names().is_none(), "el tema por defecto no declara efectos");
+    /// ```
+    #[must_use]
+    pub fn effect_names(&self) -> Option<Vec<String>> {
+        match self.effects.as_ref()? {
+            toml::Value::Table(t) => Some(t.keys().cloned().collect()),
+            _ => None,
+        }
+    }
 }

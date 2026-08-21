@@ -53,6 +53,8 @@ pub struct Falso {
     /// El `help.md` de cada extensión, por id. Un id ausente contesta como
     /// un daemon que no tiene la página: markdown vacío.
     pub paginas: HashMap<String, String>,
+    /// Los volúmenes que contesta `host.volumes`.
+    pub volumenes: Vec<norte_proto::methods::Volume>,
     /// Directorios de plugin que no cargaron: `(dir, motivo)`.
     pub errores_de_carga: Vec<(String, String)>,
     /// El esquema `[config]` de cada extensión, por id.
@@ -200,6 +202,11 @@ impl HostBackend for Falso {
                 lossy: false,
             })
         })
+    }
+
+    fn volumes(&self) -> BoxFuture<'static, Result<Vec<norte_proto::methods::Volume>, Error>> {
+        let vols = self.volumenes.clone();
+        Box::pin(async move { Ok(vols) })
     }
 
     fn plugin_config(

@@ -753,7 +753,7 @@ body {
   height: min(80vh, 100%);
   display: flex;
   flex-direction: column;
-  padding: 0 12px;
+  padding: 0 12px 8px;
   background: var(--panel-bg);
   border: 1px solid var(--border-focus);
   overflow: hidden;
@@ -857,7 +857,7 @@ body {
   height: min(80vh, 100%);
   display: flex;
   flex-direction: column;
-  padding: 0 12px;
+  padding: 0 12px 8px;
   background: var(--panel-bg);
   border: 1px solid var(--border-focus);
   overflow: auto;
@@ -1017,4 +1017,124 @@ body {
 .extensions-error-reason {
   padding-left: 2ch;
   opacity: 0.9;
+}
+
+/* --- El tema por dentro, y el selector de volúmenes ------------------- */
+
+#theme[data-open="true"],
+#picker[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+#theme[data-open="false"],
+#picker[data-open="false"] {
+  display: none;
+}
+
+.theme,
+.picker {
+  width: min(80ch, 90vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0 12px 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  overflow: auto;
+}
+
+.theme h1,
+.picker h1 {
+  margin-bottom: 2px;
+  padding-bottom: 4px;
+  font-size: 1.35em;
+  color: var(--title-fg);
+  border-bottom: 1px solid var(--border);
+}
+
+.theme h2 {
+  margin: 8px 0 2px;
+  font-size: 1em;
+  color: var(--title-fg);
+}
+
+.theme-effects {
+  margin: 6px 0 0;
+  color: var(--hostile-fg);
+  unicode-bidi: isolate;
+}
+
+.theme-roles {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.theme-role {
+  display: grid;
+  grid-template-columns: 3ch 28ch auto;
+  gap: 0 12px;
+  align-items: center;
+  padding: 0 6px;
+}
+
+/* La muestra ES el dato: un `#2d4f8a` no dice nada hasta que se ve. */
+.theme-swatch {
+  height: 1em;
+  border: 1px solid var(--border);
+}
+
+.theme-role-name {
+  unicode-bidi: isolate;
+}
+
+.theme-role-hex {
+  opacity: 0.8;
+}
+
+.picker-empty {
+  margin: 6px 0 0;
+  opacity: 0.85;
+}
+
+.picker-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.picker-row {
+  display: grid;
+  grid-template-columns: 34ch 1fr;
+  gap: 0 12px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+
+.picker-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.picker-label,
+.picker-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Un punto de montaje son BYTES y el detalle lo escribe el sistema: cada
+     uno es su propia corrida bidi. */
+  unicode-bidi: isolate;
+}
+
+.picker-label[data-hostile="true"] {
+  color: var(--hostile-fg);
+}
+
+.picker-detail {
+  opacity: 0.85;
 }

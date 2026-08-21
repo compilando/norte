@@ -211,6 +211,11 @@ pub enum UiAction {
         /// Fila, en el orden en que viajaron.
         row: u32,
     },
+    /// Pone el cursor de un selector en esa fila (un click).
+    PickerSelectRow {
+        /// Fila, en el orden en que viajaron.
+        row: u32,
+    },
     /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
     Resync,
 }

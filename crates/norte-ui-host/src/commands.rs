@@ -70,6 +70,8 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "app.help",
     "app.settings",
     "app.extensions",
+    "app.theme",
+    "pane.select-drive",
     "pane.view",
     "pane.quick-search",
     "pane.mkdir",
@@ -205,6 +207,10 @@ pub enum Efecto {
     Ajustes,
     /// Abre el gestor de extensiones, en solo lectura.
     Extensiones,
+    /// Enseña el tema activo por dentro.
+    Tema,
+    /// Abre el selector de volúmenes del host.
+    Volumenes,
     /// Abre la ayuda. Sobre la página del CONTEXTO donde está el lector —
     /// un diálogo abierto, el visor, el listado— y no siempre sobre el
     /// índice: quien pulsa F1 mirando una pregunta quiere esa respuesta.
@@ -258,6 +264,8 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "app.help" => Efecto::Ayuda,
         "app.settings" => Efecto::Ajustes,
         "app.extensions" => Efecto::Extensiones,
+        "app.theme" => Efecto::Tema,
+        "pane.select-drive" => Efecto::Volumenes,
         "pane.view" => Efecto::Ver,
         "pane.quick-search" => Efecto::BuscarRapido,
         "pane.mkdir" => Efecto::CrearDirectorio,

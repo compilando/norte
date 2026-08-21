@@ -171,6 +171,7 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             "extension_select_row",
             UiAction::ExtensionSelectRow { row: 1 },
         ),
+        ("picker_select_row", UiAction::PickerSelectRow { row: 0 }),
         ("help_select_topic", UiAction::HelpSelectTopic { row: 3 }),
         ("help_activate", UiAction::HelpActivate { index: 1 }),
         ("resync", UiAction::Resync),
@@ -404,8 +405,44 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         help: Some(ayuda_de_referencia()),
         settings: Some(ajustes_de_referencia()),
         extensions: Some(extensiones_de_referencia()),
+        theme: Some(tema_de_referencia()),
+        picker: Some(selector_de_referencia()),
         viewer: Some(visor_de_referencia()),
         locale: "es".to_owned(),
+    }
+}
+
+/// El tema de referencia: dos roles y un efecto que este renderer no pinta.
+fn tema_de_referencia() -> norte_ui_host::dto::ThemeView {
+    use norte_ui_host::dto::{ThemeRoleView, ThemeView};
+    ThemeView {
+        name: "tokyonight".to_owned(),
+        roles: vec![
+            ThemeRoleView {
+                role: "selection-bg".to_owned(),
+                color: "#2d4f8a".to_owned(),
+            },
+            ThemeRoleView {
+                role: "error-fg".to_owned(),
+                color: "#f7768e".to_owned(),
+            },
+        ],
+        unsupported_effects: vec!["crt".to_owned()],
+    }
+}
+
+/// Un selector de referencia: volúmenes, con uno de solo lectura.
+fn selector_de_referencia() -> norte_ui_host::dto::PickerView {
+    use norte_ui_host::dto::{PickerRowView, PickerView};
+    PickerView {
+        title: "Volúmenes".to_owned(),
+        rows: vec![PickerRowView {
+            label: "⟨file⟩/".to_owned(),
+            hostile: false,
+            detail: "ext4 · 12 GiB libres de 100 GiB".to_owned(),
+        }],
+        cursor: Some(0),
+        empty: String::new(),
     }
 }
 
@@ -773,6 +810,18 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
             "extensions",
             ViewChange::Extensions {
                 extensions: Some(extensiones_de_referencia()),
+            },
+        ),
+        (
+            "theme",
+            ViewChange::Theme {
+                theme: Some(tema_de_referencia()),
+            },
+        ),
+        (
+            "picker",
+            ViewChange::Picker {
+                picker: Some(selector_de_referencia()),
             },
         ),
         (

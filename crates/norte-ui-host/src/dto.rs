@@ -42,6 +42,11 @@ pub struct ViewSnapshot {
     /// La ayuda, si está abierta. Como el visor, ocupa la pantalla: mientras
     /// esté, las teclas son suyas.
     pub help: Option<HelpView>,
+    /// El tema, si se está mirando. Solo LECTURA: se ve qué colores tiene
+    /// cada rol y qué efectos declara que este renderer no sabe pintar.
+    pub theme: Option<ThemeView>,
+    /// Un selector abierto (conexiones o volúmenes), si lo hay.
+    pub picker: Option<PickerView>,
     /// Las extensiones, si están abiertas. Solo LECTURA: se ve qué hay
     /// instalado y en qué estado, y NO se aprueba ni se enciende nada.
     pub extensions: Option<ExtensionsView>,
@@ -538,6 +543,73 @@ pub struct ExtensionConfigRowView {
     pub domain: String,
 }
 
+/// El tema activo, visto por dentro.
+///
+/// Los ROLES son la parte compartida: un tema de norte no nombra colores,
+/// nombra papeles (`selection`, `error`…), y cada frontend los pinta con su
+/// tecnología. Los EFECTOS no: son un bloque libre que interpreta cada
+/// renderer, así que lo que esta vista dice de ellos es qué declara el tema y
+/// qué de eso sabe hacer ESTA ventana.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeView {
+    /// Cómo se llama el tema activo, o el nombre del preset por defecto.
+    pub name: String,
+    /// Cada rol con su color resuelto (`#rrggbb`), en orden.
+    pub roles: Vec<ThemeRoleView>,
+    /// Los efectos que el tema declara y que este renderer NO sabe pintar.
+    ///
+    /// Se dicen, en vez de ignorarse: un tema retro que no se ve distinto es
+    /// un tema que el usuario cree roto. Vacío = el tema no declara ninguno.
+    pub unsupported_effects: Vec<String>,
+}
+
+/// Un rol del tema con su color.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeRoleView {
+    /// Qué papel juega (`selection`, `error`…). Vocabulario de norte.
+    pub role: String,
+    /// Su color, `#rrggbb`. El renderer lo pinta como muestra; no lo parsea
+    /// para decidir nada.
+    pub color: String,
+}
+
+/// El selector de VOLÚMENES del host: elige uno y el panel navega a él.
+///
+/// Solo volúmenes, hoy. El selector de conexiones que la tarea 4.5 nombra a
+/// su lado no está aquí, y la ausencia es una decisión: leer
+/// `connections.toml` obliga a meter el crate de conexiones —con russh,
+/// opendal, suppaftp, age y el llavero— en esta ventana, para una lista que
+/// todavía no puede abrir ninguna. Llega con la fase 5, que necesita ese
+/// crate de todas formas. Mientras tanto `pane.connect` contesta «aquí no»,
+/// que es verdad.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PickerView {
+    /// Su título, ya traducido.
+    pub title: String,
+    /// Las filas.
+    pub rows: Vec<PickerRowView>,
+    /// Cuál está elegida, si hay alguna.
+    pub cursor: Option<u64>,
+    /// La lista está vacía y por qué, ya traducido. Vacío cuando hay filas.
+    ///
+    /// «No hay ninguna» y «todavía no ha contestado» no son lo mismo, y una
+    /// lista vacía sin frase se lee siempre como lo primero.
+    pub empty: String,
+}
+
+/// Una fila de un selector.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PickerRowView {
+    /// Lo que se enseña, ya saneado.
+    pub label: String,
+    /// El texto de arriba DIFIERE de lo real (un punto de montaje es BYTES).
+    pub hostile: bool,
+    /// El detalle de la derecha, ya saneado: la URL de una conexión, o el
+    /// sistema de ficheros y el espacio de un volumen.
+    pub detail: String,
+}
+
+/// Lo que el visor enseña.
 /// Lo que el visor enseña.
 /// Lo que el visor enseña.
 /// Lo que el visor enseña.
@@ -971,6 +1043,16 @@ pub enum ViewChange {
     Help {
         /// La ayuda, o `None` si se cerró.
         help: Option<HelpView>,
+    },
+    /// El tema se abrió o se cerró.
+    Theme {
+        /// El tema, o `None` si se cerró.
+        theme: Option<ThemeView>,
+    },
+    /// Un selector se abrió, se movió o se cerró.
+    Picker {
+        /// El selector, o `None` si se cerró.
+        picker: Option<PickerView>,
     },
     /// Las extensiones se abrieron, cambiaron o se cerraron.
     Extensions {

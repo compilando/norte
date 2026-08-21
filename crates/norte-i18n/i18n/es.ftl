@@ -559,6 +559,21 @@ ext-config-none = Esta extensión no declara ajustes.
 ext-config-range = entre {$min} y {$max}
 ext-config-min = al menos {$min}
 ext-config-max = como mucho {$max}
+# Tarea 4.5: los dos selectores de lista y la vista del tema de la
+# ventana gráfica. El selector de conexiones NO está: leer
+# connections.toml obliga a meter el crate de conexiones —russh, opendal,
+# suppaftp, age, el llavero— en esta ventana para una lista que todavía no
+# puede abrir ninguna. Los
+# `effects` de un tema los interpreta cada renderer: los que este no sabe
+# pintar se NOMBRAN, porque un tema retro idéntico se lee como roto.
+picker-volumes-title = Volúmenes
+picker-volumes-loading = preguntando al host por su tabla de montaje…
+picker-volumes-empty = el host no reportó ningún volumen
+picker-volume-space = {$free} libres de {$total}
+picker-volume-read-only = solo lectura
+theme-title = Tema
+theme-roles = Con qué se pinta cada papel
+theme-effects-unsupported = Este tema declara efectos que esta ventana no pinta:
 history-title = Historial
 history-empty = todavía no hay historial
 hotlist-title = Favoritos

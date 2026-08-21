@@ -178,6 +178,13 @@ pub trait HostBackend: Send + Sync + 'static {
         &self,
         id: String,
     ) -> BoxFuture<'static, Result<methods::PluginGetConfigResult, Error>>;
+
+    /// Los volúmenes del HOST: discos, montajes de red, medios extraíbles.
+    ///
+    /// No es una llamada de provider y por eso no vive en la familia `fs.*`:
+    /// la tabla de montaje es del host, y el daemon solo la contesta a una
+    /// conexión de humano — un agente bajo scope no la necesita.
+    fn volumes(&self) -> BoxFuture<'static, Result<Vec<methods::Volume>, Error>>;
 }
 
 /// El backend de verdad: el SDK.
@@ -302,6 +309,13 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<methods::PluginGetConfigResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.plugin_get_config(&id).await })
+    }
+
+    fn volumes(&self) -> BoxFuture<'static, Result<Vec<methods::Volume>, Error>> {
+        let backend = self.clone();
+        // Sin los pseudo-sistemas: `proc`, `sysfs` y compañía llenan la lista
+        // de sitios a los que nadie quiere ir.
+        Box::pin(async move { backend.volumes(false).await })
     }
 
     fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>> {

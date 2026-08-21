@@ -38,6 +38,7 @@ async fn host_grande() -> (UiHost, norte_ui_host::ViewSnapshot) {
         viewport: (200, 60),
         settings: norte_ui_host::ajustes_por_defecto(),
         paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
