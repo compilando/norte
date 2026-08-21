@@ -42,7 +42,13 @@ pub fn implementados(efectos: Efectos) -> Vec<&'static str> {
 }
 
 /// Los comandos de [`IMPLEMENTADOS`] que ESCRIBEN.
-pub const MUTAN: &[&str] = &["pane.mkdir", "pane.delete", "pane.delete-permanent"];
+pub const MUTAN: &[&str] = &[
+    "pane.mkdir",
+    "pane.delete",
+    "pane.delete-permanent",
+    "pane.copy",
+    "pane.move",
+];
 
 /// Los comandos que el host ejecuta HOY.
 ///
@@ -83,6 +89,8 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.mkdir",
     "pane.delete",
     "pane.delete-permanent",
+    "pane.copy",
+    "pane.move",
 ];
 
 /// Los comandos de la pantalla del VISOR que el host ejecuta.
@@ -245,6 +253,16 @@ pub enum Efecto {
         /// Permanente, sin papelera.
         permanente: bool,
     },
+    /// Pide copiar o mover lo marcado (o lo que haya bajo el cursor) al hueco
+    /// DESTINO. NO transfiere: abre la confirmación, por el mismo motivo que
+    /// [`Efecto::Borrar`] —y aquí además la confirmación es lo único que
+    /// enseña A DÓNDE va, que en una ventana con tres listados no es
+    /// evidente.
+    Transferir {
+        /// `true` = mover; `false` = copiar. El wire son dos métodos
+        /// distintos, así que esto no elige una opción: elige el verbo.
+        mover: bool,
+    },
 }
 
 /// Traduce un comando del catálogo al efecto que el host aplica.
@@ -293,6 +311,8 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.mkdir" => Efecto::CrearDirectorio,
         "pane.delete" => Efecto::Borrar { permanente: false },
         "pane.delete-permanent" => Efecto::Borrar { permanente: true },
+        "pane.copy" => Efecto::Transferir { mover: false },
+        "pane.move" => Efecto::Transferir { mover: true },
         _ => return None,
     })
 }

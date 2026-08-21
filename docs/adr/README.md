@@ -75,3 +75,4 @@ edits.
 | [0067](0067-the-renderer-is-a-painter-not-a-framework.md) | The reference renderer paints, and brings no framework to do it | accepted |
 | [0068](0068-a-row-is-named-by-key-and-generation.md) | A row is named by key AND generation, and the bridge breaks on purpose | accepted |
 | [0069](0069-how-image-bytes-reach-the-webview.md) | How image bytes reach the webview, and what the window still refuses to do | accepted |
+| [0070](0070-a-mutation-names-its-own-operands.md) | A mutation names its own operands, and the surface that approves it labels out of band | accepted |

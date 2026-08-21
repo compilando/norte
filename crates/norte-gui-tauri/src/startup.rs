@@ -25,8 +25,14 @@ use norte_ui_host::{UiHost, UiHostOptions, ViewSnapshot};
 /// Solo lectura, y es una decisión escrita: la revisión de seguridad de la
 /// tarea 3.3 encontró que el preset ya ataba F7/F8 a crear y borrar, y que
 /// `Dialog{choice:"approve"}` aprobaba la operación de un agente — o sea que
-/// la rebanada «de solo lectura» tenía autoridad destructiva y de policy. Se
-/// levanta en la fase 5, junto con el camino seguro que esa fase define.
+/// la rebanada «de solo lectura» tenía autoridad destructiva y de policy.
+///
+/// La tarea 5.1 ya construyó el camino: copiar, mover, crear y borrar pasan
+/// por confirmación, journal del daemon, tablero, cancelación y relistado del
+/// hueco afectado, y el host lo prueba. Lo que falta para levantar este
+/// interruptor NO es código sino la tarea 5.4 —la revisión de seguridad de
+/// las mutaciones—, que es lo que el gate de salida de la fase 5 exige antes
+/// de que una compilación de release escriba nada.
 pub const EFECTOS: norte_ui_host::commands::Efectos = norte_ui_host::commands::Efectos::SoloLectura;
 
 /// La ayuda. Corta a propósito: el spike no tiene superficie que documentar.

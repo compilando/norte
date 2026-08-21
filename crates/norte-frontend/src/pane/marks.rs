@@ -83,6 +83,61 @@ impl PaneState {
         self.marks.clear();
     }
 
+    /// Vuelve a marcar, POR RUTA, lo que siga estando en el listado.
+    ///
+    /// Existe para el REFRESCO: `set_listing` limpia las marcas porque las
+    /// filas son otras y una marca por índice apuntaría a otro fichero. Eso
+    /// es correcto para un `cd`, y castiga a quien no se movió — un listado
+    /// que se recarga solo (una copia que termina, un vigilante) se llevaba
+    /// por delante una selección que el lector había hecho a mano.
+    ///
+    /// La identidad es el `VPath` BYTE A BYTE, como en todo el resto: una
+    /// entrada que ya no está —la acaba de borrar la operación— simplemente
+    /// no se vuelve a marcar, y no se inventa nada. Lo que devuelve es
+    /// cuántas se perdieron, porque una selección que encoge sin decirlo es
+    /// una operación posterior sobre menos ficheros de los que el lector
+    /// cree.
+    ///
+    /// ```
+    /// use norte_frontend::PaneState;
+    /// use norte_proto::{Entry, EntryKind, VPath};
+    ///
+    /// let dir = VPath::parse("mem:///d").unwrap();
+    /// fn entrada(dir: &VPath, n: &str) -> Entry {
+    ///     Entry {
+    ///         path: dir.join(norte_proto::Segment::new(n.as_bytes().to_vec()).unwrap()),
+    ///         kind: EntryKind::File,
+    ///         size: None,
+    ///         mtime_ms: None,
+    ///         attrs: Default::default(),
+    ///     }
+    /// }
+    /// let mut p = PaneState::new(
+    ///     dir.clone(),
+    ///     vec![entrada(&dir, "a"), entrada(&dir, "b")],
+    /// );
+    /// p.mark_all();
+    /// let antes = p.marked_paths();
+    /// assert_eq!(antes.len(), 2);
+    ///
+    /// // El listado se recarga y `b` ya no está.
+    /// p.set_listing(dir.clone(), vec![entrada(&dir, "a")]);
+    /// assert_eq!(p.marks_len(), 0, "un listado nuevo llega sin marcas");
+    /// assert_eq!(p.restore_marks(&antes), 1, "una se perdió, y se dice");
+    /// assert_eq!(p.marks_len(), 1);
+    /// ```
+    pub fn restore_marks(&mut self, paths: &[VPath]) -> usize {
+        let mut perdidas = 0;
+        for path in paths {
+            if self.entries.iter().any(|e| &e.path == path) {
+                self.marks.insert(path.clone());
+            } else {
+                perdidas += 1;
+            }
+        }
+        perdidas
+    }
+
     /// The indices a BULK mark acts on: the VISIBLE subset under an active
     /// quick filter, the whole listing otherwise — what you see is what you
     /// mark. While a fill is running ([`Self::loading`]) it reaches only what

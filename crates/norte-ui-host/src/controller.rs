@@ -295,8 +295,9 @@ enum Mensaje {
     /// contestar con otra ortografía del mismo nombre y la entrada que hay
     /// que hidratar es la que se pidió.
     Hidratado(Box<Sondas>),
-    /// Una Task recién encolada, con su progreso y su cancelación.
-    TaskNueva(Box<crate::backend::HostTask>),
+    /// Una Task recién encolada, con su progreso, su cancelación y los
+    /// directorios que dejará distintos.
+    TaskNueva(Box<(crate::backend::HostTask, Vec<VPath>)>),
     /// Encolarla falló. El usuario tiene que enterarse: pidió un borrado.
     TaskFallida(Box<Error>),
     /// La conexión con el daemon cambió de estado.
@@ -455,7 +456,7 @@ impl UiHost {
             tokio::spawn(async move {
                 while let Some(task) = ajenas.recv().await {
                     if buzon
-                        .send(Mensaje::TaskNueva(Box::new(task)))
+                        .send(Mensaje::TaskNueva(Box::new((task, Vec::new()))))
                         .await
                         .is_err()
                     {
@@ -617,7 +618,8 @@ async fn actor(
                 }
             }
             Mensaje::TaskNueva(task) => {
-                for u in estado.registrar_task(*task, &buzon) {
+                let (task, afectados) = *task;
+                for u in estado.registrar_task(task, afectados, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
@@ -637,7 +639,7 @@ async fn actor(
                 let _ = updates.send(n);
             }
             Mensaje::Progreso(p) => {
-                for u in estado.progreso(&p) {
+                for u in estado.progreso(&p, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
@@ -862,6 +864,22 @@ struct Hueco {
     /// testigo llegó tarde: se descarta aquí, en Rust, no se esconde en el
     /// renderer.
     en_vuelo: Option<RequestToken>,
+    /// A DÓNDE va la petición en vuelo, si la hay.
+    ///
+    /// No es lo mismo que `pane.dir()`, y confundirlos era un bug: `dir()`
+    /// solo cambia cuando el listado ATERRIZA, así que durante una
+    /// navegación el hueco «está» todavía en el directorio que abandona. Un
+    /// refresco que se guiara por `dir()` relistaría el viejo y pisaría el
+    /// testigo de la navegación, que se descartaría en silencio; y un hueco
+    /// que va ENTRANDO en el directorio que una mutación acaba de cambiar no
+    /// se reconocería como afectado, y aterrizaría sobre un listado anterior
+    /// a la mutación sin que nada lo corrigiera.
+    dir_pedido: Option<VPath>,
+    /// Las marcas que hay que volver a poner cuando aterrice un REFRESCO.
+    ///
+    /// Vacío siempre que lo que vuela es una navegación: ahí las filas son de
+    /// otro directorio y una marca no significa nada. Se consume al aterrizar.
+    marcas_a_restaurar: Vec<VPath>,
     /// El drenaje que sigue trayendo lotes por detrás, si lo hay.
     ///
     /// SEPARADO de `en_vuelo` porque son dos vidas distintas: la primera
@@ -972,6 +990,39 @@ enum Pendiente {
         /// Dónde se crea.
         dir: VPath,
     },
+    /// Copiar o mover estas entradas AL directorio de otro hueco.
+    ///
+    /// El destino viaja ya resuelto —el directorio del hueco con el rol
+    /// `Target` en el momento de abrir el diálogo— y no como un id de hueco:
+    /// entre abrir la pregunta y responderla el lector puede haber navegado
+    /// ese panel, y entonces «el otro» sería otro sitio del que se enseñó.
+    Transferir {
+        /// El hueco del que salieron las marcas.
+        ///
+        /// Viaja por el mismo motivo que `destino`, y su ausencia era un
+        /// bug: `UiAction::FocusSlot` NO está vedada mientras hay un diálogo
+        /// abierto —solo lo están las teclas—, así que un clic en el otro
+        /// panel entre la pregunta y la respuesta hacía que las marcas que se
+        /// consumían fueran las de OTRO hueco. El de verdad se quedaba
+        /// marcado, y el lector volvía a pulsar F5 sobre lo mismo.
+        origen: u32,
+        /// El DIRECTORIO del que salieron, tal como lo escribe el hueco.
+        ///
+        /// No se deriva del padre de cada entrada: el padre lo escribe el
+        /// PROVIDER y el directorio del hueco puede venir de la config o de
+        /// la sesión, así que en macOS (NFD contra NFC) o en un servidor sin
+        /// distinción de caja son dos cadenas distintas para el mismo sitio
+        /// — y el refresco por comparación byte a byte no encontraría el
+        /// panel de origen (ADR 0061).
+        origen_dir: VPath,
+        /// Qué se transfiere, en orden de listado.
+        paths: Vec<VPath>,
+        /// El DIRECTORIO al que van. El nombre final se compone aquí, jamás
+        /// en el renderer.
+        destino: VPath,
+        /// `true` = mover.
+        mover: bool,
+    },
 }
 
 /// Una task viva en el tablero.
@@ -979,6 +1030,13 @@ struct TaskViva {
     vista: TaskView,
     /// Cómo pedirle que pare. Cancelar dos veces no es un error.
     cancel: std::sync::Arc<dyn Fn() + Send + Sync>,
+    /// Los directorios que esta task deja DISTINTOS.
+    ///
+    /// Se apuntan al encolar y no se deducen del progreso: el progreso dice
+    /// qué fichero va por dentro, no qué pantallas mienten cuando termine.
+    /// Vacío = nada que refrescar (una búsqueda, una task ajena de la que
+    /// solo se conoce el id).
+    afectados: Vec<VPath>,
 }
 
 /// El estado semántico. Solo el actor lo toca.
@@ -1178,6 +1236,8 @@ impl Hueco {
             primera_visible: 0,
             visibles: 64,
             en_vuelo: None,
+            dir_pedido: None,
+            marcas_a_restaurar: Vec::new(),
             drenando: None,
             sondeando: false,
             cancelar_sondeo: std::sync::Arc::default(),
@@ -1244,11 +1304,13 @@ impl Estado {
         }
         let activo = huecos.keys().copied().next().unwrap_or(1);
         let mut roles = Roles::con_active(SlotId(activo));
-        // El DESTINO es el otro listado visible, si lo hay: es lo que hace
-        // que copiar tenga a dónde ir sin preguntar.
-        if let Some(otro) = huecos.keys().copied().find(|k| *k != activo) {
-            roles.set(RoleId::Target, SlotId(otro));
-        }
+        // El DESTINO lo resuelve la capa compartida, y NO se pone a mano.
+        // Ponerlo con `Roles::set` lo marcaba como EXPLÍCITO —o sea, «lo
+        // eligió una persona»— cuando no lo había elegido nadie, y entonces
+        // sobrevivía a que aparecieran más candidatos: con tres listados, el
+        // primero se quedaba el rol para siempre y copiar mandaba ahí sin
+        // que nadie lo hubiera dicho (ADR 0058 D7).
+        roles.reconcile(&arbol, &reparto, &kinds, SlotId(activo));
         let estado = Self {
             instance,
             sequence: 0,
@@ -1362,9 +1424,18 @@ impl Estado {
 
     /// Deja los roles apuntando a huecos que EXISTEN y se VEN.
     ///
-    /// El destino es el otro listado visible; si no hay otro, no hay
-    /// destino — y eso es más honesto que apuntar al mismo hueco que tiene el
-    /// foco, que haría que copiar pareciera posible cuando no lo es.
+    /// El foco se decide AQUÍ (solo se mueve si el hueco que lo tenía ya no
+    /// vale) y el DESTINO lo decide la capa compartida
+    /// ([`norte_frontend::layout::roles::Roles::reconcile`]), que es la que
+    /// implementa la ADR 0058 D7. Este método tenía su propia regla —«el
+    /// primer otro hueco visible»— y esa regla estaba mal por dos motivos
+    /// que no se ven con dos paneles: con TRES adivinaba el de id más bajo, y
+    /// pisaba un destino que una persona había designado a mano en cada
+    /// cambio de foco. Desde que copiar y mover leen ese rol, adivinar es
+    /// mandar ficheros a un sitio que nadie eligió. La regla compartida
+    /// conserva lo explícito y, con varios candidatos y ninguno elegido,
+    /// deja el rol SIN FIJAR: entonces la transferencia pide que se designe
+    /// uno en vez de desempatar sola.
     fn reconcilia_roles(&mut self) {
         // El foco solo se MUEVE cuando el hueco que lo tenía ya no vale: se
         // ocultó, desapareció del reparto, o dejó de poder enfocarse. Pisarlo
@@ -1383,16 +1454,9 @@ impl Estado {
         if !sirve {
             self.roles.set(RoleId::Active, SlotId(self.activo()));
         }
-        let activo = self.activo();
-        let otro = self
-            .huecos
-            .keys()
-            .copied()
-            .find(|id| *id != activo && !self.oculto(*id));
-        match otro {
-            Some(id) => self.roles.set(RoleId::Target, SlotId(id)),
-            None => self.roles.clear(RoleId::Target),
-        }
+        let foco = SlotId(self.enfocado());
+        self.roles
+            .reconcile(&self.arbol, &self.reparto, &self.kinds, foco);
     }
 
     /// ¿Está este hueco fuera del reparto de ESTE tamaño?
@@ -1535,6 +1599,7 @@ impl Estado {
             return;
         };
         hueco.en_vuelo = None;
+        hueco.dir_pedido = None;
         // El listado es OTRO: lo sondeado antes no dice nada de estas
         // entradas, que nacen perezosas otra vez. Sin este vaciado, volver a
         // un directorio ya visitado deja las columnas de tamaño y fecha en
@@ -1556,6 +1621,11 @@ impl Estado {
         match res {
             Ok((entradas, omitidas)) => {
                 hueco.pane.set_listing(dir, entradas);
+                // Un refresco conserva la selección; un `cd` no tiene ninguna
+                // que conservar y llega con la lista vacía. Lo que la
+                // operación se llevó no se vuelve a marcar.
+                let marcas = std::mem::take(&mut hueco.marcas_a_restaurar);
+                hueco.pane.restore_marks(&marcas);
                 // TRAS `set_listing`, que la limpia: es un dato de ESTE
                 // listado y arrastrar el del anterior sería decir que faltan
                 // entradas de un directorio en el que faltaban de otro.
@@ -1565,6 +1635,7 @@ impl Estado {
             }
             Err(e) => {
                 hueco.pane.set_listing(dir, Vec::new());
+                hueco.marcas_a_restaurar.clear();
                 hueco.estado = SlotState::Error {
                     reason_key: norte_frontend::error::error_key(&e).to_owned(),
                     detail: None,
@@ -2208,6 +2279,12 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) {
         self.pedir_catalogo(dir, backend, buzon);
+        // Queda apuntado A DÓNDE va: lo que el hueco enseña no cambia hasta
+        // que esto aterrice, y hasta entonces `pane.dir()` responde por el
+        // directorio que se abandona.
+        if let Some(h) = self.huecos.get_mut(&slot) {
+            h.dir_pedido = Some(dir.clone());
+        }
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         let dir = dir.clone();
@@ -2233,7 +2310,7 @@ impl Estado {
     /// Abre el prompt de buscar. Lo que se teclea es el patrón.
     fn pedir_busqueda(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let root = self.hueco().pane.dir().clone();
-        let (donde, _) = norte_frontend::path_display(&root);
+        let donde = Self::linea_de_ruta(&root);
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         self.dialogos.push(Dialogo {
@@ -2241,7 +2318,9 @@ impl Estado {
             vista: DialogView {
                 id,
                 title_key: "modal-search-title".to_owned(),
-                body: vec![clamp_display(donde)],
+                destination: None,
+                body: vec![donde],
+                overflow_note: String::new(),
                 choices: vec![
                     DialogChoice {
                         id: "confirm".to_owned(),
@@ -2305,7 +2384,9 @@ impl Estado {
             };
             let id = task.id;
             let cancel = Arc::clone(&task.cancel);
-            let _ = buzon2.send(Mensaje::TaskNueva(Box::new(task))).await;
+            let _ = buzon2
+                .send(Mensaje::TaskNueva(Box::new((task, Vec::new()))))
+                .await;
             // Bautizada AQUÍ y no con el primer lote: puede no haber primer
             // lote —el core no manda lotes vacíos— y entonces la búsqueda se
             // quedaba sin nombre, sin poder terminar y sin poder cancelarse.
@@ -2722,16 +2803,11 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
-        let Some(dir) = self.huecos.get(&slot).map(|h| h.pane.dir().clone()) else {
-            return;
-        };
-        self.token += 1;
-        let token = RequestToken(self.token);
-        if let Some(h) = self.huecos.get_mut(&slot) {
-            h.en_vuelo = Some(token);
-            h.drenando = Some(token);
-        }
-        self.pedir_listado(slot, &dir, token, backend, buzon);
+        // Un solo camino de recarga. Este tenía su propia copia y le faltaban
+        // las dos cosas que hacen que recargar no se note: no anclaba el
+        // cursor ni conservaba las marcas, así que cambiar de columnas
+        // mandaba el cursor a la primera fila y borraba la selección.
+        let _ = self.refrescar(slot, backend, buzon);
     }
 
     /// La huella de columnas de cada hueco: qué `attr:`/`plugin:` pinta.
@@ -4058,7 +4134,10 @@ impl Estado {
     fn contexto_calculado(&self) -> &'static str {
         if let Some(d) = self.dialogos.last() {
             return match d.al_confirmar {
-                Some(Pendiente::Borrar { .. }) => "dialog.confirm",
+                // Una transferencia comparte página con el borrado: las dos
+                // son «la pregunta que hay que responder antes de que algo
+                // cambie», y el corpus tiene UNA que habla de eso.
+                Some(Pendiente::Borrar { .. } | Pendiente::Transferir { .. }) => "dialog.confirm",
                 Some(Pendiente::Decidir { .. }) => "dialog.approval",
                 // Buscar comparte página con crear: los dos son el diálogo
                 // que pide que teclees un nombre, y el corpus tiene UNA que
@@ -4762,7 +4841,7 @@ impl Estado {
                     .quick_start(norte_frontend::nav::Mode::Filter);
                 (self.aplicada(), vec![self.parche_filas()])
             }
-            Efecto::CrearDirectorio | Efecto::Borrar { .. }
+            Efecto::CrearDirectorio | Efecto::Borrar { .. } | Efecto::Transferir { .. }
                 if self.efectos == crate::commands::Efectos::SoloLectura =>
             {
                 Self::no_muta()
@@ -4776,7 +4855,163 @@ impl Estado {
             Efecto::Ver => self.pedir_visor(backend, buzon),
             Efecto::CrearDirectorio => self.pedir_mkdir(),
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
+            Efecto::Transferir { mover } => self.pedir_transferencia(mover),
         }
+    }
+
+    /// El DIRECTORIO al que va una transferencia, o por qué no hay uno.
+    ///
+    /// El destino declarado tiene que seguir sirviendo: existir, verse, y no
+    /// ser uno mismo —copiarse encima no es una operación—.
+    ///
+    /// Sin destino hay dos situaciones DISTINTAS, y decir la misma frase en
+    /// las dos manda a buscar otro panel a quien tiene tres. La capa
+    /// compartida deja el rol SIN FIJAR cuando hay varios candidatos y
+    /// ninguno elegido (ADR 0058 D7): eso no es «no hay otro», es «elige
+    /// cuál».
+    fn directorio_destino(&self) -> Result<VPath, &'static str> {
+        let activo = self.activo();
+        let destino_id = self
+            .roles
+            .get(RoleId::Target)
+            .map(|SlotId(id)| id)
+            .filter(|id| *id != activo && self.huecos.contains_key(id) && !self.oculto(*id));
+        if let Some(id) = destino_id {
+            return Ok(self.huecos[&id].pane.dir().clone());
+        }
+        let candidatos = self
+            .huecos
+            .keys()
+            .filter(|id| **id != activo && !self.oculto(**id))
+            .count();
+        Err(if candidatos > 1 {
+            "host-no-target-designated"
+        } else {
+            "host-no-other-slot"
+        })
+    }
+
+    /// Abre la confirmación de una copia o un movimiento. NO transfiere.
+    ///
+    /// El origen son las marcas del hueco activo (o el cursor si no hay
+    /// ninguna) y el destino es el DIRECTORIO del hueco con el rol `Target`.
+    /// Ni una ni otro los nombra el renderer: manda `pane.copy` y punto. Es
+    /// la misma regla que dejó sin parámetro al comando de los bytes de una
+    /// imagen (ADR 0069), y por el mismo motivo — un nombre que viene de la
+    /// webview es un nombre que la webview puede elegir.
+    fn pedir_transferencia(&mut self, mover: bool) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let activo = self.activo();
+        let destino = match self.directorio_destino() {
+            Ok(d) => d,
+            Err(reason_key) => {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: reason_key.to_owned(),
+                    },
+                    Vec::new(),
+                );
+            }
+        };
+        let hueco = self.hueco();
+        let origen_dir = hueco.pane.dir().clone();
+        if origen_dir == destino {
+            // Los dos listados en el mismo sitio. El daemon lo rechazaría
+            // igual, pero abrir un diálogo que promete algo imposible es
+            // peor que decirlo antes.
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-same-directory".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        // `marked_paths` ya cae al cursor cuando no hay marcas: es la fuente
+        // única de «sobre qué opera esto», y duplicar aquí ese respaldo
+        // sería un segundo sitio del que se pueden separar.
+        let paths: Vec<VPath> = hueco.pane.marked_paths();
+        if paths.is_empty() {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-nothing-selected".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        // Una entrada sin último segmento es una RAÍZ, y una raíz no tiene
+        // nombre que componer en el destino. Se rechaza el lote entero en vez
+        // de saltársela: transferir «casi todo lo que pediste» en silencio es
+        // exactamente lo que no puede hacer una mutación.
+        if paths.iter().any(|p| p.file_name().is_none()) {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-cannot-transfer-root".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        // El destino va en SU CAMPO, no como una línea con una flecha: un
+        // directorio puede llamarse `docs → /casa/BORRAR` y esa flecha es
+        // legítima, no se enmascara y no se marca, así que la línea se leería
+        // como dos rutas y quien confirma creería estar mandando sus ficheros
+        // a la segunda (fixture `arrow_join_spoof` del corpus canónico).
+        let destino_linea = Self::linea_de_ruta(&destino);
+        // Y los orígenes, enmascarados y acotados igual que el listado: estos
+        // nombres los controla quien haya escrito en el directorio.
+        let cuerpo: Vec<crate::dto::DialogLine> = paths
+            .iter()
+            .take(Self::MAX_LINEAS_DIALOGO)
+            .map(Self::linea_de_ruta)
+            .collect();
+        let nota = self.nota_de_recorte(cuerpo.len(), paths.len());
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: if mover {
+                "modal-move-title"
+            } else {
+                "modal-copy-title"
+            }
+            .to_owned(),
+            destination: Some(destino_linea),
+            body: cuerpo,
+            overflow_note: nota,
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    // Ni copiar ni mover se marcan destructivos, y es una
+                    // decisión: `destructive` es lo que hace que `Enter`
+                    // elija cancelar, y F5/F6 son las dos teclas que más se
+                    // pulsan de un gestor ortodoxo. Lo que destruye es el
+                    // borrado, y ese sí lo lleva.
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: None,
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista: vista.clone(),
+            input_crudo: String::new(),
+            al_confirmar: Some(Pendiente::Transferir {
+                origen: activo,
+                origen_dir,
+                paths,
+                destino,
+                mover,
+            }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
     /// Abre la confirmación de un borrado. NO borra.
@@ -4804,14 +5039,12 @@ impl Estado {
         }
         // Los nombres del cuerpo son de un atacante potencial: se pintan con
         // el saneado canónico y acotados, igual que en el listado.
-        let cuerpo: Vec<String> = paths
+        let cuerpo: Vec<crate::dto::DialogLine> = paths
             .iter()
-            .take(16)
-            .map(|p| {
-                let (texto, _hostil) = norte_frontend::path_display(p);
-                clamp_display(texto)
-            })
+            .take(Self::MAX_LINEAS_DIALOGO)
+            .map(Self::linea_de_ruta)
             .collect();
+        let nota = self.nota_de_recorte(cuerpo.len(), paths.len());
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
@@ -4822,7 +5055,10 @@ impl Estado {
                 "modal-delete-title"
             }
             .to_owned(),
+            // Un borrado no va a ninguna parte.
+            destination: None,
             body: cuerpo,
+            overflow_note: nota,
             choices: vec![
                 DialogChoice {
                     id: "confirm".to_owned(),
@@ -4892,32 +5128,45 @@ impl Estado {
         &mut self,
         req: &norte_proto::methods::PolicyApprovalRequired,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let mut cuerpo: Vec<String> = Vec::new();
-        cuerpo.push(clamp_display(norte_encoding::mask_terminal_hazards(
-            &req.op,
-        )));
-        for p in req.paths.iter().take(16) {
-            cuerpo.push(clamp_display(norte_encoding::mask_terminal_hazards(p)));
+        // Estas rutas vienen del daemon como TEXTO ya redactado, no como
+        // `VPath`, así que el enmascarado es el de cadenas y la marca se
+        // calcula comparando: si enmascarar cambió algo, lo que se lee no es
+        // lo que hay, y quien aprueba tiene que verlo.
+        let linea = |texto: &str| {
+            let enmascarado = norte_encoding::mask_terminal_hazards(texto);
+            let hostil = enmascarado != texto;
+            crate::dto::DialogLine {
+                text: clamp_display(enmascarado),
+                hostile: hostil,
+            }
+        };
+        let mut cuerpo: Vec<crate::dto::DialogLine> = Vec::new();
+        cuerpo.push(linea(&req.op));
+        for p in req.paths.iter().take(Self::MAX_LINEAS_DIALOGO) {
+            cuerpo.push(linea(p));
         }
         // Si la lista viene RECORTADA hay que decirlo: aprobar creyendo que
-        // son tres rutas cuando son mil es aprobar otra cosa (0.36.0).
-        let total = if req.paths_total == 0 {
-            req.paths.len() as u64
-        } else {
-            req.paths_total
-        };
-        if total > req.paths.len() as u64 {
-            cuerpo.push(clamp_display(norte_i18n::ta(
-                "modal-approval-truncated",
-                &[("total", &total.to_string())],
-            )));
-        }
+        // son tres rutas cuando son mil es aprobar otra cosa (0.36.0). Y son
+        // DOS recortes: el del daemon (`paths_total`) y el nuestro. El
+        // recuento honesto es el mayor de los dos.
+        //
+        // La frase va en `overflow_note` y no como una línea más del cuerpo,
+        // por el mismo motivo que el destino de una transferencia tiene campo
+        // propio: entre líneas de rutas, una ruta la puede suplantar. Antes
+        // era una línea Y encima citaba `modal-approval-truncated`, una clave
+        // Fluent que no existe en ningún idioma — o sea que un lote recortado
+        // pintaba el identificador crudo.
+        let total = std::cmp::max(req.paths_total, req.paths.len() as u64);
+        let mostrados = req.paths.len().min(Self::MAX_LINEAS_DIALOGO);
+        let nota = self.nota_de_recorte(mostrados, usize::try_from(total).unwrap_or(usize::MAX));
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
             id,
             title_key: "modal-approval-title".to_owned(),
+            destination: None,
             body: cuerpo,
+            overflow_note: nota,
             choices: vec![
                 DialogChoice {
                     id: "approve".to_owned(),
@@ -4953,13 +5202,17 @@ impl Estado {
     /// Abre el prompt de crear directorio, con su campo de texto vacío.
     fn pedir_mkdir(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let dir = self.hueco().pane.dir().clone();
-        let (donde, _hostil) = norte_frontend::path_display(&dir);
+        let donde = Self::linea_de_ruta(&dir);
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
             id,
             title_key: "modal-mkdir-title".to_owned(),
-            body: vec![clamp_display(donde)],
+            // El directorio en el que se crea NO es un destino: es el
+            // contexto. Un destino es a dónde se MUEVE algo que ya existe.
+            destination: None,
+            body: vec![donde],
+            overflow_note: String::new(),
             choices: vec![
                 DialogChoice {
                     id: "confirm".to_owned(),
@@ -5054,6 +5307,9 @@ impl Estado {
         {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
+        if let Some(rechazo) = self.rechaza_por_solo_lectura(pos) {
+            return rechazo;
+        }
         let dialogo = self.dialogos.remove(pos);
         let mut salidas = Vec::new();
         // `confirm` es la respuesta afirmativa de los diálogos normales;
@@ -5064,6 +5320,37 @@ impl Estado {
             match dialogo.al_confirmar {
                 Some(Pendiente::Borrar { paths, permanente }) => {
                     Self::lanzar_borrado(paths, permanente, backend, buzon);
+                }
+                Some(Pendiente::Transferir {
+                    origen,
+                    origen_dir,
+                    paths,
+                    destino,
+                    mover,
+                }) => {
+                    Self::lanzar_transferencia(
+                        &paths,
+                        &origen_dir,
+                        &destino,
+                        mover,
+                        backend,
+                        buzon,
+                    );
+                    // Las marcas las CONSUME el envío, no el desenlace (mismo
+                    // criterio que el TUI y que mc): una selección a medio
+                    // consumir significaría cosas distintas según qué task de
+                    // las N terminó.
+                    //
+                    // Y las del hueco de ORIGEN, no las del que tenga el foco
+                    // ahora: `FocusSlot` no está vedada mientras hay un
+                    // diálogo abierto, así que un clic en el otro panel entre
+                    // la pregunta y la respuesta borraba las marcas del panel
+                    // equivocado y dejaba intactas las que se acababan de
+                    // enviar — y el lector volvía a pulsar F5 sobre lo mismo.
+                    if let Some(h) = self.huecos.get_mut(&origen) {
+                        h.pane.clear_marks();
+                    }
+                    salidas.push(self.parche_filas());
                 }
                 Some(Pendiente::Buscar { root }) => {
                     let patron = dialogo.input_crudo.clone();
@@ -5100,7 +5387,9 @@ impl Estado {
                     tokio::spawn(async move {
                         match backend.mkdir(destino).await {
                             Ok(task) => {
-                                let _ = buzon.send(Mensaje::TaskNueva(Box::new(task))).await;
+                                let _ = buzon
+                                    .send(Mensaje::TaskNueva(Box::new((task, vec![dir]))))
+                                    .await;
                             }
                             Err(e) => {
                                 let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
@@ -5149,10 +5438,13 @@ impl Estado {
         for path in paths {
             let backend = Arc::clone(backend);
             let buzon = buzon.clone();
+            let afectados: Vec<VPath> = path.parent().into_iter().collect();
             tokio::spawn(async move {
                 match backend.delete(path, mode).await {
                     Ok(task) => {
-                        let _ = buzon.send(Mensaje::TaskNueva(Box::new(task))).await;
+                        let _ = buzon
+                            .send(Mensaje::TaskNueva(Box::new((task, afectados))))
+                            .await;
                     }
                     Err(e) => {
                         let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
@@ -5162,11 +5454,144 @@ impl Estado {
         }
     }
 
+    /// La SEGUNDA cerradura del modo solo lectura, sobre el punto ÚNICO donde
+    /// se lanzan todas las mutaciones.
+    ///
+    /// Barata, y hoy inalcanzable: en solo lectura ningún `Pendiente` que
+    /// mute llega a nacer y el canal de aprobaciones ni se toma. «Inalcanzable
+    /// hoy» es exactamente lo que deja de ser verdad cuando alguien añada el
+    /// siguiente diálogo, y esta es la puerta por la que pasaría.
+    ///
+    /// Cierra el diálogo al rechazarlo: dejarlo abierto invitaría a pulsar
+    /// otra vez lo que no va a ocurrir.
+    fn rechaza_por_solo_lectura(
+        &mut self,
+        pos: usize,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        if self.efectos != crate::commands::Efectos::SoloLectura {
+            return None;
+        }
+        let muta = self
+            .dialogos
+            .get(pos)?
+            .al_confirmar
+            .as_ref()
+            .is_some_and(|p| {
+                matches!(
+                    p,
+                    Pendiente::Borrar { .. }
+                        | Pendiente::Transferir { .. }
+                        | Pendiente::CrearDirectorio { .. }
+                        | Pendiente::Decidir { .. }
+                )
+            });
+        if !muta {
+            return None;
+        }
+        self.dialogos.remove(pos);
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        Some((
+            ActionAck::Unavailable {
+                reason_key: "host-read-only".to_owned(),
+            },
+            vec![self.parche(vec![cambio])],
+        ))
+    }
+
+    /// Encola las Tasks del lote y engancha su progreso al actor.
+    ///
+    /// El nombre del destino se compone AQUÍ, con el último segmento del
+    /// origen tal cual: bytes, sin normalizar y sin pasar por pantalla. Un
+    /// nombre que ha ido a la webview y ha vuelto es otro nombre (ADR 0061).
+    /// Lo que la composición byte a byte NO puede resolver es un nombre legal
+    /// en el origen e ilegal en el destino (`CON`, un punto final, un `:`
+    /// yendo de ext4 a NTFS): eso es cosa del provider de destino, y está en
+    /// la issue #217.
+    ///
+    /// La política de colisión es `Fail`, el default seguro del wire: si el
+    /// destino existe, la Task falla y el tablero lo dice. Sobrescribir o
+    /// renombrar son decisiones del lector, y esta ventana todavía no tiene
+    /// dónde tomarlas — elegirlas por él sería la clase de silencio que borra
+    /// ficheros.
+    fn lanzar_transferencia(
+        paths: &[VPath],
+        origen_dir: &VPath,
+        destino: &VPath,
+        mover: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        // Los directorios que el desenlace deja desactualizados. En una copia
+        // solo el destino; en un movimiento, también de donde sale — y el de
+        // origen se toma del HUECO, no del padre de cada entrada: el padre lo
+        // escribe el provider y el hueco puede venir de la config o de la
+        // sesión, así que en NFD contra NFC, o contra un servidor sin
+        // distinción de caja, son dos cadenas para el mismo sitio y la
+        // comparación byte a byte del refresco no encontraría el panel
+        // (ADR 0061). Se apuntan los dos: uno de ellos casa.
+        let mut afectados = vec![destino.clone()];
+        if mover {
+            afectados.push(origen_dir.clone());
+        }
+        let mut trabajos: Vec<(VPath, VPath)> = Vec::with_capacity(paths.len());
+        for path in paths {
+            let Some(nombre) = path.file_name() else {
+                // Imposible aquí: `pedir_transferencia` rechaza el lote
+                // entero si alguna entrada es una raíz. Se comprueba igual
+                // porque la alternativa es un `unwrap` en el camino de una
+                // mutación.
+                continue;
+            };
+            if mover
+                && let Some(padre) = path.parent()
+                && !afectados.contains(&padre)
+            {
+                afectados.push(padre);
+            }
+            trabajos.push((path.clone(), destino.join(nombre.clone())));
+        }
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        // UNA task de envío para el lote entero, y las llamadas EN SERIE. Un
+        // `spawn` por entrada abría tantas RPC simultáneas como marcas
+        // hubiera: marcar unos miles de ficheros y pulsar F5 es el flujo
+        // normal de un gestor ortodoxo, y contra SFTP eso no es una copia,
+        // es una denegación de servicio contra el propio daemon. En serie el
+        // daemon sigue haciendo el trabajo en paralelo si quiere; lo que se
+        // acota es cuántas peticiones hay volando a la vez.
+        tokio::spawn(async move {
+            for (from, to) in trabajos {
+                let encolada = if mover {
+                    backend
+                        .move_(from, to, norte_proto::CollisionPolicy::Fail)
+                        .await
+                } else {
+                    backend
+                        .copy(from, to, norte_proto::CollisionPolicy::Fail)
+                        .await
+                };
+                let mensaje = match encolada {
+                    Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados.clone()))),
+                    Err(e) => Mensaje::TaskFallida(Box::new(e)),
+                };
+                if buzon.send(mensaje).await.is_err() {
+                    // El actor ya no está: lo que quede del lote no le
+                    // importa a nadie, y seguir pidiéndolo sí importaría.
+                    return;
+                }
+            }
+        });
+    }
+
     /// Mete una Task recién encolada en el tablero y deja su progreso
     /// bombeando hacia el actor.
     fn registrar_task(
         &mut self,
         task: crate::backend::HostTask,
+        afectados: Vec<VPath>,
+        backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let id = task.id.get();
@@ -5175,23 +5600,50 @@ impl Estado {
             // El tablero está acotado: lo más viejo TERMINADO se cae antes de
             // que la memoria del host dependa de cuántas operaciones lanzó
             // alguien.
-            if let Some(viejo) = self
+            // Se prefiere desalojar una TERMINADA BIEN: una fallida o una
+            // cancelada es la única superficie que dice qué no llegó —un
+            // fallo no deja entrada de journal—, y en un lote grande con
+            // colisiones son justo las que se acumulan.
+            let viejo = self
                 .tasks
                 .iter()
-                .find(|(_, t)| Self::terminal(t.vista.state))
-                .map(|(k, _)| *k)
-            {
+                .find(|(_, t)| t.vista.state == crate::dto::TaskStateView::Done)
+                .or_else(|| {
+                    self.tasks
+                        .iter()
+                        .find(|(_, t)| Self::terminal(t.vista.state))
+                })
+                .map(|(k, _)| *k);
+            if let Some(viejo) = viejo {
+                debug_assert!(
+                    self.tasks[&viejo].afectados.is_empty(),
+                    "se desaloja una task con un refresco pendiente"
+                );
                 self.tasks.remove(&viejo);
             }
         }
         let mut rx = task.progress.clone();
         let mut vista = Self::vista_de(&rx.borrow());
         vista.foreign = ajena;
+        // Si esta task YA estaba en el tablero —una reconexión la reanuncia
+        // por el canal de ajenas— lo que llega no sabe qué directorios tocaba,
+        // así que se conserva lo apuntado: sustituirlo por una lista vacía
+        // perdía el relistado justo en el camino donde la pantalla es más
+        // probable que esté rancia.
+        let afectados = if afectados.is_empty() {
+            self.tasks
+                .get(&id)
+                .map(|t| t.afectados.clone())
+                .unwrap_or_default()
+        } else {
+            afectados
+        };
         self.tasks.insert(
             id,
             TaskViva {
                 vista,
                 cancel: task.cancel,
+                afectados,
             },
         );
         let buzon2 = buzon.clone();
@@ -5219,14 +5671,162 @@ impl Estado {
                 }
             }
         });
-        let cambio = ViewChange::Tasks {
+        // Puede nacer TERMINAL: el daemon la completó antes de que esta
+        // llamada volviera, y entonces `rx.changed()` no dispara nunca y
+        // `progreso` no se llama ni una vez. Sin esto, una copia rapidísima
+        // dejaba el destino sin relistar para siempre — la carrera que la
+        // tarea 5.1 nombra literalmente.
+        let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
+        }];
+        if self
+            .tasks
+            .get(&id)
+            .is_some_and(|t| Self::terminal(t.vista.state))
+        {
+            cambios.extend(self.refrescar_afectados(id, backend, buzon));
+        }
+        vec![self.parche(cambios)]
+    }
+
+    /// Vuelve a listar los huecos que esta task dejó desactualizados, y
+    /// OLVIDA lo que afectaba: un desenlace se aplica una vez.
+    ///
+    /// Por directorio y no por hueco: quien encoló la task sabía qué
+    /// directorios tocaba, no qué paneles estarán mirándolos cuando termine
+    /// —el lector puede haber navegado, o haber cambiado de disposición—.
+    ///
+    /// Un hueco cuenta como afectado por a dónde VA si tiene algo en vuelo, y
+    /// por lo que enseña si no: los dos son «el directorio de este panel», y
+    /// mirar solo el segundo dejaba sin refrescar al panel que estaba
+    /// entrando justo en el sitio que la mutación cambió.
+    fn refrescar_afectados(
+        &mut self,
+        task_id: u64,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<ViewChange> {
+        let afectados = match self.tasks.get(&task_id) {
+            Some(t) if !t.afectados.is_empty() => t.afectados.clone(),
+            _ => return Vec::new(),
         };
-        vec![self.parche(vec![cambio])]
+        // Mientras quede OTRA task viva sobre el mismo directorio, no se
+        // relista: un lote de doscientas copias produciría doscientos
+        // listados del mismo panel, cada uno invalidando el anterior y
+        // volviendo a pagar el sondeo y las decoraciones de plugin (medidas
+        // en 167 ms por página de veinte). Se refresca cuando termina la
+        // ÚLTIMA, que es cuando el directorio deja de moverse.
+        let queda_trabajo = self.tasks.iter().any(|(id, t)| {
+            *id != task_id
+                && !Self::terminal(t.vista.state)
+                && t.afectados.iter().any(|d| afectados.contains(d))
+        });
+        if queda_trabajo {
+            return Vec::new();
+        }
+        // Consumido: ni esta ni las hermanas ya terminadas vuelven a pedirlo.
+        for t in self.tasks.values_mut() {
+            if t.afectados.iter().any(|d| afectados.contains(d)) {
+                t.afectados.clear();
+            }
+        }
+        let huecos: Vec<(u32, bool)> = self
+            .huecos
+            .iter()
+            .filter(|(_, h)| {
+                afectados.contains(h.dir_pedido.as_ref().unwrap_or_else(|| h.pane.dir()))
+            })
+            .map(|(id, _)| (*id, self.oculto(*id)))
+            .collect();
+        let mut cambios = Vec::new();
+        for (slot, oculto) in huecos {
+            if oculto {
+                // Un hueco que no se ve no pide listados —lo que no se ve no
+                // se trae—, pero tampoco puede quedarse creyendo que su
+                // listado sigue siendo verdad: se marca CARGANDO, que es lo
+                // que `despertar_visibles` recoge en cuanto vuelva a la
+                // pantalla. Sin esto, una pestaña de atrás sobre el
+                // directorio de destino enseñaba un listado anterior a la
+                // copia hasta que alguien navegara a mano.
+                if let Some(h) = self.huecos.get_mut(&slot) {
+                    h.estado = SlotState::Loading;
+                }
+                cambios.push(ViewChange::SlotState {
+                    slot_id: slot,
+                    state: SlotState::Loading,
+                });
+                continue;
+            }
+            cambios.extend(self.refrescar(slot, backend, buzon));
+        }
+        cambios
+    }
+
+    /// Vuelve a pedir el listado de UN hueco, en su MISMO directorio.
+    ///
+    /// No es una navegación: no toca el rastro ni el foco. Lo que sí hace es
+    /// conservar lo que el lector tenía puesto, y las dos cosas son por
+    /// IDENTIDAD y no por índice:
+    ///
+    /// - el CURSOR se ancla con `set_pending_focus`, o sea por ruta. La
+    ///   memoria por directorio guarda un índice, y un índice no sobrevive a
+    ///   que la operación quite o añada una entrada: quien miraba `e` se
+    ///   encontraba el cursor en otro fichero, sin haber tocado una tecla, y
+    ///   la siguiente tecla podía ser F8.
+    /// - las MARCAS se vuelven a poner por ruta con `restore_marks`
+    ///   (`set_listing` las limpia, que es lo correcto para un `cd`). Lo que
+    ///   la operación se llevó no se vuelve a marcar y no se inventa nada.
+    ///
+    /// Con algo EN VUELO no hace nada. Reservaría un testigo nuevo, así que
+    /// la respuesta de esa navegación llegaría con uno viejo y se tiraría: el
+    /// panel se quedaría en el directorio del que el lector acababa de salir,
+    /// sin decir nada. Perder un refresco es una pantalla un poco vieja;
+    /// perder una navegación es la aplicación moviéndose sola. Y no hay nada
+    /// que perder: el listado que va a aterrizar es más nuevo que la
+    /// mutación, o va a otro sitio.
+    fn refrescar(
+        &mut self,
+        slot: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<ViewChange> {
+        self.token += 1;
+        let token = RequestToken(self.token);
+        let Some(hueco) = self.huecos.get_mut(&slot) else {
+            return Vec::new();
+        };
+        if hueco.en_vuelo.is_some() {
+            return Vec::new();
+        }
+        if let Some(sel) = hueco.pane.selected().map(|e| e.path.clone()) {
+            hueco.pane.set_pending_focus(sel);
+        }
+        hueco.pane.remember_cursor();
+        // `marked_paths` cae al cursor cuando no hay marcas, y restaurar ESO
+        // convertiría un refresco en una marca que el lector no hizo.
+        hueco.marcas_a_restaurar = if hueco.pane.marks_len() > 0 {
+            hueco.pane.marked_paths()
+        } else {
+            Vec::new()
+        };
+        let dir = hueco.pane.dir().clone();
+        hueco.estado = SlotState::Loading;
+        hueco.en_vuelo = Some(token);
+        hueco.drenando = Some(token);
+        self.pedir_listado(slot, &dir, token, backend, buzon);
+        vec![ViewChange::SlotState {
+            slot_id: slot,
+            state: SlotState::Loading,
+        }]
     }
 
     /// Aplica un snapshot de progreso al tablero.
-    fn progreso(&mut self, p: &norte_proto::TaskProgress) -> Vec<BridgeEnvelope<UiUpdate>> {
+    fn progreso(
+        &mut self,
+        p: &norte_proto::TaskProgress,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let Some(viva) = self.tasks.get_mut(&p.task_id.get()) else {
             return Vec::new();
         };
@@ -5234,6 +5834,10 @@ impl Estado {
         viva.vista = Self::vista_de(p);
         // De quién es la task no lo dice el progreso: lo dice de dónde vino.
         viva.vista.foreign = ajena;
+        // Leído de la vista que se acaba de proyectar: volver a construirla
+        // solo para mirar su estado cuesta dos `String` y un `path_display`
+        // en cada tick de progreso de cada task del lote.
+        let acabo = Self::terminal(viva.vista.state);
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
         }];
@@ -5250,6 +5854,12 @@ impl Estado {
                 search: self.vista_busqueda(),
             });
         }
+        // Una mutación que terminó deja pantallas desactualizadas: la entrada
+        // nueva está en el disco y no en el listado. Solo con un desenlace de
+        // VERDAD —`Running` no lo es—, y una sola vez.
+        if acabo {
+            cambios.extend(self.refrescar_afectados(p.task_id.get(), backend, buzon));
+        }
         vec![self.parche(cambios)]
     }
 
@@ -5263,12 +5873,68 @@ impl Estado {
         (self.aplicada(), Vec::new())
     }
 
+    /// Cuántos elementos como mucho enseña el cuerpo de un diálogo.
+    ///
+    /// El cuerpo no puede crecer con la selección —un lote de mil ficheros no
+    /// cabe en una pregunta— así que se acota. Que se acotó lo dice
+    /// [`Self::nota_de_recorte`]: una lista recortada en silencio describe
+    /// una operación más pequeña que la que se va a ejecutar, y esta es la
+    /// última pantalla donde todavía se puede decir que no.
+    const MAX_LINEAS_DIALOGO: usize = 16;
+
+    /// La frase que dice que el cuerpo enseña menos de lo que hay. Vacía si
+    /// los enseña todos.
+    fn nota_de_recorte(&self, mostrados: usize, total: usize) -> String {
+        if mostrados >= total {
+            return String::new();
+        }
+        clamp_display(norte_i18n::ta_in(
+            self.lang,
+            "dialog-body-truncated",
+            &[
+                ("shown", &mostrados.to_string()),
+                ("total", &total.to_string()),
+            ],
+        ))
+    }
+
+    /// Una ruta como LÍNEA de diálogo: enmascarada, acotada, y diciendo si
+    /// lo pintado difiere de lo real.
+    ///
+    /// Una sola función porque los cinco diálogos que enseñan rutas —crear,
+    /// buscar, borrar, transferir y aprobar— tienen que decirlo igual, y el
+    /// sitio donde uno de ellos se olvida del `bool` es exactamente donde
+    /// alguien aprueba otra cosa.
+    fn linea_de_ruta(p: &VPath) -> crate::dto::DialogLine {
+        let (texto, hostil) = norte_frontend::path_display(p);
+        crate::dto::DialogLine {
+            text: clamp_display(texto),
+            hostile: hostil,
+        }
+    }
+
     fn vistas_de_dialogos(&self) -> Vec<DialogView> {
         self.dialogos.iter().map(|d| d.vista.clone()).collect()
     }
 
+    /// El tablero que cruza el puente, acotado a [`MAX_TASKS`].
+    ///
+    /// El desalojo de `registrar_task` solo puede tirar tasks TERMINADAS, así
+    /// que un lote más grande que el tope —marcar tres mil ficheros y pulsar
+    /// F5 es el flujo normal— no tiene nada que desalojar y el mapa crece por
+    /// encima del tope que el contrato del puente promete. Se acota aquí, que
+    /// es donde el número significa algo: cuántas filas viajan.
+    ///
+    /// Se quedan las MÁS NUEVAS (el mapa está ordenado por id, que es
+    /// monótono): lo que interesa de un lote en marcha es su frente, no las
+    /// primeras que se encolaron.
     fn vistas_de_tasks(&self) -> Vec<TaskView> {
-        self.tasks.values().map(|t| t.vista.clone()).collect()
+        let sobran = self.tasks.len().saturating_sub(MAX_TASKS);
+        self.tasks
+            .values()
+            .skip(sobran)
+            .map(|t| t.vista.clone())
+            .collect()
     }
 
     fn terminal(estado: TaskStateView) -> bool {
@@ -5304,6 +5970,10 @@ impl Estado {
                 let (texto, _hostil) = norte_frontend::path_display(path);
                 clamp_display(texto)
             }),
+            detail_hostile: p
+                .current
+                .as_ref()
+                .is_some_and(|path| norte_frontend::path_display(path).1),
             foreign: false,
         }
     }
@@ -6078,7 +6748,12 @@ impl Estado {
     /// lista a mano enseña atajos que el preset del usuario no tiene.
     fn filas_de_paleta(&self) -> Vec<norte_frontend::palette::Row> {
         use norte_frontend::palette::first_chord;
-        crate::commands::todos()
+        // Con los EFECTOS de esta ventana, no con todos: la paleta era la
+        // única puerta que no pasaba por el keymap efectivo, así que una
+        // ventana de solo lectura ofrecía copiar, mover y borrar. La guarda
+        // de `aplicar_efecto` los rechazaba, pero ofrecer lo que se va a
+        // rehusar es prometer algo que no se va a hacer.
+        crate::commands::todos_con(self.efectos)
             .into_iter()
             .map(|cmd| norte_frontend::palette::Row {
                 key: cmd.to_owned(),

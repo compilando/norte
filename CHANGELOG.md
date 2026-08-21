@@ -32,6 +32,35 @@ independently through `PROTOCOL_VERSION`.
   seeing the file's bytes. A previewer that fails, stalls or does not apply is
   not an error: the viewer falls back to the raw view, because a plugin cannot
   leave a file unopenable.
+- **The window copies, moves, creates and deletes** (ADR **0070**). Bridge
+  **23**. The renderer names neither operand: it sends "copy", and Rust derives
+  the sources from the marks of the focused pane and the destination from the
+  pane holding the target role. The final path is the source's last segment
+  pushed onto the destination directory — bytes, never through a display
+  function. Everything goes through the daemon, so the journal, the policy gate
+  and the undo path are the ones the TUI already uses. The collision policy is
+  the wire's safe default: a destination that exists makes the task fail and
+  the board says so, because overwrite and rename are the reader's decisions
+  and this window has nowhere yet to take them.
+- **The confirmation labels out of band.** The destination has its own field
+  rather than being the first body line behind an arrow, and the reason is a
+  fixture the corpus has carried since before anything needed it: `→` (U+2192)
+  is legitimate in a filename and is not a terminal hazard, so it is neither
+  masked nor flagged. A directory named `docs → /home/you/DELETE` would produce
+  a line that reads as two paths, and a reader who parses "arrow, then path"
+  would confirm a move believing their files go to the second one. The same
+  argument gave the truncation notice its own field: a confirmation that shows
+  sixteen names out of two hundred and says nothing describes a smaller
+  operation than the one about to run, on the last screen where anyone can
+  still say no.
+- **Every line of a dialog says whether it is painted differently from what it
+  is**, and so does the file a task has in flight. Both surfaces masked and
+  threw the flag away, and a dialog body is the one place where a name from
+  whoever wrote in that directory gets APPROVED. This also fixed an older
+  hole found on the way: the dialog where a human approves an agent's mutation
+  cited a Fluent key defined in neither locale, so a truncated list of paths
+  painted the raw identifier.
+
 - **Image preview** (ADR **0069**). Bridge **22**. The bytes cross as a
   `blob:` built from a read that goes through the daemon like every other
   read, so the policy engine sees it. Three caps, all refusals rather than
@@ -45,7 +74,53 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
-- **A click on the sidebar could navigate somewhere else.** Bridge version
+- **The destination pane was guessed, and the guess claimed to be a choice.**
+  With two panes the destination is "the other one" and nobody notices the
+  concept exists; the window reassigned it on every focus change to the
+  lowest-numbered other pane, and recorded that guess as an explicit human
+  designation. With three panes — a layout a user writes — designating one by
+  hand and then pressing Tab silently moved the destination somewhere else.
+  The rule now comes from the shared layer, which is where it was already
+  written (ADR 0058 D7): a chosen destination survives, and with several
+  candidates and none chosen the role is left unset and the transfer asks you
+  to pick rather than breaking the tie for you.
+- **A pane refreshed after an operation moved the reader's cursor onto a
+  different file.** The cursor was restored by INDEX, and a refresh is exactly
+  the case where the index stops naming the same file: the operation removed or
+  added an entry. Nothing on screen explained it — the pane had not moved under
+  a keystroke, it moved under a task completing — and the next key could be
+  F8. The cursor is now pinned by path, and the marks come back by path too
+  instead of being dropped: a listing that reloads on its own was taking a
+  selection someone had made by hand.
+- **A refresh could throw away a navigation.** A pane's directory only changes
+  when its listing lands, so a refresh triggered while the reader was walking
+  into a directory re-requested the OLD one, and the navigation's answer
+  arrived with a stale token and was discarded. The pane sat in the directory
+  the reader had just left, with the trail already recorded, in silence. A
+  refresh now skips a pane that has a request in flight, and recognises a pane
+  by where it is heading rather than by what it is still showing.
+- **A hidden pane on a changed directory stayed wrong forever.** A tab behind
+  another one is not re-listed — what is not seen is not fetched — but nothing
+  recorded that it had gone stale, so bringing it back showed a listing from
+  before the operation. It is now marked loading, which the existing wake-up
+  path already picks up.
+- **The marks consumed by a transfer were whichever pane had the focus.** A
+  click on the other panel is not blocked while a dialog is open — only keys
+  are — so clicking away between the question and the answer cleared the wrong
+  pane's selection and left the sent one fully marked, inviting a second press
+  of F5 over the same files.
+- **A batch opened one connection per marked file.** Marking a few thousand
+  files and pressing F5 is the ordinary way to use an orthodox file manager,
+  and it fired that many simultaneous requests at the daemon; over SFTP that is
+  not a copy. The batch is now enqueued in order through one sender. The task
+  board also honours its own documented cap again, and prefers to drop a task
+  that finished cleanly over one that failed — a failure leaves no journal
+  entry, so its row is the only surface that says what did not happen.
+- **The command palette offered what the window refuses to run.** It was the
+  one door that did not go through the effective keymap, so a read-only window
+  listed copy, move and delete and then declined them.
+
+ Bridge version
   **17**, and it breaks on purpose: volumes arrive from a background task and
   are inserted in the MIDDLE of the sidebar — drives sort before favourites —
   so between the frame the user clicked and the host handling the action, that

@@ -650,9 +650,10 @@ async fn el_contador_lo_resuelve_el_host() {
 async fn un_comando_que_el_host_no_hace_no_dispara_nada() {
     let (h, snap) = host_arbol(arbol()).await;
     let antes = listado(&snap).clone();
-    // `F5` es copiar en el preset ortodoxo: existe, está ligada, y este host
-    // todavía no muta nada.
-    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    // `F4` es editar en el preset ortodoxo: existe, está ligada, y este host
+    // no la implementa. (Era `F5` hasta que la tarea 5.1 construyó copiar;
+    // el ejemplo tiene que ser un comando que de verdad no esté.)
+    let ack = h.dispatch(tecla("F4")).await.expect("host vivo");
     match ack {
         ActionAck::Unavailable { reason_key } => assert_eq!(reason_key, "cmd-not-here"),
         otro => panic!("se esperaba no disponible: {otro:?}"),
@@ -1638,14 +1639,18 @@ async fn una_aprobacion_abre_su_dialogo() {
         "aprobar una op de agente es destructivo y se dice"
     );
     assert!(
-        d.body.iter().all(|l| !l.contains('\u{202E}')),
+        d.body.iter().all(|l| !l.text.contains('\u{202E}')),
         "las rutas van enmascaradas: {:?}",
         d.body
     );
     assert!(
-        d.body.len() >= 3,
-        "y se dice que la lista viene recortada: {:?}",
+        d.body.iter().any(|l| l.hostile),
+        "y se DICE cuál se pinta distinta de lo que es: {:?}",
         d.body
+    );
+    assert!(
+        !d.overflow_note.is_empty(),
+        "y que la lista viene recortada, en su propio campo: {d:?}"
     );
 }
 
@@ -7116,4 +7121,1342 @@ async fn cerrar_el_visor_suelta_la_imagen() {
         h.image_bytes().await.expect("host vivo").is_none(),
         "un visor cerrado no retiene megas de imagen"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Copiar y mover (tarea 5.1 de la fase 5).
+//
+// El renderer JAMÁS nombra un fichero: manda `pane.copy` y el host deriva el
+// origen de las marcas del hueco activo y el destino del hueco con el rol
+// `Target`. Ni una ruta cruza desde la webview.
+// ---------------------------------------------------------------------------
+
+/// El listado de UN hueco concreto de una foto.
+fn listado_de(
+    snap: &norte_ui_host::ViewSnapshot,
+    slot_id: u32,
+) -> &norte_ui_host::dto::BrowserSlotView {
+    snap.slots
+        .iter()
+        .find_map(|s| match s {
+            SlotView::Browser(b) if b.slot_id == slot_id => Some(b),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("el hueco {slot_id} es un listado"))
+}
+
+/// Dos paneles, con el DESTINO ya en otro directorio: el escenario real de
+/// una copia. Devuelve la foto de después.
+async fn dos_paneles_con_destino_aparte(
+    backend: Arc<Falso>,
+) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    let (h, snap) = host_con_layout(backend, "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+    let b2 = listado_de(&snap, 2);
+    let docs = b2
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("el directorio está");
+    let (key, generation) = (docs.key, b2.generation);
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Activate {
+        slot_id: 2,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    // La foto del aterrizaje: sin esperarla, F5 vería el destino todavía en
+    // el directorio de partida y el test probaría otra cosa.
+    let mut despues = siguiente_foto(&mut sub).await;
+    while !listado_de(&despues, 2).path_display.ends_with("/casa/docs") {
+        despues = siguiente_foto(&mut sub).await;
+    }
+    h.dispatch(UiAction::FocusSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    // El cursor del ORIGEN, sobre un fichero que no es el directorio destino:
+    // con el cursor en `docs` el origen y el destino se escriben igual, y una
+    // aserción sobre el texto del diálogo no distinguiría cuál de los dos
+    // está mirando.
+    let b1 = listado_de(&despues, 1);
+    let notas = b1
+        .rows
+        .iter()
+        .find(|r| r.display_name == "notas.txt")
+        .expect("el fichero está");
+    let (key, generation) = (notas.key, b1.generation);
+    h.dispatch(UiAction::SelectRow {
+        slot_id: 1,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    (h, despues)
+}
+
+/// F5 no copia: abre la confirmación, y esa confirmación DICE a dónde va.
+///
+/// En una ventana con dos listados el destino no es evidente —no hay «el
+/// otro panel» cuando hay tres—, así que el diálogo es el único sitio donde
+/// se puede leer antes de aceptar.
+#[tokio::test]
+async fn copiar_pide_confirmacion_y_dice_a_donde() {
+    let backend = arbol();
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogos.len(), 1, "se abre UN diálogo");
+    assert_eq!(dialogos[0].title_key, "modal-copy-title");
+    let cuerpo = &dialogos[0].body;
+    assert!(
+        cuerpo.iter().any(|l| l.text.ends_with("/casa/notas.txt")),
+        "el cuerpo es lo que se transfiere: {cuerpo:?}"
+    );
+    let destino = dialogos[0]
+        .destination
+        .as_ref()
+        .expect("una transferencia dice a dónde va");
+    assert!(
+        destino.text.ends_with("/casa/docs"),
+        "y el destino va en SU campo: {destino:?}"
+    );
+    assert!(
+        cuerpo.iter().all(|l| !l.text.contains("/casa/docs")),
+        "no repetido entre las líneas del cuerpo: {cuerpo:?}"
+    );
+    assert!(
+        backend
+            .transferencias
+            .lock()
+            .expect("transferencias")
+            .is_empty(),
+        "abrir el diálogo no copia nada"
+    );
+}
+
+/// Confirmada, la copia sale con el destino COMPUESTO en Rust: el directorio
+/// del hueco destino más el nombre de la entrada, byte a byte.
+#[tokio::test]
+async fn copiar_compone_el_destino_en_rust() {
+    let backend = arbol();
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let ts = backend.transferencias.lock().expect("transferencias");
+    assert_eq!(ts.len(), 1, "una entrada bajo el cursor, una task");
+    let (from, to, mover, colision) = &ts[0];
+    assert_eq!(
+        *colision,
+        norte_proto::CollisionPolicy::Fail,
+        "el default SEGURO del wire: un destino ocupado falla, no se pisa"
+    );
+    assert!(!mover, "F5 copia");
+    assert_eq!(from.to_wire(), "mem:///casa/notas.txt");
+    assert_eq!(
+        to.to_wire(),
+        "mem:///casa/docs/notas.txt",
+        "el destino es el DIRECTORIO del otro hueco más el nombre del origen"
+    );
+}
+
+/// F6 usa el mismo camino, pero es otro verbo: en el wire son dos métodos,
+/// en el tablero dos clases de task y en el journal dos entradas.
+#[tokio::test]
+async fn mover_es_otro_verbo_y_lo_dice() {
+    let backend = arbol();
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F6")).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogos[0].title_key, "modal-move-title");
+    let id = dialogos[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let ts = backend.transferencias.lock().expect("transferencias");
+    assert!(ts[0].2, "F6 mueve");
+}
+
+/// Con un solo listado no hay a dónde copiar, y se DICE en vez de inventar un
+/// destino.
+#[tokio::test]
+async fn sin_otro_hueco_no_hay_a_donde_transferir() {
+    let backend = arbol();
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "simple", (120, 40)).await;
+    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Unavailable {
+            reason_key: "host-no-other-slot".to_owned()
+        },
+        "{ack:?}"
+    );
+    assert!(
+        backend
+            .transferencias
+            .lock()
+            .expect("transferencias")
+            .is_empty()
+    );
+}
+
+/// Los dos listados en el MISMO directorio: copiar ahí es copiar encima de
+/// uno mismo, y no se abre ningún diálogo que lo sugiera.
+#[tokio::test]
+async fn copiar_sobre_el_propio_directorio_se_rechaza() {
+    let backend = arbol();
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (120, 40)).await;
+    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Unavailable { .. }),
+        "el destino es el directorio de origen: {ack:?}"
+    );
+    assert!(
+        backend
+            .transferencias
+            .lock()
+            .expect("transferencias")
+            .is_empty()
+    );
+}
+
+/// En solo lectura, F5 no abre nada: que la tecla exista en el preset no es
+/// permiso.
+#[tokio::test]
+async fn en_solo_lectura_copiar_no_abre_nada() {
+    let backend = arbol();
+    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        backend
+            .transferencias
+            .lock()
+            .expect("transferencias")
+            .is_empty()
+    );
+}
+
+/// Las marcas las CONSUME el envío, como en el TUI: una selección a medio
+/// consumir significaría cosas distintas según qué task terminó.
+#[tokio::test]
+async fn las_marcas_se_consumen_al_enviar() {
+    let backend = arbol();
+    let (h, snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let b1 = listado_de(&snap, 1);
+    let (generation, claves): (u64, Vec<_>) = (
+        b1.generation,
+        b1.rows
+            .iter()
+            .filter(|r| r.display_name != "docs")
+            .map(|r| r.key)
+            .collect(),
+    );
+    let mut sub = h.subscribe();
+    for key in claves.iter().take(2) {
+        h.dispatch(UiAction::ToggleMark {
+            slot_id: 1,
+            key: *key,
+            generation,
+        })
+        .await
+        .expect("host vivo");
+    }
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    assert_eq!(
+        backend.transferencias.lock().expect("transferencias").len(),
+        2,
+        "dos marcas, dos tasks"
+    );
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(
+        listado_de(&foto, 1).marks,
+        0,
+        "las marcas las consumió el envío"
+    );
+}
+
+/// Al terminar la copia, el hueco DESTINO se vuelve a listar: la entrada
+/// nueva está ahí y una pantalla que no la enseña miente.
+#[tokio::test]
+async fn al_terminar_una_copia_se_relista_el_destino() {
+    let backend = arbol();
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    siguientes_tasks(&mut sub).await;
+    let antes = backend.listados();
+
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+
+    for _ in 0..40 {
+        if backend.listados() > antes {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("nadie volvió a listar el destino tras la copia");
+}
+
+/// Una colisión no es una excepción del host: es el desenlace TIPADO de la
+/// task, y llega al tablero como tal.
+#[tokio::test]
+async fn una_colision_llega_al_tablero_como_fallo() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)],
+    );
+    f.pon("mem:///casa/docs", vec![(b"notas.txt".to_vec(), false)]);
+    f.estado_transferencia = Some(norte_proto::TaskState::Failed {
+        error: norte_proto::Error::Conflict {
+            conflict: norte_proto::ConflictKind::Exists,
+        },
+    });
+    let backend = Arc::new(f);
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let tasks = siguientes_tasks(&mut sub).await;
+    assert_eq!(
+        tasks[0].state,
+        norte_ui_host::dto::TaskStateView::Failed,
+        "el destino ya existía, y el tablero lo dice"
+    );
+}
+
+/// Una task que NACE terminal —el daemon la completó antes de que la llamada
+/// volviera— también relista el destino.
+///
+/// Es la carrera de verdad: el canal de progreso no cambia nunca, así que
+/// nadie llega a mirarlo, y sin comprobar el estado AL REGISTRAR la copia
+/// quedaba hecha en el disco y ausente en la pantalla para siempre.
+#[tokio::test]
+async fn una_copia_que_nace_terminal_tambien_relista() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)],
+    );
+    f.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    f.estado_transferencia = Some(norte_proto::TaskState::Completed);
+    let backend = Arc::new(f);
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    let antes = backend.listados();
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    for _ in 0..40 {
+        if backend.listados() > antes {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("una copia ya terminada al llegar dejó la pantalla sin refrescar");
+}
+
+/// Un destino que no acepta escrituras rechaza al ENCOLAR, antes de que haya
+/// task: no hay fila en el tablero que mirar, así que lo dice la barra —con
+/// la frase tipada del error, no con un «algo falló»—.
+#[tokio::test]
+async fn un_destino_de_solo_lectura_lo_dice_al_encolar() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)],
+    );
+    f.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    f.transferencia_rechazada = Some(norte_proto::Error::Unsupported);
+    let backend = Arc::new(f);
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    for _ in 0..40 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        if let Some(m) = &foto.status.message {
+            assert!(
+                !m.starts_with("err-"),
+                "la barra dice el error TRADUCIDO, no su clave: {m}"
+            );
+            assert!(foto.tasks.is_empty(), "no llegó a haber task");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("un rechazo al encolar se perdió en silencio");
+}
+
+/// Una transferencia en marcha se cancela por el mismo camino que cualquier
+/// otra task: el tablero es uno solo.
+#[tokio::test]
+async fn una_copia_en_marcha_se_cancela() {
+    let backend = arbol();
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let tasks = siguientes_tasks(&mut sub).await;
+    assert_eq!(tasks.len(), 1);
+    let ack = h
+        .dispatch(UiAction::CancelTask {
+            task_id: tasks[0].task_id,
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    assert_eq!(backend.cancelaciones.load(Ordering::SeqCst), 1);
+}
+
+/// Un refresco JAMÁS pisa una navegación en vuelo.
+///
+/// El refresco reserva un testigo nuevo, así que la respuesta de la
+/// navegación llegaría con uno viejo y se descartaría: el panel se quedaría
+/// en el directorio del que el lector acababa de salir, sin decir nada. Una
+/// pantalla un poco vieja es aceptable; la aplicación moviéndose sola, no.
+#[tokio::test]
+async fn un_refresco_no_pisa_una_navegacion_en_vuelo() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)],
+    );
+    f.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    f.pon("mem:///casa/docs/hondo", vec![(b"z.md".to_vec(), false)]);
+    f.arbol
+        .get_mut("mem:///casa/docs")
+        .expect("está")
+        .push((b"hondo".to_vec(), true));
+    // La respuesta del listado TARDA: es lo que abre la ventana en la que el
+    // refresco podría colarse.
+    f.retraso_ms = 120;
+    f.estado_transferencia = Some(norte_proto::TaskState::Completed);
+    let backend = Arc::new(f);
+    let (h, snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let b2 = listado_de(&snap, 2);
+    let hondo = b2
+        .rows
+        .iter()
+        .find(|r| r.display_name == "hondo")
+        .expect("el subdirectorio está");
+    let (key, generation) = (hondo.key, b2.generation);
+
+    // Una copia hacia `casa/docs`, que termina nada más encolarse.
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    // Y, ANTES de confirmar, el destino se va a otro sitio: la navegación
+    // queda volando durante los 120 ms del falso.
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Activate {
+        slot_id: 2,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::FocusSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    // La navegación llega a su destino y NADIE la devuelve a `casa/docs`.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(
+        listado_de(&foto, 2).path_display.ends_with("/docs/hondo"),
+        "la navegación sobrevivió al refresco: {}",
+        listado_de(&foto, 2).path_display
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Lo que las tres revisiones de la 5.1 encontraron.
+// ---------------------------------------------------------------------------
+
+/// Un nombre del corpus, por su id.
+fn hostil(id: &str) -> Vec<u8> {
+    norte_testkit::corpus::hostile_names()
+        .into_iter()
+        .find(|n| n.id == id)
+        .unwrap_or_else(|| panic!("el corpus tiene {id}"))
+        .bytes
+}
+
+/// Un directorio destino que se llama `a → mem_b.txt` NO puede simular dos
+/// rutas en la confirmación.
+///
+/// La flecha es legítima (U+2192), no es un peligro de terminal y por tanto
+/// no se enmascara ni se marca. Con el destino como primera línea del cuerpo
+/// y una flecha por etiqueta, quien lee `→ …/a → mem_b.txt` puede entender
+/// que sus ficheros van a `mem_b.txt`. Se etiqueta FUERA de banda: el destino
+/// tiene su propio campo. Fixture `arrow_join_spoof` del corpus canónico.
+#[tokio::test]
+async fn un_destino_con_una_flecha_no_simula_dos_rutas() {
+    let trampa = hostil("arrow_join_spoof");
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(trampa.clone(), true), (b"notas.txt".to_vec(), false)],
+    );
+    let vp = norte_proto::VPath::parse("mem:///casa")
+        .expect("raíz")
+        .join(norte_proto::Segment::new(trampa.clone()).expect("segmento"));
+    f.pon(vp.to_wire().as_str(), vec![(b"a.md".to_vec(), false)]);
+    let backend = Arc::new(f);
+    let (h, snap) = host_con_layout(Arc::clone(&backend), "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+
+    // El hueco destino entra en el directorio trampa.
+    let b2 = listado_de(&snap, 2);
+    let fila = b2
+        .rows
+        .iter()
+        .find(|r| r.display_name.contains('→'))
+        .expect("la trampa se pinta");
+    let (key, generation) = (fila.key, b2.generation);
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Activate {
+        slot_id: 2,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    let mut despues = siguiente_foto(&mut sub).await;
+    while listado_de(&despues, 2).path_display == listado_de(&snap, 2).path_display {
+        despues = siguiente_foto(&mut sub).await;
+    }
+    h.dispatch(UiAction::FocusSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    // El cursor del ORIGEN, sobre el fichero: el directorio trampa también
+    // está listado aquí, y lo que se comprueba es el destino.
+    let b1 = listado_de(&despues, 1);
+    let notas = b1
+        .rows
+        .iter()
+        .find(|r| r.display_name == "notas.txt")
+        .expect("el fichero está");
+    let (key, generation) = (notas.key, b1.generation);
+    h.dispatch(UiAction::SelectRow {
+        slot_id: 1,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let d = siguientes_dialogos(&mut sub).await[0].clone();
+    let destino = d.destination.expect("dice a dónde va");
+    assert!(
+        destino.text.contains('\u{2192}'),
+        "el nombre real lleva la flecha: {destino:?}"
+    );
+    assert_eq!(d.body.len(), 1, "una entrada, una línea: {:?}", d.body);
+    assert!(
+        d.body[0].text.ends_with("/casa/notas.txt") && !d.body[0].text.contains('\u{2192}'),
+        "el cuerpo es SOLO el origen; el destino no aparece ahí: {:?}",
+        d.body
+    );
+}
+
+/// Un lote más grande de lo que cabe en el diálogo lo DICE.
+///
+/// Marcar cuarenta, ver dieciséis y confirmar es aprobar otra cosa: esta es
+/// la última pantalla donde todavía se puede decir que no.
+#[tokio::test]
+async fn un_lote_recortado_lo_dice() {
+    let mut nombres: Vec<(Vec<u8>, bool)> =
+        vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)];
+    nombres.extend((0..40).map(|i| (format!("f{i:03}.txt").into_bytes(), false)));
+    let mut f = Falso::default();
+    f.pon("mem:///casa", nombres);
+    f.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    let backend = Arc::new(f);
+    let (h, snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+
+    let b1 = listado_de(&snap, 1);
+    let generation = b1.generation;
+    let claves: Vec<_> = b1
+        .rows
+        .iter()
+        .filter(|r| r.display_name != "docs")
+        .map(|r| r.key)
+        .collect();
+    assert!(
+        claves.len() > 16,
+        "hay más de lo que cabe: {}",
+        claves.len()
+    );
+    for key in &claves {
+        h.dispatch(UiAction::ToggleMark {
+            slot_id: 1,
+            key: *key,
+            generation,
+        })
+        .await
+        .expect("host vivo");
+    }
+    // Se escucha DESPUÉS de marcar: cuarenta marcas son cuarenta parches, y
+    // el ayudante que espera un diálogo mira solo las primeras
+    // actualizaciones que le llegan.
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let d = siguientes_dialogos(&mut sub).await[0].clone();
+    assert!(
+        d.body.len() < claves.len(),
+        "el cuerpo está acotado: {}",
+        d.body.len()
+    );
+    assert!(
+        !d.overflow_note.is_empty(),
+        "y lo DICE, en su propio campo: {d:?}"
+    );
+    assert!(
+        !d.overflow_note.starts_with("dialog-"),
+        "traducido, no la clave Fluent: {}",
+        d.overflow_note
+    );
+}
+
+/// El cuerpo de una confirmación DICE qué línea se pinta distinta de lo que
+/// es. Es la única superficie donde se aprueba un nombre ajeno.
+#[tokio::test]
+async fn el_cuerpo_de_una_confirmacion_marca_lo_que_enmascara() {
+    for id in ["control_newline", "control_escape", "arrow_join_spoof"] {
+        let bytes = hostil(id);
+        let altera = norte_frontend::display_name(&bytes).1;
+        let mut f = Falso::default();
+        f.pon(
+            "mem:///casa",
+            vec![(b"docs".to_vec(), true), (bytes.clone(), false)],
+        );
+        f.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+        let backend = Arc::new(f);
+        let (h, snap) = host_con_layout(Arc::clone(&backend), "orthodox", (120, 40)).await;
+        let mut sub = h.subscribe();
+        // El cursor, sobre la entrada hostil.
+        let b1 = listado_de(&snap, 1);
+        let fila = b1
+            .rows
+            .iter()
+            .find(|r| r.display_name != "docs")
+            .expect("está");
+        let (key, generation) = (fila.key, b1.generation);
+        h.dispatch(UiAction::SelectRow {
+            slot_id: 1,
+            key,
+            generation,
+        })
+        .await
+        .expect("host vivo");
+        // F8 basta: el cuerpo del borrado y el de la transferencia se
+        // construyen con la MISMA función.
+        h.dispatch(tecla("F8")).await.expect("host vivo");
+        let d = siguientes_dialogos(&mut sub).await[0].clone();
+        for l in &d.body {
+            sin_peligro(&l.text, id, "una línea del cuerpo de un diálogo");
+        }
+        assert_eq!(
+            d.body.iter().any(|l| l.hostile),
+            altera,
+            "[{id}] la marca del cuerpo dice exactamente lo que `display_name` dice: {:?}",
+            d.body
+        );
+    }
+}
+
+/// El destino se compone con los BYTES del origen, también cuando no son
+/// UTF-8. La ruta que cruza el wire no ha pasado por pantalla.
+#[tokio::test]
+async fn el_destino_se_compone_byte_a_byte() {
+    let backend = arbol();
+    let (h, snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    // `caf\xC3(`: no es UTF-8, y en pantalla lleva un U+FFFD.
+    let b1 = listado_de(&snap, 1);
+    let fila = b1
+        .rows
+        .iter()
+        .find(|r| r.hostile)
+        .expect("el árbol trae un nombre que no es UTF-8");
+    let (key, generation) = (fila.key, b1.generation);
+    h.dispatch(UiAction::SelectRow {
+        slot_id: 1,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let ts = backend.transferencias.lock().expect("transferencias");
+    let (from, to, _, _) = &ts[0];
+    assert!(
+        from.to_wire().starts_with("mem:///casa/caf"),
+        "el origen es la entrada que no es UTF-8: {}",
+        from.to_wire()
+    );
+    let nombre = from
+        .to_wire()
+        .strip_prefix("mem:///casa/")
+        .expect("cuelga de casa")
+        .to_owned();
+    assert_eq!(
+        to.to_wire(),
+        format!("mem:///casa/docs/{nombre}"),
+        "los bytes del nombre llegan intactos"
+    );
+    assert!(
+        !to.to_wire().contains("%EF%BF%BD"),
+        "y sin el U+FFFD que la pantalla pinta: {}",
+        to.to_wire()
+    );
+}
+
+/// Mover relista TAMBIÉN el panel de origen: de ahí desaparecen entradas.
+#[tokio::test]
+async fn mover_relista_tambien_el_origen() {
+    let backend = arbol();
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F6")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    siguientes_tasks(&mut sub).await;
+    let antes = backend.listados();
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+
+    for _ in 0..40 {
+        // Los DOS: el origen (`casa`, de donde sale) y el destino
+        // (`casa/docs`, a donde llega).
+        if backend.listados() >= antes + 2 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("un movimiento dejó sin relistar uno de los dos paneles");
+}
+
+/// Un refresco conserva el cursor POR RUTA, no por índice.
+///
+/// La memoria por directorio guarda un índice, y un índice no sobrevive a que
+/// la operación quite una entrada: quien miraba un fichero se encontraba el
+/// cursor en otro sin haber tocado una tecla, y la siguiente tecla podía ser
+/// F8.
+#[tokio::test]
+async fn el_cursor_sobrevive_a_un_refresco() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![
+            (b"a.txt".to_vec(), false),
+            (b"b.txt".to_vec(), false),
+            (b"c.txt".to_vec(), false),
+            (b"d.txt".to_vec(), false),
+        ],
+    );
+    // El borrado QUITA la entrada: sin eso el listado que llega es idéntico
+    // y el índice del cursor sigue nombrando el mismo fichero por accidente
+    // — un test verde que no prueba nada.
+    f.borrar_de_verdad = true;
+    let backend = Arc::new(f);
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let b = listado(&snap);
+    // Ni la primera ni la ÚLTIMA: sobre la última, borrar una entrada por
+    // delante deja el índice viejo recortado justo sobre el mismo fichero, y
+    // el test pasaría sin ancla por pura coincidencia.
+    let medio = &b.rows[2];
+    let (key, generation, nombre) = (medio.key, b.generation, medio.display_name.clone());
+    h.dispatch(UiAction::SelectRow {
+        slot_id: 1,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+
+    // Se marca y se borra la PRIMERA, no la del cursor: el listado llega con
+    // una entrada menos por DELANTE, así que el índice viejo apunta a otro
+    // fichero mientras que la ruta sigue siendo la misma.
+    let primera = b.rows.first().expect("hay filas").key;
+    h.dispatch(UiAction::ToggleMark {
+        slot_id: 1,
+        key: primera,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    siguientes_tasks(&mut sub).await;
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        let b = listado(&foto);
+        if b.generation == generation {
+            continue;
+        }
+        let bajo = b
+            .cursor
+            .and_then(|k| b.rows.iter().find(|r| r.key == k))
+            .map(|r| r.display_name.clone());
+        assert_eq!(
+            bajo.as_deref(),
+            Some(nombre.as_str()),
+            "el cursor sigue sobre el MISMO fichero tras el refresco"
+        );
+        return;
+    }
+    panic!("el refresco no llegó");
+}
+
+/// Con TRES listados, un destino designado a mano SOBREVIVE a un cambio de
+/// foco, y sin designar no se adivina ninguno.
+///
+/// El host reasignaba el rol en cada `FocusSlot` con su propia regla —«el
+/// primero que no sea el activo»— pisando lo que una persona había elegido y
+/// desempatando solo cuando había varios candidatos. Mientras el destino era
+/// decoración eso se veía raro; desde que copiar y mover lo leen, es mandar
+/// ficheros a un sitio que nadie eligió. La regla es la compartida (ADR 0058
+/// D7), y con varios candidatos y ninguno elegido el rol se queda SIN FIJAR.
+#[tokio::test]
+async fn con_tres_listados_el_destino_no_se_adivina() {
+    use norte_ui_host::dto::SlotRole;
+    const TRES: &str = r#"
+[split]
+dir = "vertical"
+sizes = [{ weight = 1 }, { fixed = 1 }]
+
+[[split.children]]
+[split.children.split]
+dir = "horizontal"
+sizes = [{ weight = 1 }, { weight = 1 }, { weight = 1 }]
+
+[[split.children.split.children]]
+[split.children.split.children.slot]
+id = 1
+kind = "browser"
+
+[[split.children.split.children]]
+[split.children.split.children.slot]
+id = 2
+kind = "browser"
+
+[[split.children.split.children]]
+[split.children.split.children.slot]
+id = 3
+kind = "browser"
+
+[[split.children]]
+[split.children.slot]
+id = 4
+kind = "status"
+"#;
+    let arbol_layout: norte_frontend::layout::Node =
+        toml::from_str(TRES).expect("la disposición parsea");
+    let (h, snap) = UiHost::start(UiHostOptions {
+        backend: arbol(),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: arbol_layout,
+        viewport: (200, 60),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    let rol = |l: &norte_ui_host::dto::LayoutView, id: u32| {
+        l.placements
+            .iter()
+            .find(|p| p.slot_id == id)
+            .and_then(|p| p.role)
+    };
+    let _ = &snap;
+    let mut sub = h.subscribe();
+
+    // Sin designar: F5 no adivina, PIDE que se elija.
+    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Unavailable {
+            reason_key: "host-no-target-designated".to_owned()
+        },
+        "con tres paneles el destino se elige, no se desempata: {ack:?}"
+    );
+
+    // `layout.set-target` no lo ata ningún preset, así que se corre por la
+    // PALETA — que es la otra puerta del catálogo, y sirve igual.
+    let mut puesto = false;
+    for _ in 0..4 {
+        h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+            key: "p".to_owned(),
+            ctrl: true,
+            alt: false,
+            shift: false,
+            meta: false,
+        }))
+        .await
+        .expect("host vivo");
+        for c in ["s", "e", "t", "-", "t", "a", "r", "g", "e", "t"] {
+            h.dispatch(tecla_de(c)).await.expect("host vivo");
+        }
+        h.dispatch(tecla("Enter")).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        if rol(&foto.layout, 3) == Some(SlotRole::Target) {
+            puesto = true;
+            break;
+        }
+    }
+    assert!(puesto, "se puede designar el tercero");
+
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let despues = siguiente_foto(&mut sub).await;
+    assert_eq!(
+        rol(&despues.layout, 3),
+        Some(SlotRole::Target),
+        "el destino ELEGIDO sobrevive al cambio de foco"
+    );
+}
+
+/// Las marcas que consume el envío son las del hueco de ORIGEN, aunque el
+/// foco se haya ido a otro entre la pregunta y la respuesta.
+///
+/// `FocusSlot` no está vedada mientras hay un diálogo abierto: solo lo están
+/// las teclas. Un clic en el otro panel borraba las marcas del panel ajeno y
+/// dejaba intactas las que se acababan de enviar.
+#[tokio::test]
+async fn las_marcas_que_se_consumen_son_las_del_origen() {
+    let backend = arbol();
+    let (h, snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let b1 = listado_de(&snap, 1);
+    let generation = b1.generation;
+    let claves: Vec<_> = b1
+        .rows
+        .iter()
+        .filter(|r| r.display_name != "docs")
+        .map(|r| r.key)
+        .collect();
+    for key in &claves {
+        h.dispatch(UiAction::ToggleMark {
+            slot_id: 1,
+            key: *key,
+            generation,
+        })
+        .await
+        .expect("host vivo");
+    }
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+
+    // Y AHORA el foco se va al otro panel, sin cerrar el diálogo.
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(
+        listado_de(&foto, 1).marks,
+        0,
+        "las marcas consumidas son las del hueco que las mandó"
+    );
+}
+
+/// Un hueco OCULTO sobre el directorio afectado no se lista —lo que no se ve
+/// no se trae— pero queda marcado para recargar en cuanto vuelva.
+///
+/// Sin esto, una pestaña de atrás sobre el directorio de destino enseñaba un
+/// listado anterior a la operación hasta que alguien navegara a mano, y una
+/// tecla sobre una de sus filas actuaba contra ese listado viejo.
+#[tokio::test]
+async fn un_hueco_oculto_afectado_queda_para_recargar() {
+    let backend = arbol();
+    // Nace ANCHA, para que el segundo listado se liste de verdad y quede
+    // `Ready`. Si naciera escondido estaría `Loading` desde el principio y se
+    // recargaría al volver por ese motivo, no por este.
+    let (h, snap) = host_con_layout(Arc::clone(&backend), "orthodox", (160, 40)).await;
+    assert!(
+        snap.slots
+            .iter()
+            .filter(|s| matches!(s, SlotView::Browser(_)))
+            .count()
+            >= 2,
+        "los dos listados se ven"
+    );
+    let mut sub = h.subscribe();
+    // Y ahora se estrecha hasta que solo cabe uno.
+    h.dispatch(UiAction::SetViewport {
+        width: 30,
+        height: 10,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let estrecha = siguiente_foto(&mut sub).await;
+    assert_eq!(
+        estrecha
+            .slots
+            .iter()
+            .filter(|s| matches!(s, SlotView::Browser(_)))
+            .count(),
+        1,
+        "con 30 columnas solo cabe un listado"
+    );
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    siguientes_tasks(&mut sub).await;
+    let listados_antes = backend.listados();
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Se ensancha la ventana: el hueco que estaba escondido vuelve, y como
+    // quedó marcado CARGANDO, se lista.
+    h.dispatch(UiAction::SetViewport {
+        width: 160,
+        height: 40,
+    })
+    .await
+    .expect("host vivo");
+    for _ in 0..40 {
+        if backend.listados() > listados_antes + 1 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("el hueco que volvió sigue enseñando un listado anterior al borrado");
+}
+
+/// En solo lectura, la PALETA tampoco ofrece lo que muta.
+///
+/// Era la única puerta que no pasaba por el keymap efectivo: ofrecía copiar,
+/// mover y borrar, y la guarda de ejecución los rechazaba. Ofrecer lo que se
+/// va a rehusar es prometer algo que no se va a hacer.
+#[tokio::test]
+async fn en_solo_lectura_la_paleta_no_ofrece_lo_que_muta() {
+    let (h, _snap) = host_solo_lectura(arbol()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "p".to_owned(),
+        ctrl: true,
+        alt: false,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+    let p = siguiente_paleta(&mut sub).await.expect("la paleta abre");
+    for cmd in norte_ui_host::commands::MUTAN {
+        assert!(
+            !p.rows.iter().any(|r| r.text == *cmd),
+            "la paleta de una ventana de solo lectura ofrece {cmd}"
+        );
+    }
+}
+
+/// Y la tecla lo dice con SU motivo, no con uno cualquiera.
+#[tokio::test]
+async fn en_solo_lectura_copiar_dice_por_que() {
+    let (h, _snap) = host_solo_lectura(arbol()).await;
+    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    let ActionAck::Unavailable { reason_key } = ack else {
+        panic!("se esperaba no disponible: {ack:?}");
+    };
+    assert!(
+        reason_key == "cmd-not-here" || reason_key == "host-read-only",
+        "y con un motivo del vocabulario, no uno inventado: {reason_key}"
+    );
+}
+
+/// Un refresco conserva las MARCAS, por ruta.
+///
+/// `set_listing` las limpia porque las filas son otras — correcto para un
+/// `cd`, y un castigo para quien no se movió: el panel de DESTINO de una
+/// copia se relista cuando la copia termina, y se llevaba por delante una
+/// selección que su dueño había hecho a mano y que nadie había enviado.
+#[tokio::test]
+async fn las_marcas_sobreviven_a_un_refresco() {
+    let backend = arbol();
+    let (h, snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    // Marcas en el panel de DESTINO: no son las que la copia consume, así que
+    // lo único que puede quitarlas es el relistado.
+    let b2 = listado_de(&snap, 2);
+    let generation2 = b2.generation;
+    let claves: Vec<_> = b2.rows.iter().map(|r| r.key).collect();
+    assert!(!claves.is_empty(), "el destino tiene filas");
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    for key in &claves {
+        h.dispatch(UiAction::ToggleMark {
+            slot_id: 2,
+            key: *key,
+            generation: generation2,
+        })
+        .await
+        .expect("host vivo");
+    }
+    h.dispatch(UiAction::FocusSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    siguientes_tasks(&mut sub).await;
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        let b = listado_de(&foto, 2);
+        if b.generation == generation2 {
+            continue;
+        }
+        assert_eq!(
+            b.marks,
+            claves.len() as u64,
+            "el relistado del destino no se lleva por delante lo que su dueño \
+             había marcado"
+        );
+        return;
+    }
+    panic!("el refresco del destino no llegó");
+}
+
+/// Un movimiento relista el panel de ORIGEN aunque el provider escriba el
+/// padre de sus entradas con OTRA ortografía del mismo directorio.
+///
+/// El padre de una entrada lo escribe el provider; el directorio del panel
+/// puede venir de la config, de la sesión o de un favorito. En macOS (NFD
+/// contra NFC) y contra un servidor sin distinción de caja son dos cadenas
+/// para el mismo sitio, y la comparación byte a byte no las junta (ADR 0061).
+#[tokio::test]
+async fn mover_relista_el_origen_aunque_el_provider_lo_escriba_distinto() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)],
+    );
+    f.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    // El provider cuelga sus entradas de `⟨mem⟩/CASA`, no de `⟨mem⟩/casa`.
+    f.padre_distinto = true;
+    let backend = Arc::new(f);
+    let (h, snap) = host_con_layout(Arc::clone(&backend), "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+
+    // El destino, en `docs`.
+    let b2 = listado_de(&snap, 2);
+    let docs = b2
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("está");
+    let (key, generation) = (docs.key, b2.generation);
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Activate {
+        slot_id: 2,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    let mut despues = siguiente_foto(&mut sub).await;
+    while listado_de(&despues, 2).path_display == listado_de(&snap, 2).path_display {
+        despues = siguiente_foto(&mut sub).await;
+    }
+    h.dispatch(UiAction::FocusSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+
+    h.dispatch(tecla("F6")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    siguientes_tasks(&mut sub).await;
+    let antes = backend.listados();
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+
+    for _ in 0..40 {
+        // Los DOS paneles. Sin apuntar el directorio del HUECO de origen, el
+        // padre de la entrada (`⟨mem⟩/CASA`) no casaría con lo que el panel
+        // enseña (`⟨mem⟩/casa`) y el origen se quedaría sin relistar.
+        if backend.listados() >= antes + 2 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("el panel de origen se quedó sin relistar");
 }

@@ -43,6 +43,9 @@ norte-testkit.workspace = true
 norte-vfs.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+# Una disposición de TRES listados, que ningún preset de fábrica trae: el
+# destino solo se puede adivinar mal cuando hay más de un candidato.
+toml.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints]

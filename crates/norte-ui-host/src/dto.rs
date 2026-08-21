@@ -1260,8 +1260,34 @@ pub struct DialogView {
     pub id: ModalId,
     /// Clave Fluent del título.
     pub title_key: String,
+    /// A DÓNDE va lo que este diálogo pregunta, si va a alguna parte.
+    ///
+    /// Campo propio y no la primera línea del cuerpo, y eso NO es estilo. Un
+    /// cuerpo plano solo puede distinguir «el destino» de «los orígenes» con
+    /// un separador dentro del texto —una flecha, dos puntos—, y un nombre de
+    /// directorio puede contener ese separador: `→` (U+2192) es legítimo, no
+    /// es un peligro de terminal y por tanto no se enmascara ni se marca. Un
+    /// directorio llamado `docs → /casa/BORRAR` produciría una línea que se
+    /// lee como dos rutas, y quien confirma un movimiento cree que sus
+    /// ficheros van a la segunda. La fixture `arrow_join_spoof` del corpus
+    /// canónico dice exactamente esto: etiquetar FUERA DE BANDA, jamás por
+    /// un separador dentro del texto.
+    pub destination: Option<DialogLine>,
     /// Líneas de cuerpo, ya saneadas y acotadas.
-    pub body: Vec<String>,
+    pub body: Vec<DialogLine>,
+    /// El cuerpo enseña MENOS elementos de los que la operación toca, y esto
+    /// lo dice ya traducido. Vacío = los enseña todos.
+    ///
+    /// El cuerpo se acota (una selección de mil ficheros no cabe en un
+    /// diálogo), y una lista recortada sin decirlo describe una operación más
+    /// pequeña que la que se va a ejecutar: alguien marca doscientos, ve
+    /// dieciséis y confirma. Es el único sitio donde todavía se puede decir
+    /// que no.
+    ///
+    /// Traducido AQUÍ y en su propio campo, por los dos motivos de siempre:
+    /// un renderer no traduce ni sustituye números, y un aviso metido entre
+    /// las líneas del cuerpo lo podría suplantar un nombre de fichero.
+    pub overflow_note: String,
     /// Lo que se puede responder.
     pub choices: Vec<DialogChoice>,
     /// El diálogo pide texto libre, y esto es lo tecleado hasta ahora, YA
@@ -1272,6 +1298,27 @@ pub struct DialogView {
     /// dirección). Es la única superficie donde se pide aprobar un nombre, y
     /// enseñarlo crudo es como se aprueba otra cosa.
     pub input_hostile: bool,
+}
+
+/// Una línea del cuerpo de un diálogo.
+///
+/// Estructura y no una cadena suelta porque la línea lleva DOS cosas: lo que
+/// se pinta y si lo que se pinta difiere de lo que hay. Un cuerpo de
+/// `Vec<String>` con un `Vec<bool>` al lado son dos vectores que se pueden
+/// desincronizar; una fila del listado ([`RowView`]) ya resuelve lo mismo
+/// así, y esto es lo mismo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DialogLine {
+    /// El texto, enmascarado y acotado.
+    pub text: String,
+    /// Lo pintado DIFIERE de lo real (bytes no UTF-8, controles, marcas de
+    /// dirección). El renderer lo marca; jamás lo esconde.
+    ///
+    /// Aquí importa más que en ningún otro sitio: el cuerpo de un diálogo es
+    /// lo que alguien lee antes de aprobar que se borre, se copie o se mueva
+    /// un fichero. Un nombre que se pinta distinto de lo que es, sin insignia,
+    /// es un nombre que se lee como fiel — y la aprobación es de OTRA cosa.
+    pub hostile: bool,
 }
 
 /// Una respuesta posible de un diálogo.
@@ -1298,6 +1345,11 @@ pub struct TaskView {
     pub percent: Option<u8>,
     /// Descripción corta ya saneada (qué se está moviendo).
     pub detail: Option<String>,
+    /// [`Self::detail`] difiere de la ruta real. Se marca por el mismo motivo
+    /// que en [`DialogLine::hostile`]: una copia cuyo fichero en curso se
+    /// pinta con el nombre enmascarado y sin insignia dice que ese ES el
+    /// nombre.
+    pub detail_hostile: bool,
     /// La task es de OTRO cliente de la misma sesión.
     pub foreign: bool,
 }

@@ -73,7 +73,10 @@
     "dialogs": [
       {
         "body": [
-          "/home/oscar"
+          {
+            "text": "/home/oscar",
+            "hostile": true
+          }
         ],
         "choices": [
           {
@@ -90,7 +93,12 @@
         "id": 3,
         "input": "",
         "input_hostile": false,
-        "title_key": "modal-mkdir-title"
+        "title_key": "modal-mkdir-title",
+        "destination": {
+          "text": "/home/oscar/destino",
+          "hostile": false
+        },
+        "overflow_note": "… se enseñan 1 de 3"
       }
     ]
   },
@@ -518,7 +526,8 @@
         "kind": "copy",
         "percent": 40,
         "state": "running",
-        "task_id": 7
+        "task_id": 7,
+        "detail_hostile": false
       }
     ]
   },

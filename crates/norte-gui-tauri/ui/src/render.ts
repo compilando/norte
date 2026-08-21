@@ -2019,10 +2019,48 @@ export class Screen {
     h.textContent = this.t(top.title_key);
     box.setAttribute("aria-labelledby", h.id);
     box.append(h);
+    if (top.destination !== null) {
+      // El destino, en su propio elemento y con su etiqueta traducida. NO
+      // como una línea del cuerpo con una flecha delante: un directorio puede
+      // llamarse `docs → /casa/BORRAR`, esa flecha es legítima y no se
+      // enmascara, así que la línea se leería como dos rutas y quien confirma
+      // creería estar mandando sus ficheros a la segunda.
+      const dest = document.createElement("p");
+      dest.className = "dialog-destination";
+      const etiqueta = document.createElement("span");
+      etiqueta.className = "dialog-destination-label";
+      etiqueta.textContent = this.t("dialog-destination");
+      const valor = document.createElement("span");
+      valor.textContent = top.destination.text;
+      valor.dataset["hostile"] = String(top.destination.hostile);
+      dest.append(etiqueta, valor);
+      if (top.destination.hostile) {
+        valor.classList.add("hostile");
+        dest.append(badge(this.t("hostile-name")));
+      }
+      box.append(dest);
+    }
     for (const line of top.body) {
       const p = document.createElement("p");
-      p.textContent = line;
+      p.textContent = line.text;
+      p.dataset["hostile"] = String(line.hostile);
+      if (line.hostile) {
+        // Esta es la pantalla donde se aprueba borrar, copiar o mover un
+        // nombre. Un nombre que se pinta distinto de lo que es y no lo dice
+        // se lee como fiel, y la aprobación es de otra cosa.
+        p.classList.add("hostile");
+        p.append(badge(this.t("hostile-name")));
+      }
       box.append(p);
+    }
+    if (top.overflow_note !== "") {
+      // La lista está recortada, y decirlo es lo único que impide confirmar
+      // una operación sobre doscientos ficheros creyendo que son dieciséis.
+      const nota = document.createElement("p");
+      nota.className = "dialog-overflow";
+      nota.setAttribute("role", "alert");
+      nota.textContent = top.overflow_note;
+      box.append(nota);
     }
     if (top.input_hostile) {
       // Es la ÚNICA superficie donde se aprueba un nombre: si lo que se pinta
@@ -2224,7 +2262,15 @@ function taskNode(t: TaskView, tr: (k: string) => string): HTMLElement {
   state.textContent = t.percent === null ? t.state : `${t.state} ${String(t.percent)}%`;
   const detail = document.createElement("span");
   detail.textContent = t.detail ?? "";
+  detail.dataset["hostile"] = String(t.detail_hostile);
   el.append(kind, state, detail);
+  if (t.detail_hostile) {
+    // El fichero en curso se pinta distinto de lo que es: se dice, igual que
+    // en una fila del listado. Sin insignia, un nombre enmascarado se lee
+    // como el nombre de verdad.
+    detail.classList.add("hostile");
+    el.append(badge(tr("hostile-name")));
+  }
   if (t.foreign) {
     el.append(badge(tr("gui-task-foreign")));
   }

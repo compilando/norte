@@ -309,3 +309,23 @@ fn el_renderer_solo_invoca_comandos_conocidos() {
         );
     }
 }
+
+/// La ventana de verdad NO muta, y eso es una barrera que se clava aquí.
+///
+/// El gate de salida de la fase 5 dice que ninguna compilación de release
+/// escribe nada hasta que pase la revisión de seguridad de las mutaciones
+/// (tarea 5.4). Toda esa promesa descansaba en una constante que ninguna
+/// prueba miraba: cambiarla a `Completo` por descuido dejaba la suite entera
+/// verde y la ventana borrando ficheros.
+///
+/// Cuando 5.4 se cierre y esta constante pase a `Completo`, este test cambia
+/// A LA VEZ — que es exactamente el momento en que alguien tiene que decidirlo
+/// a propósito.
+#[test]
+fn la_ventana_no_muta_todavia() {
+    assert_eq!(
+        norte_gui_tauri::startup::EFECTOS,
+        norte_ui_host::commands::Efectos::SoloLectura,
+        "el interruptor de efectos lo levanta la tarea 5.4, no un descuido"
+    );
+}

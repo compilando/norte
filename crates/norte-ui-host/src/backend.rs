@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use norte_client::{ConnEvent, EntryStream};
-use norte_proto::{AttrCatalog, DeleteMode, Entry, Error, TaskId, TaskProgress, VPath, methods};
+use norte_proto::{
+    AttrCatalog, CollisionPolicy, DeleteMode, Entry, Error, TaskId, TaskProgress, VPath, methods,
+};
 use tokio::sync::watch;
 
 /// Una Task en marcha, en la forma mínima que el host necesita: su id, su
@@ -149,6 +151,39 @@ pub trait HostBackend: Send + Sync + 'static {
     /// borrado de varias marcas son varias Tasks, y el tablero las enseña
     /// todas.
     fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>>;
+
+    /// Copia UNA entrada a un destino EXACTO. Devuelve la Task ya encolada.
+    ///
+    /// `to` es la ruta final, no el directorio: quien llama ya compuso el
+    /// nombre. El core solo inventa un nombre libre con
+    /// [`norte_proto::CollisionPolicy::RenameAuto`], y con el resto de
+    /// políticas jamás lo hace — así que un `to` que sea un directorio
+    /// copiaría DENTRO de él sin decirlo, y eso no es lo que este método
+    /// promete.
+    ///
+    /// Una por entrada y no un lote, por el mismo motivo que
+    /// [`Self::delete`]: el método del wire es así, y un lote de marcas son
+    /// varias Tasks que el tablero enseña todas.
+    fn copy(
+        &self,
+        from: VPath,
+        to: VPath,
+        on_collision: CollisionPolicy,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
+
+    /// Mueve UNA entrada a un destino EXACTO. Mismas reglas que
+    /// [`Self::copy`].
+    ///
+    /// Método aparte y no un `bool` porque son dos verbos distintos en el
+    /// wire (`fs.copy` y `fs.move`), dos `TaskKind` distintos en el tablero y
+    /// dos entradas de journal distintas. Un parámetro que elige entre
+    /// ambos es un sitio donde una copia se convierte en un movimiento.
+    fn move_(
+        &self,
+        from: VPath,
+        to: VPath,
+        on_collision: CollisionPolicy,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
     /// El catálogo de plugins descubiertos, con su estado aprobado/activo.
     ///
@@ -444,4 +479,87 @@ impl HostBackend for norte_client::RemoteBackend {
             })
         })
     }
+
+    fn copy(
+        &self,
+        from: VPath,
+        to: VPath,
+        on_collision: CollisionPolicy,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        transferir(self, Verbo::Copiar, from, to, on_collision)
+    }
+
+    fn move_(
+        &self,
+        from: VPath,
+        to: VPath,
+        on_collision: CollisionPolicy,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        transferir(self, Verbo::Mover, from, to, on_collision)
+    }
+}
+
+/// Copiar o mover: los dos verbos de una transferencia.
+///
+/// Un enum y no el nombre del método como cadena. La diferencia importa
+/// porque el destino del `else` no es un error visible: es la otra
+/// operación, la que además BORRA el origen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verbo {
+    /// `fs.copy`.
+    Copiar,
+    /// `fs.move`.
+    Mover,
+}
+
+/// El cuerpo COMPARTIDO de copiar y mover sobre el SDK.
+///
+/// Uno solo porque las dos llamadas se diferencian en el nombre del método y
+/// en nada más: el resto —opciones por defecto, envoltura de la Task, el
+/// cancelador— tiene que ser idéntico, y dos copias del mismo bloque es el
+/// sitio donde `fs.move` se queda sin la política de colisión que `fs.copy`
+/// sí manda.
+fn transferir(
+    backend: &norte_client::RemoteBackend,
+    verbo: Verbo,
+    from: VPath,
+    to: VPath,
+    on_collision: CollisionPolicy,
+) -> BoxFuture<'static, Result<HostTask, Error>> {
+    let backend = backend.clone();
+    // El SDK sigue tomando el método como CADENA, y su cuerpo es
+    // `if method == FS_COPY { copiar } else { mover }`: cualquier cosa que no
+    // sea exactamente la constante de copiar se convierte en un movimiento.
+    // Aquí no puede pasar porque lo que entra es un enum de dos variantes y
+    // la conversión vive en un sitio; el `else` del SDK está anotado en la
+    // issue que propone el enum también allí.
+    let metodo = match verbo {
+        Verbo::Copiar => norte_proto::methods::FS_COPY,
+        Verbo::Mover => norte_proto::methods::FS_MOVE,
+    };
+    Box::pin(async move {
+        let task = backend
+            .transfer(
+                metodo,
+                &from,
+                &to,
+                norte_client::TransferOptions {
+                    on_collision,
+                    // El resto, el default del wire: preservar symlinks y no
+                    // reanudar. Reanudar es una decisión del usuario (ADR
+                    // 0012) y esta ventana todavía no tiene dónde tomarla,
+                    // así que se manda lo que el daemon entiende por «no se
+                    // pidió» en vez de elegir por él.
+                    ..norte_client::TransferOptions::default()
+                },
+            )
+            .await?;
+        let canceller = task.canceller();
+        Ok(HostTask {
+            id: task.id(),
+            progress: task.progress(),
+            cancel: Arc::new(move || canceller.cancel()),
+            foreign: false,
+        })
+    })
 }

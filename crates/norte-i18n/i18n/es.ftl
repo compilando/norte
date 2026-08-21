@@ -1517,6 +1517,8 @@ metadata-kind-other = otro
 # catálogo del renderer no las ve. Faltaban veintiuna y se pintaban como su
 # propio identificador —los dos botones del diálogo donde un humano aprueba la
 # mutación de un agente incluidos.
+dialog-body-truncated = … se enseñan { $shown } de { $total }
+dialog-destination = Destino:
 dialog-confirm = Confirmar
 dialog-cancel = Cancelar
 dialog-approve = Aprobar
@@ -1535,7 +1537,10 @@ host-column-not-sortable = por esa columna no se ordena
 host-help-over-input = la ayuda no se abre sobre un campo de texto
 host-layout-broken = ese fichero de disposición no parsea
 host-name-too-long = ese nombre es demasiado largo
+host-cannot-transfer-root = una raíz no se copia ni se mueve
 host-no-other-slot = no hay otro panel
+host-no-target-designated = hay más de un panel: designa antes un destino
+host-same-directory = el origen y el destino son el mismo directorio
 host-read-only = esta ventana todavía no escribe
 host-settings-read-only = los ajustes aquí son de solo lectura
 msg-nav-at-root = ya estás en la raíz

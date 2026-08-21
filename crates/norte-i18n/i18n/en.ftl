@@ -1490,6 +1490,8 @@ gui-msg-shortcut-saved-not-applied = saved, but this window kept the previous ke
 # the renderer's own catalogue test cannot see them. Twenty-one of them were
 # missing and painted as their own identifiers — including both buttons of
 # the dialog where a human approves an agent's mutation.
+dialog-body-truncated = … showing { $shown } of { $total }
+dialog-destination = Destination:
 dialog-confirm = Confirm
 dialog-cancel = Cancel
 dialog-approve = Approve
@@ -1508,7 +1510,10 @@ host-column-not-sortable = that column does not sort
 host-help-over-input = help does not open over a text field
 host-layout-broken = that layout file does not parse
 host-name-too-long = that name is too long
+host-cannot-transfer-root = a root cannot be copied or moved
 host-no-other-slot = there is no other panel
+host-no-target-designated = there is more than one panel: designate a destination first
+host-same-directory = source and destination are the same directory
 host-read-only = this window does not write yet
 host-settings-read-only = settings are read-only here
 msg-nav-at-root = already at the root

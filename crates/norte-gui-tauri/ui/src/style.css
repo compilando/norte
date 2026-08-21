@@ -465,6 +465,30 @@ body {
   unicode-bidi: isolate;
 }
 
+/* El destino, separado del cuerpo y con su etiqueta: es OTRA cosa que las
+   rutas de abajo, y distinguirlo por posición o por un separador dentro del
+   texto es lo que permitía que un nombre de directorio simulara dos rutas. */
+.dialog-destination {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dialog-destination-label {
+  color: var(--title-fg);
+  flex: 0 0 auto;
+}
+
+/* La lista está recortada. Se pinta como aviso porque lo es: la operación
+   toca más de lo que se lee. */
+.dialog-overflow {
+  color: var(--hostile-fg);
+  margin-top: 6px;
+}
+
 .dialog input {
   width: 100%;
   background: var(--bg);

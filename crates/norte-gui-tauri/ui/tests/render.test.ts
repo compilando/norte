@@ -319,7 +319,9 @@ describe("Screen", () => {
       {
         id: 3,
         title_key: "modal-delete-title",
-        body: ["a.txt"],
+        destination: null,
+        body: [{ text: "a.txt", hostile: false }],
+        overflow_note: "",
         choices: [
           { id: "confirm", label_key: "dialog-confirm", destructive: true },
           { id: "cancel", label_key: "dialog-cancel", destructive: false },
@@ -343,7 +345,9 @@ describe("Screen", () => {
       {
         id: 7,
         title_key: "t",
+        destination: null,
         body: [],
+        overflow_note: "",
         choices: [{ id: "cancel", label_key: "dialog-cancel", destructive: false }],
         input: null,
         input_hostile: false,
@@ -510,7 +514,9 @@ describe("el campo de texto de un diálogo", () => {
       {
         id: 9,
         title_key: "modal-mkdir-title",
+        destination: null,
         body: [],
+        overflow_note: "",
         choices: [{ id: "confirm", label_key: "dialog-confirm", destructive: false }],
         input,
         input_hostile: hostile,
@@ -1805,6 +1811,7 @@ describe("los huecos que no son listados", () => {
         state: "running",
         percent: 40,
         detail: "a.txt",
+        detail_hostile: false,
         foreign: false,
       },
       {
@@ -1813,6 +1820,7 @@ describe("los huecos que no son listados", () => {
         state: "running",
         percent: 10,
         detail: "b.txt",
+        detail_hostile: false,
         foreign: false,
       },
     ];
@@ -2054,5 +2062,91 @@ describe("la búsqueda", () => {
     const { screen } = montar();
     screen.paint(vista({}));
     expect(document.querySelector(".search")).toBeNull();
+  });
+});
+
+describe("un diálogo que pregunta por una operación", () => {
+  it("pinta el destino FUERA del cuerpo, marca lo alterado y dice si recorta", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.dialogs = [
+      {
+        id: 4,
+        title_key: "modal-copy-title",
+        // Un directorio que se llama `a → mem_b.txt`: la flecha es legítima,
+        // no se enmascara y no se marca. Con el destino como primera línea
+        // del cuerpo, la línea se leería como dos rutas.
+        destination: { text: "⟨mem⟩/casa/a → mem_b.txt", hostile: false },
+        body: [
+          { text: "⟨mem⟩/casa/notas.txt", hostile: false },
+          { text: "⟨mem⟩/casa/caf�.txt", hostile: true },
+        ],
+        overflow_note: "… se enseñan 2 de 240",
+        choices: [
+          { id: "confirm", label_key: "dialog-confirm", destructive: false },
+          { id: "cancel", label_key: "dialog-cancel", destructive: false },
+        ],
+        input: null,
+        input_hostile: false,
+      },
+    ];
+    screen.paint(v);
+    const dialog = document.querySelector('[role="dialog"]') as HTMLElement;
+
+    const dest = dialog.querySelector(".dialog-destination") as HTMLElement;
+    expect(dest).not.toBeNull();
+    expect(dest.textContent).toContain("a → mem_b.txt");
+    // Y no es una línea del cuerpo: las del cuerpo son hermanas suyas, no
+    // está entre ellas.
+    const cuerpo = [...dialog.querySelectorAll("p")].filter(
+      (p) =>
+        !p.classList.contains("dialog-destination") &&
+        !p.classList.contains("dialog-overflow"),
+    );
+    expect(cuerpo).toHaveLength(2);
+    expect(cuerpo.map((p) => p.textContent ?? "").join(" ")).not.toContain("→");
+
+    // La línea alterada lo dice, y la fiel no.
+    expect(cuerpo[0]?.dataset["hostile"]).toBe("false");
+    expect(cuerpo[1]?.dataset["hostile"]).toBe("true");
+    expect(cuerpo[1]?.textContent ?? "").toContain("nombre alterado");
+
+    // Y el recorte se pinta como aviso.
+    const nota = dialog.querySelector(".dialog-overflow") as HTMLElement;
+    expect(nota).not.toBeNull();
+    expect(nota.getAttribute("role")).toBe("alert");
+    expect(nota.textContent).toContain("240");
+  });
+});
+
+describe("el tablero de tareas", () => {
+  it("dice cuándo el fichero en curso se pinta distinto de lo que es", () => {
+    const { screen, root } = montar();
+    const v = vista({});
+    v.layout.placements.push({
+      slot_id: 9,
+      x: 0,
+      y: 30,
+      width: 60,
+      height: 4,
+      role: null,
+      focus_index: 2,
+    });
+    v.slots.push({ kind: "tasks", slot_id: 9 } as never);
+    v.tasks = [
+      {
+        task_id: 100,
+        kind: "copy",
+        state: "running",
+        percent: 40,
+        detail: "⟨mem⟩/casa/caf�.txt",
+        detail_hostile: true,
+        foreign: false,
+      },
+    ];
+    screen.paint(v);
+    const task = root.querySelector(".task") as HTMLElement;
+    expect(task).not.toBeNull();
+    expect(task.textContent ?? "").toContain("nombre alterado");
   });
 });

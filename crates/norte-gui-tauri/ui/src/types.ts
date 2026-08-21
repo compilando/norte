@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 22;
+export const BRIDGE_VERSION = 23;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -181,10 +181,22 @@ export interface DialogChoice {
   destructive: boolean;
 }
 
+/** Una línea del cuerpo de un diálogo: lo que se pinta, y si difiere de lo real. */
+export interface DialogLine {
+  text: string;
+  hostile: boolean;
+}
+
 export interface DialogView {
   id: ModalId;
   title_key: string;
-  body: string[];
+  /** A dónde va la operación. Campo propio: un nombre de directorio puede
+   *  contener una flecha, así que etiquetar con un separador dentro del texto
+   *  deja que una ruta simule otra. */
+  destination: DialogLine | null;
+  body: DialogLine[];
+  /** El cuerpo enseña menos de lo que la operación toca, ya traducido. */
+  overflow_note: string;
   choices: DialogChoice[];
   input: string | null;
   input_hostile: boolean;
@@ -198,6 +210,7 @@ export interface TaskView {
   state: TaskStateView;
   percent: number | null;
   detail: string | null;
+  detail_hostile: boolean;
   foreign: boolean;
 }
 

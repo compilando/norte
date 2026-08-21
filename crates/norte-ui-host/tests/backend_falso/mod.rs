@@ -16,7 +16,16 @@ use norte_ui_host::backend::{HostBackend, HostTask};
 
 /// Un backend de tabla: para cada directorio, los nombres que contiene y de
 /// qué clase son.
+//
+// `clippy::struct_excessive_bools`: permitido a propósito. Son MANDOS
+// independientes de un doble de test —el listado viene perezoso, el borrado
+// quita de verdad, el provider escribe el padre distinto— y cualquier
+// combinación de ellos es un escenario real. Plegarlos en una máquina de
+// estados sería inventar estados que no existen; envolver cada uno en un enum
+// de dos variantes dejaría cada test escribiendo `Lazy::Si, BorrarDeVerdad::No`
+// para nada: el nombre del campo ya dice a qué pregunta contesta.
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Falso {
     /// `wire del dir` → `(nombre, es_dir)`.
     pub arbol: HashMap<String, Vec<(Vec<u8>, bool)>>,
@@ -44,10 +53,35 @@ pub struct Falso {
     pub sondeos: std::sync::Mutex<Vec<VPath>>,
     /// Lo que se pidió borrar, en orden.
     pub borrados: std::sync::Mutex<Vec<(VPath, DeleteMode)>>,
+    /// Un borrado QUITA la entrada del árbol, como en la vida real.
+    ///
+    /// Apagado por defecto para no mover los tests que solo miran qué se
+    /// pidió. Encendido, es lo único que permite comprobar qué hace un
+    /// listado que llega con una entrada MENOS — que es donde un cursor por
+    /// índice deja de nombrar el mismo fichero.
+    pub borrar_de_verdad: bool,
+    /// Los wire de lo ya borrado, que `list` se salta.
+    pub desaparecidos: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// El provider escribe el PADRE de sus entradas con otra ortografía que
+    /// la que se le pidió (la última componente en mayúsculas).
+    ///
+    /// Es lo que pasa de verdad en macOS (NFD contra NFC) y contra un
+    /// servidor sin distinción de caja, y lo que hace que el padre de una
+    /// entrada y el directorio del panel sean dos cadenas para el mismo
+    /// sitio.
+    pub padre_distinto: bool,
     /// Cuántas veces se pidió cancelar la task que se lanzó.
     pub cancelaciones: Arc<AtomicUsize>,
     /// El emisor del progreso de la última task, para que el test lo mueva.
     pub progreso: std::sync::Mutex<Option<tokio::sync::watch::Sender<norte_proto::TaskProgress>>>,
+    /// Los emisores de TODAS las tasks de transferencia, por id.
+    ///
+    /// Un solo hueco no vale para un lote: al llegar la segunda se soltaba el
+    /// `Sender` de la primera, el bombeo del host veía `changed()` fallar y
+    /// esa fila se quedaba `Running` para siempre. O sea que el doble no
+    /// podía mover un lote, que es justo el caso caro.
+    pub progresos:
+        std::sync::Mutex<HashMap<u64, tokio::sync::watch::Sender<norte_proto::TaskProgress>>>,
     /// El catálogo de extensiones que contesta `plugin.list`.
     pub plugins: Vec<norte_proto::methods::PluginInfo>,
     /// El `help.md` de cada extensión, por id. Un id ausente contesta como
@@ -100,6 +134,25 @@ pub struct Falso {
     >,
     /// Las decisiones que se mandaron: `(id, aprobada)`.
     pub decisiones: std::sync::Mutex<Vec<(u64, bool)>>,
+    /// Lo que se pidió transferir, en orden:
+    /// `(origen, destino, mover, política de colisión)`.
+    ///
+    /// La política se apunta porque es el ÚNICO parámetro que separa «la task
+    /// falla» de «el fichero del destino desaparece»: sin clavarla, cambiarla
+    /// a `Overwrite` dejaría toda la suite verde.
+    pub transferencias: std::sync::Mutex<Vec<(VPath, VPath, bool, norte_proto::CollisionPolicy)>>,
+    /// El estado en que NACE la task de una transferencia. `Running` (el
+    /// default) deja que el test la mueva; `Failed` es la colisión que
+    /// devuelve un daemon con `on_collision = Fail`.
+    pub estado_transferencia: Option<norte_proto::TaskState>,
+    /// Ids que ya repartió una transferencia: dos copias son dos tasks, y
+    /// devolver el mismo id las fundiría en una fila del tablero.
+    pub siguiente_task: AtomicUsize,
+    /// ENCOLAR una transferencia falla con este error: un provider de solo
+    /// lectura, un scope que no llega. No es lo mismo que una task que falla
+    /// —esto pasa antes de que haya task— y la pantalla tiene que
+    /// distinguirlo.
+    pub transferencia_rechazada: Option<Error>,
 }
 
 impl Falso {
@@ -116,6 +169,60 @@ impl Falso {
     pub fn pon(&mut self, dir: &str, entradas: impl IntoIterator<Item = (Vec<u8>, bool)>) {
         self.arbol
             .insert(dir.to_owned(), entradas.into_iter().collect());
+    }
+
+    /// El cuerpo compartido de copiar y mover en el falso: apunta lo que se
+    /// pidió y devuelve una Task con id PROPIO.
+    fn transferir(
+        &self,
+        from: VPath,
+        to: VPath,
+        mover: bool,
+        on_collision: norte_proto::CollisionPolicy,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        if let Some(e) = self.transferencia_rechazada.clone() {
+            return Box::pin(async move { Err(e) });
+        }
+        self.transferencias
+            .lock()
+            .expect("transferencias")
+            .push((from, to, mover, on_collision));
+        let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
+        let id = norte_proto::TaskId::new(100 + n as u64);
+        let progreso = norte_proto::TaskProgress {
+            task_id: id,
+            kind: if mover {
+                norte_proto::TaskKind::Move
+            } else {
+                norte_proto::TaskKind::Copy
+            },
+            state: self
+                .estado_transferencia
+                .clone()
+                .unwrap_or(norte_proto::TaskState::Running),
+            bytes_done: 0,
+            bytes_total: Some(10),
+            entries_done: 0,
+            entries_total: Some(1),
+            current: None,
+        };
+        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        *self.progreso.lock().expect("progreso") = Some(tx.clone());
+        self.progresos
+            .lock()
+            .expect("progresos")
+            .insert(id.get(), tx);
+        let cancelaciones = Arc::clone(&self.cancelaciones);
+        Box::pin(async move {
+            Ok(HostTask {
+                id,
+                progress: rx,
+                cancel: Arc::new(move || {
+                    cancelaciones.fetch_add(1, Ordering::SeqCst);
+                }),
+                foreign: false,
+            })
+        })
     }
 
     pub fn listados(&self) -> usize {
@@ -521,6 +628,20 @@ impl HostBackend for Falso {
             return Box::pin(async { Err(Error::NotFound) });
         }
         let lazy = self.lazy;
+        // El directorio bajo el que el provider cuelga sus entradas. Con
+        // `padre_distinto`, OTRA ortografía del mismo sitio.
+        let padre = if self.padre_distinto {
+            match dir.file_name() {
+                Some(seg) => dir.parent().unwrap_or_else(|| dir.clone()).join(
+                    norte_proto::Segment::new(seg.as_bytes().to_ascii_uppercase())
+                        .expect("segmento"),
+                ),
+                None => dir.clone(),
+            }
+        } else {
+            dir.clone()
+        };
+        let idos = self.desaparecidos.lock().expect("desaparecidos").clone();
         // Sin ordenar: ordenar es cosa de `PaneState`, y devolverlo ya
         // ordenado escondería que el host lo delega.
         let entradas: Vec<Entry> = self
@@ -530,7 +651,7 @@ impl HostBackend for Falso {
             .unwrap_or_default()
             .into_iter()
             .map(|(nombre, es_dir)| Entry {
-                path: dir.join(norte_proto::Segment::new(nombre).expect("segmento")),
+                path: padre.join(norte_proto::Segment::new(nombre).expect("segmento")),
                 kind: if es_dir {
                     EntryKind::Dir
                 } else {
@@ -550,6 +671,7 @@ impl HostBackend for Falso {
                     m
                 },
             })
+            .filter(|e| !idos.contains(&e.path.to_wire()))
             .collect();
         let retraso = self.retraso_ms;
         let omitidas = self.omitidas;
@@ -587,7 +709,31 @@ impl HostBackend for Falso {
         Box::pin(async { Ok(9) })
     }
 
+    fn copy(
+        &self,
+        from: VPath,
+        to: VPath,
+        on_collision: norte_proto::CollisionPolicy,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.transferir(from, to, false, on_collision)
+    }
+
+    fn move_(
+        &self,
+        from: VPath,
+        to: VPath,
+        on_collision: norte_proto::CollisionPolicy,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.transferir(from, to, true, on_collision)
+    }
+
     fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>> {
+        if self.borrar_de_verdad {
+            self.desaparecidos
+                .lock()
+                .expect("desaparecidos")
+                .insert(path.to_wire());
+        }
         self.borrados.lock().expect("borrados").push((path, mode));
         let progreso = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(7),

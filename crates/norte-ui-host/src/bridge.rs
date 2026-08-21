@@ -25,6 +25,13 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **23**: un diálogo deja de ser texto plano. Su cuerpo son LÍNEAS
+///   ([`crate::dto::DialogLine`]), cada una diciendo si lo pintado difiere de
+///   lo real; el DESTINO viaja en su propio campo y no como una línea con una
+///   flecha, porque un directorio puede llamarse `docs → /casa/BORRAR` y esa
+///   flecha es legítima; y si el cuerpo enseña menos elementos de los que la
+///   operación toca, lo dice. Una task dice también si el fichero que lleva
+///   en curso se pinta distinto de lo que es.
 /// - **22**: el visor dice si lo que enseña es una IMAGEN pintable y cuánto
 ///   dice medir, o por qué se niega a pintarla. Sus bytes NO viajan en la
 ///   foto: se piden aparte (ADR 0069).
@@ -74,7 +81,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 22;
+pub const BRIDGE_VERSION: u32 = 23;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

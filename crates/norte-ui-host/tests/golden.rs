@@ -340,7 +340,15 @@ fn dialogo_de_referencia() -> DialogView {
     DialogView {
         id: ModalId(3),
         title_key: "modal-mkdir-title".to_owned(),
-        body: vec!["/home/oscar".to_owned()],
+        destination: Some(norte_ui_host::dto::DialogLine {
+            text: "/home/oscar/destino".to_owned(),
+            hostile: false,
+        }),
+        body: vec![norte_ui_host::dto::DialogLine {
+            text: "/home/oscar".to_owned(),
+            hostile: true,
+        }],
+        overflow_note: "… se enseñan 1 de 3".to_owned(),
         choices: vec![
             DialogChoice {
                 id: "confirm".to_owned(),
@@ -366,6 +374,7 @@ fn task_de_referencia() -> TaskView {
         state: TaskStateView::Running,
         percent: Some(40),
         detail: Some("notas.txt".to_owned()),
+        detail_hostile: false,
         foreign: false,
     }
 }
