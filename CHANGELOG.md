@@ -215,6 +215,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Per-scheme column configuration was dead in the graphical frontend.**
+  Columns were resolved once at start-up from the `file` scheme, so
+  `[ui.columns.schemes.sftp]` never painted and — worse — its `attr:` ids were
+  never requested, because the attribute list that travels with every listing
+  had been frozen too. The host takes the whole `ColumnsSettings` now and
+  resolves per pane, per scheme. A column id that does not parse is logged at
+  start-up instead of vanishing.
+
+- **Closing mid-copy reported that nothing was left undone.** The shutdown
+  report only looked at whether the session had been written; a queued or
+  running task now counts, which is what its own documentation always claimed.
+
 - **Closing the window could hang it.** The shutdown ran on the event-loop
   thread and waited on a daemon round-trip with no deadline, so a stalled
   socket meant a window that stopped repainting and never closed — and killing

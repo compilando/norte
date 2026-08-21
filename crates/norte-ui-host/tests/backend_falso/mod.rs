@@ -35,6 +35,8 @@ pub struct Falso {
     /// El `stat` contesta con el nombre en MAYÚSCULAS: otra ortografía de lo
     /// mismo, como un servidor sin distinción de caja o un HFS+ en NFD.
     pub stat_grita: bool,
+    /// Los `attrs` que se pidieron en cada listado, en orden.
+    pub attrs_pedidos: std::sync::Mutex<Vec<Vec<String>>>,
     /// Contenido por path, para el visor.
     pub contenido: HashMap<String, Vec<u8>>,
     /// Los paths que se sondearon, en orden: es lo que permite comprobar que
@@ -272,8 +274,9 @@ impl HostBackend for Falso {
     fn list(
         &self,
         dir: VPath,
-        _attrs: Vec<String>,
+        attrs: Vec<String>,
     ) -> BoxFuture<'static, Result<norte_client::EntryStream, Error>> {
+        self.attrs_pedidos.lock().expect("attrs").push(attrs);
         self.listados.fetch_add(1, Ordering::SeqCst);
         if !self.arbol.contains_key(&dir.to_wire()) {
             return Box::pin(async { Err(Error::NotFound) });

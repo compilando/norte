@@ -24,6 +24,9 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+# Para construir unos ajustes de columnas por su forma de configuración, que
+# es como los construye un arranque de verdad.
+norte-config.workspace = true
 # El e2e levanta un daemon REAL y conecta el SDK contra él. Son
 # dev-dependencies: el test de frontera solo mira el árbol de release, que es
 # donde el core no puede estar.

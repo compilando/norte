@@ -111,10 +111,14 @@ pub struct UiHostOptions {
     /// hasta que la fase 5 le dé el camino seguro; el TUI y los tests usan
     /// [`crate::commands::Efectos::Completo`].
     pub effects: crate::commands::Efectos,
-    /// Las columnas configuradas, en orden. El nombre lo pinta el renderer
-    /// aparte (es la columna que nunca se descarta), así que aquí van las
-    /// demás: tamaño, fecha, un atributo del provider, una columna de plugin.
-    pub columns: Vec<norte_frontend::columns::ColumnId>,
+    /// La configuración de columnas ENTERA, no una lista ya resuelta.
+    ///
+    /// Las columnas se configuran POR ESQUEMA (`[ui.columns.schemes.sftp]`),
+    /// y resolverlas una vez al arrancar dejaba muerta esa mitad de la
+    /// configuración: una columna `attr:` que solo existe en `sftp` no se
+    /// pedía nunca y no se pintaba nunca, porque los atributos que viajan en
+    /// cada listado se habían congelado con los del esquema de arranque.
+    pub columns: norte_frontend::columns::ColumnsSettings,
 }
 
 /// Lo que un suscriptor recibe.
@@ -147,8 +151,9 @@ impl UiSubscription {
 /// Lo que quedó sin terminar al apagar.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ShutdownReport {
-    /// Había trabajo vivo al apagar. Se DICE: apagar en silencio con una
-    /// copia a medias es como se pierde una operación sin que nadie lo sepa.
+    /// Quedó algo sin terminar: una task en cola o corriendo, o la sesión sin
+    /// escribir. Se DICE: apagar en silencio con una copia a medias es como
+    /// se pierde una operación sin que nadie lo sepa.
     pub incomplete: bool,
 }
 
@@ -684,11 +689,8 @@ struct Estado {
     viewport: (u16, u16),
     /// Quién tiene el foco y quién es el destino.
     roles: Roles,
-    /// Las columnas configuradas.
-    columnas: Vec<norte_frontend::columns::ColumnId>,
-    /// Los ids de atributo que esas columnas piden: se mandan en cada
-    /// listado, porque un provider solo entrega lo que se le pide.
-    attrs: Vec<String>,
+    /// La configuración de columnas, por esquema.
+    columnas: norte_frontend::columns::ColumnsSettings,
     /// El catálogo de atributos de la localización de cada hueco, cacheado
     /// por ESQUEMA: es lo que dice si un `attr:` es un tamaño, una fecha o un
     /// modo, y sin él se pinta el número crudo.
@@ -750,13 +752,6 @@ impl Estado {
             effects: efectos,
         } = options;
         let dir = &initial_dir;
-        let attrs: Vec<String> = columnas
-            .iter()
-            .filter_map(|c| match c {
-                norte_frontend::columns::ColumnId::Attr(id) => Some(id.clone()),
-                _ => None,
-            })
-            .collect();
         let kinds = KindRegistry::builtin();
         let reparto = resolve(rect(viewport), &arbol, &kinds);
         // Un hueco de listado por cada `browser` del árbol, todos en el
@@ -807,7 +802,6 @@ impl Estado {
             viewport,
             roles,
             columnas,
-            attrs,
             catalogos: std::collections::HashMap::new(),
             huecos,
             dialogos: Vec::new(),
@@ -956,7 +950,7 @@ impl Estado {
                 h.drenando = Some(token);
             }
             self.pedir_catalogo(&dir, backend_arc, buzon);
-            let stream = backend.list(dir.clone(), self.attrs.clone()).await;
+            let stream = backend.list(dir.clone(), self.attrs_de(&dir)).await;
             let res = Self::primera_pagina(stream, id, token, buzon.clone()).await;
             self.aterriza_en(id, dir, res);
         }
@@ -1623,7 +1617,7 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
-        if self.attrs.is_empty() || self.catalogos.contains_key(dir.scheme()) {
+        if self.attrs_de(dir).is_empty() || self.catalogos.contains_key(dir.scheme()) {
             return;
         }
         let backend = Arc::clone(backend);
@@ -2169,7 +2163,7 @@ impl Estado {
         let buzon = buzon.clone();
         let dir = destino.clone();
         let slot = self.activo();
-        let attrs = self.attrs.clone();
+        let attrs = self.attrs_de(&destino);
         tokio::spawn(async move {
             let stream = backend.list(dir.clone(), attrs).await;
             let res = Estado::primera_pagina(stream, slot, token, buzon.clone()).await;
@@ -2200,16 +2194,29 @@ impl Estado {
     /// conflicto en el último momento no se reintenta a lo loco: se informa,
     /// que es lo único honesto cuando ya no hay pantalla que corregir.
     async fn apagar(&mut self, backend: &dyn HostBackend) -> ShutdownReport {
+        // Una task viva al cerrar es trabajo sin terminar, lo diga la sesión
+        // o no: cerrar a mitad de una copia y reportar «todo bien» es
+        // exactamente lo que este informe existe para no hacer.
+        let hay_tasks = self.tasks.values().any(|t| {
+            matches!(
+                t.vista.state,
+                crate::dto::TaskStateView::Queued | crate::dto::TaskStateView::Running
+            )
+        });
         if !self.sesion.owner || self.sesion.futuro {
             // Una ventana suelta no escribe, y una sesión del futuro no se
             // machaca.
-            return ShutdownReport { incomplete: false };
+            return ShutdownReport {
+                incomplete: hay_tasks,
+            };
         }
         let mut body = self.capturar_sesion();
         let vivos: Vec<SlotId> = self.huecos.keys().map(|id| SlotId(*id)).collect();
         if self.sesion.policy.prepare(&mut body, &vivos, 0).is_none() {
             // Nada cambió desde lo último que se mandó.
-            return ShutdownReport { incomplete: false };
+            return ShutdownReport {
+                incomplete: hay_tasks,
+            };
         }
         let Ok(json) = serde_json::to_value(&body) else {
             return ShutdownReport { incomplete: true };
@@ -2230,7 +2237,9 @@ impl Estado {
         };
         self.sesion.revision = rev;
         self.sesion.policy.sent(std::sync::Arc::new(body));
-        ShutdownReport { incomplete: false }
+        ShutdownReport {
+            incomplete: hay_tasks,
+        }
     }
 
     fn aplicada(&self) -> ActionAck {
@@ -2311,7 +2320,11 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
-        let attrs = self.attrs.clone();
+        let attrs = self
+            .huecos
+            .get(&slot)
+            .map(|h| self.attrs_de(h.pane.dir()))
+            .unwrap_or_default();
         let Some(hueco) = self.huecos.get_mut(&slot) else {
             return;
         };
@@ -2495,7 +2508,7 @@ impl Estado {
     fn celdas(&self, hueco: &Hueco, e: &Entry) -> Vec<crate::dto::CellView> {
         use norte_frontend::columns::{ColumnId, ColumnStyle, styled_cell};
         let ahora = ahora_ms();
-        self.columnas
+        self.columnas_de(hueco.pane.dir())
             .iter()
             .filter(|c| !matches!(c, ColumnId::Builtin(norte_frontend::columns::Builtin::Name)))
             .map(|col| {
@@ -2887,10 +2900,16 @@ impl Estado {
         if !self.huecos.contains_key(&slot_id) || self.oculto(slot_id) {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         }
-        let col = self
-            .columnas
+        // Las del ESQUEMA de este hueco: es lo que se pintó, y por tanto lo
+        // que el renderer pudo nombrar.
+        let configuradas = self
+            .huecos
+            .get(&slot_id)
+            .map(|h| self.columnas_de(h.pane.dir()))
+            .unwrap_or_default();
+        let col = configuradas
             .iter()
-            .find(|c| c.to_string() == *column)
+            .find(|c| id_pintable(c) == *column)
             .and_then(sort_column_id)
             .or_else(|| {
                 // Un id que no está configurado pero que ES una columna
@@ -2929,6 +2948,27 @@ impl Estado {
         (self.aplicada(), salidas)
     }
 
+    /// Las columnas configuradas para el esquema de un hueco.
+    ///
+    /// Por ESQUEMA y no una vez al arrancar: `[ui.columns.schemes.sftp]` es
+    /// configuración de verdad, y resolverla en el arranque la dejaba muerta
+    /// en cuanto el panel navegaba a otro sitio.
+    fn columnas_de(&self, dir: &VPath) -> Vec<norte_frontend::columns::ColumnId> {
+        self.columnas
+            .layout_items_for(dir.scheme())
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    /// Los ids de atributo que pide el esquema de un directorio.
+    ///
+    /// Viajan en CADA listado: un provider solo entrega lo que se le pide, y
+    /// una columna `attr:` que no se pide se queda en blanco para siempre.
+    fn attrs_de(&self, dir: &VPath) -> Vec<String> {
+        self.columnas.attr_ids_for(dir.scheme())
+    }
+
     /// Las cabeceras del listado, con la etiqueta ya traducida y la marca de
     /// orden puesta.
     ///
@@ -2939,7 +2979,7 @@ impl Estado {
         use norte_frontend::columns::{ColumnStyle, header_label, sort_column_id};
         let spec = hueco.pane.sort();
         let catalogo = self.catalogo_de(hueco.pane.dir());
-        self.columnas
+        self.columnas_de(hueco.pane.dir())
             .iter()
             .map(|id| {
                 let estilo = ColumnStyle::default_for_id(id, catalogo);

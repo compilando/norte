@@ -49,12 +49,12 @@ pub struct ViewSnapshot {
 /// decodificación tuvo errores, el fichero seguía, el nombre difiere del
 /// real), y juntarlas en un enum obligaría a inventar combinaciones que no
 /// existen.
-#[allow(clippy::struct_excessive_bools)]
 ///
 /// El texto viene DECODIFICADO y en líneas por `norte_frontend::viewer`, que
 /// es el mismo modelo que pinta el TUI: la detección de encoding, el salto a
 /// hexadecimal de un binario y el recorte de la ventana visible son suyos, no
 /// del renderer.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerView {
     /// El fichero, ya saneado para pintar.

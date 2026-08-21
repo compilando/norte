@@ -415,6 +415,14 @@ dist-publish tag:
 
 gui_dir := "crates/norte-gui-tauri"
 
+# Las features del gate del spike. Existe por la misma razón que `features`
+# de arriba: `cargo -p norte-gui-tauri` a secas resuelve un conjunto DISTINTO
+# del de `core_pkgs` para los crates compartidos (norte-core y norte-testkit
+# entran por dev-dependencies), así que se compilaban y se quedaban en disco
+# DOS veces. No puede tomar `{{features}}`: ese conjunto nombra
+# `norte-tui/schema`, que no está en este grafo.
+gui_features := "--features norte-core/testing"
+
 # Las dependencias de JS, desde el lockfile y sin tocarlo (`npm ci`).
 gui-deps:
     cd {{gui_dir}}/ui && npm ci
@@ -434,9 +442,9 @@ gui-lint-ui:
 # El gate del spike, entero. `gui-build` va ANTES de los tests de Rust porque
 # uno de ellos audita el bundle empaquetado (`el_bundle_no_llama_a_casa`).
 gui-ci: gui-lint-ui gui-test-ui gui-build
-    CARGO_INCREMENTAL=0 cargo clippy -p norte-gui-tauri --all-targets -- -D warnings
-    CARGO_INCREMENTAL=0 cargo nextest run -p norte-gui-tauri --no-tests=pass
-    CARGO_INCREMENTAL=0 cargo test -p norte-gui-tauri --doc
+    CARGO_INCREMENTAL=0 cargo clippy -p norte-gui-tauri --all-targets {{gui_features}} -- -D warnings
+    CARGO_INCREMENTAL=0 cargo nextest run -p norte-gui-tauri {{gui_features}} --no-tests=pass
+    CARGO_INCREMENTAL=0 cargo test -p norte-gui-tauri {{gui_features}} --doc
 
 # Arranca el renderer contra el daemon. Necesita un daemon vivo.
 gui-run *args: gui-build

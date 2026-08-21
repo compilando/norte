@@ -16,6 +16,15 @@ use norte_ui_host::dto::{SlotView, UiNotice, UiUpdate};
 mod backend_falso;
 use backend_falso::Falso;
 
+/// Unos ajustes de columnas con estos ids, para todos los esquemas.
+fn columnas_de(ids: &[&str]) -> norte_frontend::columns::ColumnsSettings {
+    let cfg = norte_config::ColumnsConfig {
+        default_columns: Some(ids.iter().map(|s| (*s).to_owned()).collect()),
+        ..norte_config::ColumnsConfig::default()
+    };
+    norte_frontend::columns::ColumnsSettings::resolve(&cfg)
+}
+
 fn dir() -> VPath {
     VPath::parse("mem:///casa").expect("vpath de test")
 }
@@ -1578,10 +1587,7 @@ async fn el_catalogo_da_sentido_a_un_attr() {
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        columns: vec![
-            norte_frontend::columns::ColumnId::Builtin(norte_frontend::columns::Builtin::Name),
-            norte_frontend::columns::ColumnId::Attr("posix.mode".to_owned()),
-        ],
+        columns: columnas_de(&["name", "attr:posix.mode"]),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
     .await
@@ -2788,13 +2794,7 @@ async fn el_id_de_una_columna_hostil_no_cruza_crudo() {
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        columns: vec![
-            norte_frontend::columns::ColumnId::Builtin(norte_frontend::columns::Builtin::Name),
-            norte_frontend::columns::ColumnId::Plugin {
-                plugin: "acme.\u{202e}ftp".to_owned(),
-                column: "x".to_owned(),
-            },
-        ],
+        columns: columnas_de(&["name", "plugin:acme.\u{202e}ftp/x"]),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
     .await
@@ -2879,5 +2879,63 @@ async fn una_disposicion_sin_listado_no_arranca() {
             Err(norte_ui_host::controller::UiError::NoBrowserSlot)
         ),
         "una pantalla sin listado no es una pantalla"
+    );
+}
+
+/// Las columnas se resuelven POR ESQUEMA, no una vez al arrancar.
+///
+/// Con una lista resuelta en el arranque, `[ui.columns.schemes.sftp]` quedaba
+/// muerta: sus columnas no se pintaban y sus atributos no se pedían nunca,
+/// porque los que viajan en cada listado se habían congelado con los del
+/// esquema inicial.
+#[tokio::test]
+async fn las_columnas_de_otro_esquema_no_estan_muertas() {
+    let cfg = norte_config::ColumnsConfig {
+        default_columns: Some(vec!["name".to_owned(), "size".to_owned()]),
+        schemes: [(
+            "mem".to_owned(),
+            norte_config::SchemeColumns {
+                columns: Some(vec!["name".to_owned(), "attr:mem.mode".to_owned()]),
+                ..norte_config::SchemeColumns::default()
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..norte_config::ColumnsConfig::default()
+    };
+    let backend = arbol();
+    let (h, snap) = UiHost::start(UiHostOptions {
+        backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        columns: norte_frontend::columns::ColumnsSettings::resolve(&cfg),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    drop(h);
+
+    let ids: Vec<&str> = listado(&snap)
+        .columns
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["name", "attr:mem.mode"],
+        "manda la configuración del esquema `mem`, no la de por defecto"
+    );
+    assert!(
+        backend
+            .attrs_pedidos
+            .lock()
+            .expect("attrs")
+            .iter()
+            .any(|a| a.iter().any(|id| id == "mem.mode")),
+        "y su atributo se PIDE en el listado"
     );
 }

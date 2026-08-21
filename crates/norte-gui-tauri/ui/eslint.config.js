@@ -28,6 +28,25 @@ export default tseslint.config(
           property: "outerHTML",
           message: "prohibido: el texto se pone con textContent (decisión D11)",
         },
+        // Los otros cuatro sumideros de HTML. La regla existía para dos, y
+        // el código estaba limpio — lo que tenía agujeros era la regla que
+        // debía mantenerlo limpio.
+        {
+          property: "insertAdjacentHTML",
+          message: "prohibido: el texto se pone con textContent (decisión D11)",
+        },
+        {
+          property: "setHTMLUnsafe",
+          message: "prohibido: el texto se pone con textContent (decisión D11)",
+        },
+        {
+          property: "srcdoc",
+          message: "prohibido: la webview no anida documentos (decisión D11)",
+        },
+        {
+          property: "createContextualFragment",
+          message: "prohibido: parsea HTML de una cadena (decisión D11)",
+        },
       ],
       "no-restricted-globals": [
         "error",
@@ -37,6 +56,15 @@ export default tseslint.config(
       // dinámico se pone por CSSOM (`el.style.setProperty`).
       "no-restricted-syntax": [
         "error",
+        {
+          selector:
+            "CallExpression[callee.property.name='parseFromString']",
+          message: "prohibido: parsea HTML de una cadena (decisión D11)",
+        },
+        {
+          selector: "NewExpression[callee.name='DOMParser']",
+          message: "prohibido: la webview no parsea HTML (decisión D11)",
+        },
         {
           selector:
             "CallExpression[callee.property.name='setAttribute'][arguments.0.value='style']",

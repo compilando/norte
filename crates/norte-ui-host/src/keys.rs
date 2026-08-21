@@ -49,6 +49,23 @@ pub struct KeyInput {
 impl KeyInput {
     /// Traduce a un [`Chord`] del keymap compartido.
     ///
+    /// ```
+    /// use norte_ui_host::KeyInput;
+    ///
+    /// let k = KeyInput {
+    ///     key: "ArrowDown".to_owned(),
+    ///     ctrl: false,
+    ///     alt: false,
+    ///     shift: false,
+    ///     meta: false,
+    /// };
+    /// assert!(k.to_chord().is_ok());
+    ///
+    /// // Una tecla que no se entiende se descarta; no se adivina.
+    /// let rara = KeyInput { key: "Compose".to_owned(), ..k };
+    /// assert!(rara.to_chord().is_err());
+    /// ```
+    ///
     /// # Errors
     /// [`KeymapError::BadChord`] si el nombre de tecla no se reconoce: una
     /// tecla que no se entiende se DESCARTA, jamás se adivina.

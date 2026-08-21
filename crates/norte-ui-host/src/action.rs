@@ -27,9 +27,13 @@ use crate::keys::KeyInput;
 pub enum UiAction {
     /// Mueve el cursor del hueco. `delta` en filas; negativo hacia arriba.
     ///
-    /// Es la acción que más se repite (una tecla mantenida), así que el host
-    /// la fusiona: lo que importa es dónde acaba el cursor, no cuántas veces
-    /// se pidió.
+    /// Es la acción que más se repite (una tecla mantenida) y el host NO la
+    /// fusiona: aplica una por una y emite un parche de cursor por cada una.
+    /// Con el renderer de referencia no hay nada que fusionar —serializa sus
+    /// llamadas, así que como mucho hay una en el buzón—, y fusionar sin
+    /// necesidad complica el punto donde se contestan los acuses. Un renderer
+    /// que mande en lotes hará que valga la pena; hasta entonces, esto
+    /// describe lo que pasa y no lo que estaría bien.
     MoveCursor {
         /// Hueco.
         slot_id: u32,

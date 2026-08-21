@@ -17,6 +17,12 @@
 //! - No deja que un path crudo cruce al renderer. Lo que cruza es texto
 //!   saneado y claves opacas.
 
+// Este crate es un CONTRATO público con su propio corpus golden (ADR 0066),
+// que es el perfil al que apunta la convención de `missing_docs` aunque la
+// regla nombre proto/VFS/SDK. Y ojo: `just t` no corre doctests y `just c` no
+// comprueba enlaces intra-doc, así que lo de aquí solo se verifica en `docs`.
+#![warn(missing_docs)]
+
 pub mod action;
 pub mod backend;
 pub mod bridge;
@@ -35,18 +41,13 @@ pub use controller::{ShutdownReport, UiHost, UiHostOptions, UiSubscription, Upda
 pub use dto::{UiNotice, UiUpdate, ViewPatch, ViewSnapshot};
 pub use keys::KeyInput;
 
-/// Las columnas con las que arranca un host sin configuración: nombre,
-/// tamaño y fecha.
+/// La configuración de columnas de un host sin configuración: las de fábrica
+/// (nombre, tamaño y fecha), iguales para todos los esquemas.
 ///
-/// Existe para que un test o un primer arranque no tengan que construir la
-/// lista a mano; un host de verdad la lee de la configuración del usuario y
-/// se la pasa en [`UiHostOptions`].
+/// Existe para que un test o un primer arranque no tengan que construirla a
+/// mano; un host de verdad la resuelve de la configuración del usuario con
+/// `ColumnsSettings::resolve` y se la pasa en [`UiHostOptions`].
 #[must_use]
-pub fn columnas_por_defecto() -> Vec<norte_frontend::columns::ColumnId> {
-    use norte_frontend::columns::{Builtin, ColumnId};
-    vec![
-        ColumnId::Builtin(Builtin::Name),
-        ColumnId::Builtin(Builtin::Size),
-        ColumnId::Builtin(Builtin::Mtime),
-    ]
+pub fn columnas_por_defecto() -> norte_frontend::columns::ColumnsSettings {
+    norte_frontend::columns::ColumnsSettings::default()
 }

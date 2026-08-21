@@ -91,8 +91,10 @@ pub struct ModalId(pub u64);
 
 /// El testigo de una petición en vuelo.
 ///
-/// Toda respuesta asíncrona lo lleva, y la respuesta de un testigo que ya no
-/// interesa se descarta EN RUST, no se esconde en el renderer.
+/// NO cruza al renderer: es la contabilidad interna del host para descartar
+/// en Rust la respuesta de algo que ya no interesa. Vive en este módulo por
+/// vecindad histórica, y se queda porque moverlo sería un cambio de nombres
+/// sin lector; que no está en el cable lo dice el corpus, donde no aparece.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RequestToken(pub u64);
@@ -125,6 +127,15 @@ impl<T> BridgeEnvelope<T> {
     ///
     /// Es una pregunta de todo o nada a propósito: media interpretación de un
     /// contrato que no se conoce es peor que una pantalla que lo dice.
+    ///
+    /// ```
+    /// use norte_ui_host::{BridgeEnvelope, InstanceId, BRIDGE_VERSION};
+    ///
+    /// let mut e = BridgeEnvelope::new(InstanceId::new("host-1"), 0, 7u32);
+    /// assert!(e.is_supported());
+    /// e.bridge_version = BRIDGE_VERSION + 1;
+    /// assert!(!e.is_supported(), "una versión futura NO se interpreta");
+    /// ```
     #[must_use]
     pub fn is_supported(&self) -> bool {
         self.bridge_version == BRIDGE_VERSION
@@ -140,6 +151,12 @@ impl<T> BridgeEnvelope<T> {
 #[serde(rename_all = "snake_case")]
 pub enum StaleAction {
     /// La acción venía de OTRA instancia del host.
+    ///
+    /// RESERVADA: hoy es inalcanzable, porque las acciones viajan sin sobre
+    /// y por tanto sin instancia. Un renderer que sobreviva a un reinicio del
+    /// host es la situación que la justifica, y entonces habrá que envolver
+    /// también la dirección de entrada. Se declara para que el renderer que
+    /// la reciba algún día ya sepa qué significa.
     Instance,
     /// La fila (o el hueco) es de una generación anterior: hubo un re-listado.
     Generation,
@@ -174,6 +191,18 @@ pub enum ActionAck {
 ///
 /// Se DICE (`…`), que es la misma regla que el resto del proyecto aplica a lo
 /// pintable: nunca se pierde algo en silencio.
+///
+/// ```
+/// use norte_ui_host::bridge::{clamp_display, MAX_STRING_BYTES};
+///
+/// // Lo que cabe viaja intacto.
+/// assert_eq!(clamp_display("café.txt".to_owned()), "café.txt");
+///
+/// // Lo que no, se recorta Y se marca.
+/// let largo = clamp_display("a".repeat(MAX_STRING_BYTES * 2));
+/// assert!(largo.len() <= MAX_STRING_BYTES);
+/// assert!(largo.ends_with('…'));
+/// ```
 #[must_use]
 pub fn clamp_display(s: String) -> String {
     if s.len() <= MAX_STRING_BYTES {

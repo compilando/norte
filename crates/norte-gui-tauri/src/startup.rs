@@ -244,6 +244,11 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     };
 
     let columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+    // Un id de columna que no parsea no desaparece en silencio: `doctor` lo
+    // reporta, y aquí al menos queda en el log de arranque.
+    for malo in &columnas.invalid {
+        tracing::warn!(columna = %malo, "id de columna inválido: se ignora");
+    }
     let (host, snapshot) = UiHost::start(UiHostOptions {
         backend: Arc::new(backend),
         initial_dir: inicio,
@@ -257,11 +262,10 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         // El renderer corrige el tamaño en cuanto sepa el suyo; esto es lo
         // que se reparte mientras tanto.
         viewport: (120, 40),
-        columns: columnas
-            .layout_items_for("file")
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect(),
+        // Los ajustes ENTEROS: las columnas se configuran por esquema, y
+        // resolverlas aquí para `file` dejaba muerta esa mitad de la
+        // configuración en cuanto un panel navegaba a un `sftp://`.
+        columns: columnas,
         effects: EFECTOS,
     })
     .await?;

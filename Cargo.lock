@@ -5425,6 +5425,7 @@ dependencies = [
  "bytes",
  "futures",
  "norte-client",
+ "norte-config",
  "norte-core",
  "norte-encoding",
  "norte-frontend",
