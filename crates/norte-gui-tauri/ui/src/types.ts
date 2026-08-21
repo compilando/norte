@@ -325,6 +325,8 @@ export interface ExtensionErrorView {
   dir: string;
   hostile: boolean;
   reason: string;
+  /** El motivo se pinta distinto de lo que es: puede citar el manifiesto. */
+  reason_hostile: boolean;
 }
 
 export interface ExtensionConfigRowView {

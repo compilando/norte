@@ -745,6 +745,7 @@ fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
             dir: "/home/oscar/.config/norte/plugins/roto".to_owned(),
             hostile: false,
             reason: "el manifiesto no parsea".to_owned(),
+            reason_hostile: false,
         }],
     }
 }

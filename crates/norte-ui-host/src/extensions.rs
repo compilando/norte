@@ -81,14 +81,34 @@ impl Extensiones {
             .iter()
             .take(MAX_EXTENSIONES)
             .map(|e| {
-                let (dir, hostile) = norte_frontend::display_name(e.dir.as_bytes());
+                let (dir, enmascarado) = norte_frontend::display_name(e.dir.as_bytes());
+                let (reason, reason_enmascarado) =
+                    norte_frontend::display_name(e.reason.as_bytes());
                 ExtensionErrorView {
                     dir: clamp_display(dir),
-                    hostile,
+                    // O el U+FFFD ya estaba. El daemon manda `dir` como
+                    // `String` y lo produce con un `to_string_lossy` SIN
+                    // marcar, así que un directorio llamado `caf\xff` llega
+                    // aquí ya convertido: `display_name` no vuelve a
+                    // marcarlo —U+FFFD no es un peligro de terminal, es
+                    // Specials— y la fila decía ser fiel. Ver la trampa del
+                    // doble lossy: la bandera no se recupera, pero el
+                    // REEMPLAZO sí se ve, y verlo ya significa que lo
+                    // pintado difiere de lo que hay.
+                    //
+                    // Es media solución: `lossy_collapse_ff` y
+                    // `lossy_collapse_fe` siguen colapsando en la misma fila,
+                    // y distinguirlas pide que el daemon mande los bytes o su
+                    // marca (issue abierta). Marcarlas es lo que se puede
+                    // hacer desde este lado, y es estrictamente mejor que no
+                    // marcarlas.
+                    hostile: enmascarado || dir_ya_convertido(&e.dir),
                     // El motivo lo escribe el core, pero puede CITAR el
-                    // manifiesto del plugin, así que entra por la misma
-                    // puerta que el resto del texto de tercero.
-                    reason: clamp_display(norte_frontend::display_name(e.reason.as_bytes()).0),
+                    // manifiesto del plugin —y un `Path::display()`—, así que
+                    // entra por la misma puerta que el resto del texto de
+                    // tercero.
+                    reason: clamp_display(reason),
+                    reason_hostile: reason_enmascarado || dir_ya_convertido(&e.reason),
                 }
             })
             .collect();
@@ -252,4 +272,14 @@ fn fila_de(p: &norte_proto::methods::PluginInfo) -> ExtensionRowView {
             .map(|c| clamp_display(plugin_label(c)))
             .collect(),
     }
+}
+
+/// La cadena ya trae el reemplazo de una conversión con pérdida que hizo
+/// OTRO.
+///
+/// norte no escribe U+FFFD nunca salvo como máscara, así que encontrarlo en
+/// algo que todavía no ha pasado por la máscara significa que alguien aguas
+/// arriba convirtió bytes que no eran UTF-8 y no lo dijo.
+fn dir_ya_convertido(s: &str) -> bool {
+    s.contains('\u{fffd}')
 }

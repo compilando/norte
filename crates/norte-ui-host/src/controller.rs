@@ -285,19 +285,26 @@ enum Fondo {
         String,
         Result<norte_proto::methods::PluginHelpResult, Error>,
     ),
-    /// El catálogo que pidió el GESTOR de extensiones.
+    /// El catálogo que pidió el GESTOR de extensiones, con la APERTURA que
+    /// lo pidió.
     ///
     /// Aparte del de la ayuda: son dos superficies con dos vidas, y
     /// compartir la respuesta obligaría a cada una a comprobar si la otra
     /// sigue abierta.
-    Catalogo(Result<norte_proto::methods::PluginListResult, Error>),
+    ///
+    /// La apertura hace falta porque «sigue abierta» no es «es la misma».
+    /// Abrir (petición A, lenta), `esc`, reabrir: A vencía por plazo y su
+    /// `unwrap_or(vacío)` apagaba el «cargando» de B y decía «ninguna
+    /// instalada» hasta que llegara B.
+    Catalogo(u64, Result<norte_proto::methods::PluginListResult, Error>),
     /// El esquema `[config]` de una extensión, pedido al abrir su ficha.
     FichaDePlugin(
         String,
         Result<norte_proto::methods::PluginGetConfigResult, Error>,
     ),
-    /// Los volúmenes del host, pedidos al abrir su selector.
-    Volumenes(Result<Vec<norte_proto::methods::Volume>, Error>),
+    /// Los volúmenes del host, con la APERTURA del selector que los pidió.
+    /// Ver [`Fondo::Catalogo`].
+    Volumenes(u64, Result<Vec<norte_proto::methods::Volume>, Error>),
     /// Un lote de resultados, con la época de la búsqueda que lo pidió.
     Resultados(u64, Box<norte_proto::methods::SearchHits>),
     /// La búsqueda de esta época ya tiene Task: este es su id.
@@ -844,8 +851,11 @@ struct Estado {
     mirando_tema: bool,
     /// Sube cada vez que cambia el conjunto de filas de la barra lateral.
     gen_sitios: u64,
-    /// Sube cada vez que cambia el conjunto de filas del selector.
+    /// Sube cada vez que cambia el conjunto de filas del selector. Sirve
+    /// también de id de APERTURA: el selector se abre vacío.
     gen_selector: u64,
+    /// Cuántas veces se ha abierto el gestor de extensiones.
+    gen_extensiones: u64,
     /// La búsqueda abierta, si la hay.
     busqueda: Option<Busqueda>,
     /// Cuántas búsquedas ha lanzado esta ventana. Es la identidad de la
@@ -1061,6 +1071,7 @@ impl Estado {
             sitios: None,
             gen_sitios: 0,
             gen_selector: 0,
+            gen_extensiones: 0,
             busqueda: None,
             epoca_busqueda: 0,
             disposiciones: user_layouts,
@@ -1129,11 +1140,25 @@ impl Estado {
             .map_or_else(|| self.activo(), |SlotId(id)| id)
     }
 
+    /// El hueco ACTIVO, que siempre existe.
+    ///
+    /// El invariante (regla 6): `huecos` se siembra desde `arbol.slot_ids()`
+    /// —en `Estado::nuevo` y en `aplicar_disposicion`, los dos únicos sitios
+    /// que lo tocan— y `validate` rechaza un árbol sin `browser`, así que hay
+    /// al menos uno. `activo()` sale de `Roles`, y `reconcilia_roles` corre
+    /// tras cada cambio de reparto dejándolos apuntando a huecos que existen.
+    ///
+    /// El invariante fue FALSO hasta esta ola: se sembraba desde
+    /// `reparto.placements`, que no incluye lo oculto, así que elegir una
+    /// disposición que no coloca ningún listado vaciaba el mapa y la
+    /// siguiente tecla panicaba dentro de la task del actor. Está clavado en
+    /// `una_disposicion_que_esconde_el_listado_deja_el_hueco_vivo`.
     fn hueco(&self) -> &Hueco {
         let id = self.activo();
         self.huecos.get(&id).expect("el hueco activo existe")
     }
 
+    /// El hueco activo, mutable. Mismo invariante que [`Self::hueco`].
     fn hueco_mut(&mut self) -> &mut Hueco {
         let id = self.activo();
         self.huecos.get_mut(&id).expect("el hueco activo existe")
@@ -2968,6 +2993,7 @@ impl Estado {
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.selector = Some(crate::pickers::Selector::volumenes());
         self.gen_selector += 1;
+        let apertura = self.gen_selector;
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
@@ -2976,7 +3002,7 @@ impl Estado {
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
             let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::Volumenes(res))))
+                .send(Mensaje::Fondo(Box::new(Fondo::Volumenes(apertura, res))))
                 .await;
         });
         let cambio = ViewChange::Picker {
@@ -2992,8 +3018,14 @@ impl Estado {
     /// no hay nada que hacer.
     fn aplicar_volumenes(
         &mut self,
+        apertura: u64,
         res: Result<Vec<norte_proto::methods::Volume>, Error>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
+        // De ESTA apertura: la generación sube al abrir, así que una
+        // respuesta de la anterior no casa.
+        if apertura != self.gen_selector {
+            return None;
+        }
         let lang = self.lang;
         let s = self.selector.as_mut()?;
         s.set_volumenes(&res.unwrap_or_default(), lang);
@@ -3112,6 +3144,8 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.extensiones = Some(crate::extensions::Extensiones::abrir());
+        self.gen_extensiones += 1;
+        let apertura = self.gen_extensiones;
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
@@ -3120,7 +3154,7 @@ impl Estado {
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
             let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::Catalogo(res))))
+                .send(Mensaje::Fondo(Box::new(Fondo::Catalogo(apertura, res))))
                 .await;
         });
         let cambio = ViewChange::Extensions {
@@ -3146,12 +3180,16 @@ impl Estado {
                 .aplicar_pagina_de_plugin(&id, res.as_ref().ok())
                 .into_iter()
                 .collect(),
-            Fondo::Catalogo(res) => self.aplicar_catalogo_de_extensiones(res, backend, buzon),
+            Fondo::Catalogo(apertura, res) => {
+                self.aplicar_catalogo_de_extensiones(apertura, res, backend, buzon)
+            }
             Fondo::FichaDePlugin(id, res) => self
                 .aplicar_ficha(&id, res.as_ref().ok())
                 .into_iter()
                 .collect(),
-            Fondo::Volumenes(res) => self.aplicar_volumenes(res).into_iter().collect(),
+            Fondo::Volumenes(apertura, res) => {
+                self.aplicar_volumenes(apertura, res).into_iter().collect()
+            }
             Fondo::SitiosVolumenes(res) => self.aplicar_sitios(res).into_iter().collect(),
             Fondo::Resultados(epoca, lote) => {
                 self.aplicar_resultados(epoca, &lote).into_iter().collect()
@@ -3174,10 +3212,15 @@ impl Estado {
     /// cargando para siempre sería la única respuesta peor.
     fn aplicar_catalogo_de_extensiones(
         &mut self,
+        apertura: u64,
         res: Result<norte_proto::methods::PluginListResult, Error>,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        // De ESTA apertura. «Sigue abierta» no es «es la misma».
+        if apertura != self.gen_extensiones {
+            return Vec::new();
+        }
         let Some(e) = self.extensiones.as_mut() else {
             return Vec::new();
         };

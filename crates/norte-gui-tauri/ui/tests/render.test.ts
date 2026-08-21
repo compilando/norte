@@ -563,6 +563,51 @@ describe("el campo de texto de un diálogo", () => {
   });
 });
 
+describe("el scroll de la ayuda", () => {
+  function conAyuda(topic: string, cursor: number): ViewSnapshot {
+    const v = vista({});
+    v.help = {
+      title: "Copiar",
+      topic_id: topic,
+      sidebar: [
+        { row: "topic", title: "Copiar", current: true },
+        { row: "topic", title: "Mover", current: false },
+      ],
+      cursor,
+      blocks: [{ block: "paragraph", spans: [{ span: "text", text: "hola" }] }],
+      actions: [],
+      action_cursor: 0,
+      badge: null,
+      can_back: false,
+      filter: "",
+      filtering: false,
+      focus: "body",
+    };
+    return v;
+  }
+
+  it("no vuelve arriba en cada parche: leer media página y bajar el cursor", () => {
+    const { screen } = montar();
+    screen.paint(conAyuda("copying", 0));
+    const cuerpo = () => document.querySelector(".help-body") as HTMLElement;
+    // El lector baja por la página. `scrollTop` en jsdom no se limita solo,
+    // que es justo lo que hace falta para comprobar que se conserva.
+    cuerpo().scrollTop = 120;
+    // Un parche cualquiera —mover el cursor de la lateral lo es— repinta.
+    screen.paint(conAyuda("copying", 1));
+    expect(cuerpo().scrollTop).toBe(120);
+  });
+
+  it("y cambiar de PÁGINA empieza arriba, que es lo que hace un lector", () => {
+    const { screen } = montar();
+    screen.paint(conAyuda("copying", 0));
+    const cuerpo = () => document.querySelector(".help-body") as HTMLElement;
+    cuerpo().scrollTop = 120;
+    screen.paint(conAyuda("moving", 0));
+    expect(cuerpo().scrollTop).toBe(0);
+  });
+});
+
 describe("which-key", () => {
   function conPanel() {
     const v = vista({});
@@ -1205,7 +1250,21 @@ describe("el gestor de extensiones", () => {
     const v = conExtensiones();
     if (v.extensions !== null) {
       v.extensions.errors = [
-        { dir: "/plugins/ro�to", hostile: true, reason: "el manifiesto no parsea" },
+        {
+          dir: "/plugins/ro�to",
+          hostile: true,
+          reason: "el manifiesto no parsea",
+          reason_hostile: false,
+        },
+        // El MOTIVO cita el manifiesto del plugin, así que tiene su propia
+        // marca: una sola para las dos cadenas deja al lector sin saber cuál
+        // de ellas está alterada.
+        {
+          dir: "/plugins/otro",
+          hostile: false,
+          reason: "clave desconocida: mo�do",
+          reason_hostile: true,
+        },
       ];
     }
     screen.paint(v);
@@ -1214,6 +1273,10 @@ describe("el gestor de extensiones", () => {
     expect(document.querySelector(".extensions-error-reason")?.textContent).toBe(
       "el manifiesto no parsea",
     );
+    const motivos = [...document.querySelectorAll(".extensions-error-reason")];
+    expect(motivos[0]?.getAttribute("data-hostile")).toBe("false");
+    expect(motivos[1]?.getAttribute("data-hostile")).toBe("true");
+    expect(motivos[1]?.querySelector(".hostile-badge")).not.toBeNull();
   });
 
   it("un click elige ESA extensión", () => {

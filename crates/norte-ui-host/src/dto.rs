@@ -523,6 +523,11 @@ pub struct ExtensionErrorView {
     /// Por qué, ya saneado: lo escribe el core, pero puede citar el
     /// manifiesto del plugin.
     pub reason: String,
+    /// El MOTIVO se pinta distinto de lo que es.
+    ///
+    /// Aparte del de `dir` porque son dos cadenas con dos orígenes, y una
+    /// sola bandera para las dos deja al lector sin saber cuál mira.
+    pub reason_hostile: bool,
 }
 
 /// La ficha de una extensión: lo que PIDE y lo que se le ha configurado.

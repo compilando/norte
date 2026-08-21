@@ -87,6 +87,8 @@ export class Screen {
   private dialogoPintado: number | null = null;
   /// El campo de texto vivo del diálogo de arriba, para REUSARLO.
   private dialogoInput: HTMLInputElement | null = null;
+  /// La página de ayuda que se pintó, para conservar su scroll.
+  private helpPintada: string | null = null;
   /** Las líneas de visor que ya se declararon. */
   private viewerRows = 0;
   /** La ayuda está abierta con el CUERPO enfocado. */
@@ -290,8 +292,19 @@ export class Screen {
       this.helpRoot.replaceChildren();
       this.helpRoot.dataset["open"] = "false";
       this.helpBodyFocused = false;
+      this.helpPintada = null;
       return;
     }
+    // Dónde iba leyendo, para devolvérselo. El cuerpo se reconstruye entero
+    // en CADA parche —y mover el cursor de la lateral es un parche—, así que
+    // sin esto leer media página y pulsar `↓` devolvía el scroll a cero.
+    // Solo dentro de la MISMA página: cambiar de página empieza arriba, que
+    // es lo que hace cualquier lector.
+    const scroll =
+      this.helpPintada === help.topic_id
+        ? (this.helpRoot.querySelector(".help-body")?.scrollTop ?? 0)
+        : 0;
+    this.helpPintada = help.topic_id;
     this.helpRoot.dataset["open"] = "true";
     this.helpBodyFocused = help.focus === "body";
     const caja = document.createElement("section");
@@ -309,6 +322,12 @@ export class Screen {
     pie.textContent = this.t("help-hint-gui");
     caja.append(pie);
     this.helpRoot.replaceChildren(caja);
+    if (scroll > 0) {
+      const cuerpo = this.helpRoot.querySelector(".help-body");
+      if (cuerpo instanceof HTMLElement) {
+        cuerpo.scrollTop = scroll;
+      }
+    }
   }
 
   /** La lateral: cabeceras de grupo y páginas. */
@@ -840,7 +859,13 @@ export class Screen {
         }
         const motivo = document.createElement("span");
         motivo.className = "extensions-error-reason";
+        motivo.dataset["hostile"] = String(e.reason_hostile);
         motivo.textContent = e.reason;
+        if (e.reason_hostile) {
+          // El motivo lo escribe el core, pero CITA el manifiesto del plugin
+          // y a veces un `Path::display()`.
+          motivo.append(badge(this.t("hostile-name")));
+        }
         li.append(dir, motivo);
         errores.append(li);
       }

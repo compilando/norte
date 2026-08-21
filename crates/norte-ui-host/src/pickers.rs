@@ -51,7 +51,7 @@ impl HostTheme {
                 .iter()
                 .map(|(role, color)| ThemeRoleView {
                     role: clamp_display(role.clone()),
-                    color: clamp_display(color.clone()),
+                    color: color_valido(color),
                 })
                 .collect(),
             unsupported_effects: self
@@ -60,6 +60,28 @@ impl HostTheme {
                 .map(|e| clamp_display(norte_frontend::display_name(e.as_bytes()).0))
                 .collect(),
         }
+    }
+}
+
+/// Un color `#rrggbb`, o vacío.
+///
+/// El renderer lo mete en `style.setProperty("background-color", …)`. Hoy
+/// llega siempre de `Theme::to_hex()`, así que es seguro — pero el invariante
+/// lo sostenía UN llamante y nada lo decía en el tipo. El CSSOM tira un valor
+/// que no parsea en vez de partirlo por `;`, o sea que esto no es un agujero
+/// de inyección; es que la garantía no estaba escrita en ninguna parte.
+///
+/// Uno que no case se manda VACÍO: la muestra sin pintar dice que el tema
+/// tiene un color que no vale, y una cadena arbitraria en una propiedad CSS
+/// no dice nada.
+fn color_valido(color: &str) -> String {
+    let bien = color.len() == 7
+        && color.starts_with('#')
+        && color[1..].bytes().all(|b| b.is_ascii_hexdigit());
+    if bien {
+        color.to_owned()
+    } else {
+        String::new()
     }
 }
 
