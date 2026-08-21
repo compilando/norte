@@ -26,7 +26,9 @@ import type {
   HelpView,
   PaletteView,
   ExtensionsView,
+  MetadataSlotView,
   PickerView,
+  ProcessesSlotView,
   SettingsView,
   ThemeView,
   ViewerView,
@@ -44,6 +46,14 @@ function revelar(el: Element | undefined): void {
   if (el instanceof HTMLElement && typeof el.scrollIntoView === "function") {
     el.scrollIntoView({ block: "nearest" });
   }
+}
+
+/** Un párrafo con una frase que el host ya escribió. */
+function nota(texto: string): HTMLElement {
+  const p = document.createElement("p");
+  p.className = "slot-note";
+  p.textContent = texto;
+  return p;
 }
 
 /** Filas de más que se piden por arriba y por abajo del hueco visible. */
@@ -1234,11 +1244,87 @@ export class Screen {
     view: ViewSnapshot,
     cell: { w: number; h: number },
   ): void {
+    if (slot.kind === "metadata") {
+      this.paintMetadata(dom, slot);
+      return;
+    }
+    if (slot.kind === "processes") {
+      this.paintProcesses(dom, slot, view);
+      return;
+    }
     if (slot.kind === "unsupported") {
       this.paintAux(dom, slot.kind_name, view);
       return;
     }
     this.paintBrowser(dom, slot, cell);
+  }
+
+  /**
+   * La hoja de atributos: etiqueta y valor, y nada más.
+   *
+   * Todo llega formateado y saneado del host — el tamaño con su forma humana
+   * y su número exacto, la fecha en ISO, cada atributo por la misma puerta
+   * que su columna. Aquí no se formatea nada.
+   */
+  private paintMetadata(dom: SlotDom, slot: MetadataSlotView): void {
+    dom.root.setAttribute("aria-label", this.t("metadata-title"));
+    dom.title.textContent = this.t("metadata-title");
+    dom.scroller.className = "metadata";
+    if (slot.note !== "") {
+      dom.scroller.replaceChildren(nota(slot.note));
+      return;
+    }
+    const lista = document.createElement("dl");
+    lista.className = "metadata-fields";
+    for (const f of slot.fields) {
+      const dt = document.createElement("dt");
+      dt.textContent = f.label;
+      const dd = document.createElement("dd");
+      dd.dataset["hostile"] = String(f.hostile);
+      dd.textContent = f.value;
+      if (f.hostile) {
+        dd.append(badge(this.t("hostile-name")));
+      }
+      lista.append(dt, dd);
+    }
+    dom.scroller.replaceChildren(lista);
+  }
+
+  /**
+   * El panel de procesos: las MISMAS tareas de la franja, con su cursor.
+   *
+   * No hay una segunda lista: dos listas de tareas se separan, y la que se ve
+   * deja de ser la que se cancela.
+   */
+  private paintProcesses(
+    dom: SlotDom,
+    slot: ProcessesSlotView,
+    view: ViewSnapshot,
+  ): void {
+    dom.root.setAttribute("aria-label", this.t("processes-title"));
+    dom.title.textContent = this.t("processes-title");
+    dom.scroller.className = "processes";
+    if (view.tasks.length === 0) {
+      dom.scroller.replaceChildren(nota(this.t("processes-empty")));
+      return;
+    }
+    const lista = document.createElement("ul");
+    lista.className = "processes-rows";
+    lista.setAttribute("role", "listbox");
+    for (const [i, t] of view.tasks.entries()) {
+      const fila = document.createElement("li");
+      fila.className = "processes-row";
+      fila.id = `process-row-${String(i)}`;
+      fila.setAttribute("role", "option");
+      fila.setAttribute("aria-selected", String(slot.cursor === i));
+      fila.append(taskNode(t, (k) => this.t(k)));
+      lista.append(fila);
+    }
+    if (slot.cursor !== null) {
+      lista.setAttribute("aria-activedescendant", `process-row-${String(slot.cursor)}`);
+      revelar(lista.querySelector(`#process-row-${String(slot.cursor)}`) ?? undefined);
+    }
+    dom.scroller.replaceChildren(lista);
   }
 
   private paintAux(dom: SlotDom, kindName: string, view: ViewSnapshot): void {

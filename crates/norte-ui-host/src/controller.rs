@@ -723,6 +723,12 @@ struct Estado {
     tema: crate::pickers::HostTheme,
     /// Se está mirando el tema por dentro.
     mirando_tema: bool,
+    /// El cursor del panel de procesos.
+    ///
+    /// Se acota al LEER y no al mover: las filas aparecen y desaparecen
+    /// solas —una tarea termina y se barre—, así que un cursor guardado
+    /// siempre puede haberse quedado fuera.
+    cursor_procesos: usize,
     /// El selector abierto, si lo hay.
     selector: Option<crate::pickers::Selector>,
     /// La ayuda, si está abierta. Tapa la pantalla y se queda las teclas,
@@ -898,6 +904,7 @@ impl Estado {
             extensiones: None,
             tema: theme,
             mirando_tema: false,
+            cursor_procesos: 0,
             selector: None,
             config: settings,
             paths,
@@ -947,6 +954,20 @@ impl Estado {
             .unwrap_or(1)
     }
 
+    /// El hueco con el FOCO, sea del tipo que sea.
+    ///
+    /// No es lo mismo que [`Self::activo`], y confundirlos fue un bug: aquel
+    /// contesta «el LISTADO sobre el que actúan los comandos» y se salta lo
+    /// que no es un listado, que es justo lo que hace falta para que `F5`
+    /// copie algo con la barra lateral enfocada. Este contesta dónde está el
+    /// teclado, que es lo que decide quién recibe una tecla y qué hueco se
+    /// pinta enfocado.
+    fn enfocado(&self) -> u32 {
+        self.roles
+            .get(RoleId::Active)
+            .map_or_else(|| self.activo(), |SlotId(id)| id)
+    }
+
     fn hueco(&self) -> &Hueco {
         let id = self.activo();
         self.huecos.get(&id).expect("el hueco activo existe")
@@ -963,8 +984,24 @@ impl Estado {
     /// destino — y eso es más honesto que apuntar al mismo hueco que tiene el
     /// foco, que haría que copiar pareciera posible cuando no lo es.
     fn reconcilia_roles(&mut self) {
+        // El foco solo se MUEVE cuando el hueco que lo tenía ya no vale: se
+        // ocultó, desapareció del reparto, o dejó de poder enfocarse. Pisarlo
+        // siempre con «el primer listado» —que es lo que hacía— convertía el
+        // tabulador en un interruptor entre dos paneles: caía en la barra
+        // lateral o en el de procesos y volvía sola antes de que nadie lo
+        // viera.
+        let foco = self.roles.get(RoleId::Active).map(|SlotId(id)| id);
+        let sirve = foco.is_some_and(|id| {
+            !self.oculto(id)
+                && self.reparto.placements.iter().any(|(s, _)| s.0 == id)
+                && kind_de(&self.arbol, SlotId(id))
+                    .and_then(|k| self.kinds.get(&k).map(|d| d.focusable))
+                    .unwrap_or(false)
+        });
+        if !sirve {
+            self.roles.set(RoleId::Active, SlotId(self.activo()));
+        }
         let activo = self.activo();
-        self.roles.set(RoleId::Active, SlotId(activo));
         let otro = self
             .huecos
             .keys()
@@ -1533,6 +1570,154 @@ impl Estado {
         let u = self.aplicar_lote(slot, token, batch)?;
         self.sondear(slot, backend, buzon);
         Some(u)
+    }
+
+    /// El movimiento, cuando el foco está en un panel que no es un listado.
+    ///
+    /// `None` = el foco está en un listado, o el efecto no es un movimiento y
+    /// sigue su camino normal. Quién toma teclas lo dice el registro
+    /// COMPARTIDO de kinds (`takes_keys`), no una lista aquí: la hoja de
+    /// atributos se enfoca y NO toma teclas a propósito —sigue al cursor del
+    /// listado, así que con el teclado dentro dejaría de seguir a nada—, y
+    /// esa decisión ya está tomada en un sitio.
+    fn efecto_en_panel_enfocado(
+        &mut self,
+        efecto: Efecto,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        let SlotId(id) = self.roles.get(RoleId::Active)?;
+        if self.huecos.contains_key(&id) {
+            return None;
+        }
+        let kind = kind_de(&self.arbol, SlotId(id))?;
+        if !self.kinds.get(&kind).is_some_and(|d| d.takes_keys) {
+            return None;
+        }
+        if kind.as_str() != "processes" {
+            // Otro panel que toma teclas y que este host todavía no proyecta:
+            // se deja pasar, y el listado sigue respondiendo. Cuando se
+            // proyecte, su brazo entra aquí.
+            return None;
+        }
+        let filas = self.tasks.len();
+        if filas == 0 {
+            return Some((self.aplicada(), Vec::new()));
+        }
+        let total = i64::try_from(filas).unwrap_or(i64::MAX);
+        let paso = |n: i64| -> i64 { n.clamp(-total, total) };
+        let actual = i64::try_from(self.cursor_procesos.min(filas - 1)).unwrap_or(0);
+        let destino = match efecto {
+            Efecto::Cursor(n) => actual.saturating_add(paso(n)),
+            // Una página del panel de procesos son sus filas: no hay ventana
+            // declarada para él, y saltar más de lo que hay no significa nada.
+            Efecto::Pagina(n) => actual.saturating_add(paso(n).saturating_mul(total)),
+            Efecto::Extremo { al_final: false } => 0,
+            Efecto::Extremo { al_final: true } => total - 1,
+            _ => return None,
+        };
+        self.cursor_procesos = usize::try_from(destino.max(0)).unwrap_or(0).min(filas - 1);
+        // Va como FOTO y no como parche: no hay un `ViewChange` para un hueco
+        // que no es un listado, y añadir uno por un cursor de tres dígitos es
+        // contrato nuevo para nada. Es una tecla, no un scroll continuo.
+        let snap = self.snapshot();
+        Some((
+            self.aplicada(),
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+        ))
+    }
+
+    /// La hoja de atributos de un hueco `metadata`.
+    ///
+    /// Lo que enseña sale del panel al que este hueco SIGUE, resuelto con el
+    /// motor compartido: un hueco que sigue a un rol que se ha quedado sin
+    /// panel degrada al activo en vez de mirar al vacío en silencio.
+    ///
+    /// No pide nada: la `Entry` ya la trajo el listado.
+    fn hoja_de_atributos(&self, slot: SlotId) -> crate::dto::MetadataSlotView {
+        use norte_frontend::columns::{ColumnId, ColumnStyle, header_label, styled_cell};
+
+        let SlotId(id) = slot;
+        let mut diags = Vec::new();
+        let seguido =
+            norte_frontend::layout::resolve_follow(&self.arbol, slot, &self.roles, &mut diags)
+                .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active));
+        let entrada = seguido
+            .and_then(|SlotId(s)| self.huecos.get(&s))
+            .and_then(|h| h.pane.selected());
+        let Some(e) = entrada else {
+            return crate::dto::MetadataSlotView {
+                slot_id: id,
+                fields: Vec::new(),
+                note: clamp_display(norte_i18n::t_in(self.lang, "metadata-empty")),
+            };
+        };
+        let mut fields = Vec::new();
+        let mut campo = |clave: &str, valor: String, hostile: bool| {
+            fields.push(crate::dto::MetadataFieldView {
+                label: clamp_display(norte_i18n::t_in(self.lang, clave)),
+                value: clamp_display(valor),
+                hostile,
+            });
+        };
+        let nombre = e
+            .path
+            .file_name()
+            .map_or_else(Vec::new, |s| s.as_bytes().to_vec());
+        let (pintable, hostil) = norte_frontend::display_name(&nombre);
+        campo("metadata-name", pintable, hostil);
+        campo(
+            "metadata-kind",
+            norte_i18n::t_in(
+                self.lang,
+                match e.kind {
+                    EntryKind::Dir => "metadata-kind-dir",
+                    EntryKind::File => "metadata-kind-file",
+                    EntryKind::Symlink => "metadata-kind-symlink",
+                    EntryKind::Other => "metadata-kind-other",
+                },
+            ),
+            false,
+        );
+        if let Some(n) = e.size {
+            // El humano y el exacto, los dos: «1,2 MiB» no sirve para
+            // comparar y `1258291` no sirve para leer.
+            campo(
+                "metadata-size",
+                format!("{} ({n})", norte_frontend::human_bytes_short(n)),
+                false,
+            );
+        }
+        if let Some(ms) = e.mtime_ms {
+            campo(
+                "metadata-mtime",
+                norte_frontend::columns::format_mtime(
+                    ms,
+                    norte_frontend::columns::TimeFormat::Iso,
+                    ms,
+                ),
+                false,
+            );
+        }
+        // Los atributos que el provider YA trajo. Van por la MISMA puerta que
+        // su columna equivalente, para que la hoja y la columna no puedan
+        // discrepar sobre lo que vale un atributo.
+        let catalogo = self.catalogos.get(e.path.scheme());
+        let ahora = e.mtime_ms.unwrap_or(0);
+        for attr in e.attrs.keys() {
+            let col = ColumnId::Attr(attr.clone());
+            let style = ColumnStyle::default_for_id(&col, catalogo);
+            if let Some(celda) = styled_cell(e, &col, ahora, &style) {
+                fields.push(crate::dto::MetadataFieldView {
+                    label: clamp_display(header_label(&col, &style, catalogo)),
+                    value: clamp_display(celda),
+                    hostile: false,
+                });
+            }
+        }
+        crate::dto::MetadataSlotView {
+            slot_id: id,
+            fields,
+            note: String::new(),
+        }
     }
 
     /// Enseña el tema activo por dentro.
@@ -2615,6 +2800,17 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // El foco puede estar en un panel que NO es un listado y que SÍ toma
+        // teclas —hoy, el de procesos—. Entonces «bajar» es bajar por ÉL:
+        // hasta ahora el rol `active` lo pintaba enfocado y las flechas movían
+        // el listado de al lado, que es media función y la mitad que no se ve.
+        //
+        // Se decide por EFECTO y no por tecla, así que `j`, `↓` y `g g`
+        // funcionan igual: el keymap dice qué comando es, y la superficie con
+        // el foco dice qué significa ahí.
+        if let Some(salida) = self.efecto_en_panel_enfocado(efecto) {
+            return salida;
+        }
         let slot = self.activo();
         match efecto {
             Efecto::Cursor(delta) => self.aplicar(
@@ -3809,24 +4005,37 @@ impl Estado {
             let SlotId(id) = *slot;
             if let Some(hueco) = self.huecos.get(&id) {
                 slots.push(SlotView::Browser(Box::new(self.browser(id, hueco))));
-            } else {
-                let nombre = kind_de(&self.arbol, *slot)
-                    .map_or_else(|| "unknown".to_owned(), |k| k.as_str().to_owned());
-                // El kind sale de un fichero de disposición y `KindId` no
-                // valida nada: es texto que puede traer controles, y acaba en
-                // el DOM y en un `aria-label`.
-                let (pintable, _) = norte_frontend::display_name(nombre.as_bytes());
-                slots.push(SlotView::Unsupported {
+                continue;
+            }
+            let kind = kind_de(&self.arbol, *slot);
+            match kind.as_ref().map(norte_frontend::layout::KindId::as_str) {
+                Some("metadata") => {
+                    slots.push(SlotView::Metadata(Box::new(self.hoja_de_atributos(*slot))));
+                }
+                Some("processes") => slots.push(SlotView::Processes {
                     slot_id: id,
-                    kind_name: clamp_display(pintable),
-                });
+                    cursor: (!self.tasks.is_empty())
+                        .then(|| self.cursor_procesos.min(self.tasks.len() - 1) as u64),
+                }),
+                _ => {
+                    let nombre =
+                        kind.map_or_else(|| "unknown".to_owned(), |k| k.as_str().to_owned());
+                    // El kind sale de un fichero de disposición y `KindId` no
+                    // valida nada: es texto que puede traer controles, y acaba en
+                    // el DOM y en un `aria-label`.
+                    let (pintable, _) = norte_frontend::display_name(nombre.as_bytes());
+                    slots.push(SlotView::Unsupported {
+                        slot_id: id,
+                        kind_name: clamp_display(pintable),
+                    });
+                }
             }
         }
         ViewSnapshot {
             connection: self.conexion.clone(),
             layout: self.disposicion(),
             slots,
-            focus: Some(self.activo()),
+            focus: Some(self.enfocado()),
             status: self.status.clone(),
             // Una foto REEMPLAZA lo que el renderer tenga, así que va
             // entera: un resync que se dejara fuera el diálogo abierto
@@ -4092,7 +4301,7 @@ impl Estado {
         // que no se ve y lo que no se enfoca (una barra de estado no
         // recibe el foco), así que aquí no hay una segunda regla que
         // pueda divergir de la del TUI.
-        let actual = SlotId(self.activo());
+        let actual = SlotId(self.enfocado());
         let siguiente = if atras {
             norte_frontend::layout::focus_prev(&self.reparto, actual)
         } else {

@@ -1219,3 +1219,98 @@ describe("el tema y el selector", () => {
     expect(document.querySelector(".picker")).toBeNull();
   });
 });
+
+describe("los huecos que no son listados", () => {
+  it("la hoja de atributos pinta etiqueta y valor, y marca un nombre hostil", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.slots = [
+      ...v.slots,
+      {
+        kind: "metadata",
+        slot_id: 7,
+        fields: [
+          { label: "Nombre", value: "caf�.txt", hostile: true },
+          { label: "Tamaño", value: "1,2 KiB (1258)", hostile: false },
+        ],
+        note: "",
+      },
+    ];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 0, width: 30, height: 10, role: null, focus_index: 2 },
+    ];
+    screen.paint(v);
+    const campos = [...document.querySelectorAll(".metadata-fields dt")];
+    expect(campos.map((d) => d.textContent)).toEqual(["Nombre", "Tamaño"]);
+    const valores = [...document.querySelectorAll(".metadata-fields dd")];
+    expect(valores[0]?.getAttribute("data-hostile")).toBe("true");
+    expect(valores[1]?.getAttribute("data-hostile")).toBe("false");
+  });
+
+  it("la hoja sin nada bajo el cursor lo DICE", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.slots = [
+      ...v.slots,
+      { kind: "metadata", slot_id: 7, fields: [], note: "nada bajo el cursor" },
+    ];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 0, width: 30, height: 10, role: null, focus_index: 2 },
+    ];
+    screen.paint(v);
+    expect(document.querySelector(".metadata .slot-note")?.textContent).toBe(
+      "nada bajo el cursor",
+    );
+    expect(document.querySelector(".metadata-fields")).toBeNull();
+  });
+
+  it("el panel de procesos marca su cursor sobre las MISMAS tareas", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.tasks = [
+      {
+        task_id: 1,
+        kind: "copy",
+        state: "running",
+        percent: 40,
+        detail: "a.txt",
+        foreign: false,
+      },
+      {
+        task_id: 2,
+        kind: "delete",
+        state: "running",
+        percent: 10,
+        detail: "b.txt",
+        foreign: false,
+      },
+    ];
+    v.slots = [...v.slots, { kind: "processes", slot_id: 7, cursor: 1 }];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 0, width: 40, height: 10, role: null, focus_index: 2 },
+    ];
+    screen.paint(v);
+    const filas = [...document.querySelectorAll(".processes-row")];
+    expect(filas).toHaveLength(2);
+    expect(filas[1]?.getAttribute("aria-selected")).toBe("true");
+    const lista = document.querySelector(".processes-rows") as HTMLElement;
+    expect(lista.getAttribute("aria-activedescendant")).toBe("process-row-1");
+  });
+
+  it("sin tareas, el panel lo dice en vez de quedarse en blanco", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.slots = [...v.slots, { kind: "processes", slot_id: 7, cursor: null }];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 0, width: 40, height: 10, role: null, focus_index: 2 },
+    ];
+    screen.paint(v);
+    expect(document.querySelector(".processes .slot-note")?.textContent).toBe(
+      "processes-empty",
+    );
+  });
+});

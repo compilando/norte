@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 12;
+export const BRIDGE_VERSION = 13;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -100,7 +100,27 @@ export interface UnsupportedSlotView {
   kind_name: string;
 }
 
-export type SlotView = BrowserSlotView | UnsupportedSlotView;
+export interface MetadataFieldView {
+  label: string;
+  value: string;
+  hostile: boolean;
+}
+
+export interface MetadataSlotView {
+  kind: "metadata";
+  slot_id: number;
+  fields: MetadataFieldView[];
+  note: string;
+}
+
+export interface ProcessesSlotView {
+  kind: "processes";
+  slot_id: number;
+  cursor: number | null;
+}
+
+export type SlotView =
+  BrowserSlotView | MetadataSlotView | ProcessesSlotView | UnsupportedSlotView;
 
 export interface PendingView {
   chords: string;

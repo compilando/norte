@@ -447,8 +447,25 @@
         "total_rows": 2
       },
       {
+        "fields": [
+          {
+            "hostile": true,
+            "label": "Nombre",
+            "value": "caf�.txt"
+          }
+        ],
+        "kind": "metadata",
+        "note": "",
+        "slot_id": 5
+      },
+      {
+        "cursor": 0,
+        "kind": "processes",
+        "slot_id": 6
+      },
+      {
         "kind": "unsupported",
-        "kind_name": "processes",
+        "kind_name": "compare",
         "slot_id": 2
       }
     ],

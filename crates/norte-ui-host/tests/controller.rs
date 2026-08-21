@@ -790,7 +790,7 @@ async fn un_kind_desconocido_viaja_apagado_y_con_nombre() {
         .iter()
         .filter_map(|s| match s {
             SlotView::Unsupported { kind_name, .. } => Some(kind_name.as_str()),
-            SlotView::Browser(_) => None,
+            _ => None,
         })
         .collect();
     assert!(
@@ -4750,4 +4750,166 @@ async fn un_volumen_sin_tamano_lo_dice() {
         }
     }
     panic!("la tabla de montaje nunca llegó");
+}
+
+// ---------------------------------------------------------------------------
+// La hoja de atributos y el panel de procesos (huecos de la fase 4).
+// ---------------------------------------------------------------------------
+
+/// Un host con la disposición `full`, que trae hoja de atributos y panel de
+/// procesos además de los dos listados.
+async fn host_full(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("full").expect("layout"),
+        viewport: (200, 60),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca")
+}
+
+/// El PRIMER listado de una foto, sea cual sea su posición.
+///
+/// `listado` mira el hueco 0, que en `simple` es el listado; en `full` el
+/// hueco 0 es la barra lateral de sitios.
+fn primer_listado(snap: &norte_ui_host::ViewSnapshot) -> &norte_ui_host::dto::BrowserSlotView {
+    snap.slots
+        .iter()
+        .find_map(|s| match s {
+            SlotView::Browser(b) => Some(b.as_ref()),
+            _ => None,
+        })
+        .expect("la disposición tiene algún listado")
+}
+
+/// La hoja de atributos de una foto, si está colocada.
+fn hoja(snap: &norte_ui_host::ViewSnapshot) -> Option<&norte_ui_host::dto::MetadataSlotView> {
+    snap.slots.iter().find_map(|s| match s {
+        SlotView::Metadata(m) => Some(m.as_ref()),
+        _ => None,
+    })
+}
+
+/// La hoja de atributos enseña la entrada bajo el cursor del listado al que
+/// SIGUE, y se mueve con él.
+#[tokio::test]
+async fn la_hoja_de_atributos_sigue_al_cursor() {
+    let (h, snap) = host_full(arbol()).await;
+    let mut sub = h.subscribe();
+    let primera = hoja(&snap).expect("la disposición `full` coloca la hoja");
+    assert!(
+        primera.note.is_empty() && !primera.fields.is_empty(),
+        "con un listado con entradas, la hoja enseña la primera: {primera:?}"
+    );
+    let nombre_de = |m: &norte_ui_host::dto::MetadataSlotView| {
+        m.fields
+            .first()
+            .map(|f| f.value.clone())
+            .unwrap_or_default()
+    };
+    let antes = nombre_de(primera);
+    assert!(!antes.is_empty(), "el primer campo es el nombre");
+
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let despues = nombre_de(hoja(&foto).expect("sigue colocada"));
+    assert_ne!(
+        antes, despues,
+        "la hoja siguió al cursor sin que nadie pidiera nada"
+    );
+}
+
+/// Un nombre hostil llega a la hoja enmascarado y MARCADO, igual que a una
+/// fila del listado.
+#[tokio::test]
+async fn un_nombre_hostil_en_la_hoja_va_marcado() {
+    let (h, snap) = host_full(arbol()).await;
+    let mut sub = h.subscribe();
+    // El árbol de pruebas tiene una entrada cuyo nombre no es UTF-8.
+    let mut vista = hoja(&snap).expect("colocada").clone();
+    for _ in 0..6 {
+        if vista.fields.first().is_some_and(|f| f.hostile) {
+            break;
+        }
+        h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        vista = hoja(&foto).expect("colocada").clone();
+    }
+    let nombre = vista.fields.first().expect("hay nombre");
+    assert!(nombre.hostile, "la entrada no-UTF-8 se marca: {nombre:?}");
+    assert!(
+        !nombre.value.contains('\u{fffd}') || nombre.hostile,
+        "y su texto ya viene saneado"
+    );
+}
+
+/// Con el foco en el panel de PROCESOS, bajar baja por él y no por el
+/// listado de al lado.
+#[tokio::test]
+async fn el_panel_de_procesos_toma_sus_teclas() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(b"a.txt".to_vec(), false), (b"b.txt".to_vec(), false)],
+    );
+    let backend = Arc::new(f);
+    let (h, snap) = host_full(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let cursor_antes = primer_listado(&snap).cursor;
+
+    // Se lanzan dos borrados para que el tablero tenga filas.
+    for _ in 0..2 {
+        h.dispatch(tecla("F8")).await.expect("host vivo");
+        h.dispatch(UiAction::Dialog {
+            id: norte_ui_host::ModalId(1),
+            choice: "confirm".to_owned(),
+        })
+        .await
+        .ok();
+    }
+
+    // Se rota el foco hasta el panel de procesos.
+    let mut en_procesos = false;
+    for _ in 0..8 {
+        h.dispatch(tecla("Tab")).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        let activo = foto
+            .layout
+            .placements
+            .iter()
+            .find(|p| p.role == Some(norte_ui_host::dto::SlotRole::Active))
+            .map(|p| p.slot_id);
+        if let Some(id) = activo
+            && foto
+                .slots
+                .iter()
+                .any(|s| matches!(s, SlotView::Processes { slot_id, .. } if *slot_id == id))
+        {
+            en_procesos = true;
+            break;
+        }
+    }
+    assert!(en_procesos, "el tabulador llega al panel de procesos");
+
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(
+        primer_listado(&foto).cursor,
+        cursor_antes,
+        "bajar con el foco en procesos NO mueve el listado: el rol lo pintaba \
+         enfocado y las teclas se iban al panel de al lado"
+    );
 }

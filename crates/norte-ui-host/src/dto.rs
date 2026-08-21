@@ -609,6 +609,31 @@ pub struct PickerRowView {
     pub detail: String,
 }
 
+/// La hoja de atributos de una entrada.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MetadataSlotView {
+    /// Id del hueco.
+    pub slot_id: u32,
+    /// Los campos, en orden: primero los que tiene toda entrada, luego los
+    /// atributos que el provider trajo con el listado.
+    pub fields: Vec<MetadataFieldView>,
+    /// No hay nada que enseñar, y esta es la frase que lo dice (el panel al
+    /// que sigue está vacío). Vacía cuando sí hay campos.
+    pub note: String,
+}
+
+/// Un campo de la hoja.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MetadataFieldView {
+    /// Cómo se llama, ya traducido (o la cabecera del catálogo de atributos).
+    pub label: String,
+    /// Su valor, ya formateado y saneado.
+    pub value: String,
+    /// El valor DIFIERE de lo real (solo el nombre puede serlo).
+    pub hostile: bool,
+}
+
+/// Lo que el visor enseña.
 /// Lo que el visor enseña.
 /// Lo que el visor enseña.
 /// Lo que el visor enseña.
@@ -722,6 +747,24 @@ pub enum SlotView {
     /// más grande que un hueco sin proyectar, y un enum que mide lo que su
     /// variante mayor se paga en cada `Vec<SlotView>` que se construye.
     Browser(Box<BrowserSlotView>),
+    /// La hoja de atributos: lo que el listado ya sabe de la entrada bajo el
+    /// cursor del panel al que este hueco sigue.
+    ///
+    /// **No lee nada.** La `Entry` ya está en el listado, y un panel que
+    /// siguiera al cursor pidiendo datos por fila convertiría bajar por un
+    /// directorio en una tormenta de peticiones.
+    Metadata(Box<MetadataSlotView>),
+    /// El panel de procesos: las MISMAS tareas que pinta la franja, con su
+    /// propio cursor.
+    ///
+    /// No guarda una segunda copia: dos listas de tareas se separan, y la que
+    /// se ve deja de ser la que se cancela.
+    Processes {
+        /// Id del hueco.
+        slot_id: u32,
+        /// Qué fila tiene el cursor, si hay alguna.
+        cursor: Option<u64>,
+    },
     /// Un hueco de un tipo que este host todavía no proyecta. Se enseña
     /// vacío y con su nombre: preservar lo que no se entiende es la regla de
     /// la sesión (ADR 0059), y desaparecer sería peor que estar en gris.

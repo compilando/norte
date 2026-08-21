@@ -134,7 +134,7 @@ async fn un_parche_de_filas_pesa_lo_que_la_ventana() {
         key: norte_ui_host::RowKey(3),
         generation: match &snap.slots[0] {
             norte_ui_host::dto::SlotView::Browser(b) => b.generation,
-            norte_ui_host::dto::SlotView::Unsupported { .. } => 0,
+            _ => 0,
         },
     })
     .await
@@ -182,7 +182,7 @@ async fn la_foto_inicial_no_lleva_cien_mil_filas() {
         .iter()
         .map(|s| match s {
             norte_ui_host::dto::SlotView::Browser(b) => b.rows.len(),
-            norte_ui_host::dto::SlotView::Unsupported { .. } => 0,
+            _ => 0,
         })
         .sum();
     assert!(

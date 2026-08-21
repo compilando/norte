@@ -9,6 +9,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The details sheet and the process panel are panels, not grey rectangles.**
+  Bridge version **13**: a `metadata` slot shows what the listing already
+  knows about the entry under the cursor of the pane it *follows* — resolved
+  with the shared engine, so a slot following a role that lost its pane
+  degrades to the active one instead of staring at nothing — and it reads
+  nothing: the `Entry` is already there, and a panel that followed the cursor
+  by asking per row would turn walking a directory into a storm of requests.
+  A `processes` slot shows the same tasks the strip does, with its own cursor;
+  it keeps no second copy, because two lists of tasks drift and the one you
+  see stops being the one you cancel.
+
 - **The window shows the theme from the inside, and its volumes.** Bridge
   version **12**: `F9` lists every semantic role with the colour it resolves
   to — as a swatch, because `#2d4f8a` tells nobody anything until it is next
@@ -315,6 +326,18 @@ independently through `PROTOCOL_VERSION`.
   two are the same kind of text.
 
 ### Fixed
+
+- **Tab could not reach the sidebar or the process panel.** The shared focus
+  order includes every focusable slot, and the window moved the focus there —
+  and then snapped it straight back to a listing while reconciling roles, so
+  the key looked like a toggle between two panes. The focus now moves only
+  when the slot that had it stopped being valid (hidden, gone, not focusable).
+  With that fixed, a second half surfaced: movement with the focus on the
+  process panel still moved the *listing* beside it. Which surface a movement
+  belongs to is decided by the shared kind registry's `takes_keys` — the
+  details sheet is focusable and deliberately does not take keys, since it
+  follows the listing's cursor and would stop following anything with the
+  keyboard inside it.
 
 - **`F1` with the viewer open opened a help nobody could see or close.** The
   viewer took keys before the help and painted over it opaquely, so the

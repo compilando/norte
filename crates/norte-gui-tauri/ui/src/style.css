@@ -1138,3 +1138,61 @@ body {
 .picker-detail {
   opacity: 0.85;
 }
+
+/* --- La hoja de atributos y el panel de procesos ---------------------- */
+
+.slot-note {
+  margin: 0;
+  padding: 0 6px;
+  opacity: 0.8;
+}
+
+.metadata {
+  overflow: auto;
+}
+
+.metadata-fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 8px;
+  margin: 0;
+  padding: 0 6px;
+}
+
+.metadata-fields dt {
+  color: var(--title-fg);
+  white-space: nowrap;
+  unicode-bidi: isolate;
+}
+
+.metadata-fields dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* El valor puede ser un NOMBRE de fichero: su propia corrida bidi, o una
+     marca de dirección reordena la etiqueta de al lado. */
+  unicode-bidi: isolate;
+}
+
+.metadata-fields dd[data-hostile="true"] {
+  color: var(--hostile-fg);
+}
+
+.processes {
+  overflow: auto;
+}
+
+.processes-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.processes-row {
+  padding: 0 6px;
+}
+
+.processes-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}

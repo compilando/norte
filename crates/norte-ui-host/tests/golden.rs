@@ -317,50 +317,69 @@ fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
     }
 }
 
+/// Los huecos de la foto de referencia: un listado, la hoja de atributos, el
+/// panel de procesos y uno de un tipo que este host no proyecta.
+fn slots_de_referencia() -> Vec<SlotView> {
+    vec![
+        SlotView::Browser(Box::new(BrowserSlotView {
+            slot_id: 1,
+            generation: 4,
+            path_display: "⟨file⟩/home/oscar".to_owned(),
+            path_hostile: false,
+            total_rows: Some(2),
+            first_visible: 0,
+            rows: vec![
+                fila(1, "notas.txt", false),
+                fila(2, "caf\u{FFFD}.txt", true),
+            ],
+            cursor: Some(RowKey(1)),
+            marks: 0,
+            columns: vec![
+                ColumnHeader {
+                    id: "name".to_owned(),
+                    label: "Nombre".to_owned(),
+                    sort: Some("asc".to_owned()),
+                    sortable: true,
+                },
+                ColumnHeader {
+                    id: "size".to_owned(),
+                    label: "Tamaño".to_owned(),
+                    sort: None,
+                    sortable: true,
+                },
+            ],
+            state: SlotState::Ready,
+            quick: Some(norte_ui_host::dto::QuickView {
+                query: "no".to_owned(),
+                mode: "filter".to_owned(),
+                matches: 1,
+            }),
+        })),
+        SlotView::Metadata(Box::new(norte_ui_host::dto::MetadataSlotView {
+            slot_id: 5,
+            fields: vec![norte_ui_host::dto::MetadataFieldView {
+                label: "Nombre".to_owned(),
+                value: "caf\u{fffd}.txt".to_owned(),
+                hostile: true,
+            }],
+            note: String::new(),
+        })),
+        SlotView::Processes {
+            slot_id: 6,
+            cursor: Some(0),
+        },
+        SlotView::Unsupported {
+            slot_id: 2,
+            kind_name: "compare".to_owned(),
+        },
+    ]
+}
+
 fn snapshot_de_referencia() -> ViewSnapshot {
     ViewSnapshot {
+        slots: slots_de_referencia(),
         connection: ConnectionView::Connected,
         layout: disposicion_de_referencia(),
-        slots: vec![
-            SlotView::Browser(Box::new(BrowserSlotView {
-                slot_id: 1,
-                generation: 4,
-                path_display: "⟨file⟩/home/oscar".to_owned(),
-                path_hostile: false,
-                total_rows: Some(2),
-                first_visible: 0,
-                rows: vec![
-                    fila(1, "notas.txt", false),
-                    fila(2, "caf\u{FFFD}.txt", true),
-                ],
-                cursor: Some(RowKey(1)),
-                marks: 0,
-                columns: vec![
-                    ColumnHeader {
-                        id: "name".to_owned(),
-                        label: "Nombre".to_owned(),
-                        sort: Some("asc".to_owned()),
-                        sortable: true,
-                    },
-                    ColumnHeader {
-                        id: "size".to_owned(),
-                        label: "Tamaño".to_owned(),
-                        sort: None,
-                        sortable: true,
-                    },
-                ],
-                state: SlotState::Ready,
-                quick: Some(norte_ui_host::dto::QuickView {
-                    query: "no".to_owned(),
-                    mode: "filter".to_owned(),
-                    matches: 1,
-                }),
-            })),
-            SlotView::Unsupported {
-                slot_id: 2,
-                kind_name: "processes".to_owned(),
-            },
-        ],
         focus: Some(1),
         status: StatusView {
             message: Some("2 entradas".to_owned()),
