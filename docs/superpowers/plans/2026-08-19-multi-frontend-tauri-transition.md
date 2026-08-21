@@ -1591,7 +1591,15 @@ delete, cancellation and daemon loss.
 > TUI has no such surface either — the batch path is reached through the AI
 > plan) and `fs.rename_batch_report` beyond the `HostBackend` method. The
 > report is the only signal that a batch left the directory half-done, and
-> showing it belongs with the task board in 5.3.
+> showing it belongs with the task board in 5.3 — tracked as **#272**, which is
+> BLOCKING for 5.4.
+>
+> Three reviews ran before committing: **two BLOCKERs and thirteen MAJORs**,
+> all applied. The two that generalise beyond this task: a surface that opens
+> BY ITSELF cannot be answered by the next keystroke (the first key only
+> acknowledges, `Enter` stopped approving, and there are buttons), and the
+> paint order has to match the key order — the review took the keyboard while
+> seven full-screen panels painted over it. Further debt: #273, #274, #275.
 
 
 - manual batch rename plan and collision display;
