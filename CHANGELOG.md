@@ -9,6 +9,19 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window can search a whole subtree.** Bridge version **16**: a prompt
+  takes a name glob, `fs.search` runs as a cancellable Task, and the results
+  arrive in BATCHES — the list can be walked and used before the search
+  finishes, which is half the value of searching a big tree. It says which of
+  the three states it is in, because a short list that stopped growing, one
+  still growing, and one that stopped at the limit read the same otherwise.
+  Going to a result navigates the pane to its directory and leaves the cursor
+  on it, byte-exact: the renderer sends an INDEX and never a path, and the
+  path the daemon sent is handed straight to the pane — a painted name never
+  becomes a path again, because that is how you end up opening another file.
+  Closing the search cancels the task: walking a tree for nobody spends the
+  daemon on a result that has nowhere to appear.
+
 - **The window can be reshaped, and pick another shape.** Bridge version
   **15**: `layout.grow`/`shrink` resize the slot that has the FOCUS — which is
   the only way to widen the sidebar, and the reason it is the focus and not
@@ -353,6 +366,15 @@ independently through `PROTOCOL_VERSION`.
   two are the same kind of text.
 
 ### Fixed
+
+- **Four Fluent keys the graphical window asked for did not exist**, so it
+  painted the key itself at the reader: every altered-name badge said
+  `hostile-name`, an empty listing said `listing-empty`, a palette with no
+  matches said `palette-empty`, and the viewer's lossy-decode marker asked for
+  a key whose real name is `viewer-lossy`. No test caught it because the
+  renderer's test catalogue is a fixture that invented the keys. There is now
+  a test that reads the renderer's own source for every key it asks for and
+  fails if the catalogue does not have it — in both languages.
 
 - **Tab could not reach the sidebar or the process panel.** The shared focus
   order includes every focusable slot, and the window moved the focus there —

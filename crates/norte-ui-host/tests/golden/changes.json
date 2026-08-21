@@ -332,6 +332,33 @@
     ],
     "slot_id": 1
   },
+  "search": {
+    "change": "search",
+    "search": {
+      "cursor": 0,
+      "query": "*.rs",
+      "root": "⟨file⟩/home/oscar/work",
+      "root_hostile": false,
+      "rows": [
+        {
+          "hostile": false,
+          "is_dir": false,
+          "name": "main.rs",
+          "parent": "⟨file⟩/home/oscar/work/src",
+          "parent_hostile": false
+        },
+        {
+          "hostile": true,
+          "is_dir": false,
+          "name": "caf�.rs",
+          "parent": "⟨file⟩/home/oscar/work",
+          "parent_hostile": false
+        }
+      ],
+      "running": true,
+      "status": "búsqueda: 2 hallazgos (buscando…)"
+    }
+  },
   "settings": {
     "change": "settings",
     "settings": {

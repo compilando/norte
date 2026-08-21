@@ -28,6 +28,7 @@ import type {
   ExtensionsView,
   LayoutPickerView,
   MetadataSlotView,
+  SearchView,
   PlacesSlotView,
   PickerView,
   ProcessesSlotView,
@@ -100,6 +101,7 @@ export class Screen {
     private readonly themeRoot: HTMLElement,
     private readonly pickerRoot: HTMLElement,
     private readonly layoutsRoot: HTMLElement,
+    private readonly searchRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
     private readonly catalog: HostCatalog,
@@ -155,6 +157,7 @@ export class Screen {
     this.paintTheme(view.theme);
     this.paintPicker(view.picker);
     this.paintLayouts(view.layouts);
+    this.paintSearch(view.search);
     this.paintViewer(view.viewer);
     this.paintDialogs(view.dialogs);
   }
@@ -951,6 +954,86 @@ export class Screen {
   }
 
   /**
+   * La búsqueda por el subárbol, con lo que lleva encontrado.
+   *
+   * Los resultados se pueden recorrer y usar ANTES de que termine, que es la
+   * mitad del valor de buscar en un árbol grande. La frase de estado la
+   * compone el host: dice cuántos van y si sigue.
+   */
+  private paintSearch(search: SearchView | null): void {
+    if (search === null) {
+      this.searchRoot.replaceChildren();
+      this.searchRoot.dataset["open"] = "false";
+      return;
+    }
+    this.searchRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "search";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", this.t("search-title"));
+
+    const titulo = document.createElement("h1");
+    titulo.textContent = `${this.t("search-title")} · ${search.query}`;
+    caja.append(titulo);
+
+    const donde = document.createElement("p");
+    donde.className = "search-root";
+    donde.dataset["hostile"] = String(search.root_hostile);
+    donde.textContent = search.root;
+    if (search.root_hostile) {
+      donde.append(badge(this.t("hostile-name")));
+    }
+    caja.append(donde);
+
+    const estado = document.createElement("p");
+    estado.className = "search-status";
+    estado.dataset["running"] = String(search.running);
+    // `status` mientras corre: un lector de pantalla anuncia el avance sin
+    // robarle el foco a lo que el usuario esté haciendo.
+    estado.setAttribute("role", "status");
+    estado.setAttribute("aria-live", "polite");
+    estado.textContent = search.status;
+    caja.append(estado);
+
+    const lista = document.createElement("ul");
+    lista.className = "search-rows";
+    lista.setAttribute("role", "listbox");
+    for (const [i, r] of search.rows.entries()) {
+      const fila = document.createElement("li");
+      fila.className = "search-row";
+      fila.id = `search-row-${String(i)}`;
+      fila.setAttribute("role", "option");
+      fila.setAttribute("aria-selected", String(search.cursor === i));
+      fila.dataset["dir"] = String(r.is_dir);
+      fila.addEventListener("click", () => {
+        this.send({ action: "search_activate_row", row: i });
+      });
+      const nombre = document.createElement("span");
+      nombre.className = "search-name";
+      nombre.dataset["hostile"] = String(r.hostile);
+      nombre.textContent = r.name;
+      if (r.hostile) {
+        nombre.append(badge(this.t("hostile-name")));
+      }
+      const padre = document.createElement("span");
+      padre.className = "search-parent";
+      padre.dataset["hostile"] = String(r.parent_hostile);
+      padre.textContent = r.parent;
+      fila.append(nombre, padre);
+      lista.append(fila);
+    }
+    if (search.cursor !== null) {
+      lista.setAttribute("aria-activedescendant", `search-row-${String(search.cursor)}`);
+    }
+    caja.append(lista);
+    this.searchRoot.replaceChildren(caja);
+    if (search.cursor !== null) {
+      revelar(lista.querySelector(`#search-row-${String(search.cursor)}`) ?? undefined);
+    }
+  }
+
+  /**
    * El selector de disposiciones, con la FORMA de la elegida al lado.
    *
    * La miniatura llega como líneas de texto pintadas por el mismo motor que
@@ -1140,7 +1223,10 @@ export class Screen {
       marcas.push(this.t("viewer-forced"));
     }
     if (viewer.had_errors) {
-      marcas.push(this.t("viewer-errors"));
+      // `viewer-lossy`, que es como se llama esta marca en el catálogo desde
+      // que existe el visor del TUI: inventar `viewer-errors` fue pedir una
+      // clave que no está, y `t` contesta con la clave misma.
+      marcas.push(this.t("viewer-lossy"));
     }
     if (viewer.truncated) {
       marcas.push(this.t("viewer-truncated"));

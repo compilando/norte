@@ -231,6 +231,16 @@ pub enum UiAction {
         /// Fila, en el orden en que viajaron.
         row: u32,
     },
+    /// Elige un resultado de la búsqueda (un click) y VA a él: el panel
+    /// navega a su directorio y el cursor queda encima.
+    ///
+    /// El renderer manda un ÍNDICE, nunca una ruta: la ruta exacta la tiene
+    /// el host desde que el daemon la mandó, y reconstruirla desde un texto
+    /// pintado es como se acaba abriendo otro fichero.
+    SearchActivateRow {
+        /// Fila, en el orden en que viajaron.
+        row: u32,
+    },
     /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
     Resync,
 }

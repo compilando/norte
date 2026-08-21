@@ -5304,3 +5304,263 @@ async fn una_disposicion_rota_se_ve_y_no_se_aplica() {
         "elegirla NO cambia la pantalla por un fichero roto: {ack:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Buscar por el subárbol (tarea 6.1).
+// ---------------------------------------------------------------------------
+
+/// Espera la siguiente actualización con la búsqueda.
+async fn siguiente_busqueda(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> Option<norte_ui_host::dto::SearchView> {
+    for _ in 0..20 {
+        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("una actualización antes del plazo")
+            .expect("el host sigue vivo");
+        if let Update::Message(m) = siguiente
+            && let UiUpdate::Patch(p) = &m.payload
+        {
+            for c in &p.changes {
+                if let norte_ui_host::dto::ViewChange::Search { search } = c {
+                    return search.clone();
+                }
+            }
+        }
+    }
+    panic!("no llegó ninguna actualización con búsqueda");
+}
+
+/// Un árbol con hallazgos preparados para un patrón.
+fn arbol_con_hallazgos(patron: &str, rutas: &[&str]) -> Arc<Falso> {
+    let base = arbol();
+    let mut f = Falso {
+        hallazgos: [(
+            patron.to_owned(),
+            rutas
+                .iter()
+                .map(|r| norte_proto::VPath::parse(r).expect("vpath"))
+                .collect(),
+        )]
+        .into_iter()
+        .collect(),
+        ..Falso::default()
+    };
+    f.arbol.clone_from(&base.arbol);
+    Arc::new(f)
+}
+
+/// Buscar abre su prompt, lanza la Task y los hallazgos llegan en lotes: la
+/// vista se abre YA, diciendo que corre, y se llena después.
+#[tokio::test]
+async fn buscar_abre_su_vista_y_los_hallazgos_llegan_en_lotes() {
+    let backend = arbol_con_hallazgos("*.txt", &["mem:///casa/notas.txt", "mem:///casa/docs"]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    por_la_paleta(&h, &mut sub, "pane.search").await;
+    // El prompt pide el patrón.
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let dialogo = foto
+        .dialogs
+        .iter()
+        .find(|d| d.input.is_some())
+        .expect("el prompt de buscar pide un patrón");
+    h.dispatch(UiAction::DialogInput {
+        id: dialogo.id,
+        text: "*.txt".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id: dialogo.id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    let primera = siguiente_busqueda(&mut sub).await.expect("la vista abre");
+    assert_eq!(primera.query, "*.txt");
+    assert!(
+        primera.running,
+        "se abre YA y diciendo que corre: esperar al primer lote es una \
+         ventana que no reacciona a una tecla que sí hizo algo"
+    );
+
+    let mut con_filas = None;
+    for _ in 0..20 {
+        let Some(v) = siguiente_busqueda(&mut sub).await else {
+            continue;
+        };
+        if !v.rows.is_empty() {
+            con_filas = Some(v);
+            break;
+        }
+    }
+    let v = con_filas.expect("los hallazgos llegan");
+    assert_eq!(v.rows.len(), 2);
+    assert_eq!(v.rows[0].name, "notas.txt");
+    assert!(
+        !v.rows[0].parent.is_empty(),
+        "y dónde está: {:?}",
+        v.rows[0]
+    );
+    assert!(
+        !v.status.is_empty() && !v.status.starts_with("search-status"),
+        "la frase de estado viene traducida: {:?}",
+        v.status
+    );
+    assert_eq!(
+        backend.busquedas.lock().expect("mutex").as_slice(),
+        &["*.txt".to_owned()],
+        "y el patrón llegó al wire tal cual"
+    );
+}
+
+/// Ir a un resultado navega a su DIRECTORIO y deja el cursor encima, sin
+/// reconstruir ninguna ruta.
+#[tokio::test]
+async fn ir_a_un_resultado_navega_y_deja_el_cursor_encima() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"docs".to_vec(), true)]);
+    f.pon(
+        "mem:///casa/docs",
+        vec![(b"a.md".to_vec(), false), (b"hallado.md".to_vec(), false)],
+    );
+    f.hallazgos = [(
+        "hallado*".to_owned(),
+        vec![norte_proto::VPath::parse("mem:///casa/docs/hallado.md").expect("vpath")],
+    )]
+    .into_iter()
+    .collect();
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    por_la_paleta(&h, &mut sub, "pane.search").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let dialogo = foto
+        .dialogs
+        .iter()
+        .find(|d| d.input.is_some())
+        .expect("el prompt está");
+    h.dispatch(UiAction::DialogInput {
+        id: dialogo.id,
+        text: "hallado*".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id: dialogo.id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    for _ in 0..20 {
+        let Some(v) = siguiente_busqueda(&mut sub).await else {
+            continue;
+        };
+        if !v.rows.is_empty() {
+            break;
+        }
+    }
+
+    h.dispatch(UiAction::SearchActivateRow { row: 0 })
+        .await
+        .expect("host vivo");
+    let mut llego = false;
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        if listado(&foto).path_display.contains("docs") {
+            assert!(foto.search.is_none(), "la búsqueda se cierra al ir");
+            let bajo_cursor = listado(&foto)
+                .rows
+                .iter()
+                .find(|r| Some(r.key) == listado(&foto).cursor)
+                .map(|r| r.display_name.clone());
+            assert_eq!(
+                bajo_cursor.as_deref(),
+                Some("hallado.md"),
+                "y el cursor queda ENCIMA del hallazgo, casado byte a byte"
+            );
+            llego = true;
+            break;
+        }
+    }
+    assert!(llego, "el panel navegó al directorio del hallazgo");
+}
+
+/// Un patrón vacío no lanza nada y lo dice: casaría el árbol entero.
+#[tokio::test]
+async fn un_patron_vacio_no_lanza_nada() {
+    let backend = arbol_con_hallazgos("*", &[]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    por_la_paleta(&h, &mut sub, "pane.search").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let dialogo = foto
+        .dialogs
+        .iter()
+        .find(|d| d.input.is_some())
+        .expect("el prompt está");
+    h.dispatch(UiAction::Dialog {
+        id: dialogo.id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let despues = siguiente_foto(&mut sub).await;
+    assert!(despues.search.is_none(), "no se abrió ninguna búsqueda");
+    assert!(
+        backend.busquedas.lock().expect("mutex").is_empty(),
+        "y nada llegó al wire"
+    );
+}
+
+/// Un nombre hostil llega a los resultados enmascarado y MARCADO.
+#[tokio::test]
+async fn un_hallazgo_hostil_va_marcado() {
+    let hostil = "mem:///casa/ca%CC%81f%C3%A9%E2%80%AE.txt";
+    let backend = arbol_con_hallazgos("*", &[hostil]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    por_la_paleta(&h, &mut sub, "pane.search").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let dialogo = foto
+        .dialogs
+        .iter()
+        .find(|d| d.input.is_some())
+        .expect("el prompt está");
+    h.dispatch(UiAction::DialogInput {
+        id: dialogo.id,
+        text: "*".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id: dialogo.id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    for _ in 0..20 {
+        let Some(v) = siguiente_busqueda(&mut sub).await else {
+            continue;
+        };
+        if let Some(fila) = v.rows.first() {
+            assert!(
+                !fila.name.contains('\u{202e}'),
+                "un override bidi cruzó crudo: {:?}",
+                fila.name
+            );
+            assert!(fila.hostile, "y se MARCA: {fila:?}");
+            return;
+        }
+    }
+    panic!("los hallazgos nunca llegaron");
+}

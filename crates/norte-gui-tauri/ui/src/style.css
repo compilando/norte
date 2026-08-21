@@ -1374,3 +1374,105 @@ body {
   margin: 0;
   color: var(--error-fg);
 }
+
+/* --- La búsqueda por el subárbol --------------------------------------- */
+
+#search[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+#search[data-open="false"] {
+  display: none;
+}
+
+.search {
+  width: min(110ch, 92vw);
+  height: min(80vh, 100%);
+  display: flex;
+  flex-direction: column;
+  padding: 0 12px 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  overflow: hidden;
+}
+
+.search h1 {
+  margin-bottom: 2px;
+  padding-bottom: 4px;
+  font-size: 1.35em;
+  color: var(--title-fg);
+  border-bottom: 1px solid var(--border);
+  unicode-bidi: isolate;
+}
+
+.search-root,
+.search-status {
+  margin: 0;
+  unicode-bidi: isolate;
+}
+
+.search-root {
+  opacity: 0.8;
+}
+
+.search-root[data-hostile="true"] {
+  color: var(--hostile-fg);
+  opacity: 1;
+}
+
+/* Mientras corre, el estado se ve; parada, se apaga. La lista corta que ya
+   no crece y la que sigue creciendo se leen igual sin esto. */
+.search-status[data-running="true"] {
+  color: var(--title-fg);
+}
+
+.search-status[data-running="false"] {
+  opacity: 0.8;
+}
+
+.search-rows {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  overflow: auto;
+}
+
+.search-row {
+  display: grid;
+  grid-template-columns: 40ch 1fr;
+  gap: 0 12px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+
+.search-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.search-row[data-dir="true"] .search-name {
+  color: var(--title-fg);
+}
+
+.search-name,
+.search-parent {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Un nombre y una ruta son BYTES: cada uno su propia corrida bidi. */
+  unicode-bidi: isolate;
+}
+
+.search-name[data-hostile="true"],
+.search-parent[data-hostile="true"] {
+  color: var(--hostile-fg);
+}
+
+.search-parent {
+  opacity: 0.8;
+}

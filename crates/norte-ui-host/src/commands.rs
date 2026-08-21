@@ -78,6 +78,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.select-drive",
     "pane.view",
     "pane.quick-search",
+    "pane.search",
     "pane.mkdir",
     "pane.delete",
     "pane.delete-permanent",
@@ -229,6 +230,8 @@ pub enum Efecto {
     Ver,
     /// Abre el buscador incremental del listado.
     BuscarRapido,
+    /// Abre el prompt de buscar por el subárbol.
+    Buscar,
     /// Abre el prompt de crear directorio.
     CrearDirectorio,
     /// Pide borrar lo marcado (o lo que haya bajo el cursor). NO borra: abre
@@ -282,6 +285,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.select-drive" => Efecto::Volumenes,
         "pane.view" => Efecto::Ver,
         "pane.quick-search" => Efecto::BuscarRapido,
+        "pane.search" => Efecto::Buscar,
         "pane.mkdir" => Efecto::CrearDirectorio,
         "pane.delete" => Efecto::Borrar { permanente: false },
         "pane.delete-permanent" => Efecto::Borrar { permanente: true },

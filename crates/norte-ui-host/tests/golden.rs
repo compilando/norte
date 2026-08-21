@@ -430,6 +430,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         settings: Some(ajustes_de_referencia()),
         extensions: Some(extensiones_de_referencia()),
         theme: Some(tema_de_referencia()),
+        search: Some(busqueda_de_referencia()),
         layouts: Some(disposiciones_de_referencia()),
         picker: Some(selector_de_referencia()),
         viewer: Some(visor_de_referencia()),
@@ -453,6 +454,36 @@ fn tema_de_referencia() -> norte_ui_host::dto::ThemeView {
             },
         ],
         unsupported_effects: vec!["crt".to_owned()],
+    }
+}
+
+/// La búsqueda de referencia: dos hallazgos, uno con nombre hostil, y
+/// todavía corriendo.
+fn busqueda_de_referencia() -> norte_ui_host::dto::SearchView {
+    use norte_ui_host::dto::{SearchRowView, SearchView};
+    SearchView {
+        query: "*.rs".to_owned(),
+        root: "⟨file⟩/home/oscar/work".to_owned(),
+        root_hostile: false,
+        rows: vec![
+            SearchRowView {
+                name: "main.rs".to_owned(),
+                hostile: false,
+                parent: "⟨file⟩/home/oscar/work/src".to_owned(),
+                parent_hostile: false,
+                is_dir: false,
+            },
+            SearchRowView {
+                name: "caf\u{fffd}.rs".to_owned(),
+                hostile: true,
+                parent: "⟨file⟩/home/oscar/work".to_owned(),
+                parent_hostile: false,
+                is_dir: false,
+            },
+        ],
+        cursor: Some(0),
+        status: "búsqueda: 2 hallazgos (buscando…)".to_owned(),
+        running: true,
     }
 }
 
@@ -880,6 +911,12 @@ fn cambios_de_overlay() -> Vec<(&'static str, ViewChange)> {
             "layouts",
             ViewChange::Layouts {
                 layouts: Some(disposiciones_de_referencia()),
+            },
+        ),
+        (
+            "search",
+            ViewChange::Search {
+                search: Some(busqueda_de_referencia()),
             },
         ),
         (

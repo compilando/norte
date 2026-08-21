@@ -53,6 +53,10 @@ pub struct Falso {
     /// El `help.md` de cada extensión, por id. Un id ausente contesta como
     /// un daemon que no tiene la página: markdown vacío.
     pub paginas: HashMap<String, String>,
+    /// Lo que contesta una búsqueda, por patrón: `(glob, hallazgos)`.
+    pub hallazgos: HashMap<String, Vec<VPath>>,
+    /// Los patrones que se buscaron, en orden.
+    pub busquedas: std::sync::Mutex<Vec<String>>,
     /// Los volúmenes que contesta `host.volumes`.
     pub volumenes: Vec<norte_proto::methods::Volume>,
     /// Directorios de plugin que no cargaron: `(dir, motivo)`.
@@ -201,6 +205,83 @@ impl HostBackend for Falso {
                 truncated: false,
                 lossy: false,
             })
+        })
+    }
+
+    fn search(
+        &self,
+        params: norte_proto::methods::FsSearchParams,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            (
+                norte_ui_host::backend::HostTask,
+                tokio::sync::mpsc::Receiver<norte_proto::methods::SearchHits>,
+            ),
+            Error,
+        >,
+    > {
+        let patron = params.name_glob.clone().unwrap_or_default();
+        self.busquedas
+            .lock()
+            .expect("mutex de búsquedas")
+            .push(patron.clone());
+        let hallazgos = self.hallazgos.get(&patron).cloned().unwrap_or_default();
+        Box::pin(async move {
+            let id = norte_proto::TaskId::new(77);
+            let (tx, rx) = tokio::sync::mpsc::channel(8);
+            let (ptx, prx) = tokio::sync::watch::channel(norte_proto::TaskProgress {
+                task_id: id,
+                kind: norte_proto::TaskKind::Search,
+                state: norte_proto::TaskState::Running,
+                bytes_done: 0,
+                bytes_total: None,
+                entries_done: 0,
+                entries_total: None,
+                current: None,
+            });
+            tokio::spawn(async move {
+                let entradas: Vec<norte_proto::Entry> = hallazgos
+                    .into_iter()
+                    .map(|path| norte_proto::Entry {
+                        path,
+                        kind: norte_proto::EntryKind::File,
+                        size: Some(1),
+                        mtime_ms: Some(0),
+                        attrs: std::collections::BTreeMap::new(),
+                    })
+                    .collect();
+                let _ = tx
+                    .send(norte_proto::methods::SearchHits {
+                        task_id: id,
+                        entries: entradas,
+                        matches: None,
+                    })
+                    .await;
+                // Y termina: la vista deja de decir «buscando…».
+                let _ = ptx.send(norte_proto::TaskProgress {
+                    task_id: id,
+                    kind: norte_proto::TaskKind::Search,
+                    state: norte_proto::TaskState::Completed,
+                    bytes_done: 0,
+                    bytes_total: None,
+                    entries_done: 1,
+                    entries_total: Some(1),
+                    current: None,
+                });
+                // El emisor vive lo que la task: soltarlo cierra el canal y
+                // eso ES el final de la búsqueda.
+                std::mem::forget(ptx);
+            });
+            Ok((
+                norte_ui_host::backend::HostTask {
+                    id,
+                    progress: prx,
+                    cancel: Arc::new(|| {}),
+                    foreign: false,
+                },
+                rx,
+            ))
         })
     }
 

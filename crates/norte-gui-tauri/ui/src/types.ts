@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 15;
+export const BRIDGE_VERSION = 16;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -380,6 +380,24 @@ export interface LayoutPickerView {
   problem: string;
 }
 
+export interface SearchRowView {
+  name: string;
+  hostile: boolean;
+  parent: string;
+  parent_hostile: boolean;
+  is_dir: boolean;
+}
+
+export interface SearchView {
+  query: string;
+  root: string;
+  root_hostile: boolean;
+  rows: SearchRowView[];
+  cursor: number | null;
+  status: string;
+  running: boolean;
+}
+
 export interface ViewSnapshot {
   connection: ConnectionView;
   layout: LayoutView;
@@ -394,6 +412,7 @@ export interface ViewSnapshot {
   settings: SettingsView | null;
   extensions: ExtensionsView | null;
   theme: ThemeView | null;
+  search: SearchView | null;
   layouts: LayoutPickerView | null;
   picker: PickerView | null;
   viewer: ViewerView | null;
@@ -424,7 +443,8 @@ export type ViewChange =
   | { change: "extensions"; extensions: ExtensionsView | null }
   | { change: "theme"; theme: ThemeView | null }
   | { change: "picker"; picker: PickerView | null }
-  | { change: "layouts"; layouts: LayoutPickerView | null };
+  | { change: "layouts"; layouts: LayoutPickerView | null }
+  | { change: "search"; search: SearchView | null };
 
 export interface ViewPatch {
   base_sequence: number;
@@ -480,6 +500,7 @@ export type UiAction =
   | { action: "picker_select_row"; row: number }
   | { action: "place_activate_row"; row: number }
   | { action: "layout_activate_row"; row: number }
+  | { action: "search_activate_row"; row: number }
   | { action: "resync" };
 
 export type StaleReason = "instance" | "generation" | "modal";

@@ -759,6 +759,11 @@ msg-session-too-large = la sesión no cabe; se ha tirado el historial
 msg-session-unreadable = la sesión guardada no se pudo leer; se arranca con la disposición de la configuración
 msg-layout-applied = disposición aplicada: { $name }
 layout-picker-title = Disposición
+# Tarea 6.1 en la ventana gráfica: buscar por un subárbol. «Corriendo» y
+# «no casó nada» se dicen distinto, porque una lista corta que ya no crece
+# y una que todavía crece se leen igual.
+modal-search-title = Buscar en este árbol
+err-empty-pattern = teclea un patrón: uno vacío casa el árbol entero
 # Tarea 4.1 en la ventana gráfica: qué dice cada fila del selector de
 # disposiciones sobre sí misma. El aviso del nombre de teclado no es adorno:
 # los dos ajustes comparten espacio de nombres, y sin la línea la
@@ -1180,6 +1185,17 @@ gui-a11y-sync-confirm = confirmar el plan
 # texto limpio y legible que difiere de los bytes del disco, así que el badge
 # es su única marca.
 gui-a11y-hostile-name = nombre alterado
+# La insignia VISIBLE junto a un nombre que no se pinta como es de verdad
+# (overrides bidi, controles, bytes que no decodifican). Es TEXTO y no un
+# símbolo a secas a propósito: el símbolo solo es un misterio la primera
+# vez, y esta marca es el único aviso que tiene quien va a actuar sobre ese
+# nombre.
+hostile-name = ⚠ nombre alterado
+# Lo que pinta la ventana gráfica donde una lista no tiene nada. Son dos
+# mensajes porque contestan preguntas distintas: un directorio sin
+# entradas, y un filtro que no casó ninguna.
+listing-empty = vacío
+palette-empty = nada casa con lo que has tecleado
 gui-menu-acts-on = actúa sobre { $target }
 gui-menu-target-marks = { $n } elementos marcados
 gui-menu-entry-disabled = { $label } — { $reason }

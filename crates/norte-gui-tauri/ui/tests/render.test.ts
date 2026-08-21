@@ -87,6 +87,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     theme: null,
     picker: null,
     layouts: null,
+    search: null,
     viewer: null,
     locale: "es",
   };
@@ -103,6 +104,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
   const theme = document.createElement("div");
   const picker = document.createElement("div");
   const layouts = document.createElement("div");
+  const search = document.createElement("div");
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
   document.body.append(
@@ -115,6 +117,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     theme,
     picker,
     layouts,
+    search,
     viewer,
     dialogs,
   );
@@ -131,6 +134,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     theme,
     picker,
     layouts,
+    search,
     viewer,
     dialogs,
     catalogo(),
@@ -1456,5 +1460,77 @@ describe("el selector de disposiciones", () => {
     const filas = [...document.querySelectorAll(".layouts-row")];
     (filas[1] as HTMLElement).click();
     expect(enviadas).toEqual([{ action: "layout_activate_row", row: 1 }]);
+  });
+});
+
+describe("la búsqueda", () => {
+  function conBusqueda(running: boolean): ViewSnapshot {
+    const v = vista({});
+    v.search = {
+      query: "*.rs",
+      root: "⟨file⟩/home/oscar/work",
+      root_hostile: false,
+      rows: [
+        {
+          name: "main.rs",
+          hostile: false,
+          parent: "⟨file⟩/home/oscar/work/src",
+          parent_hostile: false,
+          is_dir: false,
+        },
+        {
+          name: "caf�.rs",
+          hostile: true,
+          parent: "⟨file⟩/home/oscar/work",
+          parent_hostile: false,
+          is_dir: false,
+        },
+      ],
+      cursor: 0,
+      status: running ? "búsqueda: 2 hallazgos (buscando…)" : "búsqueda: 2 hallazgos",
+      running,
+    };
+    return v;
+  }
+
+  it("dice en qué estado está, y lo anuncia sin robar el foco", () => {
+    const { screen } = montar();
+    screen.paint(conBusqueda(true));
+    const estado = document.querySelector(".search-status") as HTMLElement;
+    expect(estado.getAttribute("role")).toBe("status");
+    expect(estado.getAttribute("aria-live")).toBe("polite");
+    expect(estado.getAttribute("data-running")).toBe("true");
+    expect(estado.textContent).toContain("buscando");
+
+    screen.paint(conBusqueda(false));
+    expect(document.querySelector(".search-status")?.getAttribute("data-running")).toBe(
+      "false",
+    );
+  });
+
+  it("cada fila dice el nombre y DÓNDE está, y marca lo hostil", () => {
+    const { screen } = montar();
+    screen.paint(conBusqueda(true));
+    const filas = [...document.querySelectorAll(".search-row")];
+    expect(filas).toHaveLength(2);
+    expect(filas[0]?.querySelector(".search-name")?.textContent).toBe("main.rs");
+    expect(filas[0]?.querySelector(".search-parent")?.textContent).toContain("src");
+    expect(filas[1]?.querySelector(".search-name")?.getAttribute("data-hostile")).toBe(
+      "true",
+    );
+  });
+
+  it("un click va a ESE resultado, mandando un índice y no una ruta", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conBusqueda(false));
+    const filas = [...document.querySelectorAll(".search-row")];
+    (filas[1] as HTMLElement).click();
+    expect(enviadas).toEqual([{ action: "search_activate_row", row: 1 }]);
+  });
+
+  it("cerrada, no tapa nada", () => {
+    const { screen } = montar();
+    screen.paint(vista({}));
+    expect(document.querySelector(".search")).toBeNull();
   });
 });

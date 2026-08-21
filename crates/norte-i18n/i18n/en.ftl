@@ -763,6 +763,11 @@ msg-session-too-large = the session is too big to store; history dropped
 msg-session-unreadable = the stored session could not be read; starting from the configured layout
 msg-layout-applied = layout applied: { $name }
 layout-picker-title = Layout
+# Task 6.1 in the graphical window: search over a subtree. "Running" and
+# "nothing matched" are said apart, because a short list that stopped
+# growing and one still growing read the same.
+modal-search-title = Search in this tree
+err-empty-pattern = type a pattern: an empty one matches the whole tree
 # Task 4.1 in the graphical window: what each row of the layout picker says
 # about itself. The keymap-name warning is not decoration — the two settings
 # share a namespace, and without the line the coincidence is a trap.
@@ -1179,6 +1184,16 @@ gui-a11y-sync-confirm = confirm the plan
 # the masked form carries no U+FFFD either — it is clean, legible text that
 # differs from the bytes on disk, so the badge is its only marker.
 gui-a11y-hostile-name = altered name
+# The visible badge next to a name that does not paint as it really is
+# (bidi overrides, controls, undecodable bytes). It is TEXT and not a bare
+# symbol on purpose: the symbol alone is a mystery the first time, and this
+# marker is the only warning the reader gets before acting on that name.
+hostile-name = ⚠ altered name
+# What the graphical window paints where a list has nothing in it. They are
+# separate messages because they answer different questions: a directory
+# with no entries, and a filter that matched none.
+listing-empty = empty
+palette-empty = nothing matches what you typed
 gui-menu-acts-on = acts on { $target }
 gui-menu-target-marks = { $n } marked items
 gui-menu-entry-disabled = { $label } — { $reason }

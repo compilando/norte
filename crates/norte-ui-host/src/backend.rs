@@ -185,6 +185,20 @@ pub trait HostBackend: Send + Sync + 'static {
     /// la tabla de montaje es del host, y el daemon solo la contesta a una
     /// conexión de humano — un agente bajo scope no la necesita.
     fn volumes(&self) -> BoxFuture<'static, Result<Vec<methods::Volume>, Error>>;
+
+    /// Lanza una búsqueda por el subárbol y devuelve su Task Y el canal por
+    /// el que llegan los LOTES de resultados.
+    ///
+    /// Los dos juntos porque son una sola cosa: una búsqueda es una tarea
+    /// larga cuyo desenlace va por el progreso y cuyos hallazgos van por el
+    /// canal. Quedarse con uno solo es no poder cancelarla, o no ver nada.
+    fn search(
+        &self,
+        params: methods::FsSearchParams,
+    ) -> BoxFuture<
+        'static,
+        Result<(HostTask, tokio::sync::mpsc::Receiver<methods::SearchHits>), Error>,
+    >;
 }
 
 /// El backend de verdad: el SDK.
@@ -309,6 +323,29 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<methods::PluginGetConfigResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.plugin_get_config(&id).await })
+    }
+
+    fn search(
+        &self,
+        params: methods::FsSearchParams,
+    ) -> BoxFuture<
+        'static,
+        Result<(HostTask, tokio::sync::mpsc::Receiver<methods::SearchHits>), Error>,
+    > {
+        let backend = self.clone();
+        Box::pin(async move {
+            let (task, rx) = backend.search(params).await?;
+            let canceller = task.canceller();
+            Ok((
+                HostTask {
+                    id: task.id(),
+                    progress: task.progress(),
+                    cancel: Arc::new(move || canceller.cancel()),
+                    foreign: false,
+                },
+                rx,
+            ))
+        })
     }
 
     fn volumes(&self) -> BoxFuture<'static, Result<Vec<methods::Volume>, Error>> {

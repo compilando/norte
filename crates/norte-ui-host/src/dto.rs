@@ -45,6 +45,8 @@ pub struct ViewSnapshot {
     /// El tema, si se está mirando. Solo LECTURA: se ve qué colores tiene
     /// cada rol y qué efectos declara que este renderer no sabe pintar.
     pub theme: Option<ThemeView>,
+    /// Una búsqueda, si hay una abierta.
+    pub search: Option<SearchView>,
     /// El selector de disposiciones, si está abierto.
     pub layouts: Option<LayoutPickerView>,
     /// Un selector abierto (conexiones o volúmenes), si lo hay.
@@ -732,6 +734,55 @@ pub struct LayoutRowView {
     pub broken: bool,
 }
 
+/// Una búsqueda por el subárbol, con lo que lleva encontrado.
+///
+/// Los resultados llegan en LOTES mientras la búsqueda corre: la vista se
+/// puede recorrer y usar antes de que termine, que es la mitad del valor de
+/// buscar en un árbol grande.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchView {
+    /// Lo que se buscó, ya saneado.
+    pub query: String,
+    /// Dónde, ya saneado.
+    pub root: String,
+    /// El texto de arriba DIFIERE de la ruta real.
+    pub root_hostile: bool,
+    /// Lo encontrado hasta ahora.
+    pub rows: Vec<SearchRowView>,
+    /// Cuál está elegida, si hay alguna.
+    pub cursor: Option<u64>,
+    /// En qué estado está, YA dicho: cuántos van y si sigue corriendo, si
+    /// terminó, o si paró en su tope.
+    ///
+    /// Compuesto en Rust con la MISMA familia de frases que usa el TUI
+    /// (`search-status-*`): el catálogo llega al renderer con los textos ya
+    /// resueltos, así que interpolar un número es cosa del host.
+    ///
+    /// Los tres estados se dicen distinto porque son distintos: una lista
+    /// corta que ya no crece, una que todavía crece y una que paró en el tope
+    /// se leen igual si nadie las nombra.
+    pub status: String,
+    /// Sigue corriendo. Va aparte de [`Self::status`] porque el renderer lo
+    /// usa para pintar, no para leer.
+    pub running: bool,
+}
+
+/// Un resultado.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchRowView {
+    /// El nombre del fichero, ya saneado.
+    pub name: String,
+    /// El texto de arriba DIFIERE del nombre real.
+    pub hostile: bool,
+    /// Dónde está, ya saneado: el directorio que lo contiene.
+    pub parent: String,
+    /// El directorio de arriba DIFIERE del real.
+    pub parent_hostile: bool,
+    /// Es un directorio.
+    pub is_dir: bool,
+}
+
+/// Lo que el visor enseña.
 /// Lo que el visor enseña.
 /// Lo que el visor enseña.
 /// Lo que el visor enseña.
@@ -1195,6 +1246,11 @@ pub enum ViewChange {
     Theme {
         /// El tema, o `None` si se cerró.
         theme: Option<ThemeView>,
+    },
+    /// La búsqueda arrancó, encontró algo, terminó o se cerró.
+    Search {
+        /// La búsqueda, o `None` si se cerró.
+        search: Option<SearchView>,
     },
     /// El selector de disposiciones se abrió, se movió o se cerró.
     Layouts {

@@ -298,6 +298,8 @@ enum Fondo {
     ),
     /// Los volúmenes del host, pedidos al abrir su selector.
     Volumenes(Result<Vec<norte_proto::methods::Volume>, Error>),
+    /// Un lote de resultados de una búsqueda viva.
+    Resultados(Box<norte_proto::methods::SearchHits>),
     /// Los volúmenes, pedidos por la BARRA LATERAL.
     ///
     /// Aparte de los del selector por el mismo motivo que los dos catálogos
@@ -664,6 +666,26 @@ struct Hueco {
     sondeados: std::collections::HashSet<VPath>,
 }
 
+/// Una búsqueda viva y lo que lleva encontrado.
+struct Busqueda {
+    /// La Task del daemon. Un lote de OTRA se descarta: una búsqueda
+    /// anterior que todavía escupe resultados no puede llenar la lista de la
+    /// nueva.
+    task: norte_proto::TaskId,
+    /// Lo que se buscó, para poder decirlo.
+    query: String,
+    /// Dónde se buscó.
+    root: VPath,
+    /// Lo encontrado, en el orden en que llegó.
+    hits: Vec<Entry>,
+    /// Dónde está el cursor.
+    cursor: usize,
+    /// Sigue corriendo.
+    viva: bool,
+    /// El tope que se pidió: alcanzarlo significa que hay más.
+    tope: u32,
+}
+
 /// Un diálogo abierto y lo que hará si se confirma.
 struct Dialogo {
     id: ModalId,
@@ -694,6 +716,12 @@ enum Pendiente {
     Decidir {
         /// El id que el daemon espera de vuelta.
         approval_id: u64,
+    },
+    /// Buscar por el subárbol de este directorio. Lo que se teclea es el
+    /// patrón.
+    Buscar {
+        /// Dónde empieza el walk.
+        root: VPath,
     },
     /// Crear un directorio dentro de este otro. El nombre lo teclea el
     /// usuario y se valida al confirmar, no al teclear: corregir un nombre a
@@ -742,6 +770,8 @@ struct Estado {
     tema: crate::pickers::HostTheme,
     /// Se está mirando el tema por dentro.
     mirando_tema: bool,
+    /// La búsqueda abierta, si la hay.
+    busqueda: Option<Busqueda>,
     /// Las disposiciones del usuario, ya leídas por quien arrancó el host.
     disposiciones: Vec<norte_frontend::layout_picker::UserLayout>,
     /// El selector de disposiciones, si está abierto.
@@ -934,6 +964,7 @@ impl Estado {
             mirando_tema: false,
             cursor_procesos: 0,
             sitios: None,
+            busqueda: None,
             disposiciones: user_layouts,
             selector_disposicion: None,
             selector: None,
@@ -1307,6 +1338,7 @@ impl Estado {
             UiAction::PickerSelectRow { row } => self.elegir_fila_del_selector(*row),
             UiAction::PlaceActivateRow { row } => self.activar_sitio(*row, backend, buzon),
             UiAction::LayoutActivateRow { row } => self.elegir_disposicion(*row, backend, buzon),
+            UiAction::SearchActivateRow { row } => self.ir_al_resultado(*row, backend, buzon),
             UiAction::HelpActivate { index } => self.activar_en_ayuda(*index, backend, buzon),
         }
     }
@@ -1333,6 +1365,9 @@ impl Estado {
         // recibía ni una tecla y que ninguna podía cerrar.
         if self.ayuda.is_some() {
             return Some(self.tecla_en_ayuda(k, backend, buzon));
+        }
+        if self.busqueda.is_some() {
+            return Some(self.tecla_en_busqueda(k, backend, buzon));
         }
         if self.selector_disposicion.is_some() {
             return Some(self.tecla_en_disposiciones(k, backend, buzon));
@@ -1693,6 +1728,283 @@ impl Estado {
         });
     }
 
+    /// Tope de resultados de UNA búsqueda.
+    ///
+    /// Acota el mensaje y la memoria del host: un árbol grande con un patrón
+    /// laxo devuelve todo lo que hay. Alcanzarlo NO es un fallo —la Task
+    /// completa— y se DICE, porque «100 resultados» y «los primeros 100 de
+    /// no se sabe cuántos» son dos respuestas distintas.
+    const MAX_RESULTADOS: u32 = 2000;
+
+    /// Abre el prompt de buscar. Lo que se teclea es el patrón.
+    fn pedir_busqueda(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let root = self.hueco().pane.dir().clone();
+        let (donde, _) = norte_frontend::path_display(&root);
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        self.dialogos.push(Dialogo {
+            id,
+            vista: DialogView {
+                id,
+                title_key: "modal-search-title".to_owned(),
+                body: vec![clamp_display(donde)],
+                choices: vec![
+                    DialogChoice {
+                        id: "confirm".to_owned(),
+                        label_key: "dialog-confirm".to_owned(),
+                        destructive: false,
+                    },
+                    DialogChoice {
+                        id: "cancel".to_owned(),
+                        label_key: "dialog-cancel".to_owned(),
+                        destructive: false,
+                    },
+                ],
+                input: Some(String::new()),
+                input_hostile: false,
+            },
+            input_crudo: String::new(),
+            al_confirmar: Some(Pendiente::Buscar { root }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Lanza la búsqueda y engancha el canal por el que llegan sus lotes.
+    ///
+    /// El patrón va como GLOB de nombre, que es lo que un usuario teclea
+    /// cuando busca `*.rs`. La búsqueda por CONTENIDO es otra cosa —otro
+    /// campo, otro coste— y llega con su propia rebanada.
+    fn lanzar_busqueda(
+        &mut self,
+        root: VPath,
+        patron: String,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let params = norte_proto::methods::FsSearchParams {
+            root: root.clone(),
+            name_glob: Some(patron.clone()),
+            name_regex: None,
+            content: None,
+            content_regex: None,
+            case_sensitive: false,
+            max_hits: Some(Self::MAX_RESULTADOS),
+        };
+        let backend = Arc::clone(backend);
+        let buzon2 = buzon.clone();
+        // La búsqueda se lanza y CONTESTA por el buzón, como todo lo demás:
+        // el actor sigue atendiendo teclas mientras el daemon camina el árbol.
+        tokio::spawn(async move {
+            let (task, mut rx) = match backend.search(params).await {
+                Ok(par) => par,
+                Err(e) => {
+                    let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    return;
+                }
+            };
+            let _ = buzon2.send(Mensaje::TaskNueva(Box::new(task))).await;
+            // La bomba vive lo que el canal: cuando el daemon lo cierra, la
+            // búsqueda terminó y el progreso ya lo dijo por su lado.
+            while let Some(lote) = rx.recv().await {
+                if buzon2
+                    .send(Mensaje::Fondo(Box::new(Fondo::Resultados(Box::new(lote)))))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        // La vista se abre YA, vacía y diciendo que corre: esperar al primer
+        // lote es una ventana que no reacciona a una tecla que sí hizo algo.
+        self.busqueda = Some(Busqueda {
+            // Todavía no se sabe: el primer lote la nombra. Cero jamás es una
+            // Task real, así que ningún lote casa por accidente.
+            task: norte_proto::TaskId::new(0),
+            query: patron,
+            root,
+            hits: Vec::new(),
+            cursor: 0,
+            viva: true,
+            tope: Self::MAX_RESULTADOS,
+        });
+        let cambio = ViewChange::Search {
+            search: self.vista_busqueda(),
+        };
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// Un lote de resultados.
+    ///
+    /// El PRIMERO nombra la Task; los siguientes tienen que casar. Un lote de
+    /// otra búsqueda se descarta: una anterior que todavía escupe resultados
+    /// no puede llenar la lista de la nueva.
+    fn aplicar_resultados(
+        &mut self,
+        lote: &norte_proto::methods::SearchHits,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        let b = self.busqueda.as_mut()?;
+        if b.task.get() == 0 {
+            b.task = lote.task_id;
+        } else if b.task != lote.task_id {
+            return None;
+        }
+        let sitio = usize::try_from(b.tope).unwrap_or(usize::MAX);
+        for e in &lote.entries {
+            if b.hits.len() >= sitio {
+                break;
+            }
+            b.hits.push(e.clone());
+        }
+        let cambio = ViewChange::Search {
+            search: self.vista_busqueda(),
+        };
+        Some(self.parche(vec![cambio]))
+    }
+
+    /// La proyección de la búsqueda.
+    fn vista_busqueda(&self) -> Option<crate::dto::SearchView> {
+        let b = self.busqueda.as_ref()?;
+        let (donde, root_hostil) = norte_frontend::path_display(&b.root);
+        Some(crate::dto::SearchView {
+            query: clamp_display(norte_frontend::display_name(b.query.as_bytes()).0),
+            root: clamp_display(donde),
+            root_hostile: root_hostil,
+            rows: b
+                .hits
+                .iter()
+                .map(|e| {
+                    let nombre = e
+                        .path
+                        .file_name()
+                        .map_or_else(Vec::new, |s| s.as_bytes().to_vec());
+                    let (pintable, hostil) = norte_frontend::display_name(&nombre);
+                    let (padre, padre_hostil) = e.path.parent().map_or_else(
+                        || (String::new(), false),
+                        |p| norte_frontend::path_display(&p),
+                    );
+                    crate::dto::SearchRowView {
+                        name: clamp_display(pintable),
+                        hostile: hostil,
+                        parent: clamp_display(padre),
+                        parent_hostile: padre_hostil,
+                        is_dir: e.kind == EntryKind::Dir,
+                    }
+                })
+                .collect(),
+            // `then` y no `then_some`: el argumento de `then_some` se evalúa
+            // SIEMPRE, y con cero hallazgos el `len() - 1` se desbordaba.
+            cursor: (!b.hits.is_empty()).then(|| b.cursor.min(b.hits.len() - 1) as u64),
+            status: clamp_display(Self::estado_de_busqueda(b, self.lang)),
+            running: b.viva,
+        })
+    }
+
+    /// La frase de estado de una búsqueda.
+    ///
+    /// Reutiliza la familia del TUI (`search-status-*`) en vez de inventar
+    /// otra: es la misma información y no hay dos maneras de decirla.
+    fn estado_de_busqueda(b: &Busqueda, lang: norte_i18n::Lang) -> String {
+        let n = b.hits.len().to_string();
+        let clave = if b.hits.len() >= usize::try_from(b.tope).unwrap_or(usize::MAX) {
+            "search-status-truncated"
+        } else if b.viva {
+            "search-status-running"
+        } else {
+            "search-status-done"
+        };
+        norte_i18n::ta_in(lang, clave, &[("n", &n)])
+    }
+
+    /// Las teclas mientras la búsqueda está abierta.
+    fn tecla_en_busqueda(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        /// Cuántas filas mueve una página.
+        const PAGINA: usize = 10;
+        let Some(b) = self.busqueda.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let ultimo = b.hits.len().saturating_sub(1);
+        match k.key.as_str() {
+            "Escape" | "esc" => {
+                // Cerrar la búsqueda CANCELA la Task: seguir caminando un
+                // árbol para nadie es gastar el daemon en un resultado que ya
+                // no tiene dónde aparecer.
+                let task = b.task;
+                self.busqueda = None;
+                if task.get() != 0 {
+                    self.cancelar(task.get());
+                }
+            }
+            "ArrowDown" | "down" => b.cursor = (b.cursor + 1).min(ultimo),
+            "ArrowUp" | "up" => b.cursor = b.cursor.saturating_sub(1),
+            "PageDown" | "pgdn" => b.cursor = (b.cursor + PAGINA).min(ultimo),
+            "PageUp" | "pgup" => b.cursor = b.cursor.saturating_sub(PAGINA),
+            "Home" | "home" => b.cursor = 0,
+            "End" | "end" => b.cursor = ultimo,
+            "Enter" | "enter" => {
+                let fila = u32::try_from(b.cursor).unwrap_or(u32::MAX);
+                return self.ir_al_resultado(fila, backend, buzon);
+            }
+            _ => return (self.aplicada(), Vec::new()),
+        }
+        let cambio = ViewChange::Search {
+            search: self.vista_busqueda(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Va al resultado `fila`: el panel navega a su directorio y el cursor
+    /// queda ENCIMA de él.
+    ///
+    /// Sin reconstruir ninguna ruta: la del hallazgo es la que mandó el
+    /// daemon, y se le pasa entera al panel para que la case byte a byte
+    /// cuando aterrice el listado. Un nombre pintado no vuelve a ser un path
+    /// nunca — por ahí es por donde se acaba abriendo otro fichero.
+    fn ir_al_resultado(
+        &mut self,
+        fila: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(b) = self.busqueda.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        b.cursor = (fila as usize).min(b.hits.len().saturating_sub(1));
+        let Some(hit) = b.hits.get(b.cursor).cloned() else {
+            return (self.aplicada(), Vec::new());
+        };
+        // Un directorio se abre por dentro; un fichero, en su carpeta con el
+        // cursor encima.
+        let (destino, foco) = if hit.kind == EntryKind::Dir {
+            (hit.path.clone(), None)
+        } else {
+            match hit.path.parent() {
+                Some(p) => (p, Some(hit.path.clone())),
+                None => (hit.path.clone(), None),
+            }
+        };
+        let task = b.task;
+        self.busqueda = None;
+        if task.get() != 0 {
+            self.cancelar(task.get());
+        }
+        if let Some(child) = foco {
+            self.hueco_mut().pane.set_pending_focus(child);
+        }
+        let cierre = self.parche(vec![ViewChange::Search { search: None }]);
+        let mut envios = vec![cierre];
+        envios.extend(self.navegar(&destino, Trail::Record, backend, buzon));
+        (self.aplicada(), envios)
+    }
+
     /// Abre el selector de disposiciones.
     ///
     /// Las del usuario ya vienen leídas del arranque: el selector pinta la
@@ -1887,6 +2199,37 @@ impl Estado {
             self.aplicada(),
             vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
         )
+    }
+
+    /// Abre la paleta de comandos.
+    ///
+    /// Las filas se construyen AQUÍ, al abrir, y se congelan: es lo que el
+    /// modelo compartido espera (pliega el haystack de cada fila una vez, no
+    /// por tecla).
+    fn abrir_paleta(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.paleta = Some(norte_frontend::palette_state::Palette::new(
+            self.filas_de_paleta(),
+        ));
+        let cambio = ViewChange::Palette {
+            palette: self.vista_paleta(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Los tres efectos que tocan la DISPOSICIÓN, juntos.
+    ///
+    /// Agrupados aquí y no en `aplicar_efecto` porque ese método es un
+    /// reparto y crece por familias: tres brazos que hacen lo mismo —cambiar
+    /// la forma de la pantalla— son un brazo con tres casos.
+    fn efecto_de_disposicion(
+        &mut self,
+        efecto: Efecto,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match efecto {
+            Efecto::Tamano(delta) => self.redimensionar(delta),
+            Efecto::Igualar => self.igualar(),
+            _ => self.abrir_disposiciones(),
+        }
     }
 
     /// Cambia el tamaño del hueco con el FOCO, no del listado activo.
@@ -2482,6 +2825,7 @@ impl Estado {
                 .collect(),
             Fondo::Volumenes(res) => self.aplicar_volumenes(res).into_iter().collect(),
             Fondo::SitiosVolumenes(res) => self.aplicar_sitios(res).into_iter().collect(),
+            Fondo::Resultados(lote) => self.aplicar_resultados(&lote).into_iter().collect(),
         }
     }
 
@@ -2882,7 +3226,12 @@ impl Estado {
             return match d.al_confirmar {
                 Some(Pendiente::Borrar { .. }) => "dialog.confirm",
                 Some(Pendiente::Decidir { .. }) => "dialog.approval",
-                Some(Pendiente::CrearDirectorio { .. }) => "dialog.mkdir",
+                // Buscar comparte página con crear: los dos son el diálogo
+                // que pide que teclees un nombre, y el corpus tiene UNA que
+                // habla de eso.
+                Some(Pendiente::CrearDirectorio { .. } | Pendiente::Buscar { .. }) => {
+                    "dialog.mkdir"
+                }
                 None => "browse",
             };
         }
@@ -3446,9 +3795,10 @@ impl Estado {
             }
             Efecto::Foco { atras } => self.mover_foco(atras),
             Efecto::Destino => self.designar_destino(),
-            Efecto::Tamano(delta) => self.redimensionar(delta),
-            Efecto::Igualar => self.igualar(),
-            Efecto::Disposiciones => self.abrir_disposiciones(),
+            Efecto::Tamano(_) | Efecto::Igualar | Efecto::Disposiciones => {
+                self.efecto_de_disposicion(efecto)
+            }
+            Efecto::Buscar => self.pedir_busqueda(),
             Efecto::BuscarRapido => {
                 // Filtrar es el modo por defecto: es el que no mueve el
                 // listado bajo el cursor mientras se teclea.
@@ -3462,18 +3812,7 @@ impl Estado {
             {
                 Self::no_muta()
             }
-            Efecto::Paleta => {
-                // Las filas se construyen AQUÍ, al abrir, y se congelan: es
-                // lo que el modelo compartido espera (pliega el haystack de
-                // cada fila una vez, no por tecla).
-                self.paleta = Some(norte_frontend::palette_state::Palette::new(
-                    self.filas_de_paleta(),
-                ));
-                let cambio = ViewChange::Palette {
-                    palette: self.vista_paleta(),
-                };
-                (self.aplicada(), vec![self.parche(vec![cambio])])
-            }
+            Efecto::Paleta => self.abrir_paleta(),
             Efecto::Ayuda => self.abrir_ayuda(backend, buzon),
             Efecto::Ajustes => self.abrir_ajustes(),
             Efecto::Extensiones => self.abrir_extensiones(backend, buzon),
@@ -3771,6 +4110,22 @@ impl Estado {
                 Some(Pendiente::Borrar { paths, permanente }) => {
                     Self::lanzar_borrado(paths, permanente, backend, buzon);
                 }
+                Some(Pendiente::Buscar { root }) => {
+                    let patron = dialogo.input_crudo.clone();
+                    if patron.is_empty() {
+                        // Un patrón vacío casaría el árbol entero: no es una
+                        // búsqueda, es un listado recursivo, y se dice en vez
+                        // de lanzarlo.
+                        self.status.message = Some(clamp_display(norte_i18n::t_in(
+                            self.lang,
+                            "err-empty-pattern",
+                        )));
+                        let cambio = ViewChange::Status(self.status.clone());
+                        salidas.push(self.parche(vec![cambio]));
+                    } else {
+                        salidas.extend(self.lanzar_busqueda(root, patron, backend, buzon));
+                    }
+                }
                 Some(Pendiente::CrearDirectorio { dir }) => {
                     let nombre = dialogo.input_crudo.clone();
                     // El nombre se valida AQUÍ, con la misma regla que
@@ -3924,10 +4279,23 @@ impl Estado {
         viva.vista = Self::vista_de(p);
         // De quién es la task no lo dice el progreso: lo dice de dónde vino.
         viva.vista.foreign = ajena;
-        let cambio = ViewChange::Tasks {
+        let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
-        };
-        vec![self.parche(vec![cambio])]
+        }];
+        // Si la que acaba de terminar es LA búsqueda, su vista deja de decir
+        // «buscando…»: una lista que ya no crece y una que sigue creciendo se
+        // leen igual si nadie las distingue.
+        let termino = !matches!(p.state, norte_proto::TaskState::Running);
+        if termino
+            && let Some(b) = self.busqueda.as_mut()
+            && b.task == p.task_id
+        {
+            b.viva = false;
+            cambios.push(ViewChange::Search {
+                search: self.vista_busqueda(),
+            });
+        }
+        vec![self.parche(cambios)]
     }
 
     /// Pide la cancelación de una task. Idempotente por contrato: pedirla dos
@@ -4612,6 +4980,7 @@ impl Estado {
             settings: self.vista_ajustes(),
             extensions: self.vista_extensiones(),
             theme: self.vista_tema(),
+            search: self.vista_busqueda(),
             layouts: self.vista_disposiciones(),
             picker: self.vista_selector(),
             viewer: self.vista_visor(),
