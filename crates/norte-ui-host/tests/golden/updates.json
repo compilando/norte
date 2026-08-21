@@ -157,9 +157,19 @@
             "default": "10",
             "description": "Segundos antes de rendirse",
             "domain": "entre 1 y 300",
+            "hostile": false,
             "key": "timeout",
             "kind": "int",
             "value": "30"
+          },
+          {
+            "default": "safe",
+            "description": "",
+            "domain": "safe · fast� · read-only",
+            "hostile": true,
+            "key": "mode",
+            "kind": "enum",
+            "value": "safe"
           }
         ],
         "id": "acme.ftp"

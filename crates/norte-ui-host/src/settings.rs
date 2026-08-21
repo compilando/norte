@@ -49,21 +49,39 @@ impl ConfigLayer {
     }
 }
 
+/// Una ubicación que la ventana puede enseñar, con su existencia YA resuelta.
+///
+/// El `missing` viene de fuera a propósito. Saber si un directorio está es
+/// `std::fs::metadata`, o sea I/O bloqueante, y esta proyección corre en el
+/// bucle del ÚNICO ESCRITOR: con una capa de configuración en un NFS colgado,
+/// abrir los ajustes congelaba la ventana entera —ni teclas, ni listados
+/// aterrizando, ni progreso de tasks— hasta que expirase el montaje. Es la
+/// regla 2, y el arranque ya tiene un `spawn_blocking` donde hacerlo bien.
+#[derive(Debug, Clone)]
+pub struct HostPath {
+    /// La ruta, en bytes nativos. Se pinta con `display_os_name`.
+    pub path: PathBuf,
+    /// No existe. Una capa que nadie ha creado se DICE, en vez de pintar una
+    /// ruta que parece estar ahí.
+    pub missing: bool,
+}
+
 /// Dónde vive cada cosa, tal como lo resolvió quien arrancó el host.
 ///
 /// Se recibe ya resuelto a propósito. El host no lee ficheros ni consulta el
 /// entorno: si lo hiciera, una ventana podría acabar diciendo que su
-/// configuración está en un sitio distinto de donde la leyó de verdad.
+/// configuración está en un sitio distinto de donde la leyó de verdad — y lo
+/// haría bloqueando el actor.
 #[derive(Debug, Clone, Default)]
 pub struct HostPaths {
     /// Las capas de configuración, en precedencia ASCENDENTE.
-    pub config_layers: Vec<(ConfigLayer, PathBuf)>,
+    pub config_layers: Vec<(ConfigLayer, HostPath)>,
     /// El directorio de estado (sesión, historial).
-    pub state_dir: Option<PathBuf>,
+    pub state_dir: Option<HostPath>,
     /// Dónde escribe sus logs esta ventana.
-    pub logs_dir: Option<PathBuf>,
+    pub logs_dir: Option<HostPath>,
     /// El socket del daemon con el que habla.
-    pub socket: Option<PathBuf>,
+    pub socket: Option<HostPath>,
 }
 
 /// Los ajustes abiertos: el modelo mínimo, que es un cursor.
@@ -169,9 +187,9 @@ fn proyectar_fila(r: &Row) -> SettingRowView {
 
 /// Las ubicaciones, saneadas para pintar.
 ///
-/// Se comprueba si CADA sitio existe: una capa que nadie ha creado se dice
-/// que falta en vez de pintar una ruta que parece estar ahí. Es la única I/O
-/// de este módulo y es un `exists()` sobre rutas que el arranque ya nombró.
+/// CERO I/O: la existencia de cada sitio la trae [`HostPath`] ya resuelta por
+/// el arranque. Es lo que hace verdad que «el host no lee ficheros», que este
+/// módulo decía tres veces mientras llamaba a `exists()`.
 fn rutas_de(paths: &HostPaths, lang: Lang) -> Vec<PathRowView> {
     let mut out = Vec::new();
     for (capa, dir) in &paths.config_layers {
@@ -195,12 +213,12 @@ fn rutas_de(paths: &HostPaths, lang: Lang) -> Vec<PathRowView> {
 /// camino que un nombre de fichero del listado — `display_name` sobre los
 /// bytes nativos — y NUNCA por `to_string_lossy`, que se come la diferencia
 /// entre un nombre raro y uno hostil sin decirlo.
-fn fila_de_ruta(label: String, dir: &std::path::Path) -> PathRowView {
-    let (pintable, hostile) = norte_frontend::display::display_os_name(dir.as_os_str());
+fn fila_de_ruta(label: String, dir: &HostPath) -> PathRowView {
+    let (pintable, hostile) = norte_frontend::display::display_os_name(dir.path.as_os_str());
     PathRowView {
         label: clamp_display(label),
         display: clamp_display(pintable),
         hostile,
-        missing: !dir.exists(),
+        missing: dir.missing,
     }
 }

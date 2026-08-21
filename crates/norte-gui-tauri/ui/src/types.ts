@@ -327,10 +327,15 @@ export interface ExtensionErrorView {
 export interface ExtensionConfigRowView {
   key: string;
   kind: string;
+  /** Ya enmascarado: lo escribe el plugin. */
   value: string;
+  /** Ya enmascarado: lo escribe el plugin. */
   default: string;
   description: string;
+  /** Ya enmascarado: los valores de un `enum` los escribe el plugin. */
   domain: string;
+  /** Alguno de los tres se pinta DISTINTO de lo que es. */
+  hostile: boolean;
 }
 
 export interface ExtensionDetailView {

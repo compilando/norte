@@ -22,12 +22,24 @@ use norte_proto::methods::PluginConfigKeyWire;
 
 use crate::settings::{SettingsEditError, cycle};
 
-/// A single `[config.<key>]` entry, sanitized and ready to paint:
-/// `description` already masked (plugin text, untrusted); everything else
-/// (`key`, `kind`, `default`, `min`, `max`, `values`, `value`) comes
-/// straight off the wire — `key` is charset-safe (manifest-validated),
-/// `kind`/`values`/numeric bounds are norte's OWN vocabulary or numbers,
-/// never free plugin text.
+/// A single `[config.<key>]` entry.
+///
+/// Two halves, and mixing them is the bug this shape exists to prevent:
+///
+/// - `key`, `kind`, `default`, `min`, `max`, `values` and `value` are the
+///   OPERANDS. `value` is what [`PluginConfigState::activate`] cycles and
+///   what ends up in [`PendingConfigWrite`], so it must stay exactly as it
+///   came off the wire — masking it in place would write the mask into the
+///   plugin's config.
+/// - [`Self::display`] is the same three free-text fields, ALREADY masked,
+///   and is the only half a frontend may paint.
+///
+/// The previous doc here claimed `default`/`values`/`value` were "norte's OWN
+/// vocabulary or numbers, never free plugin text". That was wrong:
+/// `norte-plugin-host`'s manifest validation bounds only their LENGTH
+/// (`CONFIG_STRING_MAX_CHARS`, `CONFIG_ENUM_MAX_VALUES`) and checks no
+/// charset, so a `plugin.toml` could put U+202E in an enum value and have it
+/// reach a DOM text node untouched. `key` and `kind` really are constrained.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigKeyRow {
     /// `[config.<key>]`'s key.
@@ -46,32 +58,76 @@ pub struct ConfigKeyRow {
     pub values: Vec<String>,
     /// Cosmetic description, ALREADY masked (plugin text — untrusted).
     pub description: String,
-    /// Current effective value, as display text.
+    /// Current effective value: the schema default overlaid with whatever the
+    /// user's `config.toml` says. THE OPERAND, raw off the wire. To paint it,
+    /// use [`Self::display`].
     pub value: String,
+    /// `value`, `default` and `values`, masked for painting.
+    pub display: ConfigKeyDisplay,
 }
 
-/// Sanitizes a `plugin.get_config` result into display-ready rows: masks
-/// EVERY `description` ([`crate::display_name`], same criterion as
-/// `PluginInfo::description`/`DecorationWire::badge`) — the only field a
-/// plugin's manifest can fill with arbitrary hostile text; `key`/`kind`/
-/// `default`/`min`/`max`/`values`/`value` pass through (charset-safe or
-/// norte's own vocabulary, see the [`ConfigKeyRow`] doc).
+/// The free-text halves of a [`ConfigKeyRow`], masked and ready to paint.
+///
+/// Separate from the operands on purpose: a frontend that reaches for
+/// `row.value` to paint it gets the raw bytes and a reviewer sees it; one
+/// that reaches for `row.display.value` cannot accidentally write it back.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ConfigKeyDisplay {
+    /// The effective value, masked.
+    pub value: String,
+    /// The schema default, masked.
+    pub default: String,
+    /// The allowed values of an `enum`, each masked.
+    pub values: Vec<String>,
+    /// At least one of the three paints DIFFERENTLY from what it is. The
+    /// frontend marks it; it never hides it.
+    pub hostile: bool,
+}
+
+/// Sanitizes a `plugin.get_config` result into rows that carry both halves:
+/// the OPERANDS raw off the wire, and a [`ConfigKeyDisplay`] with every
+/// free-text field masked through [`crate::display_name`].
+///
+/// Four fields are plugin-authored free text, not one: `description`,
+/// `default`, each entry of `values`, and `value` — which is the schema
+/// default overlaid with the user's `config.toml`, so the project config
+/// layer feeds it too. Only `description` was masked before, and the other
+/// three reached the DOM untouched.
+///
+/// `key` and `kind` pass through because they really are constrained: `key`
+/// is charset-validated by the manifest parser and `kind` is a closed set.
 #[must_use]
 pub fn sanitize_config_keys(keys: &[PluginConfigKeyWire]) -> Vec<ConfigKeyRow> {
     keys.iter()
-        .map(|k| ConfigKeyRow {
-            key: k.key.clone(),
-            kind: k.kind.clone(),
-            default: k.default.clone(),
-            min: k.min,
-            max: k.max,
-            values: k.values.clone(),
-            description: k
-                .description
-                .as_deref()
-                .map(|d| crate::display_name(d.as_bytes()).0)
-                .unwrap_or_default(),
-            value: k.value.clone(),
+        .map(|k| {
+            let (value, v_hostil) = crate::display_name(k.value.as_bytes());
+            let (default, d_hostil) = crate::display_name(k.default.as_bytes());
+            let dominio: Vec<(String, bool)> = k
+                .values
+                .iter()
+                .map(|v| crate::display_name(v.as_bytes()))
+                .collect();
+            let hostile = v_hostil || d_hostil || dominio.iter().any(|(_, h)| *h);
+            ConfigKeyRow {
+                key: k.key.clone(),
+                kind: k.kind.clone(),
+                default: k.default.clone(),
+                min: k.min,
+                max: k.max,
+                values: k.values.clone(),
+                description: k
+                    .description
+                    .as_deref()
+                    .map(|d| crate::display_name(d.as_bytes()).0)
+                    .unwrap_or_default(),
+                value: k.value.clone(),
+                display: ConfigKeyDisplay {
+                    value,
+                    default,
+                    values: dominio.into_iter().map(|(v, _)| v).collect(),
+                    hostile,
+                },
+            }
         })
         .collect()
 }

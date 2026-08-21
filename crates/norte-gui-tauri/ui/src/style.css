@@ -1476,3 +1476,35 @@ body {
 .search-parent {
   opacity: 0.8;
 }
+
+/* ---------------------------------------------------------------------------
+   Aislamiento bidi de lo que compone datos de TERCEROS con prosa nuestra.
+
+   `unicode-bidi: isolate` separa un elemento de sus HERMANOS; no separa dos
+   datos concatenados en un mismo nodo de texto, y `display_name` enmascara los
+   CONTROLES bidi pero no las LETRAS fuertes RTL —un nombre árabe o hebreo
+   perfectamente legítimo reordena lo que tiene al lado sin usar ni un carácter
+   de control—. Estas son las corridas que quedaban sin aislar. */
+.hostile-badge {
+  /* La insignia se AÑADE dentro del span del nombre, así que un nombre RTL se
+     la llevaba a su izquierda. Y la insignia es toda la mitigación. */
+  unicode-bidi: isolate;
+}
+
+.theme h1,
+.theme-name,
+.viewer-meta,
+.viewer-meta > span,
+.help-badge,
+.help-badge > span,
+.error,
+.error > span,
+.layouts-problem,
+.statusbar > *,
+.pending,
+.banner,
+.extensions-key-kind-name,
+.extensions-key-domain,
+.extensions-meta > span {
+  unicode-bidi: isolate;
+}

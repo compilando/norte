@@ -17,7 +17,7 @@ use norte_proto::VPath;
 use norte_proto::methods::ClientInfo;
 use norte_theme::Theme;
 use norte_ui_host::pickers::HostTheme;
-use norte_ui_host::settings::{ConfigLayer, HostPaths};
+use norte_ui_host::settings::{ConfigLayer, HostPath, HostPaths};
 use norte_ui_host::{UiHost, UiHostOptions, ViewSnapshot};
 
 /// Hasta dónde llega esta ventana HOY.
@@ -146,8 +146,10 @@ pub struct Boot {
 /// parsea se conserva CON su motivo — el selector la enseña sin vista previa
 /// y explica por qué, que es más útil que una fila que no está.
 ///
-/// Fuera del runtime no hace falta: esto corre en el arranque, antes de que
-/// exista ventana, y `list`/`load` son lecturas de un directorio pequeño.
+/// Va por `spawn_blocking`, como sus dos vecinas. «Es el arranque y es un
+/// directorio pequeño» no es el criterio: `read_dir` sobre una capa de
+/// configuración en un montaje caído bloquea el hilo de trabajo del runtime
+/// igual de bien, y aquí ni siquiera hay ventana donde decirlo (regla 2).
 fn disposiciones_del_usuario(capas: &norte_config::Layers) -> Vec<UserLayout> {
     let Some((dir, _)) = capas
         .dirs
@@ -193,6 +195,43 @@ fn efectos_declarados(theme: &Theme) -> Vec<String> {
     theme.effect_names().unwrap_or_default()
 }
 
+/// El idioma de la ventana, y fijado para todo el proceso.
+///
+/// La configuración manda sobre el entorno: `[ui] lang` es una decisión que
+/// el usuario escribió, y `LANG` es lo que había puesto.
+fn idioma(pedido: Option<&str>) -> Lang {
+    let lang = match pedido {
+        Some(l) => Lang::negotiate(Some(l)),
+        None => Lang::from_env(),
+    };
+    let _ = norte_i18n::force(lang);
+    lang
+}
+
+/// Las dos lecturas de disco del arranque que no son la configuración.
+///
+/// Juntas y fuera del runtime (regla 2): `rutas` hace un `metadata` por sitio
+/// y `disposiciones_del_usuario` un `read_dir` más un `read_to_string` por
+/// disposición. Las dos sobre las MISMAS capas que `config::load`, que ya iba
+/// por `spawn_blocking` por este mismo motivo, y las dos pueden tocar un
+/// montaje caído.
+async fn diagnostico(
+    capas: &norte_config::Layers,
+    socket: &std::path::Path,
+) -> (HostPaths, Vec<UserLayout>) {
+    let capas = capas.clone();
+    let socket = socket.to_path_buf();
+    match tokio::task::spawn_blocking(move || {
+        (rutas(&capas, &socket), disposiciones_del_usuario(&capas))
+    })
+    .await
+    {
+        Ok(par) => par,
+        // Un panic aquí es un bug NUESTRO, no un directorio que falta.
+        Err(e) => std::panic::resume_unwind(e.into_panic()),
+    }
+}
+
 /// Dónde vive cada cosa, para la vista de diagnóstico de los ajustes.
 ///
 /// Se construye con las capas que el arranque ACABA de leer y con el socket
@@ -201,6 +240,14 @@ fn efectos_declarados(theme: &Theme) -> Vec<String> {
 /// ventana diría que su configuración sale de un sitio distinto de donde
 /// salió de verdad.
 fn rutas(capas: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
+    // Con su `missing` YA resuelto: el host proyecta esta lista dentro del
+    // bucle del único escritor, y un `exists()` allí es `std::fs::metadata`
+    // sobre —entre otras— una capa de configuración que puede estar en un
+    // montaje caído. Esta función corre en `spawn_blocking` (regla 2).
+    let sitio = |p: PathBuf| HostPath {
+        missing: !p.exists(),
+        path: p,
+    };
     HostPaths {
         config_layers: capas
             .dirs
@@ -211,14 +258,16 @@ fn rutas(capas: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
                     norte_config::Layer::User => ConfigLayer::User,
                     norte_config::Layer::Project => ConfigLayer::Project,
                 };
-                (capa, dir.clone())
+                (capa, sitio(dir.clone()))
             })
             .collect(),
-        state_dir: norte_config::dirs::state_dir(),
+        state_dir: norte_config::dirs::state_dir().map(sitio),
         // El MISMO sitio al que escribe `logging()`, que es lo único que hace
         // útil enseñarlo.
-        logs_dir: norte_config::dirs::state_dir().map(|d| d.join("logs")),
-        socket: Some(socket.to_path_buf()),
+        logs_dir: norte_config::dirs::state_dir()
+            .map(|d| d.join("logs"))
+            .map(sitio),
+        socket: Some(sitio(socket.to_path_buf())),
     }
 }
 
@@ -242,11 +291,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         Err(e) => std::panic::resume_unwind(e.into_panic()),
     };
 
-    let lang = match cfg.common.ui_lang.as_deref() {
-        Some(l) => Lang::negotiate(Some(l)),
-        None => Lang::from_env(),
-    };
-    let _ = norte_i18n::force(lang);
+    let lang = idioma(cfg.common.ui_lang.as_deref());
 
     let theme = tema(cfg.common.ui_theme.as_deref());
     // Fuera del runtime (regla 2): `metadata` sobre un NFS caído bloquea el
@@ -339,6 +384,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     for malo in &columnas.invalid {
         tracing::warn!(columna = %malo, "id de columna inválido: se ignora");
     }
+    let (paths, user_layouts) = diagnostico(&capas_vistas, &socket).await;
     let (host, snapshot) = UiHost::start(UiHostOptions {
         backend: Arc::new(backend),
         initial_dir: inicio,
@@ -358,9 +404,9 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         columns: columnas,
         effects: EFECTOS,
         settings: cfg.clone(),
-        paths: rutas(&capas_vistas, &socket),
+        paths,
         theme: tema_visto(cfg.common.ui_theme.as_deref(), &theme),
-        user_layouts: disposiciones_del_usuario(&capas_vistas),
+        user_layouts,
     })
     .await?;
     Ok(Boot {

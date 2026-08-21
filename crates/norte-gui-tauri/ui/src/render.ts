@@ -881,10 +881,31 @@ export class Screen {
       clave.textContent = k.key;
       const valor = document.createElement("td");
       valor.className = "extensions-key-value";
+      valor.dataset["hostile"] = String(k.hostile);
       valor.textContent = k.value;
+      if (k.hostile) {
+        // Lo que se pinta difiere de lo que es, y lo escribe el plugin: se
+        // dice, igual que en un nombre de fichero.
+        valor.append(badge(this.t("hostile-name")));
+      }
       const tipo = document.createElement("td");
       tipo.className = "extensions-key-kind";
-      tipo.textContent = k.domain === "" ? k.kind : `${k.kind} · ${k.domain}`;
+      // El tipo y el dominio, cada uno en su nodo: unirlos en uno solo deja
+      // que un valor de `enum` con letras RTL reordene el par entero, y el
+      // `unicode-bidi: isolate` del contenedor solo separa HERMANOS.
+      const kindSpan = document.createElement("span");
+      kindSpan.className = "extensions-key-kind-name";
+      kindSpan.textContent = k.kind;
+      tipo.append(kindSpan);
+      if (k.domain !== "") {
+        const sep = document.createElement("span");
+        sep.className = "sep";
+        sep.textContent = " · ";
+        const dom = document.createElement("span");
+        dom.className = "extensions-key-domain";
+        dom.textContent = k.domain;
+        tipo.append(sep, dom);
+      }
       const desc = document.createElement("td");
       desc.className = "extensions-key-desc";
       desc.textContent = k.description;

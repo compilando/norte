@@ -10,11 +10,12 @@
 //! llamar por accidente.
 //!
 //! Todo lo que un plugin escribe —su nombre, su publicador, su versión, su
-//! descripción, la descripción de cada clave— es texto de TERCERO y se
-//! enmascara en la ENTRADA, que es este módulo. Lo que no lo es —la clave de
-//! configuración, su tipo, sus cotas— tiene charset validado por el
-//! manifiesto o es vocabulario de norte, y se dice cuál es cuál en cada
-//! campo.
+//! descripción, la descripción de cada clave, el VALOR de cada clave, su
+//! defecto y los valores de un `enum`— es texto de TERCERO y se enmascara en
+//! la ENTRADA, que es este módulo. Lo único que no lo es son la CLAVE (charset
+//! validado por el manifiesto) y el TIPO (conjunto cerrado); las cotas son
+//! números. Esa lista decía antes que el valor, el defecto y el dominio eran
+//! seguros: no lo son — el manifiesto les acota la longitud y nada más.
 
 use norte_frontend::help_badge::{plugin_description, plugin_label};
 use norte_frontend::plugin_config::sanitize_config_keys;
@@ -163,10 +164,13 @@ impl Extensiones {
                     ExtensionConfigRowView {
                         key: clamp_display(k.key),
                         kind: clamp_display(k.kind),
-                        value: clamp_display(k.value),
-                        default: clamp_display(k.default),
+                        // Del lado de PINTAR, nunca del operando: `k.value`
+                        // es lo que un editor escribiría de vuelta.
+                        value: clamp_display(k.display.value.clone()),
+                        default: clamp_display(k.display.default.clone()),
                         description: clamp_display(k.description),
                         domain: clamp_display(domain),
+                        hostile: k.display.hostile,
                     }
                 })
                 .collect(),
@@ -188,8 +192,10 @@ impl Extensiones {
 /// Qué acota una clave: los valores de un `enum`, las cotas de un `int`, o
 /// nada.
 fn dominio(k: &norte_frontend::plugin_config::ConfigKeyRow, lang: Lang) -> String {
-    if !k.values.is_empty() {
-        return k.values.join(" · ");
+    if !k.display.values.is_empty() {
+        // Los ENMASCARADOS: un valor de `enum` es texto que escribe el
+        // plugin, y este `·` es una composición en banda.
+        return k.display.values.join(" · ");
     }
     match (k.min, k.max) {
         (Some(min), Some(max)) => norte_i18n::ta_in(

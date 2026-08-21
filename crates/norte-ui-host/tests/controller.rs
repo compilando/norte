@@ -4149,6 +4149,14 @@ async fn los_ajustes_ensenan_el_registro_compartido_con_su_valor() {
     }
 }
 
+/// Una ubicación con su existencia resuelta, como la resuelve el arranque.
+fn sitio(p: std::path::PathBuf) -> norte_ui_host::settings::HostPath {
+    norte_ui_host::settings::HostPath {
+        missing: !p.exists(),
+        path: p,
+    }
+}
+
 /// La sección de ubicaciones dice dónde vive cada cosa, marca lo que falta y
 /// no enseña ni un valor.
 #[tokio::test]
@@ -4158,13 +4166,21 @@ async fn las_ubicaciones_se_dicen_y_lo_que_falta_se_marca() {
     std::fs::create_dir(&existe).expect("mkdir");
     let no_existe = tmp.path().join("no-esta");
     let h = host_con_rutas(norte_ui_host::settings::HostPaths {
+        // El `missing` lo trae YA resuelto quien arranca: el host no hace
+        // I/O al proyectar, y el test lo dice porque es el contrato.
         config_layers: vec![
-            (norte_ui_host::settings::ConfigLayer::User, existe.clone()),
-            (norte_ui_host::settings::ConfigLayer::Project, no_existe),
+            (
+                norte_ui_host::settings::ConfigLayer::User,
+                sitio(existe.clone()),
+            ),
+            (
+                norte_ui_host::settings::ConfigLayer::Project,
+                sitio(no_existe),
+            ),
         ],
         state_dir: None,
         logs_dir: None,
-        socket: Some(tmp.path().join("daemon.sock")),
+        socket: Some(sitio(tmp.path().join("daemon.sock"))),
     })
     .await;
     let mut sub = h.subscribe();
@@ -4201,7 +4217,7 @@ async fn una_ruta_hostil_llega_enmascarada_y_marcada() {
     let hostil = tmp.path().join("conf\u{202e}gif");
     std::fs::create_dir(&hostil).expect("mkdir");
     let h = host_con_rutas(norte_ui_host::settings::HostPaths {
-        config_layers: vec![(norte_ui_host::settings::ConfigLayer::User, hostil)],
+        config_layers: vec![(norte_ui_host::settings::ConfigLayer::User, sitio(hostil))],
         state_dir: None,
         logs_dir: None,
         socket: None,
@@ -4511,6 +4527,73 @@ async fn el_texto_de_una_extension_llega_enmascarado() {
     assert!(
         !texto.contains("\\u{202e}") && !texto.contains("\\u{7}"),
         "texto de tercero sin enmascarar: {texto}"
+    );
+}
+
+/// El VALOR de una clave de configuración, su defecto y los valores de un
+/// `enum` los escribe el PLUGIN, y llegan enmascarados y marcados.
+///
+/// El manifiesto solo les acota la LONGITUD —`CONFIG_STRING_MAX_CHARS`,
+/// `CONFIG_ENUM_MAX_VALUES`— y no comprueba charset ninguno, así que un
+/// `plugin.toml` podía meter un override bidi en un valor de `enum` y verlo
+/// llegar crudo a un nodo de texto del DOM. Tres rustdocs decían que esos
+/// campos eran «vocabulario de norte, nunca texto libre del plugin».
+///
+/// Y el `·` que une el dominio se compone AQUÍ: si el valor no se enmascarara,
+/// un plugin podría fabricar uno y fingir un dominio que no tiene.
+#[tokio::test]
+async fn el_valor_de_una_clave_de_plugin_llega_enmascarado_y_marcado() {
+    let ext = extension("acme.ftp", "FTP", true);
+    let mut f = Falso {
+        plugins: vec![ext],
+        ..Falso::default()
+    };
+    f.arbol.clone_from(&arbol().arbol);
+    f.esquemas.insert(
+        "acme.ftp".to_owned(),
+        vec![norte_proto::methods::PluginConfigKeyWire {
+            key: "mode".to_owned(),
+            kind: "enum".to_owned(),
+            default: "safe\u{202e}".to_owned(),
+            min: None,
+            max: None,
+            values: vec!["safe".to_owned(), "fast\u{202e} · read-only".to_owned()],
+            description: None,
+            value: "fast\u{7}".to_owned(),
+        }],
+    );
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+
+    let mut ficha = None;
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if let Some(d) = siguiente_foto(&mut sub)
+            .await
+            .extensions
+            .and_then(|e| e.detail)
+        {
+            ficha = Some(d);
+            break;
+        }
+    }
+    let ficha = ficha.expect("la ficha llega");
+    let fila = ficha.config.first().expect("la clave está");
+    let texto = format!("{fila:?}");
+    assert!(
+        !texto.contains('\u{202e}') && !texto.contains('\u{7}'),
+        "texto del plugin sin enmascarar: {texto}"
+    );
+    assert!(
+        !texto.contains("\\u{202e}") && !texto.contains("\\u{7}"),
+        "texto del plugin sin enmascarar: {texto}"
+    );
+    assert!(
+        fila.hostile,
+        "y se DICE que lo pintado difiere de lo que es: {fila:?}"
     );
 }
 

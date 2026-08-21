@@ -716,14 +716,29 @@ fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
         cursor: 0,
         detail: Some(ExtensionDetailView {
             id: "acme.ftp".to_owned(),
-            config: vec![ExtensionConfigRowView {
-                key: "timeout".to_owned(),
-                kind: "int".to_owned(),
-                value: "30".to_owned(),
-                default: "10".to_owned(),
-                description: "Segundos antes de rendirse".to_owned(),
-                domain: "entre 1 y 300".to_owned(),
-            }],
+            config: vec![
+                ExtensionConfigRowView {
+                    key: "timeout".to_owned(),
+                    kind: "int".to_owned(),
+                    value: "30".to_owned(),
+                    default: "10".to_owned(),
+                    description: "Segundos antes de rendirse".to_owned(),
+                    domain: "entre 1 y 300".to_owned(),
+                    hostile: false,
+                },
+                // Un `enum` cuyo dominio lleva texto del plugin con un
+                // override bidi dentro: llega enmascarado Y marcado, y el
+                // `·` que lo une no puede fabricarse desde el `plugin.toml`.
+                ExtensionConfigRowView {
+                    key: "mode".to_owned(),
+                    kind: "enum".to_owned(),
+                    value: "safe".to_owned(),
+                    default: "safe".to_owned(),
+                    description: String::new(),
+                    domain: "safe · fast\u{fffd} · read-only".to_owned(),
+                    hostile: true,
+                },
+            ],
         }),
         loading: false,
         errors: vec![ExtensionErrorView {

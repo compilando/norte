@@ -536,15 +536,24 @@ pub struct ExtensionConfigRowView {
     /// no conozca —un peer más nuevo— se pinta como texto y no revienta.
     pub kind: String,
     /// El valor EFECTIVO: los defaults del esquema con el `config.toml`
-    /// superpuesto.
+    /// superpuesto. YA ENMASCARADO.
     pub value: String,
     /// El valor por defecto del esquema, para poder ver qué se ha cambiado.
+    /// YA ENMASCARADO.
     pub default: String,
     /// Qué es, ya enmascarada (texto del manifiesto). Vacía si no lo dice.
     pub description: String,
     /// Los valores válidos de un `enum`, o las cotas de un `int`, ya como
     /// texto. Vacío cuando el tipo no tiene nada que acotar.
     pub domain: String,
+    /// Alguno de los tres campos de texto libre —valor, defecto, dominio— se
+    /// pinta DISTINTO de lo que es.
+    ///
+    /// Los tres los escribe el plugin en su `plugin.toml` y el manifiesto
+    /// solo les acota la LONGITUD, no el charset: un valor de `enum` con un
+    /// override bidi dentro llegaba al DOM tal cual mientras tres rustdocs
+    /// afirmaban que eso no podía pasar.
+    pub hostile: bool,
 }
 
 /// El tema activo, visto por dentro.

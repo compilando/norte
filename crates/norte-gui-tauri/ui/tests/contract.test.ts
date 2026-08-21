@@ -35,7 +35,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     search,
     viewer,
     dialogs,
-  ] = nodos as HTMLDivElement[];
+  ] = nodos;
   const screen = new Screen(
     root,
     palette as HTMLElement,

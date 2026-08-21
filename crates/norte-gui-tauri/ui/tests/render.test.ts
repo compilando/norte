@@ -1148,6 +1148,7 @@ describe("el gestor de extensiones", () => {
             default: "10",
             description: "Segundos",
             domain: "entre 1 y 300",
+            hostile: false,
           },
           {
             key: "passive",
@@ -1156,15 +1157,36 @@ describe("el gestor de extensiones", () => {
             default: "true",
             description: "",
             domain: "",
+            hostile: false,
+          },
+          {
+            key: "mode",
+            kind: "enum",
+            value: "fast\uFFFD",
+            default: "safe",
+            description: "",
+            domain: "safe · fast\uFFFD",
+            hostile: true,
           },
         ],
       };
     }
     screen.paint(v);
     const filas = [...document.querySelectorAll(".extensions-config tbody tr")];
-    expect(filas).toHaveLength(2);
+    expect(filas).toHaveLength(3);
     expect(filas[0]?.getAttribute("data-changed")).toBe("true");
     expect(filas[1]?.getAttribute("data-changed")).toBe("false");
+    // El valor que el PLUGIN escribe y se pinta distinto de lo que es lleva
+    // su insignia, igual que un nombre de fichero.
+    const valor = filas[2]?.querySelector(".extensions-key-value");
+    expect(valor?.getAttribute("data-hostile")).toBe("true");
+    expect(valor?.querySelector(".hostile-badge")).not.toBeNull();
+    expect(filas[0]?.querySelector(".hostile-badge")).toBeNull();
+    // Y el tipo y su dominio van en nodos SEPARADOS: unirlos en uno solo
+    // deja que un valor de `enum` con letras RTL reordene el par entero.
+    expect(filas[2]?.querySelector(".extensions-key-domain")?.textContent).toBe(
+      "safe · fast\uFFFD",
+    );
     expect(filas[0]?.querySelector(".extensions-key-kind")?.textContent).toContain(
       "entre 1 y 300",
     );
