@@ -18,7 +18,8 @@
 /// para «teclear un carácter» o «correr lo seleccionado», así que quien la
 /// tenga abierta trata esas teclas como fijas.
 ///
-/// Las `rows` llegan YA construidas ([`build_rows`] de cada frontend, precomputadas como `help_lines`/`dialog_hints` —
+/// Las `rows` llegan YA construidas (el `build_rows` de cada frontend,
+/// precomputadas como `help_lines`/`dialog_hints` —
 /// mismo criterio: reconstruidas en el arranque y en cada hot-reload OK,
 /// ANTES de que los efectivos se muevan al `Resolver`); `Palette::new` solo
 /// pliega el haystack de cada fila. Mismo patrón de cache que

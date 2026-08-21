@@ -7,9 +7,9 @@
 //!
 //! - [`build`] renders the flat F1 cheatsheet: every binding of every screen,
 //!   in real precedence order (what the key DOES, not what the preset says).
-//! - [`TuiChords`] is this frontend's [`ChordResolver`], the seam through
-//!   which `norte-help`'s corpus resolves its live `{{cmd:…}}` marks against
-//!   the reader's own keymap and language.
+//! - [`TuiChords`] is this frontend's [`norte_help::ChordResolver`], the seam
+//!   through which `norte-help`'s corpus resolves its live `{{cmd:…}}` marks
+//!   against the reader's own keymap and language.
 //!
 //! Every chord either shape paints goes through
 //! [`norte_frontend::keymap::paint_chord`]. `Chord`'s `Display` is raw and
@@ -18,44 +18,27 @@
 //! conventional spelling — is the painter's duty, in ONE shared home rather
 //! than one per call site.
 
-use std::collections::HashMap;
-
-use norte_frontend::availability::Facts;
 use norte_frontend::keysheet::{SheetRow, sheet};
-use norte_help::{Availability, ChordResolver};
 use norte_i18n::t;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use unicode_width::UnicodeWidthStr;
 
-use crate::keymap::{Effective, Screen, dialog_hint_id, help_id, paint_chord};
+use crate::keymap::{Effective, Screen};
+
+/// This frontend's [`ChordResolver`](norte_help::ChordResolver), which since
+/// task 4.4 of the multi-frontend transition is the SHARED one: the graphical
+/// host asks `norte-help` the same three questions, and two copies would be two
+/// help pages teaching different keys for the same command (ADR 0066, D14).
+///
+/// Re-exported under its old name so no call site of this crate moved. Its
+/// tests stayed here too, unlike the palette's: they are written against the
+/// TUI's real presets and its whole command vocabulary, which is where they
+/// describe something the model alone cannot.
+pub use norte_frontend::help_chords::Chords as TuiChords;
 
 /// Width in CELLS of the chord column of the cheatsheet.
 const CHORD_COLUMN: usize = 14;
-
-/// What a plugin-contributed command's dispatch key starts with — the same
-/// prefix `norte_frontend::availability::plugin_of_command` strips, and that
-/// function stays the authority on whether a key is WELL FORMED. This constant
-/// answers the looser question [`TuiChords::label`] needs: does this key claim
-/// to be a plugin's, and therefore carry text nobody in this process wrote?
-const PLUGIN_KEY_PREFIX: &str = "plugin:";
-
-/// The facts of a context with nothing in the way: what [`TuiChords`] answers
-/// against until the overlay opens and freezes the real ones.
-///
-/// Everything permissive, so the table vetoes nothing. Not `Default`, because
-/// "all false" is what a derive would give and that is the OPPOSITE of
-/// permissive here — `enterable: false` alone would dim `nav.enter` on every
-/// page painted through a resolver nobody had frozen yet.
-const NO_IMPEDIMENT: Facts = Facts {
-    enterable: true,
-    viewable: true,
-    rename_single: true,
-    source_read_only: false,
-    dest_read_only: false,
-    degraded: false,
-    journalled: true,
-};
 
 /// Padding that takes `seq` up to `col` CELLS, or nothing when it is already
 /// wider.
@@ -121,7 +104,7 @@ pub fn build(browse: &Effective, viewer: &Effective, dialog: &Effective) -> Vec<
 /// column, then the catalogue label — dimmed, with the short reason, when
 /// `row.avail` is not [`norte_frontend::keymap::Availability::Here`].
 ///
-/// `command_label` (not [`label_id`]/[`t`]) is deliberate: it is the SAME
+/// `command_label` (not the raw Fluent id and [`t`]) is deliberate: it is the SAME
 /// router the which-key panel uses, and it falls back to the command NAME
 /// rather than echoing a Fluent id — the common case for a `NotBuilt`
 /// command, since nothing has written help text for one that does not exist.
@@ -142,362 +125,11 @@ fn sheet_row_line(row: &SheetRow, lang: norte_i18n::Lang) -> Line<'static> {
     Line::styled(text, style)
 }
 
-/// Fluent id of a command's short label: `dialog.*` verbs live in
-/// `dialog-cmd-*` and everything else in `help-cmd-*` — the two catalogues
-/// the app already keeps (#113).
-///
-/// Routing by PREFIX and not by which list the caller is walking, because the
-/// two do not agree: the `dialog` effective merges the preset's `[global]`
-/// section, so `app.quit` and friends turn up while rendering the dialog
-/// section. Asking `dialog-cmd-*` for them found nothing, and `t` answers a
-/// missing message with the id, so the F1 page painted literal
-/// `dialog-cmd-app-quit` rows at the reader — the same failure mode
-/// [`TuiChords::label`] documents, in the shape that actually shipped.
-fn label_id(command: &str) -> String {
-    if command.starts_with("dialog.") {
-        dialog_hint_id(command)
-    } else {
-        help_id(command)
-    }
-}
-
-/// The TUI's answer to the three questions `norte-help` asks a frontend
-/// (H3b): the user's effective chord, a short label, and whether the command
-/// can run now.
-///
-/// **Must be rebuilt wherever `help_lines` is** — `main`'s startup and
-/// `reload_config`'s hot-reload arm, where `App::help_chords` is assigned next
-/// to it — and from the same effectives, for the same reason:
-/// a rebind that does not reach this resolver is a help page that teaches
-/// the OLD key. It holds no borrows precisely so the rebuild can be a whole
-/// new value swapped in, exactly as `help_lines` and `DialogHints` are.
-///
-/// ```
-/// use norte_help::{ChordResolver, CommandText, render_command};
-/// use norte_tui::help::TuiChords;
-/// use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS, Effective, Screen, presets};
-///
-/// let (_, preset) = presets().into_iter().find(|(n, _)| *n == "orthodox").unwrap();
-/// let known: Vec<&str> = COMMANDS.iter().copied().chain(DIALOG_COMMANDS.iter().copied()).collect();
-/// let eff = |s| Effective::build_for(&preset, &[], &known, s).unwrap();
-/// let r = TuiChords::new(
-///     &eff(Screen::Browse),
-///     &eff(Screen::Viewer),
-///     &eff(Screen::Dialog),
-///     norte_i18n::Lang::En,
-/// );
-///
-/// // A `{{cmd:pane.copy}}` mark in the corpus becomes the reader's own key,
-/// // spelled the way the documentation spells it (`paint_chord`).
-/// assert_eq!(
-///     render_command("pane.copy", &r),
-///     CommandText::Chord("F5".to_owned()),
-/// );
-/// // A command with no key names itself rather than inventing one.
-/// assert_eq!(r.chord("no.such.command"), None);
-/// ```
-#[derive(Debug)]
-pub struct TuiChords {
-    /// Command to its painted chord, filled browse → viewer → dialog.
-    ///
-    /// Precomputed rather than resolved per row (M1): `Effective::bindings`
-    /// materialises the WHOLE keymap — every chord formatted into a fresh
-    /// `String` — and asking it once per screen per rendered mark, per frame,
-    /// is the cost this map pays once. Same lineage as `DialogHints`, which
-    /// precomputes its finished strings for the same reason.
-    ///
-    /// The FILL ORDER is the rule [`ChordResolver::chord`] states: resolve a
-    /// command in the screen THAT COMMAND lives in. A `viewer.*` command is
-    /// not in the browse keymap and a `dialog.*` verb is in neither, so a map
-    /// built from one screen would report "no key bound" for most of the
-    /// vocabulary. First writer wins, so a command bound in several screens
-    /// keeps its browse chord — the same precedence a browse-first or-chain
-    /// would have had.
-    chords: HashMap<String, String>,
-    /// The language `label` answers in. Also the language whose catalogue
-    /// decides whether there IS an answer; see [`ChordResolver::label`].
-    lang: norte_i18n::Lang,
-    /// The context [`ChordResolver::availability`] answers against, FROZEN
-    /// when the overlay opened ([`Self::with_facts`], called by
-    /// `crate::app::App::freeze_help_facts`).
-    ///
-    /// Frozen and not read live, which is the same decision the GUI's context
-    /// menu makes and for the same reason: the reader walks a page whose rows
-    /// were dimmed under one set of facts, and a row that changed verdict
-    /// halfway down — because the cursor moved, or a frame was laid out at a
-    /// different width — would make the page disagree with itself.
-    ///
-    /// What the freeze buys is "no verdict changes because the READER moved",
-    /// and only that. It is NOT stale for the whole lifetime of the overlay,
-    /// because two of these facts do go out of date on their own: the two
-    /// read-only ones cannot change without a `cd`, which needs a key the help
-    /// is eating, but `enterable` and `viewable` describe the entry under the
-    /// cursor, and a copy or a delete finishing while the help is open re-lists
-    /// both panes underneath it (the `tick` arm of the run loop has no overlay
-    /// guard, unlike the `dir_watch` one). So the refresh funnel re-freezes —
-    /// `main::after_panes_refresh`, which all three refresh triggers go
-    /// through. Without it a row said "does not apply to this selection" about
-    /// a selection that no longer existed.
-    ///
-    /// Before the first freeze it is [`Facts`] with nothing impeded, so the
-    /// resolver dims NOTHING. That is the table's own fail-open default
-    /// (`norte_frontend::availability::verdict`) applied one level up: a
-    /// resolver built by a hot reload and not yet frozen must not start
-    /// claiming commands are broken.
-    facts: Facts,
-    /// Plugin ids that are approved AND enabled, snapshotted when the overlay
-    /// opened (H3e). Empty means "nothing active" and dims every plugin row,
-    /// which is the right answer both when there are no plugins and when the
-    /// snapshot could not be taken: offering a row `plugin.run_command` would
-    /// refuse is the worse mistake.
-    ///
-    /// Note the asymmetry with [`Self::facts`], which defaults to fail-OPEN.
-    /// It is not an inconsistency: the facts table is a list of known
-    /// IMPEDIMENTS, so "I have not looked" means "no impediment known", while
-    /// a plugin set is an ALLOWLIST and "I have not looked" means "I cannot
-    /// vouch for any of them". Same principle in both — do not claim what has
-    /// not been established.
-    active_plugins: std::collections::BTreeSet<String>,
-    /// Dispatch key (`plugin:{plugin_id}:{command_id}`) to the title the
-    /// MANIFEST gives that command, snapshotted with [`Self::active_plugins`]
-    /// from the same `plugin.list` (H3e).
-    ///
-    /// Without it a plugin's own page named its commands by their raw dispatch
-    /// key — `plugin:org.norte.demo:greet` where the manifest says «Greet the
-    /// world» — in the prose AND in the row below it. The chain is
-    /// `norte_help::render_command` → no chord → `label_or_id` →
-    /// [`ChordResolver::label`], and a `plugin:` key has no `help-cmd-*` entry
-    /// BY CONSTRUCTION, so the fallback to the id was guaranteed on the one
-    /// page where every row is a plugin command.
-    ///
-    /// The titles come from the SNAPSHOT and never from the `help.md`. A plugin
-    /// authors both, so only one of them can be the answer, and it has to be
-    /// the one the extension manager shows the human who approves the plugin —
-    /// otherwise a page could call `greet` one thing while the manager, the
-    /// palette and the approval prompt call it another.
-    ///
-    /// Values are already masked and capped (`crate::app::plugin_label`): the
-    /// resolver hands strings straight to a painter, so anything it carries has
-    /// to be paintable already.
-    plugin_labels: HashMap<String, String>,
-}
-
-/// Compile anchor: a fourth `Screen` must not silently make `chord` answer
-/// `None` for every command that lives in it. A new variant fails to compile
-/// HERE, next to the fill that has to grow with it. (Same idiom as
-/// `CONTEXTOS` in `tests/help_gate.rs`.)
-const _: fn(Screen) = |screen| match screen {
-    Screen::Browse | Screen::Viewer | Screen::Dialog => (),
-};
-
-impl TuiChords {
-    /// Takes the three effective keymaps — one per [`Screen`] — and the
-    /// language `label` answers in.
-    ///
-    /// BORROWS them, like `DialogHints::build` and
-    /// [`crate::palette::build_rows`] and for the same reason: `main.rs`
-    /// moves those effectives into the shared `Resolver`, so everything
-    /// precomputed from them has to be built alongside the other two, before
-    /// the move, without forcing a clone. Nothing is retained — the chords
-    /// are copied out here (see `TuiChords`' chord map).
-    #[must_use]
-    pub fn new(
-        browse: &Effective,
-        viewer: &Effective,
-        dialog: &Effective,
-        lang: norte_i18n::Lang,
-    ) -> Self {
-        let mut chords: HashMap<String, String> = HashMap::new();
-        for eff in [browse, viewer, dialog] {
-            for (seq, cmd) in eff.bindings() {
-                // `bindings()` is already in precedence order and `or_insert`
-                // keeps the first writer, so within a screen this picks the
-                // binding that actually FIRES, and across screens it picks
-                // the earlier screen.
-                chords
-                    .entry(cmd.to_owned())
-                    .or_insert_with(|| paint_chord(&seq));
-            }
-        }
-        Self {
-            chords,
-            lang,
-            facts: NO_IMPEDIMENT,
-            active_plugins: std::collections::BTreeSet::new(),
-            plugin_labels: HashMap::new(),
-        }
-    }
-
-    /// The same resolver answering [`ChordResolver::availability`] against
-    /// `facts`.
-    ///
-    /// Returns a NEW value instead of mutating: the open overlay holds an
-    /// `Arc` of the resolver it was laid out with, and the freeze happens by
-    /// swapping a fresh one in (`crate::app::App::freeze_help_facts`) exactly
-    /// as the hot reload swaps a rebuilt one. Nothing that a page has already
-    /// been painted through can change underneath it.
-    ///
-    /// The chord map is cloned, once per help open. That is the whole cost, and
-    /// the alternative — resolving facts per rendered row — is what the frozen
-    /// snapshot exists to avoid.
-    #[must_use]
-    pub fn with_facts(&self, facts: Facts) -> Self {
-        Self {
-            chords: self.chords.clone(),
-            lang: self.lang,
-            facts,
-            active_plugins: self.active_plugins.clone(),
-            plugin_labels: self.plugin_labels.clone(),
-        }
-    }
-
-    /// The same resolver, carrying the plugin snapshot (H3e): which plugins are
-    /// active, and what the manifest calls each of their commands.
-    ///
-    /// BOTH halves in one builder because they are one photograph — the same
-    /// `plugin.list`, the same instant — and a resolver holding a fresh active
-    /// set beside stale titles would dim a row correctly while naming it wrong.
-    ///
-    /// A NEW value, for the reason [`Self::with_facts`] gives, and the two
-    /// compose in either order: each carries the other's fields over, so the
-    /// re-freeze the refresh funnel performs while the overlay is open
-    /// (`main::after_panes_refresh`) cannot drop the snapshot and dim every
-    /// plugin row halfway down a page — nor take their names away.
-    #[must_use]
-    pub fn with_plugins(
-        &self,
-        active: std::collections::BTreeSet<String>,
-        titles: HashMap<String, String>,
-    ) -> Self {
-        Self {
-            chords: self.chords.clone(),
-            lang: self.lang,
-            facts: self.facts,
-            active_plugins: active,
-            plugin_labels: titles,
-        }
-    }
-}
-
-impl ChordResolver for TuiChords {
-    /// The command's chord in the screen it belongs to, masked — see
-    /// `TuiChords`' chord map for why the map is filled the way it is, and
-    /// `paint_chord` for why nothing raw leaves here.
-    fn chord(&self, command: &str) -> Option<String> {
-        self.chords.get(command).cloned()
-    }
-
-    /// The catalogue's short label, or an EMPTY string when it has no entry.
-    ///
-    /// A `plugin:{id}:{command}` key is answered from the SNAPSHOT instead
-    /// (H3e): the app's Fluent catalogue cannot possibly hold an entry for a
-    /// command a third party declared, so the generic path below returns blank
-    /// and `norte_help::label_or_id` falls back to the raw dispatch key —
-    /// which is how a plugin's own page came to name its commands
-    /// `plugin:org.norte.demo:greet` while the manifest, the palette and the
-    /// extension manager all said «Greet the world».
-    ///
-    /// Only a key `norte_frontend::availability::plugin_of_command` recognises
-    /// is answered from here, and that guard is STRUCTURAL rather than a
-    /// promise about the caller: this map arrives through a public builder, and
-    /// a built-in command's label must not be overridable by data that came off
-    /// the wire even in principle. `App::freeze_help_plugins` cannot produce
-    /// such a key — it puts the prefix on itself — so the guard costs one
-    /// comparison and closes the shape of the mistake rather than the instance.
-    /// Sharing the predicate with the availability arm also means "what counts
-    /// as a plugin key" has one definition in this frontend, not two.
-    ///
-    /// A key the snapshot does not name still returns blank, so the fallback to
-    /// the id survives untouched: a row wearing its dispatch key is poor, and a
-    /// row wearing nothing at all is worse.
-    ///
-    /// Blank on a miss is the contract, not an accident: `norte_i18n::t_in`
-    /// answers a missing message with the id itself, so returning it
-    /// unconditionally would paint `help-cmd-…` at the reader and stop
-    /// `norte_help::render_command`'s fallback chain from ever naming the
-    /// command.
-    ///
-    /// The miss is detected by testing for that echo rather than for a proxy
-    /// (a set of known ids, say): the echo IS the failure mode, so this
-    /// cannot drift out of agreement with it. A message id can never be its
-    /// own translation, so the comparison has no false positive.
-    fn label(&self, command: &str) -> String {
-        if norte_frontend::availability::plugin_of_command(command).is_some()
-            && let Some(title) = self.plugin_labels.get(command)
-        {
-            return title.clone();
-        }
-        let id = label_id(command);
-        let text = norte_i18n::t_in(self.lang, &id);
-        if text != id {
-            return text;
-        }
-        if command.starts_with(PLUGIN_KEY_PREFIX) {
-            // A `plugin:` key the snapshot does not name. Blank would be the
-            // generic answer, and `norte_help::label_or_id` would then fall
-            // back to the command id — the behaviour we want, except that a
-            // `plugin:` id is THIRD-PARTY TEXT and that fallback paints it
-            // RAW. Handing back the masked, capped spelling keeps the visible
-            // behaviour (the row wears its key) and takes the hazard out of it.
-            //
-            // Today only `norte_help::parse_untrusted` builds these topics and
-            // its `is_own_command` already refuses a key carrying a control or
-            // a bidi override — but `Topic` is a plain struct with public
-            // fields and `HelpState::install_plugin_topic` does not re-check,
-            // so the renderer would be trusting a filter three crates away to
-            // stay in place. It costs one comparison not to.
-            //
-            // The PERMISSIVE prefix on purpose, unlike the strict
-            // `plugin_of_command` above: that one asks "may this be answered
-            // from the snapshot", an identity question, while this asks "is
-            // this third-party text", and anything merely CLAIMING to be a
-            // plugin key must be handled as though it were.
-            return crate::app::plugin_label(command);
-        }
-        String::new()
-    }
-
-    /// Whether the command can run in the context the overlay was opened in,
-    /// answered by the ONE shared table
-    /// ([`norte_frontend::availability::verdict`]) so a dimmed help row and a
-    /// greyed-out GUI menu entry can never disagree.
-    ///
-    /// One reason of the vocabulary is deliberately NOT computed here, and the
-    /// absence is the honest answer rather than a gap:
-    /// [`norte_help::Reason::PolicyDenied`] is unreachable. The embedded TUI's
-    /// actor is `journal::Actor::User`, which `ScopedPolicy::evaluate` allows
-    /// unconditionally, and the embedded engine is handed `AllowAll` anyway.
-    /// Policy denial is meaningful for an AGENT going through the daemon; in
-    /// this app the human is the one who APPROVES a denial, never its subject.
-    /// Computing it would dim a row for a rule that does not apply to the
-    /// reader.
-    ///
-    /// [`norte_help::Reason::PluginInactive`] DOES have a surface since H3e: a
-    /// plugin's own page lists that plugin's `plugin:{id}:{command}` rows, and
-    /// a switched-off plugin must show them dimmed rather than promise a
-    /// dispatch `plugin.run_command` would refuse. Which is why this routes
-    /// through `verdict_with_plugins` and never through plain `verdict` — the
-    /// latter answers a `plugin:` key through its fail-OPEN wildcard, lighting
-    /// every such row unconditionally.
-    ///
-    /// (The palette makes the OPPOSITE call and both are right: it filters an
-    /// inactive plugin's commands out entirely, because a list of what you can
-    /// run has no business showing what you cannot, while a page ABOUT one
-    /// plugin has every business saying that this is its command and it is
-    /// switched off.)
-    fn availability(&self, command: &str) -> Availability {
-        norte_frontend::availability::verdict_with_plugins(
-            command,
-            &self.facts,
-            &self.active_plugins,
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use norte_help::{CommandText, render_command};
+    use norte_help::{Availability, ChordResolver, CommandText, render_command};
+    use std::collections::HashMap;
 
     use crate::keymap::{COMMANDS, DIALOG_COMMANDS, parse_keymap, presets};
     use crate::palette::first_chord;

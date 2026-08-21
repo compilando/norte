@@ -223,12 +223,40 @@ pub fn pending_title(prefix: &[Chord], count: Option<u32>) -> String {
 /// ```
 #[must_use]
 pub fn command_label(command: &str, lang: Lang) -> String {
-    let id = match command.strip_prefix("dialog.") {
-        Some(verb) => format!("dialog-cmd-{}", verb.replace('.', "-")),
-        None => format!("help-cmd-{}", command.replace('.', "-")),
-    };
+    let id = label_id(command);
     let text = norte_i18n::t_in(lang, &id);
     if text == id { command.to_owned() } else { text }
+}
+
+/// The Fluent id of a command's short label: `dialog.*` verbs live in
+/// `dialog-cmd-*` and everything else in `help-cmd-*`.
+///
+/// Routing by PREFIX and not by which list the caller is walking, because the
+/// two do not agree: the `dialog` effective merges the preset's `[global]`
+/// section, so `app.quit` and friends turn up while rendering the dialog
+/// section. Asking `dialog-cmd-*` for them finds nothing, and `t_in` answers a
+/// missing message with the id, so the page painted literal
+/// `dialog-cmd-app-quit` rows at the reader — which is what shipped once.
+///
+/// Public because two callers need the id itself rather than the label:
+/// [`command_label`], which falls back to the command NAME on a miss, and
+/// [`Chords::label`](crate::help_chords::Chords), which falls back to an EMPTY
+/// string so `norte_help`'s own chain gets to answer. One mangling, two
+/// fallback policies.
+///
+/// ```
+/// use norte_frontend::whichkey::label_id;
+///
+/// assert_eq!(label_id("app.quit"), "help-cmd-app-quit");
+/// // The prefix is not repeated in the id.
+/// assert_eq!(label_id("dialog.page-up"), "dialog-cmd-page-up");
+/// ```
+#[must_use]
+pub fn label_id(command: &str) -> String {
+    match command.strip_prefix("dialog.") {
+        Some(verb) => format!("dialog-cmd-{}", verb.replace('.', "-")),
+        None => format!("help-cmd-{}", command.replace('.', "-")),
+    }
 }
 
 #[cfg(test)]

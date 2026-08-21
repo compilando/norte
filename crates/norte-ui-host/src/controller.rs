@@ -80,6 +80,13 @@ const MAX_SONDEOS: usize = 200;
 /// recuperación barata, y la que no gasta memoria del host.
 const UPDATE_BUFFER: usize = 64;
 
+/// Cuántas filas mueve una página en la ayuda.
+///
+/// El renderer es dueño del scroll del cuerpo —una página del corpus cruza
+/// entera—, así que este número solo gobierna los CURSORES, que son los que
+/// el host lleva.
+const PAGINA_DE_AYUDA: usize = 10;
+
 /// Cómo arrancar el host.
 pub struct UiHostOptions {
     /// Con quién habla.
@@ -660,6 +667,11 @@ struct Estado {
     /// Es un contexto de entrada más, como el buscador incremental y el
     /// visor: mientras esté abierta, las teclas de texto son suyas.
     paleta: Option<norte_frontend::palette_state::Palette>,
+    /// La ayuda, si está abierta. Tapa la pantalla y se queda las teclas,
+    /// como el visor: sus teclas son FIJAS (no hay vocabulario `dialog.*`
+    /// para «filtrar esta lista» ni para «seguir este enlace»), que es lo
+    /// mismo que hacen el TUI y la paleta.
+    ayuda: Option<crate::help::Ayuda>,
     /// Una COPIA del keymap efectivo del listado.
     ///
     /// El resolver se queda con el suyo, y construir el panel de
@@ -820,6 +832,7 @@ impl Estado {
             token: 0,
             locale,
             paleta: None,
+            ayuda: None,
             efectivo_visor: keymap_visor.clone(),
             efectivo: keymap.clone(),
             lang,
@@ -1152,7 +1165,53 @@ impl Estado {
             // (crear directorio, renombrar). Decirlo es más honesto que
             // aceptar texto que nadie va a leer.
             UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
+            UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row),
+            UiAction::HelpActivate { index } => {
+                let accion = self.ayuda.as_ref().and_then(|a| a.accion(*index as usize));
+                if accion.is_none() {
+                    // Un click sobre una fila que ya no existe: el renderer
+                    // iba un frame por detrás, y eso no es un error.
+                    return (Self::obsoleta(StaleAction::Modal), Vec::new());
+                }
+                self.actuar_en_ayuda(accion, backend, buzon)
+            }
         }
+    }
+
+    /// La tecla, cuando hay un CONTEXTO DE ENTRADA abierto que se la queda.
+    ///
+    /// `None` = no había ninguno (o el que había no la quiso) y la tecla
+    /// sigue su camino normal: el resolver del listado.
+    ///
+    /// El ORDEN es el de quien tapa a quién. El visor es otra pantalla
+    /// entera; la ayuda tapa al listado y desde ella se puede abrir la
+    /// paleta, así que va antes; la paleta es un editor de texto libre; y el
+    /// buscador incremental solo se queda las teclas de TEXTO.
+    fn tecla_de_un_overlay(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        if self.visor.is_some() {
+            return Some(self.tecla_en_visor(k));
+        }
+        // Cualquier tecla del LISTADO cancela una lectura de visor en vuelo.
+        // El usuario pulsó F3, se cansó y siguió a lo suyo: abrirle el visor
+        // medio segundo después es abrir una ventana que ya nadie pidió — y
+        // cambiarle el teclado de mapa sin gesto suyo. (Un segundo F3 pide su
+        // propia lectura y se queda con el testigo nuevo.)
+        self.visor_en_vuelo = None;
+        if self.ayuda.is_some() {
+            return Some(self.tecla_en_ayuda(k, backend, buzon));
+        }
+        if self.paleta.is_some() {
+            return Some(self.tecla_en_paleta(k, backend, buzon));
+        }
+        if self.hueco().pane.quick().is_some() {
+            return self.tecla_en_quick(k);
+        }
+        None
     }
 
     /// Una tecla: la resuelve el keymap COMPARTIDO y el host solo ejecuta.
@@ -1168,29 +1227,7 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // Con el VISOR abierto, la pantalla es otra y las teclas son suyas:
-        // el mismo `Screen::Viewer` del TUI, resuelto por su propio mapa.
-        if self.visor.is_some() {
-            return self.tecla_en_visor(k);
-        }
-        // Cualquier tecla del LISTADO cancela una lectura de visor en vuelo.
-        // El usuario pulsó F3, se cansó y siguió a lo suyo: abrirle el visor
-        // medio segundo después es abrir una ventana que ya nadie pidió — y
-        // cambiarle el teclado de mapa sin gesto suyo. (Un segundo F3 pide su
-        // propia lectura y se queda con el testigo nuevo.)
-        self.visor_en_vuelo = None;
-        // Con la PALETA abierta, las teclas son suyas: es un editor de texto
-        // libre, y no hay vocabulario `dialog.*` para «teclear un carácter» o
-        // «correr lo seleccionado» (mismo criterio que el TUI).
-        if self.paleta.is_some() {
-            return self.tecla_en_paleta(k, backend, buzon);
-        }
-        // Con el buscador abierto, las teclas de TEXTO son suyas. Es el
-        // contexto de entrada del listado, y dejar que el resolver se las
-        // quede convertiría teclear «d» en «borrar».
-        if self.hueco().pane.quick().is_some()
-            && let Some(salida) = self.tecla_en_quick(k)
-        {
+        if let Some(salida) = self.tecla_de_un_overlay(k, backend, buzon) {
             return salida;
         }
         let Ok(chord) = k.to_chord() else {
@@ -1319,13 +1356,22 @@ impl Estado {
                 let elegido = p.selected();
                 self.paleta = None;
                 if let Some(cmd) = elegido {
+                    // El cierre viaja en su PROPIO parche y antes que el
+                    // efecto. Sin él, un renderer que aplica parches —que es
+                    // lo que hace el de referencia— recibía el cambio del
+                    // comando y ninguno de la paleta, y la seguía pintando
+                    // encima del listado hasta la siguiente foto.
+                    let cierre = self.parche(vec![ViewChange::Palette { palette: None }]);
                     // Se ejecuta por el MISMO camino que una tecla: la
                     // paleta es otra puerta al catálogo, no un segundo
                     // despachador.
-                    let Some(efecto) = efecto_de(&cmd, 1) else {
-                        return self.no_implementado(&cmd);
+                    let (ack, mut resto) = match efecto_de(&cmd, 1) {
+                        Some(efecto) => self.aplicar_efecto(efecto, backend, buzon),
+                        None => self.no_implementado(&cmd),
                     };
-                    return self.aplicar_efecto(efecto, backend, buzon);
+                    let mut envios = vec![cierre];
+                    envios.append(&mut resto);
+                    return (ack, envios);
                 }
             }
             "ArrowDown" | "down" => p.down(),
@@ -1363,6 +1409,244 @@ impl Estado {
         )
     }
 
+    /// Abre la ayuda sobre la página del CONTEXTO donde está el lector.
+    ///
+    /// Quien pulsa `F1` mirando una pregunta quiere la respuesta a ESA
+    /// pregunta, no el índice. El contexto es una palabra cerrada
+    /// (`dialog.confirm`, `viewer`, `browse`) y quién la reclama lo dice el
+    /// propio corpus en su portada, así que añadir una página para un
+    /// diálogo nuevo no toca este código.
+    fn abrir_ayuda(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let contexto = self.contexto_de_ayuda();
+        self.ayuda = Some(crate::help::Ayuda::abrir(
+            self.lang,
+            Some(contexto),
+            &self.efectivo,
+            &self.efectivo_visor,
+            self.hechos(),
+        ));
+        let cambio = ViewChange::Help {
+            help: self.vista_ayuda(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Dónde está el lector, en el vocabulario del corpus.
+    ///
+    /// El diálogo de más arriba gana: es lo que tapa la pantalla y lo que el
+    /// lector está mirando. Un diálogo que solo informa no tiene página
+    /// propia y cae al listado, que es de lo que estaba hablando.
+    fn contexto_de_ayuda(&self) -> &'static str {
+        if let Some(d) = self.dialogos.last() {
+            return match d.al_confirmar {
+                Some(Pendiente::Borrar { .. }) => "dialog.confirm",
+                Some(Pendiente::Decidir { .. }) => "dialog.approval",
+                Some(Pendiente::CrearDirectorio { .. }) => "dialog.mkdir",
+                None => "browse",
+            };
+        }
+        if self.visor.is_some() {
+            return "viewer";
+        }
+        "browse"
+    }
+
+    /// Los hechos con los que la ayuda atenúa una fila, congelados al abrir.
+    ///
+    /// Tres son de la entrada bajo el cursor y se saben. Los dos de solo
+    /// lectura NO se saben todavía —el host no lleva cuenta de si el
+    /// provider de un hueco rehúsa escribir— y se declaran permisivos, que
+    /// es el valor por defecto de la propia tabla compartida: es una lista de
+    /// IMPEDIMENTOS conocidos, y «no lo he mirado» no es uno. Atenuar por lo
+    /// que no se ha comprobado engaña tanto como no atenuar.
+    fn hechos(&self) -> norte_frontend::availability::Facts {
+        let hueco = self.hueco();
+        let entrada = hueco.pane.entries().get(hueco.pane.cursor());
+        norte_frontend::availability::Facts {
+            enterable: entrada.is_some_and(|e| e.kind == EntryKind::Dir),
+            viewable: entrada.is_some_and(|e| e.kind == EntryKind::File),
+            rename_single: hueco.pane.marks_len() <= 1,
+            source_read_only: false,
+            dest_read_only: false,
+            // `degraded` en la tabla significa que la sesión va SIN CIFRAR,
+            // que no es ninguno de los tres estados que este host proyecta
+            // (conectado, reintentando, perdido). Mientras el wire de la
+            // conexión no llegue hasta aquí, la respuesta honesta es que no
+            // consta.
+            degraded: false,
+            // El host habla por el SDK contra el daemon, que es quien lleva
+            // el journal (ADR 0066): lo que muta por aquí se registra y se
+            // puede deshacer.
+            journalled: true,
+        }
+    }
+
+    /// La proyección de la ayuda.
+    fn vista_ayuda(&self) -> Option<crate::dto::HelpView> {
+        let a = self.ayuda.as_ref()?;
+        Some(a.vista(self.lang, &crate::commands::todos_con(self.efectos)))
+    }
+
+    /// Las teclas mientras la ayuda está abierta.
+    ///
+    /// FIJAS a propósito, como las de la paleta y por el mismo motivo: el
+    /// catálogo no tiene comandos para «filtrar esta lista», «cambiar de
+    /// mitad» o «seguir este enlace». Son las que la propia ayuda anuncia en
+    /// su pie (`help-hint-gui`), y esa cadena y este `match` cambian juntos.
+    fn tecla_en_ayuda(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // `Ctrl+P` sale de la ayuda a la paleta, que es lo que su pie
+        // promete. Los DOS cambios viajan en el mismo parche: un renderer que
+        // solo recibiera el de la paleta seguiría pintando la ayuda debajo.
+        if k.ctrl && !k.alt && !k.meta && k.key.eq_ignore_ascii_case("p") {
+            self.ayuda = None;
+            self.paleta = Some(norte_frontend::palette_state::Palette::new(
+                self.filas_de_paleta(),
+            ));
+            let cambios = vec![
+                ViewChange::Help { help: None },
+                ViewChange::Palette {
+                    palette: self.vista_paleta(),
+                },
+            ];
+            return (self.aplicada(), vec![self.parche(cambios)]);
+        }
+        let Some(a) = self.ayuda.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match k.key.as_str() {
+            "Escape" | "esc" => {
+                // Filtrando, `esc` deja de filtrar y no cierra: cerrar la
+                // ayuda entera por abandonar una búsqueda es perder la
+                // página que se estaba leyendo.
+                if a.estado.filtering() {
+                    a.estado.end_filter();
+                } else {
+                    self.ayuda = None;
+                }
+            }
+            "Tab" | "tab" => a.estado.toggle_focus(),
+            "ArrowDown" | "down" => a.estado.down(),
+            "ArrowUp" | "up" => a.estado.up(),
+            "PageDown" | "pgdn" => {
+                for _ in 0..PAGINA_DE_AYUDA {
+                    a.estado.down();
+                }
+            }
+            "PageUp" | "pgup" => {
+                for _ in 0..PAGINA_DE_AYUDA {
+                    a.estado.up();
+                }
+            }
+            "Backspace" | "backspace" => {
+                if a.estado.filtering() {
+                    a.estado.backspace();
+                } else if !a.estado.back() {
+                    // En la raíz, «atrás» es cerrar: el lector no tiene a
+                    // dónde volver y una tecla que no hace nada se lee como
+                    // una ventana colgada.
+                    self.ayuda = None;
+                }
+            }
+            "Enter" | "enter" => return self.enter_en_ayuda(backend, buzon),
+            "/" if !a.estado.filtering() => a.estado.start_filter(),
+            otra => {
+                // Una tecla de TEXTO es un punto de código, no un nombre de
+                // tecla (`ArrowLeft` no se teclea), y solo cuenta con el
+                // filtro abierto: teclear «d» leyendo una página no puede
+                // ponerse a filtrar sola.
+                let mut chars = otra.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) if a.estado.filtering() && !k.ctrl && !k.alt && !k.meta => {
+                        a.estado.push_char(c);
+                    }
+                    _ => return (self.aplicada(), Vec::new()),
+                }
+            }
+        }
+        let cambio = ViewChange::Help {
+            help: self.vista_ayuda(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// `enter` sobre la ayuda: abrir la página elegida, seguir un enlace o
+    /// correr un comando.
+    fn enter_en_ayuda(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(a) = self.ayuda.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        if a.estado.focus() == norte_frontend::help::Focus::Topics {
+            a.estado.open_selected();
+            let cambio = ViewChange::Help {
+                help: self.vista_ayuda(),
+            };
+            return (self.aplicada(), vec![self.parche(vec![cambio])]);
+        }
+        let accion = a.accion(a.estado.action_cursor());
+        self.actuar_en_ayuda(accion, backend, buzon)
+    }
+
+    /// Lo que hace una acción del cuerpo, venga de `enter` o de un click.
+    fn actuar_en_ayuda(
+        &mut self,
+        accion: Option<norte_frontend::help::Action>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match accion {
+            Some(norte_frontend::help::Action::Open(id)) => {
+                if let Some(a) = self.ayuda.as_mut() {
+                    a.estado.open(&id);
+                }
+                let cambio = ViewChange::Help {
+                    help: self.vista_ayuda(),
+                };
+                (self.aplicada(), vec![self.parche(vec![cambio])])
+            }
+            Some(norte_frontend::help::Action::Run(cmd)) => {
+                // Correr cierra la ayuda: el comando actúa sobre el listado
+                // que la ayuda estaba tapando. El cierre viaja PRIMERO y en
+                // su propio parche, de modo que el acuse que devuelve el
+                // efecto sigue apuntando a la actualización que lo refleja.
+                self.ayuda = None;
+                let cierre = self.parche(vec![ViewChange::Help { help: None }]);
+                let Some(efecto) = efecto_de(&cmd, 1) else {
+                    let (ack, mut resto) = self.no_implementado(&cmd);
+                    let mut envios = vec![cierre];
+                    envios.append(&mut resto);
+                    return (ack, envios);
+                };
+                let (ack, mut resto) = self.aplicar_efecto(efecto, backend, buzon);
+                let mut envios = vec![cierre];
+                envios.append(&mut resto);
+                (ack, envios)
+            }
+            None => (self.aplicada(), Vec::new()),
+        }
+    }
+
+    /// Un click en una fila de la lateral de la ayuda: ENSEÑA lo que haya,
+    /// que es lo mismo que hace la flecha.
+    fn elegir_pagina(&mut self, row: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(a) = self.ayuda.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        a.estado.click_row(row as usize);
+        let cambio = ViewChange::Help {
+            help: self.vista_ayuda(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
     /// Las teclas mientras el visor está abierto.
     ///
     /// Resuelven con el mapa de la pantalla `viewer`, y lo que no está ligado
@@ -1385,6 +1669,13 @@ impl Estado {
             // estado propia todavía, así que no hay nada que pintar.
             return (self.aplicada(), Vec::new());
         };
+        if command == "app.help" {
+            // La ayuda es de la APLICACIÓN y no del visor, así que no está en
+            // su lista de comandos —y no puede estarlo: las dos listas son
+            // disjuntas a propósito—. Se atiende aquí para que `F1` con el
+            // visor abierto abra la página del visor y no conteste «aquí no».
+            return self.abrir_ayuda();
+        }
         let Some(efecto) = crate::commands::efecto_visor_de(&command, count.times()) else {
             // En el catálogo y ligado a esta pantalla, pero este host no lo
             // hace: se dice, con la misma frase que el TUI.
@@ -1668,6 +1959,7 @@ impl Estado {
                 };
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
+            Efecto::Ayuda => self.abrir_ayuda(),
             Efecto::Ver => self.pedir_visor(backend, buzon),
             Efecto::CrearDirectorio => self.pedir_mkdir(),
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
@@ -2796,6 +3088,7 @@ impl Estado {
             tasks: self.vistas_de_tasks(),
             palette: self.vista_paleta(),
             whichkey: self.vista_whichkey(),
+            help: self.vista_ayuda(),
             viewer: self.vista_visor(),
             locale: self.locale.clone(),
         }

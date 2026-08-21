@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 8;
+export const BRIDGE_VERSION = 9;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -180,6 +180,56 @@ export interface WhichKeyView {
   rows: WhichKeyRowView[];
 }
 
+export type HelpSpanView =
+  | { span: "text"; text: string }
+  | { span: "strong"; text: string }
+  | { span: "emph"; text: string }
+  | { span: "code"; text: string }
+  | { span: "command"; text: string; is_chord: boolean }
+  | { span: "link"; topic: string; text: string };
+
+export interface HelpKeyRowView {
+  chord: string;
+  label: string;
+  enabled: boolean;
+  reason: string;
+}
+
+export type HelpBlockView =
+  | { block: "heading"; level: number; text: string }
+  | { block: "paragraph"; spans: HelpSpanView[] }
+  | { block: "bullets"; items: HelpSpanView[][] }
+  | { block: "code"; lang: string | null; text: string }
+  | { block: "table"; header: string[]; rows: string[][] }
+  | { block: "callout"; kind: string; spans: HelpSpanView[] }
+  | { block: "keys"; rows: HelpKeyRowView[] };
+
+export type HelpSidebarRowView =
+  { row: "group"; label: string } | { row: "topic"; title: string; current: boolean };
+
+export interface HelpActionView {
+  label: string;
+  chord: string;
+  enabled: boolean;
+  reason: string;
+  opens_topic: boolean;
+}
+
+export interface HelpView {
+  title: string;
+  topic_id: string;
+  badge: string | null;
+  sidebar: HelpSidebarRowView[];
+  cursor: number;
+  focus: "topics" | "body";
+  blocks: HelpBlockView[];
+  actions: HelpActionView[];
+  action_cursor: number | null;
+  filter: string;
+  filtering: boolean;
+  can_back: boolean;
+}
+
 export interface ViewSnapshot {
   connection: ConnectionView;
   layout: LayoutView;
@@ -190,6 +240,7 @@ export interface ViewSnapshot {
   tasks: TaskView[];
   palette: PaletteView | null;
   whichkey: WhichKeyView | null;
+  help: HelpView | null;
   viewer: ViewerView | null;
   locale: string;
 }
@@ -212,7 +263,8 @@ export type ViewChange =
   | { change: "columns"; slot_id: number; columns: ColumnHeader[] }
   | { change: "viewer"; viewer: ViewerView | null }
   | { change: "which_key"; whichkey: WhichKeyView | null }
-  | { change: "palette"; palette: PaletteView | null };
+  | { change: "palette"; palette: PaletteView | null }
+  | { change: "help"; help: HelpView | null };
 
 export interface ViewPatch {
   base_sequence: number;
@@ -261,6 +313,8 @@ export type UiAction =
   | { action: "set_viewport"; width: number; height: number }
   | ({ action: "key" } & KeyInput)
   | { action: "set_viewer_rows"; rows: number }
+  | { action: "help_select_topic"; row: number }
+  | { action: "help_activate"; index: number }
   | { action: "resync" };
 
 export type StaleReason = "instance" | "generation" | "modal";

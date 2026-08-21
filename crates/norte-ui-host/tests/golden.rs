@@ -163,6 +163,8 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("parent", UiAction::Parent { slot_id: 1 }),
+        ("help_select_topic", UiAction::HelpSelectTopic { row: 3 }),
+        ("help_activate", UiAction::HelpActivate { index: 1 }),
         ("resync", UiAction::Resync),
         (
             "select_row",
@@ -391,8 +393,102 @@ fn snapshot_de_referencia() -> ViewSnapshot {
                 },
             ],
         }),
+        help: Some(ayuda_de_referencia()),
         viewer: Some(visor_de_referencia()),
         locale: "es".to_owned(),
+    }
+}
+
+/// La ayuda de referencia: una página con prosa, una marca viva ya resuelta,
+/// un enlace, la hoja de teclado y una fila que este frontend no ejecuta.
+fn ayuda_de_referencia() -> norte_ui_host::dto::HelpView {
+    use norte_ui_host::dto::{
+        HelpActionView, HelpBlockView, HelpFocusView, HelpKeyRowView, HelpSidebarRowView,
+        HelpSpanView, HelpView,
+    };
+    HelpView {
+        title: "Copiar".to_owned(),
+        topic_id: "copying".to_owned(),
+        badge: None,
+        sidebar: vec![
+            HelpSidebarRowView::Group {
+                label: "Lo básico".to_owned(),
+            },
+            HelpSidebarRowView::Topic {
+                title: "Copiar".to_owned(),
+                current: true,
+            },
+        ],
+        cursor: 1,
+        focus: HelpFocusView::Body,
+        blocks: vec![
+            HelpBlockView::Heading {
+                level: 2,
+                text: "Copiar".to_owned(),
+            },
+            HelpBlockView::Paragraph {
+                spans: vec![
+                    HelpSpanView::Text {
+                        text: "Pulsa ".to_owned(),
+                    },
+                    HelpSpanView::Command {
+                        text: "F5".to_owned(),
+                        is_chord: true,
+                    },
+                    HelpSpanView::Link {
+                        topic: "marking".to_owned(),
+                        text: "Marcar".to_owned(),
+                    },
+                ],
+            },
+            HelpBlockView::Bullets {
+                items: vec![vec![HelpSpanView::Strong {
+                    text: "Ojo".to_owned(),
+                }]],
+            },
+            HelpBlockView::Code {
+                lang: Some("sh".to_owned()),
+                text: "norte --help".to_owned(),
+            },
+            HelpBlockView::Table {
+                header: vec!["Tecla".to_owned()],
+                rows: vec![vec!["F5".to_owned()]],
+            },
+            HelpBlockView::Callout {
+                kind: "warn".to_owned(),
+                spans: vec![HelpSpanView::Emph {
+                    text: "Cuidado".to_owned(),
+                }],
+            },
+            HelpBlockView::Keys {
+                rows: vec![HelpKeyRowView {
+                    chord: "F5".to_owned(),
+                    label: "copiar".to_owned(),
+                    enabled: false,
+                    reason: "aquí no".to_owned(),
+                }],
+            },
+        ],
+        actions: vec![
+            HelpActionView {
+                label: "copiar".to_owned(),
+                chord: "F5".to_owned(),
+                enabled: false,
+                reason: "aquí no".to_owned(),
+                opens_topic: false,
+            },
+            HelpActionView {
+                label: "Marcar".to_owned(),
+                chord: String::new(),
+                enabled: true,
+                reason: String::new(),
+                opens_topic: true,
+            },
+        ],
+        action_cursor: Some(0),
+        filter: "cop".to_owned(),
+        filtering: true,
+        can_back: true,
     }
 }
 
@@ -560,6 +656,12 @@ fn cambios_del_listado() -> Vec<(&'static str, ViewChange)> {
 fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
     vec![
         ("layout", ViewChange::Layout(disposicion_de_referencia())),
+        (
+            "help",
+            ViewChange::Help {
+                help: Some(ayuda_de_referencia()),
+            },
+        ),
         (
             "rows",
             ViewChange::Rows {

@@ -39,6 +39,9 @@ pub struct ViewSnapshot {
     pub palette: Option<PaletteView>,
     /// El panel de continuaciones, si hay un prefijo a medias.
     pub whichkey: Option<WhichKeyView>,
+    /// La ayuda, si está abierta. Como el visor, ocupa la pantalla: mientras
+    /// esté, las teclas son suyas.
+    pub help: Option<HelpView>,
     /// El visor, si hay uno abierto. Ocupa la pantalla: mientras esté, las
     /// teclas son suyas y el listado no se mueve por debajo.
     pub viewer: Option<ViewerView>,
@@ -107,6 +110,207 @@ pub struct WhichKeyRowView {
     pub opens_sequence: bool,
     /// Por qué no se puede, ya traducido. Vacío cuando sí se puede.
     pub reason: String,
+}
+
+/// La ayuda abierta (F1).
+///
+/// El corpus, el modelo del overlay y la resolución de las marcas vivas son
+/// los COMPARTIDOS (`norte_help`, `norte_frontend::help`,
+/// `norte_frontend::help_chords`): qué páginas hay, cuál está abierta, qué
+/// filas se pueden correr y con qué tecla las corre ESTE lector. El renderer
+/// no interpreta markdown y no resuelve una tecla: recibe bloques cerrados y
+/// los pinta.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelpView {
+    /// El título de la página abierta, ya acotado.
+    pub title: String,
+    /// Su id, para que el renderer pueda marcar la fila viva de la lateral.
+    pub topic_id: String,
+    /// La línea de procedencia de una página de plugin (quién la publica, si
+    /// se recortó, si hubo bytes que no decodificaron). `None` en una página
+    /// del binario: una página de plugin SIEMPRE lleva línea, y una que a
+    /// veces aparece enseña lo contrario de la verdad cuando falta.
+    pub badge: Option<String>,
+    /// La lateral: cabeceras de grupo y páginas, en el orden del modelo.
+    pub sidebar: Vec<HelpSidebarRowView>,
+    /// Qué fila de la lateral tiene el cursor.
+    pub cursor: u64,
+    /// Qué mitad tiene el teclado.
+    pub focus: HelpFocusView,
+    /// El cuerpo de la página, en bloques de un vocabulario CERRADO.
+    pub blocks: Vec<HelpBlockView>,
+    /// Lo que `enter` puede hacer sobre el cuerpo: correr un comando o abrir
+    /// otra página.
+    pub actions: Vec<HelpActionView>,
+    /// Cuál está elegida, si hay alguna.
+    pub action_cursor: Option<u64>,
+    /// Lo tecleado en el filtro, ya saneado para pintar.
+    pub filter: String,
+    /// El filtro está abierto: las teclas de texto son suyas.
+    pub filtering: bool,
+    /// Hay a dónde volver (`⌫`). Cuando no lo hay, `⌫` cierra.
+    pub can_back: bool,
+}
+
+/// Qué mitad del overlay tiene el cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HelpFocusView {
+    /// La lateral: arriba y abajo cambian de página.
+    Topics,
+    /// El cuerpo: arriba y abajo recorren lo ejecutable, `enter` actúa.
+    Body,
+}
+
+/// Una fila de la lateral.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "row")]
+pub enum HelpSidebarRowView {
+    /// Cabecera de grupo, YA traducida. No se puede elegir.
+    Group {
+        /// El texto de la cabecera.
+        label: String,
+    },
+    /// Una página que el lector puede abrir.
+    Topic {
+        /// Su título, ya acotado.
+        title: String,
+        /// Es la que está abierta.
+        current: bool,
+    },
+}
+
+/// Un bloque del cuerpo. Vocabulario CERRADO (ADR 0040): que un `help.md`
+/// hostil no pueda expresar nada fuera de esta lista es precisamente lo que
+/// lo hace seguro, y el renderer construye nodos del DOM uno a uno — nunca
+/// HTML — porque un bloque no es marcado, es datos.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "block")]
+pub enum HelpBlockView {
+    /// Encabezado de nivel 1..=3.
+    Heading {
+        /// El nivel, ya acotado a 1..=3.
+        level: u8,
+        /// Su texto.
+        text: String,
+    },
+    /// Un párrafo.
+    Paragraph {
+        /// Sus fragmentos.
+        spans: Vec<HelpSpanView>,
+    },
+    /// Una lista de puntos, de un solo nivel.
+    Bullets {
+        /// Cada punto, con sus fragmentos.
+        items: Vec<Vec<HelpSpanView>>,
+    },
+    /// Un bloque de código, literal.
+    Code {
+        /// El lenguaje que declaraba la valla, si lo declaraba.
+        lang: Option<String>,
+        /// El contenido, sin marcas interpretadas.
+        text: String,
+    },
+    /// Una tabla simple. Las filas llegan YA normalizadas al ancho de la
+    /// cabecera, así que el renderer indexa por columna sin comprobar nada.
+    Table {
+        /// La cabecera.
+        header: Vec<String>,
+        /// Las filas.
+        rows: Vec<Vec<String>>,
+    },
+    /// Un aviso destacado.
+    Callout {
+        /// De qué clase (`note`, `warn`, `tip`).
+        kind: String,
+        /// Su contenido.
+        spans: Vec<HelpSpanView>,
+    },
+    /// La hoja de referencia de teclado: cada tecla ligada de una pantalla,
+    /// en el orden de precedencia REAL del mapa efectivo.
+    ///
+    /// Un bloque propio y no una tabla, porque no es prosa del corpus: se
+    /// genera del keymap del lector, así que un rebind la cambia, y sus
+    /// filas llevan disponibilidad y motivo que una celda de tabla no tiene
+    /// dónde poner.
+    Keys {
+        /// Las filas, en orden.
+        rows: Vec<HelpKeyRowView>,
+    },
+}
+
+/// Un fragmento dentro de un bloque.
+///
+/// Las dos marcas VIVAS del corpus (`{{cmd:id}}` y `[[topic]]`) llegan aquí ya
+/// resueltas contra el keymap y el idioma de ESTE lector: la prosa no puede
+/// mentir sobre una tecla porque nunca lleva una escrita.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "span")]
+pub enum HelpSpanView {
+    /// Texto llano.
+    Text {
+        /// El texto.
+        text: String,
+    },
+    /// Énfasis fuerte.
+    Strong {
+        /// El texto.
+        text: String,
+    },
+    /// Énfasis.
+    Emph {
+        /// El texto.
+        text: String,
+    },
+    /// Código en línea.
+    Code {
+        /// El texto.
+        text: String,
+    },
+    /// Un comando, ya resuelto: la tecla que lo corre para este lector, o su
+    /// nombre cuando no tiene ninguna (nunca una tecla inventada).
+    Command {
+        /// Lo que se pinta.
+        text: String,
+        /// Es una TECLA y no un nombre. El renderer la pinta como tal.
+        is_chord: bool,
+    },
+    /// Un enlace a otra página.
+    Link {
+        /// El id de destino.
+        topic: String,
+        /// Su título, o el id si el corpus de este idioma no la tiene.
+        text: String,
+    },
+}
+
+/// Una fila de la hoja de teclado.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelpKeyRowView {
+    /// La secuencia PINTADA (`F5`, `g g`) y enmascarada: un `keymap.toml` de
+    /// proyecto puede ligar cualquier punto de código.
+    pub chord: String,
+    /// Qué hace, en el idioma del lector.
+    pub label: String,
+    /// Esta build puede correrlo.
+    pub enabled: bool,
+    /// Por qué no, ya traducido. Vacío cuando sí.
+    pub reason: String,
+}
+
+/// Algo que `enter` puede hacer sobre el cuerpo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelpActionView {
+    /// Cómo se llama, en el idioma del lector.
+    pub label: String,
+    /// El atajo que lo corre, vacío si no tiene ninguno o si abre una página.
+    pub chord: String,
+    /// Se puede hacer AHORA, con los hechos congelados al abrir la ayuda.
+    pub enabled: bool,
+    /// Por qué no, ya traducido. Vacío cuando sí.
+    pub reason: String,
+    /// Abre otra página en vez de ejecutar un comando.
+    pub opens_topic: bool,
 }
 
 /// Lo que el visor enseña.
@@ -531,6 +735,15 @@ pub enum ViewChange {
     WhichKey {
         /// Las continuaciones, o `None` si ya no hay prefijo a medias.
         whichkey: Option<WhichKeyView>,
+    },
+    /// La ayuda se abrió, cambió de página, movió el cursor o se cerró.
+    ///
+    /// Un parche entero y no un delta por campo: una página cabe de sobra en
+    /// un mensaje, y el estado de la ayuda es un todo — la lateral, el
+    /// cuerpo y lo ejecutable se mueven juntos cuando el lector abre otra.
+    Help {
+        /// La ayuda, o `None` si se cerró.
+        help: Option<HelpView>,
     },
     /// El visor cambió (se abrió, se desplazó, se cerró).
     ///

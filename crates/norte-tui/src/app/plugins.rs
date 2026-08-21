@@ -13,58 +13,12 @@ use super::display_name;
 /// tope del manifiesto: mirror deliberado, no coincidencia.
 pub const PLUGIN_DESCRIPTION_WIRE_CAP: usize = 280;
 
-/// Tope defensivo sobre las etiquetas cortas de un plugin en el wire (H3e):
-/// `PluginInfo.name`, `.publisher` y `PluginCommandInfo.title`.
-///
-/// El manifiesto acota SOLO el tercero — 120,
-/// `norte_plugin_host::manifest::COMMAND_TITLE_MAX_CHARS` — y no acota `name`
-/// ni `publisher`, así que para esos dos no hay límite de origen que reflejar y
-/// el cliente pone el suyo. Se elige EL MISMO valor a propósito: son el mismo
-/// tipo de texto (una etiqueta corta de tercero que va a una fila) y la ayuda
-/// los pinta uno al lado del otro. Para `title` el tope es además un espejo del
-/// del manifiesto, con el mismo criterio que
-/// [`PLUGIN_DESCRIPTION_WIRE_CAP`]: el límite de parseo solo protege el camino
-/// honesto, y un daemon hostil o comprometido puede mandar cualquier longitud.
-///
-/// Sin él, un `name` kilométrico no desborda el pintado (la lateral recorta),
-/// pero sí el FILTRO del modelo, que pliega el título entero en cada tecla.
-pub const PLUGIN_NAME_WIRE_CAP: usize = 120;
-
-/// Acota ([`PLUGIN_NAME_WIRE_CAP`]) y enmascara ([`display_name`]) una etiqueta
-/// corta de tercero — el `name`, el `publisher` o el título de un comando de un
-/// plugin — para que pueda entrar en el modelo de la ayuda (H3e).
-///
-/// En el PUNTO DE ENTRADA, no al pintar: `norte_frontend::help::PluginNode`
-/// documenta su `title` como «ya enmascarado y acotado», el modelo no enmascara
-/// nada — filtra sobre el título crudo que le den — y
-/// [`crate::help::TuiChords`] entrega sus etiquetas directas al pintor.
-///
-/// Un recorte se MARCA con `…`, como lo marcan los vecinos que hacen esto mismo
-/// (`masked_and_capped` en el doctor, [`norte_frontend::middle_ellipsis`] en la línea
-/// de descripción del gestor). Cortar en seco presenta un nombre truncado como
-/// si estuviera completo, que es la misma clase de mentira que H3d fue a
-/// perseguir a los pies de overlay: quien lee no puede saber que falta algo, y
-/// un nombre acabado en mitad de una palabra es precisamente lo que un tercero
-/// usaría para que su etiqueta pase por otra.
-///
-/// Elipsis por la DERECHA y no media: estas etiquetas se distinguen por su
-/// principio (`middle_ellipsis` existe para las rutas, donde lo que identifica
-/// está al final).
-/// Se acota ANTES de enmascarar, y eso es seguro porque sobre texto ya UTF-8
-/// [`display_name`] es 1:1 en chars (mapea char a char, nunca inserta ni
-/// borra). Al revés habría que enmascarar los 50 000 chars que un daemon
-/// hostil quiera mandar para quedarse con 120.
-#[must_use]
-pub fn plugin_label(raw: &str) -> String {
-    let mut chars = raw.chars();
-    let head: String = chars.by_ref().take(PLUGIN_NAME_WIRE_CAP).collect();
-    let overflowed = chars.next().is_some();
-    let mut out = display_name(head.as_bytes()).0;
-    if overflowed {
-        out.push('…');
-    }
-    out
-}
+/// El tope y el enmascarado de las etiquetas cortas de un plugin (`name`,
+/// `publisher`, título de comando) viven en `norte-frontend` desde la tarea
+/// 4.4: la ayuda del host gráfico entra por la misma puerta y masquear texto
+/// de tercero no puede tener dos definiciones. Se re-exportan con su nombre
+/// de siempre para que ningún call site de este crate se mueva.
+pub use norte_frontend::help_badge::{PLUGIN_NAME_WIRE_CAP, plugin_label};
 
 /// Clampa ([`PLUGIN_DESCRIPTION_WIRE_CAP`]) y enmascara ([`display_name`])
 /// la `description` de CADA plugin de `plugins`, IN PLACE — en el único

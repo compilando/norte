@@ -584,6 +584,26 @@ impl HelpState {
         self.history.clear();
     }
 
+    /// Whether [`back`](Self::back) would go anywhere.
+    ///
+    /// Asking WITHOUT walking, which the mutating verb cannot answer: a
+    /// renderer paints `⌫ back` or `⌫ close` from this, and a surface that
+    /// had to call `back` to find out would have already left the page.
+    ///
+    /// ```
+    /// use norte_frontend::help::HelpState;
+    /// use norte_help::{Lang, TopicId};
+    ///
+    /// let mut help = HelpState::new(Lang::En, "Keyboard".to_owned());
+    /// assert!(!help.can_back(), "the root has nowhere to go back to");
+    /// help.open(&TopicId::new("copying"));
+    /// assert!(help.can_back());
+    /// ```
+    #[must_use]
+    pub fn can_back(&self) -> bool {
+        !self.history.is_empty()
+    }
+
     /// Goes back to the previously open topic. `false` when there is no
     /// history left, so the caller can decide what `Esc`/`Backspace` means
     /// then (the TUI closes the overlay).

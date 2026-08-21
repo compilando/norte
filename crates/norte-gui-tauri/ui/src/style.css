@@ -472,3 +472,215 @@ body {
 #fatal[data-shown="true"] {
   display: flex;
 }
+
+/* --- La ayuda (F1) --------------------------------------------------- */
+
+#help[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+#help[data-open="false"] {
+  display: none;
+}
+
+.help {
+  width: min(120ch, 94vw);
+  height: min(80vh, 100%);
+  display: grid;
+  grid-template-columns: 28ch 1fr;
+  grid-template-rows: 1fr auto;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  overflow: hidden;
+}
+
+.help-topics {
+  grid-row: 1;
+  border-right: 1px solid var(--border);
+  overflow: auto;
+  /* Un nombre de página puede venir de un plugin: se aísla para que una
+     marca de dirección no reordene lo que hay a su alrededor. */
+  unicode-bidi: isolate;
+}
+
+.help-topics[data-focused="true"] {
+  border-right-color: var(--border-focus);
+}
+
+.help-filter {
+  padding: 0 6px;
+  color: var(--border-focus);
+  white-space: nowrap;
+}
+
+.help-topic-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.help-group {
+  padding: 6px 6px 0;
+  color: var(--title-fg);
+  opacity: 0.85;
+}
+
+.help-topic {
+  padding: 0 6px 0 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.help-topic[data-current="true"] {
+  color: var(--title-fg);
+}
+
+.help-topic[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.help-body {
+  grid-row: 1;
+  padding: 0 12px;
+  overflow: auto;
+  unicode-bidi: isolate;
+}
+
+.help-body h1 {
+  font-size: 1.2em;
+  color: var(--title-fg);
+}
+
+.help-body h2,
+.help-body h3,
+.help-body h4 {
+  font-size: 1em;
+  color: var(--title-fg);
+}
+
+.help-badge {
+  color: var(--hostile-fg);
+}
+
+.help-bullets {
+  margin: 0;
+  padding-left: 2ch;
+}
+
+.help-code {
+  margin: 0;
+  padding: 4px 6px;
+  overflow-x: auto;
+  background: var(--bg);
+  border-left: 2px solid var(--border);
+}
+
+.help-table,
+.help-keys {
+  border-collapse: collapse;
+}
+
+.help-table th,
+.help-table td,
+.help-keys th,
+.help-keys td {
+  padding: 0 8px 0 0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.help-keys tr[data-enabled="false"] {
+  opacity: 0.55;
+}
+
+.help-key-chord,
+.help-chord {
+  color: var(--border-focus);
+  font: inherit;
+  white-space: nowrap;
+}
+
+.help-cmd {
+  color: var(--title-fg);
+}
+
+.help-link {
+  color: var(--border-focus);
+  text-decoration: underline;
+}
+
+.help-callout {
+  display: block;
+  margin: 4px 0;
+  padding: 0 8px;
+  border-left: 2px solid var(--border-focus);
+}
+
+.help-callout[data-kind="warn"] {
+  border-left-color: var(--error-fg);
+}
+
+.help-callout-kind {
+  margin-right: 8px;
+  text-transform: uppercase;
+  color: var(--title-fg);
+}
+
+.help-actions {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.help-action {
+  display: flex;
+  gap: 12px;
+  padding: 0 6px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.help-action[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.help-action[data-enabled="false"] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.help-action-chord {
+  flex: 0 0 14ch;
+  color: var(--border-focus);
+}
+
+.help-action-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.help-action-reason {
+  flex: 0 0 auto;
+  opacity: 0.9;
+}
+
+.help-hint {
+  grid-column: 1 / -1;
+  padding: 0 6px;
+  background: var(--status-bg);
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

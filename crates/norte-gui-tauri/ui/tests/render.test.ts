@@ -78,6 +78,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     tasks: [],
     palette: null,
     whichkey: null,
+    help: null,
     viewer: null,
     locale: "es",
   };
@@ -88,9 +89,10 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
   const root = document.createElement("main");
   const palette = document.createElement("div");
   const whichkey = document.createElement("div");
+  const help = document.createElement("div");
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
-  document.body.append(root, palette, whichkey, viewer, dialogs);
+  document.body.append(root, palette, whichkey, help, viewer, dialogs);
   document.documentElement.style.setProperty("--cell-h", `${CELL_H}px`);
   document.documentElement.style.setProperty("--cell-w", "8px");
   const enviadas: UiAction[] = [];
@@ -98,6 +100,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     root,
     palette,
     whichkey,
+    help,
     viewer,
     dialogs,
     catalogo(),
@@ -583,5 +586,170 @@ describe("la paleta", () => {
     const { screen } = montar();
     screen.paint(vista({}));
     expect(document.querySelector(".palette")).toBeNull();
+  });
+});
+
+describe("la ayuda", () => {
+  /** Una página con prosa, marcas ya resueltas y una fila apagada. */
+  function conAyuda(): ViewSnapshot {
+    const v = vista({});
+    v.help = {
+      title: "Copiar",
+      topic_id: "copying",
+      badge: null,
+      sidebar: [
+        { row: "group", label: "Lo básico" },
+        { row: "topic", title: "Copiar", current: true },
+        { row: "topic", title: "Marcar", current: false },
+      ],
+      cursor: 1,
+      focus: "topics",
+      blocks: [
+        { block: "heading", level: 1, text: "Copiar ficheros" },
+        {
+          block: "paragraph",
+          spans: [
+            { span: "text", text: "Pulsa " },
+            { span: "command", text: "F5", is_chord: true },
+            { span: "text", text: " para copiar." },
+          ],
+        },
+        {
+          block: "bullets",
+          items: [
+            [{ span: "strong", text: "Ojo" }],
+            [{ span: "emph", text: "con esto" }],
+          ],
+        },
+        { block: "code", lang: "sh", text: "norte --help" },
+        { block: "table", header: ["Tecla", "Qué hace"], rows: [["F5", "copiar"]] },
+        {
+          block: "callout",
+          kind: "warn",
+          spans: [{ span: "text", text: "Cuidado" }],
+        },
+        {
+          block: "keys",
+          rows: [
+            { chord: "F5", label: "copiar", enabled: true, reason: "" },
+            { chord: "F6", label: "mover", enabled: false, reason: "aquí no" },
+          ],
+        },
+      ],
+      actions: [
+        { label: "copiar", chord: "F5", enabled: true, reason: "", opens_topic: false },
+        {
+          label: "mover",
+          chord: "F6",
+          enabled: false,
+          reason: "aquí no",
+          opens_topic: false,
+        },
+        { label: "Marcar", chord: "", enabled: true, reason: "", opens_topic: true },
+      ],
+      action_cursor: 0,
+      filter: "",
+      filtering: false,
+      can_back: false,
+    };
+    return v;
+  }
+
+  it("es modal y estructura la página con encabezados y listas de verdad", () => {
+    const { screen } = montar();
+    screen.paint(conAyuda());
+    const caja = document.querySelector(".help") as HTMLElement;
+    expect(caja.getAttribute("role")).toBe("dialog");
+    expect(caja.getAttribute("aria-modal")).toBe("true");
+    // El título de la página es el `h1`; un encabezado del cuerpo baja un
+    // nivel, así que la jerarquía no tiene dos raíces.
+    expect(caja.querySelectorAll("h1")).toHaveLength(1);
+    expect(caja.querySelector("h1")?.textContent).toBe("Copiar");
+    expect(caja.querySelector("h2")?.textContent).toBe("Copiar ficheros");
+    expect(caja.querySelectorAll(".help-bullets li")).toHaveLength(2);
+    expect(caja.querySelector("pre code")?.textContent).toBe("norte --help");
+    expect(caja.querySelectorAll(".help-table th")).toHaveLength(2);
+    expect(caja.querySelector(".help-callout")?.getAttribute("data-kind")).toBe("warn");
+  });
+
+  it("una marca del corpus llega como TECLA y nunca como marcado", () => {
+    const { screen } = montar();
+    screen.paint(conAyuda());
+    const kbd = document.querySelector(".help-body kbd");
+    expect(kbd?.textContent).toBe("F5");
+    // Ni una marca sin resolver ni un `{{cmd:`: el host las convierte.
+    expect(document.querySelector(".help")?.textContent).not.toContain("{{cmd:");
+  });
+
+  it("NADA de lo que llega se interpreta como HTML", () => {
+    const { screen } = montar();
+    const v = conAyuda();
+    if (v.help !== null) {
+      // Texto de tercero: un `help.md` de un plugin. Si algo de esto se
+      // pintara con `innerHTML`, aquí aparecería un nodo `<img>` y un
+      // atributo `onerror` — que es exactamente el fallo del que protege
+      // que el vocabulario de bloques sea cerrado.
+      v.help.title = "<img src=x onerror=alert(1)>";
+      v.help.blocks = [
+        {
+          block: "paragraph",
+          spans: [{ span: "text", text: "<script>alert(1)</script>" }],
+        },
+        { block: "code", lang: null, text: "<b>no</b>" },
+      ];
+      v.help.sidebar = [{ row: "topic", title: "<i>x</i>", current: true }];
+      v.help.actions = [];
+    }
+    screen.paint(v);
+    const caja = document.querySelector(".help") as HTMLElement;
+    expect(caja.querySelector("img")).toBeNull();
+    expect(caja.querySelector("script")).toBeNull();
+    expect(caja.querySelector("b")).toBeNull();
+    expect(caja.querySelector("i")).toBeNull();
+    // Y el texto SÍ está: escapado, no perdido.
+    expect(caja.textContent).toContain("<script>alert(1)</script>");
+    expect(caja.querySelector("h1")?.textContent).toBe("<img src=x onerror=alert(1)>");
+  });
+
+  it("una fila apagada dice por qué, y un click en una viva la activa", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conAyuda());
+    const filas = [...document.querySelectorAll(".help-action")];
+    expect(filas).toHaveLength(3);
+    expect(filas[1]?.getAttribute("data-enabled")).toBe("false");
+    expect(filas[1]?.textContent).toContain("aquí no");
+
+    (filas[0] as HTMLElement).click();
+    expect(enviadas).toEqual([{ action: "help_activate", index: 0 }]);
+    // Una fila apagada no manda nada: el host ya dijo que no se puede.
+    (filas[1] as HTMLElement).click();
+    expect(enviadas).toHaveLength(1);
+  });
+
+  it("la hoja de teclado explica cada tecla que esta ventana no hace", () => {
+    const { screen } = montar();
+    screen.paint(conAyuda());
+    const filas = [...document.querySelectorAll(".help-keys tbody tr")];
+    expect(filas).toHaveLength(2);
+    expect(filas[0]?.querySelector("th")?.textContent).toBe("F5");
+    expect(filas[1]?.getAttribute("data-enabled")).toBe("false");
+    expect(filas[1]?.textContent).toContain("aquí no");
+  });
+
+  it("un click en la lateral pide ESA página", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conAyuda());
+    const lista = document.querySelector(".help-topic-rows") as HTMLElement;
+    expect(lista.getAttribute("aria-activedescendant")).toBe("help-topic-1");
+    const paginas = [...document.querySelectorAll(".help-topic")];
+    (paginas[1] as HTMLElement).click();
+    // La fila 0 es la CABECERA del grupo: la segunda página es la fila 2.
+    expect(enviadas).toEqual([{ action: "help_select_topic", row: 2 }]);
+  });
+
+  it("cerrada, no tapa nada", () => {
+    const { screen } = montar();
+    screen.paint(vista({}));
+    expect(document.querySelector(".help")).toBeNull();
   });
 });

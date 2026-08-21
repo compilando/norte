@@ -3197,3 +3197,370 @@ async fn escape_cierra_la_paleta_sin_ejecutar() {
     let foto = siguiente_foto(&mut sub).await;
     assert_eq!(listado(&foto).cursor, antes, "y no ejecutó nada");
 }
+
+/// Ejecutar desde la paleta CIERRA la paleta en el flujo de parches, no solo
+/// en la siguiente foto.
+///
+/// Un renderer que aplica parches —que es lo que hace el de referencia, y
+/// para lo que existe la secuencia— no puede enterarse de que la paleta se
+/// cerró solo si pide un `Resync`. Antes de este test, `enter` mandaba el
+/// parche del COMANDO y ninguno de la paleta: la lista se quedaba pintada
+/// encima del listado hasta que algo, por otro motivo, provocaba una foto.
+#[tokio::test]
+async fn ejecutar_en_la_paleta_manda_su_cierre_en_un_parche() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "p".to_owned(),
+        ctrl: true,
+        alt: false,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+    let _ = siguiente_paleta(&mut sub).await.expect("la paleta abre");
+
+    h.dispatch(tecla_de("Enter")).await.expect("host vivo");
+    assert!(
+        siguiente_paleta(&mut sub).await.is_none(),
+        "el cierre viaja como parche, sin esperar a una foto"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// La ayuda (fase 4, tarea 4.4).
+// ---------------------------------------------------------------------------
+
+/// Espera la siguiente actualización que traiga la ayuda.
+async fn siguiente_ayuda(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> Option<norte_ui_host::dto::HelpView> {
+    for _ in 0..20 {
+        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("una actualización antes del plazo")
+            .expect("el host sigue vivo");
+        if let Update::Message(m) = siguiente
+            && let UiUpdate::Patch(p) = &m.payload
+        {
+            for c in &p.changes {
+                if let norte_ui_host::dto::ViewChange::Help { help } = c {
+                    return help.clone();
+                }
+            }
+        }
+    }
+    panic!("no llegó ninguna actualización con ayuda");
+}
+
+/// Abre la ayuda y devuelve lo que se pintaría.
+async fn abrir_ayuda(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+) -> norte_ui_host::dto::HelpView {
+    h.dispatch(tecla("F1")).await.expect("host vivo");
+    siguiente_ayuda(sub).await.expect("la ayuda abre")
+}
+
+/// `F1` abre la ayuda sobre la página del CONTEXTO donde está el lector, con
+/// su prosa ya en bloques y sin una sola marca sin resolver.
+#[tokio::test]
+async fn f1_abre_la_ayuda_del_contexto_y_su_prosa_llega_en_bloques() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let ayuda = abrir_ayuda(&h, &mut sub).await;
+
+    assert!(!ayuda.title.is_empty(), "la página tiene título");
+    assert!(!ayuda.blocks.is_empty(), "y cuerpo");
+    assert!(!ayuda.sidebar.is_empty(), "y la lateral enumera lo que hay");
+    assert!(
+        !ayuda.can_back,
+        "la página del contexto es la RAÍZ: `⌫` cierra, no vuelve a un índice \
+         donde el lector no estuvo"
+    );
+    // Ni una marca viva sin resolver, ni una clave Fluent cruda: las dos
+    // cosas son texto que el lector no debería ver jamás.
+    let texto = format!("{:?}", ayuda.blocks);
+    assert!(!texto.contains("{{cmd:"), "una marca sin resolver: {texto}");
+    assert!(!texto.contains("[["), "un enlace sin resolver: {texto}");
+    assert!(!texto.contains("help-cmd-"), "una clave Fluent cruda");
+    // Una cabecera de grupo llega TRADUCIDA, no como su tag.
+    let grupos: Vec<&norte_ui_host::dto::HelpSidebarRowView> = ayuda
+        .sidebar
+        .iter()
+        .filter(|r| matches!(r, norte_ui_host::dto::HelpSidebarRowView::Group { .. }))
+        .collect();
+    assert!(!grupos.is_empty(), "hay cabeceras de grupo");
+    for g in grupos {
+        let norte_ui_host::dto::HelpSidebarRowView::Group { label } = g else {
+            unreachable!("filtrado arriba")
+        };
+        assert!(!label.starts_with("help-group-"), "sin traducir: {label}");
+    }
+}
+
+/// La hoja de teclado se GENERA del mapa efectivo: un rebind la cambia, y una
+/// tecla que este frontend no ejecuta sale apagada y con su motivo.
+#[tokio::test]
+async fn la_hoja_de_teclado_sale_del_keymap_efectivo() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let ayuda = abrir_ayuda(&h, &mut sub).await;
+
+    // La página de teclado es la última de la lateral (grupo de una sola
+    // fila): se llega con el cursor, como llegaría el lector.
+    let ultima = ayuda.sidebar.len() - 1;
+    h.dispatch(UiAction::HelpSelectTopic {
+        row: u32::try_from(ultima).expect("cabe"),
+    })
+    .await
+    .expect("host vivo");
+    let teclas = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
+    assert_eq!(teclas.topic_id, "keys", "se abrió la página de teclado");
+
+    let filas: Vec<&norte_ui_host::dto::HelpKeyRowView> = teclas
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            norte_ui_host::dto::HelpBlockView::Keys { rows } => Some(rows),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(!filas.is_empty(), "la hoja tiene filas");
+    assert!(
+        filas.iter().any(|r| r.chord == "F5"),
+        "y las escribe como las escribe la documentación: {:?}",
+        filas.iter().map(|r| &r.chord).collect::<Vec<_>>()
+    );
+    assert!(
+        filas.iter().all(|r| !r.label.starts_with("help-cmd-")),
+        "ninguna fila pinta una clave Fluent"
+    );
+    let apagadas: Vec<&&norte_ui_host::dto::HelpKeyRowView> =
+        filas.iter().filter(|r| !r.enabled).collect();
+    assert!(
+        !apagadas.is_empty(),
+        "el preset ata comandos que esta ventana no hace"
+    );
+    assert!(
+        apagadas.iter().all(|r| !r.reason.is_empty()),
+        "y cada una dice POR QUÉ: atenuar sin decirlo deja al lector \
+         adivinando si la app está rota"
+    );
+}
+
+/// Una fila ejecutable de un comando que este frontend NO implementa se
+/// ofrece apagada y con su motivo, en vez de prometer un `enter` que
+/// contestaría «aquí no».
+#[tokio::test]
+async fn una_fila_que_esta_ventana_no_ejecuta_llega_apagada() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let mut ayuda = abrir_ayuda(&h, &mut sub).await;
+
+    // Se recorre la lateral hasta dar con una página que documente comandos.
+    for row in 0..ayuda.sidebar.len() {
+        if ayuda.actions.iter().any(|a| !a.opens_topic) {
+            break;
+        }
+        h.dispatch(UiAction::HelpSelectTopic {
+            row: u32::try_from(row).expect("cabe"),
+        })
+        .await
+        .expect("host vivo");
+        ayuda = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
+    }
+    let corribles: Vec<&norte_ui_host::dto::HelpActionView> =
+        ayuda.actions.iter().filter(|a| !a.opens_topic).collect();
+    assert!(
+        !corribles.is_empty(),
+        "alguna página del corpus documenta comandos"
+    );
+    for a in corribles {
+        assert!(!a.label.is_empty(), "toda fila se llama de algo");
+        assert_eq!(
+            a.enabled,
+            a.reason.is_empty(),
+            "una fila apagada dice por qué, y una viva no inventa motivo: {a:?}"
+        );
+    }
+}
+
+/// Activar una fila ejecutable cierra la ayuda Y corre el comando — por el
+/// MISMO camino que una tecla, que es lo que hace que la ayuda sea otra
+/// puerta al catálogo y no un segundo despachador.
+#[tokio::test]
+async fn activar_en_la_ayuda_cierra_y_ejecuta_por_el_mismo_camino() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let ayuda = abrir_ayuda(&h, &mut sub).await;
+
+    // La página de marcado documenta `mark.toggle`, que esta ventana SÍ
+    // ejecuta: se llega a ella por la lateral, como llegaría el lector.
+    let mut pagina = ayuda;
+    for row in 0..40 {
+        if pagina.topic_id == "selection" {
+            break;
+        }
+        h.dispatch(UiAction::HelpSelectTopic { row })
+            .await
+            .expect("host vivo");
+        pagina = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
+    }
+    assert_eq!(pagina.topic_id, "selection", "la página de marcado existe");
+    let i = pagina
+        .actions
+        .iter()
+        .position(|a| !a.opens_topic && a.enabled)
+        .expect("alguna de sus filas la ejecuta esta ventana");
+
+    h.dispatch(UiAction::HelpActivate {
+        index: u32::try_from(i).expect("cabe"),
+    })
+    .await
+    .expect("host vivo");
+    assert!(
+        siguiente_ayuda(&mut sub).await.is_none(),
+        "correr cierra la ayuda, y el cierre viaja como parche"
+    );
+
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(foto.help.is_none(), "y sigue cerrada en la foto");
+    assert!(
+        listado(&foto).rows.iter().any(|r| r.marked),
+        "y el comando de marcado se ejecutó de verdad"
+    );
+}
+
+/// Seguir un enlace de «ver también» abre la otra página y DEJA la ayuda
+/// abierta: es navegación, no una acción sobre el listado.
+#[tokio::test]
+async fn seguir_un_enlace_abre_la_otra_pagina_y_deja_volver() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let mut pagina = abrir_ayuda(&h, &mut sub).await;
+
+    for row in 0..40 {
+        if pagina.actions.iter().any(|a| a.opens_topic) {
+            break;
+        }
+        h.dispatch(UiAction::HelpSelectTopic { row })
+            .await
+            .expect("host vivo");
+        pagina = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
+    }
+    let i = pagina
+        .actions
+        .iter()
+        .position(|a| a.opens_topic)
+        .expect("alguna página enlaza a otra");
+    let antes = pagina.topic_id.clone();
+
+    h.dispatch(UiAction::HelpActivate {
+        index: u32::try_from(i).expect("cabe"),
+    })
+    .await
+    .expect("host vivo");
+    let seguida = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
+    assert_ne!(seguida.topic_id, antes, "cambió de página");
+    assert!(seguida.can_back, "y hay a dónde volver");
+
+    h.dispatch(tecla("Backspace")).await.expect("host vivo");
+    let vuelta = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
+    assert_eq!(vuelta.topic_id, antes, "`⌫` vuelve por donde vino");
+}
+
+/// `esc` la cierra; `/` abre el filtro y entonces las teclas de texto son
+/// suyas.
+#[tokio::test]
+async fn la_barra_filtra_y_escape_cierra() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let ayuda = abrir_ayuda(&h, &mut sub).await;
+    assert!(!ayuda.filtering, "arranca sin filtro");
+
+    h.dispatch(tecla("/")).await.expect("host vivo");
+    let filtrando = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
+    assert!(filtrando.filtering, "`/` abre el filtro");
+
+    h.dispatch(tecla("c")).await.expect("host vivo");
+    let tecleada = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
+    assert_eq!(tecleada.filter, "c", "y la letra la escribe el filtro");
+
+    // El primer `esc` deja de filtrar; el segundo cierra.
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    let sin_filtro = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
+    assert!(!sin_filtro.filtering, "el primer esc abandona el filtro");
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    assert!(
+        siguiente_ayuda(&mut sub).await.is_none(),
+        "el segundo cierra la ayuda"
+    );
+}
+
+/// Con la ayuda abierta, una tecla del listado NO se cuela: la pantalla es
+/// suya, como la del visor.
+#[tokio::test]
+async fn con_la_ayuda_abierta_el_listado_no_se_mueve() {
+    let (h, snap) = host_arbol(arbol()).await;
+    let antes = listado(&snap).cursor;
+    let mut sub = h.subscribe();
+    let _ = abrir_ayuda(&h, &mut sub).await;
+
+    // `j` en el preset baja el cursor; con la ayuda abierta no es del
+    // listado, y sin filtro abierto tampoco teclea nada.
+    h.dispatch(tecla("j")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(listado(&foto).cursor, antes, "el listado no se movió");
+    assert!(foto.help.is_some(), "y la ayuda sigue abierta en la foto");
+}
+
+/// `Ctrl+P` sale de la ayuda a la paleta, y los DOS cambios viajan en el
+/// mismo parche: un renderer que solo recibiera el de la paleta seguiría
+/// pintando la ayuda debajo.
+#[tokio::test]
+async fn ctrl_p_cambia_la_ayuda_por_la_paleta_en_un_solo_parche() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let _ = abrir_ayuda(&h, &mut sub).await;
+
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "p".to_owned(),
+        ctrl: true,
+        alt: false,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+
+    let mut vio_cierre = false;
+    let mut vio_paleta = false;
+    for _ in 0..20 {
+        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("una actualización antes del plazo")
+            .expect("el host sigue vivo");
+        if let Update::Message(m) = siguiente
+            && let UiUpdate::Patch(p) = &m.payload
+        {
+            for c in &p.changes {
+                match c {
+                    norte_ui_host::dto::ViewChange::Help { help } => vio_cierre = help.is_none(),
+                    norte_ui_host::dto::ViewChange::Palette { palette } => {
+                        vio_paleta = palette.is_some();
+                    }
+                    _ => {}
+                }
+            }
+            if vio_cierre && vio_paleta {
+                return;
+            }
+        }
+    }
+    panic!("el relevo no viajó entero: cierre={vio_cierre}, paleta={vio_paleta}");
+}

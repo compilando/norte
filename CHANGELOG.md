@@ -9,6 +9,25 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window has help, and the help teaches the reader's own keys.** Bridge
+  version **9**: `F1` opens the shared corpus over the page for *where the
+  reader is standing* — a dialog, the viewer, the listing — and never on an
+  index they never asked for. The prose crosses as a CLOSED vocabulary of
+  blocks, with the corpus' two live marks already resolved: a `{{cmd:…}}`
+  becomes the key this user's preset binds (or the command's name, never an
+  invented key), and a `[[topic]]` becomes that page's title. The renderer
+  builds a DOM node per block and never parses markup, which is the whole
+  reason a third party's `help.md` can be painted at all. The keyboard sheet is
+  a page of that help, generated from the effective keymap — a rebind changes
+  it — with every unavailable key dimmed *and explained*, because dimming alone
+  leaves a reader guessing whether the app is broken. A row this window cannot
+  run is offered switched off rather than promising an `Enter` that would
+  answer "not here", and running one goes through the same path a keystroke
+  takes. The resolver behind all of it moved out of `norte-tui` into
+  `norte-frontend`, so the two frontends cannot teach different keys for the
+  same command.
+
+
 - **The window has a command palette.** Bridge version **8**: `Ctrl+P` opens
   every command this frontend implements, each with what it does in the
   reader's language and the shortcut the *user's own preset* binds to it —
@@ -235,6 +254,12 @@ independently through `PROTOCOL_VERSION`.
   and were waiting for the commands to exist.
 
 ### Fixed
+
+- **Running a command from the palette did not close the palette.** It closed
+  in the host's state and in the next full snapshot, but no patch said so: a
+  renderer that applies patches — which is what the reference renderer does,
+  and what the sequence exists for — kept the palette painted over the listing
+  until something else, for some other reason, forced a snapshot.
 
 - **Per-scheme column configuration was dead in the graphical frontend.**
   Columns were resolved once at start-up from the `file` scheme, so

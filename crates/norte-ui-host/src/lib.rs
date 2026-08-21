@@ -29,6 +29,8 @@ pub mod bridge;
 pub mod commands;
 pub mod controller;
 pub mod dto;
+/// La ayuda (F1): el corpus compartido proyectado al vocabulario del bridge.
+mod help;
 pub mod keys;
 
 pub use action::UiAction;

@@ -23,6 +23,14 @@
     "action": "focus_slot",
     "slot_id": 2
   },
+  "help_activate": {
+    "action": "help_activate",
+    "index": 1
+  },
+  "help_select_topic": {
+    "action": "help_select_topic",
+    "row": 3
+  },
   "history": {
     "action": "history",
     "back": true,

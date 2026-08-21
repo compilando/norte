@@ -67,6 +67,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.focus-prev",
     "layout.set-target",
     "app.palette",
+    "app.help",
     "pane.view",
     "pane.quick-search",
     "pane.mkdir",
@@ -198,6 +199,10 @@ pub enum Efecto {
     Destino,
     /// Abre la paleta de comandos.
     Paleta,
+    /// Abre la ayuda. Sobre la página del CONTEXTO donde está el lector —
+    /// un diálogo abierto, el visor, el listado— y no siempre sobre el
+    /// índice: quien pulsa F1 mirando una pregunta quiere esa respuesta.
+    Ayuda,
     /// Abre el visor sobre la entrada bajo el cursor.
     Ver,
     /// Abre el buscador incremental del listado.
@@ -244,6 +249,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "layout.focus-prev" => Efecto::Foco { atras: true },
         "layout.set-target" => Efecto::Destino,
         "app.palette" => Efecto::Paleta,
+        "app.help" => Efecto::Ayuda,
         "pane.view" => Efecto::Ver,
         "pane.quick-search" => Efecto::BuscarRapido,
         "pane.mkdir" => Efecto::CrearDirectorio,

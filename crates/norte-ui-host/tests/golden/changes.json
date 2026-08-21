@@ -48,6 +48,121 @@
       }
     ]
   },
+  "help": {
+    "change": "help",
+    "help": {
+      "action_cursor": 0,
+      "actions": [
+        {
+          "chord": "F5",
+          "enabled": false,
+          "label": "copiar",
+          "opens_topic": false,
+          "reason": "aquí no"
+        },
+        {
+          "chord": "",
+          "enabled": true,
+          "label": "Marcar",
+          "opens_topic": true,
+          "reason": ""
+        }
+      ],
+      "badge": null,
+      "blocks": [
+        {
+          "block": "heading",
+          "level": 2,
+          "text": "Copiar"
+        },
+        {
+          "block": "paragraph",
+          "spans": [
+            {
+              "span": "text",
+              "text": "Pulsa "
+            },
+            {
+              "is_chord": true,
+              "span": "command",
+              "text": "F5"
+            },
+            {
+              "span": "link",
+              "text": "Marcar",
+              "topic": "marking"
+            }
+          ]
+        },
+        {
+          "block": "bullets",
+          "items": [
+            [
+              {
+                "span": "strong",
+                "text": "Ojo"
+              }
+            ]
+          ]
+        },
+        {
+          "block": "code",
+          "lang": "sh",
+          "text": "norte --help"
+        },
+        {
+          "block": "table",
+          "header": [
+            "Tecla"
+          ],
+          "rows": [
+            [
+              "F5"
+            ]
+          ]
+        },
+        {
+          "block": "callout",
+          "kind": "warn",
+          "spans": [
+            {
+              "span": "emph",
+              "text": "Cuidado"
+            }
+          ]
+        },
+        {
+          "block": "keys",
+          "rows": [
+            {
+              "chord": "F5",
+              "enabled": false,
+              "label": "copiar",
+              "reason": "aquí no"
+            }
+          ]
+        }
+      ],
+      "can_back": true,
+      "cursor": 1,
+      "filter": "cop",
+      "filtering": true,
+      "focus": "body",
+      "sidebar": [
+        {
+          "label": "Lo básico",
+          "row": "group"
+        },
+        {
+          "current": true,
+          "row": "topic",
+          "title": "Copiar"
+        }
+      ],
+      "title": "Copiar",
+      "topic_id": "copying"
+    }
+  },
   "layout": {
     "cells": [
       120,

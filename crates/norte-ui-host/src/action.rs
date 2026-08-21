@@ -178,6 +178,26 @@ pub enum UiAction {
         /// Líneas visibles.
         rows: u32,
     },
+    /// Pone el cursor de la lateral de la ayuda en esa fila y ENSEÑA lo que
+    /// haya (un click).
+    ///
+    /// Enseñar y no navegar, que es lo que hace la misma tecla de flecha:
+    /// recorrer el índice no debe dejarle al lector un paso de vuelta que
+    /// tenga que deshacer con `⌫` antes de poder cerrar. Una cabecera de
+    /// grupo y una fila fuera de rango no hacen nada.
+    HelpSelectTopic {
+        /// Fila de la lateral, tal como viajó en el orden de `sidebar`.
+        row: u32,
+    },
+    /// Actúa sobre una fila ejecutable del cuerpo de la ayuda (un click):
+    /// corre el comando, o abre la página enlazada.
+    ///
+    /// Va por el MISMO camino que `enter`, y ese por el mismo que una tecla:
+    /// la ayuda es otra puerta al catálogo, no un segundo despachador.
+    HelpActivate {
+        /// Índice dentro de `actions`.
+        index: u32,
+    },
     /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
     Resync,
 }

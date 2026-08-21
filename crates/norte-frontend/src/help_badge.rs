@@ -124,6 +124,67 @@ pub fn plugin_badge(
     Some(parts.join(JOINER))
 }
 
+/// Wire cap on a plugin's SHORT labels (H3e): `PluginInfo.name`, `.publisher`
+/// and `PluginCommandInfo.title`.
+///
+/// The manifest bounds only the third — 120,
+/// `norte_plugin_host::manifest::COMMAND_TITLE_MAX_CHARS` — and bounds neither
+/// `name` nor `publisher`, so for those two there is no origin limit to mirror
+/// and the client sets its own. The SAME value on purpose: they are the same
+/// kind of text (a third party's short label, headed for a row) and the help
+/// paints them side by side. For `title` it is additionally a mirror of the
+/// manifest's, on the same principle as the description cap: a parse-time limit
+/// only protects the honest path, and a hostile or compromised daemon can send
+/// any length.
+///
+/// Without it a kilometric `name` does not overflow the painting (the sidebar
+/// truncates), but it does overflow the model's FILTER, which folds the whole
+/// title on every keystroke.
+pub const PLUGIN_NAME_WIRE_CAP: usize = 120;
+
+/// Caps ([`PLUGIN_NAME_WIRE_CAP`]) and masks ([`display_name`](crate::display_name))
+/// one of a plugin's short labels — its `name`, its `publisher` or a command's
+/// title — so it can enter the help model (H3e).
+///
+/// At the ENTRY POINT, not when painting: [`crate::help::PluginNode`] documents
+/// its `title` as "already masked and capped", the model masks nothing — it
+/// filters over whatever raw title it is given — and
+/// [`Chords`](crate::help_chords::Chords) hands its labels straight to a
+/// painter.
+///
+/// A cut is MARKED with `…`, as its neighbours mark it
+/// ([`crate::middle_ellipsis`] on the description line).
+/// Cutting flush presents a truncated name as though it were complete, which is
+/// the same class of lie H3d went after: the reader cannot tell something is
+/// missing, and a name ending mid-word is precisely what a third party would
+/// use to make its label pass for another's.
+///
+/// Ellipsis on the RIGHT and not in the middle: these labels are told apart by
+/// their beginning (`middle_ellipsis` exists for paths, where what identifies
+/// is at the end). Capped BEFORE masking, which is safe because over text that
+/// is already UTF-8 `display_name` is 1:1 in chars (it maps char to char, never
+/// inserts nor deletes). The other way round would mask the 50 000 chars a
+/// hostile daemon cares to send in order to keep 120.
+///
+/// ```
+/// use norte_frontend::help_badge::plugin_label;
+///
+/// assert_eq!(plugin_label("Greet the world"), "Greet the world");
+/// // A control character never reaches a row raw.
+/// assert!(!plugin_label("a\u{7}b").contains('\u{7}'));
+/// ```
+#[must_use]
+pub fn plugin_label(raw: &str) -> String {
+    let mut chars = raw.chars();
+    let head: String = chars.by_ref().take(PLUGIN_NAME_WIRE_CAP).collect();
+    let overflowed = chars.next().is_some();
+    let mut out = crate::display_name(head.as_bytes()).0;
+    if overflowed {
+        out.push('…');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
