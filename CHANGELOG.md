@@ -7,6 +7,70 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A click on the sidebar could navigate somewhere else.** Bridge version
+  **17**, and it breaks on purpose: volumes arrive from a background task and
+  are inserted in the MIDDLE of the sidebar — drives sort before favourites —
+  so between the frame the user clicked and the host handling the action, that
+  row could be a different place. Worse, the cursor was CLAMPED rather than
+  refused, so the failure mode was navigating to the last entry in the list
+  with an `Applied` acknowledgement. The sidebar and the volume picker now
+  carry a generation and refuse a click that does not match it; the other six
+  index-named actions do not, and the code says why — their row set cannot
+  change without a gesture from the user. What they all do now is REFUSE an
+  out-of-range index instead of clamping it: choosing a layout applied the
+  LAST one in the list, and going to a search hit went to the last hit.
+- **Choosing a layout on a narrow window killed it.** The slots were seeded
+  from the resolved PLACEMENTS, and placements and hidden partition the tree,
+  so a layout whose listing the resolver does not place — a tab group whose
+  active child is another kind, a fully weighted split that does not fit —
+  emptied the map, and the next keypress died in an `expect` inside the
+  actor's task: no log, no visible crash, a window answering `Down` forever.
+  Seeded from the tree now, which is what `validate` actually guarantees.
+- **A hidden slot that came back was never listed.** It stayed `Loading`
+  forever with zero rows, and after a layout change it painted as
+  `Unsupported { kind_name: "browser" }`.
+- **A search with no hits never ended and never cancelled.** The search was
+  named by its first batch, and the core does not send empty batches, so on a
+  tree with no matches the Task id never arrived: the view said "searching…"
+  forever and `Esc` had nothing to cancel while the daemon walked the whole
+  subtree for a surface that was already closed. A late batch from a previous
+  search could also be adopted by a new one, filling a list labelled with one
+  query using the results of another.
+- **A modal dialog did not own the keyboard.** With a name prompt open,
+  `Backspace` navigated the pane to its parent and `Enter` entered the
+  directory under the cursor instead of confirming. `Enter` now picks the
+  first NON-destructive answer, so in the dialog where a human approves an
+  agent's mutation it picks "deny".
+- **The dialog's text field was rebuilt EMPTY on every keystroke**, and every
+  keystroke causes a patch: what reached `fs.mkdir` was the last character
+  typed. It is the one surface where a user approves the bytes that become a
+  filename.
+- **Twenty-two Fluent keys chosen in Rust did not exist**, so they painted as
+  their own identifiers — including both buttons of the agent-approval dialog,
+  which read `dialog-approve` and `dialog-deny`, and the title of the delete
+  confirmation. The task strip had the same problem from the other side: the
+  renderer asked for `task-kind-…` and the catalogue spells them
+  `gui-task-kind-…`, so every task read as its key.
+- **The settings view blocked the whole window.** Projecting "where each thing
+  lives" called `exists()` — a synchronous `metadata` — inside the single
+  writer's loop, so a config layer on a hung NFS mount froze keys, listings
+  and task progress until the mount timed out.
+- **Plugin-authored `[config]` text reached the DOM unmasked.** A plugin's
+  effective value, its schema default and every value of an `enum` are free
+  text that the manifest bounds only in LENGTH — no charset check — while
+  three doc comments claimed the opposite.
+- **A column id is an identity and was being masked**, so two configured
+  columns differing only in an invisible character collapsed into one and
+  clicking the second sorted by the first.
+- **The graphical window overwrote the terminal's layout.** It wrote its live
+  tree into the session's `layouts["default"]`, which `norte-tui` adopts at
+  startup, so a minute spent browsing the layout picker changed what the TUI
+  opened with. It also started from an empty body, discarding another
+  frontend's slots, and stamped live slots with a zero clock that the next
+  writer would read as thirty days old.
+
 ### Added
 
 - **The window can search a whole subtree.** Bridge version **16**: a prompt
