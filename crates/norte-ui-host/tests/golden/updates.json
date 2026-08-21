@@ -748,6 +748,8 @@
       ],
       "path_display": "⟨file⟩/home/oscar/notas.txt",
       "path_hostile": false,
+      "preview_by": "via PDF de ACME",
+      "preview_lossy": true,
       "total_rows": 120,
       "truncated": true
     },

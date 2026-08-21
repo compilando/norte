@@ -394,10 +394,27 @@ body {
   color: var(--title-fg);
   background: var(--status-bg);
   display: flex;
-  justify-content: space-between;
+  align-items: baseline;
   gap: 12px;
   white-space: nowrap;
   overflow: hidden;
+}
+
+/* La RUTA es lo único que cede sitio. Las marcas de la derecha —encoding,
+   «via ‹plugin›», el aviso de decodificación con pérdida— no se encogen: son
+   lo que hace honesto lo que se está enseñando. */
+.viewer-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  unicode-bidi: isolate;
+}
+
+.viewer-meta,
+.viewer-via,
+.viewer-via-lossy {
+  flex: 0 0 auto;
 }
 
 .viewer-meta {
@@ -1674,4 +1691,20 @@ body {
   padding-top: 4px;
   color: var(--title-fg);
   border-top: 1px solid var(--border);
+}
+
+/* Lo que enseña el visor lo produjo un PLUGIN. Su propio color, y aislado:
+   el nombre lo escribe un tercero. */
+.viewer-via {
+  margin-left: 8px;
+  color: var(--info-fg);
+  unicode-bidi: isolate;
+}
+
+/* Y la decodificación que se le dio fue con pérdida: los `?` de su salida
+   vienen de ahí y no del fichero. */
+.viewer-via-lossy {
+  margin-left: 6px;
+  color: var(--warning-fg);
+  unicode-bidi: isolate;
 }

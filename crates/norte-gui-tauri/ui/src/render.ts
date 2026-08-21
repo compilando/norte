@@ -1353,9 +1353,16 @@ export class Screen {
 
     const head = document.createElement("header");
     head.className = "viewer-head";
-    head.append(document.createTextNode(viewer.path_display));
+    // La ruta en su propio nodo, como en la cabecera de un hueco y por el
+    // mismo motivo: suelta como texto es un item de flex anónimo que no se
+    // encoge, así que empujaba fuera de la vista lo que viniera detrás —el
+    // «via …» y el aviso de decodificación con pérdida— y salían cortados.
+    const ruta = document.createElement("span");
+    ruta.className = "viewer-path";
+    ruta.textContent = viewer.path_display;
+    head.append(ruta);
     if (viewer.path_hostile) {
-      head.append(badge(this.t("hostile-name")));
+      ruta.append(badge(this.t("hostile-name")));
     }
     const meta = document.createElement("span");
     meta.className = "viewer-meta";
@@ -1380,6 +1387,26 @@ export class Screen {
     }
     meta.textContent = marcas.join(" · ");
     head.append(meta);
+    if (viewer.preview_by !== "") {
+      // Lo que se enseña lo produjo un PLUGIN. En su propio nodo y con su
+      // propio color: un previewer puede enseñar cualquier cosa —ese es su
+      // trabajo— y quien mira tiene derecho a saber que no está viendo los
+      // bytes del fichero.
+      const via = document.createElement("span");
+      via.className = "viewer-via";
+      via.textContent = viewer.preview_by;
+      head.append(via);
+      if (viewer.preview_lossy) {
+        // La decodificación que se le DIO al previewer fue con pérdida: los
+        // `?` de su salida vienen de ahí y no del fichero. Aparte de
+        // `had_errors`, que es el de la vista cruda: son dos decodificaciones
+        // y confundirlas culpa al fichero de lo que hizo la lectura.
+        const aviso = document.createElement("span");
+        aviso.className = "viewer-via-lossy";
+        aviso.textContent = this.t("viewer-plugin-preview-lossy");
+        head.append(aviso);
+      }
+    }
 
     const body = document.createElement("pre");
     body.className = viewer.hex ? "viewer-body hexview" : "viewer-body";

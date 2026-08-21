@@ -214,6 +214,15 @@ pub struct UiHost {
 
 /// Lo que vuelve de un listado: el testigo que lo pidió, el hueco al que va,
 /// el directorio y el resultado.
+/// Lo que el visor pidió: testigo, ruta, la cabecera leída y la preview de
+/// plugin si alguna aplicó.
+type Contenido = (
+    RequestToken,
+    VPath,
+    Result<Vec<u8>, Error>,
+    Option<norte_proto::methods::PluginPreviewStyled>,
+);
+
 /// Lo que vuelve de un listado: su testigo, el hueco, el directorio, y las
 /// entradas de la primera página con CUÁNTAS se saltó el provider.
 type RespuestaListado = (
@@ -252,7 +261,13 @@ enum Mensaje {
     /// siga abierta antes de tocar nada.
     Fondo(Box<Fondo>),
     /// El contenido que el visor pidió.
-    Contenido(Box<(RequestToken, VPath, Result<Vec<u8>, Error>)>),
+    /// Lo que el visor pidió: la cabecera del fichero y, si algún plugin
+    /// `previewer` aplicó, su preview con estilo.
+    ///
+    /// Las dos en el MISMO mensaje porque son una sola respuesta a una sola
+    /// tecla: mandarlas por separado abriría el visor crudo y lo cambiaría
+    /// por la preview un instante después, que es un parpadeo que nadie pidió.
+    Contenido(Box<Contenido>),
     /// Lo que un sondeo averiguó de unas cuantas entradas (tamaño y fecha de
     /// un listado perezoso).
     ///
@@ -537,8 +552,8 @@ async fn actor(
                 }
             }
             Mensaje::Contenido(datos) => {
-                let (token, path, leido) = *datos;
-                if let Some(u) = estado.abrir_visor(token, path, leido) {
+                let (token, path, leido, preview) = *datos;
+                if let Some(u) = estado.abrir_visor(token, path, leido, preview) {
                     let _ = updates.send(u);
                 }
             }
@@ -4386,8 +4401,21 @@ impl Estado {
                 // provider que no responde.
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
+            // Y se le pregunta a los plugins. Un previewer que falla, que
+            // tarda o que no aplica NO es un error: el visor cae a la vista
+            // cruda, que es lo que el TUI ya hace. Un plugin no puede dejar
+            // un fichero sin poder mirarse.
+            let preview = match tokio::time::timeout(
+                PLAZO_PLUGINS,
+                backend.plugin_preview_styled(path.clone()),
+            )
+            .await
+            {
+                Ok(Ok(p)) => p,
+                _ => None,
+            };
             let _ = buzon
-                .send(Mensaje::Contenido(Box::new((token, path, leido))))
+                .send(Mensaje::Contenido(Box::new((token, path, leido, preview))))
                 .await;
         });
         (self.aplicada(), Vec::new())
@@ -4399,6 +4427,7 @@ impl Estado {
         token: RequestToken,
         path: VPath,
         leido: Result<Vec<u8>, Error>,
+        preview: Option<norte_proto::methods::PluginPreviewStyled>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         if self.visor_en_vuelo != Some(token) {
             // El usuario cerró el visor, pidió otro fichero o se fue a otro
@@ -4414,7 +4443,19 @@ impl Estado {
                 if truncado {
                     bytes.truncate(cap);
                 }
-                self.visor = Some(norte_frontend::viewer::Viewer::new(path, bytes, truncado));
+                self.visor = Some(match preview {
+                    // Un previewer aplicó: se enseña LO SUYO. Los bytes ya
+                    // leídos no se tiran —hicieron falta para saber que el
+                    // fichero se puede leer— pero no se pintan: pintar las
+                    // dos cosas sería enseñar el mismo fichero dos veces.
+                    Some(p) => norte_frontend::viewer::Viewer::with_plugin_preview_styled(
+                        path,
+                        p.plugin_name,
+                        &p.lines,
+                        p.lossy,
+                    ),
+                    None => norte_frontend::viewer::Viewer::new(path, bytes, truncado),
+                });
             }
             Err(e) => {
                 // No se pudo leer: se DICE y no se abre un visor vacío que
@@ -5976,6 +6017,19 @@ impl Estado {
             total_rows: v.total_rows() as u64,
             first_line: v.scroll as u64,
             lines: v.rows(alto).into_iter().map(clamp_display).collect(),
+            // El nombre ya viene enmascarado del modelo compartido; se acota
+            // aquí como todo lo que cruza.
+            preview_by: v.preview_plugin().map_or_else(String::new, |n| {
+                // La MISMA clave que el TUI: el indicador «via …» no puede
+                // decirse de dos maneras según quién pinte. El nombre ya
+                // viene enmascarado del modelo compartido.
+                clamp_display(norte_i18n::ta_in(
+                    self.lang,
+                    "viewer-plugin-preview",
+                    &[("plugin", n)],
+                ))
+            }),
+            preview_lossy: v.preview_lossy(),
         })
     }
 

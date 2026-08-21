@@ -53,6 +53,9 @@ pub struct Falso {
     /// El `help.md` de cada extensión, por id. Un id ausente contesta como
     /// un daemon que no tiene la página: markdown vacío.
     pub paginas: HashMap<String, String>,
+    /// La preview con estilo que contesta un previewer, por wire. Ausente =
+    /// ningún previewer aplica, que NO es un error.
+    pub previews: HashMap<String, norte_proto::methods::PluginPreviewStyled>,
     /// Cuántas entradas dice el provider que se saltó. `None` = no lleva la
     /// cuenta, que NO es lo mismo que cero.
     pub omitidas: Option<u64>,
@@ -306,6 +309,14 @@ impl HostBackend for Falso {
                 rx,
             ))
         })
+    }
+
+    fn plugin_preview_styled(
+        &self,
+        path: VPath,
+    ) -> BoxFuture<'static, Result<Option<norte_proto::methods::PluginPreviewStyled>, Error>> {
+        let p = self.previews.get(&path.to_wire()).cloned();
+        Box::pin(async move { Ok(p) })
     }
 
     fn plugin_decorate(

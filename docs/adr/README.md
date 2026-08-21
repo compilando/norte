@@ -74,3 +74,4 @@ edits.
 | [0066](0066-renderers-use-a-rust-ui-host.md) | Renderers use a Rust UI host, and a client SDK below it | accepted |
 | [0067](0067-the-renderer-is-a-painter-not-a-framework.md) | The reference renderer paints, and brings no framework to do it | accepted |
 | [0068](0068-a-row-is-named-by-key-and-generation.md) | A row is named by key AND generation, and the bridge breaks on purpose | accepted |
+| [0069](0069-how-image-bytes-reach-the-webview.md) | How image bytes reach the webview, and what the window still refuses to do | accepted |

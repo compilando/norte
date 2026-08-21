@@ -916,6 +916,22 @@ pub struct ViewerView {
     pub first_line: u64,
     /// Las líneas de la ventana visible, ya saneadas y acotadas.
     pub lines: Vec<String>,
+    /// «via ‹plugin›», ya traducido y con el nombre enmascarado dentro. Vacío
+    /// = es el fichero, leído por norte.
+    ///
+    /// Se dice siempre que hay uno. Un previewer puede enseñar cualquier cosa
+    /// —es su trabajo: un PDF como texto, un JSON formateado— y quien mira
+    /// tiene derecho a saber que no está viendo los bytes del fichero.
+    ///
+    /// Traducido aquí porque interpola el nombre, y un renderer no traduce.
+    pub preview_by: String,
+    /// La decodificación del fichero que se le dio al previewer fue con
+    /// PÉRDIDA: los `�` de su salida vienen de ahí y no del fichero.
+    ///
+    /// Aparte de `had_errors`, que es el de la vista cruda: son dos
+    /// decodificaciones distintas y confundirlas culpa al fichero de lo que
+    /// hizo la lectura.
+    pub preview_lossy: bool,
 }
 
 /// El reparto de la pantalla: quién se pinta, dónde, y con qué papel.

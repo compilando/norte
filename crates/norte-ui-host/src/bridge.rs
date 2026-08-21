@@ -25,6 +25,8 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **21**: el visor dice si lo que enseña lo produjo un PLUGIN, y si la
+///   decodificación que se le dio fue con pérdida.
 /// - **20**: la pantalla puede llevar el SELECTOR DE COLUMNAS: qué se pinta,
 ///   en qué orden, con qué formato y sobre qué esquema.
 /// - **19**: un listado dice cuántas entradas se SALTÓ el provider.
@@ -69,7 +71,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 20;
+pub const BRIDGE_VERSION: u32 = 21;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

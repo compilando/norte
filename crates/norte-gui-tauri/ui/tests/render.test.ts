@@ -399,6 +399,8 @@ describe("el visor", () => {
       total_rows: 120,
       first_line: 0,
       lines: ["primera", "segunda"],
+      preview_by: "",
+      preview_lossy: false,
     };
     screen.paint(v);
     const doc = document.querySelector('[role="document"]') as HTMLElement;
@@ -422,6 +424,8 @@ describe("el visor", () => {
       total_rows: 1,
       first_line: 0,
       lines: ["00000000  00 01 02 ff"],
+      preview_by: "",
+      preview_lossy: false,
     };
     screen.paint(v);
     expect(document.querySelector(".viewer-body")?.classList.contains("hexview")).toBe(
@@ -451,6 +455,8 @@ describe("el visor", () => {
       total_rows: 1,
       first_line: 0,
       lines: ["<script>alert(1)</script>"],
+      preview_by: "",
+      preview_lossy: false,
     };
     screen.paint(v);
     const body = document.querySelector(".viewer-body") as HTMLElement;
@@ -568,6 +574,92 @@ describe("el campo de texto de un diálogo", () => {
     screen.paint(conDialogo("caf\ufffde.txt", true));
     const aviso = document.querySelector('.dialog [role="alert"]');
     expect(aviso).not.toBeNull();
+  });
+});
+
+describe("la preview de un plugin en el visor", () => {
+  it("dice de quién es lo que enseña, y aparte del aviso de pérdida", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.viewer = {
+      path_display: "⟨file⟩/casa/informe.pdf",
+      path_hostile: false,
+      encoding: "UTF-8",
+      eol: "lf",
+      hex: false,
+      forced: false,
+      had_errors: false,
+      truncated: false,
+      total_rows: 2,
+      first_line: 0,
+      lines: ["Informe anual"],
+      preview_by: "via PDF de ACME",
+      preview_lossy: true,
+    };
+    screen.paint(v);
+    const via = document.querySelector(".viewer-via");
+    expect(via?.textContent).toBe("via PDF de ACME");
+    // El aviso de pérdida en su PROPIO nodo: `had_errors` es el de la vista
+    // cruda y este es el de la decodificación que se le dio al previewer.
+    // Son dos decodificaciones, y confundirlas culpa al fichero de lo que
+    // hizo la lectura.
+    const aviso = document.querySelector(".viewer-via-lossy");
+    expect(aviso).not.toBeNull();
+    expect(aviso?.textContent).toBe(catalogoReal()["viewer-plugin-preview-lossy"] ?? "");
+    expect(via?.contains(aviso)).toBe(false);
+  });
+
+  it("la RUTA es lo que se recorta, no las marcas", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.viewer = {
+      path_display: "⟨file⟩/casa/informe.pdf",
+      path_hostile: false,
+      encoding: "UTF-8",
+      eol: "lf",
+      hex: false,
+      forced: false,
+      had_errors: false,
+      truncated: false,
+      total_rows: 1,
+      first_line: 0,
+      lines: ["x"],
+      preview_by: "via PDF de ACME",
+      preview_lossy: true,
+    };
+    screen.paint(v);
+    const head = document.querySelector(".viewer-head");
+    const ruta = head?.querySelector(".viewer-path");
+    // La ruta en su PROPIO nodo y las marcas como HERMANAS suyas. Suelta como
+    // texto era un item de flex anónimo que no se encoge, así que empujaba
+    // fuera de la vista todo lo que viniera detrás. jsdom no hace layout, así
+    // que lo que se clava aquí es la estructura que lo hace imposible.
+    expect(ruta?.textContent).toContain("informe.pdf");
+    expect(head?.querySelector(".viewer-via")?.parentElement).toBe(head);
+    expect(ruta?.querySelector(".viewer-via")).toBeNull();
+  });
+
+  it("y sin plugin no se atribuye nada a nadie", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.viewer = {
+      path_display: "⟨file⟩/casa/notas.txt",
+      path_hostile: false,
+      encoding: "UTF-8",
+      eol: "lf",
+      hex: false,
+      forced: false,
+      had_errors: false,
+      truncated: false,
+      total_rows: 1,
+      first_line: 0,
+      lines: ["hola"],
+      preview_by: "",
+      preview_lossy: false,
+    };
+    screen.paint(v);
+    expect(document.querySelector(".viewer-via")).toBeNull();
+    expect(document.querySelector(".viewer-via-lossy")).toBeNull();
   });
 });
 

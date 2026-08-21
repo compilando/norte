@@ -6818,3 +6818,146 @@ async fn siguiente_columnas(
     }
     panic!("el selector sigue abierto");
 }
+
+// ---------------------------------------------------------------------------
+// La preview de un plugin en el visor (tarea 4.3).
+// ---------------------------------------------------------------------------
+
+/// Una preview con estilo, como la devolvería un previewer.
+fn preview_de(
+    plugin: &str,
+    lineas: &[&str],
+    lossy: bool,
+) -> norte_proto::methods::PluginPreviewStyled {
+    norte_proto::methods::PluginPreviewStyled {
+        plugin_id: "acme.pdf".to_owned(),
+        plugin_name: plugin.to_owned(),
+        lines: lineas
+            .iter()
+            .map(|l| {
+                vec![norte_proto::methods::SpanWire {
+                    text: (*l).to_owned(),
+                    role: Some("info".to_owned()),
+                    fg: None,
+                }]
+            })
+            .collect(),
+        lossy,
+    }
+}
+
+/// Cuando un previewer aplica, el visor enseña LO SUYO y dice de quién es.
+///
+/// Un plugin puede enseñar cualquier cosa —ese es su trabajo: un PDF como
+/// texto, un JSON formateado— así que quien mira tiene derecho a saber que no
+/// está viendo los bytes del fichero.
+#[tokio::test]
+async fn el_visor_ensena_la_preview_de_un_plugin_y_dice_de_quien_es() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"informe.pdf".to_vec(), false)]);
+    f.contenido.insert(
+        "mem:///casa/informe.pdf".to_owned(),
+        b"%PDF-1.7 crudo".to_vec(),
+    );
+    f.previews.insert(
+        "mem:///casa/informe.pdf".to_owned(),
+        preview_de("PDF de ACME", &["Informe anual", "Página 1 de 12"], true),
+    );
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    let mut visor = None;
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone() {
+            visor = Some(v);
+            break;
+        }
+    }
+    let v = visor.expect("el visor abre");
+
+    assert!(
+        v.lines.iter().any(|l| l.contains("Informe anual")),
+        "enseña lo del previewer: {:?}",
+        v.lines
+    );
+    assert!(
+        !v.lines.iter().any(|l| l.contains("%PDF")),
+        "y NO los bytes crudos: enseñar las dos cosas sería el mismo fichero \
+         dos veces — {:?}",
+        v.lines
+    );
+    assert!(
+        v.preview_by.contains("PDF de ACME"),
+        "y dice de quién es lo que enseña: {:?}",
+        v.preview_by
+    );
+    assert!(
+        !v.preview_by.starts_with("viewer-plugin"),
+        "traducido, no la clave: {:?}",
+        v.preview_by
+    );
+    assert!(
+        v.preview_lossy,
+        "y que la decodificación que se le dio fue con pérdida: los `?` de su \
+         salida vienen de ahí y no del fichero"
+    );
+}
+
+/// Un previewer que no aplica NO estorba: el visor enseña el fichero.
+#[tokio::test]
+async fn sin_previewer_el_visor_ensena_el_fichero() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    f.contenido.insert(
+        "mem:///casa/notas.txt".to_owned(),
+        b"hola\nmundo\n".to_vec(),
+    );
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone() {
+            assert!(v.lines.iter().any(|l| l.contains("hola")));
+            assert!(
+                v.preview_by.is_empty(),
+                "sin plugin no se atribuye a nadie: {:?}",
+                v.preview_by
+            );
+            return;
+        }
+    }
+    panic!("el visor abre igual sin previewer");
+}
+
+/// El nombre de un previewer es texto de TERCERO y llega enmascarado.
+#[tokio::test]
+async fn el_nombre_del_previewer_llega_enmascarado() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"x.bin".to_vec(), false)]);
+    f.contenido
+        .insert("mem:///casa/x.bin".to_owned(), b"\x00\x01".to_vec());
+    f.previews.insert(
+        "mem:///casa/x.bin".to_owned(),
+        preview_de("ACME\u{202e}gpj", &["contenido"], false),
+    );
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone() {
+            assert!(
+                !v.preview_by.contains('\u{202e}'),
+                "el nombre del plugin va crudo: {:?}",
+                v.preview_by
+            );
+            return;
+        }
+    }
+    panic!("el visor abre");
+}

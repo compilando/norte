@@ -442,6 +442,11 @@ fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
         total_rows: 120,
         first_line: 4,
         lines: vec!["quinta línea".to_owned()],
+        // Lo enseña un PREVIEWER, y se dice de quién es: un plugin puede
+        // enseñar cualquier cosa —ese es su trabajo— y quien mira tiene
+        // derecho a saber que no está viendo los bytes del fichero.
+        preview_by: "via PDF de ACME".to_owned(),
+        preview_lossy: true,
     }
 }
 

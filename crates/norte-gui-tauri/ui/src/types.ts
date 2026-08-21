@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 20;
+export const BRIDGE_VERSION = 21;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -212,7 +212,10 @@ export interface ViewerView {
   truncated: boolean;
   total_rows: number;
   first_line: number;
-  lines: string[];
+  lines: string[]; /** «via ‹plugin›», ya traducido. Vacío = lo enseña norte, no un plugin. */
+  preview_by: string;
+  /** La decodificación que se le dio al previewer fue con PÉRDIDA. */
+  preview_lossy: boolean;
 }
 
 export interface PaletteRowView {

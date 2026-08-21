@@ -186,6 +186,21 @@ pub trait HostBackend: Send + Sync + 'static {
         id: String,
     ) -> BoxFuture<'static, Result<methods::PluginGetConfigResult, Error>>;
 
+    /// La PREVIEW con estilo del primer plugin `previewer` que aplique.
+    ///
+    /// `None` = ninguno aplicó, que no es un error: el visor cae entonces a
+    /// leer los bytes él mismo. Un previewer roto tampoco lo es — un plugin
+    /// no puede dejar un fichero sin poder mirarse.
+    ///
+    /// Devuelve LÍNEAS DE SPANS y no HTML ni bytes: el plugin describe y el
+    /// host pinta (ADR 0037). El `role` de cada span viene del vocabulario
+    /// CERRADO de `norte-theme`, así que un plugin no elige su color, y el
+    /// texto es suyo, o sea NO confiable: se enmascara antes de pintarse.
+    fn plugin_preview_styled(
+        &self,
+        path: VPath,
+    ) -> BoxFuture<'static, Result<Option<methods::PluginPreviewStyled>, Error>>;
+
     /// Las DECORACIONES que los plugins ponen sobre un lote de rutas.
     ///
     /// Cosmético y fail-soft por contrato: sin decoradores consentidos, con
@@ -358,6 +373,14 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<methods::PluginGetConfigResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.plugin_get_config(&id).await })
+    }
+
+    fn plugin_preview_styled(
+        &self,
+        path: VPath,
+    ) -> BoxFuture<'static, Result<Option<methods::PluginPreviewStyled>, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.plugin_preview_styled(&path).await })
     }
 
     fn plugin_decorate(
