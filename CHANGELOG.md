@@ -9,6 +9,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The places sidebar is a sidebar.** Bridge version **14**: the host's
+  volumes with their space, and the user's favourites, each section foldable.
+  Volumes are asked for at start-up and again when the drives section is
+  unfolded — and nowhere else: a sidebar with a clock would break ADR 0058's
+  suspension rule from the first frame, and `host.volumes` is not free (it
+  mounts and queries space on every filesystem). A favourite whose path does
+  not parse is *painted* with its reason: one that vanishes quietly is a
+  configuration fault nobody can see. Enter — or a click, because a sidebar
+  exists to go places — navigates the *focused listing*, down the same road as
+  any other `cd`, which is what makes having it open not change where
+  operations go.
+
 - **The details sheet and the process panel are panels, not grey rectangles.**
   Bridge version **13**: a `metadata` slot shows what the listing already
   knows about the entry under the cursor of the pane it *follows* — resolved

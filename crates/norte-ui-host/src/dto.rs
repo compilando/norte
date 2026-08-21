@@ -633,6 +633,59 @@ pub struct MetadataFieldView {
     pub hostile: bool,
 }
 
+/// La barra lateral de sitios.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlacesSlotView {
+    /// Id del hueco.
+    pub slot_id: u32,
+    /// Sus filas, en orden: cabecera de unidades, las unidades, cabecera de
+    /// favoritos, los favoritos. Una sección plegada no lista las suyas, pero
+    /// su cabecera SIGUE: sin ella la lista da un brinco cuando llegan.
+    pub rows: Vec<PlaceRowView>,
+    /// Qué fila tiene el cursor.
+    pub cursor: u64,
+}
+
+/// Una fila de la barra lateral.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "row")]
+pub enum PlaceRowView {
+    /// La cabecera de una sección. No navega.
+    Header {
+        /// Su texto, ya traducido.
+        label: String,
+        /// Está plegada.
+        folded: bool,
+    },
+    /// Un volumen del host.
+    Drive {
+        /// Cómo se llama: su etiqueta si la tiene, o su punto de montaje. Ya
+        /// saneado — ninguna plataforma promete que una etiqueta sea UTF-8.
+        label: String,
+        /// El texto de arriba DIFIERE de lo real.
+        hostile: bool,
+        /// El espacio y si es de solo lectura, ya formateado. Un tamaño que
+        /// el sistema no contestó se DICE; jamás se pinta un `0`.
+        detail: String,
+    },
+    /// Un favorito de la hotlist.
+    Favorite {
+        /// El nombre que le puso el usuario, ya saneado.
+        name: String,
+        /// A dónde va, ya saneado. Vacío si su ruta no parsea.
+        target: String,
+        /// El texto de arriba DIFIERE de lo real.
+        hostile: bool,
+        /// Su ruta no parsea, y esta es la razón ya traducida. Vacía cuando
+        /// el favorito está bien.
+        ///
+        /// Un favorito roto se PINTA con su motivo: uno que desaparece en
+        /// silencio es un fallo de configuración que nadie puede ver.
+        broken: String,
+    },
+}
+
+/// Lo que el visor enseña.
 /// Lo que el visor enseña.
 /// Lo que el visor enseña.
 /// Lo que el visor enseña.
@@ -754,6 +807,9 @@ pub enum SlotView {
     /// siguiera al cursor pidiendo datos por fila convertiría bajar por un
     /// directorio en una tormenta de peticiones.
     Metadata(Box<MetadataSlotView>),
+    /// La barra lateral de sitios: los volúmenes del host y los favoritos
+    /// del usuario, con su cursor.
+    Places(Box<PlacesSlotView>),
     /// El panel de procesos: las MISMAS tareas que pinta la franja, con su
     /// propio cursor.
     ///

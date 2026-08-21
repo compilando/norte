@@ -1314,3 +1314,73 @@ describe("los huecos que no son listados", () => {
     );
   });
 });
+
+describe("la barra lateral de sitios", () => {
+  function conSitios(cursor: number): ViewSnapshot {
+    const v = vista({});
+    v.slots = [
+      ...v.slots,
+      {
+        kind: "places",
+        slot_id: 7,
+        rows: [
+          { row: "header", label: "Unidades", folded: false },
+          {
+            row: "drive",
+            label: "raíz",
+            hostile: false,
+            detail: "12 GiB libres de 100 GiB",
+          },
+          { row: "header", label: "Favoritos", folded: true },
+          {
+            row: "favorite",
+            name: "casa",
+            target: "⟨file⟩/home",
+            hostile: false,
+            broken: "",
+          },
+          {
+            row: "favorite",
+            name: "roto",
+            target: "",
+            hostile: false,
+            broken: "la ruta no vale",
+          },
+        ],
+        cursor,
+      },
+    ];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 0, width: 20, height: 20, role: null, focus_index: 2 },
+    ];
+    return v;
+  }
+
+  it("una cabecera dice si está plegada, y un favorito roto dice por qué", () => {
+    const { screen } = montar();
+    screen.paint(conSitios(1));
+    const filas = [...document.querySelectorAll(".places-row")];
+    expect(filas).toHaveLength(5);
+    expect(filas[0]?.getAttribute("aria-expanded")).toBe("true");
+    expect(filas[2]?.getAttribute("aria-expanded")).toBe("false");
+    // El roto se VE, y se ve que está roto.
+    expect(filas[4]?.querySelector(".places-broken")?.textContent).toBe(
+      "la ruta no vale",
+    );
+    expect(filas[3]?.querySelector(".places-broken")).toBeNull();
+    const lista = document.querySelector(".places-rows") as HTMLElement;
+    expect(lista.getAttribute("aria-activedescendant")).toBe("place-row-1");
+  });
+
+  it("un click ELIGE y ACTIVA: una barra lateral existe para ir a sitios", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conSitios(0));
+    const filas = [...document.querySelectorAll(".places-row")];
+    (filas[1] as HTMLElement).click();
+    expect(enviadas).toEqual([{ action: "place_activate_row", row: 1 }]);
+    // También sobre una cabecera: ahí activar es PLEGAR, y lo decide el host.
+    (filas[2] as HTMLElement).click();
+    expect(enviadas).toHaveLength(2);
+  });
+});

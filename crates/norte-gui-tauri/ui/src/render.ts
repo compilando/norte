@@ -27,6 +27,7 @@ import type {
   PaletteView,
   ExtensionsView,
   MetadataSlotView,
+  PlacesSlotView,
   PickerView,
   ProcessesSlotView,
   SettingsView,
@@ -1244,6 +1245,10 @@ export class Screen {
     view: ViewSnapshot,
     cell: { w: number; h: number },
   ): void {
+    if (slot.kind === "places") {
+      this.paintPlaces(dom, slot);
+      return;
+    }
     if (slot.kind === "metadata") {
       this.paintMetadata(dom, slot);
       return;
@@ -1257,6 +1262,82 @@ export class Screen {
       return;
     }
     this.paintBrowser(dom, slot, cell);
+  }
+
+  /**
+   * La barra lateral de sitios: volúmenes y favoritos.
+   *
+   * Un click ELIGE Y ACTIVA, al contrario que las otras listas: una barra
+   * lateral existe para ir a sitios, y un click que solo mueve un cursor
+   * obliga a rematar con el teclado. Una cabecera pliega en vez de navegar,
+   * que es lo que el host hace con ella.
+   */
+  private paintPlaces(dom: SlotDom, slot: PlacesSlotView): void {
+    dom.root.setAttribute("aria-label", this.t("places-title"));
+    dom.title.textContent = this.t("places-title");
+    dom.scroller.className = "places";
+    const lista = document.createElement("ul");
+    lista.className = "places-rows";
+    lista.setAttribute("role", "listbox");
+    for (const [i, r] of slot.rows.entries()) {
+      const fila = document.createElement("li");
+      fila.className = "places-row";
+      fila.id = `place-row-${String(i)}`;
+      fila.dataset["row"] = r.row;
+      fila.setAttribute("role", "option");
+      fila.setAttribute("aria-selected", String(slot.cursor === i));
+      fila.addEventListener("click", () => {
+        this.send({ action: "place_activate_row", row: i });
+      });
+      if (r.row === "header") {
+        fila.setAttribute("aria-expanded", String(!r.folded));
+        const marca = document.createElement("span");
+        marca.className = "places-fold";
+        marca.textContent = r.folded ? "▸" : "▾";
+        const texto = document.createElement("span");
+        texto.className = "places-header";
+        texto.textContent = r.label;
+        fila.append(marca, texto);
+      } else if (r.row === "drive") {
+        const nombre = document.createElement("span");
+        nombre.className = "places-name";
+        nombre.dataset["hostile"] = String(r.hostile);
+        nombre.textContent = r.label;
+        if (r.hostile) {
+          nombre.append(badge(this.t("hostile-name")));
+        }
+        const detalle = document.createElement("span");
+        detalle.className = "places-detail";
+        detalle.textContent = r.detail;
+        fila.append(nombre, detalle);
+      } else {
+        const nombre = document.createElement("span");
+        nombre.className = "places-name";
+        nombre.textContent = r.name;
+        fila.append(nombre);
+        if (r.broken === "") {
+          const destino = document.createElement("span");
+          destino.className = "places-detail";
+          destino.dataset["hostile"] = String(r.hostile);
+          destino.textContent = r.target;
+          if (r.hostile) {
+            destino.append(badge(this.t("hostile-name")));
+          }
+          fila.append(destino);
+        } else {
+          // Un favorito roto se PINTA con su motivo: uno que desaparece en
+          // silencio es un fallo de configuración que nadie puede ver.
+          const roto = document.createElement("span");
+          roto.className = "places-broken";
+          roto.textContent = r.broken;
+          fila.append(roto);
+        }
+      }
+      lista.append(fila);
+    }
+    lista.setAttribute("aria-activedescendant", `place-row-${String(slot.cursor)}`);
+    dom.scroller.replaceChildren(lista);
+    revelar(lista.querySelector(`#place-row-${String(slot.cursor)}`) ?? undefined);
   }
 
   /**

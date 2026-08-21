@@ -292,6 +292,11 @@ enum Fondo {
     ),
     /// Los volúmenes del host, pedidos al abrir su selector.
     Volumenes(Result<Vec<norte_proto::methods::Volume>, Error>),
+    /// Los volúmenes, pedidos por la BARRA LATERAL.
+    ///
+    /// Aparte de los del selector por el mismo motivo que los dos catálogos
+    /// de plugins: son dos superficies con dos vidas.
+    SitiosVolumenes(Result<Vec<norte_proto::methods::Volume>, Error>),
 }
 
 impl UiHost {
@@ -322,6 +327,14 @@ impl UiHost {
         // El primer listado se pide ANTES de publicar nada: el snapshot 0
         // describe una pantalla que ya existe, no una promesa.
         estado.listar_inicial(&backend, &tx2).await;
+        // La barra lateral, si la disposición coloca una: los favoritos salen
+        // de la configuración que ya está cargada, y los volúmenes se PIDEN y
+        // llegan después — preguntarlos monta y consulta espacio en cada
+        // filesystem, y la ventana no espera a eso para pintar.
+        if estado.hueco_de_sitios().is_some() {
+            estado.sembrar_sitios();
+            estado.pedir_sitios(&backend, &tx2);
+        }
         // Y se sondea lo que ya se ve: el listado local no trae tamaño ni
         // fecha (#52), así que sin esto la primera pantalla nace con dos
         // columnas en blanco y no se llenan hasta que algo la mueva.
@@ -723,6 +736,10 @@ struct Estado {
     tema: crate::pickers::HostTheme,
     /// Se está mirando el tema por dentro.
     mirando_tema: bool,
+    /// La barra lateral de sitios, si la disposición coloca una. Hay UNA
+    /// como mucho: dos listas idénticas de discos no son una disposición,
+    /// son un fallo (lo dice el registro compartido, `multi: false`).
+    sitios: Option<norte_frontend::places::PlacesState>,
     /// El cursor del panel de procesos.
     ///
     /// Se acota al LEER y no al mover: las filas aparecen y desaparecen
@@ -905,6 +922,7 @@ impl Estado {
             tema: theme,
             mirando_tema: false,
             cursor_procesos: 0,
+            sitios: None,
             selector: None,
             config: settings,
             paths,
@@ -1274,6 +1292,7 @@ impl Estado {
             UiAction::SettingsSelectRow { row } => self.elegir_ajuste(*row),
             UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
             UiAction::PickerSelectRow { row } => self.elegir_fila_del_selector(*row),
+            UiAction::PlaceActivateRow { row } => self.activar_sitio(*row, backend, buzon),
             UiAction::HelpActivate { index } => self.activar_en_ayuda(*index, backend, buzon),
         }
     }
@@ -1592,6 +1611,9 @@ impl Estado {
         if !self.kinds.get(&kind).is_some_and(|d| d.takes_keys) {
             return None;
         }
+        if kind.as_str() == "places" {
+            return self.efecto_en_sitios(efecto);
+        }
         if kind.as_str() != "processes" {
             // Otro panel que toma teclas y que este host todavía no proyecta:
             // se deja pasar, y el listado sigue respondiendo. Cuando se
@@ -1623,6 +1645,268 @@ impl Estado {
             self.aplicada(),
             vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
         ))
+    }
+
+    /// El foco está en la barra lateral de sitios.
+    fn sitios_tienen_el_foco(&self) -> bool {
+        self.sitios.is_some()
+            && self
+                .roles
+                .get(RoleId::Active)
+                .is_some_and(|s| self.hueco_de_sitios() == Some(s))
+    }
+
+    /// El movimiento y la activación, con el foco en la barra lateral.
+    ///
+    /// El vocabulario es el del LISTADO porque es el único mapa que esta
+    /// ventana tiene —no hay pantalla `dialog` aquí—, y cada comando
+    /// significa en la barra lo que significa en su superficie: bajar baja
+    /// por ella, entrar va al sitio, y la tecla de marcar PLIEGA, porque una
+    /// barra lateral no tiene nada que marcar y sí dos secciones que abrir y
+    /// cerrar.
+    ///
+    /// La activación necesita el backend, así que se devuelve `None` para
+    /// que la trate `aplicar_efecto` por su camino normal; aquí solo se
+    /// mueve el cursor.
+    fn efecto_en_sitios(
+        &mut self,
+        efecto: Efecto,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        let estado = self.sitios.as_mut()?;
+        let filas = estado.rows().len();
+        if filas == 0 {
+            return Some((self.aplicada(), Vec::new()));
+        }
+        let total = i64::try_from(filas).unwrap_or(i64::MAX);
+        let actual = i64::try_from(estado.cursor().min(filas - 1)).unwrap_or(0);
+        let destino = match efecto {
+            Efecto::Cursor(n) => actual.saturating_add(n.clamp(-total, total)),
+            Efecto::Pagina(n) => {
+                actual.saturating_add(n.clamp(-total, total).saturating_mul(total))
+            }
+            Efecto::Extremo { al_final: false } => 0,
+            Efecto::Extremo { al_final: true } => total - 1,
+            // Todo lo demás sigue su camino. Entrar y plegar, en concreto,
+            // necesitan el backend —una navegación, o volver a pedir los
+            // volúmenes—, así que los atiende quien sí lo tiene.
+            _ => return None,
+        };
+        estado.set_cursor(usize::try_from(destino.max(0)).unwrap_or(0).min(filas - 1));
+        let snap = self.snapshot();
+        Some((
+            self.aplicada(),
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+        ))
+    }
+
+    /// Alimenta la barra lateral con los favoritos de la configuración.
+    ///
+    /// De la config con la que ARRANCÓ la ventana, que es la que está usando.
+    /// Un favorito cuya ruta no parsea se conserva con su clave de error: la
+    /// hotlist es data del usuario, no configuración estructural, y uno que
+    /// desaparece en silencio es un fallo que nadie puede ver.
+    fn sembrar_sitios(&mut self) {
+        let items: Vec<(String, Result<VPath, String>)> = self
+            .config
+            .common
+            .hotlist
+            .iter()
+            .map(|h| (h.name.clone(), h.target.clone()))
+            .collect();
+        let estado = self
+            .sitios
+            .get_or_insert_with(norte_frontend::places::PlacesState::new);
+        estado.set_favorites(&items);
+    }
+
+    /// Pide los volúmenes para la barra lateral.
+    ///
+    /// Lo llaman el arranque y desplegar la sección de unidades. Y nadie más:
+    /// una barra lateral con reloj rompería la regla de suspensión del ADR
+    /// 0058 desde el primer frame, y `host.volumes` no es gratis — monta y
+    /// consulta espacio en cada filesystem.
+    fn pedir_sitios(&mut self, backend: &Arc<dyn HostBackend>, buzon: &mpsc::Sender<Mensaje>) {
+        if self.hueco_de_sitios().is_none() {
+            return;
+        }
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.volumes()).await {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::SitiosVolumenes(res))))
+                .await;
+        });
+    }
+
+    /// Los volúmenes llegaron a la barra lateral.
+    ///
+    /// Un fallo NO vacía lo que hubiera: lo que se veía sigue siendo lo
+    /// último que el host dijo.
+    fn aplicar_sitios(
+        &mut self,
+        res: Result<Vec<norte_proto::methods::Volume>, Error>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        let Ok(vols) = res else {
+            return None;
+        };
+        self.sitios
+            .get_or_insert_with(norte_frontend::places::PlacesState::new)
+            .set_drives(&vols);
+        let snap = self.snapshot();
+        Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+    }
+
+    /// Un click en una fila de la barra lateral: la elige Y la activa.
+    fn activar_sitio(
+        &mut self,
+        row: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(estado) = self.sitios.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        estado.set_cursor(row as usize);
+        self.activar_sitio_del_cursor(backend, buzon)
+    }
+
+    /// Activa la fila del cursor de la barra lateral: navega a ella, o pliega
+    /// su sección si es una cabecera.
+    ///
+    /// El `cd` va al LISTADO enfocado por el mismo camino que cualquier otro:
+    /// es lo que hace que tener la barra abierta no cambie a dónde van las
+    /// operaciones.
+    fn activar_sitio_del_cursor(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(estado) = self.sitios.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        if let Some(destino) = estado.activate().cloned() {
+            return (
+                self.aplicada(),
+                self.navegar(&destino, Trail::Record, backend, buzon),
+            );
+        }
+        // Una cabecera: se pliega. Y desplegar las unidades ES el momento de
+        // volver a pedirlas — un disco montado o desmontado desde que se
+        // abrió la ventana se ve aquí, sin un reloj de por medio.
+        estado.toggle_fold();
+        let desplegadas = estado
+            .rows()
+            .iter()
+            .any(|r| matches!(r, norte_frontend::places::PlaceRow::Drive { .. }));
+        if desplegadas {
+            self.pedir_sitios(backend, buzon);
+        }
+        let snap = self.snapshot();
+        (
+            self.aplicada(),
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+        )
+    }
+
+    /// La barra lateral de sitios, proyectada.
+    ///
+    /// Si todavía no hay estado —la disposición la coloca pero nadie la ha
+    /// alimentado— se proyecta VACÍA con sus dos cabeceras, que es lo que
+    /// hace el modelo compartido: la lista no da un brinco cuando lleguen los
+    /// volúmenes.
+    fn barra_de_sitios(&self, id: u32) -> crate::dto::PlacesSlotView {
+        use norte_frontend::places::{PlaceRow, PlacesState};
+
+        let vacia = PlacesState::new();
+        let estado = self.sitios.as_ref().unwrap_or(&vacia);
+        let rows = estado
+            .rows()
+            .iter()
+            .map(|r| match r {
+                PlaceRow::Header { section, folded } => crate::dto::PlaceRowView::Header {
+                    label: clamp_display(norte_i18n::t_in(self.lang, section.label_key())),
+                    folded: *folded,
+                },
+                PlaceRow::Drive {
+                    label,
+                    mount,
+                    free,
+                    total,
+                    read_only,
+                } => {
+                    // La etiqueta son BYTES y el punto de montaje un `VPath`:
+                    // los dos por la puerta compartida, nunca por
+                    // `to_string_lossy`.
+                    let (pintable, hostil) = if label.is_empty() {
+                        norte_frontend::display::path_display(mount)
+                    } else {
+                        norte_frontend::display_name(label)
+                    };
+                    crate::dto::PlaceRowView::Drive {
+                        label: clamp_display(pintable),
+                        hostile: hostil,
+                        detail: clamp_display(self.espacio_de(*free, *total, *read_only)),
+                    }
+                }
+                PlaceRow::Favorite { name, target } => {
+                    let (destino, hostil) = match target {
+                        Ok(v) => norte_frontend::display::path_display(v),
+                        Err(_) => (String::new(), false),
+                    };
+                    crate::dto::PlaceRowView::Favorite {
+                        // El nombre lo escribe el usuario, pero puede venir
+                        // de la capa de PROYECTO: se enmascara igual.
+                        name: clamp_display(norte_frontend::display_name(name.as_bytes()).0),
+                        target: clamp_display(destino),
+                        hostile: hostil,
+                        broken: target.as_ref().err().map_or_else(String::new, |clave| {
+                            clamp_display(norte_i18n::t_in(self.lang, clave))
+                        }),
+                    }
+                }
+            })
+            .collect();
+        crate::dto::PlacesSlotView {
+            slot_id: id,
+            rows,
+            cursor: estado.cursor() as u64,
+        }
+    }
+
+    /// El espacio de un volumen, dicho.
+    ///
+    /// Un tamaño que el sistema no contestó se DICE: un `0` se lee como
+    /// «lleno», que es lo contrario de «no lo sé».
+    fn espacio_de(&self, free: Option<u64>, total: Option<u64>, read_only: bool) -> String {
+        let mut trozos = Vec::new();
+        match (free, total) {
+            (Some(f), Some(t)) => trozos.push(norte_i18n::ta_in(
+                self.lang,
+                "picker-volume-space",
+                &[
+                    ("free", &norte_frontend::human_bytes_short(f)),
+                    ("total", &norte_frontend::human_bytes_short(t)),
+                ],
+            )),
+            _ => trozos.push(norte_i18n::t_in(self.lang, "volumes-size-unknown")),
+        }
+        if read_only {
+            trozos.push(norte_i18n::t_in(self.lang, "picker-volume-read-only"));
+        }
+        trozos.join(" · ")
+    }
+
+    /// El hueco que ocupa la barra lateral, si la disposición coloca una.
+    fn hueco_de_sitios(&self) -> Option<SlotId> {
+        self.reparto
+            .placements
+            .iter()
+            .map(|(s, _)| *s)
+            .find(|s| kind_de(&self.arbol, *s).is_some_and(|k| k.as_str() == "places"))
     }
 
     /// La hoja de atributos de un hueco `metadata`.
@@ -1918,6 +2202,7 @@ impl Estado {
                 .into_iter()
                 .collect(),
             Fondo::Volumenes(res) => self.aplicar_volumenes(res).into_iter().collect(),
+            Fondo::SitiosVolumenes(res) => self.aplicar_sitios(res).into_iter().collect(),
         }
     }
 
@@ -2810,6 +3095,13 @@ impl Estado {
         // el foco dice qué significa ahí.
         if let Some(salida) = self.efecto_en_panel_enfocado(efecto) {
             return salida;
+        }
+        if self.sitios_tienen_el_foco() && matches!(efecto, Efecto::Entrar | Efecto::Marcar) {
+            // Entrar y plegar los atiende la barra lateral, y el `cd` que
+            // salga va al LISTADO por el mismo camino que cualquier otro: es
+            // lo que hace que tenerla abierta no cambie a dónde van las
+            // operaciones.
+            return self.activar_sitio_del_cursor(backend, buzon);
         }
         let slot = self.activo();
         match efecto {
@@ -4012,6 +4304,7 @@ impl Estado {
                 Some("metadata") => {
                     slots.push(SlotView::Metadata(Box::new(self.hoja_de_atributos(*slot))));
                 }
+                Some("places") => slots.push(SlotView::Places(Box::new(self.barra_de_sitios(id)))),
                 Some("processes") => slots.push(SlotView::Processes {
                     slot_id: id,
                     cursor: (!self.tasks.is_empty())

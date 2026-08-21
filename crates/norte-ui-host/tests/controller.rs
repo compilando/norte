@@ -4913,3 +4913,169 @@ async fn el_panel_de_procesos_toma_sus_teclas() {
          enfocado y las teclas se iban al panel de al lado"
     );
 }
+
+/// La barra lateral de sitios de una foto, si está colocada.
+fn sitios(snap: &norte_ui_host::ViewSnapshot) -> Option<&norte_ui_host::dto::PlacesSlotView> {
+    snap.slots.iter().find_map(|s| match s {
+        SlotView::Places(p) => Some(p.as_ref()),
+        _ => None,
+    })
+}
+
+/// La barra lateral llega con sus DOS cabeceras desde el primer frame, y los
+/// volúmenes se le añaden cuando el host contesta.
+#[tokio::test]
+async fn la_barra_de_sitios_no_da_un_brinco_cuando_llegan_los_discos() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    f.volumenes = vec![volumen("mem:///otro", "ext4", false)];
+    let (h, snap) = host_full(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    let primera = sitios(&snap).expect("la disposición `full` coloca la barra");
+    let cabeceras = primera
+        .rows
+        .iter()
+        .filter(|r| matches!(r, norte_ui_host::dto::PlaceRowView::Header { .. }))
+        .count();
+    assert_eq!(
+        cabeceras, 2,
+        "las dos cabeceras están desde el principio, aunque no haya nada debajo"
+    );
+
+    // Los volúmenes llegan después: la barra no espera a ellos para pintarse.
+    let mut con_discos = None;
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        let v = sitios(&foto).expect("sigue colocada").clone();
+        if v.rows
+            .iter()
+            .any(|r| matches!(r, norte_ui_host::dto::PlaceRowView::Drive { .. }))
+        {
+            con_discos = Some(v);
+            break;
+        }
+    }
+    let v = con_discos.expect("los volúmenes llegan a la barra");
+    let disco = v
+        .rows
+        .iter()
+        .find_map(|r| match r {
+            norte_ui_host::dto::PlaceRowView::Drive { detail, .. } => Some(detail.clone()),
+            _ => None,
+        })
+        .expect("hay un disco");
+    assert!(!disco.is_empty(), "y dice cuánto espacio tiene");
+}
+
+/// Con el foco en la barra lateral, bajar baja por ELLA, y entrar navega el
+/// LISTADO — que es lo que hace que tenerla abierta no cambie a dónde van las
+/// operaciones.
+#[tokio::test]
+async fn la_barra_de_sitios_navega_el_listado_y_no_se_lo_queda() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    f.pon("mem:///otro", vec![(b"raiz.txt".to_vec(), false)]);
+    f.volumenes = vec![volumen("mem:///otro", "ext4", false)];
+    let (h, _snap) = host_full(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    // Se espera a que los discos estén, y se busca su fila.
+    let mut fila_del_disco = None;
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        let v = sitios(&foto).expect("colocada");
+        if let Some(i) = v
+            .rows
+            .iter()
+            .position(|r| matches!(r, norte_ui_host::dto::PlaceRowView::Drive { .. }))
+        {
+            fila_del_disco = Some(i);
+            break;
+        }
+    }
+    let i = fila_del_disco.expect("los discos llegan");
+
+    // Un click en el disco: elige Y activa, porque una barra lateral existe
+    // para ir a sitios.
+    h.dispatch(UiAction::PlaceActivateRow {
+        row: u32::try_from(i).expect("cabe"),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let mut llego = false;
+    for _ in 0..20 {
+        let foto = siguiente_foto(&mut sub).await;
+        if primer_listado(&foto).path_display.contains("otro") {
+            llego = true;
+            break;
+        }
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+    }
+    assert!(llego, "el LISTADO navegó al volumen, no la barra");
+}
+
+/// Un favorito cuya ruta no parsea se PINTA con su motivo: uno que
+/// desaparece en silencio es un fallo de configuración que nadie puede ver.
+#[tokio::test]
+async fn un_favorito_roto_se_ve_y_dice_por_que() {
+    let mut cfg = norte_ui_host::ajustes_por_defecto();
+    cfg.common.hotlist = vec![
+        norte_config::HotlistItem {
+            name: "casa".to_owned(),
+            target: norte_proto::VPath::parse("mem:///casa").map_err(|_| "err".to_owned()),
+        },
+        norte_config::HotlistItem {
+            name: "roto".to_owned(),
+            target: Err("err-invalid-path".to_owned()),
+        },
+    ];
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    let (h, snap) = UiHost::start(UiHostOptions {
+        backend: Arc::new(f),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("full").expect("layout"),
+        viewport: (200, 60),
+        settings: cfg,
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    let _ = &h;
+
+    let v = sitios(&snap).expect("colocada");
+    let favoritos: Vec<(String, String)> = v
+        .rows
+        .iter()
+        .filter_map(|r| match r {
+            norte_ui_host::dto::PlaceRowView::Favorite { name, broken, .. } => {
+                Some((name.clone(), broken.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        favoritos.len(),
+        2,
+        "los dos favoritos se ven: {favoritos:?}"
+    );
+    let roto = favoritos
+        .iter()
+        .find(|(n, _)| n == "roto")
+        .expect("el roto está");
+    assert!(!roto.1.is_empty(), "y dice por qué está roto");
+    assert!(
+        !roto.1.starts_with("err-"),
+        "traducido, no la clave: {roto:?}"
+    );
+}

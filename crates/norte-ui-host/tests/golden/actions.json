@@ -68,6 +68,10 @@
     "action": "picker_select_row",
     "row": 0
   },
+  "place_activate_row": {
+    "action": "place_activate_row",
+    "row": 1
+  },
   "resync": {
     "action": "resync"
   },

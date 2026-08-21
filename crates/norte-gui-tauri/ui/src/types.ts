@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 13;
+export const BRIDGE_VERSION = 14;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -119,8 +119,30 @@ export interface ProcessesSlotView {
   cursor: number | null;
 }
 
+export type PlaceRowView =
+  | { row: "header"; label: string; folded: boolean }
+  | { row: "drive"; label: string; hostile: boolean; detail: string }
+  | {
+      row: "favorite";
+      name: string;
+      target: string;
+      hostile: boolean;
+      broken: string;
+    };
+
+export interface PlacesSlotView {
+  kind: "places";
+  slot_id: number;
+  rows: PlaceRowView[];
+  cursor: number;
+}
+
 export type SlotView =
-  BrowserSlotView | MetadataSlotView | ProcessesSlotView | UnsupportedSlotView;
+  | BrowserSlotView
+  | PlacesSlotView
+  | MetadataSlotView
+  | ProcessesSlotView
+  | UnsupportedSlotView;
 
 export interface PendingView {
   chords: string;
@@ -438,6 +460,7 @@ export type UiAction =
   | { action: "settings_select_row"; row: number }
   | { action: "extension_select_row"; row: number }
   | { action: "picker_select_row"; row: number }
+  | { action: "place_activate_row"; row: number }
   | { action: "resync" };
 
 export type StaleReason = "instance" | "generation" | "modal";

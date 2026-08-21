@@ -216,6 +216,16 @@ pub enum UiAction {
         /// Fila, en el orden en que viajaron.
         row: u32,
     },
+    /// Elige una fila de la barra lateral de sitios (un click) y la ACTIVA:
+    /// navega a ella, o pliega su sección si es una cabecera.
+    ///
+    /// Selecciona y activa a la vez, al contrario que las otras listas: una
+    /// barra lateral existe para ir a sitios, y un click que solo mueve un
+    /// cursor obliga a rematar con el teclado.
+    PlaceActivateRow {
+        /// Fila, en el orden en que viajaron.
+        row: u32,
+    },
     /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
     Resync,
 }

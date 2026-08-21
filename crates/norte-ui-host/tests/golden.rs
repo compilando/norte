@@ -172,6 +172,7 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             UiAction::ExtensionSelectRow { row: 1 },
         ),
         ("picker_select_row", UiAction::PickerSelectRow { row: 0 }),
+        ("place_activate_row", UiAction::PlaceActivateRow { row: 1 }),
         ("help_select_topic", UiAction::HelpSelectTopic { row: 3 }),
         ("help_activate", UiAction::HelpActivate { index: 1 }),
         ("resync", UiAction::Resync),

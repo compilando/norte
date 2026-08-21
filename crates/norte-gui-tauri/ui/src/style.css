@@ -1196,3 +1196,75 @@ body {
   background: var(--selection-bg);
   color: var(--selection-fg);
 }
+
+/* --- La barra lateral de sitios --------------------------------------- */
+
+.places {
+  overflow: auto;
+}
+
+.places-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.places-row {
+  /* El nombre en su línea y el detalle DEBAJO, no al lado: una barra lateral
+     tiene 14–20 columnas, y con las dos cosas en la misma fila el detalle
+     —que suele ser más largo— se comía el nombre. Un sitio que no dice cómo
+     se llama no sirve para ir a ningún sitio. */
+  display: block;
+  padding: 0 6px;
+  cursor: pointer;
+}
+
+.places-row[data-row="header"] {
+  display: grid;
+  grid-template-columns: 2ch 1fr;
+  gap: 0 4px;
+  color: var(--title-fg);
+}
+
+.places-row[data-row="drive"],
+.places-row[data-row="favorite"] {
+  padding-left: 2ch;
+}
+
+.places-name {
+  display: block;
+}
+
+.places-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.places-name,
+.places-detail,
+.places-broken,
+.places-header {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Una etiqueta de volumen y un destino son BYTES del sistema o del
+     usuario: cada uno, su propia corrida bidi. */
+  unicode-bidi: isolate;
+}
+
+.places-name[data-hostile="true"],
+.places-detail[data-hostile="true"] {
+  color: var(--hostile-fg);
+}
+
+.places-detail,
+.places-broken {
+  display: block;
+  padding-left: 1ch;
+  opacity: 0.8;
+}
+
+/* Un favorito roto se ve, y se ve QUE está roto. */
+.places-broken {
+  color: var(--error-fg);
+}
