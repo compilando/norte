@@ -64,7 +64,18 @@ body {
   color: var(--title-fg);
   white-space: nowrap;
   overflow: hidden;
+  /* Fila: lo que se recorta es la RUTA, y lo que va detrás —el △ de hostil,
+     el aviso de entradas omitidas— no se encoge ni se sale de la vista. */
+  display: flex;
+  align-items: baseline;
+}
+
+.title-path {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: isolate;
 }
 
 .slot[data-role="target"] .slot-title::after {
@@ -1545,4 +1556,14 @@ body {
 
 .cell-badge[data-role="info"] {
   color: var(--info-fg);
+}
+
+/* Lo que el provider se saltó al listar. En la cabecera del hueco, con el
+   color de aviso: no es un error —el listado sirve— pero está incompleto, y
+   eso no se puede ver mirando las filas que sí están. */
+.slot-skipped {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  color: var(--warning-fg);
+  unicode-bidi: isolate;
 }

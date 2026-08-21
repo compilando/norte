@@ -590,6 +590,7 @@
             "selected": false
           }
         ],
+        "skipped_note": "se saltaron 2 entradas",
         "slot_id": 1,
         "state": {
           "state": "ready"

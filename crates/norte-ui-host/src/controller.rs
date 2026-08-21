@@ -214,7 +214,14 @@ pub struct UiHost {
 
 /// Lo que vuelve de un listado: el testigo que lo pidió, el hueco al que va,
 /// el directorio y el resultado.
-type RespuestaListado = (RequestToken, u32, VPath, Result<Vec<Entry>, Error>);
+/// Lo que vuelve de un listado: su testigo, el hueco, el directorio, y las
+/// entradas de la primera página con CUÁNTAS se saltó el provider.
+type RespuestaListado = (
+    RequestToken,
+    u32,
+    VPath,
+    Result<(Vec<Entry>, Option<u64>), Error>,
+);
 
 /// Lo que vuelve de una tanda de sondeo: el directorio que se sondeaba, el
 /// hueco, y las parejas `(lo que se pidió, lo que contestó el provider)`.
@@ -1336,13 +1343,13 @@ impl Estado {
     /// su petición: un lote de una navegación abandonada se descarta igual
     /// que su primera página.
     async fn primera_pagina(
-        stream: Result<norte_client::EntryStream, Error>,
+        listado: Result<(norte_client::EntryStream, Option<u64>), Error>,
         slot: u32,
         token: RequestToken,
         buzon: mpsc::Sender<Mensaje>,
-    ) -> Result<Vec<Entry>, Error> {
+    ) -> Result<(Vec<Entry>, Option<u64>), Error> {
         use futures::StreamExt as _;
-        let mut stream = stream?;
+        let (mut stream, omitidas) = listado?;
         let mut primera = Vec::with_capacity(FIRST_PAGE);
         while primera.len() < FIRST_PAGE {
             match stream.next().await {
@@ -1350,7 +1357,7 @@ impl Estado {
                 // Un error a mitad de página se cuenta como el error del
                 // listado: media página no es un listado.
                 Some(Err(e)) => return Err(e),
-                None => return Ok(primera),
+                None => return Ok((primera, omitidas)),
             }
         }
         tokio::spawn(async move {
@@ -1380,7 +1387,7 @@ impl Estado {
                     .await;
             }
         });
-        Ok(primera)
+        Ok((primera, omitidas))
     }
 
     /// El listado inicial de cada hueco VISIBLE, el único que se espera EN
@@ -1419,7 +1426,7 @@ impl Estado {
     /// Aplica el resultado de un listado sobre SU hueco. El orden y el
     /// cursor los decide `PaneState`, que es quien sabe qué hacer con la
     /// memoria del cursor y con un foco pendiente.
-    fn aterriza_en(&mut self, id: u32, dir: VPath, res: Result<Vec<Entry>, Error>) {
+    fn aterriza_en(&mut self, id: u32, dir: VPath, res: Result<(Vec<Entry>, Option<u64>), Error>) {
         let Some(hueco) = self.huecos.get_mut(&id) else {
             return;
         };
@@ -1443,8 +1450,12 @@ impl Estado {
         hueco.olvidar_adornos();
         hueco.adornando = false;
         match res {
-            Ok(entradas) => {
+            Ok((entradas, omitidas)) => {
                 hueco.pane.set_listing(dir, entradas);
+                // TRAS `set_listing`, que la limpia: es un dato de ESTE
+                // listado y arrastrar el del anterior sería decir que faltan
+                // entradas de un directorio en el que faltaban de otro.
+                hueco.pane.set_skipped(omitidas);
                 hueco.primera_visible = 0;
                 hueco.estado = SlotState::Ready;
             }
@@ -6051,6 +6062,13 @@ impl Estado {
             cursor: (!hueco.pane.entries().is_empty())
                 .then_some(RowKey(hueco.pane.cursor() as u64)),
             marks: hueco.pane.marks_len() as u64,
+            skipped_note: hueco.pane.skipped().map_or_else(String::new, |n| {
+                clamp_display(norte_i18n::ta_in(
+                    self.lang,
+                    "listing-skipped",
+                    &[("n", &n.to_string())],
+                ))
+            }),
             columns: self.cabeceras(hueco),
             state: hueco.estado.clone(),
             quick: hueco.pane.quick().map(|q| crate::dto::QuickView {

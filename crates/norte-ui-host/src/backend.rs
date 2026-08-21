@@ -62,11 +62,18 @@ pub trait HostBackend: Send + Sync + 'static {
     /// `attrs` son los ids de atributo que las columnas configuradas piden:
     /// un provider solo manda lo que se le pide, así que pedir de menos deja
     /// una columna en blanco para siempre.
+    /// Lista un directorio, y dice CUÁNTAS entradas se saltó.
+    ///
+    /// La cuenta viaja con el listado y no aparte porque describe A ESE
+    /// listado: un provider que se salta entradas —sin permiso para
+    /// statearlas, por encima de un tope suyo— devuelve menos filas de las
+    /// que hay, y sin decirlo la pantalla miente por omisión. `None` = el
+    /// provider no lleva la cuenta, que NO es lo mismo que cero.
     fn list(
         &self,
         dir: VPath,
         attrs: Vec<String>,
-    ) -> BoxFuture<'static, Result<EntryStream, Error>>;
+    ) -> BoxFuture<'static, Result<(EntryStream, Option<u64>), Error>>;
 
     /// Crea UN directorio. Devuelve la Task ya encolada.
     fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>>;
@@ -238,12 +245,9 @@ impl HostBackend for norte_client::RemoteBackend {
         &self,
         dir: VPath,
         attrs: Vec<String>,
-    ) -> BoxFuture<'static, Result<EntryStream, Error>> {
+    ) -> BoxFuture<'static, Result<(EntryStream, Option<u64>), Error>> {
         let backend = self.clone();
-        Box::pin(async move {
-            let (stream, _total) = backend.list_stream(&dir, attrs).await?;
-            Ok(stream)
-        })
+        Box::pin(async move { backend.list_stream(&dir, attrs).await })
     }
 
     fn stat(&self, path: VPath, attrs: Vec<String>) -> BoxFuture<'static, Result<Entry, Error>> {

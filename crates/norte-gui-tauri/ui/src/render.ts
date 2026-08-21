@@ -1687,9 +1687,27 @@ export class Screen {
     slot: BrowserSlotView,
     cell: { w: number; h: number },
   ): void {
-    dom.title.replaceChildren(document.createTextNode(slot.path_display));
+    // La ruta en su propio nodo, y no como texto suelto de la cabecera: es
+    // lo ÚNICO que se puede recortar cuando no cabe. Con la ruta como texto
+    // directo, una larga empujaba fuera de la vista todo lo que viniera
+    // detrás —el △ de hostil y el aviso de entradas omitidas— y desaparecían
+    // en silencio, que es justo lo contrario de lo que existen para hacer.
+    const ruta = document.createElement("span");
+    ruta.className = "title-path";
+    ruta.textContent = slot.path_display;
+    dom.title.replaceChildren(ruta);
     if (slot.path_hostile) {
-      dom.title.append(badge(this.t("hostile-name")));
+      ruta.append(badge(this.t("hostile-name")));
+    }
+    if (slot.skipped_note !== "") {
+      // Lo que el provider se SALTÓ, ya dicho en Rust. Va en la CABECERA y no
+      // al final de la lista: lo que falta no está, así que no hay ninguna
+      // fila donde el lector pueda tropezarse con ello.
+      const aviso = document.createElement("span");
+      aviso.className = "slot-skipped";
+      aviso.setAttribute("role", "status");
+      aviso.textContent = slot.skipped_note;
+      dom.title.append(aviso);
     }
     dom.root.setAttribute("aria-label", slot.path_display);
     dom.generation = slot.generation;

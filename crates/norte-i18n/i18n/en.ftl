@@ -1193,6 +1193,10 @@ hostile-name = ⚠ altered name
 # separate messages because they answer different questions: a directory
 # with no entries, and a filter that matched none.
 listing-empty = empty
+# El provider no pudo con todas: sin permiso para statearlas, o por
+# encima de un tope suyo. Se DICE, porque lo que falta no está y no hay
+# ninguna fila donde el lector pueda tropezarse con ello.
+listing-skipped = { $n } entries were skipped
 palette-empty = nothing matches what you typed
 gui-menu-acts-on = acts on { $target }
 gui-menu-target-marks = { $n } marked items

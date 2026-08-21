@@ -463,6 +463,9 @@ fn slots_de_referencia() -> Vec<SlotView> {
             ],
             cursor: Some(RowKey(1)),
             marks: 0,
+            // El provider se saltó dos: se DICE. Un listado al que le faltan
+            // entradas y no lo avisa miente por omisión.
+            skipped_note: "se saltaron 2 entradas".to_owned(),
             columns: vec![
                 ColumnHeader {
                     id: "name".to_owned(),

@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 18;
+export const BRIDGE_VERSION = 19;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -98,6 +98,11 @@ export interface BrowserSlotView {
   rows: RowView[];
   cursor: RowKey | null;
   marks: number;
+  /**
+   * Lo que el provider se SALTÓ, ya dicho en el idioma del lector. Vacío =
+   * ninguna, o el provider no lleva la cuenta.
+   */
+  skipped_note: string;
   columns: ColumnHeader[];
   state: SlotState;
   quick: QuickView | null;

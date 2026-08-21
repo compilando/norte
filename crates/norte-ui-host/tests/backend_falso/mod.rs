@@ -53,6 +53,9 @@ pub struct Falso {
     /// El `help.md` de cada extensión, por id. Un id ausente contesta como
     /// un daemon que no tiene la página: markdown vacío.
     pub paginas: HashMap<String, String>,
+    /// Cuántas entradas dice el provider que se saltó. `None` = no lleva la
+    /// cuenta, que NO es lo mismo que cero.
+    pub omitidas: Option<u64>,
     /// La insignia que un decorador pone en cada ruta, por wire. Vacío =
     /// NINGÚN decorador consentido, que es lo que contesta el daemon.
     pub decoraciones: HashMap<String, String>,
@@ -500,7 +503,7 @@ impl HostBackend for Falso {
         &self,
         dir: VPath,
         attrs: Vec<String>,
-    ) -> BoxFuture<'static, Result<norte_client::EntryStream, Error>> {
+    ) -> BoxFuture<'static, Result<(norte_client::EntryStream, Option<u64>), Error>> {
         self.attrs_pedidos.lock().expect("attrs").push(attrs);
         self.listados.fetch_add(1, Ordering::SeqCst);
         if !self.arbol.contains_key(&dir.to_wire()) {
@@ -538,13 +541,14 @@ impl HostBackend for Falso {
             })
             .collect();
         let retraso = self.retraso_ms;
+        let omitidas = self.omitidas;
         Box::pin(async move {
             if retraso > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
             }
             let stream: norte_client::EntryStream =
                 Box::pin(futures::stream::iter(entradas.into_iter().map(Ok)));
-            Ok(stream)
+            Ok((stream, omitidas))
         })
     }
 

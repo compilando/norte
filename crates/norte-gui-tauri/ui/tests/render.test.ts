@@ -71,6 +71,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
         rows: [fila(0, "a.txt"), fila(1, "b.txt")],
         cursor: 0,
         marks: 0,
+        skipped_note: "",
         columns: [
           { id: "name", label: "Nombre", sort: "asc", sortable: true },
           { id: "size", label: "Tamaño", sort: null, sortable: true },
@@ -563,6 +564,43 @@ describe("el campo de texto de un diálogo", () => {
     screen.paint(conDialogo("caf\ufffde.txt", true));
     const aviso = document.querySelector('.dialog [role="alert"]');
     expect(aviso).not.toBeNull();
+  });
+});
+
+describe("las entradas que el provider se saltó", () => {
+  it("se DICEN en la cabecera, que es donde el lector puede verlas", () => {
+    const { screen } = montar();
+    const v = vista({ skipped_note: "se saltaron 3 entradas" });
+    screen.paint(v);
+    const aviso = document.querySelector(".slot-skipped");
+    expect(aviso?.textContent).toBe("se saltaron 3 entradas");
+    // En la CABECERA: al final de la lista no serviría de nada, porque lo
+    // que falta no está y no hay ninguna fila con la que tropezarse.
+    expect(aviso?.closest(".slot-title")).not.toBeNull();
+    // Y anunciado, para quien no mira la pantalla.
+    expect(aviso?.getAttribute("role")).toBe("status");
+  });
+
+  it("la ruta es lo que se recorta, no el aviso", () => {
+    const { screen } = montar();
+    screen.paint(vista({ skipped_note: "se saltaron 3 entradas" }));
+    const titulo = document.querySelector(".slot-title");
+    const ruta = titulo?.querySelector(".title-path");
+    const aviso = titulo?.querySelector(".slot-skipped");
+    // La ruta en su PROPIO nodo y el aviso como HERMANO suyo. Con la ruta
+    // como texto suelto de la cabecera, una larga empujaba el aviso fuera de
+    // la vista y desaparecía en silencio. jsdom no hace layout, así que lo
+    // que se puede clavar aquí es la estructura que lo hace imposible; el
+    // recorte de verdad se comprueba pintando.
+    expect(ruta?.textContent).toContain("casa");
+    expect(aviso?.parentElement).toBe(titulo);
+    expect(ruta?.contains(aviso ?? null)).toBe(false);
+  });
+
+  it("y un listado completo no dice nada", () => {
+    const { screen } = montar();
+    screen.paint(vista({}));
+    expect(document.querySelector(".slot-skipped")).toBeNull();
   });
 });
 

@@ -985,6 +985,18 @@ pub struct BrowserSlotView {
     pub cursor: Option<RowKey>,
     /// Cuántas filas están marcadas en el hueco (no solo en la ventana).
     pub marks: u64,
+    /// Cuántas entradas se saltó el provider, ya DICHO en el idioma del
+    /// lector. Vacío = ninguna, o el provider no lleva la cuenta.
+    ///
+    /// Se dice en pantalla porque es la clase de fallo que no se puede
+    /// descubrir mirando: lo que falta no está, y no hay ninguna fila donde
+    /// el lector pueda tropezarse con ello. Un listado incompleto que se
+    /// calla miente por omisión.
+    ///
+    /// Traducido AQUÍ, como la frase de estado de la búsqueda: un renderer
+    /// no traduce, y «se saltó una» y «se saltó 3» no se dicen igual en todos
+    /// los idiomas.
+    pub skipped_note: String,
     /// Las cabeceras de las columnas configuradas, en su orden. Incluye el
     /// nombre, que en las filas viaja aparte (`display_name`).
     pub columns: Vec<ColumnHeader>,

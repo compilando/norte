@@ -6482,3 +6482,88 @@ async fn la_insignia_de_un_plugin_llega_a_la_fila() {
         .expect("la columna configurada tiene su celda");
     assert_eq!(celda.text.as_deref(), Some("limpio"));
 }
+
+/// Lo que el provider se SALTÓ al listar se dice, y traducido.
+///
+/// Es la clase de fallo que no se puede descubrir mirando: lo que falta no
+/// está, así que no hay ninguna fila donde el lector pueda tropezarse con
+/// ello. Un listado incompleto que se calla miente por omisión. La cuenta la
+/// da el provider —`FsListResult::skipped`— y `HostBackend::list` la TIRABA.
+#[tokio::test]
+async fn lo_que_el_provider_se_salto_se_dice() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    f.omitidas = Some(3);
+    let (h, snap) = host_arbol(Arc::new(f)).await;
+    let _ = &h;
+
+    let b = listado(&snap);
+    assert_eq!(b.rows.len(), 1, "se pinta lo que sí vino");
+    assert!(
+        b.skipped_note.contains('3'),
+        "y se dice cuántas faltan: {:?}",
+        b.skipped_note
+    );
+    assert!(
+        !b.skipped_note.starts_with("listing-"),
+        "traducido, no la clave: {:?}",
+        b.skipped_note
+    );
+}
+
+/// Un provider que no lleva la cuenta NO dice que no se saltó ninguna.
+///
+/// `None` y `Some(0)` no son lo mismo, y afirmar «no falta nada» cuando
+/// nadie lo ha comprobado es peor que callarse.
+#[tokio::test]
+async fn un_provider_sin_cuenta_no_afirma_nada() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    f.omitidas = None;
+    let (h, snap) = host_arbol(Arc::new(f)).await;
+    let _ = &h;
+    assert!(listado(&snap).skipped_note.is_empty());
+}
+
+/// Y la cuenta es de ESTE listado: no se arrastra al siguiente directorio.
+#[tokio::test]
+async fn la_cuenta_de_omitidas_no_sobrevive_a_un_cd() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"docs".to_vec(), true)]);
+    f.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    f.omitidas = Some(2);
+    let backend = Arc::new(f);
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    assert!(!listado(&snap).skipped_note.is_empty(), "el primero sí");
+
+    // El segundo directorio también las salta —el doble contesta lo mismo—,
+    // pero lo que importa es que la cuenta se VUELVA a poner y no se herede:
+    // `set_listing` la limpia, así que sin `set_skipped` después quedaría
+    // vacía. Se comprueba que sigue diciéndose.
+    let docs = listado(&snap)
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("el directorio está")
+        .key;
+    h.dispatch(UiAction::Activate {
+        slot_id: 1,
+        key: docs,
+        generation: listado(&snap).generation,
+    })
+    .await
+    .expect("host vivo");
+    for _ in 0..20 {
+        let foto = siguiente_foto(&mut sub).await;
+        if listado(&foto).path_display.contains("docs") {
+            assert!(
+                !listado(&foto).skipped_note.is_empty(),
+                "la cuenta se vuelve a poner tras el `cd`"
+            );
+            return;
+        }
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+    }
+    panic!("nunca llegó el listado de docs");
+}
