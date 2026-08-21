@@ -26,6 +26,7 @@ import type {
   HelpView,
   PaletteView,
   ExtensionsView,
+  ColumnsPickerView,
   LayoutPickerView,
   MetadataSlotView,
   SearchView,
@@ -105,6 +106,7 @@ export class Screen {
     private readonly themeRoot: HTMLElement,
     private readonly pickerRoot: HTMLElement,
     private readonly layoutsRoot: HTMLElement,
+    private readonly columnsRoot: HTMLElement,
     private readonly searchRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
@@ -161,6 +163,7 @@ export class Screen {
     this.paintTheme(view.theme);
     this.paintPicker(view.picker);
     this.paintLayouts(view.layouts);
+    this.paintColumns(view.columns);
     this.paintSearch(view.search);
     this.paintViewer(view.viewer);
     this.paintDialogs(view.dialogs);
@@ -1094,6 +1097,90 @@ export class Screen {
    * reparte la pantalla de verdad, así que no puede mentir sobre lo que va a
    * salir. Aquí solo se pone en un `<pre>`.
    */
+  /**
+   * El selector de COLUMNAS: qué se pinta, en qué orden y con qué formato.
+   *
+   * Dice en su título el ALCANCE —un esquema o todos— y en su pie que lo
+   * elegido vale para ESTA ventana y no se guarda: esta fase no escribe
+   * configuración, y callarlo dejaría al usuario creyendo que acaba de
+   * configurar norte.
+   */
+  private paintColumns(columns: ColumnsPickerView | null): void {
+    if (columns === null) {
+      this.columnsRoot.replaceChildren();
+      this.columnsRoot.dataset["open"] = "false";
+      return;
+    }
+    this.columnsRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "columns-picker";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", columns.title);
+
+    const titulo = document.createElement("h1");
+    titulo.textContent = columns.title;
+    caja.append(titulo);
+
+    const lista = document.createElement("ul");
+    lista.className = "columns-rows";
+    lista.setAttribute("role", "listbox");
+    for (const [i, r] of columns.rows.entries()) {
+      const fila = document.createElement("li");
+      fila.className = "columns-row";
+      fila.id = `columns-row-${String(i)}`;
+      fila.setAttribute("role", "option");
+      fila.setAttribute("aria-selected", String(columns.cursor === i));
+      // Encendida o no, y si se puede tocar: las dos cosas al lector de
+      // pantalla, no solo al que mira.
+      fila.setAttribute("aria-checked", String(r.enabled));
+      fila.dataset["enabled"] = String(r.enabled);
+      fila.dataset["fixed"] = String(r.fixed);
+
+      const marca = document.createElement("span");
+      marca.className = "columns-check";
+      marca.textContent = r.enabled ? "☑" : "☐";
+      const nombre = document.createElement("span");
+      nombre.className = "columns-label";
+      nombre.dataset["hostile"] = String(r.hostile);
+      nombre.textContent = r.label;
+      if (r.hostile) {
+        nombre.append(badge(this.t("hostile-name")));
+      }
+      fila.append(marca, nombre);
+      if (r.format !== "") {
+        // El formato vigente. Bloqueado = lo fija un ajuste del esquema y
+        // aquí no se cicla; se pinta apagado en vez de desaparecer, porque
+        // una tecla que no hace nada y no dice por qué es peor.
+        const fmt = document.createElement("span");
+        fmt.className = "columns-format";
+        fmt.dataset["locked"] = String(r.format_locked);
+        fmt.textContent = r.format;
+        fila.append(fmt);
+      }
+      lista.append(fila);
+    }
+    if (columns.cursor < columns.rows.length) {
+      lista.setAttribute(
+        "aria-activedescendant",
+        `columns-row-${String(columns.cursor)}`,
+      );
+    }
+    caja.append(lista);
+
+    const nota = document.createElement("p");
+    nota.className = "columns-note";
+    nota.setAttribute("role", "note");
+    nota.textContent = columns.note;
+    caja.append(nota);
+
+    const pie = document.createElement("footer");
+    pie.className = "columns-hint";
+    pie.textContent = this.t("columns-picker-hint-gui");
+    caja.append(pie);
+    this.columnsRoot.replaceChildren(caja);
+  }
+
   private paintLayouts(layouts: LayoutPickerView | null): void {
     if (layouts === null) {
       this.layoutsRoot.replaceChildren();

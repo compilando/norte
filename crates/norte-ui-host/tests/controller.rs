@@ -6567,3 +6567,254 @@ async fn la_cuenta_de_omitidas_no_sobrevive_a_un_cd() {
     }
     panic!("nunca llegó el listado de docs");
 }
+
+// ---------------------------------------------------------------------------
+// El selector de columnas (tarea 4.2).
+// ---------------------------------------------------------------------------
+
+/// La primera vista del selector con el cursor donde `aguja` diga.
+async fn selector_columnas(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+) -> norte_ui_host::dto::ColumnsPickerView {
+    por_la_paleta(h, sub, "pane.columns").await;
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if let Some(c) = siguiente_foto(sub).await.columns.clone() {
+            return c;
+        }
+    }
+    panic!("el selector de columnas no abre");
+}
+
+/// El selector enseña lo configurado, dice su ALCANCE y avisa de que lo
+/// elegido no se guarda.
+///
+/// Lo último importa: esta fase no escribe configuración, y un selector que
+/// se calla deja al usuario creyendo que acaba de configurar norte.
+#[tokio::test]
+async fn el_selector_de_columnas_dice_su_alcance_y_que_no_guarda() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let c = selector_columnas(&h, &mut sub).await;
+
+    assert!(!c.rows.is_empty(), "hay columnas que enseñar");
+    assert!(
+        c.rows[0].fixed,
+        "la primera es el NOMBRE, y no se apaga ni se mueve: {:?}",
+        c.rows[0]
+    );
+    assert!(
+        !c.title.starts_with("columns-picker"),
+        "el título viene traducido: {:?}",
+        c.title
+    );
+    assert!(
+        !c.note.is_empty() && !c.note.starts_with("columns-picker"),
+        "y dice que no guarda, traducido: {:?}",
+        c.note
+    );
+    for r in &c.rows {
+        assert!(!r.label.is_empty(), "cada fila dice cómo se llama: {r:?}");
+    }
+}
+
+/// Encender una columna `attr:` RE-LISTA el hueco.
+///
+/// Los valores de un atributo solo llegan si se piden en `fs.list`, así que
+/// una columna nueva sobre el listado viejo se quedaría en blanco — y en
+/// blanco significa «este fichero no tiene ese atributo», que es otra cosa.
+/// La huella que decide si hace falta es la COMPARTIDA (`pane_fingerprint`),
+/// la misma que usa el TUI.
+#[tokio::test]
+async fn encender_una_columna_attr_vuelve_a_listar() {
+    let backend = arbol();
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        // SIN la columna de modo: encenderla es lo que cambia la huella.
+        columns: columnas_de(&["name", "size", "attr:posix.mode"]),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+    let c = selector_columnas(&h, &mut sub).await;
+
+    // Se baja hasta la fila del atributo y se APAGA: quitarla también cambia
+    // la huella, y es el caso que no pide un viaje de más al daemon... pero
+    // sí un re-listado, porque `attrs_de` deja de pedirla.
+    let fila = c
+        .rows
+        .iter()
+        .position(|r| r.id == "attr:posix.mode")
+        .expect("la columna de modo está");
+    for _ in 0..fila {
+        h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    }
+    let antes = backend.listados.load(Ordering::SeqCst);
+    h.dispatch(tecla(" ")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    // La foto puede venir atrasada, así que se drena hasta ver el efecto.
+    let mut cerrado = false;
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if siguiente_foto(&mut sub).await.columns.is_none() {
+            cerrado = true;
+            break;
+        }
+    }
+    assert!(cerrado, "el selector se cierra al aplicar");
+
+    for _ in 0..20 {
+        if backend.listados.load(Ordering::SeqCst) > antes {
+            return;
+        }
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let _ = siguiente_foto(&mut sub).await;
+    }
+    panic!(
+        "cambiar el conjunto de columnas `attr:` tiene que RE-LISTAR: los \
+         valores de un atributo solo llegan pidiéndolos en `fs.list`, y sin \
+         volver a pedirlo la columna se queda en blanco — que significa otra \
+         cosa"
+    );
+}
+
+/// Y cambiar solo el ORDEN no re-lista: no cambia qué se pide al provider.
+#[tokio::test]
+async fn cambiar_el_orden_de_las_columnas_no_vuelve_a_listar() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let _ = selector_columnas(&h, &mut sub).await;
+
+    let antes = backend.listados.load(Ordering::SeqCst);
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    h.dispatch(tecla("s")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    for _ in 0..10 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let _ = siguiente_foto(&mut sub).await;
+    }
+    assert_eq!(
+        backend.listados.load(Ordering::SeqCst),
+        antes,
+        "ordenar es cosa del pane: no hay nada nuevo que pedirle al provider"
+    );
+}
+
+/// El PIE del selector anuncia teclas, y esas teclas hacen lo que dice.
+///
+/// El pie es una cadena del catálogo y las teclas son un `match` del host:
+/// dos sitios, ninguna atadura. La primera versión de esto escuchaba `J`/`K`
+/// y `→` mientras el pie prometía `Shift+↑/↓` y `F` — una mentira que solo
+/// se descubre probando, y que ningún test verde decía.
+#[tokio::test]
+async fn las_teclas_del_selector_de_columnas_son_las_que_anuncia_su_pie() {
+    let pie = norte_i18n::t_in(norte_i18n::Lang::Es, "columns-picker-hint-gui");
+    assert!(
+        !pie.starts_with("columns-picker"),
+        "el pie existe en el catálogo: {pie:?}"
+    );
+
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let antes = selector_columnas(&h, &mut sub).await;
+
+    assert!(pie.contains("Espacio"));
+    // El cursor abre sobre el NOMBRE, que es fijo: espacio ahí no hace nada,
+    // y eso es el contrato —la primera columna ES el nombre por contrato del
+    // render— no un fallo.
+    assert_eq!(antes.cursor, 0);
+    assert!(antes.rows[0].fixed);
+    h.dispatch(tecla(" ")).await.expect("host vivo");
+    let quieta = siguiente_columnas(&h, &mut sub).await;
+    assert!(
+        quieta.rows[0].enabled,
+        "el nombre no se puede apagar: {:?}",
+        quieta.rows[0]
+    );
+
+    // Una fila que SÍ se puede tocar: espacio la apaga y la enciende.
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    let sobre_otra = siguiente_columnas(&h, &mut sub).await;
+    let fila = usize::try_from(sobre_otra.cursor).expect("cabe");
+    assert!(fila > 0 && !sobre_otra.rows[fila].fixed);
+    let encendida = sobre_otra.rows[fila].enabled;
+    h.dispatch(tecla(" ")).await.expect("host vivo");
+    let despues = siguiente_columnas(&h, &mut sub).await;
+    assert_ne!(
+        despues.rows[fila].enabled, encendida,
+        "espacio activa y desactiva"
+    );
+
+    // SHIFT+FLECHA mueve la FILA, no el cursor.
+    assert!(pie.contains("Shift+↑/↓"));
+    let orden_antes: Vec<String> = despues.rows.iter().map(|r| r.id.clone()).collect();
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "ArrowDown".to_owned(),
+        ctrl: false,
+        alt: false,
+        shift: true,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+    let movido = siguiente_columnas(&h, &mut sub).await;
+    let orden_despues: Vec<String> = movido.rows.iter().map(|r| r.id.clone()).collect();
+    assert_ne!(
+        orden_antes, orden_despues,
+        "shift+↓ mueve la fila: {orden_antes:?} → {orden_despues:?}"
+    );
+
+    // F cicla el formato de la fila del cursor, si lo admite. Se recorre
+    // como lo haría una persona —bajando y mirando dónde está— en vez de
+    // apuntar a un índice calculado sobre una lista que el paso anterior
+    // acaba de reordenar. Con tope: un bucle sobre una condición que puede
+    // no llegar es un test que se CUELGA en vez de fallar, y uno colgado no
+    // dice nada.
+    assert!(pie.contains(" F "));
+    let mut ciclado = false;
+    for _ in 0..movido.rows.len() + 2 {
+        let v = siguiente_columnas(&h, &mut sub).await;
+        let aqui = usize::try_from(v.cursor).expect("cabe");
+        let Some(fila) = v.rows.get(aqui) else { break };
+        if !fila.format.is_empty() && !fila.format_locked {
+            let antes = fila.format.clone();
+            h.dispatch(tecla("f")).await.expect("host vivo");
+            let luego = siguiente_columnas(&h, &mut sub).await;
+            assert_ne!(
+                luego.rows[aqui].format, antes,
+                "F cicla el formato de la fila del cursor"
+            );
+            ciclado = true;
+            break;
+        }
+        h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    }
+    assert!(ciclado, "alguna columna admite formato y se pudo ciclar");
+}
+
+/// La vista del selector tras la última tecla.
+async fn siguiente_columnas(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+) -> norte_ui_host::dto::ColumnsPickerView {
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if let Some(c) = siguiente_foto(sub).await.columns.clone() {
+            return c;
+        }
+    }
+    panic!("el selector sigue abierto");
+}

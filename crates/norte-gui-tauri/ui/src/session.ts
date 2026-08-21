@@ -169,6 +169,9 @@ export class Session {
       case "layouts":
         s.layouts = c.layouts;
         return true;
+      case "columns_picker":
+        s.columns = c.columns;
+        return true;
       case "search":
         s.search = c.search;
         return true;

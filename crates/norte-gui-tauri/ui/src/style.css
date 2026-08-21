@@ -1567,3 +1567,111 @@ body {
   color: var(--warning-fg);
   unicode-bidi: isolate;
 }
+
+/* --- El selector de columnas ------------------------------------------- */
+
+#columns[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+#columns[data-open="false"] {
+  display: none;
+}
+
+.columns-picker {
+  width: min(70ch, 90vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0 12px 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  overflow: auto;
+}
+
+.columns-picker h1 {
+  margin-bottom: 2px;
+  padding-bottom: 4px;
+  font-size: 1.35em;
+  color: var(--title-fg);
+  border-bottom: 1px solid var(--border);
+  /* El título lleva el ALCANCE dentro y ese trozo sale de un esquema, así
+     que es su propia corrida bidi. */
+  unicode-bidi: isolate;
+}
+
+.columns-rows {
+  flex: 1 1 auto;
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow: auto;
+}
+
+.columns-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+
+.columns-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+/* Una fila FIJA —el nombre— no se apaga ni se mueve. Se dice apagándola, no
+   escondiéndola: una lista donde falta lo que se espera ver es peor que una
+   donde algo está y se ve que no se toca. */
+.columns-row[data-fixed="true"] {
+  opacity: 0.7;
+}
+
+.columns-row[data-enabled="false"] .columns-label {
+  opacity: 0.55;
+}
+
+.columns-check {
+  flex: 0 0 auto;
+}
+
+.columns-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* La etiqueta de un `attr:` o un `plugin:` la escribe un TERCERO. */
+  unicode-bidi: isolate;
+}
+
+.columns-format {
+  flex: 0 0 auto;
+  color: var(--title-fg);
+  unicode-bidi: isolate;
+}
+
+/* El formato lo fija un ajuste del esquema: aquí no se cicla. Apagado, no
+   ausente — una tecla que no hace nada y no dice por qué es peor. */
+.columns-format[data-locked="true"] {
+  opacity: 0.5;
+}
+
+.columns-note {
+  flex: 0 0 auto;
+  margin: 4px 0 0;
+  color: var(--warning-fg);
+  unicode-bidi: isolate;
+}
+
+.columns-hint {
+  flex: 0 0 auto;
+  padding-top: 4px;
+  color: var(--title-fg);
+  border-top: 1px solid var(--border);
+}

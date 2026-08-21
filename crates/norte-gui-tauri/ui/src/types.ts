@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 19;
+export const BRIDGE_VERSION = 20;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -404,6 +404,34 @@ export interface LayoutRowView {
   broken: boolean;
 }
 
+/**
+ * El selector de COLUMNAS. Su título lleva ya el ALCANCE dentro —un esquema
+ * o todos— y su nota dice que lo elegido vale para esta ventana y no se
+ * guarda.
+ */
+export interface ColumnsPickerView {
+  title: string;
+  rows: ColumnsPickerRowView[];
+  cursor: number;
+  note: string;
+}
+
+export interface ColumnsPickerRowView {
+  /** Su id de configuración. Identidad: entera o vacía. */
+  id: string;
+  /** Cómo se llama, ya traducido y saneado. */
+  label: string;
+  /** La etiqueta se pinta DISTINTA de lo que es. */
+  hostile: boolean;
+  enabled: boolean;
+  /** Formato vigente, vocabulario ASCII cerrado. Vacío = no admite. */
+  format: string;
+  /** Lo fija un ajuste del esquema: aquí no se cicla. */
+  format_locked: boolean;
+  /** Ni se apaga ni se mueve. Es el NOMBRE. */
+  fixed: boolean;
+}
+
 export interface LayoutPickerView {
   title: string;
   rows: LayoutRowView[];
@@ -446,6 +474,7 @@ export interface ViewSnapshot {
   theme: ThemeView | null;
   search: SearchView | null;
   layouts: LayoutPickerView | null;
+  columns: ColumnsPickerView | null;
   picker: PickerView | null;
   viewer: ViewerView | null;
   locale: string;
@@ -476,6 +505,7 @@ export type ViewChange =
   | { change: "theme"; theme: ThemeView | null }
   | { change: "picker"; picker: PickerView | null }
   | { change: "layouts"; layouts: LayoutPickerView | null }
+  | { change: "columns_picker"; columns: ColumnsPickerView | null }
   | { change: "search"; search: SearchView | null };
 
 export interface ViewPatch {

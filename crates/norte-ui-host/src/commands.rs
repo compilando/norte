@@ -70,6 +70,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.shrink",
     "layout.equalize",
     "layout.pick",
+    "pane.columns",
     "app.palette",
     "app.help",
     "app.settings",
@@ -212,6 +213,8 @@ pub enum Efecto {
     Igualar,
     /// Abre el selector de disposiciones.
     Disposiciones,
+    /// Abre el selector de columnas.
+    Columnas,
     /// Abre la paleta de comandos.
     Paleta,
     /// Abre los ajustes, en solo lectura.
@@ -277,6 +280,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "layout.shrink" => Efecto::Tamano(-n),
         "layout.equalize" => Efecto::Igualar,
         "layout.pick" => Efecto::Disposiciones,
+        "pane.columns" => Efecto::Columnas,
         "app.palette" => Efecto::Paleta,
         "app.help" => Efecto::Ayuda,
         "app.settings" => Efecto::Ajustes,

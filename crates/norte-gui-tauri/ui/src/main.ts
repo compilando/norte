@@ -27,6 +27,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const themeEl = doc.getElementById("theme");
   const pickerEl = doc.getElementById("picker");
   const layoutsEl = doc.getElementById("layouts");
+  const columnsEl = doc.getElementById("columns");
   const searchEl = doc.getElementById("search");
   const viewerEl = doc.getElementById("viewer");
   const dialogsEl = doc.getElementById("dialogs");
@@ -41,6 +42,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     themeEl === null ||
     pickerEl === null ||
     layoutsEl === null ||
+    columnsEl === null ||
     searchEl === null ||
     viewerEl === null ||
     dialogsEl === null ||
@@ -92,6 +94,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     themeEl,
     pickerEl,
     layoutsEl,
+    columnsEl,
     searchEl,
     viewerEl,
     dialogsEl,

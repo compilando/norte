@@ -743,6 +743,38 @@ async fn celdas_de_plugin(
     out
 }
 
+/// Cómo se llama una columna en el selector, y si eso difiere de lo real.
+///
+/// Por `header_label`, que es la MISMA función que pinta la cabecera del
+/// listado: cómo se llama una columna no puede depender de dónde se lea. Un
+/// id que no parsea se enseña tal cual —es intención de configuración del
+/// usuario y el selector jamás la limpia— y por eso también se enmascara.
+fn etiqueta_de_columna(
+    r: &norte_frontend::columns_picker::PickerRow,
+    esquema: &str,
+    columnas: &norte_frontend::columns::ColumnsSettings,
+) -> (String, bool) {
+    use norte_frontend::columns::{ColumnId, header_label};
+    let Ok(cid) = r.id.parse::<ColumnId>() else {
+        // No parsea: el id crudo es lo único que se le puede enseñar, y es
+        // texto de un fichero de configuración.
+        return norte_frontend::display_name(r.id.as_bytes());
+    };
+    let estilo = columnas.style_for_id(esquema, &cid, None);
+    norte_frontend::display_name(header_label(&cid, &estilo, None).as_bytes())
+}
+
+/// Una IDENTIDAD de texto que cruza el bridge: entera, o vacía.
+///
+/// Misma regla que [`identidad_de_columna`] y por el mismo motivo (ADR 0061):
+/// recortar no es inyectivo, y una clave recortada casa con la equivocada.
+fn identidad_de_texto(id: &str) -> String {
+    if id.len() > crate::bridge::MAX_STRING_BYTES {
+        return String::new();
+    }
+    id.to_owned()
+}
+
 fn ahora_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -942,6 +974,8 @@ struct Estado {
     disposiciones: Vec<norte_frontend::layout_picker::UserLayout>,
     /// El selector de disposiciones, si está abierto.
     selector_disposicion: Option<norte_frontend::layout_picker::LayoutPicker>,
+    /// El selector de COLUMNAS, si está abierto.
+    selector_columnas: Option<norte_frontend::columns_picker::ColumnsPicker>,
     /// La barra lateral de sitios, si la disposición coloca una. Hay UNA
     /// como mucho: dos listas idénticas de discos no son una disposición,
     /// son un fallo (lo dice el registro compartido, `multi: false`).
@@ -1168,6 +1202,7 @@ impl Estado {
             epoca_busqueda: 0,
             disposiciones: user_layouts,
             selector_disposicion: None,
+            selector_columnas: None,
             selector: None,
             config: settings,
             paths,
@@ -1719,6 +1754,9 @@ impl Estado {
         }
         if self.selector_disposicion.is_some() {
             return Some(self.tecla_en_disposiciones(k, backend, buzon));
+        }
+        if self.selector_columnas.is_some() {
+            return Some(self.tecla_en_columnas(k, backend, buzon));
         }
         if self.selector.is_some() {
             return Some(self.tecla_en_selector(k, backend, buzon));
@@ -2440,6 +2478,199 @@ impl Estado {
             layouts: self.vista_disposiciones(),
         };
         (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Abre el selector de COLUMNAS sobre el esquema del hueco enfocado.
+    ///
+    /// Sobre SU esquema y no sobre el conjunto por defecto: las columnas se
+    /// configuran por esquema (`sftp` no enseña lo mismo que `file`), y
+    /// abrirlo sobre otro sería editar una pantalla distinta de la que se
+    /// está mirando.
+    fn abrir_columnas(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let hueco = self.hueco();
+        let esquema = hueco.pane.dir().scheme().to_owned();
+        let orden = hueco.pane.sort();
+        let catalogo = self.catalogos.get(esquema.as_str()).cloned();
+        self.selector_columnas = Some(
+            norte_frontend::columns_picker::ColumnsPicker::open_with_catalog(
+                &self.columnas,
+                &esquema,
+                orden,
+                catalogo.as_ref(),
+                // Sin catálogo de plugins todavía: el selector ofrece lo
+                // CONFIGURADO más los attrs que el provider anuncia, y una
+                // columna de plugin que nadie ha configurado no aparece
+                // aún. Ofrecerlas pide cachear `plugin.list` en el host, que
+                // hoy se pide por tanda de decoración y se tira.
+                &[],
+            ),
+        );
+        let cambio = ViewChange::ColumnsPicker {
+            columns: self.vista_columnas(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// La proyección del selector de columnas.
+    fn vista_columnas(&self) -> Option<crate::dto::ColumnsPickerView> {
+        let p = self.selector_columnas.as_ref()?;
+        let esquema = p.scheme().to_owned();
+        Some(crate::dto::ColumnsPickerView {
+            // El título ya trae el ALCANCE, con la clave que la TUI usa y
+            // su `$target`: inventarme una segunda colisionaba —Fluent se
+            // queda con la PRIMERA definición— y la mía habría quedado
+            // muerta con el catálogo diciendo que estaba.
+            title: clamp_display(norte_i18n::ta_in(
+                self.lang,
+                "columns-picker-title",
+                &[(
+                    "target",
+                    &if p.scheme_override() {
+                        esquema.clone()
+                    } else {
+                        norte_i18n::t_in(self.lang, "columns-picker-target-default")
+                    },
+                )],
+            )),
+            rows: p
+                .rows()
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    // La etiqueta de un `attr:` o un `plugin:` la da su
+                    // catálogo, o sea texto de TERCERO. La de un builtin la
+                    // da Fluent y es nuestra.
+                    let (label, hostil) = etiqueta_de_columna(r, &esquema, &self.columnas);
+                    crate::dto::ColumnsPickerRowView {
+                        // Identidad: entera o vacía, jamás recortada — es lo
+                        // que vuelve para encender, apagar y mover.
+                        id: identidad_de_texto(&r.id),
+                        label: clamp_display(label),
+                        hostile: hostil,
+                        enabled: r.enabled,
+                        format: r.format.clone().unwrap_or_default(),
+                        format_locked: r.format_locked,
+                        // La primera fila es el NOMBRE, que por contrato del
+                        // render va primero y no se apaga.
+                        fixed: i == 0,
+                    }
+                })
+                .collect(),
+            cursor: p.cursor() as u64,
+            // Esta ventana todavía NO escribe configuración: lo elegido vale
+            // para ella y se pierde al cerrarla. Callarlo dejaría al usuario
+            // creyendo que acaba de configurar norte.
+            note: clamp_display(norte_i18n::t_in(self.lang, "columns-picker-session-only")),
+        })
+    }
+
+    /// Las teclas del selector de columnas.
+    ///
+    /// Las mismas que el overlay del TUI, por el mismo modelo: encender y
+    /// apagar, subir y bajar la fila, elegir por qué se ordena y ciclar el
+    /// formato de la que lo admita.
+    fn tecla_en_columnas(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(p) = self.selector_columnas.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        // Las teclas son las que el PIE de la ventana anuncia
+        // (`columns-picker-hint-gui`), no otras: un pie que dice `Shift+↑/↓`
+        // sobre un código que escucha `J`/`K` es una mentira que solo se
+        // descubre probando. Con `shift`, la flecha MUEVE la fila en vez de
+        // mover el cursor, que es la misma tecla haciendo lo esperable.
+        match (k.key.as_str(), k.shift) {
+            ("Escape" | "esc", _) => self.selector_columnas = None,
+            ("ArrowDown" | "down", false) => p.down(),
+            ("ArrowUp" | "up", false) => p.up(),
+            ("ArrowDown" | "down", true) => p.move_down(),
+            ("ArrowUp" | "up", true) => p.move_up(),
+            (" " | "space", _) => p.toggle(),
+            ("s" | "S", _) => p.sort_current(),
+            ("f" | "F", _) => p.cycle_format(),
+            ("Enter" | "enter", _) => return self.aplicar_columnas(backend, buzon),
+            _ => return (self.aplicada(), Vec::new()),
+        }
+        let cambio = ViewChange::ColumnsPicker {
+            columns: self.vista_columnas(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Aplica lo elegido A ESTA VENTANA.
+    ///
+    /// No escribe `norte.toml`: esta fase no muta nada del disco, y el
+    /// selector lo DICE en su propia nota. Es el mismo trato que el selector
+    /// de disposiciones.
+    ///
+    /// Si cambia el conjunto de columnas `attr:`/`plugin:` hay que RE-LISTAR:
+    /// los valores de un attr solo llegan pidiéndolos en `fs.list`, así que
+    /// una columna nueva sobre el listado viejo se quedaría en blanco —
+    /// indistinguible de «este fichero no tiene ese atributo»— hasta el
+    /// siguiente `cd`. La huella que lo decide es la COMPARTIDA
+    /// (`pane_fingerprint`), no una cuenta de aquí.
+    fn aplicar_columnas(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(p) = self.selector_columnas.as_ref() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let elegido = p.finish();
+        self.selector_columnas = None;
+        let antes = self.huellas_de_columnas();
+        self.columnas
+            .apply_picked(elegido.scheme_target.as_deref(), &elegido.ids, elegido.sort);
+        for (id, fmt) in &elegido.formats {
+            self.columnas.apply_format(id, fmt);
+        }
+        for id in self.huecos.keys().copied().collect::<Vec<_>>() {
+            if antes.get(&id) != self.huellas_de_columnas().get(&id) {
+                self.re_listar(id, backend, buzon);
+            }
+        }
+        let snap = self.snapshot();
+        (
+            self.aplicada(),
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+        )
+    }
+
+    /// Vuelve a pedir el listado de un hueco, sin moverse de sitio.
+    ///
+    /// Lo pide el cambio de columnas: los valores de un `attr:` solo llegan
+    /// si se piden en `fs.list`, así que una columna nueva sobre el listado
+    /// viejo se quedaría en blanco — indistinguible de «este fichero no
+    /// tiene ese atributo».
+    fn re_listar(
+        &mut self,
+        slot: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let Some(dir) = self.huecos.get(&slot).map(|h| h.pane.dir().clone()) else {
+            return;
+        };
+        self.token += 1;
+        let token = RequestToken(self.token);
+        if let Some(h) = self.huecos.get_mut(&slot) {
+            h.en_vuelo = Some(token);
+            h.drenando = Some(token);
+        }
+        self.pedir_listado(slot, &dir, token, backend, buzon);
+    }
+
+    /// La huella de columnas de cada hueco: qué `attr:`/`plugin:` pinta.
+    fn huellas_de_columnas(&self) -> std::collections::BTreeMap<u32, Vec<String>> {
+        self.huecos
+            .iter()
+            .map(|(id, h)| (*id, self.columnas.pane_fingerprint(h.pane.dir().scheme())))
+            .collect()
     }
 
     /// La proyección del selector de disposiciones, con su vista previa.
@@ -4331,6 +4562,7 @@ impl Estado {
             Efecto::Tamano(_) | Efecto::Igualar | Efecto::Disposiciones => {
                 self.efecto_de_disposicion(efecto, backend, buzon)
             }
+            Efecto::Columnas => self.abrir_columnas(),
             Efecto::Buscar => self.pedir_busqueda(),
             Efecto::BuscarRapido => {
                 // Filtrar es el modo por defecto: es el que no mueve el
@@ -5630,6 +5862,7 @@ impl Estado {
             theme: self.vista_tema(),
             search: self.vista_busqueda(),
             layouts: self.vista_disposiciones(),
+            columns: self.vista_columnas(),
             picker: self.vista_selector(),
             viewer: self.vista_visor(),
             locale: self.locale.clone(),

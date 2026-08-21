@@ -763,6 +763,10 @@ msg-session-too-large = the session is too big to store; history dropped
 msg-session-unreadable = the stored session could not be read; starting from the configured layout
 msg-layout-applied = layout applied: { $name }
 layout-picker-title = Layout
+# This window does not write configuration yet: what is chosen applies to
+# THIS window and is lost when it closes. Saying nothing would leave the
+# user believing they had just configured norte.
+columns-picker-session-only = applies to this window; not saved
 # Task 6.1 in the graphical window: search over a subtree. "Running" and
 # "nothing matched" are said apart, because a short list that stopped
 # growing and one still growing read the same.

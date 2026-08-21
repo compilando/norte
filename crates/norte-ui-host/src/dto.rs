@@ -49,6 +49,8 @@ pub struct ViewSnapshot {
     pub search: Option<SearchView>,
     /// El selector de disposiciones, si está abierto.
     pub layouts: Option<LayoutPickerView>,
+    /// El selector de COLUMNAS, si está abierto.
+    pub columns: Option<ColumnsPickerView>,
     /// Un selector abierto (conexiones o volúmenes), si lo hay.
     pub picker: Option<PickerView>,
     /// Las extensiones, si están abiertas. Solo LECTURA: se ve qué hay
@@ -567,6 +569,63 @@ pub struct ExtensionConfigRowView {
     /// override bidi dentro llegaba al DOM tal cual mientras tres rustdocs
     /// afirmaban que eso no podía pasar.
     pub hostile: bool,
+}
+
+/// El selector de COLUMNAS: qué columnas hay, en qué orden y con qué formato.
+///
+/// El modelo es el compartido (`norte_frontend::columns_picker`), que la TUI
+/// envuelve en un overlay y esta ventana en un panel: la misma máquina, y por
+/// tanto las mismas reglas —el nombre va primero y no se puede ni apagar ni
+/// mover, un id que no parsea se PRESERVA porque es intención del usuario, y
+/// un attr que el provider anuncia y nadie configuró se OFRECE apagado.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColumnsPickerView {
+    /// Su título, ya traducido, CON el alcance dentro: el esquema al que se
+    /// aplica lo elegido (`sftp`, `zip+file`…) o «todos los esquemas».
+    ///
+    /// El alcance va en el título y no en un campo aparte porque es lo
+    /// primero que hay que saber para entender qué se está tocando, y desde
+    /// dentro del panel no hay forma de adivinarlo.
+    pub title: String,
+    /// Las filas, en orden de pintado.
+    pub rows: Vec<ColumnsPickerRowView>,
+    /// Qué fila tiene el cursor.
+    pub cursor: u64,
+    /// La frase que explica qué se aplica y qué NO, ya traducida.
+    ///
+    /// Esta ventana todavía no escribe configuración: lo elegido vale para
+    /// ESTA ventana y se pierde al cerrarla. Callarlo dejaría al usuario
+    /// creyendo que acaba de configurar norte.
+    pub note: String,
+}
+
+/// Una fila del selector de columnas.
+// Cuatro bools, cada uno un hecho independiente que se pinta distinto: la
+// etiqueta difiere de lo real, la columna está encendida, su formato lo fija
+// el esquema, y la fila no se puede tocar. Ver `RowView`.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColumnsPickerRowView {
+    /// Su id, tal como viaja a la configuración (`size`, `attr:posix.mode`).
+    /// Una IDENTIDAD: entera o vacía, jamás recortada.
+    pub id: String,
+    /// Cómo se llama, ya traducido y saneado. Para un `attr:` o un
+    /// `plugin:`, la etiqueta que da su catálogo, que es texto de tercero.
+    pub label: String,
+    /// La etiqueta se pinta DISTINTA de lo que es.
+    pub hostile: bool,
+    /// Se pinta en el listado.
+    pub enabled: bool,
+    /// El formato vigente (`iec`, `iso`…), vocabulario ASCII cerrado. Vacío
+    /// = esta columna no admite formato.
+    pub format: String,
+    /// El formato lo FIJA un ajuste del esquema y aquí no se puede ciclar.
+    /// Se pinta apagado en vez de desaparecer: una tecla que no hace nada y
+    /// no dice por qué es peor que una que dice que no.
+    pub format_locked: bool,
+    /// No se puede ni apagar ni mover. Es el caso del NOMBRE, que es la
+    /// primera columna por contrato del render.
+    pub fixed: bool,
 }
 
 /// El tema activo, visto por dentro.
@@ -1326,6 +1385,11 @@ pub enum ViewChange {
     Layouts {
         /// El selector, o `None` si se cerró.
         layouts: Option<LayoutPickerView>,
+    },
+    /// El selector de columnas se abrió, se movió o se cerró.
+    ColumnsPicker {
+        /// El selector, o `None` si se cerró.
+        columns: Option<ColumnsPickerView>,
     },
     /// Un selector se abrió, se movió o se cerró.
     Picker {

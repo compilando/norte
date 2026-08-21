@@ -11,6 +11,52 @@
     ],
     "slot_id": 1
   },
+  "columns_picker": {
+    "change": "columns_picker",
+    "columns": {
+      "cursor": 1,
+      "note": "se aplica a esta ventana; no se guarda",
+      "rows": [
+        {
+          "enabled": true,
+          "fixed": true,
+          "format": "",
+          "format_locked": false,
+          "hostile": false,
+          "id": "name",
+          "label": "Nombre"
+        },
+        {
+          "enabled": true,
+          "fixed": false,
+          "format": "iec",
+          "format_locked": false,
+          "hostile": false,
+          "id": "size",
+          "label": "Tamaño"
+        },
+        {
+          "enabled": false,
+          "fixed": false,
+          "format": "symbolic",
+          "format_locked": true,
+          "hostile": false,
+          "id": "attr:posix.mode",
+          "label": "Permisos"
+        },
+        {
+          "enabled": true,
+          "fixed": false,
+          "format": "",
+          "format_locked": false,
+          "hostile": false,
+          "id": "esto-no-parsea",
+          "label": "esto-no-parsea"
+        }
+      ],
+      "title": "Columnas — sftp"
+    }
+  },
   "connection": {
     "change": "connection",
     "reason_key": "conn-lost",

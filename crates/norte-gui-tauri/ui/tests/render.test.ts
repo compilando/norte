@@ -94,6 +94,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     theme: null,
     picker: null,
     layouts: null,
+    columns: null,
     search: null,
     viewer: null,
     locale: "es",
@@ -111,6 +112,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
   const theme = document.createElement("div");
   const picker = document.createElement("div");
   const layouts = document.createElement("div");
+  const columns = document.createElement("div");
   const search = document.createElement("div");
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
@@ -124,6 +126,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     theme,
     picker,
     layouts,
+    columns,
     search,
     viewer,
     dialogs,
@@ -141,6 +144,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     theme,
     picker,
     layouts,
+    columns,
     search,
     viewer,
     dialogs,
@@ -564,6 +568,85 @@ describe("el campo de texto de un diálogo", () => {
     screen.paint(conDialogo("caf\ufffde.txt", true));
     const aviso = document.querySelector('.dialog [role="alert"]');
     expect(aviso).not.toBeNull();
+  });
+});
+
+describe("el selector de columnas", () => {
+  function conColumnas(): ViewSnapshot {
+    const v = vista({});
+    v.columns = {
+      title: "Columnas — sftp",
+      cursor: 1,
+      note: "se aplica a esta ventana; no se guarda",
+      rows: [
+        {
+          id: "name",
+          label: "Nombre",
+          hostile: false,
+          enabled: true,
+          format: "",
+          format_locked: false,
+          fixed: true,
+        },
+        {
+          id: "size",
+          label: "Tamaño",
+          hostile: false,
+          enabled: true,
+          format: "iec",
+          format_locked: false,
+          fixed: false,
+        },
+        {
+          id: "attr:posix.mode",
+          label: "Permisos",
+          hostile: false,
+          enabled: false,
+          format: "symbolic",
+          format_locked: true,
+          fixed: false,
+        },
+      ],
+    };
+    return v;
+  }
+
+  it("dice qué está encendido, qué es fijo y qué formato tiene cada una", () => {
+    const { screen } = montar();
+    screen.paint(conColumnas());
+    const filas = [...document.querySelectorAll(".columns-row")];
+    expect(filas).toHaveLength(3);
+    // Encendida o no, al lector de pantalla y no solo al que mira.
+    expect(filas[0]?.getAttribute("aria-checked")).toBe("true");
+    expect(filas[2]?.getAttribute("aria-checked")).toBe("false");
+    // El NOMBRE es fijo: ni se apaga ni se mueve.
+    expect(filas[0]?.getAttribute("data-fixed")).toBe("true");
+    expect(filas[1]?.getAttribute("data-fixed")).toBe("false");
+    // El formato bloqueado se PINTA apagado, no desaparece: una tecla que no
+    // hace nada y no dice por qué es peor que una que dice que no.
+    const fmt = filas[2]?.querySelector(".columns-format");
+    expect(fmt?.textContent).toBe("symbolic");
+    expect(fmt?.getAttribute("data-locked")).toBe("true");
+    // Y una columna sin formato no inventa uno.
+    expect(filas[0]?.querySelector(".columns-format")).toBeNull();
+  });
+
+  it("dice que lo elegido NO se guarda", () => {
+    const { screen } = montar();
+    screen.paint(conColumnas());
+    const nota = document.querySelector(".columns-note");
+    expect(nota?.textContent).toContain("no se guarda");
+    // Con `role="note"`, para quien no mira la pantalla: creerse que uno
+    // acaba de configurar norte y descubrir que no es peor que no poder.
+    expect(nota?.getAttribute("role")).toBe("note");
+  });
+
+  it("y el alcance va en el TÍTULO, que es lo primero que se lee", () => {
+    const { screen } = montar();
+    screen.paint(conColumnas());
+    const caja = document.querySelector(".columns-picker");
+    expect(caja?.querySelector("h1")?.textContent).toContain("sftp");
+    expect(caja?.getAttribute("aria-modal")).toBe("true");
   });
 });
 

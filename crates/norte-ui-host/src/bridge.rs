@@ -25,6 +25,8 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **20**: la pantalla puede llevar el SELECTOR DE COLUMNAS: qué se pinta,
+///   en qué orden, con qué formato y sobre qué esquema.
 /// - **19**: un listado dice cuántas entradas se SALTÓ el provider.
 /// - **18**: una fila puede llevar la INSIGNIA que un plugin le puso, con el
 ///   rol del tema con el que pintarla, y una columna `plugin:` trae su valor.
@@ -67,7 +69,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 19;
+pub const BRIDGE_VERSION: u32 = 20;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

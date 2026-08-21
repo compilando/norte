@@ -596,6 +596,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         theme: Some(tema_de_referencia()),
         search: Some(busqueda_de_referencia()),
         layouts: Some(disposiciones_de_referencia()),
+        columns: Some(columnas_de_referencia()),
         picker: Some(selector_de_referencia()),
         viewer: Some(visor_de_referencia()),
         locale: "es".to_owned(),
@@ -676,6 +677,59 @@ fn disposiciones_de_referencia() -> norte_ui_host::dto::LayoutPickerView {
         cursor: 0,
         preview: vec!["··········".to_owned(), "·bbbbbbbb·".to_owned()],
         problem: String::new(),
+    }
+}
+
+/// El selector de COLUMNAS de referencia.
+///
+/// Sus cuatro filas son los cuatro casos que el modelo distingue: la fija
+/// —el nombre—, una builtin con formato ciclable, un `attr:` cuyo formato lo
+/// clava el esquema, y un id que NO parsea, que se preserva porque es
+/// intención de configuración del usuario.
+fn columnas_de_referencia() -> norte_ui_host::dto::ColumnsPickerView {
+    use norte_ui_host::dto::{ColumnsPickerRowView, ColumnsPickerView};
+    ColumnsPickerView {
+        title: "Columnas — sftp".to_owned(),
+        rows: vec![
+            ColumnsPickerRowView {
+                id: "name".to_owned(),
+                label: "Nombre".to_owned(),
+                hostile: false,
+                enabled: true,
+                format: String::new(),
+                format_locked: false,
+                fixed: true,
+            },
+            ColumnsPickerRowView {
+                id: "size".to_owned(),
+                label: "Tamaño".to_owned(),
+                hostile: false,
+                enabled: true,
+                format: "iec".to_owned(),
+                format_locked: false,
+                fixed: false,
+            },
+            ColumnsPickerRowView {
+                id: "attr:posix.mode".to_owned(),
+                label: "Permisos".to_owned(),
+                hostile: false,
+                enabled: false,
+                format: "symbolic".to_owned(),
+                format_locked: true,
+                fixed: false,
+            },
+            ColumnsPickerRowView {
+                id: "esto-no-parsea".to_owned(),
+                label: "esto-no-parsea".to_owned(),
+                hostile: false,
+                enabled: true,
+                format: String::new(),
+                format_locked: false,
+                fixed: false,
+            },
+        ],
+        cursor: 1,
+        note: "se aplica a esta ventana; no se guarda".to_owned(),
     }
 }
 
@@ -1105,6 +1159,12 @@ fn cambios_de_overlay() -> Vec<(&'static str, ViewChange)> {
             "layouts",
             ViewChange::Layouts {
                 layouts: Some(disposiciones_de_referencia()),
+            },
+        ),
+        (
+            "columns_picker",
+            ViewChange::ColumnsPicker {
+                columns: Some(columnas_de_referencia()),
             },
         ),
         (

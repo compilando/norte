@@ -759,6 +759,10 @@ msg-session-too-large = la sesión no cabe; se ha tirado el historial
 msg-session-unreadable = la sesión guardada no se pudo leer; se arranca con la disposición de la configuración
 msg-layout-applied = disposición aplicada: { $name }
 layout-picker-title = Disposición
+# Esta ventana todavía no escribe configuración: lo elegido vale para ESTA
+# ventana y se pierde al cerrarla. Callarlo dejaría al usuario creyendo que
+# acaba de configurar norte.
+columns-picker-session-only = se aplica a esta ventana; no se guarda
 # Tarea 6.1 en la ventana gráfica: buscar por un subárbol. «Corriendo» y
 # «no casó nada» se dicen distinto, porque una lista corta que ya no crece
 # y una que todavía crece se leen igual.
