@@ -555,8 +555,11 @@ body {
 }
 
 .help-body h1 {
-  font-size: 1.2em;
+  margin-bottom: 2px;
+  padding-bottom: 4px;
+  font-size: 1.35em;
   color: var(--title-fg);
+  border-bottom: 1px solid var(--border);
 }
 
 .help-body h2,
@@ -585,7 +588,14 @@ body {
 
 .help-table,
 .help-keys {
+  margin: 6px 0;
   border-collapse: collapse;
+}
+
+/* Sin esto, una tabla del corpus y la hoja de teclado que va debajo se leen
+   como una sola: dos rejillas pegadas, con anchos de columna distintos. */
+.help-keys {
+  border-top: 1px solid var(--border);
 }
 
 .help-table th,
@@ -606,6 +616,16 @@ body {
   color: var(--border-focus);
   font: inherit;
   white-space: nowrap;
+}
+
+/* Columna fija: con el ancho al contenido, la etiqueta de cada fila empieza
+   en un sitio distinto y la hoja deja de leerse como una lista de teclas. */
+.help-key-chord {
+  width: 12ch;
+}
+
+.help-key-reason {
+  width: 22ch;
 }
 
 /* Cada dato que pone el HOST dentro de una corrida de prosa de tercero es su
@@ -632,7 +652,7 @@ body {
 }
 
 .help-action-opens {
-  flex: 0 0 auto;
+  margin-left: 1ch;
   color: var(--border-focus);
 }
 

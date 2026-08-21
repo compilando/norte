@@ -368,12 +368,14 @@ export class Screen {
         fila.append(chord, label);
         if (a.opens_topic) {
           // La flecha es lo ÚNICO que distingue «abre una página» de «corre
-          // un comando», así que va en su propio nodo: pegada al texto queda
-          // en la misma corrida bidi que la etiqueta y puede acabar delante.
+          // un comando», así que va en su propio nodo —pegada al texto queda
+          // en la misma corrida bidi que la etiqueta y puede acabar delante—
+          // pero DENTRO de la etiqueta: como hermana suya, el reparto flex la
+          // mandaba al otro extremo de la fila, lejos de lo que califica.
           const abre = document.createElement("span");
           abre.className = "help-action-opens";
           abre.textContent = "→";
-          fila.append(abre);
+          label.append(abre);
         }
         if (!a.enabled && a.reason !== "") {
           const motivo = document.createElement("span");
