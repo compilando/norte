@@ -29,12 +29,15 @@ pub mod bridge;
 pub mod commands;
 pub mod controller;
 pub mod dto;
-/// La ayuda (F1): el corpus compartido proyectado al vocabulario del bridge.
 /// El gestor de extensiones (`app.extensions`), en solo lectura.
 mod extensions;
+/// La ayuda (F1): el corpus compartido proyectado al vocabulario del bridge.
 mod help;
 pub mod keys;
-/// El tema y los selectores de conexión y volumen, en solo lectura.
+/// El tema y el selector de volúmenes, en solo lectura.
+///
+/// De conexiones no hay selector todavía (#264), y anunciarlo aquí lo
+/// prometía en el índice de la documentación.
 pub mod pickers;
 pub mod settings;
 

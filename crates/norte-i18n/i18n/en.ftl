@@ -1249,6 +1249,18 @@ gui-task-kind-index = index
 gui-task-kind-embed = embed
 gui-task-kind-rename-batch = rename
 gui-task-kind-unknown = task
+gui-task-kind-compare = compare
+gui-task-kind-dir-size = size
+gui-task-kind-pack = pack
+gui-task-kind-test-archive = test
+gui-task-kind-split = split
+gui-task-kind-combine = combine
+gui-task-kind-sync-plan = plan
+gui-task-kind-sync = sync
+# La lanzó OTRO cliente de la misma sesión. Se pinta igual y se cancela igual
+# —es la misma sesión—, pero el tablero lo dice: una operación que uno no ha
+# pedido y no se distingue de las suyas es una sorpresa.
+gui-task-foreign = not yours
 gui-task-state-pending = pending
 gui-task-state-running = running
 gui-task-state-paused = paused

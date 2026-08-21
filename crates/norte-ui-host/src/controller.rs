@@ -635,6 +635,44 @@ fn kind_de(arbol: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId>
 
 /// El ahora, en milisegundos. Lo inyecta el proyector para que el formato de
 /// una fecha relativa («hace 3 días») no dependa de cuándo se serializó.
+/// La CLASE de una task, en el vocabulario del bridge.
+///
+/// Un `match` y no `format!("{:?}").to_lowercase()`. El `Debug` daba
+/// `renamebatch` y `dirsize` para variantes cuya clave en el catálogo es
+/// `rename-batch` y `dir-size`, así que esas dos se pintaban como su propio
+/// identificador.
+///
+/// `TaskKind` es `#[non_exhaustive]`, así que el comodín es obligatorio y
+/// esto NO deja de compilar al aparecer una variante: lo que hace es que caiga
+/// en `unknown`, que es una clave que EXISTE en el catálogo. Una task de un
+/// daemon más nuevo se lee «tarea» en vez de leerse `gui-task-kind-frobnicate`.
+fn clase_de_task(kind: norte_proto::TaskKind) -> &'static str {
+    use norte_proto::TaskKind as K;
+    match kind {
+        K::Copy => "copy",
+        K::Move => "move",
+        K::Delete => "delete",
+        K::Undo => "undo",
+        K::Search => "search",
+        K::Mkdir => "mkdir",
+        K::Index => "index",
+        K::Embed => "embed",
+        K::RenameBatch => "rename-batch",
+        K::Compare => "compare",
+        K::DirSize => "dir-size",
+        K::Pack => "pack",
+        K::TestArchive => "test-archive",
+        K::Split => "split",
+        K::Combine => "combine",
+        K::SyncPlan => "sync-plan",
+        K::Sync => "sync",
+        // `Unknown` y lo que traiga un daemon más nuevo, juntos: ver el doc
+        // de arriba. `unknown` es una clave de verdad, no un identificador
+        // pintado crudo.
+        K::Unknown | _ => "unknown",
+    }
+}
+
 fn ahora_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -929,6 +967,36 @@ struct Sesion {
     /// La política compartida de escritura: qué recortar, cuándo no repetir
     /// y cada cuánto vuelve a preguntar una ventana suelta.
     policy: norte_frontend::session::PushPolicy,
+    /// El cuerpo tal como se LEYÓ, para conservar lo ajeno.
+    ///
+    /// Escribir desde un `SessionBody::default()` tiraba todo lo que esta
+    /// ventana no entiende —los huecos de otro frontend, y las disposiciones
+    /// guardadas— en vez de conservarlo. La ola #229–#234 puso «conserva lo
+    /// ajeno en un relevo» exactamente por esto, y esta ventana no lo hacía.
+    leida: norte_frontend::session::SessionBody,
+}
+
+impl Hueco {
+    /// Un hueco recién nacido: sin listado, sin historial y CARGANDO.
+    ///
+    /// Uno solo, porque los tres sitios que lo construían —el arranque,
+    /// estrenar un hueco al cambiar de disposición y el de prueba— tenían que
+    /// coincidir campo a campo, y un campo nuevo que se olvide en uno de
+    /// ellos es un hueco que se comporta distinto según por dónde naciera.
+    fn vacio(dir: VPath) -> Self {
+        Self {
+            pane: PaneState::new(dir, Vec::new()),
+            historial: History::default(),
+            primera_visible: 0,
+            visibles: 64,
+            en_vuelo: None,
+            drenando: None,
+            sondeando: false,
+            cancelar_sondeo: std::sync::Arc::default(),
+            estado: SlotState::Loading,
+            sondeados: std::collections::HashSet::new(),
+        }
+    }
 }
 
 impl Estado {
@@ -968,21 +1036,7 @@ impl Estado {
         let mut huecos = std::collections::BTreeMap::new();
         for SlotId(id) in arbol.slot_ids() {
             if es_listado(&arbol, SlotId(id), &kinds) {
-                huecos.insert(
-                    id,
-                    Hueco {
-                        pane: PaneState::new(dir.clone(), Vec::new()),
-                        historial: History::default(),
-                        primera_visible: 0,
-                        visibles: 64,
-                        en_vuelo: None,
-                        drenando: None,
-                        sondeando: false,
-                        cancelar_sondeo: std::sync::Arc::default(),
-                        estado: SlotState::Loading,
-                        sondeados: std::collections::HashSet::new(),
-                    },
-                );
+                huecos.insert(id, Hueco::vacio(dir.clone()));
             }
         }
         let activo = huecos.keys().copied().next().unwrap_or(1);
@@ -1043,6 +1097,7 @@ impl Estado {
                 // cada treinta ticks: la dueña puede cerrarse en cualquier
                 // momento y entonces alguien tiene que recogerla.
                 policy: norte_frontend::session::PushPolicy::new(30),
+                leida: norte_frontend::session::SessionBody::default(),
             },
             status: StatusView::default(),
             conexion: ConnectionView::Connected,
@@ -2379,18 +2434,7 @@ impl Estado {
         self.huecos.retain(|id, _| nuevos.contains(id));
         for id in nuevos {
             if let std::collections::btree_map::Entry::Vacant(hueco) = self.huecos.entry(id) {
-                hueco.insert(Hueco {
-                    pane: PaneState::new(dir.clone(), Vec::new()),
-                    historial: History::default(),
-                    primera_visible: 0,
-                    visibles: 64,
-                    en_vuelo: None,
-                    drenando: None,
-                    sondeando: false,
-                    cancelar_sondeo: std::sync::Arc::default(),
-                    estado: SlotState::Loading,
-                    sondeados: std::collections::HashSet::new(),
-                });
+                hueco.insert(Hueco::vacio(dir.clone()));
             }
         }
         self.roles.clear(RoleId::Active);
@@ -2603,6 +2647,12 @@ impl Estado {
         let Ok(vols) = res else {
             return None;
         };
+        // Solo si la barra EXISTE en esta disposición. `get_or_insert_with`
+        // creaba un estado —sin favoritos, porque `sembrar_sitios` no corre—
+        // para una respuesta rezagada de una disposición que ya no tiene
+        // hueco `places`, y luego mandaba una foto entera para nada.
+        // `pedir_sitios` ya se guarda igual.
+        self.hueco_de_sitios()?;
         self.sitios
             .get_or_insert_with(norte_frontend::places::PlacesState::new)
             .set_drives(&vols);
@@ -4629,7 +4679,7 @@ impl Estado {
         });
         TaskView {
             task_id: p.task_id.get(),
-            kind: format!("{:?}", p.kind).to_lowercase(),
+            kind: clase_de_task(p.kind).to_owned(),
             state: match p.state {
                 norte_proto::TaskState::Completed => TaskStateView::Done,
                 norte_proto::TaskState::Cancelled => TaskStateView::Cancelled,
@@ -4816,9 +4866,15 @@ impl Estado {
                 incomplete: hay_tasks,
             };
         }
-        let mut body = self.capturar_sesion();
+        let ahora = u64::try_from(ahora_ms()).unwrap_or(0);
+        let mut body = self.capturar_sesion(ahora);
         let vivos: Vec<SlotId> = self.huecos.keys().map(|id| SlotId(*id)).collect();
-        if self.sesion.policy.prepare(&mut body, &vivos, 0).is_none() {
+        if self
+            .sesion
+            .policy
+            .prepare(&mut body, &vivos, ahora)
+            .is_none()
+        {
             // Nada cambió desde lo último que se mandó.
             return ShutdownReport {
                 incomplete: hay_tasks,
@@ -5175,6 +5231,7 @@ impl Estado {
             return;
         };
         self.aplicar_sesion(&body);
+        self.sesion.leida = body;
     }
 
     /// Coloca cada hueco donde la sesión dice que estaba.
@@ -5195,10 +5252,20 @@ impl Estado {
     /// Las MARCAS no entran: son una selección de trabajo, no un sitio donde
     /// estabas, y restaurarlas haría que una ventana nueva abriese con media
     /// docena de ficheros elegidos que nadie eligió.
-    fn capturar_sesion(&self) -> norte_frontend::session::SessionBody {
-        let mut body = norte_frontend::session::SessionBody::default();
-        body.layouts
-            .insert("default".to_owned(), self.arbol.clone());
+    fn capturar_sesion(&self, ahora: u64) -> norte_frontend::session::SessionBody {
+        // Se parte de lo LEÍDO y se pisa solo lo propio: los huecos de otro
+        // frontend y las disposiciones guardadas siguen ahí.
+        //
+        // Y `layouts` NO se toca. Hasta esta fase `self.arbol` era constante,
+        // así que escribirlo era escribir lo que se había leído; ahora cambia
+        // con `layout.pick` y con cada `Ctrl+→`, y el TUI adopta
+        // `layouts["default"]` al arrancar. Curiosear un minuto en el selector
+        // le cambiaba el arranque al TUI, que es lo que el rustdoc del campo
+        // prohíbe por su nombre (ADR 0058 D5) y lo que
+        // `aplicar_disposicion_elegida` promete no hacer: «se aplica para ESTA
+        // ventana». Era verdad para la configuración y falso para la sesión,
+        // que es la que lee el otro frontend.
+        let mut body = self.sesion.leida.clone();
         for (id, hueco) in &self.huecos {
             body.slots.insert(
                 *id,
@@ -5210,10 +5277,13 @@ impl Estado {
                     sort: hueco.pane.sort(),
                     columns: Vec::new(),
                     show_hidden: hueco.pane.show_hidden(),
-                    // El sello de edad lo pone quien escribe, con su reloj:
-                    // aquí no hay ninguno, y una hora inventada haría que la
-                    // barrida de huérfanos se llevara lo que no toca.
-                    touched_ms: 0,
+                    // El sello de edad, con el reloj de quien escribe. Un
+                    // cero sellaba los huecos VIVOS con la época: para la
+                    // barrida propia era inocuo —`0.saturating_sub(x)` nunca
+                    // pasa de `MAX_AGE_MS`— pero el siguiente escritor con
+                    // reloj de verdad los veía con treinta días y se los
+                    // llevaba en su primer volcado.
+                    touched_ms: ahora,
                 },
             );
         }

@@ -1921,7 +1921,9 @@ function taskNode(t: TaskView, tr: (k: string) => string): HTMLElement {
   el.className = "task";
   el.setAttribute("role", "listitem");
   const kind = document.createElement("span");
-  kind.textContent = tr(`task-kind-${t.kind}`);
+  // Con su prefijo `gui-`, que es como se llaman en el catálogo: sin él
+  // TODAS caían al `?? key` y cada task del tablero se leía `task-kind-copy`.
+  kind.textContent = tr(`gui-task-kind-${t.kind}`);
   const state = document.createElement("span");
   state.setAttribute("role", "progressbar");
   state.setAttribute("aria-valuemin", "0");
@@ -1934,7 +1936,7 @@ function taskNode(t: TaskView, tr: (k: string) => string): HTMLElement {
   detail.textContent = t.detail ?? "";
   el.append(kind, state, detail);
   if (t.foreign) {
-    el.append(badge(tr("task-foreign")));
+    el.append(badge(tr("gui-task-foreign")));
   }
   return el;
 }

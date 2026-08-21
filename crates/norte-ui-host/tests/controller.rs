@@ -1001,6 +1001,110 @@ async fn la_duena_vuelca_al_cerrar_y_sin_marcas() {
     );
 }
 
+/// La ventana gráfica NO le cambia la disposición al TUI, ni le barre sus
+/// huecos.
+///
+/// `capturar_sesion` escribía `self.arbol` en `layouts["default"]`, y hasta
+/// esta fase `self.arbol` era constante —o sea que escribía lo que había
+/// leído—. Cambiarlo con `layout.pick` o con dos `Ctrl+→` lo convirtió en una
+/// escritura de verdad, y `norte-tui` ADOPTA `layouts["default"]` al
+/// arrancar: curiosear un minuto en el selector le cambiaba el arranque al
+/// TUI. El rustdoc del campo lo prohíbe por su nombre (ADR 0058 D5) y
+/// `aplicar_disposicion_elegida` promete «se aplica para ESTA ventana», que
+/// era verdad para la configuración y falso para la sesión.
+///
+/// Y de paso: se partía de un `SessionBody::default()`, así que los huecos de
+/// cualquier OTRO frontend se tiraban en vez de conservarse.
+#[tokio::test]
+async fn cerrar_la_ventana_no_le_toca_la_disposicion_ni_los_huecos_al_tui() {
+    use norte_frontend::layout::{KindId, Node, SlotId};
+
+    // Lo que había en la sesión: la disposición del TUI y un hueco suyo que
+    // esta ventana no tiene.
+    let del_tui = Node::Split {
+        dir: norte_frontend::layout::Dir::Vertical,
+        children: vec![
+            Node::slot(SlotId(1), KindId::browser()),
+            Node::slot(SlotId(42), KindId::new("tasks")),
+        ],
+        sizes: vec![
+            norte_frontend::layout::Size::Weight(1),
+            norte_frontend::layout::Size::Fixed(3),
+        ],
+    };
+    let mut body = norte_frontend::session::SessionBody::default();
+    body.layouts.insert("default".to_owned(), del_tui.clone());
+    body.slots.insert(
+        99,
+        norte_frontend::session::SlotState {
+            path: VPath::parse("mem:///ajeno").expect("vpath"),
+            cursor: 0,
+            back: Vec::new(),
+            forward: Vec::new(),
+            sort: norte_frontend::SortSpec::default(),
+            columns: Vec::new(),
+            show_hidden: false,
+            // Recién tocado por el otro frontend: no es un huérfano.
+            touched_ms: u64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis()),
+            )
+            .unwrap_or(0),
+        },
+    );
+
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    *falso.sesion.lock().expect("sesión") = (
+        norte_proto::methods::Session {
+            version: norte_frontend::session::SCHEMA_VERSION,
+            revision: 7,
+            body: serde_json::to_value(&body).expect("json"),
+        },
+        true,
+    );
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    // La ventana cambia SU disposición: dos veces de ancho.
+    for _ in 0..2 {
+        h.dispatch(tecla("ctrl+Right")).await.expect("host vivo");
+    }
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let _ = siguiente_foto(&mut sub).await;
+
+    h.shutdown().await.expect("apaga");
+    let escrito = backend
+        .escrito
+        .lock()
+        .expect("escrito")
+        .clone()
+        .expect("escribió");
+    let guardado: norte_frontend::session::SessionBody =
+        serde_json::from_value(escrito).expect("el cuerpo parsea");
+
+    assert_eq!(
+        guardado.layouts.get("default"),
+        Some(&del_tui),
+        "la disposición del TUI se queda como estaba"
+    );
+    assert!(
+        guardado.slots.contains_key(&99),
+        "y su hueco también: partir de `default()` lo tiraba — {:?}",
+        guardado.slots.keys().collect::<Vec<_>>()
+    );
+    // Y los huecos VIVOS se sellan con un reloj de verdad: un cero los dejaba
+    // con treinta días de edad para el siguiente escritor, que se los llevaba
+    // en su primera barrida.
+    let vivo = guardado.slots.get(&1).expect("el hueco propio está");
+    assert!(
+        vivo.touched_ms > 0,
+        "el hueco vivo se sella con la hora, no con cero: {vivo:?}"
+    );
+}
+
 /// Un conflicto al escribir NO pisa lo de la otra ventana, y se DICE.
 #[tokio::test]
 async fn un_conflicto_no_pisa_a_nadie_y_se_dice() {

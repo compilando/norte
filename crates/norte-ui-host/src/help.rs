@@ -299,7 +299,6 @@ impl Ayuda {
     }
 
     /// Mete el catálogo de plugins en el modelo (H3e).
-    /// Mete el catálogo de plugins en el modelo (H3e).
     ///
     /// El ÚNICO punto de entrada de texto de tercero a la ayuda de esta
     /// ventana, y hace tres cosas que el modelo no hace:

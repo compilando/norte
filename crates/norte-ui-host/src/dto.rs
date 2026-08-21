@@ -816,13 +816,6 @@ pub struct SearchRowView {
 }
 
 /// Lo que el visor enseña.
-/// Lo que el visor enseña.
-/// Lo que el visor enseña.
-/// Lo que el visor enseña.
-/// Lo que el visor enseña.
-/// Lo que el visor enseña.
-/// Lo que el visor enseña.
-/// Lo que el visor enseña.
 ///
 /// Cinco banderas y no un estado: cada una es un HECHO independiente que el
 /// host resolvió (es hexadecimal, el encoding lo forzó el usuario, la

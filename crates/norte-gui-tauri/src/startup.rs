@@ -177,6 +177,8 @@ fn disposiciones_del_usuario(capas: &norte_config::Layers) -> Vec<UserLayout> {
 /// interpreta ninguno — y un tema retro que se ve idéntico se lee como roto.
 fn tema_visto(spec: Option<&str>, theme: &Theme) -> HostTheme {
     HostTheme {
+        // El RESUELTO, que es el de `theme`. `spec` es lo que se pidió, y con
+        // un fichero roto los dos no coinciden.
         name: spec.unwrap_or("default").to_owned(),
         roles: crate::catalog::variables(theme).into_iter().collect(),
         effects: efectos_declarados(theme),
@@ -293,7 +295,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
 
     let lang = idioma(cfg.common.ui_lang.as_deref());
 
-    let theme = tema(cfg.common.ui_theme.as_deref());
+    let (theme, tema_resuelto) = tema(cfg.common.ui_theme.as_deref());
     // Fuera del runtime (regla 2): `metadata` sobre un NFS caído bloquea el
     // hilo de trabajo hasta que expire el montaje, y encima antes de que
     // exista ventana donde decirlo. La lectura de la configuración de arriba
@@ -405,7 +407,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         effects: EFECTOS,
         settings: cfg.clone(),
         paths,
-        theme: tema_visto(cfg.common.ui_theme.as_deref(), &theme),
+        theme: tema_visto(tema_resuelto.as_deref(), &theme),
         user_layouts,
     })
     .await?;
@@ -432,13 +434,18 @@ fn nombre_de(v: &std::ffi::OsStr, que: &'static str) -> Result<String, StartupEr
         })
 }
 
-fn tema(nombre: Option<&str>) -> Theme {
+fn tema(nombre: Option<&str>) -> (Theme, Option<String>) {
     match nombre {
-        Some(n) => Theme::preset(n)
-            .ok()
-            .flatten()
-            .unwrap_or_else(Theme::preset_default),
-        None => Theme::preset_default(),
+        Some(n) => match Theme::preset(n).ok().flatten() {
+            Some(t) => (t, Some(n.to_owned())),
+            // El pedido no cargó. Se devuelve el que SE VA A PINTAR y el
+            // nombre del que se va a pintar, no el del que se pidió: la vista
+            // del tema existe para ver por dentro el que hay, y titularla con
+            // un nombre cuyos colores no son los de debajo es justo lo que
+            // esa vista viene a impedir.
+            None => (Theme::preset_default(), None),
+        },
+        None => (Theme::preset_default(), None),
     }
 }
 
