@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 6;
+export const BRIDGE_VERSION = 7;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -153,6 +153,19 @@ export interface ViewerView {
   lines: string[];
 }
 
+export interface WhichKeyRowView {
+  chord: string;
+  label: string;
+  enabled: boolean;
+  opens_sequence: boolean;
+  reason: string;
+}
+
+export interface WhichKeyView {
+  title: string;
+  rows: WhichKeyRowView[];
+}
+
 export interface ViewSnapshot {
   connection: ConnectionView;
   layout: LayoutView;
@@ -161,6 +174,7 @@ export interface ViewSnapshot {
   status: StatusView;
   dialogs: DialogView[];
   tasks: TaskView[];
+  whichkey: WhichKeyView | null;
   viewer: ViewerView | null;
   locale: string;
 }
@@ -181,7 +195,8 @@ export type ViewChange =
   | ({ change: "connection" } & ConnectionView)
   | ({ change: "layout" } & LayoutView)
   | { change: "columns"; slot_id: number; columns: ColumnHeader[] }
-  | { change: "viewer"; viewer: ViewerView | null };
+  | { change: "viewer"; viewer: ViewerView | null }
+  | { change: "which_key"; whichkey: WhichKeyView | null };
 
 export interface ViewPatch {
   base_sequence: number;

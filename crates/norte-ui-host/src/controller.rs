@@ -652,6 +652,22 @@ struct Estado {
     /// El resolver de teclas, con SU keymap efectivo dentro (mismo tipo y
     /// mismo contrato que el del TUI).
     resolver: Resolver,
+    /// Una COPIA del keymap efectivo del listado.
+    ///
+    /// El resolver se queda con el suyo, y construir el panel de
+    /// continuaciones necesita el efectivo entero (qué sigue a un prefijo, y
+    /// qué disponibilidad tiene cada continuación). `Effective` es `Clone` y
+    /// el TUI hace exactamente esto por el mismo motivo.
+    efectivo: Effective,
+    /// El idioma negociado, para las etiquetas de las continuaciones.
+    lang: norte_i18n::Lang,
+    /// Las continuaciones del prefijo a medias, si lo hay.
+    ///
+    /// Se construye en la TRANSICIÓN —la tecla que abre la secuencia y cada
+    /// una que la profundiza— y no al proyectar: `WhichKeyRows::build` cuesta
+    /// varias cadenas y uno o dos formatos Fluent POR FILA, y su propio
+    /// rustdoc avisa de lo que pasa si se llama desde el pintado.
+    whichkey: Option<norte_frontend::whichkey::WhichKeyRows>,
     /// El resolver de la pantalla del visor. Mientras el visor esté abierto,
     /// las teclas pasan por AQUÍ.
     resolver_visor: Resolver,
@@ -752,6 +768,11 @@ impl Estado {
             effects: efectos,
         } = options;
         let dir = &initial_dir;
+        // El idioma negociado, para las etiquetas de las continuaciones.
+        let lang = match locale.as_str() {
+            "es" => norte_i18n::Lang::Es,
+            _ => norte_i18n::Lang::En,
+        };
         let kinds = KindRegistry::builtin();
         let reparto = resolve(rect(viewport), &arbol, &kinds);
         // Un hueco de listado por cada `browser` del árbol, todos en el
@@ -790,6 +811,9 @@ impl Estado {
             sequence: 0,
             token: 0,
             locale,
+            efectivo: keymap.clone(),
+            lang,
+            whichkey: None,
             resolver: Resolver::new(keymap),
             resolver_visor: Resolver::new(keymap_visor),
             efectos,
@@ -1183,6 +1207,10 @@ impl Estado {
                     );
                 };
                 self.status.pending = None;
+                // La secuencia se cerró: el panel de continuaciones describe
+                // teclas que ya no están vivas, y su propio contrato dice que
+                // se tira en cuanto cambia el estado del resolver.
+                self.whichkey = None;
                 self.aplicar_efecto(efecto, backend, buzon)
             }
             Resolution::Pending(_) | Resolution::Counting(_) => {
@@ -1196,13 +1224,28 @@ impl Estado {
                         .join(" "),
                     count: self.resolver.count(),
                 });
-                let cambio = ViewChange::Status(self.status.clone());
-                (self.aplicada(), vec![self.parche(vec![cambio])])
+                // El panel se construye AQUÍ, en la transición, y no al
+                // proyectar: `build` cuesta varias cadenas y uno o dos
+                // formatos Fluent por fila.
+                self.whichkey = Some(norte_frontend::whichkey::WhichKeyRows::build(
+                    &self.efectivo,
+                    self.resolver.pending(),
+                    self.resolver.count(),
+                    self.lang,
+                ));
+                let cambios = vec![
+                    ViewChange::Status(self.status.clone()),
+                    ViewChange::WhichKey {
+                        whichkey: self.vista_whichkey(),
+                    },
+                ];
+                (self.aplicada(), vec![self.parche(cambios)])
             }
             Resolution::Unavailable { command, why } => {
                 let frase = norte_frontend::keymap::unavailable_message(&command, why);
                 self.status.message = Some(clamp_display(frase));
                 self.status.pending = None;
+                self.whichkey = None;
                 let cambio = ViewChange::Status(self.status.clone());
                 (
                     ActionAck::Unavailable {
@@ -1218,9 +1261,13 @@ impl Estado {
             }
             Resolution::Reset => {
                 let habia = self.status.pending.take().is_some();
-                if habia {
-                    let cambio = ViewChange::Status(self.status.clone());
-                    return (self.aplicada(), vec![self.parche(vec![cambio])]);
+                let panel = self.whichkey.take().is_some();
+                if habia || panel {
+                    let cambios = vec![
+                        ViewChange::Status(self.status.clone()),
+                        ViewChange::WhichKey { whichkey: None },
+                    ];
+                    return (self.aplicada(), vec![self.parche(cambios)]);
                 }
                 (self.aplicada(), Vec::new())
             }
@@ -2652,6 +2699,7 @@ impl Estado {
             // viva. Lo mismo con el tablero.
             dialogs: self.vistas_de_dialogos(),
             tasks: self.vistas_de_tasks(),
+            whichkey: self.vista_whichkey(),
             viewer: self.vista_visor(),
             locale: self.locale.clone(),
         }
@@ -2667,6 +2715,25 @@ impl Estado {
         self.visor_filas
             .unwrap_or_else(|| usize::from(self.viewport.1.saturating_sub(2)))
             .max(1)
+    }
+
+    /// La proyección del panel de continuaciones.
+    fn vista_whichkey(&self) -> Option<crate::dto::WhichKeyView> {
+        let panel = self.whichkey.as_ref()?;
+        Some(crate::dto::WhichKeyView {
+            title: clamp_display(panel.title.clone()),
+            rows: panel
+                .rows
+                .iter()
+                .map(|r| crate::dto::WhichKeyRowView {
+                    chord: clamp_display(r.chord.clone()),
+                    label: clamp_display(r.label.clone()),
+                    enabled: r.avail == Availability::Here,
+                    opens_sequence: r.opens_sequence,
+                    reason: clamp_display(r.reason.clone()),
+                })
+                .collect(),
+        })
     }
 
     /// La proyección del visor, con la ventana de líneas que cabe.

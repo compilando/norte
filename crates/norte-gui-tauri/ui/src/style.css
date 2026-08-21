@@ -202,6 +202,63 @@ body {
   gap: 8px;
 }
 
+#whichkey[data-open="true"] {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--cell-h);
+  display: block;
+  max-height: 40vh;
+  overflow: auto;
+  background: var(--status-bg);
+  border-top: 1px solid var(--border-focus);
+}
+
+#whichkey[data-open="false"] {
+  display: none;
+}
+
+.whichkey-title {
+  padding: 0 6px;
+  color: var(--border-focus);
+}
+
+.whichkey-rows {
+  margin: 0;
+  padding: 0 6px 4px;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(22ch, 1fr));
+  gap: 0 12px;
+}
+
+.whichkey-row {
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  unicode-bidi: isolate;
+}
+
+.whichkey-row[data-enabled="false"] {
+  opacity: 0.55;
+}
+
+.whichkey-chord {
+  color: var(--border-focus);
+  flex: 0 0 auto;
+}
+
+.whichkey-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.whichkey-reason {
+  opacity: 0.8;
+  flex: 0 0 auto;
+}
+
 #viewer[data-open="true"] {
   position: fixed;
   inset: 0;

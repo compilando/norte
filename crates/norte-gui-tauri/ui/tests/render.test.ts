@@ -76,6 +76,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     status: { message: "2 entradas", banners: [], pending: null },
     dialogs: [],
     tasks: [],
+    whichkey: null,
     viewer: null,
     locale: "es",
   };
@@ -84,13 +85,14 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
 function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
   document.body.replaceChildren();
   const root = document.createElement("main");
+  const whichkey = document.createElement("div");
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
-  document.body.append(root, viewer, dialogs);
+  document.body.append(root, whichkey, viewer, dialogs);
   document.documentElement.style.setProperty("--cell-h", `${CELL_H}px`);
   document.documentElement.style.setProperty("--cell-w", "8px");
   const enviadas: UiAction[] = [];
-  const screen = new Screen(root, viewer, dialogs, catalogo(), (a: UiAction) =>
+  const screen = new Screen(root, whichkey, viewer, dialogs, catalogo(), (a: UiAction) =>
     enviadas.push(a),
   );
   return { screen, enviadas, root };
@@ -459,5 +461,65 @@ describe("el campo de texto de un diálogo", () => {
     screen.paint(conDialogo("caf\ufffde.txt", true));
     const aviso = document.querySelector('.dialog [role="alert"]');
     expect(aviso).not.toBeNull();
+  });
+});
+
+describe("which-key", () => {
+  function conPanel() {
+    const v = vista({});
+    v.whichkey = {
+      title: "ctrl+x",
+      rows: [
+        {
+          chord: "g",
+          label: "Ir al principio",
+          enabled: true,
+          opens_sequence: false,
+          reason: "",
+        },
+        { chord: "s", label: "Más", enabled: true, opens_sequence: true, reason: "" },
+        {
+          chord: "p",
+          label: "Empaquetar",
+          enabled: false,
+          opens_sequence: false,
+          reason: "aquí no",
+        },
+      ],
+    };
+    return v;
+  }
+
+  it("enseña las continuaciones con su etiqueta, y marca las que abren otra secuencia", () => {
+    const { screen } = montar();
+    screen.paint(conPanel());
+    const filas = document.querySelectorAll(".whichkey-row");
+    expect(filas).toHaveLength(3);
+    expect(filas[0]?.textContent).toBe("gIr al principio");
+    // Una que abre secuencia se MARCA en vez de nombrar un comando que no
+    // ejecuta.
+    expect(filas[1]?.textContent).toContain("…");
+  });
+
+  it("una tecla que aquí no se puede dice por qué, y no se esconde", () => {
+    const { screen } = montar();
+    screen.paint(conPanel());
+    const apagada = document.querySelectorAll('.whichkey-row[data-enabled="false"]');
+    expect(apagada).toHaveLength(1);
+    expect(apagada[0]?.textContent).toContain("aquí no");
+  });
+
+  it("no es un diálogo: no captura el foco", () => {
+    const { screen } = montar();
+    screen.paint(conPanel());
+    const panel = document.querySelector(".whichkey");
+    expect(panel?.getAttribute("role")).toBe("group");
+    expect(panel?.getAttribute("aria-modal")).toBeNull();
+  });
+
+  it("sin prefijo a medias no hay panel", () => {
+    const { screen } = montar();
+    screen.paint(vista({}));
+    expect(document.querySelector(".whichkey")).toBeNull();
   });
 });

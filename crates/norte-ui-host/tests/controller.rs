@@ -2939,3 +2939,109 @@ async fn las_columnas_de_otro_esquema_no_estan_muertas() {
         "y su atributo se PIDE en el listado"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Which-key: qué continúa un prefijo a medias (fase 4, tarea 4.4).
+// ---------------------------------------------------------------------------
+
+/// Un prefijo a medias enseña QUÉ puede seguir, con la etiqueta de cada
+/// tecla en el idioma del usuario y diciendo cuáles no se pueden hacer aquí.
+///
+/// Lo construye `norte_frontend::whichkey`, el mismo modelo que pinta el TUI:
+/// el renderer no sabe resolver un prefijo, solo pintar lo que continúa.
+#[tokio::test]
+async fn un_prefijo_a_medias_ensena_lo_que_sigue() {
+    use norte_frontend::keymap::{Effective, Screen, parse_keymap, parse_keymap_layer};
+
+    let preset = parse_keymap(
+        norte_frontend::keymap::presets::source("orthodox").expect("preset de fábrica"),
+    )
+    .expect("preset parsea");
+    // Una secuencia de dos teclas, que es lo que which-key existe para
+    // enseñar. Ningún preset de fábrica las usa en `pane`.
+    let capa = parse_keymap_layer(
+        r#"
+[pane]
+prepend_keymap = [
+    { on = ["ctrl+x", "g"], run = "cursor.top" },
+    { on = ["ctrl+x", "b"], run = "cursor.bottom" },
+]
+"#,
+    )
+    .expect("capa parsea");
+    let keymap = Effective::build_for(
+        &preset,
+        &[capa],
+        &norte_ui_host::commands::todos(),
+        Screen::Browse,
+    )
+    .expect("efectivo");
+
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: arbol(),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap,
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "x".to_owned(),
+        ctrl: true,
+        alt: false,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+
+    let panel = siguiente_whichkey(&mut sub).await.expect("hay panel");
+    assert!(
+        !panel.title.is_empty(),
+        "el panel dice qué prefijo describe"
+    );
+    let teclas: Vec<&str> = panel.rows.iter().map(|r| r.chord.as_str()).collect();
+    assert!(
+        teclas.contains(&"g") && teclas.contains(&"b"),
+        "enseña las dos continuaciones: {teclas:?}"
+    );
+    for fila in &panel.rows {
+        assert!(!fila.label.is_empty(), "cada tecla dice qué hace: {fila:?}");
+    }
+
+    // Y al completar la secuencia, el panel se va: describía teclas que ya no
+    // están vivas.
+    h.dispatch(tecla("g")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(foto.whichkey.is_none(), "la secuencia se cerró");
+}
+
+/// Espera la siguiente actualización que traiga el panel de continuaciones.
+async fn siguiente_whichkey(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> Option<norte_ui_host::dto::WhichKeyView> {
+    for _ in 0..20 {
+        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("una actualización antes del plazo")
+            .expect("el host sigue vivo");
+        if let Update::Message(m) = siguiente
+            && let UiUpdate::Patch(p) = &m.payload
+        {
+            for c in &p.changes {
+                if let norte_ui_host::dto::ViewChange::WhichKey { whichkey } = c {
+                    return whichkey.clone();
+                }
+            }
+        }
+    }
+    panic!("no llegó ninguna actualización con panel");
+}

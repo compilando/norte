@@ -253,6 +253,25 @@
       "path_hostile": false,
       "total_rows": 120,
       "truncated": true
+    },
+    "whichkey": {
+      "rows": [
+        {
+          "chord": "g",
+          "enabled": true,
+          "label": "Ir al principio",
+          "opens_sequence": false,
+          "reason": ""
+        },
+        {
+          "chord": "s",
+          "enabled": false,
+          "label": "Sincronizar",
+          "opens_sequence": false,
+          "reason": "aquí no"
+        }
+      ],
+      "title": "ctrl+x"
     }
   }
 }

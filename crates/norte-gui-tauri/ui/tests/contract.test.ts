@@ -68,6 +68,7 @@ describe("el contrato con el host", () => {
       "status",
       "tasks",
       "viewer",
+      "which_key",
     ]);
   });
 

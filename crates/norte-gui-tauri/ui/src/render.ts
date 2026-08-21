@@ -22,6 +22,7 @@ import type {
   UiAction,
   ViewSnapshot,
   ViewerView,
+  WhichKeyView,
 } from "./types";
 
 /** Filas de más que se piden por arriba y por abajo del hueco visible. */
@@ -56,6 +57,7 @@ export class Screen {
 
   constructor(
     private readonly root: HTMLElement,
+    private readonly whichKeyRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
     private readonly catalog: HostCatalog,
@@ -95,8 +97,56 @@ export class Screen {
       dom.root.setAttribute("aria-current", p.role === "active" ? "true" : "false");
       this.paintSlot(dom, slot, view, cell);
     }
+    this.paintWhichKey(view.whichkey);
     this.paintViewer(view.viewer);
     this.paintDialogs(view.dialogs);
+  }
+
+  /** Lo que puede seguir a un prefijo a medias. */
+  private paintWhichKey(panel: WhichKeyView | null): void {
+    if (panel === null) {
+      this.whichKeyRoot.replaceChildren();
+      this.whichKeyRoot.dataset["open"] = "false";
+      return;
+    }
+    this.whichKeyRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "whichkey";
+    // No es un diálogo: no captura el foco ni espera respuesta. Es una ayuda
+    // que aparece mientras la secuencia está a medias.
+    caja.setAttribute("role", "group");
+    caja.setAttribute("aria-label", panel.title);
+
+    const titulo = document.createElement("header");
+    titulo.className = "whichkey-title";
+    titulo.textContent = panel.title;
+    caja.append(titulo);
+
+    const lista = document.createElement("ul");
+    lista.className = "whichkey-rows";
+    for (const r of panel.rows) {
+      const fila = document.createElement("li");
+      fila.className = "whichkey-row";
+      fila.dataset["enabled"] = String(r.enabled);
+      const chord = document.createElement("span");
+      chord.className = "whichkey-chord";
+      chord.textContent = r.chord;
+      const label = document.createElement("span");
+      label.className = "whichkey-label";
+      // `opens_sequence` se MARCA en vez de nombrar un comando que la tecla
+      // no ejecuta; el motivo de un atajo apagado ya viene traducido.
+      label.textContent = r.opens_sequence ? `${r.label}…` : r.label;
+      fila.append(chord, label);
+      if (!r.enabled && r.reason !== "") {
+        const motivo = document.createElement("span");
+        motivo.className = "whichkey-reason";
+        motivo.textContent = r.reason;
+        fila.append(motivo);
+      }
+      lista.append(fila);
+    }
+    caja.append(lista);
+    this.whichKeyRoot.replaceChildren(caja);
   }
 
   /** El visor tapa la pantalla mientras está abierto. */

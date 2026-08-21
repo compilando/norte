@@ -9,6 +9,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A half-typed prefix shows what continues it.** Bridge version **7**: the
+  window paints a which-key panel while a key sequence is pending — which key
+  follows, what each one does in the reader's language, which ones open another
+  sequence (marked, rather than named after a command they do not run) and
+  which ones this frontend cannot do, with the reason already translated. It is
+  the shared `norte-frontend::whichkey` model, built on the keystroke that
+  opens or deepens the sequence and dropped the moment it closes, because its
+  own contract says a panel kept past that point describes keys that are no
+  longer live.
+
 - **Column headers and the viewer travel as patches.** Bridge version **6**.
   Sorting used to move the rows and leave the `▲` describing the previous
   order — the screen contradicted itself, and `aria-sort` said the wrong thing

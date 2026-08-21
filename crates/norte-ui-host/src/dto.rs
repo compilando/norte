@@ -35,11 +35,44 @@ pub struct ViewSnapshot {
     pub dialogs: Vec<DialogView>,
     /// Tasks vivas y las que acaban de terminar.
     pub tasks: Vec<TaskView>,
+    /// El panel de continuaciones, si hay un prefijo a medias.
+    pub whichkey: Option<WhichKeyView>,
     /// El visor, si hay uno abierto. Ocupa la pantalla: mientras esté, las
     /// teclas son suyas y el listado no se mueve por debajo.
     pub viewer: Option<ViewerView>,
     /// Idioma negociado, para que el renderer pida el catálogo correcto.
     pub locale: String,
+}
+
+/// Lo que puede seguir a un prefijo a medias.
+///
+/// Se construye con `norte_frontend::whichkey`, que es el mismo modelo que
+/// pinta el TUI: qué teclas continúan la secuencia, cómo se llama cada una en
+/// el idioma del usuario, cuáles abren otra secuencia y cuáles no se pueden
+/// hacer aquí. El renderer lo pinta; no sabe resolver un prefijo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WhichKeyView {
+    /// El prefijo tecleado, ya pintado, con el contador delante si lo hay.
+    pub title: String,
+    /// Una fila por tecla que puede seguir, en el orden compartido.
+    pub rows: Vec<WhichKeyRowView>,
+}
+
+/// Una continuación posible.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WhichKeyRowView {
+    /// La tecla, escrita para leerse (`F5`) y enmascarada: un `keymap.toml`
+    /// de proyecto puede ligar cualquier punto de código.
+    pub chord: String,
+    /// Qué hace, en el idioma del usuario.
+    pub label: String,
+    /// Se puede hacer aquí.
+    pub enabled: bool,
+    /// Abre OTRA secuencia en vez de ejecutar algo. El renderer lo marca en
+    /// vez de nombrar un comando que la tecla no ejecuta.
+    pub opens_sequence: bool,
+    /// Por qué no se puede, ya traducido. Vacío cuando sí se puede.
+    pub reason: String,
 }
 
 /// Lo que el visor enseña.
@@ -454,6 +487,11 @@ pub enum ViewChange {
         slot_id: u32,
         /// Las cabeceras, en su orden.
         columns: Vec<ColumnHeader>,
+    },
+    /// El panel de continuaciones apareció, cambió o se fue.
+    WhichKey {
+        /// Las continuaciones, o `None` si ya no hay prefijo a medias.
+        whichkey: Option<WhichKeyView>,
     },
     /// El visor cambió (se abrió, se desplazó, se cerró).
     ///

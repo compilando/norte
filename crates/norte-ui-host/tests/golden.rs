@@ -361,6 +361,25 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         },
         dialogs: vec![dialogo_de_referencia()],
         tasks: vec![task_de_referencia()],
+        whichkey: Some(norte_ui_host::dto::WhichKeyView {
+            title: "ctrl+x".to_owned(),
+            rows: vec![
+                norte_ui_host::dto::WhichKeyRowView {
+                    chord: "g".to_owned(),
+                    label: "Ir al principio".to_owned(),
+                    enabled: true,
+                    opens_sequence: false,
+                    reason: String::new(),
+                },
+                norte_ui_host::dto::WhichKeyRowView {
+                    chord: "s".to_owned(),
+                    label: "Sincronizar".to_owned(),
+                    enabled: false,
+                    opens_sequence: false,
+                    reason: "aquí no".to_owned(),
+                },
+            ],
+        }),
         viewer: Some(visor_de_referencia()),
         locale: "es".to_owned(),
     }
@@ -542,6 +561,21 @@ fn cada_cambio_cruza_el_bridge() {
                     banners: Vec::new(),
                     pending: None,
                 }),
+            ),
+            (
+                "which_key",
+                ViewChange::WhichKey {
+                    whichkey: Some(norte_ui_host::dto::WhichKeyView {
+                        title: "ctrl+x".to_owned(),
+                        rows: vec![norte_ui_host::dto::WhichKeyRowView {
+                            chord: "g".to_owned(),
+                            label: "Ir al principio".to_owned(),
+                            enabled: true,
+                            opens_sequence: false,
+                            reason: String::new(),
+                        }],
+                    }),
+                },
             ),
             (
                 "viewer",

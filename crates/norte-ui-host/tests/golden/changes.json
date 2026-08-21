@@ -140,5 +140,20 @@
       "total_rows": 120,
       "truncated": true
     }
+  },
+  "which_key": {
+    "change": "which_key",
+    "whichkey": {
+      "rows": [
+        {
+          "chord": "g",
+          "enabled": true,
+          "label": "Ir al principio",
+          "opens_sequence": false,
+          "reason": ""
+        }
+      ],
+      "title": "ctrl+x"
+    }
   }
 }
