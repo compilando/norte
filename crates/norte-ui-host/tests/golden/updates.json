@@ -837,6 +837,7 @@
       "status": "lote: aplicable — una task, un deshacer",
       "total": 3
     },
-    "compare": null
+    "compare": null,
+    "sync": null
   }
 }

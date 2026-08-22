@@ -11494,3 +11494,187 @@ async fn separar_los_paneles(h: &UiHost, sub: &mut norte_ui_host::controller::Ui
         .await
         .expect("host vivo");
 }
+
+// ---------------------------------------------------------------------------
+// Sincronizar: el PLAN (tarea 6.3, fase A).
+// ---------------------------------------------------------------------------
+
+/// Espera la siguiente actualización con el panel de sincronización.
+async fn siguiente_sync(
+    sub: &mut norte_ui_host::controller::UiSubscription,
+) -> Option<norte_ui_host::dto::SyncView> {
+    for _ in 0..40 {
+        let Ok(Some(u)) = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+        else {
+            continue;
+        };
+        match u {
+            Update::Message(m) => {
+                if let UiUpdate::Patch(p) = &m.payload {
+                    for c in &p.changes {
+                        if let norte_ui_host::dto::ViewChange::Sync { sync } = c {
+                            return sync.clone();
+                        }
+                    }
+                }
+            }
+            Update::Lagged => {}
+        }
+    }
+    panic!("no llegó ninguna actualización con el plan");
+}
+
+/// Un paso de plan, con lo mínimo para pintarlo.
+fn paso_de_plan(id: u64, rel: &str, kind: norte_proto::methods::SyncStepKind) -> norte_proto::methods::SyncStep {
+    norte_proto::methods::SyncStep {
+        id,
+        kind,
+        rel: norte_proto::methods::RelPath::new(
+            rel.split('/')
+                .map(|s| norte_proto::Segment::new(s.as_bytes().to_vec()).expect("segmento"))
+                .collect(),
+        ),
+        dest_rel: None,
+        size: Some(10),
+        criterion: norte_proto::methods::CompareCriterion::Size,
+        confidence: norte_proto::methods::CompareConfidence::Certain,
+        // La reversa que le corresponde a una copia: deshacerla es BORRAR lo
+        // que creó. El modelo compartido rechaza un paso cuya forma se
+        // contradice —una clase que escribe sin reversa, un `Skip` que dice
+        // tenerla— y ese rechazo es lo que impide aprobar un plan que no se
+        // puede pintar.
+        reversal: Some(norte_proto::methods::StepReversal::Delete),
+        reason: None,
+    }
+}
+
+/// El cierre de un plan sin bloqueos.
+fn plan_cerrado(pasos: u64) -> norte_proto::methods::SyncPlanDone {
+    // Los recuentos, como los contaría el daemon: el modelo los compara
+    // clase a clase con los suyos, y un plan que no cuadra NO se aprueba.
+    // Los bytes también: cada paso de este test mide diez.
+    let counts = norte_proto::methods::SyncCounts {
+        copy: pasos,
+        bytes: pasos * 10,
+        ..Default::default()
+    };
+    norte_proto::methods::SyncPlanDone {
+        // Se corrige al aterrizar: el modelo casa el cierre con SU Task.
+        task_id: norte_proto::TaskId::new(0),
+        plan_hash: norte_proto::methods::PlanHash::parse(&"a".repeat(
+            norte_proto::methods::PLAN_HASH_LEN,
+        ))
+        .expect("hash de test"),
+        counts,
+        blockers: Vec::new(),
+        blockers_total: 0,
+        executable: true,
+        // Con papelera: es lo que hace que la columna del deshacer pueda
+        // decir algo distinto de «no se sabe».
+        dest_trash: norte_proto::methods::DestTrash::Restorable,
+    }
+}
+
+/// Pedir sincronizar abre el panel con el plan que contestó el core, y el
+/// plan dice de cada paso si el deshacer lo devuelve.
+#[tokio::test]
+async fn pedir_sincronizar_abre_el_plan() {
+    let falso = arbol_como_falso();
+    *falso.plan_de_sync.lock().expect("plan") = Some((
+        vec![
+            // Las dos de la MISMA clase: el modelo compara los recuentos
+            // clase a clase contra los del daemon, y un plan que no cuadra no
+            // se aprueba — que es exactamente lo que tiene que pasar.
+            paso_de_plan(1, "a.md", norte_proto::methods::SyncStepKind::Copy),
+            paso_de_plan(2, "b.md", norte_proto::methods::SyncStepKind::Copy),
+        ],
+        plan_cerrado(2),
+    ));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
+    let mut sub = h.subscribe();
+    separar_los_paneles(&h, &mut sub).await;
+    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
+
+    // Hasta que el plan CIERRA: los pasos llegan en un parche y el cierre en
+    // otro, y lo que se puede aprobar es un plan cerrado.
+    let mut vista = siguiente_sync(&mut sub).await.expect("abre");
+    for _ in 0..20 {
+        if vista.can_approve {
+            break;
+        }
+        vista = siguiente_sync(&mut sub).await.expect("sigue abierto");
+    }
+    assert_eq!(vista.steps.len(), 2, "{vista:?}");
+    assert_eq!(vista.total, 2);
+    // El modo se PINTA antes de aprobar: un espejo borra y una actualización
+    // no, y quien aprueba tiene que verlo.
+    assert_eq!(vista.mode, "update");
+    // Y cada paso dice si el deshacer lo devuelve: nunca sale de `reversal` a
+    // secas, que es la mitad que miente sin papelera en el destino.
+    assert!(vista.steps.iter().all(|p| !p.undo.is_empty()), "{vista:?}");
+    assert!(
+        vista.can_approve,
+        "un plan cerrado y sin bloqueos se aprueba: {}",
+        vista.status
+    );
+    let pedidos = backend.planes_pedidos.lock().expect("planes").clone();
+    assert_eq!(pedidos.len(), 1);
+    assert_ne!(pedidos[0].0, pedidos[0].1, "origen y destino son distintos");
+}
+
+/// Un plan con BLOQUEOS no se puede aprobar, y se dice cuáles son.
+#[tokio::test]
+async fn un_plan_con_bloqueos_no_se_aprueba() {
+    let mut done = plan_cerrado(1);
+    done.blockers = vec![norte_proto::methods::SyncBlocker {
+        kind: norte_proto::methods::SyncBlockerKind::DestReadOnly,
+        // La raíz: un bloqueo del árbol entero no cuelga de ningún paso.
+        rel: norte_proto::methods::RelPath::new(Vec::new()),
+        side: None,
+    }];
+    done.executable = false;
+    done.blockers_total = 1;
+    let falso = arbol_como_falso();
+    *falso.plan_de_sync.lock().expect("plan") = Some((
+        vec![paso_de_plan(1, "a.md", norte_proto::methods::SyncStepKind::Copy)],
+        done,
+    ));
+    let (h, _snap) = host_con_layout(Arc::new(falso), "orthodox", (200, 60)).await;
+    let mut sub = h.subscribe();
+    separar_los_paneles(&h, &mut sub).await;
+    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
+
+    let mut vista = siguiente_sync(&mut sub).await.expect("abre");
+    for _ in 0..20 {
+        if !vista.blockers.is_empty() {
+            break;
+        }
+        vista = siguiente_sync(&mut sub).await.expect("sigue abierto");
+    }
+    assert!(!vista.blockers.is_empty(), "se dice qué lo impide: {vista:?}");
+    assert!(!vista.can_approve, "y no se ofrece aprobar: {vista:?}");
+}
+
+/// Sincronizar los dos paneles cuando están en el MISMO sitio no encola nada.
+#[tokio::test]
+async fn sincronizar_el_mismo_directorio_no_encola_nada() {
+    let falso = arbol_como_falso();
+    *falso.plan_de_sync.lock().expect("plan") = Some((Vec::new(), plan_cerrado(0)));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
+    let mut sub = h.subscribe();
+    // Sin separar los paneles: los dos miran `casa`.
+    h.dispatch(tecla_mod("p", true, false))
+        .await
+        .expect("host vivo");
+    let _ = siguiente_paleta(&mut sub).await;
+    // Se dispara el efecto directamente por su comando, sin la paleta: lo que
+    // se comprueba es el rechazo, no el camino.
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    assert!(
+        backend.planes_pedidos.lock().expect("planes").is_empty(),
+        "no se pidió ningún plan"
+    );
+}

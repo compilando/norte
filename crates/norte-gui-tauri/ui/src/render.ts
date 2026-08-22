@@ -16,6 +16,8 @@ import type {
   CompareFaceView,
   CompareRowView,
   CompareView,
+  SyncStepView,
+  SyncView,
   DialogLine,
   DialogView,
   HostCatalog,
@@ -123,6 +125,7 @@ export class Screen {
     private readonly columnsRoot: HTMLElement,
     private readonly searchRoot: HTMLElement,
     private readonly compareRoot: HTMLElement,
+    private readonly syncRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
     private readonly aiRenameRoot: HTMLElement,
@@ -188,6 +191,7 @@ export class Screen {
     this.paintColumns(view.columns);
     this.paintSearch(view.search);
     this.paintCompare(view.compare);
+    this.paintSync(view.sync);
     this.paintViewer(view.viewer);
     this.paintAiRename(view.ai_rename);
     this.paintDialogs(view.dialogs);
@@ -1050,6 +1054,138 @@ export class Screen {
    * mitad del valor de buscar en un árbol grande. La frase de estado la
    * compone el host: dice cuántos van y si sigue.
    */
+  /** El panel de sincronización: el PLAN. Se pinta en el mismo hueco que el
+   *  de diferencias — son dos pantallas enteras y no coinciden. */
+  private paintSync(sync: SyncView | null): void {
+    if (sync === null) {
+      if (this.syncRoot.dataset["open"] === "true") {
+        this.syncRoot.replaceChildren();
+        this.syncRoot.dataset["open"] = "false";
+      }
+      return;
+    }
+    this.syncRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "sync";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", this.t("sync-title"));
+
+    // El MODO, arriba y en su propio elemento: un espejo borra en el destino
+    // y una actualización no, y quien aprueba tiene que verlo antes.
+    const modo = document.createElement("p");
+    modo.className = "sync-mode";
+    modo.dataset["mode"] = sync.mode;
+    // Claves LITERALES: una interpolada no la ve el barrido que comprueba
+    // que toda clave existe, y una clave que falta se pinta como su propio
+    // identificador.
+    modo.textContent =
+      sync.mode === "mirror"
+        ? this.t("gui-sync-mode-mirror")
+        : this.t("gui-sync-mode-update");
+    caja.append(modo);
+
+    const raices = document.createElement("div");
+    raices.className = "sync-roots";
+    for (const raiz of [sync.source, sync.dest]) {
+      const r = document.createElement("span");
+      r.className = "sync-root";
+      r.dataset["hostile"] = String(raiz.hostile);
+      r.textContent = raiz.text;
+      if (raiz.hostile) {
+        r.append(badge(this.t("hostile-name")));
+      }
+      raices.append(r);
+    }
+    caja.append(raices);
+
+    if (sync.blockers.length > 0) {
+      // Lo que IMPIDE aplicar va como ALERTA y arriba: un plan que no se
+      // puede ejecutar tiene que decir por qué antes que enseñar sus pasos.
+      const lista = document.createElement("ul");
+      lista.className = "sync-blockers";
+      lista.setAttribute("role", "alert");
+      for (const b of sync.blockers) {
+        const li = document.createElement("li");
+        li.textContent = b;
+        lista.append(li);
+      }
+      caja.append(lista);
+    }
+
+    const pasos = document.createElement("ul");
+    pasos.className = "sync-steps";
+    pasos.setAttribute("role", "list");
+    for (const p of sync.steps) {
+      pasos.append(this.syncStep(p));
+    }
+    caja.append(pasos);
+
+    const estado = document.createElement("p");
+    estado.className = "sync-status";
+    estado.setAttribute("role", "status");
+    estado.setAttribute("aria-live", "polite");
+    estado.dataset["running"] = String(sync.running);
+    estado.dataset["approvable"] = String(sync.can_approve);
+    estado.textContent = sync.status;
+    caja.append(estado);
+
+    const pie = document.createElement("p");
+    pie.className = "sync-hint";
+    pie.textContent = sync.hint;
+    caja.append(pie);
+    this.syncRoot.replaceChildren(caja);
+  }
+
+  /** Un paso del plan: qué hace, sobre qué, y si el deshacer lo devuelve. */
+  private syncStep(p: SyncStepView): HTMLElement {
+    const li = document.createElement("li");
+    li.className = "sync-step";
+    li.id = `sync-step-${String(p.id)}`;
+    li.dataset["anchor"] = p.anchor;
+    const kind = document.createElement("span");
+    kind.className = "sync-step-kind";
+    kind.textContent = p.kind;
+    const ruta = document.createElement("span");
+    ruta.className = "sync-step-path";
+    ruta.dataset["hostile"] = String(p.path_hostile);
+    ruta.textContent = p.path;
+    li.append(kind, ruta);
+    if (p.path_hostile) {
+      li.append(badge(this.t("hostile-name")));
+    }
+    if (p.dest_path !== null) {
+      // La ortografía del DESTINO en su propio elemento: la escritura cae
+      // sobre ESTA, y juntarlas en una celda deja que un nombre imite a otro.
+      const dest = document.createElement("span");
+      dest.className = "sync-step-dest";
+      dest.dataset["hostile"] = String(p.dest_path_hostile);
+      dest.textContent = p.dest_path;
+      li.append(dest);
+      if (p.dest_path_hostile) {
+        li.append(badge(this.t("hostile-name")));
+      }
+      if (p.twins) {
+        // Las dos se rinden IGUAL: sin decirlo, el panel parece repetirse.
+        const gemelas = document.createElement("span");
+        gemelas.className = "sync-step-twins";
+        gemelas.textContent = this.t("sync-dest-twin");
+        li.append(gemelas);
+      }
+    }
+    const undo = document.createElement("span");
+    undo.className = "sync-step-undo";
+    undo.textContent = p.undo;
+    li.append(undo);
+    if (p.reason !== "") {
+      const por = document.createElement("span");
+      por.className = "sync-step-reason";
+      por.textContent = p.reason;
+      li.append(por);
+    }
+    return li;
+  }
+
   /** El panel de diferencias. Comparte hueco con la búsqueda: los dos son
    *  pantallas enteras y no se pintan a la vez. */
   private paintCompare(compare: CompareView | null): void {

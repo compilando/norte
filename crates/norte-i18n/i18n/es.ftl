@@ -938,6 +938,11 @@ search-status-failed = búsqueda fallida: { $error }
 # la spec §17 pide una pista textual, y `igual/probable` frente a
 # `igual/seguro` es justo el par que un lector daltónico no puede perder.
 compare-title = Comparar
+sync-title = sincronizar
+sync-mode-update = actualizar
+sync-mode-mirror = espejo
+gui-sync-mode-update = ACTUALIZAR: no se borra nada en el destino
+gui-sync-mode-mirror = ESPEJO: lo que no esté en el origen se BORRA en el destino
 compare-header-left = izquierda
 compare-header-right = derecha
 compare-empty = todavía no hay filas
@@ -1113,9 +1118,6 @@ sync-cause-unknown = fallo no reconocido
 # El PANEL de sincronización (Ctrl+Y, o `s`/`m` dentro del de diferencias).
 # Sus teclas son fijas, como las del de diferencias, así que la línea de
 # teclas es el único sitio donde están escritas.
-sync-title = sincronizar
-sync-mode-update = actualizar
-sync-mode-mirror = espejo
 # Un modo que esta build no sabe nombrar. NO puede caer en «actualizar»: decir
 # «esto no borra» de un modo desconocido afirma la mitad SEGURA de lo que se
 # está aprobando.

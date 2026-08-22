@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 28;
+export const BRIDGE_VERSION = 29;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -556,6 +556,46 @@ export interface SearchRowView {
  *
  *  Ventana y no lista entera: el motor emite una fila por nombre emparejado
  *  de TODO el árbol y nada lo acota, así que viaja lo que se ve. */
+/** El panel de sincronización: el PLAN, antes de que nada se escriba.
+ *
+ *  Ventana como el de diferencias: un plan de medio millón de pasos no cruza
+ *  entero, y los pasos se nombran por su `id`. */
+export interface SyncView {
+  source: DialogLine;
+  dest: DialogLine;
+  /** `update` o `mirror`. Un espejo BORRA en el destino y una actualización
+   *  no: se pinta antes de aprobar. */
+  mode: string;
+  steps: SyncStepView[];
+  first_visible: number;
+  total: number;
+  /** Lo que IMPIDE sincronizar, ya dicho. */
+  blockers: string[];
+  status: string;
+  hint: string;
+  /** Lo decide el modelo compartido: ofrecer aprobar lo que va a rechazar es
+   *  la pantalla rota que esto evita. */
+  can_approve: boolean;
+  running: boolean;
+}
+
+export interface SyncStepView {
+  id: number;
+  kind: string;
+  reason: string;
+  /** Si el deshacer lo devuelve. Nunca sale de `reversal` a secas. */
+  undo: string;
+  anchor: string;
+  path: string;
+  path_hostile: boolean;
+  /** La ortografía del DESTINO cuando sus bytes difieren: la escritura cae
+   *  sobre ESTA. */
+  dest_path: string | null;
+  dest_path_hostile: boolean;
+  /** Las dos ortografías se rinden igual y hay que decirlo. */
+  twins: boolean;
+}
+
 export interface CompareView {
   left: string;
   left_hostile: boolean;
@@ -632,6 +672,7 @@ export interface ViewSnapshot {
   theme: ThemeView | null;
   search: SearchView | null;
   compare: CompareView | null;
+  sync: SyncView | null;
   layouts: LayoutPickerView | null;
   columns: ColumnsPickerView | null;
   picker: PickerView | null;
@@ -668,7 +709,8 @@ export type ViewChange =
   | { change: "layouts"; layouts: LayoutPickerView | null }
   | { change: "columns_picker"; columns: ColumnsPickerView | null }
   | { change: "search"; search: SearchView | null }
-  | { change: "compare"; compare: CompareView | null };
+  | { change: "compare"; compare: CompareView | null }
+  | { change: "sync"; sync: SyncView | null };
 
 export interface ViewPatch {
   base_sequence: number;

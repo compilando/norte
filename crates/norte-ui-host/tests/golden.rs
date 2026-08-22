@@ -640,6 +640,7 @@ fn slots_de_referencia() -> Vec<SlotView> {
 fn snapshot_de_referencia() -> ViewSnapshot {
     ViewSnapshot {
         compare: None,
+        sync: None,
         slots: slots_de_referencia(),
         connection: ConnectionView::Connected,
         layout: disposicion_de_referencia(),
@@ -752,6 +753,56 @@ fn busqueda_de_referencia() -> norte_ui_host::dto::SearchView {
         cursor: Some(0),
         status: "búsqueda: 2 hallazgos (buscando…)".to_owned(),
         running: true,
+    }
+}
+
+/// El plan de referencia: una copia y un borrado de árbol, con el modo a la
+/// vista y un bloqueo.
+fn sincronizacion_de_referencia() -> norte_ui_host::dto::SyncView {
+    use norte_ui_host::dto::{SyncStepView, SyncView};
+    SyncView {
+        source: norte_ui_host::dto::DialogLine {
+            text: "\u{27e8}file\u{27e9}/home/oscar/a".to_owned(),
+            hostile: false,
+        },
+        dest: norte_ui_host::dto::DialogLine {
+            text: "\u{27e8}file\u{27e9}/home/oscar/b".to_owned(),
+            hostile: false,
+        },
+        mode: "update".to_owned(),
+        steps: vec![
+            SyncStepView {
+                id: 1,
+                kind: "copiar".to_owned(),
+                reason: String::new(),
+                undo: "se deshace".to_owned(),
+                anchor: "source".to_owned(),
+                path: "docs/a.md".to_owned(),
+                path_hostile: false,
+                dest_path: None,
+                dest_path_hostile: false,
+                twins: false,
+            },
+            SyncStepView {
+                id: 2,
+                kind: "borrar".to_owned(),
+                reason: "no hay papelera en el destino".to_owned(),
+                undo: "no vuelve".to_owned(),
+                anchor: "dest".to_owned(),
+                path: "caf\u{fffd}.txt".to_owned(),
+                path_hostile: true,
+                dest_path: Some("cafe\u{301}.txt".to_owned()),
+                dest_path_hostile: false,
+                twins: true,
+            },
+        ],
+        first_visible: 0,
+        total: 2,
+        blockers: vec!["el destino es de solo lectura".to_owned()],
+        status: "2 pasos \u{b7} este plan no se puede aprobar".to_owned(),
+        hint: "\u{2191}\u{2193} mover \u{b7} Esc cerrar".to_owned(),
+        can_approve: false,
+        running: false,
     }
 }
 
@@ -1338,6 +1389,12 @@ fn cambios_de_overlay() -> Vec<(&'static str, ViewChange)> {
             "compare",
             ViewChange::Compare {
                 compare: Some(comparacion_de_referencia()),
+            },
+        ),
+        (
+            "sync",
+            ViewChange::Sync {
+                sync: Some(sincronizacion_de_referencia()),
             },
         ),
         (

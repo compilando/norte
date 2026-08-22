@@ -351,6 +351,24 @@ pub trait HostBackend: Send + Sync + 'static {
     /// conexión de humano — un agente bajo scope no la necesita.
     fn volumes(&self) -> BoxFuture<'static, Result<Vec<methods::Volume>, Error>>;
 
+    /// Pide un PLAN de sincronización: su Task y el canal de eventos.
+    ///
+    /// El plan NO escribe un byte: dice qué haría. Lo que escribe es
+    /// [`Self::sync_apply`], y solo contra el `plan_hash` que este plan cerró.
+    fn sync_plan(
+        &self,
+        params: methods::SyncPlanParams,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            (
+                HostTask,
+                tokio::sync::mpsc::Receiver<norte_client::SyncPlanEvent>,
+            ),
+            Error,
+        >,
+    >;
+
     /// Compara dos árboles y devuelve su Task Y el canal de LOTES de filas.
     ///
     /// Los dos juntos por lo mismo que en [`Self::search`]: la comparación es
@@ -581,6 +599,35 @@ impl HostBackend for norte_client::RemoteBackend {
         let backend = self.clone();
         Box::pin(async move {
             let (task, rx) = backend.search(params).await?;
+            let canceller = task.canceller();
+            Ok((
+                HostTask {
+                    id: task.id(),
+                    progress: task.progress(),
+                    cancel: Arc::new(move || canceller.cancel()),
+                    foreign: false,
+                },
+                rx,
+            ))
+        })
+    }
+
+    fn sync_plan(
+        &self,
+        params: methods::SyncPlanParams,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            (
+                HostTask,
+                tokio::sync::mpsc::Receiver<norte_client::SyncPlanEvent>,
+            ),
+            Error,
+        >,
+    > {
+        let backend = self.clone();
+        Box::pin(async move {
+            let (task, rx) = backend.sync_plan(params).await?;
             let canceller = task.canceller();
             Ok((
                 HostTask {

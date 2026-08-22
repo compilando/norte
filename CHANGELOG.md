@@ -182,6 +182,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window asks for a synchronisation PLAN** (`pane.sync-dirs`) and shows
+  it: every step with what it does, what it acts on, and whether undo gives it
+  back — which never comes from the step's `reversal` alone, because that is
+  the half that lies when the destination has no trash. The mode is painted
+  first and in its own element: a mirror DELETES at the destination and an
+  update does not, and whoever approves has to see that before anything else.
+  What blocks the plan is an alert above the steps, because a plan that cannot
+  run has to say why before it shows what it would do. Nothing here writes:
+  applying is the next pass, and the panel's hint says so rather than offering
+  a key that does nothing. Bridge **29**.
 - **The window compares two directories** (`pane.compare-dirs`): a diff panel
   with the rows as they stream in, a filter per category with its count, side
   switching, and `Enter` to go where a row points. The model is the one the TUI

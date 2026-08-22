@@ -49,6 +49,8 @@ pub struct ViewSnapshot {
     pub search: Option<SearchView>,
     /// El panel de diferencias, si hay una comparación abierta.
     pub compare: Option<CompareView>,
+    /// El panel de sincronización, si hay un plan abierto.
+    pub sync: Option<SyncView>,
     /// El selector de disposiciones, si está abierto.
     pub layouts: Option<LayoutPickerView>,
     /// El selector de COLUMNAS, si está abierto.
@@ -1290,6 +1292,76 @@ pub struct StatusView {
     pub pending: Option<PendingView>,
 }
 
+/// El panel de sincronización: el PLAN, antes de que nada se escriba.
+///
+/// Ventana como el de diferencias y por lo mismo: un plan de medio millón de
+/// pasos no cruza el puente entero. Y como el de diferencias, los pasos se
+/// nombran por su `id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncView {
+    /// La raíz ORIGEN, ya saneada y con su marca.
+    pub source: DialogLine,
+    /// La raíz DESTINO, ya saneada y con su marca.
+    pub dest: DialogLine,
+    /// El modo pedido (`update` o `mirror`), por id estable.
+    ///
+    /// Se pinta ANTES de aprobar y no es decoración: un `mirror` BORRA en el
+    /// destino y un `update` no.
+    pub mode: String,
+    /// La ventana de pasos.
+    pub steps: Vec<SyncStepView>,
+    /// Índice del primer paso que viaja.
+    pub first_visible: u64,
+    /// Cuántos pasos tiene el plan.
+    pub total: u64,
+    /// Lo que IMPIDE sincronizar, ya dicho. Vacío = nada lo impide.
+    pub blockers: Vec<String>,
+    /// El estado, ya dicho: planificando, listo para aprobar, aplicando…
+    pub status: String,
+    /// Qué se puede hacer ahora, ya dicho (la línea de ayuda del pie).
+    pub hint: String,
+    /// El plan se puede aprobar YA.
+    ///
+    /// Lo decide el modelo compartido: un plan sin cerrar, con bloqueos, o ya
+    /// enviado, no se aprueba — y que el pie ofrezca aprobar lo que el modelo
+    /// va a rechazar es la pantalla rota que esto evita.
+    pub can_approve: bool,
+    /// Hay una Task corriendo (la del plan, o la de la aplicación).
+    pub running: bool,
+}
+
+/// Un paso del plan, ya listo para pintar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncStepView {
+    /// Su id dentro del plan: la identidad, jamás la posición.
+    pub id: u64,
+    /// Qué hace, ya traducido.
+    pub kind: String,
+    /// Por qué, ya traducido.
+    pub reason: String,
+    /// Si el deshacer lo devuelve, ya dicho.
+    ///
+    /// Nunca sale de `reversal` a secas: esa es la mitad de la respuesta, y
+    /// la que miente cuando el destino no tiene papelera.
+    pub undo: String,
+    /// De qué raíz cuelga la ruta (`source` o `dest`).
+    pub anchor: String,
+    /// La ruta relativa, enmascarada.
+    pub path: String,
+    /// Lo pintado difiere de los bytes.
+    pub path_hostile: bool,
+    /// La ortografía del DESTINO, cuando sus bytes difieren de la del origen.
+    ///
+    /// La escritura cae sobre ESTA. Campo propio y no un sufijo del nombre:
+    /// dos ortografías en la misma celda las puede juntar un nombre.
+    pub dest_path: Option<String>,
+    /// Lo pintado del destino difiere de sus bytes.
+    pub dest_path_hostile: bool,
+    /// Las dos ortografías se rinden IGUAL (un par NFC/NFD), así que el
+    /// lector no puede verlas distintas y hay que decírselo.
+    pub twins: bool,
+}
+
 /// El panel de diferencias: dos árboles comparados, fila a fila.
 ///
 /// Ventana y no lista entera, por el mismo motivo que un listado: el motor
@@ -1746,6 +1818,11 @@ pub enum ViewChange {
     Compare {
         /// La comparación, o `None` si se cerró.
         compare: Option<CompareView>,
+    },
+    /// El panel de sincronización cambió (se abrió, llegaron pasos, se cerró).
+    Sync {
+        /// El plan, o `None` si se cerró.
+        sync: Option<SyncView>,
     },
     /// El selector de disposiciones se abrió, se movió o se cerró.
     Layouts {

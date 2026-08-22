@@ -57,6 +57,7 @@ pub const MUTAN: &[&str] = &[
     "pane.rename",
     "pane.ai-rename",
     "pane.semantic-search",
+    "pane.sync-dirs",
 ];
 
 /// Los comandos que el host ejecuta HOY.
@@ -104,6 +105,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.ai-rename",
     "pane.semantic-search",
     "pane.compare-dirs",
+    "pane.sync-dirs",
     "task.cancel",
 ];
 
@@ -255,6 +257,12 @@ pub enum Efecto {
     Ver,
     /// Abre el buscador incremental del listado.
     BuscarRapido,
+    /// Pide el PLAN de sincronizar el panel activo sobre el destino.
+    ///
+    /// El plan NO escribe: dice qué haría. Aun así está en [`MUTAN`], porque
+    /// es la puerta de una escritura y una ventana que se declara de solo
+    /// mirar no la abre.
+    Sincronizar,
     /// Compara los dos paneles y abre el panel de diferencias.
     ///
     /// NO muta: camina los dos árboles y contesta. Es una tarea larga y
@@ -364,6 +372,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.ai-rename" => Efecto::RenameIa,
         "pane.semantic-search" => Efecto::BuscarSemantica,
         "pane.compare-dirs" => Efecto::Comparar,
+        "pane.sync-dirs" => Efecto::Sincronizar,
         "task.cancel" => Efecto::CancelarTask,
         _ => return None,
     })

@@ -1842,6 +1842,32 @@ logic in TypeScript.
 
 ### Task 6.3: sync planning and apply
 
+> **Split in two on purpose**, because the plan calls this the highest-risk
+> surface: **phase A is the PLAN** (read-only: ask, stream, review) and phase B
+> is APPLYING it (confirmation, task, report, trash). The reviewers run in
+> between, not at the end.
+>
+> **Phase A DONE 2026-08-22** (bridge **29**). `pane.sync-dirs` asks for a plan
+> from the active pane onto the target one and opens a panel with its steps,
+> what blocks it, and whether it can be approved. Nothing here writes.
+>
+> The model is `norte_frontend::sync::SyncView`, the same one the TUI drives,
+> and it earned its keep twice on the way in:
+>
+> - **The panel opens when the Task id is KNOWN, not before.** The shared model
+>   uses that id to discard batches belonging to another plan; built with a
+>   filler id it discarded its OWN, and the panel sat at zero steps and closed
+>   saying "this plan cannot be approved". The state machine was right and the
+>   host was wrong.
+> - **`can_approve` is not "the plan closed".** It also requires that what
+>   arrived accounts for what the daemon counted, class by class, and that no
+>   step contradicts its own shape. Two of the test fixtures had to be
+>   corrected to satisfy it — a `Copy` whose reversal was `RestoreTrash`, and
+>   counts that summed differently — which is exactly the check working.
+>
+> Approving is deliberately absent: this pass only reads, and the panel's hint
+> line says so rather than offering a key that does nothing.
+
 - sync plan configuration;
 - streamed steps and blockers;
 - retained plan identity/hash;

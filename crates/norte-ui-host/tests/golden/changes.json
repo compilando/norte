@@ -630,6 +630,55 @@
     "message": "2 entradas",
     "pending": null
   },
+  "sync": {
+    "change": "sync",
+    "sync": {
+      "source": {
+        "text": "⟨file⟩/home/oscar/a",
+        "hostile": false
+      },
+      "dest": {
+        "text": "⟨file⟩/home/oscar/b",
+        "hostile": false
+      },
+      "mode": "update",
+      "steps": [
+        {
+          "id": 1,
+          "kind": "copiar",
+          "reason": "",
+          "undo": "se deshace",
+          "anchor": "source",
+          "path": "docs/a.md",
+          "path_hostile": false,
+          "dest_path": null,
+          "dest_path_hostile": false,
+          "twins": false
+        },
+        {
+          "id": 2,
+          "kind": "borrar",
+          "reason": "no hay papelera en el destino",
+          "undo": "no vuelve",
+          "anchor": "dest",
+          "path": "caf�.txt",
+          "path_hostile": true,
+          "dest_path": "café.txt",
+          "dest_path_hostile": false,
+          "twins": true
+        }
+      ],
+      "first_visible": 0,
+      "total": 2,
+      "blockers": [
+        "el destino es de solo lectura"
+      ],
+      "status": "2 pasos · este plan no se puede aprobar",
+      "hint": "↑↓ mover · Esc cerrar",
+      "can_approve": false,
+      "running": false
+    }
+  },
   "tasks": {
     "change": "tasks",
     "tasks": [

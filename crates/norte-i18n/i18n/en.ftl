@@ -941,6 +941,11 @@ search-status-failed = search failed: { $error }
 # versus `same/certain` is precisely the pair a colour-blind reader must not
 # lose.
 compare-title = Compare
+sync-title = synchronise
+sync-mode-update = update
+sync-mode-mirror = mirror
+gui-sync-mode-update = UPDATE: nothing is deleted at the destination
+gui-sync-mode-mirror = MIRROR: what is not in the source is DELETED at the destination
 compare-header-left = left
 compare-header-right = right
 compare-empty = no rows yet
@@ -1113,9 +1118,6 @@ sync-cause-io = read or write failed
 sync-cause-unknown = unrecognised failure
 # The sync PANE (Ctrl+Y, or `s`/`m` inside the diff pane). Its keys are fixed,
 # like the diff pane's, so the hint line is the only place they are written.
-sync-title = synchronise
-sync-mode-update = update
-sync-mode-mirror = mirror
 # A mode this build cannot name. It must NOT fall back to "update": saying "this
 # does not delete" about a mode we cannot name asserts the SAFE half of what a
 # human is approving.

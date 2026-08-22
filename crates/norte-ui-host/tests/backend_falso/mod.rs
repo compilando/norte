@@ -144,6 +144,17 @@ pub struct Falso {
     pub informe: std::sync::Mutex<Option<norte_proto::methods::FsRenameBatchReportResult>>,
     /// Los ids de task cuyo informe se pidió, en orden.
     pub informes_pedidos: std::sync::Mutex<Vec<u64>>,
+    /// Lo que contesta `sync.plan`: sus pasos y el cierre. `None` = el
+    /// método falla con `Unsupported`.
+    pub plan_de_sync: std::sync::Mutex<
+        Option<(
+            Vec<norte_proto::methods::SyncStep>,
+            norte_proto::methods::SyncPlanDone,
+        )>,
+    >,
+    /// Los planes que se pidieron: `(origen, destino, modo)`.
+    pub planes_pedidos:
+        std::sync::Mutex<Vec<(VPath, VPath, norte_proto::methods::SyncMode)>>,
     /// Las filas que contesta `fs.compare`, en un solo lote. `None` = el
     /// método falla con `Unsupported`.
     pub filas_comparadas: std::sync::Mutex<Option<Vec<norte_proto::methods::CompareRow>>>,
@@ -648,6 +659,68 @@ impl HostBackend for Falso {
 
     fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>> {
         self.ajenas.lock().expect("ajenas").take()
+    }
+
+    fn sync_plan(
+        &self,
+        params: norte_proto::methods::SyncPlanParams,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            (
+                HostTask,
+                tokio::sync::mpsc::Receiver<norte_client::SyncPlanEvent>,
+            ),
+            Error,
+        >,
+    > {
+        self.planes_pedidos
+            .lock()
+            .expect("planes")
+            .push((params.source, params.dest, params.mode));
+        let plan = self.plan_de_sync.lock().expect("plan").clone();
+        let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
+        let id = norte_proto::TaskId::new(400 + n as u64);
+        let progreso = norte_proto::TaskProgress {
+            task_id: id,
+            kind: norte_proto::TaskKind::SyncPlan,
+            state: norte_proto::TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+        };
+        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        *self.progreso.lock().expect("progreso") = Some(tx.clone());
+        self.progresos.lock().expect("progresos").insert(id.get(), tx);
+        Box::pin(async move {
+            let (pasos, mut done) = plan.ok_or(Error::Unsupported)?;
+            // El cierre lleva SU Task: el modelo compartido descarta el de
+            // otro plan por este id, que es justo lo que tiene que hacer.
+            done.task_id = id;
+            let (etx, erx) = tokio::sync::mpsc::channel(4);
+            tokio::spawn(async move {
+                let _ = etx
+                    .send(norte_client::SyncPlanEvent::Steps(
+                        norte_proto::methods::SyncStepsBatch {
+                            task_id: id,
+                            steps: pasos,
+                        },
+                    ))
+                    .await;
+                let _ = etx.send(norte_client::SyncPlanEvent::Done(done)).await;
+            });
+            Ok((
+                HostTask {
+                    id,
+                    progress: rx,
+                    cancel: Arc::new(|| {}),
+                    foreign: false,
+                },
+                erx,
+            ))
+        })
     }
 
     fn compare(

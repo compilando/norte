@@ -382,6 +382,10 @@ enum Fondo {
     Semanticos(u64, Result<Vec<norte_proto::methods::SemanticHit>, Error>),
     /// La comparación tiene Task: se bautiza para poder cancelarla.
     ComparacionViva(u64, norte_proto::TaskId),
+    /// El plan de sincronización tiene Task.
+    PlanDeSyncVivo(u64, norte_proto::TaskId),
+    /// Un evento del plan: un lote de pasos, o su cierre.
+    EventoDeSync(u64, Box<norte_client::SyncPlanEvent>),
     /// Un lote de filas comparadas.
     FilasComparadas(u64, Box<norte_proto::methods::CompareRowsBatch>),
     /// Lo que el modelo propuso, con la época de la petición que lo pidió.
@@ -1201,6 +1205,44 @@ enum Objetivo {
     Viva(u64),
 }
 
+/// Un plan pedido cuya Task todavía no ha vuelto.
+///
+/// Existe por el id: el modelo compartido lo necesita AL NACER para poder
+/// descartar lo que venga de otro plan.
+struct SyncPedida {
+    /// Cuál de todos los planes de esta ventana es.
+    epoca: u64,
+    /// Se abandonó antes de que la Task volviera.
+    abandonada: Arc<std::sync::atomic::AtomicBool>,
+    /// El modo pedido.
+    modo: norte_proto::methods::SyncMode,
+    /// Raíz origen.
+    origen: VPath,
+    /// Raíz destino.
+    destino: VPath,
+}
+
+/// Un plan de sincronización, con su modelo COMPARTIDO dentro.
+///
+/// El modelo es `norte_frontend::sync::SyncView`, el mismo que el TUI: qué
+/// pasos hay, qué lo bloquea, si se puede aprobar y en qué estado va la Task.
+/// Aquí no se decide ni un paso ni un veredicto; el plan lo produce el core y
+/// solo él puede canjearlo.
+struct Sincronizacion {
+    /// Cuál de todos los planes de esta ventana es.
+    epoca: u64,
+    /// La Task del PLAN (la de aplicar es otra, y la guarda el modelo).
+    task: norte_proto::TaskId,
+    /// La vista se cerró y lo que quede sobra.
+    abandonada: Arc<std::sync::atomic::AtomicBool>,
+    /// El modelo compartido.
+    vista: norte_frontend::sync::SyncView,
+    /// La ventana que el renderer dice estar pintando.
+    primera_visible: usize,
+    /// Cuántos pasos caben en esa ventana.
+    ventana: usize,
+}
+
 /// Una comparación de dos árboles, con su panel COMPARTIDO dentro.
 ///
 /// El modelo —qué filas hay, qué categorías están escondidas, cuál está
@@ -1450,6 +1492,10 @@ struct Estado {
     aviso_de_daemon: Option<&'static str>,
     /// La comparación abierta, si la hay.
     comparacion: Option<Comparacion>,
+    /// El plan de sincronización abierto, si lo hay.
+    sincronizacion: Option<Sincronizacion>,
+    /// Un plan PEDIDO cuya Task todavía no ha contestado.
+    sync_pedida: Option<SyncPedida>,
     /// La consulta semántica en vuelo, para poder ABORTARLA.
     ///
     /// Abortar no es solo dejar de escuchar: el SDK manda `rpc.cancel` al
@@ -1666,6 +1712,8 @@ impl Estado {
             epoca_conexion: 0,
             semantica_en_vuelo: None,
             comparacion: None,
+            sincronizacion: None,
+            sync_pedida: None,
             aviso_de_daemon: None,
             journal_rehusado: false,
         };
@@ -2207,6 +2255,11 @@ impl Estado {
         // pantalla que se lee entera antes de aprobar una mutación, y una
         // tecla que se le escapara al listado de debajo movería el cursor
         // bajo un plan que sigue esperando un sí.
+        // El panel de sincronización, igual que el de diferencias: mientras
+        // esté abierto se queda las teclas.
+        if self.sincronizacion.is_some() {
+            return Some(self.tecla_en_sincronizacion(k));
+        }
         // El panel de diferencias, cuando está abierto, se queda las teclas:
         // es una pantalla entera, y una flecha que se le escapara movería el
         // listado que hay debajo.
@@ -4095,6 +4148,8 @@ impl Estado {
                 Vec::new()
             }
             Fondo::FilasComparadas(epoca, lote) => self.aplicar_filas_comparadas(epoca, *lote),
+            Fondo::PlanDeSyncVivo(epoca, id) => self.abrir_panel_de_sync(epoca, id),
+            Fondo::EventoDeSync(epoca, ev) => self.aplicar_evento_de_sync(epoca, *ev),
             Fondo::Adornos(datos) => self.aplicar_adornos(*datos).into_iter().collect(),
             Fondo::Imagen(token, leido) => self.aplicar_imagen(token, leido).into_iter().collect(),
             Fondo::BusquedaViva(epoca, id) => {
@@ -5287,11 +5342,15 @@ impl Estado {
             | Efecto::Renombrar
             | Efecto::RenameIa
             | Efecto::BuscarSemantica
+            | Efecto::Sincronizar
                 if self.efectos == crate::commands::Efectos::SoloLectura =>
             {
                 Self::no_muta()
             }
             Efecto::Comparar => self.pedir_comparacion(backend, buzon),
+            // Como comparar: necesita el backend porque sale a preguntar en
+            // cuanto se abre, y el panel nace diciendo que planifica.
+            Efecto::Sincronizar => self.pedir_sincronizacion(backend, buzon),
             Efecto::Paleta
             | Efecto::Ayuda
             | Efecto::Ajustes
@@ -5449,6 +5508,71 @@ impl Estado {
     /// que el canal de filas se cerrara de verdad, y hay formas de que no lo
     /// haga —un daemon muerto, un provider colgado de un NFS— que dejaban al
     /// lector atrapado en la única pantalla de norte sin salida.
+    /// Las teclas mientras el panel de sincronización está abierto.
+    ///
+    /// `Escape` DOS veces, por lo mismo que en el panel de diferencias: la
+    /// primera pide cancelar la Task del plan, la segunda cierra pase lo que
+    /// pase. Aprobar es de la fase siguiente; hasta entonces esta pantalla
+    /// solo LEE, y decirlo es más honesto que ofrecer una tecla que no hace
+    /// nada.
+    fn tecla_en_sincronizacion(
+        &mut self,
+        k: &crate::keys::KeyInput,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(sinc) = self.sincronizacion.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match k.key.as_str() {
+            "Escape" | "esc" => {
+                if sinc.vista.cancel_requested {
+                    let task = sinc.task;
+                    sinc.abandonada
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.sincronizacion = None;
+                    if task.get() != 0 {
+                        self.cancelar(task.get());
+                    }
+                    return (
+                        self.aplicada(),
+                        vec![self.parche(vec![ViewChange::Sync { sync: None }])],
+                    );
+                }
+                sinc.vista.cancel_requested = true;
+                let task = sinc.task;
+                if task.get() != 0 {
+                    self.cancelar(task.get());
+                }
+                let cambio = ViewChange::Sync {
+                    sync: self.vista_sincronizacion(),
+                };
+                (self.aplicada(), vec![self.parche(vec![cambio])])
+            }
+            "ArrowDown" | "Down" | "ArrowUp" | "Up" => {
+                let abajo = k.key.ends_with("Down");
+                let total = sinc.vista.steps().len();
+                if total == 0 {
+                    return (self.aplicada(), Vec::new());
+                }
+                let paso = sinc.ventana.max(1);
+                sinc.primera_visible = if abajo {
+                    sinc.primera_visible
+                        .saturating_add(1)
+                        .min(total.saturating_sub(1))
+                } else {
+                    sinc.primera_visible.saturating_sub(1)
+                };
+                let _ = paso;
+                let cambio = ViewChange::Sync {
+                    sync: self.vista_sincronizacion(),
+                };
+                (self.aplicada(), vec![self.parche(vec![cambio])])
+            }
+            // Lo que no entiende se COME: un panel que deja pasar teclas no
+            // es una pantalla.
+            _ => (self.aplicada(), Vec::new()),
+        }
+    }
+
     fn tecla_en_comparacion(
         &mut self,
         k: &crate::keys::KeyInput,
@@ -5673,10 +5797,278 @@ impl Estado {
         }
     }
 
-    /// Cuántas filas de la comparación cruzan si el renderer no ha dicho su
-    /// ventana todavía.
-    /// Cuántas filas de la comparación cruzan si el renderer no ha dicho su
-    /// ventana todavía.
+    /// Pide el PLAN de sincronizar el panel activo sobre el destino.
+    ///
+    /// El plan no escribe un byte: dice qué haría. Lo que escribe es
+    /// `sync.apply`, y solo contra el hash que este plan cierre.
+    fn pedir_sincronizacion(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let destino = match self.directorio_destino() {
+            Ok(d) => d,
+            Err(reason_key) => {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: reason_key.to_owned(),
+                    },
+                    Vec::new(),
+                );
+            }
+        };
+        let origen = self.hueco().pane.dir().clone();
+        if origen == destino {
+            // Raíces solapadas: el daemon lo rechaza con `OverlappingRoots` y
+            // no crea Task. Decirlo antes es más honesto que abrir un panel
+            // que va a morir.
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-same-directory".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        (
+            self.aplicada(),
+            self.lanzar_plan_de_sync(origen, destino, backend, buzon),
+        )
+    }
+
+    /// Encola `sync.plan` y engancha su canal de eventos al actor.
+    fn lanzar_plan_de_sync(
+        &mut self,
+        origen: VPath,
+        destino: VPath,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.epoca_busqueda += 1;
+        let epoca = self.epoca_busqueda;
+        let abandonada = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // `Update` y no `Mirror`: el modo que NO borra es el que puede ser el
+        // de por defecto. Elegir espejo es una decisión que se toma a
+        // propósito, y hasta que haya dónde tomarla no se ofrece.
+        let modo = norte_proto::methods::SyncMode::Update;
+        let params = norte_proto::methods::SyncPlanParams {
+            source: origen.clone(),
+            dest: destino.clone(),
+            mode: modo,
+            compare: norte_proto::methods::SyncCompareOptions::default(),
+            on_unknown: norte_proto::methods::OnUnknown::default(),
+            // Sin `include`: el árbol entero. Acotar el plan a una selección
+            // es lo que hace el panel de diferencias con sus marcas, y eso
+            // llega cuando esta ventana tenga esa vía.
+            include: None,
+        };
+        let backend2 = Arc::clone(backend);
+        let buzon2 = buzon.clone();
+        let abandonada2 = Arc::clone(&abandonada);
+        tokio::spawn(async move {
+            let (task, mut rx) = match backend2.sync_plan(params).await {
+                Ok(par) => par,
+                Err(e) => {
+                    let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    return;
+                }
+            };
+            let id = task.id;
+            let cancel = Arc::clone(&task.cancel);
+            let _ = buzon2
+                .send(Mensaje::TaskNueva(Box::new((task, Vec::new()))))
+                .await;
+            let _ = buzon2
+                .send(Mensaje::Fondo(Box::new(Fondo::PlanDeSyncVivo(epoca, id))))
+                .await;
+            if abandonada2.load(std::sync::atomic::Ordering::SeqCst) {
+                cancel();
+                return;
+            }
+            while let Some(ev) = rx.recv().await {
+                if abandonada2.load(std::sync::atomic::Ordering::SeqCst) {
+                    cancel();
+                    return;
+                }
+                if buzon2
+                    .send(Mensaje::Fondo(Box::new(Fondo::EventoDeSync(
+                        epoca,
+                        Box::new(ev),
+                    ))))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        // El panel se abre cuando se SABE el id de la Task, y no antes: el
+        // modelo compartido lo usa para descartar lo que venga de otro plan,
+        // y con un id de relleno descartaba también los suyos —el panel se
+        // quedaba en cero pasos y el plan cerraba «no se puede aprobar»—.
+        self.sincronizacion = None;
+        self.sync_pedida = Some(SyncPedida {
+            epoca,
+            abandonada,
+            modo,
+            origen,
+            destino,
+        });
+        Vec::new()
+    }
+
+    /// Un evento del plan: un lote de pasos, o su cierre.
+    /// El daemon aceptó el plan y dijo su Task: ahora se abre el panel.
+    ///
+    /// El modelo compartido nace CON el id porque es lo que usa para
+    /// descartar lo que venga de otro plan; construirlo antes, con un id de
+    /// relleno, hacía que descartara también sus propios lotes y el panel se
+    /// quedaba en cero pasos y cerraba «no se puede aprobar».
+    fn abrir_panel_de_sync(
+        &mut self,
+        epoca: u64,
+        task: norte_proto::TaskId,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(pedida) = self.sync_pedida.take().filter(|p| p.epoca == epoca) else {
+            return Vec::new();
+        };
+        self.sincronizacion = Some(Sincronizacion {
+            epoca,
+            task,
+            abandonada: pedida.abandonada,
+            vista: norte_frontend::sync::SyncView::new(
+                task,
+                pedida.modo,
+                pedida.origen,
+                pedida.destino,
+                None,
+                None,
+            ),
+            primera_visible: 0,
+            ventana: Self::VENTANA_COMPARACION,
+        });
+        let cambio = ViewChange::Sync {
+            sync: self.vista_sincronizacion(),
+        };
+        vec![self.parche(vec![cambio])]
+    }
+
+    fn aplicar_evento_de_sync(
+        &mut self,
+        epoca: u64,
+        ev: norte_client::SyncPlanEvent,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(sinc) = self.sincronizacion.as_mut() else {
+            return Vec::new();
+        };
+        if sinc.epoca != epoca {
+            return Vec::new();
+        }
+        // El modelo COMPARTIDO decide qué entra: descarta lo que venga de
+        // otro plan por su `task_id`, y es quien sabe cuándo el plan cierra.
+        let cambio = match ev {
+            norte_client::SyncPlanEvent::Steps(lote) => sinc.vista.state.on_steps(lote),
+            norte_client::SyncPlanEvent::Done(done) => sinc.vista.state.on_plan_done(done),
+        };
+        if !cambio {
+            return Vec::new();
+        }
+        let cambio = ViewChange::Sync {
+            sync: self.vista_sincronizacion(),
+        };
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// La proyección del panel de sincronización, acotada a su ventana.
+    fn vista_sincronizacion(&self) -> Option<crate::dto::SyncView> {
+        let sinc = self.sincronizacion.as_ref()?;
+        let v = &sinc.vista;
+        let (origen, origen_hostil) = norte_frontend::path_display(&v.source_root);
+        let (destino, destino_hostil) = norte_frontend::path_display(&v.dest_root);
+        let pasos = v.steps();
+        let primera = sinc.primera_visible.min(pasos.len());
+        let hasta = primera.saturating_add(sinc.ventana).min(pasos.len());
+        let papelera = v.dest_trash();
+        let enc = v.encodings();
+        let filas = pasos
+            .get(primera..hasta)
+            .unwrap_or_default()
+            .iter()
+            .map(|paso| {
+                // Las celdas las compone el modelo COMPARTIDO: qué hace el
+                // paso, por qué, si el deshacer lo devuelve —que NUNCA sale
+                // de `reversal` a secas, porque esa es media respuesta— y las
+                // dos ortografías cuando las hay.
+                let c = norte_frontend::sync::render_step(paso, papelera, enc);
+                crate::dto::SyncStepView {
+                    id: c.id,
+                    kind: clamp_display(norte_frontend::sync::step_label(paso.kind, self.lang)),
+                    // El porqué solo lo tienen los pasos que lo tienen: un
+                    // `Skip`, o uno que no se puede deshacer. Vacío es
+                    // AUSENCIA, no una frase inventada.
+                    reason: c.reason.map_or_else(String::new, |r| {
+                        clamp_display(norte_frontend::sync::reason_label(r, self.lang))
+                    }),
+                    // El veredicto del deshacer sale del modelo (`c.undo`),
+                    // que lo compone mirando papelera Y reversa: leer
+                    // `reversal` a secas es la mitad que miente cuando el
+                    // destino no tiene papelera.
+                    undo: clamp_display(norte_frontend::sync::undo_label(c.undo, self.lang)),
+                    anchor: match c.anchor {
+                        norte_frontend::sync::RelAnchor::Dest => "dest".to_owned(),
+                        _ => "source".to_owned(),
+                    },
+                    path: clamp_display(c.rel.text.clone()),
+                    path_hostile: c.rel.hostile,
+                    dest_path: c.dest_rel.as_ref().map(|d| clamp_display(d.text.clone())),
+                    dest_path_hostile: c.dest_rel.as_ref().is_some_and(|d| d.hostile),
+                    twins: c.dest_rel_twin,
+                }
+            })
+            .collect();
+        Some(crate::dto::SyncView {
+            source: crate::dto::DialogLine {
+                text: clamp_display(origen),
+                hostile: origen_hostil,
+            },
+            dest: crate::dto::DialogLine {
+                text: clamp_display(destino),
+                hostile: destino_hostil,
+            },
+            mode: match v.mode {
+                norte_proto::methods::SyncMode::Mirror => "mirror".to_owned(),
+                _ => "update".to_owned(),
+            },
+            steps: filas,
+            first_visible: primera as u64,
+            total: pasos.len() as u64,
+            // Lo que IMPIDE aplicar, dicho por su nombre. El recuento del
+            // plan puede ser mayor que la lista: el daemon la recorta, y el
+            // modelo compartido ya lo dice en su línea de estado.
+            blockers: v
+                .state
+                .plan()
+                .map(|p| {
+                    p.done()
+                        .blockers
+                        .iter()
+                        .map(|b| {
+                            clamp_display(norte_frontend::sync::blocker_label(b.kind, self.lang))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            status: clamp_display(norte_frontend::sync::status_line(v, self.lang)),
+            hint: clamp_display(norte_i18n::t_in(
+                self.lang,
+                norte_frontend::sync::hint_id(v),
+            )),
+            can_approve: v.can_approve(),
+            running: matches!(v.run, norte_frontend::sync::SyncRunState::Running),
+        })
+    }
+
+    /// Cuántas filas de la comparación —o pasos de un plan— cruzan si el
+    /// renderer no ha dicho su ventana todavía.
     const VENTANA_COMPARACION: usize = 200;
 
     /// Lanza la comparación de los dos paneles y abre el panel de
@@ -9511,6 +9903,7 @@ impl Estado {
         }
         ViewSnapshot {
             compare: self.vista_comparacion(),
+            sync: self.vista_sincronizacion(),
             connection: self.conexion.clone(),
             layout: self.disposicion(),
             slots,
