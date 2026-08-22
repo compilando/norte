@@ -62,7 +62,10 @@ pub struct Falso {
     pub borrar_de_verdad: bool,
     /// Con qué error se RECHAZA un borrado antes de encolar nada. `None` =
     /// el borrado se encola.
-    pub error_al_borrar: Option<Error>,
+    ///
+    /// Tras un `Mutex` para que un test pueda ARREGLARLO a mitad: el caso que
+    /// importa es el de un daemon que rehúsa una vez y acepta la siguiente.
+    pub error_al_borrar: std::sync::Mutex<Option<Error>>,
     /// Los wire de lo ya borrado, que `list` se salta.
     pub desaparecidos: std::sync::Mutex<std::collections::HashSet<String>>,
     /// El provider escribe el PADRE de sus entradas con otra ortografía que
@@ -164,6 +167,8 @@ pub struct Falso {
     pub creados: std::sync::Mutex<Vec<VPath>>,
     /// El catálogo de atributos que devuelve el falso daemon.
     pub catalogo: std::sync::Mutex<norte_proto::AttrCatalog>,
+    /// Con qué error falla `policy.decide`. `None` = la decisión llega.
+    pub error_al_decidir: std::sync::Mutex<Option<Error>>,
     /// El canal de aprobaciones, para que el test empuje una.
     pub aprobaciones: std::sync::Mutex<
         Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::PolicyApprovalRequired>>,
@@ -617,7 +622,12 @@ impl HostBackend for Falso {
             .lock()
             .expect("decisiones")
             .push((approval_id, approve));
-        Box::pin(async { Ok(()) })
+        let fallo = self
+            .error_al_decidir
+            .lock()
+            .expect("error al decidir")
+            .clone();
+        Box::pin(async move { fallo.map_or(Ok(()), Err) })
     }
 
     fn take_conn_events(
@@ -873,7 +883,12 @@ impl HostBackend for Falso {
     }
 
     fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>> {
-        if let Some(e) = self.error_al_borrar.clone() {
+        if let Some(e) = self
+            .error_al_borrar
+            .lock()
+            .expect("error al borrar")
+            .clone()
+        {
             self.borrados.lock().expect("borrados").push((path, mode));
             return Box::pin(async move { Err(e) });
         }

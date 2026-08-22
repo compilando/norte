@@ -20,24 +20,39 @@ use norte_ui_host::pickers::HostTheme;
 use norte_ui_host::settings::{ConfigLayer, HostPath, HostPaths};
 use norte_ui_host::{UiHost, UiHostOptions, ViewSnapshot};
 
-/// Hasta dónde llega esta ventana HOY.
+/// Hasta dónde llega esta ventana.
 ///
-/// Solo lectura, y es una decisión escrita: la revisión de seguridad de la
-/// tarea 3.3 encontró que el preset ya ataba F7/F8 a crear y borrar, y que
-/// `Dialog{choice:"approve"}` aprobaba la operación de un agente — o sea que
+/// **Completo desde la tarea 5.4** (2026-08-22), que es la revisión de
+/// seguridad de las mutaciones que el gate de salida de la fase 5 exige antes
+/// de que una compilación de release escriba nada. Hasta entonces fue
+/// `SoloLectura`, y no por falta de código: la revisión de la tarea 3.3 había
+/// encontrado que el preset ya ataba F7/F8 a crear y borrar y que
+/// `Dialog{choice:"approve"}` aprobaba la operación de un agente, o sea que
 /// la rebanada «de solo lectura» tenía autoridad destructiva y de policy.
 ///
-/// La tarea 5.1 ya construyó el camino: copiar, mover, crear y borrar pasan
-/// por confirmación, journal del daemon, tablero, cancelación y relistado del
-/// hueco afectado, y el host lo prueba. Lo que falta para levantar este
-/// interruptor NO es código sino la tarea 5.4 —la revisión de seguridad de
-/// las mutaciones—, que es lo que el gate de salida de la fase 5 exige antes
-/// de que una compilación de release escriba nada.
-pub const EFECTOS: norte_ui_host::commands::Efectos = norte_ui_host::commands::Efectos::SoloLectura;
+/// Lo que sostiene el cambio, y que está probado en `norte-ui-host`:
+///
+/// - **Ningún operando lo nombra el renderer** (ADR 0070). `UiAction` no
+///   lleva un `VPath` ni una cadena que sea una ruta; los orígenes salen de
+///   las marcas del hueco enfocado y el destino del hueco con el rol
+///   `Target`. Lo único que cruza es texto TECLEADO, que se valida como
+///   segmento y se rehúsa si trae el carácter de sustitución.
+/// - **Toda mutación pasa por una confirmación** y de ahí a una Task del
+///   daemon: journal, tablero, cancelación y relistado. El único camino a
+///   `backend.delete/copy/move_/mkdir/rename_batch` es `ejecutar_pendiente`.
+/// - **La decisión de una aprobación no tiene respuesta implícita**: solo
+///   `approve` aprueba, el diálogo se abre sin reconocer —la primera tecla
+///   solo dice «ya lo veo»—, enseña su TTL, se cierra al vencer, y si el
+///   `policy.decide` no llega al daemon se DICE.
+/// - **La superficie de la webview sigue siendo la de siempre**: cuatro
+///   comandos, CSP sin `eval` ni orígenes remotos, capacidades mínimas, sin
+///   filesystem ni shell, y `tests/webview_boundary.rs` lo clava.
+pub const EFECTOS: norte_ui_host::commands::Efectos = norte_ui_host::commands::Efectos::Completo;
 
-/// La ayuda. Corta a propósito: el spike no tiene superficie que documentar.
+/// La ayuda de la línea de comandos. Corta a propósito: lo que esta ventana
+/// sabe hacer se documenta DENTRO (F1), no en un `--help`.
 pub const USAGE: &str = "\
-norte-gui — el renderer gráfico de norte (spike de la fase 3)
+norte-gui — el renderer gráfico de norte
 
 USO:
     norte-gui [DIR] [OPCIONES]

@@ -60,7 +60,8 @@ applies to it too.
 # Every transfer is a task
 
 A copy is not a frozen screen. It reports progress, it keeps going while you
-navigate elsewhere, and {{cmd:task.cancel}} stops the most recent one.
+navigate elsewhere, and {{cmd:task.cancel}} stops one: the task under the
+cursor when a process panel has the focus, and otherwise the most recent.
 
 What cancelling promises is per **file**: bytes go to a staging file and the
 destination name does not appear until that file is complete, so no half-written

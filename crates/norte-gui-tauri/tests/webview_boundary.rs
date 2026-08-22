@@ -310,22 +310,22 @@ fn el_renderer_solo_invoca_comandos_conocidos() {
     }
 }
 
-/// La ventana de verdad NO muta, y eso es una barrera que se clava aquí.
+/// La ventana YA muta, y sigue siendo una barrera que se clava aquí.
 ///
-/// El gate de salida de la fase 5 dice que ninguna compilación de release
-/// escribe nada hasta que pase la revisión de seguridad de las mutaciones
-/// (tarea 5.4). Toda esa promesa descansaba en una constante que ninguna
-/// prueba miraba: cambiarla a `Completo` por descuido dejaba la suite entera
-/// verde y la ventana borrando ficheros.
+/// El interruptor lo levantó la tarea 5.4 (la revisión de seguridad de las
+/// mutaciones que exige el gate de salida de la fase 5), y este test cambió a
+/// la vez: mientras valía `SoloLectura`, toda la promesa descansaba en una
+/// constante que ninguna prueba miraba, y cambiarla por descuido dejaba la
+/// suite entera verde y la ventana borrando ficheros.
 ///
-/// Cuando 5.4 se cierre y esta constante pase a `Completo`, este test cambia
-/// A LA VEZ — que es exactamente el momento en que alguien tiene que decidirlo
-/// a propósito.
+/// Sigue aquí en el otro sentido: volver a `SoloLectura` también tiene que
+/// ser una decisión, no un merge. El rustdoc de la constante dice qué la
+/// sostiene.
 #[test]
-fn la_ventana_no_muta_todavia() {
+fn la_ventana_muta_y_es_una_decision() {
     assert_eq!(
         norte_gui_tauri::startup::EFECTOS,
-        norte_ui_host::commands::Efectos::SoloLectura,
-        "el interruptor de efectos lo levanta la tarea 5.4, no un descuido"
+        norte_ui_host::commands::Efectos::Completo,
+        "cambiar el interruptor de efectos es una decisión de la 5.4, no un descuido"
     );
 }

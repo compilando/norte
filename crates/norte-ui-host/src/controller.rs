@@ -154,9 +154,14 @@ pub struct UiHostOptions {
     pub viewport: (u16, u16),
     /// Hasta dónde llega este frontend: solo mirar, o también escribir.
     ///
-    /// La ventana gráfica arranca en [`crate::commands::Efectos::SoloLectura`]
-    /// hasta que la fase 5 le dé el camino seguro; el TUI y los tests usan
-    /// [`crate::commands::Efectos::Completo`].
+    /// No es una amputación del host —sabe mutar y sus tests lo prueban—
+    /// sino una decisión de quien lo monta. La ventana gráfica arrancó en
+    /// [`crate::commands::Efectos::SoloLectura`] hasta que la revisión de
+    /// seguridad de la tarea 5.4 levantó su interruptor; hoy los tres
+    /// montajes (ventana, TUI y tests) usan
+    /// [`crate::commands::Efectos::Completo`], y `SoloLectura` sigue siendo
+    /// la posición que puede elegir un montaje que no quiera autoridad
+    /// destructiva ni de policy.
     pub effects: crate::commands::Efectos,
     /// La configuración YA cargada, para los ajustes en solo lectura.
     ///
@@ -273,6 +278,8 @@ enum Mensaje {
     Aprobacion(Box<norte_proto::methods::PolicyApprovalRequired>),
     /// A esta aprobación se le acabó el TTL: el daemon ya no la acepta.
     AprobacionCaducada(u64),
+    /// El `policy.decide` que APROBABA no llegó al daemon.
+    AprobacionNoEntregada,
     /// Más entradas del listado que se está drenando por detrás.
     MasEntradas(Box<(RequestToken, u32, Vec<Entry>)>),
     /// Lo que contestó una petición que se lanzó para un OVERLAY.
@@ -633,6 +640,11 @@ async fn actor(
             }
             Mensaje::AprobacionCaducada(approval_id) => {
                 for u in estado.caduca_aprobacion(approval_id) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::AprobacionNoEntregada => {
+                for u in estado.decir("msg-approval-not-delivered") {
                     let _ = updates.send(u);
                 }
             }
@@ -4313,7 +4325,8 @@ impl Estado {
         if let Some(clave) = self.aviso_de_daemon {
             banners.push(clamp_display(norte_i18n::t_in(self.lang, clave)));
         }
-        if let Some(aviso) = norte_frontend::banners::connection_banner(self.lang, &self.degradadas) {
+        if let Some(aviso) = norte_frontend::banners::connection_banner(self.lang, &self.degradadas)
+        {
             banners.push(clamp_display(aviso));
         }
         self.status.banners = banners;
@@ -6474,9 +6487,19 @@ impl Estado {
                 // Solo `approve` aprueba. Cualquier otra respuesta —y el
                 // cierre del diálogo— DENIEGA: una decisión de seguridad
                 // no tiene respuesta por defecto que diga «sí».
+                //
+                // Y si el sí NO llega, se dice. Un `policy.decide` que falla
+                // —el daemon se cayó entre la pregunta y la respuesta— deja
+                // la operación denegada por silencio mientras esta ventana da
+                // por hecho que la autorizó: «lo dije» y «llegó» no son lo
+                // mismo en una superficie de seguridad. Denegar es al revés:
+                // si esa no llega, el desenlace es el mismo que se pidió.
                 let backend = Arc::clone(backend);
+                let buzon = buzon.clone();
                 tokio::spawn(async move {
-                    let _ = backend.policy_decide(approval_id, true).await;
+                    if backend.policy_decide(approval_id, true).await.is_err() {
+                        let _ = buzon.send(Mensaje::AprobacionNoEntregada).await;
+                    }
                 });
             }
             None => {}
@@ -6829,6 +6852,19 @@ impl Estado {
         let mut rx = task.progress.clone();
         let mut vista = Self::vista_de(&rx.borrow());
         vista.foreign = ajena;
+        // Un REANUNCIO —el SDK vuelve a ofrecer las tasks al reconectar— trae
+        // un progreso que no sabe nada del informe que ya se pidió por esta
+        // task. Proyectarlo tal cual borraba del tablero la única señal de
+        // que el directorio se quedó a medias, justo cuando la conexión se
+        // recupera y el lector vuelve a mirarlo.
+        if let Some(anterior) = self.tasks.get(&id)
+            && anterior.informe_pedido
+            && Self::terminal(vista.state)
+            && anterior.vista.detail.is_some()
+        {
+            vista.detail.clone_from(&anterior.vista.detail);
+            vista.detail_hostile = anterior.vista.detail_hostile;
+        }
         // Si esta task YA estaba en el tablero —una reconexión la reanuncia
         // por el canal de ajenas— lo que llega no sabe qué directorios tocaba,
         // así que se conserva lo apuntado: sustituirlo por una lista vacía
@@ -6842,6 +6878,16 @@ impl Estado {
         } else {
             afectados
         };
+        // Una mutación ACEPTADA es la prueba de que el journal volvió: el
+        // daemon rehúsa mutar sin él (regla dura 4), así que si esta entró,
+        // el aviso de «no se registra» dejó de ser verdad. No hay
+        // notificación de recuperación —el TUI la tiene porque su journal es
+        // embebido—, y un aviso que no sabe apagarse miente sobre lo único
+        // que describe de toda la sesión.
+        let apaga_el_aviso = self.journal_rehusado && !ajena && Self::muta(vista.kind.as_str());
+        if apaga_el_aviso {
+            self.journal_rehusado = false;
+        }
         // Igual que con los afectados: si ya estaba, se conserva que su
         // informe se pidió. Una reconexión que reanuncia un lote terminado no
         // puede volver a abrir el mismo informe.
@@ -6888,6 +6934,9 @@ impl Estado {
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
         }];
+        if apaga_el_aviso {
+            cambios.push(self.cambio_de_banners());
+        }
         if self
             .tasks
             .get(&id)
@@ -7108,7 +7157,9 @@ impl Estado {
             } else {
                 Informe::Undo(backend.undo_report(id).await)
             };
-            let _ = buzon.send(Mensaje::Informe(Box::new((id.get(), cual)))).await;
+            let _ = buzon
+                .send(Mensaje::Informe(Box::new((id.get(), cual))))
+                .await;
         });
     }
 
@@ -7160,11 +7211,7 @@ impl Estado {
         );
         let (detalle, cuerpo) = match resultado {
             Ok(r) => (
-                norte_i18n::ta_in(
-                    self.lang,
-                    "task-undo-done",
-                    &[("n", &r.undone.to_string())],
-                ),
+                norte_i18n::ta_in(self.lang, "task-undo-done", &[("n", &r.undone.to_string())]),
                 self.cuerpo_de_undo(r),
             ),
             Err(e) => {
@@ -7194,10 +7241,7 @@ impl Estado {
             Err(_) => fallo_la_task,
         };
         if hay_que_decirlo {
-            cambios.push(self.abrir_informe(
-                "modal-undo-report-title".to_owned(),
-                cuerpo,
-            ));
+            cambios.push(self.abrir_informe("modal-undo-report-title".to_owned(), cuerpo));
         }
         vec![self.parche(cambios)]
     }
@@ -7501,6 +7545,19 @@ impl Estado {
             .rev()
             .find(|(_, t)| Self::task_viva(&t.vista))
             .map_or(Objetivo::Ninguna, |(id, _)| Objetivo::Viva(*id))
+    }
+
+    /// `true` si esta clase de task ESCRIBE.
+    ///
+    /// Por la clave del catálogo y no por `TaskKind`, que es no exhaustivo:
+    /// una clase de un daemon más nuevo cae en `unknown` y NO cuenta como
+    /// mutación, que es el lado seguro — apagar el aviso del journal por algo
+    /// que este host no sabe qué hace sería apagarlo por si acaso.
+    fn muta(clase: &str) -> bool {
+        matches!(
+            clase,
+            "copy" | "move" | "delete" | "mkdir" | "rename-batch" | "undo" | "pack" | "sync"
+        )
     }
 
     /// `true` si a esta task todavía se le puede pedir que pare.

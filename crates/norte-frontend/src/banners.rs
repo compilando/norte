@@ -26,7 +26,10 @@ const HOST_MAX: usize = 48;
 /// Un scheme repetido REEMPLAZA su entrada y pasa a ser la más nueva: el
 /// informe último es el que merece nombrarse, y el viejo hablaba de la misma
 /// sesión. Pasado [`DEGRADED_MAX`] se cae el más antiguo.
-pub fn note_degraded(degraded: &mut std::collections::VecDeque<ConnectionDegraded>, d: ConnectionDegraded) {
+pub fn note_degraded(
+    degraded: &mut std::collections::VecDeque<ConnectionDegraded>,
+    d: ConnectionDegraded,
+) {
     degraded.retain(|old| old.scheme != d.scheme);
     degraded.push_back(d);
     while degraded.len() > DEGRADED_MAX {
@@ -107,7 +110,10 @@ mod tests {
         note_degraded(&mut d, degradacion("ftp", "uno.example"));
         note_degraded(&mut d, degradacion("sftp", "dos.example"));
         let aviso = connection_banner(norte_i18n::active(), &d).expect("hay aviso");
-        assert!(aviso.contains("dos.example") && aviso.contains('1'), "{aviso}");
+        assert!(
+            aviso.contains("dos.example") && aviso.contains('1'),
+            "{aviso}"
+        );
     }
 
     /// Un host con caracteres de control NO llega crudo a la barra: es una
@@ -117,12 +123,17 @@ mod tests {
         let mut d = std::collections::VecDeque::new();
         note_degraded(&mut d, degradacion("ftp", "ma\u{7}lo\u{202e}.example"));
         let aviso = connection_banner(norte_i18n::active(), &d).expect("hay aviso");
-        assert!(!aviso.contains('\u{7}') && !aviso.contains('\u{202e}'), "{aviso:?}");
+        assert!(
+            !aviso.contains('\u{7}') && !aviso.contains('\u{202e}'),
+            "{aviso:?}"
+        );
     }
 
     /// Sin degradaciones no hay aviso.
     #[test]
     fn sin_degradaciones_no_hay_aviso() {
-        assert!(connection_banner(norte_i18n::active(), &std::collections::VecDeque::new()).is_none());
+        assert!(
+            connection_banner(norte_i18n::active(), &std::collections::VecDeque::new()).is_none()
+        );
     }
 }

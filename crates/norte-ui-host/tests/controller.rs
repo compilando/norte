@@ -9935,8 +9935,8 @@ async fn un_lote_terminado_pide_su_informe() {
 
 /// `true` si en lo que queda por leer llega algún diálogo.
 async fn hubo_dialogos(sub: &mut norte_ui_host::controller::UiSubscription) -> bool {
-    while let Ok(Some(u)) = tokio::time::timeout(std::time::Duration::from_millis(150), sub.recv())
-        .await
+    while let Ok(Some(u)) =
+        tokio::time::timeout(std::time::Duration::from_millis(150), sub.recv()).await
     {
         if let Update::Message(m) = u
             && let UiUpdate::Patch(p) = &m.payload
@@ -9980,21 +9980,22 @@ async fn un_lote_atascado_lo_dice_y_da_el_nombre_de_ahora() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
-    *falso.informe.lock().expect("informe") = Some(norte_proto::methods::FsRenameBatchReportResult {
-        applied: 4,
-        rolled_back: 2,
-        failed_pair: Some(2),
-        stuck: Some(norte_proto::methods::RenameStuckStep {
-            from: VPath::parse("mem:///casa/viejo.txt").expect("vpath"),
-            to: VPath::parse("mem:///casa/nuevo.txt").expect("vpath"),
-            pair_index: 2,
-            error: norte_proto::Error::Io { retryable: false },
-            journalled: true,
-            still_applied: 2,
-        }),
-        uncertain: None,
-        compensations_lost: 1,
-    });
+    *falso.informe.lock().expect("informe") =
+        Some(norte_proto::methods::FsRenameBatchReportResult {
+            applied: 4,
+            rolled_back: 2,
+            failed_pair: Some(2),
+            stuck: Some(norte_proto::methods::RenameStuckStep {
+                from: VPath::parse("mem:///casa/viejo.txt").expect("vpath"),
+                to: VPath::parse("mem:///casa/nuevo.txt").expect("vpath"),
+                pair_index: 2,
+                error: norte_proto::Error::Io { retryable: false },
+                journalled: true,
+                still_applied: 2,
+            }),
+            uncertain: None,
+            compensations_lost: 1,
+        });
     let backend = Arc::new(falso);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -10122,7 +10123,10 @@ async fn un_daemon_que_se_para_lo_dice() {
     let banners = siguientes_banners(&mut sub).await;
     assert_eq!(
         banners,
-        vec![norte_i18n::t_in(norte_i18n::Lang::Es, "msg-daemon-stopping")],
+        vec![norte_i18n::t_in(
+            norte_i18n::Lang::Es,
+            "msg-daemon-stopping"
+        )],
     );
 }
 
@@ -10139,7 +10143,10 @@ async fn un_relevo_no_se_lee_como_una_parada() {
     let banners = siguientes_banners(&mut sub).await;
     assert_eq!(
         banners,
-        vec![norte_i18n::t_in(norte_i18n::Lang::Es, "msg-daemon-handover")],
+        vec![norte_i18n::t_in(
+            norte_i18n::Lang::Es,
+            "msg-daemon-handover"
+        )],
     );
 
     // Y cuando vuelve, el aviso se apaga: un aviso que no sabe volverse
@@ -10167,8 +10174,8 @@ async fn un_relevo_no_se_lee_como_una_parada() {
 /// regla dura 4 dice que sin registro no se muta.
 #[tokio::test]
 async fn una_mutacion_sin_journal_deja_aviso() {
-    let mut falso = arbol_como_falso();
-    falso.error_al_borrar = Some(norte_proto::Error::JournalUnavailable);
+    let falso = arbol_como_falso();
+    *falso.error_al_borrar.lock().expect("error") = Some(norte_proto::Error::JournalUnavailable);
     let backend = Arc::new(falso);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -10184,7 +10191,10 @@ async fn una_mutacion_sin_journal_deja_aviso() {
     let banners = siguientes_banners(&mut sub).await;
     assert_eq!(
         banners,
-        vec![norte_i18n::t_in(norte_i18n::Lang::Es, "status-journal-refused")],
+        vec![norte_i18n::t_in(
+            norte_i18n::Lang::Es,
+            "status-journal-refused"
+        )],
     );
 }
 
@@ -10297,7 +10307,10 @@ async fn un_undo_terminado_pide_su_informe_y_dice_lo_que_no_volvio() {
         .map(|l| l.text.clone())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(cuerpo.contains("42"), "cita la entrada donde paró: {cuerpo}");
+    assert!(
+        cuerpo.contains("42"),
+        "cita la entrada donde paró: {cuerpo}"
+    );
     assert_eq!(dialogos[0].title_key, "modal-undo-report-title");
 }
 
@@ -10326,4 +10339,186 @@ async fn un_undo_limpio_no_abre_nada() {
     let detalle = detalle_de_task(&mut sub).await;
     assert!(detalle.contains('4'), "el tablero dice cuántas: {detalle}");
     assert!(!hubo_dialogos(&mut sub).await);
+}
+
+/// El aviso de «sin journal» se APAGA cuando el daemon vuelve a aceptar una
+/// mutación.
+///
+/// Un indicador que no sabe volverse «ya sí» miente sobre lo único que
+/// describe de toda la sesión, y es la misma lección que el TUI aprendió en
+/// el #179: la ventana de propiedad de `journal.db` se reabre sola cuando el
+/// ocupante de paso lo suelta. Aquí no hay una notificación que lo anuncie,
+/// así que la prueba es la que hay: una mutación que el daemon ACEPTA.
+#[tokio::test]
+async fn el_aviso_de_journal_se_apaga_cuando_vuelve_a_aceptarse_una_mutacion() {
+    let falso = arbol_como_falso();
+    *falso.error_al_borrar.lock().expect("error") = Some(norte_proto::Error::JournalUnavailable);
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    // Un borrado rechazado por el journal enciende el aviso.
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    assert!(!siguientes_banners(&mut sub).await.is_empty());
+
+    // El journal se arregla: la siguiente mutación entra.
+    *backend.error_al_borrar.lock().expect("error") = None;
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    for _ in 0..40 {
+        if let Ok(Some(Update::Message(m))) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv()).await
+            && let UiUpdate::Patch(p) = &m.payload
+            && let Some(norte_ui_host::dto::ViewChange::Status(s)) = p
+                .changes
+                .iter()
+                .find(|c| matches!(c, norte_ui_host::dto::ViewChange::Status(_)))
+            && s.banners.is_empty()
+        {
+            return;
+        }
+    }
+    panic!("el aviso de journal no se apagó al aceptarse una mutación");
+}
+
+/// El informe de un lote con un nombre HOSTIL dentro no lo pinta crudo, y
+/// dice que lo enmascaró.
+///
+/// El nombre de ahora es lo único accionable del informe, así que es
+/// exactamente donde un nombre con anulaciones bidi haría que quien lo lee
+/// busque otro fichero.
+#[tokio::test]
+async fn el_informe_de_un_lote_enmascara_el_nombre_y_lo_dice() {
+    let hostil_bytes = hostil("rtl_override");
+    let nombre = String::from_utf8(hostil_bytes).expect("la fixture es UTF-8");
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    *falso.informe.lock().expect("informe") =
+        Some(norte_proto::methods::FsRenameBatchReportResult {
+            applied: 1,
+            rolled_back: 0,
+            failed_pair: Some(0),
+            stuck: Some(norte_proto::methods::RenameStuckStep {
+                from: VPath::parse("mem:///casa/antes.txt").expect("vpath"),
+                to: VPath::parse(&format!("mem:///casa/{nombre}")).expect("vpath"),
+                pair_index: 0,
+                error: norte_proto::Error::Io { retryable: false },
+                journalled: false,
+                still_applied: 1,
+            }),
+            uncertain: None,
+            compensations_lost: 0,
+        });
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    let p = inyectar_task_de(&tx, 61, norte_proto::TaskKind::RenameBatch);
+    siguientes_tasks(&mut sub).await;
+    p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert!(
+        dialogos[0]
+            .body
+            .iter()
+            .all(|l| !l.text.contains('\u{202E}')),
+        "no se pinta crudo: {:?}",
+        dialogos[0].body
+    );
+    assert!(
+        dialogos[0].body.iter().any(|l| l.hostile),
+        "y se DICE que lo pintado no es lo que hay: {:?}",
+        dialogos[0].body
+    );
+}
+
+/// Una reconexión que REANUNCIA un lote ya terminado no borra su informe.
+///
+/// El SDK vuelve a anunciar las tasks al reconectar, y el registro proyecta
+/// la vista otra vez desde el progreso — que no sabe nada del informe. Sin
+/// esto, la única señal de que el directorio se quedó a medias desaparecía
+/// del tablero justo cuando la conexión se recupera, que es cuando el lector
+/// vuelve a mirarlo.
+#[tokio::test]
+async fn un_reanuncio_no_borra_el_informe_del_lote() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    *falso.informe.lock().expect("informe") = Some(informe_limpio(2));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let p = inyectar_task_de(&tx, 71, norte_proto::TaskKind::RenameBatch);
+    siguientes_tasks(&mut sub).await;
+    p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    let detalle = detalle_de_task(&mut sub).await;
+
+    // La misma task, reanunciada por el canal de ajenas como haría una
+    // reconexión: ya terminal.
+    let p2 = inyectar_task_de(&tx, 71, norte_proto::TaskKind::RenameBatch);
+    p2.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+
+    let tasks = siguientes_tasks(&mut sub).await;
+    let t = tasks.iter().find(|t| t.task_id == 71).expect("sigue ahí");
+    assert_eq!(t.detail.as_deref(), Some(detalle.as_str()), "{t:?}");
+    assert_eq!(
+        backend.informes_pedidos.lock().expect("pedidos").len(),
+        1,
+        "y no se vuelve a pedir"
+    );
+}
+
+/// Una aprobación que NO llega al daemon se dice.
+///
+/// `policy.decide` se manda y se olvida, así que si el daemon se cayó entre
+/// la pregunta y el sí, la ventana daba por autorizada una operación que va a
+/// quedar denegada por silencio. En una superficie de seguridad, «lo dije» y
+/// «llegó» no son lo mismo.
+#[tokio::test]
+async fn una_aprobacion_que_no_llega_al_daemon_se_dice() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    *falso.error_al_decidir.lock().expect("error") =
+        Some(norte_proto::Error::ProviderUnavailable { retryable: true });
+    let (host, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = host.subscribe();
+
+    tx.send(norte_proto::methods::PolicyApprovalRequired {
+        approval_id: 12,
+        session: Some("agente-1".to_owned()),
+        op: "delete".to_owned(),
+        paths: vec!["mem:///casa/x".to_owned()],
+        paths_total: 1,
+        ttl_ms: 30_000,
+    })
+    .expect("el host escucha");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    host.dispatch(UiAction::Dialog {
+        id,
+        choice: "approve".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    for _ in 0..40 {
+        if siguiente_aviso(&mut sub).await == "msg-approval-not-delivered" {
+            return;
+        }
+    }
+    panic!("nadie dijo que la aprobación no llegó");
 }

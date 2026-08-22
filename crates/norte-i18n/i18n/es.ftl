@@ -12,6 +12,7 @@ modal-collision-body = el destino ya existe:
 modal-approval-title = Aprobación de agente
 modal-approval-ttl = caduca en { $s } s
 msg-approval-expired = la aprobación caducó y quedó denegada
+msg-approval-not-delivered = la aprobación no llegó al daemon: la operación sigue denegada
 modal-approval-body = el agente "{ $session }" pide { $op }:
 modal-approval-path = { $badge }ruta { $n }: { $path }
 # H3c: el pie de un modal al que una página de ayuda está tapando. Mientras

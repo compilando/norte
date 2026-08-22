@@ -59,7 +59,8 @@ que viene después —la colisión, la papelera, el deshacer— también le apli
 # Toda transferencia es una tarea
 
 Una copia no es una pantalla congelada: informa del progreso, sigue trabajando
-mientras navegas por otro sitio y {{cmd:task.cancel}} detiene la más reciente.
+mientras navegas por otro sitio y {{cmd:task.cancel}} detiene una: la del
+cursor si el panel de procesos tiene el foco, y si no la más reciente.
 
 Lo que cancelar promete es por **fichero**: los bytes van a un fichero de
 staging y el nombre de destino no aparece hasta que ese fichero está entero,

@@ -1,6 +1,6 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-expression: texto
+expression: text
 ---
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
 "│N┌ Ayuda ───────────────────────────────────────────────────────────────────┐a│"
@@ -15,6 +15,6 @@ expression: texto
 "│ │                            ║                                            ║│ │"
 "│ │Operaciones                 ║   F5        copiar la selección al otro pa…║│ │"
 "│ │  Copiar, mover, renombrar …║   F6        mover la selección al otro pane█│ │"
-"│ │ [Tab] índice ↔ texto [PgDn] bajar [PgUp] subir [/] filtrar …     152/175 │ │"
+"│ │ [Tab] índice ↔ texto [PgDn] bajar [PgUp] subir [/] filtrar …     154/177 │ │"
 "└─└──────────────────────────────────────────────────────────────────────────┘─┘"
 " ⟨file⟩/casa  2/5                                                               "

@@ -1663,6 +1663,41 @@ visibility rules.
 
 ### Task 5.4: mutation security review
 
+> **DONE 2026-08-22.** `EFECTOS` is `Completo`: the window writes. What
+> supports that is written in the constant's own rustdoc
+> (`norte-gui-tauri/src/startup.rs`) so it is read where it is changed, and
+> `tests/webview_boundary.rs` still pins it — now in the other direction, so
+> going back to `SoloLectura` is also a decision rather than a merge.
+>
+> **The named reviewer agents were NOT dispatched** — this session was not
+> allowed to run agents. The audit was done by hand against the same four
+> lenses, and it found four things, all fixed with a failing test first:
+>
+> - **A persistent journal notice that could not turn itself off.** A daemon
+>   that refuses a mutation for lack of a journal may recover, and nothing
+>   announces it (the TUI has a signal only because its journal is embedded).
+>   An accepted mutation IS the proof, so it clears the notice — an indicator
+>   that cannot say "it's fine now" lies about the only thing it describes for
+>   the whole session.
+> - **An approval that never reached the daemon was silent.** `policy.decide`
+>   is fire-and-forget; if the daemon died between the question and the yes,
+>   the window treated the operation as authorized while it stayed denied by
+>   silence. Approving now says so when it does not land. Denying stays
+>   silent on purpose: if THAT does not arrive, the outcome is the one asked
+>   for.
+> - **A reconnect wiped a batch report from the board.** The SDK re-announces
+>   tasks, the registration re-projects the row from a progress snapshot that
+>   knows nothing about the report, and the only signal that a directory was
+>   left half renamed vanished exactly when the connection recovered.
+> - **The corpus never reached the report bodies.** Now it does: a stuck path
+>   with a bidi override is masked and flagged like every other path line.
+>
+> Two checklist items are answered by design rather than by code, and it is
+> worth saying why: *sender/window identity* (one window, no navigation, CSP
+> `default-src 'none'`, and the binary's own commands validate their types —
+> Tauri capabilities only gate plugin commands) and *production devtools*
+> (the `devtools` feature is not enabled anywhere in the manifest).
+
 Mandatory reviews:
 
 - `security-reviewer` for webview-to-host authority, policy and journal paths;
@@ -1673,6 +1708,12 @@ Mandatory reviews:
 Resolve every BLOCKER and MAJOR before enabling mutations in release builds.
 
 ### Phase 5 exit gate
+
+> **MET 2026-08-22**, with one thing named rather than hidden: the reviewer
+> agents of task 5.4 were not dispatched (the session forbade agents), so the
+> audit is a hand one. Everything else below has tests behind it, and the
+> cross-client behaviour is covered against a real daemon in
+> `norte-ui-host/tests/daemon_e2e.rs`.
 
 - All everyday mutations have behavioural parity.
 - No renderer-supplied path string authorizes an effect.

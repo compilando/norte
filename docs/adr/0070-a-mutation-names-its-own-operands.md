@@ -277,6 +277,25 @@ plaintext-session banner, and the progress percentage — which had already
 diverged, since only the TUI's copy fell back to entry counts, so a delete
 crossed the bridge with no progress to paint at all.
 
+### Closed by task 5.4: the window writes
+
+`EFECTOS` is `Completo`. What the audit added to the rules above is one
+sentence, and it applies to any indicator, not just these:
+
+**An indicator that cannot turn itself off lies.** The journal notice says
+"this session does not record", which is a statement about everything that
+follows; a daemon that refused once may recover, and nothing announces it. An
+accepted mutation is the proof, so it clears the notice. The same shape
+appears twice more in this phase: the daemon-going-away banner clears when the
+daemon returns, and an approval that expires closes its own dialog instead of
+waiting for someone to answer a question that no longer exists.
+
+Its mirror image is **"I said it" is not "it arrived"**. `policy.decide` is
+sent and forgotten; approving when the daemon has died left the window
+believing it had authorized what stayed denied by silence. Approving now says
+when it does not land. Denying does not need it: if that message is the one
+lost, the outcome is still the one that was asked for.
+
 ### Negative
 
 - Bridge **22 → 23**, and old renderers break on purpose (ADR 0068). The four

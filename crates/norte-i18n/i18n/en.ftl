@@ -12,6 +12,7 @@ modal-collision-body = destination already exists:
 modal-approval-title = Agent approval
 modal-approval-ttl = expires in { $s } s
 msg-approval-expired = the approval expired and was denied
+msg-approval-not-delivered = the approval did not reach the daemon: the operation is still denied
 modal-approval-body = agent "{ $session }" requests { $op }:
 modal-approval-path = { $badge }path { $n }: { $path }
 # H3c: the footer of a modal a help page is covering. While that help is open

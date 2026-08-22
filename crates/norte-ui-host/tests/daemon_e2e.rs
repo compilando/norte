@@ -274,7 +274,12 @@ async fn una_task_de_otro_cliente_se_ve_y_se_puede_parar() {
     // el SDK no anuncia como ajena una task que ya llegó terminal —no habría
     // a qué suscribirse—, así que una copia instantánea contra un provider
     // en memoria no probaría nada. El provider se frena a propósito.
-    escribe(&d.mem, "mem:///casa/grande.bin", &vec![7u8; 4 * 1024 * 1024]).await;
+    escribe(
+        &d.mem,
+        "mem:///casa/grande.bin",
+        &vec![7u8; 4 * 1024 * 1024],
+    )
+    .await;
     d.mem
         .faults()
         .set_latency_per_op(Some(Duration::from_millis(30)));
@@ -332,4 +337,3 @@ async fn una_task_de_otro_cliente_se_ve_y_se_puede_parar() {
         "{ack:?}"
     );
 }
-

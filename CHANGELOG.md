@@ -162,6 +162,17 @@ independently through `PROTOCOL_VERSION`.
   silence. The same approval arriving twice no longer opens two dialogs either:
   the SDK resyncs `policy.pending` on every reconnect, so anything still alive
   comes back through the channel, and two dialogs are two answers.
+- **The graphical window writes.** The effects switch was `SoloLectura` until
+  the mutation security review of phase 5 task 5.4; what supports the change is
+  written in the constant's own rustdoc, where whoever changes it will read it,
+  and a test still pins it — now in the other direction, so going back is also
+  a decision rather than a merge. What the review itself changed: an approval
+  that never reaches the daemon now says so (`policy.decide` is sent and
+  forgotten, so a daemon that died between the question and the yes left the
+  window believing it had authorized what stayed denied by silence), the
+  journal notice clears when a mutation is accepted again (an indicator that
+  cannot say "it's fine now" lies about the only thing it describes for the
+  whole session), and a reconnect no longer wipes a batch report off the board.
 - **An undo reports what did NOT come back.** Same shape as the batch report and
   for the same reason: the task's outcome says the undo ran, while an entry that
   was irreversible, a LIFO that stopped halfway, a creation left in place
