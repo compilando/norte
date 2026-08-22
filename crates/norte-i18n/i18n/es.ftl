@@ -13,6 +13,7 @@ modal-approval-title = Aprobación de agente
 modal-approval-ttl = caduca en { $s } s
 msg-approval-expired = la aprobación caducó y quedó denegada
 msg-approval-not-delivered = la aprobación no llegó al daemon: la operación sigue denegada
+msg-dialog-dropped = demasiados diálogos abiertos: se cerró el más viejo
 modal-approval-body = el agente "{ $session }" pide { $op }:
 modal-approval-path = { $badge }ruta { $n }: { $path }
 # H3c: el pie de un modal al que una página de ayuda está tapando. Mientras
@@ -1583,7 +1584,7 @@ task-batch-half = lote a medias: { $applied } aplicados, { $back } devueltos
 task-batch-unverified = terminado, sin informe
 host-plan-unseen = recorre el plan entero antes de aplicarlo
 host-same-directory = el origen y el destino son el mismo directorio
-host-read-only = esta ventana todavía no escribe
+host-read-only = esta ventana está montada sin efectos: no escribe
 host-settings-read-only = los ajustes aquí son de solo lectura
 msg-nav-at-root = ya estás en la raíz
 msg-nothing-selected = nada seleccionado

@@ -38,8 +38,14 @@ use norte_ui_host::{UiHost, UiHostOptions, ViewSnapshot};
 ///   `Target`. Lo único que cruza es texto TECLEADO, que se valida como
 ///   segmento y se rehúsa si trae el carácter de sustitución.
 /// - **Toda mutación pasa por una confirmación** y de ahí a una Task del
-///   daemon: journal, tablero, cancelación y relistado. El único camino a
-///   `backend.delete/copy/move_/mkdir/rename_batch` es `ejecutar_pendiente`.
+///   daemon: journal, tablero, cancelación y relistado. Los caminos a
+///   `backend.delete/copy/move_/mkdir/rename_batch` son DOS y los dos exigen
+///   una pantalla contestada: `ejecutar_pendiente` (los diálogos) y
+///   `aprobar_revision_ia` (la revisión de un plan, que además exige el
+///   `plan_hash` que devolvió el core y haber leído el plan entero).
+/// - **Levantar esto también habilita `pane.ai-rename`**, que manda el
+///   contenido del directorio a un modelo externo. No escribe, pero sale del
+///   proceso, y por eso está en la lista de lo que solo lectura quita.
 /// - **La decisión de una aprobación no tiene respuesta implícita**: solo
 ///   `approve` aprueba, el diálogo se abre sin reconocer —la primera tecla
 ///   solo dice «ya lo veo»—, enseña su TTL, se cierra al vencer, y si el

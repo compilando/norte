@@ -54,6 +54,11 @@ pub enum SyncPlanEvent {
 }
 
 /// Evento de conexión del backend remoto (para la barra de mensajes).
+///
+/// `#[non_exhaustive]`: este crate es la superficie publicable del SDK (ADR
+/// 0066), y añadir `GoingAway` ya obligó a tocar todos los `match` de fuera.
+/// El siguiente evento tiene que poder ser aditivo.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnEvent {
     /// La conexión con el daemon se perdió; reconectando en background.

@@ -13,6 +13,7 @@ modal-approval-title = Agent approval
 modal-approval-ttl = expires in { $s } s
 msg-approval-expired = the approval expired and was denied
 msg-approval-not-delivered = the approval did not reach the daemon: the operation is still denied
+msg-dialog-dropped = too many open dialogs: the oldest one was dropped
 modal-approval-body = agent "{ $session }" requests { $op }:
 modal-approval-path = { $badge }path { $n }: { $path }
 # H3c: the footer of a modal a help page is covering. While that help is open
@@ -1556,7 +1557,7 @@ task-batch-half = batch left half done: { $applied } applied, { $back } rolled b
 task-batch-unverified = finished, report unavailable
 host-plan-unseen = scroll through the whole plan before applying it
 host-same-directory = source and destination are the same directory
-host-read-only = this window does not write yet
+host-read-only = this window is mounted without effects: it does not write
 host-settings-read-only = settings are read-only here
 msg-nav-at-root = already at the root
 msg-nothing-selected = nothing selected

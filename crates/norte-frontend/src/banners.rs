@@ -21,16 +21,29 @@ pub const DEGRADED_MAX: usize = 32;
 /// a todo lo demás.
 const HOST_MAX: usize = 48;
 
-/// Anota una degradación en la colección, UNA por scheme.
+/// Anota una degradación en la colección, UNA por SESIÓN.
 ///
-/// Un scheme repetido REEMPLAZA su entrada y pasa a ser la más nueva: el
-/// informe último es el que merece nombrarse, y el viejo hablaba de la misma
-/// sesión. Pasado [`DEGRADED_MAX`] se cae el más antiguo.
+/// Y una sesión es `(scheme, host)`, no `scheme`. Deduplicar por el scheme a
+/// secas era la regla vieja del TUI, con la justificación de que «el viejo
+/// hablaba de la misma sesión»: con dos FTP a hosts distintos eso es falso, y
+/// el segundo aviso BORRABA el primero dejando el contador de «y otras N» en
+/// cero. El que desaparecía era justo el host que el lector no estaba
+/// mirando, y «¿cuál?» es la única pregunta que este indicador contesta.
+///
+/// La identidad se decide plegando a minúsculas ASCII: `FTP` y `ftp` del wire
+/// son la misma sesión. Los BYTES que se pintan son los del informe último —
+/// plegar sirve para decidir, no para reescribir lo que se enseña.
+///
+/// Pasado [`DEGRADED_MAX`] se cae el más antiguo.
 pub fn note_degraded(
     degraded: &mut std::collections::VecDeque<ConnectionDegraded>,
     d: ConnectionDegraded,
 ) {
-    degraded.retain(|old| old.scheme != d.scheme);
+    let clave = |x: &ConnectionDegraded| {
+        (x.scheme.to_ascii_lowercase(), x.host.to_ascii_lowercase())
+    };
+    let nueva = clave(&d);
+    degraded.retain(|old| clave(old) != nueva);
     degraded.push_back(d);
     while degraded.len() > DEGRADED_MAX {
         degraded.pop_front();
@@ -94,13 +107,29 @@ mod tests {
     /// Un scheme repetido no ocupa dos huecos, y el que se nombra es el
     /// último informe.
     #[test]
-    fn un_scheme_repetido_reemplaza_su_entrada() {
+    fn la_misma_sesion_repetida_reemplaza_su_entrada() {
         let mut d = std::collections::VecDeque::new();
         note_degraded(&mut d, degradacion("ftp", "uno.example"));
-        note_degraded(&mut d, degradacion("ftp", "dos.example"));
-        assert_eq!(d.len(), 1);
+        note_degraded(&mut d, degradacion("FTP", "UNO.example"));
+        assert_eq!(d.len(), 1, "la caja del wire no hace dos sesiones");
         let aviso = connection_banner(norte_i18n::active(), &d).expect("hay aviso");
-        assert!(aviso.contains("dos.example"), "{aviso}");
+        assert!(aviso.contains("UNO.example"), "pinta los bytes del último: {aviso}");
+    }
+
+    /// Dos HOSTS del mismo scheme son dos sesiones: el segundo no puede
+    /// borrar al primero, porque el que desaparece es justo el que no se
+    /// está mirando.
+    #[test]
+    fn dos_hosts_del_mismo_scheme_no_se_pisan() {
+        let mut d = std::collections::VecDeque::new();
+        note_degraded(&mut d, degradacion("ftp", "banco.example"));
+        note_degraded(&mut d, degradacion("ftp", "otro.example"));
+        assert_eq!(d.len(), 2);
+        let aviso = connection_banner(norte_i18n::active(), &d).expect("hay aviso");
+        assert!(
+            aviso.contains("otro.example") && aviso.contains('1'),
+            "nombra una y cuenta la otra: {aviso}"
+        );
     }
 
     /// Con varias, se nombra una Y se dice cuántas más hay.

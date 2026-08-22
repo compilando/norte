@@ -108,6 +108,20 @@ pub const MAX_NOTICES: usize = 32;
 /// Tasks proyectadas a la vez.
 pub const MAX_TASKS: usize = 256;
 
+/// Diálogos apilados a la vez.
+///
+/// La pila era de gestos humanos y por eso no tenía techo. Desde la tarea 5.3
+/// la alimenta el WIRE: una aprobación por cada op de agente, y un informe
+/// por cada lote o undo terminal que dejó algo a medias —también los de otro
+/// cliente de la misma sesión—. Otro frontend corriendo doscientos lotes
+/// atascados apilaba doscientos diálogos, cada uno pidiendo dos respuestas, y
+/// cada parche de diálogos CLONA la pila entera.
+///
+/// Ocho es lo que una persona puede contestar sin perder el hilo; al llegar
+/// al techo se cae el más viejo NO reconocido —lo que nadie ha llegado a
+/// mirar— y jamás el de arriba, que es el que se está contestando.
+pub const MAX_DIALOGS: usize = 8;
+
 /// Bytes de una previsualización que cruzan al renderer.
 pub const MAX_PREVIEW_BYTES: usize = 256 * 1024;
 

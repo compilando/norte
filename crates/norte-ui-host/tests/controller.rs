@@ -10508,12 +10508,15 @@ async fn una_aprobacion_que_no_llega_al_daemon_se_dice() {
     })
     .expect("el host escucha");
     let id = siguientes_dialogos(&mut sub).await[0].id;
-    host.dispatch(UiAction::Dialog {
-        id,
-        choice: "approve".to_owned(),
-    })
-    .await
-    .expect("host vivo");
+    // Dos veces: la primera solo reconoce la superficie, que se abrió sola.
+    for _ in 0..2 {
+        host.dispatch(UiAction::Dialog {
+            id,
+            choice: "approve".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    }
 
     for _ in 0..40 {
         if siguiente_aviso(&mut sub).await == "msg-approval-not-delivered" {
@@ -10521,4 +10524,359 @@ async fn una_aprobacion_que_no_llega_al_daemon_se_dice() {
         }
     }
     panic!("nadie dijo que la aprobación no llegó");
+}
+
+/// Con el tablero RECORTADO, se cancela la fila que se ve.
+///
+/// El tablero cruza el puente acotado a `MAX_TASKS` y el cursor es un
+/// índice. Mientras el recorte y el cursor contaban sobre listas distintas,
+/// con más de 256 tasks —marcar tres mil ficheros y pulsar F5, y el desalojo
+/// solo se lleva las TERMINADAS— la fila resaltada y la task que paraba eran
+/// dos tasks distintas.
+#[tokio::test]
+async fn con_el_tablero_recortado_se_cancela_la_fila_que_se_ve() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    let (h, _snap) = host_con_layout(Arc::new(falso), "full", (200, 60)).await;
+    let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let max = norte_ui_host::bridge::MAX_TASKS;
+    let total = max + 5;
+    let mut vivas = Vec::new();
+    for i in 0..total {
+        vivas.push(inyectar_task(&tx, 1000 + i as u64, &canceladas));
+    }
+    // Se suscribe DESPUÉS de meterlas: doscientas sesenta y una altas
+    // producen más parches de los que cabe leer, y quedarse atrás no es lo
+    // que este test mide. La foto que pide el resync trae el tablero entero.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(foto.tasks.len(), max, "el tablero va acotado");
+    let primera_pintada = foto.tasks[0].task_id;
+
+    h.dispatch(UiAction::FocusSlot { slot_id: 7 })
+        .await
+        .expect("host vivo");
+    // Cursor en la primera fila PINTADA (arriba del todo).
+    h.dispatch(tecla("Home")).await.expect("host vivo");
+    h.dispatch(tecla_mod("k", true, false))
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        *canceladas.lock().expect("canceladas"),
+        vec![primera_pintada],
+        "se cancela la de la fila resaltada, no una que no está en pantalla"
+    );
+    drop(vivas);
+}
+
+/// Un lote que NACE terminal pide su informe igual.
+///
+/// El daemon puede completarlo antes de que vuelva la llamada; entonces el
+/// watch ya está resuelto, `progreso` no se llama ni una vez, y la única
+/// señal de que el directorio quedó a medias no se pedía nunca — justo en
+/// los lotes rápidos, que es donde el desenlace más parece que todo fue bien.
+#[tokio::test]
+async fn un_lote_que_nace_terminal_pide_su_informe() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    *falso.informe.lock().expect("informe") = Some(informe_limpio(2));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    // Nace COMPLETADA: el emisor se suelta acto seguido, como hace el SDK
+    // con una task que ya llegó terminal.
+    let progreso = norte_proto::TaskProgress {
+        task_id: norte_proto::TaskId::new(81),
+        kind: norte_proto::TaskKind::RenameBatch,
+        state: norte_proto::TaskState::Completed,
+        bytes_done: 0,
+        bytes_total: None,
+        entries_done: 1,
+        entries_total: Some(1),
+        current: None,
+    };
+    let (ptx, prx) = tokio::sync::watch::channel(progreso);
+    drop(ptx);
+    tx.send(norte_ui_host::backend::HostTask {
+        id: norte_proto::TaskId::new(81),
+        progress: prx,
+        cancel: Arc::new(|| {}),
+        foreign: false,
+    })
+    .expect("el host escucha");
+
+    let detalle = detalle_de_task(&mut sub).await;
+    assert!(detalle.contains('2'), "el informe llegó al tablero: {detalle}");
+    assert_eq!(
+        *backend.informes_pedidos.lock().expect("pedidos"),
+        vec![81]
+    );
+}
+
+/// Un CLIC sobre una aprobación recién abierta no la aprueba.
+///
+/// El diálogo se pinta en el mismo sitio que el anterior y con la misma
+/// primera opción, así que un clic ya en marcha sobre «Confirmar» aterrizaba
+/// sobre el «Aprobar» de una aprobación de agente que acababa de llegar. La
+/// regla de «se abre solo, la primera respuesta solo reconoce» era solo del
+/// teclado, y el ratón es la entrada primaria de esta superficie.
+#[tokio::test]
+async fn un_clic_sobre_una_aprobacion_recien_abierta_no_la_aprueba() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let backend = Arc::new(falso);
+    let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = host.subscribe();
+
+    tx.send(norte_proto::methods::PolicyApprovalRequired {
+        approval_id: 21,
+        session: Some("agente-1".to_owned()),
+        op: "delete".to_owned(),
+        paths: vec!["mem:///casa/x".to_owned()],
+        paths_total: 1,
+        ttl_ms: 30_000,
+    })
+    .expect("el host escucha");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+
+    host.dispatch(UiAction::Dialog {
+        id,
+        choice: "approve".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(
+        backend.decisiones.lock().expect("decisiones").is_empty(),
+        "el primer clic solo reconoce"
+    );
+
+    // El segundo sí aprueba: la pregunta ya se ha visto.
+    host.dispatch(UiAction::Dialog {
+        id,
+        choice: "approve".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert_eq!(
+        backend.decisiones.lock().expect("decisiones").clone(),
+        vec![(21, true)]
+    );
+}
+
+/// Una ruta que el daemon YA redactó va marcada.
+///
+/// Las rutas de una aprobación llegan como texto pasado por el lossy del
+/// daemon: los controles, los overrides bidi y los bytes inválidos ya son
+/// U+FFFD. Calcular la marca comparando contra ese texto daba `false`
+/// exactamente en la clase más peligrosa, y encima de forma inconsistente
+/// —un `zwsp`, que el lossy no toca, sí la encendía—.
+#[tokio::test]
+async fn una_ruta_ya_redactada_por_el_daemon_va_marcada() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let (host, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = host.subscribe();
+
+    // Tal cual lo manda el daemon: `display_lossy` ya sustituyó el override.
+    tx.send(norte_proto::methods::PolicyApprovalRequired {
+        approval_id: 22,
+        session: None,
+        op: "delete".to_owned(),
+        paths: vec!["mem:///casa/factura\u{FFFD}.pdf".to_owned()],
+        paths_total: 1,
+        ttl_ms: 30_000,
+    })
+    .expect("el host escucha");
+
+    let d = siguientes_dialogos(&mut sub).await;
+    assert!(
+        d[0].body.iter().any(|l| l.hostile),
+        "lo que se lee no es lo que hay, y se dice: {:?}",
+        d[0].body
+    );
+}
+
+/// Una ruta LIMPIA pero más larga que el tope del puente se marca por el
+/// recorte.
+///
+/// El recorte le pega una elipsis DESPUÉS del veredicto de `path_display`, y
+/// `…` es un carácter legal en un nombre: sin marca, quien lee no distingue
+/// «se llama así» de «esto está cortado». Y en el informe de un lote ese
+/// nombre es lo único accionable que hay.
+#[tokio::test]
+async fn una_ruta_limpia_pero_recortada_se_marca() {
+    let largo: String = std::iter::repeat_n("segmento_larguisimo_pero_limpio", 200)
+        .collect::<Vec<_>>()
+        .join("/");
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    *falso.informe.lock().expect("informe") = Some(norte_proto::methods::FsRenameBatchReportResult {
+        applied: 1,
+        rolled_back: 0,
+        failed_pair: Some(0),
+        stuck: Some(norte_proto::methods::RenameStuckStep {
+            from: VPath::parse("mem:///casa/antes.txt").expect("vpath"),
+            to: VPath::parse(&format!("mem:///casa/{largo}")).expect("vpath"),
+            pair_index: 0,
+            error: norte_proto::Error::Io { retryable: false },
+            journalled: true,
+            still_applied: 1,
+        }),
+        uncertain: None,
+        compensations_lost: 0,
+    });
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    let p = inyectar_task_de(&tx, 91, norte_proto::TaskKind::RenameBatch);
+    siguientes_tasks(&mut sub).await;
+    p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+
+    let d = siguientes_dialogos(&mut sub).await;
+    assert!(
+        d[0].body.iter().any(|l| l.hostile),
+        "el recorte también altera lo pintado: {:?}",
+        d[0].body
+    );
+}
+
+/// Tras un RELEVO del daemon, una task con el mismo id no hereda nada de la
+/// anterior.
+///
+/// Los ids los reparte el scheduler de un proceso y empiezan en 1 en cada
+/// arranque, así que el daemon nuevo reparte los MISMOS números. La task 3
+/// nueva heredaba de la vieja que su informe ya se había pedido — y entonces
+/// no se pedía nunca, que es perder la única señal de un directorio a medias.
+#[tokio::test]
+async fn tras_un_relevo_un_id_repetido_no_hereda_nada() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    let (evtx, evrx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.eventos.lock().expect("eventos") = Some(evrx);
+    *falso.informe.lock().expect("informe") = Some(informe_limpio(1));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    let p = inyectar_task_de(&tx, 3, norte_proto::TaskKind::RenameBatch);
+    siguientes_tasks(&mut sub).await;
+    p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    detalle_de_task(&mut sub).await;
+    assert_eq!(backend.informes_pedidos.lock().expect("pedidos").len(), 1);
+
+    // Relevo: se va y vuelve. Al otro lado, otro daemon.
+    evtx.send(norte_client::ConnEvent::GoingAway { reconnect: true })
+        .expect("el host escucha");
+    evtx.send(norte_client::ConnEvent::Restored)
+        .expect("el host escucha");
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+    // Su primera task también es la 3, y también es un lote.
+    let p2 = inyectar_task_de(&tx, 3, norte_proto::TaskKind::RenameBatch);
+    p2.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    for _ in 0..40 {
+        if backend.informes_pedidos.lock().expect("pedidos").len() == 2 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("el informe de la task nueva no se pidió: heredó la marca de la vieja");
+}
+
+/// La pila de diálogos tiene techo, y que se cayó uno se DICE.
+///
+/// Desde que la alimenta el wire —un informe por cada lote ajeno que quedó a
+/// medias— una pila sin techo es un canal de memoria de crecimiento libre, y
+/// cada parche de diálogos clona la pila entera.
+#[tokio::test]
+async fn la_pila_de_dialogos_tiene_techo() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    *falso.informe.lock().expect("informe") = Some(norte_proto::methods::FsRenameBatchReportResult {
+        applied: 1,
+        rolled_back: 1,
+        failed_pair: Some(0),
+        stuck: None,
+        uncertain: None,
+        compensations_lost: 0,
+    });
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+
+    let tope = norte_ui_host::bridge::MAX_DIALOGS;
+    let mut vivas = Vec::new();
+    for i in 0..(tope + 3) {
+        let p = inyectar_task_de(&tx, 400 + i as u64, norte_proto::TaskKind::RenameBatch);
+        p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+        vivas.push(p);
+    }
+
+    let mut ultimos = Vec::new();
+    for _ in 0..60 {
+        let d = siguientes_dialogos(&mut sub).await;
+        ultimos = d;
+        if ultimos.len() >= tope {
+            break;
+        }
+    }
+    assert!(
+        ultimos.len() <= tope,
+        "la pila no pasa del techo: {}",
+        ultimos.len()
+    );
+    drop(vivas);
+}
+
+/// Una ventana SIN efectos no aborta la task de otro cliente.
+///
+/// Cancelar una copia deja el destino limpio o un `.norte-partial`: toca el
+/// disco. Sus propias tasks son otra cosa — para lanzarlas ya hacía falta el
+/// interruptor.
+#[tokio::test]
+async fn en_solo_lectura_no_se_para_la_task_de_otro() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: Arc::new(falso),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::SoloLectura,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+    let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _p = inyectar_task(&tx, 55, &canceladas);
+    siguientes_tasks(&mut sub).await;
+
+    let ack = h
+        .dispatch(tecla_mod("k", true, false))
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Unavailable { .. }),
+        "una ventana sin efectos no la para: {ack:?}"
+    );
+    assert!(canceladas.lock().expect("canceladas").is_empty());
 }

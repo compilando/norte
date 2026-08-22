@@ -182,6 +182,61 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **`task.cancel` could stop a task that was not on screen.** The board is
+  capped at 256 rows and the cursor is an index; the cap lived in one place and
+  the cursor counted over the whole map, so with more than 256 tasks — marking
+  three thousand files and pressing F5, one task per entry, and eviction only
+  takes the FINISHED ones — the highlighted row and the cancelled task were two
+  different tasks. There is now one definition of "the visible ones" and every
+  index means the same thing.
+- **A rename batch that was already finished when it arrived never asked for its
+  report.** The daemon can complete it before the call returns, and then the
+  progress channel never fires: the request hung off progress alone, so the only
+  signal that a directory was left half-renamed went missing precisely on the
+  fast batches, where the outcome most looks like everything went fine.
+- **A dialog that opened by itself could be answered by a CLICK.** The
+  acknowledge rule was keyboard-only, and the pointer is the primary input of
+  this surface: dialogs paint in the same place with the same first button, so a
+  click already in flight over "Confirm" landed on the "Approve" of an agent
+  approval that had just arrived. The rule now lives where both inputs pass.
+- **Clicking the processes panel or the places sidebar did not focus them.**
+  Focus by click demanded a listing; only the Tab cycle could reach the others.
+  Both now use the same shared focus order.
+- **An approval path redacted by the daemon was shown as faithful.** The flag was
+  computed by masking the text again, but the daemon had already replaced the
+  dangerous bytes with U+FFFD, so it never fired for the most dangerous class —
+  while a zero-width space, which that pass does not touch, did fire. The
+  replacement character is itself the signal, and it is now read as one.
+- **A clean but over-long path was shown truncated and declared faithful.** The
+  bridge's clamp appends `…` AFTER the verdict, and `…` is a legal filename
+  character, so the reader could not tell "it is called that" from "this was
+  cut" — in a batch report that name is the only actionable thing there is.
+- **Task ids restart at 1 in every daemon, and the board did not know.** After a
+  handover — which this window now hears about — the new daemon hands out the
+  same numbers, and a new task inherited from the old one that its report had
+  already been asked for (so it never was), along with its affected directories
+  and even its row detail. Rows now carry the connection epoch, and a report in
+  flight from the previous one is dropped rather than hung off whatever carries
+  that number today.
+- **The cleartext-session notice deduplicated by scheme alone**, so a second FTP
+  host EVICTED the first and the "+N more" counter went to zero. The one that
+  disappeared was the host the reader was not looking at, which is the only
+  question the indicator exists to answer. A session is `(scheme, host)`.
+- **The dialog stack had no ceiling** now that the wire feeds it: another client
+  running two hundred stuck batches piled up two hundred modals, each cloned
+  into every dialog patch. Eight at a time, a report is sacrificed before a
+  decision, and the drop is said out loud.
+- **A report whose row had already been evicted was dropped in silence** —
+  losing exactly the "left half-done" that never gets folded into "it went
+  fine". Without a row it skips the detail and still says what it has to say.
+- **Cancelling from a window mounted without effects could abort ANOTHER
+  client's transfer**, leaving them a `.norte-partial`: cancelling a copy does
+  touch the disk. Own tasks stay cancellable — launching them already needed the
+  switch.
+- **Whether a task was still alive was read from a stale projection**, so
+  "cancelling…" was said about something already finished, and "the most recent
+  live one" could skip the one actually running. It now asks the live progress,
+  which is what the TUI does and for the same reason.
 - **A task with no byte totals showed no progress at all in the window.** The
   percentage only looked at bytes, so a delete — which counts entries, not
   bytes — crossed the bridge with nothing to paint from start to finish. The

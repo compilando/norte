@@ -273,9 +273,12 @@ pub enum Efecto {
     RenameIa,
     /// Pide parar una task del tablero.
     ///
-    /// NO es una mutación, y por eso sobrevive a [`Efectos::SoloLectura`]:
-    /// parar una copia no escribe nada, y una ventana que puede VER una task
-    /// ajena y no puede pedirle que pare es una ventana que mira arder.
+    /// Sobrevive a [`Efectos::SoloLectura`] **solo para las tasks propias**, y
+    /// la distinción no es formalismo: parar una copia SÍ toca el disco —el
+    /// destino se limpia o queda un `.norte-partial`, que es la regla del
+    /// proyecto—, así que una ventana montada sin efectos no puede abortar la
+    /// transferencia de OTRO cliente y dejarle un parcial. Sus propias tasks
+    /// son otra cosa: si pudo lanzarlas, puede pararlas.
     CancelarTask,
     /// Pide renombrar la entrada bajo el cursor. NO renombra: abre el nombre
     /// para editarlo.

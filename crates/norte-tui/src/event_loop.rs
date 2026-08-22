@@ -392,13 +392,16 @@ pub async fn run(
                 }
             } => {
                 app.message = Some(match ev {
-                    ConnEvent::Lost => t("msg-daemon-lost"),
                     ConnEvent::Restored => t("msg-daemon-restored"),
                     // Un relevo y una parada se ven igual en cuanto la
                     // conexión cae: este aviso llega antes y es lo único que
                     // los distingue.
                     ConnEvent::GoingAway { reconnect: true } => t("msg-daemon-handover"),
                     ConnEvent::GoingAway { reconnect: false } => t("msg-daemon-stopping"),
+                    // `Lost` y el comodín juntos: `ConnEvent` es no
+                    // exhaustivo, y un evento de un SDK más nuevo se lee como
+                    // una pérdida, que es lo conservador.
+                    ConnEvent::Lost | _ => t("msg-daemon-lost"),
                 });
             }
             Some(req) = async {
