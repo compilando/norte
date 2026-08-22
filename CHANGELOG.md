@@ -182,6 +182,20 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window compares two directories** (`pane.compare-dirs`): a diff panel
+  with the rows as they stream in, a filter per category with its count, side
+  switching, and `Enter` to go where a row points. The model is the one the TUI
+  already uses — nothing here re-pairs rows or decides a verdict — and two
+  pieces of it are worth naming because reimplementing them is what has bitten
+  other surfaces: the status line distinguishes "finished" from "finished but
+  batches were lost" and from "the channel closed and nobody saw the outcome",
+  which in a comparison IS the answer; and where a row opens comes from the
+  shared rule, so an orphan seen from the side that does not have it opens
+  nothing rather than falling back to the other side. What crosses the bridge
+  is a WINDOW of rows: the engine emits one row per paired name over the whole
+  tree and capping that would turn "are these the same?" into half an answer.
+  Cancelling is the only brake, and the second `Escape` closes the panel
+  whatever the daemon is doing. Bridge **28**.
 - **The window searches by MEANING** (`pane.semantic-search`, from the command
   palette — no preset binds it, in either frontend). The shared catalogue has
   had the command since the keymap work and the host answered "not here"; now

@@ -380,6 +380,10 @@ enum Fondo {
     Resultados(u64, Box<norte_proto::methods::SearchHits>),
     /// La respuesta de una consulta SEMÁNTICA: entera, de una vez.
     Semanticos(u64, Result<Vec<norte_proto::methods::SemanticHit>, Error>),
+    /// La comparación tiene Task: se bautiza para poder cancelarla.
+    ComparacionViva(u64, norte_proto::TaskId),
+    /// Un lote de filas comparadas.
+    FilasComparadas(u64, Box<norte_proto::methods::CompareRowsBatch>),
     /// Lo que el modelo propuso, con la época de la petición que lo pidió.
     PlanIa(
         u64,
@@ -1197,6 +1201,35 @@ enum Objetivo {
     Viva(u64),
 }
 
+/// Una comparación de dos árboles, con su panel COMPARTIDO dentro.
+///
+/// El modelo —qué filas hay, qué categorías están escondidas, cuál está
+/// seleccionada, de qué lado operan las teclas— es
+/// `norte_frontend::compare::ComparePane`, el mismo que pinta el TUI. Aquí no
+/// se vuelve a emparejar nada ni se decide ningún veredicto: eso lo hizo el
+/// core, y reproducirlo en el host sería la tercera copia.
+struct Comparacion {
+    /// Cuál de todas las comparaciones de esta ventana es. Misma razón que la
+    /// época de una búsqueda: el id de la Task llega tarde.
+    epoca: u64,
+    /// La Task del daemon, en cuanto se sabe. Cero mientras no se sabe.
+    task: norte_proto::TaskId,
+    /// La vista se cerró y lo que quede de esta comparación sobra.
+    abandonada: Arc<std::sync::atomic::AtomicBool>,
+    /// El MODELO compartido: raíces, filas, filtros, selección, lado activo
+    /// y —lo que más importa— en qué estado quedó.
+    ///
+    /// Los cinco estados de `CompareState` son cómo un frontend dice si la
+    /// respuesta está COMPLETA, y en una comparación eso ES la respuesta.
+    /// Tener aquí un `bool viva` habría vuelto a perder el caso que ese enum
+    /// existe para no perder: lotes que se cayeron por el camino.
+    vista: norte_frontend::compare::CompareView,
+    /// La ventana que el renderer dice estar pintando.
+    primera_visible: usize,
+    /// Cuántas filas caben en esa ventana.
+    ventana: usize,
+}
+
 /// Un hallazgo de una búsqueda, venga de donde venga.
 #[derive(Clone)]
 struct Hallazgo {
@@ -1415,6 +1448,8 @@ struct Estado {
     /// Lo que el daemon dijo de sí mismo antes de irse: relevo o parada.
     /// `None` = no ha dicho nada, o ya volvió.
     aviso_de_daemon: Option<&'static str>,
+    /// La comparación abierta, si la hay.
+    comparacion: Option<Comparacion>,
     /// La consulta semántica en vuelo, para poder ABORTARLA.
     ///
     /// Abortar no es solo dejar de escuchar: el SDK manda `rpc.cancel` al
@@ -1630,6 +1665,7 @@ impl Estado {
             degradadas: std::collections::VecDeque::new(),
             epoca_conexion: 0,
             semantica_en_vuelo: None,
+            comparacion: None,
             aviso_de_daemon: None,
             journal_rehusado: false,
         };
@@ -2040,6 +2076,12 @@ impl Estado {
             }
             UiAction::Dialog { id, choice } => self.responder_dialogo(*id, choice, backend, buzon),
             UiAction::CancelTask { task_id } => self.cancelar(*task_id),
+            UiAction::CompareSelectRow { .. }
+            | UiAction::CompareActivateRow { .. }
+            | UiAction::CompareToggleFilter { .. }
+            | UiAction::CompareSetVisibleRange { .. } => {
+                self.accion_de_comparacion(accion, backend, buzon)
+            }
             // Un diálogo con campo de texto llega con la tarea que lo traiga
             // (crear directorio, renombrar). Decirlo es más honesto que
             // aceptar texto que nadie va a leer.
@@ -2165,6 +2207,12 @@ impl Estado {
         // pantalla que se lee entera antes de aprobar una mutación, y una
         // tecla que se le escapara al listado de debajo movería el cursor
         // bajo un plan que sigue esperando un sí.
+        // El panel de diferencias, cuando está abierto, se queda las teclas:
+        // es una pantalla entera, y una flecha que se le escapara movería el
+        // listado que hay debajo.
+        if self.comparacion.is_some() {
+            return Some(self.tecla_en_comparacion(k, backend, buzon));
+        }
         if self.revision_ia.is_some() {
             return Some(self.tecla_en_revision_ia(k, backend, buzon));
         }
@@ -4038,6 +4086,15 @@ impl Estado {
                 self.aplicar_resultados(epoca, &lote).into_iter().collect()
             }
             Fondo::Semanticos(epoca, hits) => self.aplicar_semanticos(epoca, hits),
+            Fondo::ComparacionViva(epoca, id) => {
+                if let Some(c) = self.comparacion.as_mut()
+                    && c.epoca == epoca
+                {
+                    c.task = id;
+                }
+                Vec::new()
+            }
+            Fondo::FilasComparadas(epoca, lote) => self.aplicar_filas_comparadas(epoca, *lote),
             Fondo::Adornos(datos) => self.aplicar_adornos(*datos).into_iter().collect(),
             Fondo::Imagen(token, leido) => self.aplicar_imagen(token, leido).into_iter().collect(),
             Fondo::BusquedaViva(epoca, id) => {
@@ -5234,6 +5291,7 @@ impl Estado {
             {
                 Self::no_muta()
             }
+            Efecto::Comparar => self.pedir_comparacion(backend, buzon),
             Efecto::Paleta
             | Efecto::Ayuda
             | Efecto::Ajustes
@@ -5360,6 +5418,526 @@ impl Estado {
         }
     }
 
+    /// El desenlace de la Task de una comparación entra en el modelo.
+    ///
+    /// Lo traduce `finish_from_task`, que es donde vive la diferencia que
+    /// importa: «terminó» no es lo mismo que «terminó y llegó todo». Una
+    /// comparación a la que se le perdieron lotes se lee INCOMPLETA, y una
+    /// cuyo canal se cerró sin desenlace observado se lee DESCONOCIDA — dos
+    /// estados que el CLI y el MCP ya perdieron cada uno por su cuenta.
+    fn cerrar_comparacion(&mut self, p: &norte_proto::TaskProgress) -> Vec<ViewChange> {
+        let lang = self.lang;
+        let Some(c) = self.comparacion.as_mut() else {
+            return Vec::new();
+        };
+        if c.task != p.task_id {
+            return Vec::new();
+        }
+        let recibidas = c.vista.pane.len() as u64;
+        c.vista
+            .finish_from_task(&p.state, p.entries_done, recibidas, lang);
+        vec![ViewChange::Compare {
+            compare: self.vista_comparacion(),
+        }]
+    }
+
+    /// Las teclas mientras el panel de diferencias está abierto.
+    /// Las teclas mientras el panel de diferencias está abierto.
+    ///
+    /// `Escape` DOS veces y no una: la primera pide cancelar la Task, la
+    /// segunda cierra pase lo que pase. Sin la segunda, cerrar dependía de
+    /// que el canal de filas se cerrara de verdad, y hay formas de que no lo
+    /// haga —un daemon muerto, un provider colgado de un NFS— que dejaban al
+    /// lector atrapado en la única pantalla de norte sin salida.
+    fn tecla_en_comparacion(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(c) = self.comparacion.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match k.key.as_str() {
+            "Escape" | "esc" => {
+                if c.vista.cancel_requested {
+                    let task = c.task;
+                    c.abandonada
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.comparacion = None;
+                    if task.get() != 0 {
+                        self.cancelar(task.get());
+                    }
+                    return (
+                        self.aplicada(),
+                        vec![self.parche(vec![ViewChange::Compare { compare: None }])],
+                    );
+                }
+                c.vista.cancel_requested = true;
+                let task = c.task;
+                if task.get() != 0 {
+                    self.cancelar(task.get());
+                }
+                let cambio = ViewChange::Compare {
+                    compare: self.vista_comparacion(),
+                };
+                (self.aplicada(), vec![self.parche(vec![cambio])])
+            }
+            "Tab" | "tab" => {
+                // Cambiar de lado cambia a qué panel navega `Enter` y sobre
+                // qué lado operan las teclas de fichero.
+                c.vista.pane.swap_active_side();
+                let cambio = ViewChange::Compare {
+                    compare: self.vista_comparacion(),
+                };
+                (self.aplicada(), vec![self.parche(vec![cambio])])
+            }
+            "Enter" | "enter" => {
+                let Some(id) = c.vista.pane.selected_id() else {
+                    return (self.aplicada(), Vec::new());
+                };
+                self.comparacion_activa(id, backend, buzon)
+            }
+            "ArrowUp" | "Up" | "ArrowDown" | "Down" => {
+                let abajo = k.key.ends_with("Down");
+                let visibles = c.vista.pane.visible_ids();
+                if visibles.is_empty() {
+                    return (self.aplicada(), Vec::new());
+                }
+                let actual = c
+                    .vista
+                    .pane
+                    .selected_id()
+                    .and_then(|id| visibles.iter().position(|v| *v == id))
+                    .unwrap_or(0);
+                let destino = if abajo {
+                    (actual + 1).min(visibles.len() - 1)
+                } else {
+                    actual.saturating_sub(1)
+                };
+                let id = visibles[destino];
+                c.vista.pane.select(id);
+                let cambio = ViewChange::Compare {
+                    compare: self.vista_comparacion(),
+                };
+                (self.aplicada(), vec![self.parche(vec![cambio])])
+            }
+            // 1..5: los filtros, en el orden fijo de las categorías, igual
+            // que en el TUI.
+            d if d.len() == 1 && d.chars().all(|c| ('1'..='5').contains(&c)) => {
+                let i = d.chars().next().and_then(|c| c.to_digit(10)).unwrap_or(1) as usize - 1;
+                let Some(cat) = norte_frontend::compare::CATEGORIES.get(i).copied() else {
+                    return (self.aplicada(), Vec::new());
+                };
+                c.vista.pane.toggle_filter(cat);
+                let cambio = ViewChange::Compare {
+                    compare: self.vista_comparacion(),
+                };
+                (self.aplicada(), vec![self.parche(vec![cambio])])
+            }
+            // Una tecla que no entiende se COME igual: un panel que deja
+            // pasar lo que no entiende no es una pantalla, es un adorno.
+            _ => (self.aplicada(), Vec::new()),
+        }
+    }
+
+    /// Elige una fila del panel de diferencias.
+    /// Las cuatro acciones del panel de diferencias, en un brazo.
+    ///
+    /// Juntas y no cuatro brazos del reparto general: son la misma superficie
+    /// y ninguna significa nada sin ella.
+    fn accion_de_comparacion(
+        &mut self,
+        accion: &UiAction,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match accion {
+            UiAction::CompareSelectRow { id } => self.comparacion_selecciona(*id),
+            UiAction::CompareActivateRow { id } => self.comparacion_activa(*id, backend, buzon),
+            UiAction::CompareToggleFilter { category } => self.comparacion_filtra(category),
+            UiAction::CompareSetVisibleRange { first, count } => {
+                self.comparacion_ventana(*first, *count)
+            }
+            // El reparto general solo manda aquí esas cuatro.
+            _ => (Self::obsoleta(StaleAction::Modal), Vec::new()),
+        }
+    }
+
+    /// Elige una fila del panel de diferencias.
+    fn comparacion_selecciona(&mut self, id: u64) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(c) = self.comparacion.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        // `select` IGNORA un id que no llegó, que es lo correcto: la
+        // alternativa es una selección que nombra una fila inexistente.
+        c.vista.pane.select(id);
+        if c.vista.pane.selected_id() != Some(id) {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let cambio = ViewChange::Compare {
+            compare: self.vista_comparacion(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Enseña o esconde una categoría entera.
+    fn comparacion_filtra(&mut self, categoria: &str) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(c) = self.comparacion.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let Some(cat) = norte_frontend::compare::CATEGORIES
+            .iter()
+            .find(|c| c.id() == categoria)
+        else {
+            // Una categoría que no existe es un renderer de otra versión, no
+            // una orden.
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        c.vista.pane.toggle_filter(*cat);
+        let cambio = ViewChange::Compare {
+            compare: self.vista_comparacion(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// El renderer dice qué ventana pinta.
+    fn comparacion_ventana(
+        &mut self,
+        primera: u64,
+        cuantas: u32,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(c) = self.comparacion.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        c.primera_visible = usize::try_from(primera).unwrap_or(0);
+        // Acotada: lo que el renderer diga que le cabe no puede hacer que un
+        // parche lleve medio millón de filas.
+        c.ventana = usize::try_from(cuantas)
+            .unwrap_or(Self::VENTANA_COMPARACION)
+            .clamp(1, MAX_ROWS_PER_BATCH);
+        let cambio = ViewChange::Compare {
+            compare: self.vista_comparacion(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Abre la fila elegida: navega al directorio del lado ACTIVO.
+    ///
+    /// A dónde ir lo decide el modelo COMPARTIDO (`navigation_target`): la
+    /// fila si es un directorio, su padre si es un fichero, y `None` cuando
+    /// ese lado está vacío —un huérfano mirado desde el lado que no lo
+    /// tiene—, que NO cae al otro lado.
+    fn comparacion_activa(
+        &mut self,
+        id: u64,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(c) = self.comparacion.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        c.vista.pane.select(id);
+        let Some(destino) = c.vista.pane.navigation_target() else {
+            let lado = norte_frontend::compare::side_label(c.vista.pane.active_side(), self.lang);
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "compare-no-target".to_owned(),
+                },
+                self.decir_con("compare-no-target", &[("side", &lado)]),
+            );
+        };
+        // El panel que navega es el del lado ACTIVO, no el que tenga el foco:
+        // quien mira la derecha no puede perder su directorio de la izquierda
+        // por pulsar `Enter`. Se ENFOCA ese hueco y se navega por el camino
+        // de siempre, que es el que registra el rastro y pide el listado.
+        if let Some(slot) = self.hueco_del_lado() {
+            self.roles.set(RoleId::Active, SlotId(slot));
+            self.reconcilia_roles();
+        }
+        let mut salidas = self.navegar(&destino, Trail::Record, backend, buzon);
+        let cambio = ViewChange::Compare {
+            compare: self.vista_comparacion(),
+        };
+        salidas.push(self.parche(vec![cambio]));
+        (self.aplicada(), salidas)
+    }
+
+    /// El hueco que corresponde al lado ACTIVO de la comparación.
+    fn hueco_del_lado(&self) -> Option<u32> {
+        let c = self.comparacion.as_ref()?;
+        let izquierdo = u32::try_from(c.vista.left_pane).ok()?;
+        match c.vista.pane.active_side() {
+            norte_proto::methods::Side::Right => self.hueco_destino().ok(),
+            _ => Some(izquierdo),
+        }
+    }
+
+    /// Cuántas filas de la comparación cruzan si el renderer no ha dicho su
+    /// ventana todavía.
+    /// Cuántas filas de la comparación cruzan si el renderer no ha dicho su
+    /// ventana todavía.
+    const VENTANA_COMPARACION: usize = 200;
+
+    /// Lanza la comparación de los dos paneles y abre el panel de
+    /// diferencias.
+    ///
+    /// La raíz derecha sale del hueco con el rol `Target`, por el MISMO
+    /// camino que una transferencia: dos formas de decidir «el otro panel»
+    /// son dos sitios donde pueden divergir, y con varios candidatos y
+    /// ninguno designado se pide elegir en vez de romper el empate.
+    fn pedir_comparacion(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let derecha = match self.directorio_destino() {
+            Ok(d) => d,
+            Err(reason_key) => {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: reason_key.to_owned(),
+                    },
+                    Vec::new(),
+                );
+            }
+        };
+        let izquierda = self.hueco().pane.dir().clone();
+        if izquierda == derecha {
+            // El daemon lo rechazaría igual (`-32602`), y abrir un panel que
+            // promete una respuesta imposible es peor que decirlo antes.
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-same-directory".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        (self.aplicada(), self.lanzar_comparacion(izquierda, derecha, backend, buzon))
+    }
+
+    /// Encola `fs.compare` y engancha su canal de filas al actor.
+    fn lanzar_comparacion(
+        &mut self,
+        izquierda: VPath,
+        derecha: VPath,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.epoca_busqueda += 1;
+        let epoca = self.epoca_busqueda;
+        let abandonada = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let params = norte_proto::methods::FsCompareParams {
+            left: izquierda.clone(),
+            right: derecha.clone(),
+            criteria: norte_proto::methods::CompareCriteria::default(),
+            // Sin tope de profundidad, como el TUI: una comparación que se
+            // para a mitad no ha contestado a lo que se le preguntó.
+            max_depth: None,
+            // La regla FAT, que es el default del wire.
+            mtime_tolerance_ms: 2000,
+            // Sin seguir enlaces, como el default del core: los destinos se
+            // comparan como BYTES, y seguirlos podría salirse del árbol que
+            // se preguntó.
+            follow_symlinks: false,
+            // Un huérfano se emite como UNA fila y no se recorre, que es lo
+            // que sabe hacer el default. Descender un lado es una decisión
+            // del plan de sincronización, no de una comparación que solo
+            // mira.
+            descend_orphans: None,
+        };
+        self.comparacion = Some(Comparacion {
+            epoca,
+            task: norte_proto::TaskId::new(0),
+            abandonada: Arc::clone(&abandonada),
+            vista: norte_frontend::compare::CompareView::new(
+                izquierda,
+                derecha,
+                // El hueco que lanzó la comparación ES el lado izquierdo, y
+                // eso decide a qué panel navega un `Enter`. Sin ello, quien
+                // mira el lado derecho perdía su directorio de la izquierda
+                // para ir a ver el de la derecha.
+                self.activo() as usize,
+                None,
+                None,
+            ),
+            primera_visible: 0,
+            ventana: Self::VENTANA_COMPARACION,
+        });
+        let backend2 = Arc::clone(backend);
+        let buzon2 = buzon.clone();
+        tokio::spawn(async move {
+            let (task, mut rx) = match backend2.compare(params).await {
+                Ok(par) => par,
+                Err(e) => {
+                    let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    return;
+                }
+            };
+            let id = task.id;
+            let cancel = Arc::clone(&task.cancel);
+            let _ = buzon2
+                .send(Mensaje::TaskNueva(Box::new((task, Vec::new()))))
+                .await;
+            let _ = buzon2
+                .send(Mensaje::Fondo(Box::new(Fondo::ComparacionViva(epoca, id))))
+                .await;
+            // La vista pudo cerrarse mientras el daemon aceptaba la Task: en
+            // esa ventana el actor no tiene a quién cancelar, así que cancela
+            // quien sí lo tiene.
+            if abandonada.load(std::sync::atomic::Ordering::SeqCst) {
+                cancel();
+                return;
+            }
+            while let Some(lote) = rx.recv().await {
+                if abandonada.load(std::sync::atomic::Ordering::SeqCst) {
+                    cancel();
+                    return;
+                }
+                if buzon2
+                    .send(Mensaje::Fondo(Box::new(Fondo::FilasComparadas(
+                        epoca,
+                        Box::new(lote),
+                    ))))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let cambio = ViewChange::Compare {
+            compare: self.vista_comparacion(),
+        };
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// Un lote de filas comparadas. Casa por ÉPOCA, como los hallazgos.
+    fn aplicar_filas_comparadas(
+        &mut self,
+        epoca: u64,
+        lote: norte_proto::methods::CompareRowsBatch,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(c) = self.comparacion.as_mut() else {
+            return Vec::new();
+        };
+        if c.epoca != epoca {
+            return Vec::new();
+        }
+        // El panel COMPARTIDO es quien cuenta, filtra y selecciona: aquí solo
+        // se le dan las filas.
+        c.vista.pane.extend(lote.rows);
+        let cambio = ViewChange::Compare {
+            compare: self.vista_comparacion(),
+        };
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// La proyección del panel de diferencias, acotada a su ventana.
+    fn vista_comparacion(&self) -> Option<crate::dto::CompareView> {
+        use norte_frontend::compare::{Category, cells_for};
+
+        let c = self.comparacion.as_ref()?;
+        let ahora = ahora_ms();
+        let (izq, izq_hostil) = norte_frontend::path_display(&c.vista.left_root);
+        let (der, der_hostil) = norte_frontend::path_display(&c.vista.right_root);
+        let visibles: Vec<&norte_proto::methods::CompareRow> = c.vista.pane.visible().collect();
+        let primera = c.primera_visible.min(visibles.len());
+        let hasta = primera.saturating_add(c.ventana).min(visibles.len());
+        let filas = visibles
+            .get(primera..hasta)
+            .unwrap_or_default()
+            .iter()
+            .map(|r| {
+                // Las celdas las compone el modelo COMPARTIDO: los nombres
+                // enmascarados con su bandera, y los dos glifos del medio.
+                // Ni el emparejado ni el veredicto se recalculan aquí.
+                let celdas = cells_for(r, None, None);
+                let cara = |f: Option<&norte_frontend::compare::RowFace>| {
+                    f.map(|f| crate::dto::CompareFaceView {
+                        name: clamp_display(f.name.clone()),
+                        hostile: f.hostile,
+                        // Formateados con las MISMAS funciones que una
+                        // columna del listado: un tamaño o una fecha no
+                        // pueden leerse distinto según qué panel los pinte.
+                        size: f
+                            .size
+                            .map(norte_frontend::human_bytes)
+                            .unwrap_or_default(),
+                        mtime: f
+                            .mtime_ms
+                            .map(|ms| {
+                                norte_frontend::columns::format_mtime(
+                                    ms,
+                                    norte_frontend::columns::TimeFormat::Iso,
+                                    ahora,
+                                )
+                            })
+                            .unwrap_or_default(),
+                        is_dir: f.kind == EntryKind::Dir,
+                    })
+                };
+                crate::dto::CompareRowView {
+                    id: r.id,
+                    verdict: clamp_display(norte_frontend::compare::verdict_label(
+                        r.verdict, self.lang,
+                    )),
+                    category: Category::of(r.verdict).id().to_owned(),
+                    confidence: clamp_display(norte_frontend::compare::confidence_label(
+                        r.confidence,
+                        self.lang,
+                    )),
+                    criterion: clamp_display(norte_frontend::compare::criterion_label(
+                        r.criterion,
+                        self.lang,
+                    )),
+                    reason: r
+                        .reason
+                        .map(|x| clamp_display(norte_frontend::compare::reason_label(x, self.lang))),
+                    left: cara(celdas.left.as_ref()),
+                    right: cara(celdas.right.as_ref()),
+                    paired_under: norte_frontend::compare::paired_under_label(
+                        r.paired_under,
+                        self.lang,
+                    )
+                    .map(clamp_display),
+                }
+            })
+            .collect();
+        let filtros = norte_frontend::compare::CATEGORIES
+            .iter()
+            .map(|cat| crate::dto::CompareFilterView {
+                id: cat.id().to_owned(),
+                label: clamp_display(cat.label(self.lang)),
+                count: c.vista.pane.count_of(*cat) as u64,
+                hidden: c.vista.pane.is_hidden(*cat),
+            })
+            .collect();
+        Some(crate::dto::CompareView {
+            left: clamp_display(izq),
+            left_hostile: izq_hostil,
+            right: clamp_display(der),
+            right_hostile: der_hostil,
+            rows: filas,
+            first_visible: primera as u64,
+            total: visibles.len() as u64,
+            selected: c.vista.pane.selected_id(),
+            filters: filtros,
+            // La frase la compone el modelo COMPARTIDO, y no es un detalle:
+            // sus cinco estados son cómo se dice si la respuesta está
+            // completa, y una comparación que perdió lotes tiene que leerse
+            // distinto de una que terminó. El TUI y el CLI ya se equivocaron
+            // aquí cada uno por su cuenta.
+            status: clamp_display(norte_frontend::compare::status_line(
+                &c.vista,
+                c.vista.pane.marked_len(),
+                self.lang,
+            )),
+            running: c.vista.state == norte_frontend::compare::CompareState::Running,
+        })
+    }
+
+    /// Abre el prompt de una consulta SEMÁNTICA.
     /// Abre el prompt de una consulta SEMÁNTICA.
     ///
     /// No lleva raíz, y eso es lo que dice el diálogo: el índice se construye
@@ -6175,6 +6753,16 @@ impl Estado {
     /// ninguno elegido (ADR 0058 D7): eso no es «no hay otro», es «elige
     /// cuál».
     fn directorio_destino(&self) -> Result<VPath, &'static str> {
+        self.hueco_destino()
+            .map(|id| self.huecos[&id].pane.dir().clone())
+    }
+
+    /// El HUECO destino, con la misma regla que [`Self::directorio_destino`].
+    ///
+    /// Los dos por el mismo camino: una comparación necesita el hueco (para
+    /// navegar el lado derecho) y una transferencia necesita su directorio,
+    /// y dos formas de decidir «el otro panel» son dos sitios donde divergir.
+    fn hueco_destino(&self) -> Result<u32, &'static str> {
         let activo = self.activo();
         let destino_id = self
             .roles
@@ -6182,7 +6770,7 @@ impl Estado {
             .map(|SlotId(id)| id)
             .filter(|id| *id != activo && self.huecos.contains_key(id) && !self.oculto(*id));
         if let Some(id) = destino_id {
-            return Ok(self.huecos[&id].pane.dir().clone());
+            return Ok(id);
         }
         let candidatos = self
             .huecos
@@ -7496,6 +8084,7 @@ impl Estado {
         if acabo {
             cambios.extend(self.refrescar_afectados(p.task_id.get(), backend, buzon));
             self.pedir_informe_de_lote(p, backend, buzon);
+            cambios.extend(self.cerrar_comparacion(p));
         }
         vec![self.parche(cambios)]
     }
@@ -8033,6 +8622,17 @@ impl Estado {
     /// Las dos cosas y por la misma llamada, que es lo que ya hace una task
     /// fallida: la barra es donde se lee al mirar, y el aviso es lo que el
     /// renderer puede anunciar a un lector de pantalla.
+    fn decir_con(&mut self, clave: &str, args: &[(&str, &str)]) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.status.message = Some(clamp_display(norte_i18n::ta_in(self.lang, clave, args)));
+        let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);
+        let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
+            key: clave.to_owned(),
+            detail: None,
+        }));
+        vec![parche, aviso]
+    }
+
+    /// Como [`Self::decir_con`], sin argumentos.
     fn decir(&mut self, clave: &str) -> Vec<BridgeEnvelope<UiUpdate>> {
         self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
         let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);
@@ -8910,6 +9510,7 @@ impl Estado {
             }
         }
         ViewSnapshot {
+            compare: self.vista_comparacion(),
             connection: self.conexion.clone(),
             layout: self.disposicion(),
             slots,

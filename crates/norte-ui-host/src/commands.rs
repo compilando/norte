@@ -103,6 +103,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.rename",
     "pane.ai-rename",
     "pane.semantic-search",
+    "pane.compare-dirs",
     "task.cancel",
 ];
 
@@ -254,6 +255,11 @@ pub enum Efecto {
     Ver,
     /// Abre el buscador incremental del listado.
     BuscarRapido,
+    /// Compara los dos paneles y abre el panel de diferencias.
+    ///
+    /// NO muta: camina los dos árboles y contesta. Es una tarea larga y
+    /// cancelable, y cancelarla es su único freno.
+    Comparar,
     /// Pide una búsqueda SEMÁNTICA contra el índice: abre el prompt de la
     /// consulta.
     ///
@@ -357,6 +363,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.rename" => Efecto::Renombrar,
         "pane.ai-rename" => Efecto::RenameIa,
         "pane.semantic-search" => Efecto::BuscarSemantica,
+        "pane.compare-dirs" => Efecto::Comparar,
         "task.cancel" => Efecto::CancelarTask,
         _ => return None,
     })

@@ -13,6 +13,23 @@
     "action": "cancel_task",
     "task_id": 42
   },
+  "compare_activate_row": {
+    "action": "compare_activate_row",
+    "id": 7
+  },
+  "compare_select_row": {
+    "action": "compare_select_row",
+    "id": 7
+  },
+  "compare_set_visible_range": {
+    "action": "compare_set_visible_range",
+    "first": 40,
+    "count": 20
+  },
+  "compare_toggle_filter": {
+    "action": "compare_toggle_filter",
+    "category": "different"
+  },
   "dialog": {
     "action": "dialog",
     "choice": "confirm",

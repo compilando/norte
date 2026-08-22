@@ -142,6 +142,35 @@ pub enum UiAction {
         /// del caret, y mandar el texto entero evita reconstruirlo en Rust).
         text: String,
     },
+    /// Elige una fila del panel de diferencias, POR SU ID.
+    ///
+    /// Por id y no por índice: un filtro esconde filas y las renumeraría, y
+    /// la selección tiene que seguir nombrando la misma.
+    CompareSelectRow {
+        /// El id que la fila trajo.
+        id: u64,
+    },
+    /// Abre la fila elegida: navega al directorio del lado ACTIVO.
+    CompareActivateRow {
+        /// El id de la fila.
+        id: u64,
+    },
+    /// Enseña o esconde una categoría entera del panel de diferencias.
+    CompareToggleFilter {
+        /// Id estable de la categoría (`same`, `different`…).
+        category: String,
+    },
+    /// Dice qué ventana de filas está pintando el renderer.
+    ///
+    /// La comparación no tiene tope —un tope convertiría «¿son iguales?» en
+    /// media respuesta— así que lo que cruza el puente es una ventana, y esto
+    /// es lo que la mueve.
+    CompareSetVisibleRange {
+        /// Índice, entre las VISIBLES, de la primera fila pintada.
+        first: u64,
+        /// Cuántas caben.
+        count: u32,
+    },
     /// Pide cancelar una task.
     CancelTask {
         /// Id de la task.

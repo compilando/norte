@@ -178,6 +178,9 @@ export class Session {
       case "search":
         s.search = c.search;
         return true;
+      case "compare":
+        s.compare = c.compare;
+        return true;
       case "layout": {
         s.layout = { cells: c.cells, placements: c.placements };
         // El foco es de quien tenga el papel `active`, y lo dice el host.

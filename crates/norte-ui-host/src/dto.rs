@@ -47,6 +47,8 @@ pub struct ViewSnapshot {
     pub theme: Option<ThemeView>,
     /// Una búsqueda, si hay una abierta.
     pub search: Option<SearchView>,
+    /// El panel de diferencias, si hay una comparación abierta.
+    pub compare: Option<CompareView>,
     /// El selector de disposiciones, si está abierto.
     pub layouts: Option<LayoutPickerView>,
     /// El selector de COLUMNAS, si está abierto.
@@ -1288,6 +1290,98 @@ pub struct StatusView {
     pub pending: Option<PendingView>,
 }
 
+/// El panel de diferencias: dos árboles comparados, fila a fila.
+///
+/// Ventana y no lista entera, por el mismo motivo que un listado: el motor
+/// emite una fila por nombre emparejado de TODO el árbol y nada lo acota —un
+/// tope convertiría «¿son iguales?» en una respuesta a medias—, así que medio
+/// millón de filas no pueden cruzar el puente. Viaja lo que se ve, con su
+/// primera fila y el total.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompareView {
+    /// La raíz izquierda, ya saneada (el panel que lanzó la comparación).
+    pub left: String,
+    /// Lo pintado a la izquierda difiere de la ruta real.
+    pub left_hostile: bool,
+    /// La raíz derecha, ya saneada.
+    pub right: String,
+    /// Lo pintado a la derecha difiere de la ruta real.
+    pub right_hostile: bool,
+    /// La ventana de filas VISIBLES (las que un filtro no esconde).
+    pub rows: Vec<CompareRowView>,
+    /// Índice, dentro de las visibles, de la primera fila que viaja.
+    pub first_visible: u64,
+    /// Cuántas filas visibles hay en total.
+    pub total: u64,
+    /// La fila seleccionada, por su id. Anclada al id y no al índice: un
+    /// filtro esconde filas, jamás las renumera.
+    pub selected: Option<u64>,
+    /// Los filtros por categoría, en orden fijo.
+    pub filters: Vec<CompareFilterView>,
+    /// El estado, ya dicho: cuántas van y si sigue caminando.
+    pub status: String,
+    /// La comparación sigue corriendo.
+    pub running: bool,
+}
+
+/// Un filtro por categoría, con su recuento.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompareFilterView {
+    /// Id estable de la categoría (`same`, `different`…), para el renderer.
+    pub id: String,
+    /// Cómo se llama, en el idioma del lector.
+    pub label: String,
+    /// Cuántas filas cayeron en ella, filtros aparte.
+    pub count: u64,
+    /// Está ESCONDIENDO su categoría.
+    pub hidden: bool,
+}
+
+/// Una fila del panel de diferencias.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompareRowView {
+    /// Su id dentro de esta comparación. Es la IDENTIDAD: seleccionar y
+    /// marcar van por él, jamás por la posición.
+    pub id: u64,
+    /// El veredicto, ya traducido.
+    pub verdict: String,
+    /// Su categoría, por id estable (para pintar el color).
+    pub category: String,
+    /// Cuánto vale el veredicto, ya traducido.
+    pub confidence: String,
+    /// Qué rung lo decidió, ya traducido.
+    pub criterion: String,
+    /// El porqué, ya traducido, cuando el veredicto tiene porqué.
+    pub reason: Option<String>,
+    /// La cara izquierda, ausente en un huérfano de la derecha.
+    pub left: Option<CompareFaceView>,
+    /// La cara derecha.
+    pub right: Option<CompareFaceView>,
+    /// Por qué esta fila enseña DOS ortografías, en una frase ya traducida.
+    ///
+    /// Frase y no insignia pegada al nombre, y eso no es estilo: lo que se
+    /// pega a un nombre lo puede falsificar un nombre.
+    pub paired_under: Option<String>,
+}
+
+/// Una cara de una fila: lo que se sabe de una entrada, ya saneado.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompareFaceView {
+    /// El nombre, ya enmascarado.
+    pub name: String,
+    /// Lo pintado difiere de los bytes que hay.
+    pub hostile: bool,
+    /// El tamaño ya formateado, o vacío si el provider no lo sabe.
+    ///
+    /// Vacío y no un `0` fabricado: «no lo sé» y «cero bytes» son dos
+    /// respuestas distintas, y un huérfano sin hidratar da la primera.
+    pub size: String,
+    /// La fecha ya formateada, o vacía si no se sabe.
+    pub mtime: String,
+    /// Es un directorio.
+    pub is_dir: bool,
+}
+
 /// Un aviso persistente de la barra.
 ///
 /// No es una cadena pelada, y los dos campos que la acompañan son por lo
@@ -1647,6 +1741,11 @@ pub enum ViewChange {
     Search {
         /// La búsqueda, o `None` si se cerró.
         search: Option<SearchView>,
+    },
+    /// El panel de diferencias cambió (se abrió, llegaron filas, se cerró).
+    Compare {
+        /// La comparación, o `None` si se cerró.
+        compare: Option<CompareView>,
     },
     /// El selector de disposiciones se abrió, se movió o se cerró.
     Layouts {

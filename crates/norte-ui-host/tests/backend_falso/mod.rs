@@ -144,6 +144,11 @@ pub struct Falso {
     pub informe: std::sync::Mutex<Option<norte_proto::methods::FsRenameBatchReportResult>>,
     /// Los ids de task cuyo informe se pidió, en orden.
     pub informes_pedidos: std::sync::Mutex<Vec<u64>>,
+    /// Las filas que contesta `fs.compare`, en un solo lote. `None` = el
+    /// método falla con `Unsupported`.
+    pub filas_comparadas: std::sync::Mutex<Option<Vec<norte_proto::methods::CompareRow>>>,
+    /// Las comparaciones que se pidieron: `(izquierda, derecha)`.
+    pub comparaciones: std::sync::Mutex<Vec<(VPath, VPath)>>,
     /// Lo que contesta `index.search_semantic`. `None` = `NotFound` (no hay
     /// índice), que es el caso que hay que saber leer.
     pub semanticos: std::sync::Mutex<Option<Vec<norte_proto::methods::SemanticHit>>>,
@@ -643,6 +648,62 @@ impl HostBackend for Falso {
 
     fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>> {
         self.ajenas.lock().expect("ajenas").take()
+    }
+
+    fn compare(
+        &self,
+        params: norte_proto::methods::FsCompareParams,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            (
+                HostTask,
+                tokio::sync::mpsc::Receiver<norte_proto::methods::CompareRowsBatch>,
+            ),
+            Error,
+        >,
+    > {
+        self.comparaciones
+            .lock()
+            .expect("comparaciones")
+            .push((params.left, params.right));
+        let filas = self.filas_comparadas.lock().expect("filas").clone();
+        let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
+        let id = norte_proto::TaskId::new(300 + n as u64);
+        let progreso = norte_proto::TaskProgress {
+            task_id: id,
+            kind: norte_proto::TaskKind::Compare,
+            state: norte_proto::TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+        };
+        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        *self.progreso.lock().expect("progreso") = Some(tx.clone());
+        self.progresos.lock().expect("progresos").insert(id.get(), tx);
+        Box::pin(async move {
+            let filas = filas.ok_or(Error::Unsupported)?;
+            let (ftx, frx) = tokio::sync::mpsc::channel(4);
+            tokio::spawn(async move {
+                let _ = ftx
+                    .send(norte_proto::methods::CompareRowsBatch {
+                        task_id: id,
+                        rows: filas,
+                    })
+                    .await;
+            });
+            Ok((
+                HostTask {
+                    id,
+                    progress: rx,
+                    cancel: Arc::new(|| {}),
+                    foreign: false,
+                },
+                frx,
+            ))
+        })
     }
 
     fn semantic_search(

@@ -1801,6 +1801,35 @@ Resolve every BLOCKER and MAJOR before enabling mutations in release builds.
 
 ### Task 6.2: directory compare
 
+> **DONE 2026-08-22** (bridge **28**). `pane.compare-dirs` — bound in the
+> shared catalogue since spec 1 of the comparison work — opens a diff panel
+> over the two panes: streamed rows, per-category filters with their counts,
+> selection, side switching, navigation and cancellation.
+>
+> **The reuse the task asked for is total**: the model IS
+> `norte_frontend::compare::CompareView`, the same one the TUI paints, and the
+> host projects it. Nothing here re-pairs rows or decides a verdict, and the
+> two things that would have been tempting to reimplement are exactly the two
+> that already bit other surfaces:
+>
+> - **`status_line`, not a `bool`.** A first pass had `viva: bool` and would
+>   have thrown away the distinction that IS the answer: a comparison that
+>   lost batches is INCOMPLETE, and one whose channel closed without an
+>   observed outcome is UNKNOWN. The CLI and the MCP tool each reported
+>   "complete" for a lossy run before that enum existed.
+> - **`navigation_target`, not a local rule.** A row's `Enter` goes to the
+>   directory of the ACTIVE side — the row itself when it is a directory, its
+>   parent when it is a file — and `None` when that side is empty does NOT
+>   fall back to the other one. And the pane it navigates is the one belonging
+>   to that side, not the focused one, or a reader looking at the right side
+>   loses their left directory to go and see the right one.
+>
+> **The row window is the other decision.** The engine emits one row per
+> paired name over the whole tree and nothing caps it — a cap would turn "are
+> these two trees the same?" into half an answer — so what crosses the bridge
+> is a window (`first_visible` + `total`), like a listing's. Rows are named by
+> their `id`, never by position: a filter hides rows and would renumber them.
+
 - compare configuration and start;
 - streamed rows, confidence and reason cells;
 - orphan size/stat hydration;

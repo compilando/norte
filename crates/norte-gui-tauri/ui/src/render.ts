@@ -13,6 +13,9 @@
 import type {
   AiRenameView,
   BrowserSlotView,
+  CompareFaceView,
+  CompareRowView,
+  CompareView,
   DialogLine,
   DialogView,
   HostCatalog,
@@ -119,6 +122,7 @@ export class Screen {
     private readonly layoutsRoot: HTMLElement,
     private readonly columnsRoot: HTMLElement,
     private readonly searchRoot: HTMLElement,
+    private readonly compareRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
     private readonly aiRenameRoot: HTMLElement,
@@ -183,6 +187,7 @@ export class Screen {
     this.paintLayouts(view.layouts);
     this.paintColumns(view.columns);
     this.paintSearch(view.search);
+    this.paintCompare(view.compare);
     this.paintViewer(view.viewer);
     this.paintAiRename(view.ai_rename);
     this.paintDialogs(view.dialogs);
@@ -1045,6 +1050,143 @@ export class Screen {
    * mitad del valor de buscar en un árbol grande. La frase de estado la
    * compone el host: dice cuántos van y si sigue.
    */
+  /** El panel de diferencias. Comparte hueco con la búsqueda: los dos son
+   *  pantallas enteras y no se pintan a la vez. */
+  private paintCompare(compare: CompareView | null): void {
+    if (compare === null) {
+      if (this.compareRoot.dataset["open"] === "true") {
+        this.compareRoot.replaceChildren();
+        this.compareRoot.dataset["open"] = "false";
+      }
+      return;
+    }
+    this.compareRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "compare";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", this.t("compare-title"));
+
+    const cabecera = document.createElement("div");
+    cabecera.className = "compare-roots";
+    for (const [texto, hostil] of [
+      [compare.left, compare.left_hostile],
+      [compare.right, compare.right_hostile],
+    ] as [string, boolean][]) {
+      const raiz = document.createElement("span");
+      raiz.className = "compare-root";
+      raiz.dataset["hostile"] = String(hostil);
+      raiz.textContent = texto;
+      if (hostil) {
+        raiz.append(badge(this.t("hostile-name")));
+      }
+      cabecera.append(raiz);
+    }
+    caja.append(cabecera);
+
+    const filtros = document.createElement("div");
+    filtros.className = "compare-filters";
+    for (const f of compare.filters) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "compare-filter";
+      b.dataset["hidden"] = String(f.hidden);
+      b.setAttribute("aria-pressed", String(!f.hidden));
+      b.textContent = `${f.label} (${String(f.count)})`;
+      b.addEventListener("click", () => {
+        this.send({ action: "compare_toggle_filter", category: f.id });
+      });
+      filtros.append(b);
+    }
+    caja.append(filtros);
+
+    const lista = document.createElement("ul");
+    lista.className = "compare-rows";
+    lista.setAttribute("role", "listbox");
+    for (const r of compare.rows) {
+      const fila = document.createElement("li");
+      fila.className = "compare-row";
+      // El id, no la posición: es la identidad de la fila y lo que el host
+      // espera de vuelta.
+      fila.id = `compare-row-${String(r.id)}`;
+      fila.dataset["category"] = r.category;
+      fila.setAttribute("role", "option");
+      fila.setAttribute("aria-selected", String(compare.selected === r.id));
+      fila.addEventListener("click", () => {
+        this.send({ action: "compare_select_row", id: r.id });
+      });
+      fila.addEventListener("dblclick", () => {
+        this.send({ action: "compare_activate_row", id: r.id });
+      });
+      fila.append(
+        this.compareFace(r.left),
+        veredicto(r, (k) => this.t(k)),
+        this.compareFace(r.right),
+      );
+      if (r.paired_under !== null) {
+        // Frase en su propia línea, JAMÁS pegada al nombre: lo que se pega a
+        // un nombre lo puede falsificar un nombre.
+        const nota = document.createElement("p");
+        nota.className = "compare-paired-under";
+        nota.textContent = r.paired_under;
+        fila.append(nota);
+      }
+      lista.append(fila);
+    }
+    if (compare.selected !== null) {
+      lista.setAttribute(
+        "aria-activedescendant",
+        `compare-row-${String(compare.selected)}`,
+      );
+    }
+    caja.append(lista);
+
+    const estado = document.createElement("p");
+    estado.className = "compare-status";
+    estado.setAttribute("role", "status");
+    estado.setAttribute("aria-live", "polite");
+    estado.dataset["running"] = String(compare.running);
+    estado.textContent = compare.status;
+    caja.append(estado);
+    this.compareRoot.replaceChildren(caja);
+  }
+
+  /** Una cara de una fila comparada, o el hueco de un huérfano. */
+  private compareFace(face: CompareFaceView | null): HTMLElement {
+    const el = document.createElement("span");
+    el.className = "compare-face";
+    if (face === null) {
+      // Vacío y DICHO: un huérfano no tiene nada de este lado, y una celda
+      // en blanco sin más se lee como un fichero sin nombre.
+      el.dataset["absent"] = "true";
+      el.textContent = "—";
+      return el;
+    }
+    el.dataset["dir"] = String(face.is_dir);
+    el.dataset["hostile"] = String(face.hostile);
+    const nombre = document.createElement("span");
+    nombre.className = "compare-name";
+    nombre.textContent = face.name;
+    el.append(nombre);
+    if (face.hostile) {
+      el.append(badge(this.t("hostile-name")));
+    }
+    // Tamaño y fecha solo cuando se saben: vacío es AUSENCIA, no cero.
+    for (const [clase, texto] of [
+      ["compare-size", face.size],
+      ["compare-mtime", face.mtime],
+    ] as [string, string][]) {
+      if (texto === "") {
+        continue;
+      }
+      const celda = document.createElement("span");
+      celda.className = clase;
+      celda.textContent = texto;
+      el.append(celda);
+    }
+    return el;
+  }
+
   private paintSearch(search: SearchView | null): void {
     if (search === null) {
       this.searchRoot.replaceChildren();
@@ -2459,6 +2601,26 @@ function errorNode(text: string, detail: string | null): HTMLElement {
   d.setAttribute("role", "alert");
   d.textContent = detail === null ? text : `${text}: ${detail}`;
   return d;
+}
+
+/** Los dos glifos del medio de una fila comparada, ya traducidos por el
+ *  host: el veredicto y cuánto vale. */
+function veredicto(r: CompareRowView, tr: (k: string) => string): HTMLElement {
+  const el = document.createElement("span");
+  el.className = "compare-verdict";
+  el.textContent = r.verdict;
+  const conf = document.createElement("span");
+  conf.className = "compare-confidence";
+  conf.textContent = r.confidence;
+  el.append(conf);
+  if (r.reason !== null) {
+    const por = document.createElement("span");
+    por.className = "compare-reason";
+    por.textContent = r.reason;
+    el.append(por);
+  }
+  el.title = tr("compare-title");
+  return el;
 }
 
 function statusNodes(

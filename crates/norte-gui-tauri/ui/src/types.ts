@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 27;
+export const BRIDGE_VERSION = 28;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -552,6 +552,57 @@ export interface SearchRowView {
   score: number | null;
 }
 
+/** El panel de diferencias: dos árboles comparados, fila a fila.
+ *
+ *  Ventana y no lista entera: el motor emite una fila por nombre emparejado
+ *  de TODO el árbol y nada lo acota, así que viaja lo que se ve. */
+export interface CompareView {
+  left: string;
+  left_hostile: boolean;
+  right: string;
+  right_hostile: boolean;
+  rows: CompareRowView[];
+  first_visible: number;
+  total: number;
+  /** La fila elegida, POR SU ID: un filtro esconde filas, jamás las
+   *  renumera. */
+  selected: number | null;
+  filters: CompareFilterView[];
+  status: string;
+  running: boolean;
+}
+
+export interface CompareFilterView {
+  id: string;
+  label: string;
+  count: number;
+  hidden: boolean;
+}
+
+export interface CompareRowView {
+  id: number;
+  verdict: string;
+  category: string;
+  confidence: string;
+  criterion: string;
+  reason: string | null;
+  left: CompareFaceView | null;
+  right: CompareFaceView | null;
+  /** Por qué la fila enseña dos ortografías. Frase, no insignia pegada al
+   *  nombre: lo que se pega a un nombre lo puede falsificar un nombre. */
+  paired_under: string | null;
+}
+
+export interface CompareFaceView {
+  name: string;
+  hostile: boolean;
+  /** Vacío cuando el provider no lo sabe: «no lo sé» y «cero bytes» son dos
+   *  respuestas distintas. */
+  size: string;
+  mtime: string;
+  is_dir: boolean;
+}
+
 export interface SearchView {
   /** Se preguntó por SIGNIFICADO contra el índice, no por nombre contra el
    *  árbol: el alcance es el índice entero y no `root`. */
@@ -580,6 +631,7 @@ export interface ViewSnapshot {
   extensions: ExtensionsView | null;
   theme: ThemeView | null;
   search: SearchView | null;
+  compare: CompareView | null;
   layouts: LayoutPickerView | null;
   columns: ColumnsPickerView | null;
   picker: PickerView | null;
@@ -615,7 +667,8 @@ export type ViewChange =
   | { change: "picker"; picker: PickerView | null }
   | { change: "layouts"; layouts: LayoutPickerView | null }
   | { change: "columns_picker"; columns: ColumnsPickerView | null }
-  | { change: "search"; search: SearchView | null };
+  | { change: "search"; search: SearchView | null }
+  | { change: "compare"; compare: CompareView | null };
 
 export interface ViewPatch {
   base_sequence: number;
@@ -661,6 +714,10 @@ export type UiAction =
   | { action: "dialog"; id: ModalId; choice: string }
   | { action: "dialog_input"; id: ModalId; text: string }
   | { action: "cancel_task"; task_id: number }
+  | { action: "compare_select_row"; id: number }
+  | { action: "compare_activate_row"; id: number }
+  | { action: "compare_toggle_filter"; category: string }
+  | { action: "compare_set_visible_range"; first: number; count: number }
   | { action: "set_viewport"; width: number; height: number }
   | ({ action: "key" } & KeyInput)
   | { action: "set_viewer_rows"; rows: number }

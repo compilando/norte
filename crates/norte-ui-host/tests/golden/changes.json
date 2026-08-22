@@ -92,6 +92,70 @@
       "title": "Columnas — sftp"
     }
   },
+  "compare": {
+    "change": "compare",
+    "compare": {
+      "left": "⟨file⟩/home/oscar/a",
+      "left_hostile": false,
+      "right": "⟨file⟩/home/oscar/b",
+      "right_hostile": true,
+      "rows": [
+        {
+          "id": 1,
+          "verdict": "igual",
+          "category": "same",
+          "confidence": "cierto",
+          "criterion": "size",
+          "reason": null,
+          "left": {
+            "name": "notas.txt",
+            "hostile": false,
+            "size": "1,2 kB",
+            "mtime": "2026-08-22 10:00",
+            "is_dir": false
+          },
+          "right": {
+            "name": "notas.txt",
+            "hostile": false,
+            "size": "1,2 kB",
+            "mtime": "2026-08-22 10:00",
+            "is_dir": false
+          },
+          "paired_under": null
+        },
+        {
+          "id": 2,
+          "verdict": "solo a la izquierda",
+          "category": "only-left",
+          "confidence": "cierto",
+          "criterion": "presence",
+          "reason": null,
+          "left": {
+            "name": "caf�.txt",
+            "hostile": true,
+            "size": "",
+            "mtime": "2026-08-22 10:00",
+            "is_dir": false
+          },
+          "right": null,
+          "paired_under": "los dos nombres se escriben distinto"
+        }
+      ],
+      "first_visible": 0,
+      "total": 9,
+      "selected": 2,
+      "filters": [
+        {
+          "id": "same",
+          "label": "iguales",
+          "count": 4,
+          "hidden": true
+        }
+      ],
+      "status": "comparación: 9 filas",
+      "running": false
+    }
+  },
   "connection": {
     "change": "connection",
     "reason_key": "conn-lost",

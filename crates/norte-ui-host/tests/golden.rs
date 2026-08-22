@@ -132,6 +132,10 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::Dialog { .. } => "dialog",
         UiAction::DialogInput { .. } => "dialog_input",
         UiAction::CancelTask { .. } => "cancel_task",
+        UiAction::CompareSelectRow { .. } => "compare_select_row",
+        UiAction::CompareActivateRow { .. } => "compare_activate_row",
+        UiAction::CompareToggleFilter { .. } => "compare_toggle_filter",
+        UiAction::CompareSetVisibleRange { .. } => "compare_set_visible_range",
         UiAction::SetViewport { .. } => "set_viewport",
         UiAction::Key(_) => "key",
         UiAction::SetViewerRows { .. } => "set_viewer_rows",
@@ -160,6 +164,27 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("cancel_task", UiAction::CancelTask { task_id: 42 }),
+        (
+            "compare_select_row",
+            UiAction::CompareSelectRow { id: 7 },
+        ),
+        (
+            "compare_activate_row",
+            UiAction::CompareActivateRow { id: 7 },
+        ),
+        (
+            "compare_toggle_filter",
+            UiAction::CompareToggleFilter {
+                category: "different".to_owned(),
+            },
+        ),
+        (
+            "compare_set_visible_range",
+            UiAction::CompareSetVisibleRange {
+                first: 40,
+                count: 20,
+            },
+        ),
         (
             "dialog",
             UiAction::Dialog {
@@ -614,6 +639,7 @@ fn slots_de_referencia() -> Vec<SlotView> {
 
 fn snapshot_de_referencia() -> ViewSnapshot {
     ViewSnapshot {
+        compare: None,
         slots: slots_de_referencia(),
         connection: ConnectionView::Connected,
         layout: disposicion_de_referencia(),
@@ -726,6 +752,62 @@ fn busqueda_de_referencia() -> norte_ui_host::dto::SearchView {
         cursor: Some(0),
         status: "búsqueda: 2 hallazgos (buscando…)".to_owned(),
         running: true,
+    }
+}
+
+/// La comparación de referencia: una fila igual y un huérfano de la izquierda
+/// con nombre hostil, y una categoría escondida.
+fn comparacion_de_referencia() -> norte_ui_host::dto::CompareView {
+    use norte_ui_host::dto::{CompareFaceView, CompareFilterView, CompareRowView, CompareView};
+    let cara = |name: &str, hostile: bool, size: &str| CompareFaceView {
+        name: name.to_owned(),
+        hostile,
+        size: size.to_owned(),
+        mtime: "2026-08-22 10:00".to_owned(),
+        is_dir: false,
+    };
+    CompareView {
+        left: "\u{27e8}file\u{27e9}/home/oscar/a".to_owned(),
+        left_hostile: false,
+        right: "\u{27e8}file\u{27e9}/home/oscar/b".to_owned(),
+        right_hostile: true,
+        rows: vec![
+            CompareRowView {
+                id: 1,
+                verdict: "igual".to_owned(),
+                category: "same".to_owned(),
+                confidence: "cierto".to_owned(),
+                criterion: "size".to_owned(),
+                reason: None,
+                left: Some(cara("notas.txt", false, "1,2 kB")),
+                right: Some(cara("notas.txt", false, "1,2 kB")),
+                paired_under: None,
+            },
+            CompareRowView {
+                id: 2,
+                verdict: "solo a la izquierda".to_owned(),
+                category: "only-left".to_owned(),
+                confidence: "cierto".to_owned(),
+                criterion: "presence".to_owned(),
+                reason: None,
+                // Sin tama\u{f1}o: un hu\u{e9}rfano sin hidratar no lo sabe, y eso
+                // viaja como AUSENCIA y no como un cero fabricado.
+                left: Some(cara("caf\u{fffd}.txt", true, "")),
+                right: None,
+                paired_under: Some("los dos nombres se escriben distinto".to_owned()),
+            },
+        ],
+        first_visible: 0,
+        total: 9,
+        selected: Some(2),
+        filters: vec![CompareFilterView {
+            id: "same".to_owned(),
+            label: "iguales".to_owned(),
+            count: 4,
+            hidden: true,
+        }],
+        status: "comparaci\u{f3}n: 9 filas".to_owned(),
+        running: false,
     }
 }
 
@@ -1253,6 +1335,12 @@ fn cambios_de_overlay() -> Vec<(&'static str, ViewChange)> {
             },
         ),
         (
+            "compare",
+            ViewChange::Compare {
+                compare: Some(comparacion_de_referencia()),
+            },
+        ),
+        (
             "help",
             ViewChange::Help {
                 help: Some(ayuda_de_referencia()),
@@ -1342,3 +1430,4 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
     ]);
     casos
 }
+

@@ -351,6 +351,30 @@ pub trait HostBackend: Send + Sync + 'static {
     /// conexión de humano — un agente bajo scope no la necesita.
     fn volumes(&self) -> BoxFuture<'static, Result<Vec<methods::Volume>, Error>>;
 
+    /// Compara dos árboles y devuelve su Task Y el canal de LOTES de filas.
+    ///
+    /// Los dos juntos por lo mismo que en [`Self::search`]: la comparación es
+    /// una tarea larga cuyo desenlace va por el progreso y cuyas filas van por
+    /// el canal, y quedarse con uno solo es no poder pararla o no ver nada.
+    ///
+    /// Cancelarla es el ÚNICO freno: el motor emite una fila por nombre
+    /// emparejado de todo el árbol y no hay tope —un tope convertiría «¿son
+    /// iguales estos dos árboles?» en una respuesta a medias, que es lo único
+    /// que esta pregunta no admite—.
+    fn compare(
+        &self,
+        params: methods::FsCompareParams,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            (
+                HostTask,
+                tokio::sync::mpsc::Receiver<methods::CompareRowsBatch>,
+            ),
+            Error,
+        >,
+    >;
+
     /// Búsqueda SEMÁNTICA contra el índice (`index.search_semantic`).
     ///
     /// Respuesta directa y no una Task: el core embebe la consulta y barre el
@@ -557,6 +581,35 @@ impl HostBackend for norte_client::RemoteBackend {
         let backend = self.clone();
         Box::pin(async move {
             let (task, rx) = backend.search(params).await?;
+            let canceller = task.canceller();
+            Ok((
+                HostTask {
+                    id: task.id(),
+                    progress: task.progress(),
+                    cancel: Arc::new(move || canceller.cancel()),
+                    foreign: false,
+                },
+                rx,
+            ))
+        })
+    }
+
+    fn compare(
+        &self,
+        params: methods::FsCompareParams,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            (
+                HostTask,
+                tokio::sync::mpsc::Receiver<methods::CompareRowsBatch>,
+            ),
+            Error,
+        >,
+    > {
+        let backend = self.clone();
+        Box::pin(async move {
+            let (task, rx) = backend.compare(params).await?;
             let canceller = task.canceller();
             Ok((
                 HostTask {
