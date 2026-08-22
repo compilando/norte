@@ -95,6 +95,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.move",
     "pane.rename",
     "pane.ai-rename",
+    "task.cancel",
 ];
 
 /// Los comandos de la pantalla del VISOR que el host ejecuta.
@@ -270,6 +271,12 @@ pub enum Efecto {
     /// Pide un plan de renombrado para el directorio ENTERO. Abre el prompt
     /// de la instrucción; el plan llega después y se revisa antes de nada.
     RenameIa,
+    /// Pide parar una task del tablero.
+    ///
+    /// NO es una mutación, y por eso sobrevive a [`Efectos::SoloLectura`]:
+    /// parar una copia no escribe nada, y una ventana que puede VER una task
+    /// ajena y no puede pedirle que pare es una ventana que mira arder.
+    CancelarTask,
     /// Pide renombrar la entrada bajo el cursor. NO renombra: abre el nombre
     /// para editarlo.
     ///
@@ -331,6 +338,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.move" => Efecto::Transferir { mover: true },
         "pane.rename" => Efecto::Renombrar,
         "pane.ai-rename" => Efecto::RenameIa,
+        "task.cancel" => Efecto::CancelarTask,
         _ => return None,
     })
 }

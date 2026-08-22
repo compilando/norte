@@ -144,6 +144,17 @@ pub trait HostBackend: Send + Sync + 'static {
     /// lanzó y este observa.
     fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>>;
 
+    /// El canal de avisos `connection.degraded` (#44): una sesión de un
+    /// provider que viaja SIN cifrar.
+    ///
+    /// No habla del daemon —eso es [`Self::take_conn_events`]— sino de la
+    /// conexión que un provider abrió por debajo, y es un hecho de
+    /// SEGURIDAD: mientras no se diga, el listado de un FTP en claro se lee
+    /// igual que el de un SFTP.
+    fn take_degraded(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::ConnectionDegraded>>;
+
     /// Borra UNA entrada: a la papelera o permanente. Devuelve la Task ya
     /// encolada — el desenlace llega por su progreso, no por esta llamada.
     ///
@@ -213,8 +224,9 @@ pub trait HostBackend: Send + Sync + 'static {
 
     /// El informe de un lote ya terminado.
     ///
-    /// TODO(#272): todavía no lo enseña nadie. Va con el tablero de la tarea
-    /// 5.3, y es bloqueante de la 5.4.
+    /// Lo pide el controlador en cuanto una task de clase `rename-batch`
+    /// llega a un estado terminal, y lo enseña en la fila del tablero (y
+    /// delante, si el lote dejó algo a medias).
     ///
     /// Es la ÚNICA señal de que un lote dejó el directorio a medias, así que
     /// no se degrada en silencio: un daemon que no conozca el método
@@ -419,6 +431,12 @@ impl HostBackend for norte_client::RemoteBackend {
 
     fn take_conn_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>> {
         norte_client::RemoteBackend::take_conn_events(self)
+    }
+
+    fn take_degraded(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::ConnectionDegraded>> {
+        norte_client::RemoteBackend::take_degraded(self)
     }
 
     fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>> {

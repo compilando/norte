@@ -1963,6 +1963,12 @@ async fn pump_loop(
                     .reconnect
                     .then(|| std::time::Instant::now() + HANDOVER_SPAWN_WINDOW);
                 tracing::info!(reconnect = aviso.reconnect, "el daemon avisa de que se va");
+                // Y se DICE hacia arriba. Este aviso es la única ocasión de
+                // distinguir un relevo de una parada: en cuanto la conexión
+                // se cierre, el frontend ve lo mismo en los dos casos.
+                let _ = inner.events_tx.send(ConnEvent::GoingAway {
+                    reconnect: aviso.reconnect,
+                });
                 continue;
             }
             // Lote de hits de una búsqueda viva (live search T5): al `rx`

@@ -60,6 +60,9 @@ pub struct Falso {
     /// listado que llega con una entrada MENOS — que es donde un cursor por
     /// índice deja de nombrar el mismo fichero.
     pub borrar_de_verdad: bool,
+    /// Con qué error se RECHAZA un borrado antes de encolar nada. `None` =
+    /// el borrado se encola.
+    pub error_al_borrar: Option<Error>,
     /// Los wire de lo ya borrado, que `list` se salta.
     pub desaparecidos: std::sync::Mutex<std::collections::HashSet<String>>,
     /// El provider escribe el PADRE de sus entradas con otra ortografía que
@@ -132,6 +135,12 @@ pub struct Falso {
             norte_proto::methods::PlanHash,
         )>,
     >,
+    /// El informe que contesta `fs.rename_batch_report`. `None` = el daemon
+    /// no sabe informar (`Unsupported`), que es un caso propio: no se puede
+    /// confundir con «el lote fue bien».
+    pub informe: std::sync::Mutex<Option<norte_proto::methods::FsRenameBatchReportResult>>,
+    /// Los ids de task cuyo informe se pidió, en orden.
+    pub informes_pedidos: std::sync::Mutex<Vec<u64>>,
     /// Los ids cuya ficha se pidió, en orden.
     pub fichas_pedidas: std::sync::Mutex<Vec<String>>,
     /// Los ids que se pidieron a `plugin.help`, en orden: es lo que permite
@@ -143,6 +152,10 @@ pub struct Falso {
     pub eventos:
         std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<norte_client::ConnEvent>>>,
     pub ajenas: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>>>,
+    /// El canal de `connection.degraded`, para que el test empuje uno.
+    pub degradadas: std::sync::Mutex<
+        Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>>,
+    >,
     /// Los directorios que se pidió crear.
     pub creados: std::sync::Mutex<Vec<VPath>>,
     /// El catálogo de atributos que devuelve el falso daemon.
@@ -613,6 +626,13 @@ impl HostBackend for Falso {
         self.ajenas.lock().expect("ajenas").take()
     }
 
+    fn take_degraded(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>>
+    {
+        self.degradadas.lock().expect("degradadas").take()
+    }
+
     fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.creados.lock().expect("creados").push(path);
         let progreso = norte_proto::TaskProgress {
@@ -817,9 +837,14 @@ impl HostBackend for Falso {
 
     fn rename_batch_report(
         &self,
-        _task_id: norte_proto::TaskId,
+        task_id: norte_proto::TaskId,
     ) -> BoxFuture<'static, Result<norte_proto::methods::FsRenameBatchReportResult, Error>> {
-        Box::pin(async { Err(Error::Unsupported) })
+        self.informes_pedidos
+            .lock()
+            .expect("informes")
+            .push(task_id.get());
+        let informe = self.informe.lock().expect("informe").clone();
+        Box::pin(async move { informe.ok_or(Error::Unsupported) })
     }
 
     fn move_(
@@ -832,6 +857,10 @@ impl HostBackend for Falso {
     }
 
     fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>> {
+        if let Some(e) = self.error_al_borrar.clone() {
+            self.borrados.lock().expect("borrados").push((path, mode));
+            return Box::pin(async move { Err(e) });
+        }
         if self.borrar_de_verdad {
             self.desaparecidos
                 .lock()

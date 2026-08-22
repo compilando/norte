@@ -106,6 +106,7 @@ msg-done = done
 msg-cancelled = cancelled
 msg-cancelling = cancelling…
 msg-no-tasks = no running tasks
+msg-task-finished = that task already finished
 msg-error = error: { $error }
 msg-refresh-error = refresh: { $error }
 # Errores por CATEGORÍA (spec §17.7): localizados, jamás el string del OS.
@@ -163,6 +164,8 @@ msg-view-error = view: { $error }
 msg-config-reloaded = config reloaded
 msg-daemon-lost = daemon connection lost; reconnecting…
 msg-daemon-restored = reconnected to daemon
+msg-daemon-handover = the daemon is handing over; it will be back
+msg-daemon-stopping = the daemon is stopping
 msg-config-not-applied = config NOT applied: { $error }
 msg-config-polling = config: watching degraded to polling
 msg-no-trash-here = no trash here: F8 again for permanent
@@ -819,7 +822,7 @@ help-cmd-pane-hotlist = favorite directories
 help-cmd-pane-select-drive = pick a drive for the focused pane
 help-cmd-pane-select-drive-left = pick a drive for the LEFT pane
 help-cmd-pane-select-drive-right = pick a drive for the RIGHT pane
-help-cmd-task-cancel = cancel the most recent task
+help-cmd-task-cancel = cancel the selected task, or the most recent one
 # G3c: GUI-only commands (no TUI equivalent — its multi-select/task strip
 # use different bindings) surfaced now that the GUI's command palette lists
 # `app.palette`/`app.extensions` and needs help text for every GUI command.
@@ -1524,6 +1527,20 @@ host-plan-not-applicable = the core did not accept this plan: nothing would be r
 host-plan-abandoned = the rename plan was abandoned
 host-plan-asking = asking the model for a rename plan…
 host-plan-acknowledge = press a key again to answer: this window opened on its own
+host-dialog-acknowledge = press a key again to answer: this dialog opened on its own
+dialog-ok = Got it
+modal-batch-report-title = batch rename report
+modal-batch-summary = { $applied } applied, { $back } rolled back
+modal-batch-stuck = could not be put back; it is now called:
+modal-batch-stuck-journalled = the journal describes it: an undo can finish the job
+modal-batch-stuck-unjournalled = the journal never recorded it: only a person can undo this
+modal-batch-uncertain = unknown whether this step took effect; look here:
+modal-batch-compensations-lost = { $n } lost compensations: a session undo will stop there
+modal-batch-unsupported = this daemon cannot report on a batch, so the outcome is unverified
+modal-batch-report-failed = the report could not be fetched, so the outcome is unverified
+task-batch-applied = { $n } renamed
+task-batch-half = batch left half done: { $applied } applied, { $back } rolled back
+task-batch-unverified = finished, report unavailable
 host-plan-unseen = scroll through the whole plan before applying it
 host-same-directory = source and destination are the same directory
 host-read-only = this window does not write yet

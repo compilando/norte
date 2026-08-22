@@ -394,6 +394,11 @@ pub async fn run(
                 app.message = Some(match ev {
                     ConnEvent::Lost => t("msg-daemon-lost"),
                     ConnEvent::Restored => t("msg-daemon-restored"),
+                    // Un relevo y una parada se ven igual en cuanto la
+                    // conexión cae: este aviso llega antes y es lo único que
+                    // los distingue.
+                    ConnEvent::GoingAway { reconnect: true } => t("msg-daemon-handover"),
+                    ConnEvent::GoingAway { reconnect: false } => t("msg-daemon-stopping"),
                 });
             }
             Some(req) = async {

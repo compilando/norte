@@ -2,23 +2,18 @@
 //! el estado del journal (ocupado, recuperado, ausente) y el de la sesión,
 //! más la frase que resume los tres.
 
-use super::{App, DEGRADED_MAX, JournalIndicator};
-use norte_i18n::{t, ta};
+use super::{App, JournalIndicator};
+use norte_i18n::t;
 
 impl App {
     /// Records a `connection.degraded` notification (#44).
     ///
-    /// One entry per scheme, so a second scheme does not evict the first, and a
-    /// repeat for the SAME scheme replaces the entry AND becomes the newest:
-    /// the latest report is the one worth naming, and the old one described the
-    /// same session. Past `DEGRADED_MAX` the oldest is dropped — see the
-    /// `degraded` field for why a wire-fed collection needs a ceiling.
+    /// La regla —una entrada por scheme, la repetida pasa a ser la más nueva,
+    /// techo en `DEGRADED_MAX`— vive en `norte_frontend::banners`: la ventana
+    /// gráfica tiene el mismo indicador, y dos copias de un aviso de
+    /// SEGURIDAD son dos sitios donde el enmascarado se olvida.
     pub fn note_degraded(&mut self, d: norte_proto::methods::ConnectionDegraded) {
-        self.degraded.retain(|old| old.scheme != d.scheme);
-        self.degraded.push_back(d);
-        while self.degraded.len() > DEGRADED_MAX {
-            self.degraded.pop_front();
-        }
+        norte_frontend::banners::note_degraded(&mut self.degraded, d);
     }
 
     /// The degradation reported for `scheme`, if any.
@@ -31,51 +26,14 @@ impl App {
         self.degraded.iter().rev().find(|d| d.scheme == scheme)
     }
 
-    /// The persistent status-bar banner, or `None` when nothing degraded.
+    /// El aviso persistente de conexiones en claro, o `None` si no hay
+    /// ninguna. La frase la compone el módulo COMPARTIDO.
     ///
-    /// It always NAMES a connection — the most recent one — and appends how
-    /// many others there are. Reporting a bare count ("2 connections in
-    /// plaintext") beats silently overwriting one report with another, but
-    /// combined with never clearing it means the identity of every degraded
-    /// session is lost for the rest of the session, and "which one?" is the
-    /// only question this indicator exists to answer.
-    ///
-    /// Scheme and host are masked (`norte_frontend::display_name`) and the
-    /// host is clamped: both are wire-supplied strings, and the status bar is
-    /// the one place in the TUI they reach unfiltered. A host of control
-    /// characters or bidi overrides is exactly what an attacker sends to a
-    /// security indicator.
-    ///
-    /// Never cleared once set — see the `degraded` field for why that is a
-    /// decision and not an omission.
+    /// Nunca se apaga una vez encendido — ver el campo `degraded` para por
+    /// qué eso es una decisión y no un olvido.
     #[must_use]
     pub fn connection_banner(&self) -> Option<String> {
-        /// Cells the host gets before the middle ellipsis takes over. Long
-        /// enough for a real FQDN, short enough that the banner cannot push
-        /// everything else off the status bar.
-        const HOST_MAX: usize = 48;
-
-        let last = self.degraded.back()?;
-        let scheme = norte_frontend::display_name(last.scheme.as_bytes()).0;
-        let host = norte_frontend::middle_ellipsis(
-            &norte_frontend::display_name(last.host.as_bytes()).0,
-            HOST_MAX,
-        );
-        let others = self.degraded.len() - 1;
-        if others == 0 {
-            return Some(ta(
-                "status-connection-degraded",
-                &[("scheme", &scheme), ("host", &host)],
-            ));
-        }
-        Some(ta(
-            "status-connections-degraded",
-            &[
-                ("scheme", &scheme),
-                ("host", &host),
-                ("n", &others.to_string()),
-            ],
-        ))
+        norte_frontend::banners::connection_banner(norte_i18n::active(), &self.degraded)
     }
 
     /// Anota que esta sesión no está registrando sus mutaciones (#177).
@@ -334,16 +292,16 @@ mod tests {
     #[test]
     fn las_degradaciones_tienen_tope() {
         let mut app = app_dos_panes();
-        for i in 0..(super::DEGRADED_MAX + 10) {
+        for i in 0..(norte_frontend::banners::DEGRADED_MAX + 10) {
             app.note_degraded(degradacion_de_test(&format!("s{i}"), "host"));
         }
-        assert_eq!(app.degraded.len(), super::DEGRADED_MAX);
+        assert_eq!(app.degraded.len(), norte_frontend::banners::DEGRADED_MAX);
         assert!(
             app.degraded_for("s0").is_none(),
             "la más vieja es la que se cae"
         );
         assert!(
-            app.degraded_for(&format!("s{}", super::DEGRADED_MAX + 9))
+            app.degraded_for(&format!("s{}", norte_frontend::banners::DEGRADED_MAX + 9))
                 .is_some(),
             "la última en llegar se queda"
         );

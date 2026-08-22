@@ -311,9 +311,22 @@ enum Mensaje {
     TaskFallida(Box<Error>),
     /// La conexión con el daemon cambió de estado.
     Conexion(norte_client::ConnEvent),
+    /// Una sesión de un provider viaja SIN cifrar (#44).
+    Degradada(Box<norte_proto::methods::ConnectionDegraded>),
     /// Un snapshot de progreso. Por la MISMA cola que todo lo demás, que es
     /// lo que garantiza que un estado terminal no se adelante ni se pierda.
     Progreso(Box<norte_proto::TaskProgress>),
+    /// El informe de un lote de renombrado que ya terminó (#272).
+    ///
+    /// Lleva el `Result` entero y no un `Option`: «el lote fue bien» y «el
+    /// daemon no sabe informar» son dos cosas distintas, y colapsarlas es
+    /// justo lo que este informe existe para no hacer.
+    InformeLote(
+        Box<(
+            u64,
+            Result<norte_proto::methods::FsRenameBatchReportResult, Error>,
+        )>,
+    ),
     Apagar(oneshot::Sender<ShutdownReport>),
 }
 
@@ -446,6 +459,20 @@ impl UiHost {
             tokio::spawn(async move {
                 while let Some(ev) = eventos.recv().await {
                     if buzon.send(Mensaje::Conexion(ev)).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+        // Los avisos de sesión en claro (#44) van por el mismo buzón, y se
+        // toman SIEMPRE: no dependen de si esta ventana puede escribir. Que
+        // un listado que se está LEYENDO viaje sin cifrar es un hecho para
+        // quien lo mira, no un permiso.
+        if let Some(mut degradadas) = backend.take_degraded() {
+            let buzon = tx.clone();
+            tokio::spawn(async move {
+                while let Some(d) = degradadas.recv().await {
+                    if buzon.send(Mensaje::Degradada(Box::new(d))).await.is_err() {
                         return;
                     }
                 }
@@ -638,6 +665,9 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
+            Mensaje::Degradada(d) => {
+                let _ = updates.send(estado.sesion_degradada(*d));
+            }
             Mensaje::TaskNueva(task) => {
                 let (task, afectados) = *task;
                 for u in estado.registrar_task(task, afectados, &backend, &buzon) {
@@ -650,7 +680,11 @@ async fn actor(
                 // traducir, el usuario leía `err-not-found` en la barra.
                 let clave = norte_frontend::error::error_key(&e);
                 estado.status.message = Some(clamp_display(norte_i18n::t(clave)));
-                let cambio = ViewChange::Status(estado.status.clone());
+                // Un rechazo por journal no es una mutación que salió mal:
+                // es que ESTA SESIÓN no muta hasta que el fichero se arregle
+                // (regla dura 4). Eso dura más que un mensaje.
+                estado.journal_rehusado |= matches!(*e, Error::JournalUnavailable);
+                let cambio = estado.cambio_de_banners();
                 let u = estado.parche(vec![cambio]);
                 let _ = updates.send(u);
                 let n = estado.sobre(UiUpdate::Notice(UiNotice::Message {
@@ -661,6 +695,12 @@ async fn actor(
             }
             Mensaje::Progreso(p) => {
                 for u in estado.progreso(&p, &backend, &buzon) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::InformeLote(informe) => {
+                let (task_id, resultado) = *informe;
+                for u in estado.informe_de_lote(task_id, &resultado) {
                     let _ = updates.send(u);
                 }
             }
@@ -981,6 +1021,18 @@ struct Dialogo {
     /// una elipsis dentro: el mismo error que ADR 0061 decidió no volver a
     /// cometer, en miniatura.
     input_crudo: String,
+    /// Este diálogo se ABRIÓ SOLO, y todavía no se le ha reconocido.
+    ///
+    /// Una aprobación y el informe de un lote aparecen sin que nadie acabe de
+    /// pulsar nada: llegan cuando el daemon contesta, encima de lo que el
+    /// lector estuviera haciendo, y se quedan el teclado. Con esto, la
+    /// primera tecla solo dice «ya lo veo» —la misma regla que la revisión de
+    /// un plan, y por el mismo motivo—. `Escape` es la excepción: quitarse de
+    /// encima algo que uno no ha pedido tiene que salir a la primera.
+    ///
+    /// `true` en un diálogo que abrió un gesto: ahí la tecla siguiente SÍ es
+    /// una respuesta, porque la pregunta la hizo quien está tecleando.
+    reconocido: bool,
 }
 
 /// Lo que un diálogo tiene pendiente de hacer.
@@ -1104,11 +1156,29 @@ struct RevisionIa {
     epoca: u64,
 }
 
+/// A qué task apunta un `task.cancel`.
+///
+/// Tres casos y no dos: «no hay ninguna» y «la señalada ya terminó» se leen
+/// distinto, y colapsarlos haría que cancelar una task acabada dijera que no
+/// hay tasks mientras el tablero enseña cuatro.
+enum Objetivo {
+    /// No hay ninguna a la que pedirle que pare.
+    Ninguna,
+    /// La señalada ya es terminal.
+    Terminada,
+    /// Esta.
+    Viva(u64),
+}
+
 /// Una task viva en el tablero.
 struct TaskViva {
     vista: TaskView,
     /// Cómo pedirle que pare. Cancelar dos veces no es un error.
     cancel: std::sync::Arc<dyn Fn() + Send + Sync>,
+    /// Su informe ya se pidió. Solo lo llevan los lotes de renombrado, y
+    /// evita pedirlo dos veces si el daemon repite el último progreso —una
+    /// reconexión reanuncia las tasks, terminales incluidas—.
+    informe_pedido: bool,
     /// Los directorios que esta task deja DISTINTOS.
     ///
     /// Se apuntan al encolar y no se deducen del progreso: el progreso dice
@@ -1286,6 +1356,18 @@ struct Estado {
     sesion: Sesion,
     status: StatusView,
     conexion: ConnectionView,
+    /// Las sesiones de provider que viajan sin cifrar (#44), acotadas por el
+    /// módulo compartido.
+    degradadas: std::collections::VecDeque<norte_proto::methods::ConnectionDegraded>,
+    /// Lo que el daemon dijo de sí mismo antes de irse: relevo o parada.
+    /// `None` = no ha dicho nada, o ya volvió.
+    aviso_de_daemon: Option<&'static str>,
+    /// El daemon RECHAZÓ una mutación por no poder abrir su journal.
+    ///
+    /// Persistente y no un mensaje: la regla dura 4 dice que sin registro no
+    /// se muta, así que esto describe lo que le va a pasar a TODA la sesión,
+    /// no a la operación que se acaba de intentar.
+    journal_rehusado: bool,
 }
 
 /// Lo que el host sabe de la sesión guardada.
@@ -1465,6 +1547,9 @@ impl Estado {
             },
             status: StatusView::default(),
             conexion: ConnectionView::Connected,
+            degradadas: std::collections::VecDeque::new(),
+            aviso_de_daemon: None,
+            journal_rehusado: false,
         };
         (estado, backend)
     }
@@ -1941,6 +2026,23 @@ impl Estado {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
         let id = d.id;
+        // La PRIMERA tecla de un diálogo que se abrió SOLO no lo contesta:
+        // solo lo reconoce. `Escape` no lo necesita —descartar es seguro y
+        // quien no quiere esto delante tiene que poder quitárselo a la
+        // primera—, y un diálogo que abrió un gesto ya nace reconocido.
+        if !d.reconocido && k.key != "Escape" && k.key != "esc" {
+            if let Some(d) = self.dialogos.last_mut() {
+                d.reconocido = true;
+            }
+            self.status.message = Some(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "host-dialog-acknowledge",
+            )));
+            return (
+                self.aplicada(),
+                vec![self.parche(vec![ViewChange::Status(self.status.clone())])],
+            );
+        }
         let elegido = match k.key.as_str() {
             "Enter" | "enter" => d
                 .vista
@@ -2442,6 +2544,7 @@ impl Estado {
         self.siguiente_modal += 1;
         self.dialogos.push(Dialogo {
             id,
+            reconocido: true,
             vista: DialogView {
                 id,
                 title_key: "modal-search-title".to_owned(),
@@ -4142,14 +4245,80 @@ impl Estado {
         let (vista, clave) = match ev {
             norte_client::ConnEvent::Lost => (ConnectionView::Reconnecting, "msg-daemon-lost"),
             norte_client::ConnEvent::Restored => (ConnectionView::Connected, "msg-daemon-restored"),
+            // El daemon avisa ANTES de cerrar, y esto es lo único que
+            // distingue un relevo de una parada: en cuanto la conexión caiga,
+            // las dos se ven igual. Se queda como aviso PERSISTENTE porque
+            // sigue siendo verdad mientras dure, y la vista de conexión no se
+            // toca todavía — la conexión, ahora mismo, sigue en pie.
+            norte_client::ConnEvent::GoingAway { reconnect } => {
+                self.aviso_de_daemon = Some(if reconnect {
+                    "msg-daemon-handover"
+                } else {
+                    "msg-daemon-stopping"
+                });
+                let clave = self.aviso_de_daemon.unwrap_or("msg-daemon-stopping");
+                let banners = self.cambio_de_banners();
+                let parche = self.parche(vec![banners]);
+                let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
+                    key: clave.to_owned(),
+                    detail: None,
+                }));
+                return vec![parche, aviso];
+            }
         };
+        // Volver APAGA el aviso: uno que no sabe volverse «ya está» miente en
+        // cuanto el daemon reaparece, y el relevo termina volviendo.
+        if matches!(ev, norte_client::ConnEvent::Restored) {
+            self.aviso_de_daemon = None;
+        }
         self.conexion = vista.clone();
-        let parche = self.parche(vec![ViewChange::Connection(vista)]);
+        let banners = self.cambio_de_banners();
+        let parche = self.parche(vec![ViewChange::Connection(vista), banners]);
         let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
             key: clave.to_owned(),
             detail: None,
         }));
         vec![parche, aviso]
+    }
+
+    /// Una sesión de provider viaja sin cifrar (#44): se apunta y se dice.
+    ///
+    /// Persistente y no efímero: un mensaje que borra la siguiente tecla no
+    /// puede describir cómo viaja lo que se está mirando. La frase y el techo
+    /// los pone `norte_frontend::banners`, que es el MISMO código que compone
+    /// el aviso del TUI.
+    fn sesion_degradada(
+        &mut self,
+        d: norte_proto::methods::ConnectionDegraded,
+    ) -> BridgeEnvelope<UiUpdate> {
+        norte_frontend::banners::note_degraded(&mut self.degradadas, d);
+        let cambio = self.cambio_de_banners();
+        self.parche(vec![cambio])
+    }
+
+    /// Recompone los avisos persistentes de la barra y devuelve su cambio.
+    ///
+    /// UN sitio para los tres, y en este orden: el journal habla de TODA la
+    /// sesión y de si algo se puede deshacer, el daemon de si esta ventana
+    /// va a seguir sirviendo, y la degradación de cómo viaja una conexión.
+    /// Elegir uno solo escondería los otros para siempre, que es justo lo
+    /// que el TUI ya decidió no hacer.
+    fn cambio_de_banners(&mut self) -> ViewChange {
+        let mut banners = Vec::new();
+        if self.journal_rehusado {
+            banners.push(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "status-journal-refused",
+            )));
+        }
+        if let Some(clave) = self.aviso_de_daemon {
+            banners.push(clamp_display(norte_i18n::t_in(self.lang, clave)));
+        }
+        if let Some(aviso) = norte_frontend::banners::connection_banner(self.lang, &self.degradadas) {
+            banners.push(clamp_display(aviso));
+        }
+        self.status.banners = banners;
+        ViewChange::Status(self.status.clone())
     }
 
     /// El parche de la ayuda, y de paso la página que haya que pedir.
@@ -4889,6 +5058,13 @@ impl Estado {
         // Se decide por EFECTO y no por tecla, así que `j`, `↓` y `g g`
         // funcionan igual: el keymap dice qué comando es, y la superficie con
         // el foco dice qué significa ahí.
+        // Cancelar se decide ANTES que nada: con el panel de procesos
+        // enfocado y el tablero vacío, `efecto_en_panel_enfocado` responde
+        // «aplicado» a cualquier efecto, y eso convertiría un «no hay nada
+        // que parar» en un silencio.
+        if matches!(efecto, Efecto::CancelarTask) {
+            return self.cancelar_por_comando();
+        }
         if let Some(salida) = self.efecto_en_panel_enfocado(efecto) {
             return salida;
         }
@@ -4911,6 +5087,10 @@ impl Estado {
             | Efecto::DesmarcarTodo => self.efecto_de_listado(efecto, slot, backend, buzon),
             Efecto::Foco { atras } => self.mover_foco(atras),
             Efecto::Destino => self.designar_destino(),
+            // Atendido arriba, antes del panel enfocado. El brazo existe
+            // porque el `match` es exhaustivo a propósito: un efecto nuevo
+            // sin sitio tiene que ser un error de compilación.
+            Efecto::CancelarTask => self.cancelar_por_comando(),
             Efecto::Tamano(_) | Efecto::Igualar | Efecto::Disposiciones => {
                 self.efecto_de_disposicion(efecto, backend, buzon)
             }
@@ -5092,6 +5272,7 @@ impl Estado {
             id,
             vista: vista.clone(),
             input_crudo: String::new(),
+            reconocido: true,
             al_confirmar: Some(Pendiente::InstruccionIa { dir }),
         });
         let cambio = ViewChange::Dialogs {
@@ -5628,6 +5809,7 @@ impl Estado {
             // El crudo arranca IGUAL que la siembra: es lo que permite
             // reconocer «no lo ha tocado» sin llevar una bandera aparte.
             input_crudo: siembra.clone(),
+            reconocido: true,
             al_confirmar: Some(Pendiente::Renombrar { from, siembra }),
         });
         let cambio = ViewChange::Dialogs {
@@ -5819,6 +6001,7 @@ impl Estado {
             id,
             vista: vista.clone(),
             input_crudo: String::new(),
+            reconocido: true,
             al_confirmar: Some(Pendiente::Transferir {
                 origen: activo,
                 origen_dir,
@@ -5900,6 +6083,7 @@ impl Estado {
             id,
             vista: vista.clone(),
             input_crudo: String::new(),
+            reconocido: true,
             al_confirmar: Some(Pendiente::Borrar { paths, permanente }),
         });
         let cambio = ViewChange::Dialogs {
@@ -6008,6 +6192,8 @@ impl Estado {
             id,
             vista: vista.clone(),
             input_crudo: String::new(),
+            // Se abre SOLA: la trae una op de un agente, no una tecla.
+            reconocido: false,
             al_confirmar: Some(Pendiente::Decidir {
                 approval_id: req.approval_id,
             }),
@@ -6053,6 +6239,7 @@ impl Estado {
             id,
             vista: vista.clone(),
             input_crudo: String::new(),
+            reconocido: true,
             al_confirmar: Some(Pendiente::CrearDirectorio { dir }),
         });
         let cambio = ViewChange::Dialogs {
@@ -6588,12 +6775,17 @@ impl Estado {
         } else {
             afectados
         };
+        // Igual que con los afectados: si ya estaba, se conserva que su
+        // informe se pidió. Una reconexión que reanuncia un lote terminado no
+        // puede volver a abrir el mismo informe.
+        let informe_pedido = self.tasks.get(&id).is_some_and(|t| t.informe_pedido);
         self.tasks.insert(
             id,
             TaskViva {
                 vista,
                 cancel: task.cancel,
                 afectados,
+                informe_pedido,
             },
         );
         let buzon2 = buzon.clone();
@@ -6809,8 +7001,294 @@ impl Estado {
         // VERDAD —`Running` no lo es—, y una sola vez.
         if acabo {
             cambios.extend(self.refrescar_afectados(p.task_id.get(), backend, buzon));
+            self.pedir_informe_de_lote(p, backend, buzon);
         }
         vec![self.parche(cambios)]
+    }
+
+    /// Un lote de renombrado que acaba de terminar: se le pide su informe.
+    ///
+    /// Es la ÚNICA señal de que el directorio se quedó A MEDIAS, y hay que
+    /// pedirla AUNQUE la Task diga `Completed`: el desenlace de la Task
+    /// habla del lote, y el informe habla de lo que quedó en el disco.
+    ///
+    /// Se pide también para un lote AJENO —otro cliente de esta sesión— por
+    /// el mismo motivo: el directorio medio renombrado es el mismo mire quien
+    /// lo mire, y quien tiene esta ventana delante es quien lo va a ver.
+    fn pedir_informe_de_lote(
+        &mut self,
+        p: &norte_proto::TaskProgress,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        if !matches!(p.kind, norte_proto::TaskKind::RenameBatch) {
+            return;
+        }
+        let id = p.task_id;
+        match self.tasks.get_mut(&id.get()) {
+            Some(t) if !t.informe_pedido => t.informe_pedido = true,
+            _ => return,
+        }
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let resultado = backend.rename_batch_report(id).await;
+            let _ = buzon
+                .send(Mensaje::InformeLote(Box::new((id.get(), resultado))))
+                .await;
+        });
+    }
+
+    /// El informe llegó: se apunta en el tablero y, si el lote dejó algo a
+    /// medias, se dice DELANTE.
+    ///
+    /// Dos superficies y no una: la fila del tablero se queda con el resumen
+    /// —sobrevive a que alguien cierre lo que sea—, y el diálogo es lo que
+    /// hace que un directorio medio renombrado no pase inadvertido. Un lote
+    /// limpio no abre nada: no hay nada que buscar.
+    fn informe_de_lote(
+        &mut self,
+        task_id: u64,
+        resultado: &Result<norte_proto::methods::FsRenameBatchReportResult, Error>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(viva) = self.tasks.get(&task_id) else {
+            // El tablero está acotado y la task pudo caerse mientras el
+            // informe volaba. No se inventa una fila para colgarlo.
+            return Vec::new();
+        };
+        let fallo_la_task = matches!(
+            viva.vista.state,
+            crate::dto::TaskStateView::Failed | crate::dto::TaskStateView::Cancelled
+        );
+        let (detalle, cuerpo) = match resultado {
+            Ok(r) => (Self::detalle_de_lote(self.lang, r), self.cuerpo_de_lote(r)),
+            Err(e) => {
+                let clave = if matches!(e, Error::Unsupported) {
+                    "modal-batch-unsupported"
+                } else {
+                    "modal-batch-report-failed"
+                };
+                (
+                    norte_i18n::t_in(self.lang, "task-batch-unverified"),
+                    vec![crate::dto::DialogLine {
+                        text: clamp_display(norte_i18n::t_in(self.lang, clave)),
+                        hostile: false,
+                    }],
+                )
+            }
+        };
+        // El detalle de la fila es «qué va por dentro» mientras corre; ya
+        // terminada, lo que importa es en qué quedó. No hay más progreso
+        // detrás que lo pise: el estado es terminal.
+        if let Some(t) = self.tasks.get_mut(&task_id) {
+            t.vista.detail = Some(clamp_display(detalle));
+            t.vista.detail_hostile = false;
+        }
+        let mut cambios = vec![ViewChange::Tasks {
+            tasks: self.vistas_de_tasks(),
+        }];
+        // Se abre por lo que el INFORME dice, no por cómo terminó la Task:
+        // un lote `Completed` con un paso atascado es exactamente el caso
+        // que el desenlace de la Task no cuenta.
+        let hay_que_decirlo = match resultado {
+            Ok(r) => !Self::lote_limpio(r),
+            // Un informe que no se pudo pedir sobre un lote que además falló
+            // deja el directorio sin explicación: eso se dice delante. Si el
+            // lote terminó bien, la fila del tablero basta.
+            Err(_) => fallo_la_task,
+        };
+        if hay_que_decirlo {
+            cambios.push(self.abrir_informe_de_lote(cuerpo));
+        }
+        vec![self.parche(cambios)]
+    }
+
+    /// `true` si el lote no dejó nada que buscar ni que rematar.
+    fn lote_limpio(r: &norte_proto::methods::FsRenameBatchReportResult) -> bool {
+        r.stuck.is_none()
+            && r.uncertain.is_none()
+            && r.failed_pair.is_none()
+            && r.compensations_lost == 0
+            && r.rolled_back == 0
+    }
+
+    /// El resumen de una línea que se queda en la fila del tablero.
+    fn detalle_de_lote(
+        lang: norte_i18n::Lang,
+        r: &norte_proto::methods::FsRenameBatchReportResult,
+    ) -> String {
+        if Self::lote_limpio(r) {
+            return norte_i18n::ta_in(lang, "task-batch-applied", &[("n", &r.applied.to_string())]);
+        }
+        norte_i18n::ta_in(
+            lang,
+            "task-batch-half",
+            &[
+                ("applied", &r.applied.to_string()),
+                ("back", &r.rolled_back.to_string()),
+            ],
+        )
+    }
+
+    /// El cuerpo del informe: qué se aplicó, qué no se pudo devolver, y CÓMO
+    /// SE LLAMA AHORA lo que se quedó a medias.
+    ///
+    /// El nombre de ahora es lo único accionable que hay aquí, así que va
+    /// como línea de ruta —enmascarada y marcada— y no dentro de una frase:
+    /// una ruta metida en una frase la puede suplantar otra ruta.
+    fn cuerpo_de_lote(
+        &self,
+        r: &norte_proto::methods::FsRenameBatchReportResult,
+    ) -> Vec<crate::dto::DialogLine> {
+        let frase = |clave: &str| crate::dto::DialogLine {
+            text: clamp_display(norte_i18n::t_in(self.lang, clave)),
+            hostile: false,
+        };
+        let mut cuerpo = vec![crate::dto::DialogLine {
+            text: clamp_display(norte_i18n::ta_in(
+                self.lang,
+                "modal-batch-summary",
+                &[
+                    ("applied", &r.applied.to_string()),
+                    ("back", &r.rolled_back.to_string()),
+                ],
+            )),
+            hostile: false,
+        }];
+        if let Some(paso) = &r.stuck {
+            cuerpo.push(frase("modal-batch-stuck"));
+            cuerpo.push(Self::linea_de_ruta(&paso.to));
+            cuerpo.push(frase(if paso.journalled {
+                "modal-batch-stuck-journalled"
+            } else {
+                "modal-batch-stuck-unjournalled"
+            }));
+        }
+        if let Some(paso) = &r.uncertain {
+            cuerpo.push(frase("modal-batch-uncertain"));
+            cuerpo.push(Self::linea_de_ruta(&paso.to));
+        }
+        if r.compensations_lost > 0 {
+            cuerpo.push(crate::dto::DialogLine {
+                text: clamp_display(norte_i18n::ta_in(
+                    self.lang,
+                    "modal-batch-compensations-lost",
+                    &[("n", &r.compensations_lost.to_string())],
+                )),
+                hostile: false,
+            });
+        }
+        cuerpo
+    }
+
+    /// Abre el diálogo del informe. Solo informa: no tiene nada que ejecutar.
+    fn abrir_informe_de_lote(&mut self, cuerpo: Vec<crate::dto::DialogLine>) -> ViewChange {
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: "modal-batch-report-title".to_owned(),
+            destination: None,
+            body: cuerpo,
+            overflow_note: String::new(),
+            choices: vec![DialogChoice {
+                id: "ok".to_owned(),
+                label_key: "dialog-ok".to_owned(),
+                destructive: false,
+            }],
+            input: None,
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista,
+            input_crudo: String::new(),
+            // Se abre SOLO, cuando el daemon contesta.
+            reconocido: false,
+            al_confirmar: None,
+        });
+        ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        }
+    }
+
+    /// `task.cancel`: le pide parar a UNA task, y dice a cuál o que no hay.
+    ///
+    /// Qué task es depende de dónde está el foco, y no por gusto: con el
+    /// panel de procesos delante, el tablero pinta un cursor, y una tecla que
+    /// cancelara otra cosa dejaría ese cursor pintando una selección que no
+    /// manda. Sin ese panel enfocado se cancela la ÚLTIMA viva, que es lo que
+    /// hace el TUI con la misma tecla.
+    fn cancelar_por_comando(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match self.task_a_cancelar() {
+            Objetivo::Ninguna => (self.aplicada(), self.decir("msg-no-tasks")),
+            Objetivo::Terminada => (self.aplicada(), self.decir("msg-task-finished")),
+            Objetivo::Viva(id) => {
+                let (ack, mut fuera) = self.cancelar(id);
+                fuera.extend(self.decir("msg-cancelling"));
+                (ack, fuera)
+            }
+        }
+    }
+
+    /// A qué task le toca parar.
+    fn task_a_cancelar(&self) -> Objetivo {
+        if self.procesos_tienen_el_foco() {
+            // La del cursor, sea cual sea su estado: la eligió un humano
+            // mirándola. Si ya terminó se DICE, en vez de saltar a otra —
+            // cancelar una task que no es la señalada es peor que no
+            // cancelar nada.
+            let Some((id, viva)) = self
+                .tasks
+                .iter()
+                .nth(self.cursor_procesos.min(self.tasks.len().saturating_sub(1)))
+            else {
+                return Objetivo::Ninguna;
+            };
+            return if Self::task_viva(&viva.vista) {
+                Objetivo::Viva(*id)
+            } else {
+                Objetivo::Terminada
+            };
+        }
+        // El tablero va por id, y el daemon los reparte crecientes: la última
+        // viva es la de id mayor.
+        self.tasks
+            .iter()
+            .rev()
+            .find(|(_, t)| Self::task_viva(&t.vista))
+            .map_or(Objetivo::Ninguna, |(id, _)| Objetivo::Viva(*id))
+    }
+
+    /// `true` si a esta task todavía se le puede pedir que pare.
+    fn task_viva(v: &TaskView) -> bool {
+        matches!(
+            v.state,
+            crate::dto::TaskStateView::Queued | crate::dto::TaskStateView::Running
+        )
+    }
+
+    /// `true` si el foco está en el panel de procesos.
+    fn procesos_tienen_el_foco(&self) -> bool {
+        self.roles
+            .get(RoleId::Active)
+            .and_then(|s| kind_de(&self.arbol, s))
+            .is_some_and(|k| k.as_str() == "processes")
+    }
+
+    /// Dice una frase: en la barra de estado Y como aviso.
+    ///
+    /// Las dos cosas y por la misma llamada, que es lo que ya hace una task
+    /// fallida: la barra es donde se lee al mirar, y el aviso es lo que el
+    /// renderer puede anunciar a un lector de pantalla.
+    fn decir(&mut self, clave: &str) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+        let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);
+        let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
+            key: clave.to_owned(),
+            detail: None,
+        }));
+        vec![parche, aviso]
     }
 
     /// Pide la cancelación de una task. Idempotente por contrato: pedirla dos

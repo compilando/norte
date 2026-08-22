@@ -9690,3 +9690,492 @@ async fn un_nombre_que_no_cabe_en_pantalla_no_se_edita() {
         "{ack:?}"
     );
 }
+
+/// Inyecta una task AJENA con su propio cancelador, y devuelve por dónde
+/// mandarle progreso.
+///
+/// Cada una lleva un cancelador que apunta SU id: un contador compartido dice
+/// que se canceló algo, no CUÁL, y «cuál» es justo lo que un tablero con
+/// cursor tiene que acertar.
+fn inyectar_task(
+    tx: &tokio::sync::mpsc::UnboundedSender<norte_ui_host::backend::HostTask>,
+    id: u64,
+    canceladas: &Arc<std::sync::Mutex<Vec<u64>>>,
+) -> tokio::sync::watch::Sender<norte_proto::TaskProgress> {
+    let progreso = norte_proto::TaskProgress {
+        task_id: norte_proto::TaskId::new(id),
+        kind: norte_proto::TaskKind::Copy,
+        state: norte_proto::TaskState::Running,
+        bytes_done: 0,
+        bytes_total: None,
+        entries_done: 0,
+        entries_total: None,
+        current: None,
+    };
+    let (ptx, prx) = tokio::sync::watch::channel(progreso);
+    let canceladas = Arc::clone(canceladas);
+    tx.send(norte_ui_host::backend::HostTask {
+        id: norte_proto::TaskId::new(id),
+        progress: prx,
+        cancel: Arc::new(move || canceladas.lock().expect("canceladas").push(id)),
+        foreign: true,
+    })
+    .expect("el host escucha");
+    ptx
+}
+
+/// Espera el siguiente aviso con clave, sea cual sea.
+async fn siguiente_aviso(sub: &mut norte_ui_host::controller::UiSubscription) -> String {
+    for _ in 0..40 {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("llega")
+            .expect("el host sigue vivo")
+        {
+            Update::Message(m) => {
+                if let UiUpdate::Notice(UiNotice::Message { key, .. }) = &m.payload {
+                    return key.clone();
+                }
+            }
+            Update::Lagged => {}
+        }
+    }
+    panic!("no llegó ningún aviso");
+}
+
+/// `Ctrl+K` para la task viva: hasta ahora el catálogo ataba la tecla y el
+/// host respondía `NotHere`, así que una copia lanzada desde la ventana solo
+/// se podía parar matando la ventana.
+#[tokio::test]
+async fn la_tecla_de_cancelar_para_la_task_viva() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _p = inyectar_task(&tx, 11, &canceladas);
+    siguientes_tasks(&mut sub).await;
+
+    let ack = h
+        .dispatch(tecla_mod("k", true, false))
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    assert_eq!(
+        *canceladas.lock().expect("canceladas"),
+        vec![11],
+        "se le pidió parar a la task viva"
+    );
+    assert_eq!(siguiente_aviso(&mut sub).await, "msg-cancelling");
+}
+
+/// Sin nada en marcha, cancelar no es un error ni un silencio: se dice.
+#[tokio::test]
+async fn cancelar_sin_tasks_lo_dice() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let ack = h
+        .dispatch(tecla_mod("k", true, false))
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    assert_eq!(siguiente_aviso(&mut sub).await, "msg-no-tasks");
+}
+
+/// Una task ya TERMINADA sigue en el tablero, y cancelarla no es cancelar
+/// nada: se busca una viva, y si no la hay se dice.
+#[tokio::test]
+async fn una_task_terminada_no_es_la_que_se_cancela() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let p = inyectar_task(&tx, 11, &canceladas);
+    siguientes_tasks(&mut sub).await;
+    p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    siguientes_tasks(&mut sub).await;
+
+    h.dispatch(tecla_mod("k", true, false))
+        .await
+        .expect("host vivo");
+    assert!(
+        canceladas.lock().expect("canceladas").is_empty(),
+        "a una task terminada no se le pide parar"
+    );
+    assert_eq!(siguiente_aviso(&mut sub).await, "msg-no-tasks");
+}
+
+/// Con el panel de procesos enfocado se cancela la del CURSOR, no la última.
+///
+/// Es la misma regla que el panel ya tenía para moverse: si la lista que se
+/// ve tiene cursor y la tecla cancela otra cosa, el tablero pinta una
+/// selección que no manda.
+#[tokio::test]
+async fn con_el_panel_enfocado_se_cancela_la_del_cursor() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    let (h, _snap) = host_con_layout(Arc::new(falso), "full", (200, 60)).await;
+    let mut sub = h.subscribe();
+    let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _a = inyectar_task(&tx, 11, &canceladas);
+    let _b = inyectar_task(&tx, 12, &canceladas);
+    // Las dos en el tablero antes de tocar el cursor.
+    for _ in 0..2 {
+        if siguientes_tasks(&mut sub).await.len() == 2 {
+            break;
+        }
+    }
+
+    h.dispatch(UiAction::FocusSlot { slot_id: 7 })
+        .await
+        .expect("host vivo");
+    // El tablero va por id, así que la segunda fila es la 12.
+    h.dispatch(tecla("Down")).await.expect("host vivo");
+    h.dispatch(tecla_mod("k", true, false))
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        *canceladas.lock().expect("canceladas"),
+        vec![12],
+        "la del cursor, no la última"
+    );
+}
+
+/// Igual que [`inyectar_task`], pero eligiendo la CLASE: el informe de un
+/// lote solo se pide para un lote.
+fn inyectar_task_de(
+    tx: &tokio::sync::mpsc::UnboundedSender<norte_ui_host::backend::HostTask>,
+    id: u64,
+    kind: norte_proto::TaskKind,
+) -> tokio::sync::watch::Sender<norte_proto::TaskProgress> {
+    let progreso = norte_proto::TaskProgress {
+        task_id: norte_proto::TaskId::new(id),
+        kind,
+        state: norte_proto::TaskState::Running,
+        bytes_done: 0,
+        bytes_total: None,
+        entries_done: 0,
+        entries_total: None,
+        current: None,
+    };
+    let (ptx, prx) = tokio::sync::watch::channel(progreso);
+    tx.send(norte_ui_host::backend::HostTask {
+        id: norte_proto::TaskId::new(id),
+        progress: prx,
+        cancel: Arc::new(|| {}),
+        foreign: false,
+    })
+    .expect("el host escucha");
+    ptx
+}
+
+/// Un informe limpio: N aplicados y nada más.
+fn informe_limpio(n: u64) -> norte_proto::methods::FsRenameBatchReportResult {
+    norte_proto::methods::FsRenameBatchReportResult {
+        applied: n,
+        rolled_back: 0,
+        failed_pair: None,
+        stuck: None,
+        uncertain: None,
+        compensations_lost: 0,
+    }
+}
+
+/// Espera a que el tablero traiga una task con `detail` puesto.
+async fn detalle_de_task(sub: &mut norte_ui_host::controller::UiSubscription) -> String {
+    for _ in 0..40 {
+        let tasks = siguientes_tasks(sub).await;
+        if let Some(d) = tasks.first().and_then(|t| t.detail.clone()) {
+            return d;
+        }
+    }
+    panic!("ninguna task trajo detalle");
+}
+
+/// Un lote que termina PIDE su informe: es la única señal de que el
+/// directorio se quedó a medias, y hasta ahora no lo pedía nadie (#272).
+#[tokio::test]
+async fn un_lote_terminado_pide_su_informe() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    *falso.informe.lock().expect("informe") = Some(informe_limpio(3));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let p = inyectar_task_de(&tx, 31, norte_proto::TaskKind::RenameBatch);
+    siguientes_tasks(&mut sub).await;
+    p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+
+    let detalle = detalle_de_task(&mut sub).await;
+    assert_eq!(
+        *backend.informes_pedidos.lock().expect("informes"),
+        vec![31],
+        "se pidió el informe del lote"
+    );
+    assert!(detalle.contains('3'), "el tablero dice cuántos: {detalle}");
+    // Un lote limpio no interrumpe: no hay nada que decidir ni que buscar.
+    assert!(
+        !hubo_dialogos(&mut sub).await,
+        "un lote limpio no abre nada"
+    );
+}
+
+/// `true` si en lo que queda por leer llega algún diálogo.
+async fn hubo_dialogos(sub: &mut norte_ui_host::controller::UiSubscription) -> bool {
+    while let Ok(Some(u)) = tokio::time::timeout(std::time::Duration::from_millis(150), sub.recv())
+        .await
+    {
+        if let Update::Message(m) = u
+            && let UiUpdate::Patch(p) = &m.payload
+            && p.changes
+                .iter()
+                .any(|c| matches!(c, norte_ui_host::dto::ViewChange::Dialogs { .. }))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Una copia que termina NO pide informe de lote: el informe es de los lotes.
+#[tokio::test]
+async fn una_copia_no_pide_informe_de_lote() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let p = inyectar_task_de(&tx, 32, norte_proto::TaskKind::Copy);
+    siguientes_tasks(&mut sub).await;
+    p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    siguientes_tasks(&mut sub).await;
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(
+        backend
+            .informes_pedidos
+            .lock()
+            .expect("informes")
+            .is_empty()
+    );
+}
+
+/// Un lote ATASCADO abre una superficie que lo dice, y dice CÓMO SE LLAMA
+/// AHORA el fichero: sin ese nombre, «se quedó a medias» no se puede actuar.
+#[tokio::test]
+async fn un_lote_atascado_lo_dice_y_da_el_nombre_de_ahora() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    *falso.informe.lock().expect("informe") = Some(norte_proto::methods::FsRenameBatchReportResult {
+        applied: 4,
+        rolled_back: 2,
+        failed_pair: Some(2),
+        stuck: Some(norte_proto::methods::RenameStuckStep {
+            from: VPath::parse("mem:///casa/viejo.txt").expect("vpath"),
+            to: VPath::parse("mem:///casa/nuevo.txt").expect("vpath"),
+            pair_index: 2,
+            error: norte_proto::Error::Io { retryable: false },
+            journalled: true,
+            still_applied: 2,
+        }),
+        uncertain: None,
+        compensations_lost: 1,
+    });
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let p = inyectar_task_de(&tx, 33, norte_proto::TaskKind::RenameBatch);
+    siguientes_tasks(&mut sub).await;
+    p.send_modify(|p| {
+        p.state = norte_proto::TaskState::Failed {
+            error: norte_proto::Error::Io { retryable: false },
+        };
+    });
+
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let cuerpo: String = dialogos[0]
+        .body
+        .iter()
+        .map(|l| l.text.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        cuerpo.contains("nuevo.txt"),
+        "dice cómo se llama AHORA: {cuerpo}"
+    );
+    // Y la marca de compensaciones perdidas no se calla: un undo de sesión se
+    // va a parar justo ahí.
+    assert!(cuerpo.contains('1'), "{cuerpo}");
+}
+
+/// Un daemon que NO sabe informar de un lote fallido no se degrada en
+/// silencio: se dice que el desenlace se quedó sin comprobar.
+#[tokio::test]
+async fn un_informe_que_no_se_puede_pedir_se_dice() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    // Sin informe: el falso contesta `Unsupported`.
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let p = inyectar_task_de(&tx, 34, norte_proto::TaskKind::RenameBatch);
+    siguientes_tasks(&mut sub).await;
+    p.send_modify(|p| {
+        p.state = norte_proto::TaskState::Failed {
+            error: norte_proto::Error::Io { retryable: false },
+        };
+    });
+
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogos[0].title_key, "modal-batch-report-title");
+    // Y dice EXACTAMENTE que el daemon no sabe informar: «no se pudo pedir»
+    // y «este daemon no sabe» son dos cosas distintas, y confundirlas es
+    // degradar en silencio con más palabras.
+    assert_eq!(
+        dialogos[0].body[0].text,
+        norte_i18n::t_in(norte_i18n::Lang::Es, "modal-batch-unsupported"),
+        "{:?}",
+        dialogos[0].body
+    );
+}
+
+/// Espera el siguiente estado de la barra que traiga avisos persistentes.
+async fn siguientes_banners(sub: &mut norte_ui_host::controller::UiSubscription) -> Vec<String> {
+    for _ in 0..40 {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("llega")
+            .expect("el host sigue vivo")
+        {
+            Update::Message(m) => {
+                if let UiUpdate::Patch(p) = &m.payload {
+                    for c in &p.changes {
+                        if let norte_ui_host::dto::ViewChange::Status(s) = c
+                            && !s.banners.is_empty()
+                        {
+                            return s.banners.clone();
+                        }
+                    }
+                }
+            }
+            Update::Lagged => {}
+        }
+    }
+    panic!("no llegó ningún aviso persistente");
+}
+
+/// Una sesión que viaja SIN cifrar deja un aviso persistente que la NOMBRA.
+///
+/// Un mensaje efímero no vale: lo borra la siguiente tecla, y esto es un
+/// hecho de toda la sesión. La ventana lo pintaba de ninguna manera —el
+/// canal existía en el SDK y el host no lo tomaba— así que un FTP en claro
+/// se leía igual que un SFTP.
+#[tokio::test]
+async fn una_sesion_en_claro_deja_aviso_persistente() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.degradadas.lock().expect("degradadas") = Some(rx);
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    tx.send(norte_proto::methods::ConnectionDegraded {
+        scheme: "ftp".to_owned(),
+        host: "archivo.example".to_owned(),
+        reason: "ftp-plaintext".to_owned(),
+        detail: None,
+    })
+    .expect("el host escucha");
+
+    let banners = siguientes_banners(&mut sub).await;
+    assert!(
+        banners.iter().any(|b| b.contains("archivo.example")),
+        "el aviso nombra la conexión: {banners:?}"
+    );
+}
+
+/// El daemon que avisa de que se PARA lo dice, y lo dice de forma persistente:
+/// «reconectando…» sobre un daemon que no vuelve es una espera falsa.
+#[tokio::test]
+async fn un_daemon_que_se_para_lo_dice() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.eventos.lock().expect("eventos") = Some(rx);
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    tx.send(norte_client::ConnEvent::GoingAway { reconnect: false })
+        .expect("el host escucha");
+
+    let banners = siguientes_banners(&mut sub).await;
+    assert_eq!(
+        banners,
+        vec![norte_i18n::t_in(norte_i18n::Lang::Es, "msg-daemon-stopping")],
+    );
+}
+
+/// Un relevo NO es una parada, y se dice distinto: uno vuelve y el otro no.
+#[tokio::test]
+async fn un_relevo_no_se_lee_como_una_parada() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.eventos.lock().expect("eventos") = Some(rx);
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    tx.send(norte_client::ConnEvent::GoingAway { reconnect: true })
+        .expect("el host escucha");
+    let banners = siguientes_banners(&mut sub).await;
+    assert_eq!(
+        banners,
+        vec![norte_i18n::t_in(norte_i18n::Lang::Es, "msg-daemon-handover")],
+    );
+
+    // Y cuando vuelve, el aviso se apaga: un aviso que no sabe volverse
+    // «ya está» miente en cuanto el daemon reaparece.
+    tx.send(norte_client::ConnEvent::Restored)
+        .expect("el host escucha");
+    for _ in 0..40 {
+        if let Ok(Some(Update::Message(m))) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv()).await
+            && let UiUpdate::Patch(p) = &m.payload
+            && let Some(norte_ui_host::dto::ViewChange::Status(s)) = p
+                .changes
+                .iter()
+                .find(|c| matches!(c, norte_ui_host::dto::ViewChange::Status(_)))
+            && s.banners.is_empty()
+        {
+            return;
+        }
+    }
+    panic!("el aviso del daemon no se apagó al volver");
+}
+
+/// Una mutación que el daemon RECHAZA por no poder abrir el journal deja
+/// aviso persistente: «no se registra» es un hecho de toda la sesión, y la
+/// regla dura 4 dice que sin registro no se muta.
+#[tokio::test]
+async fn una_mutacion_sin_journal_deja_aviso() {
+    let mut falso = arbol_como_falso();
+    falso.error_al_borrar = Some(norte_proto::Error::JournalUnavailable);
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    let banners = siguientes_banners(&mut sub).await;
+    assert_eq!(
+        banners,
+        vec![norte_i18n::t_in(norte_i18n::Lang::Es, "status-journal-refused")],
+    );
+}

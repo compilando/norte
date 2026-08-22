@@ -195,16 +195,15 @@ fn caps_key(at: &VPath) -> CapsKey {
 /// the oldest location is the one least likely to be the next cd.
 const CAPS_CACHE_MAX: usize = 64;
 
-/// How many connection degradations `App` retains at once.
-///
-/// #44 held ONE, as an `Option<String>`, so it was bounded by construction; a
-/// collection keyed on a scheme the WIRE supplies is not, and the daemon is
-/// not the only thing that can send those notifications. Thirty-two is far
-/// more than the seven schemes that exist, so the cap can only ever be reached
-/// by something abnormal — and when it is, the oldest report is dropped and the
-/// reader keeps the ones that just arrived. Same discipline as the daemon's
-/// retained listings and its approvals cap.
-const DEGRADED_MAX: usize = 32;
+// How many connection degradations `App` retains at once.
+//
+// #44 held ONE, as an `Option<String>`, so it was bounded by construction; a
+// collection keyed on a scheme the WIRE supplies is not, and the daemon is
+// not the only thing that can send those notifications. Thirty-two is far
+// more than the seven schemes that exist, so the cap can only ever be reached
+// by something abnormal — and when it is, the oldest report is dropped and the
+// reader keeps the ones that just arrived. Same discipline as the daemon's
+// retained listings and its approvals cap.
 
 /// Lo que el run loop tiene que preguntarle al DESTINO antes de que el humano
 /// diga que sí: si cabe (#149) y si sabe sujetar sus escrituras (#164).

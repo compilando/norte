@@ -108,6 +108,7 @@ msg-done = hecho
 msg-cancelled = cancelado
 msg-cancelling = cancelando…
 msg-no-tasks = no hay tasks en marcha
+msg-task-finished = esa task ya había terminado
 msg-error = error: { $error }
 # Errores por CATEGORÍA (spec §17.7): localizados, jamás el string del OS.
 err-not-found = no encontrado
@@ -165,6 +166,8 @@ msg-view-error = view: { $error }
 msg-config-reloaded = config recargada
 msg-daemon-lost = conexión con el daemon perdida; reconectando…
 msg-daemon-restored = reconectado al daemon
+msg-daemon-handover = el daemon se releva; vuelve enseguida
+msg-daemon-stopping = el daemon se está parando
 msg-config-not-applied = config NO aplicada: { $error }
 msg-config-polling = config: vigilancia degradada a polling
 msg-no-trash-here = sin papelera aquí: F8 de nuevo para permanente
@@ -816,7 +819,7 @@ help-cmd-pane-hotlist = directorios favoritos
 help-cmd-pane-select-drive = elegir unidad para el panel con foco
 help-cmd-pane-select-drive-left = elegir unidad para el panel IZQUIERDO
 help-cmd-pane-select-drive-right = elegir unidad para el panel DERECHO
-help-cmd-task-cancel = cancelar la task más reciente
+help-cmd-task-cancel = cancelar la task señalada, o la más reciente
 # G3c: comandos SOLO de la GUI (sin equivalente en la TUI, que usa otros
 # bindings para multi-selección/franja de tasks) — hacen falta ahora que la
 # paleta de comandos de la GUI lista `app.palette`/`app.extensions` y
@@ -1551,6 +1554,20 @@ host-plan-not-applicable = el core no aceptó este plan: no se renombraría nada
 host-plan-abandoned = el plan de renombrado se abandonó
 host-plan-asking = pidiéndole al modelo un plan de renombrado…
 host-plan-acknowledge = pulsa otra vez para contestar: esta ventana se abrió sola
+host-dialog-acknowledge = pulsa otra vez para contestar: este diálogo se abrió solo
+dialog-ok = Entendido
+modal-batch-report-title = informe del lote de renombrado
+modal-batch-summary = { $applied } aplicados, { $back } devueltos
+modal-batch-stuck = no se pudo devolver; ahora se llama:
+modal-batch-stuck-journalled = el journal lo describe: un deshacer puede rematarlo
+modal-batch-stuck-unjournalled = el journal no lo registró: esto solo lo deshace una persona
+modal-batch-uncertain = no se sabe si este paso surtió efecto; mira aquí:
+modal-batch-compensations-lost = { $n } compensaciones perdidas: un deshacer de sesión se parará ahí
+modal-batch-unsupported = este daemon no sabe informar de un lote, así que el desenlace queda sin comprobar
+modal-batch-report-failed = el informe no se pudo pedir, así que el desenlace queda sin comprobar
+task-batch-applied = { $n } renombrados
+task-batch-half = lote a medias: { $applied } aplicados, { $back } devueltos
+task-batch-unverified = terminado, sin informe
 host-plan-unseen = recorre el plan entero antes de aplicarlo
 host-same-directory = el origen y el destino son el mismo directorio
 host-read-only = esta ventana todavía no escribe

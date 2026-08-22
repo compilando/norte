@@ -60,4 +60,14 @@ pub enum ConnEvent {
     Lost,
     /// Reconectado (y resincronizado vía `task.list`).
     Restored,
+    /// El daemon avisó de que se va (`daemon.going_away`, 0.46.0).
+    ///
+    /// Llega ANTES de que la conexión se cierre, y es lo único que distingue
+    /// un relevo de una parada: desde el corte las dos se ven igual. El
+    /// frontend lo necesita para decir cuál de las dos está pasando en vez de
+    /// pintar «reconectando…» sobre un daemon que no va a volver.
+    GoingAway {
+        /// El daemon dice que vuelve (un relevo, p. ej. una actualización).
+        reconnect: bool,
+    },
 }

@@ -123,6 +123,38 @@ independently through `PROTOCOL_VERSION`.
   cannot be understood is refused too: treating "I don't know" as "go ahead"
   is the door the budget exists to close. A refusal is said, not silently
   swapped for the hex view.
+- **A running task can be stopped from the window** (`task.cancel`, `Ctrl+K` in
+  the orthodox preset). Which task it is depends on where the focus is: with
+  the process panel in front it is the one under its cursor, because a board
+  that paints a cursor and cancels something else is painting a selection that
+  does not command; anywhere else it is the most recent live one, which is what
+  the TUI does with the same key. Nothing running says so, and a task that
+  already finished says THAT — collapsing the two would answer "no tasks" while
+  the board shows four.
+- **A rename batch reports what it left behind.** The report is the only signal
+  that a batch left a directory half renamed, and it is asked for even when the
+  task says it completed: the task's outcome talks about the batch, the report
+  talks about what is on disk. The board row keeps the summary, and a batch that
+  left something stuck opens a surface naming what the file is CALLED NOW —
+  which is the only actionable thing in the whole report — plus whether the
+  journal knows about it, because that decides whether an undo can finish the
+  job or only a person can. A daemon that cannot report says so: "the outcome is
+  unverified" and "the batch went fine" are different facts.
+- **A dialog that opened BY ITSELF does not answer with the next keystroke.**
+  The same rule the AI plan review already had, now for the approval dialog and
+  the batch report: they appear when the daemon replies, on top of whatever the
+  reader was doing, and they take the keyboard. The first key only acknowledges;
+  `Escape` is the exception, because getting rid of something you did not ask
+  for has to work first time.
+- **Persistent notices in the status bar.** Three facts that outlive a keystroke
+  and used to be painted by nobody: a provider session travelling UNENCRYPTED
+  (the phrase and its cap are now shared with the TUI rather than written
+  twice — a security indicator implemented in two places is two places to
+  forget the masking), a daemon that announced it is going away, and a mutation
+  the daemon REFUSED because it could not open its journal. The daemon notice
+  distinguishes a handover from a shutdown: once the connection drops the two
+  look identical, and painting "reconnecting…" over a daemon that is not coming
+  back is a false wait. It clears when the daemon returns.
 
 ### Fixed
 
