@@ -209,7 +209,16 @@ independently through `PROTOCOL_VERSION`.
   the report — the counts, the failures, the undo handle — over a destination
   that was rewritten halfway. When it ends, the report is fetched and shown,
   failures one by one with the path and which root it hangs from, because "3
-  failed" without saying which cannot be acted on. Bridge **29**.
+  failed" without saying which cannot be acted on. Bridge **30**. Two things
+  that review changed and that generalise: "it failed" is not "it did not
+  write" — the daemon answering *no* and the connection dropping *after* the
+  request are different facts, and only the first lets the panel offer to
+  apply again, because the second may already be writing; and the writing
+  panel now has a way out, the second `Escape`, which says the destination may
+  be halfway rather than leaving the only screen in norte you cannot leave.
+  A step's and a failure's anchor is SAID, not left in an attribute: staying
+  quiet about "on either side" where an unqualified path means "on the source"
+  asserts the source.
 - **The window compares two directories** (`pane.compare-dirs`): a diff panel
   with the rows as they stream in, a filter per category with its count, side
   switching, and `Enter` to go where a row points. The model is the one the TUI
