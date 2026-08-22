@@ -2062,6 +2062,51 @@ Renderer never loads plugin-provided JavaScript, CSS or HTML.
 Each native affordance gets a narrowly scoped capability, not general shell or
 filesystem access.
 
+### Task 6.5 — DONE 2026-08-22 (the half that can be built today)
+
+> The window copies paths, opens with the desktop's application, and drops a
+> terminal in the current directory (`pane.copy-path`, `pane.open`,
+> `app.terminal`).
+>
+> **The shape that matters is the channel.** Native effects leave the host on
+> their OWN channel, not as one more `UiUpdate`, for two reasons that point at
+> the same place: they carry PATHS and programs, and the webview has no
+> business seeing them — nor any permission to run anything, since its
+> capabilities are "listen to events" and nothing else (ADR 0066 D11); and the
+> host does not spawn processes or touch the clipboard. It says WHAT, with
+> operands from its own semantic state, and the hosting process decides HOW
+> behind one narrow door per thing. A frontend that cannot do these simply
+> does not subscribe, and then the gesture is REFUSED rather than acked — no
+> "copied" over a clipboard that never got anything.
+>
+> Four decisions worth keeping:
+>
+> - **None of the three is a shell.** Each builds a closed `argv` — the
+>   program comes from a list, never from user text — and nothing goes through
+>   an interpreter. No `sh -c`, which is where a filename with `;` stops being
+>   a filename.
+> - **The clipboard travels as BYTES, over STDIN.** A name is bytes: a lossy
+>   decode would put the replacement character on the clipboard and the paste
+>   would open something else. And in an `argv`, a path starting with `-` is a
+>   flag to whichever helper is installed.
+> - **What is not on THIS disk is not handed to the desktop.** `xdg-open`
+>   cannot take an `sftp://` and a terminal has nowhere to sit inside one, so
+>   it is refused out loud instead of quietly opening `$HOME`.
+> - **`pane.open` and `app.terminal` are in `MUTAN`**; `pane.copy-path` is
+>   not. What an editor or a shell does with the files is not this window's
+>   decision — putting text on the clipboard is.
+>
+> Deferred, each with an issue, because each needs a decision rather than
+> code: **#283** drag and drop (needs a platform/security design; it is a
+> gesture with no confirmation reaching a window that writes), **#284** the
+> destination for a one-pane operation (native dialog vs typed path vs open a
+> second pane — the third fits the model, the first is what desktop users
+> expect), **#285** desktop notifications (which events, chosen by whom, and
+> what a notification may NOT carry — it leaves the process and the desktop
+> paints it). Also filed: **#286**, the TUI does not implement
+> `pane.copy-path` either, which the catalogue has been calling `Live` since
+> the GPUI frontend that did was retired.
+
 ### Phase 6 feature matrix
 
 Before exit, compare current TUI and GPUI commands against the new host command
@@ -2076,6 +2121,42 @@ blocked by platform transport
 
 No command may disappear merely because nobody remembered it. Update help and
 availability from the same classification.
+
+#### The matrix, measured 2026-08-22
+
+The shared catalogue declares **138** live commands (`viewer.*` included).
+The window implements **55**; the TUI implements **111**. Nothing was
+dropped: every one of the 83 the window lacks is classified below, and every
+"deferred" line has an issue that can be closed.
+
+| family | in the window | classification |
+| --- | --- | --- |
+| cursor, nav, mark (toggle/clear), layout focus/resize/pick, pane transfer/delete/rename/mkdir/search/compare/sync/columns/view/open/copy-path, app palette/help/settings/extensions/agents/theme/terminal, task.cancel, viewer.* | **55 supported** | — |
+| `dialog.*` (22) | fixed keys and mouse instead of the shared resolver | **deferred — #287** |
+| `pane.tab-*` (15) | none | **deferred — #288** |
+| `pane.*` others (27) | sorting is done by clicking the header; the rest have no surface | **deferred — #290** |
+| `layout.split-h/v`, `close-slot`, `preview`, `processes`, `metadata`, `places` (7) | the tree is painted, not edited | **deferred — #291** |
+| `mark.all/invert/pattern-add/pattern-remove` (4) | none | **deferred — #289** |
+| `task.next/prev/dismiss` (3) | the board is painted, not walked | **deferred — #292** |
+| `pane.command-line` | the palette is this window's answer | **not applicable to the GUI** |
+| `app.pick-accept` | `--pick` is a CLI mode; a GUI has no pipe to answer into | **not applicable to the GUI** |
+| `app.quit` | the window manager closes the window | **not applicable to the GUI** |
+| `app.menu`, `app.toggle-panels` | a menu bar and a full-screen toggle are terminal-shaped answers; the window has no menu bar yet | **not applicable today** |
+
+Two commands go the OTHER way — the window has them and the TUI does not:
+`app.agents` (#276, agent sessions and the undo of one) and `pane.copy-path`
+(**#286** tracks the TUI catching up; the catalogue had been calling it
+`Live` since the GPUI frontend that implemented it was retired).
+
+**Nothing is blocked by platform transport.** Drag and drop (#283) is the one
+thing that would be, and it is blocked by a design that has not been made,
+not by the transport.
+
+**And a hole in the guard**: the test that ties the two halves checks that
+everything the TUI implements is in the catalogue, not that everything the
+catalogue calls `Live` is implemented by SOMEBODY. A frontend that retires
+can leave the catalogue promising what nobody does — which is exactly what
+happened to `pane.copy-path` for two months.
 
 ---
 

@@ -219,6 +219,18 @@ independently through `PROTOCOL_VERSION`.
   A step's and a failure's anchor is SAID, not left in an attribute: staying
   quiet about "on either side" where an unqualified path means "on the source"
   asserts the source.
+- **The window copies paths, opens with the desktop, and drops a terminal
+  where you are** (`pane.copy-path`, `pane.open`, `app.terminal`). Native
+  effects leave the host on their own channel, never through the webview:
+  they carry paths and programs, and the webview neither needs to see them
+  nor has permission to run anything. None of the three is a shell — each
+  builds a closed `argv` from a list and nothing goes through an interpreter,
+  so a filename with a `;` stays a filename. The clipboard travels as BYTES
+  over the helper's stdin: a lossy decode would paste a path that opens
+  something else, and in an `argv` a path starting with `-` is a flag. What
+  is not on this disk is refused out loud — `xdg-open` cannot take an
+  `sftp://` — instead of quietly opening somewhere else. And a frontend with
+  no desktop behind it refuses the gesture rather than claiming it copied.
 - **The window can undo everything an agent session did** (bridge **33**,
   closes #276). `app.agents` lists the agent sessions THIS window has seen ask
   for permission — the only thing in the whole protocol that names one is the
