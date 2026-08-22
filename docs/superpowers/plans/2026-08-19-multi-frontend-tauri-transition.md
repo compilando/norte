@@ -1758,6 +1758,40 @@ Resolve every BLOCKER and MAJOR before enabling mutations in release builds.
 
 ### Task 6.1: search and semantic search
 
+> **DONE 2026-08-22 for the search half** (bridge **27**). Filesystem search
+> with streaming batches, cancellation and stale protection was already built
+> in phase 4; what this task added is the SEMANTIC side: `pane.semantic-search`
+> — which the shared catalogue has bound since K2 and the host answered
+> `NotHere` — now opens a query prompt and asks the index.
+>
+> The decisions worth carrying:
+>
+> - **Semantic results extend the search view rather than opening a second
+>   one.** A row gains `score` and the view gains `semantic`. Two lists of
+>   results drift apart, and the one you are looking at stops being the one
+>   you navigate — the same argument the process panel already made.
+> - **`None` is not `false`.** The index answers with paths and similarity, not
+>   kinds, so a semantic hit carries `kind: None` and activating it opens the
+>   containing directory with the cursor on it. Claiming "file" because it
+>   usually is would be inventing the answer.
+> - **`NotFound` here is not "no results"** — it is "that root has no rows in
+>   the index", and reading it as an empty search leaves the reader believing
+>   nothing resembles what they asked. It says what to run instead.
+> - **It is in `MUTAN`.** It writes nothing, but the query LEAVES the process
+>   towards the AI provider, exactly like the directory listing behind
+>   `pane.ai-rename`. That list is now "writes **or** leaves the process",
+>   because read-only removes both for the same reason.
+> - **Cancellation is an abort.** There is no Task to cancel — it is a direct
+>   call — so relaunching or closing the view aborts the future, which is what
+>   makes the SDK send `rpc.cancel` and stops an embed plus an index sweep at
+>   the other end.
+>
+> **Not built: triggering `index.build` / `index.embed`.** The shared catalogue
+> has no command for either and the TUI does not offer them; they are CLI
+> verbs. Their tasks DO appear on the board already, since they are
+> `TaskKind::Index`/`Embed`. Adding a command would be a shared-surface
+> decision, not a GUI one.
+
 - filesystem search streaming batches;
 - index query/build/embed tasks;
 - semantic-search limits and validation;

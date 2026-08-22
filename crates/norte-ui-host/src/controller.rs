@@ -378,6 +378,8 @@ enum Fondo {
     Volumenes(u64, Result<Vec<norte_proto::methods::Volume>, Error>),
     /// Un lote de resultados, con la época de la búsqueda que lo pidió.
     Resultados(u64, Box<norte_proto::methods::SearchHits>),
+    /// La respuesta de una consulta SEMÁNTICA: entera, de una vez.
+    Semanticos(u64, Result<Vec<norte_proto::methods::SemanticHit>, Error>),
     /// Lo que el modelo propuso, con la época de la petición que lo pidió.
     PlanIa(
         u64,
@@ -998,7 +1000,10 @@ struct Busqueda {
     /// Dónde se buscó.
     root: VPath,
     /// Lo encontrado, en el orden en que llegó.
-    hits: Vec<Entry>,
+    hits: Vec<Hallazgo>,
+    /// Esta búsqueda es SEMÁNTICA: se preguntó por significado contra el
+    /// índice, no por nombre contra el árbol.
+    semantica: bool,
     /// Dónde está el cursor.
     cursor: usize,
     /// Sigue corriendo.
@@ -1052,6 +1057,9 @@ enum Pendiente {
         /// Permanente (sin papelera): el diálogo lo AVISA.
         permanente: bool,
     },
+    /// Preguntar al índice por SIGNIFICADO. Lo que se teclea es la consulta,
+    /// y no lleva más operandos: el alcance es el índice entero.
+    ConsultaSemantica,
     /// Decidir sobre una op de agente. La op real la tiene el daemon ligada
     /// al id: aquí solo viaja el sí o el no.
     Decidir {
@@ -1187,6 +1195,20 @@ enum Objetivo {
     Terminada,
     /// Esta.
     Viva(u64),
+}
+
+/// Un hallazgo de una búsqueda, venga de donde venga.
+#[derive(Clone)]
+struct Hallazgo {
+    /// Dónde está.
+    path: VPath,
+    /// Qué es, si se sabe. `None` en un hallazgo SEMÁNTICO: el índice
+    /// devuelve rutas y parecidos, no clases, y decir «fichero» porque suele
+    /// serlo es inventarse la respuesta.
+    kind: Option<EntryKind>,
+    /// Cuánto se parece a lo que se preguntó, en `[-1, 1]`. `None` en una
+    /// búsqueda por nombre: ahí no hay grados, o casa o no casa.
+    score: Option<f64>,
 }
 
 /// Una task viva en el tablero.
@@ -1393,6 +1415,12 @@ struct Estado {
     /// Lo que el daemon dijo de sí mismo antes de irse: relevo o parada.
     /// `None` = no ha dicho nada, o ya volvió.
     aviso_de_daemon: Option<&'static str>,
+    /// La consulta semántica en vuelo, para poder ABORTARLA.
+    ///
+    /// Abortar no es solo dejar de escuchar: el SDK manda `rpc.cancel` al
+    /// soltar la llamada, y al otro lado hay un embed y un barrido del índice
+    /// que cuestan. Relanzar o cerrar la vista los para.
+    semantica_en_vuelo: Option<tokio::task::JoinHandle<()>>,
     /// Cuántas veces se ha (re)establecido la conexión con el daemon.
     ///
     /// Los ids de task los reparte el SCHEDULER de un proceso y empiezan en 1
@@ -1601,6 +1629,7 @@ impl Estado {
             conexion: ConnectionView::Connected,
             degradadas: std::collections::VecDeque::new(),
             epoca_conexion: 0,
+            semantica_en_vuelo: None,
             aviso_de_daemon: None,
             journal_rehusado: false,
         };
@@ -2697,6 +2726,7 @@ impl Estado {
         // La vista se abre YA, vacía y diciendo que corre: esperar al primer
         // lote es una ventana que no reacciona a una tecla que sí hizo algo.
         self.busqueda = Some(Busqueda {
+            semantica: false,
             epoca,
             // Todavía no se sabe: `Fondo::BusquedaViva` la trae. Cero jamás
             // es una Task real.
@@ -2736,7 +2766,11 @@ impl Estado {
             if b.hits.len() >= sitio {
                 break;
             }
-            b.hits.push(e.clone());
+            b.hits.push(Hallazgo {
+                path: e.path.clone(),
+                kind: Some(e.kind),
+                score: None,
+            });
         }
         let cambio = ViewChange::Search {
             search: self.vista_busqueda(),
@@ -2749,6 +2783,7 @@ impl Estado {
         let b = self.busqueda.as_ref()?;
         let (donde, root_hostil) = norte_frontend::path_display(&b.root);
         Some(crate::dto::SearchView {
+            semantic: b.semantica,
             query: clamp_display(norte_frontend::display_name(b.query.as_bytes()).0),
             root: clamp_display(donde),
             root_hostile: root_hostil,
@@ -2770,7 +2805,8 @@ impl Estado {
                         hostile: hostil,
                         parent: clamp_display(padre),
                         parent_hostile: padre_hostil,
-                        is_dir: e.kind == EntryKind::Dir,
+                        is_dir: e.kind == Some(EntryKind::Dir),
+                        score: e.score,
                     }
                 })
                 .collect(),
@@ -2823,6 +2859,12 @@ impl Estado {
                 if task.get() != 0 {
                     self.cancelar(task.get());
                 }
+                // Y si era una consulta SEMÁNTICA, se aborta: no tiene Task
+                // que cancelar —es una llamada directa— y lo que la para es
+                // soltarla, que hace que el SDK mande `rpc.cancel`.
+                if let Some(vuelo) = self.semantica_en_vuelo.take() {
+                    vuelo.abort();
+                }
             }
             "ArrowDown" | "down" => b.cursor = (b.cursor + 1).min(ultimo),
             "ArrowUp" | "up" => b.cursor = b.cursor.saturating_sub(1),
@@ -2868,7 +2910,10 @@ impl Estado {
         b.cursor = fila as usize;
         // Un directorio se abre por dentro; un fichero, en su carpeta con el
         // cursor encima.
-        let (destino, foco) = if hit.kind == EntryKind::Dir {
+        // Sin clase —un hallazgo semántico— se trata como fichero: se abre
+        // su carpeta con el cursor encima. Es lo conservador; entrar EN algo
+        // que resulta no ser un directorio no lleva a ninguna parte.
+        let (destino, foco) = if hit.kind == Some(EntryKind::Dir) {
             (hit.path.clone(), None)
         } else {
             match hit.path.parent() {
@@ -3992,6 +4037,7 @@ impl Estado {
             Fondo::Resultados(epoca, lote) => {
                 self.aplicar_resultados(epoca, &lote).into_iter().collect()
             }
+            Fondo::Semanticos(epoca, hits) => self.aplicar_semanticos(epoca, hits),
             Fondo::Adornos(datos) => self.aplicar_adornos(*datos).into_iter().collect(),
             Fondo::Imagen(token, leido) => self.aplicar_imagen(token, leido).into_iter().collect(),
             Fondo::BusquedaViva(epoca, id) => {
@@ -4517,7 +4563,11 @@ impl Estado {
                 Some(
                     Pendiente::CrearDirectorio { .. }
                     | Pendiente::Buscar { .. }
-                    | Pendiente::Renombrar { .. },
+                    | Pendiente::Renombrar { .. }
+                    // La consulta semántica es otro diálogo que pide que
+                    // teclees algo, y el corpus tiene UNA página que habla
+                    // de eso.
+                    | Pendiente::ConsultaSemantica,
                 ) => "dialog.mkdir",
                 None => "browse",
             };
@@ -5179,6 +5229,7 @@ impl Estado {
             | Efecto::Transferir { .. }
             | Efecto::Renombrar
             | Efecto::RenameIa
+            | Efecto::BuscarSemantica
                 if self.efectos == crate::commands::Efectos::SoloLectura =>
             {
                 Self::no_muta()
@@ -5194,7 +5245,8 @@ impl Estado {
             | Efecto::Borrar { .. }
             | Efecto::Transferir { .. }
             | Efecto::Renombrar
-            | Efecto::RenameIa => self.efecto_que_muta(efecto),
+            | Efecto::RenameIa
+            | Efecto::BuscarSemantica => self.efecto_que_muta(efecto),
         }
     }
 
@@ -5302,9 +5354,177 @@ impl Estado {
             Efecto::Transferir { mover } => self.pedir_transferencia(mover),
             Efecto::Renombrar => self.pedir_rename(),
             Efecto::RenameIa => self.pedir_instruccion_ia(),
+            Efecto::BuscarSemantica => self.pedir_consulta_semantica(),
             // Los demás no llegan aquí: el `match` de arriba los reparte.
             _ => Self::no_muta(),
         }
+    }
+
+    /// Abre el prompt de una consulta SEMÁNTICA.
+    ///
+    /// No lleva raíz, y eso es lo que dice el diálogo: el índice se construye
+    /// por raíces y no por lo que se esté mirando, así que acotar la búsqueda
+    /// al directorio del panel prometería un alcance que el índice puede no
+    /// tener. Se pregunta al índice ENTERO, igual que el TUI.
+    fn pedir_consulta_semantica(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: "modal-semantic-title".to_owned(),
+            destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
+            body: vec![crate::dto::DialogLine {
+                text: clamp_display(norte_i18n::t_in(self.lang, "modal-semantic-scope")),
+                hostile: false,
+            }],
+            overflow_note: String::new(),
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: Some(String::new()),
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista: vista.clone(),
+            input_crudo: String::new(),
+            reconocido: true,
+            al_confirmar: Some(Pendiente::ConsultaSemantica),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Lanza la consulta contra el índice. La respuesta vuelve al actor.
+    ///
+    /// Época nueva por consulta: la respuesta tarda —hay un embed de por
+    /// medio— y quien pregunta dos veces no puede acabar mirando los
+    /// resultados de la primera.
+    fn lanzar_semantica(
+        &mut self,
+        consulta: String,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        if consulta.trim().is_empty() {
+            // Una consulta vacía no sale del proceso: no significa nada, y
+            // lo que sale va a un proveedor externo.
+            self.status.message = Some(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "err-empty-pattern",
+            )));
+            let cambio = ViewChange::Status(self.status.clone());
+            return vec![self.parche(vec![cambio])];
+        }
+        self.epoca_busqueda += 1;
+        let epoca = self.epoca_busqueda;
+        self.busqueda = Some(Busqueda {
+            semantica: true,
+            epoca,
+            task: norte_proto::TaskId::new(0),
+            abandonada: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            query: consulta.clone(),
+            // El alcance es el índice entero: no hay raíz que enseñar, y la
+            // vista lo dice por `semantic`.
+            root: self.hueco().pane.dir().clone(),
+            hits: Vec::new(),
+            cursor: 0,
+            viva: true,
+            tope: norte_proto::methods::INDEX_SEMANTIC_MAX_K,
+        });
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        let handle = tokio::spawn(async move {
+            let hits = backend
+                .semantic_search(consulta, norte_frontend::SEMANTIC_K)
+                .await;
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::Semanticos(epoca, hits))))
+                .await;
+        });
+        // Relanzar ABORTA la anterior, y abortar la cancela de verdad: el SDK
+        // manda `rpc.cancel` al soltar la llamada. Dejarla correr sería pagar
+        // un embed y un barrido del índice por una respuesta que la época ya
+        // condena a descartarse.
+        if let Some(vieja) = self.semantica_en_vuelo.replace(handle) {
+            vieja.abort();
+        }
+        let cambio = ViewChange::Search {
+            search: self.vista_busqueda(),
+        };
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// La respuesta del índice: entra si sigue siendo la consulta de ahora.
+    fn aplicar_semanticos(
+        &mut self,
+        epoca: u64,
+        hits: Result<Vec<norte_proto::methods::SemanticHit>, Error>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        // La vista pudo cerrarse o relevarse mientras el embed corría.
+        if self.busqueda.as_ref().is_none_or(|b| b.epoca != epoca) {
+            return Vec::new();
+        }
+        let hits = match hits {
+            // El barrido del wire es el COMPARTIDO: acota la `k` y rehúsa un
+            // score no finito, que serializado como `null` envenenaría el
+            // orden.
+            Ok(h) => {
+                let Some(h) = norte_frontend::validate_semantic_hits(h) else {
+                    self.busqueda = None;
+                    let mut fuera = vec![self.parche(vec![ViewChange::Search { search: None }])];
+                    fuera.extend(self.decir("msg-semantic-bad-hits"));
+                    return fuera;
+                };
+                h
+            }
+            Err(e) => {
+                self.busqueda = None;
+                let clave = match e {
+                    // `NotFound` aquí NO es «no hay resultados»: es que ese
+                    // root no tiene filas en el índice. Leerlo como una
+                    // búsqueda vacía deja al lector creyendo que no hay nada
+                    // parecido a lo que preguntó.
+                    Error::NotFound => "msg-semantic-no-index",
+                    Error::Unsupported => "msg-semantic-unsupported",
+                    _ => norte_frontend::error::error_key(&e),
+                };
+                let mut fuera = vec![self.parche(vec![ViewChange::Search { search: None }])];
+                fuera.extend(self.decir(clave));
+                return fuera;
+            }
+        };
+        self.semantica_en_vuelo = None;
+        if let Some(b) = self.busqueda.as_mut() {
+            b.hits = hits
+                .into_iter()
+                .map(|h| Hallazgo {
+                    path: h.path,
+                    // El índice devuelve rutas y parecidos, no clases.
+                    kind: None,
+                    score: Some(h.score),
+                })
+                .collect();
+            b.viva = false;
+        }
+        let cambio = ViewChange::Search {
+            search: self.vista_busqueda(),
+        };
+        vec![self.parche(vec![cambio])]
     }
 
     /// Abre el prompt de la instrucción para un plan de renombrado.
@@ -6509,6 +6729,10 @@ impl Estado {
                 let instruccion = dialogo.input_crudo.clone();
                 salidas.extend(self.lanzar_plan_ia(dir, instruccion, backend, buzon));
             }
+            Some(Pendiente::ConsultaSemantica) => {
+                let consulta = dialogo.input_crudo.clone();
+                salidas.extend(self.lanzar_semantica(consulta, backend, buzon));
+            }
             Some(Pendiente::Renombrar { from, siembra }) => {
                 let (motivo, partes) =
                     self.confirmar_rename(&from, &siembra, &dialogo.input_crudo, backend, buzon);
@@ -6783,6 +7007,8 @@ impl Estado {
                         // modelo, que no es algo que deba hacer una ventana
                         // que se declara de solo lectura.
                         | Pendiente::InstruccionIa { .. }
+                        // Tampoco: la consulta sale del proceso.
+                        | Pendiente::ConsultaSemantica
                 )
             });
         if !muta {

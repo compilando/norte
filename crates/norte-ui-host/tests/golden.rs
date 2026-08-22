@@ -701,6 +701,7 @@ fn tema_de_referencia() -> norte_ui_host::dto::ThemeView {
 fn busqueda_de_referencia() -> norte_ui_host::dto::SearchView {
     use norte_ui_host::dto::{SearchRowView, SearchView};
     SearchView {
+        semantic: false,
         query: "*.rs".to_owned(),
         root: "⟨file⟩/home/oscar/work".to_owned(),
         root_hostile: false,
@@ -711,6 +712,7 @@ fn busqueda_de_referencia() -> norte_ui_host::dto::SearchView {
                 parent: "⟨file⟩/home/oscar/work/src".to_owned(),
                 parent_hostile: false,
                 is_dir: false,
+            score: None,
             },
             SearchRowView {
                 name: "caf\u{fffd}.rs".to_owned(),
@@ -718,6 +720,7 @@ fn busqueda_de_referencia() -> norte_ui_host::dto::SearchView {
                 parent: "⟨file⟩/home/oscar/work".to_owned(),
                 parent_hostile: false,
                 is_dir: false,
+            score: None,
             },
         ],
         cursor: Some(0),

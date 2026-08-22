@@ -2026,6 +2026,7 @@ describe("la búsqueda", () => {
   function conBusqueda(running: boolean): ViewSnapshot {
     const v = vista({});
     v.search = {
+      semantic: false,
       query: "*.rs",
       root: "⟨file⟩/home/oscar/work",
       root_hostile: false,
@@ -2036,6 +2037,7 @@ describe("la búsqueda", () => {
           parent: "⟨file⟩/home/oscar/work/src",
           parent_hostile: false,
           is_dir: false,
+          score: null,
         },
         {
           name: "caf�.rs",
@@ -2043,6 +2045,7 @@ describe("la búsqueda", () => {
           parent: "⟨file⟩/home/oscar/work",
           parent_hostile: false,
           is_dir: false,
+          score: null,
         },
       ],
       cursor: 0,
@@ -2268,5 +2271,40 @@ describe("la revisión de un plan de renombrado", () => {
     v.ai_rename = null;
     screen.paint(v);
     expect(document.querySelector(".ai-rename")).toBeNull();
+  });
+});
+
+describe("la búsqueda por significado", () => {
+  it("se titula distinto, dice su alcance y pinta el parecido", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.search = {
+      semantic: true,
+      query: "facturas del año pasado",
+      root: "",
+      root_hostile: false,
+      rows: [
+        {
+          name: "a.md",
+          hostile: false,
+          parent: "⟨mem⟩/casa/docs",
+          parent_hostile: false,
+          is_dir: false,
+          score: 0.9123,
+        },
+      ],
+      cursor: 0,
+      status: "1 resultado",
+      running: false,
+    };
+    screen.paint(v);
+
+    const caja = document.querySelector(".search") as HTMLElement;
+    expect(caja.querySelector("h1")?.textContent ?? "").toContain(
+      "facturas del año pasado",
+    );
+    // El parecido se ve, con dos decimales: sin él, el orden parece
+    // arbitrario.
+    expect(caja.querySelector(".search-score")?.textContent).toBe("0.91");
   });
 });

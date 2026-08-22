@@ -858,7 +858,7 @@ pub struct LayoutRowView {
 /// Los resultados llegan en LOTES mientras la búsqueda corre: la vista se
 /// puede recorrer y usar antes de que termine, que es la mitad del valor de
 /// buscar en un árbol grande.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchView {
     /// Lo que se buscó, ya saneado.
     pub query: String,
@@ -870,6 +870,14 @@ pub struct SearchView {
     pub rows: Vec<SearchRowView>,
     /// Cuál está elegida, si hay alguna.
     pub cursor: Option<u64>,
+    /// Se preguntó por SIGNIFICADO contra el índice, no por nombre contra el
+    /// árbol.
+    ///
+    /// El renderer lo necesita para dos cosas: titular la vista y decidir si
+    /// pinta la columna de parecido. Y para no prometer lo que no hay: una
+    /// búsqueda semántica no recorre un subárbol, así que su alcance es el
+    /// índice entero y no [`Self::root`].
+    pub semantic: bool,
     /// En qué estado está, YA dicho: cuántos van y si sigue corriendo, si
     /// terminó, o si paró en su tope.
     ///
@@ -887,7 +895,7 @@ pub struct SearchView {
 }
 
 /// Un resultado.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchRowView {
     /// El nombre del fichero, ya saneado.
     pub name: String,
@@ -898,7 +906,18 @@ pub struct SearchRowView {
     /// El directorio de arriba DIFIERE del real.
     pub parent_hostile: bool,
     /// Es un directorio.
+    ///
+    /// `false` también cuando NO se sabe: un hallazgo semántico trae ruta y
+    /// parecido, no clase, y activarlo abre la carpeta con el cursor encima
+    /// —que es lo que hay que hacer con un fichero— en vez de intentar
+    /// entrar en algo que puede no ser un directorio.
     pub is_dir: bool,
+    /// Cuánto se parece a lo que se preguntó, en `[-1, 1]`, mayor = más.
+    ///
+    /// `None` en una búsqueda por NOMBRE: ahí no hay grados, o el patrón casa
+    /// o no casa, y pintar un número inventado convertiría un orden de
+    /// llegada en un ranking.
+    pub score: Option<f64>,
 }
 
 /// Lo que el visor enseña.

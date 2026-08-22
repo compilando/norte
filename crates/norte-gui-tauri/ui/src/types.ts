@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 26;
+export const BRIDGE_VERSION = 27;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -547,9 +547,15 @@ export interface SearchRowView {
   parent: string;
   parent_hostile: boolean;
   is_dir: boolean;
+  /** Cuánto se parece a lo que se preguntó, en `[-1, 1]`. `null` en una
+   *  búsqueda por nombre: ahí no hay grados. */
+  score: number | null;
 }
 
 export interface SearchView {
+  /** Se preguntó por SIGNIFICADO contra el índice, no por nombre contra el
+   *  árbol: el alcance es el índice entero y no `root`. */
+  semantic: boolean;
   query: string;
   root: string;
   root_hostile: boolean;

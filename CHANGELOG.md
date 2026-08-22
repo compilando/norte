@@ -180,6 +180,23 @@ independently through `PROTOCOL_VERSION`.
   ever counted by the report. A clean undo says so on the board and interrupts
   nobody.
 
+### Added
+
+- **The window searches by MEANING** (`pane.semantic-search`, from the command
+  palette — no preset binds it, in either frontend). The shared catalogue has
+  had the command since the keymap work and the host answered "not here"; now
+  it asks the index and shows what came back, best first, with the similarity
+  in its own cell — without it a 0.91 and a 0.42 read as equally good and the
+  order looks arbitrary. Results extend the existing search view rather than
+  opening a second list: two lists drift, and the one you are looking at stops
+  being the one you navigate. A hit carries no KIND, because the index answers
+  with paths and scores and claiming "file" because it usually is would be
+  inventing the answer — so activating one opens its directory with the cursor
+  on it. Nothing indexed yet is its own answer ("run `norte index build`"), not
+  an empty result set. The command is treated as read-only-removable for the
+  same reason as the AI rename: it writes nothing, but the query leaves the
+  process. Bridge **27**.
+
 ### Changed
 
 - **Bridge 26.** Three shapes moved, all for the same reason: what is masked

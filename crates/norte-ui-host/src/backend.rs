@@ -351,6 +351,21 @@ pub trait HostBackend: Send + Sync + 'static {
     /// conexión de humano — un agente bajo scope no la necesita.
     fn volumes(&self) -> BoxFuture<'static, Result<Vec<methods::Volume>, Error>>;
 
+    /// Búsqueda SEMÁNTICA contra el índice (`index.search_semantic`).
+    ///
+    /// Respuesta directa y no una Task: el core embebe la consulta y barre el
+    /// índice, y lo que vuelve es la lista entera, mejor primero.
+    ///
+    /// **Sale del proceso**: la consulta va al proveedor de IA configurado.
+    /// El daemon solo la atiende a una conexión de humano, y exige que el
+    /// índice esté construido y embebido — sin filas contesta `NotFound`, que
+    /// es una respuesta que hay que saber leer y no un fallo cualquiera.
+    fn semantic_search(
+        &self,
+        query: String,
+        k: u32,
+    ) -> BoxFuture<'static, Result<Vec<methods::SemanticHit>, Error>>;
+
     /// Lanza una búsqueda por el subárbol y devuelve su Task Y el canal por
     /// el que llegan los LOTES de resultados.
     ///
@@ -508,6 +523,19 @@ impl HostBackend for norte_client::RemoteBackend {
         let backend = self.clone();
         Box::pin(async move { backend.plugin_decorate(&paths).await })
     }
+
+    fn semantic_search(
+        &self,
+        query: String,
+        k: u32,
+    ) -> BoxFuture<'static, Result<Vec<methods::SemanticHit>, Error>> {
+        let backend = self.clone();
+        // Sin `root`: el índice entero, igual que el TUI. Acotar por el
+        // directorio del panel prometería un alcance que el índice puede no
+        // tener — se construye por raíces, no por lo que se está mirando.
+        Box::pin(async move { backend.index_search_semantic(None, &query, k).await })
+    }
+
 
     fn plugin_column_values(
         &self,

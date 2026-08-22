@@ -11040,3 +11040,209 @@ async fn un_kind_desconocido_con_nombre_alterado_va_marcado() {
     });
     assert!(marcado, "el kind alterado se dice: {:?}", snap.slots);
 }
+
+// ---------------------------------------------------------------------------
+// Búsqueda semántica (tarea 6.1).
+// ---------------------------------------------------------------------------
+
+/// La ventana pregunta al índice por SIGNIFICADO, y lo que vuelve se navega
+/// como cualquier otro hallazgo.
+///
+/// El catálogo ataba `pane.semantic-search` desde el keymap y el host
+/// contestaba `NotHere`: la capacidad existía en el daemon y en el TUI, y
+/// aquí no había por dónde pedirla.
+#[tokio::test]
+async fn la_ventana_busca_por_significado() {
+    let falso = arbol_como_falso();
+    *falso.semanticos.lock().expect("semánticos") = Some(vec![
+        norte_proto::methods::SemanticHit {
+            path: VPath::parse("mem:///casa/docs/a.md").expect("vpath"),
+            score: 0.91,
+        },
+        norte_proto::methods::SemanticHit {
+            path: VPath::parse("mem:///casa/notas.txt").expect("vpath"),
+            score: 0.42,
+        },
+    ]);
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "semant").await;
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: "facturas del año pasado".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    // La vista se abre YA, vacía y corriendo; los hallazgos llegan después.
+    let mut vista = siguiente_busqueda(&mut sub).await.expect("la búsqueda abre");
+    for _ in 0..20 {
+        if !vista.rows.is_empty() {
+            break;
+        }
+        vista = siguiente_busqueda(&mut sub).await.expect("sigue abierta");
+    }
+    assert!(vista.semantic, "la vista dice que esto es semántico");
+    assert_eq!(vista.rows.len(), 2);
+    assert_eq!(vista.rows[0].name, "a.md");
+    // El parecido se ENSEÑA: sin él, dos hallazgos con 0,91 y 0,42 se leen
+    // igual de buenos y el orden parece arbitrario.
+    assert!(vista.rows[0].score.is_some_and(|s| s > 0.9));
+    let pedidas = backend.semanticas_pedidas.lock().expect("pedidas").clone();
+    assert_eq!(pedidas.len(), 1);
+    assert_eq!(pedidas[0].0, "facturas del año pasado");
+    assert!(
+        pedidas[0].1 <= norte_proto::methods::INDEX_SEMANTIC_MAX_K,
+        "la k va acotada a lo que el daemon acepta: {}",
+        pedidas[0].1
+    );
+}
+
+/// Sin índice, se DICE qué falta y cómo se arregla.
+///
+/// `NotFound` aquí no es «no hay resultados»: es «este root no tiene filas en
+/// el índice», y confundirlo con una búsqueda vacía deja al lector creyendo
+/// que no hay nada parecido a lo que buscó.
+#[tokio::test]
+async fn una_busqueda_semantica_sin_indice_dice_que_falta_construirlo() {
+    let falso = arbol_como_falso();
+    // Sin `semanticos`: el falso contesta `NotFound`.
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "semant").await;
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: "lo que sea".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    for _ in 0..40 {
+        if siguiente_aviso(&mut sub).await == "msg-semantic-no-index" {
+            return;
+        }
+    }
+    panic!("nadie dijo que falta construir el índice");
+}
+
+/// Una consulta VACÍA no sale del proceso.
+#[tokio::test]
+async fn una_consulta_semantica_vacia_no_se_manda() {
+    let falso = arbol_como_falso();
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "semant").await;
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(
+        backend
+            .semanticas_pedidas
+            .lock()
+            .expect("pedidas")
+            .is_empty()
+    );
+}
+
+/// En SOLO LECTURA no se pregunta: la consulta sale del proceso hacia el
+/// proveedor de IA, igual que el plan de renombrado.
+#[tokio::test]
+async fn en_solo_lectura_no_hay_busqueda_semantica() {
+    let falso = arbol_como_falso();
+    let backend = Arc::new(falso);
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::backend::HostBackend>,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset_con(
+            "orthodox",
+            norte_ui_host::commands::Efectos::SoloLectura,
+        )
+        .expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::SoloLectura,
+    })
+    .await
+    .expect("arranca");
+
+    let mut sub = h.subscribe();
+    h.dispatch(tecla_mod("p", true, false))
+        .await
+        .expect("host vivo");
+    let paleta = siguiente_paleta(&mut sub).await.expect("la paleta abre");
+    // La paleta no lleva la clave de despacho —se elige por índice— así que
+    // se busca por la etiqueta, que es lo que el lector ve.
+    let etiqueta = norte_frontend::whichkey::command_label(
+        "pane.semantic-search",
+        norte_i18n::Lang::Es,
+    );
+    assert!(
+        !paleta.rows.iter().any(|r| r.text == etiqueta),
+        "una ventana sin efectos no ofrece preguntarle a un modelo: {:?}",
+        paleta.rows.iter().map(|r| r.text.clone()).collect::<Vec<_>>()
+    );
+    assert!(
+        backend
+            .semanticas_pedidas
+            .lock()
+            .expect("pedidas")
+            .is_empty()
+    );
+}
+
+
+/// Ejecuta un comando por la PALETA, que es por donde se llega a lo que
+/// ningún preset ata (la búsqueda semántica es uno).
+async fn ejecutar_por_paleta(
+    h: &UiHost,
+    sub: &mut norte_ui_host::controller::UiSubscription,
+    filtro: &str,
+) {
+    h.dispatch(tecla_mod("p", true, false))
+        .await
+        .expect("host vivo");
+    let _ = siguiente_paleta(sub).await;
+    for c in filtro.chars() {
+        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+    }
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let filtrada = siguiente_foto(sub)
+        .await
+        .palette
+        .expect("la paleta sigue abierta");
+    assert!(
+        !filtrada.rows.is_empty(),
+        "el filtro `{filtro}` no deja nada: ¿el host no lo implementa?"
+    );
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+}

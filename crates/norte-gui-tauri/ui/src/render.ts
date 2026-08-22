@@ -1056,20 +1056,32 @@ export class Screen {
     caja.className = "search";
     caja.setAttribute("role", "dialog");
     caja.setAttribute("aria-modal", "true");
-    caja.setAttribute("aria-label", this.t("search-title"));
+    // Una búsqueda por significado no recorre un subárbol: su alcance es el
+    // índice entero, y titularla como la otra prometería lo que no hay.
+    const rotulo = search.semantic
+      ? this.t("search-title-semantic")
+      : this.t("search-title");
+    caja.setAttribute("aria-label", rotulo);
 
     const titulo = document.createElement("h1");
-    titulo.textContent = `${this.t("search-title")} · ${search.query}`;
+    titulo.textContent = `${rotulo} · ${search.query}`;
     caja.append(titulo);
 
-    const donde = document.createElement("p");
-    donde.className = "search-root";
-    donde.dataset["hostile"] = String(search.root_hostile);
-    donde.textContent = search.root;
-    if (search.root_hostile) {
-      donde.append(badge(this.t("hostile-name")));
+    if (search.semantic) {
+      const alcance = document.createElement("p");
+      alcance.className = "search-root";
+      alcance.textContent = this.t("modal-semantic-scope");
+      caja.append(alcance);
+    } else {
+      const donde = document.createElement("p");
+      donde.className = "search-root";
+      donde.dataset["hostile"] = String(search.root_hostile);
+      donde.textContent = search.root;
+      if (search.root_hostile) {
+        donde.append(badge(this.t("hostile-name")));
+      }
+      caja.append(donde);
     }
-    caja.append(donde);
 
     const estado = document.createElement("p");
     estado.className = "search-status";
@@ -1106,6 +1118,15 @@ export class Screen {
       padre.dataset["hostile"] = String(r.parent_hostile);
       padre.textContent = r.parent;
       fila.append(nombre, padre);
+      if (r.score !== null) {
+        // El parecido, en su propia celda: sin él, un 0,91 y un 0,42 se leen
+        // igual de buenos y el orden parece arbitrario. Dos decimales, que es
+        // lo que distingue sin fingir precisión.
+        const parecido = document.createElement("span");
+        parecido.className = "search-score";
+        parecido.textContent = r.score.toFixed(2);
+        fila.append(parecido);
+      }
       lista.append(fila);
     }
     if (search.cursor !== null) {

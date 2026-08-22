@@ -144,6 +144,11 @@ pub struct Falso {
     pub informe: std::sync::Mutex<Option<norte_proto::methods::FsRenameBatchReportResult>>,
     /// Los ids de task cuyo informe se pidió, en orden.
     pub informes_pedidos: std::sync::Mutex<Vec<u64>>,
+    /// Lo que contesta `index.search_semantic`. `None` = `NotFound` (no hay
+    /// índice), que es el caso que hay que saber leer.
+    pub semanticos: std::sync::Mutex<Option<Vec<norte_proto::methods::SemanticHit>>>,
+    /// Las consultas semánticas que se pidieron, con su `k`.
+    pub semanticas_pedidas: std::sync::Mutex<Vec<(String, u32)>>,
     /// El informe que contesta `policy.undo_report`. `None` = `Unsupported`.
     pub informe_undo: std::sync::Mutex<Option<norte_proto::methods::PolicyUndoReportResult>>,
     /// Los ids de task cuyo informe de undo se pidió, en orden.
@@ -638,6 +643,19 @@ impl HostBackend for Falso {
 
     fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>> {
         self.ajenas.lock().expect("ajenas").take()
+    }
+
+    fn semantic_search(
+        &self,
+        query: String,
+        k: u32,
+    ) -> BoxFuture<'static, Result<Vec<norte_proto::methods::SemanticHit>, Error>> {
+        self.semanticas_pedidas
+            .lock()
+            .expect("semánticas")
+            .push((query, k));
+        let hits = self.semanticos.lock().expect("semánticos").clone();
+        Box::pin(async move { hits.ok_or(Error::NotFound) })
     }
 
     fn take_degraded(

@@ -487,18 +487,21 @@
           "is_dir": false,
           "name": "main.rs",
           "parent": "⟨file⟩/home/oscar/work/src",
-          "parent_hostile": false
+          "parent_hostile": false,
+          "score": null
         },
         {
           "hostile": true,
           "is_dir": false,
           "name": "caf�.rs",
           "parent": "⟨file⟩/home/oscar/work",
-          "parent_hostile": false
+          "parent_hostile": false,
+          "score": null
         }
       ],
       "running": true,
-      "status": "búsqueda: 2 hallazgos (buscando…)"
+      "status": "búsqueda: 2 hallazgos (buscando…)",
+      "semantic": false
     }
   },
   "settings": {

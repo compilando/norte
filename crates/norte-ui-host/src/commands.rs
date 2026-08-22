@@ -41,7 +41,13 @@ pub fn implementados(efectos: Efectos) -> Vec<&'static str> {
     }
 }
 
-/// Los comandos de [`IMPLEMENTADOS`] que ESCRIBEN.
+/// Los comandos de [`IMPLEMENTADOS`] que ESCRIBEN **o que sacan datos del
+/// proceso**.
+///
+/// Las dos cosas en la misma lista porque solo lectura las quita a las dos, y
+/// por el mismo motivo: una ventana que se declara «solo mirar» tampoco
+/// manda el contenido de un directorio ni una consulta a un proveedor de IA.
+/// La alternativa —dos listas— sería un sitio donde olvidarse de una.
 pub const MUTAN: &[&str] = &[
     "pane.mkdir",
     "pane.delete",
@@ -50,6 +56,7 @@ pub const MUTAN: &[&str] = &[
     "pane.move",
     "pane.rename",
     "pane.ai-rename",
+    "pane.semantic-search",
 ];
 
 /// Los comandos que el host ejecuta HOY.
@@ -95,6 +102,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.move",
     "pane.rename",
     "pane.ai-rename",
+    "pane.semantic-search",
     "task.cancel",
 ];
 
@@ -246,6 +254,13 @@ pub enum Efecto {
     Ver,
     /// Abre el buscador incremental del listado.
     BuscarRapido,
+    /// Pide una búsqueda SEMÁNTICA contra el índice: abre el prompt de la
+    /// consulta.
+    ///
+    /// Está en [`MUTAN`] y no escribe un byte: la consulta SALE del proceso
+    /// hacia el proveedor de IA configurado, igual que el contenido de un
+    /// directorio en [`Efecto::RenameIa`].
+    BuscarSemantica,
     /// Abre el prompt de buscar por el subárbol.
     Buscar,
     /// Abre el prompt de crear directorio.
@@ -341,6 +356,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.move" => Efecto::Transferir { mover: true },
         "pane.rename" => Efecto::Renombrar,
         "pane.ai-rename" => Efecto::RenameIa,
+        "pane.semantic-search" => Efecto::BuscarSemantica,
         "task.cancel" => Efecto::CancelarTask,
         _ => return None,
     })

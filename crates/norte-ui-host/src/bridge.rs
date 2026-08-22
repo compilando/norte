@@ -91,7 +91,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 26;
+pub const BRIDGE_VERSION: u32 = 27;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///
