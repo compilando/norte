@@ -33,6 +33,7 @@ import type {
   HelpView,
   PaletteView,
   ExtensionsView,
+  TabGroupView,
   AgentsView,
   ExtensionCommandView,
   ExtensionOutputView,
@@ -77,6 +78,8 @@ type Send = (action: UiAction) => void;
 
 interface SlotDom {
   root: HTMLElement;
+  /** La barra de pestañas, vacía cuando el hueco no está en un grupo. */
+  tabs: HTMLElement;
   title: HTMLElement;
   header: HTMLElement;
   scroller: HTMLElement;
@@ -183,6 +186,10 @@ export class Screen {
       }
       dom.root.dataset["role"] = p.role ?? "";
       dom.root.setAttribute("aria-current", p.role === "active" ? "true" : "false");
+      this.paintTabs(
+        dom,
+        view.layout.tabs.find((g) => g.slot_id === p.slot_id),
+      );
       this.paintSlot(dom, slot, view, cell);
     }
     this.paintPalette(view.palette);
@@ -2185,6 +2192,11 @@ export class Screen {
       // entre el orden de `placements` y el del DOM.
       el.dataset["slotId"] = String(p.slot_id);
       place(el, p, cell);
+      // La barra de PESTAÑAS va encima del título: es lo que dice qué hay
+      // detrás de lo que se está pintando.
+      const tabs = document.createElement("div");
+      tabs.className = "slot-tabs";
+      tabs.dataset["open"] = "false";
       const title = document.createElement("header");
       title.className = "slot-title";
       const header = document.createElement("div");
@@ -2195,10 +2207,11 @@ export class Screen {
       const canvas = document.createElement("div");
       canvas.className = "canvas";
       scroller.append(canvas);
-      el.append(title, header, scroller);
+      el.append(tabs, title, header, scroller);
       this.root.append(el);
       const dom: SlotDom = {
         root: el,
+        tabs,
         title,
         header,
         scroller,
@@ -2333,6 +2346,48 @@ export class Screen {
       this.send({ action: "set_visible_range", slot_id: slotId, first, count });
     });
     this.pendingRange.set(slotId, handle);
+  }
+
+  /**
+   * La barra de PESTAÑAS de un hueco, si está en un grupo.
+   *
+   * Se pinta aunque solo se vea el contenido de una: lo que hay detrás sigue
+   * abierto, y una ventana que no lo dice esconde trabajo. El rótulo llega ya
+   * enmascarado del host —un directorio hostil dentro de una pestaña es tan
+   * hostil como dentro de un listado— con su bandera al lado.
+   */
+  private paintTabs(dom: SlotDom, grupo: TabGroupView | undefined): void {
+    if (grupo === undefined) {
+      if (dom.tabs.dataset["open"] === "true") {
+        dom.tabs.replaceChildren();
+        dom.tabs.dataset["open"] = "false";
+      }
+      return;
+    }
+    dom.tabs.dataset["open"] = "true";
+    const lista = document.createElement("ul");
+    lista.className = "tabs";
+    lista.setAttribute("role", "tablist");
+    for (const [i, t] of grupo.tabs.entries()) {
+      const li = document.createElement("li");
+      li.className = "tab";
+      li.setAttribute("role", "tab");
+      li.setAttribute("aria-selected", String(i === grupo.active));
+      li.dataset["active"] = String(i === grupo.active);
+      li.dataset["hostile"] = String(t.title_hostile);
+      li.textContent = t.title;
+      if (t.title_hostile) {
+        li.append(badge(this.t("hostile-name")));
+      }
+      li.addEventListener("click", () => {
+        // Por SLOT y no por posición: la lista puede haberse movido entre el
+        // pintado y el clic, y el host rehúsa un hueco que ya no está en
+        // ningún grupo en vez de acertar por casualidad.
+        this.send({ action: "select_tab", slot_id: t.slot_id });
+      });
+      lista.append(li);
+    }
+    dom.tabs.replaceChildren(lista);
   }
 
   private paintSlot(

@@ -235,6 +235,12 @@ pub enum UiAction {
         /// Fila, contando TODAS las de todas las secciones en orden.
         row: u32,
     },
+    /// Pone delante la pestaña de este hueco (un click).
+    SelectTab {
+        /// El hueco que hay dentro de la pestaña elegida.
+        slot_id: u32,
+    },
+
     /// Elige una sesión de agente por posición (un click).
     AgentSelectRow {
         /// Fila dentro de la lista pintada.

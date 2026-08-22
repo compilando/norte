@@ -144,6 +144,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::SettingsSelectRow { .. } => "settings_select_row",
         UiAction::ExtensionSelectRow { .. } => "extension_select_row",
         UiAction::AgentSelectRow { .. } => "agent_select_row",
+        UiAction::SelectTab { .. } => "select_tab",
         UiAction::PickerSelectRow { .. } => "picker_select_row",
         UiAction::PlaceActivateRow { .. } => "place_activate_row",
         UiAction::LayoutActivateRow { .. } => "layout_activate_row",
@@ -215,6 +216,7 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
             "extension_select_row",
             UiAction::ExtensionSelectRow { row: 1 },
         ),
+        ("select_tab", UiAction::SelectTab { slot_id: 3 }),
         (
             "agent_select_row",
             UiAction::AgentSelectRow {
@@ -460,6 +462,25 @@ fn task_de_referencia() -> TaskView {
 fn disposicion_de_referencia() -> LayoutView {
     LayoutView {
         cells: (120, 40),
+        // Un grupo de PESTAÑAS, con una cuyo nombre se pinta distinto de lo
+        // que es: un directorio hostil dentro de una pestaña es tan hostil
+        // como dentro de un listado.
+        tabs: vec![norte_ui_host::dto::TabGroupView {
+            slot_id: 1,
+            tabs: vec![
+                norte_ui_host::dto::TabView {
+                    slot_id: 1,
+                    title: "trabajo".to_owned(),
+                    title_hostile: false,
+                },
+                norte_ui_host::dto::TabView {
+                    slot_id: 9,
+                    title: "caf\u{fffd}".to_owned(),
+                    title_hostile: true,
+                },
+            ],
+            active: 0,
+        }],
         placements: vec![
             SlotPlacement {
                 slot_id: 1,

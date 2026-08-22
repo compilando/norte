@@ -2456,6 +2456,7 @@ impl Estado {
             UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row, backend, buzon),
             UiAction::SettingsSelectRow { row } => self.elegir_ajuste(*row),
             UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
+            UiAction::SelectTab { slot_id } => self.elegir_pestana(*slot_id, backend, buzon),
             UiAction::AgentSelectRow { row, generation } => self.elegir_agente(*row, *generation),
             UiAction::PickerSelectRow { row, generation } => {
                 self.elegir_fila_del_selector(*row, *generation)
@@ -4099,8 +4100,172 @@ impl Estado {
             Efecto::Partir { vertical } => self.partir(vertical, backend, buzon),
             Efecto::CerrarHueco => self.cerrar_hueco(backend, buzon),
             Efecto::AlternarHueco { kind } => self.alternar_hueco(kind, backend, buzon),
+            Efecto::PestanaNueva => self.pestana_nueva(backend, buzon),
+            Efecto::CerrarPestana => self.cerrar_pestana(backend, buzon),
+            Efecto::CiclarPestana { atras } => self.ciclar_pestana(atras, backend, buzon),
+            Efecto::MoverPestana { derecha } => self.mover_pestana(derecha, backend, buzon),
+            Efecto::IrAPestana { n } => self.ir_a_pestana(n, backend, buzon),
             _ => self.abrir_disposiciones(),
         }
+    }
+
+    /// Abre otra PESTAÑA junto al hueco enfocado.
+    ///
+    /// El listado nuevo arranca en el mismo directorio y se queda el foco,
+    /// por lo mismo que al partir. `add_tab` envuelve el hueco en un grupo si
+    /// todavía no lo estaba: no hay que decidirlo aquí.
+    fn pestana_nueva(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        use norte_frontend::layout::KindId;
+        let id = self.nuevo_slot();
+        let nuevo = self.arbol.add_tab(
+            SlotId(self.enfocado()),
+            &Node::slot(SlotId(id), KindId::browser()),
+        );
+        self.aplicar_disposicion_con(nuevo, Some(SlotId(id)), backend, buzon)
+    }
+
+    /// Cierra la pestaña enfocada.
+    ///
+    /// Sin grupo no hace nada y lo DICE: cerrar el hueco entero es otro
+    /// comando, y hacerlo aquí «porque no había pestañas» sería cerrar lo que
+    /// nadie pidió cerrar.
+    fn cerrar_pestana(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(nuevo) = self.arbol.close_tab(SlotId(self.enfocado())) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-tabs".to_owned(),
+                },
+                self.decir("host-no-tabs"),
+            );
+        };
+        self.aplicar_disposicion(nuevo, backend, buzon)
+    }
+
+    /// Pasa a la pestaña siguiente —o anterior—, CICLANDO.
+    fn ciclar_pestana(
+        &mut self,
+        atras: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let foco = SlotId(self.enfocado());
+        let Some((tabs, activo)) = self.arbol.tabs_of(foco) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-tabs".to_owned(),
+                },
+                self.decir("host-no-tabs"),
+            );
+        };
+        if tabs.is_empty() {
+            return (self.aplicada(), Vec::new());
+        }
+        let n = isize::try_from(tabs.len()).unwrap_or(1);
+        let i = isize::try_from(activo).unwrap_or(0);
+        let delta = if atras { -1 } else { 1 };
+        let destino = usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0);
+        self.activar_pestana(foco, destino, &tabs, backend, buzon)
+    }
+
+    /// Va a la pestaña `n` (base 1).
+    fn ir_a_pestana(
+        &mut self,
+        n: usize,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let foco = SlotId(self.enfocado());
+        let Some((tabs, _)) = self.arbol.tabs_of(foco) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-tabs".to_owned(),
+                },
+                self.decir("host-no-tabs"),
+            );
+        };
+        let i = n.saturating_sub(1);
+        if i >= tabs.len() {
+            // Pedir la séptima cuando hay tres no va a la última: no es lo
+            // que se pidió, y adivinar aquí es cambiar de pestaña sola.
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-such-tab".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        self.activar_pestana(foco, i, &tabs, backend, buzon)
+    }
+
+    /// Pone delante la pestaña `destino` del grupo de `foco`.
+    ///
+    /// Y le da el FOCO: la pestaña que está delante es con la que se trabaja,
+    /// y dejarlo en la que se acaba de esconder deja las teclas apuntando a
+    /// un listado que no se ve.
+    fn activar_pestana(
+        &mut self,
+        foco: SlotId,
+        destino: usize,
+        tabs: &[SlotId],
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let nuevo = self.arbol.set_active_for(foco, destino);
+        let activo = tabs.get(destino).copied();
+        self.aplicar_disposicion_con(nuevo, activo, backend, buzon)
+    }
+
+    /// Mueve la pestaña enfocada dentro de su grupo.
+    ///
+    /// NO da la vuelta: una pestaña que salta del final al principio por una
+    /// pulsación de más es justo lo que nadie quería (la regla es del modelo
+    /// compartido, y aquí solo se usa).
+    fn mover_pestana(
+        &mut self,
+        derecha: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let foco = SlotId(self.enfocado());
+        if self.arbol.tabs_of(foco).is_none() {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-tabs".to_owned(),
+                },
+                self.decir("host-no-tabs"),
+            );
+        }
+        let nuevo = self.arbol.move_tab(foco, if derecha { 1 } else { -1 });
+        self.aplicar_disposicion_con(nuevo, Some(foco), backend, buzon)
+    }
+
+    /// Un clic en una pestaña: la pone delante.
+    ///
+    /// El hueco viene del propio grupo, así que un clic contra un árbol que
+    /// ya cambió no acierta por casualidad: si ese id ya no está en un grupo,
+    /// se rehúsa.
+    fn elegir_pestana(
+        &mut self,
+        slot_id: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let quien = SlotId(slot_id);
+        let Some((tabs, _)) = self.arbol.tabs_of(quien) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        let Some(i) = tabs.iter().position(|t| *t == quien) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        self.activar_pestana(quien, i, &tabs, backend, buzon)
     }
 
     /// El id de hueco más alto del árbol, más uno.
@@ -7061,7 +7226,12 @@ impl Estado {
             | Efecto::Disposiciones
             | Efecto::Partir { .. }
             | Efecto::CerrarHueco
-            | Efecto::AlternarHueco { .. } => {
+            | Efecto::AlternarHueco { .. }
+            | Efecto::PestanaNueva
+            | Efecto::CerrarPestana
+            | Efecto::CiclarPestana { .. }
+            | Efecto::MoverPestana { .. }
+            | Efecto::IrAPestana { .. } => {
                 self.efecto_de_disposicion(efecto, backend, buzon)
             }
             Efecto::Columnas => self.abrir_columnas(),
@@ -12647,7 +12817,65 @@ impl Estado {
             .collect();
         LayoutView {
             cells: self.viewport,
+            tabs: self.grupos_de_pestanas(),
             placements,
+        }
+    }
+
+    /// Los grupos de PESTAÑAS que hay en pantalla.
+    ///
+    /// Uno por hueco colocado que viva dentro de una `Tabs`: las inactivas no
+    /// se colocan —el repartidor compartido no las pinta— y sin esto la
+    /// ventana enseñaría la de delante sin decir que hay otras dos abiertas.
+    fn grupos_de_pestanas(&self) -> Vec<crate::dto::TabGroupView> {
+        let mut fuera = Vec::new();
+        for (slot, _) in &self.reparto.placements {
+            let Some((huecos, activo)) = self.arbol.tabs_of(*slot) else {
+                continue;
+            };
+            if huecos.len() < 2 {
+                // Un grupo de UNA no es un grupo: pintarle una barra de
+                // pestañas es cromo que no dice nada y que roba una fila.
+                continue;
+            }
+            let SlotId(id) = *slot;
+            fuera.push(crate::dto::TabGroupView {
+                slot_id: id,
+                tabs: huecos.iter().map(|t| self.pestana(*t)).collect(),
+                active: activo as u64,
+            });
+        }
+        fuera
+    }
+
+    /// Una pestaña: qué hueco lleva dentro y cómo se llama.
+    ///
+    /// El rótulo es el nombre del DIRECTORIO de su listado —no la ruta
+    /// entera, que no cabe— enmascarado como cualquier otro nombre: uno
+    /// hostil dentro de una pestaña es tan hostil como dentro de un listado.
+    /// Un directorio raíz no tiene nombre: se cae al esquema, que es lo único
+    /// que lo distingue de otro.
+    fn pestana(&self, slot: SlotId) -> crate::dto::TabView {
+        let SlotId(id) = slot;
+        let (titulo, hostil) = if let Some(h) = self.huecos.get(&id) {
+            let dir = h.pane.dir();
+            match dir.file_name() {
+                Some(seg) => norte_frontend::display_name(seg.as_bytes()),
+                // Una raíz no tiene nombre: se cae al esquema, que es lo
+                // único que la distingue de otra.
+                None => (dir.scheme().to_owned(), false),
+            }
+        } else {
+            // Lo que no es un listado se nombra por su KIND, que sale de un
+            // fichero de disposición y entra por la misma puerta.
+            let kind = kind_de(&self.arbol, slot)
+                .map_or_else(|| "unknown".to_owned(), |k| k.as_str().to_owned());
+            norte_frontend::display_name(kind.as_bytes())
+        };
+        crate::dto::TabView {
+            slot_id: id,
+            title: clamp_display(titulo),
+            title_hostile: hostil,
         }
     }
 

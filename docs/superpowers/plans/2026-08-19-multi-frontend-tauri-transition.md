@@ -2125,9 +2125,9 @@ availability from the same classification.
 #### The matrix, measured 2026-08-22
 
 The shared catalogue declares **138** live commands (`viewer.*` included).
-The window implements **72** after #287/#289/#291/#292; the TUI implements
-**111**. Nothing was dropped: every one of the 66 the window lacks is
-classified below, and every
+The window implements **87** after #287/#288/#289/#291/#292; the TUI
+implements **111**. Nothing was dropped: every one of the 51 the window lacks
+is classified below, and every
 "deferred" line has an issue that can be closed.
 
 | family | in the window | classification |
@@ -2135,7 +2135,7 @@ classified below, and every
 | cursor, nav, mark (toggle/clear), layout focus/resize/pick, pane transfer/delete/rename/mkdir/search/compare/sync/columns/view/open/copy-path, app palette/help/settings/extensions/agents/theme/terminal, task.cancel, viewer.* | **55 supported** | — |
 | `dialog.confirm/cancel/approve/deny` (4) | through the shared resolver since #287 | **supported** |
 | `dialog.*` others (18) | they name answers of dialogs this window does not have | **not applicable today** |
-| `pane.tab-*` (15) | none | **deferred — #288** |
+| `pane.tab-*` (15) | built (#288): the strip crosses the bridge, and a click picks a tab by SLOT | **supported** |
 | `pane.*` others (27) | sorting is done by clicking the header; the rest have no surface | **deferred — #290** |
 | `layout.split-h/v`, `close-slot`, `places`, `processes`, `metadata` (6) | built (#291): the tree is edited, not just painted | **supported** |
 | `layout.preview` (1) | this window cannot PAINT a preview slot — it would open grey, as an unsupported kind, and a slot that only paints off is not open | **deferred — #291** |

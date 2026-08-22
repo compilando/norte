@@ -53,6 +53,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
   return {
     connection: { state: "connected" },
     layout: {
+      tabs: [],
       cells: [120, 40],
       placements: [
         { slot_id: 1, x: 0, y: 0, width: 60, height: 38, role: "active", focus_index: 0 },

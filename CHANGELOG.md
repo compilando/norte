@@ -219,6 +219,18 @@ independently through `PROTOCOL_VERSION`.
   A step's and a failure's anchor is SAID, not left in an attribute: staying
   quiet about "on either side" where an unqualified path means "on the source"
   asserts the source.
+- **The window has tabs** (#288, bridge **35**): open, close, cycle, move, and
+  go to the Nth. The strip crosses the bridge on its own, separate from the
+  placements, because an inactive tab is NOT placed — its content is not
+  painted — and a window that shows only the front one without saying there
+  are two more behind it hides open work. A tab's label is the name of its
+  listing's directory, masked like any other name: a hostile directory inside
+  a tab is as hostile as inside a listing. The tab that comes to the front
+  takes the FOCUS, because working in one you cannot see is what that avoids,
+  and a click picks a tab by SLOT rather than by position — against a tree
+  that already changed the host refuses instead of guessing right by accident.
+  Asking for the 7th of three is refused too: guessing there would be changing
+  tab on its own.
 - **The window edits the layout tree, not just paints it** (#291): split
   horizontally or vertically, close a slot, and toggle the three auxiliary
   slots it can actually paint — places, the task board, the attribute sheet.

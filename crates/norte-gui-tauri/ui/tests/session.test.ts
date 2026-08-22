@@ -87,6 +87,7 @@ describe("Session", () => {
         changes: [
           {
             change: "layout",
+            tabs: [],
             cells: [120, 40],
             placements: [
               {

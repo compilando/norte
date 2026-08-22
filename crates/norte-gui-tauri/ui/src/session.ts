@@ -191,7 +191,7 @@ export class Session {
         s.sync = c.sync;
         return true;
       case "layout": {
-        s.layout = { cells: c.cells, placements: c.placements };
+        s.layout = { cells: c.cells, placements: c.placements, tabs: c.tabs };
         // El foco es de quien tenga el papel `active`, y lo dice el host.
         const activo = c.placements.find((p) => p.role === "active");
         s.focus = activo === undefined ? null : activo.slot_id;

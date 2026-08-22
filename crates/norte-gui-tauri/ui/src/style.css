@@ -1192,6 +1192,34 @@ body {
   overflow: auto;
 }
 
+/* La barra de pestañas: encima del título del hueco, y cada rótulo aislado
+   —un nombre de directorio con letras RTL reordenaría la barra entera. */
+.slot-tabs[data-open="false"] {
+  display: none;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0 4px;
+  list-style: none;
+  overflow-x: auto;
+}
+
+.tab {
+  padding: 0 8px;
+  white-space: nowrap;
+  opacity: 0.7;
+  unicode-bidi: isolate;
+  cursor: pointer;
+}
+
+.tab[data-active="true"] {
+  opacity: 1;
+  border-bottom: 2px solid var(--border-focus);
+}
+
 .agents-note,
 .agents-empty {
   opacity: 0.8;

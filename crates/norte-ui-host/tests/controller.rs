@@ -13453,3 +13453,129 @@ async fn los_huecos_auxiliares_se_abren_y_se_cierran() {
         );
     }
 }
+
+/// Las pestañas: abrir, recorrer, mover, ir a la N y cerrar (#288).
+///
+/// El grupo lo lleva el modelo COMPARTIDO (`add_tab` envuelve el hueco si
+/// hacía falta, `move_tab` no da la vuelta): aquí se comprueba que el gesto
+/// llega, que la pestaña que se pone delante se lleva el FOCO —trabajar con
+/// una que no se ve es lo que esto evita— y que la vista dice qué hay.
+#[tokio::test]
+async fn las_pestanas_se_abren_se_recorren_y_se_cierran() {
+    let backend = arbol();
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    assert!(snap.layout.tabs.is_empty(), "sin grupo no hay barra");
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.tab-new").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let grupo = foto.layout.tabs.first().expect("hay grupo").clone();
+    assert_eq!(grupo.tabs.len(), 2, "dos pestañas");
+    assert_eq!(grupo.active, 1, "la nueva queda delante");
+    assert_eq!(
+        Some(grupo.tabs[1].slot_id),
+        foto.focus,
+        "y con el foco: trabajar en una que no se ve es lo que esto evita"
+    );
+
+    // Recorrer CICLA.
+    ejecutar_por_paleta(&h, &mut sub, "pane.tab-next").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(
+        foto.layout.tabs.first().expect("grupo").active,
+        0,
+        "de la última a la primera"
+    );
+
+    // Ir a la N que no existe se rehúsa: adivinar sería cambiar de pestaña
+    // sola.
+    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.tab-goto-9").await;
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-no-such-tab"),
+        "{ack:?}"
+    );
+
+    // Cerrar la de delante deja una, y el grupo se disuelve.
+    ejecutar_por_paleta(&h, &mut sub, "pane.tab-close").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(
+        foto.layout.tabs.is_empty(),
+        "un grupo de una no es un grupo: {:?}",
+        foto.layout.tabs
+    );
+}
+
+/// Sin grupo, los comandos de pestaña lo DICEN.
+///
+/// Cerrar el hueco entero es otro comando: hacerlo aquí «porque no había
+/// pestañas» sería cerrar lo que nadie pidió cerrar.
+#[tokio::test]
+async fn sin_grupo_los_comandos_de_pestana_lo_dicen() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    for cmd in ["pane.tab-close", "pane.tab-next", "pane.tab-move-right"] {
+        let ack = ejecutar_por_paleta_ack(&h, &mut sub, cmd).await;
+        assert!(
+            matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-no-tabs"),
+            "{cmd}: {ack:?}"
+        );
+    }
+}
+
+/// Un clic en una pestaña la pone delante; contra un árbol que ya cambió, se
+/// rehúsa en vez de acertar por casualidad.
+#[tokio::test]
+async fn un_clic_en_una_pestana_la_pone_delante() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "pane.tab-new").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let grupo = siguiente_foto(&mut sub)
+        .await
+        .layout
+        .tabs
+        .first()
+        .expect("grupo")
+        .clone();
+    let primera = grupo.tabs[0].slot_id;
+
+    let ack = h
+        .dispatch(UiAction::SelectTab { slot_id: primera })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    // Cada cambio de disposición manda su propia foto, así que las que se
+    // acumulan en la cola son de ANTES: se busca la que ya refleja el clic
+    // en vez de leer la primera que salga.
+    let mut visto = None;
+    for _ in 0..10 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        if foto.layout.tabs.first().is_some_and(|g| g.active == 0) {
+            visto = Some(foto);
+            break;
+        }
+    }
+    let foto = visto.expect("el clic pone delante la primera");
+    assert_eq!(foto.focus, Some(primera));
+
+    // Un hueco que no está en ningún grupo: obsoleto, no un acierto.
+    let ack = h
+        .dispatch(UiAction::SelectTab { slot_id: 4242 })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(
+            &ack,
+            ActionAck::Stale {
+                reason: StaleAction::Generation
+            }
+        ),
+        "{ack:?}"
+    );
+}

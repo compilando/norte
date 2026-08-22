@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 34;
+export const BRIDGE_VERSION = 35;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -41,6 +41,28 @@ export interface SlotPlacement {
 export interface LayoutView {
   cells: [number, number];
   placements: SlotPlacement[];
+  /** Los grupos de PESTAÑAS que hay en pantalla. Aparte de los placements
+   *  porque una pestaña inactiva no se coloca —no se pinta su contenido— y
+   *  aun así hay que enseñar que está: una ventana con tres pestañas que solo
+   *  muestra la de delante esconde trabajo abierto. */
+  tabs: TabGroupView[];
+}
+
+export interface TabGroupView {
+  /** El hueco COLOCADO al que pertenece el grupo: el de la pestaña activa. */
+  slot_id: number;
+  tabs: TabView[];
+  /** Cuál está delante, como índice en `tabs`. */
+  active: number;
+}
+
+export interface TabView {
+  /** El hueco de dentro. Es lo que vuelve al elegirla con el ratón. */
+  slot_id: number;
+  /** Su rótulo, ya enmascarado: un directorio hostil dentro de una pestaña es
+   *  tan hostil como dentro de un listado. */
+  title: string;
+  title_hostile: boolean;
 }
 
 export type RowKind = "dir" | "file" | "symlink" | "other";
@@ -888,6 +910,7 @@ export type UiAction =
   | { action: "settings_select_row"; row: number }
   | { action: "extension_select_row"; row: number }
   | { action: "agent_select_row"; row: number; generation: number }
+  | { action: "select_tab"; slot_id: number }
   | { action: "picker_select_row"; row: number; generation: number }
   | { action: "place_activate_row"; row: number; generation: number }
   | { action: "layout_activate_row"; row: number }

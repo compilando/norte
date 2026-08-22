@@ -105,6 +105,21 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.places",
     "layout.processes",
     "layout.metadata",
+    "pane.tab-new",
+    "pane.tab-close",
+    "pane.tab-next",
+    "pane.tab-prev",
+    "pane.tab-move-left",
+    "pane.tab-move-right",
+    "pane.tab-goto-1",
+    "pane.tab-goto-2",
+    "pane.tab-goto-3",
+    "pane.tab-goto-4",
+    "pane.tab-goto-5",
+    "pane.tab-goto-6",
+    "pane.tab-goto-7",
+    "pane.tab-goto-8",
+    "pane.tab-goto-9",
     "pane.columns",
     "app.palette",
     "app.help",
@@ -293,6 +308,25 @@ pub enum Efecto {
     Extensiones,
     /// Las sesiones de agente vistas, y el deshacer de una entera.
     Agentes,
+    /// Abre otra PESTAÑA junto al hueco enfocado.
+    PestanaNueva,
+    /// Cierra la pestaña enfocada. Sin grupo, no hace nada.
+    CerrarPestana,
+    /// Pasa a la pestaña siguiente —o anterior—, ciclando.
+    CiclarPestana {
+        /// Hacia atrás.
+        atras: bool,
+    },
+    /// Mueve la pestaña enfocada dentro de su grupo.
+    MoverPestana {
+        /// Hacia la derecha.
+        derecha: bool,
+    },
+    /// Va a la pestaña `n` (base 1) del grupo enfocado.
+    IrAPestana {
+        /// Cuál, empezando por 1.
+        n: usize,
+    },
     /// Parte el hueco enfocado y pone otro LISTADO al lado.
     Partir {
         /// Uno encima de otro en vez de uno al lado del otro.
@@ -446,6 +480,21 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "layout.places" => Efecto::AlternarHueco { kind: "places" },
         "layout.processes" => Efecto::AlternarHueco { kind: "processes" },
         "layout.metadata" => Efecto::AlternarHueco { kind: "metadata" },
+        "pane.tab-new" => Efecto::PestanaNueva,
+        "pane.tab-close" => Efecto::CerrarPestana,
+        "pane.tab-next" => Efecto::CiclarPestana { atras: false },
+        "pane.tab-prev" => Efecto::CiclarPestana { atras: true },
+        "pane.tab-move-left" => Efecto::MoverPestana { derecha: false },
+        "pane.tab-move-right" => Efecto::MoverPestana { derecha: true },
+        "pane.tab-goto-1" => Efecto::IrAPestana { n: 1 },
+        "pane.tab-goto-2" => Efecto::IrAPestana { n: 2 },
+        "pane.tab-goto-3" => Efecto::IrAPestana { n: 3 },
+        "pane.tab-goto-4" => Efecto::IrAPestana { n: 4 },
+        "pane.tab-goto-5" => Efecto::IrAPestana { n: 5 },
+        "pane.tab-goto-6" => Efecto::IrAPestana { n: 6 },
+        "pane.tab-goto-7" => Efecto::IrAPestana { n: 7 },
+        "pane.tab-goto-8" => Efecto::IrAPestana { n: 8 },
+        "pane.tab-goto-9" => Efecto::IrAPestana { n: 9 },
         "pane.columns" => Efecto::Columnas,
         "app.palette" => Efecto::Paleta,
         "app.help" => Efecto::Ayuda,

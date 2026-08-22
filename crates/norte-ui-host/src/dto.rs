@@ -1181,6 +1181,39 @@ pub struct LayoutView {
     /// aquí es que no cabe o es una pestaña inactiva: no se pinta, y eso lo
     /// decidió el mismo repartidor que usa el TUI.
     pub placements: Vec<SlotPlacement>,
+    /// Las PESTAÑAS de cada grupo que hay en pantalla.
+    ///
+    /// Aparte de los `placements` porque una pestaña inactiva NO se coloca —
+    /// no se pinta su contenido— y aun así hay que enseñar que está: una
+    /// ventana con tres pestañas que solo muestra la de delante y no dice que
+    /// hay otras dos es una ventana que esconde trabajo abierto.
+    pub tabs: Vec<TabGroupView>,
+}
+
+/// Un grupo de pestañas y cuál está delante.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabGroupView {
+    /// El hueco COLOCADO al que pertenece este grupo: el de la pestaña
+    /// activa, que es el que el renderer está pintando.
+    pub slot_id: u32,
+    /// Sus pestañas, en el orden del árbol.
+    pub tabs: Vec<TabView>,
+    /// Cuál está delante, como índice en `tabs`.
+    pub active: u64,
+}
+
+/// Una pestaña.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabView {
+    /// El hueco que hay dentro. Es lo que vuelve al elegirla con el ratón.
+    pub slot_id: u32,
+    /// Su rótulo: el nombre del directorio de su listado, ya enmascarado —un
+    /// directorio con nombre hostil dentro de una pestaña es tan hostil como
+    /// dentro de un listado—. Para lo que no es un listado, el nombre de su
+    /// kind.
+    pub title: String,
+    /// El rótulo se pinta distinto de lo que es.
+    pub title_hostile: bool,
 }
 
 /// Un hueco colocado.

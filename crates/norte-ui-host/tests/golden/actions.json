@@ -117,6 +117,10 @@
     "key": 7,
     "slot_id": 1
   },
+  "select_tab": {
+    "action": "select_tab",
+    "slot_id": 3
+  },
   "set_viewer_rows": {
     "action": "set_viewer_rows",
     "rows": 40

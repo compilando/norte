@@ -30,6 +30,10 @@ use serde::{Deserialize, Serialize};
 ///   hará DE VERDAD —los dos ya traducidos, porque el catálogo no sustituye
 ///   variables—, si hay un nombre alterado FUERA de la ventana, y si el
 ///   lector ha recorrido el plan entero. Y se puede contestar con el ratón.
+/// - **35**: la disposición lleva sus grupos de PESTAÑAS —qué hay detrás de
+///   lo que se pinta, con el rótulo de cada una y su bandera—, porque una
+///   pestaña inactiva no se coloca y sin esto la ventana enseñaba la de
+///   delante sin decir que había otras abiertas.
 /// - **34**: el panel de agentes lleva GENERACIÓN —la lista se reordena sola,
 ///   así que un clic tiene que decir contra cuál habla—, cuántas sesiones se
 ///   han olvidado por el tope, qué decir cuando está vacío (que no es siempre
@@ -125,7 +129,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 34;
+pub const BRIDGE_VERSION: u32 = 35;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///
