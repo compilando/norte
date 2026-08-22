@@ -2126,19 +2126,21 @@ availability from the same classification.
 
 The shared catalogue declares **135** live commands (`viewer.*` included;
 `task.next`/`prev`/`dismiss` moved to `Planned` because nobody implements
-them). The window implements **55**; the TUI implements **111**. Nothing was
+them). The window implements **66** after #287/#289/#292; the TUI implements
+**111**. Nothing was
 dropped: every one of the 80 the window lacks is classified below, and every
 "deferred" line has an issue that can be closed.
 
 | family | in the window | classification |
 | --- | --- | --- |
 | cursor, nav, mark (toggle/clear), layout focus/resize/pick, pane transfer/delete/rename/mkdir/search/compare/sync/columns/view/open/copy-path, app palette/help/settings/extensions/agents/theme/terminal, task.cancel, viewer.* | **55 supported** | — |
-| `dialog.*` (22) | fixed keys and mouse instead of the shared resolver | **deferred — #287** |
+| `dialog.confirm/cancel/approve/deny` (4) | through the shared resolver since #287 | **supported** |
+| `dialog.*` others (18) | they name answers of dialogs this window does not have | **not applicable today** |
 | `pane.tab-*` (15) | none | **deferred — #288** |
 | `pane.*` others (27) | sorting is done by clicking the header; the rest have no surface | **deferred — #290** |
 | `layout.split-h/v`, `close-slot`, `preview`, `processes`, `metadata`, `places` (7) | the tree is painted, not edited | **deferred — #291** |
-| `mark.all/invert/pattern-add/pattern-remove` (4) | none | **deferred — #289** |
-| `task.next/prev/dismiss` (3) | the board is painted, not walked; NO frontend has these, so they are `Planned` in the catalogue | **deferred — #292** |
+| `mark.all/invert/pattern-add/pattern-remove` (4) | built (#289) | **supported** |
+| `task.next/prev/dismiss` (3) | built (#292); they were `Planned` for an afternoon because NO frontend had them | **supported** |
 | `pane.command-line` | the palette is this window's answer | **not applicable to the GUI** |
 | `app.pick-accept` | `--pick` is a CLI mode; a GUI has no pipe to answer into | **not applicable to the GUI** |
 | `app.quit` | the window manager closes the window | **not applicable to the GUI** |

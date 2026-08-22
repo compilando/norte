@@ -219,6 +219,18 @@ independently through `PROTOCOL_VERSION`.
   A step's and a failure's anchor is SAID, not left in an attribute: staying
   quiet about "on either side" where an unqualified path means "on the source"
   asserts the source.
+- **The window's dialogs go through the shared keymap** (closes #287), and it
+  gained mark-by-pattern (#289) and a walkable task board (#292). The dialogs
+  were answered with FIXED keys, so rebinding `dialog.confirm` changed the TUI
+  and not the window — the drift the shared catalogue exists to prevent. There
+  are two regimes, the same pair the TUI has: with a field open the keys are
+  letters, because there is no `dialog.*` verb for "type a letter" and
+  resolving there would turn typing a filename into answering the question;
+  with no field, the keymap resolves. The verb picks among the answers THAT
+  dialog offers — one it does not offer is not interpreted, which is why
+  `dialog.confirm` does not approve an approval. A running task cannot be
+  dismissed from the board: stopping it is another key, and taking something
+  that is still writing out of view is losing sight of exactly what to watch.
 - **The window copies paths, opens with the desktop, and drops a terminal
   where you are** (`pane.copy-path`, `pane.open`, `app.terminal`). Native
   effects leave the host on their own channel, never through the webview:
