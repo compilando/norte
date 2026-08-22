@@ -93,6 +93,27 @@ struct SalidaPedida {
     res: Result<String, Error>,
 }
 
+/// Lo que esta ventana tiene del ESCRITORIO.
+///
+/// Juntos porque son la misma cosa vista dos veces: por dónde se le pide algo
+/// al proceso que hospeda, y lo que ese proceso contestó y sigue en pantalla.
+#[derive(Debug, Default)]
+struct Escritorio {
+    /// Por dónde salen los efectos NATIVOS, cuando hay alguien escuchando.
+    ///
+    /// `Option` porque el estado se construye antes que el canal —la primera
+    /// foto sale de él— y porque un host sin nadie suscrito tiene que poder
+    /// seguir: un efecto que nadie recoge es un gesto que no pasa nada, no un
+    /// error.
+    nativos: Option<broadcast::Sender<crate::dto::NativeEffect>>,
+    /// La salida del último comando de extensión, si sigue en pantalla.
+    ///
+    /// Aquí y no en el gestor de extensiones: un comando se lanza desde la
+    /// PALETA, que no necesita tener el gestor abierto —ni lo abre—, y una
+    /// salida guardada dentro de una pantalla cerrada no la ve nadie.
+    salida: Option<crate::dto::ExtensionOutputView>,
+}
+
 /// Lo que esta ventana sabe de las sesiones de AGENTE.
 ///
 /// Juntas y no sueltas en el estado: las tres describen lo mismo —quién ha
@@ -239,6 +260,13 @@ pub struct UiHostOptions {
     /// suyas, igual que en el TUI, y mezclarlas sería inventarse un tercer
     /// contexto de entrada que no existe en ningún preset.
     pub keymap_viewer: Effective,
+    /// El keymap efectivo de un DIÁLOGO, con las mismas capas.
+    ///
+    /// Tercera pantalla, por el mismo motivo que la del visor: con una
+    /// pregunta delante las teclas son suyas. Sin esto, esta ventana atendía
+    /// sus diálogos con teclas fijas y un preset que reataba
+    /// `dialog.confirm` cambiaba el TUI y no la ventana (#287).
+    pub keymap_dialog: Effective,
     /// La disposición: el árbol de huecos. De un preset de fábrica
     /// (`norte_frontend::layout::presets::tree`) o de la configuración del
     /// usuario; el host no lee ficheros.
@@ -677,7 +705,7 @@ impl UiHost {
             nativos: nativos.clone(),
             instance,
         };
-        estado.nativos = Some(nativos);
+        estado.escritorio.nativos = Some(nativos);
         tokio::spawn(actor(rx, estado, backend, updates, tx2));
         Ok((host, primero))
     }
@@ -1227,6 +1255,11 @@ enum Pendiente {
     /// Preguntar al índice por SIGNIFICADO. Lo que se teclea es la consulta,
     /// y no lleva más operandos: el alcance es el índice entero.
     ConsultaSemantica,
+    /// Marcar —o desmarcar— por patrón. Lo que se teclea es el glob.
+    Patron {
+        /// `true` añade marcas, `false` las quita.
+        marcar: bool,
+    },
     /// Deshacer TODO lo que hizo una sesión de agente (#276).
     DeshacerSesion {
         /// La clave OPACA con la que el core la resuelve, cruda.
@@ -1548,13 +1581,6 @@ struct Estado {
     /// Todo lo de las sesiones de AGENTE: lo visto, si el panel está
     /// abierto, y qué deshacer corre por quién.
     agencia: Agencia,
-    /// Por dónde salen los efectos NATIVOS, cuando hay alguien escuchando.
-    ///
-    /// `Option` porque el estado se construye antes que el canal —la primera
-    /// foto sale de él— y porque un host sin nadie suscrito tiene que poder
-    /// seguir funcionando: un efecto que nadie recoge es un gesto que no pasa
-    /// nada, no un error.
-    nativos: Option<broadcast::Sender<crate::dto::NativeEffect>>,
 
     /// Cómo se llaman las extensiones y sus comandos, ya enmascarados, para
     /// el panel de salida: `id → (nombre, comando → título)`.
@@ -1564,12 +1590,10 @@ struct Estado {
     /// entonces no hay de dónde sacar un rótulo. Un panel que dice quién
     /// imprimió qué sin poder nombrar a ninguno de los dos no dice nada.
     rotulos_plugin: Rotulos,
-    /// La salida del último comando de extensión, si sigue en pantalla.
-    ///
-    /// Del CONTROLADOR y no del gestor: un comando se lanza desde la paleta,
-    /// que no necesita tener el gestor abierto —ni lo abre—, y una salida
-    /// guardada dentro de una pantalla cerrada no la ve nadie.
-    salida_plugin: Option<crate::dto::ExtensionOutputView>,
+    /// Lo que esta ventana tiene del ESCRITORIO: por dónde salen los efectos
+    /// nativos y la salida del último comando de extensión.
+    escritorio: Escritorio,
+
     /// El tema, tal como lo resolvió el arranque.
     tema: crate::pickers::HostTheme,
     /// Se está mirando el tema por dentro.
@@ -1648,6 +1672,8 @@ struct Estado {
     /// El resolver de la pantalla del visor. Mientras el visor esté abierto,
     /// las teclas pasan por AQUÍ.
     resolver_visor: Resolver,
+    /// El resolutor de la pantalla de DIÁLOGO.
+    resolver_dialogo: Resolver,
     /// Si este frontend puede escribir.
     efectos: crate::commands::Efectos,
     /// Cuántas líneas caben en el visor, según el renderer.
@@ -1894,6 +1920,7 @@ impl Estado {
             locale,
             keymap,
             keymap_viewer: keymap_visor,
+            keymap_dialog,
             layout: arbol,
             viewport,
             columns: columnas,
@@ -1912,7 +1939,6 @@ impl Estado {
         let roles = Self::roles_iniciales(&arbol, &reparto, &kinds, activo);
         let estado = Self {
             rotulos_plugin: Rotulos::new(),
-            salida_plugin: None,
             instance,
             sequence: 0,
             token: 0,
@@ -1922,7 +1948,7 @@ impl Estado {
             ajustes: None,
             extensiones: None,
             agencia: Agencia::default(),
-            nativos: None,
+            escritorio: Escritorio::default(),
             tema: theme,
             mirando_tema: false,
             cursor_procesos: 0,
@@ -1949,6 +1975,7 @@ impl Estado {
             whichkey: None,
             resolver: Resolver::new(keymap),
             resolver_visor: Resolver::new(keymap_visor),
+            resolver_dialogo: Resolver::new(keymap_dialog),
             efectos,
             visor_filas: None,
             visor_en_vuelo: None,
@@ -2477,22 +2504,58 @@ impl Estado {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
         let id = d.id;
-        let elegido = match k.key.as_str() {
-            "Enter" | "enter" => d
-                .vista
-                .choices
-                .iter()
-                .find(|c| !c.destructive)
-                .map(|c| c.id.clone()),
-            "Escape" | "esc" => d
+        let tecleando = d.vista.input.is_some();
+        // DOS REGÍMENES, el mismo par que el TUI y que el resto de campos de
+        // este host. Con un campo abierto las teclas son LETRAS: resolverlas
+        // por el keymap convertiría escribir un nombre de fichero en
+        // contestar la pregunta, porque no hay verbo `dialog.*` para «teclea
+        // una letra». Sin campo, la tecla pasa por el resolutor COMPARTIDO,
+        // que es lo que hace que un preset que reata `dialog.confirm` cambie
+        // esta ventana y no solo el TUI.
+        let verbo = if tecleando {
+            match k.key.as_str() {
+                "Enter" | "enter" => Some("dialog.confirm"),
+                "Escape" | "esc" => Some("dialog.cancel"),
+                _ => None,
+            }
+        } else {
+            let Ok(chord) = k.to_chord() else {
+                return (self.aplicada(), Vec::new());
+            };
+            match self.resolver_dialogo.push(chord) {
+                Resolution::Run { command, .. } => match command.as_str() {
+                    "dialog.confirm" => Some("dialog.confirm"),
+                    "dialog.cancel" => Some("dialog.cancel"),
+                    "dialog.approve" => Some("dialog.approve"),
+                    "dialog.deny" => Some("dialog.deny"),
+                    _ => None,
+                },
+                _ => None,
+            }
+        };
+        let Some(d) = self.dialogos.last() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        // El VERBO elige entre las respuestas que ESTE diálogo ofrece: una
+        // que no ofrece no se interpreta —no hay respuestas implícitas en una
+        // superficie de decisión— y por eso `dialog.confirm` sobre una
+        // aprobación no aprueba: la afirmativa de una aprobación se llama
+        // `approve` a propósito, para que un renderer no las confunda.
+        let elegido = match verbo {
+            Some("dialog.confirm") => d.vista.choices.iter().find(|c| c.id == "confirm"),
+            Some("dialog.approve") => d.vista.choices.iter().find(|c| c.id == "approve"),
+            Some("dialog.deny") => d.vista.choices.iter().find(|c| c.id == "deny"),
+            Some("dialog.cancel") => d
                 .vista
                 .choices
                 .iter()
                 .find(|c| c.id == "cancel" || c.id == "deny")
-                .or_else(|| d.vista.choices.iter().rfind(|c| !c.destructive))
-                .map(|c| c.id.clone()),
+                // Cerrar SIEMPRE se puede: si el diálogo no ofrece cancelar
+                // ni denegar, la respuesta es la última que no destruye.
+                .or_else(|| d.vista.choices.iter().rfind(|c| !c.destructive)),
             _ => None,
-        };
+        }
+        .map(|c| c.id.clone());
         let Some(choice) = elegido else {
             return (self.aplicada(), Vec::new());
         };
@@ -2523,7 +2586,7 @@ impl Estado {
         // debajo, donde una confirmación de borrado podía estar esperando un
         // sí que el lector no ve. El momento lo elige el PLUGIN, que decide
         // cuándo contesta su comando.
-        if self.salida_plugin.is_some() {
+        if self.escritorio.salida.is_some() {
             if matches!(k.key.as_str(), "Escape" | "esc" | "Enter" | "enter") {
                 return Some(self.cerrar_salida());
             }
@@ -3005,6 +3068,84 @@ impl Estado {
     const MAX_RESULTADOS: u32 = 2000;
 
     /// Abre el prompt de buscar. Lo que se teclea es el patrón.
+    /// Abre el prompt de un GLOB para marcar —o desmarcar— por patrón.
+    ///
+    /// Un prompt y no una tecla: el operando es un patrón que se teclea, y
+    /// eso ya tiene forma en este host. Lo que se marca lo decide el modelo
+    /// COMPARTIDO (`mark_glob`), que pliega el nombre antes de casar y sabe
+    /// que un `*` sobre nombres enmascarados no puede significar «todos los
+    /// que se pintan raro».
+    fn pedir_patron(&mut self, marcar: bool) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        self.dialogos.push(Dialogo {
+            id,
+            reconocido: true,
+            vista: DialogView {
+                id,
+                title_key: if marcar {
+                    "modal-mark-pattern-title"
+                } else {
+                    "modal-unmark-pattern-title"
+                }
+                .to_owned(),
+                destination: None,
+                subject: None,
+                asker: None,
+                deadline: None,
+                body: Vec::new(),
+                overflow_note: String::new(),
+                choices: vec![
+                    DialogChoice {
+                        id: "confirm".to_owned(),
+                        label_key: "dialog-confirm".to_owned(),
+                        destructive: false,
+                    },
+                    DialogChoice {
+                        id: "cancel".to_owned(),
+                        label_key: "dialog-cancel".to_owned(),
+                        destructive: false,
+                    },
+                ],
+                input: Some(String::new()),
+                input_hostile: false,
+            },
+            input_crudo: String::new(),
+            al_confirmar: Some(Pendiente::Patron { marcar }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Aplica el patrón tecleado.
+    fn aplicar_patron(
+        &mut self,
+        marcar: bool,
+        patron: &str,
+    ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
+        if patron.is_empty() {
+            // Un glob vacío no casa nada, y decirlo es mejor que no hacer
+            // nada: quien pulsó cree que marcó.
+            return (Some("err-empty-pattern"), self.decir("err-empty-pattern"));
+        }
+        match self.hueco_mut().pane.mark_glob(patron, marcar) {
+            Ok(n) => {
+                // La clave del TUI, que ya existía y dice «N marcas
+                // cambiadas»: sirve para las dos direcciones, y una segunda
+                // definición de la misma clave la tira Fluent en silencio —
+                // la trampa que este repo ya se ha comido dos veces.
+                let mut fuera = self.decir_con("msg-marked-by-pattern", &[("n", &n.to_string())]);
+                fuera.push(self.parche_filas());
+                (None, fuera)
+            }
+            // Un glob que no compila se DICE: es lo que el lector acaba de
+            // teclear, y callar deja una tecla que no hizo nada.
+            Err(_) => (Some("err-bad-pattern"), self.decir("err-bad-pattern")),
+        }
+    }
+
     fn pedir_busqueda(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let root = self.hueco().pane.dir().clone();
         let donde = Self::linea_de_ruta(&root);
@@ -5669,7 +5810,7 @@ impl Estado {
                     lineas.push(clamp_display(pintable));
                 }
                 truncado |= recortado.lines().nth(MAX_SALIDA_LINEAS).is_some();
-                self.salida_plugin = Some(crate::dto::ExtensionOutputView {
+                self.escritorio.salida = Some(crate::dto::ExtensionOutputView {
                     plugin: crate::dto::MaskedTextView {
                         text: plugin.0,
                         hostile: plugin.1,
@@ -5684,7 +5825,7 @@ impl Estado {
                     truncated: truncado,
                 });
                 let cambio = ViewChange::PluginOutput {
-                    output: self.salida_plugin.clone(),
+                    output: self.escritorio.salida.clone(),
                 };
                 vec![self.parche(vec![cambio])]
             }
@@ -5694,7 +5835,7 @@ impl Estado {
 
     /// Cierra el panel de salida.
     fn cerrar_salida(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.salida_plugin = None;
+        self.escritorio.salida = None;
         (
             self.aplicada(),
             vec![self.parche(vec![ViewChange::PluginOutput { output: None }])],
@@ -6099,7 +6240,10 @@ impl Estado {
                     // La consulta semántica es otro diálogo que pide que
                     // teclees algo, y el corpus tiene UNA página que habla
                     // de eso.
-                    | Pendiente::ConsultaSemantica,
+                    | Pendiente::ConsultaSemantica
+                    // Marcar por patrón, igual: un diálogo que pide que
+                    // teclees algo.
+                    | Pendiente::Patron { .. },
                 ) => "dialog.mkdir",
                 None => "browse",
             };
@@ -6718,6 +6862,15 @@ impl Estado {
         if matches!(efecto, Efecto::CancelarTask) {
             return self.cancelar_por_comando();
         }
+        // Recorrer y descartar el tablero, por el mismo motivo y antes del
+        // foco: son comandos del TABLERO, no del panel que lo pinta, y con el
+        // panel de procesos cerrado tienen que seguir significando lo mismo.
+        if let Efecto::TaskVecina { atras } = efecto {
+            return self.mover_en_tablero(atras);
+        }
+        if matches!(efecto, Efecto::DescartarTask) {
+            return self.descartar_task();
+        }
         if let Some(salida) = self.efecto_en_panel_enfocado(efecto) {
             return salida;
         }
@@ -6737,13 +6890,19 @@ impl Estado {
             | Efecto::Subir
             | Efecto::Rastro { .. }
             | Efecto::Marcar
+            | Efecto::MarcarTodo
+            | Efecto::InvertirMarcas
             | Efecto::DesmarcarTodo => self.efecto_de_listado(efecto, slot, backend, buzon),
             Efecto::Foco { atras } => self.mover_foco(atras),
             Efecto::Destino => self.designar_destino(),
             // Atendido arriba, antes del panel enfocado. El brazo existe
             // porque el `match` es exhaustivo a propósito: un efecto nuevo
             // sin sitio tiene que ser un error de compilación.
-            Efecto::CancelarTask => self.cancelar_por_comando(),
+            // Los tres del TABLERO se atienden antes de llegar aquí: no
+            // dependen del panel que tenga el foco.
+            Efecto::CancelarTask | Efecto::TaskVecina { .. } | Efecto::DescartarTask => {
+                self.cancelar_por_comando()
+            }
             Efecto::Tamano(_) | Efecto::Igualar | Efecto::Disposiciones => {
                 self.efecto_de_disposicion(efecto, backend, buzon)
             }
@@ -6775,6 +6934,7 @@ impl Estado {
             // Copiar la ruta no toca nada y va en los dos modos: poner texto
             // en el portapapeles es tan de solo mirar como leer un nombre.
             Efecto::CopiarRuta => self.copiar_rutas(),
+            Efecto::MarcarPatron { marcar } => self.pedir_patron(marcar),
             Efecto::AbrirExterno => self.abrir_externo(),
             Efecto::Terminal => self.abrir_terminal(),
             Efecto::Comparar => self.pedir_comparacion(backend, buzon),
@@ -6868,6 +7028,14 @@ impl Estado {
                 self.hueco_mut().pane.clear_marks();
                 (self.aplicada(), vec![self.parche_filas()])
             }
+            Efecto::MarcarTodo => {
+                self.hueco_mut().pane.mark_all();
+                (self.aplicada(), vec![self.parche_filas()])
+            }
+            Efecto::InvertirMarcas => {
+                self.hueco_mut().pane.invert_marks();
+                (self.aplicada(), vec![self.parche_filas()])
+            }
             // Los demás no llegan aquí: el `match` de arriba los reparte.
             _ => Self::no_muta(),
         }
@@ -6880,7 +7048,8 @@ impl Estado {
     /// decirle a quien pulsó que aquí eso no pasa, en vez de acusar recibo de
     /// algo que no va a ocurrir.
     fn nativo(&self, efecto: crate::dto::NativeEffect) -> bool {
-        self.nativos
+        self.escritorio
+            .nativos
             .as_ref()
             .is_some_and(|tx| tx.send(efecto).is_ok())
     }
@@ -9831,6 +10000,12 @@ impl Estado {
                 rehusado = motivo;
                 salidas.extend(partes);
             }
+            Some(Pendiente::Patron { marcar }) => {
+                let patron = dialogo.input_crudo.clone();
+                let (motivo, partes) = self.aplicar_patron(marcar, &patron);
+                rehusado = motivo;
+                salidas.extend(partes);
+            }
             Some(Pendiente::DeshacerSesion { sesion }) => {
                 let (motivo, partes) = self.deshacer_sesion(&sesion, backend, buzon);
                 rehusado = motivo;
@@ -11028,6 +11203,80 @@ impl Estado {
         }
     }
 
+    /// Mueve la fila elegida del tablero.
+    ///
+    /// Sin necesitar el foco del panel de procesos: el tablero se pinta
+    /// también cuando ese hueco no existe —las tasks salen en el sobre— y un
+    /// comando que solo funcionara con un hueco concreto abierto sería una
+    /// tecla que depende de la disposición.
+    fn mover_en_tablero(&mut self, atras: bool) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let filas = self.filas_de_tablero();
+        if filas == 0 {
+            return (self.aplicada(), self.decir("msg-no-tasks"));
+        }
+        let actual = self.cursor_procesos.min(filas - 1);
+        self.cursor_procesos = if atras {
+            actual.saturating_sub(1)
+        } else {
+            (actual + 1).min(filas - 1)
+        };
+        // Foto y no parche, por lo mismo que el cursor del panel de procesos:
+        // no hay `ViewChange` para un hueco que no es un listado, y añadir
+        // contrato por un índice es contrato para nada.
+        let snap = self.snapshot();
+        (
+            self.aplicada(),
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+        )
+    }
+
+    /// Quita del tablero la fila elegida, si YA terminó.
+    ///
+    /// Una viva no se descarta: pararla es `task.cancel`, y quitar de la
+    /// vista algo que sigue escribiendo en el disco es perder de vista
+    /// justo lo que hay que mirar.
+    fn descartar_task(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let filas = self.filas_de_tablero();
+        if filas == 0 {
+            return (self.aplicada(), self.decir("msg-no-tasks"));
+        }
+        let i = self.cursor_procesos.min(filas - 1);
+        let Some((&id, viva)) = self.tasks_visibles().nth(i) else {
+            return (self.aplicada(), self.decir("msg-no-tasks"));
+        };
+        if !Self::terminal(viva.vista.state) {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-task-running".to_owned(),
+                },
+                self.decir("host-task-running"),
+            );
+        }
+        self.tasks.remove(&id);
+        self.undos_sin_task(id);
+        // El cursor se queda donde estaba, clampado: descartar la última deja
+        // la selección en la que ahora es la última, no en la primera.
+        let filas = self.filas_de_tablero();
+        self.cursor_procesos = self.cursor_procesos.min(filas.saturating_sub(1));
+        let mut fuera = vec![self.parche(vec![ViewChange::Tasks {
+            tasks: self.vistas_de_tasks(),
+        }])];
+        let snap = self.snapshot();
+        fuera.push(self.sobre(UiUpdate::Snapshot(Box::new(snap))));
+        (self.aplicada(), fuera)
+    }
+
+    /// Suelta el «deshaciendo» de una sesión cuya task se descarta.
+    ///
+    /// Descartar la fila de un undo que terminó es lo mismo que verlo
+    /// terminar: si no se soltara aquí, esa sesión se quedaría marcada como
+    /// «deshaciendo» para siempre y `u` sobre ella se rehusaría sin motivo.
+    fn undos_sin_task(&mut self, task_id: u64) {
+        if let Some(sesion) = self.agencia.undos.remove(&task_id) {
+            self.agencia.sesiones.deshecha(&sesion);
+        }
+    }
+
     /// A qué task le toca parar.
     fn task_a_cancelar(&self) -> Objetivo {
         if self.procesos_tienen_el_foco() {
@@ -12002,7 +12251,7 @@ impl Estado {
             settings: self.vista_ajustes(),
             extensions: self.vista_extensiones(),
             agents: self.vista_agentes(),
-            plugin_output: self.salida_plugin.clone(),
+            plugin_output: self.escritorio.salida.clone(),
             theme: self.vista_tema(),
             search: self.vista_busqueda(),
             layouts: self.vista_disposiciones(),

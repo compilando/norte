@@ -50,11 +50,14 @@ const fn live(name: &'static str, counts: bool) -> CommandDef {
 /// Un comando que un preset puede nombrar honestamente y que norte todavía
 /// no hace.
 ///
-/// Con #132 la tabla llegó a quedarse sin ninguno, y luego la matriz de
-/// paridad de la fase 6 destapó tres (`task.next`/`prev`/`dismiss`): estaban
-/// declarados vivos y no los implementaba ningún frontend. Esa es la avería
-/// que esto evita — una fila atenuada con su motivo traducido y su número de
-/// issue, en vez de una tecla que no hace nada y no dice por qué.
+/// **Ahora mismo no hay ninguno**, y el constructor se queda por lo que
+/// costó descubrirlo: con #132 la tabla se quedó sin `Planned`, y luego la
+/// matriz de paridad de la fase 6 destapó tres (`task.next`/`prev`/
+/// `dismiss`) declarados VIVOS sin que los implementara ningún frontend —
+/// que es peor, porque una tecla así no hace nada y tampoco dice por qué.
+/// Esta maquinaria (fila atenuada, motivo traducido, número de issue) es la
+/// respuesta a eso, y reconstruirla costaría más que dejarla.
+#[allow(dead_code, reason = "el vocabulario está entero: ver el doc de arriba")]
 const fn planned(name: &'static str, reason: &'static str, issue: u32) -> CommandDef {
     CommandDef {
         name,
@@ -208,15 +211,15 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("mark.pattern-remove", false),
     // --- task ---
     live("task.cancel", false),
-    // Los tres de RECORRER el tablero no los implementa NADIE: el TUI ata
-    // `task.cancel` y nada más, y la ventana cancela la última en marcha. La
-    // tabla los declaraba vivos desde antes de que se midiera la paridad de
-    // la fase 6, que es exactamente el fallo que `Planned` existe para no
-    // tener: un preset puede atarlos, y entonces la tecla se pinta en gris
-    // con su motivo en vez de no hacer nada en silencio.
-    planned("task.next", "keymap-reason-task-walk", 292),
-    planned("task.prev", "keymap-reason-task-walk", 292),
-    planned("task.dismiss", "keymap-reason-task-walk", 292),
+    // Los tres de RECORRER el tablero estuvieron un rato en `Planned`: la
+    // matriz de paridad de la fase 6 destapó que la tabla los declaraba vivos
+    // sin que los implementara NINGÚN frontend. Vuelven a vivos porque la
+    // ventana ya los hace (#292); el TUI sigue atando solo `task.cancel`, que
+    // es una asimetría normal —lo que no es normal es que la tabla prometa lo
+    // que no hace nadie.
+    live("task.next", false),
+    live("task.prev", false),
+    live("task.dismiss", false),
     // --- viewer ---
     live("viewer.close", false),
     live("viewer.up", true),

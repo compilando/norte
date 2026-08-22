@@ -813,6 +813,9 @@ columns-picker-session-only = se aplica a esta ventana; no se guarda
 # y una que todavía crece se leen igual.
 modal-search-title = Buscar en este árbol
 err-empty-pattern = teclea un patrón: uno vacío casa el árbol entero
+modal-mark-pattern-title = marcar por patrón (glob)
+modal-unmark-pattern-title = desmarcar por patrón (glob)
+err-bad-pattern = ese patrón no es un glob válido
 # Tarea 4.1 en la ventana gráfica: qué dice cada fila del selector de
 # disposiciones sobre sí misma. El aviso del nombre de teclado no es adorno:
 # los dos ajustes comparten espacio de nombres, y sin la línea la
@@ -1619,6 +1622,7 @@ task-batch-unverified = terminado, sin informe
 host-plan-unseen = recorre el plan entero antes de aplicarlo
 host-same-directory = el origen y el destino son el mismo directorio
 host-read-only = esta ventana está montada sin efectos: no escribe
+host-task-running = esa tarea sigue en marcha: pararla es otra tecla
 host-nothing-selected = no hay nada señalado
 host-not-local = eso no está en este disco: no hay ruta nativa que darle al escritorio
 host-no-desktop = esta ventana no tiene escritorio detrás: no puede copiar al portapapeles ni lanzar nada

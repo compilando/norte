@@ -36,6 +36,7 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -255,6 +256,7 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -616,6 +618,7 @@ async fn el_contador_lo_resuelve_el_host() {
         // `vim` es el preset que habilita contadores.
         keymap: norte_ui_host::keys::keymap_de_preset("vim").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("vim").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -717,6 +720,7 @@ async fn host_con_layout(
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree(layout).expect("layout"),
         viewport,
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -1730,6 +1734,7 @@ async fn el_catalogo_da_sentido_a_un_attr() {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -2292,6 +2297,7 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
         locale: "es".to_owned(),
         keymap,
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (200, 60),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -2537,6 +2543,7 @@ async fn host_solo_lectura(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewS
         )
         .expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -2955,6 +2962,7 @@ async fn dos_columnas_que_se_enmascaran_igual_siguen_siendo_dos() {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -3058,6 +3066,7 @@ async fn una_disposicion_sin_listado_no_arranca() {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: arbol_sin_listado,
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -3105,6 +3114,7 @@ async fn las_columnas_de_otro_esquema_no_estan_muertas() {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -3182,6 +3192,7 @@ prepend_keymap = [
         locale: "es".to_owned(),
         keymap,
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -4260,6 +4271,7 @@ async fn host_con_rutas(paths: norte_ui_host::settings::HostPaths) -> UiHost {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -4839,6 +4851,7 @@ async fn host_con_tema(theme: norte_ui_host::pickers::HostTheme) -> UiHost {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -5034,6 +5047,7 @@ async fn host_full(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot)
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("full").expect("layout"),
         viewport: (200, 60),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -5337,6 +5351,7 @@ async fn un_click_en_la_barra_no_navega_a_otro_sitio_si_la_lista_cambio() {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("full").expect("layout"),
         viewport: (200, 60),
         settings: cfg,
@@ -5440,6 +5455,7 @@ async fn un_favorito_roto_se_ve_y_dice_por_que() {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("full").expect("layout"),
         viewport: (200, 60),
         settings: cfg,
@@ -5644,6 +5660,7 @@ async fn una_disposicion_rota_se_ve_y_no_se_aplica() {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -5719,6 +5736,7 @@ async fn una_disposicion_que_esconde_el_listado_deja_el_hueco_vivo() {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -6286,6 +6304,8 @@ async fn ninguna_superficie_enmascara_en_silencio() {
             locale: "es".to_owned(),
             keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
             keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+            keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox")
+                .expect("preset"),
             layout: norte_frontend::layout::presets::tree("full").expect("layout"),
             viewport: (200, 60),
             settings: cfg,
@@ -6404,6 +6424,7 @@ async fn a_los_plugins_solo_se_les_pregunta_por_la_ventana() {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -6470,6 +6491,7 @@ async fn la_insignia_de_un_plugin_llega_a_la_fila() {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -6674,6 +6696,7 @@ async fn encender_una_columna_attr_vuelve_a_listar() {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -8112,6 +8135,7 @@ kind = "status"
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: arbol_layout,
         viewport: (200, 60),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -10876,6 +10900,7 @@ async fn en_solo_lectura_no_se_para_la_task_de_otro() {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -11042,6 +11067,7 @@ async fn un_kind_desconocido_con_nombre_alterado_va_marcado() {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: disposicion,
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -11209,6 +11235,7 @@ async fn en_solo_lectura_no_hay_busqueda_semantica() {
         )
         .expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: norte_ui_host::ajustes_por_defecto(),
@@ -11296,7 +11323,11 @@ async fn ejecutar_por_paleta_ack(
         if p.rows[i].text == etiqueta {
             return h.dispatch(tecla("Enter")).await.expect("host vivo");
         }
-        h.dispatch(tecla("Down")).await.expect("host vivo");
+        // `ArrowDown`, no `Down`: la paleta acepta el nombre del navegador o
+        // el del proyecto en minúscula, y `Down` no es ninguno de los dos —
+        // este ayudante llevaba desde la fase 2 funcionando solo cuando el
+        // comando buscado caía el PRIMERO.
+        h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
     }
     panic!("`{comando}` no aparece entre lo que el filtro deja");
 }
@@ -13074,5 +13105,243 @@ async fn sin_escritorio_detras_copiar_se_rehusa() {
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-no-desktop"),
         "{ack:?}"
+    );
+}
+
+/// Un preset que reata `dialog.confirm` cambia TAMBIÉN la ventana (#287).
+///
+/// Los diálogos de esta ventana se atendían con teclas fijas, así que quien
+/// reataba el verbo cambiaba el TUI y no la ventana — que es exactamente la
+/// deriva que el catálogo compartido está para no tener. Con un campo
+/// abierto sigue habiendo régimen fijo, porque no hay verbo `dialog.*` para
+/// «teclea una letra»; eso lo cubre el test de al lado.
+#[tokio::test]
+async fn una_tecla_reatada_contesta_el_dialogo() {
+    let backend = arbol();
+    // Una capa de usuario que ata `s` a confirmar, sobre el preset de
+    // siempre: es lo que un `keymap.toml` haría.
+    let capa = norte_frontend::keymap::parse_keymap(
+        "[dialog]\nappend_keymap = [{ on = [\"z\"], run = \"dialog.confirm\" }]\n",
+    )
+    .expect("la capa parsea");
+    let base = norte_frontend::keymap::parse_keymap(
+        norte_frontend::keymap::presets::source("orthodox").expect("preset"),
+    )
+    .expect("el preset parsea");
+    let dialogo = norte_frontend::keymap::Effective::build_for(
+        &base,
+        std::slice::from_ref(&capa),
+        norte_ui_host::commands::IMPLEMENTADOS_DIALOGO,
+        norte_frontend::keymap::Screen::Dialog,
+    )
+    .expect("efectivo");
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::backend::HostBackend>,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: dialogo,
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+
+    // Un borrado abre su confirmación, que NO tiene campo donde teclear.
+    ejecutar_por_paleta(&h, &mut sub, "pane.delete").await;
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogos.len(), 1, "la confirmación");
+    h.dispatch(tecla("z")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert!(
+        siguiente_foto(&mut sub).await.dialogs.is_empty(),
+        "`z` atada a `dialog.confirm` contesta la pregunta"
+    );
+    for _ in 0..40 {
+        if !backend.borrados.lock().expect("borrados").is_empty() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("y el borrado se encoló");
+}
+
+/// Con un CAMPO abierto, las teclas del diálogo son letras.
+///
+/// No hay verbo `dialog.*` para «teclea una letra», así que resolver por el
+/// keymap ahí convertiría escribir un nombre de fichero en contestar la
+/// pregunta. Es el mismo par de regímenes que el TUI y que el editor de
+/// `[config]` de la 6.4.
+#[tokio::test]
+async fn con_un_campo_abierto_las_teclas_no_contestan() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "pane.mkdir").await;
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let d = dialogos.last().expect("el prompt del nombre");
+    assert!(d.input.is_some(), "este diálogo tiene dónde teclear");
+    // Una letra cualquiera: ni contesta ni cierra.
+    h.dispatch(tecla("y")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert_eq!(
+        siguiente_foto(&mut sub).await.dialogs.len(),
+        1,
+        "el prompt sigue abierto"
+    );
+}
+
+/// Marcar todo, invertir y por PATRÓN (#289).
+///
+/// Lo que casa lo decide el modelo compartido (`mark_glob`), que pliega el
+/// nombre antes de comparar: aquí solo se comprueba que el gesto llega y que
+/// un glob que no compila se DICE en vez de no hacer nada.
+#[tokio::test]
+async fn marcar_todo_invertir_y_por_patron() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let marcas = |s: &norte_ui_host::ViewSnapshot| listado(s).marks;
+
+    ejecutar_por_paleta(&h, &mut sub, "mark.all").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let todas = marcas(&siguiente_foto(&mut sub).await);
+    assert!(todas > 0, "marcar todo marca algo");
+
+    ejecutar_por_paleta(&h, &mut sub, "mark.invert").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert_eq!(
+        marcas(&siguiente_foto(&mut sub).await),
+        0,
+        "invertir sobre todo marcado no deja ninguna"
+    );
+
+    // Por patrón: el prompt pide el glob y `Enter` lo aplica.
+    ejecutar_por_paleta(&h, &mut sub, "mark.pattern-add").await;
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let d = dialogos.last().expect("el prompt del glob");
+    assert!(d.input.is_some());
+    h.dispatch(UiAction::DialogInput {
+        id: d.id,
+        text: "*".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id: d.id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert_eq!(
+        marcas(&siguiente_foto(&mut sub).await),
+        todas,
+        "`*` marca lo mismo que marcar todo"
+    );
+
+    // Y un glob que no compila se rehúsa DICIÉNDOLO.
+    ejecutar_por_paleta(&h, &mut sub, "mark.pattern-remove").await;
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let d = dialogos.last().expect("el prompt");
+    h.dispatch(UiAction::DialogInput {
+        id: d.id,
+        text: "[".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let ack = h
+        .dispatch(UiAction::Dialog {
+            id: d.id,
+            choice: "confirm".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "err-bad-pattern"),
+        "{ack:?}"
+    );
+}
+
+/// El tablero se recorre y se descarta con el teclado, sin enfocar el panel
+/// de procesos (#292).
+///
+/// Y una task VIVA no se descarta: pararla es `task.cancel`, y quitar de la
+/// vista algo que sigue escribiendo en el disco es perder de vista justo lo
+/// que hay que mirar.
+#[tokio::test]
+async fn el_tablero_se_recorre_y_se_descarta() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    // Sin tasks: los tres lo dicen en vez de callar.
+    for cmd in ["task.next", "task.prev", "task.dismiss"] {
+        let ack = ejecutar_por_paleta_ack(&h, &mut sub, cmd).await;
+        assert!(matches!(ack, ActionAck::Applied { .. }), "{cmd}: {ack:?}");
+    }
+
+    // Una task viva: descartarla se rehúsa.
+    ejecutar_por_paleta(&h, &mut sub, "pane.mkdir").await;
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let d = dialogos.last().expect("el prompt");
+    h.dispatch(UiAction::DialogInput {
+        id: d.id,
+        text: "nueva".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id: d.id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let mut vivas = Vec::new();
+    for _ in 0..40 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        vivas = siguiente_foto(&mut sub).await.tasks;
+        if !vivas.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(!vivas.is_empty(), "la task del mkdir llegó al tablero");
+    if vivas
+        .iter()
+        .any(|t| matches!(t.state, norte_ui_host::dto::TaskStateView::Running))
+    {
+        let ack = ejecutar_por_paleta_ack(&h, &mut sub, "task.dismiss").await;
+        assert!(
+            matches!(&ack, ActionAck::Unavailable { reason_key }
+                if reason_key == "host-task-running"),
+            "una viva no se descarta: {ack:?}"
+        );
+    }
+
+    // Cuando termina, sí: la fila desaparece del tablero.
+    for _ in 0..40 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let tasks = siguiente_foto(&mut sub).await.tasks;
+        if tasks
+            .iter()
+            .all(|t| !matches!(t.state, norte_ui_host::dto::TaskStateView::Running))
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    ejecutar_por_paleta(&h, &mut sub, "task.dismiss").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert!(
+        siguiente_foto(&mut sub).await.tasks.is_empty(),
+        "la fila terminada se descarta"
     );
 }

@@ -817,6 +817,9 @@ columns-picker-session-only = applies to this window; not saved
 # growing and one still growing read the same.
 modal-search-title = Search in this tree
 err-empty-pattern = type a pattern: an empty one matches the whole tree
+modal-mark-pattern-title = mark by pattern (glob)
+modal-unmark-pattern-title = unmark by pattern (glob)
+err-bad-pattern = that pattern is not a valid glob
 # Task 4.1 in the graphical window: what each row of the layout picker says
 # about itself. The keymap-name warning is not decoration — the two settings
 # share a namespace, and without the line the coincidence is a trap.
@@ -1592,6 +1595,7 @@ task-batch-unverified = finished, report unavailable
 host-plan-unseen = scroll through the whole plan before applying it
 host-same-directory = source and destination are the same directory
 host-read-only = this window is mounted without effects: it does not write
+host-task-running = that task is still running: stopping it is another key
 host-nothing-selected = nothing is selected
 host-not-local = that is not on this disk: there is no native path to hand the desktop
 host-no-desktop = this window has no desktop behind it: it cannot copy to the clipboard or launch anything

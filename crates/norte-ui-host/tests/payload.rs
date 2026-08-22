@@ -34,6 +34,7 @@ async fn host_grande() -> (UiHost, norte_ui_host::ViewSnapshot) {
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (200, 60),
         settings: norte_ui_host::ajustes_por_defecto(),

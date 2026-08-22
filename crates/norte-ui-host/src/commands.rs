@@ -87,6 +87,10 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "nav.forward",
     "mark.toggle",
     "mark.clear",
+    "mark.all",
+    "mark.invert",
+    "mark.pattern-add",
+    "mark.pattern-remove",
     "pane.switch",
     "layout.focus-next",
     "layout.focus-prev",
@@ -120,6 +124,9 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.compare-dirs",
     "pane.sync-dirs",
     "task.cancel",
+    "task.next",
+    "task.prev",
+    "task.dismiss",
 ];
 
 /// Los comandos de la pantalla del VISOR que el host ejecuta.
@@ -128,6 +135,26 @@ pub const IMPLEMENTADOS: &[&str] = &[
 /// con `Screen::Viewer`: un comando que no esté aquí resuelve a
 /// [`norte_frontend::keymap::Availability::NotHere`] y se DICE, igual que en
 /// el listado.
+/// Los verbos de DIÁLOGO que este host atiende.
+///
+/// Cuatro y no los veintidós del catálogo: los diálogos de esta ventana son
+/// preguntas con dos respuestas —confirmar/cancelar, aprobar/denegar—, y los
+/// demás verbos (`dialog.overwrite`, `dialog.sort`, `dialog.pane`…) nombran
+/// respuestas de diálogos que aquí no existen. Un preset puede atarlos: la
+/// tecla dirá que aquí no, con la misma frase que cualquier otro comando que
+/// esta ventana no hace.
+pub const IMPLEMENTADOS_DIALOGO: &[&str] = &[
+    "dialog.confirm",
+    "dialog.cancel",
+    "dialog.approve",
+    "dialog.deny",
+];
+
+/// Los comandos del VISOR que este host implementa.
+///
+/// Lista aparte porque el visor es otra PANTALLA: con él abierto las teclas
+/// son suyas, y mezclarlas con las del listado sería un contexto de entrada
+/// que no existe en ningún preset.
 pub const IMPLEMENTADOS_VISOR: &[&str] = &[
     "viewer.close",
     "viewer.up",
@@ -260,6 +287,22 @@ pub enum Efecto {
     Extensiones,
     /// Las sesiones de agente vistas, y el deshacer de una entera.
     Agentes,
+    /// Mueve la fila elegida del TABLERO, sin tener que enfocarlo.
+    TaskVecina {
+        /// Hacia arriba.
+        atras: bool,
+    },
+    /// Quita del tablero la fila elegida, si ya terminó.
+    DescartarTask,
+    /// Marca TODAS las filas del panel activo.
+    MarcarTodo,
+    /// Invierte las marcas del panel activo.
+    InvertirMarcas,
+    /// Marca —o desmarca— por PATRÓN: abre el prompt del glob.
+    MarcarPatron {
+        /// `true` añade marcas, `false` las quita.
+        marcar: bool,
+    },
     /// Copia al portapapeles las rutas de lo marcado (o de lo señalado).
     CopiarRuta,
     /// Abre lo señalado con la aplicación que el escritorio elija.
@@ -364,6 +407,10 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "nav.forward" => Efecto::Rastro { atras: false },
         "mark.toggle" => Efecto::Marcar,
         "mark.clear" => Efecto::DesmarcarTodo,
+        "mark.all" => Efecto::MarcarTodo,
+        "mark.invert" => Efecto::InvertirMarcas,
+        "mark.pattern-add" => Efecto::MarcarPatron { marcar: true },
+        "mark.pattern-remove" => Efecto::MarcarPatron { marcar: false },
         // `pane.switch` es el cambio clásico entre dos paneles; con más de
         // dos, lo honesto es seguir el mismo recorrido que el tabulador en
         // vez de inventar un segundo orden.
@@ -398,6 +445,9 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.semantic-search" => Efecto::BuscarSemantica,
         "pane.compare-dirs" => Efecto::Comparar,
         "pane.sync-dirs" => Efecto::Sincronizar,
+        "task.next" => Efecto::TaskVecina { atras: false },
+        "task.prev" => Efecto::TaskVecina { atras: true },
+        "task.dismiss" => Efecto::DescartarTask,
         "task.cancel" => Efecto::CancelarTask,
         _ => return None,
     })

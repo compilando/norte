@@ -300,6 +300,31 @@ fn rutas(capas: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
     }
 }
 
+/// Las otras dos PANTALLAS del mismo preset: el visor y el diálogo.
+///
+/// No son capas, son pantallas: con el visor abierto las teclas son suyas
+/// (`esc` cierra, `e` recarga con otro encoding), y con una pregunta delante
+/// también — y eso último es lo que hace que quien reata `dialog.confirm`
+/// cambie esta ventana igual que el TUI (#287).
+fn otras_pantallas(
+    preset: &str,
+) -> Result<
+    (
+        norte_frontend::keymap::Effective,
+        norte_frontend::keymap::Effective,
+    ),
+    StartupError,
+> {
+    let desconocido = || StartupError::Desconocido {
+        que: "preset",
+        valor: preset.to_owned(),
+    };
+    let visor = norte_ui_host::keys::keymap_visor_de_preset(preset).map_err(|_| desconocido())?;
+    let dialogo =
+        norte_ui_host::keys::keymap_dialogo_de_preset(preset).map_err(|_| desconocido())?;
+    Ok((visor, dialogo))
+}
+
 /// Monta el host: configuración, socket, directorio, keymap y disposición.
 ///
 /// # Errors
@@ -379,12 +404,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // El visor es otra PANTALLA, con el mismo preset: `esc` cierra y `e`
     // recarga con otro encoding porque eso es lo que dice el preset, no
     // porque el renderer lo decida.
-    let keymap_viewer = norte_ui_host::keys::keymap_visor_de_preset(&preset).map_err(|_| {
-        StartupError::Desconocido {
-            que: "preset",
-            valor: preset.clone(),
-        }
-    })?;
+    let (keymap_viewer, keymap_dialog) = otras_pantallas(&preset)?;
 
     // De la línea de órdenes se exige que exista; de la CONFIGURACIÓN se cae
     // a la de siempre, que es lo que el usuario tenía antes de escribir la
@@ -423,6 +443,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         },
         keymap,
         keymap_viewer,
+        keymap_dialog,
         layout,
         // El renderer corrige el tamaño en cuanto sepa el suyo; esto es lo
         // que se reparte mientras tanto.

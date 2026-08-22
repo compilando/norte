@@ -35,12 +35,8 @@ const NO_APLICA: &[&str] = &[
 /// Comandos vivos APLAZADOS, con la issue que los cierra.
 const APLAZADOS: &[(&str, u32)] = &[
     ("dialog.add", 287),
-    ("dialog.approve", 287),
     ("dialog.back", 287),
-    ("dialog.cancel", 287),
-    ("dialog.confirm", 287),
     ("dialog.cycle-format", 287),
-    ("dialog.deny", 287),
     ("dialog.down", 287),
     ("dialog.filter", 287),
     ("dialog.move-down", 287),
@@ -71,10 +67,6 @@ const APLAZADOS: &[(&str, u32)] = &[
     ("pane.tab-new", 288),
     ("pane.tab-next", 288),
     ("pane.tab-prev", 288),
-    ("mark.all", 289),
-    ("mark.invert", 289),
-    ("mark.pattern-add", 289),
-    ("mark.pattern-remove", 289),
     ("pane.combine-files", 290),
     ("pane.connect", 290),
     ("pane.dir-size", 290),
@@ -118,6 +110,7 @@ fn cada_comando_vivo_esta_clasificado() {
     let hace: std::collections::HashSet<&str> = norte_ui_host::commands::IMPLEMENTADOS
         .iter()
         .chain(norte_ui_host::commands::IMPLEMENTADOS_VISOR.iter())
+        .chain(norte_ui_host::commands::IMPLEMENTADOS_DIALOGO.iter())
         .copied()
         .collect();
     let no_aplica: std::collections::HashSet<&str> = NO_APLICA.iter().copied().collect();
@@ -147,6 +140,7 @@ fn nada_clasificado_esta_construido() {
     let hace: std::collections::HashSet<&str> = norte_ui_host::commands::IMPLEMENTADOS
         .iter()
         .chain(norte_ui_host::commands::IMPLEMENTADOS_VISOR.iter())
+        .chain(norte_ui_host::commands::IMPLEMENTADOS_DIALOGO.iter())
         .copied()
         .collect();
     for c in NO_APLICA.iter().chain(APLAZADOS.iter().map(|(c, _)| c)) {

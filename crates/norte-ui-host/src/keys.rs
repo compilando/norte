@@ -181,6 +181,30 @@ pub fn keymap_visor_de_preset(
     efectivo(nombre, norte_frontend::keymap::Screen::Viewer)
 }
 
+/// El keymap efectivo de un DIÁLOGO, del mismo preset.
+///
+/// Otra pantalla, como el visor: con una pregunta delante las teclas son
+/// suyas. Existe para que un preset que reata `dialog.confirm` cambie las dos
+/// superficies y no solo el TUI — que es la deriva que el catálogo
+/// compartido está para no tener (#287).
+///
+/// # Errors
+/// [`KeymapError`] si el preset no existe o no valida.
+pub fn keymap_dialogo_de_preset(
+    nombre: &str,
+) -> Result<norte_frontend::keymap::Effective, KeymapError> {
+    let fuente = norte_frontend::keymap::presets::source(nombre).ok_or(KeymapError::BadChord {
+        chord: nombre.to_owned(),
+    })?;
+    let preset = norte_frontend::keymap::parse_keymap(fuente)?;
+    norte_frontend::keymap::Effective::build_for(
+        &preset,
+        &[],
+        crate::commands::IMPLEMENTADOS_DIALOGO,
+        norte_frontend::keymap::Screen::Dialog,
+    )
+}
+
 fn efectivo(
     nombre: &str,
     pantalla: norte_frontend::keymap::Screen,
