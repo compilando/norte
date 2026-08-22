@@ -1433,6 +1433,7 @@ keymap-reason-editor = built-in editor
 keymap-reason-tree = directory tree panel
 keymap-reason-tabs = panel tabs
 keymap-reason-sort = sort commands
+keymap-reason-task-walk = walking the task board
 keymap-reason-properties = properties and directory size
 keymap-reason-connections = connection management
 # The SHORT form, for a surface whose ROW already names the command: the

@@ -2124,9 +2124,10 @@ availability from the same classification.
 
 #### The matrix, measured 2026-08-22
 
-The shared catalogue declares **138** live commands (`viewer.*` included).
-The window implements **55**; the TUI implements **111**. Nothing was
-dropped: every one of the 83 the window lacks is classified below, and every
+The shared catalogue declares **135** live commands (`viewer.*` included;
+`task.next`/`prev`/`dismiss` moved to `Planned` because nobody implements
+them). The window implements **55**; the TUI implements **111**. Nothing was
+dropped: every one of the 80 the window lacks is classified below, and every
 "deferred" line has an issue that can be closed.
 
 | family | in the window | classification |
@@ -2137,7 +2138,7 @@ dropped: every one of the 83 the window lacks is classified below, and every
 | `pane.*` others (27) | sorting is done by clicking the header; the rest have no surface | **deferred — #290** |
 | `layout.split-h/v`, `close-slot`, `preview`, `processes`, `metadata`, `places` (7) | the tree is painted, not edited | **deferred — #291** |
 | `mark.all/invert/pattern-add/pattern-remove` (4) | none | **deferred — #289** |
-| `task.next/prev/dismiss` (3) | the board is painted, not walked | **deferred — #292** |
+| `task.next/prev/dismiss` (3) | the board is painted, not walked; NO frontend has these, so they are `Planned` in the catalogue | **deferred — #292** |
 | `pane.command-line` | the palette is this window's answer | **not applicable to the GUI** |
 | `app.pick-accept` | `--pick` is a CLI mode; a GUI has no pipe to answer into | **not applicable to the GUI** |
 | `app.quit` | the window manager closes the window | **not applicable to the GUI** |
@@ -2152,11 +2153,21 @@ Two commands go the OTHER way — the window has them and the TUI does not:
 thing that would be, and it is blocked by a design that has not been made,
 not by the transport.
 
-**And a hole in the guard**: the test that ties the two halves checks that
-everything the TUI implements is in the catalogue, not that everything the
-catalogue calls `Live` is implemented by SOMEBODY. A frontend that retires
-can leave the catalogue promising what nobody does — which is exactly what
-happened to `pane.copy-path` for two months.
+**And a hole in the guard, now closed.** The test that ties the two halves
+checks that everything the TUI implements is in the catalogue, not that
+everything the catalogue calls `Live` is implemented by SOMEBODY. A frontend
+that retires leaves the catalogue promising what nobody does — which is what
+happened to `pane.copy-path` for two months, and to `task.next`/`prev`/
+`dismiss`, which no frontend has ever implemented. Those three are now
+`Planned` with issue #292, which is what that state exists for: a preset can
+bind them and the key paints dimmed with its reason instead of doing nothing
+in silence.
+
+The matrix itself is now a TEST (`crates/norte-ui-host/tests/paridad.rs`):
+every live command is either implemented by the window, or on the
+"not applicable to a window" list, or pointed at the issue that closes it.
+Adding a command to the catalogue fails that test until somebody classifies
+it — which is all the guard has to do, and exactly what was missing.
 
 ---
 

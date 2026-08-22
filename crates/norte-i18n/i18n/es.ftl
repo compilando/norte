@@ -1441,6 +1441,7 @@ keymap-reason-editor = editor integrado
 keymap-reason-tree = panel de árbol de directorios
 keymap-reason-tabs = pestañas de panel
 keymap-reason-sort = comandos de ordenación
+keymap-reason-task-walk = recorrer el tablero de tareas
 keymap-reason-properties = propiedades y tamaño de directorio
 keymap-reason-connections = gestión de conexiones
 # Forma CORTA, para una superficie cuya FILA ya nombra el comando: el panel

@@ -47,13 +47,14 @@ const fn live(name: &'static str, counts: bool) -> CommandDef {
     }
 }
 
-/// **Ahora mismo no hay ninguno**, y eso es un hito: con #132 construido, la
-/// tabla se quedó sin `Planned` — cada comando que un preset nombra es un
-/// comando que norte tiene. El constructor se queda porque la maquinaria
-/// (fila atenuada, motivo traducido, número de issue) es lo que hace que la
-/// próxima capacidad prometida se anuncie en gris en vez de en silencio, y
-/// reconstruirla costaría más que dejarla.
-#[allow(dead_code, reason = "el vocabulario está entero: ver el doc de arriba")]
+/// Un comando que un preset puede nombrar honestamente y que norte todavía
+/// no hace.
+///
+/// Con #132 la tabla llegó a quedarse sin ninguno, y luego la matriz de
+/// paridad de la fase 6 destapó tres (`task.next`/`prev`/`dismiss`): estaban
+/// declarados vivos y no los implementaba ningún frontend. Esa es la avería
+/// que esto evita — una fila atenuada con su motivo traducido y su número de
+/// issue, en vez de una tecla que no hace nada y no dice por qué.
 const fn planned(name: &'static str, reason: &'static str, issue: u32) -> CommandDef {
     CommandDef {
         name,
@@ -207,9 +208,15 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("mark.pattern-remove", false),
     // --- task ---
     live("task.cancel", false),
-    live("task.next", false),
-    live("task.prev", false),
-    live("task.dismiss", false),
+    // Los tres de RECORRER el tablero no los implementa NADIE: el TUI ata
+    // `task.cancel` y nada más, y la ventana cancela la última en marcha. La
+    // tabla los declaraba vivos desde antes de que se midiera la paridad de
+    // la fase 6, que es exactamente el fallo que `Planned` existe para no
+    // tener: un preset puede atarlos, y entonces la tecla se pinta en gris
+    // con su motivo en vez de no hacer nada en silencio.
+    planned("task.next", "keymap-reason-task-walk", 292),
+    planned("task.prev", "keymap-reason-task-walk", 292),
+    planned("task.dismiss", "keymap-reason-task-walk", 292),
     // --- viewer ---
     live("viewer.close", false),
     live("viewer.up", true),
