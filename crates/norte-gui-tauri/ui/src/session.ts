@@ -160,6 +160,9 @@ export class Session {
       case "settings":
         s.settings = c.settings;
         return true;
+      case "agents":
+        s.agents = c.agents;
+        return true;
       case "plugin_output":
         s.plugin_output = c.output;
         return true;

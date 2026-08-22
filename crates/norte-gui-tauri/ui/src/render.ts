@@ -33,6 +33,7 @@ import type {
   HelpView,
   PaletteView,
   ExtensionsView,
+  AgentsView,
   ExtensionCommandView,
   ExtensionOutputView,
   ColumnsPickerView,
@@ -128,6 +129,7 @@ export class Screen {
     private readonly searchRoot: HTMLElement,
     private readonly compareRoot: HTMLElement,
     private readonly syncRoot: HTMLElement,
+    private readonly agentsRoot: HTMLElement,
     private readonly pluginOutputRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
@@ -188,6 +190,7 @@ export class Screen {
     this.paintHelp(view.help);
     this.paintSettings(view.settings);
     this.paintExtensions(view.extensions);
+    this.paintAgents(view.agents);
     this.paintPluginOutput(view.plugin_output);
     this.paintTheme(view.theme);
     this.paintPicker(view.picker);
@@ -1038,6 +1041,86 @@ export class Screen {
     }
     caja.append(titulo, lista);
     return caja;
+  }
+
+  /**
+   * Las sesiones de agente que esta ventana ha visto pedir permiso.
+   *
+   * La NOTA va dentro del panel y no en la documentación: esta lista no es
+   * el censo de agentes del sistema —no hay método que lo dé—, y una lista
+   * vacía sin esa frase se lee como «ningún agente ha tocado nada».
+   */
+  private paintAgents(agents: AgentsView | null): void {
+    if (agents === null) {
+      if (this.agentsRoot.dataset["open"] === "true") {
+        this.agentsRoot.replaceChildren();
+        this.agentsRoot.dataset["open"] = "false";
+      }
+      return;
+    }
+    this.agentsRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "agents";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", this.t("agents-title"));
+    const titulo = document.createElement("h2");
+    titulo.textContent = this.t("agents-title");
+    const nota = document.createElement("p");
+    nota.className = "agents-note";
+    nota.textContent = agents.note;
+    caja.append(titulo, nota);
+    if (agents.rows.length === 0) {
+      const vacio = document.createElement("p");
+      vacio.className = "agents-empty";
+      vacio.textContent = this.t("agents-empty");
+      caja.append(vacio);
+      this.agentsRoot.replaceChildren(caja);
+      return;
+    }
+    const lista = document.createElement("ul");
+    lista.className = "agents-rows";
+    lista.setAttribute("role", "listbox");
+    for (const [i, r] of agents.rows.entries()) {
+      const li = document.createElement("li");
+      li.className = "agents-row";
+      li.id = `agent-row-${String(i)}`;
+      li.setAttribute("role", "option");
+      li.setAttribute("aria-selected", String(agents.cursor === i));
+      li.addEventListener("click", () => {
+        this.send({ action: "agent_select_row", row: i });
+      });
+      // El id y el último op, cada uno aislado y con su bandera: el id es
+      // una clave opaca del daemon y puede traer letras RTL que reordenarían
+      // la fila entera.
+      const id = document.createElement("span");
+      id.className = "agents-session";
+      id.dataset["hostile"] = String(r.session_hostile);
+      id.textContent = r.session;
+      li.append(id);
+      if (r.session_hostile) {
+        li.append(badge(this.t("hostile-name")));
+      }
+      const op = document.createElement("span");
+      op.className = "agents-op";
+      op.dataset["hostile"] = String(r.last_op_hostile);
+      op.textContent = r.last_op;
+      li.append(op);
+      if (r.last_op_hostile) {
+        li.append(badge(this.t("hostile-name")));
+      }
+      // Pidió N y se le aprobaron M: no son lo mismo cuando contestó otra
+      // ventana, cuando se denegó, o cuando caducó.
+      const cuentas = document.createElement("span");
+      cuentas.className = "agents-counts";
+      cuentas.textContent = r.counts;
+      li.append(cuentas);
+      lista.append(li);
+    }
+    lista.setAttribute("aria-activedescendant", `agent-row-${String(agents.cursor)}`);
+    caja.append(lista);
+    this.agentsRoot.replaceChildren(caja);
+    revelar(lista.querySelector(`#agent-row-${String(agents.cursor)}`) ?? undefined);
   }
 
   /**

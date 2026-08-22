@@ -248,6 +248,17 @@ pub trait HostBackend: Send + Sync + 'static {
         task_id: TaskId,
     ) -> BoxFuture<'static, Result<methods::PolicyUndoReportResult, Error>>;
 
+    /// Deshace lo que una sesión de AGENTE hizo, entero, en orden inverso.
+    ///
+    /// La sesión es una clave OPACA: viene del daemon (en la petición de
+    /// aprobación que el agente disparó) y vuelve tal cual. No se compone ni
+    /// se recorta — se pinta enmascarada, pero lo que viaja es lo que llegó.
+    ///
+    /// Devuelve una Task: es una operación larga con su propio informe
+    /// (`undo_report`), y lo que no volvió —irreversible, denegado, un LIFO
+    /// que paró a mitad— se dice ahí y no en el desenlace de la Task.
+    fn undo_session(&self, session: String) -> BoxFuture<'static, Result<HostTask, Error>>;
+
     /// Mueve UNA entrada a un destino EXACTO. Mismas reglas que
     /// [`Self::copy`].
     ///
@@ -881,6 +892,20 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<methods::FsRenameBatchReportResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.rename_batch_report(task_id).await })
+    }
+
+    fn undo_session(&self, session: String) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.undo_session(&session).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
+        })
     }
 
     fn undo_report(

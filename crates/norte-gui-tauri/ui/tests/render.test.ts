@@ -98,6 +98,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     search: null,
     compare: null,
     sync: null,
+    agents: null,
     plugin_output: null,
     viewer: null,
     ai_rename: null,
@@ -124,6 +125,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
   const search = document.createElement("div");
   const compare = document.createElement("div");
   const sync = document.createElement("div");
+  const agents = document.createElement("div");
   const pluginOutput = document.createElement("div");
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
@@ -161,6 +163,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
     search,
     compare,
     sync,
+    agents,
     pluginOutput,
     viewer,
     dialogs,

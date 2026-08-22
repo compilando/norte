@@ -235,6 +235,12 @@ pub enum UiAction {
         /// Fila, contando TODAS las de todas las secciones en orden.
         row: u32,
     },
+    /// Elige una sesión de agente por posición (un click).
+    AgentSelectRow {
+        /// Fila dentro de la lista pintada.
+        row: u32,
+    },
+
     /// Elige una extensión del gestor (un click) y pide su ficha.
     ExtensionSelectRow {
         /// Fila, en el orden en que viajaron.

@@ -30,6 +30,10 @@ use serde::{Deserialize, Serialize};
 ///   hará DE VERDAD —los dos ya traducidos, porque el catálogo no sustituye
 ///   variables—, si hay un nombre alterado FUERA de la ventana, y si el
 ///   lector ha recorrido el plan entero. Y se puede contestar con el ratón.
+/// - **33**: la ventana lleva las sesiones de AGENTE que ha visto pedir
+///   permiso, con cuántas pidió cada una y cuántas se le aprobaron desde
+///   aquí. Es de donde sale el operando del deshacer de una sesión entera
+///   (#276): elegido de una lista, jamás tecleado.
 /// - **32**: lo que las revisiones de la 6.4 cambiaron de forma: la salida de
 ///   un comando viaja por LÍNEAS y con una bandera por cadena —quién, qué y lo
 ///   impreso, cada uno con la suya, más el id reverse-DNS de la extensión—, y
@@ -117,7 +121,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 32;
+pub const BRIDGE_VERSION: u32 = 33;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

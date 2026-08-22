@@ -61,6 +61,8 @@ pub struct ViewSnapshot {
     /// aprueba, se revoca, se enciende, se apaga y se configura — con el
     /// mismo interruptor de efectos que decide si esta ventana escribe.
     pub extensions: Option<ExtensionsView>,
+    /// Las sesiones de agente, si el panel está abierto.
+    pub agents: Option<AgentsView>,
     /// La salida del último comando de extensión, si sigue en pantalla.
     ///
     /// Fuera del gestor a propósito: un comando se lanza desde la PALETA, y
@@ -534,6 +536,45 @@ pub struct ExtensionOutputView {
     pub text_hostile: bool,
     /// La salida no cabía entera y se cortó.
     pub truncated: bool,
+}
+
+/// Las sesiones de AGENTE que esta ventana ha visto pedir permiso.
+///
+/// Lo que la lista ES va DENTRO de ella (`note`): no hay método en el
+/// protocolo que enumere las sesiones vivas, así que esto son las vistas por
+/// esta ventana y no el censo de agentes del sistema. Una lista vacía sin esa
+/// nota se lee como «ningún agente ha tocado nada», que es una afirmación que
+/// esta ventana no puede hacer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentsView {
+    /// Las sesiones, de la vista más recientemente a la más antigua.
+    pub rows: Vec<AgentRowView>,
+    /// Cuál está elegida.
+    pub cursor: u64,
+    /// Qué es esta lista, ya traducido.
+    pub note: String,
+}
+
+/// Una sesión de agente vista por esta ventana.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRowView {
+    /// Su id, ya enmascarado: es una clave OPACA del daemon y puede llevar
+    /// cualquier byte. Lo que viaja de vuelta es el id crudo, no esto.
+    pub session: String,
+    /// El id se pinta distinto de lo que es.
+    pub session_hostile: bool,
+    /// Cuántas pidió y cuántas se le aprobaron desde aquí, ya en una frase
+    /// traducida.
+    ///
+    /// Compuesta AQUÍ y no en el renderer: el catálogo que cruza son cadenas
+    /// ya traducidas, sin sustitución de variables, así que un `{ $n }` al
+    /// otro lado se pinta literal. Y las dos cuentas no son la misma cosa —
+    /// otra ventana pudo contestar, o se denegó, o caducó.
+    pub counts: String,
+    /// El último op-kind que pidió (`copy`, `delete`…), ya enmascarado.
+    pub last_op: String,
+    /// El op-kind se pinta distinto de lo que es.
+    pub last_op_hostile: bool,
 }
 
 /// Una cadena de tercero lista para pintar, con su bandera al lado.
@@ -2005,6 +2046,11 @@ pub enum ViewChange {
     Extensions {
         /// El gestor, o `None` si se cerró.
         extensions: Option<ExtensionsView>,
+    },
+    /// El panel de sesiones de agente se abrió, se movió o se cerró.
+    Agents {
+        /// El panel, o `None` si se cerró.
+        agents: Option<AgentsView>,
     },
     /// La salida de un comando de extensión se enseñó o se cerró.
     PluginOutput {

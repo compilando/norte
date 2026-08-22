@@ -12719,3 +12719,119 @@ async fn siguiente_foto_tras_resync(
     h.dispatch(UiAction::Resync).await.expect("host vivo");
     siguiente_foto(sub).await
 }
+
+/// El panel de agentes lista las sesiones que ESTA ventana vio pedir
+/// permiso, y desde ahí se deshace una entera (#276).
+///
+/// El operando se ELIGE de una lista: un id de sesión tecleado a mano en una
+/// superficie de gobierno es un id que se puede equivocar, y deshacer la
+/// sesión equivocada es deshacer el trabajo de otro. Y la lista dice lo que
+/// es —lo visto por esta ventana, no el censo del sistema—, porque no hay
+/// método en el protocolo que enumere sesiones vivas.
+#[tokio::test]
+async fn el_panel_de_agentes_deshace_la_sesion_elegida() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    // Dos sesiones, y la del id hostil es la ÚLTIMA vista: la lista va de la
+    // más reciente a la más antigua.
+    for (id, op, aid) in [
+        ("agente-2", "copy", 11_u64),
+        ("agente\u{202e}1", "delete", 12),
+    ] {
+        tx.send(norte_proto::methods::PolicyApprovalRequired {
+            approval_id: aid,
+            session: Some(id.to_owned()),
+            op: op.to_owned(),
+            paths: vec!["mem:///casa/x".to_owned()],
+            paths_total: 1,
+            ttl_ms: 30_000,
+        })
+        .expect("el host escucha");
+        let dialogos = siguientes_dialogos(&mut sub).await;
+        // Se DENIEGA para quitarlo de en medio: un diálogo abierto se queda
+        // las teclas, y lo que se comprueba aquí es el panel. Denegar no
+        // borra el apunte —lo que la sesión pidió ya se vio—, que es
+        // justamente la propiedad interesante.
+        let d = dialogos.last().expect("la aprobación");
+        h.dispatch(UiAction::Dialog {
+            id: d.id,
+            choice: "deny".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+        let _ = siguientes_dialogos(&mut sub).await;
+    }
+
+    ejecutar_por_paleta(&h, &mut sub, "app.agents").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let panel = siguiente_foto(&mut sub)
+        .await
+        .agents
+        .expect("el panel está abierto");
+    assert_eq!(panel.rows.len(), 2);
+    assert_eq!(panel.rows[0].last_op, "delete", "la más reciente primero");
+    assert!(
+        panel.rows[0].session_hostile,
+        "un id de sesión es una clave OPACA: si se pinta distinto, se dice"
+    );
+    assert!(
+        !panel.rows[0].session.contains('\u{202e}'),
+        "y se enmascara"
+    );
+    assert!(!panel.note.is_empty(), "y la lista dice lo que es");
+
+    // `u` PREGUNTA: deshacer una sesión revierte todo lo que hizo.
+    h.dispatch(tecla("u")).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let d = dialogos.last().expect("la pregunta");
+    assert_eq!(d.title_key, "modal-undo-session-title");
+    assert!(
+        d.choices.iter().any(|c| c.id == "confirm" && c.destructive),
+        "deshacer escribe: la respuesta va marcada"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(backend.deshechas.lock().expect("deshechas").is_empty());
+
+    // Y al confirmar viaja el id CRUDO, no el que se pinta.
+    h.dispatch(UiAction::Dialog {
+        id: d.id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    for _ in 0..40 {
+        let pedidas = backend.deshechas.lock().expect("deshechas").clone();
+        if !pedidas.is_empty() {
+            assert_eq!(pedidas, ["agente\u{202e}1".to_owned()]);
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("el deshacer nunca se pidió");
+}
+
+/// En solo lectura no se deshace nada: se DICE.
+#[tokio::test]
+async fn en_solo_lectura_no_se_deshace_una_sesion() {
+    // Sin aprobaciones: una ventana de solo lectura tampoco puede
+    // CONTESTARLAS, así que un diálogo abierto se quedaría las teclas y este
+    // test estaría comprobando otra cosa. La lista vacía vale igual: el
+    // rechazo por efectos se mira ANTES que si hay algo señalado.
+    let backend = arbol_como_falso();
+    let backend = Arc::new(backend);
+    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "app.agents").await;
+    let ack = h.dispatch(tecla("u")).await.expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-read-only"),
+        "{ack:?}"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(backend.deshechas.lock().expect("deshechas").is_empty());
+}

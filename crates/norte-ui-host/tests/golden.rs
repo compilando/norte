@@ -143,6 +143,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::HelpActivate { .. } => "help_activate",
         UiAction::SettingsSelectRow { .. } => "settings_select_row",
         UiAction::ExtensionSelectRow { .. } => "extension_select_row",
+        UiAction::AgentSelectRow { .. } => "agent_select_row",
         UiAction::PickerSelectRow { .. } => "picker_select_row",
         UiAction::PlaceActivateRow { .. } => "place_activate_row",
         UiAction::LayoutActivateRow { .. } => "layout_activate_row",
@@ -214,6 +215,7 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
             "extension_select_row",
             UiAction::ExtensionSelectRow { row: 1 },
         ),
+        ("agent_select_row", UiAction::AgentSelectRow { row: 1 }),
         (
             "picker_select_row",
             UiAction::PickerSelectRow {
@@ -686,6 +688,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         help: Some(ayuda_de_referencia()),
         settings: Some(ajustes_de_referencia()),
         extensions: Some(extensiones_de_referencia()),
+        agents: Some(agentes_de_referencia()),
         plugin_output: Some(salida_de_referencia()),
         theme: Some(tema_de_referencia()),
         search: Some(busqueda_de_referencia()),
@@ -982,6 +985,32 @@ fn selector_de_referencia() -> norte_ui_host::dto::PickerView {
         cursor: Some(0),
         empty: String::new(),
         generation: 2,
+    }
+}
+
+/// El panel de sesiones de agente: una sesión cuyo id se pinta distinto de
+/// lo que es —es una clave opaca del daemon, no un identificador con
+/// charset— y otra limpia.
+fn agentes_de_referencia() -> norte_ui_host::dto::AgentsView {
+    norte_ui_host::dto::AgentsView {
+        rows: vec![
+            norte_ui_host::dto::AgentRowView {
+                session: "agente\u{fffd}1".to_owned(),
+                session_hostile: true,
+                counts: "pidió 7, aprobadas desde aquí 3".to_owned(),
+                last_op: "delete".to_owned(),
+                last_op_hostile: false,
+            },
+            norte_ui_host::dto::AgentRowView {
+                session: "agente-2".to_owned(),
+                session_hostile: false,
+                counts: "pidió 1, aprobadas desde aquí 0".to_owned(),
+                last_op: "copy".to_owned(),
+                last_op_hostile: false,
+            },
+        ],
+        cursor: 0,
+        note: "solo las sesiones que esta ventana ha visto".to_owned(),
     }
 }
 
@@ -1414,6 +1443,12 @@ fn cambios_de_overlay() -> Vec<(&'static str, ViewChange)> {
             "extensions",
             ViewChange::Extensions {
                 extensions: Some(extensiones_de_referencia()),
+            },
+        ),
+        (
+            "agents",
+            ViewChange::Agents {
+                agents: Some(agentes_de_referencia()),
             },
         ),
         (

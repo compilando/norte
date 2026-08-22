@@ -71,6 +71,12 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("app.theme", false),
     live("app.settings", false),
     live("app.extensions", false),
+    // Las sesiones de AGENTE que este cliente ha visto pedir permiso, y el
+    // deshacer de una entera (#276). Vive en el catálogo compartido —y no
+    // solo en el host gráfico— porque el vocabulario de comandos es UNO: un
+    // preset puede atarlo, la ayuda lo documenta, y el frontend que aún no lo
+    // implementa lo dice con la misma frase que cualquier otro que no tenga.
+    live("app.agents", false),
     live("app.palette", false),
     live("app.menu", false),
     // `--pick` (S2): being in this table only means the NAME is known to the

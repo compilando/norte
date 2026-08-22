@@ -1184,6 +1184,11 @@ enum Pendiente {
     /// Preguntar al índice por SIGNIFICADO. Lo que se teclea es la consulta,
     /// y no lleva más operandos: el alcance es el índice entero.
     ConsultaSemantica,
+    /// Deshacer TODO lo que hizo una sesión de agente (#276).
+    DeshacerSesion {
+        /// La clave OPACA con la que el core la resuelve, cruda.
+        sesion: String,
+    },
     /// Conceder las capabilities de una extensión.
     ///
     /// Es la única de las cuatro operaciones del gestor que PREGUNTA:
@@ -1208,6 +1213,12 @@ enum Pendiente {
     Decidir {
         /// El id que el daemon espera de vuelta.
         approval_id: u64,
+        /// La sesión de agente que la pidió, CRUDA, si la petición la traía.
+        ///
+        /// Cruda y no la del diálogo: lo que el diálogo pinta está
+        /// enmascarado, y enmascarar no es inyectivo — usar eso como clave
+        /// apuntaría el sí en la fila de otra sesión, o en ninguna.
+        session: Option<String>,
     },
     /// Buscar por el subárbol de este directorio. Lo que se teclea es el
     /// patrón.
@@ -1491,6 +1502,11 @@ struct Estado {
     ajustes: Option<crate::settings::Ajustes>,
     /// El gestor de extensiones, si está abierto.
     extensiones: Option<crate::extensions::Extensiones>,
+    /// Las sesiones de agente vistas. SIEMPRE presente: una petición de
+    /// aprobación llega cuando llega, y el panel solo decide si se pintan.
+    agentes: crate::agents::Agentes,
+    /// El panel de sesiones de agente está abierto.
+    panel_agentes: bool,
     /// Cómo se llaman las extensiones y sus comandos, ya enmascarados, para
     /// el panel de salida: `id → (nombre, comando → título)`.
     ///
@@ -1844,6 +1860,8 @@ impl Estado {
             ayuda: None,
             ajustes: None,
             extensiones: None,
+            agentes: crate::agents::Agentes::default(),
+            panel_agentes: false,
             tema: theme,
             mirando_tema: false,
             cursor_procesos: 0,
@@ -2350,6 +2368,7 @@ impl Estado {
             UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row, backend, buzon),
             UiAction::SettingsSelectRow { row } => self.elegir_ajuste(*row),
             UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
+            UiAction::AgentSelectRow { row } => self.elegir_agente(*row),
             UiAction::PickerSelectRow { row, generation } => {
                 self.elegir_fila_del_selector(*row, *generation)
             }
@@ -2493,6 +2512,9 @@ impl Estado {
         }
         if self.extensiones.is_some() {
             return Some(self.tecla_en_extensiones(k, backend, buzon));
+        }
+        if self.panel_agentes {
+            return Some(self.tecla_en_agentes(k, backend, buzon));
         }
         if self.ajustes.is_some() {
             return Some(self.tecla_en_ajustes(k));
@@ -4486,6 +4508,165 @@ impl Estado {
     /// aparece medio segundo después. Y «cargando» no es lo mismo que
     /// «ninguna»: una lista vacía sin ese aviso se lee como que no hay nada
     /// instalado.
+    /// Abre el panel de sesiones de AGENTE.
+    ///
+    /// No pide nada al daemon: no hay método que enumere sesiones vivas, así
+    /// que lo que se enseña es lo que ESTA ventana ha visto pedir permiso —y
+    /// el panel lo dice—. Eso es también lo que hace que el operando del
+    /// deshacer se ELIJA en vez de teclearse, que es lo que la tarea 5.3
+    /// rechazó: un id de sesión tecleado se puede equivocar, y deshacer la
+    /// sesión equivocada es deshacer el trabajo de otro.
+    fn abrir_agentes(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.panel_agentes = true;
+        self.agentes.al_abrir();
+        let cambio = ViewChange::Agents {
+            agents: self.vista_agentes(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// La proyección del panel de agentes.
+    fn vista_agentes(&self) -> Option<crate::dto::AgentsView> {
+        self.panel_agentes.then(|| self.agentes.vista_de(self.lang))
+    }
+
+    /// Las teclas mientras el panel de agentes está abierto.
+    fn tecla_en_agentes(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        /// Cuántas filas mueve una página.
+        const PAGINA: i64 = 10;
+        match k.key.as_str() {
+            "Escape" | "esc" => self.panel_agentes = false,
+            "ArrowDown" | "down" => self.agentes.mover(1),
+            "ArrowUp" | "up" => self.agentes.mover(-1),
+            "PageDown" | "pgdn" => self.agentes.mover(PAGINA),
+            "PageUp" | "pgup" => self.agentes.mover(-PAGINA),
+            "Home" | "home" => self.agentes.mover(i64::MIN / 2),
+            "End" | "end" => self.agentes.mover(i64::MAX / 2),
+            // `u` DESHACE la sesión entera, y pregunta antes: es la operación
+            // más grande que esta ventana puede lanzar de un tirón —revierte
+            // todo lo que un agente hizo, en orden inverso— y no hay ninguna
+            // otra que toque tantas cosas con una tecla.
+            "u" => return self.preguntar_por_deshacer(),
+            _ => return (self.aplicada(), Vec::new()),
+        }
+        let _ = (backend, buzon);
+        let cambio = ViewChange::Agents {
+            agents: self.vista_agentes(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Un click sobre una fila del panel de agentes: la elige.
+    fn elegir_agente(&mut self, row: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if !self.panel_agentes {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        self.agentes.senalar(row as usize);
+        let cambio = ViewChange::Agents {
+            agents: self.vista_agentes(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Abre la pregunta de deshacer una sesión entera.
+    fn preguntar_por_deshacer(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.efectos == crate::commands::Efectos::SoloLectura {
+            return Self::no_muta();
+        }
+        let Some(sesion) = self.agentes.elegida() else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-session".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        // El id, enmascarado, en su propio campo: es una clave opaca del
+        // daemon que puede llevar cualquier byte, y una decisión sobre «esta
+        // sesión» que no dice cuál no es una decisión.
+        let (pintable, hostil) = norte_frontend::display_name(sesion.as_bytes());
+        let modal = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id: modal,
+            title_key: "modal-undo-session-title".to_owned(),
+            destination: None,
+            subject: Some(crate::dto::DialogLine {
+                text: clamp_display(pintable),
+                hostile: hostil,
+            }),
+            asker: None,
+            deadline: None,
+            // El cuerpo dice qué ALCANCE tiene, que es lo que no se ve en la
+            // fila: deshacer una sesión revierte TODO lo que hizo, no lo
+            // último, y lo que no se pueda revertir —algo irreversible, algo
+            // que la policy deniegue ahora— se dirá en el informe.
+            body: vec![crate::dto::DialogLine {
+                text: clamp_display(norte_i18n::t_in(self.lang, "modal-undo-session-scope")),
+                hostile: false,
+            }],
+            overflow_note: String::new(),
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    // Deshacer ESCRIBE: mueve ficheros de vuelta y borra los
+                    // que la sesión creó.
+                    destructive: true,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: None,
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id: modal,
+            vista: vista.clone(),
+            input_crudo: String::new(),
+            reconocido: true,
+            al_confirmar: Some(Pendiente::DeshacerSesion { sesion }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Lanza el deshacer de una sesión entera.
+    ///
+    /// Como cualquier otra operación larga: es una Task, aparece en el
+    /// tablero y su informe —lo que NO volvió— llega por el camino que la 5.3
+    /// ya construyó.
+    fn lanzar_deshacer(
+        sesion: String,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            match backend.undo_session(sesion).await {
+                Ok(task) => {
+                    let _ = buzon
+                        .send(Mensaje::TaskNueva(Box::new((task, Vec::new()))))
+                        .await;
+                }
+                Err(e) => {
+                    let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
+                }
+            }
+        });
+    }
+
     fn abrir_extensiones(
         &mut self,
         backend: &Arc<dyn HostBackend>,
@@ -5699,9 +5880,11 @@ impl Estado {
                 // son «la pregunta que hay que responder antes de que algo
                 // cambie», y el corpus tiene UNA que habla de eso.
                 Some(Pendiente::Borrar { .. } | Pendiente::Transferir { .. }) => "dialog.confirm",
-                Some(Pendiente::Decidir { .. } | Pendiente::AprobarExtension { .. }) => {
-                    "dialog.approval"
-                }
+                Some(
+                    Pendiente::Decidir { .. }
+                    | Pendiente::AprobarExtension { .. }
+                    | Pendiente::DeshacerSesion { .. },
+                ) => "dialog.approval",
                 // Buscar comparte página con crear: los dos son el diálogo
                 // que pide que teclees un nombre, y el corpus tiene UNA que
                 // habla de eso.
@@ -6393,6 +6576,7 @@ impl Estado {
             | Efecto::Ayuda
             | Efecto::Ajustes
             | Efecto::Extensiones
+            | Efecto::Agentes
             | Efecto::Tema
             | Efecto::Volumenes
             | Efecto::Ver => self.efecto_que_abre(efecto, backend, buzon),
@@ -6492,6 +6676,7 @@ impl Estado {
             Efecto::Ayuda => self.abrir_ayuda(backend, buzon),
             Efecto::Ajustes => self.abrir_ajustes(),
             Efecto::Extensiones => self.abrir_extensiones(backend, buzon),
+            Efecto::Agentes => self.abrir_agentes(),
             Efecto::Tema => self.abrir_tema(),
             Efecto::Volumenes => self.abrir_volumenes(backend, buzon),
             Efecto::Ver => self.pedir_visor(backend, buzon),
@@ -8980,10 +9165,17 @@ impl Estado {
         if self.dialogos.iter().any(|d| {
             matches!(
                 d.al_confirmar,
-                Some(Pendiente::Decidir { approval_id }) if approval_id == req.approval_id
+                Some(Pendiente::Decidir { approval_id, .. }) if approval_id == req.approval_id
             )
         }) {
             return Vec::new();
+        }
+        // Se APUNTA la sesión que pidió, aunque el diálogo no llegue a
+        // abrirse por lo que sea: es lo ÚNICO que nombra a un agente en todo
+        // el protocolo, y sin ese apunte no hay forma de ofrecer deshacer lo
+        // que hizo salvo tecleando su id a mano (#276).
+        if let Some(sesion) = req.session.as_deref() {
+            self.agentes.vista(sesion, &req.op);
         }
         // Estas rutas vienen del daemon como TEXTO ya redactado, no como
         // `VPath`, así que el enmascarado es el de cadenas y la marca se
@@ -9095,6 +9287,7 @@ impl Estado {
             reconocido: false,
             al_confirmar: Some(Pendiente::Decidir {
                 approval_id: req.approval_id,
+                session: req.session.clone(),
             }),
         });
         // Y se programa su caducidad. El daemon deja de aceptar el id cuando
@@ -9128,7 +9321,7 @@ impl Estado {
         self.dialogos.retain(|d| {
             !matches!(
                 d.al_confirmar,
-                Some(Pendiente::Decidir { approval_id: id }) if id == approval_id
+                Some(Pendiente::Decidir { approval_id: id, .. }) if id == approval_id
             )
         });
         if self.dialogos.len() == antes {
@@ -9350,12 +9543,25 @@ impl Estado {
                     }
                 });
             }
+            Some(Pendiente::DeshacerSesion { sesion }) => {
+                Self::lanzar_deshacer(sesion, backend, buzon);
+            }
             Some(Pendiente::AprobarExtension { id, capabilities }) => {
                 let (motivo, partes) = self.conceder(&id, &capabilities, backend, buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }
-            Some(Pendiente::Decidir { approval_id }) => {
+            Some(Pendiente::Decidir {
+                approval_id,
+                session,
+            }) => {
+                // Y se apunta a QUIÉN se le dijo que sí desde aquí: la fila
+                // del panel de agentes distingue «pidió N veces» de «se le
+                // aprobaron M», que no son lo mismo cuando contestó otra
+                // ventana, cuando se denegó, o cuando caducó.
+                if let Some(sesion) = &session {
+                    self.agentes.aprobada(sesion);
+                }
                 // Solo `approve` aprueba. Cualquier otra respuesta —y el
                 // cierre del diálogo— DENIEGA: una decisión de seguridad
                 // no tiene respuesta por defecto que diga «sí».
@@ -9450,7 +9656,7 @@ impl Estado {
             let (motivo, partes) = self.ejecutar_pendiente(dialogo, backend, buzon);
             rehusado = motivo;
             salidas.extend(partes);
-        } else if let Some(Pendiente::Decidir { approval_id }) = dialogo.al_confirmar {
+        } else if let Some(Pendiente::Decidir { approval_id, .. }) = dialogo.al_confirmar {
             // Denegar explícitamente, y también al cerrar: dejar al agente
             // esperando una respuesta que no llega es peor que decirle que no.
             let backend = Arc::clone(backend);
@@ -9542,6 +9748,9 @@ impl Estado {
                         // del sistema de extensiones: una ventana que se
                         // declara de solo lectura no la toma.
                         | Pendiente::AprobarExtension { .. }
+                        // Deshacer una sesión ESCRIBE: mueve ficheros de
+                        // vuelta y borra lo que el agente creó.
+                        | Pendiente::DeshacerSesion { .. }
                         // Pedir un plan no escribe en el disco, y aun así
                         // entra: manda el contenido de un directorio a un
                         // modelo, que no es algo que deba hacer una ventana
@@ -11484,6 +11693,7 @@ impl Estado {
             help: self.vista_ayuda(),
             settings: self.vista_ajustes(),
             extensions: self.vista_extensiones(),
+            agents: self.vista_agentes(),
             plugin_output: self.salida_plugin.clone(),
             theme: self.vista_tema(),
             search: self.vista_busqueda(),

@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 32;
+export const BRIDGE_VERSION = 33;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -483,6 +483,27 @@ export interface MaskedTextView {
   hostile: boolean;
 }
 
+export interface AgentRowView {
+  /** Su id, ya enmascarado: es una clave OPACA del daemon y puede llevar
+   *  cualquier byte. Lo que viaja de vuelta es el crudo, no esto. */
+  session: string;
+  session_hostile: boolean;
+  /** Cuántas pidió y cuántas se le aprobaron desde aquí, ya en una frase
+   *  traducida: el catálogo que cruza no sustituye variables. */
+  counts: string;
+  last_op: string;
+  last_op_hostile: boolean;
+}
+
+export interface AgentsView {
+  rows: AgentRowView[];
+  cursor: number;
+  /** Qué ES esta lista: lo visto por esta ventana, no el censo del sistema.
+   *  Sin decirlo, una lista vacía se lee como «ningún agente ha tocado
+   *  nada», que es una afirmación que esta ventana no puede hacer. */
+  note: string;
+}
+
 export interface ExtensionOutputView {
   /** De qué extensión: su nombre, ya enmascarado, con su bandera. */
   plugin: MaskedTextView;
@@ -751,6 +772,7 @@ export interface ViewSnapshot {
   help: HelpView | null;
   settings: SettingsView | null;
   extensions: ExtensionsView | null;
+  agents: AgentsView | null;
   plugin_output: ExtensionOutputView | null;
   theme: ThemeView | null;
   search: SearchView | null;
@@ -787,6 +809,7 @@ export type ViewChange =
   | { change: "help"; help: HelpView | null }
   | { change: "settings"; settings: SettingsView | null }
   | { change: "extensions"; extensions: ExtensionsView | null }
+  | { change: "agents"; agents: AgentsView | null }
   | { change: "plugin_output"; output: ExtensionOutputView | null }
   | { change: "theme"; theme: ThemeView | null }
   | { change: "picker"; picker: PickerView | null }
@@ -851,6 +874,7 @@ export type UiAction =
   | { action: "help_activate"; index: number }
   | { action: "settings_select_row"; row: number }
   | { action: "extension_select_row"; row: number }
+  | { action: "agent_select_row"; row: number }
   | { action: "picker_select_row"; row: number; generation: number }
   | { action: "place_activate_row"; row: number; generation: number }
   | { action: "layout_activate_row"; row: number }

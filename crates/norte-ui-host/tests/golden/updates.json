@@ -749,6 +749,26 @@
         }
       ]
     },
+    "agents": {
+      "rows": [
+        {
+          "session": "agente�1",
+          "session_hostile": true,
+          "counts": "pidió 7, aprobadas desde aquí 3",
+          "last_op": "delete",
+          "last_op_hostile": false
+        },
+        {
+          "session": "agente-2",
+          "session_hostile": false,
+          "counts": "pidió 1, aprobadas desde aquí 0",
+          "last_op": "copy",
+          "last_op_hostile": false
+        }
+      ],
+      "cursor": 0,
+      "note": "solo las sesiones que esta ventana ha visto"
+    },
     "plugin_output": {
       "plugin": {
         "text": "ACME�FTP",

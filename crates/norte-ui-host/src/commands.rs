@@ -91,6 +91,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "app.help",
     "app.settings",
     "app.extensions",
+    "app.agents",
     "app.theme",
     "pane.select-drive",
     "pane.view",
@@ -245,6 +246,8 @@ pub enum Efecto {
     Ajustes,
     /// Abre el gestor de extensiones, en solo lectura.
     Extensiones,
+    /// Las sesiones de agente vistas, y el deshacer de una entera.
+    Agentes,
     /// Enseña el tema activo por dentro.
     Tema,
     /// Abre el selector de volúmenes del host.
@@ -358,6 +361,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "app.help" => Efecto::Ayuda,
         "app.settings" => Efecto::Ajustes,
         "app.extensions" => Efecto::Extensiones,
+        "app.agents" => Efecto::Agentes,
         "app.theme" => Efecto::Tema,
         "pane.select-drive" => Efecto::Volumenes,
         "pane.view" => Efecto::Ver,

@@ -159,6 +159,8 @@ pub struct Falso {
     >,
     /// El informe que contesta `sync.report`. `None` = `Unsupported`.
     pub informe_de_sync: std::sync::Mutex<Option<norte_proto::methods::SyncReportResult>>,
+    /// Las sesiones de agente que se pidió deshacer, en orden.
+    pub deshechas: std::sync::Mutex<Vec<String>>,
     /// Cuántas veces se ha pedido el catálogo de extensiones.
     pub catalogos_pedidos: std::sync::atomic::AtomicU64,
     /// Los cambios de gobierno pedidos, en orden (`approval:id:true`…).
@@ -584,6 +586,35 @@ impl HostBackend for Falso {
             .push(id.clone());
         let keys = self.esquemas.get(&id).cloned().unwrap_or_default();
         Box::pin(async move { Ok(norte_proto::methods::PluginGetConfigResult { keys }) })
+    }
+
+    fn undo_session(&self, session: String) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.deshechas.lock().expect("deshechas").push(session);
+        let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
+        let id = norte_proto::TaskId::new(900 + n as u64);
+        let progreso = norte_proto::TaskProgress {
+            task_id: id,
+            kind: norte_proto::TaskKind::Undo,
+            state: norte_proto::TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+        };
+        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        self.progresos
+            .lock()
+            .expect("progresos")
+            .insert(id.get(), tx);
+        Box::pin(async move {
+            Ok(HostTask {
+                id,
+                progress: rx,
+                cancel: Arc::new(|| {}),
+                foreign: false,
+            })
+        })
     }
 
     fn plugin_set_approval(

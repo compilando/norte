@@ -24,6 +24,7 @@
 #![warn(missing_docs)]
 
 pub mod action;
+mod agents;
 pub mod backend;
 pub mod bridge;
 pub mod commands;

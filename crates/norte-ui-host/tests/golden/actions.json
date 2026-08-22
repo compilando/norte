@@ -5,6 +5,10 @@
     "key": 9,
     "slot_id": 1
   },
+  "agent_select_row": {
+    "action": "agent_select_row",
+    "row": 1
+  },
   "ai_rename_decide": {
     "action": "ai_rename_decide",
     "approve": true

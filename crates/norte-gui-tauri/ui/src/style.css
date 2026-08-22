@@ -1168,6 +1168,67 @@ body {
   unicode-bidi: isolate;
 }
 
+#agents[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+#agents[data-open="false"] {
+  display: none;
+}
+
+.agents {
+  width: min(100ch, 92vw);
+  max-height: min(80vh, 100%);
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px 12px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  overflow: auto;
+}
+
+.agents-note,
+.agents-empty {
+  opacity: 0.8;
+}
+
+.agents-rows {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agents-row {
+  display: flex;
+  gap: 12px;
+  padding: 2px 4px;
+}
+
+.agents-row[aria-selected="true"] {
+  background: var(--selection-bg);
+}
+
+/* Cada cadena de tercero aislada: el id de una sesión es una clave opaca del
+   daemon y puede traer letras RTL que reordenarían la fila entera. */
+.agents-session,
+.agents-op {
+  unicode-bidi: isolate;
+}
+
+.agents-session {
+  min-width: 24ch;
+}
+
+.agents-counts {
+  margin-left: auto;
+  opacity: 0.8;
+}
+
 #plugin-output[data-open="true"] {
   position: fixed;
   inset: 0;
