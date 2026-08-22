@@ -237,7 +237,12 @@ independently through `PROTOCOL_VERSION`.
   failed write. While a value is being typed, letters are letters: resolving
   `a` as "approve" there turns typing "casa" into two grants. A command's
   output is third-party text: masked, capped, and the fact it was cut is said,
-  because the reader cannot deduce it from text that arrives already short.
+  because the reader cannot deduce it from text that arrives already short —
+  and it travels LINE BY LINE with a flag per string, because a newline is a
+  C0 control, so masking the whole output marked every multi-line run as
+  hostile while a hostile plugin name with ASCII output went unbadged. The
+  panel also names the extension by its reverse-DNS id: a name does not
+  identify, and two manifests can claim the same one. Bridge **32**.
 - **The window compares two directories** (`pane.compare-dirs`): a diff panel
   with the rows as they stream in, a filter per category with its count, side
   switching, and `Enter` to go where a row points. The model is the one the TUI

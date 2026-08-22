@@ -1953,6 +1953,50 @@ by TUI/GPUI and a dedicated security review.
 
 ### Task 6.4: plugin governance, commands and config writes
 
+> **First half DONE 2026-08-22** (bridge **31 → 32**). The extension manager
+> governs: approve/revoke, enable/disable, a typed `[config]` editor over the
+> shared `plugin_config` model, and the commands a plugin contributes, run from
+> the palette with their output shown. Three rules carry it: approving ASKS and
+> the question enumerates the capabilities one per line, each masked on its own
+> and carrying its own flag; none of it exists in read-only mode; and after a
+> change the CATALOGUE is fetched again rather than flipping a local boolean.
+>
+> **Two reviews, three BLOCKERs, thirteen MAJORs — all applied.** What
+> generalises beyond this task:
+>
+> - **A flag computed from one string cannot describe three.** One `hostile`
+>   for the plugin name, the command title and the output was derived from the
+>   output — so a hostile manifest with ASCII output painted unbadged, and
+>   since a newline is a C0 control, every honest multi-line run painted
+>   badged. A flag that is true for everything honest and false for the one
+>   hostile case is worse than no flag.
+> - **"It failed" is not "it did not happen" — again, and this time in the
+>   pessimistic direction.** A grant that timed out on OUR deadline left the
+>   row saying "not approved" over capabilities the daemon had granted.
+> - **A full-screen panel that only claims one key is not modal.** The output
+>   panel painted over an open confirmation while the confirmation kept the
+>   keyboard — and the moment was chosen by the PLUGIN, which decides when its
+>   command answers. Paint order (DOM order, no `z-index` anywhere) and input
+>   order have to agree.
+> - **A consent question that truncates its list is not consent.** Showing
+>   sixteen of forty capabilities while the yes grants forty is the whole hole.
+>   Above the cap it now refuses to ask rather than asking about a part.
+> - **A modal holds the keyboard, not the mailbox.** A catalogue landing
+>   between the question and the yes could change what the yes granted, so the
+>   answer re-compares against what the manifest declares now.
+> - **Two halves of one row, and only the operand was moving.** Cycling a
+>   `bool` wrote `false` and kept painting `true`; the next Enter wrote `true`
+>   back. The daemon oscillated and the screen never moved.
+>
+> Debt filed: **#280** (the TUI approves without asking and trusts its own
+> optimism), **#281** (the manifest caps a command's id and title but not how
+> many commands there are), **#282** (a grant binds to the id, not to the
+> capabilities that were read — needs `expected_digest` on the wire).
+>
+> Still open in this task: **#276**, the gesture that launches
+> `policy.undo_session`, which needs a surface where an agent session is a
+> nameable, selectable thing.
+
 - approve/revoke and enable/disable;
 - command execution and bounded output;
 - typed plugin config editors for string/bool/int/enum;
