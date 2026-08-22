@@ -4082,8 +4082,15 @@ async fn una_fila_de_otra_pantalla_no_se_ofrece_encendida() {
         pagina = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
     }
     assert_eq!(pagina.topic_id, "viewer", "la página del visor existe");
-    let corribles: Vec<&norte_ui_host::dto::HelpActionView> =
-        pagina.actions.iter().filter(|a| !a.opens_topic).collect();
+    // `pane.open` sale en esta página y NO es del visor: abre lo señalado en
+    // el LISTADO con la aplicación del escritorio, así que estar viva aquí es
+    // lo correcto. Las demás filas de la página sí necesitan el visor.
+    let abrir = norte_frontend::keymap::paint_chord("alt+f4");
+    let corribles: Vec<&norte_ui_host::dto::HelpActionView> = pagina
+        .actions
+        .iter()
+        .filter(|a| !a.opens_topic && a.chord != abrir)
+        .collect();
     assert!(!corribles.is_empty(), "documenta comandos");
     for a in corribles {
         assert!(
@@ -12953,5 +12960,119 @@ async fn en_solo_lectura_el_panel_dice_que_no_escucha() {
     assert_ne!(
         panel.empty, escuchando,
         "una ventana que no escucha no puede decir que nadie ha pedido nada"
+    );
+}
+
+/// Copiar la ruta pone BYTES en el portapapeles, y lo hace en los dos modos.
+///
+/// Bytes y no texto: un nombre de fichero es bytes, y pasarlo por una
+/// decodificación con pérdida pegaría una ruta que abre otra cosa. Y no muta
+/// nada, así que una ventana de solo lectura también copia — es tan de solo
+/// mirar como leer un nombre.
+#[tokio::test]
+async fn copiar_la_ruta_manda_bytes_al_escritorio() {
+    for solo_lectura in [false, true] {
+        let backend = arbol();
+        let (h, _snap) = if solo_lectura {
+            host_solo_lectura(Arc::clone(&backend)).await
+        } else {
+            host_arbol(Arc::clone(&backend)).await
+        };
+        let mut nativos = h.native_effects();
+        let mut sub = h.subscribe();
+        ejecutar_por_paleta(&h, &mut sub, "pane.copy-path").await;
+        let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+            .await
+            .expect("un efecto antes del plazo")
+            .expect("el canal sigue vivo");
+        match efecto {
+            norte_ui_host::dto::NativeEffect::CopyBytes { bytes, count } => {
+                assert_eq!(count, 1);
+                assert!(
+                    bytes.starts_with(b"/") || bytes.starts_with(b"mem:"),
+                    "la ruta, en su forma nativa o la del wire: {bytes:?}"
+                );
+            }
+            otro => panic!("copiar la ruta pide copiar, no {otro:?}"),
+        }
+    }
+}
+
+/// En solo lectura NO se abre nada ni se lanza un terminal: se DICE.
+///
+/// Lo que haga con los ficheros un editor o un shell no lo decide esta
+/// ventana, así que una montada sin efectos no los arranca.
+#[tokio::test]
+async fn en_solo_lectura_no_se_lanza_nada_del_escritorio() {
+    let backend = arbol();
+    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let mut nativos = h.native_effects();
+    let mut sub = h.subscribe();
+    // Ni siquiera se OFRECEN: la paleta se construye con los efectos de esta
+    // ventana, y ofrecer lo que se va a rehusar es prometer algo que no se
+    // va a hacer. Es la misma regla que ya rige para copiar y borrar.
+    h.dispatch(tecla_mod("p", true, false))
+        .await
+        .expect("host vivo");
+    let _ = siguiente_paleta(&mut sub).await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let p = siguiente_foto(&mut sub).await.palette.expect("abierta");
+    for cmd in ["pane.open", "app.terminal"] {
+        assert!(
+            !p.rows.iter().any(|r| r.text == cmd),
+            "{cmd} no se ofrece en una ventana sin efectos"
+        );
+    }
+    // Y copiar la ruta SÍ, porque no lanza nada.
+    assert!(p.rows.iter().any(|r| r.text == "pane.copy-path") || p.total > 0);
+    assert!(
+        matches!(
+            nativos.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ),
+        "y no salió ningún efecto"
+    );
+}
+
+/// Lo que no está en ESTE disco no se le da al escritorio.
+///
+/// A `xdg-open` no se le puede pasar un `sftp://`, y un terminal no tiene
+/// dónde sentarse dentro de uno. Se rehúsa diciéndolo, en vez de abrir otra
+/// cosa —el `$HOME`, típicamente— sin avisar.
+#[tokio::test]
+async fn una_ruta_que_no_es_local_no_se_abre() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut nativos = h.native_effects();
+    let mut sub = h.subscribe();
+    for cmd in ["pane.open", "app.terminal"] {
+        let ack = ejecutar_por_paleta_ack(&h, &mut sub, cmd).await;
+        assert!(
+            matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-not-local"),
+            "{cmd} sobre un `mem://`: {ack:?}"
+        );
+    }
+    assert!(
+        matches!(
+            nativos.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ),
+        "y no salió ningún efecto"
+    );
+}
+
+/// Sin nadie escuchando los efectos nativos, el gesto se rehúsa: no se acusa
+/// recibo de algo que no va a ocurrir.
+#[tokio::test]
+async fn sin_escritorio_detras_copiar_se_rehusa() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    // NADIE llama a `native_effects()`: es el caso de un frontend que no sabe
+    // hacer estas cosas.
+    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.copy-path").await;
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-no-desktop"),
+        "{ack:?}"
     );
 }

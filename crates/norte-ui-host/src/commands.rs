@@ -58,6 +58,15 @@ pub const MUTAN: &[&str] = &[
     "pane.ai-rename",
     "pane.semantic-search",
     "pane.sync-dirs",
+    // Abrir con la aplicación del escritorio y abrir un terminal LANZAN
+    // procesos que no pasan por norte: lo que hagan con los ficheros no lo
+    // decide esta ventana. Una que se declara «solo mirar» no arranca un
+    // editor ni un shell sentado en el directorio.
+    //
+    // Copiar la ruta NO está aquí: pone texto en el portapapeles y no toca
+    // nada, que es tan de solo lectura como leer un nombre.
+    "pane.open",
+    "app.terminal",
 ];
 
 /// Los comandos que el host ejecuta HOY.
@@ -92,6 +101,9 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "app.settings",
     "app.extensions",
     "app.agents",
+    "app.terminal",
+    "pane.open",
+    "pane.copy-path",
     "app.theme",
     "pane.select-drive",
     "pane.view",
@@ -248,6 +260,12 @@ pub enum Efecto {
     Extensiones,
     /// Las sesiones de agente vistas, y el deshacer de una entera.
     Agentes,
+    /// Copia al portapapeles las rutas de lo marcado (o de lo señalado).
+    CopiarRuta,
+    /// Abre lo señalado con la aplicación que el escritorio elija.
+    AbrirExterno,
+    /// Abre un terminal sentado en el directorio del panel activo.
+    Terminal,
     /// Enseña el tema activo por dentro.
     Tema,
     /// Abre el selector de volúmenes del host.
@@ -362,6 +380,9 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "app.settings" => Efecto::Ajustes,
         "app.extensions" => Efecto::Extensiones,
         "app.agents" => Efecto::Agentes,
+        "pane.copy-path" => Efecto::CopiarRuta,
+        "pane.open" => Efecto::AbrirExterno,
+        "app.terminal" => Efecto::Terminal,
         "app.theme" => Efecto::Tema,
         "pane.select-drive" => Efecto::Volumenes,
         "pane.view" => Efecto::Ver,

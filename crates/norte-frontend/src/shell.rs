@@ -467,6 +467,145 @@ fn cwd_args(program: &str, dir: &std::path::Path) -> Vec<std::ffi::OsString> {
     }
 }
 
+/// The bytes to put on the clipboard for `paths`: one per line, no trailing
+/// newline.
+///
+/// Same spelling rule as [`pick_bytes`] — native form where there is one,
+/// because that is what the tool on the other side will open, and the wire
+/// form where there is not, because that is the only true thing to say about
+/// a location that is not on this disk. The separator is a newline and not a
+/// NUL: this goes to a human's clipboard, and every paste target in existence
+/// splits on newlines.
+///
+/// BYTES, and never a `String`: a name is bytes (rule 1), and a path decoded
+/// with replacement characters pastes as a path that opens something else.
+///
+/// ```
+/// use norte_frontend::shell::clipboard_bytes;
+/// use norte_proto::VPath;
+///
+/// let a = VPath::parse("file:///tmp/a").expect("vpath");
+/// let b = VPath::parse("file:///tmp/b").expect("vpath");
+/// assert_eq!(clipboard_bytes(&[a, b]), b"/tmp/a\n/tmp/b");
+/// ```
+#[must_use]
+pub fn clipboard_bytes(paths: &[norte_proto::VPath]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (i, p) in paths.iter().enumerate() {
+        if i > 0 {
+            out.push(b'\n');
+        }
+        match norte_vfs_local::vpath_to_native(p) {
+            #[cfg(unix)]
+            Ok(native) => {
+                use std::os::unix::ffi::OsStrExt;
+                out.extend_from_slice(native.as_os_str().as_bytes());
+            }
+            #[cfg(not(unix))]
+            Ok(native) => out.extend_from_slice(native.to_string_lossy().as_bytes()),
+            Err(_) => out.extend_from_slice(p.to_wire().as_bytes()),
+        }
+    }
+    out
+}
+
+/// `true` if this location has a native path — i.e. it is on THIS filesystem.
+///
+/// What it gates: an `xdg-open` cannot be handed an `sftp://`, and a terminal
+/// has nowhere to sit inside one. Answering "no" is what lets the caller say
+/// so instead of opening something else.
+///
+/// ```
+/// use norte_frontend::shell::is_local;
+/// use norte_proto::VPath;
+///
+/// assert!(is_local(&VPath::parse("file:///tmp").expect("vpath")));
+/// assert!(!is_local(&VPath::parse("sftp://host/tmp").expect("vpath")));
+/// ```
+#[must_use]
+pub fn is_local(path: &norte_proto::VPath) -> bool {
+    norte_vfs_local::vpath_to_native(path).is_ok()
+}
+
+/// Every argv worth trying, in order, to put text on the system clipboard —
+/// for a frontend that has no terminal to ask (the GUI, task 6.5).
+///
+/// A LIST, like [`terminal_candidates`], and for the same reason: choosing
+/// needs a PATH probe and this function does no I/O. Empty means nothing
+/// plausible exists here, which the caller REPORTS rather than swallowing —
+/// "copied" over an empty clipboard is the kind of lie that is only found out
+/// when the paste goes somewhere else.
+///
+/// The text always goes on the helper's STDIN, never in the argv. Two
+/// reasons, and the second is the one that matters: a path is BYTES (rule 1)
+/// and an argv is not a good place for arbitrary ones, and a path that starts
+/// with `-` would otherwise be read as a flag by whichever helper is
+/// installed.
+///
+/// Reads the environment; the decision is [`clipboard_candidates_from`].
+#[must_use]
+pub fn clipboard_candidates() -> Vec<Vec<std::ffi::OsString>> {
+    clipboard_candidates_from(
+        std::env::var_os("WAYLAND_DISPLAY").as_deref(),
+        std::env::var_os("DISPLAY").as_deref(),
+    )
+}
+
+/// Testable core of [`clipboard_candidates`].
+///
+/// On unix the session type decides the ORDER and not the membership: a
+/// Wayland session usually still has `xclip` working through `XWayland`, and a
+/// user who has one and not the other should not be told there is no
+/// clipboard. What the environment buys is trying the native one first.
+///
+/// macOS is `pbcopy` and Windows is `clip.exe`; both ship with the system, so
+/// there is nothing to choose between.
+///
+/// ```
+/// use norte_frontend::shell::clipboard_candidates_from;
+/// use std::ffi::OsStr;
+///
+/// let wayland = clipboard_candidates_from(Some(OsStr::new("wayland-0")), None);
+/// # #[cfg(all(unix, not(target_os = "macos")))]
+/// assert_eq!(wayland.first().and_then(|a| a.first()), Some(&"wl-copy".into()));
+/// // Nothing declared: the list is still offered — a helper can be there
+/// // without either variable, and probing is the caller's job anyway.
+/// assert!(!clipboard_candidates_from(None, None).is_empty());
+/// ```
+#[must_use]
+pub fn clipboard_candidates_from(
+    wayland: Option<&std::ffi::OsStr>,
+    x11: Option<&std::ffi::OsStr>,
+) -> Vec<Vec<std::ffi::OsString>> {
+    use std::ffi::OsString;
+    let argv = |parts: &[&str]| -> Vec<OsString> { parts.iter().map(OsString::from).collect() };
+    if cfg!(target_os = "macos") {
+        return vec![argv(&["pbcopy"])];
+    }
+    if cfg!(target_os = "windows") {
+        return vec![argv(&["clip.exe"])];
+    }
+    let wl = vec![argv(&["wl-copy"])];
+    let x = vec![
+        argv(&["xclip", "-selection", "clipboard"]),
+        argv(&["xsel", "--clipboard", "--input"]),
+    ];
+    // Wayland primero solo si la sesión lo declara; si no, X11 primero. Los
+    // dos conjuntos se ofrecen siempre: XWayland es lo normal, y decirle a
+    // quien tiene `xclip` que no hay portapapeles sería falso.
+    let wayland_primero = wayland.is_some_and(|v| !v.is_empty());
+    let x11_primero = !wayland_primero && x11.is_some_and(|v| !v.is_empty());
+    let mut out = Vec::new();
+    if wayland_primero || !x11_primero {
+        out.extend(wl.clone());
+        out.extend(x.clone());
+    } else {
+        out.extend(x);
+        out.extend(wl);
+    }
+    out
+}
+
 /// Every argv worth trying, in order, to open a terminal emulator sitting in
 /// `dir` — for a frontend that cannot suspend (the GUI, §E).
 ///

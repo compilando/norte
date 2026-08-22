@@ -188,6 +188,13 @@ fn main() -> ExitCode {
                     app: app.handle().clone(),
                 };
                 tauri::async_runtime::spawn(norte_gui_tauri::sink::pump(sub, sink));
+                // Y los efectos NATIVOS, por su propio canal: portapapeles,
+                // abrir con el escritorio y terminal. No pasan por la
+                // webview —no ve las rutas ni tiene permiso para ejecutar
+                // nada— sino por este proceso, con una puerta estrecha por
+                // cosa (ADR 0066 D11).
+                let nativos = bridge.host().native_effects();
+                tauri::async_runtime::spawn(norte_gui_tauri::nativo::bombear(nativos));
             }
             Ok(())
         })

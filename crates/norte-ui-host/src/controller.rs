@@ -93,6 +93,25 @@ struct SalidaPedida {
     res: Result<String, Error>,
 }
 
+/// Lo que esta ventana sabe de las sesiones de AGENTE.
+///
+/// Juntas y no sueltas en el estado: las tres describen lo mismo —quién ha
+/// pedido permiso, si se está mirando, y qué se está deshaciendo— y separarlas
+/// era tener que acordarse de las tres cada vez que una cambia.
+#[derive(Debug, Default)]
+struct Agencia {
+    /// Lo visto. SIEMPRE presente: una petición llega cuando llega, y el
+    /// panel solo decide si se pinta.
+    sesiones: crate::agents::Agentes,
+    /// El panel está abierto.
+    panel: bool,
+    /// Qué sesión deshace cada task de undo en marcha, por id de task.
+    ///
+    /// El desenlace llega por el progreso, que solo trae el id: sin este mapa
+    /// no hay forma de saber a qué sesión soltarle el «deshaciendo».
+    undos: std::collections::HashMap<u64, String>,
+}
+
 /// Qué se cambia de una extensión.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Cambio {
@@ -305,6 +324,7 @@ pub struct ShutdownReport {
 pub struct UiHost {
     inbox: mpsc::Sender<Mensaje>,
     updates: broadcast::Sender<BridgeEnvelope<UiUpdate>>,
+    nativos: broadcast::Sender<crate::dto::NativeEffect>,
     instance: InstanceId,
 }
 
@@ -550,6 +570,12 @@ impl UiHost {
     pub async fn start(options: UiHostOptions) -> Result<(Self, ViewSnapshot), UiError> {
         let instance = InstanceId::new(nueva_instancia());
         let (updates, _) = broadcast::channel(UPDATE_BUFFER);
+        // Los efectos NATIVOS van por su propio canal: llevan rutas y van al
+        // proceso que hospeda, no a la webview. Un buffer pequeño porque son
+        // gestos de una persona —copiar una ruta, abrir un fichero— y no un
+        // flujo: si alguna vez se llenara, lo que se pierde es un gesto que
+        // se puede repetir, y no un trozo de la pantalla.
+        let (nativos, _) = broadcast::channel(16);
         let (tx, rx) = mpsc::channel(INBOX);
         // El actor conserva un remite a SU propio buzón: por ahí vuelven las
         // respuestas de lo que tarda.
@@ -648,8 +674,10 @@ impl UiHost {
         let host = Self {
             inbox: tx,
             updates: updates.clone(),
+            nativos: nativos.clone(),
             instance,
         };
+        estado.nativos = Some(nativos);
         tokio::spawn(actor(rx, estado, backend, updates, tx2));
         Ok((host, primero))
     }
@@ -702,6 +730,19 @@ impl UiHost {
         UiSubscription {
             rx: self.updates.subscribe(),
         }
+    }
+
+    /// Los efectos NATIVOS que el host pide: portapapeles, abrir con el
+    /// escritorio, terminal.
+    ///
+    /// Canal aparte del de la vista a propósito: esto lleva rutas y va al
+    /// PROCESO que hospeda, no a la webview, que no tiene permiso para
+    /// ejecutar nada (ADR 0066 D11). Un frontend que no se suscriba
+    /// sencillamente no hace ninguna, que es lo que se quiere de un frontend
+    /// que no sepa hacerlas.
+    #[must_use]
+    pub fn native_effects(&self) -> broadcast::Receiver<crate::dto::NativeEffect> {
+        self.nativos.subscribe()
     }
 
     /// Apaga el host y cuenta qué quedó sin terminar.
@@ -1504,16 +1545,17 @@ struct Estado {
     ajustes: Option<crate::settings::Ajustes>,
     /// El gestor de extensiones, si está abierto.
     extensiones: Option<crate::extensions::Extensiones>,
-    /// Las sesiones de agente vistas. SIEMPRE presente: una petición de
-    /// aprobación llega cuando llega, y el panel solo decide si se pintan.
-    agentes: crate::agents::Agentes,
-    /// El panel de sesiones de agente está abierto.
-    panel_agentes: bool,
-    /// Qué sesión deshace cada task de undo en marcha, por id de task.
+    /// Todo lo de las sesiones de AGENTE: lo visto, si el panel está
+    /// abierto, y qué deshacer corre por quién.
+    agencia: Agencia,
+    /// Por dónde salen los efectos NATIVOS, cuando hay alguien escuchando.
     ///
-    /// El desenlace llega por el progreso, que solo trae el id: sin este mapa
-    /// no hay forma de saber a qué sesión soltarle el «deshaciendo».
-    undos: std::collections::HashMap<u64, String>,
+    /// `Option` porque el estado se construye antes que el canal —la primera
+    /// foto sale de él— y porque un host sin nadie suscrito tiene que poder
+    /// seguir funcionando: un efecto que nadie recoge es un gesto que no pasa
+    /// nada, no un error.
+    nativos: Option<broadcast::Sender<crate::dto::NativeEffect>>,
+
     /// Cómo se llaman las extensiones y sus comandos, ya enmascarados, para
     /// el panel de salida: `id → (nombre, comando → título)`.
     ///
@@ -1879,9 +1921,8 @@ impl Estado {
             ayuda: None,
             ajustes: None,
             extensiones: None,
-            agentes: crate::agents::Agentes::default(),
-            panel_agentes: false,
-            undos: std::collections::HashMap::new(),
+            agencia: Agencia::default(),
+            nativos: None,
             tema: theme,
             mirando_tema: false,
             cursor_procesos: 0,
@@ -2533,7 +2574,7 @@ impl Estado {
         if self.extensiones.is_some() {
             return Some(self.tecla_en_extensiones(k, backend, buzon));
         }
-        if self.panel_agentes {
+        if self.agencia.panel {
             return Some(self.tecla_en_agentes(k, backend, buzon));
         }
         if self.ajustes.is_some() {
@@ -4537,8 +4578,8 @@ impl Estado {
     /// rechazó: un id de sesión tecleado se puede equivocar, y deshacer la
     /// sesión equivocada es deshacer el trabajo de otro.
     fn abrir_agentes(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.panel_agentes = true;
-        self.agentes.al_abrir();
+        self.agencia.panel = true;
+        self.agencia.sesiones.al_abrir();
         let cambio = ViewChange::Agents {
             agents: self.vista_agentes(),
         };
@@ -4551,8 +4592,9 @@ impl Estado {
         // así que su lista está vacía por ESO y no porque nadie haya pedido
         // nada. La pantalla lo dice, en vez de afirmar lo que no sabe.
         let escucha = self.efectos == crate::commands::Efectos::Completo;
-        self.panel_agentes
-            .then(|| self.agentes.vista_de(self.lang, escucha))
+        self.agencia
+            .panel
+            .then(|| self.agencia.sesiones.vista_de(self.lang, escucha))
     }
 
     /// Las teclas mientras el panel de agentes está abierto.
@@ -4565,13 +4607,13 @@ impl Estado {
         /// Cuántas filas mueve una página.
         const PAGINA: i64 = 10;
         match k.key.as_str() {
-            "Escape" | "esc" => self.panel_agentes = false,
-            "ArrowDown" | "down" => self.agentes.mover(1),
-            "ArrowUp" | "up" => self.agentes.mover(-1),
-            "PageDown" | "pgdn" => self.agentes.mover(PAGINA),
-            "PageUp" | "pgup" => self.agentes.mover(-PAGINA),
-            "Home" | "home" => self.agentes.mover(i64::MIN / 2),
-            "End" | "end" => self.agentes.mover(i64::MAX / 2),
+            "Escape" | "esc" => self.agencia.panel = false,
+            "ArrowDown" | "down" => self.agencia.sesiones.mover(1),
+            "ArrowUp" | "up" => self.agencia.sesiones.mover(-1),
+            "PageDown" | "pgdn" => self.agencia.sesiones.mover(PAGINA),
+            "PageUp" | "pgup" => self.agencia.sesiones.mover(-PAGINA),
+            "Home" | "home" => self.agencia.sesiones.mover(i64::MIN / 2),
+            "End" | "end" => self.agencia.sesiones.mover(i64::MAX / 2),
             // `u` DESHACE la sesión entera, y pregunta antes: es la operación
             // más grande que esta ventana puede lanzar de un tirón —revierte
             // todo lo que un agente hizo, en orden inverso— y no hay ninguna
@@ -4598,10 +4640,10 @@ impl Estado {
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // Con un diálogo encima, el panel no recibe: es modal para el teclado
         // y tiene que serlo también para el ratón.
-        if !self.panel_agentes || !self.dialogos.is_empty() {
+        if !self.agencia.panel || !self.dialogos.is_empty() {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
-        if !self.agentes.senalar(row as usize, generation) {
+        if !self.agencia.sesiones.senalar(row as usize, generation) {
             // La lista cambió entre el pintado y el clic: se rehúsa en vez de
             // recortar, porque recortar es elegir por el lector.
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
@@ -4617,7 +4659,7 @@ impl Estado {
         if self.efectos == crate::commands::Efectos::SoloLectura {
             return Self::no_muta();
         }
-        let Some(sesion) = self.agentes.elegida() else {
+        let Some(sesion) = self.agencia.sesiones.elegida() else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-no-session".to_owned(),
@@ -4629,7 +4671,7 @@ impl Estado {
         // la MISMA lista de entradas —cada uno la fotografía antes de que el
         // otro registre sus compensaciones—, y el segundo devuelve un informe
         // lleno de bloqueos que no son de nadie.
-        if self.agentes.tiene_undo_vivo(&sesion) {
+        if self.agencia.sesiones.tiene_undo_vivo(&sesion) {
             let fuera = self.decir("host-undo-already-running");
             return (
                 ActionAck::Unavailable {
@@ -4752,20 +4794,20 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.agentes.tiene_undo_vivo(sesion) {
+        if self.agencia.sesiones.tiene_undo_vivo(sesion) {
             return (
                 Some("host-undo-already-running"),
                 self.decir("host-undo-already-running"),
             );
         }
-        self.agentes.deshaciendo(sesion);
+        self.agencia.sesiones.deshaciendo(sesion);
         // Sin ALCANCE conocido: un `undo_session` toca los directorios que la
         // sesión tocara, que esta ventana no sabe. Se relista lo que está EN
         // PANTALLA, que es donde el lector estaba mirando trabajar al agente.
         let visibles = self.dirs_visibles();
         Self::lanzar_deshacer(sesion.to_owned(), visibles, backend, buzon);
         let mut fuera = Vec::new();
-        if self.panel_agentes {
+        if self.agencia.panel {
             let cambio = ViewChange::Agents {
                 agents: self.vista_agentes(),
             };
@@ -4862,7 +4904,7 @@ impl Estado {
                 .into_iter()
                 .collect(),
             Fondo::UndoDeSesion(task_id, sesion) => {
-                self.undos.insert(task_id, sesion);
+                self.agencia.undos.insert(task_id, sesion);
                 Vec::new()
             }
             Fondo::PluginsDePaleta(apertura, res) => self.aplicar_filas_de_plugin(apertura, res),
@@ -6722,10 +6764,19 @@ impl Estado {
             | Efecto::RenameIa
             | Efecto::BuscarSemantica
             | Efecto::Sincronizar
+            // Los dos que LANZAN un proceso: lo que ese proceso haga con los
+            // ficheros no lo decide esta ventana.
+            | Efecto::AbrirExterno
+            | Efecto::Terminal
                 if self.efectos == crate::commands::Efectos::SoloLectura =>
             {
                 Self::no_muta()
             }
+            // Copiar la ruta no toca nada y va en los dos modos: poner texto
+            // en el portapapeles es tan de solo mirar como leer un nombre.
+            Efecto::CopiarRuta => self.copiar_rutas(),
+            Efecto::AbrirExterno => self.abrir_externo(),
+            Efecto::Terminal => self.abrir_terminal(),
             Efecto::Comparar => self.pedir_comparacion(backend, buzon),
             // Como comparar: necesita el backend porque sale a preguntar en
             // cuanto se abre, y el panel nace diciendo que planifica.
@@ -6820,6 +6871,108 @@ impl Estado {
             // Los demás no llegan aquí: el `match` de arriba los reparte.
             _ => Self::no_muta(),
         }
+    }
+
+    /// Manda un efecto NATIVO al proceso que hospeda, si hay alguien.
+    ///
+    /// `false` = nadie escucha. No es un error del host: un frontend que no
+    /// sabe hacer estas cosas no se suscribe, y entonces lo honesto es
+    /// decirle a quien pulsó que aquí eso no pasa, en vez de acusar recibo de
+    /// algo que no va a ocurrir.
+    fn nativo(&self, efecto: crate::dto::NativeEffect) -> bool {
+        self.nativos
+            .as_ref()
+            .is_some_and(|tx| tx.send(efecto).is_ok())
+    }
+
+    /// Las rutas de lo MARCADO —o de lo señalado, si no hay marcas— al
+    /// portapapeles.
+    ///
+    /// Marcado primero y cursor como respaldo: es la misma regla que copiar y
+    /// mover, y tener dos respuestas a «sobre qué actúa esto» según el
+    /// comando es lo que hace que un gesto se aplique a otra cosa.
+    ///
+    /// En BYTES y en forma nativa cuando la hay: lo que se pega tiene que
+    /// abrir el mismo fichero, y una ruta decodificada con pérdida abre otro.
+    fn copiar_rutas(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let hueco = self.hueco();
+        // `marked_paths` ya cae al cursor cuando no hay marcas: es la misma
+        // regla que copiar y mover, y tener dos respuestas a «sobre qué
+        // actúa esto» según el comando es lo que aplica un gesto a otra cosa.
+        let paths: Vec<VPath> = hueco.pane.marked_paths();
+        if paths.is_empty() {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-nothing-selected".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        let count = paths.len();
+        let bytes = norte_frontend::shell::clipboard_bytes(&paths);
+        if !self.nativo(crate::dto::NativeEffect::CopyBytes { bytes, count }) {
+            return Self::sin_escritorio();
+        }
+        let fuera = self.decir_con("msg-paths-copied", &[("n", &count.to_string())]);
+        (self.aplicada(), fuera)
+    }
+
+    /// Abre lo señalado con la aplicación que el escritorio elija.
+    fn abrir_externo(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(path) = self.hueco().pane.selected().map(|e| e.path.clone()) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-nothing-selected".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        // Solo lo que está en ESTE disco: a `xdg-open` no se le puede dar un
+        // `sftp://`, y fingir que sí abriría otra cosa —o nada— sin decirlo.
+        if !norte_frontend::shell::is_local(&path) {
+            let fuera = self.decir("host-not-local");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-not-local".to_owned(),
+                },
+                fuera,
+            );
+        }
+        if !self.nativo(crate::dto::NativeEffect::OpenPath { path }) {
+            return Self::sin_escritorio();
+        }
+        (self.aplicada(), self.decir("msg-opening-external"))
+    }
+
+    /// Abre un terminal sentado en el directorio del panel activo.
+    fn abrir_terminal(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let dir = self.hueco().pane.dir().clone();
+        if !norte_frontend::shell::is_local(&dir) {
+            // Un terminal se sienta en un directorio del sistema de ficheros:
+            // en un `sftp://` no hay dónde sentarlo, y abrirlo en el `$HOME`
+            // sin decir nada sería abrirlo en otro sitio.
+            let fuera = self.decir("host-not-local");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-not-local".to_owned(),
+                },
+                fuera,
+            );
+        }
+        if !self.nativo(crate::dto::NativeEffect::OpenTerminal { dir }) {
+            return Self::sin_escritorio();
+        }
+        (self.aplicada(), self.decir("msg-opening-terminal"))
+    }
+
+    /// Nadie escucha los efectos nativos: se DICE.
+    fn sin_escritorio() -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        (
+            ActionAck::Unavailable {
+                reason_key: "host-no-desktop".to_owned(),
+            },
+            Vec::new(),
+        )
     }
 
     /// Los efectos que abren una PANTALLA sobre el listado y no tocan nada.
@@ -9334,13 +9487,13 @@ impl Estado {
         // que hizo salvo tecleando su id a mano (#276).
         let mut fuera = Vec::new();
         if let Some(sesion) = req.session.as_deref() {
-            self.agentes.vista(sesion, &req.op);
+            self.agencia.sesiones.vista(sesion, &req.op);
             // Y se REPINTA si el panel está abierto. La lista cambia SIN
             // gesto —esta petición la reordena— y un renderer al que no se
             // le dice se queda pintando el orden de antes: la fila que el
             // lector ve resaltada deja de ser la que el host tiene elegida, y
             // `u` deshace el trabajo de otra sesión.
-            if self.panel_agentes {
+            if self.agencia.panel {
                 fuera.push(self.parche(vec![ViewChange::Agents {
                     agents: self.vista_agentes(),
                 }]));
@@ -9697,8 +9850,8 @@ impl Estado {
                 // aprobaron M», que no son lo mismo cuando contestó otra
                 // ventana, cuando se denegó, o cuando caducó.
                 if let Some(sesion) = &session {
-                    self.agentes.aprobada(sesion);
-                    if self.panel_agentes {
+                    self.agencia.sesiones.aprobada(sesion);
+                    if self.agencia.panel {
                         let cambio = ViewChange::Agents {
                             agents: self.vista_agentes(),
                         };
@@ -10373,9 +10526,9 @@ impl Estado {
         // lo dice y `u` sobre ella se rehúsa —dos undos de la misma sesión
         // caminan la misma lista de entradas— y eso no puede quedarse pegado
         // para siempre.
-        if acabo && let Some(sesion) = self.undos.remove(&p.task_id.get()) {
-            self.agentes.deshecha(&sesion);
-            if self.panel_agentes {
+        if acabo && let Some(sesion) = self.agencia.undos.remove(&p.task_id.get()) {
+            self.agencia.sesiones.deshecha(&sesion);
+            if self.agencia.panel {
                 cambios.push(ViewChange::Agents {
                     agents: self.vista_agentes(),
                 });

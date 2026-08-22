@@ -2140,6 +2140,50 @@ pub enum UiNotice {
     },
 }
 
+/// Lo que el host le pide al PROCESO que lo hospeda, no al renderer.
+///
+/// Canal aparte, y no un `UiUpdate` más, por dos motivos que apuntan al mismo
+/// sitio. El primero es de audiencia: esto lleva RUTAS y programas, y la
+/// webview no tiene por qué verlos —ni tiene permiso para ejecutarlos: sus
+/// capabilities son escuchar eventos y nada más (ADR 0066 D11)—. El segundo
+/// es de responsabilidad: el host no lanza procesos ni toca el portapapeles;
+/// dice QUÉ hay que hacer, con operandos que salen de su propio estado
+/// semántico, y quien lo hospeda decide CÓMO con una puerta estrecha por
+/// cosa. Un frontend que no sepa hacer alguna simplemente no la hace, y el
+/// host se entera porque nadie le contesta.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeEffect {
+    /// Pon esto en el portapapeles.
+    ///
+    /// Ya compuesto —una ruta por línea, en su forma nativa cuando la
+    /// tiene—: componerlo es una regla de presentación y vive donde vive el
+    /// resto.
+    CopyBytes {
+        /// Lo que se copia, en BYTES y sin decodificar.
+        ///
+        /// Bytes y no `String` porque un nombre de fichero es bytes (regla
+        /// 1): pasarlo por `from_utf8_lossy` metería el carácter de
+        /// sustitución en el portapapeles, y lo que se pegue después abriría
+        /// otro fichero —o ninguno—. El helper del sistema lo recibe por
+        /// STDIN, que tampoco lo decodifica.
+        bytes: Vec<u8>,
+        /// Cuántas rutas lleva, para decirlo sin volver a contarlas.
+        count: usize,
+    },
+    /// Abre ESTA entrada con la aplicación que el escritorio elija.
+    OpenPath {
+        /// Qué se abre. Es un `VPath`: quien lo hospeda lo convierte a ruta
+        /// nativa —o dice que no puede, porque un `sftp://` no se le pasa a
+        /// `xdg-open`—.
+        path: norte_proto::VPath,
+    },
+    /// Abre un terminal sentado en ESTE directorio.
+    OpenTerminal {
+        /// Dónde se sienta.
+        dir: norte_proto::VPath,
+    },
+}
+
 /// Lo que el host manda al renderer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "update")]
