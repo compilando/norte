@@ -1179,6 +1179,12 @@ export class Screen {
         ruta.dataset["hostile"] = String(f.path_hostile);
         ruta.textContent = f.path;
         li.append(causa, ruta);
+        if (f.anchor_label !== "") {
+          const ancla = document.createElement("span");
+          ancla.className = "sync-failure-anchor";
+          ancla.textContent = f.anchor_label;
+          li.append(ancla);
+        }
         if (f.path_hostile) {
           li.append(badge(this.t("hostile-name")));
         }
@@ -1201,6 +1207,7 @@ export class Screen {
     estado.setAttribute("aria-live", "polite");
     estado.dataset["running"] = String(sync.running);
     estado.dataset["approvable"] = String(sync.can_approve);
+    estado.dataset["cancelRequested"] = String(sync.cancel_requested);
     estado.textContent = sync.status;
     caja.append(estado);
 
@@ -1225,6 +1232,13 @@ export class Screen {
     ruta.dataset["hostile"] = String(p.path_hostile);
     ruta.textContent = p.path;
     li.append(kind, ruta);
+    if (p.anchor_label !== "") {
+      // El ancla se DICE, no se deduce de un `data-anchor` que nadie lee.
+      const ancla = document.createElement("span");
+      ancla.className = "sync-step-anchor";
+      ancla.textContent = p.anchor_label;
+      li.append(ancla);
+    }
     if (p.path_hostile) {
       li.append(badge(this.t("hostile-name")));
     }

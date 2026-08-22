@@ -10109,9 +10109,10 @@ async fn una_sesion_en_claro_deja_aviso_persistente() {
 
     let banners = siguientes_banners(&mut sub).await;
     assert!(
-        banners
-            .iter()
-            .any(|b| b.subject.as_ref().is_some_and(|s| s.host == "archivo.example")),
+        banners.iter().any(|b| b
+            .subject
+            .as_ref()
+            .is_some_and(|s| s.host == "archivo.example")),
         "el aviso nombra la conexión, en su propio campo: {banners:?}"
     );
 }
@@ -10619,11 +10620,11 @@ async fn un_lote_que_nace_terminal_pide_su_informe() {
     .expect("el host escucha");
 
     let detalle = detalle_de_task(&mut sub).await;
-    assert!(detalle.contains('2'), "el informe llegó al tablero: {detalle}");
-    assert_eq!(
-        *backend.informes_pedidos.lock().expect("pedidos"),
-        vec![81]
+    assert!(
+        detalle.contains('2'),
+        "el informe llegó al tablero: {detalle}"
     );
+    assert_eq!(*backend.informes_pedidos.lock().expect("pedidos"), vec![81]);
 }
 
 /// Un CLIC sobre una aprobación recién abierta no la aprueba.
@@ -10728,21 +10729,22 @@ async fn una_ruta_limpia_pero_recortada_se_marca() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
-    *falso.informe.lock().expect("informe") = Some(norte_proto::methods::FsRenameBatchReportResult {
-        applied: 1,
-        rolled_back: 0,
-        failed_pair: Some(0),
-        stuck: Some(norte_proto::methods::RenameStuckStep {
-            from: VPath::parse("mem:///casa/antes.txt").expect("vpath"),
-            to: VPath::parse(&format!("mem:///casa/{largo}")).expect("vpath"),
-            pair_index: 0,
-            error: norte_proto::Error::Io { retryable: false },
-            journalled: true,
-            still_applied: 1,
-        }),
-        uncertain: None,
-        compensations_lost: 0,
-    });
+    *falso.informe.lock().expect("informe") =
+        Some(norte_proto::methods::FsRenameBatchReportResult {
+            applied: 1,
+            rolled_back: 0,
+            failed_pair: Some(0),
+            stuck: Some(norte_proto::methods::RenameStuckStep {
+                from: VPath::parse("mem:///casa/antes.txt").expect("vpath"),
+                to: VPath::parse(&format!("mem:///casa/{largo}")).expect("vpath"),
+                pair_index: 0,
+                error: norte_proto::Error::Io { retryable: false },
+                journalled: true,
+                still_applied: 1,
+            }),
+            uncertain: None,
+            compensations_lost: 0,
+        });
     let (h, _snap) = host_arbol(Arc::new(falso)).await;
     let mut sub = h.subscribe();
     let p = inyectar_task_de(&tx, 91, norte_proto::TaskKind::RenameBatch);
@@ -10811,14 +10813,15 @@ async fn la_pila_de_dialogos_tiene_techo() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
-    *falso.informe.lock().expect("informe") = Some(norte_proto::methods::FsRenameBatchReportResult {
-        applied: 1,
-        rolled_back: 1,
-        failed_pair: Some(0),
-        stuck: None,
-        uncertain: None,
-        compensations_lost: 0,
-    });
+    *falso.informe.lock().expect("informe") =
+        Some(norte_proto::methods::FsRenameBatchReportResult {
+            applied: 1,
+            rolled_back: 1,
+            failed_pair: Some(0),
+            stuck: None,
+            uncertain: None,
+            compensations_lost: 0,
+        });
     let (h, _snap) = host_arbol(Arc::new(falso)).await;
     let mut sub = h.subscribe();
 
@@ -10916,16 +10919,26 @@ async fn una_aprobacion_dice_que_pide_quien_y_hasta_cuando() {
     .expect("el host escucha");
 
     let d = &siguientes_dialogos(&mut sub).await[0];
-    assert_eq!(d.subject.as_ref().map(|l| l.text.clone()).as_deref(), Some("delete"));
+    assert_eq!(
+        d.subject.as_ref().map(|l| l.text.clone()).as_deref(),
+        Some("delete")
+    );
     assert_eq!(
         d.asker.as_ref().map(|l| l.text.clone()).as_deref(),
         Some("agente-7")
     );
     assert_eq!(
         d.deadline.as_deref(),
-        Some(norte_i18n::ta_in(norte_i18n::Lang::Es, "modal-approval-ttl", &[("s", "30")]).as_str())
+        Some(
+            norte_i18n::ta_in(norte_i18n::Lang::Es, "modal-approval-ttl", &[("s", "30")]).as_str()
+        )
     );
-    assert_eq!(d.body.len(), 2, "el cuerpo son SOLO las rutas: {:?}", d.body);
+    assert_eq!(
+        d.body.len(),
+        2,
+        "el cuerpo son SOLO las rutas: {:?}",
+        d.body
+    );
 }
 
 /// Sin TTL —una pendiente reconstruida por el resync— se dice que el plazo
@@ -11084,7 +11097,9 @@ async fn la_ventana_busca_por_significado() {
     .expect("host vivo");
 
     // La vista se abre YA, vacía y corriendo; los hallazgos llegan después.
-    let mut vista = siguiente_busqueda(&mut sub).await.expect("la búsqueda abre");
+    let mut vista = siguiente_busqueda(&mut sub)
+        .await
+        .expect("la búsqueda abre");
     for _ in 0..20 {
         if !vista.rows.is_empty() {
             break;
@@ -11202,14 +11217,16 @@ async fn en_solo_lectura_no_hay_busqueda_semantica() {
     let paleta = siguiente_paleta(&mut sub).await.expect("la paleta abre");
     // La paleta no lleva la clave de despacho —se elige por índice— así que
     // se busca por la etiqueta, que es lo que el lector ve.
-    let etiqueta = norte_frontend::whichkey::command_label(
-        "pane.semantic-search",
-        norte_i18n::Lang::Es,
-    );
+    let etiqueta =
+        norte_frontend::whichkey::command_label("pane.semantic-search", norte_i18n::Lang::Es);
     assert!(
         !paleta.rows.iter().any(|r| r.text == etiqueta),
         "una ventana sin efectos no ofrece preguntarle a un modelo: {:?}",
-        paleta.rows.iter().map(|r| r.text.clone()).collect::<Vec<_>>()
+        paleta
+            .rows
+            .iter()
+            .map(|r| r.text.clone())
+            .collect::<Vec<_>>()
     );
     assert!(
         backend
@@ -11219,7 +11236,6 @@ async fn en_solo_lectura_no_hay_busqueda_semantica() {
             .is_empty()
     );
 }
-
 
 /// Ejecuta un comando por la PALETA, que es por donde se llega a lo que
 /// ningún preset ata (la búsqueda semántica es uno).
@@ -11362,7 +11378,9 @@ async fn comparar_los_dos_paneles_abre_el_panel_de_diferencias() {
         if !vista.rows.is_empty() {
             break;
         }
-        vista = siguiente_comparacion(&mut sub).await.expect("sigue abierta");
+        vista = siguiente_comparacion(&mut sub)
+            .await
+            .expect("sigue abierta");
     }
     assert_eq!(vista.rows.len(), 2, "{vista:?}");
     assert_eq!(vista.total, 2);
@@ -11370,7 +11388,10 @@ async fn comparar_los_dos_paneles_abre_el_panel_de_diferencias() {
     // traducidos: el renderer no decide qué es «igual».
     assert_eq!(vista.rows[0].category, "same");
     assert_eq!(vista.rows[1].category, "only-left");
-    assert!(vista.rows[1].right.is_none(), "un huérfano no tiene derecha");
+    assert!(
+        vista.rows[1].right.is_none(),
+        "un huérfano no tiene derecha"
+    );
     // Y se pidió comparar los dos directorios de verdad.
     let pedidas = backend.comparaciones.lock().expect("comparaciones").clone();
     assert_eq!(pedidas.len(), 1);
@@ -11405,7 +11426,9 @@ async fn un_filtro_esconde_una_categoria_y_no_renumera() {
         if vista.rows.len() == 2 {
             break;
         }
-        vista = siguiente_comparacion(&mut sub).await.expect("sigue abierta");
+        vista = siguiente_comparacion(&mut sub)
+            .await
+            .expect("sigue abierta");
     }
 
     h.dispatch(UiAction::CompareSelectRow { id: 2 })
@@ -11418,15 +11441,23 @@ async fn un_filtro_esconde_una_categoria_y_no_renumera() {
     .expect("host vivo");
     // Hay parches en cola (la selección produjo el suyo): se lee hasta el que
     // ya trae el filtro puesto.
-    let mut filtrada = siguiente_comparacion(&mut sub).await.expect("sigue abierta");
+    let mut filtrada = siguiente_comparacion(&mut sub)
+        .await
+        .expect("sigue abierta");
     for _ in 0..20 {
         if filtrada.rows.len() == 1 {
             break;
         }
-        filtrada = siguiente_comparacion(&mut sub).await.expect("sigue abierta");
+        filtrada = siguiente_comparacion(&mut sub)
+            .await
+            .expect("sigue abierta");
     }
     assert_eq!(filtrada.rows.len(), 1, "la categoría escondida no viaja");
-    assert_eq!(filtrada.selected, Some(2), "y la selección sigue siendo suya");
+    assert_eq!(
+        filtrada.selected,
+        Some(2),
+        "y la selección sigue siendo suya"
+    );
     assert!(
         filtrada
             .filters
@@ -11457,7 +11488,9 @@ async fn abrir_un_huerfano_por_el_lado_vacio_no_cae_al_otro() {
         if !vista.rows.is_empty() {
             break;
         }
-        vista = siguiente_comparacion(&mut sub).await.expect("sigue abierta");
+        vista = siguiente_comparacion(&mut sub)
+            .await
+            .expect("sigue abierta");
     }
 
     // El lado activo es el IZQUIERDO, y esta fila no tiene izquierda.
@@ -11509,8 +11542,8 @@ async fn siguiente_sync(
     sub: &mut norte_ui_host::controller::UiSubscription,
 ) -> Option<norte_ui_host::dto::SyncView> {
     for _ in 0..40 {
-        let Ok(Some(u)) = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
-            .await
+        let Ok(Some(u)) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv()).await
         else {
             continue;
         };
@@ -11531,7 +11564,11 @@ async fn siguiente_sync(
 }
 
 /// Un paso de plan, con lo mínimo para pintarlo.
-fn paso_de_plan(id: u64, rel: &str, kind: norte_proto::methods::SyncStepKind) -> norte_proto::methods::SyncStep {
+fn paso_de_plan(
+    id: u64,
+    rel: &str,
+    kind: norte_proto::methods::SyncStepKind,
+) -> norte_proto::methods::SyncStep {
     norte_proto::methods::SyncStep {
         id,
         kind,
@@ -11567,9 +11604,9 @@ fn plan_cerrado(pasos: u64) -> norte_proto::methods::SyncPlanDone {
     norte_proto::methods::SyncPlanDone {
         // Se corrige al aterrizar: el modelo casa el cierre con SU Task.
         task_id: norte_proto::TaskId::new(0),
-        plan_hash: norte_proto::methods::PlanHash::parse(&"a".repeat(
-            norte_proto::methods::PLAN_HASH_LEN,
-        ))
+        plan_hash: norte_proto::methods::PlanHash::parse(
+            &"a".repeat(norte_proto::methods::PLAN_HASH_LEN),
+        )
         .expect("hash de test"),
         counts,
         blockers: Vec::new(),
@@ -11652,7 +11689,11 @@ async fn un_plan_con_bloqueos_no_se_aprueba() {
     done.blockers_total = 1;
     let falso = arbol_como_falso();
     *falso.plan_de_sync.lock().expect("plan") = Some((
-        vec![paso_de_plan(1, "a.md", norte_proto::methods::SyncStepKind::Copy)],
+        vec![paso_de_plan(
+            1,
+            "a.md",
+            norte_proto::methods::SyncStepKind::Copy,
+        )],
         done,
     ));
     let (h, _snap) = host_con_layout(Arc::new(falso), "orthodox", (200, 60)).await;
@@ -11667,7 +11708,10 @@ async fn un_plan_con_bloqueos_no_se_aprueba() {
         }
         vista = siguiente_sync(&mut sub).await.expect("sigue abierto");
     }
-    assert!(!vista.blockers.is_empty(), "se dice qué lo impide: {vista:?}");
+    assert!(
+        !vista.blockers.is_empty(),
+        "se dice qué lo impide: {vista:?}"
+    );
     assert!(!vista.can_approve, "y no se ofrece aprobar: {vista:?}");
 }
 
@@ -11708,7 +11752,11 @@ async fn sincronizar_el_mismo_directorio_no_encola_nada() {
 async fn cancelar_el_plan_desde_el_tablero_lo_dice_en_el_panel() {
     let falso = arbol_como_falso();
     *falso.plan_de_sync.lock().expect("plan") = Some((
-        vec![paso_de_plan(1, "a.md", norte_proto::methods::SyncStepKind::Copy)],
+        vec![paso_de_plan(
+            1,
+            "a.md",
+            norte_proto::methods::SyncStepKind::Copy,
+        )],
         plan_cerrado(1),
     ));
     let backend = Arc::new(falso);
@@ -11751,7 +11799,11 @@ async fn cancelar_el_plan_desde_el_tablero_lo_dice_en_el_panel() {
 async fn con_el_panel_del_plan_delante_no_se_pide_otro() {
     let falso = arbol_como_falso();
     *falso.plan_de_sync.lock().expect("plan") = Some((
-        vec![paso_de_plan(1, "a.md", norte_proto::methods::SyncStepKind::Copy)],
+        vec![paso_de_plan(
+            1,
+            "a.md",
+            norte_proto::methods::SyncStepKind::Copy,
+        )],
         plan_cerrado(1),
     ));
     let backend = Arc::new(falso);
@@ -11874,6 +11926,66 @@ async fn un_plan_que_borra_pregunta_dos_veces() {
     assert_eq!(aplicados.len(), 1, "una sola vez");
 }
 
+/// Un apply RECHAZADO suelta el pestillo; uno de resultado DESCONOCIDO no.
+///
+/// Que el daemon conteste «no» y que la conexión se caiga después de pedirlo
+/// son cosas distintas: en el primer caso se sabe que el destino está
+/// intacto y volver a intentarlo es correcto; en el segundo la petición pudo
+/// llegar, y ofrecer `a` otra vez es ofrecer aplicar el mismo plan dos veces
+/// sobre el mismo destino.
+#[tokio::test]
+async fn un_apply_de_resultado_desconocido_no_se_reofrece() {
+    for (error, se_reofrece) in [
+        (
+            norte_proto::Error::PolicyDenied {
+                rule: "policy-rule".to_owned(),
+            },
+            true,
+        ),
+        (norte_proto::Error::Io { retryable: true }, false),
+    ] {
+        let falso = arbol_como_falso();
+        *falso.plan_de_sync.lock().expect("plan") = Some((
+            vec![paso_de_plan(
+                1,
+                "a.md",
+                norte_proto::methods::SyncStepKind::Copy,
+            )],
+            plan_cerrado(1),
+        ));
+        *falso.error_al_aplicar.lock().expect("error") = Some(error.clone());
+        let backend = Arc::new(falso);
+        let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
+        let mut sub = h.subscribe();
+        separar_los_paneles(&h, &mut sub).await;
+        ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
+        let mut vista = siguiente_sync(&mut sub).await.expect("abre");
+        for _ in 0..20 {
+            if vista.can_approve {
+                break;
+            }
+            vista = siguiente_sync(&mut sub).await.expect("sigue abierto");
+        }
+        assert!(vista.can_approve, "{}", vista.status);
+
+        h.dispatch(tecla("a")).await.expect("host vivo");
+        for _ in 0..40 {
+            if !backend.aplicados.lock().expect("aplicados").is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let tras = siguiente_foto(&mut sub).await.sync.expect("sigue abierto");
+        assert_eq!(
+            tras.can_approve, se_reofrece,
+            "{error:?} dejó la pantalla ofreciendo aprobar = {}",
+            tras.can_approve
+        );
+    }
+}
+
 /// Con el apply EN VUELO, `Escape` pide cancelar y NO cierra el panel.
 ///
 /// Cerrarlo pierde el informe —y con él el recuento, los fallos y el asa del
@@ -11882,7 +11994,11 @@ async fn un_plan_que_borra_pregunta_dos_veces() {
 async fn con_el_apply_en_vuelo_escape_no_cierra() {
     let falso = arbol_como_falso();
     *falso.plan_de_sync.lock().expect("plan") = Some((
-        vec![paso_de_plan(1, "a.md", norte_proto::methods::SyncStepKind::Copy)],
+        vec![paso_de_plan(
+            1,
+            "a.md",
+            norte_proto::methods::SyncStepKind::Copy,
+        )],
         plan_cerrado(1),
     ));
     let backend = Arc::new(falso);
@@ -11907,13 +12023,35 @@ async fn con_el_apply_en_vuelo_escape_no_cierra() {
     }
     assert_eq!(backend.aplicados.lock().expect("aplicados").len(), 1);
 
+    // El PRIMER `Escape` pide parar y NO cierra: cerrar pierde el informe
+    // sobre un destino a medio reescribir. Y se le pide parar a la task del
+    // APPLY, no a la del plan, que hace rato que terminó.
     h.dispatch(tecla("Escape")).await.expect("host vivo");
     h.dispatch(UiAction::Resync).await.expect("host vivo");
     let foto = siguiente_foto(&mut sub).await;
+    let panel = foto.sync.expect("el panel se queda");
+    assert!(panel.cancel_requested, "y la pantalla acusa que se le oyó");
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    let paradas = backend
+        .canceladas_por_id
+        .lock()
+        .expect("canceladas")
+        .clone();
     assert!(
-        foto.sync.is_some(),
-        "el panel se queda: el informe todavía no ha llegado"
+        paradas.iter().any(|id| *id >= 500),
+        "se le pidió parar a la task del apply: {paradas:?}"
     );
+
+    // El SEGUNDO cierra, pase lo que pase con el informe: sin esta salida,
+    // la pantalla que escribe era la única de norte sin salida.
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    for _ in 0..20 {
+        if siguiente_foto(&mut sub).await.sync.is_none() {
+            return;
+        }
+    }
+    panic!("el panel no se pudo cerrar");
 }
 
 /// El informe llega y el panel lo dice, con los fallos uno a uno.
@@ -11921,26 +12059,31 @@ async fn con_el_apply_en_vuelo_escape_no_cierra() {
 async fn el_informe_de_la_sincronizacion_dice_lo_que_fallo() {
     let falso = arbol_como_falso();
     *falso.plan_de_sync.lock().expect("plan") = Some((
-        vec![paso_de_plan(1, "a.md", norte_proto::methods::SyncStepKind::Copy)],
+        vec![paso_de_plan(
+            1,
+            "a.md",
+            norte_proto::methods::SyncStepKind::Copy,
+        )],
         plan_cerrado(1),
     ));
-    *falso.informe_de_sync.lock().expect("informe") = Some(norte_proto::methods::SyncReportResult {
-        done: 0,
-        failed: 1,
-        skipped: 0,
-        bytes: 0,
-        failures: vec![norte_proto::methods::SyncFailure {
-            rel: norte_proto::methods::RelPath::new(vec![
-                norte_proto::Segment::new(b"a.md".to_vec()).expect("segmento"),
-            ]),
-            dest_rel: None,
-            cause: norte_proto::methods::SyncFailureCause::Denied,
-            kind: norte_proto::methods::SyncStepKind::Copy,
-        }],
-        // Sin lote de journal: nada que deshacer, y el panel lo dirá.
-        batch_id: None,
-        dest_trash: norte_proto::methods::DestTrash::Restorable,
-    });
+    *falso.informe_de_sync.lock().expect("informe") =
+        Some(norte_proto::methods::SyncReportResult {
+            done: 0,
+            failed: 1,
+            skipped: 0,
+            bytes: 0,
+            failures: vec![norte_proto::methods::SyncFailure {
+                rel: norte_proto::methods::RelPath::new(vec![
+                    norte_proto::Segment::new(b"a.md".to_vec()).expect("segmento"),
+                ]),
+                dest_rel: None,
+                cause: norte_proto::methods::SyncFailureCause::Denied,
+                kind: norte_proto::methods::SyncStepKind::Copy,
+            }],
+            // Sin lote de journal: nada que deshacer, y el panel lo dirá.
+            batch_id: None,
+            dest_trash: norte_proto::methods::DestTrash::Restorable,
+        });
     let backend = Arc::new(falso);
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();

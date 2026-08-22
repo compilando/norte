@@ -503,6 +503,12 @@ impl SyncView {
     /// de C2, MINOR de las dos revisiones).
     pub fn on_apply_abandoned(&mut self) {
         self.submitted = false;
+        // Y la petición de cancelación se olvida con él. Un `Esc` que no
+        // llegó a cancelar NADA —porque el apply ni nació— dejaba
+        // `cancel_requested` puesto para siempre, y entonces cada apply
+        // posterior lo negaba `on_apply_started`: el panel se convertía en una
+        // máquina de lanzar escrituras que nunca se adoptan.
+        self.cancel_requested = false;
     }
 
     /// Echa el pestillo y devuelve el hash que se manda, o `None` si este
@@ -673,6 +679,11 @@ impl SyncView {
 /// ```
 #[must_use]
 pub fn hint_id(view: &SyncView) -> &'static str {
+    // Mientras el daemon ESCRIBE, `Esc` pide cancelar y no cierra: decir
+    // «Esc cierra» ahí es ofrecer irse de una escritura en curso.
+    if view.is_submitted() || matches!(view.state, SyncState::Applying(_)) {
+        return "sync-hint-applying";
+    }
     if view.confirming.is_some() {
         "sync-hint-confirm"
     } else if view.awaiting_approval() && view.can_approve() {

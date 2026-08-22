@@ -1331,7 +1331,11 @@ mod tests {
         // sí: sin él no se sabe cuánto se escribió.
         let mut v = armar();
         let c = v
-            .on_apply_ended(&TaskState::Completed, Err(norte_proto::Error::NotFound), Lang::En)
+            .on_apply_ended(
+                &TaskState::Completed,
+                Err(norte_proto::Error::NotFound),
+                Lang::En,
+            )
             .expect("un informe que no llega es un fallo que decir");
         assert_eq!(v.run, SyncRunState::Failed);
         assert_eq!(
@@ -1368,8 +1372,12 @@ mod tests {
         // lector pidió parar y eso ya lo sabe.
         let mut v = armar();
         assert!(
-            v.on_apply_ended(&TaskState::Cancelled, Err(norte_proto::Error::NotFound), Lang::En)
-                .is_some(),
+            v.on_apply_ended(
+                &TaskState::Cancelled,
+                Err(norte_proto::Error::NotFound),
+                Lang::En
+            )
+            .is_some(),
             "y aun así se dice que no se pudo pedir el informe"
         );
         assert_eq!(v.run, SyncRunState::Cancelled);

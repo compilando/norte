@@ -154,11 +154,14 @@ pub struct Falso {
     >,
     /// El informe que contesta `sync.report`. `None` = `Unsupported`.
     pub informe_de_sync: std::sync::Mutex<Option<norte_proto::methods::SyncReportResult>>,
+    /// Con qué falla `sync.apply`, si falla.
+    pub error_al_aplicar: std::sync::Mutex<Option<Error>>,
+    /// Los ids de task a los que se les pidió parar, en orden.
+    pub canceladas_por_id: Arc<std::sync::Mutex<Vec<u64>>>,
     /// Los hashes con los que se pidió aplicar, en orden.
     pub aplicados: std::sync::Mutex<Vec<norte_proto::methods::PlanHash>>,
     /// Los planes que se pidieron: `(origen, destino, modo)`.
-    pub planes_pedidos:
-        std::sync::Mutex<Vec<(VPath, VPath, norte_proto::methods::SyncMode)>>,
+    pub planes_pedidos: std::sync::Mutex<Vec<(VPath, VPath, norte_proto::methods::SyncMode)>>,
     /// Las filas que contesta `fs.compare`, en un solo lote. `None` = el
     /// método falla con `Unsupported`.
     pub filas_comparadas: std::sync::Mutex<Option<Vec<norte_proto::methods::CompareRow>>>,
@@ -670,6 +673,14 @@ impl HostBackend for Falso {
         plan_hash: norte_proto::methods::PlanHash,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.aplicados.lock().expect("aplicados").push(plan_hash);
+        if let Some(e) = self
+            .error_al_aplicar
+            .lock()
+            .expect("error al aplicar")
+            .clone()
+        {
+            return Box::pin(async move { Err(e) });
+        }
         let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(500 + n as u64);
         let progreso = norte_proto::TaskProgress {
@@ -684,12 +695,20 @@ impl HostBackend for Falso {
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
-        self.progresos.lock().expect("progresos").insert(id.get(), tx);
+        self.progresos
+            .lock()
+            .expect("progresos")
+            .insert(id.get(), tx);
+        // Cancelable DE VERDAD: con un cancelador que no cuenta, un test de
+        // cancelación pasa igual con el panel congelado.
+        let canceladas = Arc::clone(&self.canceladas_por_id);
         Box::pin(async move {
             Ok(HostTask {
                 id,
                 progress: rx,
-                cancel: Arc::new(|| {}),
+                cancel: Arc::new(move || {
+                    canceladas.lock().expect("canceladas").push(id.get());
+                }),
                 foreign: false,
             })
         })
@@ -735,7 +754,10 @@ impl HostBackend for Falso {
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
-        self.progresos.lock().expect("progresos").insert(id.get(), tx);
+        self.progresos
+            .lock()
+            .expect("progresos")
+            .insert(id.get(), tx);
         Box::pin(async move {
             let (pasos, mut done) = plan.ok_or(Error::Unsupported)?;
             // El cierre lleva SU Task: el modelo compartido descarta el de
@@ -797,7 +819,10 @@ impl HostBackend for Falso {
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
-        self.progresos.lock().expect("progresos").insert(id.get(), tx);
+        self.progresos
+            .lock()
+            .expect("progresos")
+            .insert(id.get(), tx);
         Box::pin(async move {
             let filas = filas.ok_or(Error::Unsupported)?;
             let (ftx, frx) = tokio::sync::mpsc::channel(4);

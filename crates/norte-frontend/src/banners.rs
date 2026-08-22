@@ -43,9 +43,8 @@ pub fn note_degraded(
     degraded: &mut std::collections::VecDeque<ConnectionDegraded>,
     d: ConnectionDegraded,
 ) {
-    let clave = |x: &ConnectionDegraded| {
-        (x.scheme.to_ascii_lowercase(), x.host.to_ascii_lowercase())
-    };
+    let clave =
+        |x: &ConnectionDegraded| (x.scheme.to_ascii_lowercase(), x.host.to_ascii_lowercase());
     let nueva = clave(&d);
     degraded.retain(|old| clave(old) != nueva);
     degraded.push_back(d);

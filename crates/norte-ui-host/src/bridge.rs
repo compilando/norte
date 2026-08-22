@@ -30,6 +30,23 @@ use serde::{Deserialize, Serialize};
 ///   hará DE VERDAD —los dos ya traducidos, porque el catálogo no sustituye
 ///   variables—, si hay un nombre alterado FUERA de la ventana, y si el
 ///   lector ha recorrido el plan entero. Y se puede contestar con el ratón.
+/// - **30**: el panel de sincronización APLICA: la segunda pregunta, los
+///   fallos del informe y el acuse de la cancelación cruzan, y el ancla de una
+///   ruta puede valer `either`. Un renderer de 29 leería `undefined` donde
+///   ahora hay una lista.
+/// - **29**: la pantalla puede llevar un PLAN de sincronización: sus pasos con
+///   la perspectiva del deshacer, su resumen, lo que lo bloquea y si se puede
+///   aprobar.
+/// - **28**: la pantalla puede llevar el panel de DIFERENCIAS: filas
+///   emparejadas por el core, sus filtros por categoría y una ventana de las
+///   que se ven.
+/// - **27**: una búsqueda puede ser SEMÁNTICA, y entonces sus filas llevan
+///   cuánto se parecen.
+/// - **26**: lo que se enmascara se DICE también en los avisos persistentes,
+///   en el diagnóstico de una disposición, en el nombre de un kind sin
+///   proyectar, en las claves de efectos de un tema y en la etiqueta de una
+///   tecla; y una aprobación dice qué pide, quién lo pide y hasta cuándo, en
+///   campos propios.
 /// - **24**: la pantalla puede llevar un PLAN DE RENOMBRADO en revisión: las
 ///   parejas que el modelo propone (de nombre a nombre, cada uno entero y por
 ///   separado — nunca concatenados con una flecha), el veredicto del core y
@@ -91,7 +108,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 29;
+pub const BRIDGE_VERSION: u32 = 30;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

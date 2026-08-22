@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 29;
+export const BRIDGE_VERSION = 30;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -587,6 +587,8 @@ export interface SyncView {
    *  la pantalla rota que esto evita. */
   can_approve: boolean;
   running: boolean;
+  /** Ya se le pidió parar. El segundo `Escape` cierra el panel. */
+  cancel_requested: boolean;
 }
 
 export interface SyncFailureView {
@@ -597,6 +599,9 @@ export interface SyncFailureView {
    *  panel donde una ruta sin calificar significa «del origen» es afirmar el
    *  origen. */
   anchor: string;
+  /** El ancla YA DICHA, en el idioma de la sesión. Vacía cuando es el origen,
+   *  que es lo que una ruta sin calificar significa aquí. */
+  anchor_label: string;
 }
 
 export interface SyncBlockerView {
@@ -613,6 +618,8 @@ export interface SyncStepView {
   /** Si el deshacer lo devuelve. Nunca sale de `reversal` a secas. */
   undo: string;
   anchor: string;
+  /** Como en el fallo: el ancla ya dicha, vacía cuando es el origen. */
+  anchor_label: string;
   path: string;
   path_hostile: boolean;
   /** La ortografía del DESTINO cuando sus bytes difieren: la escritura cae

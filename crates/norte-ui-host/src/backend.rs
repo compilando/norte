@@ -379,7 +379,10 @@ pub trait HostBackend: Send + Sync + 'static {
     /// vale contra otro. Quién puede canjearlo lo decide la policy del core.
     ///
     /// Esto ESCRIBE: es la única llamada de esta superficie que lo hace.
-    fn sync_apply(&self, plan_hash: methods::PlanHash) -> BoxFuture<'static, Result<HostTask, Error>>;
+    fn sync_apply(
+        &self,
+        plan_hash: methods::PlanHash,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
     /// El informe de una sincronización ya terminada.
     ///
@@ -599,7 +602,6 @@ impl HostBackend for norte_client::RemoteBackend {
         // tener — se construye por raíces, no por lo que se está mirando.
         Box::pin(async move { backend.index_search_semantic(None, &query, k).await })
     }
-
 
     fn plugin_column_values(
         &self,

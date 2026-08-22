@@ -1352,6 +1352,12 @@ pub struct SyncView {
     /// por qué. El desenlace de la Task dice si corrió, y lo que no se hizo
     /// lo cuenta solo el informe.
     pub failures: Vec<SyncFailureView>,
+    /// Ya se pidió PARAR lo que está corriendo.
+    ///
+    /// Viaja porque si no, pulsar `Escape` durante la escritura no cambia ni
+    /// una letra de la pantalla: no hay forma de distinguir «te oí» de «esta
+    /// tecla no hace nada», que es justo lo que empuja a pulsarla otra vez.
+    pub cancel_requested: bool,
     /// El plan se puede aprobar YA.
     ///
     /// Lo decide el modelo compartido: un plan sin cerrar, con bloqueos, o ya
@@ -1371,11 +1377,15 @@ pub struct SyncFailureView {
     pub path: String,
     /// Lo pintado difiere de los bytes.
     pub path_hostile: bool,
-    /// De qué raíz cuelga la ruta (`source`, `dest` o `either`).
-    ///
-    /// **Hay que pintarlo**: en un panel donde una ruta sin calificar
-    /// significa «del origen», callar un `either` es afirmar el origen.
+    /// De qué raíz cuelga la ruta (`source`, `dest` o `either`), por id
+    /// estable — para el estilo, no para leer.
     pub anchor: String,
+    /// Lo mismo, ya traducido y para PINTAR. Vacío = no hay nada que decir.
+    ///
+    /// Viaja además del id porque el id no se lee: en un panel donde una ruta
+    /// sin calificar significa «del origen», callar un `either` es afirmar el
+    /// origen, y un atributo `data-` que ningún estilo mira lo calla igual.
+    pub anchor_label: String,
 }
 
 /// Algo que impide sincronizar, con dónde pasa.
@@ -1404,8 +1414,10 @@ pub struct SyncStepView {
     /// Nunca sale de `reversal` a secas: esa es la mitad de la respuesta, y
     /// la que miente cuando el destino no tiene papelera.
     pub undo: String,
-    /// De qué raíz cuelga la ruta (`source` o `dest`).
+    /// De qué raíz cuelga la ruta (`source` o `dest`), por id estable.
     pub anchor: String,
+    /// Lo mismo, ya traducido y para pintar. Vacío = no hay nada que decir.
+    pub anchor_label: String,
     /// La ruta relativa, enmascarada.
     pub path: String,
     /// Lo pintado difiere de los bytes.

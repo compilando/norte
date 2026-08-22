@@ -386,8 +386,12 @@ enum Fondo {
     PlanDeSyncVivo(u64, norte_proto::TaskId),
     /// El `sync.apply` fue aceptado y esta es su Task.
     SyncAplicando(u64, norte_proto::TaskId),
-    /// El `sync.apply` no llegó a ejecutarse: se suelta el pestillo.
-    SyncNoAplicado(u64),
+    /// El `sync.apply` falló. El `bool` dice si se SABE que no escribió nada:
+    /// un rechazo (política, conflicto, ruta inválida) lo sabe, porque el
+    /// daemon contestó; un transporte caído NO, porque la petición pudo
+    /// llegar y estar corriendo ahora mismo. Soltar el pestillo en el segundo
+    /// caso invita a aplicar el mismo plan dos veces sobre el mismo destino.
+    SyncNoAplicado(u64, bool),
     /// El informe de una sincronización terminada.
     InformeDeSync(
         u64,
@@ -1257,6 +1261,15 @@ struct Sincronizacion {
     primera_visible: usize,
     /// Cuántos pasos caben en esa ventana.
     ventana: usize,
+    /// Su informe ya se pidió: es una RPC, y una reconexión reanuncia el
+    /// terminal.
+    informe_pedido: bool,
+    /// En qué época de CONEXIÓN vive su Task.
+    ///
+    /// Tras un relevo, el daemon nuevo reparte los ids desde 1: sin esto, una
+    /// task ajena con el mismo número cerraba la historia de esta escritura
+    /// con la prueba de otra.
+    epoca_conexion: u64,
 }
 
 /// Una comparación de dos árboles, con su panel COMPARTIDO dentro.
@@ -3268,12 +3281,10 @@ impl Estado {
         // El diagnóstico del parser puede CITAR el fichero del usuario: entra
         // por la misma puerta que el resto, y con su bandera (#266) — lo que
         // se enmascara se dice.
-        let diagnostico = actual
-            .and_then(|r| r.problem.clone())
-            .map_or_else(
-                || (String::new(), false),
-                |p| norte_frontend::display_name(p.as_bytes()),
-            );
+        let diagnostico = actual.and_then(|r| r.problem.clone()).map_or_else(
+            || (String::new(), false),
+            |p| norte_frontend::display_name(p.as_bytes()),
+        );
         Some(crate::dto::LayoutPickerView {
             title: clamp_display(norte_i18n::t_in(self.lang, "layout-picker-title")),
             rows: p
@@ -4165,12 +4176,26 @@ impl Estado {
             }
             Fondo::FilasComparadas(epoca, lote) => self.aplicar_filas_comparadas(epoca, *lote),
             Fondo::PlanDeSyncVivo(epoca, id) => self.abrir_panel_de_sync(epoca, id),
-            Fondo::SyncAplicando(epoca, id) => self.sync_aplicando(epoca, id),
-            Fondo::SyncNoAplicado(epoca) => {
+            Fondo::SyncAplicando(epoca, id) => self.sync_aplicando(epoca, id, backend, buzon),
+            Fondo::SyncNoAplicado(epoca, seguro) => {
+                let mut fuera = Vec::new();
                 if let Some(s) = self.sincronizacion.as_mut().filter(|s| s.epoca == epoca) {
-                    s.vista.on_apply_abandoned();
+                    if seguro {
+                        s.vista.on_apply_abandoned();
+                    } else {
+                        // Ambiguo: el pestillo se QUEDA echado. La pantalla no
+                        // puede decir «no se aplicó» de algo que quizá se está
+                        // aplicando, ni ofrecer repetirlo.
+                        fuera.extend(self.decir("msg-sync-apply-unknown"));
+                    }
                 }
-                Vec::new()
+                // Con su parche: `on_apply_abandoned` cambia lo que la
+                // pantalla ofrece, y sin repintar, la `a` que acaba de
+                // devolverse parece muerta.
+                fuera.push(self.parche(vec![ViewChange::Sync {
+                    sync: self.vista_sincronizacion(),
+                }]));
+                fuera
             }
             Fondo::InformeDeSync(epoca, estado, informe) => {
                 self.informe_de_sync(epoca, &estado, *informe)
@@ -4507,9 +4532,7 @@ impl Estado {
             // evento de un SDK más nuevo se lee como una pérdida, que es lo
             // conservador — se pinta reconectando en vez de fingir que todo
             // sigue igual.
-            norte_client::ConnEvent::Lost | _ => {
-                (ConnectionView::Reconnecting, "msg-daemon-lost")
-            }
+            norte_client::ConnEvent::Lost | _ => (ConnectionView::Reconnecting, "msg-daemon-lost"),
         };
         // Volver APAGA el aviso: uno que no sabe volverse «ya está» miente en
         // cuanto el daemon reaparece, y el relevo termina volviendo.
@@ -5538,14 +5561,28 @@ impl Estado {
         let Some(sinc) = self.sincronizacion.as_ref() else {
             return;
         };
+        // Los MISMOS tres guards que el informe de un lote, y por los mismos
+        // motivos: la CLASE (un `fs.copy` cualquiera puede llevar el mismo id
+        // tras un relevo), la ÉPOCA de conexión (los ids del daemon nuevo
+        // empiezan otra vez en 1) y la idempotencia (una reconexión reanuncia
+        // el terminal, y esto es una RPC).
         if sinc.task != p.task_id
-            || !matches!(sinc.vista.state, norte_frontend::sync::SyncState::Applying(_))
+            || sinc.epoca_conexion != self.epoca_conexion
+            || !matches!(p.kind, norte_proto::TaskKind::Sync)
+            || sinc.informe_pedido
+            || !matches!(
+                sinc.vista.state,
+                norte_frontend::sync::SyncState::Applying(_)
+            )
         {
             return;
         }
         let epoca = sinc.epoca;
         let estado = p.state.clone();
         let id = p.task_id;
+        if let Some(s) = self.sincronizacion.as_mut() {
+            s.informe_pedido = true;
+        }
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
@@ -5613,7 +5650,9 @@ impl Estado {
             // La CATEGORÍA localizada, jamás el `Display` inglés: esto se
             // pinta de forma persistente y varias variantes interpolan datos
             // del otro extremo.
-            sinc.vista.error = Some(norte_frontend::error::error_category_in(lang, error));
+            sinc.vista.error = Some(clamp_display(norte_frontend::error::error_category_in(
+                lang, error,
+            )));
         }
         vec![ViewChange::Sync {
             sync: self.vista_sincronizacion(),
@@ -5647,10 +5686,11 @@ impl Estado {
     /// Las teclas mientras el panel de sincronización está abierto.
     ///
     /// `Escape` DOS veces, por lo mismo que en el panel de diferencias: la
-    /// primera pide cancelar la Task del plan, la segunda cierra pase lo que
-    /// pase. Aprobar es de la fase siguiente; hasta entonces esta pantalla
-    /// solo LEE, y decirlo es más honesto que ofrecer una tecla que no hace
-    /// nada.
+    /// primera pide cancelar la Task viva —la del plan, o la del apply si ya
+    /// está escribiendo—, la segunda cierra pase lo que pase. `a` aprueba, y
+    /// cuando el plan borra o deja algo sin vuelta atrás, `y` contesta la
+    /// segunda pregunta: es la última pantalla donde todavía se puede decir
+    /// que no.
     fn tecla_en_sincronizacion(
         &mut self,
         k: &crate::keys::KeyInput,
@@ -5681,18 +5721,42 @@ impl Estado {
                 // cierra: cerrar pierde el informe —y con él el recuento, los
                 // fallos y el asa del deshacer— sobre un destino que se
                 // reescribió a medias.
-                if sinc.vista.is_submitted()
-                    || matches!(sinc.vista.state, norte_frontend::sync::SyncState::Applying(_))
-                {
-                    sinc.vista.cancel_requested = true;
+                let escribiendo = sinc.vista.is_submitted()
+                    || matches!(
+                        sinc.vista.state,
+                        norte_frontend::sync::SyncState::Applying(_)
+                    );
+                if escribiendo {
+                    // La PRIMERA vez pide parar y no cierra: cerrar pierde el
+                    // informe sobre un destino a medio reescribir.
+                    //
+                    // La segunda SÍ cierra, y eso no contradice lo anterior:
+                    // «espera al informe» vale mientras el informe pueda
+                    // llegar, y hay formas de que no llegue nunca —un daemon
+                    // muerto, un `sync.report` que falla, una Task cuyo canal
+                    // se cae sin desenlace—. Sin esta salida, esta pantalla
+                    // —la que ESCRIBE— era la única de norte sin salida.
+                    if !sinc.vista.cancel_requested {
+                        sinc.vista.cancel_requested = true;
+                        let task = sinc.task;
+                        if task.get() != 0 {
+                            self.cancelar(task.get());
+                        }
+                        let cambio = ViewChange::Sync {
+                            sync: self.vista_sincronizacion(),
+                        };
+                        return (self.aplicada(), vec![self.parche(vec![cambio])]);
+                    }
                     let task = sinc.task;
+                    self.sincronizacion = None;
                     if task.get() != 0 {
                         self.cancelar(task.get());
                     }
-                    let cambio = ViewChange::Sync {
-                        sync: self.vista_sincronizacion(),
-                    };
-                    return (self.aplicada(), vec![self.parche(vec![cambio])]);
+                    let mut fuera = vec![self.parche(vec![ViewChange::Sync { sync: None }])];
+                    // Y se DICE lo que se pierde al cerrar: el destino puede
+                    // haber quedado a medias y su informe ya no se va a ver.
+                    fuera.extend(self.decir("msg-sync-closed-midway"));
+                    return (self.aplicada(), fuera);
                 }
                 if sinc.vista.cancel_requested {
                     let task = sinc.task;
@@ -5711,7 +5775,15 @@ impl Estado {
                 // Y el modelo se entera YA: si el `plan_done` viene de camino,
                 // sin esto el panel pasaría a «listo para aprobar» un plan que
                 // el lector acaba de mandar parar.
-                sinc.vista.run = norte_frontend::sync::SyncRunState::Cancelled;
+                //
+                // Solo mientras algo CORRE. Sobre un plan ya aplicado, marcar
+                // «cancelado» reescribía el desenlace a «cancelado tras
+                // aplicar N; el resto no se aplicó» sobre una sincronización
+                // que terminó entera: dos frases falsas sobre lo que hay en
+                // disco, en la única pantalla que lo describe.
+                if matches!(sinc.vista.run, norte_frontend::sync::SyncRunState::Running) {
+                    sinc.vista.run = norte_frontend::sync::SyncRunState::Cancelled;
+                }
                 let task = sinc.task;
                 if task.get() != 0 {
                     self.cancelar(task.get());
@@ -5721,8 +5793,8 @@ impl Estado {
                 };
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
-            "ArrowDown" | "Down" | "ArrowUp" | "Up" | "PageDown" | "pgdn" | "PageUp"
-            | "pgup" | "Home" | "home" | "End" | "end" => {
+            "ArrowDown" | "Down" | "ArrowUp" | "Up" | "PageDown" | "pgdn" | "PageUp" | "pgup"
+            | "Home" | "home" | "End" | "end" => {
                 let total = sinc.vista.steps().len();
                 if total == 0 {
                     return (self.aplicada(), Vec::new());
@@ -5803,11 +5875,7 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let epoca = self.sincronizacion.as_ref().map_or(0, |s| s.epoca);
-        let Some(hash) = self
-            .sincronizacion
-            .as_mut()
-            .and_then(|s| s.vista.submit())
-        else {
+        let Some(hash) = self.sincronizacion.as_mut().and_then(|s| s.vista.submit()) else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-sync-cannot-approve".to_owned(),
@@ -5830,11 +5898,25 @@ impl Estado {
                         .await;
                 }
                 Err(e) => {
+                    // ¿Se SABE que no escribió? Solo si el daemon contestó que
+                    // no. Un transporte muerto deja la petición en el aire.
+                    let seguro = matches!(
+                        e,
+                        Error::PolicyDenied { .. }
+                            | Error::Conflict { .. }
+                            | Error::NotFound
+                            | Error::PermissionDenied
+                            | Error::InvalidPath
+                            | Error::Unsupported
+                            | Error::EncodingLoss
+                    );
                     let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
-                    // Y se suelta el pestillo: sin esto la `a` queda muerta
-                    // para siempre sobre un plan que nadie llegó a aplicar.
+                    // Y se suelta el pestillo —cuando toca—: sin esto la `a`
+                    // queda muerta para siempre sobre un plan que nadie aplicó.
                     let _ = buzon2
-                        .send(Mensaje::Fondo(Box::new(Fondo::SyncNoAplicado(epoca))))
+                        .send(Mensaje::Fondo(Box::new(Fondo::SyncNoAplicado(
+                            epoca, seguro,
+                        ))))
                         .await;
                 }
             }
@@ -5850,6 +5932,8 @@ impl Estado {
         &mut self,
         epoca: u64,
         task: norte_proto::TaskId,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let Some(sinc) = self.sincronizacion.as_mut().filter(|s| s.epoca == epoca) else {
             return Vec::new();
@@ -5857,13 +5941,36 @@ impl Estado {
         // La Task que se sigue pasa a ser la del APPLY: es a la que apunta
         // ahora el `Escape`, y de la que hay que pedir el informe.
         sinc.task = task;
+        sinc.epoca_conexion = self.epoca_conexion;
         if !sinc.vista.on_apply_started(task) {
-            return Vec::new();
+            // El modelo la NIEGA —el lector pidió parar en la ventana en la
+            // que el apply todavía no tenía id— y entonces cancelarla es
+            // NUESTRO trabajo: nadie más conoce ese id, y el contrato del
+            // modelo lo dice con todas las letras. Sin esto, el daemon seguía
+            // reescribiendo el destino de un plan que el humano canceló.
+            sinc.vista.on_apply_abandoned();
+            let (_, mut fuera) = self.cancelar(task.get());
+            fuera.extend(self.decir("msg-sync-cancelled-late"));
+            fuera.push(self.parche(vec![ViewChange::Sync {
+                sync: self.vista_sincronizacion(),
+            }]));
+            return fuera;
         }
-        let cambio = ViewChange::Sync {
+        // Pudo nacer TERMINAL: el daemon la completó antes de contestar y su
+        // progreso no dispara nunca. Es la misma carrera que el tablero ya
+        // documenta, y aquí se traduce en un panel aplicando para siempre.
+        let nacio = self
+            .tasks
+            .get(&task.get())
+            .map(|t| t.progreso.borrow().clone());
+        let mut fuera = vec![self.parche(vec![ViewChange::Sync {
             sync: self.vista_sincronizacion(),
-        };
-        vec![self.parche(vec![cambio])]
+        }])];
+        if let Some(p) = nacio.filter(|p| p.state.is_terminal()) {
+            self.pedir_informe_de_sync(&p, backend, buzon);
+        }
+        fuera.extend(Vec::new());
+        fuera
     }
 
     fn tecla_en_comparacion(
@@ -5999,7 +6106,10 @@ impl Estado {
     }
 
     /// Enseña o esconde una categoría entera.
-    fn comparacion_filtra(&mut self, categoria: &str) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    fn comparacion_filtra(
+        &mut self,
+        categoria: &str,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(c) = self.comparacion.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
@@ -6294,6 +6404,8 @@ impl Estado {
             ),
             primera_visible: 0,
             ventana: Self::VENTANA_COMPARACION,
+            epoca_conexion: self.epoca_conexion,
+            informe_pedido: false,
         });
         let cambio = ViewChange::Sync {
             sync: self.vista_sincronizacion(),
@@ -6330,7 +6442,6 @@ impl Estado {
         vec![self.parche(vec![cambio])]
     }
 
-    /// La proyección del panel de sincronización, acotada a su ventana.
     /// Los pasos de la ventana, proyectados por el modelo COMPARTIDO.
     fn pasos_proyectados(
         pasos: &[norte_proto::methods::SyncStep],
@@ -6357,6 +6468,7 @@ impl Estado {
                     }),
                     undo: clamp_display(norte_frontend::sync::undo_label(c.undo, lang)),
                     anchor: Self::nombre_de_ancla(c.anchor),
+                    anchor_label: Self::etiqueta_de_ancla(c.anchor, lang),
                     path: clamp_display(c.rel.text.clone()),
                     path_hostile: c.rel.hostile,
                     dest_path: c.dest_rel.as_ref().map(|d| clamp_display(d.text.clone())),
@@ -6386,6 +6498,7 @@ impl Estado {
                     path: clamp_display(c.rel.text.clone()),
                     path_hostile: c.rel.hostile,
                     anchor: Self::nombre_de_ancla(c.anchor),
+                    anchor_label: Self::etiqueta_de_ancla(c.anchor, lang),
                 }
             })
             .collect()
@@ -6403,6 +6516,21 @@ impl Estado {
         }
     }
 
+    /// La etiqueta del ancla, ya traducida, o vacía cuando no hay nada que
+    /// decir.
+    ///
+    /// La etiqueta y no solo el id: el DTO promete que esto se pinta, y un
+    /// `data-` que ningún estilo lee no lo pinta — el `either` seguía
+    /// callado, que en un panel donde una ruta sin calificar significa «del
+    /// origen» es afirmar el origen.
+    fn etiqueta_de_ancla(
+        anchor: norte_frontend::sync::RelAnchor,
+        lang: norte_i18n::Lang,
+    ) -> String {
+        norte_frontend::sync::anchor_label(anchor, lang).map_or_else(String::new, clamp_display)
+    }
+
+    /// La proyección del panel de sincronización, acotada a su ventana.
     fn vista_sincronizacion(&self) -> Option<crate::dto::SyncView> {
         let sinc = self.sincronizacion.as_ref()?;
         let v = &sinc.vista;
@@ -6439,8 +6567,11 @@ impl Estado {
             // Los RETENIDOS más los que el modelo tiró: sin sumarlos, este
             // número y el de la línea de estado se contradicen en un plan
             // grande, y los dos cruzan en el mismo mensaje.
-            total: (pasos.len() as u64)
-                .saturating_add(v.state.plan().map_or(0, norte_frontend::sync::SyncPlan::dropped)),
+            total: (pasos.len() as u64).saturating_add(
+                v.state
+                    .plan()
+                    .map_or(0, norte_frontend::sync::SyncPlan::dropped),
+            ),
             // El RESUMEN, que es lo que un humano lee antes de aprobar:
             // irreversibles, bytes (con los que no se pudieron medir aparte),
             // lo que no se pudo leer, y si la lista esconde pasos. No cabe en
@@ -6474,11 +6605,8 @@ impl Estado {
                             // esta ventana no tiene override de codificación
                             // de nombres; el día que lo tenga, la regla va
                             // arriba y no aquí.
-                            let ruta = norte_frontend::sync::rel_display_or_root(
-                                &b.rel,
-                                None,
-                                self.lang,
-                            );
+                            let ruta =
+                                norte_frontend::sync::rel_display_or_root(&b.rel, None, self.lang);
                             crate::dto::SyncBlockerView {
                                 label: clamp_display(norte_frontend::sync::blocker_label(
                                     b.kind, self.lang,
@@ -6509,6 +6637,7 @@ impl Estado {
             // de estado, que lo compone el modelo compartido; esto es el
             // detalle, y sin él «3 fallaron» no dice cuáles.
             failures: fallos,
+            cancel_requested: v.cancel_requested,
             can_approve: v.can_approve(),
             running: matches!(v.run, norte_frontend::sync::SyncRunState::Running),
         })
@@ -6552,7 +6681,10 @@ impl Estado {
                 Vec::new(),
             );
         }
-        (self.aplicada(), self.lanzar_comparacion(izquierda, derecha, backend, buzon))
+        (
+            self.aplicada(),
+            self.lanzar_comparacion(izquierda, derecha, backend, buzon),
+        )
     }
 
     /// Encola `fs.compare` y engancha su canal de filas al actor.
@@ -6699,10 +6831,7 @@ impl Estado {
                         // Formateados con las MISMAS funciones que una
                         // columna del listado: un tamaño o una fecha no
                         // pueden leerse distinto según qué panel los pinte.
-                        size: f
-                            .size
-                            .map(norte_frontend::human_bytes)
-                            .unwrap_or_default(),
+                        size: f.size.map(norte_frontend::human_bytes).unwrap_or_default(),
                         mtime: f
                             .mtime_ms
                             .map(|ms| {
@@ -6730,9 +6859,9 @@ impl Estado {
                         r.criterion,
                         self.lang,
                     )),
-                    reason: r
-                        .reason
-                        .map(|x| clamp_display(norte_frontend::compare::reason_label(x, self.lang))),
+                    reason: r.reason.map(|x| {
+                        clamp_display(norte_frontend::compare::reason_label(x, self.lang))
+                    }),
                     left: cara(celdas.left.as_ref()),
                     right: cara(celdas.right.as_ref()),
                     paired_under: norte_frontend::compare::paired_under_label(
@@ -9405,10 +9534,10 @@ impl Estado {
             // mirándola. Si ya terminó se DICE, en vez de saltar a otra —
             // cancelar una task que no es la señalada es peor que no
             // cancelar nada.
-            let Some((id, viva)) = self
-                .tasks_visibles()
-                .nth(self.cursor_procesos.min(self.filas_de_tablero().saturating_sub(1)))
-            else {
+            let Some((id, viva)) = self.tasks_visibles().nth(
+                self.cursor_procesos
+                    .min(self.filas_de_tablero().saturating_sub(1)),
+            ) else {
                 return Objetivo::Ninguna;
             };
             return if Self::sigue_viva(viva) {
@@ -9558,7 +9687,9 @@ impl Estado {
     /// monótono): lo que interesa de un lote en marcha es su frente, no las
     /// primeras que se encolaron.
     fn vistas_de_tasks(&self) -> Vec<TaskView> {
-        self.tasks_visibles().map(|(_, t)| t.vista.clone()).collect()
+        self.tasks_visibles()
+            .map(|(_, t)| t.vista.clone())
+            .collect()
     }
 
     /// Las tasks que CRUZAN el puente, en el orden en que se pintan.
@@ -10331,9 +10462,8 @@ impl Estado {
                     // Índice sobre las filas PINTADAS, que es lo que el
                     // renderer resalta. Sobre el mapa entero, con el tablero
                     // recortado, señalaba a otra.
-                    cursor: (self.filas_de_tablero() > 0).then(|| {
-                        self.cursor_procesos.min(self.filas_de_tablero() - 1) as u64
-                    }),
+                    cursor: (self.filas_de_tablero() > 0)
+                        .then(|| self.cursor_procesos.min(self.filas_de_tablero() - 1) as u64),
                 }),
                 _ => {
                     let nombre =

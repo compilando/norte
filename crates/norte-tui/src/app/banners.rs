@@ -41,7 +41,11 @@ impl App {
         // el resto de los modales de este frontend ya hacen.
         Some(norte_i18n::ta(
             "status-degraded-subject",
-            &[("banner", &b.text), ("scheme", &b.scheme), ("host", &b.host)],
+            &[
+                ("banner", &b.text),
+                ("scheme", &b.scheme),
+                ("host", &b.host),
+            ],
         ))
     }
 

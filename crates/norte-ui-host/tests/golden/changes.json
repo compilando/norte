@@ -649,6 +649,7 @@
           "reason": "",
           "undo": "se deshace",
           "anchor": "source",
+          "anchor_label": "",
           "path": "docs/a.md",
           "path_hostile": false,
           "dest_path": null,
@@ -661,6 +662,7 @@
           "reason": "no hay papelera en el destino",
           "undo": "no vuelve",
           "anchor": "dest",
+          "anchor_label": "en el destino",
           "path": "caf�.txt",
           "path_hostile": true,
           "dest_path": "café.txt",
@@ -690,9 +692,11 @@
           "cause": "permiso denegado",
           "path": "docs/a.md",
           "path_hostile": false,
-          "anchor": "either"
+          "anchor": "either",
+          "anchor_label": "en cualquiera de los dos"
         }
       ],
+      "cancel_requested": false,
       "can_approve": false,
       "running": false
     }

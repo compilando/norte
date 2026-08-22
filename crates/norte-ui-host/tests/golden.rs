@@ -164,10 +164,7 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("cancel_task", UiAction::CancelTask { task_id: 42 }),
-        (
-            "compare_select_row",
-            UiAction::CompareSelectRow { id: 7 },
-        ),
+        ("compare_select_row", UiAction::CompareSelectRow { id: 7 }),
         (
             "compare_activate_row",
             UiAction::CompareActivateRow { id: 7 },
@@ -739,7 +736,7 @@ fn busqueda_de_referencia() -> norte_ui_host::dto::SearchView {
                 parent: "⟨file⟩/home/oscar/work/src".to_owned(),
                 parent_hostile: false,
                 is_dir: false,
-            score: None,
+                score: None,
             },
             SearchRowView {
                 name: "caf\u{fffd}.rs".to_owned(),
@@ -747,7 +744,7 @@ fn busqueda_de_referencia() -> norte_ui_host::dto::SearchView {
                 parent: "⟨file⟩/home/oscar/work".to_owned(),
                 parent_hostile: false,
                 is_dir: false,
-            score: None,
+                score: None,
             },
         ],
         cursor: Some(0),
@@ -777,6 +774,7 @@ fn sincronizacion_de_referencia() -> norte_ui_host::dto::SyncView {
                 reason: String::new(),
                 undo: "se deshace".to_owned(),
                 anchor: "source".to_owned(),
+                anchor_label: String::new(),
                 path: "docs/a.md".to_owned(),
                 path_hostile: false,
                 dest_path: None,
@@ -789,6 +787,7 @@ fn sincronizacion_de_referencia() -> norte_ui_host::dto::SyncView {
                 reason: "no hay papelera en el destino".to_owned(),
                 undo: "no vuelve".to_owned(),
                 anchor: "dest".to_owned(),
+                anchor_label: "en el destino".to_owned(),
                 path: "caf\u{fffd}.txt".to_owned(),
                 path_hostile: true,
                 dest_path: Some("cafe\u{301}.txt".to_owned()),
@@ -810,6 +809,7 @@ fn sincronizacion_de_referencia() -> norte_ui_host::dto::SyncView {
             path_hostile: false,
         }],
         blockers_total: 900,
+        cancel_requested: false,
         confirming: Some("esto borra 2 \u{e1}rboles enteros. \u{bf}seguro? (y/n)".to_owned()),
         failures: vec![norte_ui_host::dto::SyncFailureView {
             cause: "permiso denegado".to_owned(),
@@ -818,6 +818,9 @@ fn sincronizacion_de_referencia() -> norte_ui_host::dto::SyncView {
             // `either` se PINTA: en un panel donde una ruta sin calificar
             // significa «del origen», callarlo es afirmar el origen.
             anchor: "either".to_owned(),
+            // `either` se DICE: callarlo en un panel donde una ruta sin
+            // calificar significa «del origen» es afirmar el origen.
+            anchor_label: "en cualquiera de los dos".to_owned(),
         }],
         status: "2 pasos \u{b7} este plan no se puede aprobar".to_owned(),
         hint: "\u{2191}\u{2193} mover \u{b7} Esc cerrar".to_owned(),
@@ -1507,4 +1510,3 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
     ]);
     casos
 }
-
