@@ -219,6 +219,25 @@ independently through `PROTOCOL_VERSION`.
   A step's and a failure's anchor is SAID, not left in an attribute: staying
   quiet about "on either side" where an unqualified path means "on the source"
   asserts the source.
+- **The window governs extensions** (bridge **31**). Approve and revoke a
+  plugin's capabilities, enable and disable it, edit its `[config]` keys, and
+  run the commands it contributes from the palette. Three things are not
+  decoration: approving ASKS, and the question lists the capabilities one per
+  line, each masked on its own and carrying its own flag — the line that
+  paints differently from what it says is exactly the one a hostile manifest
+  writes to slip in among the real ones; none of it exists in read-only mode,
+  because the switch that decides whether this window deletes is the switch
+  that decides whether it grants permissions; and after a change the CATALOGUE
+  is fetched again rather than flipping a local boolean, with the cursor
+  re-placed by id, because the core orders by category and id and approving
+  can move the row. The config editor is the shared model, so a `bool`/`enum`
+  cycles, a `string`/`int` is typed and validated against the schema's bounds,
+  and a `kind` this build does not know is read-only — and the screen now says
+  so, because offering `Enter` on something that will not change reads as a
+  failed write. While a value is being typed, letters are letters: resolving
+  `a` as "approve" there turns typing "casa" into two grants. A command's
+  output is third-party text: masked, capped, and the fact it was cut is said,
+  because the reader cannot deduce it from text that arrives already short.
 - **The window compares two directories** (`pane.compare-dirs`): a diff panel
   with the rows as they stream in, a filter per category with its count, side
   switching, and `Enter` to go where a row points. The model is the one the TUI
