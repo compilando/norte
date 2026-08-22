@@ -271,6 +271,8 @@ enum Mensaje {
     Catalogo(Box<(String, norte_proto::AttrCatalog)>),
     /// Una op de agente espera decisión humana.
     Aprobacion(Box<norte_proto::methods::PolicyApprovalRequired>),
+    /// A esta aprobación se le acabó el TTL: el daemon ya no la acepta.
+    AprobacionCaducada(u64),
     /// Más entradas del listado que se está drenando por detrás.
     MasEntradas(Box<(RequestToken, u32, Vec<Entry>)>),
     /// Lo que contestó una petición que se lanzó para un OVERLAY.
@@ -316,17 +318,12 @@ enum Mensaje {
     /// Un snapshot de progreso. Por la MISMA cola que todo lo demás, que es
     /// lo que garantiza que un estado terminal no se adelante ni se pierda.
     Progreso(Box<norte_proto::TaskProgress>),
-    /// El informe de un lote de renombrado que ya terminó (#272).
+    /// El informe de una Task que ya terminó y que TIENE informe.
     ///
-    /// Lleva el `Result` entero y no un `Option`: «el lote fue bien» y «el
-    /// daemon no sabe informar» son dos cosas distintas, y colapsarlas es
-    /// justo lo que este informe existe para no hacer.
-    InformeLote(
-        Box<(
-            u64,
-            Result<norte_proto::methods::FsRenameBatchReportResult, Error>,
-        )>,
-    ),
+    /// Lleva el `Result` entero y no un `Option`: «fue bien» y «el daemon no
+    /// sabe informar» son dos cosas distintas, y colapsarlas es justo lo que
+    /// estos informes existen para no hacer.
+    Informe(Box<(u64, Informe)>),
     Apagar(oneshot::Sender<ShutdownReport>),
 }
 
@@ -630,7 +627,12 @@ async fn actor(
                 let _ = updates.send(estado.aplicar_catalogo(scheme, catalogo));
             }
             Mensaje::Aprobacion(req) => {
-                for u in estado.abrir_aprobacion(&req) {
+                for u in estado.abrir_aprobacion(&req, &buzon) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::AprobacionCaducada(approval_id) => {
+                for u in estado.caduca_aprobacion(approval_id) {
                     let _ = updates.send(u);
                 }
             }
@@ -675,32 +677,18 @@ async fn actor(
                 }
             }
             Mensaje::TaskFallida(e) => {
-                // `error_key` devuelve una CLAVE Fluent, y el contrato de
-                // `StatusView.message` dice «ya traducido por el host»: sin
-                // traducir, el usuario leía `err-not-found` en la barra.
-                let clave = norte_frontend::error::error_key(&e);
-                estado.status.message = Some(clamp_display(norte_i18n::t(clave)));
-                // Un rechazo por journal no es una mutación que salió mal:
-                // es que ESTA SESIÓN no muta hasta que el fichero se arregle
-                // (regla dura 4). Eso dura más que un mensaje.
-                estado.journal_rehusado |= matches!(*e, Error::JournalUnavailable);
-                let cambio = estado.cambio_de_banners();
-                let u = estado.parche(vec![cambio]);
-                let _ = updates.send(u);
-                let n = estado.sobre(UiUpdate::Notice(UiNotice::Message {
-                    key: clave.to_owned(),
-                    detail: None,
-                }));
-                let _ = updates.send(n);
+                for u in estado.task_fallida(&e) {
+                    let _ = updates.send(u);
+                }
             }
             Mensaje::Progreso(p) => {
                 for u in estado.progreso(&p, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::InformeLote(informe) => {
-                let (task_id, resultado) = *informe;
-                for u in estado.informe_de_lote(task_id, &resultado) {
+            Mensaje::Informe(informe) => {
+                let (task_id, cual) = *informe;
+                for u in estado.informe(task_id, &cual) {
                     let _ = updates.send(u);
                 }
             }
@@ -1154,6 +1142,17 @@ struct RevisionIa {
     reconocida: bool,
     /// La época que la pidió.
     epoca: u64,
+}
+
+/// El informe de una Task terminada, por clase.
+///
+/// Dos clases lo tienen —un lote de renombrado y un undo— y las dos por el
+/// mismo motivo: lo que quedó a medias no cabe en el desenlace de una Task.
+enum Informe {
+    /// El de un lote de renombrado (#272).
+    Lote(Result<norte_proto::methods::FsRenameBatchReportResult, Error>),
+    /// El de un undo de sesión.
+    Undo(Result<norte_proto::methods::PolicyUndoReportResult, Error>),
 }
 
 /// A qué task apunta un `task.cancel`.
@@ -6130,7 +6129,20 @@ impl Estado {
     fn abrir_aprobacion(
         &mut self,
         req: &norte_proto::methods::PolicyApprovalRequired,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        // La MISMA aprobación puede llegar dos veces: el SDK resincroniza
+        // `policy.pending` en cada reconexión, y lo que sigue vivo vuelve por
+        // el canal. Dos diálogos son dos respuestas, y la segunda cae sobre
+        // un id que el daemon ya cerró.
+        if self.dialogos.iter().any(|d| {
+            matches!(
+                d.al_confirmar,
+                Some(Pendiente::Decidir { approval_id }) if approval_id == req.approval_id
+            )
+        }) {
+            return Vec::new();
+        }
         // Estas rutas vienen del daemon como TEXTO ya redactado, no como
         // `VPath`, así que el enmascarado es el de cadenas y la marca se
         // calcula comparando: si enmascarar cambió algo, lo que se lee no es
@@ -6162,6 +6174,22 @@ impl Estado {
         let total = std::cmp::max(req.paths_total, req.paths.len() as u64);
         let mostrados = req.paths.len().min(Self::MAX_LINEAS_DIALOGO);
         let nota = self.nota_de_recorte(mostrados, usize::try_from(total).unwrap_or(usize::MAX));
+        // Cuánto le queda, DICHO. Una decisión con fecha de caducidad que no
+        // la enseña se lee como una que espera para siempre, y el humano que
+        // vuelve al rato pulsa aprobar sobre algo que el daemon ya denegó.
+        // `0` = desconocido (una pendiente reconstruida por el resync no
+        // transporta el TTL restante): entonces no se promete un plazo.
+        if req.ttl_ms > 0 {
+            let segundos = req.ttl_ms.div_ceil(1000);
+            cuerpo.push(crate::dto::DialogLine {
+                text: clamp_display(norte_i18n::ta_in(
+                    self.lang,
+                    "modal-approval-ttl",
+                    &[("s", &segundos.to_string())],
+                )),
+                hostile: false,
+            });
+        }
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
@@ -6198,10 +6226,49 @@ impl Estado {
                 approval_id: req.approval_id,
             }),
         });
+        // Y se programa su caducidad. El daemon deja de aceptar el id cuando
+        // el TTL se acaba: un diálogo que siguiera delante invitaría a
+        // aprobar en el vacío, y quien lo hiciera se quedaría creyendo que
+        // autorizó lo que en realidad quedó denegado por silencio.
+        if req.ttl_ms > 0 {
+            let buzon = buzon.clone();
+            let approval_id = req.approval_id;
+            let plazo = std::time::Duration::from_millis(req.ttl_ms);
+            tokio::spawn(async move {
+                tokio::time::sleep(plazo).await;
+                let _ = buzon.send(Mensaje::AprobacionCaducada(approval_id)).await;
+            });
+        }
         let cambio = ViewChange::Dialogs {
             dialogs: self.vistas_de_dialogos(),
         };
         vec![self.parche(vec![cambio])]
+    }
+
+    /// El TTL de una aprobación se acabó: su diálogo se cierra y se dice.
+    ///
+    /// No se manda `policy.decide`: el daemon ya la resolvió por su cuenta
+    /// —un TTL vencido es una denegación—, y contestar sobre un id cerrado
+    /// solo produce un error que no significa nada para quien lo lee.
+    fn caduca_aprobacion(&mut self, approval_id: u64) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let antes = self.dialogos.len();
+        self.dialogos.retain(|d| {
+            !matches!(
+                d.al_confirmar,
+                Some(Pendiente::Decidir { approval_id: id }) if id == approval_id
+            )
+        });
+        if self.dialogos.len() == antes {
+            // Ya se había contestado: la caducidad llega y no hay nada que
+            // cerrar. No es un error, y no se dice nada.
+            return Vec::new();
+        }
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        let mut salidas = vec![self.parche(vec![cambio])];
+        salidas.extend(self.decir("msg-approval-expired"));
+        salidas
     }
 
     /// Abre el prompt de crear directorio, con su campo de texto vacío.
@@ -7021,9 +7088,13 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
-        if !matches!(p.kind, norte_proto::TaskKind::RenameBatch) {
-            return;
-        }
+        // Dos clases tienen informe, y las dos por el mismo motivo: lo que
+        // quedó a medias no cabe en el desenlace de una Task.
+        let lote = match p.kind {
+            norte_proto::TaskKind::RenameBatch => true,
+            norte_proto::TaskKind::Undo => false,
+            _ => return,
+        };
         let id = p.task_id;
         match self.tasks.get_mut(&id.get()) {
             Some(t) if !t.informe_pedido => t.informe_pedido = true,
@@ -7032,11 +7103,178 @@ impl Estado {
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let resultado = backend.rename_batch_report(id).await;
-            let _ = buzon
-                .send(Mensaje::InformeLote(Box::new((id.get(), resultado))))
-                .await;
+            let cual = if lote {
+                Informe::Lote(backend.rename_batch_report(id).await)
+            } else {
+                Informe::Undo(backend.undo_report(id).await)
+            };
+            let _ = buzon.send(Mensaje::Informe(Box::new((id.get(), cual)))).await;
         });
+    }
+
+    /// Encolar una mutación falló: se dice, y si fue por el journal se
+    /// queda dicho.
+    ///
+    /// `error_key` devuelve una CLAVE Fluent, y el contrato de
+    /// `StatusView.message` dice «ya traducido por el host»: sin traducir, el
+    /// usuario leía `err-not-found` en la barra.
+    fn task_fallida(&mut self, e: &Error) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let clave = norte_frontend::error::error_key(e);
+        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+        // Un rechazo por journal no es una mutación que salió mal: es que
+        // ESTA SESIÓN no muta hasta que el fichero se arregle (regla dura 4).
+        // Eso dura más que un mensaje.
+        self.journal_rehusado |= matches!(e, Error::JournalUnavailable);
+        let cambio = self.cambio_de_banners();
+        let parche = self.parche(vec![cambio]);
+        let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
+            key: clave.to_owned(),
+            detail: None,
+        }));
+        vec![parche, aviso]
+    }
+
+    /// Un informe llegó: al tablero, y delante si dejó algo a medias.
+    fn informe(&mut self, task_id: u64, cual: &Informe) -> Vec<BridgeEnvelope<UiUpdate>> {
+        match cual {
+            Informe::Lote(r) => self.informe_de_lote(task_id, r),
+            Informe::Undo(r) => self.informe_de_undo(task_id, r),
+        }
+    }
+
+    /// El informe de un undo llegó: al tablero, y delante si algo no volvió.
+    ///
+    /// Misma forma que [`Self::informe_de_lote`] porque es la misma pregunta
+    /// —qué quedó sin deshacer— hecha sobre otra clase de Task.
+    fn informe_de_undo(
+        &mut self,
+        task_id: u64,
+        resultado: &Result<norte_proto::methods::PolicyUndoReportResult, Error>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(viva) = self.tasks.get(&task_id) else {
+            return Vec::new();
+        };
+        let fallo_la_task = matches!(
+            viva.vista.state,
+            crate::dto::TaskStateView::Failed | crate::dto::TaskStateView::Cancelled
+        );
+        let (detalle, cuerpo) = match resultado {
+            Ok(r) => (
+                norte_i18n::ta_in(
+                    self.lang,
+                    "task-undo-done",
+                    &[("n", &r.undone.to_string())],
+                ),
+                self.cuerpo_de_undo(r),
+            ),
+            Err(e) => {
+                let clave = if matches!(e, Error::Unsupported) {
+                    "modal-undo-unsupported"
+                } else {
+                    "modal-undo-report-failed"
+                };
+                (
+                    norte_i18n::t_in(self.lang, "task-undo-unverified"),
+                    vec![crate::dto::DialogLine {
+                        text: clamp_display(norte_i18n::t_in(self.lang, clave)),
+                        hostile: false,
+                    }],
+                )
+            }
+        };
+        if let Some(t) = self.tasks.get_mut(&task_id) {
+            t.vista.detail = Some(clamp_display(detalle));
+            t.vista.detail_hostile = false;
+        }
+        let mut cambios = vec![ViewChange::Tasks {
+            tasks: self.vistas_de_tasks(),
+        }];
+        let hay_que_decirlo = match resultado {
+            Ok(r) => !Self::undo_limpio(r),
+            Err(_) => fallo_la_task,
+        };
+        if hay_que_decirlo {
+            cambios.push(self.abrir_informe(
+                "modal-undo-report-title".to_owned(),
+                cuerpo,
+            ));
+        }
+        vec![self.parche(cambios)]
+    }
+
+    /// `true` si el undo devolvió TODO lo que tocaba.
+    ///
+    /// Lo saltado cuenta como no-limpio: una entrada irreversible o una
+    /// creación que se queda porque el destino no tiene papelera son cosas
+    /// que NO volvieron, y un informe que las callara diría que el árbol
+    /// está como estaba.
+    fn undo_limpio(r: &norte_proto::methods::PolicyUndoReportResult) -> bool {
+        r.blocked.is_none()
+            && r.batch_stuck.is_none()
+            && r.compensations_lost == 0
+            && r.denied_total == 0
+            && r.skipped_irreversible == 0
+            && r.skipped_created_no_trash == 0
+    }
+
+    /// El cuerpo del informe de un undo: qué volvió y qué no.
+    fn cuerpo_de_undo(
+        &self,
+        r: &norte_proto::methods::PolicyUndoReportResult,
+    ) -> Vec<crate::dto::DialogLine> {
+        let linea = |texto: String| crate::dto::DialogLine {
+            text: clamp_display(texto),
+            hostile: false,
+        };
+        let mut cuerpo = vec![linea(norte_i18n::ta_in(
+            self.lang,
+            "modal-undo-summary",
+            &[
+                ("undone", &r.undone.to_string()),
+                ("skipped", &r.skipped_irreversible.to_string()),
+            ],
+        ))];
+        if r.skipped_created_no_trash > 0 {
+            cuerpo.push(linea(norte_i18n::ta_in(
+                self.lang,
+                "modal-undo-left-in-place",
+                &[("n", &r.skipped_created_no_trash.to_string())],
+            )));
+        }
+        if let Some(b) = &r.blocked {
+            // El `seq` es una referencia OPACA: sirve para CITAR la entrada
+            // contra el journal del server, no para interpretarla aquí.
+            cuerpo.push(linea(norte_i18n::ta_in(
+                self.lang,
+                "modal-undo-blocked",
+                &[
+                    ("seq", &b.seq.to_string()),
+                    (
+                        "error",
+                        &norte_i18n::t_in(self.lang, norte_frontend::error::error_key(&b.error)),
+                    ),
+                ],
+            )));
+        }
+        if let Some(paso) = &r.batch_stuck {
+            cuerpo.push(linea(norte_i18n::t_in(self.lang, "modal-undo-batch-stuck")));
+            cuerpo.push(Self::linea_de_ruta(&paso.to));
+        }
+        if r.compensations_lost > 0 {
+            cuerpo.push(linea(norte_i18n::ta_in(
+                self.lang,
+                "modal-batch-compensations-lost",
+                &[("n", &r.compensations_lost.to_string())],
+            )));
+        }
+        if r.denied_total > 0 {
+            cuerpo.push(linea(norte_i18n::ta_in(
+                self.lang,
+                "modal-undo-denied",
+                &[("n", &r.denied_total.to_string())],
+            )));
+        }
+        cuerpo
     }
 
     /// El informe llegó: se apunta en el tablero y, si el lote dejó algo a
@@ -7098,7 +7336,7 @@ impl Estado {
             Err(_) => fallo_la_task,
         };
         if hay_que_decirlo {
-            cambios.push(self.abrir_informe_de_lote(cuerpo));
+            cambios.push(self.abrir_informe("modal-batch-report-title".to_owned(), cuerpo));
         }
         vec![self.parche(cambios)]
     }
@@ -7181,13 +7419,18 @@ impl Estado {
         cuerpo
     }
 
-    /// Abre el diálogo del informe. Solo informa: no tiene nada que ejecutar.
-    fn abrir_informe_de_lote(&mut self, cuerpo: Vec<crate::dto::DialogLine>) -> ViewChange {
+    /// Abre el diálogo de un informe. Solo informa: no tiene nada que
+    /// ejecutar, y su única respuesta lo cierra.
+    fn abrir_informe(
+        &mut self,
+        title_key: String,
+        cuerpo: Vec<crate::dto::DialogLine>,
+    ) -> ViewChange {
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
             id,
-            title_key: "modal-batch-report-title".to_owned(),
+            title_key,
             destination: None,
             body: cuerpo,
             overflow_note: String::new(),
@@ -7374,10 +7617,10 @@ impl Estado {
 
     /// Proyecta un snapshot del daemon a lo que el renderer pinta.
     fn vista_de(p: &norte_proto::TaskProgress) -> TaskView {
-        let porcentaje = p.bytes_total.filter(|t| *t > 0).map(|total| {
-            let hecho = p.bytes_done.min(total);
-            u8::try_from(hecho.saturating_mul(100) / total).unwrap_or(100)
-        });
+        // Por la regla COMPARTIDA, que cae a las entradas cuando no hay
+        // bytes totales: esto solo miraba bytes, así que un borrado —que no
+        // cuenta bytes— cruzaba el puente sin porcentaje de principio a fin.
+        let porcentaje = norte_frontend::tasks::progress_pct(p);
         TaskView {
             task_id: p.task_id.get(),
             kind: clase_de_task(p.kind).to_owned(),

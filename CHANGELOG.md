@@ -155,8 +155,28 @@ independently through `PROTOCOL_VERSION`.
   distinguishes a handover from a shutdown: once the connection drops the two
   look identical, and painting "reconnecting…" over a daemon that is not coming
   back is a false wait. It clears when the daemon returns.
+- **An approval says how long it has left, and closes itself when it runs
+  out.** The daemon stops accepting the id when the TTL expires; a dialog still
+  sitting there invites approving into the void — and whoever did would walk
+  away believing they had authorized something that was in fact denied by
+  silence. The same approval arriving twice no longer opens two dialogs either:
+  the SDK resyncs `policy.pending` on every reconnect, so anything still alive
+  comes back through the channel, and two dialogs are two answers.
+- **An undo reports what did NOT come back.** Same shape as the batch report and
+  for the same reason: the task's outcome says the undo ran, while an entry that
+  was irreversible, a LIFO that stopped halfway, a creation left in place
+  because the destination has no trash, or a unit the policy denied are only
+  ever counted by the report. A clean undo says so on the board and interrupts
+  nobody.
 
 ### Fixed
+
+- **A task with no byte totals showed no progress at all in the window.** The
+  percentage only looked at bytes, so a delete — which counts entries, not
+  bytes — crossed the bridge with nothing to paint from start to finish. The
+  arithmetic now lives in `norte-frontend` alongside the TUI's, which already
+  fell back to entries: this is exactly the divergence a second copy of a
+  presentation rule produces.
 
 - **The destination pane was guessed, and the guess claimed to be a choice.**
   With two panes the destination is "the other one" and nobody notices the

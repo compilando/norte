@@ -388,17 +388,16 @@ pub(crate) fn mount_name(mount: &norte_proto::VPath) -> (String, bool) {
     (text, hostile)
 }
 
-/// El porcentaje de una tarea: por bytes si se conocen, si no por entradas.
+/// El porcentaje de una tarea, o `0` si todavía no se sabe.
 ///
-/// Una sola copia porque la franja y el panel de procesos pintan lo mismo, y
-/// dos aritméticas del mismo número acaban dividiendo una de ellas por un
-/// total que puede ser cero.
+/// La ARITMÉTICA vive en `norte_frontend::tasks`: la ventana gráfica pinta el
+/// mismo tablero, y dos copias del mismo cálculo divergieron una vez ya —la
+/// otra no caía a las entradas, así que un borrado se quedaba en cero—.
+///
+/// Aquí «no se sabe» se pinta como cero porque la barra tiene que medir algo;
+/// el estado de al lado es el que dice si la tarea está viva.
 pub(crate) fn progress_pct(p: &norte_proto::TaskProgress) -> u64 {
-    match (p.bytes_total, p.entries_total) {
-        (Some(total), _) if total > 0 => (p.bytes_done.saturating_mul(100) / total).min(100),
-        (_, Some(total)) if total > 0 => (p.entries_done.saturating_mul(100) / total).min(100),
-        _ => 0,
-    }
+    norte_frontend::tasks::progress_pct(p).map_or(0, u64::from)
 }
 
 /// El panel de procesos (fase A): una fila por tarea, con barra y estado.

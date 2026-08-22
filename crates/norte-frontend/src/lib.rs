@@ -64,6 +64,7 @@ pub mod shortcuts;
 mod sort;
 pub mod space;
 pub mod sync;
+pub mod tasks;
 pub mod theme;
 pub mod viewer;
 pub mod viewport;

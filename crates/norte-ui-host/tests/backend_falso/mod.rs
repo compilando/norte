@@ -141,6 +141,10 @@ pub struct Falso {
     pub informe: std::sync::Mutex<Option<norte_proto::methods::FsRenameBatchReportResult>>,
     /// Los ids de task cuyo informe se pidió, en orden.
     pub informes_pedidos: std::sync::Mutex<Vec<u64>>,
+    /// El informe que contesta `policy.undo_report`. `None` = `Unsupported`.
+    pub informe_undo: std::sync::Mutex<Option<norte_proto::methods::PolicyUndoReportResult>>,
+    /// Los ids de task cuyo informe de undo se pidió, en orden.
+    pub informes_undo_pedidos: std::sync::Mutex<Vec<u64>>,
     /// Los ids cuya ficha se pidió, en orden.
     pub fichas_pedidas: std::sync::Mutex<Vec<String>>,
     /// Los ids que se pidieron a `plugin.help`, en orden: es lo que permite
@@ -844,6 +848,18 @@ impl HostBackend for Falso {
             .expect("informes")
             .push(task_id.get());
         let informe = self.informe.lock().expect("informe").clone();
+        Box::pin(async move { informe.ok_or(Error::Unsupported) })
+    }
+
+    fn undo_report(
+        &self,
+        task_id: norte_proto::TaskId,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::PolicyUndoReportResult, Error>> {
+        self.informes_undo_pedidos
+            .lock()
+            .expect("informes undo")
+            .push(task_id.get());
+        let informe = self.informe_undo.lock().expect("informe undo").clone();
         Box::pin(async move { informe.ok_or(Error::Unsupported) })
     }
 

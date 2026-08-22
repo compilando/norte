@@ -237,6 +237,17 @@ pub trait HostBackend: Send + Sync + 'static {
         task_id: TaskId,
     ) -> BoxFuture<'static, Result<methods::FsRenameBatchReportResult, Error>>;
 
+    /// El informe de una Task de UNDO ya terminada (`policy.undo_report`).
+    ///
+    /// Mismo papel que [`Self::rename_batch_report`] y por el mismo motivo:
+    /// el desenlace de la Task dice si el undo corrió, y lo que NO volvió
+    /// —una entrada irreversible, un bloqueo a mitad del LIFO, una unidad que
+    /// la policy denegó— lo cuenta solo el informe.
+    fn undo_report(
+        &self,
+        task_id: TaskId,
+    ) -> BoxFuture<'static, Result<methods::PolicyUndoReportResult, Error>>;
+
     /// Mueve UNA entrada a un destino EXACTO. Mismas reglas que
     /// [`Self::copy`].
     ///
@@ -604,6 +615,14 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<methods::FsRenameBatchReportResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.rename_batch_report(task_id).await })
+    }
+
+    fn undo_report(
+        &self,
+        task_id: TaskId,
+    ) -> BoxFuture<'static, Result<methods::PolicyUndoReportResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.undo_report(task_id).await })
     }
 
     fn move_(

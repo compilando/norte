@@ -1663,6 +1663,14 @@ async fn una_aprobacion_abre_su_dialogo() {
         !d.overflow_note.is_empty(),
         "y que la lista viene recortada, en su propio campo: {d:?}"
     );
+    // Y dice cuánto le queda: una decisión con fecha de caducidad que no la
+    // enseña se lee como una que espera para siempre.
+    assert!(
+        d.body.iter().any(|l| l.text
+            == norte_i18n::ta_in(norte_i18n::Lang::Es, "modal-approval-ttl", &[("s", "30")])),
+        "{:?}",
+        d.body
+    );
 }
 
 /// Denegar es lo que pasa por defecto: cualquier respuesta que no sea
@@ -10178,4 +10186,144 @@ async fn una_mutacion_sin_journal_deja_aviso() {
         banners,
         vec![norte_i18n::t_in(norte_i18n::Lang::Es, "status-journal-refused")],
     );
+}
+
+/// Una aprobación que llega DOS veces no abre dos diálogos.
+///
+/// No es hipotético: el SDK resincroniza `policy.pending` en cada
+/// reconexión, así que una aprobación que sigue viva vuelve por el canal.
+/// Dos diálogos para la misma decisión son dos respuestas, y la segunda cae
+/// sobre un `approval_id` que el daemon ya cerró.
+#[tokio::test]
+async fn una_aprobacion_repetida_no_abre_dos_dialogos() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let (host, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = host.subscribe();
+
+    let peticion = |ttl: u64| norte_proto::methods::PolicyApprovalRequired {
+        approval_id: 5,
+        session: Some("agente-1".to_owned()),
+        op: "delete".to_owned(),
+        paths: vec!["mem:///casa/x".to_owned()],
+        paths_total: 1,
+        ttl_ms: ttl,
+    };
+    tx.send(peticion(30_000)).expect("el host escucha");
+    assert_eq!(siguientes_dialogos(&mut sub).await.len(), 1);
+    // La misma, reconstruida por el resync: sin TTL, porque `policy.pending`
+    // no lo transporta.
+    tx.send(peticion(0)).expect("el host escucha");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        !hubo_dialogos(&mut sub).await,
+        "la repetida no abre nada nuevo"
+    );
+}
+
+/// Una aprobación CADUCA: el daemon deja de aceptarla, así que su diálogo se
+/// cierra solo y se dice.
+///
+/// Un diálogo que sigue delante después del TTL invita a aprobar en el vacío:
+/// se pulsa aprobar, el daemon contesta que ese id ya no existe, y el agente
+/// lleva rato denegado. Peor todavía si mientras tanto el humano se creyó que
+/// lo había autorizado.
+#[tokio::test]
+async fn una_aprobacion_caduca_y_su_dialogo_se_cierra() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let (host, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = host.subscribe();
+
+    tx.send(norte_proto::methods::PolicyApprovalRequired {
+        approval_id: 7,
+        session: None,
+        op: "delete".to_owned(),
+        paths: vec!["mem:///casa/x".to_owned()],
+        paths_total: 1,
+        ttl_ms: 60,
+    })
+    .expect("el host escucha");
+    let abiertos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(abiertos.len(), 1);
+
+    let vacios = siguientes_dialogos(&mut sub).await;
+    assert!(vacios.is_empty(), "el diálogo se cerró solo: {vacios:?}");
+}
+
+/// Un undo que termina PIDE su informe y lo enseña.
+///
+/// El desenlace de la Task dice si el undo corrió; lo que NO volvió lo dice
+/// solo el informe, y un undo que paró a mitad deja el árbol en un estado
+/// que nadie más va a contar.
+#[tokio::test]
+async fn un_undo_terminado_pide_su_informe_y_dice_lo_que_no_volvio() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    *falso.informe_undo.lock().expect("informe undo") =
+        Some(norte_proto::methods::PolicyUndoReportResult {
+            undone: 3,
+            skipped_irreversible: 1,
+            skipped_created_no_trash: 0,
+            blocked: Some(norte_proto::methods::UndoBlocked {
+                seq: 42,
+                error: norte_proto::Error::Conflict {
+                    conflict: norte_proto::ConflictKind::Exists,
+                },
+            }),
+            batch_stuck: None,
+            compensations_lost: 0,
+            denied: Vec::new(),
+            denied_total: 0,
+        });
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let p = inyectar_task_de(&tx, 51, norte_proto::TaskKind::Undo);
+    siguientes_tasks(&mut sub).await;
+    p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(
+        *backend.informes_undo_pedidos.lock().expect("pedidos"),
+        vec![51]
+    );
+    let cuerpo: String = dialogos[0]
+        .body
+        .iter()
+        .map(|l| l.text.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(cuerpo.contains("42"), "cita la entrada donde paró: {cuerpo}");
+    assert_eq!(dialogos[0].title_key, "modal-undo-report-title");
+}
+
+/// Un undo limpio no interrumpe: el tablero lo dice y ya.
+#[tokio::test]
+async fn un_undo_limpio_no_abre_nada() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    *falso.informe_undo.lock().expect("informe undo") =
+        Some(norte_proto::methods::PolicyUndoReportResult {
+            undone: 4,
+            skipped_irreversible: 0,
+            skipped_created_no_trash: 0,
+            blocked: None,
+            batch_stuck: None,
+            compensations_lost: 0,
+            denied: Vec::new(),
+            denied_total: 0,
+        });
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    let p = inyectar_task_de(&tx, 52, norte_proto::TaskKind::Undo);
+    siguientes_tasks(&mut sub).await;
+    p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    let detalle = detalle_de_task(&mut sub).await;
+    assert!(detalle.contains('4'), "el tablero dice cuántas: {detalle}");
+    assert!(!hubo_dialogos(&mut sub).await);
 }
