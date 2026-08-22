@@ -1285,10 +1285,12 @@ mod tests {
         v.run = SyncRunState::Cancelled;
         assert_eq!(hint_id(&v), "sync-hint-done");
 
-        // Gastado: aplicar lo consume.
+        // Gastado: aplicar lo consume. Y mientras ESCRIBE el pie es el suyo,
+        // que tampoco nombra la `a` —pero no dice «Esc cierra», porque ahí no
+        // cierra.
         v.run = SyncRunState::Running;
         v.on_apply_started(TaskId::new(9));
-        assert_eq!(hint_id(&v), "sync-hint-done");
+        assert_eq!(hint_id(&v), "sync-hint-applying");
     }
 
     /// Las tres reglas del final de una aplicación, COMPARTIDAS (#161): el
