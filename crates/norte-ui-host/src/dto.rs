@@ -1338,6 +1338,20 @@ pub struct SyncView {
     pub status: String,
     /// Qué se puede hacer ahora, ya dicho (la línea de ayuda del pie).
     pub hint: String,
+    /// La SEGUNDA pregunta, ya formulada, cuando el plan es peligroso.
+    ///
+    /// `None` = todavía no se ha pedido aprobar, o este plan no la necesita
+    /// (todo se puede deshacer y no borra árboles). La compone el modelo
+    /// compartido, con una rama por perspectiva de deshacer: un titular que
+    /// diga «algo de esto se puede deshacer» sobre una confirmación que diga
+    /// «nada» enseña a saltarse las dos.
+    pub confirming: Option<String>,
+    /// Los pasos que FALLARON, cuando la sincronización terminó.
+    ///
+    /// El recuento va en la línea de estado; esto es el detalle: qué ruta y
+    /// por qué. El desenlace de la Task dice si corrió, y lo que no se hizo
+    /// lo cuenta solo el informe.
+    pub failures: Vec<SyncFailureView>,
     /// El plan se puede aprobar YA.
     ///
     /// Lo decide el modelo compartido: un plan sin cerrar, con bloqueos, o ya
@@ -1346,6 +1360,22 @@ pub struct SyncView {
     pub can_approve: bool,
     /// Hay una Task corriendo (la del plan, o la de la aplicación).
     pub running: bool,
+}
+
+/// Un paso que falló al aplicar el plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncFailureView {
+    /// Por qué falló, ya traducido.
+    pub cause: String,
+    /// Sobre qué ruta, ya saneada.
+    pub path: String,
+    /// Lo pintado difiere de los bytes.
+    pub path_hostile: bool,
+    /// De qué raíz cuelga la ruta (`source`, `dest` o `either`).
+    ///
+    /// **Hay que pintarlo**: en un panel donde una ruta sin calificar
+    /// significa «del origen», callar un `either` es afirmar el origen.
+    pub anchor: String,
 }
 
 /// Algo que impide sincronizar, con dónde pasa.

@@ -578,10 +578,25 @@ export interface SyncView {
   blockers_total: number;
   status: string;
   hint: string;
+  /** La SEGUNDA pregunta, cuando el plan borra o deja algo sin vuelta atrás.
+   *  Solo `y` la contesta que sí. */
+  confirming: string | null;
+  /** Los pasos que fallaron al aplicar. El recuento va en el estado. */
+  failures: SyncFailureView[];
   /** Lo decide el modelo compartido: ofrecer aprobar lo que va a rechazar es
    *  la pantalla rota que esto evita. */
   can_approve: boolean;
   running: boolean;
+}
+
+export interface SyncFailureView {
+  cause: string;
+  path: string;
+  path_hostile: boolean;
+  /** `source`, `dest` o `either`. HAY que pintarlo: callar un `either` en un
+   *  panel donde una ruta sin calificar significa «del origen» es afirmar el
+   *  origen. */
+  anchor: string;
 }
 
 export interface SyncBlockerView {

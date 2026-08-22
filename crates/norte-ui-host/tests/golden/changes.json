@@ -684,6 +684,15 @@
       "blockers_total": 900,
       "status": "2 pasos · este plan no se puede aprobar",
       "hint": "↑↓ mover · Esc cerrar",
+      "confirming": "esto borra 2 árboles enteros. ¿seguro? (y/n)",
+      "failures": [
+        {
+          "cause": "permiso denegado",
+          "path": "docs/a.md",
+          "path_hostile": false,
+          "anchor": "either"
+        }
+      ],
       "can_approve": false,
       "running": false
     }

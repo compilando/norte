@@ -257,7 +257,7 @@ pub async fn harvest_sync_apply(
     // única mitad que de verdad difiere entre frontends: cómo se sanea la
     // categoría y dónde se pinta.
     let category = view
-        .on_apply_ended(&snapshot.state, report)
+        .on_apply_ended(&snapshot.state, report, norte_i18n::active())
         .map(|c| detail_for_bar(&c));
     view.error.clone_from(&category);
     if let Some(c) = category {

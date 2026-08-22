@@ -11804,3 +11804,178 @@ async fn un_plan_que_el_daemon_rechaza_no_deja_nada_pendiente() {
         "la petición anterior dejó el host encallado: {ack:?}"
     );
 }
+
+/// Un plan que BORRA árboles pregunta DOS veces, y la segunda solo la
+/// contesta `y`.
+///
+/// La segunda pregunta no es ceremonia: la compone el modelo compartido y
+/// solo aparece cuando el plan borra o deja algo sin vuelta atrás. Preguntar
+/// siempre es lo que enseña a contestar sin leer.
+#[tokio::test]
+async fn un_plan_que_borra_pregunta_dos_veces() {
+    let mut done = plan_cerrado(1);
+    done.counts = norte_proto::methods::SyncCounts {
+        delete_tree: 1,
+        ..Default::default()
+    };
+    let falso = arbol_como_falso();
+    *falso.plan_de_sync.lock().expect("plan") = Some((
+        vec![norte_proto::methods::SyncStep {
+            reversal: Some(norte_proto::methods::StepReversal::RestoreTrash),
+            ..paso_de_plan(1, "viejo", norte_proto::methods::SyncStepKind::DeleteTree)
+        }],
+        done,
+    ));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
+    let mut sub = h.subscribe();
+    separar_los_paneles(&h, &mut sub).await;
+    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
+    let mut vista = siguiente_sync(&mut sub).await.expect("abre");
+    for _ in 0..20 {
+        if vista.can_approve {
+            break;
+        }
+        vista = siguiente_sync(&mut sub).await.expect("sigue abierto");
+    }
+    assert!(vista.can_approve, "{}", vista.status);
+
+    // La primera `a` solo PREGUNTA.
+    h.dispatch(tecla("a")).await.expect("host vivo");
+    let preguntando = siguiente_sync(&mut sub).await.expect("sigue abierto");
+    assert!(
+        preguntando.confirming.is_some(),
+        "un plan que borra árboles pregunta otra vez: {preguntando:?}"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(
+        backend.aplicados.lock().expect("aplicados").is_empty(),
+        "y todavía no ha aplicado nada"
+    );
+
+    // Una tecla que no es `y` RETIRA la pregunta y no aplica.
+    h.dispatch(tecla("n")).await.expect("host vivo");
+    let retirada = siguiente_sync(&mut sub).await.expect("sigue abierto");
+    assert!(retirada.confirming.is_none());
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(backend.aplicados.lock().expect("aplicados").is_empty());
+
+    // `a` y luego `y`: ahora sí, y con el hash que devolvió el CORE.
+    h.dispatch(tecla("a")).await.expect("host vivo");
+    let _ = siguiente_sync(&mut sub).await;
+    h.dispatch(tecla("y")).await.expect("host vivo");
+    for _ in 0..40 {
+        if !backend.aplicados.lock().expect("aplicados").is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let aplicados = backend.aplicados.lock().expect("aplicados").clone();
+    assert_eq!(aplicados.len(), 1, "una sola vez");
+}
+
+/// Con el apply EN VUELO, `Escape` pide cancelar y NO cierra el panel.
+///
+/// Cerrarlo pierde el informe —y con él el recuento, los fallos y el asa del
+/// deshacer— sobre un destino que se está reescribiendo.
+#[tokio::test]
+async fn con_el_apply_en_vuelo_escape_no_cierra() {
+    let falso = arbol_como_falso();
+    *falso.plan_de_sync.lock().expect("plan") = Some((
+        vec![paso_de_plan(1, "a.md", norte_proto::methods::SyncStepKind::Copy)],
+        plan_cerrado(1),
+    ));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
+    let mut sub = h.subscribe();
+    separar_los_paneles(&h, &mut sub).await;
+    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
+    let mut vista = siguiente_sync(&mut sub).await.expect("abre");
+    for _ in 0..20 {
+        if vista.can_approve {
+            break;
+        }
+        vista = siguiente_sync(&mut sub).await.expect("sigue abierto");
+    }
+    // Este plan no borra nada y se deshace entero: no hay segunda pregunta.
+    h.dispatch(tecla("a")).await.expect("host vivo");
+    for _ in 0..40 {
+        if !backend.aplicados.lock().expect("aplicados").is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert_eq!(backend.aplicados.lock().expect("aplicados").len(), 1);
+
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(
+        foto.sync.is_some(),
+        "el panel se queda: el informe todavía no ha llegado"
+    );
+}
+
+/// El informe llega y el panel lo dice, con los fallos uno a uno.
+#[tokio::test]
+async fn el_informe_de_la_sincronizacion_dice_lo_que_fallo() {
+    let falso = arbol_como_falso();
+    *falso.plan_de_sync.lock().expect("plan") = Some((
+        vec![paso_de_plan(1, "a.md", norte_proto::methods::SyncStepKind::Copy)],
+        plan_cerrado(1),
+    ));
+    *falso.informe_de_sync.lock().expect("informe") = Some(norte_proto::methods::SyncReportResult {
+        done: 0,
+        failed: 1,
+        skipped: 0,
+        bytes: 0,
+        failures: vec![norte_proto::methods::SyncFailure {
+            rel: norte_proto::methods::RelPath::new(vec![
+                norte_proto::Segment::new(b"a.md".to_vec()).expect("segmento"),
+            ]),
+            dest_rel: None,
+            cause: norte_proto::methods::SyncFailureCause::Denied,
+            kind: norte_proto::methods::SyncStepKind::Copy,
+        }],
+        // Sin lote de journal: nada que deshacer, y el panel lo dirá.
+        batch_id: None,
+        dest_trash: norte_proto::methods::DestTrash::Restorable,
+    });
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
+    let mut sub = h.subscribe();
+    separar_los_paneles(&h, &mut sub).await;
+    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
+    let mut vista = siguiente_sync(&mut sub).await.expect("abre");
+    for _ in 0..20 {
+        if vista.can_approve {
+            break;
+        }
+        vista = siguiente_sync(&mut sub).await.expect("sigue abierto");
+    }
+    h.dispatch(tecla("a")).await.expect("host vivo");
+    for _ in 0..40 {
+        if !backend.aplicados.lock().expect("aplicados").is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    // El daemon termina la Task del apply.
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+
+    for _ in 0..40 {
+        let v = siguiente_sync(&mut sub).await.expect("sigue abierto");
+        if !v.failures.is_empty() {
+            assert_eq!(v.failures[0].path, "a.md");
+            assert!(!v.failures[0].cause.is_empty());
+            return;
+        }
+    }
+    panic!("el informe no llegó al panel");
+}

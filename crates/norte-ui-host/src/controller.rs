@@ -384,6 +384,16 @@ enum Fondo {
     ComparacionViva(u64, norte_proto::TaskId),
     /// El plan de sincronización tiene Task.
     PlanDeSyncVivo(u64, norte_proto::TaskId),
+    /// El `sync.apply` fue aceptado y esta es su Task.
+    SyncAplicando(u64, norte_proto::TaskId),
+    /// El `sync.apply` no llegó a ejecutarse: se suelta el pestillo.
+    SyncNoAplicado(u64),
+    /// El informe de una sincronización terminada.
+    InformeDeSync(
+        u64,
+        norte_proto::TaskState,
+        Box<Result<norte_proto::methods::SyncReportResult, Error>>,
+    ),
     /// El daemon rechazó el plan: no habrá Task ni panel.
     PlanDeSyncFallido(u64),
     /// Un evento del plan: un lote de pasos, o su cierre.
@@ -2264,7 +2274,7 @@ impl Estado {
         // El panel de sincronización, igual que el de diferencias: mientras
         // esté abierto se queda las teclas.
         if self.sincronizacion.is_some() {
-            return Some(self.tecla_en_sincronizacion(k));
+            return Some(self.tecla_en_sincronizacion(k, backend, buzon));
         }
         // El panel de diferencias, cuando está abierto, se queda las teclas:
         // es una pantalla entera, y una flecha que se le escapara movería el
@@ -4155,6 +4165,16 @@ impl Estado {
             }
             Fondo::FilasComparadas(epoca, lote) => self.aplicar_filas_comparadas(epoca, *lote),
             Fondo::PlanDeSyncVivo(epoca, id) => self.abrir_panel_de_sync(epoca, id),
+            Fondo::SyncAplicando(epoca, id) => self.sync_aplicando(epoca, id),
+            Fondo::SyncNoAplicado(epoca) => {
+                if let Some(s) = self.sincronizacion.as_mut().filter(|s| s.epoca == epoca) {
+                    s.vista.on_apply_abandoned();
+                }
+                Vec::new()
+            }
+            Fondo::InformeDeSync(epoca, estado, informe) => {
+                self.informe_de_sync(epoca, &estado, *informe)
+            }
             Fondo::PlanDeSyncFallido(epoca) => {
                 if self.sync_pedida.as_ref().is_some_and(|p| p.epoca == epoca) {
                     self.sync_pedida = None;
@@ -5504,6 +5524,70 @@ impl Estado {
     /// comparación a la que se le perdieron lotes se lee INCOMPLETA, y una
     /// cuyo canal se cerró sin desenlace observado se lee DESCONOCIDA — dos
     /// estados que el CLI y el MCP ya perdieron cada uno por su cuenta.
+    /// La Task del APPLY terminó: se pide su informe.
+    ///
+    /// El desenlace de la Task dice si corrió; lo que se hizo y lo que NO lo
+    /// cuenta el informe, y sin él «terminó» se lee como «salió bien» sobre
+    /// un destino que puede haber quedado a medias.
+    fn pedir_informe_de_sync(
+        &mut self,
+        p: &norte_proto::TaskProgress,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let Some(sinc) = self.sincronizacion.as_ref() else {
+            return;
+        };
+        if sinc.task != p.task_id
+            || !matches!(sinc.vista.state, norte_frontend::sync::SyncState::Applying(_))
+        {
+            return;
+        }
+        let epoca = sinc.epoca;
+        let estado = p.state.clone();
+        let id = p.task_id;
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let informe = backend.sync_report(id).await;
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::InformeDeSync(
+                    epoca,
+                    estado,
+                    Box::new(informe),
+                ))))
+                .await;
+        });
+    }
+
+    /// El informe llegó: entra en el modelo, que decide qué frase sale.
+    fn informe_de_sync(
+        &mut self,
+        epoca: u64,
+        estado: &norte_proto::TaskState,
+        informe: Result<norte_proto::methods::SyncReportResult, Error>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let lang = self.lang;
+        let Some(sinc) = self.sincronizacion.as_mut().filter(|s| s.epoca == epoca) else {
+            return Vec::new();
+        };
+        // `on_apply_ended` es quien sabe leer el par (desenlace, informe): un
+        // apply cancelado CON informe dice las dos mitades —«cancelado tras
+        // aplicar N»— y uno sin informe deja que mande el error, porque no
+        // hay recuento que lo pueda sustituir.
+        // La categoría del error vuelve YA localizada en el idioma de esta
+        // ventana, porque el modelo lo recibe como parámetro: leerlo del
+        // global habría puesto el desenlace de una escritura en el idioma de
+        // otra ventana.
+        if let Some(categoria) = sinc.vista.on_apply_ended(estado, informe, lang) {
+            sinc.vista.error = Some(clamp_display(categoria));
+        }
+        let cambio = ViewChange::Sync {
+            sync: self.vista_sincronizacion(),
+        };
+        vec![self.parche(vec![cambio])]
+    }
+
     /// El desenlace de la Task de un PLAN entra en el modelo.
     ///
     /// Sin esto, `run` se quedaba en `Running` para siempre y con él moría la
@@ -5570,12 +5654,46 @@ impl Estado {
     fn tecla_en_sincronizacion(
         &mut self,
         k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(sinc) = self.sincronizacion.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
+        // Con la SEGUNDA pregunta delante, las teclas son suyas: solo `y`
+        // contesta que sí, y cualquier otra cosa la retira. Una pregunta que
+        // se puede contestar con cualquier tecla no es una pregunta.
+        if sinc.vista.confirming.is_some() {
+            let si = matches!(k.key.as_str(), "y" | "Y");
+            sinc.vista.confirming = None;
+            if si {
+                return self.aplicar_plan(backend, buzon);
+            }
+            let cambio = ViewChange::Sync {
+                sync: self.vista_sincronizacion(),
+            };
+            return (self.aplicada(), vec![self.parche(vec![cambio])]);
+        }
         match k.key.as_str() {
+            "a" | "A" => self.pedir_aprobacion(backend, buzon),
             "Escape" | "esc" => {
+                // Mientras el daemon ESCRIBE, `Escape` pide cancelar y no
+                // cierra: cerrar pierde el informe —y con él el recuento, los
+                // fallos y el asa del deshacer— sobre un destino que se
+                // reescribió a medias.
+                if sinc.vista.is_submitted()
+                    || matches!(sinc.vista.state, norte_frontend::sync::SyncState::Applying(_))
+                {
+                    sinc.vista.cancel_requested = true;
+                    let task = sinc.task;
+                    if task.get() != 0 {
+                        self.cancelar(task.get());
+                    }
+                    let cambio = ViewChange::Sync {
+                        sync: self.vista_sincronizacion(),
+                    };
+                    return (self.aplicada(), vec![self.parche(vec![cambio])]);
+                }
                 if sinc.vista.cancel_requested {
                     let task = sinc.task;
                     sinc.abandonada
@@ -5633,6 +5751,119 @@ impl Estado {
             // es una pantalla.
             _ => (self.aplicada(), Vec::new()),
         }
+    }
+
+    /// `a`: pide aprobar el plan. Puede que haya una SEGUNDA pregunta.
+    ///
+    /// La segunda no es ceremonia: la compone el modelo compartido con una
+    /// rama por perspectiva de deshacer, y solo aparece cuando el plan borra
+    /// árboles o deja algo sin vuelta atrás. Un plan que se deshace entero y
+    /// no borra nada no la tiene — preguntar siempre es lo que enseña a
+    /// contestar sin leer.
+    fn pedir_aprobacion(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let lang = self.lang;
+        let Some(sinc) = self.sincronizacion.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        if !sinc.vista.can_approve() {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-sync-cannot-approve".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        let pregunta = sinc.vista.state.plan().and_then(|p| p.confirmation(lang));
+        match pregunta {
+            Some(c) => {
+                sinc.vista.confirming = Some(c);
+                let cambio = ViewChange::Sync {
+                    sync: self.vista_sincronizacion(),
+                };
+                (self.aplicada(), vec![self.parche(vec![cambio])])
+            }
+            None => self.aplicar_plan(backend, buzon),
+        }
+    }
+
+    /// Manda `sync.apply` con el hash que el CORE devolvió.
+    ///
+    /// Por `SyncView::submit`, que es la ÚNICA puerta: mira `can_approve` y
+    /// echa el pestillo del apply en vuelo en el mismo gesto. Separarlos deja
+    /// la ventana en la que un segundo `a` —o un `Escape`— entra entre que la
+    /// petición sale y el daemon contesta, y esta ventana lee eventos entre
+    /// teclas, así que es alcanzable de verdad.
+    fn aplicar_plan(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let epoca = self.sincronizacion.as_ref().map_or(0, |s| s.epoca);
+        let Some(hash) = self
+            .sincronizacion
+            .as_mut()
+            .and_then(|s| s.vista.submit())
+        else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-sync-cannot-approve".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        let backend2 = Arc::clone(backend);
+        let buzon2 = buzon.clone();
+        tokio::spawn(async move {
+            let resultado = backend2.sync_apply(hash).await;
+            match resultado {
+                Ok(task) => {
+                    let id = task.id;
+                    let _ = buzon2
+                        .send(Mensaje::TaskNueva(Box::new((task, Vec::new()))))
+                        .await;
+                    let _ = buzon2
+                        .send(Mensaje::Fondo(Box::new(Fondo::SyncAplicando(epoca, id))))
+                        .await;
+                }
+                Err(e) => {
+                    let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    // Y se suelta el pestillo: sin esto la `a` queda muerta
+                    // para siempre sobre un plan que nadie llegó a aplicar.
+                    let _ = buzon2
+                        .send(Mensaje::Fondo(Box::new(Fondo::SyncNoAplicado(epoca))))
+                        .await;
+                }
+            }
+        });
+        let cambio = ViewChange::Sync {
+            sync: self.vista_sincronizacion(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// El daemon aceptó el apply: el modelo pasa a APLICANDO.
+    fn sync_aplicando(
+        &mut self,
+        epoca: u64,
+        task: norte_proto::TaskId,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(sinc) = self.sincronizacion.as_mut().filter(|s| s.epoca == epoca) else {
+            return Vec::new();
+        };
+        // La Task que se sigue pasa a ser la del APPLY: es a la que apunta
+        // ahora el `Escape`, y de la que hay que pedir el informe.
+        sinc.task = task;
+        if !sinc.vista.on_apply_started(task) {
+            return Vec::new();
+        }
+        let cambio = ViewChange::Sync {
+            sync: self.vista_sincronizacion(),
+        };
+        vec![self.parche(vec![cambio])]
     }
 
     fn tecla_en_comparacion(
@@ -6100,6 +6331,78 @@ impl Estado {
     }
 
     /// La proyección del panel de sincronización, acotada a su ventana.
+    /// Los pasos de la ventana, proyectados por el modelo COMPARTIDO.
+    fn pasos_proyectados(
+        pasos: &[norte_proto::methods::SyncStep],
+        papelera: norte_proto::methods::DestTrash,
+        enc: norte_frontend::sync::SyncEncodings,
+        lang: norte_i18n::Lang,
+    ) -> Vec<crate::dto::SyncStepView> {
+        pasos
+            .iter()
+            .map(|paso| {
+                // Las celdas las compone el modelo COMPARTIDO: qué hace el
+                // paso, por qué, si el deshacer lo devuelve —que NUNCA sale
+                // de `reversal` a secas, porque esa es media respuesta— y las
+                // dos ortografías cuando las hay.
+                let c = norte_frontend::sync::render_step(paso, papelera, enc);
+                crate::dto::SyncStepView {
+                    id: c.id,
+                    kind: clamp_display(norte_frontend::sync::step_label(paso.kind, lang)),
+                    // El porqué solo lo tienen los pasos que lo tienen: un
+                    // `Skip`, o uno que no se puede deshacer. Vacío es
+                    // AUSENCIA, no una frase inventada.
+                    reason: c.reason.map_or_else(String::new, |r| {
+                        clamp_display(norte_frontend::sync::reason_label(r, lang))
+                    }),
+                    undo: clamp_display(norte_frontend::sync::undo_label(c.undo, lang)),
+                    anchor: Self::nombre_de_ancla(c.anchor),
+                    path: clamp_display(c.rel.text.clone()),
+                    path_hostile: c.rel.hostile,
+                    dest_path: c.dest_rel.as_ref().map(|d| clamp_display(d.text.clone())),
+                    dest_path_hostile: c.dest_rel.as_ref().is_some_and(|d| d.hostile),
+                    twins: c.dest_rel_twin,
+                }
+            })
+            .collect()
+    }
+
+    /// Los fallos del informe, cuando ya hay informe.
+    fn fallos_proyectados(
+        estado: &norte_frontend::sync::SyncState,
+        enc: norte_frontend::sync::SyncEncodings,
+        lang: norte_i18n::Lang,
+    ) -> Vec<crate::dto::SyncFailureView> {
+        let norte_frontend::sync::SyncState::Applied(a) = estado else {
+            return Vec::new();
+        };
+        a.report()
+            .failures
+            .iter()
+            .map(|f| {
+                let c = norte_frontend::sync::render_failure(f, enc);
+                crate::dto::SyncFailureView {
+                    cause: clamp_display(norte_frontend::sync::failure_cause_label(f.cause, lang)),
+                    path: clamp_display(c.rel.text.clone()),
+                    path_hostile: c.rel.hostile,
+                    anchor: Self::nombre_de_ancla(c.anchor),
+                }
+            })
+            .collect()
+    }
+
+    /// De qué raíz cuelga una ruta, por su id estable.
+    ///
+    /// `either` se dice: en un panel donde una ruta sin calificar significa
+    /// «del origen», callarlo es afirmar el origen.
+    fn nombre_de_ancla(anchor: norte_frontend::sync::RelAnchor) -> String {
+        match anchor {
+            norte_frontend::sync::RelAnchor::Dest => "dest".to_owned(),
+            norte_frontend::sync::RelAnchor::Source => "source".to_owned(),
+            norte_frontend::sync::RelAnchor::Either => "either".to_owned(),
+        }
+    }
+
     fn vista_sincronizacion(&self) -> Option<crate::dto::SyncView> {
         let sinc = self.sincronizacion.as_ref()?;
         let v = &sinc.vista;
@@ -6110,42 +6413,13 @@ impl Estado {
         let hasta = primera.saturating_add(sinc.ventana).min(pasos.len());
         let papelera = v.dest_trash();
         let enc = v.encodings();
-        let filas = pasos
-            .get(primera..hasta)
-            .unwrap_or_default()
-            .iter()
-            .map(|paso| {
-                // Las celdas las compone el modelo COMPARTIDO: qué hace el
-                // paso, por qué, si el deshacer lo devuelve —que NUNCA sale
-                // de `reversal` a secas, porque esa es media respuesta— y las
-                // dos ortografías cuando las hay.
-                let c = norte_frontend::sync::render_step(paso, papelera, enc);
-                crate::dto::SyncStepView {
-                    id: c.id,
-                    kind: clamp_display(norte_frontend::sync::step_label(paso.kind, self.lang)),
-                    // El porqué solo lo tienen los pasos que lo tienen: un
-                    // `Skip`, o uno que no se puede deshacer. Vacío es
-                    // AUSENCIA, no una frase inventada.
-                    reason: c.reason.map_or_else(String::new, |r| {
-                        clamp_display(norte_frontend::sync::reason_label(r, self.lang))
-                    }),
-                    // El veredicto del deshacer sale del modelo (`c.undo`),
-                    // que lo compone mirando papelera Y reversa: leer
-                    // `reversal` a secas es la mitad que miente cuando el
-                    // destino no tiene papelera.
-                    undo: clamp_display(norte_frontend::sync::undo_label(c.undo, self.lang)),
-                    anchor: match c.anchor {
-                        norte_frontend::sync::RelAnchor::Dest => "dest".to_owned(),
-                        _ => "source".to_owned(),
-                    },
-                    path: clamp_display(c.rel.text.clone()),
-                    path_hostile: c.rel.hostile,
-                    dest_path: c.dest_rel.as_ref().map(|d| clamp_display(d.text.clone())),
-                    dest_path_hostile: c.dest_rel.as_ref().is_some_and(|d| d.hostile),
-                    twins: c.dest_rel_twin,
-                }
-            })
-            .collect();
+        let filas = Self::pasos_proyectados(
+            pasos.get(primera..hasta).unwrap_or_default(),
+            papelera,
+            enc,
+            self.lang,
+        );
+        let fallos = Self::fallos_proyectados(&v.state, enc, self.lang);
         Some(crate::dto::SyncView {
             source: crate::dto::DialogLine {
                 text: clamp_display(origen),
@@ -6230,6 +6504,11 @@ impl Estado {
             } else {
                 norte_i18n::t_in(self.lang, norte_frontend::sync::hint_id(v))
             }),
+            confirming: v.confirming.as_ref().map(|c| clamp_display(c.text.clone())),
+            // Los fallos del informe, uno a uno. El recuento va en la línea
+            // de estado, que lo compone el modelo compartido; esto es el
+            // detalle, y sin él «3 fallaron» no dice cuáles.
+            failures: fallos,
             can_approve: v.can_approve(),
             running: matches!(v.run, norte_frontend::sync::SyncRunState::Running),
         })
@@ -8646,6 +8925,7 @@ impl Estado {
             self.pedir_informe_de_lote(p, backend, buzon);
             cambios.extend(self.cerrar_comparacion(p));
             cambios.extend(self.cerrar_sincronizacion(p));
+            self.pedir_informe_de_sync(p, backend, buzon);
         }
         vec![self.parche(cambios)]
     }

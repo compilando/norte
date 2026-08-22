@@ -1893,6 +1893,25 @@ logic in TypeScript.
 > - And a gate the commit had not run: the rustdoc link `Self::sync_apply`
 >   pointed at a method the trait deliberately does not have, so `just docs`
 >   was RED on main. `just t` and `gui-ci` are not the whole gate.
+>
+> **Phase B DONE 2026-08-22** (same bridge, 29): approve → the second question
+> → apply → the report. `a` asks; the second question only exists when the plan
+> deletes trees or leaves something without a way back, and only `y` answers it
+> — asking every time is what teaches people to answer without reading. What
+> goes out is the hash the CORE returned, through `SyncView::submit`, which is
+> the one door: it checks `can_approve` and latches the in-flight apply in the
+> same gesture, and this window reads events between keystrokes, so the window
+> where a second `a` slips in is reachable here in a way it is not in the TUI.
+>
+> While the daemon is writing, `Escape` asks to cancel and does NOT close:
+> closing loses the report — and with it the counts, the failures and the undo
+> handle — over a destination that was rewritten halfway. When the apply task
+> ends, the report is asked for and `on_apply_ended` reads the pair (outcome,
+> report), so "cancelled after applying N" says both halves.
+>
+> One thing changed in the shared layer: `on_apply_ended` now takes the
+> language. It was localising the error category with the process-global one,
+> which for a window with a per-instance language is the wrong sentence.
 
 - sync plan configuration;
 - streamed steps and blockers;

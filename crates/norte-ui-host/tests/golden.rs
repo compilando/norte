@@ -810,6 +810,15 @@ fn sincronizacion_de_referencia() -> norte_ui_host::dto::SyncView {
             path_hostile: false,
         }],
         blockers_total: 900,
+        confirming: Some("esto borra 2 \u{e1}rboles enteros. \u{bf}seguro? (y/n)".to_owned()),
+        failures: vec![norte_ui_host::dto::SyncFailureView {
+            cause: "permiso denegado".to_owned(),
+            path: "docs/a.md".to_owned(),
+            path_hostile: false,
+            // `either` se PINTA: en un panel donde una ruta sin calificar
+            // significa «del origen», callarlo es afirmar el origen.
+            anchor: "either".to_owned(),
+        }],
         status: "2 pasos \u{b7} este plan no se puede aprobar".to_owned(),
         hint: "\u{2191}\u{2193} mover \u{b7} Esc cerrar".to_owned(),
         can_approve: false,

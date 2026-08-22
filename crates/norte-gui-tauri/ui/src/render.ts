@@ -1162,6 +1162,39 @@ export class Screen {
     }
     caja.append(pasos);
 
+    if (sync.failures.length > 0) {
+      // Lo que FALLÓ, uno a uno: el recuento va en el estado, y «3 fallaron»
+      // sin decir cuáles no se puede arreglar.
+      const fallos = document.createElement("ul");
+      fallos.className = "sync-failures";
+      fallos.setAttribute("role", "alert");
+      for (const f of sync.failures) {
+        const li = document.createElement("li");
+        li.dataset["anchor"] = f.anchor;
+        const causa = document.createElement("span");
+        causa.className = "sync-failure-cause";
+        causa.textContent = f.cause;
+        const ruta = document.createElement("span");
+        ruta.className = "sync-failure-path";
+        ruta.dataset["hostile"] = String(f.path_hostile);
+        ruta.textContent = f.path;
+        li.append(causa, ruta);
+        if (f.path_hostile) {
+          li.append(badge(this.t("hostile-name")));
+        }
+        fallos.append(li);
+      }
+      caja.append(fallos);
+    }
+    if (sync.confirming !== null) {
+      // La SEGUNDA pregunta, como alerta y con su propio elemento: es la
+      // última pantalla donde todavía se puede decir que no.
+      const pregunta = document.createElement("p");
+      pregunta.className = "sync-confirm";
+      pregunta.setAttribute("role", "alertdialog");
+      pregunta.textContent = sync.confirming;
+      caja.append(pregunta);
+    }
     const estado = document.createElement("p");
     estado.className = "sync-status";
     estado.setAttribute("role", "status");

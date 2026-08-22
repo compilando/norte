@@ -595,10 +595,14 @@ impl SyncView {
         &mut self,
         state: &TaskState,
         report: Result<SyncReportResult, norte_proto::Error>,
+        lang: Lang,
     ) -> Option<String> {
+        // El idioma va como PARÁMETRO y no se lee del global: la ventana
+        // gráfica tiene uno por instancia, y el desenlace de una escritura en
+        // el idioma de otra ventana es un desenlace que no se lee.
         let categoria = match (state, &report) {
-            (TaskState::Failed { error }, _) => Some(crate::error::error_category(error)),
-            (_, Err(e)) => Some(crate::error::error_category(e)),
+            (TaskState::Failed { error }, _) => Some(crate::error::error_category_in(lang, error)),
+            (_, Err(e)) => Some(crate::error::error_category_in(lang, e)),
             _ => None,
         };
         if let Ok(informe) = report {

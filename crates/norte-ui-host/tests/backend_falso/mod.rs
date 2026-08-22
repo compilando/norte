@@ -152,6 +152,10 @@ pub struct Falso {
             norte_proto::methods::SyncPlanDone,
         )>,
     >,
+    /// El informe que contesta `sync.report`. `None` = `Unsupported`.
+    pub informe_de_sync: std::sync::Mutex<Option<norte_proto::methods::SyncReportResult>>,
+    /// Los hashes con los que se pidió aplicar, en orden.
+    pub aplicados: std::sync::Mutex<Vec<norte_proto::methods::PlanHash>>,
     /// Los planes que se pidieron: `(origen, destino, modo)`.
     pub planes_pedidos:
         std::sync::Mutex<Vec<(VPath, VPath, norte_proto::methods::SyncMode)>>,
@@ -659,6 +663,44 @@ impl HostBackend for Falso {
 
     fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>> {
         self.ajenas.lock().expect("ajenas").take()
+    }
+
+    fn sync_apply(
+        &self,
+        plan_hash: norte_proto::methods::PlanHash,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.aplicados.lock().expect("aplicados").push(plan_hash);
+        let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
+        let id = norte_proto::TaskId::new(500 + n as u64);
+        let progreso = norte_proto::TaskProgress {
+            task_id: id,
+            kind: norte_proto::TaskKind::Sync,
+            state: norte_proto::TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+        };
+        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        *self.progreso.lock().expect("progreso") = Some(tx.clone());
+        self.progresos.lock().expect("progresos").insert(id.get(), tx);
+        Box::pin(async move {
+            Ok(HostTask {
+                id,
+                progress: rx,
+                cancel: Arc::new(|| {}),
+                foreign: false,
+            })
+        })
+    }
+
+    fn sync_report(
+        &self,
+        _task_id: norte_proto::TaskId,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::SyncReportResult, Error>> {
+        let informe = self.informe_de_sync.lock().expect("informe").clone();
+        Box::pin(async move { informe.ok_or(Error::Unsupported) })
     }
 
     fn sync_plan(

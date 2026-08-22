@@ -198,7 +198,18 @@ independently through `PROTOCOL_VERSION`.
   list is hiding steps) and what blocks it WITH the path — "the destination is
   read-only" without saying which one sends you looking blind — plus the real
   blocker count, because the wire truncates that list to 256 and a reader needs
-  to know there are forty thousand. Bridge **29**.
+  to know there are forty thousand.
+- **And the window applies it.** `a` approves; a plan that deletes trees or
+  leaves something without a way back asks a SECOND question that only `y`
+  answers — and a plan that undoes completely does not ask it at all, because
+  asking every time is what teaches people to answer without reading. What
+  travels is the hash the core returned, through the one door that checks
+  approvability and latches the in-flight apply in the same gesture. While the
+  daemon writes, `Escape` asks to cancel and does not close: closing would lose
+  the report — the counts, the failures, the undo handle — over a destination
+  that was rewritten halfway. When it ends, the report is fetched and shown,
+  failures one by one with the path and which root it hangs from, because "3
+  failed" without saying which cannot be acted on. Bridge **29**.
 - **The window compares two directories** (`pane.compare-dirs`): a diff panel
   with the rows as they stream in, a filter per category with its count, side
   switching, and `Enter` to go where a row points. The model is the one the TUI

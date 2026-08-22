@@ -371,6 +371,26 @@ pub trait HostBackend: Send + Sync + 'static {
         >,
     >;
 
+    /// APLICA un plan ya revisado, por su `plan_hash`.
+    ///
+    /// El hash es un token de FRESCURA, no de aprobación: es público y
+    /// determinista, así que lo que garantiza es que se ejecuta el plan que
+    /// el re-plan produce AHORA y que un hash aprobado para un directorio no
+    /// vale contra otro. Quién puede canjearlo lo decide la policy del core.
+    ///
+    /// Esto ESCRIBE: es la única llamada de esta superficie que lo hace.
+    fn sync_apply(&self, plan_hash: methods::PlanHash) -> BoxFuture<'static, Result<HostTask, Error>>;
+
+    /// El informe de una sincronización ya terminada.
+    ///
+    /// Mismo papel que el informe de un lote de renombrado: el desenlace de
+    /// la Task dice si corrió, y lo que NO se hizo —los pasos que fallaron,
+    /// lo que quedó sin deshacer— lo cuenta solo el informe.
+    fn sync_report(
+        &self,
+        task_id: TaskId,
+    ) -> BoxFuture<'static, Result<methods::SyncReportResult, Error>>;
+
     /// Compara dos árboles y devuelve su Task Y el canal de LOTES de filas.
     ///
     /// Los dos juntos por lo mismo que en [`Self::search`]: la comparación es
@@ -641,6 +661,31 @@ impl HostBackend for norte_client::RemoteBackend {
                 rx,
             ))
         })
+    }
+
+    fn sync_apply(
+        &self,
+        plan_hash: methods::PlanHash,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.sync_apply(&plan_hash).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
+        })
+    }
+
+    fn sync_report(
+        &self,
+        task_id: TaskId,
+    ) -> BoxFuture<'static, Result<methods::SyncReportResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.sync_report(task_id).await })
     }
 
     fn compare(
