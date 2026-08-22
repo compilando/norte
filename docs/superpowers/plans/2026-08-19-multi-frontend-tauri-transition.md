@@ -1912,6 +1912,32 @@ logic in TypeScript.
 > One thing changed in the shared layer: `on_apply_ended` now takes the
 > language. It was localising the error category with the process-global one,
 > which for a window with a per-instance language is the wrong sentence.
+>
+> **Phase B reviewed too** (bridge **29 → 30**; phase B had added required
+> fields without a bump, which is the whole reason the bridge is single-level).
+> Both reviewers landed on the same theme: the panel asserted things it did not
+> know.
+>
+> - **"It failed" is not "it did not write."** A failed `sync.apply` released
+>   the latch and offered `a` again — but the daemon answering *no* and the
+>   connection dropping *after* the request are different facts. In the second
+>   case the request may have arrived, so re-offering apply offers to write the
+>   same plan twice over the same destination. `Fondo::SyncNoAplicado` now
+>   carries whether we KNOW nothing was written; the ambiguous case says so and
+>   does not re-offer.
+> - **The one who knows the id has to be the one who cancels.** When the shared
+>   model refuses an apply — the reader asked to stop in the window where it had
+>   no id yet — nobody else knows that Task id. The host cancels it.
+> - **The writing panel was the only screen in norte with no way out.** The
+>   second `Escape` now closes, saying the destination may be halfway. And
+>   `Escape` on an already-finished apply no longer rewrites its outcome to
+>   cancelled.
+> - **An anchor is said, not inferred from a `data-` attribute nobody reads.**
+>   `anchor_label` crosses the bridge: staying quiet about an `either` on a
+>   panel where an unqualified path means "on the source" asserts the source.
+> - **A fake canceller that counts nothing passes a cancellation test with the
+>   panel frozen.** The fake's `sync_apply` now records who was asked to stop,
+>   and the test asserts the apply's id — not the plan's — was the one asked.
 
 - sync plan configuration;
 - streamed steps and blockers;
