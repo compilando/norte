@@ -11,6 +11,13 @@
     <div id="palette" data-open="false"></div>
     <div id="whichkey" data-open="false"></div>
     <div id="viewer" data-open="false"></div>
+    <!-- La salida de un comando de extensión va JUSTO DEBAJO de los
+         diálogos, y el orden importa dos veces: pinta con un velo a pantalla
+         completa y sin `z-index` en ninguna parte, así que quien va después
+         en el DOM tapa al anterior. Declarada tras `#dialogs` cubría una
+         confirmación que seguía teniendo el teclado —y el momento lo elegía
+         el plugin, que decide cuándo contesta su comando—. -->
+    <div id="plugin-output" data-open="false"></div>
     <div id="dialogs"></div>
     <!-- La ayuda va la ÚLTIMA a propósito: se abre encima de lo que
          hubiera —también encima del visor y de un diálogo— y el orden del
@@ -26,7 +33,6 @@
     <div id="search" data-open="false"></div>
     <div id="compare" data-open="false"></div>
     <div id="sync" data-open="false"></div>
-    <div id="plugin-output" data-open="false"></div>
     <!-- La revisión de un plan de renombrado va aquí, casi al final: se
          queda el teclado por encima de los selectores (columnas, temas,
          ajustes, búsqueda…), y todos ellos pintan un fondo opaco a pantalla

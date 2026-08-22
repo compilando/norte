@@ -1199,6 +1199,16 @@ body {
   unicode-bidi: isolate;
 }
 
+.plugin-output-id {
+  opacity: 0.7;
+  unicode-bidi: isolate;
+}
+
+.plugin-output-id::before {
+  content: " · ";
+  opacity: 0.6;
+}
+
 .plugin-output-command::before {
   content: " · ";
   opacity: 0.6;

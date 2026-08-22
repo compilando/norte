@@ -659,6 +659,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
                 desc: "Ordenar por nombre".to_owned(),
                 chord: "ctrl+f3".to_owned(),
                 enabled: true,
+                hostile: false,
             }],
             cursor: Some(0),
             total: 42,
@@ -984,20 +985,34 @@ fn selector_de_referencia() -> norte_ui_host::dto::PickerView {
     }
 }
 
-/// El gestor de extensiones de referencia: una extensión aprobada y
-/// encendida, otra que no, un directorio que no cargó y una ficha abierta.
 /// La salida de un comando de extensión: lo que imprimió un tercero, ya
 /// enmascarado, acotado, y diciendo que se cortó.
 fn salida_de_referencia() -> norte_ui_host::dto::ExtensionOutputView {
     norte_ui_host::dto::ExtensionOutputView {
-        plugin: "ACME FTP".to_owned(),
-        command: "Saludar".to_owned(),
-        text: "hola\u{fffd}mundo".to_owned(),
-        hostile: true,
+        // El nombre de la extensión enmascarado Y marcado, con el texto
+        // LIMPIO: es el caso que una sola bandera para las tres cadenas no
+        // podía expresar — la bandera salía del texto, así que un manifiesto
+        // hostil con salida ASCII se pintaba sin insignia.
+        plugin: norte_ui_host::dto::MaskedTextView {
+            text: "ACME\u{fffd}FTP".to_owned(),
+            hostile: true,
+        },
+        plugin_id: "acme.ftp".to_owned(),
+        command: norte_ui_host::dto::MaskedTextView {
+            text: "Saludar".to_owned(),
+            hostile: false,
+        },
+        // Y por LÍNEAS: un salto de línea es un control C0, así que
+        // enmascarar la salida entera marcaba como hostil cualquier salida de
+        // más de una línea.
+        lines: vec!["hola".to_owned(), "mundo".to_owned()],
+        text_hostile: false,
         truncated: true,
     }
 }
 
+/// El gestor de extensiones de referencia: una extensión aprobada y
+/// encendida, otra que no, un directorio que no cargó y una ficha abierta.
 fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
     use norte_ui_host::dto::{
         ExtensionConfigRowView, ExtensionDetailView, ExtensionErrorView, ExtensionRowView,
@@ -1496,6 +1511,7 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
                         text: "pane.sort-name".to_owned(),
                         desc: "Ordenar por nombre".to_owned(),
                         chord: "ctrl+f3".to_owned(),
+                        hostile: false,
                         enabled: true,
                     }],
                     cursor: Some(0),

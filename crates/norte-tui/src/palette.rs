@@ -38,6 +38,8 @@ pub fn build_rows(browse: &Effective, viewer: &Effective) -> Vec<Row> {
                 text: cmd.to_owned(),
                 desc,
                 chord,
+                // Vocabulario de este proyecto: no hay nada que enmascarar.
+                hostile: false,
             }
         })
         .collect()

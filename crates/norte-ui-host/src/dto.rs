@@ -110,6 +110,13 @@ pub struct PaletteRowView {
     pub chord: String,
     /// Este frontend puede ejecutarlo.
     pub enabled: bool,
+    /// Lo pintado DIFIERE de lo que declara quien aporta la fila.
+    ///
+    /// Solo puede ser cierto en una fila de PLUGIN: su título y su
+    /// descripción los escribe un manifiesto, y esta es la pantalla donde se
+    /// elige qué código de tercero correr. Un texto enmascarado que viaja sin
+    /// su bandera se lee como fiel.
+    pub hostile: bool,
 }
 
 /// Lo que puede seguir a un prefijo a medias.
@@ -505,17 +512,41 @@ pub struct ExtensionsView {
 /// texto le llega ya corto.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionOutputView {
-    /// De qué extensión, ya enmascarado (su nombre, no su id).
-    pub plugin: String,
-    /// Qué comando, ya enmascarado (su título, no su id).
-    pub command: String,
-    /// Lo que imprimió, ya enmascarado y acotado. Vacío = no imprimió nada,
-    /// que se DICE: un panel en blanco se lee como que no llegó a correr.
-    pub text: String,
-    /// Alguna de las tres cadenas se pinta distinta de lo que es.
-    pub hostile: bool,
+    /// De qué extensión: su nombre ya enmascarado, con su bandera.
+    pub plugin: MaskedTextView,
+    /// Su id reverse-DNS, que el core SÍ valida.
+    ///
+    /// Va con el nombre porque el nombre no identifica: dos extensiones
+    /// pueden llamarse igual, y la que dice quién imprimió esto es esta.
+    pub plugin_id: String,
+    /// Qué comando: su título ya enmascarado, con su bandera.
+    pub command: MaskedTextView,
+    /// Lo que imprimió, LÍNEA A LÍNEA, cada una enmascarada y acotada.
+    ///
+    /// Por líneas y no como una cadena: un salto de línea es un control C0,
+    /// o sea un peligro de terminal, así que enmascarar la salida entera
+    /// marcaba como hostil CUALQUIER salida de más de una línea — una
+    /// bandera que es cierta para todo lo honesto no dice nada. Vacío = no
+    /// imprimió nada, que se DICE: un panel en blanco se lee como que no
+    /// llegó a correr.
+    pub lines: Vec<String>,
+    /// Alguna línea se pinta distinta de lo que el plugin imprimió.
+    pub text_hostile: bool,
     /// La salida no cabía entera y se cortó.
     pub truncated: bool,
+}
+
+/// Una cadena de tercero lista para pintar, con su bandera al lado.
+///
+/// Las dos juntas y no en campos hermanos: una bandera suelta acaba
+/// describiendo a la cadena de al lado —que es exactamente lo que pasó aquí,
+/// donde una sola bandera para tres cadenas la calculaba una de ellas.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MaskedTextView {
+    /// Lo que se pinta, ya enmascarado y acotado.
+    pub text: String,
+    /// Lo pintado DIFIERE de lo que su autor escribió.
+    pub hostile: bool,
 }
 
 /// Un comando que aporta una extensión.

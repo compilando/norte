@@ -215,6 +215,7 @@ mod palette_tests {
             text: key.to_owned(),
             desc: desc.to_owned(),
             chord: chord.to_owned(),
+            hostile: false,
         }
     }
 

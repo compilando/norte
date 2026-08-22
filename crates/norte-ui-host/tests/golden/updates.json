@@ -399,7 +399,8 @@
           "text": "pane.sort-name",
           "desc": "Ordenar por nombre",
           "chord": "ctrl+f3",
-          "enabled": true
+          "enabled": true,
+          "hostile": false
         }
       ],
       "cursor": 0,
@@ -749,10 +750,20 @@
       ]
     },
     "plugin_output": {
-      "plugin": "ACME FTP",
-      "command": "Saludar",
-      "text": "hola�mundo",
-      "hostile": true,
+      "plugin": {
+        "text": "ACME�FTP",
+        "hostile": true
+      },
+      "plugin_id": "acme.ftp",
+      "command": {
+        "text": "Saludar",
+        "hostile": false
+      },
+      "lines": [
+        "hola",
+        "mundo"
+      ],
+      "text_hostile": false,
       "truncated": true
     },
     "settings": {

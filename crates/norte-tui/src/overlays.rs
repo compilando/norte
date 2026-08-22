@@ -579,6 +579,7 @@ mod palette_help_tests {
             text: key.to_owned(),
             desc: "descripción de prueba".to_owned(),
             chord: "—".to_owned(),
+            hostile: false,
         }]));
         app
     }

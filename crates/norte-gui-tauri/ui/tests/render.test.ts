@@ -1073,8 +1073,20 @@ describe("la paleta", () => {
     v.palette = {
       query: "cur",
       rows: [
-        { text: "cursor.up", desc: "subir el cursor", chord: "Up", enabled: true },
-        { text: "cursor.down", desc: "bajar el cursor", chord: "Down", enabled: true },
+        {
+          text: "cursor.up",
+          desc: "subir el cursor",
+          chord: "Up",
+          enabled: true,
+          hostile: false,
+        },
+        {
+          text: "cursor.down",
+          desc: "bajar el cursor",
+          chord: "Down",
+          enabled: true,
+          hostile: false,
+        },
       ],
       cursor,
       total: 24,

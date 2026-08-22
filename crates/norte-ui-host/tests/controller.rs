@@ -12151,10 +12151,16 @@ async fn aprobar_pregunta_y_enumera_las_capabilities() {
     let d = dialogos.last().expect("la pregunta");
     assert_eq!(d.title_key, "modal-extension-approve-title");
     assert_eq!(d.body.len(), 3, "el nombre y las DOS capabilities: {d:?}");
+    assert!(!d.body[1].hostile, "la capability limpia no se marca");
     assert!(
-        d.body.iter().any(|l| l.hostile),
-        "la capability con el override bidi se marca: {:?}",
-        d.body
+        d.body[2].hostile,
+        "y la del override bidi SÍ: cuál difiere es la pregunta entera"
+    );
+    // Y quién la pide, por el id que el core valida: dos extensiones pueden
+    // llamarse igual, y el nombre lo escribe el manifiesto.
+    assert_eq!(
+        d.subject.as_ref().map(|s| s.text.as_str()),
+        Some("acme.ftp")
     );
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     assert!(
@@ -12247,16 +12253,24 @@ async fn el_editor_de_config_cicla_teclea_y_valida() {
     let _ = extensiones_cargadas(&mut sub).await;
     h.dispatch(tecla("Enter")).await.expect("host vivo");
     let ficha = ficha_abierta(&mut sub).await;
-    assert_eq!(ficha.config.len(), 3);
+    assert_eq!(ficha.config.len(), 4);
     assert!(
-        !ficha.config[2].editable,
+        !ficha.config[3].editable,
         "un `kind` que este build no conoce es de solo lectura: {:?}",
-        ficha.config[2]
+        ficha.config[3]
     );
 
-    // La primera clave es el `bool`: `Enter` la cicla y la manda.
+    // La primera clave es el `bool`: `Enter` la cicla y la manda. Se ESPERA
+    // a que llegue en vez de dormir un plazo fijo: bajo carga, cuarenta
+    // milisegundos no son una garantía, y un test que afirma presencia
+    // contra el reloj es rojo intermitente.
     h.dispatch(tecla("Enter")).await.expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    for _ in 0..40 {
+        if !backend.escrituras.lock().expect("escrituras").is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
     assert_eq!(
         backend.escrituras.lock().expect("escrituras").as_slice(),
         [(
@@ -12265,26 +12279,33 @@ async fn el_editor_de_config_cicla_teclea_y_valida() {
             "true".to_owned()
         )]
     );
+    // Y la pantalla se mueve con él: el operando y lo que se pinta son dos
+    // mitades de la misma fila, y actualizar solo una dejaba la celda con el
+    // valor viejo — el siguiente `Enter` lo devolvía a donde estaba.
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let ficha = siguiente_foto(&mut sub)
+        .await
+        .extensions
+        .expect("sigue abierto")
+        .detail
+        .expect("con ficha");
+    assert_eq!(ficha.config[0].value, "true");
 
     // La segunda es el `int`: `Enter` abre el buffer y NO escribe nada.
     h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
     h.dispatch(tecla("Enter")).await.expect("host vivo");
-    for _ in 0..20 {
-        let Some(v) = siguiente_extensiones(&mut sub).await else {
-            continue;
-        };
-        if v.detail.as_ref().is_some_and(|d| d.editing.is_some()) {
-            break;
-        }
-    }
+    esperar_buffer(&h, &mut sub).await;
     // Un valor fuera de las cotas se rehúsa AQUÍ y no viaja: el daemon
     // vuelve a validar, pero decirlo antes ahorra el viaje y dice la cota.
     for c in ["Backspace", "Backspace", "9", "9", "9"] {
         h.dispatch(tecla(c)).await.expect("host vivo");
     }
     let ack = h.dispatch(tecla("Enter")).await.expect("host vivo");
+    // El ACUSE lleva una clave sin variables —nadie sustituye `{ $min }` en
+    // ese camino—; las cotas van en el aviso, que sí se traduce con ellas.
     assert!(
-        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-out-of-range"),
+        matches!(&ack, ActionAck::Unavailable { reason_key }
+            if reason_key == "host-value-rejected"),
         "{ack:?}"
     );
     tokio::time::sleep(std::time::Duration::from_millis(40)).await;
@@ -12293,17 +12314,23 @@ async fn el_editor_de_config_cicla_teclea_y_valida() {
         1,
         "el valor fuera de rango no se mandó"
     );
+    // Y el buffer SIGUE abierto: un commit rechazado no cierra el campo, que
+    // es lo que permite corregir sin volver a teclearlo entero.
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert!(
+        siguiente_foto(&mut sub)
+            .await
+            .extensions
+            .expect("sigue abierto")
+            .detail
+            .expect("con ficha")
+            .editing
+            .is_some()
+    );
 
     // Y uno dentro sí.
     h.dispatch(tecla("Enter")).await.expect("host vivo");
-    for _ in 0..20 {
-        let Some(v) = siguiente_extensiones(&mut sub).await else {
-            continue;
-        };
-        if v.detail.as_ref().is_some_and(|d| d.editing.is_some()) {
-            break;
-        }
-    }
+    esperar_buffer(&h, &mut sub).await;
     for c in ["Backspace", "Backspace", "Backspace", "4", "2"] {
         h.dispatch(tecla(c)).await.expect("host vivo");
     }
@@ -12335,19 +12362,13 @@ async fn tecleando_un_valor_las_letras_son_letras() {
     let _ = extensiones_cargadas(&mut sub).await;
     h.dispatch(tecla("Enter")).await.expect("host vivo");
     let _ = ficha_abierta(&mut sub).await;
-    // A la tercera clave, que es `string`.
-    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
-    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
-    h.dispatch(tecla("ArrowUp")).await.expect("host vivo");
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
-    for _ in 0..20 {
-        let Some(v) = siguiente_extensiones(&mut sub).await else {
-            continue;
-        };
-        if v.detail.as_ref().is_some_and(|d| d.editing.is_some()) {
-            break;
-        }
+    // A la clave `string`, que es la TERCERA (`verbose`, `timeout`,
+    // `greeting`, y la cuarta es la del `kind` desconocido).
+    for _ in 0..2 {
+        h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
     }
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    esperar_buffer(&h, &mut sub).await;
     h.dispatch(tecla("a")).await.expect("host vivo");
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     assert!(
@@ -12407,6 +12428,16 @@ fn esquema_de_prueba() -> Vec<norte_proto::methods::PluginConfigKeyWire> {
             values: Vec::new(),
             description: None,
             value: "30".to_owned(),
+        },
+        norte_proto::methods::PluginConfigKeyWire {
+            key: "greeting".to_owned(),
+            kind: "string".to_owned(),
+            default: "hola".to_owned(),
+            min: None,
+            max: None,
+            values: Vec::new(),
+            description: None,
+            value: "hola".to_owned(),
         },
         norte_proto::methods::PluginConfigKeyWire {
             key: "future".to_owned(),
@@ -12494,10 +12525,14 @@ async fn la_paleta_ejecuta_un_comando_de_extension_y_ensena_su_salida() {
             backend.ejecutados.lock().expect("ejecutados").as_slice(),
             [("acme.ftp".to_owned(), "greet".to_owned())]
         );
-        assert!(salida.hostile, "el override bidi se dice: {salida:?}");
-        assert!(!salida.text.contains('\u{202e}'), "y se enmascara");
+        assert!(salida.text_hostile, "el override bidi se dice: {salida:?}");
+        assert!(
+            !salida.lines.iter().any(|l| l.contains('\u{202e}')),
+            "y se enmascara"
+        );
         assert!(salida.truncated, "y que se cortó también: {salida:?}");
-        assert_eq!(salida.command, "Saludar");
+        assert_eq!(salida.command.text, "Saludar");
+        assert_eq!(salida.plugin_id, "acme.ftp", "y quién lo imprimió, por id");
 
         // Y `Escape` la cierra sin tocar nada de debajo.
         h.dispatch(tecla("Escape")).await.expect("host vivo");
@@ -12540,5 +12575,147 @@ async fn en_solo_lectura_no_se_ejecuta_un_comando_de_extension() {
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     // Y el catálogo ni se pidió: la puerta se cierra antes del viaje.
+    assert_eq!(
+        backend
+            .catalogos_pedidos
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "una ventana sin efectos no va a preguntar por comandos que no va a lanzar"
+    );
     assert!(backend.ejecutados.lock().expect("ejecutados").is_empty());
+}
+
+/// Espera a que el buffer de edición de la ficha esté abierto.
+///
+/// Por RESYNC y no consumiendo parches a ciegas: un bucle que lee N
+/// actualizaciones se queda sin ellas en cuanto el test manda una foto por
+/// otro motivo, y entonces falla por plazo diciendo algo que no es.
+async fn esperar_buffer(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) {
+    for _ in 0..40 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let abierto = siguiente_foto(sub)
+            .await
+            .extensions
+            .and_then(|e| e.detail)
+            .is_some_and(|d| d.editing.is_some());
+        if abierto {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("el buffer de edición nunca se abrió");
+}
+
+/// Un cambio de gobierno que FALLA vuelve a pedir el catálogo.
+///
+/// El fallo incluye el plazo de ESTE lado, que no es «no pasó» sino «no se
+/// sabe»: el daemon pudo conceder las capabilities y tardar en contestar.
+/// Dejar la fila diciendo «sin aprobar» es la misma mentira que el optimismo
+/// local, en pesimista — y lo único que resuelve un desconocido es preguntar.
+#[tokio::test]
+async fn un_gobierno_fallido_vuelve_a_preguntar_al_core() {
+    let mut ext = extension("acme.ftp", "FTP de ACME", false);
+    ext.approved = false;
+    ext.enabled = false;
+    ext.capabilities = vec!["fs-read".to_owned()];
+    let backend = arbol_con_plugins(vec![ext], &[]);
+    *backend.error_al_gobernar.lock().expect("gobierno") =
+        Some(norte_proto::Error::ProviderUnavailable { retryable: true });
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+    let pedidos = backend
+        .catalogos_pedidos
+        .load(std::sync::atomic::Ordering::SeqCst);
+
+    h.dispatch(tecla("a")).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let d = dialogos.last().expect("la pregunta");
+    h.dispatch(UiAction::Dialog {
+        id: d.id,
+        choice: "approve".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    for _ in 0..40 {
+        let ahora = backend
+            .catalogos_pedidos
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if ahora > pedidos {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("un gobierno fallido dejó la pantalla afirmando lo que no sabe");
+}
+
+/// Con la salida de un comando en pantalla, las teclas son SUYAS.
+///
+/// Pinta a pantalla completa, así que un modal que dejara pasar la tecla que
+/// no entiende no es un modal: `Enter` sobre ese panel llegaba a lo de
+/// debajo, donde podía haber una confirmación esperando un sí que el lector
+/// no ve — y el momento lo elige el PLUGIN, que decide cuándo contesta.
+#[tokio::test]
+async fn la_salida_de_un_comando_no_deja_pasar_teclas() {
+    let mut ext = extension("acme.ftp", "FTP de ACME", false);
+    ext.commands = vec![norte_proto::methods::PluginCommandInfo {
+        id: "greet".to_owned(),
+        title: "Saludar".to_owned(),
+    }];
+    let backend = arbol_con_plugins(vec![ext], &[]);
+    *backend.salida_de_comando.lock().expect("salida") = Some(Ok("hola".to_owned()));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let antes = siguiente_foto_tras_resync(&h, &mut sub).await;
+    let cursor_antes = listado(&antes).cursor;
+
+    h.dispatch(tecla_mod("p", true, false))
+        .await
+        .expect("host vivo");
+    for _ in 0..40 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let p = siguiente_foto(&mut sub).await.palette.expect("abierta");
+        if p.rows.iter().any(|r| r.text.contains("Saludar")) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    for c in "Saludar".chars() {
+        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+    }
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    for _ in 0..40 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if siguiente_foto(&mut sub).await.plugin_output.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    // Una tecla de navegación con el panel abierto NO mueve lo de debajo.
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    let durante = siguiente_foto_tras_resync(&h, &mut sub).await;
+    assert!(durante.plugin_output.is_some(), "el panel sigue");
+    assert_eq!(
+        listado(&durante).cursor,
+        cursor_antes,
+        "el cursor del listado no se movió bajo el panel"
+    );
+
+    // Y `Enter` lo CIERRA, que es el reflejo de quien acaba de leerlo.
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    let despues = siguiente_foto_tras_resync(&h, &mut sub).await;
+    assert!(despues.plugin_output.is_none());
+    assert_eq!(listado(&despues).cursor, cursor_antes);
+}
+
+/// Pide una foto y la espera.
+async fn siguiente_foto_tras_resync(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+) -> norte_ui_host::ViewSnapshot {
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    siguiente_foto(sub).await
 }

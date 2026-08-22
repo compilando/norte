@@ -30,6 +30,11 @@ use serde::{Deserialize, Serialize};
 ///   hará DE VERDAD —los dos ya traducidos, porque el catálogo no sustituye
 ///   variables—, si hay un nombre alterado FUERA de la ventana, y si el
 ///   lector ha recorrido el plan entero. Y se puede contestar con el ratón.
+/// - **32**: lo que las revisiones de la 6.4 cambiaron de forma: la salida de
+///   un comando viaja por LÍNEAS y con una bandera por cadena —quién, qué y lo
+///   impreso, cada uno con la suya, más el id reverse-DNS de la extensión—, y
+///   una fila de la paleta dice si lo pintado difiere de lo que declara quien
+///   la aporta.
 /// - **31**: el gestor de extensiones GOBIERNA: la ficha lleva el editor de
 ///   `[config]` (qué clave está elegida, qué se está tecleando y qué claves
 ///   este build sabe editar), los comandos que aporta la extensión, y la
@@ -112,7 +117,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 31;
+pub const BRIDGE_VERSION: u32 = 32;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

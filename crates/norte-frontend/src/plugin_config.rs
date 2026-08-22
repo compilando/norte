@@ -66,6 +66,40 @@ pub struct ConfigKeyRow {
     pub display: ConfigKeyDisplay,
 }
 
+/// The `kind`s this build knows how to edit — the SAME closed set
+/// [`PluginConfigState::activate`] dispatches on.
+///
+/// It lives here so a frontend that paints "read-only" and the function that
+/// decides read-only cannot drift: a screen that greys out a row `activate`
+/// would happily cycle tells its reader the write failed.
+pub const EDITABLE_KINDS: &[&str] = &["bool", "enum", "string", "int"];
+
+impl ConfigKeyRow {
+    /// `true` if this build knows how to edit this key's `kind`.
+    ///
+    /// ```
+    /// use norte_frontend::plugin_config::sanitize_config_keys;
+    /// use norte_proto::methods::PluginConfigKeyWire;
+    ///
+    /// let rows = sanitize_config_keys(&[PluginConfigKeyWire {
+    ///     key: "future".to_owned(),
+    ///     kind: "duration".to_owned(),
+    ///     default: "1s".to_owned(),
+    ///     min: None,
+    ///     max: None,
+    ///     values: Vec::new(),
+    ///     description: None,
+    ///     value: "1s".to_owned(),
+    /// }]);
+    /// // A kind from a newer peer: read-only, never a panic.
+    /// assert!(!rows[0].is_editable());
+    /// ```
+    #[must_use]
+    pub fn is_editable(&self) -> bool {
+        EDITABLE_KINDS.contains(&self.kind.as_str())
+    }
+}
+
 /// The free-text halves of a [`ConfigKeyRow`], masked and ready to paint.
 ///
 /// Separate from the operands on purpose: a frontend that reaches for
@@ -246,6 +280,9 @@ impl PluginConfigState {
     pub fn activate(&mut self) -> Option<PendingConfigWrite> {
         let row = self.rows.get(self.cursor)?;
         match row.kind.as_str() {
+            // `EDITABLE_KINDS` is the same set, one screen up. If you add an
+            // arm here, add it there: a frontend that greys out a row this
+            // function DOES edit tells its reader the write failed.
             "bool" => {
                 let next = row.value != "true";
                 Some(self.commit_row(next.to_string()))
@@ -316,9 +353,21 @@ impl PluginConfigState {
     fn commit_row(&mut self, value: String) -> PendingConfigWrite {
         let row = &mut self.rows[self.cursor];
         row.value.clone_from(&value);
+        // And the PAINTED half too. They are two halves of one row and only
+        // the operand was being updated, so the cell kept showing the old
+        // value: cycling a `bool` wrote `false`, painted `true`, and the next
+        // Enter wrote `true` again — the daemon flip-flopped and the screen
+        // never moved. The new value can be plugin text (an `enum` value) or
+        // human-typed, so it goes through the same mask as the rest.
+        let (pintable, hostile) = crate::display_name(value.as_bytes());
+        row.display.value.clone_from(&pintable);
+        // The row's flag is about ALL THREE free-text fields, so it can only
+        // grow here: a clean new value does not clear a hostile `default` or
+        // a hostile domain.
+        row.display.hostile |= hostile;
         PendingConfigWrite {
             key: row.key.clone(),
-            display: value.clone(),
+            display: pintable,
             value,
         }
     }
@@ -327,6 +376,56 @@ impl PluginConfigState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ciclar un `bool` mueve las DOS mitades de la fila.
+    ///
+    /// Solo el operando se actualizaba, así que la celda seguía enseñando el
+    /// valor viejo: el segundo Enter lo devolvía a donde estaba, el daemon
+    /// oscilaba y la pantalla no se movía nunca.
+    #[test]
+    fn ciclar_mueve_tambien_lo_que_se_pinta() {
+        let rows = sanitize_config_keys(&[PluginConfigKeyWire {
+            key: "verbose".to_owned(),
+            kind: "bool".to_owned(),
+            default: "false".to_owned(),
+            min: None,
+            max: None,
+            values: Vec::new(),
+            description: None,
+            value: "false".to_owned(),
+        }]);
+        let mut state = PluginConfigState::new(rows);
+        state.activate().expect("un bool cicla");
+        assert_eq!(state.rows()[0].value, "true", "el operando");
+        assert_eq!(state.rows()[0].display.value, "true", "y lo que se pinta");
+    }
+
+    /// `EDITABLE_KINDS` and `activate` are the same set, and this is what
+    /// makes "they must not drift" more than a comment: a `kind` the flag
+    /// calls editable that `activate` refuses (or the other way round) is a
+    /// screen that lies about what it can do.
+    #[test]
+    fn el_conjunto_editable_es_el_que_activate_despacha() {
+        for kind in ["bool", "enum", "string", "int", "duration", ""] {
+            let wire = PluginConfigKeyWire {
+                key: "k".to_owned(),
+                kind: kind.to_owned(),
+                default: "a".to_owned(),
+                min: None,
+                max: None,
+                values: vec!["a".to_owned(), "b".to_owned()],
+                description: None,
+                value: "a".to_owned(),
+            };
+            let rows = sanitize_config_keys(std::slice::from_ref(&wire));
+            let editable = rows[0].is_editable();
+            let mut state = PluginConfigState::new(rows);
+            // `activate` hace ALGO —escribe, o abre el buffer— exactamente
+            // para los `kind` que el flag llama editables.
+            let hizo_algo = state.activate().is_some() || state.is_editing();
+            assert_eq!(editable, hizo_algo, "kind `{kind}`");
+        }
+    }
 
     fn wire(key: &str, kind: &str, default: &str, value: &str) -> PluginConfigKeyWire {
         PluginConfigKeyWire {

@@ -23,7 +23,7 @@
 //! números. Esa lista decía antes que el valor, el defecto y el dominio eran
 //! seguros: no lo son — el manifiesto les acota la longitud y nada más.
 
-use norte_frontend::help_badge::{PLUGIN_NAME_WIRE_CAP, plugin_description, plugin_label};
+use norte_frontend::help_badge::{plugin_description, plugin_label, plugin_label_flagged};
 use norte_frontend::plugin_config::{PendingConfigWrite, PluginConfigState, sanitize_config_keys};
 use norte_frontend::settings::SettingsEditError;
 use norte_i18n::Lang;
@@ -40,7 +40,7 @@ use crate::dto::{
 /// Un daemon hostil puede anunciar los plugins que quiera, y cada fila cuesta
 /// varias cadenas enmascaradas. El tope acota el trabajo y el mensaje; lo que
 /// se deja fuera NO se calla, se dice en la propia vista.
-const MAX_EXTENSIONES: usize = 512;
+pub(crate) const MAX_EXTENSIONES: usize = 512;
 
 /// El gestor abierto.
 pub(crate) struct Extensiones {
@@ -154,9 +154,18 @@ impl Extensiones {
                 }
             })
             .collect();
-        self.cursor = elegida
-            .and_then(|id| self.filas.iter().position(|f| f.id == id))
-            .unwrap_or_else(|| self.cursor.min(self.filas.len().saturating_sub(1)));
+        if let Some(i) = elegida.and_then(|id| self.filas.iter().position(|f| f.id == id)) {
+            self.cursor = i;
+        } else {
+            // La que estaba elegida ya no está —o el catálogo llegó
+            // vacío, que es lo que pasa cuando la petición vence—: el
+            // cursor cae donde puede y la FICHA se cierra. Sin esto, el
+            // detalle seguía describiendo a una extensión mientras el
+            // cursor señalaba a otra, y la siguiente tecla se aplicaba a
+            // la señalada.
+            self.cursor = self.cursor.min(self.filas.len().saturating_sub(1));
+            self.cerrar_ficha();
+        }
     }
 
     /// La fila elegida entera: lo que hace falta para gobernarla.
@@ -273,10 +282,16 @@ impl Extensiones {
         if f.estado.rows().is_empty() {
             return false;
         }
-        if delta < 0 {
-            f.estado.up();
-        } else {
-            f.estado.down();
+        // El modelo compartido mueve de uno en uno y clampa; una página son N
+        // pasos suyos, no un índice calculado aquí — que es cómo se acaba
+        // teniendo dos respuestas a dónde está el cursor.
+        let pasos = delta.unsigned_abs().min(f.estado.rows().len() as u64);
+        for _ in 0..pasos {
+            if delta < 0 {
+                f.estado.up();
+            } else {
+                f.estado.down();
+            }
         }
         true
     }
@@ -396,7 +411,7 @@ impl Ficha {
                         // compartido sabe editar. Sin esto, la pantalla
                         // ofrece `Enter` sobre una clave que no va a cambiar
                         // y el lector concluye que la escritura falló.
-                        editable: matches!(k.kind.as_str(), "bool" | "enum" | "string" | "int"),
+                        editable: k.is_editable(),
                     }
                 })
                 .collect(),
@@ -503,17 +518,11 @@ fn fila_de(p: &norte_proto::methods::PluginInfo) -> ExtensionRowView {
 /// Una cadena que escribió un TERCERO, lista para pintar: enmascarada,
 /// acotada, y con la bandera de si lo pintado difiere de lo que dice.
 ///
-/// `plugin_label` tira la bandera —para una fila de catálogo bastaba— y de
-/// una máscara ya aplicada no se recupera. Donde la decisión ES la cadena
-/// (aprobar una capability), la bandera es parte de la pregunta.
+/// Es `plugin_label` con su bandera —la misma función, no una copia— más el
+/// recorte de pantalla de este host. Donde la decisión ES la cadena (aprobar
+/// una capability), la bandera es parte de la pregunta.
 pub(crate) fn texto_de_tercero(raw: &str) -> (String, bool) {
-    let mut chars = raw.chars();
-    let cabeza: String = chars.by_ref().take(PLUGIN_NAME_WIRE_CAP).collect();
-    let desbordado = chars.next().is_some();
-    let (mut pintable, hostil) = norte_frontend::display_name(cabeza.as_bytes());
-    if desbordado {
-        pintable.push('…');
-    }
+    let (pintable, hostil) = plugin_label_flagged(raw);
     (clamp_display(pintable), hostil)
 }
 

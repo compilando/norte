@@ -186,14 +186,40 @@ pub const PLUGIN_NAME_WIRE_CAP: usize = 120;
 /// ```
 #[must_use]
 pub fn plugin_label(raw: &str) -> String {
+    plugin_label_flagged(raw).0
+}
+
+/// [`plugin_label`] KEEPING the mask flag.
+///
+/// Same cut, same mask; the only difference is that the caller is told
+/// whether what it got differs from what the manifest declared. That matters
+/// where the string IS the decision — the question that asks a human to grant
+/// a plugin's capabilities lists them one per line, and the line that paints
+/// differently from what it says is exactly the one a hostile manifest writes
+/// to slip in among the real ones.
+///
+/// It is the same function and not a copy on purpose: the reasoning above
+/// about WHERE this cut ellipsises has one home, and a second copy would keep
+/// the old policy the day this one is revised.
+///
+/// ```
+/// use norte_frontend::help_badge::plugin_label_flagged;
+///
+/// assert_eq!(plugin_label_flagged("fs-read"), ("fs-read".to_owned(), false));
+/// let (texto, enmascarado) = plugin_label_flagged("net\u{202e}");
+/// assert!(enmascarado, "un override bidi se dice");
+/// assert!(!texto.contains('\u{202e}'));
+/// ```
+#[must_use]
+pub fn plugin_label_flagged(raw: &str) -> (String, bool) {
     let mut chars = raw.chars();
     let head: String = chars.by_ref().take(PLUGIN_NAME_WIRE_CAP).collect();
     let overflowed = chars.next().is_some();
-    let mut out = crate::display_name(head.as_bytes()).0;
+    let (mut out, hostile) = crate::display_name(head.as_bytes());
     if overflowed {
         out.push('…');
     }
-    out
+    (out, hostile)
 }
 
 /// Wire cap on a plugin's `description` (P1 encoding audit F1).

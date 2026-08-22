@@ -51,6 +51,14 @@ pub struct Row {
     /// preset (or, for a plugin command row, always — the palette is its
     /// only entry point).
     pub chord: String,
+    /// `text` or `desc` paints DIFFERENTLY from what the manifest declares.
+    ///
+    /// Always `false` for a built-in row: its text is this project's own
+    /// vocabulary. For a plugin row it is the mask flag `display_name`
+    /// returned — a masked string travelling without its flag reads as
+    /// faithful, and this is the screen where a reader picks which
+    /// third-party code to run.
+    pub hostile: bool,
 }
 
 /// Rows for plugin commands (P1): ONLY approved AND enabled plugins — the
@@ -77,22 +85,23 @@ pub fn plugin_rows(plugins: &[norte_proto::methods::PluginInfo]) -> Vec<Row> {
             // exercised directly in tests/snapshots with raw data, so it
             // stays self-contained (safe by construction) rather than
             // trusting the caller already clamped.
-            let desc = p
+            let (desc, desc_masked) = p
                 .description
                 .as_deref()
                 .map(|d| {
                     let clamped: String = d.chars().take(PLUGIN_DESCRIPTION_WIRE_CAP).collect();
-                    crate::display_name(clamped.as_bytes()).0
+                    crate::display_name(clamped.as_bytes())
                 })
                 .unwrap_or_default();
             let plugin_id = p.id.clone();
             p.commands.iter().map(move |c| {
-                let (title, _) = crate::display_name(c.title.as_bytes());
+                let (title, masked) = crate::display_name(c.title.as_bytes());
                 Row {
                     key: format!("plugin:{plugin_id}:{}", c.id),
                     text: format!("[{}] {title}", t("palette-plugin-prefix")),
                     desc: desc.clone(),
                     chord: "—".to_owned(),
+                    hostile: masked || desc_masked,
                 }
             })
         })
@@ -362,12 +371,14 @@ mod tests {
                 text: "viewer.close".into(),
                 desc: String::new(),
                 chord: "—".into(),
+                hostile: false,
             },
             Row {
                 key: "pane.copy".into(),
                 text: "pane.copy".into(),
                 desc: String::new(),
                 chord: "—".into(),
+                hostile: false,
             },
         ];
         let filtradas = rows_for_context(&rows, false);

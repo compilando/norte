@@ -159,6 +159,8 @@ pub struct Falso {
     >,
     /// El informe que contesta `sync.report`. `None` = `Unsupported`.
     pub informe_de_sync: std::sync::Mutex<Option<norte_proto::methods::SyncReportResult>>,
+    /// Cuántas veces se ha pedido el catálogo de extensiones.
+    pub catalogos_pedidos: std::sync::atomic::AtomicU64,
     /// Los cambios de gobierno pedidos, en orden (`approval:id:true`…).
     pub gobierno: std::sync::Mutex<Vec<String>>,
     /// Con qué falla un cambio de gobierno, si falla.
@@ -383,6 +385,8 @@ impl HostBackend for Falso {
     fn plugin_list(
         &self,
     ) -> BoxFuture<'static, Result<norte_proto::methods::PluginListResult, Error>> {
+        self.catalogos_pedidos
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let plugins = self.plugins.lock().expect("plugins").clone();
         let errores = self
             .errores_de_carga

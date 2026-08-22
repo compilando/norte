@@ -496,16 +496,17 @@
   "palette": {
     "change": "palette",
     "palette": {
-      "cursor": 0,
       "query": "orde",
       "rows": [
         {
-          "chord": "ctrl+f3",
+          "text": "pane.sort-name",
           "desc": "Ordenar por nombre",
+          "chord": "ctrl+f3",
           "enabled": true,
-          "text": "pane.sort-name"
+          "hostile": false
         }
       ],
+      "cursor": 0,
       "total": 42
     }
   },
@@ -528,10 +529,20 @@
   "plugin_output": {
     "change": "plugin_output",
     "output": {
-      "plugin": "ACME FTP",
-      "command": "Saludar",
-      "text": "hola�mundo",
-      "hostile": true,
+      "plugin": {
+        "text": "ACME�FTP",
+        "hostile": true
+      },
+      "plugin_id": "acme.ftp",
+      "command": {
+        "text": "Saludar",
+        "hostile": false
+      },
+      "lines": [
+        "hola",
+        "mundo"
+      ],
+      "text_hostile": false,
       "truncated": true
     }
   },

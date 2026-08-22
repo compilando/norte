@@ -236,6 +236,7 @@ export class Screen {
       fila.setAttribute("role", "option");
       fila.setAttribute("aria-selected", String(palette.cursor === i));
       fila.dataset["enabled"] = String(r.enabled);
+      fila.dataset["hostile"] = String(r.hostile);
       const texto = document.createElement("span");
       texto.className = "palette-text";
       texto.textContent = r.text;
@@ -246,6 +247,12 @@ export class Screen {
       chord.className = "palette-chord";
       chord.textContent = r.chord;
       fila.append(texto, desc, chord);
+      if (r.hostile) {
+        // Solo una fila de PLUGIN puede serlo, y esta es la pantalla donde
+        // se elige qué código de tercero correr: un texto enmascarado que
+        // viaja sin decirlo se lee como fiel.
+        fila.append(badge(this.t("hostile-name")));
+      }
       lista.append(fila);
     }
     if (palette.cursor !== null) {
@@ -1058,27 +1065,43 @@ export class Screen {
     titulo.textContent = this.t("plugin-output-title");
     const quien = document.createElement("p");
     quien.className = "plugin-output-who";
-    quien.dataset["hostile"] = String(output.hostile);
-    // Quién y qué, cada uno en su nodo: unirlos en una frase deja que un
-    // título de tercero con letras RTL reordene el par entero.
+    // Quién y qué, cada uno en su nodo y con SU bandera: unirlos en una
+    // frase deja que un título de tercero con letras RTL reordene el par
+    // entero, y una bandera para los dos acaba describiendo al otro.
     const plugin = document.createElement("span");
     plugin.className = "plugin-output-plugin";
-    plugin.textContent = output.plugin;
+    plugin.dataset["hostile"] = String(output.plugin.hostile);
+    plugin.textContent = output.plugin.text;
     quien.append(plugin);
-    if (output.command !== "") {
+    if (output.plugin.hostile) {
+      quien.append(badge(this.t("hostile-name")));
+    }
+    // El id reverse-DNS, que el core SÍ valida: dos extensiones pueden
+    // llamarse igual y el nombre lo escribe el manifiesto.
+    const ident = document.createElement("span");
+    ident.className = "plugin-output-id";
+    ident.textContent = output.plugin_id;
+    quien.append(ident);
+    if (output.command.text !== "") {
       const cmd = document.createElement("span");
       cmd.className = "plugin-output-command";
-      cmd.textContent = output.command;
+      cmd.dataset["hostile"] = String(output.command.hostile);
+      cmd.textContent = output.command.text;
       quien.append(cmd);
-    }
-    if (output.hostile) {
-      quien.append(badge(this.t("hostile-name")));
+      if (output.command.hostile) {
+        quien.append(badge(this.t("hostile-name")));
+      }
     }
     const cuerpo = document.createElement("pre");
     cuerpo.className = "plugin-output-text";
+    cuerpo.dataset["hostile"] = String(output.text_hostile);
     // Vacío se DICE: un panel en blanco se lee como que no llegó a correr.
-    cuerpo.textContent = output.text === "" ? this.t("plugin-output-empty") : output.text;
+    cuerpo.textContent =
+      output.lines.length === 0 ? this.t("plugin-output-empty") : output.lines.join("\n");
     caja.append(titulo, quien, cuerpo);
+    if (output.text_hostile) {
+      caja.append(badge(this.t("hostile-name")));
+    }
     if (output.truncated) {
       const corte = document.createElement("p");
       corte.className = "plugin-output-truncated";

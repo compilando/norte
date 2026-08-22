@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 31;
+export const BRIDGE_VERSION = 32;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -310,6 +310,10 @@ export interface PaletteRowView {
   desc: string;
   chord: string;
   enabled: boolean;
+  /** Lo pintado DIFIERE de lo que declara quien aporta la fila. Solo puede
+   *  ser cierto en una fila de PLUGIN, y esta es la pantalla donde se elige
+   *  qué código de tercero correr. */
+  hostile: boolean;
 }
 
 export interface PaletteView {
@@ -472,14 +476,26 @@ export interface ExtensionDetailView {
   editing_hostile: boolean;
 }
 
-export interface ExtensionOutputView {
-  /** De qué extensión, ya enmascarado. */
-  plugin: string;
-  /** Qué comando, ya enmascarado. Vacío si no se conocía su título. */
-  command: string;
-  /** Lo que imprimió, ya enmascarado y acotado. */
+/** Una cadena de tercero con su bandera AL LADO: una bandera suelta acaba
+ *  describiendo a la cadena vecina. */
+export interface MaskedTextView {
   text: string;
   hostile: boolean;
+}
+
+export interface ExtensionOutputView {
+  /** De qué extensión: su nombre, ya enmascarado, con su bandera. */
+  plugin: MaskedTextView;
+  /** Su id reverse-DNS, que el core SÍ valida: el nombre no identifica. */
+  plugin_id: string;
+  /** Qué comando. `text` vacío si no se conocía su título. */
+  command: MaskedTextView;
+  /** Lo que imprimió, LÍNEA A LÍNEA, cada una enmascarada y acotada: un
+   *  salto de línea es un control C0, así que enmascarar la salida entera
+   *  marcaba como hostil cualquier salida de más de una línea. */
+  lines: string[];
+  /** Alguna línea se pinta distinta de lo que el plugin imprimió. */
+  text_hostile: boolean;
   /** No cabía entera y se cortó. Viaja porque el receptor no puede
    *  deducirlo: el texto le llega ya corto. */
   truncated: boolean;

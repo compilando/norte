@@ -124,7 +124,7 @@ pub(crate) fn draw_plugin_config_panel(
         for (i, row) in rows.iter().enumerate() {
             let selected = i == panel.state.cursor();
             let cursor = if selected { ">" } else { " " };
-            let mut line = Line::raw(format!("{cursor} {}: {}", row.key, row.value));
+            let mut line = Line::raw(format!("{cursor} {}: {}", row.key, row.display.value));
             if selected {
                 line = line.style(theme.role(Role::Selection));
             }
