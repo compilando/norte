@@ -219,6 +219,22 @@ independently through `PROTOCOL_VERSION`.
   A step's and a failure's anchor is SAID, not left in an attribute: staying
   quiet about "on either side" where an unqualified path means "on the source"
   asserts the source.
+- **The window can undo everything an agent session did** (bridge **33**,
+  closes #276). `app.agents` lists the agent sessions THIS window has seen ask
+  for permission — the only thing in the whole protocol that names one is the
+  approval request an agent triggers, so that is what the host records, panel
+  open or not, and whether or not the approval was granted. The screen says
+  that is what the list is: an empty one without that sentence reads as "no
+  agent has touched anything", which is a claim this window cannot make. `u`
+  asks first, naming the scope — it reverts ALL of that session's operations,
+  and whatever cannot be reverted is named in the report that already existed.
+  A session id is an OPAQUE daemon key: it paints masked and flagged, and what
+  travels back is the raw one. The row separates "asked N times" from
+  "approved M from here", which are not the same number once another window
+  answered, or the human denied, or it expired. What this buys over typing the
+  id — which is what phase 5 refused to build — is that the operand is CHOSEN:
+  a typed session id can be the wrong one, and undoing the wrong session undoes
+  somebody else's work.
 - **The window governs extensions** (bridge **31**). Approve and revoke a
   plugin's capabilities, enable and disable it, edit its `[config]` keys, and
   run the commands it contributes from the palette. Three things are not

@@ -1993,9 +1993,25 @@ by TUI/GPUI and a dedicated security review.
 > many commands there are), **#282** (a grant binds to the id, not to the
 > capabilities that were read — needs `expected_digest` on the wire).
 >
-> Still open in this task: **#276**, the gesture that launches
-> `policy.undo_session`, which needs a surface where an agent session is a
-> nameable, selectable thing.
+> **Second half DONE 2026-08-22** (bridge **32 → 33**), which closes **#276**:
+> `app.agents` lists the agent sessions this window has seen ask for
+> permission, and `u` on one launches `policy.undo_session` after a question
+> that names the scope.
+>
+> The issue said this needed "a surface where an agent session is a nameable,
+> selectable thing", and the answer turned out not to need new protocol: the
+> only thing that names an agent anywhere on the wire is the approval request
+> it triggers, so the host records those as they arrive — panel open or not,
+> granted or denied, because what the session ASKED for was seen either way.
+> The screen states what the list is, since it is emphatically not the
+> system's roster of agents; and what it buys over typing the id (which task
+> 5.3 refused to build) is that the operand is CHOSEN. A typed session id can
+> be the wrong one, and undoing the wrong session undoes somebody else's work.
+>
+> `app.agents` goes in the SHARED catalogue rather than only here: the command
+> vocabulary is one, a preset may bind it, help documents it, and the TUI —
+> which does not implement it — says so with the same sentence it uses for
+> every other command it lacks.
 
 - approve/revoke and enable/disable;
 - command execution and bounded output;
