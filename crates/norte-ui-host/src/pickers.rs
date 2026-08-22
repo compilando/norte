@@ -57,7 +57,15 @@ impl HostTheme {
             unsupported_effects: self
                 .effects
                 .iter()
-                .map(|e| clamp_display(norte_frontend::display_name(e.as_bytes()).0))
+                .map(|e| {
+                    // La clave sale del fichero de tema: se enmascara, y se
+                    // DICE que se enmascaró (#266).
+                    let (pintable, hostil) = norte_frontend::display_name(e.as_bytes());
+                    crate::dto::ThemeEffectView {
+                        key: clamp_display(pintable),
+                        hostile: hostil,
+                    }
+                })
                 .collect(),
         }
     }

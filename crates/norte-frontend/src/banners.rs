@@ -21,6 +21,10 @@ pub const DEGRADED_MAX: usize = 32;
 /// a todo lo demás.
 const HOST_MAX: usize = 48;
 
+/// Lo mismo para el esquema. Siete letras son un scheme de verdad; el tope
+/// existe porque el wire puede mandar cualquier cosa.
+const SCHEME_MAX: usize = 16;
+
 /// Anota una degradación en la colección, UNA por SESIÓN.
 ///
 /// Y una sesión es `(scheme, host)`, no `scheme`. Deduplicar por el scheme a
@@ -51,44 +55,66 @@ pub fn note_degraded(
 }
 
 /// El aviso persistente de conexiones en claro, o `None` si no hay ninguna.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DegradedBanner {
+    /// La frase, ya traducida, SIN nada que venga del wire dentro.
+    pub text: String,
+    /// El esquema, enmascarado.
+    pub scheme: String,
+    /// El host, enmascarado y acortado.
+    pub host: String,
+    /// Lo pintado difiere de lo que hay, en el esquema o en el host.
+    pub hostile: bool,
+}
+
+/// Compone el aviso: la frase por un lado y la conexión por otro.
 ///
-/// Siempre NOMBRA una conexión —la más reciente— y añade cuántas más hay.
-/// Un recuento pelado («2 conexiones en texto plano») pierde la identidad de
+/// Siempre NOMBRA una conexión —la más reciente— y dice cuántas más hay. Un
+/// recuento pelado («2 conexiones en texto plano») pierde la identidad de
 /// todas, y «¿cuál?» es la única pregunta que este indicador existe para
 /// contestar.
+///
+/// **La conexión NO se interpola en la frase**, y eso no es estilo. Montar
+/// `{scheme}://{host}` dentro del texto convierte a un host como
+/// `banco.example@malo.example` —que `Authority::new` acepta, y que no lleva
+/// ni un carácter que se enmascare— en algo que se lee como userinfo de un
+/// host legítimo, en el indicador donde más valor tiene mentir. Cada parte en
+/// su campo, y quien pinte que las separe.
 ///
 /// El idioma va como PARÁMETRO y no se lee del global: la ventana gráfica
 /// tiene uno por instancia, y un aviso de seguridad en el idioma de otra
 /// ventana es un aviso que no se lee.
 ///
-/// Scheme y host se enmascaran y el host se acorta: los dos son cadenas del
-/// wire, y un host de caracteres de control o de anulaciones bidi es
-/// exactamente lo que se le manda a un indicador de seguridad.
+/// Scheme y host se enmascaran y el host se acorta; la bandera dice que se
+/// hizo, porque lo que se enmascara se dice.
 #[must_use]
 pub fn connection_banner(
     lang: norte_i18n::Lang,
     degraded: &std::collections::VecDeque<ConnectionDegraded>,
-) -> Option<String> {
+) -> Option<DegradedBanner> {
     let last = degraded.back()?;
-    let scheme = crate::display_name(last.scheme.as_bytes()).0;
-    let host = crate::middle_ellipsis(&crate::display_name(last.host.as_bytes()).0, HOST_MAX);
+    let (scheme, scheme_hostil) = crate::display_name(last.scheme.as_bytes());
+    let (host_pintable, host_hostil) = crate::display_name(last.host.as_bytes());
+    // El scheme también se acota: el techo estaba solo en el host, y un
+    // scheme de sesenta kilobytes echa de la barra a todo lo demás.
+    let scheme = crate::middle_ellipsis(&scheme, SCHEME_MAX);
+    let host = crate::middle_ellipsis(&host_pintable, HOST_MAX);
     let others = degraded.len() - 1;
-    if others == 0 {
-        return Some(norte_i18n::ta_in(
+    let text = if others == 0 {
+        norte_i18n::t_in(lang, "status-connection-degraded")
+    } else {
+        norte_i18n::ta_in(
             lang,
-            "status-connection-degraded",
-            &[("scheme", &scheme), ("host", &host)],
-        ));
-    }
-    Some(norte_i18n::ta_in(
-        lang,
-        "status-connections-degraded",
-        &[
-            ("scheme", &scheme),
-            ("host", &host),
-            ("n", &others.to_string()),
-        ],
-    ))
+            "status-connections-degraded",
+            &[("n", &others.to_string())],
+        )
+    };
+    Some(DegradedBanner {
+        text,
+        scheme,
+        host,
+        hostile: scheme_hostil || host_hostil,
+    })
 }
 
 #[cfg(test)]
@@ -113,7 +139,7 @@ mod tests {
         note_degraded(&mut d, degradacion("FTP", "UNO.example"));
         assert_eq!(d.len(), 1, "la caja del wire no hace dos sesiones");
         let aviso = connection_banner(norte_i18n::active(), &d).expect("hay aviso");
-        assert!(aviso.contains("UNO.example"), "pinta los bytes del último: {aviso}");
+        assert_eq!(aviso.host, "UNO.example", "pinta los bytes del último");
     }
 
     /// Dos HOSTS del mismo scheme son dos sesiones: el segundo no puede
@@ -126,10 +152,8 @@ mod tests {
         note_degraded(&mut d, degradacion("ftp", "otro.example"));
         assert_eq!(d.len(), 2);
         let aviso = connection_banner(norte_i18n::active(), &d).expect("hay aviso");
-        assert!(
-            aviso.contains("otro.example") && aviso.contains('1'),
-            "nombra una y cuenta la otra: {aviso}"
-        );
+        assert_eq!(aviso.host, "otro.example");
+        assert!(aviso.text.contains('1'), "y cuenta la otra: {}", aviso.text);
     }
 
     /// Con varias, se nombra una Y se dice cuántas más hay.
@@ -139,10 +163,8 @@ mod tests {
         note_degraded(&mut d, degradacion("ftp", "uno.example"));
         note_degraded(&mut d, degradacion("sftp", "dos.example"));
         let aviso = connection_banner(norte_i18n::active(), &d).expect("hay aviso");
-        assert!(
-            aviso.contains("dos.example") && aviso.contains('1'),
-            "{aviso}"
-        );
+        assert_eq!(aviso.host, "dos.example");
+        assert!(aviso.text.contains('1'), "{}", aviso.text);
     }
 
     /// Un host con caracteres de control NO llega crudo a la barra: es una
@@ -153,9 +175,10 @@ mod tests {
         note_degraded(&mut d, degradacion("ftp", "ma\u{7}lo\u{202e}.example"));
         let aviso = connection_banner(norte_i18n::active(), &d).expect("hay aviso");
         assert!(
-            !aviso.contains('\u{7}') && !aviso.contains('\u{202e}'),
+            !aviso.host.contains('\u{7}') && !aviso.host.contains('\u{202e}'),
             "{aviso:?}"
         );
+        assert!(aviso.hostile, "y se DICE que se enmascaró: {aviso:?}");
     }
 
     /// Sin degradaciones no hay aviso.

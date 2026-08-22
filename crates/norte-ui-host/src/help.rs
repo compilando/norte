@@ -458,11 +458,18 @@ fn hoja_de_teclado(listado: &Effective, visor: &Effective, lang: Lang) -> Vec<He
     ] {
         let filas: Vec<HelpKeyRowView> = sheet(&[(screen, eff.clone())])
             .into_iter()
-            .map(|row| HelpKeyRowView {
-                chord: clamp_display(row.chord),
-                label: clamp_display(norte_frontend::whichkey::command_label(&row.command, lang)),
-                enabled: row.avail == Availability::Here,
-                reason: clamp_display(short_unavailable_message(row.avail, lang)),
+            .map(|row| {
+                // La etiqueta puede venir de un `keymap.toml` del usuario:
+                // se enmascara, y se dice que se enmascaró (#266).
+                let etiqueta = norte_frontend::whichkey::command_label(&row.command, lang);
+                let (pintable, hostil) = norte_frontend::display_name(etiqueta.as_bytes());
+                HelpKeyRowView {
+                    chord: clamp_display(row.chord),
+                    label: clamp_display(pintable),
+                    label_hostile: hostil,
+                    enabled: row.avail == Availability::Here,
+                    reason: clamp_display(short_unavailable_message(row.avail, lang)),
+                }
             })
             .collect();
         if filas.is_empty() {

@@ -2591,6 +2591,9 @@ impl Estado {
                 id,
                 title_key: "modal-search-title".to_owned(),
                 destination: None,
+                subject: None,
+                asker: None,
+                deadline: None,
                 body: vec![donde],
                 overflow_note: String::new(),
                 choices: vec![
@@ -3100,6 +3103,15 @@ impl Estado {
 
         let p = self.selector_disposicion.as_ref()?;
         let actual = p.current();
+        // El diagnóstico del parser puede CITAR el fichero del usuario: entra
+        // por la misma puerta que el resto, y con su bandera (#266) — lo que
+        // se enmascara se dice.
+        let diagnostico = actual
+            .and_then(|r| r.problem.clone())
+            .map_or_else(
+                || (String::new(), false),
+                |p| norte_frontend::display_name(p.as_bytes()),
+            );
         Some(crate::dto::LayoutPickerView {
             title: clamp_display(norte_i18n::t_in(self.lang, "layout-picker-title")),
             rows: p
@@ -3126,13 +3138,8 @@ impl Estado {
                 .map_or_else(Vec::new, |t| {
                     norte_frontend::layout_picker::preview(t, MINIATURA.0, MINIATURA.1, &self.kinds)
                 }),
-            problem: actual
-                .and_then(|r| r.problem.clone())
-                .map_or_else(String::new, |p| {
-                    // El diagnóstico del parser puede citar el fichero del
-                    // usuario: entra por la misma puerta que el resto.
-                    clamp_display(norte_frontend::display_name(p.as_bytes()).0)
-                }),
+            problem: clamp_display(diagnostico.0),
+            problem_hostile: diagnostico.1,
         })
     }
 
@@ -4356,19 +4363,29 @@ impl Estado {
     /// Elegir uno solo escondería los otros para siempre, que es justo lo
     /// que el TUI ya decidió no hacer.
     fn cambio_de_banners(&mut self) -> ViewChange {
+        let frase = |clave: &str| crate::dto::BannerView {
+            text: clamp_display(norte_i18n::t_in(self.lang, clave)),
+            subject: None,
+        };
         let mut banners = Vec::new();
         if self.journal_rehusado {
-            banners.push(clamp_display(norte_i18n::t_in(
-                self.lang,
-                "status-journal-refused",
-            )));
+            banners.push(frase("status-journal-refused"));
         }
         if let Some(clave) = self.aviso_de_daemon {
-            banners.push(clamp_display(norte_i18n::t_in(self.lang, clave)));
+            banners.push(frase(clave));
         }
         if let Some(aviso) = norte_frontend::banners::connection_banner(self.lang, &self.degradadas)
         {
-            banners.push(clamp_display(aviso));
+            // La conexión va en su propio campo, jamás dentro de la frase:
+            // ver el rustdoc de `connection_banner`.
+            banners.push(crate::dto::BannerView {
+                text: clamp_display(aviso.text),
+                subject: Some(crate::dto::BannerSubjectView {
+                    scheme: clamp_display(aviso.scheme),
+                    host: clamp_display(aviso.host),
+                    hostile: aviso.hostile,
+                }),
+            });
         }
         self.status.banners = banners;
         ViewChange::Status(self.status.clone())
@@ -5304,6 +5321,9 @@ impl Estado {
             id,
             title_key: "modal-ai-rename".to_owned(),
             destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
             body: vec![Self::linea_de_ruta(&dir)],
             overflow_note: String::new(),
             choices: vec![
@@ -5847,6 +5867,9 @@ impl Estado {
             title_key: "modal-rename-title".to_owned(),
             // Un rename no va a ninguna parte: se queda donde está.
             destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
             body: vec![Self::linea_de_ruta(&from)],
             overflow_note: String::new(),
             choices: vec![
@@ -6036,6 +6059,9 @@ impl Estado {
             }
             .to_owned(),
             destination: Some(destino_linea),
+            subject: None,
+            asker: None,
+            deadline: None,
             body: cuerpo,
             overflow_note: nota,
             choices: vec![
@@ -6120,6 +6146,9 @@ impl Estado {
             .to_owned(),
             // Un borrado no va a ninguna parte.
             destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
             body: cuerpo,
             overflow_note: nota,
             choices: vec![
@@ -6228,11 +6257,22 @@ impl Estado {
                 hostile: hostil,
             }
         };
-        let mut cuerpo: Vec<crate::dto::DialogLine> = Vec::new();
-        cuerpo.push(linea(&req.op));
-        for p in req.paths.iter().take(Self::MAX_LINEAS_DIALOGO) {
-            cuerpo.push(linea(p));
-        }
+        // El cuerpo son SOLO las rutas: el renderer las numera por posición,
+        // que es una etiqueta que ningún nombre de fichero puede escribir. Lo
+        // demás —qué se pide, quién lo pide, cuándo caduca— va en campos
+        // propios, por el mismo motivo que el destino de una transferencia:
+        // entre líneas de rutas, una ruta suplanta a cualquier otra línea.
+        let cuerpo: Vec<crate::dto::DialogLine> = req
+            .paths
+            .iter()
+            .take(Self::MAX_LINEAS_DIALOGO)
+            .map(|p| linea(p))
+            .collect();
+        let sujeto = linea(&req.op);
+        // Quién pide es lo PRIMERO que hace falta para decidir, y se
+        // descartaba: el título dice «aprobación de agente» y sin esto no se
+        // sabe de qué agente.
+        let quien = req.session.as_deref().map(linea);
         // Si la lista viene RECORTADA hay que decirlo: aprobar creyendo que
         // son tres rutas cuando son mil es aprobar otra cosa (0.36.0). Y son
         // DOS recortes: el del daemon (`paths_total`) y el nuestro. El
@@ -6247,28 +6287,35 @@ impl Estado {
         let total = std::cmp::max(req.paths_total, req.paths.len() as u64);
         let mostrados = req.paths.len().min(Self::MAX_LINEAS_DIALOGO);
         let nota = self.nota_de_recorte(mostrados, usize::try_from(total).unwrap_or(usize::MAX));
-        // Cuánto le queda, DICHO. Una decisión con fecha de caducidad que no
-        // la enseña se lee como una que espera para siempre, y el humano que
-        // vuelve al rato pulsa aprobar sobre algo que el daemon ya denegó.
-        // `0` = desconocido (una pendiente reconstruida por el resync no
-        // transporta el TTL restante): entonces no se promete un plazo.
-        if req.ttl_ms > 0 {
-            let segundos = req.ttl_ms.div_ceil(1000);
-            cuerpo.push(crate::dto::DialogLine {
-                text: clamp_display(norte_i18n::ta_in(
-                    self.lang,
-                    "modal-approval-ttl",
-                    &[("s", &segundos.to_string())],
-                )),
-                hostile: false,
-            });
-        }
+        // Cuánto le queda, DICHO y en su propio campo. Una decisión con fecha
+        // de caducidad que no la enseña se lee como una que espera para
+        // siempre, y quien vuelve al rato pulsa aprobar sobre algo que el
+        // daemon ya denegó.
+        //
+        // Con `ttl_ms == 0` —DESCONOCIDO: una pendiente reconstruida por el
+        // resync de `policy.pending` no transporta el TTL restante— se dice
+        // que no se sabe, en vez de callar: callar deja el diálogo delante
+        // invitando a aprobar sobre un id que el daemon puede haber reapado
+        // hace rato. Y sin línea de plazo, un fichero llamado «caduca en
+        // 3600 s» sería la única que lo pareciera.
+        let plazo = Some(if req.ttl_ms > 0 {
+            clamp_display(norte_i18n::ta_in(
+                self.lang,
+                "modal-approval-ttl",
+                &[("s", &req.ttl_ms.div_ceil(1000).to_string())],
+            ))
+        } else {
+            clamp_display(norte_i18n::t_in(self.lang, "modal-approval-ttl-unknown"))
+        });
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
             id,
             title_key: "modal-approval-title".to_owned(),
             destination: None,
+            subject: Some(sujeto),
+            asker: quien,
+            deadline: plazo,
             body: cuerpo,
             overflow_note: nota,
             choices: vec![
@@ -6358,6 +6405,9 @@ impl Estado {
             // El directorio en el que se crea NO es un destino: es el
             // contexto. Un destino es a dónde se MUEVE algo que ya existe.
             destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
             body: vec![donde],
             overflow_note: String::new(),
             choices: vec![
@@ -7635,6 +7685,9 @@ impl Estado {
             id,
             title_key,
             destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
             body: cuerpo,
             overflow_note: String::new(),
             choices: vec![DialogChoice {
@@ -8621,10 +8674,11 @@ impl Estado {
                     // El kind sale de un fichero de disposición y `KindId` no
                     // valida nada: es texto que puede traer controles, y acaba en
                     // el DOM y en un `aria-label`.
-                    let (pintable, _) = norte_frontend::display_name(nombre.as_bytes());
+                    let (pintable, hostil) = norte_frontend::display_name(nombre.as_bytes());
                     slots.push(SlotView::Unsupported {
                         slot_id: id,
                         kind_name: clamp_display(pintable),
+                        kind_name_hostile: hostil,
                     });
                 }
             }

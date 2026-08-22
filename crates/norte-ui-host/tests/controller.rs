@@ -1663,13 +1663,14 @@ async fn una_aprobacion_abre_su_dialogo() {
         !d.overflow_note.is_empty(),
         "y que la lista viene recortada, en su propio campo: {d:?}"
     );
-    // Y dice cuánto le queda: una decisión con fecha de caducidad que no la
-    // enseña se lee como una que espera para siempre.
-    assert!(
-        d.body.iter().any(|l| l.text
-            == norte_i18n::ta_in(norte_i18n::Lang::Es, "modal-approval-ttl", &[("s", "30")])),
-        "{:?}",
-        d.body
+    // Y dice cuánto le queda, en su propio campo: una decisión con fecha de
+    // caducidad que no la enseña se lee como una que espera para siempre, y
+    // entre las rutas la podría suplantar un nombre de fichero.
+    assert_eq!(
+        d.deadline.as_deref(),
+        Some(
+            norte_i18n::ta_in(norte_i18n::Lang::Es, "modal-approval-ttl", &[("s", "30")]).as_str()
+        )
     );
 }
 
@@ -4862,7 +4863,10 @@ async fn el_tema_se_ve_por_dentro_y_dice_lo_que_no_pinta() {
     assert_eq!(t.roles.len(), 2);
     assert_eq!(t.roles[0].color, "#2d4f8a", "el color va como muestra");
     assert_eq!(
-        t.unsupported_effects,
+        t.unsupported_effects
+            .iter()
+            .map(|e| e.key.clone())
+            .collect::<Vec<_>>(),
         vec!["crt".to_owned(), "scanlines".to_owned()],
         "los efectos se NOMBRAN, no se ignoran"
     );
@@ -10056,7 +10060,9 @@ async fn un_informe_que_no_se_puede_pedir_se_dice() {
 }
 
 /// Espera el siguiente estado de la barra que traiga avisos persistentes.
-async fn siguientes_banners(sub: &mut norte_ui_host::controller::UiSubscription) -> Vec<String> {
+async fn siguientes_banners(
+    sub: &mut norte_ui_host::controller::UiSubscription,
+) -> Vec<norte_ui_host::dto::BannerView> {
     for _ in 0..40 {
         match tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
             .await
@@ -10103,8 +10109,10 @@ async fn una_sesion_en_claro_deja_aviso_persistente() {
 
     let banners = siguientes_banners(&mut sub).await;
     assert!(
-        banners.iter().any(|b| b.contains("archivo.example")),
-        "el aviso nombra la conexión: {banners:?}"
+        banners
+            .iter()
+            .any(|b| b.subject.as_ref().is_some_and(|s| s.host == "archivo.example")),
+        "el aviso nombra la conexión, en su propio campo: {banners:?}"
     );
 }
 
@@ -10122,7 +10130,7 @@ async fn un_daemon_que_se_para_lo_dice() {
 
     let banners = siguientes_banners(&mut sub).await;
     assert_eq!(
-        banners,
+        banners.iter().map(|b| b.text.clone()).collect::<Vec<_>>(),
         vec![norte_i18n::t_in(
             norte_i18n::Lang::Es,
             "msg-daemon-stopping"
@@ -10142,7 +10150,7 @@ async fn un_relevo_no_se_lee_como_una_parada() {
         .expect("el host escucha");
     let banners = siguientes_banners(&mut sub).await;
     assert_eq!(
-        banners,
+        banners.iter().map(|b| b.text.clone()).collect::<Vec<_>>(),
         vec![norte_i18n::t_in(
             norte_i18n::Lang::Es,
             "msg-daemon-handover"
@@ -10190,7 +10198,7 @@ async fn una_mutacion_sin_journal_deja_aviso() {
 
     let banners = siguientes_banners(&mut sub).await;
     assert_eq!(
-        banners,
+        banners.iter().map(|b| b.text.clone()).collect::<Vec<_>>(),
         vec![norte_i18n::t_in(
             norte_i18n::Lang::Es,
             "status-journal-refused"
@@ -10879,4 +10887,156 @@ async fn en_solo_lectura_no_se_para_la_task_de_otro() {
         "una ventana sin efectos no la para: {ack:?}"
     );
     assert!(canceladas.lock().expect("canceladas").is_empty());
+}
+
+/// Una aprobación dice QUÉ se pide y QUIÉN lo pide, y los dos van fuera de
+/// la lista de rutas.
+///
+/// Mezclados con las rutas eran una línea más: un fichero llamado `delete`
+/// —o llamado como una sesión de agente— era indistinguible de la línea que
+/// dice qué se está aprobando. Y el plazo, lo mismo: con `ttl_ms == 0` no se
+/// pintaba ninguna línea de plazo, así que un fichero llamado «caduca en
+/// 3600 s» era la única con pinta de serlo.
+#[tokio::test]
+async fn una_aprobacion_dice_que_pide_quien_y_hasta_cuando() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let (host, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = host.subscribe();
+
+    tx.send(norte_proto::methods::PolicyApprovalRequired {
+        approval_id: 31,
+        session: Some("agente-7".to_owned()),
+        op: "delete".to_owned(),
+        paths: vec!["mem:///casa/x".to_owned(), "mem:///casa/y".to_owned()],
+        paths_total: 2,
+        ttl_ms: 30_000,
+    })
+    .expect("el host escucha");
+
+    let d = &siguientes_dialogos(&mut sub).await[0];
+    assert_eq!(d.subject.as_ref().map(|l| l.text.clone()).as_deref(), Some("delete"));
+    assert_eq!(
+        d.asker.as_ref().map(|l| l.text.clone()).as_deref(),
+        Some("agente-7")
+    );
+    assert_eq!(
+        d.deadline.as_deref(),
+        Some(norte_i18n::ta_in(norte_i18n::Lang::Es, "modal-approval-ttl", &[("s", "30")]).as_str())
+    );
+    assert_eq!(d.body.len(), 2, "el cuerpo son SOLO las rutas: {:?}", d.body);
+}
+
+/// Sin TTL —una pendiente reconstruida por el resync— se dice que el plazo
+/// NO se sabe, en vez de callar.
+///
+/// Callar deja el diálogo delante invitando a aprobar sobre un id que el
+/// daemon puede haber reapado hace rato.
+#[tokio::test]
+async fn una_aprobacion_sin_ttl_dice_que_no_sabe_el_plazo() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let (host, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = host.subscribe();
+
+    tx.send(norte_proto::methods::PolicyApprovalRequired {
+        approval_id: 32,
+        session: None,
+        op: "copy".to_owned(),
+        paths: vec!["mem:///casa/x".to_owned()],
+        paths_total: 1,
+        ttl_ms: 0,
+    })
+    .expect("el host escucha");
+
+    let d = &siguientes_dialogos(&mut sub).await[0];
+    assert_eq!(
+        d.deadline.as_deref(),
+        Some(norte_i18n::t_in(norte_i18n::Lang::Es, "modal-approval-ttl-unknown").as_str())
+    );
+    assert!(d.asker.is_none(), "sin sesión, no se inventa una");
+}
+
+/// El aviso de sesión en claro lleva la conexión en su PROPIO campo y con su
+/// marca.
+///
+/// Dentro de la frase, un host llamado `banco.example@malo.example` —que no
+/// lleva ni un carácter que se enmascare— se lee como userinfo de un host
+/// legítimo. Y enmascarar sin decirlo, en el indicador de que algo viaja sin
+/// cifrar, es donde más caro sale.
+#[tokio::test]
+async fn el_aviso_en_claro_lleva_la_conexion_aparte_y_marcada() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.degradadas.lock().expect("degradadas") = Some(rx);
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    tx.send(norte_proto::methods::ConnectionDegraded {
+        scheme: "ftp".to_owned(),
+        host: "ma\u{202E}lo.example".to_owned(),
+        reason: "ftp-plaintext".to_owned(),
+        detail: None,
+    })
+    .expect("el host escucha");
+
+    let banners = siguientes_banners(&mut sub).await;
+    let sujeto = banners
+        .iter()
+        .find_map(|b| b.subject.clone())
+        .expect("el aviso lleva su conexión");
+    assert!(!sujeto.host.contains('\u{202E}'), "{sujeto:?}");
+    assert!(sujeto.hostile, "y dice que la enmascaró: {sujeto:?}");
+    assert!(
+        banners.iter().all(|b| !b.text.contains("://")),
+        "la conexión no se monta dentro de la frase: {banners:?}"
+    );
+}
+
+/// Un kind que este host no proyecta y cuyo nombre viene alterado va MARCADO.
+///
+/// Sale del fichero de disposición del usuario: se enmascaraba y se tiraba la
+/// bandera, así que se leía como fiel (#266).
+#[tokio::test]
+async fn un_kind_desconocido_con_nombre_alterado_va_marcado() {
+    use norte_frontend::layout::{KindId, Node, SlotId};
+    let disposicion = Node::Split {
+        dir: norte_frontend::layout::Dir::Vertical,
+        children: vec![
+            Node::slot(SlotId(1), KindId::browser()),
+            Node::slot(SlotId(9), KindId::new("com\u{202E}pare")),
+        ],
+        sizes: vec![
+            norte_frontend::layout::Size::Weight(1),
+            norte_frontend::layout::Size::Fixed(3),
+        ],
+    };
+    let (_h, snap) = UiHost::start(UiHostOptions {
+        backend: arbol(),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        layout: disposicion,
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+
+    let marcado = snap.slots.iter().any(|s| match s {
+        SlotView::Unsupported {
+            kind_name,
+            kind_name_hostile,
+            ..
+        } => *kind_name_hostile && !kind_name.contains('\u{202E}'),
+        _ => false,
+    });
+    assert!(marcado, "el kind alterado se dice: {:?}", snap.slots);
 }

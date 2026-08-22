@@ -13,6 +13,7 @@
 import type {
   AiRenameView,
   BrowserSlotView,
+  DialogLine,
   DialogView,
   HostCatalog,
   RowView,
@@ -998,7 +999,16 @@ export class Screen {
       const aviso = document.createElement("p");
       aviso.className = "theme-effects";
       aviso.setAttribute("role", "note");
-      aviso.textContent = `${this.t("theme-effects-unsupported")} ${theme.unsupported_effects.join(" · ")}`;
+      const hostil = theme.unsupported_effects.some((e) => e.hostile);
+      aviso.textContent = `${this.t("theme-effects-unsupported")} ${theme.unsupported_effects
+        .map((e) => e.key)
+        .join(" · ")}`;
+      aviso.dataset["hostile"] = String(hostil);
+      if (hostil) {
+        // Las claves salen del fichero de tema: si se enmascararon, se dice.
+        aviso.classList.add("hostile");
+        aviso.append(badge(this.t("hostile-name")));
+      }
       caja.append(aviso);
     }
 
@@ -1268,6 +1278,11 @@ export class Screen {
       const roto = document.createElement("p");
       roto.className = "layouts-problem";
       roto.textContent = layouts.problem;
+      roto.dataset["hostile"] = String(layouts.problem_hostile);
+      if (layouts.problem_hostile) {
+        roto.classList.add("hostile");
+        roto.append(badge(this.t("hostile-name")));
+      }
       cuerpo.append(roto);
     }
     caja.append(cuerpo);
@@ -1714,7 +1729,9 @@ export class Screen {
       return;
     }
     if (slot.kind === "unsupported") {
-      this.paintAux(dom, slot.kind_name, view);
+      // El nombre del kind sale del fichero de disposición del usuario: si el
+      // host lo enmascaró, se dice — el mismo criterio que el resto.
+      this.paintAux(dom, slot.kind_name, view, slot.kind_name_hostile);
       return;
     }
     if (slot.kind === "browser") {
@@ -1880,14 +1897,27 @@ export class Screen {
     dom.scroller.replaceChildren(lista);
   }
 
-  private paintAux(dom: SlotDom, kindName: string, view: ViewSnapshot): void {
+  private paintAux(
+    dom: SlotDom,
+    kindName: string,
+    view: ViewSnapshot,
+    kindHostile = false,
+  ): void {
     dom.root.setAttribute("aria-label", kindName);
     dom.title.textContent = "";
+    if (kindHostile) {
+      dom.title.replaceChildren(
+        document.createTextNode(kindName),
+        badge(this.t("hostile-name")),
+      );
+    }
     if (kindName === "status") {
       dom.scroller.className = "statusbar";
       dom.scroller.setAttribute("role", "status");
       dom.scroller.setAttribute("aria-live", "polite");
-      dom.scroller.replaceChildren(...statusNodes(view.status, view.connection.state));
+      dom.scroller.replaceChildren(
+        ...statusNodes(view.status, view.connection.state, (k) => this.t(k)),
+      );
       return;
     }
     if (kindName === "tasks") {
@@ -2150,6 +2180,25 @@ export class Screen {
     this.aiRenameRoot.replaceChildren(caja);
   }
 
+  /** Un campo etiquetado de un diálogo: la etiqueta fuera de banda y el valor
+   *  con su marca si lo pintado difiere de lo que hay. */
+  private campoDeDialogo(etiquetaTexto: string, linea: DialogLine): HTMLElement {
+    const p = document.createElement("p");
+    p.className = "dialog-field";
+    const etiqueta = document.createElement("span");
+    etiqueta.className = "dialog-field-label";
+    etiqueta.textContent = etiquetaTexto;
+    const valor = document.createElement("span");
+    valor.textContent = linea.text;
+    valor.dataset["hostile"] = String(linea.hostile);
+    p.append(etiqueta, valor);
+    if (linea.hostile) {
+      valor.classList.add("hostile");
+      p.append(badge(this.t("hostile-name")));
+    }
+    return p;
+  }
+
   private paintDialogs(dialogs: DialogView[]): void {
     if (dialogs.length === 0) {
       this.dialogsRoot.replaceChildren();
@@ -2191,18 +2240,44 @@ export class Screen {
       }
       box.append(dest);
     }
-    for (const line of top.body) {
-      const p = document.createElement("p");
-      p.textContent = line.text;
-      p.dataset["hostile"] = String(line.hostile);
-      if (line.hostile) {
-        // Esta es la pantalla donde se aprueba borrar, copiar o mover un
-        // nombre. Un nombre que se pinta distinto de lo que es y no lo dice
-        // se lee como fiel, y la aprobación es de otra cosa.
-        p.classList.add("hostile");
-        p.append(badge(this.t("hostile-name")));
+    // Qué se pide y quién lo pide, cada uno etiquetado y FUERA de la lista de
+    // rutas: entre líneas de rutas, un nombre de fichero que dijera lo mismo
+    // sería indistinguible.
+    if (top.subject !== null) {
+      box.append(this.campoDeDialogo(this.t("dialog-subject"), top.subject));
+    }
+    if (top.asker !== null) {
+      box.append(this.campoDeDialogo(this.t("dialog-asker"), top.asker));
+    }
+    if (top.body.length > 0) {
+      // Numeradas por POSICIÓN, con una lista ordenada: la etiqueta es
+      // estructural y ningún nombre de fichero puede escribirla.
+      const lista = document.createElement("ol");
+      lista.className = "dialog-body";
+      for (const line of top.body) {
+        const li = document.createElement("li");
+        li.textContent = line.text;
+        li.dataset["hostile"] = String(line.hostile);
+        if (line.hostile) {
+          // Esta es la pantalla donde se aprueba borrar, copiar o mover un
+          // nombre. Un nombre que se pinta distinto de lo que es y no lo dice
+          // se lee como fiel, y la aprobación es de otra cosa.
+          li.classList.add("hostile");
+          li.append(badge(this.t("hostile-name")));
+        }
+        lista.append(li);
       }
-      box.append(p);
+      box.append(lista);
+    }
+    if (top.deadline !== null) {
+      // El plazo, en su propio elemento: con `ttl_ms == 0` no hay línea de
+      // plazo que pintar, y entonces un fichero llamado «caduca en 3600 s»
+      // sería la única que lo pareciera.
+      const plazo = document.createElement("p");
+      plazo.className = "dialog-deadline";
+      plazo.setAttribute("role", "status");
+      plazo.textContent = top.deadline;
+      box.append(plazo);
     }
     if (top.overflow_note !== "") {
       // La lista está recortada, y decirlo es lo único que impide confirmar
@@ -2365,12 +2440,37 @@ function errorNode(text: string, detail: string | null): HTMLElement {
   return d;
 }
 
-function statusNodes(status: StatusView, connection: string): Node[] {
+function statusNodes(
+  status: StatusView,
+  connection: string,
+  tr: (k: string) => string,
+): Node[] {
   const nodes: Node[] = [];
   for (const b of status.banners) {
     const el = document.createElement("span");
     el.className = "banner";
-    el.textContent = b;
+    el.textContent = b.text;
+    if (b.subject !== null) {
+      // La conexión, en su propio elemento y etiquetada. NUNCA como
+      // `scheme://host` dentro de la frase: un host puede llamarse
+      // `banco.example@malo.example` sin llevar ni un carácter que se
+      // enmascare, y ahí se leería como userinfo de un host legítimo.
+      const sujeto = document.createElement("span");
+      sujeto.className = "banner-subject";
+      sujeto.dataset["hostile"] = String(b.subject.hostile);
+      const esquema = document.createElement("span");
+      esquema.className = "banner-scheme";
+      esquema.textContent = b.subject.scheme;
+      const host = document.createElement("span");
+      host.className = "banner-host";
+      host.textContent = b.subject.host;
+      sujeto.append(esquema, host);
+      if (b.subject.hostile) {
+        sujeto.classList.add("hostile");
+        sujeto.append(badge(tr("hostile-name")));
+      }
+      el.append(sujeto);
+    }
     nodes.push(el);
   }
   if (connection !== "connected") {

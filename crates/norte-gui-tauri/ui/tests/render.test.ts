@@ -80,7 +80,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
         quick: null,
         ...browser,
       },
-      { kind: "unsupported", slot_id: 4, kind_name: "status" },
+      { kind_name_hostile: false, kind: "unsupported", slot_id: 4, kind_name: "status" },
     ],
     focus: 1,
     status: { message: "2 entradas", banners: [], pending: null },
@@ -323,6 +323,9 @@ describe("Screen", () => {
       {
         id: 3,
         title_key: "modal-delete-title",
+        subject: null,
+        asker: null,
+        deadline: null,
         destination: null,
         body: [{ text: "a.txt", hostile: false }],
         overflow_note: "",
@@ -349,6 +352,9 @@ describe("Screen", () => {
       {
         id: 7,
         title_key: "t",
+        subject: null,
+        asker: null,
+        deadline: null,
         destination: null,
         body: [],
         overflow_note: "",
@@ -518,6 +524,9 @@ describe("el campo de texto de un diálogo", () => {
       {
         id: 9,
         title_key: "modal-mkdir-title",
+        subject: null,
+        asker: null,
+        deadline: null,
         destination: null,
         body: [],
         overflow_note: "",
@@ -1145,8 +1154,20 @@ describe("la ayuda", () => {
         {
           block: "keys",
           rows: [
-            { chord: "F5", label: "copiar", enabled: true, reason: "" },
-            { chord: "F6", label: "mover", enabled: false, reason: "aquí no" },
+            {
+              chord: "F5",
+              label: "copiar",
+              label_hostile: false,
+              enabled: true,
+              reason: "",
+            },
+            {
+              chord: "F6",
+              label: "mover",
+              label_hostile: false,
+              enabled: false,
+              reason: "aquí no",
+            },
           ],
         },
       ],
@@ -1685,7 +1706,10 @@ describe("el tema y el selector", () => {
         { role: "selection-bg", color: "#2d4f8a" },
         { role: "error-fg", color: "#f7768e" },
       ],
-      unsupported_effects: ["crt", "scanlines"],
+      unsupported_effects: [
+        { key: "crt", hostile: false },
+        { key: "scanlines", hostile: false },
+      ],
     };
     screen.paint(v);
     const filas = [...document.querySelectorAll(".theme-role")];
@@ -1931,6 +1955,7 @@ describe("el selector de disposiciones", () => {
   function conDisposiciones(cursor: number, problem = ""): ViewSnapshot {
     const v = vista({});
     v.layouts = {
+      problem_hostile: false,
       title: "Disposiciones",
       rows: [
         {
@@ -2077,6 +2102,9 @@ describe("un diálogo que pregunta por una operación", () => {
       {
         id: 4,
         title_key: "modal-copy-title",
+        subject: null,
+        asker: null,
+        deadline: null,
         // Un directorio que se llama `a → mem_b.txt`: la flecha es legítima,
         // no se enmascara y no se marca. Con el destino como primera línea
         // del cuerpo, la línea se leería como dos rutas.
@@ -2100,19 +2128,15 @@ describe("un diálogo que pregunta por una operación", () => {
     const dest = dialog.querySelector(".dialog-destination") as HTMLElement;
     expect(dest).not.toBeNull();
     expect(dest.textContent).toContain("a → mem_b.txt");
-    // Y no es una línea del cuerpo: las del cuerpo son hermanas suyas, no
-    // está entre ellas.
-    const cuerpo = [...dialog.querySelectorAll("p")].filter(
-      (p) =>
-        !p.classList.contains("dialog-destination") &&
-        !p.classList.contains("dialog-overflow"),
-    );
+    // Y no es una línea del cuerpo: el cuerpo es una lista NUMERADA aparte,
+    // y el destino no está en ella.
+    const cuerpo = [...dialog.querySelectorAll("ol.dialog-body li")];
     expect(cuerpo).toHaveLength(2);
     expect(cuerpo.map((p) => p.textContent ?? "").join(" ")).not.toContain("→");
 
     // La línea alterada lo dice, y la fiel no.
-    expect(cuerpo[0]?.dataset["hostile"]).toBe("false");
-    expect(cuerpo[1]?.dataset["hostile"]).toBe("true");
+    expect((cuerpo[0] as HTMLElement | undefined)?.dataset["hostile"]).toBe("false");
+    expect((cuerpo[1] as HTMLElement | undefined)?.dataset["hostile"]).toBe("true");
     expect(cuerpo[1]?.textContent ?? "").toContain("nombre alterado");
 
     // Y el recorte se pinta como aviso.

@@ -349,6 +349,15 @@ fn dialogo_de_referencia() -> DialogView {
             text: "/home/oscar/destino".to_owned(),
             hostile: false,
         }),
+        subject: Some(norte_ui_host::dto::DialogLine {
+            text: "delete".to_owned(),
+            hostile: false,
+        }),
+        asker: Some(norte_ui_host::dto::DialogLine {
+            text: "agente-1".to_owned(),
+            hostile: false,
+        }),
+        deadline: Some("caduca en 30 s".to_owned()),
         body: vec![norte_ui_host::dto::DialogLine {
             text: "/home/oscar".to_owned(),
             hostile: true,
@@ -598,6 +607,7 @@ fn slots_de_referencia() -> Vec<SlotView> {
         SlotView::Unsupported {
             slot_id: 2,
             kind_name: "compare".to_owned(),
+            kind_name_hostile: false,
         },
     ]
 }
@@ -679,7 +689,10 @@ fn tema_de_referencia() -> norte_ui_host::dto::ThemeView {
                 color: "#f7768e".to_owned(),
             },
         ],
-        unsupported_effects: vec!["crt".to_owned()],
+        unsupported_effects: vec![norte_ui_host::dto::ThemeEffectView {
+            key: "crt".to_owned(),
+            hostile: false,
+        }],
     }
 }
 
@@ -737,6 +750,7 @@ fn disposiciones_de_referencia() -> norte_ui_host::dto::LayoutPickerView {
         ],
         cursor: 0,
         preview: vec!["··········".to_owned(), "·bbbbbbbb·".to_owned()],
+        problem_hostile: false,
         problem: String::new(),
     }
 }
@@ -999,6 +1013,7 @@ fn ayuda_de_referencia() -> norte_ui_host::dto::HelpView {
             },
             HelpBlockView::Keys {
                 rows: vec![HelpKeyRowView {
+                    label_hostile: false,
                     chord: "F5".to_owned(),
                     label: "copiar".to_owned(),
                     enabled: false,

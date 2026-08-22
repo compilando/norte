@@ -33,7 +33,16 @@ impl App {
     /// qué eso es una decisión y no un olvido.
     #[must_use]
     pub fn connection_banner(&self) -> Option<String> {
-        norte_frontend::banners::connection_banner(norte_i18n::active(), &self.degraded)
+        let b = norte_frontend::banners::connection_banner(norte_i18n::active(), &self.degraded)?;
+        // La barra del TUI es UNA línea de texto, así que aquí sí hay que
+        // juntar la frase y la conexión — pero no como una URL: `scheme://host`
+        // convierte a `banco.example@malo.example` en algo que se lee como
+        // userinfo de un host legítimo. Etiquetado y separado, que es lo que
+        // el resto de los modales de este frontend ya hacen.
+        Some(norte_i18n::ta(
+            "status-degraded-subject",
+            &[("banner", &b.text), ("scheme", &b.scheme), ("host", &b.host)],
+        ))
     }
 
     /// Anota que esta sesión no está registrando sus mutaciones (#177).

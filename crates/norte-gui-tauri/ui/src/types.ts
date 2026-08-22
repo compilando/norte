@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 25;
+export const BRIDGE_VERSION = 26;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -112,6 +112,7 @@ export interface UnsupportedSlotView {
   kind: "unsupported";
   slot_id: number;
   kind_name: string;
+  kind_name_hostile: boolean;
 }
 
 export interface MetadataFieldView {
@@ -171,8 +172,23 @@ export interface PendingView {
 
 export interface StatusView {
   message: string | null;
-  banners: string[];
+  banners: BannerView[];
   pending: PendingView | null;
+}
+
+/** Un aviso persistente: la frase por un lado y la conexión por otro. */
+export interface BannerView {
+  text: string;
+  subject: BannerSubjectView | null;
+}
+
+/** De qué conexión habla un aviso. Cada parte en su campo: montar
+ *  `scheme://host` dentro de la frase deja que un host se lea como userinfo
+ *  de otro. */
+export interface BannerSubjectView {
+  scheme: string;
+  host: string;
+  hostile: boolean;
 }
 
 export interface DialogChoice {
@@ -194,6 +210,15 @@ export interface DialogView {
    *  contener una flecha, así que etiquetar con un separador dentro del texto
    *  deja que una ruta simule otra. */
   destination: DialogLine | null;
+  /** QUÉ se pregunta (la op de un agente). Fuera del cuerpo, por lo mismo
+   *  que el destino. */
+  subject: DialogLine | null;
+  /** QUIÉN pregunta, si no es quien está delante. */
+  asker: DialogLine | null;
+  /** Cuándo deja de aceptarse la respuesta, ya traducido. */
+  deadline: string | null;
+  /** Cuando son rutas, se numeran POR POSICIÓN: la etiqueta es estructural y
+   *  ningún nombre de fichero puede escribirla. */
   body: DialogLine[];
   /** El cuerpo enseña menos de lo que la operación toca, ya traducido. */
   overflow_note: string;
@@ -318,6 +343,7 @@ export type HelpSpanView =
 export interface HelpKeyRowView {
   chord: string;
   label: string;
+  label_hostile: boolean;
   enabled: boolean;
   reason: string;
 }
@@ -443,7 +469,14 @@ export interface ThemeRoleView {
 export interface ThemeView {
   name: string;
   roles: ThemeRoleView[];
-  unsupported_effects: string[];
+  unsupported_effects: ThemeEffectView[];
+}
+
+/** Un efecto declarado que este renderer no pinta. La clave sale del fichero
+ *  de tema, así que va enmascarada y con su bandera. */
+export interface ThemeEffectView {
+  key: string;
+  hostile: boolean;
 }
 
 export interface PickerRowView {
@@ -502,7 +535,10 @@ export interface LayoutPickerView {
   rows: LayoutRowView[];
   cursor: number;
   preview: string[];
+  /** Por qué la elegida no tiene vista previa. CITA el fichero del usuario. */
   problem: string;
+  /** El diagnóstico pintado difiere de lo que el fichero contiene. */
+  problem_hostile: boolean;
 }
 
 export interface SearchRowView {

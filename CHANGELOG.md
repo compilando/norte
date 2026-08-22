@@ -180,6 +180,25 @@ independently through `PROTOCOL_VERSION`.
   ever counted by the report. A clean undo says so on the board and interrupts
   nobody.
 
+### Changed
+
+- **Bridge 26.** Three shapes moved, all for the same reason: what is masked
+  has to say so, and what comes from outside does not go inside a sentence.
+  The status bar's persistent notices are no longer bare strings — the
+  cleartext-session one carries the connection in its own field, with its flag,
+  because `{scheme}://{host}` inside the phrase turns a host called
+  `bank.example@evil.example` — which contains nothing that gets masked — into
+  something that reads as userinfo of a legitimate host. An approval carries
+  what is being asked, WHO is asking (the agent session, which was being thrown
+  away, so the reader could not tell which agent), and the deadline, each in its
+  own field; the body is now only the paths, numbered by position, and a
+  deadline that is not known says so instead of staying silent. And the four
+  surfaces of issue #266 that masked and dropped the flag — a layout parser
+  diagnostic quoting the user's file, the name of a slot kind this renderer does
+  not paint, a theme's unsupported effect keys, and a key's label from a keymap
+  — now carry it. The issue asked for exactly this: not to spend a bridge
+  version on four flags alone.
+
 ### Fixed
 
 - **`task.cancel` could stop a task that was not on screen.** The board is

@@ -344,8 +344,11 @@ pub struct HelpKeyRowView {
     /// La secuencia PINTADA (`F5`, `g g`) y enmascarada: un `keymap.toml` de
     /// proyecto puede ligar cualquier punto de código.
     pub chord: String,
-    /// Qué hace, en el idioma del lector.
+    /// Qué hace, en el idioma del lector. Puede venir de un `keymap.toml`
+    /// del usuario, así que va enmascarado.
     pub label: String,
+    /// La etiqueta pintada difiere de la que hay en el fichero (#266).
+    pub label_hostile: bool,
     /// Esta build puede correrlo.
     pub enabled: bool,
     /// Por qué no, ya traducido. Vacío cuando sí.
@@ -648,7 +651,18 @@ pub struct ThemeView {
     ///
     /// Se dicen, en vez de ignorarse: un tema retro que no se ve distinto es
     /// un tema que el usuario cree roto. Vacío = el tema no declara ninguno.
-    pub unsupported_effects: Vec<String>,
+    ///
+    /// Cada clave con su bandera: salen del fichero de tema (#266).
+    pub unsupported_effects: Vec<ThemeEffectView>,
+}
+
+/// Un efecto que el tema declara y que este renderer no pinta.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeEffectView {
+    /// La clave, ya enmascarada.
+    pub key: String,
+    /// Lo pintado difiere de lo que el fichero dice.
+    pub hostile: bool,
 }
 
 /// Un rol del tema con su color.
@@ -806,7 +820,12 @@ pub struct LayoutPickerView {
     pub preview: Vec<String>,
     /// Por qué la elegida no tiene vista previa, ya traducido. Vacío cuando
     /// sí la tiene.
+    ///
+    /// CITA el fichero del usuario (el diagnóstico del parser TOML), así que
+    /// va enmascarado y con su bandera: lo que se enmascara se dice (#266).
     pub problem: String,
+    /// El diagnóstico pintado difiere de lo que el fichero contiene.
+    pub problem_hostile: bool,
 }
 
 /// Una disposición ofrecida.
@@ -1065,8 +1084,11 @@ pub enum SlotView {
     Unsupported {
         /// Id del hueco.
         slot_id: u32,
-        /// Nombre del kind, para decirlo.
+        /// Nombre del kind, para decirlo. Lo escribe la disposición del
+        /// usuario, así que va enmascarado.
         kind_name: String,
+        /// El nombre pintado difiere del que hay en el fichero (#266).
+        kind_name_hostile: bool,
     },
 }
 
@@ -1240,11 +1262,39 @@ pub struct StatusView {
     /// Mensaje efímero, ya traducido por el host.
     pub message: Option<String>,
     /// Avisos persistentes (degradación, journal, sesión), acotados.
-    pub banners: Vec<String>,
+    pub banners: Vec<BannerView>,
     /// Lo que hay tecleado a medias: una secuencia, un contador, o las dos
     /// cosas. Se pinta SIEMPRE que exista — un prefijo pendiente que no se
     /// ve es un prefijo que no se puede cancelar.
     pub pending: Option<PendingView>,
+}
+
+/// Un aviso persistente de la barra.
+///
+/// No es una cadena pelada, y los dos campos que la acompañan son por lo
+/// mismo que en un diálogo. La marca: el aviso de una sesión en claro pinta
+/// un `host` que viene del WIRE, se enmascara, y sin bandera la ausencia de
+/// insignia se lee como «esto es fiel» — en el indicador donde más valor
+/// tiene para quien ataca. Y el sujeto aparte: montar `{scheme}://{host}`
+/// dentro de la frase convierte a `bank.example@evil.example` en algo que se
+/// lee como userinfo de un host legítimo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BannerView {
+    /// La frase, ya traducida y sin nada que venga de fuera dentro.
+    pub text: String,
+    /// De qué conexión habla, si habla de una.
+    pub subject: Option<BannerSubjectView>,
+}
+
+/// La conexión de la que habla un aviso: cada parte en su campo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BannerSubjectView {
+    /// Esquema, ya enmascarado y acotado.
+    pub scheme: String,
+    /// Host, ya enmascarado y acotado.
+    pub host: String,
+    /// Lo pintado difiere de lo que hay (en el esquema o en el host).
+    pub hostile: bool,
 }
 
 /// Una secuencia o un contador a medio teclear.
@@ -1276,7 +1326,32 @@ pub struct DialogView {
     /// canónico dice exactamente esto: etiquetar FUERA DE BANDA, jamás por
     /// un separador dentro del texto.
     pub destination: Option<DialogLine>,
+    /// QUÉ se pregunta, cuando eso es una cosa nombrable aparte de las rutas
+    /// (la op de un agente: `delete`, `copy`…).
+    ///
+    /// Campo propio por el mismo motivo que [`Self::destination`]: mezclado
+    /// con las rutas era una línea más, indistinguible de un nombre de
+    /// fichero que dijera lo mismo.
+    pub subject: Option<DialogLine>,
+    /// QUIÉN pregunta, si no es quien está delante: la sesión del agente que
+    /// pidió la operación.
+    ///
+    /// Se descartaba, y era lo primero que hay que saber para decidir: el
+    /// título dice «aprobación de agente» y sin esto no se sabe de QUÉ
+    /// agente.
+    pub asker: Option<DialogLine>,
+    /// Cuándo deja de aceptarse la respuesta, ya traducido. `None` = no hay
+    /// plazo, o no se conoce.
+    ///
+    /// Fuera del cuerpo, otra vez por lo mismo: entre líneas de rutas, un
+    /// fichero llamado `caduca en 3600 s` es la única línea con pinta de
+    /// plazo cuando el plazo REAL no se conoce —una pendiente reconstruida
+    /// por el resync de `policy.pending` no transporta el TTL restante—.
+    pub deadline: Option<String>,
     /// Líneas de cuerpo, ya saneadas y acotadas.
+    ///
+    /// Cuando son RUTAS, el renderer las numera por posición: la etiqueta es
+    /// estructural y un nombre de fichero no puede escribirla.
     pub body: Vec<DialogLine>,
     /// El cuerpo enseña MENOS elementos de los que la operación toca, y esto
     /// lo dice ya traducido. Vacío = los enseña todos.

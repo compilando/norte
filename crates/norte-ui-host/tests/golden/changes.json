@@ -133,7 +133,16 @@
           "text": "/home/oscar/destino",
           "hostile": false
         },
-        "overflow_note": "… se enseñan 1 de 3"
+        "overflow_note": "… se enseñan 1 de 3",
+        "subject": {
+          "text": "delete",
+          "hostile": false
+        },
+        "asker": {
+          "text": "agente-1",
+          "hostile": false
+        },
+        "deadline": "caduca en 30 s"
       }
     ]
   },
@@ -299,7 +308,8 @@
               "chord": "F5",
               "enabled": false,
               "label": "copiar",
-              "reason": "aquí no"
+              "reason": "aquí no",
+              "label_hostile": false
             }
           ]
         }
@@ -403,7 +413,8 @@
           "shares_keymap_name": false
         }
       ],
-      "title": "Disposiciones"
+      "title": "Disposiciones",
+      "problem_hostile": false
     }
   },
   "palette": {
@@ -581,7 +592,10 @@
         }
       ],
       "unsupported_effects": [
-        "crt"
+        {
+          "key": "crt",
+          "hostile": false
+        }
       ]
     }
   },
