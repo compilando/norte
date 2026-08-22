@@ -1099,6 +1099,19 @@ export class Screen {
     }
     caja.append(raices);
 
+    if (sync.summary.length > 0) {
+      // El RESUMEN, arriba: cuántos pasos no se pueden deshacer, cuántos
+      // bytes, qué no se pudo leer. Es lo que se lee antes de aprobar, y
+      // debajo de la lista no lo lee nadie.
+      const resumen = document.createElement("ul");
+      resumen.className = "sync-summary";
+      for (const linea of sync.summary) {
+        const li = document.createElement("li");
+        li.textContent = linea;
+        resumen.append(li);
+      }
+      caja.append(resumen);
+    }
     if (sync.blockers.length > 0) {
       // Lo que IMPIDE aplicar va como ALERTA y arriba: un plan que no se
       // puede ejecutar tiene que decir por qué antes que enseñar sus pasos.
@@ -1107,15 +1120,43 @@ export class Screen {
       lista.setAttribute("role", "alert");
       for (const b of sync.blockers) {
         const li = document.createElement("li");
-        li.textContent = b;
+        const que = document.createElement("span");
+        que.className = "sync-blocker-label";
+        que.textContent = b.label;
+        // La ruta en su propio elemento: «el destino es de solo lectura» sin
+        // decir CUÁL manda a buscar el problema a ciegas.
+        const donde = document.createElement("span");
+        donde.className = "sync-blocker-path";
+        donde.dataset["hostile"] = String(b.path_hostile);
+        donde.textContent = b.path;
+        li.append(que, donde);
+        if (b.path_hostile) {
+          li.append(badge(this.t("hostile-name")));
+        }
         lista.append(li);
+      }
+      if (sync.blockers_total > sync.blockers.length) {
+        // El wire recorta la lista: que hay cuarenta mil y se enseñan
+        // doscientos cincuenta y seis tiene que decirse.
+        const mas = document.createElement("li");
+        mas.className = "sync-blockers-more";
+        mas.textContent = `${String(sync.blockers.length)} / ${String(sync.blockers_total)}`;
+        lista.append(mas);
       }
       caja.append(lista);
     }
 
-    const pasos = document.createElement("ul");
+    const pasos = document.createElement("ol");
     pasos.className = "sync-steps";
     pasos.setAttribute("role", "list");
+    // La numeración arranca donde arranca la VENTANA: la lista no es el plan
+    // entero, y pintarla desde uno la haría pasar por él.
+    pasos.setAttribute("start", String(sync.first_visible + 1));
+    if (sync.total > sync.steps.length) {
+      pasos.dataset["window"] = `${String(sync.first_visible + 1)}-${String(
+        sync.first_visible + sync.steps.length,
+      )}/${String(sync.total)}`;
+    }
     for (const p of sync.steps) {
       pasos.append(this.syncStep(p));
     }

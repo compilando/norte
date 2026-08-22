@@ -1867,6 +1867,32 @@ logic in TypeScript.
 >
 > Approving is deliberately absent: this pass only reads, and the panel's hint
 > line says so rather than offering a key that does nothing.
+>
+> **Reviewed before phase B, which is the whole point of the split.**
+> `security-reviewer` and `rust-reviewer` agreed on one BLOCKER and most of the
+> majors; all are applied. What they found, and what generalises:
+>
+> - **A model's guard is only as alive as the field that feeds it.** The plan
+>   Task's outcome never reached `SyncView::run`, so the clause that refuses to
+>   approve a CANCELLED or FAILED plan — which the shared model documents as its
+>   reason for existing — was dead here, and a cancelled plan crossed the bridge
+>   saying it could be approved. A failed one left the panel reading
+>   "planning…" forever.
+> - **`take()` before the filter throws away the live request.** A stale Task id
+>   discarded a newer pending plan, so no panel opened at all while two walks
+>   kept running on the daemon. Filter first; and only one plan at a time.
+> - **A screen that offers a key it does not have trains the reader to press
+>   it** — on the screen where the next phase puts the writing.
+> - **`sync_roots` exists so "which tree gets overwritten" has ONE answer.** The
+>   host had rederived it from the roles, which already disagreed with the shared
+>   rule when a diff panel is open. It now goes through the shared function,
+>   encodings included.
+> - **`summary_lines`, `blockers_total` and a blocker's own path are not
+>   decoration**: without them an approvable plan with three irreversible steps,
+>   an unreadable branch and 340 unmeasured files reads as "5 steps".
+> - And a gate the commit had not run: the rustdoc link `Self::sync_apply`
+>   pointed at a method the trait deliberately does not have, so `just docs`
+>   was RED on main. `just t` and `gui-ci` are not the whole gate.
 
 - sync plan configuration;
 - streamed steps and blockers;

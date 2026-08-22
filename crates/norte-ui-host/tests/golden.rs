@@ -798,7 +798,18 @@ fn sincronizacion_de_referencia() -> norte_ui_host::dto::SyncView {
         ],
         first_visible: 0,
         total: 2,
-        blockers: vec!["el destino es de solo lectura".to_owned()],
+        summary: vec![
+            "2 pasos: 1 copiar, 1 borrar".to_owned(),
+            "1 no se puede deshacer".to_owned(),
+        ],
+        blockers: vec![norte_ui_host::dto::SyncBlockerView {
+            label: "el destino es de solo lectura".to_owned(),
+            // La RAÍZ se dice, no se calla: un bloqueo del árbol entero con
+            // la ruta vacía no dice dónde pasa.
+            path: "todo el \u{e1}rbol".to_owned(),
+            path_hostile: false,
+        }],
+        blockers_total: 900,
         status: "2 pasos \u{b7} este plan no se puede aprobar".to_owned(),
         hint: "\u{2191}\u{2193} mover \u{b7} Esc cerrar".to_owned(),
         can_approve: false,

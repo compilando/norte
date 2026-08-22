@@ -354,7 +354,9 @@ pub trait HostBackend: Send + Sync + 'static {
     /// Pide un PLAN de sincronización: su Task y el canal de eventos.
     ///
     /// El plan NO escribe un byte: dice qué haría. Lo que escribe es
-    /// [`Self::sync_apply`], y solo contra el `plan_hash` que este plan cerró.
+    /// `sync.apply` —que este trait todavía no expone, y esa ausencia ES la
+    /// frontera de la fase A— y solo contra el `plan_hash` que este plan
+    /// cerró.
     fn sync_plan(
         &self,
         params: methods::SyncPlanParams,

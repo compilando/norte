@@ -1312,10 +1312,28 @@ pub struct SyncView {
     pub steps: Vec<SyncStepView>,
     /// Índice del primer paso que viaja.
     pub first_visible: u64,
-    /// Cuántos pasos tiene el plan.
+    /// Cuántos pasos tiene el plan, INCLUIDOS los que la lista no retiene.
+    ///
+    /// El modelo compartido acota cuántos cuerpos guarda y cuenta aparte los
+    /// que tira; sumarlos aquí es lo que evita que este número y el de la
+    /// línea de estado se contradigan en un plan grande.
     pub total: u64,
-    /// Lo que IMPIDE sincronizar, ya dicho. Vacío = nada lo impide.
-    pub blockers: Vec<String>,
+    /// El RESUMEN del plan, ya dicho: cuántos irreversibles, cuántos bytes,
+    /// qué no se pudo leer, y si la lista esconde pasos.
+    ///
+    /// Es lo que un humano necesita antes de aprobar, y no cabe en la línea
+    /// de estado: un plan aprobable con tres pasos irreversibles y una rama
+    /// ilegible se leía como «5 pasos, pulsa aprobar».
+    pub summary: Vec<String>,
+    /// Lo que IMPIDE sincronizar, ya dicho, CON su ruta. Vacío = nada lo
+    /// impide.
+    pub blockers: Vec<SyncBlockerView>,
+    /// Cuántos bloqueos hay DE VERDAD.
+    ///
+    /// El wire recorta la lista, y el total viaja aparte a propósito: un
+    /// humano necesita saber que hay cuarenta mil aunque solo se le enseñen
+    /// doscientos cincuenta y seis.
+    pub blockers_total: u64,
     /// El estado, ya dicho: planificando, listo para aprobar, aplicando…
     pub status: String,
     /// Qué se puede hacer ahora, ya dicho (la línea de ayuda del pie).
@@ -1328,6 +1346,18 @@ pub struct SyncView {
     pub can_approve: bool,
     /// Hay una Task corriendo (la del plan, o la de la aplicación).
     pub running: bool,
+}
+
+/// Algo que impide sincronizar, con dónde pasa.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncBlockerView {
+    /// Qué es, ya traducido.
+    pub label: String,
+    /// Sobre qué ruta, ya saneada. La RAÍZ se dice «todo el árbol» y no como
+    /// una cadena vacía.
+    pub path: String,
+    /// Lo pintado difiere de los bytes.
+    pub path_hostile: bool,
 }
 
 /// Un paso del plan, ya listo para pintar.

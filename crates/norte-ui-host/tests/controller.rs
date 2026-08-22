@@ -11228,9 +11228,20 @@ async fn ejecutar_por_paleta(
     sub: &mut norte_ui_host::controller::UiSubscription,
     comando: &str,
 ) {
-    // La paleta pinta el NOMBRE del comando y su descripción, nunca la clave
-    // de despacho —se elige por índice—, así que la fila se busca por el
-    // nombre, que es lo que se ve.
+    let ack = ejecutar_por_paleta_ack(h, sub, comando).await;
+    assert!(
+        matches!(ack, ActionAck::Applied { .. }),
+        "la paleta no pudo ejecutar `{comando}`: {ack:?}"
+    );
+}
+
+/// Como [`ejecutar_por_paleta`], pero devolviendo el ACUSE: lo que se
+/// comprueba a veces es el rechazo.
+async fn ejecutar_por_paleta_ack(
+    h: &UiHost,
+    sub: &mut norte_ui_host::controller::UiSubscription,
+    comando: &str,
+) -> ActionAck {
     let etiqueta = comando.to_owned();
     h.dispatch(tecla_mod("p", true, false))
         .await
@@ -11239,8 +11250,6 @@ async fn ejecutar_por_paleta(
     for c in etiqueta.chars().skip(5).take(6) {
         h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
     }
-    // Bajar hasta la fila EXACTA: un filtro puede dejar varias, y ejecutar la
-    // primera sería ejecutar otro comando.
     for _ in 0..40 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let p = siguiente_foto(sub)
@@ -11249,7 +11258,8 @@ async fn ejecutar_por_paleta(
             .expect("la paleta sigue abierta");
         assert!(
             !p.rows.is_empty(),
-            "`{comando}` no sale en la paleta: ¿el host no lo implementa?"
+            "`{comando}` no sale en la paleta con la consulta `{}`",
+            p.query
         );
         let i = p
             .cursor
@@ -11257,12 +11267,7 @@ async fn ejecutar_por_paleta(
             .unwrap_or(0)
             .min(p.rows.len() - 1);
         if p.rows[i].text == etiqueta {
-            let ack = h.dispatch(tecla("Enter")).await.expect("host vivo");
-            assert!(
-                matches!(ack, ActionAck::Applied { .. }),
-                "la paleta no pudo ejecutar `{comando}`: {ack:?}"
-            );
-            return;
+            return h.dispatch(tecla("Enter")).await.expect("host vivo");
         }
         h.dispatch(tecla("Down")).await.expect("host vivo");
     }
@@ -11610,7 +11615,16 @@ async fn pedir_sincronizar_abre_el_plan() {
     assert_eq!(vista.total, 2);
     // El modo se PINTA antes de aprobar: un espejo borra y una actualización
     // no, y quien aprueba tiene que verlo.
-    assert_eq!(vista.mode, "update");
+    // El modo va ya TRADUCIDO por la etiqueta compartida, no como un id: un
+    // modo que esta build no supiera nombrar no puede caer en «actualizar»,
+    // que es la mitad segura de lo que se está aprobando.
+    assert_eq!(
+        vista.mode,
+        norte_frontend::sync::mode_label(
+            norte_proto::methods::SyncMode::Update,
+            norte_i18n::Lang::Es
+        )
+    );
     // Y cada paso dice si el deshacer lo devuelve: nunca sale de `reversal` a
     // secas, que es la mitad que miente sin papelera en el destino.
     assert!(vista.steps.iter().all(|p| !p.undo.is_empty()), "{vista:?}");
@@ -11665,16 +11679,128 @@ async fn sincronizar_el_mismo_directorio_no_encola_nada() {
     let backend = Arc::new(falso);
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
-    // Sin separar los paneles: los dos miran `casa`.
-    h.dispatch(tecla_mod("p", true, false))
-        .await
-        .expect("host vivo");
-    let _ = siguiente_paleta(&mut sub).await;
-    // Se dispara el efecto directamente por su comando, sin la paleta: lo que
-    // se comprueba es el rechazo, no el camino.
-    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    // Sin separar los paneles: los dos miran `casa`. Y el comando se EJECUTA
+    // de verdad — la versión anterior de este test pulsaba `Escape` sobre la
+    // paleta y afirmaba que no se había pedido nada, que es cierto tanto con
+    // el guard como sin él.
+    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.sync-dirs").await;
+    assert_eq!(
+        ack,
+        ActionAck::Unavailable {
+            reason_key: "host-same-directory".to_owned()
+        },
+        "{ack:?}"
+    );
     assert!(
         backend.planes_pedidos.lock().expect("planes").is_empty(),
         "no se pidió ningún plan"
+    );
+}
+
+/// Cancelar la Task del plan desde el TABLERO deja el panel diciendo que se
+/// canceló, no «planificando…» para siempre.
+///
+/// El desenlace de la Task no llegaba al modelo, así que `run` se quedaba en
+/// `Running` eternamente: el panel no sabía decir «cancelado» ni «falló», y
+/// —lo que importa para la fase siguiente— seguía diciendo que el plan se
+/// puede aprobar después de que alguien lo mandara parar.
+#[tokio::test]
+async fn cancelar_el_plan_desde_el_tablero_lo_dice_en_el_panel() {
+    let falso = arbol_como_falso();
+    *falso.plan_de_sync.lock().expect("plan") = Some((
+        vec![paso_de_plan(1, "a.md", norte_proto::methods::SyncStepKind::Copy)],
+        plan_cerrado(1),
+    ));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
+    let mut sub = h.subscribe();
+    separar_los_paneles(&h, &mut sub).await;
+    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
+    let vista = siguiente_sync(&mut sub).await.expect("abre");
+    assert!(vista.running);
+
+    // El daemon dice que la Task se canceló.
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Cancelled);
+
+    for _ in 0..40 {
+        let v = siguiente_sync(&mut sub).await.expect("sigue abierto");
+        if !v.running {
+            assert!(
+                !v.can_approve,
+                "un plan cancelado no se aprueba, haya cerrado o no: {v:?}"
+            );
+            return;
+        }
+    }
+    panic!("el panel siguió diciendo que planifica");
+}
+
+/// Con el panel del plan delante no se puede pedir otro.
+///
+/// Relanzar dejaba el panel anterior sin abandonar y su Task sin cancelar —el
+/// daemon seguía caminando un árbol para un plan que ya nadie puede ver— y,
+/// con una petición en vuelo, la segunda pulsación mataba el panel de las
+/// dos.
+#[tokio::test]
+async fn con_el_panel_del_plan_delante_no_se_pide_otro() {
+    let falso = arbol_como_falso();
+    *falso.plan_de_sync.lock().expect("plan") = Some((
+        vec![paso_de_plan(1, "a.md", norte_proto::methods::SyncStepKind::Copy)],
+        plan_cerrado(1),
+    ));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
+    let mut sub = h.subscribe();
+    separar_los_paneles(&h, &mut sub).await;
+    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
+    let _ = siguiente_sync(&mut sub).await.expect("abre");
+
+    // Con el panel delante, las teclas son SUYAS: `ctrl+p` no abre la paleta,
+    // que es la vía por la que se repetiría el comando. Es la primera de las
+    // dos cerraduras.
+    h.dispatch(tecla_mod("p", true, false))
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert!(
+        foto.palette.is_none(),
+        "el panel del plan no puede dejar pasar la tecla de la paleta"
+    );
+    assert!(foto.sync.is_some(), "y el panel sigue delante");
+    assert_eq!(
+        backend.planes_pedidos.lock().expect("planes").len(),
+        1,
+        "no se pidió un segundo plan"
+    );
+}
+
+/// Un daemon que no sabe planificar no deja la petición colgada.
+#[tokio::test]
+async fn un_plan_que_el_daemon_rechaza_no_deja_nada_pendiente() {
+    let falso = arbol_como_falso();
+    // Sin plan: el falso contesta `Unsupported`.
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
+    let mut sub = h.subscribe();
+    separar_los_paneles(&h, &mut sub).await;
+    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
+    // El fallo se DICE.
+    for _ in 0..40 {
+        if siguiente_aviso(&mut sub).await.starts_with("err-") {
+            break;
+        }
+    }
+    // Y el siguiente intento se puede hacer: la petición no se quedó colgada.
+    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.sync-dirs").await;
+    assert!(
+        matches!(ack, ActionAck::Applied { .. }),
+        "la petición anterior dejó el host encallado: {ack:?}"
     );
 }

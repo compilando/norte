@@ -384,6 +384,8 @@ enum Fondo {
     ComparacionViva(u64, norte_proto::TaskId),
     /// El plan de sincronización tiene Task.
     PlanDeSyncVivo(u64, norte_proto::TaskId),
+    /// El daemon rechazó el plan: no habrá Task ni panel.
+    PlanDeSyncFallido(u64),
     /// Un evento del plan: un lote de pasos, o su cierre.
     EventoDeSync(u64, Box<norte_client::SyncPlanEvent>),
     /// Un lote de filas comparadas.
@@ -1220,6 +1222,10 @@ struct SyncPedida {
     origen: VPath,
     /// Raíz destino.
     destino: VPath,
+    /// Reinterpretación de nombres del ORIGEN, congelada al pedir.
+    origen_encoding: Option<norte_encoding::NameEncoding>,
+    /// La del DESTINO, que puede ser otra.
+    destino_encoding: Option<norte_encoding::NameEncoding>,
 }
 
 /// Un plan de sincronización, con su modelo COMPARTIDO dentro.
@@ -4149,6 +4155,12 @@ impl Estado {
             }
             Fondo::FilasComparadas(epoca, lote) => self.aplicar_filas_comparadas(epoca, *lote),
             Fondo::PlanDeSyncVivo(epoca, id) => self.abrir_panel_de_sync(epoca, id),
+            Fondo::PlanDeSyncFallido(epoca) => {
+                if self.sync_pedida.as_ref().is_some_and(|p| p.epoca == epoca) {
+                    self.sync_pedida = None;
+                }
+                Vec::new()
+            }
             Fondo::EventoDeSync(epoca, ev) => self.aplicar_evento_de_sync(epoca, *ev),
             Fondo::Adornos(datos) => self.aplicar_adornos(*datos).into_iter().collect(),
             Fondo::Imagen(token, leido) => self.aplicar_imagen(token, leido).into_iter().collect(),
@@ -4487,6 +4499,14 @@ impl Estado {
         if matches!(ev, norte_client::ConnEvent::Restored) {
             self.aviso_de_daemon = None;
             self.epoca_conexion = self.epoca_conexion.saturating_add(1);
+            // Un plan pedido al daemon ANTERIOR no lo va a contestar el
+            // nuevo: su id empieza otra vez en 1, y dejar la petición colgada
+            // haría que el panel se abriera con la Task de otro.
+            if let Some(pedida) = self.sync_pedida.take() {
+                pedida
+                    .abandonada
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
         }
         self.conexion = vista.clone();
         let banners = self.cambio_de_banners();
@@ -5484,6 +5504,38 @@ impl Estado {
     /// comparación a la que se le perdieron lotes se lee INCOMPLETA, y una
     /// cuyo canal se cerró sin desenlace observado se lee DESCONOCIDA — dos
     /// estados que el CLI y el MCP ya perdieron cada uno por su cuenta.
+    /// El desenlace de la Task de un PLAN entra en el modelo.
+    ///
+    /// Sin esto, `run` se quedaba en `Running` para siempre y con él moría la
+    /// cláusula que el modelo compartido documenta como su motivo de existir:
+    /// un plan CANCELADO o FALLIDO no se aprueba aunque haya cerrado. El
+    /// `sync.plan_done` puede ir ya en el canal cuando el lector pulsa
+    /// `Escape`, así que sin el desenlace la pantalla ofrecía aprobar un plan
+    /// que acababan de mandar parar — y la fase B cuelga de ese campo el
+    /// botón que escribe.
+    ///
+    /// Y por el progreso, no por el cierre del canal: una Task que muere sin
+    /// cerrar su stream dejaba el panel en «planificando…» para siempre.
+    fn cerrar_sincronizacion(&mut self, p: &norte_proto::TaskProgress) -> Vec<ViewChange> {
+        let lang = self.lang;
+        let Some(sinc) = self.sincronizacion.as_mut() else {
+            return Vec::new();
+        };
+        if sinc.task != p.task_id {
+            return Vec::new();
+        }
+        sinc.vista.run = norte_frontend::sync::SyncRunState::from_task_state(&p.state);
+        if let norte_proto::TaskState::Failed { error } = &p.state {
+            // La CATEGORÍA localizada, jamás el `Display` inglés: esto se
+            // pinta de forma persistente y varias variantes interpolan datos
+            // del otro extremo.
+            sinc.vista.error = Some(norte_frontend::error::error_category_in(lang, error));
+        }
+        vec![ViewChange::Sync {
+            sync: self.vista_sincronizacion(),
+        }]
+    }
+
     fn cerrar_comparacion(&mut self, p: &norte_proto::TaskProgress) -> Vec<ViewChange> {
         let lang = self.lang;
         let Some(c) = self.comparacion.as_mut() else {
@@ -5538,6 +5590,10 @@ impl Estado {
                     );
                 }
                 sinc.vista.cancel_requested = true;
+                // Y el modelo se entera YA: si el `plan_done` viene de camino,
+                // sin esto el panel pasaría a «listo para aprobar» un plan que
+                // el lector acaba de mandar parar.
+                sinc.vista.run = norte_frontend::sync::SyncRunState::Cancelled;
                 let task = sinc.task;
                 if task.get() != 0 {
                     self.cancelar(task.get());
@@ -5547,21 +5603,27 @@ impl Estado {
                 };
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
-            "ArrowDown" | "Down" | "ArrowUp" | "Up" => {
-                let abajo = k.key.ends_with("Down");
+            "ArrowDown" | "Down" | "ArrowUp" | "Up" | "PageDown" | "pgdn" | "PageUp"
+            | "pgup" | "Home" | "home" | "End" | "end" => {
                 let total = sinc.vista.steps().len();
                 if total == 0 {
                     return (self.aplicada(), Vec::new());
                 }
-                let paso = sinc.ventana.max(1);
-                sinc.primera_visible = if abajo {
-                    sinc.primera_visible
-                        .saturating_add(1)
-                        .min(total.saturating_sub(1))
-                } else {
-                    sinc.primera_visible.saturating_sub(1)
-                };
-                let _ = paso;
+                // El TOPE del desplazamiento es «lo que hay menos lo que
+                // cabe», no «lo que hay menos uno»: con lo segundo, una sola
+                // flecha sobre un plan de dos pasos y una ventana de
+                // doscientos dejaba de mandar el primer paso.
+                let tope = total.saturating_sub(sinc.ventana.max(1));
+                let pagina = sinc.ventana.max(1);
+                sinc.primera_visible = match k.key.as_str() {
+                    "ArrowDown" | "Down" => sinc.primera_visible.saturating_add(1),
+                    "ArrowUp" | "Up" => sinc.primera_visible.saturating_sub(1),
+                    "PageDown" | "pgdn" => sinc.primera_visible.saturating_add(pagina),
+                    "PageUp" | "pgup" => sinc.primera_visible.saturating_sub(pagina),
+                    "Home" | "home" => 0,
+                    _ => tope,
+                }
+                .min(tope);
                 let cambio = ViewChange::Sync {
                     sync: self.vista_sincronizacion(),
                 };
@@ -5806,7 +5868,19 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let destino = match self.directorio_destino() {
+        // UNA a la vez. Relanzar dejaba el panel anterior sin abandonar y su
+        // Task sin cancelar —el daemon seguía caminando un árbol para un plan
+        // que ya no se puede ver— y, con una petición en vuelo, la segunda
+        // pulsación mataba el panel de las dos.
+        if self.sincronizacion.is_some() || self.sync_pedida.is_some() {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-sync-already".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        let destino_slot = match self.hueco_destino() {
             Ok(d) => d,
             Err(reason_key) => {
                 return (
@@ -5817,11 +5891,30 @@ impl Estado {
                 );
             }
         };
-        let origen = self.hueco().pane.dir().clone();
+        // Qué árbol se sobrescribe lo decide la regla COMPARTIDA, no una
+        // copia local: dos respuestas a «cuál de los dos se reescribe» es el
+        // bug más barato de escribir y el más caro de encontrar, porque las
+        // dos producen un plan perfectamente plausible.
+        let enfocado = self.hueco().pane.dir().clone();
+        let otro = self.huecos[&destino_slot].pane.dir().clone();
+        // Con el panel de diferencias abierto manda el LADO ACTIVO; sin él,
+        // el pane con foco es el origen. Las dos ramas viven en la regla
+        // compartida, y aquí solo se le pasan los datos.
+        let raices = norte_frontend::sync::sync_roots(
+            self.comparacion.as_ref().map(|c| &c.vista),
+            &norte_frontend::sync::Panes {
+                focused_root: &enfocado,
+                focused_encoding: None,
+                other_root: &otro,
+                other_encoding: None,
+            },
+        );
+        let (origen, destino) = (raices.source.clone(), raices.dest.clone());
         if origen == destino {
             // Raíces solapadas: el daemon lo rechaza con `OverlappingRoots` y
-            // no crea Task. Decirlo antes es más honesto que abrir un panel
-            // que va a morir.
+            // no crea Task. Este atajo local es cortesía —la autoridad es el
+            // core, que también caza el solape ANIDADO— pero abrir un panel
+            // que va a morir es peor que decirlo antes.
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-same-directory".to_owned(),
@@ -5831,18 +5924,23 @@ impl Estado {
         }
         (
             self.aplicada(),
-            self.lanzar_plan_de_sync(origen, destino, backend, buzon),
+            self.lanzar_plan_de_sync(raices, backend, buzon),
         )
     }
 
     /// Encola `sync.plan` y engancha su canal de eventos al actor.
     fn lanzar_plan_de_sync(
         &mut self,
-        origen: VPath,
-        destino: VPath,
+        raices: norte_frontend::sync::SyncRoots,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let norte_frontend::sync::SyncRoots {
+            source: origen,
+            dest: destino,
+            source_encoding: origen_encoding,
+            dest_encoding: destino_encoding,
+        } = raices;
         self.epoca_busqueda += 1;
         let epoca = self.epoca_busqueda;
         let abandonada = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -5868,7 +5966,14 @@ impl Estado {
             let (task, mut rx) = match backend2.sync_plan(params).await {
                 Ok(par) => par,
                 Err(e) => {
+                    // El fallo se DICE y además SUELTA la petición: sin lo
+                    // segundo, un daemon que no sabe planificar —o unas
+                    // raíces solapadas— dejaban `sync_pedida` puesta para
+                    // siempre y el siguiente intento se rehusaba solo.
                     let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    let _ = buzon2
+                        .send(Mensaje::Fondo(Box::new(Fondo::PlanDeSyncFallido(epoca))))
+                        .await;
                     return;
                 }
             };
@@ -5912,6 +6017,8 @@ impl Estado {
             modo,
             origen,
             destino,
+            origen_encoding,
+            destino_encoding,
         });
         Vec::new()
     }
@@ -5928,7 +6035,14 @@ impl Estado {
         epoca: u64,
         task: norte_proto::TaskId,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let Some(pedida) = self.sync_pedida.take().filter(|p| p.epoca == epoca) else {
+        // FILTRAR antes de TOMAR: `take()` incondicional se llevaba por
+        // delante una petición nueva cuando contestaba la Task de una vieja,
+        // y entonces no se abría panel ninguno mientras dos recorridos
+        // seguían caminando dos árboles en el daemon.
+        if self.sync_pedida.as_ref().is_none_or(|p| p.epoca != epoca) {
+            return Vec::new();
+        }
+        let Some(pedida) = self.sync_pedida.take() else {
             return Vec::new();
         };
         self.sincronizacion = Some(Sincronizacion {
@@ -5940,8 +6054,12 @@ impl Estado {
                 pedida.modo,
                 pedida.origen,
                 pedida.destino,
-                None,
-                None,
+                // Las reinterpretaciones de cada lado, tal como las decidió
+                // la regla compartida: son DOS porque los dos panes son dos
+                // ubicaciones, y cruzarlas nombraría con otros bytes el
+                // fichero sobre el que cae la escritura.
+                pedida.origen_encoding,
+                pedida.destino_encoding,
             ),
             primera_visible: 0,
             ventana: Self::VENTANA_COMPARACION,
@@ -5970,6 +6088,9 @@ impl Estado {
             norte_client::SyncPlanEvent::Done(done) => sinc.vista.state.on_plan_done(done),
         };
         if !cambio {
+            // Que se descartó, DICHO: un lote rechazado después del cierre es
+            // una violación del contrato del daemon, y callarla la esconde.
+            tracing::warn!(epoca, "un evento del plan se descartó");
             return Vec::new();
         }
         let cambio = ViewChange::Sync {
@@ -6034,16 +6155,35 @@ impl Estado {
                 text: clamp_display(destino),
                 hostile: destino_hostil,
             },
-            mode: match v.mode {
-                norte_proto::methods::SyncMode::Mirror => "mirror".to_owned(),
-                _ => "update".to_owned(),
-            },
+            // El modo, por la etiqueta COMPARTIDA. Caer en «actualizar» ante
+            // un modo que esta build no sabe nombrar afirmaría la mitad
+            // SEGURA de lo que se está aprobando —«esto no borra»— sobre algo
+            // desconocido, y el propio catálogo lo prohíbe por escrito.
+            mode: clamp_display(norte_frontend::sync::mode_label(v.mode, self.lang)),
             steps: filas,
             first_visible: primera as u64,
-            total: pasos.len() as u64,
-            // Lo que IMPIDE aplicar, dicho por su nombre. El recuento del
-            // plan puede ser mayor que la lista: el daemon la recorta, y el
-            // modelo compartido ya lo dice en su línea de estado.
+            // Los RETENIDOS más los que el modelo tiró: sin sumarlos, este
+            // número y el de la línea de estado se contradicen en un plan
+            // grande, y los dos cruzan en el mismo mensaje.
+            total: (pasos.len() as u64)
+                .saturating_add(v.state.plan().map_or(0, norte_frontend::sync::SyncPlan::dropped)),
+            // El RESUMEN, que es lo que un humano lee antes de aprobar:
+            // irreversibles, bytes (con los que no se pudieron medir aparte),
+            // lo que no se pudo leer, y si la lista esconde pasos. No cabe en
+            // la línea de estado y no puede quedarse dentro del modelo.
+            summary: v
+                .state
+                .plan()
+                .map(|p| {
+                    p.summary_lines(self.lang)
+                        .into_iter()
+                        .map(clamp_display)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            // Lo que IMPIDE aplicar, con SU RUTA: «el destino es de solo
+            // lectura» sin decir cuál manda a buscar el problema a ciegas, y
+            // un bloqueo de la raíz se dice «todo el árbol», no vacío.
             blockers: v
                 .state
                 .plan()
@@ -6052,16 +6192,44 @@ impl Estado {
                         .blockers
                         .iter()
                         .map(|b| {
-                            clamp_display(norte_frontend::sync::blocker_label(b.kind, self.lang))
+                            // Sin reinterpretación: de qué raíz cuelga el
+                            // `rel` de un BLOQUEO no lo decide ninguna regla
+                            // compartida todavía —la que existe es para
+                            // pasos—, y elegirla aquí sería inventar una
+                            // segunda respuesta. Hoy no cambia nada porque
+                            // esta ventana no tiene override de codificación
+                            // de nombres; el día que lo tenga, la regla va
+                            // arriba y no aquí.
+                            let ruta = norte_frontend::sync::rel_display_or_root(
+                                &b.rel,
+                                None,
+                                self.lang,
+                            );
+                            crate::dto::SyncBlockerView {
+                                label: clamp_display(norte_frontend::sync::blocker_label(
+                                    b.kind, self.lang,
+                                )),
+                                path: clamp_display(ruta.text),
+                                path_hostile: ruta.hostile,
+                            }
                         })
                         .collect()
                 })
                 .unwrap_or_default(),
+            // Cuántos hay DE VERDAD: el wire recorta la lista a 256 y el
+            // total viaja aparte justo para que 40 000 no se lean como 256.
+            blockers_total: v.state.plan().map_or(0, |p| p.done().blockers_total),
             status: clamp_display(norte_frontend::sync::status_line(v, self.lang)),
-            hint: clamp_display(norte_i18n::t_in(
-                self.lang,
-                norte_frontend::sync::hint_id(v),
-            )),
+            // La línea de teclas del modelo ofrece `a aprobar` en cuanto el
+            // plan se puede aprobar, y esta fase NO tiene esa tecla: decir lo
+            // que no se puede hacer entrena a pulsarla justo en la pantalla
+            // donde la fase siguiente pone la escritura. Mientras aprobar no
+            // exista, esta pantalla dice que solo lee.
+            hint: clamp_display(if v.can_approve() {
+                norte_i18n::t_in(self.lang, "host-sync-read-only")
+            } else {
+                norte_i18n::t_in(self.lang, norte_frontend::sync::hint_id(v))
+            }),
             can_approve: v.can_approve(),
             running: matches!(v.run, norte_frontend::sync::SyncRunState::Running),
         })
@@ -8477,6 +8645,7 @@ impl Estado {
             cambios.extend(self.refrescar_afectados(p.task_id.get(), backend, buzon));
             self.pedir_informe_de_lote(p, backend, buzon);
             cambios.extend(self.cerrar_comparacion(p));
+            cambios.extend(self.cerrar_sincronizacion(p));
         }
         vec![self.parche(cambios)]
     }

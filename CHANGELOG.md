@@ -191,7 +191,14 @@ independently through `PROTOCOL_VERSION`.
   What blocks the plan is an alert above the steps, because a plan that cannot
   run has to say why before it shows what it would do. Nothing here writes:
   applying is the next pass, and the panel's hint says so rather than offering
-  a key that does nothing. Bridge **29**.
+  a key that does nothing — and it says exactly that, because the shared
+  model's footer offers "a to approve" the moment a plan becomes approvable and
+  this pass has no such key. Before the steps it shows the plan's SUMMARY (how
+  many cannot be undone, how many bytes, what could not be read, whether the
+  list is hiding steps) and what blocks it WITH the path — "the destination is
+  read-only" without saying which one sends you looking blind — plus the real
+  blocker count, because the wire truncates that list to 256 and a reader needs
+  to know there are forty thousand. Bridge **29**.
 - **The window compares two directories** (`pane.compare-dirs`): a diff panel
   with the rows as they stream in, a filter per category with its count, side
   switching, and `Enter` to go where a row points. The model is the one the TUI

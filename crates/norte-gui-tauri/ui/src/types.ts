@@ -569,14 +569,26 @@ export interface SyncView {
   steps: SyncStepView[];
   first_visible: number;
   total: number;
-  /** Lo que IMPIDE sincronizar, ya dicho. */
-  blockers: string[];
+  /** El RESUMEN del plan: irreversibles, bytes, lo ilegible, y si la lista
+   *  esconde pasos. Es lo que se lee antes de aprobar. */
+  summary: string[];
+  /** Lo que IMPIDE sincronizar, con su ruta. */
+  blockers: SyncBlockerView[];
+  /** Cuántos hay de verdad: el wire recorta la lista. */
+  blockers_total: number;
   status: string;
   hint: string;
   /** Lo decide el modelo compartido: ofrecer aprobar lo que va a rechazar es
    *  la pantalla rota que esto evita. */
   can_approve: boolean;
   running: boolean;
+}
+
+export interface SyncBlockerView {
+  label: string;
+  /** Dónde. La raíz se dice «todo el árbol», no vacío. */
+  path: string;
+  path_hostile: boolean;
 }
 
 export interface SyncStepView {

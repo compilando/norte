@@ -670,9 +670,18 @@
       ],
       "first_visible": 0,
       "total": 2,
-      "blockers": [
-        "el destino es de solo lectura"
+      "summary": [
+        "2 pasos: 1 copiar, 1 borrar",
+        "1 no se puede deshacer"
       ],
+      "blockers": [
+        {
+          "label": "el destino es de solo lectura",
+          "path": "todo el árbol",
+          "path_hostile": false
+        }
+      ],
+      "blockers_total": 900,
       "status": "2 pasos · este plan no se puede aprobar",
       "hint": "↑↓ mover · Esc cerrar",
       "can_approve": false,
