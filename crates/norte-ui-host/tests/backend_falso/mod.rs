@@ -89,7 +89,12 @@ pub struct Falso {
     pub progresos:
         std::sync::Mutex<HashMap<u64, tokio::sync::watch::Sender<norte_proto::TaskProgress>>>,
     /// El catálogo de extensiones que contesta `plugin.list`.
-    pub plugins: Vec<norte_proto::methods::PluginInfo>,
+    ///
+    /// Tras un `Mutex` porque el gobierno lo CAMBIA: el host repide el
+    /// catálogo tras aprobar o encender, y un falso que contestara siempre lo
+    /// mismo dejaría pasar una pantalla que dice «aprobada» sin que el
+    /// daemon lo hubiera confirmado.
+    pub plugins: std::sync::Mutex<Vec<norte_proto::methods::PluginInfo>>,
     /// El `help.md` de cada extensión, por id. Un id ausente contesta como
     /// un daemon que no tiene la página: markdown vacío.
     pub paginas: HashMap<String, String>,
@@ -154,6 +159,19 @@ pub struct Falso {
     >,
     /// El informe que contesta `sync.report`. `None` = `Unsupported`.
     pub informe_de_sync: std::sync::Mutex<Option<norte_proto::methods::SyncReportResult>>,
+    /// Los cambios de gobierno pedidos, en orden (`approval:id:true`…).
+    pub gobierno: std::sync::Mutex<Vec<String>>,
+    /// Con qué falla un cambio de gobierno, si falla.
+    pub error_al_gobernar: std::sync::Mutex<Option<Error>>,
+    /// Las claves escritas, en orden: `(plugin, clave, valor)`.
+    pub escrituras: std::sync::Mutex<Vec<(String, String, String)>>,
+    /// Con qué falla `plugin.set_config`, si falla.
+    pub error_al_escribir: std::sync::Mutex<Option<Error>>,
+    /// Los comandos ejecutados, en orden: `(plugin, comando)`.
+    pub ejecutados: std::sync::Mutex<Vec<(String, String)>>,
+    /// Qué contesta `plugin.run_command`. `None` = la salida vacía, que NO
+    /// es un error: un comando puede no imprimir nada.
+    pub salida_de_comando: std::sync::Mutex<Option<Result<String, Error>>>,
     /// Con qué falla `sync.apply`, si falla.
     pub error_al_aplicar: std::sync::Mutex<Option<Error>>,
     /// Los ids de task a los que se les pidió parar, en orden.
@@ -365,7 +383,7 @@ impl HostBackend for Falso {
     fn plugin_list(
         &self,
     ) -> BoxFuture<'static, Result<norte_proto::methods::PluginListResult, Error>> {
-        let plugins = self.plugins.clone();
+        let plugins = self.plugins.lock().expect("plugins").clone();
         let errores = self
             .errores_de_carga
             .iter()
@@ -562,6 +580,77 @@ impl HostBackend for Falso {
             .push(id.clone());
         let keys = self.esquemas.get(&id).cloned().unwrap_or_default();
         Box::pin(async move { Ok(norte_proto::methods::PluginGetConfigResult { keys }) })
+    }
+
+    fn plugin_set_approval(
+        &self,
+        id: String,
+        approved: bool,
+    ) -> BoxFuture<'static, Result<(), Error>> {
+        self.gobierno
+            .lock()
+            .expect("gobierno")
+            .push(format!("approval:{id}:{approved}"));
+        let fallo = self.error_al_gobernar.lock().expect("gobierno").clone();
+        // Y el catálogo cambia: el host lo REPIDE tras un OK, así que un
+        // falso que contestara siempre lo mismo dejaría pasar una pantalla
+        // que dice «aprobada» sin que nadie lo confirmara.
+        if fallo.is_none() {
+            for p in self.plugins.lock().expect("plugins").iter_mut() {
+                if p.id == id {
+                    p.approved = approved;
+                }
+            }
+        }
+        Box::pin(async move { fallo.map_or(Ok(()), Err) })
+    }
+
+    fn plugin_set_enabled(
+        &self,
+        id: String,
+        enabled: bool,
+    ) -> BoxFuture<'static, Result<(), Error>> {
+        self.gobierno
+            .lock()
+            .expect("gobierno")
+            .push(format!("enabled:{id}:{enabled}"));
+        let fallo = self.error_al_gobernar.lock().expect("gobierno").clone();
+        if fallo.is_none() {
+            for p in self.plugins.lock().expect("plugins").iter_mut() {
+                if p.id == id {
+                    p.enabled = enabled;
+                }
+            }
+        }
+        Box::pin(async move { fallo.map_or(Ok(()), Err) })
+    }
+
+    fn plugin_set_config(
+        &self,
+        id: String,
+        key: String,
+        value: String,
+    ) -> BoxFuture<'static, Result<(), Error>> {
+        self.escrituras
+            .lock()
+            .expect("escrituras")
+            .push((id, key, value));
+        let fallo = self.error_al_escribir.lock().expect("escribir").clone();
+        Box::pin(async move { fallo.map_or(Ok(()), Err) })
+    }
+
+    fn plugin_run_command(
+        &self,
+        id: String,
+        command: String,
+        _arg: String,
+    ) -> BoxFuture<'static, Result<String, Error>> {
+        self.ejecutados
+            .lock()
+            .expect("ejecutados")
+            .push((id, command));
+        let salida = self.salida_de_comando.lock().expect("salida").clone();
+        Box::pin(async move { salida.unwrap_or_else(|| Ok(String::new())) })
     }
 
     fn read(

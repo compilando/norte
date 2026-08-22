@@ -1137,6 +1137,87 @@ body {
   opacity: 0.85;
 }
 
+/* La clave elegida y la que no se puede editar: lo segundo importa tanto
+   como lo primero, porque un `kind` que este build no conoce es de solo
+   lectura y ofrecerlo hace creer que la escritura falló. */
+.extensions-config tr[data-current="true"] {
+  background: var(--selection-bg);
+}
+
+.extensions-config tr[data-editable="false"] .extensions-key-value {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.extensions-key-editing {
+  padding: 0 2px;
+  background: var(--panel-bg);
+  border-bottom: 2px solid var(--border-focus);
+  /* Lo que se teclea se aísla: el valor de partida lo escribió el plugin y
+     puede traer letras RTL que reordenarían la celda entera. */
+  unicode-bidi: isolate;
+}
+
+.extensions-commands h3 {
+  margin: 12px 0 4px;
+  font-size: 1em;
+  color: var(--border-focus);
+}
+
+.extensions-command {
+  unicode-bidi: isolate;
+}
+
+#plugin-output[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+#plugin-output[data-open="false"] {
+  display: none;
+}
+
+.plugin-output {
+  width: min(100ch, 92vw);
+  max-height: min(80vh, 100%);
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px 12px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  overflow: auto;
+}
+
+/* Quién imprimió y qué, cada uno aislado: son dos cadenas de tercero y una
+   sola caja deja que la primera reordene a la segunda. */
+.plugin-output-plugin,
+.plugin-output-command {
+  unicode-bidi: isolate;
+}
+
+.plugin-output-command::before {
+  content: " · ";
+  opacity: 0.6;
+}
+
+.plugin-output-text {
+  margin: 8px 0 0;
+  padding: 8px;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  background: var(--bg);
+  unicode-bidi: isolate;
+}
+
+.plugin-output-truncated {
+  margin: 6px 0 0;
+  color: var(--warning-fg, var(--title-fg));
+}
+
 /* El dominio de un `enum` puede ser largo: sin esto se pega a la
    descripción y las dos se leen como una sola frase. */
 .extensions-key-kind {

@@ -298,6 +298,57 @@ pub trait HostBackend: Send + Sync + 'static {
         id: String,
     ) -> BoxFuture<'static, Result<methods::PluginGetConfigResult, Error>>;
 
+    /// Aprueba o REVOCA las capabilities de un plugin.
+    ///
+    /// Es LA decisión de seguridad del sistema de extensiones: lo que separa
+    /// «este código está en tu disco» de «este código puede leer tus
+    /// ficheros». Quien la llame tiene que haberla pedido a un humano —esta
+    /// puerta no pregunta— y el core es quien la persiste.
+    ///
+    /// Revocar no es lo mismo que apagar: apagar deja las capabilities
+    /// aprobadas para la próxima vez, revocar las retira.
+    fn plugin_set_approval(
+        &self,
+        id: String,
+        approved: bool,
+    ) -> BoxFuture<'static, Result<(), Error>>;
+
+    /// Enciende o apaga un plugin YA aprobado.
+    fn plugin_set_enabled(
+        &self,
+        id: String,
+        enabled: bool,
+    ) -> BoxFuture<'static, Result<(), Error>>;
+
+    /// Fija UNA clave `[config.<key>]` de un plugin.
+    ///
+    /// `value` viaja como String SIEMPRE, en la codificación canónica del
+    /// wire (`bool` → `"true"`/`"false"`, `int` → decimal). El daemon la
+    /// valida contra el ESQUEMA antes de persistirla: la validación de este
+    /// lado es para no mandar lo que ya se sabe malo, jamás lo que permite.
+    fn plugin_set_config(
+        &self,
+        id: String,
+        key: String,
+        value: String,
+    ) -> BoxFuture<'static, Result<(), Error>>;
+
+    /// Ejecuta UN comando de un plugin y devuelve su salida.
+    ///
+    /// La autorización es del SERVIDOR: `plugin.run_command` resuelve el
+    /// comando contra el catálogo y exige aprobado + activo por su cuenta.
+    /// Lo que una comprobación de este lado compra es coherencia con lo que
+    /// el lector está mirando, nunca el permiso.
+    ///
+    /// La salida es texto de TERCERO: se enmascara y se acota antes de
+    /// pintarse, como cualquier otra cosa que escriba un plugin.
+    fn plugin_run_command(
+        &self,
+        id: String,
+        command: String,
+        arg: String,
+    ) -> BoxFuture<'static, Result<String, Error>>;
+
     /// La PREVIEW con estilo del primer plugin `previewer` que aplique.
     ///
     /// `None` = ninguno aplicó, que no es un error: el visor cae entonces a
@@ -573,6 +624,44 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<methods::PluginGetConfigResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.plugin_get_config(&id).await })
+    }
+
+    fn plugin_set_approval(
+        &self,
+        id: String,
+        approved: bool,
+    ) -> BoxFuture<'static, Result<(), Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.plugins_set_approval(&id, approved).await })
+    }
+
+    fn plugin_set_enabled(
+        &self,
+        id: String,
+        enabled: bool,
+    ) -> BoxFuture<'static, Result<(), Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.plugins_set_enabled(&id, enabled).await })
+    }
+
+    fn plugin_set_config(
+        &self,
+        id: String,
+        key: String,
+        value: String,
+    ) -> BoxFuture<'static, Result<(), Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.plugin_set_config(&id, &key, &value).await })
+    }
+
+    fn plugin_run_command(
+        &self,
+        id: String,
+        command: String,
+        arg: String,
+    ) -> BoxFuture<'static, Result<String, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.plugin_run_command(&id, &command, &arg).await })
     }
 
     fn plugin_preview_styled(

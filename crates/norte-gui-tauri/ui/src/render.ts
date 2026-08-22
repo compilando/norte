@@ -33,6 +33,8 @@ import type {
   HelpView,
   PaletteView,
   ExtensionsView,
+  ExtensionCommandView,
+  ExtensionOutputView,
   ColumnsPickerView,
   LayoutPickerView,
   MetadataSlotView,
@@ -126,6 +128,7 @@ export class Screen {
     private readonly searchRoot: HTMLElement,
     private readonly compareRoot: HTMLElement,
     private readonly syncRoot: HTMLElement,
+    private readonly pluginOutputRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
     private readonly aiRenameRoot: HTMLElement,
@@ -185,6 +188,7 @@ export class Screen {
     this.paintHelp(view.help);
     this.paintSettings(view.settings);
     this.paintExtensions(view.extensions);
+    this.paintPluginOutput(view.plugin_output);
     this.paintTheme(view.theme);
     this.paintPicker(view.picker);
     this.paintLayouts(view.layouts);
@@ -932,8 +936,14 @@ export class Screen {
     const tabla = document.createElement("table");
     tabla.className = "extensions-config";
     const tbody = document.createElement("tbody");
-    for (const k of d.config) {
+    for (const [i, k] of d.config.entries()) {
       const tr = document.createElement("tr");
+      tr.id = `extension-key-${String(i)}`;
+      // Cuál está elegida y cuál se puede editar: sin lo segundo, la
+      // pantalla ofrece `Enter` sobre una clave de un tipo que este build no
+      // conoce y el lector concluye que la escritura falló.
+      tr.dataset["current"] = String(i === d.cursor);
+      tr.dataset["editable"] = String(k.editable);
       // Un valor que NO es el del esquema se marca: es lo único que
       // distingue «así viene» de «así lo dejaste».
       tr.dataset["changed"] = String(k.value !== k.default);
@@ -944,8 +954,21 @@ export class Screen {
       const valor = document.createElement("td");
       valor.className = "extensions-key-value";
       valor.dataset["hostile"] = String(k.hostile);
-      valor.textContent = k.value;
-      if (k.hostile) {
+      if (i === d.cursor && d.editing !== null) {
+        // Lo que se está TECLEANDO, en su propio nodo y marcado: sustituye
+        // al valor porque es lo que se va a escribir, no lo que hay.
+        const buf = document.createElement("span");
+        buf.className = "extensions-key-editing";
+        buf.dataset["hostile"] = String(d.editing_hostile);
+        buf.textContent = d.editing;
+        valor.append(buf);
+        if (d.editing_hostile) {
+          valor.append(badge(this.t("hostile-name")));
+        }
+      } else {
+        valor.textContent = k.value;
+      }
+      if (k.hostile && d.editing === null) {
         // Lo que se pinta difiere de lo que es, y lo escribe el plugin: se
         // dice, igual que en un nombre de fichero.
         valor.append(badge(this.t("hostile-name")));
@@ -976,7 +999,94 @@ export class Screen {
     }
     tabla.append(tbody);
     ficha.append(tabla);
+    ficha.append(this.extensionCommands(d.commands));
     return ficha;
+  }
+
+  /**
+   * Los comandos que aporta una extensión.
+   *
+   * Se LISTAN y no se lanzan desde aquí: la paleta es la puerta —la misma
+   * que en el TUI—, y tener dos deja dos respuestas a qué significa que uno
+   * falle. El `id` no se pinta: el manifiesto no le valida charset.
+   */
+  private extensionCommands(cmds: ExtensionCommandView[]): HTMLElement {
+    const caja = document.createElement("div");
+    caja.className = "extensions-commands";
+    if (cmds.length === 0) {
+      return caja;
+    }
+    const titulo = document.createElement("h3");
+    titulo.textContent = this.t("ext-commands-title");
+    const lista = document.createElement("ul");
+    for (const c of cmds) {
+      const li = document.createElement("li");
+      li.className = "extensions-command";
+      li.dataset["hostile"] = String(c.hostile);
+      li.textContent = c.title;
+      if (c.hostile) {
+        li.append(badge(this.t("hostile-name")));
+      }
+      lista.append(li);
+    }
+    caja.append(titulo, lista);
+    return caja;
+  }
+
+  /**
+   * Lo que imprimió un comando de extensión.
+   *
+   * Todo aquí lo escribe un tercero, y las tres cosas se dicen: quién
+   * imprimió, qué comando, y si la salida se cortó — que el receptor no
+   * puede deducir, porque el texto le llega ya corto.
+   */
+  private paintPluginOutput(output: ExtensionOutputView | null): void {
+    if (output === null) {
+      if (this.pluginOutputRoot.dataset["open"] === "true") {
+        this.pluginOutputRoot.replaceChildren();
+        this.pluginOutputRoot.dataset["open"] = "false";
+      }
+      return;
+    }
+    this.pluginOutputRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "plugin-output";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", this.t("plugin-output-title"));
+    const titulo = document.createElement("h2");
+    titulo.textContent = this.t("plugin-output-title");
+    const quien = document.createElement("p");
+    quien.className = "plugin-output-who";
+    quien.dataset["hostile"] = String(output.hostile);
+    // Quién y qué, cada uno en su nodo: unirlos en una frase deja que un
+    // título de tercero con letras RTL reordene el par entero.
+    const plugin = document.createElement("span");
+    plugin.className = "plugin-output-plugin";
+    plugin.textContent = output.plugin;
+    quien.append(plugin);
+    if (output.command !== "") {
+      const cmd = document.createElement("span");
+      cmd.className = "plugin-output-command";
+      cmd.textContent = output.command;
+      quien.append(cmd);
+    }
+    if (output.hostile) {
+      quien.append(badge(this.t("hostile-name")));
+    }
+    const cuerpo = document.createElement("pre");
+    cuerpo.className = "plugin-output-text";
+    // Vacío se DICE: un panel en blanco se lee como que no llegó a correr.
+    cuerpo.textContent = output.text === "" ? this.t("plugin-output-empty") : output.text;
+    caja.append(titulo, quien, cuerpo);
+    if (output.truncated) {
+      const corte = document.createElement("p");
+      corte.className = "plugin-output-truncated";
+      corte.setAttribute("role", "status");
+      corte.textContent = this.t("plugin-output-truncated");
+      caja.append(corte);
+    }
+    this.pluginOutputRoot.replaceChildren(caja);
   }
 
   /**

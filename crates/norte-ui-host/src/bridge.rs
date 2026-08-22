@@ -30,6 +30,10 @@ use serde::{Deserialize, Serialize};
 ///   hará DE VERDAD —los dos ya traducidos, porque el catálogo no sustituye
 ///   variables—, si hay un nombre alterado FUERA de la ventana, y si el
 ///   lector ha recorrido el plan entero. Y se puede contestar con el ratón.
+/// - **31**: el gestor de extensiones GOBIERNA: la ficha lleva el editor de
+///   `[config]` (qué clave está elegida, qué se está tecleando y qué claves
+///   este build sabe editar), los comandos que aporta la extensión, y la
+///   salida del último que se ejecutó.
 /// - **30**: el panel de sincronización APLICA: la segunda pregunta, los
 ///   fallos del informe y el acuse de la cancelación cruzan, y el ancla de una
 ///   ruta puede valer `either`. Un renderer de 29 leería `undefined` donde
@@ -108,7 +112,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 30;
+pub const BRIDGE_VERSION: u32 = 31;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

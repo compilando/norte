@@ -685,6 +685,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         help: Some(ayuda_de_referencia()),
         settings: Some(ajustes_de_referencia()),
         extensions: Some(extensiones_de_referencia()),
+        plugin_output: Some(salida_de_referencia()),
         theme: Some(tema_de_referencia()),
         search: Some(busqueda_de_referencia()),
         layouts: Some(disposiciones_de_referencia()),
@@ -985,6 +986,18 @@ fn selector_de_referencia() -> norte_ui_host::dto::PickerView {
 
 /// El gestor de extensiones de referencia: una extensión aprobada y
 /// encendida, otra que no, un directorio que no cargó y una ficha abierta.
+/// La salida de un comando de extensión: lo que imprimió un tercero, ya
+/// enmascarado, acotado, y diciendo que se cortó.
+fn salida_de_referencia() -> norte_ui_host::dto::ExtensionOutputView {
+    norte_ui_host::dto::ExtensionOutputView {
+        plugin: "ACME FTP".to_owned(),
+        command: "Saludar".to_owned(),
+        text: "hola\u{fffd}mundo".to_owned(),
+        hostile: true,
+        truncated: true,
+    }
+}
+
 fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
     use norte_ui_host::dto::{
         ExtensionConfigRowView, ExtensionDetailView, ExtensionErrorView, ExtensionRowView,
@@ -1023,6 +1036,14 @@ fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
         ],
         cursor: 0,
         detail: Some(ExtensionDetailView {
+            commands: vec![norte_ui_host::dto::ExtensionCommandView {
+                id: "greet".to_owned(),
+                title: "Saludar".to_owned(),
+                hostile: false,
+            }],
+            cursor: 0,
+            editing: None,
+            editing_hostile: false,
             id: "acme.ftp".to_owned(),
             config: vec![
                 ExtensionConfigRowView {
@@ -1033,6 +1054,7 @@ fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
                     description: "Segundos antes de rendirse".to_owned(),
                     domain: "entre 1 y 300".to_owned(),
                     hostile: false,
+                    editable: true,
                 },
                 // Un `enum` cuyo dominio lleva texto del plugin con un
                 // override bidi dentro: llega enmascarado Y marcado, y el
@@ -1045,6 +1067,7 @@ fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
                     description: String::new(),
                     domain: "safe · fast\u{fffd} · read-only".to_owned(),
                     hostile: true,
+                    editable: true,
                 },
             ],
         }),
@@ -1376,6 +1399,12 @@ fn cambios_de_overlay() -> Vec<(&'static str, ViewChange)> {
             "extensions",
             ViewChange::Extensions {
                 extensions: Some(extensiones_de_referencia()),
+            },
+        ),
+        (
+            "plugin_output",
+            ViewChange::PluginOutput {
+                output: Some(salida_de_referencia()),
             },
         ),
         (

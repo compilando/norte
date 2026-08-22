@@ -213,72 +213,84 @@
   "extensions": {
     "change": "extensions",
     "extensions": {
+      "rows": [
+        {
+          "id": "acme.ftp",
+          "name": "FTP de ACME",
+          "publisher": "ACME",
+          "version": "1.2.0",
+          "category": "provider",
+          "description": "Sirve ficheros por FTP",
+          "approved": true,
+          "enabled": true,
+          "has_help": true,
+          "commands": 2,
+          "columns": 0,
+          "capabilities": [
+            "net",
+            "fs-read"
+          ]
+        },
+        {
+          "id": "org.norte.demo",
+          "name": "Demo",
+          "publisher": "",
+          "version": "0.1.0",
+          "category": "previewer",
+          "description": "",
+          "approved": false,
+          "enabled": false,
+          "has_help": false,
+          "commands": 1,
+          "columns": 1,
+          "capabilities": [
+            "fs-read"
+          ]
+        }
+      ],
       "cursor": 0,
       "detail": {
+        "id": "acme.ftp",
         "config": [
           {
+            "key": "timeout",
+            "kind": "int",
+            "value": "30",
             "default": "10",
             "description": "Segundos antes de rendirse",
             "domain": "entre 1 y 300",
             "hostile": false,
-            "key": "timeout",
-            "kind": "int",
-            "value": "30"
+            "editable": true
           },
           {
+            "key": "mode",
+            "kind": "enum",
+            "value": "safe",
             "default": "safe",
             "description": "",
             "domain": "safe · fast� · read-only",
             "hostile": true,
-            "key": "mode",
-            "kind": "enum",
-            "value": "safe"
+            "editable": true
           }
         ],
-        "id": "acme.ftp"
+        "commands": [
+          {
+            "id": "greet",
+            "title": "Saludar",
+            "hostile": false
+          }
+        ],
+        "cursor": 0,
+        "editing": null,
+        "editing_hostile": false
       },
+      "loading": false,
       "errors": [
         {
           "dir": "/home/oscar/.config/norte/plugins/roto",
           "hostile": false,
           "reason": "el manifiesto no parsea",
           "reason_hostile": false
-        }
-      ],
-      "loading": false,
-      "rows": [
-        {
-          "approved": true,
-          "capabilities": [
-            "net",
-            "fs-read"
-          ],
-          "category": "provider",
-          "columns": 0,
-          "commands": 2,
-          "description": "Sirve ficheros por FTP",
-          "enabled": true,
-          "has_help": true,
-          "id": "acme.ftp",
-          "name": "FTP de ACME",
-          "publisher": "ACME",
-          "version": "1.2.0"
-        },
-        {
-          "approved": false,
-          "capabilities": [
-            "fs-read"
-          ],
-          "category": "previewer",
-          "columns": 1,
-          "commands": 1,
-          "description": "",
-          "enabled": false,
-          "has_help": false,
-          "id": "org.norte.demo",
-          "name": "Demo",
-          "publisher": "",
-          "version": "0.1.0"
         }
       ]
     }
@@ -511,6 +523,16 @@
         }
       ],
       "title": "Volúmenes"
+    }
+  },
+  "plugin_output": {
+    "change": "plugin_output",
+    "output": {
+      "plugin": "ACME FTP",
+      "command": "Saludar",
+      "text": "hola�mundo",
+      "hostile": true,
+      "truncated": true
     }
   },
   "rows": {

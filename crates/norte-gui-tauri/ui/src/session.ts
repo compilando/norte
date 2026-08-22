@@ -160,6 +160,9 @@ export class Session {
       case "settings":
         s.settings = c.settings;
         return true;
+      case "plugin_output":
+        s.plugin_output = c.output;
+        return true;
       case "extensions":
         s.extensions = c.extensions;
         return true;

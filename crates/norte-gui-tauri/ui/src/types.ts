@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 30;
+export const BRIDGE_VERSION = 31;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -446,11 +446,43 @@ export interface ExtensionConfigRowView {
   domain: string;
   /** Alguno de los tres se pinta DISTINTO de lo que es. */
   hostile: boolean;
+  /** Este build sabe editar este `kind`. Un tipo de un peer más nuevo es de
+   *  solo lectura: ofrecer `Enter` sobre lo que no va a cambiar hace creer
+   *  que la escritura falló. */
+  editable: boolean;
+}
+
+export interface ExtensionCommandView {
+  /** Clave de despacho. NUNCA se pinta: el manifiesto no le valida charset. */
+  id: string;
+  title: string;
+  hostile: boolean;
 }
 
 export interface ExtensionDetailView {
   id: string;
   config: ExtensionConfigRowView[];
+  /** Los comandos que aporta, en orden de manifiesto. */
+  commands: ExtensionCommandView[];
+  /** Qué clave está elegida. */
+  cursor: number;
+  /** Lo que se está tecleando, YA enmascarado. `null` = no se edita nada. */
+  editing: string | null;
+  /** El buffer se pinta distinto de lo que se va a escribir. */
+  editing_hostile: boolean;
+}
+
+export interface ExtensionOutputView {
+  /** De qué extensión, ya enmascarado. */
+  plugin: string;
+  /** Qué comando, ya enmascarado. Vacío si no se conocía su título. */
+  command: string;
+  /** Lo que imprimió, ya enmascarado y acotado. */
+  text: string;
+  hostile: boolean;
+  /** No cabía entera y se cortó. Viaja porque el receptor no puede
+   *  deducirlo: el texto le llega ya corto. */
+  truncated: boolean;
 }
 
 export interface ExtensionsView {
@@ -703,6 +735,7 @@ export interface ViewSnapshot {
   help: HelpView | null;
   settings: SettingsView | null;
   extensions: ExtensionsView | null;
+  plugin_output: ExtensionOutputView | null;
   theme: ThemeView | null;
   search: SearchView | null;
   compare: CompareView | null;
@@ -738,6 +771,7 @@ export type ViewChange =
   | { change: "help"; help: HelpView | null }
   | { change: "settings"; settings: SettingsView | null }
   | { change: "extensions"; extensions: ExtensionsView | null }
+  | { change: "plugin_output"; output: ExtensionOutputView | null }
   | { change: "theme"; theme: ThemeView | null }
   | { change: "picker"; picker: PickerView | null }
   | { change: "layouts"; layouts: LayoutPickerView | null }

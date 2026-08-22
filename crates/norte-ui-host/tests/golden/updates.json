@@ -126,81 +126,229 @@
     "update": "patch"
   },
   "snapshot": {
-    "columns": {
-      "cursor": 1,
-      "note": "se aplica a esta ventana; no se guarda",
-      "rows": [
-        {
-          "enabled": true,
-          "fixed": true,
-          "format": "",
-          "format_locked": false,
-          "hostile": false,
-          "id": "name",
-          "label": "Nombre"
-        },
-        {
-          "enabled": true,
-          "fixed": false,
-          "format": "iec",
-          "format_locked": false,
-          "hostile": false,
-          "id": "size",
-          "label": "Tamaño"
-        },
-        {
-          "enabled": false,
-          "fixed": false,
-          "format": "symbolic",
-          "format_locked": true,
-          "hostile": false,
-          "id": "attr:posix.mode",
-          "label": "Permisos"
-        },
-        {
-          "enabled": true,
-          "fixed": false,
-          "format": "",
-          "format_locked": false,
-          "hostile": false,
-          "id": "esto-no-parsea",
-          "label": "esto-no-parsea"
-        }
-      ],
-      "title": "Columnas — sftp"
-    },
     "connection": {
       "state": "connected"
     },
-    "dialogs": [
+    "layout": {
+      "cells": [
+        120,
+        40
+      ],
+      "placements": [
+        {
+          "slot_id": 1,
+          "x": 0,
+          "y": 0,
+          "width": 60,
+          "height": 38,
+          "role": "active",
+          "focus_index": 0
+        },
+        {
+          "slot_id": 2,
+          "x": 60,
+          "y": 0,
+          "width": 60,
+          "height": 38,
+          "role": "target",
+          "focus_index": 1
+        },
+        {
+          "slot_id": 5,
+          "x": 0,
+          "y": 38,
+          "width": 40,
+          "height": 2,
+          "role": null,
+          "focus_index": 2
+        },
+        {
+          "slot_id": 6,
+          "x": 40,
+          "y": 38,
+          "width": 40,
+          "height": 2,
+          "role": null,
+          "focus_index": 3
+        },
+        {
+          "slot_id": 7,
+          "x": 80,
+          "y": 38,
+          "width": 40,
+          "height": 2,
+          "role": null,
+          "focus_index": 4
+        }
+      ]
+    },
+    "slots": [
       {
-        "body": [
+        "kind": "browser",
+        "slot_id": 1,
+        "generation": 4,
+        "path_display": "⟨file⟩/home/oscar",
+        "path_hostile": false,
+        "total_rows": 3,
+        "first_visible": 0,
+        "rows": [
           {
-            "text": "/home/oscar",
+            "key": 1,
+            "display_name": "notas.txt",
+            "hostile": false,
+            "kind": "file",
+            "selected": false,
+            "marked": false,
+            "cells": [
+              {
+                "column": "size",
+                "text": "1.2 KiB"
+              }
+            ],
+            "badge": "",
+            "badge_hostile": false,
+            "badge_role": ""
+          },
+          {
+            "key": 2,
+            "display_name": "caf�.txt",
+            "hostile": true,
+            "kind": "file",
+            "selected": false,
+            "marked": false,
+            "cells": [
+              {
+                "column": "size",
+                "text": "1.2 KiB"
+              }
+            ],
+            "badge": "",
+            "badge_hostile": false,
+            "badge_role": ""
+          },
+          {
+            "key": 3,
+            "display_name": "cambiado.rs",
+            "hostile": false,
+            "kind": "file",
+            "selected": false,
+            "marked": false,
+            "cells": [
+              {
+                "column": "size",
+                "text": "1.2 KiB"
+              }
+            ],
+            "badge": "M",
+            "badge_hostile": false,
+            "badge_role": "warning"
+          }
+        ],
+        "cursor": 1,
+        "marks": 0,
+        "skipped_note": "se saltaron 2 entradas",
+        "columns": [
+          {
+            "id": "name",
+            "label": "Nombre",
+            "sort": "asc",
+            "sortable": true
+          },
+          {
+            "id": "size",
+            "label": "Tamaño",
+            "sort": null,
+            "sortable": true
+          }
+        ],
+        "state": {
+          "state": "ready"
+        },
+        "quick": {
+          "query": "no",
+          "mode": "filter",
+          "matches": 1
+        }
+      },
+      {
+        "kind": "metadata",
+        "slot_id": 5,
+        "fields": [
+          {
+            "label": "Nombre",
+            "value": "caf�.txt",
             "hostile": true
           }
         ],
-        "choices": [
+        "note": ""
+      },
+      {
+        "kind": "processes",
+        "slot_id": 6,
+        "cursor": 0
+      },
+      {
+        "kind": "places",
+        "slot_id": 7,
+        "rows": [
           {
-            "destructive": false,
-            "id": "confirm",
-            "label_key": "dialog-confirm"
+            "row": "header",
+            "label": "Unidades",
+            "folded": false
           },
           {
-            "destructive": false,
-            "id": "cancel",
-            "label_key": "dialog-cancel"
+            "row": "drive",
+            "label": "⟨file⟩/",
+            "hostile": false,
+            "detail": "ext4 · 12 GiB libres de 100 GiB"
+          },
+          {
+            "row": "header",
+            "label": "Favoritos",
+            "folded": false
+          },
+          {
+            "row": "favorite",
+            "name": "caf�",
+            "target": "⟨file⟩/home/oscar/caf�",
+            "hostile": true,
+            "broken": ""
+          },
+          {
+            "row": "favorite",
+            "name": "rota",
+            "target": "",
+            "hostile": false,
+            "broken": "esa ruta no parsea"
           }
         ],
+        "cursor": 1,
+        "generation": 5
+      },
+      {
+        "kind": "unsupported",
+        "slot_id": 2,
+        "kind_name": "compare",
+        "kind_name_hostile": false
+      }
+    ],
+    "focus": 1,
+    "status": {
+      "message": "2 entradas",
+      "banners": [],
+      "pending": {
+        "chords": "ctrl+x",
+        "count": 12
+      }
+    },
+    "dialogs": [
+      {
         "id": 3,
-        "input": "",
-        "input_hostile": false,
         "title_key": "modal-mkdir-title",
         "destination": {
           "text": "/home/oscar/destino",
           "hostile": false
         },
-        "overflow_note": "… se enseñan 1 de 3",
         "subject": {
           "text": "delete",
           "hostile": false
@@ -209,99 +357,90 @@
           "text": "agente-1",
           "hostile": false
         },
-        "deadline": "caduca en 30 s"
-      }
-    ],
-    "extensions": {
-      "cursor": 0,
-      "detail": {
-        "config": [
+        "deadline": "caduca en 30 s",
+        "body": [
           {
-            "default": "10",
-            "description": "Segundos antes de rendirse",
-            "domain": "entre 1 y 300",
-            "hostile": false,
-            "key": "timeout",
-            "kind": "int",
-            "value": "30"
-          },
-          {
-            "default": "safe",
-            "description": "",
-            "domain": "safe · fast� · read-only",
-            "hostile": true,
-            "key": "mode",
-            "kind": "enum",
-            "value": "safe"
+            "text": "/home/oscar",
+            "hostile": true
           }
         ],
-        "id": "acme.ftp"
-      },
-      "errors": [
-        {
-          "dir": "/home/oscar/.config/norte/plugins/roto",
-          "hostile": false,
-          "reason": "el manifiesto no parsea",
-          "reason_hostile": false
-        }
-      ],
-      "loading": false,
+        "overflow_note": "… se enseñan 1 de 3",
+        "choices": [
+          {
+            "id": "confirm",
+            "label_key": "dialog-confirm",
+            "destructive": false
+          },
+          {
+            "id": "cancel",
+            "label_key": "dialog-cancel",
+            "destructive": false
+          }
+        ],
+        "input": "",
+        "input_hostile": false
+      }
+    ],
+    "tasks": [
+      {
+        "task_id": 7,
+        "kind": "copy",
+        "state": "running",
+        "percent": 40,
+        "detail": "notas.txt",
+        "detail_hostile": false,
+        "foreign": false
+      }
+    ],
+    "palette": {
+      "query": "orde",
       "rows": [
         {
-          "approved": true,
-          "capabilities": [
-            "net",
-            "fs-read"
-          ],
-          "category": "provider",
-          "columns": 0,
-          "commands": 2,
-          "description": "Sirve ficheros por FTP",
+          "text": "pane.sort-name",
+          "desc": "Ordenar por nombre",
+          "chord": "ctrl+f3",
+          "enabled": true
+        }
+      ],
+      "cursor": 0,
+      "total": 42
+    },
+    "whichkey": {
+      "title": "ctrl+x",
+      "rows": [
+        {
+          "chord": "g",
+          "label": "Ir al principio",
           "enabled": true,
-          "has_help": true,
-          "id": "acme.ftp",
-          "name": "FTP de ACME",
-          "publisher": "ACME",
-          "version": "1.2.0"
+          "opens_sequence": false,
+          "reason": ""
         },
         {
-          "approved": false,
-          "capabilities": [
-            "fs-read"
-          ],
-          "category": "previewer",
-          "columns": 1,
-          "commands": 1,
-          "description": "",
+          "chord": "s",
+          "label": "Sincronizar",
           "enabled": false,
-          "has_help": false,
-          "id": "org.norte.demo",
-          "name": "Demo",
-          "publisher": "",
-          "version": "0.1.0"
+          "opens_sequence": false,
+          "reason": "aquí no"
         }
       ]
     },
-    "focus": 1,
     "help": {
-      "action_cursor": 0,
-      "actions": [
+      "title": "Copiar",
+      "topic_id": "copying",
+      "badge": null,
+      "sidebar": [
         {
-          "chord": "F5",
-          "enabled": false,
-          "label": "copiar",
-          "opens_topic": false,
-          "reason": "aquí no"
+          "row": "group",
+          "label": "Lo básico"
         },
         {
-          "chord": "",
-          "enabled": true,
-          "label": "Marcar",
-          "opens_topic": true,
-          "reason": ""
+          "row": "topic",
+          "title": "Copiar",
+          "current": true
         }
       ],
-      "badge": null,
+      "cursor": 1,
+      "focus": "body",
       "blocks": [
         {
           "block": "heading",
@@ -316,9 +455,9 @@
               "text": "Pulsa "
             },
             {
-              "is_chord": true,
               "span": "command",
-              "text": "F5"
+              "text": "F5",
+              "is_chord": true
             },
             {
               "span": "link",
@@ -368,391 +507,45 @@
           "rows": [
             {
               "chord": "F5",
-              "enabled": false,
               "label": "copiar",
-              "reason": "aquí no",
-              "label_hostile": false
+              "label_hostile": false,
+              "enabled": false,
+              "reason": "aquí no"
             }
           ]
         }
       ],
-      "can_back": true,
-      "cursor": 1,
+      "actions": [
+        {
+          "label": "copiar",
+          "chord": "F5",
+          "enabled": false,
+          "reason": "aquí no",
+          "opens_topic": false
+        },
+        {
+          "label": "Marcar",
+          "chord": "",
+          "enabled": true,
+          "reason": "",
+          "opens_topic": true
+        }
+      ],
+      "action_cursor": 0,
       "filter": "cop",
       "filtering": true,
-      "focus": "body",
-      "sidebar": [
-        {
-          "label": "Lo básico",
-          "row": "group"
-        },
-        {
-          "current": true,
-          "row": "topic",
-          "title": "Copiar"
-        }
-      ],
-      "title": "Copiar",
-      "topic_id": "copying"
+      "can_back": true
     },
-    "layout": {
-      "cells": [
-        120,
-        40
-      ],
-      "placements": [
-        {
-          "focus_index": 0,
-          "height": 38,
-          "role": "active",
-          "slot_id": 1,
-          "width": 60,
-          "x": 0,
-          "y": 0
-        },
-        {
-          "focus_index": 1,
-          "height": 38,
-          "role": "target",
-          "slot_id": 2,
-          "width": 60,
-          "x": 60,
-          "y": 0
-        },
-        {
-          "focus_index": 2,
-          "height": 2,
-          "role": null,
-          "slot_id": 5,
-          "width": 40,
-          "x": 0,
-          "y": 38
-        },
-        {
-          "focus_index": 3,
-          "height": 2,
-          "role": null,
-          "slot_id": 6,
-          "width": 40,
-          "x": 40,
-          "y": 38
-        },
-        {
-          "focus_index": 4,
-          "height": 2,
-          "role": null,
-          "slot_id": 7,
-          "width": 40,
-          "x": 80,
-          "y": 38
-        }
-      ]
-    },
-    "layouts": {
-      "cursor": 0,
-      "preview": [
-        "··········",
-        "·bbbbbbbb·"
-      ],
-      "problem": "",
-      "rows": [
-        {
-          "broken": false,
-          "factory": true,
-          "hostile": false,
-          "name": "orthodox",
-          "shares_keymap_name": true
-        },
-        {
-          "broken": true,
-          "factory": false,
-          "hostile": false,
-          "name": "mia",
-          "shares_keymap_name": false
-        }
-      ],
-      "title": "Disposiciones",
-      "problem_hostile": false
-    },
-    "locale": "es",
-    "palette": {
-      "cursor": 0,
-      "query": "orde",
-      "rows": [
-        {
-          "chord": "ctrl+f3",
-          "desc": "Ordenar por nombre",
-          "enabled": true,
-          "text": "pane.sort-name"
-        }
-      ],
-      "total": 42
-    },
-    "picker": {
-      "cursor": 0,
-      "empty": "",
-      "generation": 2,
-      "rows": [
-        {
-          "detail": "ext4 · 12 GiB libres de 100 GiB",
-          "hostile": false,
-          "label": "⟨file⟩/"
-        }
-      ],
-      "title": "Volúmenes"
-    },
-    "search": {
-      "cursor": 0,
-      "query": "*.rs",
-      "root": "⟨file⟩/home/oscar/work",
-      "root_hostile": false,
-      "rows": [
-        {
-          "hostile": false,
-          "is_dir": false,
-          "name": "main.rs",
-          "parent": "⟨file⟩/home/oscar/work/src",
-          "parent_hostile": false,
-          "score": null
-        },
-        {
-          "hostile": true,
-          "is_dir": false,
-          "name": "caf�.rs",
-          "parent": "⟨file⟩/home/oscar/work",
-          "parent_hostile": false,
-          "score": null
-        }
-      ],
-      "running": true,
-      "status": "búsqueda: 2 hallazgos (buscando…)",
-      "semantic": false
-    },
-    "settings": {
-      "cursor": 0,
-      "read_only": true,
-      "sections": [
-        {
-          "rows": [
-            {
-              "desc": "Pregunta antes de cerrar norte",
-              "hostile": false,
-              "id": "ui.confirm-quit",
-              "name": "Confirmar al salir",
-              "restart_required": true,
-              "value": "siempre"
-            },
-            {
-              "desc": "La fuente de la ventana",
-              "hostile": true,
-              "id": "ui.font",
-              "name": "Tipografía",
-              "restart_required": true,
-              "value": "Fira�Code"
-            }
-          ],
-          "section": "settings",
-          "title": "General"
-        },
-        {
-          "rows": [
-            {
-              "display": "/home/oscar/.config/norte",
-              "hostile": false,
-              "label": "Tu configuración",
-              "missing": false
-            },
-            {
-              "display": ".norte",
-              "hostile": false,
-              "label": "Configuración del proyecto",
-              "missing": true
-            }
-          ],
-          "section": "paths",
-          "title": "Dónde vive cada cosa"
-        }
-      ]
-    },
-    "slots": [
-      {
-        "columns": [
-          {
-            "id": "name",
-            "label": "Nombre",
-            "sort": "asc",
-            "sortable": true
-          },
-          {
-            "id": "size",
-            "label": "Tamaño",
-            "sort": null,
-            "sortable": true
-          }
-        ],
-        "cursor": 1,
-        "first_visible": 0,
-        "generation": 4,
-        "kind": "browser",
-        "marks": 0,
-        "path_display": "⟨file⟩/home/oscar",
-        "path_hostile": false,
-        "quick": {
-          "matches": 1,
-          "mode": "filter",
-          "query": "no"
-        },
-        "rows": [
-          {
-            "badge": "",
-            "badge_hostile": false,
-            "badge_role": "",
-            "cells": [
-              {
-                "column": "size",
-                "text": "1.2 KiB"
-              }
-            ],
-            "display_name": "notas.txt",
-            "hostile": false,
-            "key": 1,
-            "kind": "file",
-            "marked": false,
-            "selected": false
-          },
-          {
-            "badge": "",
-            "badge_hostile": false,
-            "badge_role": "",
-            "cells": [
-              {
-                "column": "size",
-                "text": "1.2 KiB"
-              }
-            ],
-            "display_name": "caf�.txt",
-            "hostile": true,
-            "key": 2,
-            "kind": "file",
-            "marked": false,
-            "selected": false
-          },
-          {
-            "badge": "M",
-            "badge_hostile": false,
-            "badge_role": "warning",
-            "cells": [
-              {
-                "column": "size",
-                "text": "1.2 KiB"
-              }
-            ],
-            "display_name": "cambiado.rs",
-            "hostile": false,
-            "key": 3,
-            "kind": "file",
-            "marked": false,
-            "selected": false
-          }
-        ],
-        "skipped_note": "se saltaron 2 entradas",
-        "slot_id": 1,
-        "state": {
-          "state": "ready"
-        },
-        "total_rows": 3
-      },
-      {
-        "fields": [
-          {
-            "hostile": true,
-            "label": "Nombre",
-            "value": "caf�.txt"
-          }
-        ],
-        "kind": "metadata",
-        "note": "",
-        "slot_id": 5
-      },
-      {
-        "cursor": 0,
-        "kind": "processes",
-        "slot_id": 6
-      },
-      {
-        "cursor": 1,
-        "generation": 5,
-        "kind": "places",
-        "rows": [
-          {
-            "folded": false,
-            "label": "Unidades",
-            "row": "header"
-          },
-          {
-            "detail": "ext4 · 12 GiB libres de 100 GiB",
-            "hostile": false,
-            "label": "⟨file⟩/",
-            "row": "drive"
-          },
-          {
-            "folded": false,
-            "label": "Favoritos",
-            "row": "header"
-          },
-          {
-            "broken": "",
-            "hostile": true,
-            "name": "caf�",
-            "row": "favorite",
-            "target": "⟨file⟩/home/oscar/caf�"
-          },
-          {
-            "broken": "esa ruta no parsea",
-            "hostile": false,
-            "name": "rota",
-            "row": "favorite",
-            "target": ""
-          }
-        ],
-        "slot_id": 7
-      },
-      {
-        "kind": "unsupported",
-        "kind_name": "compare",
-        "slot_id": 2,
-        "kind_name_hostile": false
-      }
-    ],
-    "status": {
-      "banners": [],
-      "message": "2 entradas",
-      "pending": {
-        "chords": "ctrl+x",
-        "count": 12
-      }
-    },
-    "tasks": [
-      {
-        "detail": "notas.txt",
-        "foreign": false,
-        "kind": "copy",
-        "percent": 40,
-        "state": "running",
-        "task_id": 7,
-        "detail_hostile": false
-      }
-    ],
     "theme": {
       "name": "tokyonight",
       "roles": [
         {
-          "color": "#2d4f8a",
-          "role": "selection-bg"
+          "role": "selection-bg",
+          "color": "#2d4f8a"
         },
         {
-          "color": "#f7768e",
-          "role": "error-fg"
+          "role": "error-fg",
+          "color": "#f7768e"
         }
       ],
       "unsupported_effects": [
@@ -762,64 +555,280 @@
         }
       ]
     },
-    "update": "snapshot",
+    "search": {
+      "query": "*.rs",
+      "root": "⟨file⟩/home/oscar/work",
+      "root_hostile": false,
+      "rows": [
+        {
+          "name": "main.rs",
+          "hostile": false,
+          "parent": "⟨file⟩/home/oscar/work/src",
+          "parent_hostile": false,
+          "is_dir": false,
+          "score": null
+        },
+        {
+          "name": "caf�.rs",
+          "hostile": true,
+          "parent": "⟨file⟩/home/oscar/work",
+          "parent_hostile": false,
+          "is_dir": false,
+          "score": null
+        }
+      ],
+      "cursor": 0,
+      "semantic": false,
+      "status": "búsqueda: 2 hallazgos (buscando…)",
+      "running": true
+    },
+    "compare": null,
+    "sync": null,
+    "layouts": {
+      "title": "Disposiciones",
+      "rows": [
+        {
+          "name": "orthodox",
+          "hostile": false,
+          "factory": true,
+          "shares_keymap_name": true,
+          "broken": false
+        },
+        {
+          "name": "mia",
+          "hostile": false,
+          "factory": false,
+          "shares_keymap_name": false,
+          "broken": true
+        }
+      ],
+      "cursor": 0,
+      "preview": [
+        "··········",
+        "·bbbbbbbb·"
+      ],
+      "problem": "",
+      "problem_hostile": false
+    },
+    "columns": {
+      "title": "Columnas — sftp",
+      "rows": [
+        {
+          "id": "name",
+          "label": "Nombre",
+          "hostile": false,
+          "enabled": true,
+          "format": "",
+          "format_locked": false,
+          "fixed": true
+        },
+        {
+          "id": "size",
+          "label": "Tamaño",
+          "hostile": false,
+          "enabled": true,
+          "format": "iec",
+          "format_locked": false,
+          "fixed": false
+        },
+        {
+          "id": "attr:posix.mode",
+          "label": "Permisos",
+          "hostile": false,
+          "enabled": false,
+          "format": "symbolic",
+          "format_locked": true,
+          "fixed": false
+        },
+        {
+          "id": "esto-no-parsea",
+          "label": "esto-no-parsea",
+          "hostile": false,
+          "enabled": true,
+          "format": "",
+          "format_locked": false,
+          "fixed": false
+        }
+      ],
+      "cursor": 1,
+      "note": "se aplica a esta ventana; no se guarda"
+    },
+    "picker": {
+      "title": "Volúmenes",
+      "rows": [
+        {
+          "label": "⟨file⟩/",
+          "hostile": false,
+          "detail": "ext4 · 12 GiB libres de 100 GiB"
+        }
+      ],
+      "cursor": 0,
+      "empty": "",
+      "generation": 2
+    },
+    "extensions": {
+      "rows": [
+        {
+          "id": "acme.ftp",
+          "name": "FTP de ACME",
+          "publisher": "ACME",
+          "version": "1.2.0",
+          "category": "provider",
+          "description": "Sirve ficheros por FTP",
+          "approved": true,
+          "enabled": true,
+          "has_help": true,
+          "commands": 2,
+          "columns": 0,
+          "capabilities": [
+            "net",
+            "fs-read"
+          ]
+        },
+        {
+          "id": "org.norte.demo",
+          "name": "Demo",
+          "publisher": "",
+          "version": "0.1.0",
+          "category": "previewer",
+          "description": "",
+          "approved": false,
+          "enabled": false,
+          "has_help": false,
+          "commands": 1,
+          "columns": 1,
+          "capabilities": [
+            "fs-read"
+          ]
+        }
+      ],
+      "cursor": 0,
+      "detail": {
+        "id": "acme.ftp",
+        "config": [
+          {
+            "key": "timeout",
+            "kind": "int",
+            "value": "30",
+            "default": "10",
+            "description": "Segundos antes de rendirse",
+            "domain": "entre 1 y 300",
+            "hostile": false,
+            "editable": true
+          },
+          {
+            "key": "mode",
+            "kind": "enum",
+            "value": "safe",
+            "default": "safe",
+            "description": "",
+            "domain": "safe · fast� · read-only",
+            "hostile": true,
+            "editable": true
+          }
+        ],
+        "commands": [
+          {
+            "id": "greet",
+            "title": "Saludar",
+            "hostile": false
+          }
+        ],
+        "cursor": 0,
+        "editing": null,
+        "editing_hostile": false
+      },
+      "loading": false,
+      "errors": [
+        {
+          "dir": "/home/oscar/.config/norte/plugins/roto",
+          "hostile": false,
+          "reason": "el manifiesto no parsea",
+          "reason_hostile": false
+        }
+      ]
+    },
+    "plugin_output": {
+      "plugin": "ACME FTP",
+      "command": "Saludar",
+      "text": "hola�mundo",
+      "hostile": true,
+      "truncated": true
+    },
+    "settings": {
+      "sections": [
+        {
+          "section": "settings",
+          "title": "General",
+          "rows": [
+            {
+              "id": "ui.confirm-quit",
+              "name": "Confirmar al salir",
+              "desc": "Pregunta antes de cerrar norte",
+              "value": "siempre",
+              "hostile": false,
+              "restart_required": true
+            },
+            {
+              "id": "ui.font",
+              "name": "Tipografía",
+              "desc": "La fuente de la ventana",
+              "value": "Fira�Code",
+              "hostile": true,
+              "restart_required": true
+            }
+          ]
+        },
+        {
+          "section": "paths",
+          "title": "Dónde vive cada cosa",
+          "rows": [
+            {
+              "label": "Tu configuración",
+              "display": "/home/oscar/.config/norte",
+              "hostile": false,
+              "missing": false
+            },
+            {
+              "label": "Configuración del proyecto",
+              "display": ".norte",
+              "hostile": false,
+              "missing": true
+            }
+          ]
+        }
+      ],
+      "cursor": 0,
+      "read_only": true
+    },
     "viewer": {
+      "path_display": "⟨file⟩/home/oscar/notas.txt",
+      "path_hostile": false,
       "encoding": "UTF-8",
       "eol": "lf",
-      "first_line": 4,
+      "hex": false,
       "forced": false,
       "had_errors": false,
-      "hex": false,
-      "image": {
-        "format": "PNG",
-        "height": 1080,
-        "width": 1920
-      },
-      "image_refused": "",
+      "truncated": true,
+      "total_rows": 120,
+      "first_line": 4,
       "lines": [
         "quinta línea"
       ],
-      "path_display": "⟨file⟩/home/oscar/notas.txt",
-      "path_hostile": false,
       "preview_by": "via PDF de ACME",
       "preview_lossy": true,
-      "total_rows": 120,
-      "truncated": true
-    },
-    "whichkey": {
-      "rows": [
-        {
-          "chord": "g",
-          "enabled": true,
-          "label": "Ir al principio",
-          "opens_sequence": false,
-          "reason": ""
-        },
-        {
-          "chord": "s",
-          "enabled": false,
-          "label": "Sincronizar",
-          "opens_sequence": false,
-          "reason": "aquí no"
-        }
-      ],
-      "title": "ctrl+x"
+      "image": {
+        "format": "PNG",
+        "width": 1920,
+        "height": 1080
+      },
+      "image_refused": ""
     },
     "ai_rename": {
-      "confirmable": true,
-      "detail": [
-        {
-          "text": "✗ 2. ya existe: otro.mkv",
-          "hostile": false
-        }
-      ],
       "dir": {
         "text": "⟨file⟩/home/oscar/series",
         "hostile": false
       },
-      "first_visible": 0,
-      "hidden_hostile": true,
-      "more_note": "… 1/3 (desplazar: ↓/↑)",
       "pairs": [
         {
           "from": {
@@ -832,12 +841,22 @@
           }
         }
       ],
-      "real_steps_note": "se renombrarán 2 de verdad",
-      "seen_all": false,
+      "first_visible": 0,
+      "total": 3,
+      "more_note": "… 1/3 (desplazar: ↓/↑)",
+      "hidden_hostile": true,
       "status": "lote: aplicable — una task, un deshacer",
-      "total": 3
+      "detail": [
+        {
+          "text": "✗ 2. ya existe: otro.mkv",
+          "hostile": false
+        }
+      ],
+      "confirmable": true,
+      "real_steps_note": "se renombrarán 2 de verdad",
+      "seen_all": false
     },
-    "compare": null,
-    "sync": null
+    "locale": "es",
+    "update": "snapshot"
   }
 }

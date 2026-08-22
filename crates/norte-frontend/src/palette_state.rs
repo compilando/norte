@@ -65,6 +65,25 @@ impl Palette {
         p
     }
 
+    /// Añade filas a una palette YA abierta, conservando lo tecleado.
+    ///
+    /// Existe porque las filas de plugin no se pueden tener al abrir: salen
+    /// de un `plugin.list` que hay que ir a pedir, y esperar a que conteste
+    /// para pintar la palette es congelar la ventana por unas filas que
+    /// puede que no haya. La alternativa —reconstruirla con `new`— pierde la
+    /// query, que es justo lo que el lector acaba de teclear.
+    ///
+    /// El fold se calcula igual que en [`Self::new`]: sobre lo PINTADO
+    /// (`text`+`desc`), jamás sobre `key`.
+    pub fn extend_rows(&mut self, rows: Vec<crate::palette::Row>) {
+        self.folds.extend(
+            rows.iter()
+                .map(|row| crate::nav::fold(format!("{} {}", row.text, row.desc).as_bytes())),
+        );
+        self.rows.extend(rows);
+        self.recompute();
+    }
+
     /// Recalcula `visible` a partir de la query actual sobre `self.folds`
     /// (el cache YA vigente) y clampa el cursor.
     fn recompute(&mut self) {

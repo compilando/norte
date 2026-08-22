@@ -99,6 +99,38 @@ pub fn plugin_rows(plugins: &[norte_proto::methods::PluginInfo]) -> Vec<Row> {
         .collect()
 }
 
+/// Splits a plugin command row's `key` back into `(plugin_id, command_id)`.
+///
+/// Lives next to [`plugin_rows`], which COMPOSES that key: a format with two
+/// homes is a format with two answers about where the `command_id` starts,
+/// and the `command_id` is the half with no charset validation.
+///
+/// The split is at the FIRST `:` after the `plugin:` prefix — `plugin_id` is
+/// reverse-DNS and cannot contain one — and everything after it is the raw
+/// `command_id`, with no further splitting: it may carry `:`, newlines, or
+/// anything else the manifest let through.
+///
+/// ```
+/// use norte_frontend::palette::parse_plugin_key;
+///
+/// assert_eq!(
+///     parse_plugin_key("plugin:org.norte.demo:greet"),
+///     Some(("org.norte.demo", "greet"))
+/// );
+/// // A built-in command is not one of these.
+/// assert_eq!(parse_plugin_key("app.quit"), None);
+/// // Everything after the first colon is the command id, verbatim.
+/// assert_eq!(
+///     parse_plugin_key("plugin:org.norte.demo:a:b"),
+///     Some(("org.norte.demo", "a:b"))
+/// );
+/// ```
+#[must_use]
+pub fn parse_plugin_key(cmd: &str) -> Option<(&str, &str)> {
+    let (id, command) = cmd.strip_prefix("plugin:")?.split_once(':')?;
+    (!id.is_empty()).then_some((id, command))
+}
+
 /// The FIRST chord (in `eff.bindings()`'s precedence order) that resolves
 /// to `cmd`, if any, ready to PAINT.
 ///

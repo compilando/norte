@@ -57,9 +57,16 @@ pub struct ViewSnapshot {
     pub columns: Option<ColumnsPickerView>,
     /// Un selector abierto (conexiones o volúmenes), si lo hay.
     pub picker: Option<PickerView>,
-    /// Las extensiones, si están abiertas. Solo LECTURA: se ve qué hay
-    /// instalado y en qué estado, y NO se aprueba ni se enciende nada.
+    /// Las extensiones, si están abiertas. Desde la 6.4 GOBIERNAN: se
+    /// aprueba, se revoca, se enciende, se apaga y se configura — con el
+    /// mismo interruptor de efectos que decide si esta ventana escribe.
     pub extensions: Option<ExtensionsView>,
+    /// La salida del último comando de extensión, si sigue en pantalla.
+    ///
+    /// Fuera del gestor a propósito: un comando se lanza desde la PALETA, y
+    /// una salida guardada dentro de una pantalla que no está abierta no la
+    /// ve nadie.
+    pub plugin_output: Option<ExtensionOutputView>,
     /// Los ajustes, si están abiertos. Solo LECTURA: esta ventana enseña lo
     /// que hay y no escribe nada hasta que la fase 5 dé el camino seguro.
     pub settings: Option<SettingsView>,
@@ -490,6 +497,40 @@ pub struct ExtensionsView {
     pub errors: Vec<ExtensionErrorView>,
 }
 
+/// La salida de UN comando de extensión.
+///
+/// Todo lo de aquí lo escribe un tercero: el texto es lo que el plugin
+/// imprimió y el título es el de su manifiesto. Los dos entran enmascarados y
+/// acotados, y `truncated` viaja porque el receptor NO puede deducirlo — el
+/// texto le llega ya corto.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionOutputView {
+    /// De qué extensión, ya enmascarado (su nombre, no su id).
+    pub plugin: String,
+    /// Qué comando, ya enmascarado (su título, no su id).
+    pub command: String,
+    /// Lo que imprimió, ya enmascarado y acotado. Vacío = no imprimió nada,
+    /// que se DICE: un panel en blanco se lee como que no llegó a correr.
+    pub text: String,
+    /// Alguna de las tres cadenas se pinta distinta de lo que es.
+    pub hostile: bool,
+    /// La salida no cabía entera y se cortó.
+    pub truncated: bool,
+}
+
+/// Un comando que aporta una extensión.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionCommandView {
+    /// Su id de despacho. NUNCA se pinta: el manifiesto no le valida
+    /// charset, así que puede llevar cualquier byte —saltos de línea
+    /// incluidos—, y enmascararlo lo rompería como clave.
+    pub id: String,
+    /// Su título, ya enmascarado y acotado.
+    pub title: String,
+    /// El título se pinta distinto de lo que declara el manifiesto.
+    pub hostile: bool,
+}
+
 /// Una extensión del catálogo.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionRowView {
@@ -550,6 +591,18 @@ pub struct ExtensionDetailView {
     /// Sus claves `[config]` con el valor efectivo. Vacío si no declara
     /// ninguna.
     pub config: Vec<ExtensionConfigRowView>,
+    /// Los comandos que aporta, en orden de manifiesto. Vacío si no aporta
+    /// ninguno.
+    pub commands: Vec<ExtensionCommandView>,
+    /// Qué clave está elegida dentro de la ficha.
+    pub cursor: u64,
+    /// El buffer de edición abierto (`string`/`int`), YA ENMASCARADO. `None`
+    /// = no se está editando nada.
+    pub editing: Option<String>,
+    /// El buffer se pinta distinto de lo que se va a escribir. Un valor de
+    /// partida lo escribió el PLUGIN, así que puede traer lo que sea; lo que
+    /// viaja de vuelta al daemon es el operando crudo, no esto.
+    pub editing_hostile: bool,
 }
 
 /// Una clave `[config.<key>]` con su esquema y su valor efectivo.
@@ -579,6 +632,12 @@ pub struct ExtensionConfigRowView {
     /// override bidi dentro llegaba al DOM tal cual mientras tres rustdocs
     /// afirmaban que eso no podía pasar.
     pub hostile: bool,
+    /// Este build sabe editar este `kind`.
+    ///
+    /// `false` para un tipo que no conoce —un peer más nuevo—: el modelo
+    /// compartido lo trata como solo lectura, y decirlo evita que la pantalla
+    /// ofrezca un `Enter` que no va a cambiar nada.
+    pub editable: bool,
 }
 
 /// El selector de COLUMNAS: qué columnas hay, en qué orden y con qué formato.
@@ -1915,6 +1974,11 @@ pub enum ViewChange {
     Extensions {
         /// El gestor, o `None` si se cerró.
         extensions: Option<ExtensionsView>,
+    },
+    /// La salida de un comando de extensión se enseñó o se cerró.
+    PluginOutput {
+        /// Lo que imprimió, o `None` si se cerró.
+        output: Option<ExtensionOutputView>,
     },
     /// Los ajustes se abrieron, movieron el cursor o se cerraron.
     Settings {

@@ -3801,7 +3801,7 @@ fn arbol_con_plugins(
 ) -> Arc<Falso> {
     let base = arbol();
     let mut f = Falso {
-        plugins,
+        plugins: plugins.into(),
         paginas: paginas
             .iter()
             .map(|(id, md)| ((*id).to_owned(), (*md).to_owned()))
@@ -4620,6 +4620,10 @@ async fn moverse_tira_la_ficha() {
             break;
         }
     }
+    // Con la ficha abierta, las flechas son SUYAS: recorren sus claves. Este
+    // catálogo no declara ninguna, y entonces no se las queda —una ficha sin
+    // nada que andar dejaría al lector sin poder moverse sin cerrarla—, así
+    // que esta baja el catálogo y tira la ficha.
     h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
     let v = siguiente_extensiones(&mut sub)
         .await
@@ -4704,7 +4708,7 @@ async fn el_texto_de_una_extension_llega_enmascarado() {
 async fn el_valor_de_una_clave_de_plugin_llega_enmascarado_y_marcado() {
     let ext = extension("acme.ftp", "FTP", true);
     let mut f = Falso {
-        plugins: vec![ext],
+        plugins: vec![ext].into(),
         ..Falso::default()
     };
     f.arbol.clone_from(&arbol().arbol);
@@ -6356,7 +6360,7 @@ fn arbol_grande_con_plugins(n: usize) -> Arc<Falso> {
     f.arbol.insert("mem:///casa".to_owned(), nombres);
     f.decoraciones
         .insert("mem:///casa/f00000.txt".to_owned(), "M".to_owned());
-    f.plugins = vec![{
+    *f.plugins.lock().expect("plugins") = vec![{
         let mut p = extension("acme.git", "Git", true);
         // DECLARADA en el catálogo: `validated_plugin_requests` no pide una
         // columna que su plugin no dice tener, para no atribuirla a quien no
@@ -12121,4 +12125,420 @@ async fn el_informe_de_la_sincronizacion_dice_lo_que_fallo() {
         }
     }
     panic!("el informe no llegó al panel");
+}
+
+/// Aprobar las capabilities de una extensión PREGUNTA, y la pregunta las
+/// enumera.
+///
+/// «¿Apruebas org.ejemplo.foo?» sin decir qué concede no es una decisión: es
+/// un botón. Cada capability va en su LÍNEA y con su bandera, porque la que
+/// se pinta distinta de lo que dice es justo la que un manifiesto hostil
+/// escribe para colarse entre las de verdad.
+#[tokio::test]
+async fn aprobar_pregunta_y_enumera_las_capabilities() {
+    let mut ext = extension("acme.ftp", "FTP de ACME", false);
+    ext.approved = false;
+    ext.enabled = false;
+    ext.capabilities = vec!["fs-read".to_owned(), "net\u{202e}".to_owned()];
+    let backend = arbol_con_plugins(vec![ext], &[]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+
+    h.dispatch(tecla("a")).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let d = dialogos.last().expect("la pregunta");
+    assert_eq!(d.title_key, "modal-extension-approve-title");
+    assert_eq!(d.body.len(), 3, "el nombre y las DOS capabilities: {d:?}");
+    assert!(
+        d.body.iter().any(|l| l.hostile),
+        "la capability con el override bidi se marca: {:?}",
+        d.body
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(
+        backend.gobierno.lock().expect("gobierno").is_empty(),
+        "y todavía no se ha concedido nada"
+    );
+
+    // Y la respuesta afirmativa concede, y el catálogo se REPIDE: lo que la
+    // pantalla dice de quién puede leer tus ficheros no lo decide un
+    // optimismo local.
+    h.dispatch(UiAction::Dialog {
+        id: d.id,
+        choice: "approve".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    for _ in 0..20 {
+        let Some(v) = siguiente_extensiones(&mut sub).await else {
+            continue;
+        };
+        if v.rows.first().is_some_and(|r| r.approved) {
+            assert_eq!(
+                backend.gobierno.lock().expect("gobierno").as_slice(),
+                ["approval:acme.ftp:true"]
+            );
+            return;
+        }
+    }
+    panic!("el catálogo nunca reflejó la concesión");
+}
+
+/// En solo lectura no se concede nada: se DICE.
+///
+/// Es el mismo interruptor que decide si esta ventana borra. Conceder
+/// capabilities es la decisión de seguridad del sistema de extensiones, y
+/// una ventana montada sin efectos no la toma.
+#[tokio::test]
+async fn en_solo_lectura_no_se_gobierna_ninguna_extension() {
+    let mut ext = extension("acme.ftp", "FTP de ACME", false);
+    ext.approved = false;
+    let backend = arbol_con_plugins(vec![ext], &[]);
+    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+    for tecla_de in ["a", "e"] {
+        let ack = h.dispatch(tecla(tecla_de)).await.expect("host vivo");
+        assert!(
+            matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-read-only"),
+            "`{tecla_de}` en solo lectura: {ack:?}"
+        );
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(backend.gobierno.lock().expect("gobierno").is_empty());
+}
+
+/// Encender una extensión SIN aprobar se rehúsa, y se dice por qué.
+///
+/// Sin capabilities aprobadas el core no la carga: decir «encendida» sobre
+/// algo que no corre es la pantalla mintiendo.
+#[tokio::test]
+async fn encender_sin_aprobar_se_rehusa() {
+    let mut ext = extension("acme.ftp", "FTP de ACME", false);
+    ext.approved = false;
+    ext.enabled = false;
+    let backend = arbol_con_plugins(vec![ext], &[]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+    let ack = h.dispatch(tecla("e")).await.expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key }
+            if reason_key == "host-extension-not-approved"),
+        "{ack:?}"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(backend.gobierno.lock().expect("gobierno").is_empty());
+}
+
+/// Un `bool` CICLA con `Enter` y se escribe; un `int` abre el buffer, y lo
+/// que se teclea se valida contra las cotas del ESQUEMA antes de salir.
+#[tokio::test]
+async fn el_editor_de_config_cicla_teclea_y_valida() {
+    let ext = extension("acme.ftp", "FTP de ACME", false);
+    let backend = arbol_con_esquema(vec![ext], &[("acme.ftp", esquema_de_prueba())]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    let ficha = ficha_abierta(&mut sub).await;
+    assert_eq!(ficha.config.len(), 3);
+    assert!(
+        !ficha.config[2].editable,
+        "un `kind` que este build no conoce es de solo lectura: {:?}",
+        ficha.config[2]
+    );
+
+    // La primera clave es el `bool`: `Enter` la cicla y la manda.
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    assert_eq!(
+        backend.escrituras.lock().expect("escrituras").as_slice(),
+        [(
+            "acme.ftp".to_owned(),
+            "verbose".to_owned(),
+            "true".to_owned()
+        )]
+    );
+
+    // La segunda es el `int`: `Enter` abre el buffer y NO escribe nada.
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    for _ in 0..20 {
+        let Some(v) = siguiente_extensiones(&mut sub).await else {
+            continue;
+        };
+        if v.detail.as_ref().is_some_and(|d| d.editing.is_some()) {
+            break;
+        }
+    }
+    // Un valor fuera de las cotas se rehúsa AQUÍ y no viaja: el daemon
+    // vuelve a validar, pero decirlo antes ahorra el viaje y dice la cota.
+    for c in ["Backspace", "Backspace", "9", "9", "9"] {
+        h.dispatch(tecla(c)).await.expect("host vivo");
+    }
+    let ack = h.dispatch(tecla("Enter")).await.expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-out-of-range"),
+        "{ack:?}"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    assert_eq!(
+        backend.escrituras.lock().expect("escrituras").len(),
+        1,
+        "el valor fuera de rango no se mandó"
+    );
+
+    // Y uno dentro sí.
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    for _ in 0..20 {
+        let Some(v) = siguiente_extensiones(&mut sub).await else {
+            continue;
+        };
+        if v.detail.as_ref().is_some_and(|d| d.editing.is_some()) {
+            break;
+        }
+    }
+    for c in ["Backspace", "Backspace", "Backspace", "4", "2"] {
+        h.dispatch(tecla(c)).await.expect("host vivo");
+    }
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        let escrituras = backend.escrituras.lock().expect("escrituras").clone();
+        if escrituras.len() == 2 {
+            assert_eq!(escrituras[1].1, "timeout");
+            assert_eq!(escrituras[1].2, "42");
+            return;
+        }
+    }
+    panic!("la clave tecleada nunca se mandó");
+}
+
+/// Mientras se TECLEA un valor, `a` es una letra y no una concesión.
+///
+/// Es el mismo régimen fijo que cualquier campo de este host: resolver las
+/// letras como gestos ahí convierte escribir «casa» en dos concesiones de
+/// capabilities.
+#[tokio::test]
+async fn tecleando_un_valor_las_letras_son_letras() {
+    let ext = extension("acme.ftp", "FTP de ACME", false);
+    let backend = arbol_con_esquema(vec![ext], &[("acme.ftp", esquema_de_prueba())]);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = extensiones_cargadas(&mut sub).await;
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    let _ = ficha_abierta(&mut sub).await;
+    // A la tercera clave, que es `string`.
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    h.dispatch(tecla("ArrowUp")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    for _ in 0..20 {
+        let Some(v) = siguiente_extensiones(&mut sub).await else {
+            continue;
+        };
+        if v.detail.as_ref().is_some_and(|d| d.editing.is_some()) {
+            break;
+        }
+    }
+    h.dispatch(tecla("a")).await.expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(
+        backend.gobierno.lock().expect("gobierno").is_empty(),
+        "la `a` tecleada no concedió capabilities"
+    );
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let editando = foto
+        .extensions
+        .expect("sigue abierto")
+        .detail
+        .expect("con ficha")
+        .editing
+        .expect("editando");
+    assert!(editando.ends_with('a'), "la letra entró: {editando:?}");
+}
+
+/// Un árbol con catálogo Y esquemas de `[config]`.
+fn arbol_con_esquema(
+    plugins: Vec<norte_proto::methods::PluginInfo>,
+    esquemas: &[(&str, Vec<norte_proto::methods::PluginConfigKeyWire>)],
+) -> Arc<Falso> {
+    let base = arbol();
+    let mut f = Falso {
+        plugins: plugins.into(),
+        esquemas: esquemas
+            .iter()
+            .map(|(id, keys)| ((*id).to_owned(), keys.clone()))
+            .collect(),
+        ..Falso::default()
+    };
+    f.arbol.clone_from(&base.arbol);
+    Arc::new(f)
+}
+
+/// El esquema de prueba: un `bool`, un `int` acotado y un `kind` que este
+/// build no conoce.
+fn esquema_de_prueba() -> Vec<norte_proto::methods::PluginConfigKeyWire> {
+    vec![
+        norte_proto::methods::PluginConfigKeyWire {
+            key: "verbose".to_owned(),
+            kind: "bool".to_owned(),
+            default: "false".to_owned(),
+            min: None,
+            max: None,
+            values: Vec::new(),
+            description: None,
+            value: "false".to_owned(),
+        },
+        norte_proto::methods::PluginConfigKeyWire {
+            key: "timeout".to_owned(),
+            kind: "int".to_owned(),
+            default: "10".to_owned(),
+            min: Some(1),
+            max: Some(300),
+            values: Vec::new(),
+            description: None,
+            value: "30".to_owned(),
+        },
+        norte_proto::methods::PluginConfigKeyWire {
+            key: "future".to_owned(),
+            kind: "duration".to_owned(),
+            default: "1s".to_owned(),
+            min: None,
+            max: None,
+            values: Vec::new(),
+            description: None,
+            value: "1s".to_owned(),
+        },
+    ]
+}
+
+/// Espera a que la ficha de la extensión elegida esté abierta.
+async fn ficha_abierta(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> norte_ui_host::dto::ExtensionDetailView {
+    for _ in 0..20 {
+        let Some(v) = siguiente_extensiones(sub).await else {
+            continue;
+        };
+        if let Some(d) = v.detail {
+            return d;
+        }
+    }
+    panic!("la ficha nunca se abrió");
+}
+
+/// La paleta ofrece los comandos de las extensiones, y ejecutarlos enseña lo
+/// que imprimieron.
+///
+/// Las filas las compone el modelo COMPARTIDO: solo aprobadas y encendidas
+/// —la misma puerta que `plugin.run_command` exige por su cuenta— y con el
+/// prefijo que impide que un comando de tercero se disfrace de uno propio.
+/// La salida es texto de tercero: se enmascara, se acota, y que se cortó se
+/// dice.
+#[tokio::test]
+async fn la_paleta_ejecuta_un_comando_de_extension_y_ensena_su_salida() {
+    let mut ext = extension("acme.ftp", "FTP de ACME", false);
+    ext.commands = vec![norte_proto::methods::PluginCommandInfo {
+        id: "greet".to_owned(),
+        title: "Saludar".to_owned(),
+    }];
+    let backend = arbol_con_plugins(vec![ext], &[]);
+    *backend.salida_de_comando.lock().expect("salida") =
+        Some(Ok(format!("hola\u{202e}{}", "x".repeat(5_000))));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla_mod("p", true, false))
+        .await
+        .expect("host vivo");
+    // Las filas de plugin se UNEN cuando el daemon contesta: la paleta se
+    // pinta antes, con los comandos propios.
+    let mut llegaron = false;
+    for _ in 0..40 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let p = siguiente_foto(&mut sub).await.palette.expect("abierta");
+        if p.rows.iter().any(|r| r.text.contains("Saludar")) {
+            llegaron = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(llegaron, "la fila del comando de la extensión nunca llegó");
+    // Se acota tecleando, que es para lo que está la paleta: el título del
+    // comando lo pliega el modelo compartido junto con su descripción.
+    for c in "Saludar".chars() {
+        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+    }
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let p = siguiente_foto(&mut sub).await.palette.expect("abierta");
+    assert_eq!(p.rows.len(), 1, "el filtro deja una sola fila: {p:?}");
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+
+    for _ in 0..40 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        let Some(salida) = foto.plugin_output else {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            continue;
+        };
+        assert_eq!(
+            backend.ejecutados.lock().expect("ejecutados").as_slice(),
+            [("acme.ftp".to_owned(), "greet".to_owned())]
+        );
+        assert!(salida.hostile, "el override bidi se dice: {salida:?}");
+        assert!(!salida.text.contains('\u{202e}'), "y se enmascara");
+        assert!(salida.truncated, "y que se cortó también: {salida:?}");
+        assert_eq!(salida.command, "Saludar");
+
+        // Y `Escape` la cierra sin tocar nada de debajo.
+        h.dispatch(tecla("Escape")).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        assert!(siguiente_foto(&mut sub).await.plugin_output.is_none());
+        return;
+    }
+    panic!(
+        "la salida del comando nunca llegó; ejecutados = {:?}",
+        backend.ejecutados.lock().expect("ejecutados")
+    );
+}
+
+/// En solo lectura la paleta NO ofrece comandos de extensión.
+///
+/// Lo que hace un comando lo decide el PLUGIN: puede escribir. Una ventana
+/// montada sin efectos no lo lanza, y por tanto tampoco lo ofrece — es la
+/// misma regla que ya se aplica a los comandos propios: ofrecer lo que se va
+/// a rehusar es prometer algo que no se hará. El catálogo ni se pide.
+#[tokio::test]
+async fn en_solo_lectura_no_se_ejecuta_un_comando_de_extension() {
+    let mut ext = extension("acme.ftp", "FTP de ACME", false);
+    ext.commands = vec![norte_proto::methods::PluginCommandInfo {
+        id: "greet".to_owned(),
+        title: "Saludar".to_owned(),
+    }];
+    let backend = arbol_con_plugins(vec![ext], &[]);
+    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla_mod("p", true, false))
+        .await
+        .expect("host vivo");
+    for _ in 0..10 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let p = siguiente_foto(&mut sub).await.palette.expect("abierta");
+        assert!(
+            !p.rows.iter().any(|r| r.text.contains("Saludar")),
+            "una ventana sin efectos no ofrece ejecutar código de tercero"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    // Y el catálogo ni se pidió: la puerta se cierra antes del viaje.
+    assert!(backend.ejecutados.lock().expect("ejecutados").is_empty());
 }

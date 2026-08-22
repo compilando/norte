@@ -70,6 +70,38 @@ pub const CONTEXTOS: &[&str] = &[
     "dialog.ai-rename",
 ];
 
+/// Cómo se llaman las extensiones y sus comandos, ya enmascarados:
+/// `id → (nombre, comando → título)`.
+type Rotulos =
+    std::collections::HashMap<String, (String, std::collections::HashMap<String, String>)>;
+
+/// Qué se cambia de una extensión.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cambio {
+    /// Conceder o retirar sus capabilities.
+    Aprobacion,
+    /// Encenderla o apagarla.
+    Encendido,
+}
+
+/// El cambio ya resuelto a un valor concreto.
+///
+/// Aparte de [`Cambio`] a propósito: `a` sobre una fila significa cosas
+/// distintas según cómo esté, y la que viaja al daemon es la resuelta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gobierno {
+    /// `plugin.set_approval`.
+    Aprobar(bool),
+    /// `plugin.set_enabled`.
+    Encender(bool),
+}
+
+/// Tope de caracteres de la salida de un comando de extensión.
+///
+/// Lo que imprime un plugin no tiene tope por su lado: un comando puede
+/// devolver un megabyte y dejarlo cruzar es regalarle la ventana.
+const MAX_SALIDA: usize = 4_000;
+
 /// Plazo de una llamada de extensiones (catálogo o página).
 ///
 /// La ayuda se pinta sin esperarla, así que este plazo no gobierna una
@@ -368,6 +400,18 @@ enum Fondo {
     /// `unwrap_or(vacío)` apagaba el «cargando» de B y decía «ninguna
     /// instalada» hasta que llegara B.
     Catalogo(u64, Result<norte_proto::methods::PluginListResult, Error>),
+    /// El catálogo que pidió la PALETA, para sus filas de plugin.
+    PluginsDePaleta(u64, Result<norte_proto::methods::PluginListResult, Error>),
+    /// Un cambio de gobierno (aprobar/revocar, encender/apagar) contestó.
+    ///
+    /// Lleva la APERTURA por lo mismo que el catálogo: la respuesta puede
+    /// llegar sobre un gestor que ya se cerró y se volvió a abrir.
+    Gobernada(u64, Result<(), Error>),
+    /// Una escritura de `[config.<key>]` contestó, con el id de la extensión
+    /// a la que se le escribió.
+    ConfigEscrita(String, Result<(), Error>),
+    /// La salida de un comando de extensión, con quién lo pidió.
+    SalidaDeComando(u64, Box<(String, String, Result<String, Error>)>),
     /// El esquema `[config]` de una extensión, pedido al abrir su ficha.
     FichaDePlugin(
         String,
@@ -1084,6 +1128,17 @@ enum Pendiente {
     /// Preguntar al índice por SIGNIFICADO. Lo que se teclea es la consulta,
     /// y no lleva más operandos: el alcance es el índice entero.
     ConsultaSemantica,
+    /// Conceder las capabilities de una extensión.
+    ///
+    /// Es la única de las cuatro operaciones del gestor que PREGUNTA:
+    /// revocar, encender y apagar van en la dirección segura y no hacen
+    /// falta dos gestos. La pregunta enumera las capabilities una por línea
+    /// —fuera de la frase, como cualquier operando de este host— porque
+    /// «aprobar org.ejemplo.foo» sin decir qué concede no es una decisión.
+    AprobarExtension {
+        /// A quién se le conceden.
+        id: String,
+    },
     /// Decidir sobre una op de agente. La op real la tiene el daemon ligada
     /// al id: aquí solo viaja el sí o el no.
     Decidir {
@@ -1372,6 +1427,20 @@ struct Estado {
     ajustes: Option<crate::settings::Ajustes>,
     /// El gestor de extensiones, si está abierto.
     extensiones: Option<crate::extensions::Extensiones>,
+    /// Cómo se llaman las extensiones y sus comandos, ya enmascarados, para
+    /// el panel de salida: `id → (nombre, comando → título)`.
+    ///
+    /// Se compone con el catálogo que la PALETA pidió, y no con el del
+    /// gestor: un comando se lanza desde la paleta con el gestor cerrado, y
+    /// entonces no hay de dónde sacar un rótulo. Un panel que dice quién
+    /// imprimió qué sin poder nombrar a ninguno de los dos no dice nada.
+    rotulos_plugin: Rotulos,
+    /// La salida del último comando de extensión, si sigue en pantalla.
+    ///
+    /// Del CONTROLADOR y no del gestor: un comando se lanza desde la paleta,
+    /// que no necesita tener el gestor abierto —ni lo abre—, y una salida
+    /// guardada dentro de una pantalla cerrada no la ve nadie.
+    salida_plugin: Option<crate::dto::ExtensionOutputView>,
     /// El tema, tal como lo resolvió el arranque.
     tema: crate::pickers::HostTheme,
     /// Se está mirando el tema por dentro.
@@ -1383,6 +1452,10 @@ struct Estado {
     gen_selector: u64,
     /// Cuántas veces se ha abierto el gestor de extensiones.
     gen_extensiones: u64,
+    /// Cuántas veces se ha abierto la paleta.
+    gen_paleta: u64,
+    /// Cuántos comandos de extensión se han lanzado.
+    gen_salida: u64,
     /// Los bytes de la imagen que el visor enseña, si ya llegaron.
     ///
     /// NO viajan en la foto: una imagen de ocho megas en el flujo de parches
@@ -1632,6 +1705,23 @@ impl Estado {
     /// Toma las opciones ENTERAS y no ocho parámetros sueltos: son los
     /// mismos datos, y una lista de ocho posiciones es donde dos `Effective`
     /// del mismo tipo se intercambian sin que el compilador diga nada.
+    /// Un hueco de listado por cada `browser` del árbol, todos en el mismo
+    /// directorio: de dónde arranca cada uno es cosa de la sesión (y hasta
+    /// que exista, arrancar los dos donde arrancó el host es lo honesto).
+    fn huecos_iniciales(
+        arbol: &Node,
+        kinds: &KindRegistry,
+        dir: &VPath,
+    ) -> std::collections::BTreeMap<u32, Hueco> {
+        let mut huecos = std::collections::BTreeMap::new();
+        for SlotId(id) in arbol.slot_ids() {
+            if es_listado(arbol, SlotId(id), kinds) {
+                huecos.insert(id, Hueco::vacio(dir.clone()));
+            }
+        }
+        huecos
+    }
+
     fn nuevo(instance: InstanceId, options: UiHostOptions) -> (Self, Arc<dyn HostBackend>) {
         let UiHostOptions {
             backend,
@@ -1656,16 +1746,7 @@ impl Estado {
         };
         let kinds = KindRegistry::builtin();
         let reparto = resolve(rect(viewport), &arbol, &kinds);
-        // Un hueco de listado por cada `browser` del árbol, todos en el
-        // mismo directorio: de dónde arranca cada uno es cosa de la sesión
-        // (y hasta que exista, arrancar los dos donde arrancó el host es lo
-        // honesto).
-        let mut huecos = std::collections::BTreeMap::new();
-        for SlotId(id) in arbol.slot_ids() {
-            if es_listado(&arbol, SlotId(id), &kinds) {
-                huecos.insert(id, Hueco::vacio(dir.clone()));
-            }
-        }
+        let huecos = Self::huecos_iniciales(&arbol, &kinds, dir);
         let activo = huecos.keys().copied().next().unwrap_or(1);
         let mut roles = Roles::con_active(SlotId(activo));
         // El DESTINO lo resuelve la capa compartida, y NO se pone a mano.
@@ -1676,6 +1757,8 @@ impl Estado {
         // que nadie lo hubiera dicho (ADR 0058 D7).
         roles.reconcile(&arbol, &reparto, &kinds, SlotId(activo));
         let estado = Self {
+            rotulos_plugin: Rotulos::new(),
+            salida_plugin: None,
             instance,
             sequence: 0,
             token: 0,
@@ -1691,6 +1774,8 @@ impl Estado {
             gen_sitios: 0,
             gen_selector: 0,
             gen_extensiones: 0,
+            gen_paleta: 0,
+            gen_salida: 0,
             imagen: None,
             busqueda: None,
             epoca_busqueda: 0,
@@ -2271,6 +2356,14 @@ impl Estado {
         if !self.dialogos.is_empty() {
             return Some(self.tecla_en_dialogo(k, backend, buzon));
         }
+        // La SALIDA de un comando de extensión va justo detrás del diálogo:
+        // es lo último que se ha abierto y tapa lo que hubiera, así que la
+        // primera tecla que la cierra tiene que llegarle a ella. Solo
+        // `Escape` la atiende; el resto de teclas caen a lo de debajo, que
+        // sigue siendo la pantalla del lector.
+        if self.salida_plugin.is_some() && matches!(k.key.as_str(), "Escape" | "esc") {
+            return Some(self.cerrar_salida());
+        }
         // La AYUDA va primero, incluso antes que el visor, y no por gusto:
         // se abre ENCIMA de lo que hubiera —también encima del visor, que es
         // desde donde se pide la página del visor— y quien está arriba se
@@ -2505,6 +2598,12 @@ impl Estado {
                     // despachador.
                     let (ack, mut resto) = match efecto_de(&cmd, 1) {
                         Some(efecto) => self.aplicar_efecto(efecto, backend, buzon),
+                        // Una fila de PLUGIN no está en el catálogo de
+                        // comandos y no puede estarlo: la aporta un tercero
+                        // en tiempo de ejecución.
+                        None if cmd.starts_with("plugin:") => {
+                            self.ejecutar_de_plugin(&cmd, backend, buzon)
+                        }
                         None => self.no_implementado(&cmd),
                     };
                     let mut envios = vec![cierre];
@@ -3450,14 +3549,187 @@ impl Estado {
     /// Las filas se construyen AQUÍ, al abrir, y se congelan: es lo que el
     /// modelo compartido espera (pliega el haystack de cada fila una vez, no
     /// por tecla).
-    fn abrir_paleta(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    fn abrir_paleta(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.paleta = Some(norte_frontend::palette_state::Palette::new(
             self.filas_de_paleta(),
         ));
+        self.pedir_filas_de_plugin(backend, buzon);
         let cambio = ViewChange::Palette {
             palette: self.vista_paleta(),
         };
         (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Pide el catálogo para las filas de PLUGIN de la paleta.
+    ///
+    /// No se espera: la paleta se pinta ya con los comandos propios y las de
+    /// plugin se unen cuando el daemon conteste. Congelar la ventana hasta
+    /// entonces sería pagar el viaje aunque no haya ninguna extensión.
+    fn pedir_filas_de_plugin(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        // En SOLO LECTURA no se piden: lo que hace un comando de plugin lo
+        // decide el plugin, y esta ventana no lo va a lanzar. Es la misma
+        // regla que `filas_de_paleta` ya aplica a los comandos propios —
+        // ofrecer lo que se va a rehusar es prometer algo que no se hará.
+        if self.efectos == crate::commands::Efectos::SoloLectura {
+            return;
+        }
+        self.gen_paleta += 1;
+        let apertura = self.gen_paleta;
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_list()).await {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::PluginsDePaleta(
+                    apertura, res,
+                ))))
+                .await;
+        });
+    }
+
+    /// Las filas de plugin llegaron: se UNEN a la paleta abierta.
+    ///
+    /// Conservando lo tecleado (`extend_rows`): reconstruirla perdería la
+    /// query, y perder lo que alguien acaba de escribir por unas filas que
+    /// llegan tarde es peor que no tenerlas.
+    ///
+    /// Un fallo NO tumba la paleta ni se anuncia: los comandos propios
+    /// siguen ahí, que es el mismo criterio que el TUI («un daemon caído
+    /// degrada la paleta, no la tumba»).
+    fn aplicar_filas_de_plugin(
+        &mut self,
+        apertura: u64,
+        res: Result<norte_proto::methods::PluginListResult, Error>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        if apertura != self.gen_paleta {
+            return Vec::new();
+        }
+        let Ok(lista) = res else {
+            return Vec::new();
+        };
+        let Some(p) = self.paleta.as_mut() else {
+            return Vec::new();
+        };
+        // El modelo COMPARTIDO decide qué se ofrece: solo aprobadas y
+        // encendidas —la misma puerta que `plugin.run_command` exige por su
+        // cuenta—, en orden de manifiesto, y con el prefijo que impide que
+        // un comando de tercero se disfrace de uno propio.
+        let filas = norte_frontend::palette::plugin_rows(&lista.plugins);
+        if filas.is_empty() {
+            return Vec::new();
+        }
+        p.extend_rows(filas);
+        self.rotulos_plugin = lista
+            .plugins
+            .iter()
+            .map(|p| {
+                let comandos = p
+                    .commands
+                    .iter()
+                    .map(|c| {
+                        (
+                            c.id.clone(),
+                            crate::extensions::texto_de_tercero(&c.title).0,
+                        )
+                    })
+                    .collect();
+                (
+                    p.id.clone(),
+                    (crate::extensions::texto_de_tercero(&p.name).0, comandos),
+                )
+            })
+            .collect();
+        let cambio = ViewChange::Palette {
+            palette: self.vista_paleta(),
+        };
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// Ejecuta un comando de extensión y enseña su salida.
+    ///
+    /// La autorización es del SERVIDOR: `plugin.run_command` resuelve el
+    /// comando contra el catálogo y exige aprobada + encendida por su
+    /// cuenta. Lo que la fila comprueba de este lado es coherencia con lo
+    /// que el lector está mirando, jamás el permiso.
+    fn ejecutar_de_plugin(
+        &mut self,
+        clave: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some((id, comando)) = norte_frontend::palette::parse_plugin_key(clave) else {
+            return self.no_implementado(clave);
+        };
+        if self.efectos == crate::commands::Efectos::SoloLectura {
+            // Lo que hace un comando de plugin lo decide el plugin: puede
+            // escribir. Una ventana sin efectos no lo lanza.
+            return Self::no_muta();
+        }
+        self.gen_salida += 1;
+        let apertura = self.gen_salida;
+        // Los dos rótulos se resuelven AHORA, con el catálogo que la paleta
+        // usó: la respuesta puede tardar, y buscarlos al volver es buscarlos
+        // en un catálogo que ya no es el mismo.
+        let (rotulo, titulo) = self.rotulos_de_comando(id, comando);
+        let backend2 = Arc::clone(backend);
+        let buzon2 = buzon.clone();
+        let (id2, comando2) = (id.to_owned(), comando.to_owned());
+        tokio::spawn(async move {
+            let res = match tokio::time::timeout(
+                PLAZO_PLUGINS,
+                backend2.plugin_run_command(id2, comando2, String::new()),
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon2
+                .send(Mensaje::Fondo(Box::new(Fondo::SalidaDeComando(
+                    apertura,
+                    Box::new((rotulo, titulo, res)),
+                ))))
+                .await;
+        });
+        (self.aplicada(), self.decir("host-plugin-running"))
+    }
+
+    /// Cómo se llaman, para el panel de salida: el nombre de la extensión y
+    /// el título del comando, ya enmascarados. Si el gestor no está abierto
+    /// se cae al id, que es lo único que este proceso asigna.
+    fn rotulos_de_comando(&self, id: &str, comando: &str) -> (String, String) {
+        let del_catalogo = self.rotulos_plugin.get(id);
+        let nombre = del_catalogo
+            .map(|(n, _)| n.clone())
+            .or_else(|| Some(self.extensiones.as_ref()?.concesion(id)?.nombre.0))
+            // El id de la extensión SÍ se puede pintar: es reverse-DNS
+            // validado por el core.
+            .unwrap_or_else(|| id.to_owned());
+        let titulo = del_catalogo
+            .and_then(|(_, cs)| cs.get(comando).cloned())
+            .or_else(|| {
+                self.extensiones
+                    .as_ref()?
+                    .comandos_de_id(id)
+                    .iter()
+                    .find(|c| c.id == comando)
+                    .map(|c| c.title.clone())
+            })
+            // El id de un COMANDO no: el manifiesto no le valida charset.
+            // Sin título conocido, la línea se queda sin él.
+            .unwrap_or_default();
+        (nombre, titulo)
     }
 
     /// Los tres efectos que tocan la DISPOSICIÓN, juntos.
@@ -4158,6 +4430,10 @@ impl Estado {
                 .aplicar_ficha(&id, res.as_ref().ok())
                 .into_iter()
                 .collect(),
+            Fondo::PluginsDePaleta(apertura, res) => self.aplicar_filas_de_plugin(apertura, res),
+            Fondo::Gobernada(apertura, res) => self.aplicar_gobierno(apertura, res, backend, buzon),
+            Fondo::ConfigEscrita(id, res) => self.aplicar_escritura(&id, res, backend, buzon),
+            Fondo::SalidaDeComando(apertura, datos) => self.aplicar_salida(apertura, *datos),
             Fondo::Volumenes(apertura, res) => {
                 self.aplicar_volumenes(apertura, res).into_iter().collect()
             }
@@ -4323,6 +4599,12 @@ impl Estado {
         let Some(e) = self.extensiones.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
+        // TRES REGÍMENES, y el orden importa. Mientras se TECLEA un valor,
+        // las letras son letras: resolver `a` como «aprobar» ahí convierte
+        // escribir la palabra «casa» en dos concesiones de capabilities.
+        if e.editando() {
+            return self.tecla_editando_config(k, backend, buzon);
+        }
         match k.key.as_str() {
             "Escape" | "esc" => {
                 // El primer `esc` cierra la FICHA, no el gestor: dejar la
@@ -4333,19 +4615,422 @@ impl Estado {
                     self.extensiones = None;
                 }
             }
-            "ArrowDown" | "down" => e.mover(1),
-            "ArrowUp" | "up" => e.mover(-1),
+            // Con la ficha abierta, las flechas recorren SUS claves: mover el
+            // catálogo por debajo tiraría la ficha que se está leyendo.
+            "ArrowDown" | "down" => {
+                if !e.mover_en_ficha(1) {
+                    e.mover(1);
+                }
+            }
+            "ArrowUp" | "up" => {
+                if !e.mover_en_ficha(-1) {
+                    e.mover(-1);
+                }
+            }
             "PageDown" | "pgdn" => e.mover(PAGINA),
             "PageUp" | "pgup" => e.mover(-PAGINA),
             "Home" | "home" => e.mover(i64::MIN / 2),
             "End" | "end" => e.mover(i64::MAX / 2),
-            "Enter" | "enter" => return self.pedir_ficha(backend, buzon),
+            "Enter" | "enter" => {
+                if e.tiene_ficha() {
+                    return self.activar_clave(backend, buzon);
+                }
+                return self.pedir_ficha(backend, buzon);
+            }
+            "a" => return self.gobernar_elegida(Cambio::Aprobacion, backend, buzon),
+            "e" => return self.gobernar_elegida(Cambio::Encendido, backend, buzon),
             _ => return (self.aplicada(), Vec::new()),
         }
         let cambio = ViewChange::Extensions {
             extensions: self.vista_extensiones(),
         };
         (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Las teclas mientras se TECLEA el valor de una clave.
+    ///
+    /// Régimen FIJO, como el de cualquier campo de este host: aquí una letra
+    /// es una letra. `Enter` confirma —y entonces se escribe—, `Escape`
+    /// cancela sin escribir, y el resto de teclas no significan nada.
+    fn tecla_editando_config(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(e) = self.extensiones.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match k.key.as_str() {
+            "Escape" | "esc" => e.cancelar_edicion(),
+            "Backspace" | "backspace" => e.borrar(),
+            "Enter" | "enter" => return self.confirmar_config(backend, buzon),
+            otra => {
+                // Una tecla imprimible es su carácter; cualquier otra —y
+                // cualquier combinación con modificador— no es texto.
+                let mut cs = otra.chars();
+                match (cs.next(), cs.next()) {
+                    (Some(c), None) if !k.ctrl && !k.alt && !k.meta => e.escribir(c),
+                    _ => return (self.aplicada(), Vec::new()),
+                }
+            }
+        }
+        let cambio = ViewChange::Extensions {
+            extensions: self.vista_extensiones(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// `Enter` sobre una clave: cicla, o abre el buffer para teclearla.
+    fn activar_clave(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.efectos == crate::commands::Efectos::SoloLectura {
+            return Self::no_muta();
+        }
+        let Some(e) = self.extensiones.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let escritura = e.activar_clave();
+        let cambio = ViewChange::Extensions {
+            extensions: self.vista_extensiones(),
+        };
+        let mut fuera = vec![self.parche(vec![cambio])];
+        // Un `bool` o un `enum` YA cambiaron de valor en el modelo: lo que
+        // queda es contárselo al daemon. Un `string`/`int` solo abrió el
+        // buffer y todavía no hay nada que escribir.
+        if let Some((id, escritura)) = escritura {
+            fuera.extend(Self::escribir_config(&id, escritura, backend, buzon));
+        }
+        (self.aplicada(), fuera)
+    }
+
+    /// `Enter` con el buffer abierto: valida y escribe, o dice por qué no.
+    fn confirmar_config(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(e) = self.extensiones.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let Some(resultado) = e.confirmar_edicion() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match resultado {
+            Ok((id, escritura)) => {
+                let cambio = ViewChange::Extensions {
+                    extensions: self.vista_extensiones(),
+                };
+                let mut fuera = vec![self.parche(vec![cambio])];
+                fuera.extend(Self::escribir_config(&id, escritura, backend, buzon));
+                (self.aplicada(), fuera)
+            }
+            // La validación de ESTE lado no es la que permite —el daemon
+            // vuelve a validar contra el esquema— pero decirlo aquí ahorra un
+            // viaje y, sobre todo, dice CUÁL era la cota.
+            Err(norte_frontend::settings::SettingsEditError::NotAnInt) => (
+                ActionAck::Unavailable {
+                    reason_key: "host-not-an-int".to_owned(),
+                },
+                self.decir("host-not-an-int"),
+            ),
+            Err(norte_frontend::settings::SettingsEditError::OutOfRange { min, max }) => {
+                let fuera = self.decir_con(
+                    "host-out-of-range",
+                    &[("min", &min.to_string()), ("max", &max.to_string())],
+                );
+                (
+                    ActionAck::Unavailable {
+                        reason_key: "host-out-of-range".to_owned(),
+                    },
+                    fuera,
+                )
+            }
+        }
+    }
+
+    /// Manda UNA clave al daemon.
+    ///
+    /// El valor ya está puesto en el modelo (optimismo): lo que corrige un
+    /// fallo es REPEDIR la ficha, no adivinar qué había antes.
+    fn escribir_config(
+        id: &str,
+        escritura: norte_frontend::plugin_config::PendingConfigWrite,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let backend2 = Arc::clone(backend);
+        let buzon2 = buzon.clone();
+        let (id2, key, value) = (id.to_owned(), escritura.key, escritura.value);
+        tokio::spawn(async move {
+            let res = match tokio::time::timeout(
+                PLAZO_PLUGINS,
+                backend2.plugin_set_config(id2.clone(), key, value),
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon2
+                .send(Mensaje::Fondo(Box::new(Fondo::ConfigEscrita(id2, res))))
+                .await;
+        });
+        Vec::new()
+    }
+
+    /// La escritura contestó.
+    fn aplicar_escritura(
+        &mut self,
+        id: &str,
+        res: Result<(), Error>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Err(e) = res else {
+            return Vec::new();
+        };
+        let mut fuera = self.decir(norte_frontend::error::error_key(&e));
+        // Y se REPIDE la ficha: el valor optimista de la pantalla es ahora
+        // mismo una mentira sobre lo que el plugin tiene configurado, y
+        // adivinar el anterior es inventarse un tercer estado.
+        if let Some(ext) = self.extensiones.as_mut()
+            && ext.es_ficha_de(id)
+        {
+            ext.cerrar_ficha();
+            let (_, partes) = self.pedir_ficha(backend, buzon);
+            fuera.extend(partes);
+        }
+        fuera
+    }
+
+    /// `a`/`e` sobre la extensión elegida.
+    fn gobernar_elegida(
+        &mut self,
+        cambio: Cambio,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.efectos == crate::commands::Efectos::SoloLectura {
+            return Self::no_muta();
+        }
+        let Some(e) = self.extensiones.as_ref() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let Some(fila) = e.fila_elegida() else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-extension".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        let (id, aprobada, encendida) = (fila.id.clone(), fila.approved, fila.enabled);
+        match cambio {
+            // Conceder PREGUNTA; retirar, no.
+            Cambio::Aprobacion if !aprobada => self.preguntar_por_aprobacion(&id),
+            Cambio::Aprobacion => {
+                let fuera = self.gobernar(&id, Gobierno::Aprobar(false), backend, buzon);
+                (self.aplicada(), fuera)
+            }
+            // Encender un plugin SIN aprobar no es una decisión que esta
+            // pantalla pueda tomar por su cuenta: sin capabilities aprobadas
+            // el core no lo va a cargar, y decir «encendido» sobre algo que
+            // no corre es la pantalla que miente.
+            Cambio::Encendido if !aprobada => (
+                ActionAck::Unavailable {
+                    reason_key: "host-extension-not-approved".to_owned(),
+                },
+                self.decir("host-extension-not-approved"),
+            ),
+            Cambio::Encendido => {
+                let fuera = self.gobernar(&id, Gobierno::Encender(!encendida), backend, buzon);
+                (self.aplicada(), fuera)
+            }
+        }
+    }
+
+    /// Abre la pregunta de conceder capabilities, con las capabilities
+    /// dentro.
+    fn preguntar_por_aprobacion(&mut self, id: &str) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(concesion) = self.extensiones.as_ref().and_then(|e| e.concesion(id)) else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let (nombre, capabilities) = (concesion.nombre, concesion.capabilities);
+        // Una capability por LÍNEA, y el nombre de la extensión aparte: son
+        // los operandos de la decisión, y meterlos en la frase es lo que
+        // deja a un nombre de tercero imitando el texto de la ventana. Cada
+        // una con SU bandera: la que se pinta distinta de lo que dice es
+        // justo la que un manifiesto hostil escribe para colarse.
+        let total = capabilities.len();
+        let mut cuerpo = vec![crate::dto::DialogLine {
+            text: nombre.0,
+            hostile: nombre.1,
+        }];
+        cuerpo.extend(
+            capabilities
+                .into_iter()
+                .take(Self::MAX_LINEAS_DIALOGO)
+                .map(|(text, hostile)| crate::dto::DialogLine { text, hostile }),
+        );
+        let nota = self.nota_de_recorte(cuerpo.len().saturating_sub(1), total);
+        let modal = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id: modal,
+            title_key: "modal-extension-approve-title".to_owned(),
+            destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
+            body: cuerpo,
+            overflow_note: nota,
+            choices: vec![
+                DialogChoice {
+                    id: "approve".to_owned(),
+                    label_key: "dialog-approve".to_owned(),
+                    // Conceder permisos no borra nada, pero tampoco es la
+                    // respuesta inocua de un diálogo cualquiera: se marca
+                    // para que el renderer no la pinte como el «Aceptar» de
+                    // un aviso.
+                    destructive: true,
+                },
+                DialogChoice {
+                    id: "deny".to_owned(),
+                    label_key: "dialog-deny".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: None,
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id: modal,
+            vista: vista.clone(),
+            input_crudo: String::new(),
+            reconocido: true,
+            al_confirmar: Some(Pendiente::AprobarExtension { id: id.to_owned() }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Manda el cambio al daemon. La verdad la dirá el catálogo repedido.
+    fn gobernar(
+        &mut self,
+        id: &str,
+        que: Gobierno,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let apertura = self.gen_extensiones;
+        let backend2 = Arc::clone(backend);
+        let buzon2 = buzon.clone();
+        let id2 = id.to_owned();
+        tokio::spawn(async move {
+            let llamada = match que {
+                Gobierno::Aprobar(v) => backend2.plugin_set_approval(id2, v),
+                Gobierno::Encender(v) => backend2.plugin_set_enabled(id2, v),
+            };
+            let res = match tokio::time::timeout(PLAZO_PLUGINS, llamada).await {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon2
+                .send(Mensaje::Fondo(Box::new(Fondo::Gobernada(apertura, res))))
+                .await;
+        });
+        Vec::new()
+    }
+
+    /// El cambio de gobierno contestó.
+    ///
+    /// Con un OK NO se toca el `bool` local: se REPIDE el catálogo. Un
+    /// optimismo que el daemon no confirmó es, en esta pantalla, una
+    /// afirmación sobre quién puede leer tus ficheros.
+    fn aplicar_gobierno(
+        &mut self,
+        apertura: u64,
+        res: Result<(), Error>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        if apertura != self.gen_extensiones || self.extensiones.is_none() {
+            return Vec::new();
+        }
+        if let Err(e) = res {
+            return self.decir(norte_frontend::error::error_key(&e));
+        }
+        self.repedir_catalogo(backend, buzon);
+        self.decir("host-extension-updated")
+    }
+
+    /// Vuelve a pedir el catálogo para la apertura VIVA.
+    fn repedir_catalogo(&self, backend: &Arc<dyn HostBackend>, buzon: &mpsc::Sender<Mensaje>) {
+        let apertura = self.gen_extensiones;
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_list()).await {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::Catalogo(apertura, res))))
+                .await;
+        });
+    }
+
+    /// La salida de un comando llegó.
+    ///
+    /// Solo la del ÚLTIMO que se lanzó: dos comandos en vuelo y el lento
+    /// aterrizando después pintaría la salida de uno bajo el título del
+    /// otro, que en un panel que dice quién imprimió qué es mentir.
+    fn aplicar_salida(
+        &mut self,
+        apertura: u64,
+        datos: (String, String, Result<String, Error>),
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let (plugin, comando, res) = datos;
+        if apertura != self.gen_salida {
+            return Vec::new();
+        }
+        match res {
+            Ok(texto) => {
+                // Texto de TERCERO: se enmascara y se acota, y que se haya
+                // cortado se DICE — el receptor no puede deducirlo, porque
+                // lo que le llega ya viene corto.
+                let (pintable, hostil) = norte_frontend::display_name(texto.as_bytes());
+                let recortado: String = pintable.chars().take(MAX_SALIDA).collect();
+                let truncado = pintable.chars().nth(MAX_SALIDA).is_some();
+                self.salida_plugin = Some(crate::dto::ExtensionOutputView {
+                    plugin,
+                    command: comando,
+                    text: recortado,
+                    hostile: hostil,
+                    truncated: truncado,
+                });
+                let cambio = ViewChange::PluginOutput {
+                    output: self.salida_plugin.clone(),
+                };
+                vec![self.parche(vec![cambio])]
+            }
+            Err(e) => self.decir(norte_frontend::error::error_key(&e)),
+        }
+    }
+
+    /// Cierra el panel de salida.
+    fn cerrar_salida(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.salida_plugin = None;
+        (
+            self.aplicada(),
+            vec![self.parche(vec![ViewChange::PluginOutput { output: None }])],
+        )
     }
 
     /// Un click en una fila del gestor: la elige.
@@ -4727,7 +5412,9 @@ impl Estado {
                 // son «la pregunta que hay que responder antes de que algo
                 // cambie», y el corpus tiene UNA que habla de eso.
                 Some(Pendiente::Borrar { .. } | Pendiente::Transferir { .. }) => "dialog.confirm",
-                Some(Pendiente::Decidir { .. }) => "dialog.approval",
+                Some(Pendiente::Decidir { .. } | Pendiente::AprobarExtension { .. }) => {
+                    "dialog.approval"
+                }
                 // Buscar comparte página con crear: los dos son el diálogo
                 // que pide que teclees un nombre, y el corpus tiene UNA que
                 // habla de eso.
@@ -4816,6 +5503,7 @@ impl Estado {
             self.paleta = Some(norte_frontend::palette_state::Palette::new(
                 self.filas_de_paleta(),
             ));
+            self.pedir_filas_de_plugin(backend, buzon);
             let cambios = vec![
                 ViewChange::Help { help: None },
                 ViewChange::Palette {
@@ -5513,7 +6201,7 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match efecto {
-            Efecto::Paleta => self.abrir_paleta(),
+            Efecto::Paleta => self.abrir_paleta(backend, buzon),
             Efecto::Ayuda => self.abrir_ayuda(backend, buzon),
             Efecto::Ajustes => self.abrir_ajustes(),
             Efecto::Extensiones => self.abrir_extensiones(backend, buzon),
@@ -8375,6 +9063,9 @@ impl Estado {
                     }
                 });
             }
+            Some(Pendiente::AprobarExtension { id }) => {
+                salidas.extend(self.gobernar(&id, Gobierno::Aprobar(true), backend, buzon));
+            }
             Some(Pendiente::Decidir { approval_id }) => {
                 // Solo `approve` aprueba. Cualquier otra respuesta —y el
                 // cierre del diálogo— DENIEGA: una decisión de seguridad
@@ -8558,6 +9249,10 @@ impl Estado {
                         | Pendiente::CrearDirectorio { .. }
                         | Pendiente::Decidir { .. }
                         | Pendiente::Renombrar { .. }
+                        // Conceder capabilities es la decisión de seguridad
+                        // del sistema de extensiones: una ventana que se
+                        // declara de solo lectura no la toma.
+                        | Pendiente::AprobarExtension { .. }
                         // Pedir un plan no escribe en el disco, y aun así
                         // entra: manda el contenido de un directorio a un
                         // modelo, que no es algo que deba hacer una ventana
@@ -10500,6 +11195,7 @@ impl Estado {
             help: self.vista_ayuda(),
             settings: self.vista_ajustes(),
             extensions: self.vista_extensiones(),
+            plugin_output: self.salida_plugin.clone(),
             theme: self.vista_tema(),
             search: self.vista_busqueda(),
             layouts: self.vista_disposiciones(),

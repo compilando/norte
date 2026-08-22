@@ -1,13 +1,19 @@
 //! El gestor de extensiones (`app.extensions`) visto desde el host: qué hay
 //! instalado, en qué estado, y qué se le ha configurado.
 //!
-//! **Solo lectura, y no por comodidad.** Aprobar las capabilities de un
+//! **Ya gobierna, y con el freno puesto.** Aprobar las capabilities de un
 //! plugin es la decisión de seguridad del sistema de extensiones: es lo que
 //! separa «este código está en tu disco» de «este código puede leer tus
-//! ficheros». Esta ventana la ENSEÑA y no la toma, igual que no borra, hasta
-//! que la fase 5 traiga el camino seguro. Por eso el `HostBackend` de este
-//! host no tiene `set_approval` ni `set_enabled`: lo que no está no se puede
-//! llamar por accidente.
+//! ficheros». Desde la 6.4 esta ventana la toma, con tres cosas que no son
+//! adorno:
+//!
+//! - **Aprobar PREGUNTA**, y la pregunta enumera las capabilities una por
+//!   línea. Revocar y apagar no preguntan: van en la dirección segura.
+//! - **Nada de esto existe en `SoloLectura`.** El mismo interruptor que
+//!   decide si la ventana borra decide si concede permisos.
+//! - **La verdad vive en el core.** Tras un cambio se REPIDE el catálogo en
+//!   vez de tocar el `bool` de aquí: un optimismo local que el daemon no
+//!   confirmó es una pantalla que miente sobre quién puede leer tus ficheros.
 //!
 //! Todo lo que un plugin escribe —su nombre, su publicador, su versión, su
 //! descripción, la descripción de cada clave, el VALOR de cada clave, su
@@ -17,15 +23,16 @@
 //! números. Esa lista decía antes que el valor, el defecto y el dominio eran
 //! seguros: no lo son — el manifiesto les acota la longitud y nada más.
 
-use norte_frontend::help_badge::{plugin_description, plugin_label};
-use norte_frontend::plugin_config::sanitize_config_keys;
+use norte_frontend::help_badge::{PLUGIN_NAME_WIRE_CAP, plugin_description, plugin_label};
+use norte_frontend::plugin_config::{PendingConfigWrite, PluginConfigState, sanitize_config_keys};
+use norte_frontend::settings::SettingsEditError;
 use norte_i18n::Lang;
-use norte_proto::methods::{PluginGetConfigResult, PluginListResult};
+use norte_proto::methods::{PluginGetConfigResult, PluginInfo, PluginListResult};
 
 use crate::bridge::clamp_display;
 use crate::dto::{
-    ExtensionConfigRowView, ExtensionDetailView, ExtensionErrorView, ExtensionRowView,
-    ExtensionsView,
+    ExtensionCommandView, ExtensionConfigRowView, ExtensionDetailView, ExtensionErrorView,
+    ExtensionRowView, ExtensionsView,
 };
 
 /// Tope de filas del catálogo que cruzan.
@@ -46,7 +53,20 @@ pub(crate) struct Extensiones {
     /// El catálogo todavía no ha contestado.
     cargando: bool,
     /// La ficha abierta, si alguna.
-    ficha: Option<ExtensionDetailView>,
+    ficha: Option<Ficha>,
+    /// El catálogo CRUDO tal como llegó, ya filtrado y acotado.
+    ///
+    /// Las filas de arriba son su proyección enmascarada, y de una máscara no
+    /// se vuelve: para preguntar «¿apruebas ESTAS capabilities?» hace falta
+    /// enmascarar cada una POR SEPARADO y saber cuál difiere, y eso solo se
+    /// puede hacer desde el texto original.
+    catalogo: Vec<PluginInfo>,
+    /// Los comandos de cada extensión, ya enmascarados, por id de extensión.
+    ///
+    /// Aparte de la fila y no dentro: la fila cruza el puente en CADA
+    /// repintado del catálogo, y los títulos de los comandos solo hacen falta
+    /// cuando alguien abre una ficha. El enmascarado se hace una vez, aquí.
+    comandos: std::collections::HashMap<String, Vec<ExtensionCommandView>>,
     /// La extensión cuya ficha se ha PEDIDO. Se guarda para descartar una
     /// respuesta que llega cuando el lector ya se fue a otra fila: sin esto,
     /// una ficha lenta aterrizaba encima de otra extensión.
@@ -62,6 +82,8 @@ impl Extensiones {
             cursor: 0,
             cargando: true,
             ficha: None,
+            catalogo: Vec::new(),
+            comandos: std::collections::HashMap::new(),
             pedida: None,
         }
     }
@@ -69,6 +91,26 @@ impl Extensiones {
     /// Mete el catálogo que contestó el daemon.
     pub(crate) fn set_catalogo(&mut self, lista: &PluginListResult) {
         self.cargando = false;
+        // Quién estaba elegida, por ID. Un cambio de estado REPIDE el
+        // catálogo entero, y el core lo ordena por categoría e id: aprobar
+        // una extensión puede moverla de sitio, y un cursor por posición
+        // dejaría al lector señalando otra distinta justo después de haberle
+        // concedido permisos a la primera.
+        let elegida = self.elegida().map(str::to_owned);
+        self.catalogo = lista
+            .plugins
+            .iter()
+            .filter(|p| norte_proto::methods::is_valid_plugin_id(&p.id))
+            .take(MAX_EXTENSIONES)
+            .cloned()
+            .collect();
+        self.comandos = lista
+            .plugins
+            .iter()
+            .filter(|p| norte_proto::methods::is_valid_plugin_id(&p.id))
+            .take(MAX_EXTENSIONES)
+            .map(|p| (p.id.clone(), comandos_de(p)))
+            .collect();
         self.filas = lista
             .plugins
             .iter()
@@ -112,7 +154,40 @@ impl Extensiones {
                 }
             })
             .collect();
-        self.cursor = self.cursor.min(self.filas.len().saturating_sub(1));
+        self.cursor = elegida
+            .and_then(|id| self.filas.iter().position(|f| f.id == id))
+            .unwrap_or_else(|| self.cursor.min(self.filas.len().saturating_sub(1)));
+    }
+
+    /// La fila elegida entera: lo que hace falta para gobernarla.
+    pub(crate) fn fila_elegida(&self) -> Option<&ExtensionRowView> {
+        self.filas.get(self.cursor)
+    }
+
+    /// Lo que hay que ENSEÑAR antes de conceder capabilities: el nombre de
+    /// la extensión y sus capabilities, cada una enmascarada por su cuenta y
+    /// con su propia bandera.
+    ///
+    /// Una bandera para todo el bloque no sirve aquí: quien lee tiene que
+    /// saber CUÁL de las líneas se pinta distinta de lo que dice, y esa
+    /// línea es justo la que un manifiesto hostil escribe para que parezca
+    /// otra capability.
+    pub(crate) fn concesion(&self, id: &str) -> Option<Concesion> {
+        let p = self.catalogo.iter().find(|p| p.id == id)?;
+        Some(Concesion {
+            nombre: texto_de_tercero(&p.name),
+            capabilities: p.capabilities.iter().map(|c| texto_de_tercero(c)).collect(),
+        })
+    }
+
+    /// `true` si la ficha abierta es la de esta extensión.
+    pub(crate) fn es_ficha_de(&self, id: &str) -> bool {
+        self.ficha.as_ref().is_some_and(|f| f.id == id)
+    }
+
+    /// Los comandos de una extensión, ya enmascarados.
+    pub(crate) fn comandos_de_id(&self, id: &str) -> &[ExtensionCommandView] {
+        self.comandos.get(id).map_or(&[], Vec::as_slice)
     }
 
     /// La extensión elegida, si hay alguna.
@@ -175,26 +250,86 @@ impl Extensiones {
         if self.pedida.as_deref() != Some(id) {
             return;
         }
-        self.ficha = Some(ExtensionDetailView {
+        // El EDITOR compartido es el modelo, no una lista proyectada: es
+        // quien sabe que un `bool` cicla, que un `int` se teclea y valida
+        // contra sus cotas, y que un `kind` que este build no conoce —un
+        // peer más nuevo— es de solo lectura en vez de un pánico.
+        self.ficha = Some(Ficha {
             id: id.to_owned(),
-            config: sanitize_config_keys(&res.keys)
-                .into_iter()
-                .map(|k| {
-                    let domain = dominio(&k, lang);
-                    ExtensionConfigRowView {
-                        key: clamp_display(k.key),
-                        kind: clamp_display(k.kind),
-                        // Del lado de PINTAR, nunca del operando: `k.value`
-                        // es lo que un editor escribiría de vuelta.
-                        value: clamp_display(k.display.value.clone()),
-                        default: clamp_display(k.display.default.clone()),
-                        description: clamp_display(k.description),
-                        domain: clamp_display(domain),
-                        hostile: k.display.hostile,
-                    }
-                })
-                .collect(),
+            estado: PluginConfigState::new(sanitize_config_keys(&res.keys)),
+            comandos: self.comandos.get(id).cloned().unwrap_or_default(),
+            lang,
         });
+    }
+
+    /// Mueve el cursor DENTRO de la ficha. `false` si no hay ficha —o si la
+    /// que hay no tiene claves que recorrer, y entonces las flechas son del
+    /// catálogo: una ficha sin nada que andar que se quedara las teclas
+    /// dejaría al lector sin poder moverse sin cerrarla primero.
+    pub(crate) fn mover_en_ficha(&mut self, delta: i64) -> bool {
+        let Some(f) = self.ficha.as_mut() else {
+            return false;
+        };
+        if f.estado.rows().is_empty() {
+            return false;
+        }
+        if delta < 0 {
+            f.estado.up();
+        } else {
+            f.estado.down();
+        }
+        true
+    }
+
+    /// `Enter` sobre la clave elegida: cicla un `bool`/`enum` —y entonces hay
+    /// algo que escribir— o abre el buffer de edición de un `string`/`int`.
+    ///
+    /// Un `kind` desconocido no hace nada, que es la respuesta del modelo
+    /// compartido: editar a ciegas una forma que este build no entiende es
+    /// escribir en el `config.toml` de un plugin lo que a nadie le consta.
+    pub(crate) fn activar_clave(&mut self) -> Option<(String, PendingConfigWrite)> {
+        let f = self.ficha.as_mut()?;
+        let write = f.estado.activate()?;
+        Some((f.id.clone(), write))
+    }
+
+    /// `true` si el buffer de edición de la ficha está abierto.
+    pub(crate) fn editando(&self) -> bool {
+        self.ficha.as_ref().is_some_and(|f| f.estado.is_editing())
+    }
+
+    /// Un carácter al buffer de edición.
+    pub(crate) fn escribir(&mut self, c: char) {
+        if let Some(f) = self.ficha.as_mut() {
+            f.estado.edit_push_char(c);
+        }
+    }
+
+    /// Borra el último carácter del buffer.
+    pub(crate) fn borrar(&mut self) {
+        if let Some(f) = self.ficha.as_mut() {
+            f.estado.edit_backspace();
+        }
+    }
+
+    /// Cierra el buffer SIN escribir.
+    pub(crate) fn cancelar_edicion(&mut self) {
+        if let Some(f) = self.ficha.as_mut() {
+            f.estado.edit_cancel();
+        }
+    }
+
+    /// Confirma el buffer: el valor a escribir, o por qué no vale.
+    ///
+    /// # Errors
+    /// Lo que diga el modelo compartido: no parsea como entero, o parsea y se
+    /// sale de las cotas del esquema.
+    pub(crate) fn confirmar_edicion(
+        &mut self,
+    ) -> Option<Result<(String, PendingConfigWrite), SettingsEditError>> {
+        let f = self.ficha.as_mut()?;
+        let id = f.id.clone();
+        Some(f.estado.edit_commit().map(|w| (id, w)))
     }
 
     /// La proyección.
@@ -202,11 +337,102 @@ impl Extensiones {
         ExtensionsView {
             rows: self.filas.clone(),
             cursor: self.cursor as u64,
-            detail: self.ficha.clone(),
+            detail: self.ficha.as_ref().map(Ficha::vista),
             loading: self.cargando,
             errors: self.errores.clone(),
         }
     }
+}
+
+/// Una cadena de tercero lista para pintar y si difiere de lo que dice.
+pub(crate) type Texto = (String, bool);
+
+/// Lo que hay que ENSEÑAR antes de conceder capabilities.
+pub(crate) struct Concesion {
+    /// De quién son.
+    pub(crate) nombre: Texto,
+    /// Qué se concede, una por línea.
+    pub(crate) capabilities: Vec<Texto>,
+}
+
+/// La ficha abierta: QUIÉN, su editor de `[config]` y qué comandos aporta.
+///
+/// El editor es `norte_frontend::plugin_config::PluginConfigState`, el mismo
+/// que mueve el gestor del TUI. Aquí no se decide qué cicla ni qué se teclea:
+/// eso tendría dos respuestas en cuanto una de las dos superficies cambiara.
+struct Ficha {
+    /// De quién es la ficha.
+    id: String,
+    /// El editor compartido sobre sus claves.
+    estado: PluginConfigState,
+    /// Sus comandos, ya enmascarados.
+    comandos: Vec<ExtensionCommandView>,
+    /// Con qué idioma se compuso el dominio de cada clave.
+    lang: Lang,
+}
+
+impl Ficha {
+    /// La proyección de la ficha.
+    fn vista(&self) -> ExtensionDetailView {
+        ExtensionDetailView {
+            id: self.id.clone(),
+            config: self
+                .estado
+                .rows()
+                .iter()
+                .map(|k| {
+                    let domain = dominio(k, self.lang);
+                    ExtensionConfigRowView {
+                        key: clamp_display(k.key.clone()),
+                        kind: clamp_display(k.kind.clone()),
+                        // Del lado de PINTAR, nunca del operando: `k.value`
+                        // es lo que un editor escribiría de vuelta.
+                        value: clamp_display(k.display.value.clone()),
+                        default: clamp_display(k.display.default.clone()),
+                        description: clamp_display(k.description.clone()),
+                        domain: clamp_display(domain),
+                        hostile: k.display.hostile,
+                        // Lo dice el MISMO conjunto cerrado que el modelo
+                        // compartido sabe editar. Sin esto, la pantalla
+                        // ofrece `Enter` sobre una clave que no va a cambiar
+                        // y el lector concluye que la escritura falló.
+                        editable: matches!(k.kind.as_str(), "bool" | "enum" | "string" | "int"),
+                    }
+                })
+                .collect(),
+            commands: self.comandos.clone(),
+            cursor: self.estado.cursor() as u64,
+            editing: self.estado.edit_buffer().map(|b| {
+                // El buffer se pinta SANEADO —lo teclea un humano, pero el
+                // valor de partida lo escribió el plugin— y el operando
+                // sigue crudo dentro del modelo compartido.
+                clamp_display(norte_frontend::display_name(b.as_bytes()).0)
+            }),
+            editing_hostile: self
+                .estado
+                .edit_buffer()
+                .is_some_and(|b| norte_frontend::display_name(b.as_bytes()).1),
+        }
+    }
+}
+
+/// Los comandos de una extensión, ya enmascarados.
+///
+/// El `id` de un comando NO se enmascara y NO se recorta: es la clave de
+/// despacho que vuelve al daemon, y el manifiesto no le valida charset — por
+/// eso NO se pinta nunca. Lo que se pinta es el título.
+fn comandos_de(p: &PluginInfo) -> Vec<ExtensionCommandView> {
+    p.commands
+        .iter()
+        .map(|c| {
+            let (title, hostile) = norte_frontend::display_name(c.title.as_bytes());
+            ExtensionCommandView {
+                id: c.id.clone(),
+                title: clamp_display(title),
+                hostile,
+            }
+        })
+        .collect()
 }
 
 /// Qué acota una clave: los valores de un `enum`, las cotas de un `int`, o
@@ -272,6 +498,23 @@ fn fila_de(p: &norte_proto::methods::PluginInfo) -> ExtensionRowView {
             .map(|c| clamp_display(plugin_label(c)))
             .collect(),
     }
+}
+
+/// Una cadena que escribió un TERCERO, lista para pintar: enmascarada,
+/// acotada, y con la bandera de si lo pintado difiere de lo que dice.
+///
+/// `plugin_label` tira la bandera —para una fila de catálogo bastaba— y de
+/// una máscara ya aplicada no se recupera. Donde la decisión ES la cadena
+/// (aprobar una capability), la bandera es parte de la pregunta.
+pub(crate) fn texto_de_tercero(raw: &str) -> (String, bool) {
+    let mut chars = raw.chars();
+    let cabeza: String = chars.by_ref().take(PLUGIN_NAME_WIRE_CAP).collect();
+    let desbordado = chars.next().is_some();
+    let (mut pintable, hostil) = norte_frontend::display_name(cabeza.as_bytes());
+    if desbordado {
+        pintable.push('…');
+    }
+    (clamp_display(pintable), hostil)
 }
 
 /// La cadena ya trae el reemplazo de una conversión con pérdida que hizo

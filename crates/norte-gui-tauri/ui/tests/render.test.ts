@@ -98,6 +98,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     search: null,
     compare: null,
     sync: null,
+    plugin_output: null,
     viewer: null,
     ai_rename: null,
     locale: "es",
@@ -123,6 +124,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
   const search = document.createElement("div");
   const compare = document.createElement("div");
   const sync = document.createElement("div");
+  const pluginOutput = document.createElement("div");
   const viewer = document.createElement("div");
   const dialogs = document.createElement("div");
   const aiRename = document.createElement("div");
@@ -159,6 +161,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
     search,
     compare,
     sync,
+    pluginOutput,
     viewer,
     dialogs,
     aiRename,
@@ -1605,6 +1608,7 @@ describe("el gestor de extensiones", () => {
             description: "Segundos",
             domain: "entre 1 y 300",
             hostile: false,
+            editable: true,
           },
           {
             key: "passive",
@@ -1614,6 +1618,7 @@ describe("el gestor de extensiones", () => {
             description: "",
             domain: "",
             hostile: false,
+            editable: true,
           },
           {
             key: "mode",
@@ -1623,8 +1628,13 @@ describe("el gestor de extensiones", () => {
             description: "",
             domain: "safe · fast\uFFFD",
             hostile: true,
+            editable: true,
           },
         ],
+        commands: [],
+        cursor: 0,
+        editing: null,
+        editing_hostile: false,
       };
     }
     screen.paint(v);

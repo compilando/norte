@@ -822,21 +822,15 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
     }
 }
 
-/// Parsea una `key` de fila de plugin de la palette
-/// (`plugin:{plugin_id}:{command_id}`, [`crate::palette::plugin_rows`])
-/// de vuelta a `(plugin_id, command_id)`. El `plugin_id` es reverse-DNS
-/// charset-validado por el core (`is_valid_plugin_id`, norte-plugin-host
-/// manifest.rs — nunca lleva `:`); el `command_id` del manifiesto NO tiene
-/// charset validado, así que puede llevar CUALQUIER byte, incluidos `:` o
-/// saltos de línea. El PRIMER `:` que sigue al prefijo `plugin:` separa
-/// ambos sin ambigüedad (el `plugin_id` no puede contenerlo) — el resto,
-/// TODO lo que quede tras ese primer `:`, es el `command_id` crudo, tomado
-/// ENTERO y jamás vuelto a partir.
-#[must_use]
-pub fn parse_plugin_key(cmd: &str) -> Option<(&str, &str)> {
-    let (id, command) = cmd.strip_prefix("plugin:")?.split_once(':')?;
-    (!id.is_empty()).then_some((id, command))
-}
+/// Parsea una `key` de fila de plugin de la palette de vuelta a
+/// `(plugin_id, command_id)`.
+///
+/// Vive en `norte-frontend`, JUNTO a `palette::plugin_rows`, que es quien
+/// COMPONE esa clave: el que la escribe y el que la lee no pueden estar en
+/// dos crates con dos respuestas sobre dónde empieza el `command_id` —que es
+/// justo la mitad sin charset validado—. Se re-exporta con su nombre de
+/// siempre para que ningún call site de este crate se mueva.
+pub use norte_frontend::palette::parse_plugin_key;
 
 #[cfg(test)]
 mod parse_plugin_key_tests {
