@@ -2124,11 +2124,9 @@ availability from the same classification.
 
 #### The matrix, measured 2026-08-22
 
-The shared catalogue declares **135** live commands (`viewer.*` included;
-`task.next`/`prev`/`dismiss` moved to `Planned` because nobody implements
-them). The window implements **66** after #287/#289/#292; the TUI implements
-**111**. Nothing was
-dropped: every one of the 80 the window lacks is classified below, and every
+The shared catalogue declares **138** live commands (`viewer.*` included).
+The window implements **66** after #287/#289/#292; the TUI implements **111**.
+Nothing was dropped: every one of the 72 the window lacks is classified below, and every
 "deferred" line has an issue that can be closed.
 
 | family | in the window | classification |
