@@ -32,6 +32,9 @@ fn vp(wire: &str) -> VPath {
 
 struct DaemonDePrueba {
     socket: std::path::PathBuf,
+    /// El provider de memoria que hay DETRÁS del daemon, para que un test
+    /// pueda sembrar algo más que el arbolito de arranque.
+    mem: Arc<MemProvider>,
     _run: tokio::task::JoinHandle<Result<(), norte_core::daemon::DaemonError>>,
     _dir: tempfile::TempDir,
 }
@@ -72,6 +75,7 @@ async fn daemon() -> DaemonDePrueba {
     .expect("bind");
     DaemonDePrueba {
         socket,
+        mem,
         _run: tokio::spawn(d.run()),
         _dir: dir,
     }
@@ -240,3 +244,92 @@ async fn las_celdas_traen_valor_contra_el_daemon() {
         fichero.cells
     );
 }
+
+/// Lo que lanza OTRO cliente del mismo daemon aparece en este tablero, dicho
+/// como ajeno, y esta ventana puede pararlo.
+///
+/// Es la prueba que el backend de tabla no puede dar: ahí las tasks ajenas
+/// las empuja el test por un canal que él mismo abre. Aquí la task nace en
+/// otra conexión, el daemon la difunde, y el SDK decide que es ajena — que es
+/// el camino que de verdad recorre una copia lanzada desde el TUI mientras la
+/// ventana está abierta.
+#[tokio::test]
+async fn una_task_de_otro_cliente_se_ve_y_se_puede_parar() {
+    let d = daemon().await;
+    let (h, _snap) = host_contra(&d).await;
+    let mut sub = h.subscribe();
+
+    // El «otro frontend»: otra conexión humana al mismo daemon.
+    let otro = RemoteBackend::connect(
+        d.socket.clone(),
+        None,
+        ClientInfo {
+            name: "otro-frontend-e2e".into(),
+            version: "0.0.0".into(),
+        },
+    )
+    .await
+    .expect("conecta");
+    // La copia tiene que seguir VIVA cuando su primer progreso se difunde:
+    // el SDK no anuncia como ajena una task que ya llegó terminal —no habría
+    // a qué suscribirse—, así que una copia instantánea contra un provider
+    // en memoria no probaría nada. El provider se frena a propósito.
+    escribe(&d.mem, "mem:///casa/grande.bin", &vec![7u8; 4 * 1024 * 1024]).await;
+    d.mem
+        .faults()
+        .set_latency_per_op(Some(Duration::from_millis(30)));
+    let task = otro
+        .transfer(
+            norte_proto::methods::FS_COPY,
+            &vp("mem:///casa/grande.bin"),
+            &vp("mem:///casa/copia.bin"),
+            norte_client::TransferOptions::default(),
+        )
+        .await
+        .expect("encola la copia");
+
+    // El tablero de ESTA ventana la enseña, y dice que no es suya.
+    let mut vista = None;
+    for _ in 0..40 {
+        let siguiente = tokio::time::timeout(Duration::from_secs(5), sub.recv())
+            .await
+            .expect("una actualización antes del plazo")
+            .expect("el host sigue vivo");
+        let tasks = match siguiente {
+            Update::Message(m) => match m.payload {
+                UiUpdate::Snapshot(s) => s.tasks.clone(),
+                UiUpdate::Patch(p) => p
+                    .changes
+                    .iter()
+                    .find_map(|c| match c {
+                        norte_ui_host::dto::ViewChange::Tasks { tasks } => Some(tasks.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default(),
+                UiUpdate::Notice(_) => Vec::new(),
+            },
+            Update::Lagged => Vec::new(),
+        };
+        if let Some(t) = tasks.iter().find(|t| t.task_id == task.id().get()) {
+            vista = Some(t.clone());
+            break;
+        }
+    }
+    let vista = vista.expect("la task del otro cliente llegó al tablero");
+    assert!(vista.foreign, "y el tablero dice que es ajena: {vista:?}");
+
+    // Y se puede cancelar desde aquí: es la misma sesión, así que pararla es
+    // legítimo — y el tablero que la enseña sin poder tocarla sería una
+    // ventana mirando arder.
+    let ack = h
+        .dispatch(UiAction::CancelTask {
+            task_id: vista.task_id,
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, norte_ui_host::bridge::ActionAck::Applied { .. }),
+        "{ack:?}"
+    );
+}
+

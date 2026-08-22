@@ -1614,6 +1614,40 @@ The renderer never constructs rename pairs from displayed names.
 
 ### Task 5.3: task board, approvals, journal and undo
 
+> **DONE 2026-08-22** (ADR 0070 extended again; no bridge bump — everything
+> here fitted the shapes that already cross). What it added: `task.cancel`
+> from the window (the board's cursor decides which task when the process
+> panel has the focus, the most recent live one otherwise), the batch report
+> (**#272**, which was blocking 5.4) and its twin for undo, approval TTL with
+> a dialog that closes itself and dedupe against the `policy.pending` resync,
+> and the three persistent banners the status bar was painting from nobody:
+> plaintext session, daemon going away, journal-refused mutation.
+>
+> Three things worth carrying forward:
+>
+> - **`ConnEvent` gained `GoingAway { reconnect }`.** A handover and a shutdown
+>   look identical the moment the connection drops; the daemon's warning
+>   beforehand is the only thing that tells them apart, and the SDK was keeping
+>   it to itself (it used it to decide whether to respawn). The TUI got the
+>   message too.
+> - **A task that is already terminal when first observed is never announced as
+>   foreign** — by SDK design, there is nothing to subscribe to. It is why the
+>   cross-client e2e test has to slow the provider down: against a memory
+>   provider a copy finishes before the observer hears about it, and a test
+>   that passed by accident here would have proved nothing.
+> - **What was NOT built: the gesture that LAUNCHES `policy.undo_session`** —
+>   tracked as **#276**. The report is built and shown; the trigger needs a
+>   surface where an agent session is a nameable, selectable thing, and that
+>   belongs with task 6.4. A prompt asking someone to type a session id would
+>   be a governance surface whose operand is typed by hand, which is what this
+>   whole phase avoids. The TUI does not have it either, so this is not a
+>   parity regression: it is a capability that today lives only in the CLI.
+> - **No throughput figure is painted.** `current` (which item) travels and the
+>   percentage now falls back to entry counts, but there is no bytes-per-second
+>   or ETA — the TUI does not show one either, and inventing one for the window
+>   alone would be a second answer to a question the two frontends should
+>   answer identically.
+
 - all local and foreign tasks;
 - progress rate/current item;
 - cancel actions;

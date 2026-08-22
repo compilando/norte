@@ -239,6 +239,44 @@ worth recording next to the ones above because the second one is not obvious:
   stale answer is not enough on its own; the operand has to travel with the
   request, which is the same rule as point 3 above one layer down.
 
+### Extended by task 5.3
+
+The board, the approvals and the two reports pushed the same rules one step
+further, and three of them are worth writing down:
+
+- **A surface that opens BY ITSELF does not get answered by the next
+  keystroke.** Task 5.2 learned this for the AI plan review; it is now a
+  property of the dialog itself (`reconocido`), and the approval dialog and the
+  batch/undo reports carry it. A dialog opened by a gesture is born
+  acknowledged, because there the next key IS an answer. `Escape` is exempt in
+  both cases: getting rid of something you did not ask for has to work first
+  time.
+- **An approval has a deadline, so the surface has one too.** The TTL is shown,
+  and when it runs out the dialog closes itself with a notice rather than
+  sitting there inviting an approval the daemon will no longer accept — which
+  would leave a human believing they authorized what was in fact denied by
+  silence. No `policy.decide` is sent on expiry: the daemon already resolved
+  it, and answering a closed id only produces an error that means nothing to
+  the reader. The same approval arriving twice does not open a second dialog,
+  because the SDK resyncs `policy.pending` on every reconnect and two dialogs
+  would be two answers to a question that admits one.
+- **A terminal state is not an outcome.** Two task classes carry a report —
+  a rename batch and an undo — and in both the report is the ONLY account of
+  what stayed half done. It is asked for even when the task says `Completed`
+  (the task's state talks about the operation, the report talks about the
+  disk), and for FOREIGN tasks too: a half-renamed directory is the same
+  directory whoever started the work. When the report cannot be fetched, "the
+  outcome is unverified" is said as its own fact — never folded into "it went
+  fine". What the report contributes that nothing else can is the name the
+  file carries NOW, which is the only actionable thing in it, so it travels as
+  a masked path line and never inside a sentence where another path could
+  impersonate it.
+
+Two presentation rules moved to `norte-frontend` on the way (D14): the
+plaintext-session banner, and the progress percentage — which had already
+diverged, since only the TUI's copy fell back to entry counts, so a delete
+crossed the bridge with no progress to paint at all.
+
 ### Negative
 
 - Bridge **22 → 23**, and old renderers break on purpose (ADR 0068). The four
