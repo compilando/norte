@@ -219,6 +219,16 @@ independently through `PROTOCOL_VERSION`.
   A step's and a failure's anchor is SAID, not left in an attribute: staying
   quiet about "on either side" where an unqualified path means "on the source"
   asserts the source.
+- **The window edits the layout tree, not just paints it** (#291): split
+  horizontally or vertically, close a slot, and toggle the three auxiliary
+  slots it can actually paint — places, the task board, the attribute sheet.
+  The new listing starts in the directory of the one it split from and takes
+  the focus, because asking for room to work is not going somewhere else, and
+  it all lands in ONE snapshot: in two steps the first would show the focus
+  where it no longer is. Closing the last listing is refused out loud — a
+  screen with no usable listing is not a screen. `layout.preview` stays out on
+  purpose: this window cannot paint a preview slot, and one that would only
+  paint grey is not open.
 - **The window's dialogs go through the shared keymap** (closes #287), and it
   gained mark-by-pattern (#289) and a walkable task board (#292). The dialogs
   were answered with FIXED keys, so rebinding `dialog.confirm` changed the TUI

@@ -94,13 +94,10 @@ const APLAZADOS: &[(&str, u32)] = &[
     ("pane.toggle-hidden", 290),
     ("pane.tree", 290),
     ("pane.unpack", 290),
-    ("layout.close-slot", 291),
-    ("layout.metadata", 291),
-    ("layout.places", 291),
+    // El único de los siete de la ADR 0058 que sigue fuera: esta ventana no
+    // sabe PINTAR un hueco de preview —caería a «kind no soportado», en
+    // gris—, y abrir un hueco que solo se pinta apagado no es abrirlo.
     ("layout.preview", 291),
-    ("layout.processes", 291),
-    ("layout.split-h", 291),
-    ("layout.split-v", 291),
 ];
 
 /// Todo comando vivo o lo implementa la ventana, o está clasificado.

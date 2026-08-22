@@ -3815,6 +3815,22 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.aplicar_disposicion_con(arbol, None, backend, buzon)
+    }
+
+    /// Como [`Self::aplicar_disposicion`], diciendo qué hueco QUEDA activo.
+    ///
+    /// `None` = lo decide la reconciliación, que es lo que hace falta cuando
+    /// el árbol viene de fuera. `Some` es para quien acaba de crear un hueco
+    /// y quiere el foco ahí: en dos pasos serían dos fotos, y la primera
+    /// enseñaría el foco donde ya no está.
+    fn aplicar_disposicion_con(
+        &mut self,
+        arbol: Node,
+        activo: Option<SlotId>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let dir = self.hueco().pane.dir().clone();
         self.arbol = arbol;
         self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);
@@ -3839,7 +3855,10 @@ impl Estado {
                 hueco.insert(Hueco::vacio(dir.clone()));
             }
         }
-        self.roles.clear(RoleId::Active);
+        match activo {
+            Some(id) => self.roles.set(RoleId::Active, id),
+            None => self.roles.clear(RoleId::Active),
+        }
         self.reconcilia_roles();
         self.despertar_visibles(backend, buzon);
         if self.hueco_de_sitios().is_some() {
@@ -4077,8 +4096,142 @@ impl Estado {
         match efecto {
             Efecto::Tamano(delta) => self.redimensionar(delta, backend, buzon),
             Efecto::Igualar => self.igualar(backend, buzon),
+            Efecto::Partir { vertical } => self.partir(vertical, backend, buzon),
+            Efecto::CerrarHueco => self.cerrar_hueco(backend, buzon),
+            Efecto::AlternarHueco { kind } => self.alternar_hueco(kind, backend, buzon),
             _ => self.abrir_disposiciones(),
         }
+    }
+
+    /// El id de hueco más alto del árbol, más uno.
+    ///
+    /// Del ÁRBOL y no de `huecos`: los auxiliares —sitios, tablero, hoja de
+    /// atributos— no están en ese mapa, y reusar el id de uno abierto sería
+    /// meter dos cosas en el mismo hueco.
+    fn nuevo_slot(&self) -> u32 {
+        self.arbol
+            .slot_ids()
+            .into_iter()
+            .map(|SlotId(id)| id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+    }
+
+    /// Parte el hueco enfocado y pone otro LISTADO al lado.
+    ///
+    /// El nuevo arranca en el directorio del que se parte, que es lo menos
+    /// sorprendente: pedir sitio para trabajar no es irse a otra parte. Y el
+    /// foco va al recién nacido, por lo mismo.
+    fn partir(
+        &mut self,
+        vertical: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        use norte_frontend::layout::{Dir, KindId};
+        let id = self.nuevo_slot();
+        let dir = if vertical {
+            Dir::Vertical
+        } else {
+            Dir::Horizontal
+        };
+        let nuevo = self.arbol.split_slot(
+            SlotId(self.enfocado()),
+            dir,
+            &Node::slot(SlotId(id), KindId::browser()),
+        );
+        // El foco al recién nacido, y DENTRO de la misma aplicación: partir
+        // es pedir sitio para trabajar en él. En dos pasos serían dos fotos,
+        // y la primera enseñaría el foco donde ya no está.
+        self.aplicar_disposicion_con(nuevo, Some(SlotId(id)), backend, buzon)
+    }
+
+    /// Cierra el hueco enfocado.
+    ///
+    /// Salvo si con eso la pantalla se queda sin LISTADO: una pantalla sin un
+    /// listado usable no es una pantalla —es un cuelgue con bordes—, y esa es
+    /// la misma regla que el reparto compartido ya aplica por su cuenta
+    /// (#229). Aquí se dice, en vez de dejar una tecla que no hace nada.
+    fn cerrar_hueco(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(nuevo) = self.arbol.close_slot(SlotId(self.enfocado())) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-layout-last-panel".to_owned(),
+                },
+                self.decir("msg-layout-last-panel"),
+            );
+        };
+        let quedan = nuevo
+            .slot_ids()
+            .into_iter()
+            .any(|s| es_listado(&nuevo, s, &self.kinds));
+        if !quedan {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-layout-last-panel".to_owned(),
+                },
+                self.decir("msg-layout-last-panel"),
+            );
+        }
+        self.aplicar_disposicion(nuevo, backend, buzon)
+    }
+
+    /// Abre —o cierra— el hueco auxiliar de este kind.
+    ///
+    /// Los tres que esta ventana sabe PINTAR. Uno que solo se pintaría en
+    /// gris no se abre: `layout.preview` sigue sin construirse por eso, y lo
+    /// dice el catálogo, no un hueco vacío.
+    ///
+    /// Los bordes y los tamaños son los MISMOS que el TUI usa, y no por
+    /// simetría: son anchos medidos —dieciséis celdas es el mínimo del kind
+    /// de sitios, ocho filas son las seis del tablero más el marco, treinta
+    /// es la etiqueta más larga de la hoja con su valor al lado.
+    fn alternar_hueco(
+        &mut self,
+        kind: &'static str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Size};
+        let abierto = self
+            .arbol
+            .slot_ids()
+            .into_iter()
+            .find(|s| kind_de(&self.arbol, *s).is_some_and(|k| k.as_str() == kind));
+        if let Some(id) = abierto {
+            let Some(nuevo) = self.arbol.close_slot(id) else {
+                return (self.aplicada(), Vec::new());
+            };
+            return self.aplicar_disposicion(nuevo, backend, buzon);
+        }
+        let id = SlotId(self.nuevo_slot());
+        let hoja = match kind {
+            // La hoja de atributos SIGUE al rol activo: describe lo que el
+            // cursor señala, y sin la atadura describiría el hueco donde
+            // nació para siempre.
+            "metadata" => Node::slot_bound(
+                id,
+                KindId::new(kind),
+                Bindings {
+                    follows: Some(Follow::Role(RoleId::Active)),
+                },
+            ),
+            _ => Node::slot(id, KindId::new(kind)),
+        };
+        let (borde, tamano) = match kind {
+            "places" => (Edge::Left, Size::Fixed(16)),
+            "processes" => (Edge::Bottom, Size::Fixed(8)),
+            _ => (Edge::Right, Size::Fixed(30)),
+        };
+        let nuevo = self
+            .arbol
+            .dock(SlotId(self.enfocado()), borde, tamano, &hoja);
+        self.aplicar_disposicion(nuevo, backend, buzon)
     }
 
     /// Cambia el tamaño del hueco con el FOCO, no del listado activo.
@@ -6903,7 +7056,12 @@ impl Estado {
             Efecto::CancelarTask | Efecto::TaskVecina { .. } | Efecto::DescartarTask => {
                 self.cancelar_por_comando()
             }
-            Efecto::Tamano(_) | Efecto::Igualar | Efecto::Disposiciones => {
+            Efecto::Tamano(_)
+            | Efecto::Igualar
+            | Efecto::Disposiciones
+            | Efecto::Partir { .. }
+            | Efecto::CerrarHueco
+            | Efecto::AlternarHueco { .. } => {
                 self.efecto_de_disposicion(efecto, backend, buzon)
             }
             Efecto::Columnas => self.abrir_columnas(),

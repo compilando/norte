@@ -13345,3 +13345,111 @@ async fn el_tablero_se_recorre_y_se_descarta() {
         "la fila terminada se descarta"
     );
 }
+
+/// Partir pone otro LISTADO al lado, en el mismo directorio y con el foco
+/// (#291).
+#[tokio::test]
+async fn partir_abre_otro_listado_y_le_da_el_foco() {
+    let backend = arbol();
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let antes = snap.slots.len();
+    let dir_antes = listado(&snap).path_display.clone();
+
+    ejecutar_por_paleta(&h, &mut sub, "layout.split-v").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(foto.slots.len(), antes + 1, "hay un hueco más");
+    let listados: Vec<&norte_ui_host::dto::BrowserSlotView> = foto
+        .slots
+        .iter()
+        .filter_map(|s| match s {
+            SlotView::Browser(b) => Some(&**b),
+            _ => None,
+        })
+        .collect();
+    assert!(listados.len() >= 2, "y es un listado");
+    assert!(
+        listados.iter().all(|b| b.path_display == dir_antes),
+        "el nuevo arranca donde estaba el que se partió: {listados:?}"
+    );
+    // El foco al recién nacido: partir es pedir sitio para trabajar en él.
+    let enfocado = foto.focus.expect("hay foco");
+    assert!(
+        !foto.slots.is_empty() && enfocado != 1,
+        "el foco se movió al hueco nuevo: {enfocado}"
+    );
+}
+
+/// Cerrar el ÚLTIMO listado se rehúsa y se dice.
+///
+/// Una pantalla sin un listado usable no es una pantalla, es un cuelgue con
+/// bordes — la misma regla que el reparto compartido ya aplica por su cuenta.
+#[tokio::test]
+async fn no_se_cierra_el_ultimo_listado() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    // `simple` tiene UN listado: cerrarlo dejaría la pantalla sin ninguno.
+    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "layout.close-slot").await;
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key }
+            if reason_key == "msg-layout-last-panel"),
+        "{ack:?}"
+    );
+
+    // Con dos, cerrar uno sí. Por TECLA y no por paleta: partir cambia la
+    // pantalla entera y manda su foto, y el ayudante de la paleta lee fotos.
+    ejecutar_por_paleta(&h, &mut sub, "layout.split-h").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let _ = siguiente_foto(&mut sub).await;
+    ejecutar_por_paleta(&h, &mut sub, "layout.close-slot").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(
+        foto.slots
+            .iter()
+            .filter(|s| matches!(s, SlotView::Browser(_)))
+            .count(),
+        1,
+        "vuelve a haber uno"
+    );
+}
+
+/// Los tres huecos auxiliares que esta ventana sabe pintar se abren y se
+/// cierran con su comando (#291).
+#[tokio::test]
+async fn los_huecos_auxiliares_se_abren_y_se_cierran() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    for (cmd, presente) in [
+        (
+            "layout.processes",
+            (|s: &norte_ui_host::ViewSnapshot| {
+                s.slots
+                    .iter()
+                    .any(|v| matches!(v, SlotView::Processes { .. }))
+            }) as fn(&norte_ui_host::ViewSnapshot) -> bool,
+        ),
+        ("layout.metadata", |s| {
+            s.slots.iter().any(|v| matches!(v, SlotView::Metadata(_)))
+        }),
+        ("layout.places", |s| {
+            s.slots.iter().any(|v| matches!(v, SlotView::Places(_)))
+        }),
+    ] {
+        ejecutar_por_paleta(&h, &mut sub, cmd).await;
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        assert!(
+            presente(&siguiente_foto(&mut sub).await),
+            "{cmd} abre su hueco, y esta ventana lo PINTA (no en gris)"
+        );
+        ejecutar_por_paleta(&h, &mut sub, cmd).await;
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        assert!(
+            !presente(&siguiente_foto(&mut sub).await),
+            "{cmd} otra vez lo cierra"
+        );
+    }
+}

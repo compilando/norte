@@ -99,6 +99,12 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.shrink",
     "layout.equalize",
     "layout.pick",
+    "layout.split-h",
+    "layout.split-v",
+    "layout.close-slot",
+    "layout.places",
+    "layout.processes",
+    "layout.metadata",
     "pane.columns",
     "app.palette",
     "app.help",
@@ -287,6 +293,19 @@ pub enum Efecto {
     Extensiones,
     /// Las sesiones de agente vistas, y el deshacer de una entera.
     Agentes,
+    /// Parte el hueco enfocado y pone otro LISTADO al lado.
+    Partir {
+        /// Uno encima de otro en vez de uno al lado del otro.
+        vertical: bool,
+    },
+    /// Cierra el hueco enfocado.
+    CerrarHueco,
+    /// Abre —o cierra— el hueco auxiliar de este kind.
+    AlternarHueco {
+        /// `places`, `processes` o `metadata`: los tres que esta ventana sabe
+        /// PINTAR. Abrir uno que solo se pintaría en gris no es abrirlo.
+        kind: &'static str,
+    },
     /// Mueve la fila elegida del TABLERO, sin tener que enfocarlo.
     TaskVecina {
         /// Hacia arriba.
@@ -421,6 +440,12 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "layout.shrink" => Efecto::Tamano(-n),
         "layout.equalize" => Efecto::Igualar,
         "layout.pick" => Efecto::Disposiciones,
+        "layout.split-h" => Efecto::Partir { vertical: false },
+        "layout.split-v" => Efecto::Partir { vertical: true },
+        "layout.close-slot" => Efecto::CerrarHueco,
+        "layout.places" => Efecto::AlternarHueco { kind: "places" },
+        "layout.processes" => Efecto::AlternarHueco { kind: "processes" },
+        "layout.metadata" => Efecto::AlternarHueco { kind: "metadata" },
         "pane.columns" => Efecto::Columnas,
         "app.palette" => Efecto::Paleta,
         "app.help" => Efecto::Ayuda,

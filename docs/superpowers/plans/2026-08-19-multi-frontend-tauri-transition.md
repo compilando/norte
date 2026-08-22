@@ -2125,8 +2125,9 @@ availability from the same classification.
 #### The matrix, measured 2026-08-22
 
 The shared catalogue declares **138** live commands (`viewer.*` included).
-The window implements **66** after #287/#289/#292; the TUI implements **111**.
-Nothing was dropped: every one of the 72 the window lacks is classified below, and every
+The window implements **72** after #287/#289/#291/#292; the TUI implements
+**111**. Nothing was dropped: every one of the 66 the window lacks is
+classified below, and every
 "deferred" line has an issue that can be closed.
 
 | family | in the window | classification |
@@ -2136,7 +2137,8 @@ Nothing was dropped: every one of the 72 the window lacks is classified below, a
 | `dialog.*` others (18) | they name answers of dialogs this window does not have | **not applicable today** |
 | `pane.tab-*` (15) | none | **deferred — #288** |
 | `pane.*` others (27) | sorting is done by clicking the header; the rest have no surface | **deferred — #290** |
-| `layout.split-h/v`, `close-slot`, `preview`, `processes`, `metadata`, `places` (7) | the tree is painted, not edited | **deferred — #291** |
+| `layout.split-h/v`, `close-slot`, `places`, `processes`, `metadata` (6) | built (#291): the tree is edited, not just painted | **supported** |
+| `layout.preview` (1) | this window cannot PAINT a preview slot — it would open grey, as an unsupported kind, and a slot that only paints off is not open | **deferred — #291** |
 | `mark.all/invert/pattern-add/pattern-remove` (4) | built (#289) | **supported** |
 | `task.next/prev/dismiss` (3) | built (#292); they were `Planned` for an afternoon because NO frontend had them | **supported** |
 | `pane.command-line` | the palette is this window's answer | **not applicable to the GUI** |
