@@ -296,6 +296,26 @@ believing it had authorized what stayed denied by silence. Approving now says
 when it does not land. Denying does not need it: if that message is the one
 lost, the outcome is still the one that was asked for.
 
+### What the reviews added to the rule
+
+Three findings from the 5.3/5.4 reviews generalise past this ADR's subject,
+and all three are about the same thing — an invariant that holds on one path
+and not on its twin:
+
+- **A rule that only covers the keyboard does not cover the surface.** The
+  acknowledge guard for self-opening dialogs lived in the key path while the
+  pointer is the primary input of a window. Guards belong where the two inputs
+  meet, not on the one you were thinking about when you wrote it.
+- **A masked string cannot be detected by masking it again.** The daemon
+  redacts paths before sending them, so the host's "did masking change
+  anything?" test answered no for exactly the bytes that had been replaced.
+  U+FFFD is itself the signal; where it comes from a wire that already
+  redacted, its presence is the flag.
+- **An index is only as good as the list it indexes.** The board is capped
+  before it crosses the bridge; the cursor counted over the uncapped map. Any
+  cap plus any index needs one definition of "the visible ones", and the
+  invariant belongs in a function rather than in three call sites.
+
 ### Negative
 
 - Bridge **22 → 23**, and old renderers break on purpose (ADR 0068). The four

@@ -1697,6 +1697,35 @@ visibility rules.
 > `default-src 'none'`, and the binary's own commands validate their types —
 > Tauri capabilities only gate plugin commands) and *production devtools*
 > (the `devtools` feature is not enabled anywhere in the manifest).
+>
+> **The reviewer agents ran afterwards** (same range), and they were right to:
+> four BLOCKERs and nine MAJORs, applied in two passes (`763ecae4`,
+> `e9e871d4`). What the hand audit had missed shares one shape — a promise
+> written in one place and broken in another:
+>
+> - The board crosses the bridge capped at 256 rows and the cursor is an
+>   index; the cap lived in one place and the cursor counted over the whole
+>   map, so past 256 tasks the highlighted row and the cancelled task were two
+>   different tasks. The DTO's own rustdoc states the invariant verbatim.
+> - A batch born terminal never asked for its report — `registrar_task`
+>   documents that exact race and handles it for the relisting, not for the
+>   report.
+> - The acknowledge rule was keyboard-only, and the pointer is the primary
+>   input of this surface: dialogs paint in the same place with the same first
+>   button, so a click already in flight over "Confirm" landed on the
+>   "Approve" of an approval that had just arrived. The `EFECTOS` rustdoc
+>   cited that guard as one of the four things holding the switch up.
+> - The approval's hostile flag was computed by masking text the DAEMON had
+>   already passed through its lossy pass, so it never fired for the most
+>   dangerous class — while a zero-width space, which that pass does not
+>   touch, did.
+> - Task ids restart at 1 in every daemon, so after a handover a new task
+>   inherited the old one's state. Rows now carry a connection epoch; the root
+>   fix belongs in the scheduler (**#278**).
+>
+> The lesson for the next phase that wants to skip them: **a hand audit finds
+> what you already know to look for.** Three of the four blockers are
+> invariants this repository had already written down somewhere else.
 
 Mandatory reviews:
 
