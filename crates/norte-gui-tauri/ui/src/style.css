@@ -1224,6 +1224,16 @@ body {
   min-width: 24ch;
 }
 
+/* Una fila con un deshacer EN MARCHA: se dice, y otro `u` sobre ella se
+   rehúsa —dos undos de la misma sesión caminan la misma lista. */
+.agents-row[data-undoing="true"] .agents-session::after {
+  content: " ⟳";
+}
+
+.agents-forgotten {
+  opacity: 0.8;
+}
+
 .agents-counts {
   margin-left: auto;
   opacity: 0.8;

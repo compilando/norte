@@ -215,7 +215,13 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
             "extension_select_row",
             UiAction::ExtensionSelectRow { row: 1 },
         ),
-        ("agent_select_row", UiAction::AgentSelectRow { row: 1 }),
+        (
+            "agent_select_row",
+            UiAction::AgentSelectRow {
+                row: 1,
+                generation: 4,
+            },
+        ),
         (
             "picker_select_row",
             UiAction::PickerSelectRow {
@@ -997,6 +1003,9 @@ fn agentes_de_referencia() -> norte_ui_host::dto::AgentsView {
             norte_ui_host::dto::AgentRowView {
                 session: "agente\u{fffd}1".to_owned(),
                 session_hostile: true,
+                // Con un deshacer EN MARCHA: la fila lo dice, y `u` sobre
+                // ella se rehúsa.
+                undoing: true,
                 counts: "pidió 7, aprobadas desde aquí 3".to_owned(),
                 last_op: "delete".to_owned(),
                 last_op_hostile: false,
@@ -1004,13 +1013,19 @@ fn agentes_de_referencia() -> norte_ui_host::dto::AgentsView {
             norte_ui_host::dto::AgentRowView {
                 session: "agente-2".to_owned(),
                 session_hostile: false,
+                undoing: false,
                 counts: "pidió 1, aprobadas desde aquí 0".to_owned(),
                 last_op: "copy".to_owned(),
                 last_op_hostile: false,
             },
         ],
         cursor: 0,
+        generation: 4,
+        // Con alguna OLVIDADA: el tope existe y decirlo es lo que impide que
+        // una lista recortada se lea como completa.
+        forgotten: 2,
         note: "solo las sesiones que esta ventana ha visto".to_owned(),
+        empty: "ningún agente ha pedido permiso".to_owned(),
     }
 }
 

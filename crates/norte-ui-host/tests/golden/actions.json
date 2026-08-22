@@ -7,7 +7,8 @@
   },
   "agent_select_row": {
     "action": "agent_select_row",
-    "row": 1
+    "row": 1,
+    "generation": 4
   },
   "ai_rename_decide": {
     "action": "ai_rename_decide",

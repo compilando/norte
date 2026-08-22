@@ -50,14 +50,31 @@ pub(crate) struct Agentes {
     sesiones: std::collections::HashMap<String, Sesion>,
     /// El reloj lógico de «visto por última vez».
     reloj: u64,
-    /// Cuál está elegida, cuando el panel está abierto.
-    cursor: usize,
+    /// Cuál está elegida, POR ID y no por posición.
+    ///
+    /// La lista se reordena sola —una petición nueva sube a su sesión al
+    /// primer puesto— y una selección por índice significa otra fila en
+    /// cuanto eso pasa. Es la misma regla que la 6.2 dejó escrita para las
+    /// filas comparadas: se nombran por id, jamás por posición.
+    elegida: Option<String>,
+    /// Cuántas veces ha CAMBIADO la lista.
+    ///
+    /// Viaja con la vista y vuelve con el clic: un clic se resuelve contra la
+    /// lista que el lector estaba mirando, no contra la de ahora. Sin esto,
+    /// una petición que llega entre el clic y su llegada convierte «esta
+    /// fila» en otra — y aquí «esta fila» es de quién se deshace el trabajo.
+    generacion: u64,
+    /// Cuántas sesiones se han olvidado por el tope.
+    olvidadas: u64,
+    /// Las sesiones con un deshacer en marcha.
+    deshaciendo: std::collections::HashSet<String>,
 }
 
 impl Agentes {
     /// Apunta que esta sesión pidió permiso para `op`.
     pub(crate) fn vista(&mut self, id: &str, op: &str) {
         self.reloj += 1;
+        self.generacion += 1;
         let sello = self.reloj;
         let (pintable, hostil) = norte_frontend::display_name(op.as_bytes());
         let entrada = self
@@ -80,21 +97,54 @@ impl Agentes {
     pub(crate) fn aprobada(&mut self, id: &str) {
         if let Some(s) = self.sesiones.get_mut(id) {
             s.aprobadas = s.aprobadas.saturating_add(1);
+            self.generacion += 1;
         }
     }
 
-    /// Se olvida de la vista hace más tiempo cuando sobra alguna.
+    /// Apunta que a esta sesión se le lanzó un deshacer.
+    pub(crate) fn deshaciendo(&mut self, id: &str) {
+        self.deshaciendo.insert(id.to_owned());
+        self.generacion += 1;
+    }
+
+    /// El deshacer de esta sesión terminó, como sea.
+    pub(crate) fn deshecha(&mut self, id: &str) {
+        if self.deshaciendo.remove(id) {
+            self.generacion += 1;
+        }
+    }
+
+    /// `true` si esta sesión ya tiene un deshacer en marcha.
+    pub(crate) fn tiene_undo_vivo(&self, id: &str) -> bool {
+        self.deshaciendo.contains(id)
+    }
+
+    /// Se olvida de alguna cuando sobran, y lo apunta.
+    ///
+    /// NO la más vieja a secas: el id de sesión lo elige el AGENTE, y nada le
+    /// impide reconectarse ciento veintiocho veces con ids nuevos, cada uno
+    /// pidiendo un permiso, para empujar fuera de la lista justo a la sesión
+    /// cuyo trabajo alguien querría deshacer. Se olvida primero lo que nadie
+    /// ha tocado —una sola petición y ninguna aprobación desde aquí—, nunca
+    /// una con un deshacer en marcha, y el recuento de olvidadas VIAJA:
+    /// una lista recortada que se presenta como completa es lo que convierte
+    /// el ataque en «esa sesión no existe».
     fn podar(&mut self) {
         while self.sesiones.len() > MAX_SESIONES {
             let Some(vieja) = self
                 .sesiones
                 .values()
-                .min_by_key(|s| s.sello)
+                .filter(|s| !self.deshaciendo.contains(&s.id))
+                .min_by_key(|s| (s.aprobadas > 0 || s.vistas > 1, s.sello))
                 .map(|s| s.id.clone())
             else {
                 return;
             };
             self.sesiones.remove(&vieja);
+            if self.elegida.as_deref() == Some(vieja.as_str()) {
+                self.elegida = None;
+            }
+            self.olvidadas = self.olvidadas.saturating_add(1);
         }
     }
 
@@ -110,36 +160,69 @@ impl Agentes {
 
     /// El id CRUDO de la sesión elegida.
     pub(crate) fn elegida(&self) -> Option<String> {
-        self.ordenadas().get(self.cursor).map(|s| s.id.clone())
+        match &self.elegida {
+            // Por ID: si la fila se movió —o desapareció—, la selección la
+            // sigue, y no se queda señalando a quien ocupó su hueco.
+            Some(id) if self.sesiones.contains_key(id) => Some(id.clone()),
+            _ => self.ordenadas().first().map(|s| s.id.clone()),
+        }
     }
 
-    /// Mueve el cursor dentro de la lista.
+    /// Dónde cae la selección dentro de la lista pintada.
+    fn indice(&self) -> usize {
+        let orden = self.ordenadas();
+        self.elegida
+            .as_ref()
+            .and_then(|id| orden.iter().position(|s| &s.id == id))
+            .unwrap_or(0)
+    }
+
+    /// Mueve la selección dentro de la lista.
     pub(crate) fn mover(&mut self, delta: i64) {
-        let n = self.sesiones.len();
-        if n == 0 {
+        let orden = self.ordenadas();
+        if orden.is_empty() {
             return;
         }
-        let destino = i64::try_from(self.cursor)
+        let destino = i64::try_from(self.indice())
             .unwrap_or(0)
             .saturating_add(delta);
-        self.cursor = usize::try_from(destino.max(0)).unwrap_or(0).min(n - 1);
+        let i = usize::try_from(destino.max(0))
+            .unwrap_or(0)
+            .min(orden.len() - 1);
+        self.elegida = Some(orden[i].id.clone());
     }
 
-    /// Pone el cursor en una fila concreta (un click).
-    pub(crate) fn senalar(&mut self, fila: usize) {
-        if fila < self.sesiones.len() {
-            self.cursor = fila;
+    /// Pone la selección en una fila concreta (un click), si el clic habla de
+    /// la lista que se estaba pintando.
+    ///
+    /// Fuera de generación NO se recorta ni se ignora: se rehúsa. Recortar
+    /// sobre una lista que se movió es elegir por el lector, y aquí lo que se
+    /// elige es de quién se deshace el trabajo.
+    pub(crate) fn senalar(&mut self, fila: usize, generacion: u64) -> bool {
+        if generacion != self.generacion {
+            return false;
         }
+        let orden = self.ordenadas();
+        let Some(s) = orden.get(fila) else {
+            return false;
+        };
+        self.elegida = Some(s.id.clone());
+        true
     }
 
-    /// Empieza en la primera: el panel se abre y se cierra, y el cursor de la
-    /// vez anterior describía una lista que puede haber cambiado entera.
+    /// Empieza sin selección: el panel se abre y se cierra, y la de la vez
+    /// anterior describía una lista que puede haber cambiado entera.
     pub(crate) fn al_abrir(&mut self) {
-        self.cursor = 0;
+        self.elegida = None;
     }
 
     /// La proyección del panel.
-    pub(crate) fn vista_de(&self, lang: norte_i18n::Lang) -> AgentsView {
+    ///
+    /// `escucha` es si esta ventana está suscrita al canal de aprobaciones:
+    /// una que no lo está —montada sin efectos— tiene la lista vacía POR ESO,
+    /// y decir ahí «ningún agente ha pedido permiso» es afirmar algo que no
+    /// puede saber.
+    pub(crate) fn vista_de(&self, lang: norte_i18n::Lang, escucha: bool) -> AgentsView {
         AgentsView {
             rows: self
                 .ordenadas()
@@ -149,6 +232,7 @@ impl Agentes {
                     AgentRowView {
                         session: clamp_display(id),
                         session_hostile: hostil,
+                        undoing: self.deshaciendo.contains(&s.id),
                         counts: clamp_display(norte_i18n::ta_in(
                             lang,
                             "agents-counts",
@@ -162,13 +246,23 @@ impl Agentes {
                     }
                 })
                 .collect(),
-            cursor: self.cursor as u64,
+            cursor: self.indice() as u64,
+            generation: self.generacion,
+            forgotten: self.olvidadas,
             // Qué ES esta lista, dentro de la propia pantalla: las que ESTA
             // ventana ha visto pedir permiso, que no es el censo de agentes
             // del sistema. Sin decirlo, una lista vacía se lee como «ningún
             // agente ha tocado nada», que es una afirmación que esta ventana
             // no puede hacer.
             note: clamp_display(norte_i18n::t_in(lang, "agents-note")),
+            empty: clamp_display(norte_i18n::t_in(
+                lang,
+                if escucha {
+                    "agents-empty"
+                } else {
+                    "agents-not-listening"
+                },
+            )),
         }
     }
 }

@@ -1070,10 +1070,24 @@ export class Screen {
     nota.className = "agents-note";
     nota.textContent = agents.note;
     caja.append(titulo, nota);
+    if (agents.forgotten > 0) {
+      // Lo OLVIDADO se dice: el id de sesión lo elige el agente, así que
+      // inundar la lista para empujar fuera a una concreta está a su
+      // alcance, y una lista recortada que se presenta como completa es lo
+      // que convierte eso en «esa sesión no existe».
+      const podadas = document.createElement("p");
+      podadas.className = "agents-forgotten";
+      podadas.setAttribute("role", "status");
+      podadas.textContent = String(agents.forgotten);
+      podadas.dataset["forgotten"] = String(agents.forgotten);
+      caja.append(podadas);
+    }
     if (agents.rows.length === 0) {
+      // La frase la compone el HOST: una lista vacía significa cosas
+      // distintas según si esta ventana escucha las peticiones.
       const vacio = document.createElement("p");
       vacio.className = "agents-empty";
-      vacio.textContent = this.t("agents-empty");
+      vacio.textContent = agents.empty;
       caja.append(vacio);
       this.agentsRoot.replaceChildren(caja);
       return;
@@ -1088,7 +1102,14 @@ export class Screen {
       li.setAttribute("role", "option");
       li.setAttribute("aria-selected", String(agents.cursor === i));
       li.addEventListener("click", () => {
-        this.send({ action: "agent_select_row", row: i });
+        // La generación viaja con el clic: la lista se reordena sola, y un
+        // clic contra la de antes elige otra fila — aquí «esta fila» es de
+        // quién se deshace el trabajo.
+        this.send({
+          action: "agent_select_row",
+          row: i,
+          generation: agents.generation,
+        });
       });
       // El id y el último op, cada uno aislado y con su bandera: el id es
       // una clave opaca del daemon y puede traer letras RTL que reordenarían
@@ -1115,6 +1136,7 @@ export class Screen {
       cuentas.className = "agents-counts";
       cuentas.textContent = r.counts;
       li.append(cuentas);
+      li.dataset["undoing"] = String(r.undoing);
       lista.append(li);
     }
     lista.setAttribute("aria-activedescendant", `agent-row-${String(agents.cursor)}`);

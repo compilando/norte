@@ -239,6 +239,13 @@ pub enum UiAction {
     AgentSelectRow {
         /// Fila dentro de la lista pintada.
         row: u32,
+        /// La generación de la lista que el renderer estaba pintando.
+        ///
+        /// La lista cambia SIN gesto —una petición de permiso la reordena—,
+        /// así que un clic contra la de antes elige otra fila. Fuera de
+        /// generación se rehúsa: aquí «esta fila» es de quién se deshace el
+        /// trabajo.
+        generation: u64,
     },
 
     /// Elige una extensión del gestor (un click) y pide su ficha.

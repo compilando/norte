@@ -447,6 +447,8 @@ enum Fondo {
         u64,
         Result<norte_proto::methods::PluginListResult, Error>,
     ),
+    /// La task de un `policy.undo_session` ya tiene id: se ata a su sesión.
+    UndoDeSesion(u64, String),
     /// El catálogo que pidió la PALETA, para sus filas de plugin.
     PluginsDePaleta(u64, Result<norte_proto::methods::PluginListResult, Error>),
     /// Un cambio de gobierno (aprobar/revocar, encender/apagar) contestó.
@@ -1507,6 +1509,11 @@ struct Estado {
     agentes: crate::agents::Agentes,
     /// El panel de sesiones de agente está abierto.
     panel_agentes: bool,
+    /// Qué sesión deshace cada task de undo en marcha, por id de task.
+    ///
+    /// El desenlace llega por el progreso, que solo trae el id: sin este mapa
+    /// no hay forma de saber a qué sesión soltarle el «deshaciendo».
+    undos: std::collections::HashMap<u64, String>,
     /// Cómo se llaman las extensiones y sus comandos, ya enmascarados, para
     /// el panel de salida: `id → (nombre, comando → título)`.
     ///
@@ -1819,6 +1826,25 @@ impl Estado {
         }
     }
 
+    /// Los roles de arranque.
+    ///
+    /// El DESTINO lo resuelve la capa compartida, y NO se pone a mano.
+    /// Ponerlo con `Roles::set` lo marcaba como EXPLÍCITO —o sea, «lo eligió
+    /// una persona»— cuando no lo había elegido nadie, y entonces sobrevivía
+    /// a que aparecieran más candidatos: con tres listados, el primero se
+    /// quedaba el rol para siempre y copiar mandaba ahí sin que nadie lo
+    /// hubiera dicho (ADR 0058 D7).
+    fn roles_iniciales(
+        arbol: &Node,
+        reparto: &norte_frontend::layout::Resolved,
+        kinds: &KindRegistry,
+        activo: u32,
+    ) -> Roles {
+        let mut roles = Roles::con_active(SlotId(activo));
+        roles.reconcile(arbol, reparto, kinds, SlotId(activo));
+        roles
+    }
+
     fn nuevo(instance: InstanceId, options: UiHostOptions) -> (Self, Arc<dyn HostBackend>) {
         let UiHostOptions {
             backend,
@@ -1841,14 +1867,7 @@ impl Estado {
         let reparto = resolve(rect(viewport), &arbol, &kinds);
         let huecos = Self::huecos_iniciales(&arbol, &kinds, dir);
         let activo = huecos.keys().copied().next().unwrap_or(1);
-        let mut roles = Roles::con_active(SlotId(activo));
-        // El DESTINO lo resuelve la capa compartida, y NO se pone a mano.
-        // Ponerlo con `Roles::set` lo marcaba como EXPLÍCITO —o sea, «lo
-        // eligió una persona»— cuando no lo había elegido nadie, y entonces
-        // sobrevivía a que aparecieran más candidatos: con tres listados, el
-        // primero se quedaba el rol para siempre y copiar mandaba ahí sin
-        // que nadie lo hubiera dicho (ADR 0058 D7).
-        roles.reconcile(&arbol, &reparto, &kinds, SlotId(activo));
+        let roles = Self::roles_iniciales(&arbol, &reparto, &kinds, activo);
         let estado = Self {
             rotulos_plugin: Rotulos::new(),
             salida_plugin: None,
@@ -1862,6 +1881,7 @@ impl Estado {
             extensiones: None,
             agentes: crate::agents::Agentes::default(),
             panel_agentes: false,
+            undos: std::collections::HashMap::new(),
             tema: theme,
             mirando_tema: false,
             cursor_procesos: 0,
@@ -2368,7 +2388,7 @@ impl Estado {
             UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row, backend, buzon),
             UiAction::SettingsSelectRow { row } => self.elegir_ajuste(*row),
             UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
-            UiAction::AgentSelectRow { row } => self.elegir_agente(*row),
+            UiAction::AgentSelectRow { row, generation } => self.elegir_agente(*row, *generation),
             UiAction::PickerSelectRow { row, generation } => {
                 self.elegir_fila_del_selector(*row, *generation)
             }
@@ -4527,7 +4547,12 @@ impl Estado {
 
     /// La proyección del panel de agentes.
     fn vista_agentes(&self) -> Option<crate::dto::AgentsView> {
-        self.panel_agentes.then(|| self.agentes.vista_de(self.lang))
+        // Una ventana sin efectos NO se suscribe al canal de aprobaciones,
+        // así que su lista está vacía por ESO y no porque nadie haya pedido
+        // nada. La pantalla lo dice, en vez de afirmar lo que no sabe.
+        let escucha = self.efectos == crate::commands::Efectos::Completo;
+        self.panel_agentes
+            .then(|| self.agentes.vista_de(self.lang, escucha))
     }
 
     /// Las teclas mientras el panel de agentes está abierto.
@@ -4551,7 +4576,11 @@ impl Estado {
             // más grande que esta ventana puede lanzar de un tirón —revierte
             // todo lo que un agente hizo, en orden inverso— y no hay ninguna
             // otra que toque tantas cosas con una tecla.
-            "u" => return self.preguntar_por_deshacer(),
+            // Y exige la tecla PELADA, a diferencia del resto de letras de
+            // este host: `ctrl+u` es memoria muscular de otra cosa, y esta es
+            // la operación más grande que la ventana puede lanzar de un
+            // tirón.
+            "u" if !k.ctrl && !k.alt && !k.meta => return self.preguntar_por_deshacer(),
             _ => return (self.aplicada(), Vec::new()),
         }
         let _ = (backend, buzon);
@@ -4562,11 +4591,21 @@ impl Estado {
     }
 
     /// Un click sobre una fila del panel de agentes: la elige.
-    fn elegir_agente(&mut self, row: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if !self.panel_agentes {
+    fn elegir_agente(
+        &mut self,
+        row: u32,
+        generation: u64,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Con un diálogo encima, el panel no recibe: es modal para el teclado
+        // y tiene que serlo también para el ratón.
+        if !self.panel_agentes || !self.dialogos.is_empty() {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
-        self.agentes.senalar(row as usize);
+        if !self.agentes.senalar(row as usize, generation) {
+            // La lista cambió entre el pintado y el clic: se rehúsa en vez de
+            // recortar, porque recortar es elegir por el lector.
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
         let cambio = ViewChange::Agents {
             agents: self.vista_agentes(),
         };
@@ -4586,6 +4625,19 @@ impl Estado {
                 Vec::new(),
             );
         };
+        // Uno cada vez: dos `policy.undo_session` de la misma sesión caminan
+        // la MISMA lista de entradas —cada uno la fotografía antes de que el
+        // otro registre sus compensaciones—, y el segundo devuelve un informe
+        // lleno de bloqueos que no son de nadie.
+        if self.agentes.tiene_undo_vivo(&sesion) {
+            let fuera = self.decir("host-undo-already-running");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-undo-already-running".to_owned(),
+                },
+                fuera,
+            );
+        }
         // El id, enmascarado, en su propio campo: es una clave opaca del
         // daemon que puede llevar cualquier byte, y una decisión sobre «esta
         // sesión» que no dice cuál no es una decisión.
@@ -4641,23 +4693,43 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
-    /// Lanza el deshacer de una sesión entera.
+    /// Crea el directorio TECLEADO dentro de este otro.
     ///
-    /// Como cualquier otra operación larga: es una Task, aparece en el
-    /// tablero y su informe —lo que NO volvió— llega por el camino que la 5.3
-    /// ya construyó.
-    fn lanzar_deshacer(
-        sesion: String,
+    /// El nombre se valida AQUÍ, con la misma regla que cualquier otro
+    /// segmento: ni vacío, ni `/`, ni NUL, ni `.`/`..`. Un nombre que no vale
+    /// no encola nada y lo dice; el texto tecleado no se pierde porque el
+    /// diálogo se vuelve a abrir con él.
+    ///
+    /// El mismo cinturón que el rename: un nombre TOCADO que aún lleva el
+    /// carácter de sustitución no se escribe. La asimetría de antes («crear
+    /// no tiene siembra de la que heredar residuos») era falsa del ROUND
+    /// TRIP: el host pinta su propia proyección enmascarada en el campo, y el
+    /// renderer vuelve a sembrarlo con ella si tuvo que reconstruir el nodo —
+    /// un diálogo de aprobación que se cuele por encima basta.
+    fn crear_directorio(
+        &mut self,
+        dir: &VPath,
+        nombre: &str,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
-    ) {
+    ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
+        let seg = match Self::segmento_tecleado(nombre) {
+            Ok(seg) => seg,
+            Err(clave) => {
+                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+                let cambio = ViewChange::Status(self.status.clone());
+                return (Some(clave), vec![self.parche(vec![cambio])]);
+            }
+        };
+        let destino = dir.join(seg);
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
+        let dir = dir.clone();
         tokio::spawn(async move {
-            match backend.undo_session(sesion).await {
+            match backend.mkdir(destino).await {
                 Ok(task) => {
                     let _ = buzon
-                        .send(Mensaje::TaskNueva(Box::new((task, Vec::new()))))
+                        .send(Mensaje::TaskNueva(Box::new((task, vec![dir]))))
                         .await;
                 }
                 Err(e) => {
@@ -4665,6 +4737,88 @@ impl Estado {
                 }
             }
         });
+        (None, Vec::new())
+    }
+
+    /// Confirma el deshacer de UNA sesión: comprueba que no haya otro en
+    /// marcha, lo lanza, y repinta la fila.
+    ///
+    /// La sesión es la que se LEYÓ en la pregunta, no la señalada ahora: la
+    /// lista se reordena sola —una petición nueva sube a su sesión al primer
+    /// puesto— y el diálogo se queda las teclas, no los mensajes de fondo.
+    fn deshacer_sesion(
+        &mut self,
+        sesion: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.agentes.tiene_undo_vivo(sesion) {
+            return (
+                Some("host-undo-already-running"),
+                self.decir("host-undo-already-running"),
+            );
+        }
+        self.agentes.deshaciendo(sesion);
+        // Sin ALCANCE conocido: un `undo_session` toca los directorios que la
+        // sesión tocara, que esta ventana no sabe. Se relista lo que está EN
+        // PANTALLA, que es donde el lector estaba mirando trabajar al agente.
+        let visibles = self.dirs_visibles();
+        Self::lanzar_deshacer(sesion.to_owned(), visibles, backend, buzon);
+        let mut fuera = Vec::new();
+        if self.panel_agentes {
+            let cambio = ViewChange::Agents {
+                agents: self.vista_agentes(),
+            };
+            fuera.push(self.parche(vec![cambio]));
+        }
+        (None, fuera)
+    }
+
+    /// Lanza el deshacer de una sesión entera.
+    ///
+    /// Como cualquier otra operación larga: es una Task, aparece en el
+    /// tablero y su informe —lo que NO volvió— llega por el camino que la 5.3
+    /// ya construyó.
+    fn lanzar_deshacer(
+        sesion: String,
+        afectados: Vec<VPath>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            match backend.undo_session(sesion.clone()).await {
+                Ok(task) => {
+                    // El id de la task y la sesión, juntos: el desenlace
+                    // llega por el progreso, que solo trae el id.
+                    let _ = buzon
+                        .send(Mensaje::Fondo(Box::new(Fondo::UndoDeSesion(
+                            task.id.get(),
+                            sesion,
+                        ))))
+                        .await;
+                    let _ = buzon
+                        .send(Mensaje::TaskNueva(Box::new((task, afectados))))
+                        .await;
+                }
+                Err(e) => {
+                    let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
+                }
+            }
+        });
+    }
+
+    /// Los directorios que hay AHORA en pantalla, sin repetir.
+    fn dirs_visibles(&self) -> Vec<VPath> {
+        let mut v: Vec<VPath> = Vec::new();
+        for h in self.huecos.values() {
+            let dir = h.pane.dir();
+            if !v.contains(dir) {
+                v.push(dir.clone());
+            }
+        }
+        v
     }
 
     fn abrir_extensiones(
@@ -4707,6 +4861,10 @@ impl Estado {
                 .aplicar_ficha(&id, res.as_ref().ok())
                 .into_iter()
                 .collect(),
+            Fondo::UndoDeSesion(task_id, sesion) => {
+                self.undos.insert(task_id, sesion);
+                Vec::new()
+            }
             Fondo::PluginsDePaleta(apertura, res) => self.aplicar_filas_de_plugin(apertura, res),
             Fondo::Gobernada(apertura, res) => {
                 self.aplicar_gobierno(apertura, &res, backend, buzon)
@@ -9174,8 +9332,19 @@ impl Estado {
         // abrirse por lo que sea: es lo ÚNICO que nombra a un agente en todo
         // el protocolo, y sin ese apunte no hay forma de ofrecer deshacer lo
         // que hizo salvo tecleando su id a mano (#276).
+        let mut fuera = Vec::new();
         if let Some(sesion) = req.session.as_deref() {
             self.agentes.vista(sesion, &req.op);
+            // Y se REPINTA si el panel está abierto. La lista cambia SIN
+            // gesto —esta petición la reordena— y un renderer al que no se
+            // le dice se queda pintando el orden de antes: la fila que el
+            // lector ve resaltada deja de ser la que el host tiene elegida, y
+            // `u` deshace el trabajo de otra sesión.
+            if self.panel_agentes {
+                fuera.push(self.parche(vec![ViewChange::Agents {
+                    agents: self.vista_agentes(),
+                }]));
+            }
         }
         // Estas rutas vienen del daemon como TEXTO ya redactado, no como
         // `VPath`, así que el enmascarado es el de cadenas y la marca se
@@ -9504,47 +9673,15 @@ impl Estado {
                 }
             }
             Some(Pendiente::CrearDirectorio { dir }) => {
-                let nombre = dialogo.input_crudo.clone();
-                // El nombre se valida AQUÍ, con la misma regla que
-                // cualquier otro segmento: ni vacío, ni `/`, ni NUL, ni
-                // `.`/`..`. Un nombre que no vale no encola nada y lo
-                // dice; el texto tecleado no se pierde porque el diálogo
-                // se vuelve a abrir con él.
-                // El mismo cinturón que el rename: un nombre TOCADO que aún
-                // lleva el carácter de sustitución no se escribe. La
-                // asimetría de antes («crear no tiene siembra de la que
-                // heredar residuos») era falsa del ROUND TRIP: el host pinta
-                // su propia proyección enmascarada en el campo, y el renderer
-                // vuelve a sembrarlo con ella si tuvo que reconstruir el nodo
-                // — un diálogo de aprobación que se cuele por encima basta.
-                let seg = match Self::segmento_tecleado(&nombre) {
-                    Ok(seg) => seg,
-                    Err(clave) => {
-                        self.status.message =
-                            Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
-                        let cambio = ViewChange::Status(self.status.clone());
-                        salidas.push(self.parche(vec![cambio]));
-                        return (Some(clave), salidas);
-                    }
-                };
-                let destino = dir.join(seg);
-                let backend = Arc::clone(backend);
-                let buzon = buzon.clone();
-                tokio::spawn(async move {
-                    match backend.mkdir(destino).await {
-                        Ok(task) => {
-                            let _ = buzon
-                                .send(Mensaje::TaskNueva(Box::new((task, vec![dir]))))
-                                .await;
-                        }
-                        Err(e) => {
-                            let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
-                        }
-                    }
-                });
+                let (motivo, partes) =
+                    self.crear_directorio(&dir, &dialogo.input_crudo, backend, buzon);
+                rehusado = motivo;
+                salidas.extend(partes);
             }
             Some(Pendiente::DeshacerSesion { sesion }) => {
-                Self::lanzar_deshacer(sesion, backend, buzon);
+                let (motivo, partes) = self.deshacer_sesion(&sesion, backend, buzon);
+                rehusado = motivo;
+                salidas.extend(partes);
             }
             Some(Pendiente::AprobarExtension { id, capabilities }) => {
                 let (motivo, partes) = self.conceder(&id, &capabilities, backend, buzon);
@@ -9561,6 +9698,12 @@ impl Estado {
                 // ventana, cuando se denegó, o cuando caducó.
                 if let Some(sesion) = &session {
                     self.agentes.aprobada(sesion);
+                    if self.panel_agentes {
+                        let cambio = ViewChange::Agents {
+                            agents: self.vista_agentes(),
+                        };
+                        salidas.push(self.parche(vec![cambio]));
+                    }
                 }
                 // Solo `approve` aprueba. Cualquier otra respuesta —y el
                 // cierre del diálogo— DENIEGA: una decisión de seguridad
@@ -10226,6 +10369,18 @@ impl Estado {
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
         }];
+        // Un deshacer que TERMINA suelta su sesión: mientras corre, la fila
+        // lo dice y `u` sobre ella se rehúsa —dos undos de la misma sesión
+        // caminan la misma lista de entradas— y eso no puede quedarse pegado
+        // para siempre.
+        if acabo && let Some(sesion) = self.undos.remove(&p.task_id.get()) {
+            self.agentes.deshecha(&sesion);
+            if self.panel_agentes {
+                cambios.push(ViewChange::Agents {
+                    agents: self.vista_agentes(),
+                });
+            }
+        }
         // Si la que acaba de terminar es LA búsqueda, su vista deja de decir
         // «buscando…»: una lista que ya no crece y una que sigue creciendo se
         // leen igual si nadie las distingue.

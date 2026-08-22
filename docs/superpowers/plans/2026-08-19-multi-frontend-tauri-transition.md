@@ -2008,6 +2008,32 @@ by TUI/GPUI and a dedicated security review.
 > 5.3 refused to build) is that the operand is CHOSEN. A typed session id can
 > be the wrong one, and undoing the wrong session undoes somebody else's work.
 >
+> **Reviewed** (bridge **33 → 34**): one BLOCKER and three MAJORs, applied.
+> What generalises:
+>
+> - **A list that changes with no gesture needs a generation, and a selection
+>   by id.** This one is reordered by an incoming permission request, and it
+>   was patched only on user gestures — so the renderer kept painting the old
+>   order while the host's index-based cursor pointed elsewhere, and `u` would
+>   have undone a different session's work. An agent triggers that reorder at
+>   will, which makes it a choice, not a race. The repo already had the rule
+>   written down twice (6.2's "rows are named by id, never by position"; the
+>   generation on the lists that fill from a background task) — the third such
+>   list did not get it.
+> - **An eviction policy is an attack surface when the attacker names the
+>   keys.** Dropping the least-recently-seen session let an agent push its own
+>   row out with 128 reconnects. Untouched sessions go first now, one with an
+>   undo running never goes, and the count of forgotten ones travels: a
+>   truncated list presented as complete is what turns flooding into "that
+>   session does not exist".
+> - **An empty list means different things in different modes.** A read-only
+>   window never subscribes to the approvals channel, so its empty list was
+>   painting "no agent has asked for permission" — the exact claim the note was
+>   written to avoid, missed in the one mode where the emptiness is an artefact.
+> - **The widest mutation the window can launch refreshed nothing.** An
+>   `undo_session` has no scope this window knows, so it now re-lists what is
+>   ON SCREEN, which is where the reader was watching the agent work.
+>
 > `app.agents` goes in the SHARED catalogue rather than only here: the command
 > vocabulary is one, a preset may bind it, help documents it, and the TUI —
 > which does not implement it — says so with the same sentence it uses for

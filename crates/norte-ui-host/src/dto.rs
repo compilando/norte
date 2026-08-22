@@ -551,8 +551,29 @@ pub struct AgentsView {
     pub rows: Vec<AgentRowView>,
     /// Cuál está elegida.
     pub cursor: u64,
+    /// Cuántas veces ha cambiado esta lista.
+    ///
+    /// Vuelve con el clic: la lista se reordena SOLA —una petición de
+    /// permiso sube a su sesión al primer puesto— y un clic tiene que
+    /// resolverse contra la que el lector estaba mirando. Aquí «esta fila» es
+    /// de quién se deshace el trabajo.
+    pub generation: u64,
+    /// Cuántas sesiones se han olvidado por el tope.
+    ///
+    /// Se dice: el id de sesión lo elige el agente, así que inundar la lista
+    /// para empujar fuera a una concreta está a su alcance, y una lista
+    /// recortada que se presenta como completa es lo que convierte eso en
+    /// «esa sesión no existe».
+    pub forgotten: u64,
     /// Qué es esta lista, ya traducido.
     pub note: String,
+    /// Qué decir cuando no hay ninguna fila, ya traducido.
+    ///
+    /// Lo compone el HOST porque no es siempre la misma frase: una ventana de
+    /// solo lectura ni siquiera se suscribe al canal de aprobaciones, así que
+    /// su lista vacía significa «esta ventana no escucha», no «ningún agente
+    /// ha pedido nada» — que es una afirmación que no puede hacer.
+    pub empty: String,
 }
 
 /// Una sesión de agente vista por esta ventana.
@@ -571,6 +592,12 @@ pub struct AgentRowView {
     /// otro lado se pinta literal. Y las dos cuentas no son la misma cosa —
     /// otra ventana pudo contestar, o se denegó, o caducó.
     pub counts: String,
+    /// Ya se le lanzó un deshacer y sigue en marcha.
+    ///
+    /// Se dice y además se rehúsa lanzar otro: dos `policy.undo_session` de
+    /// la misma sesión caminan la misma lista de entradas, y el segundo
+    /// produce un informe lleno de bloqueos que no son de nadie.
+    pub undoing: bool,
     /// El último op-kind que pidió (`copy`, `delete`…), ya enmascarado.
     pub last_op: String,
     /// El op-kind se pinta distinto de lo que es.

@@ -12835,3 +12835,123 @@ async fn en_solo_lectura_no_se_deshace_una_sesion() {
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     assert!(backend.deshechas.lock().expect("deshechas").is_empty());
 }
+
+/// Una petición que llega con el panel abierto lo REPINTA, y la selección
+/// sigue a su sesión aunque la lista se reordene.
+///
+/// La lista cambia SIN gesto: una petición nueva sube a su sesión al primer
+/// puesto. Un renderer al que no se le dice se queda pintando el orden de
+/// antes —la fila resaltada deja de ser la que el host tiene elegida— y `u`
+/// deshace el trabajo de otra sesión. Y la selección va por ID, no por
+/// posición, que es la regla que la 6.2 ya dejó escrita.
+#[tokio::test]
+async fn una_peticion_nueva_repinta_el_panel_y_no_mueve_la_seleccion() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let pedir = |id: &str, aid: u64| norte_proto::methods::PolicyApprovalRequired {
+        approval_id: aid,
+        session: Some(id.to_owned()),
+        op: "copy".to_owned(),
+        paths: vec!["mem:///casa/x".to_owned()],
+        paths_total: 1,
+        ttl_ms: 30_000,
+    };
+    for (id, aid) in [("agente-A", 21_u64), ("agente-B", 22)] {
+        tx.send(pedir(id, aid)).expect("el host escucha");
+        let dialogos = siguientes_dialogos(&mut sub).await;
+        let d = dialogos.last().expect("la aprobación");
+        h.dispatch(UiAction::Dialog {
+            id: d.id,
+            choice: "deny".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+        let _ = siguientes_dialogos(&mut sub).await;
+    }
+    ejecutar_por_paleta(&h, &mut sub, "app.agents").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let antes = siguiente_foto(&mut sub).await.agents.expect("abierto");
+    assert_eq!(antes.rows[0].session, "agente-B", "la más reciente primero");
+    // La selección se pone en la SEGUNDA, `agente-A`.
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let elegida = siguiente_foto(&mut sub).await.agents.expect("abierto");
+    assert_eq!(elegida.cursor, 1);
+
+    // Y llega otra petición de `agente-B`, que ya estaba primera: lo que
+    // cambia es su cuenta, y la lista tiene que decir que cambió.
+    tx.send(pedir("agente-B", 23)).expect("el host escucha");
+    let mut panel = elegida.clone();
+    for _ in 0..40 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        panel = siguiente_foto(&mut sub).await.agents.expect("abierto");
+        if panel.generation > elegida.generation {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(
+        panel.generation > elegida.generation,
+        "una lista que cambia sola tiene que decir que cambió: {panel:?}"
+    );
+    assert_eq!(
+        panel.rows[usize::try_from(panel.cursor).expect("cabe")].session,
+        "agente-A",
+        "la selección sigue a SU sesión, no al hueco que ocupaba"
+    );
+
+    // La tercera petición dejó su diálogo delante: se contesta antes de
+    // seguir, porque el panel es modal también para el ratón.
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    if let Some(d) = foto.dialogs.last() {
+        h.dispatch(UiAction::Dialog {
+            id: d.id,
+            choice: "deny".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    }
+
+    // Un clic contra la lista VIEJA se rehúsa en vez de elegir por el lector.
+    let ack = h
+        .dispatch(UiAction::AgentSelectRow {
+            row: 0,
+            generation: elegida.generation,
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(
+            &ack,
+            ActionAck::Stale {
+                reason: StaleAction::Generation
+            }
+        ),
+        "{ack:?}"
+    );
+}
+
+/// En solo lectura, la lista vacía NO dice «ningún agente ha pedido nada».
+///
+/// Esa ventana ni siquiera se suscribe al canal de aprobaciones: su lista
+/// está vacía por eso, y afirmar lo otro es afirmar lo que no puede saber.
+#[tokio::test]
+async fn en_solo_lectura_el_panel_dice_que_no_escucha() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "app.agents").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let panel = siguiente_foto(&mut sub).await.agents.expect("abierto");
+    assert!(panel.rows.is_empty());
+    let escuchando = norte_i18n::t_in(norte_i18n::Lang::Es, "agents-empty");
+    assert_ne!(
+        panel.empty, escuchando,
+        "una ventana que no escucha no puede decir que nadie ha pedido nada"
+    );
+}

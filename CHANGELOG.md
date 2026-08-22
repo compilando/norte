@@ -234,7 +234,14 @@ independently through `PROTOCOL_VERSION`.
   answered, or the human denied, or it expired. What this buys over typing the
   id — which is what phase 5 refused to build — is that the operand is CHOSEN:
   a typed session id can be the wrong one, and undoing the wrong session undoes
-  somebody else's work.
+  somebody else's work. The list is one of the few in norte that changes with
+  no gesture — a permission request reorders it — so it carries a generation, a
+  click is refused rather than clamped when it names the previous one, and the
+  selection follows its session by id and not by position. It also says how
+  many sessions it forgot to its cap, because a session id is chosen by the
+  agent: flooding the list to push a particular one out is within reach, and a
+  truncated list presented as complete is what would turn that into "that
+  session does not exist". Bridge **34**.
 - **The window governs extensions** (bridge **31**). Approve and revoke a
   plugin's capabilities, enable and disable it, edit its `[config]` keys, and
   run the commands it contributes from the palette. Three things are not

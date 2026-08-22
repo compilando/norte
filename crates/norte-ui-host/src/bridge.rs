@@ -30,6 +30,10 @@ use serde::{Deserialize, Serialize};
 ///   hará DE VERDAD —los dos ya traducidos, porque el catálogo no sustituye
 ///   variables—, si hay un nombre alterado FUERA de la ventana, y si el
 ///   lector ha recorrido el plan entero. Y se puede contestar con el ratón.
+/// - **34**: el panel de agentes lleva GENERACIÓN —la lista se reordena sola,
+///   así que un clic tiene que decir contra cuál habla—, cuántas sesiones se
+///   han olvidado por el tope, qué decir cuando está vacío (que no es siempre
+///   lo mismo), y si una sesión ya tiene un deshacer en marcha.
 /// - **33**: la ventana lleva las sesiones de AGENTE que ha visto pedir
 ///   permiso, con cuántas pidió cada una y cuántas se le aprobaron desde
 ///   aquí. Es de donde sale el operando del deshacer de una sesión entera
@@ -121,7 +125,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 33;
+pub const BRIDGE_VERSION: u32 = 34;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

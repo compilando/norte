@@ -17,7 +17,6 @@
          en el DOM tapa al anterior. Declarada tras `#dialogs` cubría una
          confirmación que seguía teniendo el teclado —y el momento lo elegía
          el plugin, que decide cuándo contesta su comando—. -->
-    <div id="agents" data-open="false"></div>
     <div id="plugin-output" data-open="false"></div>
     <div id="dialogs"></div>
     <!-- La ayuda va la ÚLTIMA a propósito: se abre encima de lo que
@@ -26,6 +25,13 @@
          `z-index`. Con la ayuda antes del visor, `F1` en el visor pintaba una
          ayuda debajo de un fondo opaco. -->
     <div id="settings" data-open="false"></div>
+    <!-- Las sesiones de agente van ENTRE los ajustes y las extensiones, y no
+         es estética: el teclado se lo queda el gestor de extensiones antes
+         que este panel, y este antes que los ajustes, así que el orden del
+         DOM —que es el de pintado, porque no hay `z-index` en ninguna
+         parte— tiene que decir lo mismo. Declarado antes que `#settings`,
+         los ajustes tapaban un panel que seguía teniendo las teclas. -->
+    <div id="agents" data-open="false"></div>
     <div id="extensions" data-open="false"></div>
     <div id="theme" data-open="false"></div>
     <div id="picker" data-open="false"></div>
