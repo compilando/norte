@@ -120,6 +120,60 @@ pub fn connection_banner(
 mod tests {
     use super::*;
 
+    /// Ninguna AUTORIDAD hostil del corpus llega entera a la FRASE (#277).
+    ///
+    /// Lo que este aviso existe para contestar es «¿cuál?», y todas las formas
+    /// de mentir sobre eso viven en la autoridad: userinfo antes de un `@`,
+    /// una frase in-band, un override bidi, homógrafos cirílicos, dos FQDN que
+    /// colisionan al cortar y un scheme sin techo. La afirmación es la misma
+    /// para las seis y es estructural, no por caso: la frase NO contiene la
+    /// autoridad, cada parte va en su campo, lo que se enmascara se dice y lo
+    /// que se corta se acota.
+    #[test]
+    fn ninguna_autoridad_hostil_del_corpus_entra_en_la_frase() {
+        let hosts = norte_testkit::corpus::hostile_hosts();
+        assert!(hosts.len() >= 6, "el corpus canónico no encoge");
+        for h in &hosts {
+            let mut cola = std::collections::VecDeque::new();
+            cola.push_back(degradacion(h.scheme, h.host));
+            let aviso = connection_banner(norte_i18n::Lang::Es, &cola).expect("hay aviso");
+            assert!(
+                !aviso.text.contains(h.host),
+                "[{}] la autoridad se interpoló en la frase: {:?}",
+                h.id,
+                aviso.text
+            );
+            // Acotados los DOS: el techo estaba solo en el host, y un scheme
+            // largo echa de la barra a la parte que identifica la máquina.
+            assert!(aviso.scheme.chars().count() <= SCHEME_MAX, "[{}]", h.id);
+            assert!(aviso.host.chars().count() <= HOST_MAX, "[{}]", h.id);
+            // Y lo que se enmascara se dice.
+            let alterado = aviso.scheme != h.scheme && !aviso.scheme.contains('\u{2026}')
+                || aviso.host != h.host && !aviso.host.contains('\u{2026}');
+            assert!(
+                !alterado || aviso.hostile,
+                "[{}] se alteró y no lo dice: {:?} / {:?}",
+                h.id,
+                aviso.scheme,
+                aviso.host
+            );
+            // El par que colisiona al cortar sigue distinguiéndose a 48
+            // celdas, y el corte se MARCA cuando lo hay.
+            if let Some(gemelo) = h.twin {
+                let mut otra = std::collections::VecDeque::new();
+                otra.push_back(degradacion(h.scheme, gemelo));
+                let b = connection_banner(norte_i18n::Lang::Es, &otra).expect("hay aviso");
+                if aviso.host == b.host {
+                    assert!(
+                        aviso.host.contains('\u{2026}'),
+                        "[{}] dos autoridades distintas se pintan igual SIN marca de corte",
+                        h.id
+                    );
+                }
+            }
+        }
+    }
+
     fn degradacion(scheme: &str, host: &str) -> ConnectionDegraded {
         ConnectionDegraded {
             scheme: scheme.to_owned(),

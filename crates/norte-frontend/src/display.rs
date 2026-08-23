@@ -616,4 +616,98 @@ mod tests {
         assert_eq!(ellipsis_at_bytes("hola", 2), "");
         assert!(ellipsis_at_bytes("holaaa", 5).ends_with('…'));
     }
+
+    /// La premisa de `clean_utf8_path_over_clamp` (#277): una ruta de
+    /// segmentos UTF-8 LIMPIOS cuyo `path_display` pasa del tope del puente.
+    ///
+    /// Lo que se afirma aquí es lo que hace útil a la fixture: `path_display`
+    /// la declara FIEL, porque no hay nada que enmascarar. O sea que si la
+    /// superficie que la pinta la recorta y no lo dice, no queda ninguna
+    /// bandera que delate el recorte —y la elipsis es un carácter legal en un
+    /// nombre—. `display_expansion_over_clamp` no sirve para esto: sus 0xFF
+    /// escogen el camino lossy y su bandera ya sale `true` por ahí.
+    #[test]
+    fn la_ruta_limpia_sobre_el_tope_no_tiene_nada_que_enmascarar() {
+        let segs = norte_testkit::corpus::clean_utf8_path_over_clamp();
+        let mut p = VPath::parse("mem:///").expect("raíz");
+        for s in &segs {
+            p = p.join(norte_proto::Segment::new(s.clone()).expect("segmento"));
+        }
+        let (texto, hostil) = path_display(&p);
+        assert!(
+            !hostil,
+            "la fixture existe para el RECORTE: si ya marca por otra cosa, no distingue nada"
+        );
+        assert!(
+            texto.len() > 4096,
+            "la ruta tiene que pasar de MAX_STRING_BYTES: {}",
+            texto.len()
+        );
+    }
+
+    /// El prefijo `⟨scheme⟩/` de una línea de ruta es un MARCADOR DE ROL, y
+    /// esto es lo que lo pinea (#277).
+    ///
+    /// Tres nombres del corpus renderizan, letra por letra, una línea que el
+    /// host escribe por su cuenta: el plazo de una aprobación en los dos
+    /// idiomas y el veredicto de un informe de lote. Todos son texto
+    /// imprimible corriente, así que no se enmascaran y ninguna bandera salta;
+    /// lo único que impide que un fichero fabrique la frase del host es que
+    /// una línea de RUTA se distinga de una de CUERPO al pintarla.
+    ///
+    /// Quien quite ese prefijo por «ruido» no encuentra nada rojo sin esto.
+    #[test]
+    fn una_linea_de_ruta_no_puede_fabricar_una_frase_del_host() {
+        let casos = [
+            (
+                "approval_ttl_line_spoof",
+                norte_i18n::Lang::Es,
+                "modal-approval-ttl",
+            ),
+            (
+                "approval_ttl_line_spoof_en",
+                norte_i18n::Lang::En,
+                "modal-approval-ttl",
+            ),
+            (
+                "journal_verdict_line_spoof",
+                norte_i18n::Lang::Es,
+                "modal-batch-stuck-journalled",
+            ),
+        ];
+        let corpus = norte_testkit::corpus::hostile_names();
+        for (id, lang, clave) in casos {
+            let n = corpus
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("la fixture {id} está en el corpus"));
+
+            // La premisa: el nombre ES la frase, sin una sola diferencia.
+            let frase = if clave == "modal-approval-ttl" {
+                norte_i18n::ta_in(lang, clave, &[("s", "3600")])
+            } else {
+                norte_i18n::t_in(lang, clave)
+            };
+            let (nombre, hostil) = display_name(&n.bytes);
+            assert_eq!(nombre, frase, "[{id}] la fixture dejó de ser la frase");
+            assert!(
+                !hostil,
+                "[{id}] no hay nada que enmascarar: por eso hace falta el marcador"
+            );
+
+            // Y el marcador de rol es lo que lo desactiva.
+            let p = VPath::parse("mem:///")
+                .expect("raíz")
+                .join(norte_proto::Segment::new(n.bytes.clone()).expect("segmento"));
+            let (linea, _) = path_display(&p);
+            assert_ne!(
+                linea, frase,
+                "[{id}] una ruta se pintó como una frase del host"
+            );
+            assert!(
+                linea.starts_with("⟨mem⟩/"),
+                "[{id}] el marcador de rol desapareció: {linea:?}"
+            );
+        }
+    }
 }

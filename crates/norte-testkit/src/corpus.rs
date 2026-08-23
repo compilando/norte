@@ -619,6 +619,392 @@ pub fn hostile_titles() -> Vec<HostileTitle> {
     ]
 }
 
+/// A path of CLEAN UTF-8 segments whose `path_display` goes over the bridge's
+/// `MAX_STRING_BYTES` (4096) (#277).
+///
+/// Returns the segments, not a name: 4096 bytes do not fit in ONE filename on
+/// any filesystem (`NAME_MAX` is 255), so a fixture that tried would only be
+/// testing the archive writer's refusal. Each segment here is 210 bytes and
+/// there are 24 of them, which is an ordinary deep tree.
+///
+/// It is the only fixture that turns the CLAMP red on its own.
+/// `display_expansion_over_clamp` cannot: its `0xFF` bytes take the lossy
+/// path, so its `hostile` flag is already `true` for the other reason, and a
+/// test using it cannot tell "it was masked" from "it was cut". Here there is
+/// nothing to mask — `display_name` returns `false` — and the only thing that
+/// happens is that the composed path passes the ceiling and `clamp_display`
+/// hands back a value ending in `U+2026`, a character that is legal in a name
+/// and that no flag reports. A reader who seeds an editable field with it
+/// renames to a name that is not the one they saw.
+///
+/// ```
+/// let segs = norte_testkit::corpus::clean_utf8_path_over_clamp();
+/// let total: usize = segs.iter().map(Vec::len).sum::<usize>() + segs.len();
+/// assert!(total > 4096, "{total}");
+/// // Every segment is a legal filename on its own.
+/// for s in &segs {
+///     assert!(s.len() <= 255);
+///     assert!(std::str::from_utf8(s).is_ok());
+///     assert!(norte_proto::Segment::new(s.clone()).is_ok());
+/// }
+/// ```
+#[must_use]
+pub fn clean_utf8_path_over_clamp() -> Vec<Vec<u8>> {
+    (0..24)
+        .map(|i| format!("{}{i:02}", "a".repeat(208)).into_bytes())
+        .collect()
+}
+
+/// A hostile AUTHORITY: the `host` (and sometimes the scheme) of a remote
+/// location, as it reaches a connection banner, a places row or a task detail.
+///
+/// The corpus had names, chords, runs and titles, and no authorities (#277).
+/// An authority is neither a filename nor prose: it is what tells a reader
+/// WHICH machine their files are going to, so every hazard here is a hazard
+/// about identity rather than about layout.
+#[derive(Debug, Clone)]
+pub struct HostileHost {
+    /// Stable identifier (for test names and messages).
+    pub id: &'static str,
+    /// The scheme, when the fixture is about the scheme rather than the host.
+    pub scheme: &'static str,
+    /// The authority, as a URL would carry it.
+    pub host: &'static str,
+    /// The other half of a COLLIDING pair, when the hazard needs two.
+    pub twin: Option<&'static str>,
+    /// Why it is hostile (living documentation).
+    pub why: &'static str,
+}
+
+/// The 6 canonical hostile authorities (#277).
+///
+/// ```
+/// let hosts = norte_testkit::corpus::hostile_hosts();
+/// assert!(hosts.len() >= 6);
+///
+/// // The homograph pair is two DIFFERENT strings that paint the same.
+/// let h = hosts.iter().find(|h| h.id == "host_idn_homograph").unwrap();
+/// assert_ne!(h.host, h.twin.expect("a homograph needs its twin"));
+///
+/// // And the userinfo spoof really carries the `@`: everything before it is
+/// // decoration, and the host is what comes after.
+/// let u = hosts.iter().find(|h| h.id == "host_userinfo_spoof").unwrap();
+/// assert!(u.host.contains('@'));
+/// ```
+#[must_use]
+pub fn hostile_hosts() -> Vec<HostileHost> {
+    vec![
+        HostileHost {
+            id: "host_userinfo_spoof",
+            scheme: "sftp",
+            host: "bank.example@evil.example",
+            twin: Some("bank.example"),
+            why: "URL userinfo: everything before the `@` is a username and \
+                  the machine is what comes AFTER. A banner that paints the \
+                  authority whole tells the reader they are connected to \
+                  `bank.example` while the bytes go to `evil.example`. The \
+                  twin is the legitimate host it impersonates",
+        },
+        HostileHost {
+            id: "host_inband_sentence_break",
+            scheme: "sftp",
+            host: "host.example, sin cifrar",
+            twin: None,
+            why: "an authority that IS the rest of the sentence a banner \
+                  builds around it. Every byte is ordinary printable text, so \
+                  nothing masks it and no `hostile` bit fires: the row reads \
+                  as a complete warning the host never wrote. Same family as \
+                  `cause_join_spoof`, aimed at an authority instead of a \
+                  filename",
+        },
+        HostileHost {
+            id: "host_bidi_override",
+            scheme: "sftp",
+            host: "evil.example\u{202E}moc.knab",
+            twin: None,
+            why: "a bidi override inside an authority: painted in a terminal \
+                  the tail reverses and the row reads as `bank.com`. Unlike a \
+                  filename, an authority is not usually run through the same \
+                  masking, which is exactly what this fixture is for",
+        },
+        HostileHost {
+            id: "host_idn_homograph",
+            // `ра` here is Cyrillic U+0440 U+0430.
+            scheme: "https",
+            host: "\u{440}a\u{443}pal.example",
+            twin: Some("paypal.example"),
+            why: "Cyrillic homographs in an IDN authority. The two strings \
+                  are different by every byte and identical to a reader, so \
+                  the only defence is showing the punycode or marking the \
+                  mixed script — and neither happens by accident",
+        },
+        HostileHost {
+            id: "host_truncation_twins",
+            scheme: "sftp",
+            host: "produccion.equipo.almacen.interno.example.org",
+            twin: Some("produccion.equipo.almacen.interno.example.net"),
+            why: "two FQDNs that differ only in the TLD and share the first \
+                  44 characters: cut to 48 cells with an ellipsis they still \
+                  differ, cut shorter they do not. It is the authority twin \
+                  of `truncation_twins`, and what it demands is the same — \
+                  that the cut be MARKED, never a silent equality",
+        },
+        HostileHost {
+            id: "scheme_unbounded",
+            // 512 characters, none of them a scheme anyone registered.
+            scheme: "sftpsftpsftpsftpsftpsftpsftpsftpsftpsftpsftpsftpsftpsftp",
+            host: "host.example",
+            twin: None,
+            why: "a scheme with no ceiling. Banners and places rows compose \
+                  `<scheme>://<host>` and size their columns from it, so an \
+                  unbounded scheme pushes the host — the part that identifies \
+                  the machine — off the visible end of the row. The scheme is \
+                  the half a reader ignores, which is what makes it the good \
+                  place to hide",
+        },
+    ]
+}
+
+/// A hostile plugin/topic ID: a KEY, not prose.
+///
+/// The distinction is the whole point of the family. A title is text a human
+/// reads and a frontend may mask; an id is what `TopicId` holds, what travels
+/// as the argument of `plugin.help` on the wire, and what the sidebar filter
+/// folds on every keystroke. `parse_untrusted` deliberately does NOT mask an
+/// id — masking a key would change what it addresses — so every hazard here
+/// reaches whoever compares, cuts or folds ids.
+#[derive(Debug, Clone)]
+pub struct HostileTopicId {
+    /// Stable identifier (for test names and messages).
+    pub id: &'static str,
+    /// The id itself, as a plugin manifest would declare it.
+    pub text: String,
+    /// The other half of a COLLIDING pair, when the hazard needs two ids.
+    ///
+    /// `None` when the hazard is internal to a single id. For the pairs, the
+    /// contract under test is that the two stay DIFFERENT: a step that maps
+    /// them to one string (a clamp, an NFC pass) is the regression.
+    pub twin: Option<String>,
+    /// Why it is hostile (living documentation).
+    pub why: &'static str,
+}
+
+/// The 4 canonical hostile topic ids (#263).
+///
+/// ```
+/// let ids = norte_testkit::corpus::hostile_topic_ids();
+/// assert!(ids.len() >= 4);
+///
+/// // The clamp twins differ, and only AFTER the byte where a 4096-byte
+/// // ceiling would have cut them.
+/// let par = ids.iter().find(|i| i.id == "id_clamp_twins").unwrap();
+/// let gemelo = par.twin.as_ref().expect("a collision needs two ids");
+/// assert_ne!(&par.text, gemelo);
+/// assert_eq!(&par.text[..4093], &gemelo[..4093]);
+///
+/// // The invisible twin is BLANK by the parser's definition, which is what
+/// // `is_blank_id` exists for: a page named with it has no name at all.
+/// let hueco = ids.iter().find(|i| i.id == "id_hangul_filler").unwrap();
+/// assert!(hueco.text.ends_with('\u{3164}'));
+/// ```
+#[must_use]
+pub fn hostile_topic_ids() -> Vec<HostileTopicId> {
+    // 4093 shared bytes: the clamp that matters is `MAX_STRING_BYTES` (4096),
+    // and the pair has to be identical UP TO it and different after.
+    let base = format!("org.acme.{}", "a".repeat(4093 - "org.acme.".len()));
+    vec![
+        HostileTopicId {
+            id: "id_clamp_twins",
+            text: format!("{base}uno"),
+            twin: Some(format!("{base}dos")),
+            why: "two reverse-DNS ids identical through byte 4093 and \
+                  different after: a clamp to `MAX_STRING_BYTES` maps both to \
+                  ONE string. On a title that is cosmetic — the reader sees \
+                  an ellipsis and knows something was cut. On a KEY it is \
+                  not: two extensions become one row, and activating it \
+                  addresses whichever the map happened to keep",
+        },
+        HostileTopicId {
+            id: "id_rlo",
+            text: "org.acme.\u{202E}ptfs".to_owned(),
+            twin: None,
+            why: "a bidi override INSIDE an id. `parse_untrusted` masks prose \
+                  and deliberately leaves ids alone — masking a key changes \
+                  what it addresses — so this reaches every surface that \
+                  paints an id raw. Painted in a terminal it reads `sftp`, \
+                  which is the point of writing it that way",
+        },
+        HostileTopicId {
+            id: "id_hangul_filler",
+            text: "org.acme.demo\u{3164}".to_owned(),
+            twin: Some("org.acme.demo".to_owned()),
+            why: "U+3164 HANGUL FILLER is a zero-width character that is NOT \
+                  whitespace, so `trim` keeps it and the two ids stay \
+                  different while rendering identically. It is the exact case \
+                  `norte_help::is_blank_id` exists for, and the twin is the \
+                  legitimate id it shadows",
+        },
+        HostileTopicId {
+            id: "id_nfd_pair",
+            text: "org.acme.cafe\u{301}".to_owned(),
+            twin: Some("org.acme.caf\u{e9}".to_owned()),
+            why: "the SAME id in NFD and NFC. These are two ids and must stay \
+                  two: nothing on this path normalises, and the fixture is \
+                  here so that whoever adds a normalisation step finds an \
+                  assertion saying so. macOS hands out NFD by default, so a \
+                  plugin authored there and one authored on Linux declare \
+                  different bytes for what a human reads as one name",
+        },
+    ]
+}
+
+/// The bytes of a third-party `help.md`, before any decoding.
+///
+/// Bytes and not `&str` on purpose: half the family is about the DECODING
+/// (windows-1252, UTF-16LE with a BOM), and a `&str` would have decided that
+/// question before the test starts.
+#[derive(Debug, Clone)]
+pub struct HostileHelpDoc {
+    /// Stable identifier (for test names and messages).
+    pub id: &'static str,
+    /// The raw bytes of the file, exactly as a plugin would ship them.
+    pub bytes: Vec<u8>,
+    /// The publisher, which is the OTHER input to the same door.
+    ///
+    /// It is not front matter: it comes from the manifest and reaches
+    /// `parse_untrusted` as a parameter. The badge that says WHO wrote the
+    /// page a reader is reading is built from both halves, so a fixture about
+    /// the badge has to carry both.
+    pub publisher: Option<&'static str>,
+    /// Why it is hostile (living documentation).
+    pub why: &'static str,
+}
+
+/// The 6 canonical hostile `help.md` documents (#263).
+///
+/// Until this family existed every one of these cases was a literal inside
+/// `norte-help`'s own parser tests, so neither `norte-ui-host` nor the
+/// renderer's contract test could reach one.
+///
+/// ```
+/// let docs = norte_testkit::corpus::hostile_help_docs();
+/// assert!(docs.len() >= 6);
+///
+/// // The UTF-16LE page really carries a BOM: a decoder that reads it as
+/// // UTF-8 sees NUL bytes and falls to "binary".
+/// let u16 = docs.iter().find(|d| d.id == "doc_utf16le_bom").unwrap();
+/// assert_eq!(&u16.bytes[..2], &[0xFF, 0xFE]);
+///
+/// // And the windows-1252 one is NOT valid UTF-8, which is what makes the
+/// // detection step observable.
+/// let w = docs.iter().find(|d| d.id == "doc_windows1252_title").unwrap();
+/// assert!(std::str::from_utf8(&w.bytes).is_err());
+///
+/// // The publisher is the OTHER input to the same door: it comes from the
+/// // manifest, not from the front matter, so a badge fixture carries both.
+/// let pub_ = docs.iter().find(|d| d.id == "doc_publisher_bidi").unwrap();
+/// assert!(pub_.publisher.unwrap().contains('\u{202E}'));
+/// assert!(!String::from_utf8_lossy(&pub_.bytes).contains("publisher"));
+/// ```
+#[must_use]
+pub fn hostile_help_docs() -> Vec<HostileHelpDoc> {
+    // `título` with the accented letter as a single windows-1252 byte (0xED),
+    // which is not valid UTF-8 on its own.
+    let mut w1252 = b"+++\nid = \"org.acme.demo\"\ntitle = \"T".to_vec();
+    w1252.push(0xED);
+    w1252.extend_from_slice(b"tulo\"\n+++\ncuerpo\n");
+
+    let utf16le = {
+        let texto = "+++\nid = \"org.acme.demo\"\ntitle = \"Página\"\n+++\ncuerpo\n";
+        let mut out = vec![0xFF, 0xFE];
+        for u in texto.encode_utf16() {
+            out.extend_from_slice(&u.to_le_bytes());
+        }
+        out
+    };
+
+    let diecisiete = {
+        // `plugin:<id>:<cmd>`: la ayuda de un tercero solo puede referirse a
+        // SUS comandos, así que sin el prefijo la lista se cae entera y el
+        // tope de cabecera no se llega a rozar.
+        let lista: Vec<String> = (0..17)
+            .map(|i| format!("\"plugin:org.acme.demo:c{i}\""))
+            .collect();
+        format!(
+            "+++\nid = \"org.acme.demo\"\ntitle = \"Muchos\"\ncommands = [{}]\n+++\ncuerpo\n",
+            lista.join(", ")
+        )
+        .into_bytes()
+    };
+
+    vec![
+        HostileHelpDoc {
+            id: "doc_windows1252_title",
+            bytes: w1252,
+            publisher: None,
+            why: "a front-matter title in windows-1252: the byte 0xED is not \
+                  valid UTF-8 on its own, so a reader that skips detection \
+                  either rejects the whole page or paints a U+FFFD in the \
+                  middle of a name. It pins that the DETECTED decoding \
+                  reaches the projection and not just the parser",
+        },
+        HostileHelpDoc {
+            id: "doc_utf16le_bom",
+            bytes: utf16le,
+            publisher: None,
+            why: "the same page in UTF-16LE with a BOM. Read as UTF-8 it is \
+                  full of NUL bytes and the heuristic calls it binary, so \
+                  this is the case where the BOM is the only thing between a \
+                  legible page and `no se puede mostrar`",
+        },
+        HostileHelpDoc {
+            id: "doc_title_all_invisibles",
+            bytes:
+                "+++\nid = \"org.acme.demo\"\ntitle = \"\u{3164}\u{3164}\u{3164}\"\n+++\ncuerpo\n"
+                    .as_bytes()
+                    .to_vec(),
+            publisher: None,
+            why: "a title of three HANGUL FILLERs: not empty, not whitespace, \
+                  and painted as nothing at all. The page has to fall back to \
+                  the host id — a nameless row in a sidebar is a row nobody \
+                  can name to report",
+        },
+        HostileHelpDoc {
+            id: "doc_publisher_bidi",
+            bytes: "+++\nid = \"org.acme.demo\"\ntitle = \"Demo\"\n+++\ncuerpo\n"
+                .as_bytes()
+                .to_vec(),
+            publisher: Some("ACME\u{202E} \u{b7} cut short"),
+            why: "a publisher carrying a bidi override right before the \
+                  separator the badge fabricates. The badge is the surface \
+                  that tells a reader WHO wrote the page they are reading, so \
+                  a publisher that can reorder the text around the separator \
+                  can make one plugin's page look like another's",
+        },
+        HostileHelpDoc {
+            id: "doc_unterminated_fence",
+            bytes: "+++\nid = \"org.acme.demo\"\ntitle = \"Valla\"\n+++\n```rust\nfn a() {}\n"
+                .as_bytes()
+                .to_vec(),
+            publisher: None,
+            why: "a code fence that never closes: everything after it is code \
+                  until the end of the source. It is one edge of `Limits`, \
+                  and the one where a parser that keeps looking for the \
+                  closing fence reads the whole file into a single block",
+        },
+        HostileHelpDoc {
+            id: "doc_17_commands",
+            bytes: diecisiete,
+            publisher: None,
+            why: "one command over `MAX_HEADER_COMMANDS` (16). The cap is a \
+                  memory bound as much as a display one — the front matter is \
+                  TOML and sits outside `Limits` — and every kept entry is a \
+                  runnable row on the palette's dispatch path. The fixture \
+                  pins the cut on the SURFACE and not only in the parser",
+        },
+    ]
+}
+
 fn hex_decode(s: &str) -> Vec<u8> {
     assert!(s.len().is_multiple_of(2), "hex de longitud par: {s}");
     (0..s.len())

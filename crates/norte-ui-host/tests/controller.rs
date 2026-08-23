@@ -6245,13 +6245,22 @@ async fn un_hallazgo_hostil_va_marcado() {
 /// lo DICE.
 ///
 /// Una tabla sobre el corpus de `norte-testkit`, que es lo que faltaba: las
-/// nueve superficies de esta fase se escribieron sin que ninguna lo tocara, y
-/// todas las banderas que se calculaban y se tiraban —el nombre de un
-/// favorito, la etiqueta de un volumen, el valor de un atributo, el valor de
-/// un ajuste— habrían salido de aquí. La propiedad es un PAR: lo pintado no
-/// lleva peligro Y la marca está puesta. Comprobar solo lo primero es lo que
-/// deja pasar una superficie que enmascara en silencio.
+/// superficies de esta fase se escribieron sin que ninguna lo tocara, y todas
+/// las banderas que se calculaban y se tiraban habrían salido de aquí. La
+/// propiedad es un PAR: lo pintado no lleva peligro Y la marca está puesta.
+/// Comprobar solo lo primero es lo que deja pasar una superficie que enmascara
+/// en silencio.
+///
+/// TRES superficies, y se dice cuáles porque el doc de antes prometía nueve y
+/// ejercitaba dos (#277): el nombre de un FAVORITO (lo escribe el usuario en
+/// su `norte.toml`), la etiqueta de un VOLUMEN (la da el sistema y son bytes)
+/// y el valor de un ATRIBUTO (el nombre de la entrada bajo el cursor). El
+/// diálogo de APROBACIÓN tiene su propia tabla, porque sus rutas llegan del
+/// daemon ya redactadas y hay que pasarlas antes por el mismo lossy.
 #[tokio::test]
+// Larga por TABLA, no por lógica: cada superficie es un bloque con su
+// aserción y su frase, y partirla escondería cuáles se cubren.
+#[allow(clippy::too_many_lines)]
 async fn ninguna_superficie_enmascara_en_silencio() {
     let corpus = norte_testkit::corpus::hostile_names();
     assert!(
@@ -6292,7 +6301,9 @@ async fn ninguna_superficie_enmascara_en_silencio() {
             target: norte_proto::VPath::parse("mem:///casa").map_err(|_| "err".to_owned()),
         }];
         let mut f = Falso::default();
-        f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+        // La entrada bajo el cursor es la hostil: su nombre es el primer campo
+        // de la HOJA DE ATRIBUTOS, que es la tercera superficie.
+        f.pon("mem:///casa", vec![(n.bytes.clone(), false)]);
         // 2. La etiqueta de un VOLUMEN: la da el sistema y son bytes.
         f.volumenes = vec![norte_proto::methods::Volume {
             label: Some(n.bytes.clone()),
@@ -6360,6 +6371,27 @@ async fn ninguna_superficie_enmascara_en_silencio() {
                 break;
             }
         }
+
+        // 3. El valor de un ATRIBUTO: el primer campo de la hoja es el nombre
+        //    de la entrada bajo el cursor, o sea bytes del provider (#277).
+        //    El doc de este test la nombraba desde el principio y nadie la
+        //    ejercitaba.
+        let foto = esperar_foto(&h, &mut sub, "la hoja tiene el nombre", |f| {
+            hoja(f).is_some_and(|m| !m.fields.is_empty())
+        })
+        .await;
+        let campo = hoja(&foto)
+            .expect("la disposición `full` coloca la hoja")
+            .fields
+            .first()
+            .expect("el primer campo es el nombre")
+            .clone();
+        sin_peligro(&campo.value, &n.id, "el valor de un atributo");
+        assert!(
+            campo.hostile,
+            "[{}] el valor del atributo se enmascara y NO lo dice: {:?}",
+            n.id, campo.value
+        );
     }
 }
 
@@ -14548,4 +14580,78 @@ async fn un_lote_por_encima_del_tope_se_rechaza_entero() {
         foto.dialogs.is_empty(),
         "no se abre un diálogo que promete algo que no se va a hacer"
     );
+}
+
+/// El corpus canónico contra el diálogo de APROBACIÓN (#277).
+///
+/// Es la superficie donde más caro sale mentir: lo que se lee ahí es lo único
+/// que un humano tiene para decidir si un agente borra sus ficheros.
+///
+/// Las rutas llegan del daemon como TEXTO ya redactado, no como `VPath`, así
+/// que el test las pasa antes por `display_lossy` —que es lo que hace
+/// `norte_core::engine::span_path`, y no se puede llamar desde aquí porque el
+/// host no depende del core (ADR 0066)—. Ese paso ES lo que hace que el test
+/// signifique algo: alimentar bytes crudos encendería la bandera por un camino
+/// que en producción no ocurre.
+#[tokio::test]
+async fn el_corpus_hostil_cruza_el_dialogo_de_aprobacion() {
+    // Las cuatro que el lossy del daemon ALTERA, y `zwsp_twin` como CONTRASTE:
+    // a ésa el lossy no la toca —es UTF-8 válido— y su bandera se tiene que
+    // encender por el otro camino, el del enmascarado.
+    let casos = [
+        "lossy_collapse_ff",
+        "lossy_collapse_fe",
+        "rtl_override",
+        "control_escape",
+        "zwsp_twin",
+    ];
+    let corpus = norte_testkit::corpus::hostile_names();
+    for id in casos {
+        let n = corpus
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("la fixture {id} está en el corpus"));
+        let p = norte_proto::VPath::parse("mem:///casa")
+            .expect("raíz")
+            .join(norte_proto::Segment::new(n.bytes.clone()).expect("segmento"));
+        // El paso del daemon: `span_path` es esto para cualquier autoridad sin
+        // userinfo, que es el caso de un `mem://`.
+        let redactada = p.display_lossy().clone();
+
+        let falso = arbol_como_falso();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+        let (host, _snap) = host_arbol(Arc::new(falso)).await;
+        let mut sub = host.subscribe();
+        tx.send(norte_proto::methods::PolicyApprovalRequired {
+            approval_id: 7,
+            session: Some("agente-1".to_owned()),
+            op: "delete".to_owned(),
+            paths: vec![redactada.clone()],
+            paths_total: 1,
+            ttl_ms: 30_000,
+        })
+        .expect("el host escucha");
+
+        let dialogos = siguientes_dialogos(&mut sub).await;
+        let d = &dialogos[0];
+        let linea = d.body.first().expect("la ruta está");
+        sin_peligro(&linea.text, id, "una ruta del diálogo de aprobación");
+        assert!(
+            linea.hostile,
+            "[{id}] la línea se pinta distinta de lo que hay y NO lo dice: {:?}",
+            linea.text
+        );
+        // Y el plazo va en SU campo, nunca entre las rutas: entre ellas lo
+        // podría suplantar un nombre de fichero (`approval_ttl_line_spoof`).
+        assert!(
+            d.deadline.is_some(),
+            "[{id}] el plazo tiene que tener campo propio"
+        );
+        assert!(
+            d.body.iter().all(|l| Some(&l.text) != d.deadline.as_ref()),
+            "[{id}] el plazo se coló entre las rutas: {:?}",
+            d.body
+        );
+    }
 }
