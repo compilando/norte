@@ -14785,3 +14785,114 @@ async fn sin_los_bytes_un_nombre_honesto_con_reemplazo_sale_marcado_de_mas() {
          más antes que de menos"
     );
 }
+
+/// #268 — dos marcas que son UN nombre en el destino se rechazan enteras.
+///
+/// En un ext4 `README.txt` y `readme.txt` son dos ficheros; en NTFS o APFS son
+/// uno. Encolar las dos deja que una gane —cuál, no es determinista— y que la
+/// otra falle sin explicación sobre un miembro arbitrario de la pareja.
+///
+/// El test corre las TRES parejas del corpus canónico, que son tres pliegues
+/// distintos: caja ASCII, normalización NFC/NFD, y el pliegue completo de un
+/// ext4 `+F`. Un arreglo que solo mirase la caja pasaría el primero y fallaría
+/// los otros dos.
+#[tokio::test]
+async fn dos_marcas_que_pliegan_al_mismo_nombre_no_se_encolan() {
+    let corpus = norte_testkit::corpus::hostile_names();
+    let bytes_de = |id: &str| {
+        corpus
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("la fixture {id} está"))
+            .bytes
+            .clone()
+    };
+    let parejas = [
+        ("ascii_case_twin_upper", "ascii_case_twin_lower"),
+        ("nfc_e_acute", "nfd_e_acute"),
+        ("ext4_full_fold_ss", "ext4_full_fold_es_zett"),
+    ];
+    for (a, b) in parejas {
+        let (uno, otro) = (bytes_de(a), bytes_de(b));
+        assert_ne!(uno, otro, "[{a}/{b}] la premisa: son bytes distintos");
+
+        let mut f = Falso::default();
+        f.pon(
+            "mem:///casa",
+            vec![
+                (b"docs".to_vec(), true),
+                (b"notas.txt".to_vec(), false),
+                (uno.clone(), false),
+                (otro.clone(), false),
+            ],
+        );
+        f.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
+        // El DESTINO pliega: un APFS, un NTFS o un ext4 `+F`. Sin este mando
+        // el caso no se podía escribir, que es lo que la issue decía.
+        f.capacidades.insert(
+            "mem:///casa/docs".to_owned(),
+            norte_proto::Capabilities {
+                flags: norte_proto::CapabilityFlags::FULL_FOLD,
+                max_path: None,
+            },
+        );
+        let backend = Arc::new(f);
+        let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+        let mut sub = h.subscribe();
+        // Que el pliegue del destino haya llegado: se pide al aterrizar, no
+        // delante del diálogo, así que hay que esperarlo.
+        esperar_foto(&h, &mut sub, "el destino dice cómo pliega", |_| true).await;
+        marca_todo(&h, &mut sub, 1).await;
+        let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+
+        assert!(
+            matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-batch-folds-to-one"),
+            "[{a}/{b}] {ack:?}"
+        );
+        assert!(
+            backend
+                .transferencias
+                .lock()
+                .expect("transferencias")
+                .is_empty(),
+            "[{a}/{b}] no se encoló ni una: el lote se rechaza ENTERO"
+        );
+    }
+}
+
+/// Y en un destino que NO pliega, las mismas dos marcas son dos ficheros y el
+/// lote sale. La comprobación no puede costar la operación legítima.
+#[tokio::test]
+async fn dos_gemelos_de_caja_hacia_un_destino_sensible_si_se_encolan() {
+    let corpus = norte_testkit::corpus::hostile_names();
+    let bytes_de = |id: &str| {
+        corpus
+            .iter()
+            .find(|n| n.id == id)
+            .expect("la fixture está")
+            .bytes
+            .clone()
+    };
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![
+            (b"docs".to_vec(), true),
+            (b"notas.txt".to_vec(), false),
+            (bytes_de("ascii_case_twin_upper"), false),
+            (bytes_de("ascii_case_twin_lower"), false),
+        ],
+    );
+    f.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
+    // Sin mando = ext4 corriente, que distingue la caja.
+    let backend = Arc::new(f);
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    esperar_foto(&h, &mut sub, "el destino dice cómo pliega", |_| true).await;
+    marca_todo(&h, &mut sub, 1).await;
+    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Applied { .. }),
+        "un ext4 distingue la caja: son dos ficheros y el lote es legítimo: {ack:?}"
+    );
+}

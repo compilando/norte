@@ -13,6 +13,7 @@ async-trait.workspace = true
 bytes.workspace = true
 futures.workspace = true
 norte-proto.workspace = true
+norte-encoding.workspace = true
 # `deadline::blocking_with_deadline` (#213): un plazo sobre una syscall que no
 # se puede cancelar, compartido por el core y por los providers. Vive aquí
 # porque el motivo por el que existe —un montaje de red muerto— no es de nadie

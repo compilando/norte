@@ -10,7 +10,8 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use norte_client::{ConnEvent, EntryStream};
 use norte_proto::{
-    AttrCatalog, CollisionPolicy, DeleteMode, Entry, Error, TaskId, TaskProgress, VPath, methods,
+    AttrCatalog, Capabilities, CollisionPolicy, DeleteMode, Entry, Error, TaskId, TaskProgress,
+    VPath, methods,
 };
 use tokio::sync::watch;
 
@@ -76,6 +77,17 @@ pub trait HostBackend: Send + Sync + 'static {
         dir: VPath,
         attrs: Vec<String>,
     ) -> BoxFuture<'static, Result<(EntryStream, Option<u64>), Error>>;
+
+    /// Las capacidades de UNA UBICACIÓN (#215): las contesta el mount, no el
+    /// provider, así que un pincho FAT bajo un `/home` sensible a la caja no
+    /// hereda la respuesta de `/home`.
+    ///
+    /// Lo que la ventana hace con ellas es plegar nombres como los plegaría el
+    /// destino (#268): dos marcas que en un ext4 son `README.txt` y
+    /// `readme.txt` son UN nombre en NTFS o APFS, y encolarlas las dos deja
+    /// que una gane de forma no determinista mientras la otra falla sin
+    /// explicación.
+    fn capabilities(&self, path: VPath) -> BoxFuture<'static, Result<Capabilities, Error>>;
 
     /// Crea UN directorio. Devuelve la Task ya encolada.
     fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>>;
@@ -527,6 +539,11 @@ impl HostBackend for norte_client::RemoteBackend {
     fn stat(&self, path: VPath, attrs: Vec<String>) -> BoxFuture<'static, Result<Entry, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.stat(&path, attrs).await })
+    }
+
+    fn capabilities(&self, path: VPath) -> BoxFuture<'static, Result<Capabilities, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.capabilities(&path).await })
     }
 
     fn read(

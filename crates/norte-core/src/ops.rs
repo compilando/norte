@@ -129,6 +129,38 @@ impl<'a> Dest<'a> {
             None => self.provider.symlink(&self.path, target, kind).await,
         }
     }
+
+    /// El `lstat` del destino, POR EL DESCRIPTOR cuando lo hay (#218).
+    ///
+    /// La resolución de colisión miraba el destino por ruta, así que con un
+    /// componente intermedio sustituido lstateaba un fichero del árbol del
+    /// atacante — y era ese el que `Overwrite` decidía borrar.
+    async fn stat(&self) -> Result<Entry, Error> {
+        match &self.confined {
+            Some((root, rel)) => root.stat(rel).await,
+            None => self.provider.stat(&self.path).await,
+        }
+    }
+
+    /// Borra la HOJA del destino, por el descriptor cuando lo hay (#218).
+    ///
+    /// Sin caída al camino por ruta: una raíz que dice no saber borrar
+    /// confinado devuelve [`Error::Unsupported`] y el llamante RECHAZA la
+    /// política. Caerse a la ruta sería reabrir el agujero justo en el caso
+    /// que este método existe para cerrar, y encima en silencio.
+    async fn remove(&self, cancel: &CancellationToken) -> Result<(), Error> {
+        match &self.confined {
+            // El MISMO bucle que el camino por ruta, y no un `with_retry`
+            // pelado: sin él, un `unlinkat` que sufre un transitorio y luego
+            // contesta `ENOENT` sale como `NotFound` duro y mata el
+            // `Overwrite`, en vez de contar como hecho — que es justo el
+            // agujero que #186 documentó por la otra puerta.
+            Some((root, rel)) => bucle_de_borrado(|| root.remove(rel), cancel)
+                .await
+                .map_err(|(e, _)| e),
+            None => remove_retrying(self.provider, &self.path, cancel).await,
+        }
+    }
 }
 
 /// El destino de una operación RECURSIVA: su provider, su raíz confinada si la
@@ -156,8 +188,8 @@ impl<'a> Destination<'a> {
         }
     }
 
-    /// Sin raíz: una hoja suelta no cuelga de ningún árbol aprobado, así que no
-    /// hay raíz que abrir y cada ruta va tal cual.
+    /// Sin raíz: el destino no sabe confinarse, o no hay directorio del que
+    /// colgar. Cada ruta va tal cual, que es lo de siempre.
     pub(crate) fn unconfined(provider: &'a dyn Provider, base: &'a VPath) -> Self {
         Self::new(provider, None, base)
     }
@@ -234,6 +266,141 @@ pub(crate) fn rel_under(root: &VPath, path: &VPath) -> Option<Vec<Segment>> {
         .iter()
         .map(|s| Segment::new(s.to_vec()).ok())
         .collect()
+}
+
+/// La raíz de una transferencia de UNA hoja: su DIRECTORIO destino (#219).
+///
+/// Devuelve `(directorio, raíz)`; `None` en la raíz = no hay dónde anclarse y
+/// el llamante sigue por ruta, que es lo de siempre.
+///
+/// # Por qué el directorio y no el scope de policy
+///
+/// La issue proponía el scope. No sirve, y la razón es simple: **un `fs.copy`
+/// humano no tiene scope** — los scopes existen solo para sesiones de agente,
+/// así que para el llamante más común no habría nada que abrir.
+///
+/// Lo que el humano SÍ aprobó es el directorio de destino: es lo que el panel
+/// enseñaba, de lo que `pedir_transferencia` compone `to`, y lo que el diálogo
+/// nombra en su propio campo.
+///
+/// # Qué cierra, y qué no
+///
+/// Cierra el CAMBIAZO, que es el modelo de #164: entre que se mira el
+/// directorio y que se escribe en él, alguien lo sustituye por un enlace hacia
+/// otro árbol. La comprobación de identidad lo caza —el nodo abierto deja de
+/// ser el que se miró— y, una vez abierto, el staging y su publicación van los
+/// dos por el descriptor: `dest/sub` se resuelve UNA vez en lugar de tres
+/// —crear el staging, renombrar, y otra vez por cada uno de los tres
+/// reintentos de 100/200/400 ms.
+///
+/// **No cierra un enlace que YA estaba** cuando el core miró por primera vez, y
+/// eso no es un descuido: desde aquí un `~/copias -> /mnt/disco/copias`
+/// legítimo y un enlace hostil son indistinguibles, porque los dos resuelven a
+/// otro sitio. Distinguirlos pide la identidad que se observó al APROBAR —el
+/// listado que el humano miró—, y eso tendría que viajar con la petición.
+/// Mientras no viaje, un directorio destino que es un enlace se copia por
+/// ruta, exactamente como antes de #219, y se dice en el log.
+///
+/// Tampoco cierra la sustitución de un componente INTERMEDIO del directorio:
+/// el ancla se consigue ABRIENDO una ruta, así que esa primera resolución es
+/// por ruta por definición. Es el mismo residuo que una copia recursiva acepta
+/// para su propio destino.
+/// El destino de una hoja, con raíz si `open_leaf_root` pudo darla.
+fn destino_de_hoja<'a>(
+    dst: &'a dyn Provider,
+    dir: Option<&'a VPath>,
+    raiz: Option<&'a dyn norte_vfs::ConfinedRoot>,
+    to: &'a VPath,
+) -> Destination<'a> {
+    match dir {
+        Some(dir) => Destination::new(dst, raiz, dir),
+        None => Destination::unconfined(dst, to),
+    }
+}
+
+async fn open_leaf_root(
+    dst: &dyn Provider,
+    to: &VPath,
+    task_id: u64,
+    cancel: &CancellationToken,
+) -> Result<(Option<VPath>, Option<Box<dyn norte_vfs::ConfinedRoot>>), Error> {
+    // Una hoja cuyo destino es una RAÍZ no tiene directorio del que colgar.
+    let Some(dir) = to.parent() else {
+        return Ok((None, None));
+    };
+    // ¿Es el directorio destino un ENLACE? Se pregunta con las dos
+    // resoluciones del mismo path: si `lstat` y `stat` dan el mismo nodo, el
+    // último componente es un directorio de verdad; si difieren, es un enlace.
+    //
+    // Y si lo es, NO se confina. No es una concesión: es que ahí no hay nada
+    // que comprobar. `~/copias -> /mnt/disco/copias` es un destino legítimo y
+    // corriente —en macOS lo son `/tmp`, `/var` y `/etc`; en un Linux con
+    // usrmerge, `/bin` y `/lib`—, y un enlace hostil recién plantado se ve
+    // EXACTAMENTE igual desde aquí: los dos resuelven a otro sitio. Rechazar
+    // los dos rompería la copia a media distribución para no cerrar nada;
+    // aceptar los dos con la comprobación apagada sería lo de siempre, que es
+    // lo que se hace, diciéndolo.
+    let (por_enlace, id_directo) = (
+        with_retry(cancel, || dst.node_id(&dir, FollowLinks::Yes).boxed()).await?,
+        with_retry(cancel, || dst.node_id(&dir, FollowLinks::No).boxed()).await?,
+    );
+    let es_enlace = matches!((por_enlace, id_directo), (Some(a), Some(b)) if a != b);
+    let root = match dst.open_root(&dir).await {
+        Ok(r) => Some(r),
+        // «No sé confinar»: el único caso que degrada, igual que en una copia
+        // recursiva y por el mismo motivo (ADR 0054).
+        Err(Error::Unsupported) => {
+            // `debug!` y no `warn!`, al revés que en una copia recursiva: eso
+            // avisa una vez por OPERACIÓN y esto una vez por FICHERO, y el
+            // lote de la ventana encola una Task por marca. Cinco mil copias a
+            // un SFTP, a un bucket o desde Windows —donde `open_root` es el
+            // default `Unsupported`— escribirían cinco mil líneas idénticas, y
+            // un aviso que se repite cinco mil veces no es un aviso.
+            tracing::debug!(
+                task_id,
+                dest = %crate::engine::span_path(&dir),
+                "el destino no sabe confinar sus escrituras: un symlink intermedio podría \
+                 desviar esta transferencia fuera de su directorio (#219)"
+            );
+            None
+        }
+        // El directorio destino no está. Es la respuesta, no un fallo del
+        // confinamiento: la escritura iba a fallar igual, y decirlo aquí evita
+        // el mensaje alarmista del brazo de abajo.
+        Err(e @ Error::NotFound) => return Err(e),
+        Err(e) => {
+            tracing::error!(
+                task_id,
+                dest = %crate::engine::span_path(&dir),
+                error = %e,
+                "no se pudo abrir el directorio destino confinado y el destino declaró que \
+                 sabía: se para en vez de escribir por ruta sin decirlo (#219)"
+            );
+            return Err(e);
+        }
+    };
+    // La comprobación de identidad SOLO si el último componente es un
+    // directorio de verdad. Sobre un enlace compara el nodo del ENLACE con el
+    // del directorio al que apunta, que nunca casan: rechazaría un
+    // `~/copias -> /mnt/disco/copias` legítimo, y en macOS un `/tmp`.
+    //
+    // Se confina igual, sin ella: el descriptor sigue valiendo lo que vale
+    // —una resolución en vez de tres más los reintentos— y lo que se pierde es
+    // solo la comprobación, que sobre un enlace no podía decir nada.
+    if let Some(root) = root.as_deref()
+        && !es_enlace
+    {
+        same_root_or_fail(dst, root, &dir, cancel).await?;
+    }
+    if es_enlace {
+        tracing::debug!(
+            task_id,
+            dest = %crate::engine::span_path(&dir),
+            "el directorio destino es un enlace: se confina, pero su identidad no se \
+             puede comprobar (#219)"
+        );
+    }
+    Ok((Some(dir), root))
 }
 
 /// Abre la raíz confinada de `root`, o dice por qué no la hay.
@@ -381,6 +548,25 @@ pub(crate) async fn remove_retrying_amb(
     path: &VPath,
     cancel: &CancellationToken,
 ) -> Result<(), (Error, Ambiguity)> {
+    bucle_de_borrado(|| p.remove(path), cancel).await
+}
+
+/// El bucle de [`remove_retrying_amb`], sobre CUALQUIER forma de borrar.
+///
+/// Existe porque desde #218 hay dos: por ruta y por el descriptor de una raíz
+/// confinada. Las dos necesitan lo mismo —comprobar la cancelación antes del
+/// primer intento, sembrar la duda al ver un transitorio, y tratar un
+/// `NotFound` posterior como «ya no está», que ES el estado que el borrado
+/// perseguía— y tenerlo dos veces es tenerlo de dos maneras en cuanto una de
+/// las dos se toque.
+async fn bucle_de_borrado<F, Fut>(
+    mut borra: F,
+    cancel: &CancellationToken,
+) -> Result<(), (Error, Ambiguity)>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<(), Error>>,
+{
     let mut attempt = 0u32;
     let mut ambiguous = false;
     // La duda, una vez sembrada, viaja con TODA salida de error — incluida la
@@ -397,7 +583,7 @@ pub(crate) async fn remove_retrying_amb(
         if cancel.is_cancelled() {
             return Err((Error::Cancelled, dudoso(ambiguous)));
         }
-        match p.remove(path).await {
+        match borra().await {
             Ok(()) => return Ok(()),
             Err(Error::NotFound) if ambiguous => return Ok(()),
             // La duda se siembra en cuanto se VE un transitorio, no solo cuando
@@ -797,23 +983,32 @@ async fn same_node_heuristic(from: &VPath, to: &VPath, dst: &dyn Provider) -> bo
         })
 }
 
-/// Resuelve la colisión de UNA hoja contra el provider DESTINO (trampa del
-/// dominio: siempre contra el destino). `Ok(Some(path))` = copiar ahí;
-/// `Ok(None)` = saltar por política.
+/// Resuelve la colisión de UNA hoja contra el DESTINO (trampa del dominio:
+/// siempre contra el destino). `Ok(Some(path))` = copiar ahí; `Ok(None)` =
+/// saltar por política.
 ///
-/// Ventana TOCTOU residual documentada: entre este `stat` y el
-/// remove/write posterior el destino puede cambiar. Sin pérdida silenciosa
-/// (el `write()` del provider es create-new), pero el replace atómico llega
-/// con `WriteOpts` en M2 (ADR 0005).
+/// Toma el [`Destination`] y no el provider pelado (#218): el `stat` que
+/// decide y el `remove` que ejecuta van por el DESCRIPTOR cuando lo hay. Por
+/// ruta, un componente intermedio sustituido hacía que se lstateara —y luego
+/// se borrara— un fichero del árbol del atacante, y solo después el write
+/// confinado se negaba: un fichero destruido fuera de la raíz, nada escrito
+/// en su lugar, y una entrada de journal nombrando otro sitio.
+///
+/// Ventana TOCTOU residual documentada: entre este `stat` y el remove/write
+/// posterior el destino puede cambiar. Sin pérdida silenciosa (el `write()`
+/// del provider es create-new), pero el replace atómico llega con `WriteOpts`
+/// en M2 (ADR 0005).
 async fn resolve_collision(
-    dst: &dyn Provider,
+    into: &Destination<'_>,
     to: &VPath,
     src_entry: &Entry,
     policy: CollisionPolicy,
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<Option<VPath>, Error> {
-    let existing = match with_retry(&ctx.cancel, || dst.stat(to).boxed()).await {
+    let dst = into.provider();
+    let en_destino = into.at(to.clone());
+    let existing = match with_retry(&ctx.cancel, || en_destino.stat().boxed()).await {
         Err(Error::NotFound) => return Ok(Some(to.clone())),
         Ok(e) => e,
         Err(e) => return Err(e),
@@ -830,12 +1025,12 @@ async fn resolve_collision(
         }),
         CollisionPolicy::Skip => Ok(None),
         CollisionPolicy::Overwrite => {
-            overwrite_existing(dst, to, &existing, observer, ctx).await?;
+            overwrite_existing(&en_destino, &existing, observer, ctx).await?;
             Ok(Some(to.clone()))
         }
         CollisionPolicy::Newer => match (src_entry.mtime_ms, existing.mtime_ms) {
             (Some(s), Some(d)) if s > d => {
-                overwrite_existing(dst, to, &existing, observer, ctx).await?;
+                overwrite_existing(&en_destino, &existing, observer, ctx).await?;
                 Ok(Some(to.clone()))
             }
             (Some(_), Some(_)) => Ok(None),
@@ -869,9 +1064,13 @@ async fn resolve_collision(
 
 /// Quita la hoja existente del destino para reemplazarla (Overwrite/Newer).
 /// Jamás pisa un DIR con una hoja: eso es `TypeMismatch`, no política.
+///
+/// El borrado va por el DESCRIPTOR si el destino tiene raíz (#218). Una raíz
+/// que no sabe borrar confinado hace que la política se RECHACE: caerse al
+/// borrado por ruta sería reabrir el agujero en el único sitio donde esta
+/// operación destruye, y hacerlo callando.
 async fn overwrite_existing(
-    dst: &dyn Provider,
-    to: &VPath,
+    dest: &Dest<'_>,
     existing: &Entry,
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
@@ -881,9 +1080,9 @@ async fn overwrite_existing(
             conflict: ConflictKind::TypeMismatch,
         });
     }
-    remove_retrying(dst, to, &ctx.cancel).await?;
+    dest.remove(&ctx.cancel).await?;
     observer
-        .on_mutation(&Mutation::Removed(to), &ctx.actor)
+        .on_mutation(&Mutation::Removed(dest.path()), &ctx.actor)
         .await?;
     Ok(())
 }
@@ -903,8 +1102,13 @@ async fn ensure_dir(
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
-    let (backend, to) = (dest.provider(), dest.path());
-    let pre = match with_retry(&ctx.cancel, || backend.stat(to).boxed()).await {
+    let to = dest.path();
+    // El pre-stat va por el DESCRIPTOR cuando lo hay (#218): por ruta, un
+    // componente intermedio sustituido lo hacía mirar el árbol del atacante y
+    // contestar «ya existe como dir», con lo que la fusión seguía adelante
+    // sobre un sitio que la raíz no cubre. Un `EscapesRoot` sale por el brazo
+    // de error de abajo y para la operación, que es la respuesta.
+    let pre = match with_retry(&ctx.cancel, || dest.stat().boxed()).await {
         Ok(e) => Some(e),
         Err(Error::NotFound) => None,
         Err(e) => return Err(e),
@@ -942,7 +1146,8 @@ async fn ensure_dir(
         // pre-stat y el mkdir (carrera externa). Merge lo absorbe SIN
         // Created (no es nuestro); Fail/Ask fallan en seguro.
         Err(Error::Conflict { .. }) if merge_allowed(opts.on_collision) => {
-            let existing = with_retry(&ctx.cancel, || backend.stat(to).boxed()).await?;
+            // Por el descriptor, mismo motivo que el pre-stat.
+            let existing = with_retry(&ctx.cancel, || dest.stat().boxed()).await?;
             if existing.kind == EntryKind::Dir {
                 Ok(())
             } else {
@@ -967,8 +1172,7 @@ async fn copy_file_leaf(
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<Placed, Error> {
-    let Some(target) =
-        resolve_collision(into.provider(), to, entry, opts.on_collision, observer, ctx).await?
+    let Some(target) = resolve_collision(into, to, entry, opts.on_collision, observer, ctx).await?
     else {
         return Ok(Placed::Skipped);
     };
@@ -995,8 +1199,7 @@ async fn copy_symlink_leaf(
             let target_bytes =
                 with_retry(&ctx.cancel, || src.read_link(&entry.path).boxed()).await?;
             let Some(target) =
-                resolve_collision(into.provider(), to, entry, opts.on_collision, observer, ctx)
-                    .await?
+                resolve_collision(into, to, entry, opts.on_collision, observer, ctx).await?
             else {
                 return Ok(Placed::Skipped);
             };
@@ -1023,8 +1226,7 @@ async fn copy_symlink_leaf(
                 Err(e) => return Err(e),
             }
             let Some(target) =
-                resolve_collision(into.provider(), to, entry, opts.on_collision, observer, ctx)
-                    .await?
+                resolve_collision(into, to, entry, opts.on_collision, observer, ctx).await?
             else {
                 return Ok(Placed::Skipped);
             };
@@ -1075,6 +1277,7 @@ pub(crate) async fn copy_task(
         return Err(Error::InvalidPath);
     }
     let src_entry = with_retry(&ctx.cancel, || src.stat(&from).boxed()).await?;
+    let tarea = ctx.progress.snapshot().task_id.get();
     match src_entry.kind {
         EntryKind::File => {
             ctx.progress.update(|p| {
@@ -1082,16 +1285,20 @@ pub(crate) async fn copy_task(
                 p.entries_total = Some(1);
                 p.current = Some(from.clone());
             });
-            copy_file_leaf(
-                &*src,
-                &Destination::unconfined(&*dst, &to),
-                &src_entry,
-                &to,
-                opts,
-                &observer,
-                ctx,
-            )
-            .await?;
+            // La hoja se confina bajo SU DIRECTORIO destino (#219), que es lo
+            // que el humano eligió y lo que el gate resolvió. Antes iba sin
+            // confinar, con el argumento de que «una hoja suelta no cuelga de
+            // ningún árbol aprobado»; la revisión de seguridad enseñó que sí
+            // cuelga de uno, y que sin él `fs.copy` —la operación más común
+            // del producto— tenía #164 intacto.
+            //
+            // Se abre DENTRO de cada brazo de hoja, no antes del `match`: el
+            // tercero —un dir-symlink bajo `Follow`— se desvía a `copy_tree`,
+            // que abre la suya, y pagar aquí una raíz que descarta le haría
+            // heredar además sus errores.
+            let (dir, raiz) = open_leaf_root(&*dst, &to, tarea, &ctx.cancel).await?;
+            let into = destino_de_hoja(&*dst, dir.as_ref(), raiz.as_deref(), &to);
+            copy_file_leaf(&*src, &into, &src_entry, &to, opts, &observer, ctx).await?;
             ctx.progress.update(|p| p.entries_done = 1);
             Ok(())
         }
@@ -1111,16 +1318,9 @@ pub(crate) async fn copy_task(
                 p.entries_total = Some(1);
                 p.current = Some(from.clone());
             });
-            copy_symlink_leaf(
-                &*src,
-                &Destination::unconfined(&*dst, &to),
-                &src_entry,
-                &to,
-                opts,
-                &observer,
-                ctx,
-            )
-            .await?;
+            let (dir, raiz) = open_leaf_root(&*dst, &to, tarea, &ctx.cancel).await?;
+            let into = destino_de_hoja(&*dst, dir.as_ref(), raiz.as_deref(), &to);
+            copy_symlink_leaf(&*src, &into, &src_entry, &to, opts, &observer, ctx).await?;
             ctx.progress.update(|p| p.entries_done = 1);
             Ok(())
         }
@@ -1539,7 +1739,11 @@ async fn copy_file(
         // episodio transitorio que también agote el `stat`, no confirman y
         // recaen en el camino de fallo.
         Err(e) if is_transient(&e) => {
-            match with_retry(&ctx.cancel, || backend.stat(to).boxed()).await {
+            // Y la desambiguación post-transitorio también (#218): reclamar
+            // como nuestra una escritura que en realidad está fuera de la raíz
+            // le pondría un `Created` en el journal a un fichero ajeno, y el
+            // undo lo mandaría a la papelera.
+            match with_retry(&ctx.cancel, || dest.stat().boxed()).await {
                 // Aplicó: `to` existe con el tamaño esperado → cae al Created.
                 Ok(entry) if entry.size == Some(final_size) => {}
                 // Cancelado durante la comprobación: propaga cancelación.
@@ -1653,6 +1857,10 @@ enum RenameOutcome {
 
 /// Rename same-provider aplicando la política de colisión sobre el
 /// `Conflict` del rename no-replace del provider.
+// Un brazo por POLÍTICA de colisión, y cada uno con su secuencia completa —
+// stat del origen, stat del destino, comprobación de tipos, borrado, rename,
+// journal—. Partirla escondería cuál de las cinco hace qué.
+#[allow(clippy::too_many_lines)]
 async fn rename_with_policy(
     src: &dyn Provider,
     from: &VPath,
@@ -1695,7 +1903,12 @@ async fn rename_with_policy(
             let src_e = with_retry(&ctx.cancel, || src.stat(from).boxed()).await?;
             let existing = with_retry(&ctx.cancel, || src.stat(to).boxed()).await?;
             check_overwrite_kinds(&src_e, &existing)?;
-            overwrite_existing(src, to, &existing, observer, ctx).await?;
+            // SIN confinar, y a propósito: un rename in-place no abre ninguna
+            // raíz —el `renameat` que viene después tampoco podría ir por
+            // descriptor sin una— así que aquí no hay handle que usar y
+            // fingirlo sería peor. Lo que este camino sí tiene es el
+            // `from_id`, que `rename_retrying` comprueba.
+            overwrite_existing(&Dest::plain(src, to.clone()), &existing, observer, ctx).await?;
             rename_retrying(src, from, to, from_id, &ctx.cancel).await?;
             observer
                 .on_mutation(
@@ -1715,7 +1928,8 @@ async fn rename_with_policy(
             match (src_e.mtime_ms, existing.mtime_ms) {
                 (Some(s), Some(d)) if s > d => {
                     check_overwrite_kinds(&src_e, &existing)?;
-                    overwrite_existing(src, to, &existing, observer, ctx).await?;
+                    overwrite_existing(&Dest::plain(src, to.clone()), &existing, observer, ctx)
+                        .await?;
                     rename_retrying(src, from, to, from_id, &ctx.cancel).await?;
                     observer
                         .on_mutation(
@@ -1769,6 +1983,10 @@ async fn rename_with_policy(
 /// Move por copy + delete con plan único: el walk de la copia ES la lista
 /// del delete. Lo saltado por política queda en el origen (junto con sus
 /// dirs ancestros).
+// Dos formas del mismo verbo —una hoja y un árbol— cada una con su fase de
+// copia y su fase de borrado. Separarlas duplicaría la guarda de «dentro de sí
+// mismo» y el plan, que es donde estaría el error si se separaran.
+#[allow(clippy::too_many_lines)]
 async fn move_by_copy(
     src: Arc<dyn Provider>,
     dst: Arc<dyn Provider>,
@@ -1807,7 +2025,18 @@ async fn move_by_copy(
                 p.entries_total = Some(2);
                 p.current = Some(from.clone());
             });
-            let into = Destination::unconfined(&*dst, &to);
+            // Misma raíz que en `copy_task` (#219): el directorio destino de
+            // la hoja. Un movimiento por copia ESCRIBE igual que una copia, y
+            // además borra el origen después — dejarlo sin confinar era la
+            // mitad del agujero con la otra mitad al lado.
+            let (dir_destino, raiz) = open_leaf_root(
+                &*dst,
+                &to,
+                ctx.progress.snapshot().task_id.get(),
+                &ctx.cancel,
+            )
+            .await?;
+            let into = destino_de_hoja(&*dst, dir_destino.as_ref(), raiz.as_deref(), &to);
             let placed = if src_entry.kind == EntryKind::File {
                 copy_file_leaf(&*src, &into, &src_entry, &to, opts, &observer, ctx).await?
             } else {

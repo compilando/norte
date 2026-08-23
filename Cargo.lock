@@ -5455,6 +5455,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
+ "norte-encoding",
  "norte-proto",
  "norte-testkit",
  "tokio",

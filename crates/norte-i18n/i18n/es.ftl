@@ -1636,6 +1636,7 @@ task-batch-unverified = terminado, sin informe
 host-plan-unseen = recorre el plan entero antes de aplicarlo
 host-same-directory = el origen y el destino son el mismo directorio
 host-batch-too-large = demasiadas entradas para una sola transferencia
+host-batch-folds-to-one = dos de las marcas son el mismo nombre en el destino
 host-task-board-full = el tablero de tareas está lleno
 host-read-only = esta ventana está montada sin efectos: no escribe
 host-no-tabs = este panel no está en un grupo de pestañas

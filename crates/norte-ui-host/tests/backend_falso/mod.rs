@@ -163,6 +163,13 @@ pub struct Falso {
     pub busquedas: std::sync::Mutex<Vec<String>>,
     /// Los volúmenes que contesta `host.volumes`.
     pub volumenes: Vec<norte_proto::methods::Volume>,
+    /// Cómo PLIEGA nombres cada ubicación (#268/#274). Clave: el wire del
+    /// directorio. Ausente = lo que dice `Capabilities::default()`.
+    ///
+    /// Es el mando que faltaba para poder escribir estos tests: sin él ningún
+    /// doble podía fingir un APFS, un NTFS o un exFAT, y las fixtures de
+    /// gemelos de caja del corpus no tenían contra qué correr.
+    pub capacidades: std::collections::HashMap<String, norte_proto::Capabilities>,
     /// Directorios de plugin que no cargaron: `(dir, motivo)`.
     pub errores_de_carga: Vec<(String, String)>,
     /// Los BYTES del directorio de un error de carga (#265), por su cadena.
@@ -431,6 +438,29 @@ pub fn arbol_de_prueba() -> Falso {
 }
 
 impl HostBackend for Falso {
+    fn capabilities(
+        &self,
+        path: VPath,
+    ) -> BoxFuture<'static, Result<norte_proto::Capabilities, Error>> {
+        // Por UBICACIÓN, no por provider: se busca el directorio exacto y, si
+        // no está, su padre — que es lo que hace un mount de verdad.
+        let caps = self
+            .capacidades
+            .get(&path.to_wire())
+            .or_else(|| {
+                path.parent()
+                    .and_then(|p| self.capacidades.get(&p.to_wire()))
+            })
+            .copied()
+            // Sin mando: lo que dice un ext4 corriente —distingue la caja— que
+            // es el suelo honesto para un doble que corre en Linux.
+            .unwrap_or(norte_proto::Capabilities {
+                flags: norte_proto::CapabilityFlags::CASE_SENSITIVE,
+                max_path: None,
+            });
+        Box::pin(async move { Ok(caps) })
+    }
+
     fn plugin_list(
         &self,
     ) -> BoxFuture<'static, Result<norte_proto::methods::PluginListResult, Error>> {

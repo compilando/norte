@@ -1609,6 +1609,7 @@ task-batch-unverified = finished, report unavailable
 host-plan-unseen = scroll through the whole plan before applying it
 host-same-directory = source and destination are the same directory
 host-batch-too-large = too many entries for a single transfer
+host-batch-folds-to-one = two of the marks are one name on the destination
 host-task-board-full = the task board is full
 host-read-only = this window is mounted without effects: it does not write
 host-no-tabs = this panel is not in a tab group

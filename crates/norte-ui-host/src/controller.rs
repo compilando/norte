@@ -449,6 +449,8 @@ enum Mensaje {
     /// directorios que dejará distintos.
     TaskNueva(Box<(crate::backend::HostTask, Vec<VPath>)>),
     /// Encolarla falló. El usuario tiene que enterarse: pidió un borrado.
+    /// Cómo pliega nombres la ubicación de un hueco (#268).
+    Pliegue(u32, VPath, norte_encoding::FoldMode),
     TaskFallida(Box<Error>),
     /// Un rechazo al encolar UNA entrada de un lote (#271). Separado de
     /// [`Self::TaskFallida`] a propósito: aquél lo manda todo el que encola
@@ -903,6 +905,9 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
+            Mensaje::Pliegue(slot, dir, modo) => {
+                estado.aplicar_pliegue(slot, &dir, modo);
+            }
             Mensaje::TaskFallida(e) => {
                 for u in estado.task_fallida(&e) {
                     let _ = updates.send(u);
@@ -1137,6 +1142,18 @@ fn nueva_instancia() -> String {
 /// significa «bajar el cursor» (ADR 0066, D14).
 struct Hueco {
     pane: PaneState,
+    /// Cómo PLIEGA nombres el directorio en el que este hueco está (#268).
+    ///
+    /// Por UBICACIÓN y no por esquema (#215): un pincho FAT montado bajo el
+    /// mismo `file://` que un `/home` sensible a la caja da otra respuesta, y
+    /// contestar por el provider sería contestar por el sitio equivocado.
+    ///
+    /// Se pide al ATERRIZAR y no delante de cada diálogo: preguntarlo en el
+    /// momento de copiar metería un viaje al daemon en el camino de F5, que es
+    /// la tecla que más se pulsa. `None` = todavía no ha llegado, y entonces no
+    /// se pliega nada — la comprobación es una cortesía y el core es la
+    /// autoridad.
+    pliegue: Option<norte_encoding::FoldMode>,
     /// El esquema cuyo orden lleva puesto `pane` ahora mismo (#108).
     ///
     /// `[ui.columns] sort` puede dar un orden POR ESQUEMA, y se reaplica
@@ -1932,6 +1949,7 @@ impl Hueco {
         pane.set_sort(orden);
         Self {
             pane,
+            pliegue: None,
             esquema_del_orden: esquema,
             historial: History::default(),
             primera_visible: 0,
@@ -3020,6 +3038,52 @@ impl Estado {
         )
     }
 
+    /// Pregunta cómo pliega nombres el directorio de un hueco (#268).
+    ///
+    /// Se pide al ATERRIZAR y no delante de cada diálogo: hacerlo al copiar
+    /// metería un viaje al daemon en el camino de F5, que es la tecla que más
+    /// se pulsa de un gestor ortodoxo. Aquí va detrás de un listado que ya
+    /// costó una ronda, y la respuesta sirve para todas las copias que salgan
+    /// de ese directorio.
+    ///
+    /// Un fallo no dice nada y no rompe nada: sin respuesta no se pliega, que
+    /// es exactamente lo que se hacía antes de #268.
+    fn pedir_pliegue(
+        &mut self,
+        slot: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let Some(hueco) = self.huecos.get_mut(&slot) else {
+            return;
+        };
+        let dir = hueco.pane.dir().clone();
+        // El de antes ya no vale: es de otro sitio.
+        hueco.pliegue = None;
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let Ok(caps) = backend.capabilities(dir.clone()).await else {
+                return;
+            };
+            let modo = norte_vfs::fold_mode_of(caps);
+            let _ = buzon.send(Mensaje::Pliegue(slot, dir, modo)).await;
+        });
+    }
+
+    /// Guarda el modo de plegado, si el hueco sigue donde estaba.
+    ///
+    /// La comprobación del directorio no es paranoia: entre pedir y contestar
+    /// cabe una navegación entera, y guardar el pliegue de otro sitio haría
+    /// que la comprobación del lote mintiera en la dirección permisiva.
+    fn aplicar_pliegue(&mut self, slot: u32, dir: &VPath, modo: norte_encoding::FoldMode) {
+        if let Some(h) = self.huecos.get_mut(&slot)
+            && h.pane.dir() == dir
+        {
+            h.pliegue = Some(modo);
+        }
+    }
+
     /// Un listado que se pidió antes acaba de volver.
     ///
     /// `None` = llegó TARDE y otra navegación lo relevó. Se descarta aquí y
@@ -3035,6 +3099,7 @@ impl Estado {
             return None;
         }
         self.aterriza_en(slot, dir, res);
+        self.pedir_pliegue(slot, backend, buzon);
         self.sondear(slot, backend, buzon);
         self.adornar(slot, backend, buzon);
         // Los hechos de la ayuda describen la entrada bajo el CURSOR, y este
@@ -10137,6 +10202,32 @@ impl Estado {
     /// la misma regla que dejó sin parámetro al comando de los bytes de una
     /// imagen (ADR 0069), y por el mismo motivo — un nombre que viene de la
     /// webview es un nombre que la webview puede elegir.
+    /// ¿Hay dos entradas del lote cuyos NOMBRES son uno solo en el destino?
+    ///
+    /// Se pliega con la clave compartida bajo el modo del DESTINO —la trampa
+    /// del dominio de siempre: la caja y la normalización las decide el sitio
+    /// al que van, no el del que salen—. Sin modo todavía (el hueco acaba de
+    /// aterrizar, o el daemon no contestó) no se pliega: esto es una cortesía
+    /// del cliente y la autoridad es el core.
+    fn dos_marcas_pliegan_igual(&self, paths: &[VPath]) -> bool {
+        let Some(modo) = self
+            .hueco_destino()
+            .ok()
+            .and_then(|id| self.huecos.get(&id))
+            .and_then(|h| h.pliegue)
+        else {
+            return false;
+        };
+        if modo == norte_encoding::FoldMode::None {
+            return false;
+        }
+        let mut vistas = std::collections::HashSet::new();
+        paths
+            .iter()
+            .filter_map(|p| p.file_name())
+            .any(|n| !vistas.insert(norte_encoding::name_key(n.as_bytes(), modo)))
+    }
+
     /// Los dos topes de un lote (#271), o `None` si cabe.
     ///
     /// Se preguntan antes de abrir diálogo alguno: preguntar por algo que no
@@ -10183,6 +10274,16 @@ impl Estado {
         }
         if let Some(motivo) = self.lote_no_cabe(paths.len()) {
             return Err(motivo);
+        }
+        // Dos marcas que PLIEGAN al mismo nombre en el destino (#268): en un
+        // ext4 `README.txt` y `readme.txt` son dos ficheros, y en NTFS o APFS
+        // son uno. Encolar las dos deja que una gane —cuál, no es
+        // determinista— y que la otra falle sin explicación sobre un miembro
+        // arbitrario de la pareja. Con `CollisionPolicy::Fail` el resultado es
+        // al menos un error visible; el día que la ventana ofrezca elegir
+        // sobrescribir, el mismo lote pierde un fichero en silencio.
+        if self.dos_marcas_pliegan_igual(&paths) {
+            return Err("host-batch-folds-to-one");
         }
         // Una entrada sin último segmento es una RAÍZ, y una raíz no tiene
         // nombre que componer en el destino. Se rechaza el lote entero en vez

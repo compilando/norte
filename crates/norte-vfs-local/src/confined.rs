@@ -533,6 +533,26 @@ impl LocalRoot {
         Ok(entry_from_stat(path, &st))
     }
 
+    /// `unlinkat` de la HOJA que hay en `rel`, bajo la raíz (#218).
+    ///
+    /// SIN `AT_REMOVEDIR`: lo que esto borra es una hoja que va a ser
+    /// reemplazada, y un directorio en su sitio es `TypeMismatch` —una
+    /// respuesta, no una política—. Pedirle a `unlinkat` que borre un dir sin
+    /// la bandera devuelve `EISDIR`, que es exactamente el error correcto y
+    /// llega sin haber tocado nada.
+    #[allow(unsafe_code)]
+    pub(crate) fn remove(&self, rel: &[Segment]) -> Result<(), Error> {
+        let (dir, name) = self.parent_of(rel)?;
+        let c = cstring(name)?;
+        // SAFETY: `dir` vive mientras dura la llamada y `c` es una CString
+        // NUL-terminada viva también.
+        let rc = unsafe { libc::unlinkat(dir.as_raw_fd(), c.as_ptr(), 0) };
+        if rc != 0 {
+            return Err(map_errno(&std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+
     /// Abre un sink para `rel`: el staging se crea con `openat` en el
     /// directorio ya resuelto y se publica con `renameat` en ESE MISMO
     /// descriptor, así que la publicación va confinada igual que la escritura.
@@ -892,6 +912,12 @@ impl norte_vfs::ConfinedRoot for LocalConfinedRoot {
         let path = self.vpath_of(rel);
         let rel = rel.to_vec();
         crate::provider::blocking(move || root.stat(&rel, path)).await
+    }
+
+    async fn remove(&self, rel: &[Segment]) -> Result<(), Error> {
+        let root = std::sync::Arc::clone(&self.root);
+        let rel = rel.to_vec();
+        crate::provider::blocking(move || root.remove(&rel)).await
     }
 }
 

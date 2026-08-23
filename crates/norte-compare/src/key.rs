@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use norte_encoding::FoldMode;
 use norte_proto::Segment;
 use norte_proto::methods::{CompareReason, PairTransform};
-use norte_vfs::{Capabilities, CapabilityFlags, Entry};
+use norte_vfs::{Capabilities, Entry};
 
 /// Cómo empareja LA PAREJA de lados, que no es lo mismo que cómo es cada uno.
 ///
@@ -91,13 +91,12 @@ impl Sides {
     /// ```
     #[must_use]
     pub fn mode_of(c: Capabilities) -> FoldMode {
-        if c.flags.contains(CapabilityFlags::FULL_FOLD) {
-            FoldMode::Full
-        } else if c.flags.contains(CapabilityFlags::CASE_SENSITIVE) {
-            FoldMode::None
-        } else {
-            FoldMode::Simple
-        }
+        // La regla vive en `norte-vfs`, que es dueño del contrato del
+        // `Provider` cuyas banderas se están leyendo. Aquí solo se reenvía:
+        // la preguntan tres capas que no se ven entre sí —este motor, el core
+        // y la ventana (#268)— y tres copias de tres líneas es como se
+        // separan.
+        norte_vfs::fold_mode_of(c)
     }
 
     /// Los dos lados distinguen caja (ext4 contra ext4): NO se pliega.
@@ -461,6 +460,8 @@ impl<'a, T: PairName> SideIndex<'a, T> {
 
 #[cfg(test)]
 mod tests {
+    use norte_vfs::CapabilityFlags;
+
     use super::*;
 
     /// Los bytes de una fixture del corpus canónico de `norte-testkit`.

@@ -480,3 +480,69 @@ async fn la_identidad_de_la_raiz_delata_una_ruta_sustituida_por_un_enlace() {
         "un directorio de verdad casa consigo mismo"
     );
 }
+
+/// #218 — la mitad DESTRUCTIVA también va por el descriptor.
+///
+/// `Overwrite` y `Newer` borran antes de escribir, y ese borrado iba por ruta
+/// mientras el write iba confinado. Con `sub` sustituido por un puente hacia
+/// fuera, el `unlink` se llevaba un fichero de OTRO árbol y solo entonces el
+/// write se negaba: un fichero destruido, nada escrito en su lugar, y una
+/// entrada de journal nombrando un sitio que no era.
+#[tokio::test]
+async fn un_symlink_intermedio_no_redirige_un_borrado_fuera_de_la_raiz() {
+    let (p, raiz, dentro, fuera) = escenario();
+    let victima = fuera.join("victima.txt");
+    std::fs::write(&victima, b"no me borres").expect("victima");
+    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
+
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let err = root
+        .remove(&[seg(b"sub"), seg(b"victima.txt")])
+        .await
+        .expect_err("tiene que negarse");
+
+    assert!(
+        matches!(
+            err,
+            Error::Conflict {
+                conflict: ConflictKind::EscapesRoot
+            }
+        ),
+        "respondió {err:?}"
+    );
+    assert!(victima.exists(), "y sobre todo: no borró fuera");
+}
+
+/// Y dentro de la raíz borra, que es para lo que existe.
+#[tokio::test]
+async fn el_borrado_confinado_borra_lo_que_hay_dentro() {
+    let (p, raiz, dentro, _fuera) = escenario();
+    let hoja = dentro.join("hoja.txt");
+    std::fs::write(&hoja, b"x").expect("hoja");
+
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    root.remove(&[seg(b"hoja.txt")]).await.expect("borra");
+    assert!(!hoja.exists());
+}
+
+/// Un DIRECTORIO no se borra por aquí: reemplazar un dir por una hoja es
+/// `TypeMismatch`, que es una respuesta y no una política. `unlinkat` sin
+/// `AT_REMOVEDIR` contesta `EISDIR` sin haber tocado nada, que es justo eso.
+#[tokio::test]
+async fn el_borrado_confinado_no_se_lleva_un_directorio() {
+    let (p, raiz, dentro, _fuera) = escenario();
+    let sub = dentro.join("undir");
+    std::fs::create_dir(&sub).expect("undir");
+    std::fs::write(sub.join("dentro.txt"), b"x").expect("contenido");
+
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let err = root
+        .remove(&[seg(b"undir")])
+        .await
+        .expect_err("un dir no es una hoja");
+    assert!(
+        !matches!(err, Error::NotFound),
+        "el error tiene que decir que es un dir, no que no está: {err:?}"
+    );
+    assert!(sub.exists(), "y el directorio sigue ahí con su contenido");
+}
