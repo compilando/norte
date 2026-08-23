@@ -33,6 +33,7 @@ pub const CONTEXTS: &[&str] = &[
     "dialog.approval",
     "dialog.trust-host",
     "dialog.trust-lua",
+    "dialog.plugin-approval",
     "dialog.quit",
     "dialog.mark-pattern",
     "dialog.transfer-name",
@@ -69,6 +70,10 @@ fn modal_context(modal: &Modal) -> &'static str {
         Modal::ConfirmQuit => "dialog.quit",
         Modal::Collision { .. } => "dialog.collision",
         Modal::ApproveAgentOp { .. } => "dialog.approval",
+        // Conceder capabilities NO comparte página con aprobar la operación
+        // de un agente: son dos cosas distintas de las que tener cuidado, y
+        // quien pulsa F1 encima de una no puede recibir prosa de la otra.
+        Modal::ConfirmPluginApproval { .. } => "dialog.plugin-approval",
         Modal::TrustHostKey { .. } => "dialog.trust-host",
         Modal::TrustLuaInit { .. } => "dialog.trust-lua",
         Modal::MarkPattern { .. } => "dialog.mark-pattern",
@@ -137,6 +142,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::ConfirmQuit
         | Modal::Collision { .. }
         | Modal::ApproveAgentOp { .. }
+        | Modal::ConfirmPluginApproval { .. }
         | Modal::TrustHostKey { .. }
         | Modal::AiRenamePlan { .. }
         // #139: se lee, no se escribe — F1 encima no le roba una tecla a nadie.
@@ -222,6 +228,12 @@ mod tests {
             Modal::ConfirmDelete {
                 items: vec![vp("file:///x/a")],
                 permanent: false,
+            },
+            Modal::ConfirmPluginApproval {
+                id: "org.acme.demo".to_owned(),
+                name: "Demo".to_owned(),
+                name_hostile: false,
+                caps: vec![("leer ficheros".to_owned(), false)],
             },
             Modal::ConfirmTransfer {
                 kind: TransferKind::Copy,

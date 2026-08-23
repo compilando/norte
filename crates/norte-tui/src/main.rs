@@ -217,6 +217,17 @@ async fn main() -> Result<()> {
     if watch.mode == WatchMode::Polling {
         app.message = Some(t("msg-config-polling"));
     }
+    // Una capa de proyecto que no cargó (#260): antes del de Lua, que es el
+    // que no puede quedar pisado.
+    if !cfg.common.project_warnings.is_empty() {
+        app.message = Some(ta(
+            "msg-project-config-skipped",
+            &[("n", &cfg.common.project_warnings.len().to_string())],
+        ));
+        for aviso in &cfg.common.project_warnings {
+            tracing::warn!(motivo = %aviso, "capa de proyecto ignorada");
+        }
+    }
     // DESPUÉS del aviso de polling: el de seguridad no debe quedar pisado.
     if discarded_lua > 0 {
         app.message = Some(ta(

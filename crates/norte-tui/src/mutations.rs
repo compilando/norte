@@ -143,6 +143,12 @@ pub async fn confirm_modal(
         Modal::ConfirmDelete { items, permanent } => {
             submit_deletes(app, backend, &items, permanent).await;
         }
+        // Ya lo confirmó un humano que leyó las capabilities enumeradas
+        // (#280). Lo que sigue lo dice el CORE: se concede y se relista, en
+        // vez de creerse un `bool` local que el daemon no confirmó.
+        Modal::ConfirmPluginApproval { id, .. } => {
+            crate::screens::extensions::conceder_aprobacion(app, backend, &id).await;
+        }
         Modal::ConfirmTransfer {
             kind, items, to, ..
         } => {

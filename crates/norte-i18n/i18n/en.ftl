@@ -362,6 +362,7 @@ status-watch-degraded = directory watching degraded to polling (inotify limit?) 
 msg-names-encoding = names shown as { $enc } (display only; bytes unchanged)
 msg-names-encoding-off = names shown as-is (reinterpretation off)
 msg-hidden-shown = hidden entries shown
+msg-project-config-skipped = { $n } project config did not load and was ignored
 msg-mkdir-in-search = search results have no destination directory — leave the search first
 msg-ai-rename-running = AI rename: thinking… (Esc cancels)
 # GUI variant: the GUI has no path to abort the in-flight request, so it must
@@ -674,6 +675,9 @@ msg-hotlist-removed = favorite removed: { $name }
 msg-plugin-run-ok = extension: { $output }
 # G3c: `dialog.confirm` on a plugin with an empty `[config]` schema.
 msg-plugin-config-empty = this plugin declares no configurable settings
+msg-plugin-not-approved = this extension is not approved: approve it before enabling it
+modal-plugin-approval-title = Grant these capabilities?
+modal-plugin-approval-note = an approved extension acts on your behalf with everything listed here
 msg-extensions-no-help = this extension ships no help page
 # G3c: plugin.set_config succeeded — { $key } is the manifest-declared,
 # charset-safe config key (never plugin free text); { $value } is the new
@@ -1608,6 +1612,8 @@ host-nothing-selected = nothing is selected
 host-not-local = that is not on this disk: there is no native path to hand the desktop
 host-no-desktop = this window has no desktop behind it: it cannot copy to the clipboard or launch anything
 msg-paths-copied = { $n } path(s) on the clipboard
+msg-paths-copied-osc52 = { $n } path(s) sent to the terminal clipboard (OSC 52); check by pasting
+msg-clipboard-failed = the clipboard refused the paths
 msg-opening-external = opening with the desktop’s application…
 msg-opening-terminal = opening a terminal here…
 host-plugin-running = running the extension command…

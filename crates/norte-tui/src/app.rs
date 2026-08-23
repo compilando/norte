@@ -630,6 +630,14 @@ pub struct App {
     /// antes del draw) para que ningún `continue` de los que responde teclas
     /// pueda dejarla encallada.
     pub pending_shell: Option<PendingShell>,
+    /// Bytes que hay que escribirle al EMULADOR de terminal, si los hay.
+    ///
+    /// Mismo reparto que [`Self::pending_shell`]: `dispatch` decide QUÉ y el
+    /// bucle —dueño de la salida— lo escribe. Hoy solo lo usa OSC 52, que es
+    /// la única forma de copiar al portapapeles por SSH: quien recibe la
+    /// secuencia es el terminal que el humano mira, no la máquina donde
+    /// corre norte (#286).
+    pub pending_osc52: Option<Vec<u8>>,
     /// Hints de pie de página de los overlays de diálogo (H1 T3, #24),
     /// PRECOMPUTADOS del efectivo `dialog` vigente — igual que `help_lines`
     /// en `main.rs`, se reconstruyen en el arranque y en cada hot-reload OK
@@ -783,6 +791,7 @@ impl App {
             openers: norte_frontend::openers::OpenersConfig::empty(),
             pending_open: None,
             pending_shell: None,
+            pending_osc52: None,
             dialog_hints: crate::hints::DialogHints::default(),
             help_chords: default_help_chords(),
             palette: None,

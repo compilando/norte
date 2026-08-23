@@ -3,7 +3,7 @@ id = "shell"
 title = "Salir a un shell"
 tags = ["doing"]
 see_also = ["panes", "settings"]
-commands = ["app.terminal", "app.toggle-panels", "pane.command-line"]
+commands = ["app.terminal", "app.toggle-panels", "pane.command-line", "pane.copy-path"]
 context = ["dialog.command-line"]
 +++
 Un gestor de ficheros del que no puedes salir es un gestor de ficheros que
@@ -79,3 +79,18 @@ La versión gráfica no siempre puede prometerlo. Una ventana de terminal
 servida por una instancia que ya estaba corriendo —GNOME Terminal y Konsole lo
 hacen, y macOS también— la arranca en realidad ese servidor, no norte, así que
 hereda el entorno del servidor y no el nuestro.
+
+## Copiar la ruta
+
+{{cmd:pane.copy-path}} pone en el portapapeles la ruta de lo marcado —o la de
+la entrada bajo el cursor si no hay nada marcado—, una por línea y en su forma
+**nativa**: `/casa/notas.txt`, no `file:///casa/notas.txt`. Lo que no está en
+este disco no tiene forma nativa, así que viaja como localización completa.
+
+Hay dos caminos y norte dice cuál usó. Si encuentra un helper del escritorio
+(`wl-copy`, `xclip`) lo usa, porque ése CONTESTA si funcionó. Si no hay
+ninguno —lo normal en una sesión por SSH— manda la secuencia **OSC 52**, que
+la interpreta el emulador de terminal que estás mirando y no la máquina donde
+corre norte. Esa segunda no se puede confirmar: un terminal que no la soporte
+la ignora sin decir nada, y por eso el aviso te pide que lo compruebes
+pegando.

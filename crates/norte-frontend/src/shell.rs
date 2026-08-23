@@ -1104,3 +1104,86 @@ mod tests {
         assert_eq!(Shell::parse(""), None);
     }
 }
+
+/// Cómo acabó un intento de escribir en el portapapeles del sistema.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardOutcome {
+    /// Escrito, con el helper que lo hizo (para poder DECIR cuál fue).
+    Done(String),
+    /// No hay ningún helper instalado. NO es un fallo: en una sesión por SSH
+    /// es lo normal, y un terminal todavía tiene OSC 52 ([`osc52`]).
+    NoHelper,
+    /// Había helper y falló al escribir.
+    Failed,
+}
+
+/// Escribe `bytes` en el portapapeles con el primer helper que EXISTA.
+///
+/// Compartido por los dos frontends (#286): la ventana no tiene terminal al
+/// que pedírselo, y el terminal sí — pero cuando hay `wl-copy` o `xclip`
+/// delante, usarlo es mejor que OSC 52, porque el helper CONTESTA y la
+/// secuencia de escape no.
+///
+/// El texto va siempre por STDIN y nunca en el argv: una ruta es BYTES
+/// (regla 1), y una que empiece por `-` la leería como flag el helper que
+/// toque.
+#[must_use]
+pub fn copy_to_clipboard(bytes: &[u8]) -> ClipboardOutcome {
+    use std::io::Write as _;
+    for argv in clipboard_candidates() {
+        let Some(programa) = argv.first() else {
+            continue;
+        };
+        let Some(ruta) = programa.to_str().and_then(crate::openers::resolve_program) else {
+            continue;
+        };
+        let hijo = std::process::Command::new(&ruta)
+            .args(&argv[1..])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        let Ok(mut hijo) = hijo else {
+            continue;
+        };
+        // El texto por STDIN y el stdin CERRADO después: `wl-copy` y `xclip`
+        // se quedan de dueños de la selección hasta que el flujo acaba, y sin
+        // cerrarlo el portapapeles queda a medias para siempre.
+        let escrito = hijo
+            .stdin
+            .take()
+            .map(|mut w| w.write_all(bytes).and_then(|()| w.flush()));
+        return match escrito {
+            Some(Ok(())) => ClipboardOutcome::Done(programa.to_string_lossy().into_owned()),
+            _ => ClipboardOutcome::Failed,
+        };
+    }
+    ClipboardOutcome::NoHelper
+}
+
+/// La secuencia OSC 52 que pone `bytes` en el portapapeles del TERMINAL.
+///
+/// Es la salida que la ventana gráfica no tiene y el terminal sí, y la única
+/// que funciona por SSH sin instalar nada al otro lado: quien recibe la
+/// secuencia es el emulador que el humano está mirando, no la máquina donde
+/// corre norte.
+///
+/// **Un terminal que no la soporte la ignora en silencio**, y no hay forma de
+/// preguntárselo. Por eso el llamante la usa como ÚLTIMO recurso y dice por
+/// qué camino fue: «copiado» sobre un portapapeles vacío es la clase de
+/// mentira que se descubre al pegar en otro sitio.
+///
+/// ```
+/// use norte_frontend::shell::osc52;
+/// assert_eq!(osc52(b"hola"), b"\x1b]52;c;aG9sYQ==\x07".to_vec());
+/// ```
+#[must_use]
+pub fn osc52(bytes: &[u8]) -> Vec<u8> {
+    use base64::Engine as _;
+    let payload = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let mut out = Vec::with_capacity(payload.len() + 8);
+    out.extend_from_slice(b"\x1b]52;c;");
+    out.extend_from_slice(payload.as_bytes());
+    out.push(0x07);
+    out
+}

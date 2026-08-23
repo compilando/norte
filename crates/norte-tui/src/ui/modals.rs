@@ -85,6 +85,31 @@ pub(crate) fn modal_title_body(
         // truncada por la política COMPARTIDA con la GUI
         // (`norte_frontend::item_lines_with`), jamás dos rutas en la misma
         // línea (un nombre hostil fabricaría una entrada de la lista).
+        // Las capabilities van UNA POR LÍNEA, cada una con su bandera si su
+        // texto difiere del real: son texto de un tercero, y una lista pegada
+        // en una frase deja que una finja ser otra (#280).
+        Modal::ConfirmPluginApproval {
+            name,
+            name_hostile,
+            caps,
+            ..
+        } => (
+            t("modal-plugin-approval-title"),
+            [
+                vec![format!(
+                    "{name}{}",
+                    if *name_hostile { HOSTILE_BADGE } else { "" }
+                )],
+                caps.iter()
+                    .map(|(texto, hostil)| {
+                        format!("  · {texto}{}", if *hostil { HOSTILE_BADGE } else { "" })
+                    })
+                    .collect(),
+                vec![t("modal-plugin-approval-note"), hints.approval.clone()],
+            ]
+            .concat()
+            .join("\n"),
+        ),
         Modal::ConfirmDelete { items, permanent } => (
             if *permanent {
                 t("modal-delete-permanent-title")

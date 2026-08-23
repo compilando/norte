@@ -66,40 +66,17 @@ pub fn ejecutar(efecto: &NativeEffect) -> Resultado {
 }
 
 /// Escribe `bytes` en el portapapeles con el primer helper que exista.
+///
+/// El cuerpo vive en `norte_frontend::shell` desde #286: el terminal necesita
+/// exactamente lo mismo, y tener dos copias de «qué helper y en qué orden»
+/// es tener dos respuestas a la misma pregunta. Lo que esta ventana NO tiene
+/// es la salida de OSC 52, que necesita un emulador de terminal delante.
 fn copiar(bytes: &[u8]) -> Resultado {
-    use std::io::Write as _;
-    for argv in norte_frontend::shell::clipboard_candidates() {
-        let Some(programa) = argv.first() else {
-            continue;
-        };
-        let Some(ruta) = programa
-            .to_str()
-            .and_then(norte_frontend::openers::resolve_program)
-        else {
-            continue;
-        };
-        let hijo = std::process::Command::new(ruta)
-            .args(&argv[1..])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-        let Ok(mut hijo) = hijo else {
-            continue;
-        };
-        // El texto por STDIN y el stdin CERRADO después: `wl-copy` y `xclip`
-        // se quedan de dueños de la selección hasta que el flujo acaba, y sin
-        // cerrarlo el portapapeles queda a medias para siempre.
-        let escrito = hijo
-            .stdin
-            .take()
-            .map(|mut w| w.write_all(bytes).and_then(|()| w.flush()));
-        return match escrito {
-            Some(Ok(())) => Resultado::Hecho,
-            _ => Resultado::Fallo,
-        };
+    match norte_frontend::shell::copy_to_clipboard(bytes) {
+        norte_frontend::shell::ClipboardOutcome::Done(_) => Resultado::Hecho,
+        norte_frontend::shell::ClipboardOutcome::NoHelper => Resultado::SinPrograma,
+        norte_frontend::shell::ClipboardOutcome::Failed => Resultado::Fallo,
     }
-    Resultado::SinPrograma
 }
 
 /// Abre `path` con la aplicación que el escritorio elija.

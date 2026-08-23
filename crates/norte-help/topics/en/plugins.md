@@ -4,7 +4,7 @@ title = "Extensions"
 tags = ["extensions"]
 see_also = ["settings", "remote", "agents"]
 commands = ["app.extensions"]
-context = ["dialog.trust-lua"]
+context = ["dialog.trust-lua", "dialog.plugin-approval"]
 +++
 {{cmd:app.extensions}} lists what is installed, and for each one two separate
 facts: whether you have APPROVED it, and whether it is ENABLED. Nothing runs
@@ -62,3 +62,19 @@ be a window for a different script to slip in between your answer and the run.
 
 Configuration from a project directory follows the same rule and is on
 [[settings]].
+
+## Approving an extension
+
+Approving is THE security decision of this system: an approved extension acts
+on your behalf with the capabilities it declares — reading files, running
+programs, reaching the network. So norte **asks**, and the question lists them
+one per line, each flagged separately when its text is not what it looks like.
+`Enter` does not grant: it takes the approve key, the same as an agent's
+operation.
+
+**Revoking does not ask**, and enabling something unapproved is refused.
+Disabling is always allowed, even if the approval was revoked meanwhile:
+disabling goes in the safe direction.
+
+After granting or revoking, the list is asked of the core again. What you see
+is what the core believes, not what this screen expected to happen.

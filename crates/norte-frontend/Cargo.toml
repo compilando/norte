@@ -61,6 +61,10 @@ unicode-width = "0.2"
 # inside — into every frontend for a string conversion. It now lives in
 # `norte-vfs`, which is the trait crate and touches no disk (#254).
 norte-vfs.workspace = true
+# OSC 52 (#286): la única forma de copiar al portapapeles desde un terminal
+# por SSH es mandarle al EMULADOR la secuencia con el texto en base64. Ya es
+# dependencia del workspace (proto, client, mcp): no entra nada nuevo.
+base64.workspace = true
 # Vigilancia de los dirs visibles (#106), compartida por los dos frontends: la
 # TUI la estrenó y la GUI la necesita igual, y duplicarla sería duplicar también
 # el pitfall de inotify que ya está resuelto una vez aquí. `notify` ya es

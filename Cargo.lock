@@ -5199,6 +5199,7 @@ dependencies = [
 name = "norte-frontend"
 version = "0.3.0-alpha.2"
 dependencies = [
+ "base64 0.22.1",
  "globset",
  "norte-config",
  "norte-encoding",

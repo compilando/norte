@@ -39,6 +39,12 @@ pub const ALLOW_APPROVAL: &[&str] = &["dialog.approve", "dialog.deny", "dialog.c
 /// propósito (Enter jamás confía en una host key sin verificar).
 pub const ALLOW_TRUST_HOST: &[&str] = &["dialog.approve", "dialog.deny", "dialog.cancel"];
 
+/// ALLOWLIST de `Modal::ConfirmPluginApproval` (#280): mismo principio que
+/// [`ALLOW_APPROVAL`] — conceder capabilities a una extensión es LA decisión
+/// de seguridad de ese sistema, y `dialog.confirm` queda fuera a propósito:
+/// Enter no concede permiso para leer los ficheros de nadie.
+pub const ALLOW_PLUGIN_APPROVAL: &[&str] = &["dialog.approve", "dialog.deny", "dialog.cancel"];
+
 /// ALLOWLIST del selector de tema (`on_theme_picker_key`, main.rs): sin
 /// riesgo de seguridad (elegir tema no muta nada fuera del propio popup),
 /// así que `confirm` SÍ dispara (a diferencia de los modales de arriba).
@@ -222,6 +228,18 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         // que solo entienden cancelar. Darle un «confirmar» a un cuadro de
         // solo lectura es enseñarle al lector que Enter hace algo aquí.
         Modal::Properties { .. } => (cmd == "dialog.cancel").then_some(DialogOutcome::Cancelled),
+        // Conceder capabilities: `approve` concede y todo lo demás de la
+        // lista cierra sin conceder — cerrar ES no conceder, fail-safe.
+        Modal::ConfirmPluginApproval { .. } => {
+            if !ALLOW_PLUGIN_APPROVAL.contains(&cmd) {
+                return None;
+            }
+            Some(if cmd == "dialog.approve" {
+                DialogOutcome::Confirmed
+            } else {
+                DialogOutcome::Cancelled
+            })
+        }
         // M4-IA: `AiRenamePlan` es una superficie de decisión sobre contenido
         // INICIADO y REVISADO por el humano — semántica [`ALLOW_CONFIRM`]
         // (Enter confirma, como un delete/transfer), NO el allowlist de

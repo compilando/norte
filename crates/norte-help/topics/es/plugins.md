@@ -4,7 +4,7 @@ title = "Extensiones"
 tags = ["extensions"]
 see_also = ["settings", "remote", "agents"]
 commands = ["app.extensions"]
-context = ["dialog.trust-lua"]
+context = ["dialog.trust-lua", "dialog.plugin-approval"]
 +++
 {{cmd:app.extensions}} lista lo que hay instalado y, de cada cosa, dos hechos
 separados: si la has APROBADO y si está ACTIVADA. Nada corre hasta que la
@@ -62,3 +62,19 @@ ejecución.
 
 La configuración de un directorio de proyecto sigue la misma regla y está en
 [[settings]].
+
+## Aprobar una extensión
+
+Aprobar es LA decisión de seguridad de este sistema: una extensión aprobada
+actúa en tu nombre con las capacidades que declara —leer ficheros, correr
+programas, salir a la red—. Por eso norte **pregunta** y la pregunta las
+enumera una por línea, cada una marcada aparte si su texto no es lo que
+parece. `Enter` no concede: hace falta la tecla de aprobar, igual que con la
+operación de un agente.
+
+**Revocar no pregunta**, y encender lo que no está aprobado no se puede.
+Apagar sí se puede siempre, aunque la aprobación se haya revocado por el
+camino: apagar va en la dirección segura.
+
+Tras conceder o revocar, la lista se vuelve a pedir al núcleo. Lo que ves es
+lo que el núcleo cree, no lo que esta pantalla esperaba que pasara.

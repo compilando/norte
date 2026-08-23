@@ -497,6 +497,19 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     })
     .await?;
     let mut snapshot = snapshot;
+    if !cfg.common.project_warnings.is_empty() {
+        // Un `.norte.toml` roto ya no tumba el arranque (#260), pero
+        // saltárselo en silencio dejaría al lector con una configuración de
+        // proyecto que cree activa y no lo está.
+        snapshot.status.message = Some(norte_i18n::ta_in(
+            lang,
+            "msg-project-config-skipped",
+            &[("n", &cfg.common.project_warnings.len().to_string())],
+        ));
+        for aviso in &cfg.common.project_warnings {
+            tracing::warn!(motivo = %aviso, "capa de proyecto ignorada");
+        }
+    }
     if capas_lua_descartadas > 0 {
         // Se DICE, como en el terminal: un `lua:` que un repositorio pone en
         // su capa de proyecto se descarta —un repositorio no elige qué código

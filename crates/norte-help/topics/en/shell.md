@@ -3,7 +3,7 @@ id = "shell"
 title = "Dropping to a shell"
 tags = ["doing"]
 see_also = ["panes", "settings"]
-commands = ["app.terminal", "app.toggle-panels", "pane.command-line"]
+commands = ["app.terminal", "app.toggle-panels", "pane.command-line", "pane.copy-path"]
 context = ["dialog.command-line"]
 +++
 A file manager you cannot leave is a file manager you stop using. Three
@@ -80,3 +80,18 @@ The graphical version cannot always promise this. A terminal window served by
 an already-running instance — GNOME Terminal and Konsole both do this, and so
 does macOS — is actually started by that server, not by norte, so it inherits
 the server's environment and not ours.
+
+## Copying the path
+
+{{cmd:pane.copy-path}} puts the path of everything marked — or of the entry
+under the cursor when nothing is marked — on the clipboard, one per line and in
+its **native** form: `/home/notes.txt`, not `file:///home/notes.txt`. Anything
+not on this filesystem has no native form, so it travels as its full location.
+
+There are two routes and norte tells you which one it took. If a desktop
+helper is installed (`wl-copy`, `xclip`) it uses that, because that one
+ANSWERS. If none is — the usual case over SSH — it emits the **OSC 52**
+sequence, which is read by the terminal emulator you are looking at rather than
+by the machine norte runs on. That second route cannot be confirmed: a terminal
+that does not support it ignores it silently, which is why the message asks you
+to check by pasting.

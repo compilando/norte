@@ -301,6 +301,21 @@ mod tests {
     /// with, and the reason a Total Commander preset's `pane.pack` comes out
     /// `NotBuilt` here instead of quietly resolving.
     fn build_effectives_of(preset: &str) -> (Effective, Effective, Effective) {
+        build_effectives_sin(preset, "")
+    }
+
+    /// Como [`build_effectives_of`], pero fingiendo que el TUI NO implementa
+    /// `ausente`.
+    ///
+    /// Existe porque el test de la fila atenuada necesita que haya al menos
+    /// una atadura sin construir, y eso era un accidente: dependía de que
+    /// quedara algún comando del catálogo que ningún frontend hiciera. Al
+    /// cerrarse el último (`pane.copy-path`, #286) el test se quedó sin
+    /// sujeto y se puso rojo afirmando que ya no probaba nada — que es
+    /// exactamente lo que su propia aserción decía que pasaría. Lo que se
+    /// prueba es el PINTADO de una fila atenuada, así que el hueco se fabrica
+    /// en vez de esperarlo.
+    fn build_effectives_sin(preset: &str, ausente: &str) -> (Effective, Effective, Effective) {
         let (_, kf) = presets()
             .into_iter()
             .find(|(n, _)| *n == preset)
@@ -309,6 +324,7 @@ mod tests {
             .iter()
             .copied()
             .chain(DIALOG_COMMANDS.iter().copied())
+            .filter(|c| *c != ausente)
             .collect();
         let browse = Effective::build_for(&kf, &[], &known, Screen::Browse).unwrap();
         let viewer = Effective::build_for(&kf, &[], &known, Screen::Viewer).unwrap();
@@ -324,7 +340,7 @@ mod tests {
     /// (`Line::styled` sets it there, not per-span).
     #[test]
     fn un_binding_no_construido_sale_atenuado_y_con_su_razon() {
-        let (browse, viewer, dialog) = build_effectives_of("total-commander");
+        let (browse, viewer, dialog) = build_effectives_sin("total-commander", "pane.pack");
         let lines = build(&browse, &viewer, &dialog);
         let dimmed: Vec<&Line<'_>> = lines
             .iter()

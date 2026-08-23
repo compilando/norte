@@ -86,6 +86,37 @@ pub async fn dispatch(
                 app.quit = true;
             }
         }
+        // `pane.copy-path` (#286): el catálogo lo declaraba `Live` desde la
+        // GUI de GPUI, que lo implementaba; ésa se retiró y nadie se quedó el
+        // comando, así que el catálogo prometía algo que no hacía nadie.
+        //
+        // Dos caminos, y el orden importa: primero el helper del escritorio
+        // (`wl-copy`, `xclip`), porque CONTESTA si funcionó; y si no hay
+        // ninguno —lo normal en una sesión por SSH— la secuencia OSC 52, que
+        // es la salida que un terminal tiene y una ventana no. Un terminal
+        // que no la soporte la ignora sin decir nada y no hay forma de
+        // preguntárselo, así que el mensaje DICE por qué camino fue: eso es
+        // lo que convierte una incertidumbre en algo que el lector puede
+        // comprobar pegando.
+        Command::PaneCopyPath => {
+            let paths = app.focused().marked_paths();
+            if paths.is_empty() {
+                app.message = Some(t("msg-nothing-selected"));
+            } else {
+                let bytes = norte_frontend::shell::clipboard_bytes(&paths);
+                let n = paths.len().to_string();
+                app.message = Some(match norte_frontend::shell::copy_to_clipboard(&bytes) {
+                    norte_frontend::shell::ClipboardOutcome::Done(_) => {
+                        ta("msg-paths-copied", &[("n", &n)])
+                    }
+                    norte_frontend::shell::ClipboardOutcome::NoHelper => {
+                        app.pending_osc52 = Some(norte_frontend::shell::osc52(&bytes));
+                        ta("msg-paths-copied-osc52", &[("n", &n)])
+                    }
+                    norte_frontend::shell::ClipboardOutcome::Failed => t("msg-clipboard-failed"),
+                });
+            }
+        }
         Command::PaneSwitch => app.switch_focus(),
         Command::TabNew => app.tab_new(),
         Command::TabClose => app.tab_close(),
