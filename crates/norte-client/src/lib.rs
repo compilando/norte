@@ -27,4 +27,6 @@ pub use remote::RemoteBackend;
 pub use rpc::{Client, ClientError, is_version_mismatch};
 pub use socket::{default_socket_path, process_uid_best_effort};
 pub use task::{RemoteTask, RemoteTaskCanceller};
-pub use types::{AI_CALL_TIMEOUT, ConnEvent, EntryStream, SyncPlanEvent, TransferOptions};
+pub use types::{
+    AI_CALL_TIMEOUT, ConnEvent, EntryStream, SyncPlanEvent, Transfer, TransferOptions,
+};

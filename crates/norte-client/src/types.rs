@@ -19,6 +19,22 @@ pub const AI_CALL_TIMEOUT: Duration = Duration::from_mins(2);
 /// sería pagar un árbol entero por un alias (ADR 0066).
 pub type EntryStream = futures::stream::BoxStream<'static, Result<Entry, Error>>;
 
+/// Copiar o mover: los dos verbos de una transferencia (#270).
+///
+/// Un enum, y no el nombre del método como cadena, porque cuando el verbo era
+/// una `&str` el despacho era `if method == FS_COPY { … } else { … }`: todo lo
+/// que no fuera exactamente `fs.copy` se convertía en un MOVIMIENTO, que
+/// además borra el origen. El fallo de un typo no era un error visible sino la
+/// otra operación. `norte-ui-host` ya interponía un enum propio por su lado
+/// para no poder equivocarse; el SDK no lo tenía.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transfer {
+    /// `fs.copy`.
+    Copy,
+    /// `fs.move` — BORRA el origen.
+    Move,
+}
+
 /// Las opciones de una transferencia, tal como viajan por el wire.
 ///
 /// Gemela de `norte_core::engine::TransferOptions`, y a propósito: la del

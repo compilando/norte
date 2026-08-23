@@ -150,6 +150,29 @@ pub const MAX_NOTICES: usize = 32;
 /// Tasks proyectadas a la vez.
 pub const MAX_TASKS: usize = 256;
 
+/// Tasks RETENIDAS a la vez, proyectadas o no (#271).
+///
+/// [`MAX_TASKS`] acota lo que cruza el puente; esto acota lo que el host
+/// guarda. No son el mismo número porque no son la misma pregunta: una fila
+/// que se cae de la proyección sigue teniendo un progreso que bombear y un
+/// directorio que relistar cuando termine, y tirarla por no caber en la
+/// pantalla perdería el refresco.
+///
+/// El desalojo de `registrar_task` solo puede tirar tasks TERMINALES, así que
+/// sin este segundo tope un lote de tres mil copias encoladas —ninguna
+/// terminal todavía— retenía las tres mil. 512 es lo que un daemon acepta
+/// vivas a la vez (`MAX_LIVE_TASKS`), o sea el techo real del otro lado.
+pub const MAX_TASKS_RETAINED: usize = 512;
+
+/// Entradas que admite UNA transferencia (#271).
+///
+/// `pane.copy` opera sobre las marcas, y marcar no tiene tope: un lote se
+/// encolaba entero y se descubría el límite cuando el daemon empezaba a
+/// rechazar por `MAX_LIVE_TASKS`, o sea a mitad, con la mitad hecha y sin
+/// nada que dijera dónde se cortó. Decirlo ANTES es más honesto que
+/// descubrirlo a medias.
+pub const MAX_TRANSFER_BATCH: usize = 512;
+
 /// Diálogos apilados a la vez.
 ///
 /// La pila era de gestos humanos y por eso no tenía techo. Desde la tarea 5.3

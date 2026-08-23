@@ -785,11 +785,7 @@ fn follow_links_for(opts: TransferOptions) -> FollowLinks {
 /// ni de lejos el pliegue que ese directorio hace. La clave ya sabe cuál toca
 /// a partir de las capabilities.
 async fn same_node_heuristic(from: &VPath, to: &VPath, dst: &dyn Provider) -> bool {
-    let caps = dst
-        .capabilities_at(to)
-        .await
-        .unwrap_or_else(|_| dst.capabilities());
-    let mode = norte_compare::Sides::mode_of(caps);
+    let mode = fold_mode_at(to, dst).await;
     if mode == norte_encoding::FoldMode::None {
         return false;
     }
@@ -1073,7 +1069,7 @@ pub(crate) async fn copy_task(
     // copiar algo SOBRE SÍ MISMO con Overwrite lo destruiría (hallazgo B1).
     // Bajo Follow, el "sí mismo" es el TARGET resuelto del origen.
     if Arc::ptr_eq(&src, &dst)
-        && (is_descendant(&to, &from)
+        && (is_descendant_folded(&to, &from, &*dst).await
             || same_node(&from, &to, &*dst, follow_links_for(opts), &ctx.cancel).await?)
     {
         return Err(Error::InvalidPath);
@@ -1611,7 +1607,7 @@ pub(crate) async fn move_task(
     // un undo que restaura la mitad del origen sobre la mitad del destino.
     let observer = crate::observer::pin_for_task(observer).await?;
     if Arc::ptr_eq(&src, &dst) {
-        if is_descendant(&to, &from) {
+        if is_descendant_folded(&to, &from, &*dst).await {
             return Err(Error::InvalidPath);
         }
         ctx.progress.update(|p| {
@@ -1783,7 +1779,7 @@ async fn move_by_copy(
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
     if Arc::ptr_eq(&src, &dst)
-        && (is_descendant(&to, &from)
+        && (is_descendant_folded(&to, &from, &*dst).await
             || same_node(&from, &to, &*dst, follow_links_for(opts), &ctx.cancel).await?)
     {
         return Err(Error::InvalidPath);
@@ -2429,7 +2425,12 @@ fn rebase(path: &VPath, from: &VPath, to: &VPath) -> Result<VPath, Error> {
 }
 
 /// `true` si `child` es descendiente PROPIO de `ancestor` (mismo scheme y
-/// authority, prefijo estricto de segmentos).
+/// authority, prefijo estricto de segmentos), BYTE A BYTE.
+///
+/// Vale para comparar dos paths que salieron de la MISMA foto de listado —
+/// donde los bytes ya son los que el provider dio— y NO vale para decidir si
+/// una transferencia cae dentro de su propio origen: eso se pregunta contra el
+/// volumen destino con [`is_descendant_folded`] (#269).
 fn is_descendant(child: &VPath, ancestor: &VPath) -> bool {
     if child.scheme() != ancestor.scheme() || child.authority() != ancestor.authority() {
         return false;
@@ -2439,11 +2440,91 @@ fn is_descendant(child: &VPath, ancestor: &VPath) -> bool {
     c.len() > a.len() && c[..a.len()] == a[..]
 }
 
+/// La misma pregunta, plegando los segmentos bajo el modo del volumen DESTINO
+/// (#269) — la trampa del dominio de siempre: la caja y la normalización las
+/// decide el destino, no el origen.
+///
+/// El escenario que la abrió: panel A en `/casa` sobre `docs`, panel B
+/// navegado a `/casa/DOCS`, que en APFS o NTFS **es** `/casa/docs`. Entonces
+/// `to = /casa/DOCS/docs` y la comparación de bytes decía que no, mientras
+/// `same_node` salía antes porque el número de segmentos difiere. Ninguna de
+/// las dos guardas saltaba y el árbol se copiaba dentro de sí mismo: acotado
+/// —el plan es una foto— pero es exactamente lo que la guarda existe para
+/// impedir, y el `docs/docs` anidado es una trampa para quien luego limpie.
+///
+/// Bajo `FoldMode::None` es literalmente [`is_descendant`]: sin pliegue, la
+/// comparación de bytes ya es la respuesta.
+async fn is_descendant_folded(child: &VPath, ancestor: &VPath, dst: &dyn Provider) -> bool {
+    if child.scheme() != ancestor.scheme() || child.authority() != ancestor.authority() {
+        return false;
+    }
+    let a: Vec<&[u8]> = ancestor.segments().collect();
+    let c: Vec<&[u8]> = child.segments().collect();
+    if c.len() <= a.len() {
+        return false;
+    }
+    let mode = fold_mode_at(child, dst).await;
+    if mode == norte_encoding::FoldMode::None {
+        return c[..a.len()] == a[..];
+    }
+    a.iter().zip(&c).all(|(x, y)| {
+        x == y || norte_encoding::name_key(x, mode) == norte_encoding::name_key(y, mode)
+    })
+}
+
+/// Cómo pliega nombres el volumen que contiene `at`, preguntado al provider
+/// DESTINO. `capabilities_at` responde por el MOUNT (#215): un pincho FAT bajo
+/// un `/home` sensible a la caja no hereda la respuesta de `/home`.
+async fn fold_mode_at(at: &VPath, dst: &dyn Provider) -> norte_encoding::FoldMode {
+    let caps = dst
+        .capabilities_at(at)
+        .await
+        .unwrap_or_else(|_| dst.capabilities());
+    norte_compare::Sides::mode_of(caps)
+}
+
 #[cfg(test)]
 mod tests {
     use norte_proto::{Entry, Error};
 
-    use super::{rename_auto_candidate, same_node_heuristic};
+    use super::{is_descendant_folded, rename_auto_candidate, same_node_heuristic};
+
+    /// #269 — la guarda de «dentro de sí mismo» comparaba los prefijos BYTE A
+    /// BYTE, y en un volumen que pliega (APFS, NTFS, exFAT, un SMB/SFTP contra
+    /// un servidor que pliega) `/casa/DOCS` **es** `/casa/docs`. Con el panel
+    /// destino navegado ahí, `from = /casa/docs` y `to = /casa/DOCS/docs`: la
+    /// guarda no saltaba, `same_node` salía antes porque el número de
+    /// segmentos difiere, y el core copiaba un árbol dentro de sí mismo.
+    #[tokio::test]
+    async fn dentro_de_si_mismo_pliega_bajo_el_modo_del_destino() {
+        use norte_proto::{CapabilityFlags, VPath};
+        use norte_testkit::MemProvider;
+
+        let vp = |w: &str| VPath::parse(w).expect("wire");
+        let from = vp("mem:///casa/docs");
+        let to = vp("mem:///casa/DOCS/docs");
+
+        // Volumen que DISTINGUE caja: son dos árboles distintos, y copiar uno
+        // dentro del otro es una operación legítima.
+        let sensible = MemProvider::new();
+        assert!(!is_descendant_folded(&to, &from, &sensible).await);
+
+        // Volumen que PLIEGA: es el mismo árbol.
+        let pliega = MemProvider::with_flags(
+            CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING,
+        );
+        assert!(
+            is_descendant_folded(&to, &from, &pliega).await,
+            "un árbol se copia dentro de sí mismo"
+        );
+
+        // Y sigue siendo un prefijo ESTRICTO: el mismo path plegado no es
+        // descendiente de sí mismo (de eso se ocupa `same_node`).
+        assert!(!is_descendant_folded(&vp("mem:///casa/DOCS"), &from, &pliega).await);
+
+        // Ni un hermano cuyo nombre solo comparte prefijo de BYTES.
+        assert!(!is_descendant_folded(&vp("mem:///casa/docsx/y"), &from, &pliega).await);
+    }
 
     /// #215: la heurística de identidad pregunta por la UBICACIÓN, no por el
     /// provider, y pliega con la clave compartida y no con `to_lowercase`.

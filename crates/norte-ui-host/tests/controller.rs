@@ -7228,10 +7228,15 @@ async fn dos_paneles_con_destino_aparte(
     .expect("host vivo");
     // La foto del aterrizaje: sin esperarla, F5 vería el destino todavía en
     // el directorio de partida y el test probaría otra cosa.
-    let mut despues = siguiente_foto(&mut sub).await;
-    while !listado_de(&despues, 2).path_display.ends_with("/casa/docs") {
-        despues = siguiente_foto(&mut sub).await;
-    }
+    //
+    // Se PIDE (`esperar_foto` manda `Resync`) en vez de quedarse escuchando:
+    // con un listado grande el aterrizaje viaja en PARCHES y la foto que lo
+    // contaría puede haber pasado ya, así que un `siguiente_foto` en bucle se
+    // quedaba esperando una que no vuelve a salir — colgado, no rojo.
+    let despues = esperar_foto(&h, &mut sub, "el destino aterriza en /casa/docs", |f| {
+        listado_de(f, 2).path_display.ends_with("/casa/docs")
+    })
+    .await;
     h.dispatch(UiAction::FocusSlot { slot_id: 1 })
         .await
         .expect("host vivo");
@@ -13633,7 +13638,12 @@ async fn esperar_foto(
             if cond(&f) {
                 return f;
             }
-            let _ = siguiente_foto(sub).await;
+            // CUALQUIER mensaje del host, no la siguiente FOTO: las fotos las
+            // pide el renderer, y un drenaje viaja entero en PARCHES. Esperar
+            // otra foto era esperar a que el host mandara una por su cuenta,
+            // que es justo lo que no hace: el bucle se colgaba en vez de
+            // agotar el plazo, y un test colgado no dice qué falló.
+            let _ = sub.recv().await.expect("el host sigue vivo");
         }
     };
     tokio::time::timeout(std::time::Duration::from_secs(10), espera)
@@ -14366,5 +14376,176 @@ async fn la_config_siembra_la_ocultacion() {
             .iter()
             .all(|r| r.display_name != ".oculto"),
         "la configuración decía que no se enseñan"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Un LOTE de transferencias: sus topes y su cuenta (#271).
+// ---------------------------------------------------------------------------
+
+/// Marca las N primeras filas del hueco activo, una a una.
+async fn marca_todo(h: &UiHost, sub: &mut norte_ui_host::controller::UiSubscription, slot: u32) {
+    let foto = foto(h, sub).await;
+    let b = listado_de(&foto, slot);
+    let (generation, claves): (u64, Vec<_>) =
+        (b.generation, b.rows.iter().map(|r| r.key).collect());
+    for key in claves {
+        h.dispatch(UiAction::ToggleMark {
+            slot_id: slot,
+            key,
+            generation,
+        })
+        .await
+        .expect("host vivo");
+    }
+}
+
+/// Un lote cuyos rechazos al encolar son TODOS: la barra dice UNA frase con la
+/// cuenta, no N frases de las que sobrevive la última (#271, punto 3).
+#[tokio::test]
+async fn los_rechazos_de_un_lote_se_dicen_una_sola_vez() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![
+            (b"docs".to_vec(), true),
+            (b"notas.txt".to_vec(), false),
+            (b"a.txt".to_vec(), false),
+            (b"b.txt".to_vec(), false),
+        ],
+    );
+    f.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
+    f.transferencia_rechazada = Some(norte_proto::Error::Unsupported);
+    let backend = Arc::new(f);
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    marca_todo(&h, &mut sub, 1).await;
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    // El resumen dice CUÁNTAS, o sea que la cuenta existió: sin ella la barra
+    // llevaría la frase del último error y nada más.
+    let foto = esperar_foto(&h, &mut sub, "el lote se resume", |f| {
+        f.status.message.as_deref().is_some_and(|m| m.contains('4'))
+    })
+    .await;
+    let msg = foto.status.message.clone().expect("hay resumen");
+    assert!(msg.contains('4'), "el resumen no cuenta el lote: {msg}");
+    assert!(foto.tasks.is_empty(), "ninguna llegó a ser task");
+}
+
+/// Y con las tasks encoladas: el resumen cuenta los DESENLACES, y solo cuando
+/// el lote entero está resuelto (#271, punto 2).
+#[tokio::test]
+async fn el_lote_dice_cuantas_terminaron_bien_y_cuantas_no() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![
+            (b"docs".to_vec(), true),
+            (b"notas.txt".to_vec(), false),
+            (b"a.txt".to_vec(), false),
+            (b"b.txt".to_vec(), false),
+        ],
+    );
+    f.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
+    // Nacen TERMINALES y bien: el camino donde `progreso` no se llama nunca.
+    f.estado_transferencia = Some(norte_proto::TaskState::Completed);
+    let backend = Arc::new(f);
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    marca_todo(&h, &mut sub, 1).await;
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    let foto = esperar_foto(&h, &mut sub, "el lote se resume", |f| {
+        f.status.message.is_some()
+    })
+    .await;
+    let msg = foto.status.message.clone().expect("hay resumen");
+    assert!(
+        msg.contains('4') && msg.contains('0'),
+        "el resumen dice 4 pedidas y 0 mal: {msg}"
+    );
+}
+
+/// El tope de lote (#271, punto 4): `pane.copy` opera sobre las marcas y
+/// marcar no tiene techo. Sin este tope el lote se encolaba entero y el límite
+/// se descubría a mitad, cuando el daemon empezaba a rechazar por
+/// `MAX_LIVE_TASKS`: con la mitad hecha y nada que dijera dónde se cortó.
+#[tokio::test]
+async fn un_lote_por_encima_del_tope_se_rechaza_entero() {
+    const CUANTAS: usize = norte_ui_host::MAX_TRANSFER_BATCH + 8;
+    let mut f = Falso::default();
+    let mut entradas: Vec<(Vec<u8>, bool)> =
+        vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)];
+    for i in 0..CUANTAS {
+        entradas.push((format!("f{i:04}.txt").into_bytes(), false));
+    }
+    f.pon("mem:///casa", entradas);
+    f.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
+    let backend = Arc::new(f);
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+    // El destino, a mano y no con el ayudante de dos paneles: con un listado
+    // de este tamaño el drenaje MUEVE la generación, y un `Activate` con la
+    // del arranque llega rancio. Se espera a que el listado esté entero y se
+    // lee la generación de ESA foto.
+    let asentado = esperar_foto(&h, &mut sub, "el drenaje termina", |f| {
+        listado_de(f, 2).total_rows.unwrap_or(0) >= CUANTAS as u64 + 2
+    })
+    .await;
+    let b2 = listado_de(&asentado, 2);
+    let docs = b2
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("el directorio está");
+    let (key, generation) = (docs.key, b2.generation);
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Activate {
+        slot_id: 2,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    esperar_foto(&h, &mut sub, "el destino aterriza en /casa/docs", |f| {
+        listado_de(f, 2).path_display.ends_with("/casa/docs")
+    })
+    .await;
+    h.dispatch(UiAction::FocusSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    // Y el origen entero cargado: `invert_marks` marca lo CARGADO, y con el
+    // drenaje a medias marcaría cien y el tope no se rozaría.
+    esperar_foto(&h, &mut sub, "el origen está entero", |f| {
+        listado_de(f, 1).total_rows.unwrap_or(0) >= CUANTAS as u64 + 2
+    })
+    .await;
+    ejecutar_por_paleta(&h, &mut sub, "mark.invert").await;
+    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-batch-too-large"),
+        "{ack:?}"
+    );
+    let foto = foto(&h, &mut sub).await;
+    assert!(
+        foto.dialogs.is_empty(),
+        "no se abre un diálogo que promete algo que no se va a hacer"
     );
 }

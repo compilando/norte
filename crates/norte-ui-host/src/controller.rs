@@ -23,8 +23,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use crate::action::UiAction;
 use crate::backend::HostBackend;
 use crate::bridge::{
-    ActionAck, BridgeEnvelope, InstanceId, MAX_DIALOGS, MAX_ROWS_PER_BATCH, MAX_TASKS, ModalId,
-    RequestToken, RowKey, StaleAction, clamp_display,
+    ActionAck, BridgeEnvelope, InstanceId, MAX_DIALOGS, MAX_ROWS_PER_BATCH, MAX_TASKS,
+    MAX_TASKS_RETAINED, MAX_TRANSFER_BATCH, ModalId, RequestToken, RowKey, StaleAction,
+    clamp_display,
 };
 use crate::commands::{Efecto, efecto_de};
 use crate::dto::{
@@ -447,6 +448,11 @@ enum Mensaje {
     TaskNueva(Box<(crate::backend::HostTask, Vec<VPath>)>),
     /// Encolarla falló. El usuario tiene que enterarse: pidió un borrado.
     TaskFallida(Box<Error>),
+    /// Un rechazo al encolar UNA entrada de un lote (#271). Separado de
+    /// [`Self::TaskFallida`] a propósito: aquél lo manda todo el que encola
+    /// algo —una búsqueda, un plan, un undo— y su sitio es la barra; éste solo
+    /// lo manda el bucle de un lote, y su sitio es la CUENTA del lote.
+    TaskDeLoteRechazada(Box<Error>),
     /// La conexión con el daemon cambió de estado.
     Conexion(norte_client::ConnEvent),
     /// Una sesión de un provider viaja SIN cifrar (#44).
@@ -811,6 +817,10 @@ pub enum UiError {
 }
 
 /// El bucle del ÚNICO escritor.
+// El REPARTO de mensajes del actor: un brazo por variante, y cada brazo
+// delega. Largo por número de variantes, no por lógica — partirlo en dos
+// mitades arbitrarias solo escondería dónde se atiende cada mensaje.
+#[allow(clippy::too_many_lines)]
 async fn actor(
     mut rx: mpsc::Receiver<Mensaje>,
     mut estado: Estado,
@@ -893,6 +903,11 @@ async fn actor(
             }
             Mensaje::TaskFallida(e) => {
                 for u in estado.task_fallida(&e) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::TaskDeLoteRechazada(e) => {
+                for u in estado.rechazo_de_lote(&e) {
                     let _ = updates.send(u);
                 }
             }
@@ -1572,6 +1587,45 @@ struct TaskViva {
     afectados: Vec<VPath>,
 }
 
+/// La cuenta de UN lote de transferencias (#271).
+///
+/// Un lote grande contra un destino poblado produce muchas filas `Failed` —
+/// `CollisionPolicy::Fail` es lo que se manda—, y el tablero las enseña una a
+/// una hasta su tope. Lo que el lector necesita no es la fila 213: es «de
+/// estas 500, 460 bien y 40 mal».
+///
+/// Y los rechazos al ENCOLAR tenían el problema gemelo: cada uno pintaba un
+/// mensaje en la barra y el siguiente lo pisaba, así que de N rechazos
+/// sobrevivía el último. Se cuentan en vez de decirse.
+///
+/// UNA sola frase, y al final: la mitad del lote no es una respuesta, es
+/// ruido que se pisa a sí mismo. El lote se cierra cuando todo lo que se pidió
+/// está resuelto — encolado o rechazado, y lo encolado, terminal.
+#[derive(Debug, Default)]
+struct Lote {
+    /// Cuántas entradas se pidieron.
+    total: usize,
+    /// Cuántas llegaron a ser task.
+    encoladas: usize,
+    /// Cuántas rechazó el daemon al encolar.
+    rechazadas: usize,
+    /// Los ids de las que se encolaron, para reconocer su desenlace. Un id que
+    /// no está aquí es de otra cosa (una búsqueda, un undo, otro cliente).
+    ids: std::collections::BTreeSet<u64>,
+    /// Desenlaces terminales BUENOS de las encoladas.
+    hechas: usize,
+    /// Desenlaces terminales malos: falló o se canceló.
+    fallidas: usize,
+}
+
+impl Lote {
+    /// Todo lo que se pidió está resuelto.
+    fn cerrado(&self) -> bool {
+        self.encoladas + self.rechazadas >= self.total
+            && self.hechas + self.fallidas >= self.encoladas
+    }
+}
+
 /// El estado semántico. Solo el actor lo toca.
 struct Estado {
     instance: InstanceId,
@@ -1765,6 +1819,8 @@ struct Estado {
     ia_en_vuelo: Option<(u64, VPath, Vec<Vec<u8>>)>,
     /// El tablero: lo que está en marcha, por id de task.
     tasks: std::collections::BTreeMap<u64, TaskViva>,
+    /// El lote de transferencias en curso, si lo hay (#271).
+    lote: Option<Lote>,
     /// La sesión de UI: qué revisión se leyó, si esta ventana es su dueña, y
     /// si el esquema que hay guardado es de una versión que este host no
     /// entiende (ADR 0059).
@@ -1953,6 +2009,10 @@ impl Estado {
         roles
     }
 
+    /// Largo porque es un LITERAL de estructura: un campo por línea, con el
+    /// porqué de los que no son obvios. No hay nada que extraer que no sea
+    /// mover campos a una función que los devuelva de uno en uno.
+    #[allow(clippy::too_many_lines)]
     fn nuevo(instance: InstanceId, options: UiHostOptions) -> (Self, Arc<dyn HostBackend>) {
         let UiHostOptions {
             backend,
@@ -2035,6 +2095,7 @@ impl Estado {
             epoca_ia: 0,
             ia_en_vuelo: None,
             tasks: std::collections::BTreeMap::new(),
+            lote: None,
             sesion: Sesion {
                 revision: 0,
                 owner: false,
@@ -10055,10 +10116,67 @@ impl Estado {
     /// la misma regla que dejó sin parámetro al comando de los bytes de una
     /// imagen (ADR 0069), y por el mismo motivo — un nombre que viene de la
     /// webview es un nombre que la webview puede elegir.
+    /// Los dos topes de un lote (#271), o `None` si cabe.
+    ///
+    /// Se preguntan antes de abrir diálogo alguno: preguntar por algo que no
+    /// se va a poder hacer es peor que decirlo de entrada.
+    fn lote_no_cabe(&self, cuantas: usize) -> Option<&'static str> {
+        if cuantas > MAX_TRANSFER_BATCH {
+            return Some("host-batch-too-large");
+        }
+        // Y que quepa en lo que el host RETIENE: el desalojo solo puede tirar
+        // tasks terminales, así que un lote sobre un tablero ya lleno de vivas
+        // no tendría dónde caer.
+        if self.tasks.len().saturating_add(cuantas) > MAX_TASKS_RETAINED {
+            return Some("host-task-board-full");
+        }
+        None
+    }
+
+    /// Sobre QUÉ y hacia DÓNDE opera una transferencia, o el motivo por el que
+    /// no se puede preguntar siquiera. Devuelve `(origen_dir, destino, paths)`.
+    fn operandos_de_transferencia(&self) -> Result<(VPath, VPath, Vec<VPath>), &'static str> {
+        let destino = self.directorio_destino()?;
+        let origen_dir = self.hueco().pane.dir().clone();
+        if origen_dir == destino {
+            // Los dos listados en el mismo sitio. El daemon lo rechazaría
+            // igual, pero abrir un diálogo que promete algo imposible es
+            // peor que decirlo antes.
+            //
+            // BYTE A BYTE a propósito (#269): en un volumen que pliega,
+            // `/casa/docs` y `/casa/DOCS` son el mismo sitio y este atajo NO
+            // los ve. Saberlo cuesta un `fs.capabilities` —o sea un viaje al
+            // daemon delante de CADA diálogo de copia—, y el error de este
+            // lado solo puede ser por PERMISIVO: la autoridad es
+            // `norte_core::ops`, que sí pliega (#215) y devuelve
+            // `InvalidPath`. Ser más estricto aquí sí rompería algo: negaría
+            // una operación legítima en un volumen sensible a la caja.
+            return Err("host-same-directory");
+        }
+        // `marked_paths` ya cae al cursor cuando no hay marcas: es la fuente
+        // única de «sobre qué opera esto», y duplicar aquí ese respaldo
+        // sería un segundo sitio del que se pueden separar.
+        let paths: Vec<VPath> = self.hueco().pane.marked_paths();
+        if paths.is_empty() {
+            return Err("msg-nothing-selected");
+        }
+        if let Some(motivo) = self.lote_no_cabe(paths.len()) {
+            return Err(motivo);
+        }
+        // Una entrada sin último segmento es una RAÍZ, y una raíz no tiene
+        // nombre que componer en el destino. Se rechaza el lote entero en vez
+        // de saltársela: transferir «casi todo lo que pediste» en silencio es
+        // exactamente lo que no puede hacer una mutación.
+        if paths.iter().any(|p| p.file_name().is_none()) {
+            return Err("host-cannot-transfer-root");
+        }
+        Ok((origen_dir, destino, paths))
+    }
+
     fn pedir_transferencia(&mut self, mover: bool) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let activo = self.activo();
-        let destino = match self.directorio_destino() {
-            Ok(d) => d,
+        let (origen_dir, destino, paths) = match self.operandos_de_transferencia() {
+            Ok(t) => t,
             Err(reason_key) => {
                 return (
                     ActionAck::Unavailable {
@@ -10068,43 +10186,6 @@ impl Estado {
                 );
             }
         };
-        let hueco = self.hueco();
-        let origen_dir = hueco.pane.dir().clone();
-        if origen_dir == destino {
-            // Los dos listados en el mismo sitio. El daemon lo rechazaría
-            // igual, pero abrir un diálogo que promete algo imposible es
-            // peor que decirlo antes.
-            return (
-                ActionAck::Unavailable {
-                    reason_key: "host-same-directory".to_owned(),
-                },
-                Vec::new(),
-            );
-        }
-        // `marked_paths` ya cae al cursor cuando no hay marcas: es la fuente
-        // única de «sobre qué opera esto», y duplicar aquí ese respaldo
-        // sería un segundo sitio del que se pueden separar.
-        let paths: Vec<VPath> = hueco.pane.marked_paths();
-        if paths.is_empty() {
-            return (
-                ActionAck::Unavailable {
-                    reason_key: "msg-nothing-selected".to_owned(),
-                },
-                Vec::new(),
-            );
-        }
-        // Una entrada sin último segmento es una RAÍZ, y una raíz no tiene
-        // nombre que componer en el destino. Se rechaza el lote entero en vez
-        // de saltársela: transferir «casi todo lo que pediste» en silencio es
-        // exactamente lo que no puede hacer una mutación.
-        if paths.iter().any(|p| p.file_name().is_none()) {
-            return (
-                ActionAck::Unavailable {
-                    reason_key: "host-cannot-transfer-root".to_owned(),
-                },
-                Vec::new(),
-            );
-        }
         // El destino va en SU CAMPO, no como una línea con una flecha: un
         // directorio puede llamarse `docs → /casa/BORRAR` y esa flecha es
         // legítima, no se enmascara y no se marca, así que la línea se leería
@@ -10616,6 +10697,16 @@ impl Estado {
                 destino,
                 mover,
             }) => {
+                // El lote se abre AQUÍ, con el número que se va a pedir: la
+                // cuenta tiene que existir antes de que llegue el primer
+                // desenlace, que con una task que nace terminal puede ser
+                // antes de que el bucle de envío haya pedido la segunda.
+                // Uno solo no es un lote: su desenlace ya se dice en su fila
+                // y su rechazo en la barra, con la frase tipada del error.
+                self.lote = (paths.len() > 1).then(|| Lote {
+                    total: paths.len(),
+                    ..Lote::default()
+                });
                 Self::lanzar_transferencia(&paths, &origen_dir, &destino, mover, backend, buzon);
                 // Las marcas las CONSUME el envío, no el desenlace (mismo
                 // criterio que el TUI y que mc): una selección a medio
@@ -11035,7 +11126,9 @@ impl Estado {
                 };
                 let mensaje = match encolada {
                     Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados.clone()))),
-                    Err(e) => Mensaje::TaskFallida(Box::new(e)),
+                    // A la CUENTA del lote, no a la barra: N rechazos eran N
+                    // mensajes de los que solo sobrevivía el último (#271).
+                    Err(e) => Mensaje::TaskDeLoteRechazada(Box::new(e)),
                 };
                 if buzon.send(mensaje).await.is_err() {
                     // El actor ya no está: lo que quede del lote no le
@@ -11044,6 +11137,36 @@ impl Estado {
                 }
             }
         });
+    }
+
+    /// Hace sitio en el tablero tirando lo más viejo TERMINADO.
+    ///
+    /// Se prefiere desalojar una TERMINADA BIEN: una fallida o una cancelada
+    /// es la única superficie que dice qué no llegó —un fallo no deja entrada
+    /// de journal—, y en un lote grande con colisiones son justo las que se
+    /// acumulan. Una VIVA no se toca: tiene progreso que bombear y, quizá, un
+    /// directorio que relistar.
+    fn desalojar_del_tablero(&mut self) {
+        if self.tasks.len() < MAX_TASKS {
+            return;
+        }
+        let viejo = self
+            .tasks
+            .iter()
+            .find(|(_, t)| t.vista.state == crate::dto::TaskStateView::Done)
+            .or_else(|| {
+                self.tasks
+                    .iter()
+                    .find(|(_, t)| Self::terminal(t.vista.state))
+            })
+            .map(|(k, _)| *k);
+        if let Some(viejo) = viejo {
+            debug_assert!(
+                self.tasks[&viejo].afectados.is_empty(),
+                "se desaloja una task con un refresco pendiente"
+            );
+            self.tasks.remove(&viejo);
+        }
     }
 
     /// Mete una Task recién encolada en el tablero y deja su progreso
@@ -11057,31 +11180,25 @@ impl Estado {
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let id = task.id.get();
         let ajena = task.foreign;
-        if self.tasks.len() >= MAX_TASKS {
-            // El tablero está acotado: lo más viejo TERMINADO se cae antes de
-            // que la memoria del host dependa de cuántas operaciones lanzó
-            // alguien.
-            // Se prefiere desalojar una TERMINADA BIEN: una fallida o una
-            // cancelada es la única superficie que dice qué no llegó —un
-            // fallo no deja entrada de journal—, y en un lote grande con
-            // colisiones son justo las que se acumulan.
-            let viejo = self
-                .tasks
-                .iter()
-                .find(|(_, t)| t.vista.state == crate::dto::TaskStateView::Done)
-                .or_else(|| {
-                    self.tasks
-                        .iter()
-                        .find(|(_, t)| Self::terminal(t.vista.state))
-                })
-                .map(|(k, _)| *k);
-            if let Some(viejo) = viejo {
-                debug_assert!(
-                    self.tasks[&viejo].afectados.is_empty(),
-                    "se desaloja una task con un refresco pendiente"
-                );
-                self.tasks.remove(&viejo);
-            }
+        // Alta en la cuenta del lote (#271), antes de cualquier desalojo: lo
+        // que se encoló se encoló aunque su fila no llegue a caber.
+        if let Some(lote) = self.lote.as_mut()
+            && !ajena
+            && lote.encoladas + lote.rechazadas < lote.total
+            && lote.ids.insert(id)
+        {
+            lote.encoladas += 1;
+        }
+        self.desalojar_del_tablero();
+        // Y el techo DURO de lo retenido (#271). Solo se llega aquí con el
+        // tablero lleno de tasks VIVAS, y solo desde el canal de ajenas: las
+        // propias no pasan de `pedir_transferencia`, que rehúsa el lote entero
+        // si no cabe. Una fila ajena que se cae no pierde nada —viene con
+        // `afectados` vacío, o sea sin refresco que deber— salvo una fila que
+        // esta ventana nunca prometió enseñar.
+        if self.tasks.len() >= MAX_TASKS_RETAINED && !self.tasks.contains_key(&id) {
+            tracing::debug!(task = id, "tablero lleno: no se retiene una task ajena");
+            return Vec::new();
         }
         let mut rx = task.progress.clone();
         let nacio = rx.borrow().clone();
@@ -11184,11 +11301,17 @@ impl Estado {
         if apaga_el_aviso {
             cambios.push(self.cambio_de_banners());
         }
-        if self
+        if let Some(estado) = self
             .tasks
             .get(&id)
-            .is_some_and(|t| Self::terminal(t.vista.state))
+            .map(|t| t.vista.state)
+            .filter(|e| Self::terminal(*e))
         {
+            // Nace TERMINAL: su desenlace entra en la cuenta del lote aquí,
+            // porque `progreso` no se llamará nunca para ella.
+            if self.anota_desenlace_de_lote(id, estado) {
+                cambios.push(self.cambio_de_banners());
+            }
             cambios.extend(self.refrescar_afectados(id, backend, buzon));
             // Y su informe, por el mismo motivo que el relistado: si nació
             // terminal, `progreso` no se llama NUNCA, y el informe es la
@@ -11670,9 +11793,16 @@ impl Estado {
         // solo para mirar su estado cuesta dos `String` y un `path_display`
         // en cada tick de progreso de cada task del lote.
         let acabo = Self::terminal(viva.vista.state);
+        let estado_final = viva.vista.state;
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
         }];
+        // El desenlace entra en la cuenta del lote (#271). Solo cuando el lote
+        // queda RESUELTO viaja algo: doscientas frases de «una más» no dicen
+        // nada que la fila no diga ya.
+        if acabo && self.anota_desenlace_de_lote(p.task_id.get(), estado_final) {
+            cambios.push(self.cambio_de_banners());
+        }
         // Un deshacer que TERMINA suelta su sesión: mientras corre, la fila
         // lo dice y `u` sobre ella se rehúsa —dos undos de la misma sesión
         // caminan la misma lista de entradas— y eso no puede quedarse pegado
@@ -11773,6 +11903,80 @@ impl Estado {
             detail: None,
         }));
         vec![parche, aviso]
+    }
+
+    /// Una entrada del lote la rechazó el daemon al encolar (#271).
+    ///
+    /// No pinta nada: cuenta. Con `CollisionPolicy::Fail` contra un destino
+    /// poblado los rechazos son la norma, y N mensajes de los que sobrevive el
+    /// último no dicen ni cuántos hubo.
+    ///
+    /// Sin lote abierto —no debería pasar, el bucle solo manda esto dentro de
+    /// uno— cae a la barra, que es lo que hacía antes: perder el aviso entero
+    /// es peor que pintarlo donde ya se pintaba.
+    fn rechazo_de_lote(&mut self, e: &Error) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(lote) = self.lote.as_mut() else {
+            return self.task_fallida(e);
+        };
+        lote.rechazadas += 1;
+        // Un rechazo por journal sigue significando lo mismo aunque venga de
+        // un lote: esta sesión NO muta hasta que el fichero se arregle (regla
+        // dura 4), y eso dura más que cualquier resumen — y es lo único de un
+        // rechazo suelto que SÍ viaja antes del final.
+        let antes = self.journal_rehusado;
+        self.journal_rehusado |= matches!(e, Error::JournalUnavailable);
+        let banner_nuevo = self.journal_rehusado != antes;
+        if !self.resumen_de_lote_si_cerrado() && !banner_nuevo {
+            // Un parche por rechazo es la tormenta que esto existe para
+            // apagar: mientras el lote siga abierto, nada viaja.
+            return Vec::new();
+        }
+        let cambio = self.cambio_de_banners();
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// Anota el desenlace de UNA task del lote (#271). `true` si con ella el
+    /// lote quedó resuelto y `status.message` ya lleva el resumen.
+    ///
+    /// El id se saca de la cuenta al anotarlo: un progreso terminal puede
+    /// llegar más de una vez —un reanuncio tras reconectar trae el estado
+    /// final otra vez— y la segunda no es un segundo desenlace.
+    fn anota_desenlace_de_lote(&mut self, id: u64, estado: TaskStateView) -> bool {
+        let Some(lote) = self.lote.as_mut() else {
+            return false;
+        };
+        if !lote.ids.remove(&id) {
+            return false;
+        }
+        if estado == TaskStateView::Done {
+            lote.hechas += 1;
+        } else {
+            lote.fallidas += 1;
+        }
+        self.resumen_de_lote_si_cerrado()
+    }
+
+    /// Si el lote está resuelto, pone el resumen en la barra y lo cierra.
+    fn resumen_de_lote_si_cerrado(&mut self) -> bool {
+        let Some(lote) = self.lote.as_ref() else {
+            return false;
+        };
+        if !lote.cerrado() {
+            return false;
+        }
+        // Rechazada al encolar y terminada mal son el mismo desenlace para
+        // quien mira: no llegó. Distinguirlas pediría dos números más en una
+        // frase que tiene que caber en la barra.
+        let total = lote.total.to_string();
+        let bien = lote.hechas.to_string();
+        let mal = (lote.rechazadas + lote.fallidas).to_string();
+        self.lote = None;
+        self.status.message = Some(clamp_display(norte_i18n::ta_in(
+            self.lang,
+            "msg-batch-summary",
+            &[("total", &total), ("ok", &bien), ("fail", &mal)],
+        )));
+        true
     }
 
     /// Un informe llegó: al tablero, y delante si dejó algo a medias.

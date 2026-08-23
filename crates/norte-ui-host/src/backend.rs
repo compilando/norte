@@ -957,12 +957,12 @@ fn transferir(
     // El SDK sigue tomando el método como CADENA, y su cuerpo es
     // `if method == FS_COPY { copiar } else { mover }`: cualquier cosa que no
     // sea exactamente la constante de copiar se convierte en un movimiento.
-    // Aquí no puede pasar porque lo que entra es un enum de dos variantes y
-    // la conversión vive en un sitio; el `else` del SDK está anotado en la
-    // issue que propone el enum también allí.
+    // Aquí no puede pasar porque lo que entra es un enum de dos variantes, y
+    // desde #270 el SDK también toma un enum: el `else` que convertía
+    // cualquier método desconocido en un movimiento ya no existe.
     let metodo = match verbo {
-        Verbo::Copiar => norte_proto::methods::FS_COPY,
-        Verbo::Mover => norte_proto::methods::FS_MOVE,
+        Verbo::Copiar => norte_client::Transfer::Copy,
+        Verbo::Mover => norte_client::Transfer::Move,
     };
     Box::pin(async move {
         let task = backend

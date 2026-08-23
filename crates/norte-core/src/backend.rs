@@ -804,7 +804,7 @@ impl Backend {
             )),
             #[cfg(unix)]
             Self::Remote(r) => r
-                .transfer(norte_proto::methods::FS_COPY, from, to, opts.into())
+                .transfer(norte_client::Transfer::Copy, from, to, opts.into())
                 .await
                 .map(TaskRef::from),
         }
@@ -826,7 +826,7 @@ impl Backend {
             )),
             #[cfg(unix)]
             Self::Remote(r) => r
-                .transfer(norte_proto::methods::FS_MOVE, from, to, opts.into())
+                .transfer(norte_client::Transfer::Move, from, to, opts.into())
                 .await
                 .map(TaskRef::from),
         }

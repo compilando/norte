@@ -37,7 +37,9 @@ use routes::{BatchRoutes, OnFull, register_route, route_batch, schedule_route_re
 
 use crate::rpc::{Client, ClientError};
 use crate::task::{RemoteTask, RemoteTaskCanceller};
-use crate::types::{AI_CALL_TIMEOUT, ConnEvent, EntryStream, SyncPlanEvent, TransferOptions};
+use crate::types::{
+    AI_CALL_TIMEOUT, ConnEvent, EntryStream, SyncPlanEvent, Transfer, TransferOptions,
+};
 
 /// Backoff de reconexión (se recorre y se queda en el último).
 const RECONNECT_BACKOFF_MS: &[u64] = &[250, 500, 1000, 2000, 5000];
@@ -830,48 +832,54 @@ impl RemoteBackend {
         }
     }
 
-    /// Copia o mueve, según `mover`: una Task del daemon en los dos casos.
+    /// Copia o mueve, según `what`: una Task del daemon en los dos casos.
+    ///
+    /// El verbo es un [`Transfer`] y no el nombre del método (#270): con una
+    /// cadena, cualquier cosa que no fuera exactamente `fs.copy` caía en el
+    /// `else` y se convertía en un movimiento, que además borra el origen.
     ///
     /// # Errors
     /// Lo que responda el daemon al ENCOLAR (el desenlace llega por progreso).
     pub async fn transfer(
         &self,
-        method: &str,
+        what: Transfer,
         from: &VPath,
         to: &VPath,
         opts: TransferOptions,
     ) -> Result<RemoteTask, Error> {
-        let result: FsTaskResult = if method == methods::FS_COPY {
-            self.call_timed_guarded(
-                method,
-                &FsCopyParams {
-                    from: from.clone(),
-                    to: to.clone(),
-                    on_collision: opts.on_collision,
-                    symlinks: opts.symlinks,
-                    resume: opts.resume,
-                    verify: opts.verify,
-                },
-            )
-            .await?
-        } else {
-            self.call_timed_guarded(
-                method,
-                &FsMoveParams {
-                    from: from.clone(),
-                    to: to.clone(),
-                    on_collision: opts.on_collision,
-                    symlinks: opts.symlinks,
-                    resume: opts.resume,
-                    verify: opts.verify,
-                },
-            )
-            .await?
+        let result: FsTaskResult = match what {
+            Transfer::Copy => {
+                self.call_timed_guarded(
+                    methods::FS_COPY,
+                    &FsCopyParams {
+                        from: from.clone(),
+                        to: to.clone(),
+                        on_collision: opts.on_collision,
+                        symlinks: opts.symlinks,
+                        resume: opts.resume,
+                        verify: opts.verify,
+                    },
+                )
+                .await?
+            }
+            Transfer::Move => {
+                self.call_timed_guarded(
+                    methods::FS_MOVE,
+                    &FsMoveParams {
+                        from: from.clone(),
+                        to: to.clone(),
+                        on_collision: opts.on_collision,
+                        symlinks: opts.symlinks,
+                        resume: opts.resume,
+                        verify: opts.verify,
+                    },
+                )
+                .await?
+            }
         };
-        let kind = if method == methods::FS_COPY {
-            TaskKind::Copy
-        } else {
-            TaskKind::Move
+        let kind = match what {
+            Transfer::Copy => TaskKind::Copy,
+            Transfer::Move => TaskKind::Move,
         };
         Ok(self.own_task(result.task_id, kind))
     }

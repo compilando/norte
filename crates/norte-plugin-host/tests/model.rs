@@ -2,7 +2,7 @@
 //! catálogo. Sin runtime WASM (M4-P2).
 
 use norte_plugin_host::{
-    COMMAND_ID_MAX_CHARS, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
+    COMMAND_ID_MAX_CHARS, COMMAND_MAX_COUNT, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
     CONFIG_ENUM_MAX_VALUES, CONFIG_MAX_KEYS, CONFIG_STRING_MAX_CHARS, Catalog, Category,
     ConfigKeySpec, HelpPresence, Manifest, ManifestError, Scope,
 };
@@ -356,6 +356,42 @@ fn command_id_64_chars_es_el_tope_exacto() {
     let id = "a".repeat(COMMAND_ID_MAX_CHARS);
     let m = manifest_con_comando(&id, "Title").unwrap();
     assert_eq!(m.contributions.command[0].id, id);
+}
+
+fn manifest_con_n_comandos(n: usize) -> Result<Manifest, ManifestError> {
+    let cmds: Vec<String> = (0..n)
+        .map(|i| format!(r#"{{ id = "c{i}", title = "C{i}" }}"#))
+        .collect();
+    Manifest::from_toml(&format!(
+        r#"
+        [plugin]
+        id = "org.norte.x"
+        name = "X"
+        publisher = "norte"
+        version = "0.1.0"
+        category = "command"
+        [contributions]
+        command = [{}]
+    "#,
+        cmds.join(", ")
+    ))
+}
+
+/// El tope se corta en el MANIFIESTO, no en cada paleta que lo pinta (#281).
+/// La ventana ya se defiende por su lado (512 extensiones, 2048 filas), pero
+/// eso es el cliente protegiéndose del servidor.
+#[test]
+fn command_33_comandos_se_rechaza() {
+    assert!(matches!(
+        manifest_con_n_comandos(COMMAND_MAX_COUNT + 1),
+        Err(ManifestError::TooManyCommands)
+    ));
+}
+
+#[test]
+fn command_32_comandos_es_el_tope_exacto() {
+    let m = manifest_con_n_comandos(COMMAND_MAX_COUNT).unwrap();
+    assert_eq!(m.contributions.command.len(), COMMAND_MAX_COUNT);
 }
 
 #[test]
