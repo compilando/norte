@@ -629,3 +629,90 @@ async fn demasiados_trozos_se_niegan_antes_de_escribir() {
         "ni el primero se llegó a escribir"
     );
 }
+
+/// #250 — dos entradas que PLIEGAN al mismo nombre tampoco se empaquetan.
+///
+/// Los bytes distintos no bastan: lo que decide es si colisionan allí donde el
+/// archivo se extraiga, y un archivo no puede saberlo — se manda por ahí. Se
+/// pliega con el modo más ancho a propósito, así que la pregunta no es «¿aquí?»
+/// sino «¿en alguna parte?». Extraído allí, uno de los dos desaparece sin decir
+/// nada, y ésa es la dirección que ADR 0005 dice no tomar.
+///
+/// Cuatro parejas del corpus canónico, y son cuatro pliegues distintos:
+/// normalización NFD/NFC, singleton NFC, mu contra micro, y el pliegue completo
+/// de un ext4 `+F`. Un arreglo que solo mirase la caja no pasaría ninguno.
+///
+/// La quinta que el issue lista —`win_trailing_dot` contra
+/// `win_trailing_space`— NO entra, y es deliberado: esos dos no pliegan a lo
+/// mismo bajo ninguna clave Unicode. Lo que hace que colisionen es que Windows
+/// RECORTA la cola de un nombre sin el prefijo `\\?\`, que es mangling de
+/// rutas y no plegado. Cazarlo pide otra comprobación, y va en el punto 2 de
+/// #250 —el aviso de «este nombre significa otra cosa allí»— junto a `a\b`,
+/// `f:ads` y `CON`.
+#[tokio::test]
+async fn dos_entradas_que_pliegan_al_mismo_nombre_no_se_empaquetan() {
+    let corpus = norte_testkit::corpus::hostile_names();
+    let bytes_de = |id: &str| {
+        corpus
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("la fixture {id} está"))
+            .bytes
+            .clone()
+    };
+    let parejas = [
+        ("nfd_e_acute", "nfc_e_acute"),
+        ("singleton_kelvin_sign", "ascii_capital_k"),
+        ("micro_sign_mu", "greek_mu_twin"),
+        ("ext4_full_fold_es_zett", "ext4_full_fold_ss"),
+    ];
+    for (a, b) in parejas {
+        let (uno, otro) = (bytes_de(a), bytes_de(b));
+        assert_ne!(uno, otro, "[{a}/{b}] la premisa: bytes distintos");
+
+        let mem = Arc::new(MemProvider::new());
+        mem.mkdir(&vp("mem:///p")).await.expect("p");
+        for nombre in [&uno, &otro] {
+            let p = vp("mem:///p").join(Segment::new(nombre.clone()).expect("segmento"));
+            let mut sink = mem.write(&p).await.expect("write");
+            sink.write(Bytes::from_static(b"x")).await.expect("chunk");
+            sink.commit().await.expect("commit");
+        }
+        let engine = Engine::new();
+        engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+
+        let h = engine
+            .pack_as(
+                pack_params(&["mem:///p"], "mem:///out.zip", "mem:///"),
+                norte_core::journal::Actor::User,
+            )
+            .await
+            .expect("arranca");
+        assert!(
+            matches!(
+                h.join().await,
+                TaskState::Failed {
+                    error: norte_proto::Error::Conflict { .. },
+                    ..
+                }
+            ),
+            "[{a}/{b}] se empaquetaron las dos: una se pierde al extraer"
+        );
+    }
+}
+
+/// Y dos nombres que NO pliegan a lo mismo se empaquetan, que es lo normal. La
+/// comprobación no puede costar la operación legítima.
+#[tokio::test]
+async fn dos_nombres_distintos_de_verdad_si_se_empaquetan() {
+    let (engine, mem) = engine_con(&[("mem:///p/uno.txt", b"1"), ("mem:///p/dos.txt", b"2")]).await;
+    let h = engine
+        .pack_as(
+            pack_params(&["mem:///p"], "mem:///out.zip", "mem:///"),
+            norte_core::journal::Actor::User,
+        )
+        .await
+        .expect("arranca");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert!(!lee(&mem, "mem:///out.zip").await.is_empty());
+}

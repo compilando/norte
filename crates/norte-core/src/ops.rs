@@ -115,12 +115,18 @@ impl<'a> Dest<'a> {
 
     /// ¿Puede este destino continuar un parcial suyo?
     ///
-    /// Solo el camino sin confinar. El confinado abre su staging con un nombre
-    /// efímero por sink, así que conservarlo al cancelar dejaría un
-    /// `.norte-partial` por intento que ningún `open_resumable` posterior va a
-    /// encontrar. Con `false`, el sink ABORTA y el destino queda limpio.
+    /// Lo contesta la RAÍZ cuando la hay (#297). Antes era `false` para todo
+    /// destino confinado, porque el staging confinado llevaba un nombre
+    /// efímero por sink y conservarlo dejaría un `.norte-partial` por intento
+    /// que ningún `open_resumable` posterior iba a encontrar. Desde que la raíz
+    /// local sabe abrir el staging ESTABLE, esa razón dejó de aplicar — y
+    /// mantenerla convertía `ResumePolicy::On` en un no-op justo para el caso
+    /// donde reanudar más importa: un fichero grande y solo.
     pub(crate) fn resumes(&self) -> bool {
-        self.confined.is_none()
+        match &self.confined {
+            Some((root, _)) => root.resumes(),
+            None => true,
+        }
     }
 
     async fn symlink(&self, target: &[u8], kind: SymlinkKind) -> Result<(), Error> {
@@ -159,6 +165,38 @@ impl<'a> Dest<'a> {
                 .await
                 .map_err(|(e, _)| e),
             None => remove_retrying(self.provider, &self.path, cancel).await,
+        }
+    }
+
+    /// El digest del parcial de este destino, por el descriptor cuando lo hay.
+    async fn partial_digest(&self, len: u64) -> Result<Option<[u8; 32]>, Error> {
+        match &self.confined {
+            Some((root, rel)) => root.partial_digest(rel, len).await,
+            None => self.provider.partial_digest(&self.path, len).await,
+        }
+    }
+
+    /// Borra este destino DICIENDO su clase, y contando la ambigüedad (#296).
+    ///
+    /// Un borrado en post-orden llega a directorios y a hojas, y `unlinkat`
+    /// necesita saber cuál es: son dos efectos distintos, y confundirlos es
+    /// como se borra un árbol creyendo que se borra un fichero. Por ruta la
+    /// distinción no hace falta —`Provider::remove` la hace por dentro— así
+    /// que esa rama es la de siempre.
+    pub(crate) async fn remove_kind(
+        &self,
+        es_dir: bool,
+        cancel: &CancellationToken,
+    ) -> Result<(), (Error, Ambiguity)> {
+        match &self.confined {
+            Some((root, rel)) => {
+                if es_dir {
+                    bucle_de_borrado(|| root.rmdir(rel), cancel).await
+                } else {
+                    bucle_de_borrado(|| root.remove(rel), cancel).await
+                }
+            }
+            None => remove_retrying_amb(self.provider, &self.path, cancel).await,
         }
     }
 }
@@ -1566,7 +1604,12 @@ async fn should_discard_partial(
     }
     // Hash: sin digest del staging el provider no permite verificar → degrada
     // a Length (el check de tamaño de arriba ya se aplicó).
-    let Some(partial_dig) = dest.provider().partial_digest(dest.path(), already).await? else {
+    // Por el DESCRIPTOR cuando hay raíz: por ruta, esto resuelve el nombre del
+    // staging siguiendo cada componente, así que la ÚNICA verificación que hay
+    // sobre los bytes que se reanudan se hacía por la puerta que el
+    // confinamiento cerró para el `stat` y el `remove` — y un componente
+    // intermedio sustituido le da el digest de otro fichero.
+    let Some(partial_dig) = dest.partial_digest(already).await? else {
         return Ok(false);
     };
     // `None` = origen más corto que el parcial → descartar. Un error REAL se

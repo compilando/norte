@@ -546,3 +546,268 @@ async fn el_borrado_confinado_no_se_lleva_un_directorio() {
     );
     assert!(sub.exists(), "y el directorio sigue ahí con su contenido");
 }
+
+// ---------------------------------------------------------------------------
+// Reanudar bajo una raíz confinada (#297).
+// ---------------------------------------------------------------------------
+
+/// Una raíz confinada REANUDA: su staging lleva el nombre estable, así que un
+/// `open_resumable` posterior lo reencuentra y continúa tras sus bytes.
+///
+/// Hasta #219 una hoja iba SIN confinar y por tanto sí reanudaba; confinarla la
+/// dejó sin resume justo donde más importa —un fichero grande y solo por un
+/// enlace que se corta— y eso era una regresión, no una decisión.
+#[tokio::test]
+async fn una_raiz_confinada_reanuda_su_propio_parcial() {
+    let (p, raiz, dentro, _fuera) = escenario();
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    assert!(
+        root.resumes(),
+        "y lo DICE, que es de lo que depende el `keep`"
+    );
+
+    // Primera mitad, y se CONSERVA.
+    let (mut sink, ya) = root
+        .open_resumable(&[seg(b"grande.bin")])
+        .await
+        .expect("abre");
+    assert_eq!(ya, 0, "no había nada que continuar");
+    sink.write(Bytes::from_static(b"12345"))
+        .await
+        .expect("mitad");
+    sink.keep().await.expect("conserva");
+
+    // Segunda: el parcial se reencuentra y dice cuántos bytes ya hay.
+    let (mut sink, ya) = root
+        .open_resumable(&[seg(b"grande.bin")])
+        .await
+        .expect("reabre");
+    assert_eq!(ya, 5, "el staging estable se reencontró");
+    sink.write(Bytes::from_static(b"67890"))
+        .await
+        .expect("resto");
+    sink.commit().await.expect("publica");
+
+    assert_eq!(
+        std::fs::read(dentro.join("grande.bin")).expect("publicado"),
+        b"1234567890",
+        "y el fichero es la suma de las dos mitades, en orden"
+    );
+    // Y no queda parcial detrás.
+    let sobra: Vec<_> = std::fs::read_dir(&dentro)
+        .expect("listar")
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().as_bytes().starts_with(b".norte-partial"))
+        .collect();
+    assert!(
+        sobra.is_empty(),
+        "el publish se llevó el staging: {sobra:?}"
+    );
+}
+
+/// Un `abort` sobre un staging estable SÍ lo borra: abortar es «no quiero
+/// esto», y conservarlo dejaría un parcial que nadie pidió.
+#[tokio::test]
+async fn abortar_un_parcial_estable_lo_borra() {
+    let (p, raiz, dentro, _fuera) = escenario();
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let (mut sink, _) = root
+        .open_resumable(&[seg(b"grande.bin")])
+        .await
+        .expect("abre");
+    sink.write(Bytes::from_static(b"12345"))
+        .await
+        .expect("mitad");
+    sink.abort().await.expect("aborta");
+
+    let sobra: Vec<_> = std::fs::read_dir(&dentro)
+        .expect("listar")
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().as_bytes().starts_with(b".norte-partial"))
+        .collect();
+    assert!(sobra.is_empty(), "abortar no deja parcial: {sobra:?}");
+}
+
+/// Y el resume NO se sale de la raíz: el staging se abre con `O_NOFOLLOW` en
+/// el directorio ya resuelto, así que un componente intermedio hostil no puede
+/// llevárselo — igual que la escritura normal.
+#[tokio::test]
+async fn el_resume_tampoco_se_sale_por_un_symlink_intermedio() {
+    let (p, raiz, dentro, fuera) = escenario();
+    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
+
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let Err(err) = root
+        .open_resumable(&[seg(b"sub"), seg(b"grande.bin")])
+        .await
+    else {
+        panic!("tiene que negarse");
+    };
+
+    assert!(
+        matches!(
+            err,
+            Error::Conflict {
+                conflict: ConflictKind::EscapesRoot
+            }
+        ),
+        "respondió {err:?}"
+    );
+    let sobra: Vec<_> = std::fs::read_dir(&fuera)
+        .expect("listar")
+        .filter_map(Result::ok)
+        .collect();
+    assert!(sobra.is_empty(), "no dejó nada fuera: {sobra:?}");
+}
+
+/// #296 — el `rmdir` confinado, gemelo del `mkdir`.
+///
+/// Lo pide el borrado en post-orden de un `Mirror`, que llega a cada
+/// directorio ya vacío. Separado de `remove` por la misma razón por la que
+/// `unlinkat` tiene `AT_REMOVEDIR`: son dos efectos distintos.
+#[tokio::test]
+async fn el_rmdir_confinado_no_se_sale_de_la_raiz() {
+    let (p, raiz, dentro, fuera) = escenario();
+    let victima = fuera.join("carpeta");
+    std::fs::create_dir(&victima).expect("victima");
+    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
+
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let err = root
+        .rmdir(&[seg(b"sub"), seg(b"carpeta")])
+        .await
+        .expect_err("tiene que negarse");
+
+    assert!(
+        matches!(
+            err,
+            Error::Conflict {
+                conflict: ConflictKind::EscapesRoot
+            }
+        ),
+        "respondió {err:?}"
+    );
+    assert!(victima.exists(), "y no borró el directorio de fuera");
+}
+
+/// Y dentro borra el directorio VACÍO, que es para lo que existe. Uno con
+/// contenido NO: eso es un error, no una política.
+#[tokio::test]
+async fn el_rmdir_confinado_borra_lo_vacio_y_rehusa_lo_lleno() {
+    let (p, raiz, dentro, _fuera) = escenario();
+    std::fs::create_dir(dentro.join("vacio")).expect("vacio");
+    std::fs::create_dir(dentro.join("lleno")).expect("lleno");
+    std::fs::write(dentro.join("lleno/x.txt"), b"x").expect("contenido");
+
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    root.rmdir(&[seg(b"vacio")]).await.expect("borra el vacío");
+    assert!(!dentro.join("vacio").exists());
+
+    let err = root
+        .rmdir(&[seg(b"lleno")])
+        .await
+        .expect_err("uno con contenido no");
+    assert!(!matches!(err, Error::NotFound), "{err:?}");
+    assert!(dentro.join("lleno/x.txt").exists(), "y no se llevó nada");
+}
+
+// ---------------------------------------------------------------------------
+// El staging estable es un nombre PREDECIBLE, así que lo que hay al otro lado
+// puede haberlo puesto otro. Los tres casos que `O_NOFOLLOW` no cubre.
+// ---------------------------------------------------------------------------
+
+/// El nombre del staging, tal como lo calcula quien sepa el nombre de destino.
+fn nombre_de_staging(final_name: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    let d = Sha256::digest(final_name);
+    let mut hex = String::new();
+    for b in &d[..16] {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{b:02x}");
+    }
+    format!(".norte-partial.{hex}")
+}
+
+/// Un FICHERO REGULAR plantado con el nombre del staging NO se reanuda.
+///
+/// `O_NOFOLLOW` descarta un enlace y nada más. Reanudar sobre el fichero de
+/// otro publica bajo el nombre legítimo un inodo que no es nuestro: con su
+/// contenido delante de los nuestros, con su dueño y con sus permisos, y con
+/// el descriptor de escritura del atacante todavía abierto encima.
+#[tokio::test]
+async fn un_staging_plantado_por_otro_no_se_reanuda() {
+    let (p, raiz, dentro, _fuera) = escenario();
+    let plantado = dentro.join(nombre_de_staging(b"grande.bin"));
+    std::fs::write(&plantado, b"CONTENIDO AJENO").expect("plantado");
+
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    // Se planta un HARDLINK, que es lo que hace observable «este inodo tiene
+    // otro nombre» sin depender del uid (el test corre como el mismo usuario).
+    let otro_nombre = dentro.join("lo-mio.txt");
+    std::fs::hard_link(&plantado, &otro_nombre).expect("hardlink");
+
+    let Err(err) = root.open_resumable(&[seg(b"grande.bin")]).await else {
+        panic!("reanudó sobre un fichero que no es suyo");
+    };
+    assert!(
+        matches!(err, Error::Conflict { .. }),
+        "tiene que ser un conflicto, no un error de E/S: {err:?}"
+    );
+    assert_eq!(
+        std::fs::read(&plantado).expect("sigue"),
+        b"CONTENIDO AJENO",
+        "y no se le anexó nada"
+    );
+}
+
+/// Un FIFO con el nombre del staging tampoco: sin `O_NONBLOCK` el `openat`
+/// se queda colgado PARA SIEMPRE dentro del pool de bloqueo, y el token de
+/// cancelación no puede interrumpir un `openat` en curso.
+#[tokio::test]
+async fn un_fifo_con_el_nombre_del_staging_no_cuelga_el_abrir() {
+    let (p, raiz, dentro, _fuera) = escenario();
+    let fifo = dentro.join(nombre_de_staging(b"grande.bin"));
+    let c = std::ffi::CString::new(fifo.as_os_str().as_bytes()).expect("cstring");
+    // SAFETY: `c` es una CString viva y NUL-terminada; `mkfifo` no requiere
+    // privilegio y solo escribe en el sistema de ficheros.
+    let rc = unsafe { libc::mkfifo(c.as_ptr(), 0o666) };
+    assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
+
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    // Con un plazo: lo que este test comprueba es que NO se cuelga.
+    let r = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        root.open_resumable(&[seg(b"grande.bin")]),
+    )
+    .await
+    .expect("el abrir tiene que volver, no colgarse");
+    let Err(_err) = r else {
+        panic!("un FIFO no es un staging");
+    };
+    // Cuál sea el error da igual y no se fija: con `O_NONBLOCK`, un FIFO sin
+    // lector contesta `ENXIO` y ni siquiera se llega al `fstat`. Lo que este
+    // test afirma es que VUELVE — sin la bandera, el `openat` se queda dentro
+    // del pool de bloqueo esperando un lector que no va a llegar, y ahí no hay
+    // token de cancelación que valga.
+}
+
+/// Y el camino normal sigue funcionando: un staging que creamos nosotros se
+/// reanuda. La defensa no puede costar la operación que existe para proteger.
+#[tokio::test]
+async fn un_staging_propio_si_se_reanuda_tras_la_comprobacion() {
+    let (p, raiz, _dentro, _fuera) = escenario();
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let (mut sink, ya) = root
+        .open_resumable(&[seg(b"grande.bin")])
+        .await
+        .expect("abre");
+    assert_eq!(ya, 0);
+    sink.write(Bytes::from_static(b"abc")).await.expect("mitad");
+    sink.keep().await.expect("conserva");
+
+    let (_sink, ya) = root
+        .open_resumable(&[seg(b"grande.bin")])
+        .await
+        .expect("reabre lo suyo");
+    assert_eq!(ya, 3, "el nuestro pasa la comprobación y se continúa");
+}

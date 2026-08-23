@@ -140,6 +140,19 @@ struct Inner {
     /// Dentro de la ventana se arranca tantas veces como haga falta;
     /// pasada, «el daemon no está» vuelve a significar lo de siempre.
     handover_until: Mutex<Option<std::time::Instant>>,
+    /// La versión de protocolo que el peer declaró en el ÚLTIMO handshake
+    /// (#294). `None` = todavía no se ha conectado nunca.
+    ///
+    /// Existe porque un cliente no podía saber con qué habla, y eso deja sin
+    /// defensa las degradaciones que son seguras solo por accidente: manda
+    /// `expected_digest` (#282), un daemon 0.52 lo ignora como manda ADR 0004,
+    /// concede sin comprobar, y nada se lo dice. Un `InitializeResult` que se
+    /// tira es una respuesta que ya se pagó.
+    ///
+    /// Se reescribe en CADA reconexión, porque el daemon del otro lado puede
+    /// ser otro: un relevo (`daemon.going_away { reconnect: true }`) es
+    /// exactamente el caso de una versión distinta al mismo socket.
+    peer_version: Mutex<Option<String>>,
     client: tokio::sync::RwLock<Option<Arc<Client>>>,
     watches: Mutex<HashMap<u64, watch::Sender<TaskProgress>>>,
     /// Desenlaces vistos SIN watch receptor (el broadcast terminal
@@ -301,6 +314,7 @@ impl RemoteBackend {
                 client_info,
                 agent_session,
                 handover_until: Mutex::new(None),
+                peer_version: Mutex::new(None),
                 client: tokio::sync::RwLock::new(None),
                 watches: Mutex::new(HashMap::new()),
                 finished: Mutex::new(std::collections::VecDeque::new()),
@@ -351,16 +365,23 @@ impl RemoteBackend {
         };
         // El actor se re-declara en CADA conexión: el daemon lo fija en
         // el handshake y no lo recuerda de la anterior.
-        match self.inner.agent_session.clone() {
+        let hola = match self.inner.agent_session.clone() {
             Some(session) => {
                 client
                     .initialize_as_agent(self.inner.client_info.clone(), session)
-                    .await?;
+                    .await?
             }
-            None => {
-                client.initialize(self.inner.client_info.clone()).await?;
-            }
-        }
+            None => client.initialize(self.inner.client_info.clone()).await?,
+        };
+        // La versión del peer se RETIENE (#294): sin ella, un cliente no puede
+        // saber que la comprobación que acaba de pedir no se hizo. Se
+        // reescribe en cada reconexión porque al otro lado puede haber otro
+        // daemon — que es exactamente lo que un relevo significa.
+        *self
+            .inner
+            .peer_version
+            .lock()
+            .expect("peer_version lock sano") = Some(hola.protocol_version.clone());
         let notifications = client.take_notifications();
         let client = Arc::new(client);
         *self.inner.client.write().await = Some(Arc::clone(&client));
@@ -1602,6 +1623,48 @@ impl RemoteBackend {
         Ok(r.revision)
     }
 
+    /// La versión de protocolo que el peer declaró en el último handshake
+    /// (#294), o `None` si todavía no se ha conectado nunca.
+    ///
+    /// Lo que se contesta con ella es «¿se hizo de verdad la comprobación que
+    /// pedí?». Un campo opcional que un peer viejo ignora (ADR 0004) es una
+    /// degradación silenciosa, y sin esto el cliente ni siquiera podía
+    /// detectarla.
+    ///
+    /// # Panics
+    /// Nunca en la práctica: solo por envenenamiento del lock interno, que
+    /// exigiría que otro hilo hubiese panicado con él tomado — y lo único que
+    /// se hace bajo él es leer y escribir un `Option<String>`.
+    #[must_use]
+    pub fn peer_protocol_version(&self) -> Option<String> {
+        self.inner
+            .peer_version
+            .lock()
+            .expect("peer_version lock sano")
+            .clone()
+    }
+
+    /// ¿Entiende el peer `expected_digest` en `plugin.set_approval` (#282)?
+    ///
+    /// La comparación la hace [`methods::version_at_least`], que es la función
+    /// canónica y **falla CERRADO**: una versión que no parsea contesta
+    /// `false`, «sin saber qué habla el otro, no se le supone nada». Esto tuvo
+    /// su propio parser durante media hora y fallaba ABIERTO, que es la
+    /// dirección equivocada — la cadena la elige el PEER, o sea justo la parte
+    /// que se está intentando clasificar, y un `"norte-0.52"` se habría
+    /// saltado la comprobación entera.
+    ///
+    /// Sin versión retenida —todavía sin conectar— se contesta `true` y quien
+    /// decide es el daemon: ahí no hay ninguna afirmación que hacer, y el
+    /// handshake va antes que cualquier llamada.
+    fn peer_comprueba_el_ancla(&self) -> bool {
+        let Some(v) = self.peer_protocol_version() else {
+            return true;
+        };
+        // `expected_digest` llegó en 0.53.0.
+        methods::version_at_least(&v, 0, 53)
+    }
+
     /// `plugin.set_approval` contra el daemon (M4-P3).
     ///
     /// `expected_digest` es el ancla que el humano LEYÓ (#282): el daemon
@@ -1617,6 +1680,22 @@ impl RemoteBackend {
         approved: bool,
         expected_digest: Option<&str>,
     ) -> Result<(), Error> {
+        // Conceder pidiendo una comprobación que el peer no sabe hacer es
+        // creerse una garantía que no se aplicó (#294): el daemon viejo ignora
+        // el campo como manda ADR 0004 y concede lo que él tenga. Se rehúsa, y
+        // quien quiera conceder de todas formas puede mandar `None` — que es
+        // decir explícitamente «sin comprobar».
+        if approved && expected_digest.is_some() && !self.peer_comprueba_el_ancla() {
+            // Se DICE, con la versión dentro: el punto entero de #294 es hacer
+            // audible una degradación silenciosa, y un `Unsupported` mudo se
+            // lee igual que «este daemon no hace plugins».
+            tracing::warn!(
+                peer = self.peer_protocol_version().as_deref().unwrap_or("?"),
+                "el daemon es anterior a 0.53 y no puede comprobar el ancla de la aprobación: \
+                 se rehúsa en vez de conceder sin comprobar (#294)"
+            );
+            return Err(Error::Unsupported);
+        }
         let _: methods::PluginSetApprovalResult = self
             .call_timed(
                 methods::PLUGIN_SET_APPROVAL,
@@ -2207,6 +2286,7 @@ mod tests {
             },
             agent_session: None,
             handover_until: Mutex::new(None),
+            peer_version: Mutex::new(None),
             client: tokio::sync::RwLock::new(None),
             watches: Mutex::new(HashMap::new()),
             finished: Mutex::new(std::collections::VecDeque::new()),
@@ -2469,6 +2549,7 @@ mod tests {
             },
             agent_session: None,
             handover_until: Mutex::new(None),
+            peer_version: Mutex::new(None),
             client: tokio::sync::RwLock::new(None),
             watches: Mutex::new(HashMap::new()),
             finished: Mutex::new(std::collections::VecDeque::new()),

@@ -553,6 +553,87 @@ impl LocalRoot {
         Ok(())
     }
 
+    /// El digest de los primeros `len` bytes del parcial de `rel`, abierto POR
+    /// EL DESCRIPTOR del directorio ya resuelto.
+    ///
+    /// Las MISMAS comprobaciones que [`Self::open_resumable`] —`O_NOFOLLOW`,
+    /// fichero regular, un solo enlace, nuestro—: verificar el prefijo de un
+    /// fichero que no es el que vamos a continuar no verifica nada.
+    #[allow(unsafe_code)]
+    pub(crate) fn partial_digest(
+        &self,
+        rel: &[Segment],
+        len: u64,
+    ) -> Result<Option<[u8; 32]>, Error> {
+        use std::io::Read as _;
+
+        use sha2::{Digest as _, Sha256};
+        let (dir, name) = self.parent_of(rel)?;
+        let staging_name = CString::new(crate::provider::stable_partial_name(name.as_bytes()))
+            .map_err(|_| Error::InvalidPath)?;
+        // SAFETY: `dir` vive durante la llamada y `staging_name` es una CString
+        // NUL-terminada viva también. Solo lectura, y sin `O_CREAT`: si no está
+        // no hay digest y el caller degrada a `Length`.
+        let raw = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                staging_name.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        };
+        if raw < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::NotFound {
+                return Ok(None);
+            }
+            return Err(map_errno(&e));
+        }
+        // SAFETY: `raw` es un fd recién abierto y sin dueño; `File` pasa a serlo.
+        let file = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(raw) };
+        let st = fstat_de(&file)?;
+        // SAFETY: `geteuid` no toma punteros y no puede fallar.
+        if st.st_mode & libc::S_IFMT != libc::S_IFREG
+            || st.st_nlink != 1
+            || st.st_uid != unsafe { libc::geteuid() }
+        {
+            // No es el parcial que dejamos: sin digest, y el caller degrada.
+            // Que la reanudación lo rechace es trabajo de `open_resumable`.
+            return Ok(None);
+        }
+        let mut reader = file.take(len);
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut vistos: u64 = 0;
+        loop {
+            let n = reader
+                .read(&mut buf)
+                .map_err(|e| crate::provider::map_io(&e))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            vistos += n as u64;
+        }
+        if vistos < len {
+            return Ok(None);
+        }
+        Ok(Some(hasher.finalize().into()))
+    }
+
+    /// `unlinkat(AT_REMOVEDIR)` del directorio VACÍO que hay en `rel` (#296).
+    #[allow(unsafe_code)]
+    pub(crate) fn rmdir(&self, rel: &[Segment]) -> Result<(), Error> {
+        let (dir, name) = self.parent_of(rel)?;
+        let c = cstring(name)?;
+        // SAFETY: `dir` vive mientras dura la llamada y `c` es una CString
+        // NUL-terminada viva también.
+        let rc = unsafe { libc::unlinkat(dir.as_raw_fd(), c.as_ptr(), libc::AT_REMOVEDIR) };
+        if rc != 0 {
+            return Err(map_errno(&std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+
     /// Abre un sink para `rel`: el staging se crea con `openat` en el
     /// directorio ya resuelto y se publica con `renameat` en ESE MISMO
     /// descriptor, así que la publicación va confinada igual que la escritura.
@@ -586,7 +667,110 @@ impl LocalRoot {
             file,
             staging: staging_name,
             final_name,
+            estable: false,
         })
+    }
+
+    /// Como [`Self::open_write`], pero con el staging ESTABLE que un resume
+    /// posterior puede reencontrar (#297, ADR 0012).
+    ///
+    /// La diferencia con el efímero es solo el NOMBRE —derivado del hash del
+    /// nombre final, sin pid ni secuencia— y que se abre en `O_APPEND` sin
+    /// `O_EXCL`: si ya había bytes de un intento anterior, se continúa tras
+    /// ellos. Devuelve cuántos había.
+    ///
+    /// Hacía falta porque hasta #219 una hoja iba SIN confinar y por tanto sí
+    /// reanudaba; confinarla la dejó sin resume justo en el caso donde más
+    /// importa —un fichero grande y solo por un enlace que se corta— y eso era
+    /// una regresión, no una decisión.
+    #[allow(unsafe_code)]
+    pub(crate) fn open_resumable(&self, rel: &[Segment]) -> Result<(ConfinedStaging, u64), Error> {
+        let (dir, name) = self.parent_of(rel)?;
+        let final_name = cstring(name)?;
+        // El destino final NO debe existir todavía: mismo contrato que
+        // `open_write`, y la política de colisión es del core.
+        if !name_is_free(dir.as_raw_fd(), &final_name)? {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::Exists,
+            });
+        }
+        let staging_name = CString::new(crate::provider::stable_partial_name(name.as_bytes()))
+            .map_err(|_| Error::InvalidPath)?;
+        // SAFETY: `dir` vive durante la llamada y `staging_name` es una CString
+        // NUL-terminada viva también.
+        //
+        // Sin `O_EXCL` a propósito —se REABRE, que es de lo que va reanudar— y
+        // por eso hacen falta las banderas siguientes y el `fstat` de abajo.
+        // Este nombre es PREDECIBLE: lo calcula cualquiera que sepa el nombre
+        // de destino, así que el fichero que hay al otro lado puede haberlo
+        // puesto otro.
+        //
+        // - `O_NOFOLLOW`: no es un enlace.
+        // - `O_NONBLOCK`: un FIFO plantado con ese nombre colgaría el `openat`
+        //   PARA SIEMPRE dentro del pool de bloqueo, y el token de cancelación
+        //   no puede interrumpir un `openat` en curso. Se quita después de
+        //   comprobar que es un fichero regular.
+        // - `0o600` y no `0o666`: lo que se crea aquí es nuestro y de nadie
+        //   más mientras dure.
+        let raw = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                staging_name.as_ptr(),
+                libc::O_WRONLY
+                    | libc::O_CREAT
+                    | libc::O_APPEND
+                    | libc::O_NOFOLLOW
+                    | libc::O_NONBLOCK
+                    | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if raw < 0 {
+            return Err(map_errno(&std::io::Error::last_os_error()));
+        }
+        // SAFETY: `raw` es un fd recién abierto y sin dueño; `File` pasa a serlo.
+        let file = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(raw) };
+        // **Y ahora se MIRA lo que se ha abierto**, que es lo que faltaba.
+        // `O_NOFOLLOW` descarta un enlace y nada más: un fichero regular del
+        // atacante, un FIFO o un hardlink al fichero de una víctima pasan por
+        // esa puerta. Reanudar sobre cualquiera de los tres publica bajo el
+        // nombre legítimo un inodo que no es nuestro —con su contenido, su
+        // dueño y sus permisos— o anexa nuestros bytes FUERA de la raíz
+        // aprobada, que es justo lo que el confinamiento existe para impedir.
+        let st = fstat_de(&file)?;
+        if st.st_mode & libc::S_IFMT != libc::S_IFREG {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::TypeMismatch,
+            });
+        }
+        // Un hardlink: nuestros bytes irían también al otro nombre, que puede
+        // estar fuera de la raíz.
+        if st.st_nlink != 1 {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::EscapesRoot,
+            });
+        }
+        // SAFETY: `geteuid` no toma punteros y no puede fallar.
+        if st.st_uid != unsafe { libc::geteuid() } {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::EscapesRoot,
+            });
+        }
+        // Comprobado que es un fichero regular nuestro, el `O_NONBLOCK` ya no
+        // pinta nada; se quita para no pasar a otra capa un fd con una bandera
+        // que no espera.
+        quita_nonblock(&file)?;
+        let already = u64::try_from(st.st_size).unwrap_or(0);
+        Ok((
+            ConfinedStaging {
+                dir,
+                file,
+                staging: staging_name,
+                final_name,
+                estable: true,
+            },
+            already,
+        ))
     }
 }
 
@@ -598,6 +782,9 @@ pub(crate) struct ConfinedStaging {
     pub(crate) file: std::fs::File,
     pub(crate) staging: CString,
     pub(crate) final_name: CString,
+    /// El nombre del staging es el ESTABLE, o sea reencontrable por un resume
+    /// posterior. Es lo que decide si `keep` conserva o borra (#297).
+    pub(crate) estable: bool,
 }
 
 /// Publica el staging sobre su nombre definitivo, no-replace y en el mismo
@@ -762,6 +949,38 @@ fn create_exclusive(dir: RawFd, name: &CString) -> Result<std::fs::File, Error> 
     Ok(unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(raw) })
 }
 
+/// `fstat` de un descriptor ya abierto.
+#[allow(unsafe_code)]
+fn fstat_de(file: &std::fs::File) -> Result<libc::stat, Error> {
+    use std::os::fd::AsRawFd as _;
+    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `file` vive durante la llamada y `st` es un `stat` propio y
+    // alineado que se rellena entero. Solo se lee tras el 0.
+    let rc = unsafe { libc::fstat(file.as_raw_fd(), st.as_mut_ptr()) };
+    if rc != 0 {
+        return Err(map_errno(&std::io::Error::last_os_error()));
+    }
+    // SAFETY: `fstat` devolvió 0, así que dejó `st` inicializado.
+    Ok(unsafe { st.assume_init() })
+}
+
+/// Quita `O_NONBLOCK` de un descriptor ya abierto.
+#[allow(unsafe_code)]
+fn quita_nonblock(file: &std::fs::File) -> Result<(), Error> {
+    use std::os::fd::AsRawFd as _;
+    // SAFETY: `file` vive durante las dos llamadas; `F_GETFL`/`F_SETFL` no
+    // toman punteros.
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0 {
+        return Err(map_errno(&std::io::Error::last_os_error()));
+    }
+    let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags & !libc::O_NONBLOCK) };
+    if rc < 0 {
+        return Err(map_errno(&std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
 /// Nombre de staging efímero, con la MISMA forma que el del provider
 /// (`.norte-partial.<16 hex>.<pid>-<seq>`) para que el barredor de parciales
 /// lo siga reconociendo — esto es otra manera de llegar a los mismos ficheros,
@@ -892,19 +1111,18 @@ impl norte_vfs::ConfinedRoot for LocalConfinedRoot {
         crate::provider::blocking(move || root.symlink(&rel, &target)).await
     }
 
-    /// Esta raíz NO reanuda, y lo dice en vez de fingirlo.
-    ///
-    /// El default del trait contesta `(write, 0)`, que es seguro pero le
-    /// promete al caller un sink cuyo `keep` conservaría algo continuable — y
-    /// el de aquí no puede (ver [`ConfinedSink::keep`]). `Unsupported` es la
-    /// respuesta exacta: el motor recopia entero, que es lo que iba a hacer de
-    /// todas formas con `already = 0`.
+    fn resumes(&self) -> bool {
+        true
+    }
+
     async fn open_resumable(
         &self,
         rel: &[Segment],
     ) -> Result<(Box<dyn norte_vfs::ByteSink>, u64), Error> {
-        let _ = rel;
-        Err(Error::Unsupported)
+        let root = std::sync::Arc::clone(&self.root);
+        let rel = rel.to_vec();
+        let (staging, ya) = crate::provider::blocking(move || root.open_resumable(&rel)).await?;
+        Ok((Box::new(ConfinedSink::desde(staging, ya)), ya))
     }
 
     async fn stat(&self, rel: &[Segment]) -> Result<Entry, Error> {
@@ -919,6 +1137,18 @@ impl norte_vfs::ConfinedRoot for LocalConfinedRoot {
         let rel = rel.to_vec();
         crate::provider::blocking(move || root.remove(&rel)).await
     }
+
+    async fn rmdir(&self, rel: &[Segment]) -> Result<(), Error> {
+        let root = std::sync::Arc::clone(&self.root);
+        let rel = rel.to_vec();
+        crate::provider::blocking(move || root.rmdir(&rel)).await
+    }
+
+    async fn partial_digest(&self, rel: &[Segment], len: u64) -> Result<Option<[u8; 32]>, Error> {
+        let root = std::sync::Arc::clone(&self.root);
+        let rel = rel.to_vec();
+        crate::provider::blocking(move || root.partial_digest(&rel, len)).await
+    }
 }
 
 /// El sink de una escritura confinada.
@@ -931,26 +1161,35 @@ struct ConfinedSink {
     dir: Option<OwnedFd>,
     file: Option<std::fs::File>,
     /// Bytes ya entregados, agujeros incluidos: el ancla de
-    /// [`crate::provider::write_maybe_sparse`]. Esta raíz abre su staging con
-    /// `O_CREAT | O_EXCL`, así que siempre empieza en cero — pero el campo
-    /// existe igual, porque la alternativa es preguntarle la posición al
-    /// descriptor, y ése es exactamente el error que el sink de al lado
-    /// cometió.
+    /// [`crate::provider::write_maybe_sparse`]. Con `open_write` empieza en
+    /// cero; **reanudando empieza en lo que ya había**, y no en lo que diga el
+    /// descriptor — el staging se abre con `O_APPEND`, que deja el offset en 0
+    /// hasta la primera escritura. Ése es exactamente el error que el sink de
+    /// al lado cometió.
     pos: u64,
     staging: CString,
     final_name: CString,
+    /// El staging lleva el nombre ESTABLE: `keep` lo CONSERVA para que un
+    /// resume posterior lo continúe (#297).
+    estable: bool,
     /// `true` cuando commit/abort ya se ocuparon del staging (Drop no toca).
     done: bool,
 }
 
 impl ConfinedSink {
     fn new(s: ConfinedStaging) -> Self {
+        Self::desde(s, 0)
+    }
+
+    /// Reanudando: la posición arranca en lo que el staging ya tenía.
+    fn desde(s: ConfinedStaging, ya: u64) -> Self {
         Self {
             dir: Some(s.dir),
             file: Some(s.file),
-            pos: 0,
+            pos: ya,
             staging: s.staging,
             final_name: s.final_name,
+            estable: s.estable,
             done: false,
         }
     }
@@ -1005,22 +1244,31 @@ impl norte_vfs::ByteSink for ConfinedSink {
         crate::provider::blocking(move || discard(dir.as_raw_fd(), &staging)).await
     }
 
-    /// **Aquí `keep` BORRA, y no es una contradicción con el trait: es la
-    /// única forma honesta de cumplirlo.**
+    /// **Con un staging EFÍMERO, `keep` borra, y no es una contradicción con el
+    /// trait: es la única forma honesta de cumplirlo.**
     ///
     /// `keep` existe para conservar el staging y que un `open_resumable`
-    /// posterior lo continúe (ADR 0012). El de esta raíz lleva un nombre
-    /// EFÍMERO —pid y secuencia—, así que nadie puede volver a encontrarlo:
-    /// conservarlo dejaría un `.norte-partial` por intento que ningún resume va
-    /// a consumir y que el siguiente `Mirror` vería como huérfano y borraría.
-    /// Sin resume que servir, conservar no conserva nada; solo ensucia.
+    /// posterior lo continúe (ADR 0012). Un nombre efímero —pid y secuencia—
+    /// no lo puede reencontrar nadie: conservarlo dejaría un `.norte-partial`
+    /// por intento que ningún resume va a consumir y que el siguiente `Mirror`
+    /// vería como huérfano y borraría. Sin resume que servir, conservar no
+    /// conserva nada; solo ensucia.
     ///
-    /// Hoy el core no llega aquí —`Dest::resumes()` es `false` para un destino
-    /// confinado, así que la cancelación va por `abort`—, y precisamente por
-    /// eso se cierra en el TIPO en vez de confiarlo a esa invariante, que vive
-    /// en otro crate y la puede romper el siguiente que pase.
-    async fn keep(self: Box<Self>) -> Result<(), Error> {
-        self.abort().await
+    /// Con el staging ESTABLE (#297) `keep` sí conserva, que es lo que ese
+    /// nombre existe para permitir: `open_resumable` lo reencuentra y continúa
+    /// tras sus bytes.
+    async fn keep(mut self: Box<Self>) -> Result<(), Error> {
+        if !self.estable {
+            return self.abort().await;
+        }
+        // Sincroniza lo escrito y suelta: el staging se queda donde está, con
+        // su nombre reencontrable. Sin `fsync` lo conservado podría ser menos
+        // de lo que el resume va a dar por bueno.
+        let file = self.file.take().ok_or(Error::Io { retryable: false })?;
+        self.dir.take();
+        self.done = true;
+        crate::provider::blocking(move || file.sync_all().map_err(|e| crate::provider::map_io(&e)))
+            .await
     }
 }
 
@@ -1033,6 +1281,13 @@ impl Drop for ConfinedSink {
             return;
         }
         self.file.take();
+        // Un staging ESTABLE sobrevive al drop: es lo que un resume posterior
+        // va a buscar, y borrarlo aquí convertiría un proceso que se cae en un
+        // fichero que hay que volver a copiar entero.
+        if self.estable {
+            self.dir.take();
+            return;
+        }
         if let Some(dir) = self.dir.take() {
             let _ = discard(dir.as_raw_fd(), &self.staging);
         }

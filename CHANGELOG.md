@@ -9,6 +9,34 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Packing refuses two entries that fold to one name** (#250, item 1). Bytes
+  being different is not enough: what decides is whether they collide *where the
+  archive gets extracted*, and an archive cannot know — it gets sent elsewhere.
+  `café.txt` in NFD and NFC are two files on ext4 and one on APFS; `µ` and `μ`
+  are two here and one on NTFS; `straße` and `strasse` are two almost everywhere
+  and one on an ext4 with `+F`. Extracted there, one of the two disappears
+  without a word. The fold uses the widest mode on purpose, so the question is
+  "do these collide anywhere?" rather than "do they collide here?".
+- **A confined destination resumes again** (#297). Confining a single-file copy
+  (#219) silently turned `ResumePolicy::On` into a no-op for exactly the case
+  where resume matters most — one large file over a link that drops — because a
+  confined staging carried an ephemeral per-sink name that no later
+  `open_resumable` could find. `LocalConfinedRoot` now opens the *stable*
+  staging name, the one derived from the final name's hash that the by-path
+  route has used since ADR 0012, so `keep` keeps and the next attempt continues
+  after the bytes already there.
+- **The sync executor destroys through its confined root** (#296). It held
+  `dest_confined` and still resolved every deletion by path. `ConfinedRoot`
+  gains `rmdir` — the twin of `mkdir`, separate from `remove` for the same
+  reason `unlinkat` has `AT_REMOVEDIR` — so a `Mirror`'s post-order walk names
+  what it is destroying instead of letting the path decide.
+- **The SDK remembers which protocol version it is talking to** (#294). The
+  `InitializeResult` was discarded, so a client could not tell that the check it
+  had just asked for did not happen: it sends `expected_digest` (#282), a 0.52
+  daemon ignores it exactly as ADR 0004 requires, grants without verifying, and
+  nothing says so. Approving with an anchor against a peer that predates 0.53
+  is now refused rather than silently unverified.
+
 - **A single-file copy is confined, and so is the deletion an overwrite
   performs** (#218 closed, #219 narrowed, ADR 0072). `ops::copy_task` used an
   unconfined destination for a lone file or symlink, so `fs.copy` — the most
