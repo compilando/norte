@@ -254,17 +254,26 @@ const STABLE_HASH_HEX: usize = 32;
 /// no confiable) — hallazgo H1/H3 del encoding-auditor. Hashea los BYTES
 /// crudos del nombre (regla 1), jamás lo decodifica.
 fn stable_partial_vpath(p: &VPath) -> Result<VPath, Error> {
-    use sha2::{Digest, Sha256};
     let name = p.file_name().ok_or(Error::InvalidPath)?;
-    let digest = Sha256::digest(name.as_bytes());
+    let seg = Segment::new(stable_partial_name(name.as_bytes())).map_err(|_| Error::InvalidPath)?;
+    p.with_file_name(seg).ok_or(Error::InvalidPath)
+}
+
+/// El nombre del staging estable a partir de los BYTES del nombre final.
+///
+/// La mitad de [`stable_partial_vpath`] que no necesita un `VPath`, porque la
+/// raíz confinada direcciona por segmentos y no tiene ninguno que darle. Una
+/// sola definición: dos formas de nombrar el mismo staging serían dos ficheros
+/// donde el resume espera uno.
+pub(crate) fn stable_partial_name(final_name: &[u8]) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(final_name);
     let mut hex = String::with_capacity(STABLE_HASH_HEX);
     for b in &digest[..STABLE_HASH_HEX / 2] {
         use std::fmt::Write;
         let _ = write!(hex, "{b:02x}");
     }
-    let partial_name = format!("{PARTIAL_PREFIX}{hex}").into_bytes();
-    let seg = Segment::new(partial_name).map_err(|_| Error::InvalidPath)?;
-    p.with_file_name(seg).ok_or(Error::InvalidPath)
+    format!("{PARTIAL_PREFIX}{hex}").into_bytes()
 }
 
 /// Nombre de staging EFÍMERO para el destino `final_name`:

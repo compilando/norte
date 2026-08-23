@@ -749,10 +749,11 @@ async fn place(
 /// árbol ya no está»— y su entrada también, igual que la papelera entierra el
 /// árbol de una pieza.
 async fn remove_tree(
-    provider: &dyn Provider,
+    targets: &SyncTargets,
     path: &VPath,
     ctx: &TaskCtx,
 ) -> (u64, Result<(), Error>) {
+    let provider = targets.dest.as_ref();
     // El `stat` no es de adorno y es el mismo que hace `ops::delete_task`: el
     // walk empieza por un `list`, y un `list` sobre un fichero es
     // `Conflict{TypeMismatch}`. Un `DeleteTree` nombra la entrada huérfana, que
@@ -779,7 +780,14 @@ async fn remove_tree(
             if ctx.cancel.is_cancelled() {
                 return (quitados, Err(Error::Cancelled));
             }
-            match crate::ops::remove_retrying_amb(provider, &entry.path, &ctx.cancel).await {
+            // Cada nodo por el DESCRIPTOR cuando hay raíz (#296), y diciendo
+            // su clase: el post-orden llega a directorios ya vacíos y a hojas,
+            // y `unlinkat` necesita saber cuál de las dos cosas borra.
+            match targets
+                .dest_at(&entry.path)
+                .remove_kind(entry.kind == EntryKind::Dir, &ctx.cancel)
+                .await
+            {
                 Ok(()) => quitados += 1,
                 // Un fallo TRAS un transitorio deja el nodo en duda: el
                 // `remove` pudo llegar al bucket y perderse la respuesta. Cuenta
@@ -793,7 +801,13 @@ async fn remove_tree(
             }
         }
     }
-    match crate::ops::remove_retrying_amb(provider, path, &ctx.cancel).await {
+    // Y la raíz del árbol, por el mismo camino y diciendo su clase: el `stat`
+    // de arriba ya dijo si es un directorio o una hoja suelta.
+    match targets
+        .dest_at(path)
+        .remove_kind(entry.kind == EntryKind::Dir, &ctx.cancel)
+        .await
+    {
         Ok(()) => (quitados + 1, Ok(())),
         Err((e, crate::ops::Ambiguity::MaybeApplied)) => (quitados + 1, Err(e)),
         Err((e, crate::ops::Ambiguity::NotApplied)) => (quitados, Err(e)),
@@ -840,7 +854,15 @@ async fn destroy_leaf(
             .await?;
         return Ok(());
     }
-    crate::ops::remove_retrying(targets.dest.as_ref(), to, &ctx.cancel).await
+    // Por el DESCRIPTOR cuando la raíz está (#296): la teníamos en la mano y
+    // el borrado seguía resolviendo la ruta. Está mucho más tapado que una
+    // copia —`revalidate` exige que la clase, el tamaño y el mtime del testigo
+    // sigan casando antes de destruir nada— pero tapado no es confinado.
+    targets
+        .dest_at(to)
+        .remove_kind(false, &ctx.cancel)
+        .await
+        .map_err(|(e, _)| e)
 }
 
 /// Lo mismo para un ÁRBOL: la papelera se lo lleva de una pieza (por eso ni
@@ -868,7 +890,7 @@ async fn destroy_tree(
             Err((e, crate::ops::Ambiguity::NotApplied)) => (0, Err(e)),
         };
     }
-    remove_tree(targets.dest.as_ref(), to, ctx).await
+    remove_tree(targets, to, ctx).await
 }
 
 /// Entierra `to` en la papelera y lo journaliza.

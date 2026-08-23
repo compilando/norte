@@ -8151,3 +8151,41 @@ async fn un_core_suelto_no_escribe_el_estado_ajeno() {
         "el volcado final es el de la dueña"
     );
 }
+
+/// #294 — el SDK RETIENE la versión que el peer declaró en el handshake.
+///
+/// Sin ella un cliente no puede saber que la comprobación que acaba de pedir
+/// no se hizo: manda `expected_digest` (#282), un daemon viejo lo ignora como
+/// manda ADR 0004, concede sin comprobar, y nada se lo dice. El
+/// `InitializeResult` se tiraba, que es una respuesta ya pagada.
+#[tokio::test]
+async fn el_sdk_retiene_la_version_del_peer() {
+    let d = spawn_daemon_plugins().await;
+    let backend = norte_client::RemoteBackend::connect(
+        d.socket.clone(),
+        None,
+        norte_proto::methods::ClientInfo {
+            name: "version-peer".into(),
+            version: "0.0.0".into(),
+        },
+    )
+    .await
+    .expect("conecta");
+
+    assert_eq!(
+        backend.peer_protocol_version().as_deref(),
+        Some(norte_proto::PROTOCOL_VERSION),
+        "la versión del handshake es la que el daemon declara"
+    );
+
+    // Y con ella el ancla SÍ se manda: este daemon la entiende.
+    let list = backend.plugins_list().await.expect("plugin.list");
+    let ancla = list.plugins[0]
+        .manifest_digest
+        .clone()
+        .expect("el catálogo trae el ancla");
+    backend
+        .plugins_set_approval("org.norte.demo", true, Some(&ancla))
+        .await
+        .expect("un peer 0.53 comprueba el ancla y concede");
+}

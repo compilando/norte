@@ -594,6 +594,19 @@ pub trait ConfinedRoot: Send + Sync {
     /// también, que es donde la garantía se escaparía si no.
     async fn write(&self, rel: &[Segment]) -> Result<Box<dyn ByteSink>, Error>;
 
+    /// ¿Puede esta raíz continuar un parcial suyo? (#297)
+    ///
+    /// El caller lo pregunta ANTES de elegir camino, porque de la respuesta
+    /// depende si al cancelar conserva el staging (`keep`) o lo tira
+    /// (`abort`). Contestar `true` sin que [`Self::open_resumable`] deje un
+    /// staging REENCONTRABLE deja un parcial por intento que nadie consume.
+    ///
+    /// Default `false`: el default de `open_resumable` de aquí abajo devuelve
+    /// un `write` normal, cuyo staging no tiene por qué ser reencontrable.
+    fn resumes(&self) -> bool {
+        false
+    }
+
     /// Mismo contrato que [`Provider::open_resumable`]. Default: sin
     /// reanudación, que es correcto y seguro (el engine recopia entero).
     async fn open_resumable(&self, rel: &[Segment]) -> Result<(Box<dyn ByteSink>, u64), Error> {
@@ -666,6 +679,25 @@ pub trait ConfinedRoot: Send + Sync {
     /// [`Error::Unsupported`] si este backend no sabe borrar confinado;
     /// [`Error::NotFound`] si no hay nada en `rel`; los del borrado si no.
     async fn remove(&self, rel: &[Segment]) -> Result<(), Error> {
+        let _ = rel;
+        Err(Error::Unsupported)
+    }
+
+    /// Borra el DIRECTORIO VACÍO que hay en `rel` (#296).
+    ///
+    /// Gemelo de [`Self::mkdir`], y separado de [`Self::remove`] por la misma
+    /// razón por la que `unlinkat` tiene `AT_REMOVEDIR`: son dos efectos
+    /// distintos y confundirlos es como se borra un árbol creyendo que se
+    /// borraba un fichero. Lo pide el borrado en post-orden de un `Mirror`,
+    /// que llega a cada directorio ya vacío.
+    ///
+    /// Mismo default y mismo contrato para el llamante que `remove`: una raíz
+    /// que no sabe RECHAZA la operación, jamás cae al borrado por ruta.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si este backend no sabe; los del borrado si no —
+    /// incluido el que corresponda a un directorio que no está vacío.
+    async fn rmdir(&self, rel: &[Segment]) -> Result<(), Error> {
         let _ = rel;
         Err(Error::Unsupported)
     }
