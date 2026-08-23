@@ -9,6 +9,19 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The by-path stable staging is no longer reopened blind** (#298). The name a
+  resume reopens is `.norte-partial.` plus the SHA-256-128 of the destination
+  name — *calculable by anyone who knows where the copy is going* — and it was
+  opened with `append(true).create(true)`: it followed symlinks, never asked
+  what it had opened, and created with `0o666`. A regular file planted there
+  gets published under the legitimate name with its own content, owner and
+  permissions; a hardlink to a victim's file receives our bytes; a FIFO hangs
+  the blocking pool forever, where no cancellation token can reach it. The same
+  hole was closed for the *confined* route in #297; the by-path route has had it
+  since ADR 0012 and with fewer defences. It now opens with `O_NOFOLLOW |
+  O_NONBLOCK`, mode `0o600`, and checks the opened *descriptor*: regular file,
+  `st_nlink == 1`, ours. `partial_digest` does the same, because verifying the
+  prefix of a file that is not the one being continued verifies nothing.
 - **Packing refuses two entries that fold to one name** (#250, item 1). Bytes
   being different is not enough: what decides is whether they collide *where the
   archive gets extracted*, and an archive cannot know — it gets sent elsewhere.

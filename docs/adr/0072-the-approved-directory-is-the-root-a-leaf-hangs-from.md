@@ -166,6 +166,24 @@ That has three consequences worth stating rather than discovering:
   confined destination is no longer left clean on cancellation. Same contract
   the by-path route already had, extended, and said out loud here.
 
+**And the by-path route had the same hole, older and barer** (#298). The three
+checks above were written for the confined reopen, but the predictable name is
+not a property of confinement — it comes from ADR 0012, and the provider's
+`open_resumable` had been reopening it with `append(true).create(true)` ever
+since: following symlinks, never asking what it had opened, and creating with
+`0o666`. The same set applies there and now does, on the descriptor rather than
+on the path: `O_NOFOLLOW | O_NONBLOCK`, mode `0o600`, then regular file,
+`st_nlink == 1`, ours — and `partial_digest` alongside it. What the by-path
+route still does not get is confinement of the intermediate components, which
+is #219's remainder and a different shape of change; this is the leaf, and the
+leaf is where the planted staging lives.
+
+One consequence is stated in #299 rather than decided here: a staging created
+`0o600` is *published* `0o600`, so a resumed copy leaves a private file where a
+plain copy leaves `0o644`. Matching them means either reading the umask (which
+`umask(2)` will only tell you by changing it) or preserving the source mode,
+which norte does not do today — a product decision, not a security fix.
+
 **Cost.** Three extra syscalls per leaf transfer (`open`, `fstat`, two
 `node_id`s), against the five to ten each leaf already pays. `open_leaf_root`
 lives **inside** the two leaf arms and not before the `match`, so a recursive

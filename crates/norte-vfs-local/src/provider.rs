@@ -276,6 +276,49 @@ pub(crate) fn stable_partial_name(final_name: &[u8]) -> Vec<u8> {
     format!("{PARTIAL_PREFIX}{hex}").into_bytes()
 }
 
+/// Abre (o crea) el staging estable de `path` para REANUDAR, y dice cuántos
+/// bytes había.
+///
+/// Unix mira lo que ha abierto —`O_NOFOLLOW`, fichero regular, un solo enlace,
+/// nuestro, `0o600`— porque el nombre lo calcula cualquiera que sepa el nombre
+/// de destino (#298).
+#[cfg(unix)]
+fn open_stable_staging(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
+    crate::confined::abre_staging_estable(path)
+}
+
+/// Windows: sin las comprobaciones de #298 todavía. Un reparse point plantado
+/// con el nombre del staging es el mismo agujero, y ahí no se cierra con una
+/// bandera de `open` — pide `NtCreateFile` con `FILE_OPEN_REPARSE_POINT`, que
+/// es lo que #220 y #217 tienen abierto.
+#[cfg(windows)]
+fn open_stable_staging(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
+    let file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+        .map_err(|e| map_io(&e))?;
+    let already = file.metadata().map_err(|e| map_io(&e))?.len();
+    Ok((file, already))
+}
+
+/// Abre el staging estable de `path` para LEER su prefijo, o `None` si no hay
+/// uno nuestro. Mismas comprobaciones y mismo motivo que
+/// [`open_stable_staging`].
+#[cfg(unix)]
+fn open_partial_for_digest(path: &std::path::Path) -> Result<Option<std::fs::File>, Error> {
+    crate::confined::abre_parcial_verificado(path)
+}
+
+#[cfg(windows)]
+fn open_partial_for_digest(path: &std::path::Path) -> Result<Option<std::fs::File>, Error> {
+    match std::fs::File::open(path) {
+        Ok(f) => Ok(Some(f)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(map_io(&e)),
+    }
+}
+
 /// Nombre de staging EFÍMERO para el destino `final_name`:
 /// `.norte-partial.<16 hex>.<pid>-<seq>`.
 ///
@@ -1705,11 +1748,11 @@ impl Provider for LocalProvider {
         // primeros `len` bytes. I/O síncrono en spawn_blocking (regla 2).
         let partial_native = self.native(&stable_partial_vpath(p)?)?;
         blocking(move || {
-            let file = match std::fs::File::open(&partial_native) {
-                Ok(f) => f,
-                // Sin staging = sin digest (el engine degrada a Length).
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(e) => return Err(map_io(&e)),
+            // Sin staging NUESTRO = sin digest (el engine degrada a Length):
+            // el prefijo de un fichero que no es el que se va a continuar no
+            // dice nada sobre lo que se va a continuar (#298).
+            let Some(file) = open_partial_for_digest(&partial_native)? else {
+                return Ok(None);
             };
             let mut reader = file.take(len);
             let mut hasher = Sha256::new();
@@ -1757,13 +1800,9 @@ impl Provider for LocalProvider {
                 Err(e) => return Err(map_io(&e)),
             }
             // Abre (o crea) el parcial en APPEND: si ya había bytes de una
-            // copia previa, se reanuda tras ellos.
-            let file = std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(&partial_native)
-                .map_err(|e| map_io(&e))?;
-            let already = file.metadata().map_err(|e| map_io(&e))?.len();
+            // copia previa, se reanuda tras ellos. Y MIRA lo que ha abierto,
+            // porque este nombre es predecible (#298).
+            let (file, already) = open_stable_staging(&partial_native)?;
             Ok((file, already, partial_native, final_native))
         })
         .await?;

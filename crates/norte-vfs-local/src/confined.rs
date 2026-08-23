@@ -949,6 +949,94 @@ fn create_exclusive(dir: RawFd, name: &CString) -> Result<std::fs::File, Error> 
     Ok(unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(raw) })
 }
 
+/// Abre el staging ESTABLE de una RUTA con las mismas comprobaciones que
+/// [`LocalRoot::open_resumable`] (#298), y devuelve cuántos bytes había.
+///
+/// El camino por ruta no tiene descriptor de directorio contra el que hacer
+/// `openat` —el confinamiento es otro asunto, y es #219—, pero el conjunto de
+/// comprobaciones sobre lo que se ha abierto es exactamente el mismo, porque
+/// el motivo es el mismo: el nombre del staging deriva del hash del nombre de
+/// destino, así que **lo calcula cualquiera que sepa a dónde vamos a copiar**
+/// y el fichero que hay al otro lado puede haberlo puesto otro.
+///
+/// Y se miran sobre el FICHERO ABIERTO, no sobre la ruta: un `lstat` previo
+/// contesta sobre lo que había, no sobre lo que se abrió.
+#[allow(unsafe_code)]
+pub(crate) fn abre_staging_estable(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+    // Sin `O_EXCL` a propósito —se REABRE, que es de lo que va reanudar— y por
+    // eso hacen falta las banderas de aquí y las comprobaciones de abajo:
+    //
+    // - `O_NOFOLLOW`: no es un enlace. Un `.norte-partial.<hash> -> /etc/passwd`
+    //   plantado recibiría nuestros bytes y luego el `commit` publicaría ESE
+    //   inodo bajo el nombre legítimo.
+    // - `O_NONBLOCK`: un FIFO plantado con ese nombre cuelga el `open` PARA
+    //   SIEMPRE dentro del pool de bloqueo, y el token de cancelación no puede
+    //   interrumpir un `open` en curso. Se quita en cuanto se sabe que es un
+    //   fichero regular.
+    // - `0o600` y no el `0o666` de antes: lo que se crea aquí es nuestro y de
+    //   nadie más mientras dure.
+    let file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| map_errno(&e))?;
+    let md = file.metadata().map_err(|e| crate::provider::map_io(&e))?;
+    if !md.file_type().is_file() {
+        return Err(Error::Conflict {
+            conflict: ConflictKind::TypeMismatch,
+        });
+    }
+    // Un hardlink al fichero de una víctima: nuestros bytes irían también al
+    // otro nombre, que está donde el atacante quiera.
+    if md.nlink() != 1 {
+        return Err(Error::Conflict {
+            conflict: ConflictKind::EscapesRoot,
+        });
+    }
+    // SAFETY: `geteuid` no toma punteros y no puede fallar.
+    if md.uid() != unsafe { libc::geteuid() } {
+        return Err(Error::Conflict {
+            conflict: ConflictKind::EscapesRoot,
+        });
+    }
+    quita_nonblock(&file)?;
+    Ok((file, md.len()))
+}
+
+/// Abre para LEER el parcial de una ruta con las mismas comprobaciones (#298):
+/// verificar el prefijo de un fichero que no es el que se va a continuar no
+/// verifica nada.
+///
+/// `Ok(None)` es «no hay parcial nuestro»: el caller degrada a `Length`, y que
+/// la reanudación rechace lo que haya es trabajo de [`abre_staging_estable`].
+#[allow(unsafe_code)]
+pub(crate) fn abre_parcial_verificado(
+    path: &std::path::Path,
+) -> Result<Option<std::fs::File>, Error> {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(map_errno(&e)),
+    };
+    let md = file.metadata().map_err(|e| crate::provider::map_io(&e))?;
+    // SAFETY: `geteuid` no toma punteros y no puede fallar.
+    if !md.file_type().is_file() || md.nlink() != 1 || md.uid() != unsafe { libc::geteuid() } {
+        return Ok(None);
+    }
+    quita_nonblock(&file)?;
+    Ok(Some(file))
+}
+
 /// `fstat` de un descriptor ya abierto.
 #[allow(unsafe_code)]
 fn fstat_de(file: &std::fs::File) -> Result<libc::stat, Error> {
