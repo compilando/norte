@@ -26,6 +26,23 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Swapping two panes no longer blanks both of them.** The paint window
+  travelled with the pane, so after a swap each side painted rows from a band
+  the reader was not looking at — and nothing corrected it, because the
+  renderer owns the scroll and a swap does not move it.
+- **A swap during a listing no longer freezes it at a hundred entries.** The
+  gesture re-issued only a navigation, and a directory longer than one page
+  spends most of its listing time in the *other* in-flight state — the drain
+  that carries the rest of the stream. The remainder was then discarded and
+  the listing stayed at its first page, in `Ready`, saying nothing; marking
+  everything acted on that slice. A listing now says when it has FINISHED
+  arriving, which is what its flag always claimed to mean.
+- **A redundant mirror or pull no longer clears the other pane's marks.** With
+  both panes already in the directory, the gesture re-listed the receiving one
+  for nothing, dropping its selection on the way.
+- **Hiding the hidden entries says how many marks it took with it.** They were
+  pruned in silence, so the next bulk op ran on fewer files than the reader
+  had marked.
 - **The window paints names with the reinterpretation the panel has set**
   (#57). It was cycling the encoding internally and painting the same thing,
   so `pane.names-encoding` could only be read as broken.

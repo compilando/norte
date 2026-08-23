@@ -404,7 +404,13 @@ enum Mensaje {
     /// El `policy.decide` que APROBABA no llegó al daemon.
     AprobacionNoEntregada,
     /// Más entradas del listado que se está drenando por detrás.
-    MasEntradas(Box<(RequestToken, u32, Vec<Entry>)>),
+    ///
+    /// El `bool` dice si es el ÚLTIMO lote. Sin él, `drenando` se levantaba
+    /// al pedir el listado y no lo bajaba nadie nunca —ni siquiera cuando el
+    /// stream se agotaba dentro de la primera página—, así que el campo no
+    /// significaba «sigue llegando» sino «alguna vez se pidió esto», y
+    /// cualquiera que lo consultara para decidir se equivocaba.
+    MasEntradas(Box<(RequestToken, u32, Vec<Entry>, bool)>),
     /// Lo que contestó una petición que se lanzó para un OVERLAY.
     ///
     /// Las cinco viajan juntas porque son la misma historia: una superficie
@@ -2177,41 +2183,52 @@ impl Estado {
         use futures::StreamExt as _;
         let (mut stream, omitidas) = listado?;
         let mut primera = Vec::with_capacity(FIRST_PAGE);
+        let mut agotado = false;
         while primera.len() < FIRST_PAGE {
             match stream.next().await {
                 Some(Ok(e)) => primera.push(e),
                 // Un error a mitad de página se cuenta como el error del
                 // listado: media página no es un listado.
                 Some(Err(e)) => return Err(e),
-                None => return Ok((primera, omitidas)),
-            }
-        }
-        tokio::spawn(async move {
-            let mut lote = Vec::with_capacity(FILL_BATCH);
-            while let Some(entrada) = stream.next().await {
-                let Ok(entrada) = entrada else {
-                    // El resto se cortó. Lo que ya se pintó sigue siendo
-                    // válido; callarlo es mejor que tirar el listado entero.
+                None => {
+                    agotado = true;
                     break;
-                };
-                lote.push(entrada);
-                if lote.len() >= FILL_BATCH {
-                    let batch = std::mem::take(&mut lote);
-                    if buzon
-                        .send(Mensaje::MasEntradas(Box::new((token, slot, batch))))
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                    lote = Vec::with_capacity(FILL_BATCH);
                 }
             }
-            if !lote.is_empty() {
-                let _ = buzon
-                    .send(Mensaje::MasEntradas(Box::new((token, slot, lote))))
-                    .await;
+        }
+        // La tarea se lanza SIEMPRE, aunque el stream ya se haya agotado: su
+        // último mensaje es lo que baja `drenando`, y sin él un listado que
+        // cabe en una página dejaría el hueco marcado como «sigue llegando»
+        // para el resto de la sesión. Y se lanza APARTE en vez de mandarlo
+        // aquí porque este futuro lo espera el actor: mandar al buzón desde
+        // dentro se bloquearía contra el único que lo vacía.
+        tokio::spawn(async move {
+            let mut lote = Vec::with_capacity(FILL_BATCH);
+            if !agotado {
+                while let Some(entrada) = stream.next().await {
+                    let Ok(entrada) = entrada else {
+                        // El resto se cortó. Lo que ya se pintó sigue siendo
+                        // válido; callarlo es mejor que tirar el listado
+                        // entero.
+                        break;
+                    };
+                    lote.push(entrada);
+                    if lote.len() >= FILL_BATCH {
+                        let batch = std::mem::take(&mut lote);
+                        if buzon
+                            .send(Mensaje::MasEntradas(Box::new((token, slot, batch, false))))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                        lote = Vec::with_capacity(FILL_BATCH);
+                    }
+                }
             }
+            let _ = buzon
+                .send(Mensaje::MasEntradas(Box::new((token, slot, lote, true))))
+                .await;
         });
         Ok((primera, omitidas))
     }
@@ -2292,6 +2309,9 @@ impl Estado {
                 hueco.estado = SlotState::Ready;
             }
             Err(e) => {
+                // Sin stream no hay drenaje que vaya a contestar, así que la
+                // bandera la baja quien la levantó.
+                hueco.drenando = None;
                 hueco.pane.set_listing(dir, Vec::new());
                 hueco.marcas_a_restaurar.clear();
                 hueco.estado = SlotState::Error {
@@ -2971,12 +2991,12 @@ impl Estado {
     /// Un lote más del listado que se está drenando por detrás.
     fn aterrizar_lote(
         &mut self,
-        datos: (RequestToken, u32, Vec<Entry>),
+        datos: (RequestToken, u32, Vec<Entry>, bool),
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let (token, slot, batch) = datos;
-        let u = self.aplicar_lote(slot, token, batch)?;
+        let (token, slot, batch, ultimo) = datos;
+        let u = self.aplicar_lote(slot, token, batch, ultimo)?;
         self.sondear(slot, backend, buzon);
         self.adornar(slot, backend, buzon);
         Some(u)
@@ -11139,13 +11159,31 @@ impl Estado {
     /// apartadas siguen en el modelo. Y se ANUNCIA, porque un listado que
     /// encoge sin decir por qué se lee como un fallo del panel.
     fn alternar_ocultos(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let visibles = self.hueco_mut().pane.toggle_hidden();
+        let (visibles, podadas) = {
+            let hueco = self.hueco_mut();
+            let visibles = hueco.pane.toggle_hidden();
+            (visibles, hueco.pane.pruned_marks())
+        };
         let clave = if visibles {
             "msg-hidden-shown"
         } else {
             "msg-hidden-hidden"
         };
-        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+        let mut frase = norte_i18n::t_in(self.lang, clave);
+        if podadas > 0 {
+            // Apartar las ocultas PODA las marcas de las que se van. El
+            // contrato de `PaneState::pruned_marks` es que eso jamás es
+            // silencioso: callarlo mandaría la siguiente op en masa sobre
+            // menos ficheros de los que el lector marcó, creyendo él que van
+            // todos.
+            frase.push_str(", ");
+            frase.push_str(&norte_i18n::ta_in(
+                self.lang,
+                "status-marks-pruned",
+                &[("n", &podadas.to_string())],
+            ));
+        }
+        self.status.message = Some(clamp_display(frase));
         let filas = self.parche_filas();
         let cambio = ViewChange::Status(self.status.clone());
         (self.aplicada(), vec![filas, self.parche(vec![cambio])])
@@ -11206,6 +11244,16 @@ impl Estado {
                 let Some(destino) = self.dir_en_curso(origen) else {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 };
+                if self.dir_en_curso(llega).as_ref() == Some(&destino) {
+                    // Los dos ya están ahí. Un cd redundante RE-LISTA el
+                    // panel que llega: `set_listing` le borra las marcas y
+                    // una navegación —a diferencia de un refresco— no las
+                    // restaura, además de deslizarle el listado bajo el
+                    // cursor. Todo eso a cambio de nada, porque ya enseña lo
+                    // que se le pide. El TUI lo rehúsa por lo mismo
+                    // (`gestures::mirror_plan`).
+                    return (self.aplicada(), Vec::new());
+                }
                 (
                     self.aplicada(),
                     self.navegar_hueco(llega, &destino, Trail::Record, backend, buzon),
@@ -11229,10 +11277,13 @@ impl Estado {
 
     /// Los dos listados cambian de sitio. NO toca disco.
     ///
-    /// Lo que se intercambia es el HUECO entero —listado, cursor, marcas,
-    /// rastro y orden—, porque partirlo sería inventar reglas sobre qué se
-    /// queda dónde. El foco no se mueve: quien lo tenía sigue teniéndolo, y
-    /// ahora enseña lo otro, que es lo que el gesto significa.
+    /// Lo que se intercambia es el CONTENIDO del hueco —listado, cursor,
+    /// marcas, rastro y orden—, porque partirlo más sería inventar reglas
+    /// sobre qué se queda dónde. El foco no se mueve: quien lo tenía sigue
+    /// teniéndolo, y ahora enseña lo otro, que es lo que el gesto significa.
+    ///
+    /// Lo único que NO viaja es la ventana de pintado (`primera_visible` y
+    /// `visibles`): esa es geometría del SLOT, no del listado.
     ///
     /// Lo que estaba EN VUELO es la parte que no se ve. Una respuesta viaja
     /// etiquetada con su hueco, así que tras el intercambio llegaría al hueco
@@ -11248,11 +11299,26 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let (Some(ha), Some(hb)) = (self.huecos.remove(&a), self.huecos.remove(&b)) else {
-            // Uno de los dos desapareció entre el rol y aquí: se deshace lo
-            // hecho y se dice que la pantalla ya no es la que se creía.
+        if !self.huecos.contains_key(&a) || !self.huecos.contains_key(&b) {
+            // Uno de los dos desapareció entre el rol y aquí. Se comprueba
+            // ANTES de sacar ninguno: los dos `remove` de una tupla se
+            // evalúan los dos antes de casar el patrón, así que salir por el
+            // camino de error con uno ya extraído lo DROPEA — «se deshace lo
+            // hecho» no deshacía nada.
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let (Some(mut ha), Some(mut hb)) = (self.huecos.remove(&a), self.huecos.remove(&b)) else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
+        // La ventana de pintado se queda en SU slot. `primera_visible` y
+        // `visibles` no describen el listado: los pone el renderer con
+        // `set_visible_range`, y su `scrollTop` es suyo — un intercambio no
+        // lo mueve ni dispara un evento de scroll que lo recalcule. Si
+        // viajaran con el hueco, cada panel pintaría filas de una banda que
+        // el lector no tiene delante y los DOS se verían vacíos, sin nada
+        // que lo corrigiera salvo arrastrar la barra a mano.
+        std::mem::swap(&mut ha.primera_visible, &mut hb.primera_visible);
+        std::mem::swap(&mut ha.visibles, &mut hb.visibles);
         self.huecos.insert(a, hb);
         self.huecos.insert(b, ha);
         for slot in [a, b] {
@@ -11278,24 +11344,62 @@ impl Estado {
 
     /// Vuelve a pedir lo que este hueco tenía en vuelo, con testigo nuevo.
     ///
-    /// Sin nada en vuelo no hace nada. Conserva el DESTINO de la petición
-    /// vieja: una navegación interrumpida por un intercambio sigue yendo a
-    /// donde iba, no al directorio del que salía.
+    /// «En vuelo» son DOS cosas, y mirar solo la primera dejaba pasar el caso
+    /// común. `en_vuelo` se limpia en cuanto aterriza la primera página,
+    /// mientras `drenando` sigue trayendo el resto del stream: en un
+    /// directorio de más de `FIRST_PAGE` entradas —o sea casi cualquiera— hay
+    /// una ventana en la que solo vive el drenaje. Los lotes que siguieran
+    /// llegando se descartarían por testigo (no se cruzan de hueco, eso está
+    /// bien), y el listado se quedaría congelado en las cien primeras
+    /// entradas, en `Ready`, sin decir nada: marcar todo actuaría sobre ese
+    /// trozo.
+    ///
+    /// Los dos casos se repiden distinto:
+    ///
+    /// - **Navegación**: conserva el DESTINO de la petición vieja, no el
+    ///   directorio del que salía.
+    /// - **Solo drenaje**: la primera página ya está en pantalla, así que
+    ///   esto es un REFRESCO de lo que el lector mira — cursor y marcas
+    ///   vuelven, con la misma disciplina que [`Self::refrescar`].
+    ///
+    /// Sin ninguna de las dos no hace nada, y no gasta testigo.
     fn reanudar_peticion(
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
+        let Some(h) = self.huecos.get(&slot) else {
+            return;
+        };
+        let navegando = h.en_vuelo.is_some();
+        if !navegando && h.drenando.is_none() {
+            return;
+        }
         self.token += 1;
         let token = RequestToken(self.token);
         let Some(h) = self.huecos.get_mut(&slot) else {
             return;
         };
-        if h.en_vuelo.is_none() {
-            return;
+        let dir = if navegando {
+            h.dir_pedido.clone().unwrap_or_else(|| h.pane.dir().clone())
+        } else {
+            // El hueco YA está en su directorio: lo que faltaba era el resto.
+            h.pane.dir().clone()
+        };
+        if !navegando {
+            if let Some(sel) = h.pane.selected().map(|e| e.path.clone()) {
+                h.pane.set_pending_focus(sel);
+            }
+            h.pane.remember_cursor();
+            // `marked_paths` cae al cursor sin marcas, y restaurar ESO sería
+            // una marca que nadie hizo.
+            h.marcas_a_restaurar = if h.pane.marks_len() > 0 {
+                h.pane.marked_paths()
+            } else {
+                Vec::new()
+            };
         }
-        let dir = h.dir_pedido.clone().unwrap_or_else(|| h.pane.dir().clone());
         h.en_vuelo = Some(token);
         h.drenando = Some(token);
         h.estado = SlotState::Loading;
@@ -12634,11 +12738,21 @@ impl Estado {
         slot: u32,
         token: RequestToken,
         batch: Vec<Entry>,
+        ultimo: bool,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         let hueco = self.huecos.get_mut(&slot)?;
         if hueco.drenando != Some(token) {
             // Un lote de una navegación que ya fue relevada: pegarlo sería
             // mezclar dos árboles en una pantalla.
+            return None;
+        }
+        if ultimo {
+            // Se acabó el stream: este hueco ya no está creciendo.
+            hueco.drenando = None;
+        }
+        if batch.is_empty() {
+            // El último lote puede venir vacío —el stream cabía justo—: no
+            // hay filas nuevas que pintar, solo la bandera que bajar.
             return None;
         }
         hueco.pane.extend(batch);

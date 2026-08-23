@@ -13830,6 +13830,249 @@ async fn intercambiar_no_pide_nada_al_backend() {
     );
 }
 
+/// La ventana de PINTADO no viaja con el intercambio.
+///
+/// `primera_visible`/`visibles` los pone el renderer por slot con
+/// `set_visible_range`, y su `scrollTop` es suyo: un swap no lo mueve ni
+/// dispara un evento de scroll. Si la ventana viajara con el hueco, cada
+/// panel pintaría filas de una banda que el lector no tiene delante y los DOS
+/// se verían VACÍOS. Con listados cortos y los dos arriba del todo no se nota
+/// nada, que es por lo que hace falta este test y no el de al lado.
+#[tokio::test]
+async fn el_intercambio_no_mueve_la_ventana_de_pintado() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        (0..300).map(|i| (format!("f{i:03}").into_bytes(), false)),
+    );
+    let (h, _snap) = host_con_layout(Arc::new(f), "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::SetVisibleRange {
+        slot_id: 1,
+        first: 200,
+        count: 30,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::SetVisibleRange {
+        slot_id: 2,
+        first: 0,
+        count: 30,
+    })
+    .await
+    .expect("host vivo");
+    let antes = foto(&h, &mut sub).await;
+    assert_eq!(listado_de(&antes, 1).first_visible, 200);
+    assert_eq!(listado_de(&antes, 2).first_visible, 0);
+
+    h.dispatch(tecla_mod("u", true, false))
+        .await
+        .expect("host vivo");
+    let despues = foto(&h, &mut sub).await;
+
+    assert_eq!(
+        listado_de(&despues, 1).first_visible,
+        200,
+        "el slot que estaba por la fila 200 sigue pintando por la 200: el \
+         scroll del renderer no se ha movido"
+    );
+    assert_eq!(
+        listado_de(&despues, 2).first_visible,
+        0,
+        "y el que estaba arriba sigue arriba"
+    );
+}
+
+/// Un intercambio durante una NAVEGACIÓN la repide, apuntando a donde iba.
+///
+/// La respuesta en vuelo viaja etiquetada con su slot: tras el cambio llega
+/// al hueco equivocado y se descarta por testigo. Sin repedirla, el panel se
+/// queda `Loading` para siempre.
+#[tokio::test]
+async fn el_intercambio_repide_la_navegacion_en_vuelo() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)],
+    );
+    f.pon("mem:///casa/docs", vec![(b"informe.pdf".to_vec(), false)]);
+    // Lo bastante lento para que el swap caiga DENTRO de la navegación.
+    f.retraso_ms = 400;
+    let (h, snap) = host_con_layout(Arc::new(f), "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+    let b1 = listado_de(&snap, 1);
+    let docs = b1
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("el directorio está");
+    h.dispatch(UiAction::Activate {
+        slot_id: 1,
+        key: docs.key,
+        generation: b1.generation,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(tecla_mod("u", true, false))
+        .await
+        .expect("host vivo");
+
+    for _ in 0..80 {
+        let f = foto(&h, &mut sub).await;
+        let (izq, der) = (listado_de(&f, 1), listado_de(&f, 2));
+        if der.path_display.ends_with("/casa/docs") && izq.path_display.ends_with("/casa") {
+            assert!(
+                !matches!(izq.state, norte_ui_host::dto::SlotState::Loading)
+                    && !matches!(der.state, norte_ui_host::dto::SlotState::Loading),
+                "ningún panel se queda cargando: {:?} {:?}",
+                izq.state,
+                der.state
+            );
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("la navegación que el intercambio interrumpió no llegó a su destino");
+}
+
+/// Un intercambio durante el DRENAJE también lo repide.
+///
+/// `en_vuelo` muere con la primera página y `drenando` sigue vivo: en un
+/// directorio de más de cien entradas —o sea casi cualquiera— hay una ventana
+/// en la que solo vive el drenaje. Mirar solo `en_vuelo` dejaba el listado
+/// congelado en cien entradas, en `Ready` y sin decir nada, y marcar todo
+/// actuaba sobre ese trozo.
+#[tokio::test]
+async fn el_intercambio_repide_el_drenaje() {
+    let puerta = Arc::new(backend_falso::Puerta::default());
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        (0..250).map(|i| (format!("f{i:03}").into_bytes(), false)),
+    );
+    f.puerta_drenaje = Some(Arc::clone(&puerta));
+    let (h, _snap) = host_con_layout(Arc::new(f), "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+
+    // La primera página ya está en pantalla y el resto sigue detenido en la
+    // puerta: ESTE es el estado que el bug necesitaba.
+    let mut antes = foto(&h, &mut sub).await;
+    for _ in 0..80 {
+        if listado_de(&antes, 1).total_rows == Some(100) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        antes = foto(&h, &mut sub).await;
+    }
+    assert_eq!(
+        listado_de(&antes, 1).total_rows,
+        Some(100),
+        "la primera página aterrizó y el drenaje sigue detenido"
+    );
+
+    h.dispatch(tecla_mod("u", true, false))
+        .await
+        .expect("host vivo");
+    puerta.abrir();
+
+    for _ in 0..80 {
+        let f = foto(&h, &mut sub).await;
+        if listado_de(&f, 1).total_rows == Some(250) && listado_de(&f, 2).total_rows == Some(250) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("el listado se quedó en la primera página: el intercambio no repidió el drenaje");
+}
+
+/// `pane.toggle-hidden` PODA las marcas de lo que aparta, y lo dice.
+///
+/// El contrato de `PaneState::pruned_marks` es que una selección que alimenta
+/// una op en masa jamás encoge en silencio: callarlo copiaría menos ficheros
+/// de los que el lector marcó, creyendo él que van todos.
+#[tokio::test]
+async fn apartar_los_ocultos_dice_las_marcas_que_se_lleva() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(b".env".to_vec(), false), (b"notas.txt".to_vec(), false)],
+    );
+    let (h, snap) = host_arbol(Arc::new(f)).await;
+    let oculta = listado(&snap)
+        .rows
+        .iter()
+        .find(|r| r.display_name == ".env")
+        .expect("los ocultos se ven de fábrica");
+    h.dispatch(UiAction::ToggleMark {
+        slot_id: 1,
+        key: oculta.key,
+        generation: listado(&snap).generation,
+    })
+    .await
+    .expect("host vivo");
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.toggle-hidden").await;
+    let despues = foto(&h, &mut sub).await;
+
+    assert_eq!(
+        listado_de(&despues, 1).marks,
+        0,
+        "la marca se fue con la fila"
+    );
+    let dicho = despues.status.message.clone().unwrap_or_default();
+    assert!(
+        dicho.contains('1') && dicho.contains("caída") || dicho.contains("caídas"),
+        "y se DICE cuántas se cayeron: {dicho:?}"
+    );
+}
+
+/// Un espejo REDUNDANTE no toca el otro panel.
+///
+/// Los dos ya enseñan lo mismo, así que un cd sería re-listar: `set_listing`
+/// le borra las marcas —una navegación, a diferencia de un refresco, no las
+/// restaura— y le desliza el listado bajo el cursor, a cambio de nada. El TUI
+/// lo rehúsa por lo mismo (`gestures::mirror_plan`).
+#[tokio::test]
+async fn un_espejo_redundante_no_borra_las_marcas_del_otro() {
+    let backend = arbol();
+    let (h, snap) = host_con_layout(Arc::clone(&backend), "orthodox", (120, 40)).await;
+    let b2 = listado_de(&snap, 2);
+    // `fila_de` RECHAZA un slot que no sea el activo, así que el foco va
+    // primero al 2 y vuelve al 1. Lo que se prueba aquí es el espejo.
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::ToggleMark {
+        slot_id: 2,
+        key: b2.rows[0].key,
+        generation: b2.generation,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::FocusSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    let mut sub = h.subscribe();
+    let antes = foto(&h, &mut sub).await;
+    assert_eq!(listado_de(&antes, 2).marks, 1);
+    let listados = backend.listados();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.mirror").await;
+    let despues = foto(&h, &mut sub).await;
+
+    assert_eq!(
+        listado_de(&despues, 2).marks,
+        1,
+        "los dos ya estaban en el mismo sitio: la marca sigue puesta"
+    );
+    assert_eq!(
+        backend.listados(),
+        listados,
+        "y no se ha vuelto a pedir nada"
+    );
+}
+
 /// Un gesto de panel sin otro panel se DICE, y con la frase que distingue
 /// «no hay otro» de «hay varios, designa uno».
 #[tokio::test]
@@ -13953,18 +14196,59 @@ async fn un_favorito_invalido_se_queda_y_se_dice() {
 /// foco en el panel derecho, el selector sigue siendo el del izquierdo.
 #[tokio::test]
 async fn los_volumenes_por_lado_no_siguen_al_foco() {
-    let (h, _snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
-    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
-        .await
-        .expect("host vivo");
-    let mut sub = h.subscribe();
+    // Los dos sentidos, porque una implementación que leyera el foco pasaría
+    // cualquiera de los dos por separado: lo que hay que fijar es que el
+    // panel que se MUEVE es el del lado nombrado y el otro no se toca.
+    for (comando, montado, quieto) in [
+        ("pane.select-drive-left", 1_u32, 2_u32),
+        ("pane.select-drive-right", 2, 1),
+    ] {
+        let mut f = Falso::default();
+        f.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+        f.pon("mem:///otro", vec![(b"raiz.txt".to_vec(), false)]);
+        f.volumenes = vec![volumen("mem:///otro", "ext4", false)];
+        let (h, _snap) = host_con_layout(Arc::new(f), "orthodox", (200, 60)).await;
+        // El foco se pone en el panel CONTRARIO al que el comando nombra.
+        h.dispatch(UiAction::FocusSlot { slot_id: quieto })
+            .await
+            .expect("host vivo");
+        let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.select-drive-left").await;
-    let abierto = foto(&h, &mut sub).await;
-    assert!(
-        abierto.picker.is_some(),
-        "el selector del lado izquierdo se abre con el foco en el derecho"
-    );
+        ejecutar_por_paleta(&h, &mut sub, comando).await;
+        let mut con_filas = None;
+        for _ in 0..40 {
+            let f = foto(&h, &mut sub).await;
+            if f.picker.as_ref().is_some_and(|p| !p.rows.is_empty()) {
+                con_filas = f.picker;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        assert!(
+            con_filas.is_some(),
+            "{comando}: la tabla de montaje llega al selector"
+        );
+
+        h.dispatch(tecla("Enter")).await.expect("host vivo");
+        let mut ok = false;
+        for _ in 0..40 {
+            let f = foto(&h, &mut sub).await;
+            if f.picker.is_none() && listado_de(&f, montado).path_display.contains("otro") {
+                assert!(
+                    listado_de(&f, quieto).path_display.ends_with("/casa"),
+                    "{comando}: el panel del foco NO se ha movido: {}",
+                    listado_de(&f, quieto).path_display
+                );
+                ok = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        assert!(
+            ok,
+            "{comando}: el volumen se monta en el hueco del lado {montado}, no en el del foco"
+        );
+    }
 }
 
 /// Las propiedades de esta ventana son el hueco `metadata`, que ya enseña

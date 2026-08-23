@@ -14,6 +14,41 @@ use futures::future::BoxFuture;
 use norte_proto::{DeleteMode, Entry, EntryKind, Error, VPath};
 use norte_ui_host::backend::{HostBackend, HostTask};
 
+/// Un pestillo de un solo sentido: se abre una vez y se queda abierto.
+///
+/// `notify_waiters` solo despierta a quien YA espera, así que la bandera es
+/// la que manda y el aviso solo evita el sondeo. Una vez abierta, cualquier
+/// petición posterior pasa de largo — que es lo que hace falta cuando el
+/// host repide el listado y el stream nuevo vuelve a llegar aquí.
+#[derive(Default)]
+pub struct Puerta {
+    abierta: std::sync::atomic::AtomicBool,
+    aviso: tokio::sync::Notify,
+}
+
+impl Puerta {
+    /// Deja pasar el drenaje, ahora y para siempre.
+    pub fn abrir(&self) {
+        self.abierta.store(true, Ordering::SeqCst);
+        self.aviso.notify_waiters();
+    }
+
+    async fn esperar(&self) {
+        loop {
+            if self.abierta.load(Ordering::SeqCst) {
+                return;
+            }
+            // El futuro se arma ANTES de la segunda comprobación: armarlo
+            // después perdería un `abrir` que cayera justo en medio.
+            let esperando = self.aviso.notified();
+            if self.abierta.load(Ordering::SeqCst) {
+                return;
+            }
+            esperando.await;
+        }
+    }
+}
+
 /// Un backend de tabla: para cada directorio, los nombres que contiene y de
 /// qué clase son.
 //
@@ -32,6 +67,14 @@ pub struct Falso {
     pub listados: AtomicUsize,
     /// Retraso artificial, para provocar la carrera de una respuesta tardía.
     pub retraso_ms: u64,
+    /// Detiene el stream JUSTO después de la primera página, hasta que el
+    /// test la abre.
+    ///
+    /// Es la única forma de estar DENTRO de la ventana en la que `en_vuelo`
+    /// ya se limpió y `drenando` sigue vivo, que es donde vive el bug que
+    /// este mando existe para probar. Un `sleep` valdría de casualidad; esto
+    /// no depende del reloj.
+    pub puerta_drenaje: Option<Arc<Puerta>>,
     /// La sesión que el daemon devuelve, y si esta ventana es su dueña.
     pub sesion: std::sync::Mutex<(norte_proto::methods::Session, bool)>,
     /// Lo ÚLTIMO que se escribió, para comprobar qué guarda el host.
@@ -1071,12 +1114,25 @@ impl HostBackend for Falso {
             .collect();
         let retraso = self.retraso_ms;
         let omitidas = self.omitidas;
+        let puerta = self.puerta_drenaje.clone();
         Box::pin(async move {
             if retraso > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
             }
-            let stream: norte_client::EntryStream =
-                Box::pin(futures::stream::iter(entradas.into_iter().map(Ok)));
+            // 100 = `FIRST_PAGE` del host: la entrada 101 es la primera del
+            // DRENAJE, y es ahí donde se corta.
+            let stream: norte_client::EntryStream = Box::pin(futures::stream::unfold(
+                (entradas.into_iter().enumerate(), puerta),
+                |(mut it, puerta)| async move {
+                    let (i, e) = it.next()?;
+                    if i == 100
+                        && let Some(p) = &puerta
+                    {
+                        p.esperar().await;
+                    }
+                    Some((Ok(e), (it, puerta)))
+                },
+            ));
             Ok((stream, omitidas))
         })
     }

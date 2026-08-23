@@ -165,6 +165,37 @@ command with the surface it already has, rather than growing a second one:
   kind, size and date of the highlighted entry. A properties dialog with
   permissions and owner is a separate surface, and it is deferred as such.
 
+And `pane.swap` exchanges the CONTENT of two slots, never the slot itself.
+What travels is the listing, the cursor, the marks, the trail and the sort; the
+**paint window does not** (`first_visible`/`visible_count`). That pair is
+geometry of the slot: the renderer sets it per slot and owns the `scrollTop`
+behind it, which a swap neither moves nor causes to be recomputed. Let it
+travel and both panes paint rows outside the band the reader is looking at —
+both appear EMPTY, with no scroll event to correct it.
+
+The same gesture has to re-issue what was in flight, and "in flight" is two
+things, not one. A listing response is labelled with its slot, so after the
+exchange it lands on the wrong slot and is discarded by token: the pane would
+load forever. But the first page landing clears only the first of the two
+flags; the drain that carries the rest of the stream is still alive, and in any
+directory over a page long that is the state a swap will actually find. Both
+are re-issued, and they are re-issued DIFFERENTLY: a navigation keeps its
+destination, whereas a drain is a refresh of what the reader already sees, so
+its cursor and marks are restored. Which in turn requires the drain to say when
+it ENDS — a flag raised at request time and lowered by nobody does not mean
+"still arriving", it means "this was asked for once", and anything consulting
+it decides wrong.
+
+Two more rules of the same family, about not shrinking things silently:
+
+- **A redundant `pane.mirror`/`pane.pull` is refused.** If both slots already
+  show the directory, a `cd` re-lists the receiving pane: `set_listing` clears
+  its marks —a navigation, unlike a refresh, does not restore them— and slides
+  the listing under its cursor, for nothing.
+- **`pane.toggle-hidden` says how many marks it pruned.** Stashing the hidden
+  entries drops the marks on them, and the shared contract is that a selection
+  feeding a bulk op never shrinks in silence.
+
 D8's storage has one rule that reading this ADR should not let anyone forget:
 **what the session writes, the session reads.** Panel state carries the sort
 spec and the hidden-entries toggle; a frontend that writes them and restores
