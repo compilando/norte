@@ -90,6 +90,29 @@ const CALCULADAS: &[&str] = &[
 /// fichero.
 const VENTANA: usize = 600;
 
+/// Recorta `fuente` hasta `hasta` sin partir un carácter.
+///
+/// El barrido corta por BYTES —una ventana de 600 detrás de una llamada—, y
+/// el código de este host está comentado en castellano: una raya o una tilde
+/// a caballo del corte panicaba el test, que es una avería del arnés y no del
+/// host. Se retrocede hasta el límite de carácter más cercano.
+fn hasta_limite(fuente: &str, hasta: usize) -> usize {
+    let mut fin = hasta.min(fuente.len());
+    while fin > 0 && !fuente.is_char_boundary(fin) {
+        fin -= 1;
+    }
+    fin
+}
+
+/// Lo mismo por el otro extremo: avanza hasta un límite de carácter.
+fn desde_limite(fuente: &str, desde: usize) -> usize {
+    let mut ini = desde.min(fuente.len());
+    while ini < fuente.len() && !fuente.is_char_boundary(ini) {
+        ini += 1;
+    }
+    ini
+}
+
 /// Un literal que puede ser una clave Fluent: minúsculas, dígitos y guiones,
 /// con al menos un guion. Descarta rutas, formatos y nombres de kind.
 fn parece_clave(s: &str) -> bool {
@@ -111,7 +134,7 @@ fn claves_elegidas() -> BTreeMap<String, Vec<String>> {
             while let Some(i) = fuente[desde..].find(&aguja) {
                 let inicio = desde + i + aguja.len();
                 desde = inicio;
-                let fin = (inicio + VENTANA).min(fuente.len());
+                let fin = hasta_limite(fuente, inicio + VENTANA);
                 let ventana = &fuente[inicio..fin];
                 let encontradas: Vec<String> = literales(ventana)
                     .into_iter()
@@ -123,8 +146,8 @@ fn claves_elegidas() -> BTreeMap<String, Vec<String>> {
                     // algo que este test SÍ mira.
                     // Con el nombre del campo delante: es parte de la forma
                     // que se reconoce.
-                    let desde_campo = inicio.saturating_sub(aguja.len() + 2);
-                    let cabecera = &fuente[desde_campo..(inicio + 80).min(fuente.len())];
+                    let desde_campo = desde_limite(fuente, inicio.saturating_sub(aguja.len() + 2));
+                    let cabecera = &fuente[desde_campo..hasta_limite(fuente, inicio + 80)];
                     assert!(
                         CALCULADAS.iter().any(|c| cabecera.contains(c)),
                         "{nombre}:{linea}: `{campo}` sin literal y sin estar en \
@@ -149,7 +172,7 @@ fn claves_elegidas() -> BTreeMap<String, Vec<String>> {
             while let Some(i) = fuente[desde..].find(llamada) {
                 let inicio = desde + i + llamada.len();
                 desde = inicio;
-                let fin = (inicio + VENTANA).min(fuente.len());
+                let fin = hasta_limite(fuente, inicio + VENTANA);
                 let encontradas: Vec<String> = literales(&fuente[inicio..fin])
                     .into_iter()
                     .filter(|s| parece_clave(s))

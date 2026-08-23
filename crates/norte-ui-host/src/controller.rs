@@ -404,7 +404,13 @@ enum Mensaje {
     /// El `policy.decide` que APROBABA no llegó al daemon.
     AprobacionNoEntregada,
     /// Más entradas del listado que se está drenando por detrás.
-    MasEntradas(Box<(RequestToken, u32, Vec<Entry>)>),
+    ///
+    /// El `bool` dice si es el ÚLTIMO lote. Sin él, `drenando` se levantaba
+    /// al pedir el listado y no lo bajaba nadie nunca —ni siquiera cuando el
+    /// stream se agotaba dentro de la primera página—, así que el campo no
+    /// significaba «sigue llegando» sino «alguna vez se pidió esto», y
+    /// cualquiera que lo consultara para decidir se equivocaba.
+    MasEntradas(Box<(RequestToken, u32, Vec<Entry>, bool)>),
     /// Lo que contestó una petición que se lanzó para un OVERLAY.
     ///
     /// Las cinco viajan juntas porque son la misma historia: una superficie
@@ -1830,9 +1836,17 @@ impl Hueco {
     /// estrenar un hueco al cambiar de disposición y el de prueba— tenían que
     /// coincidir campo a campo, y un campo nuevo que se olvide en uno de
     /// ellos es un hueco que se comporta distinto según por dónde naciera.
-    fn vacio(dir: VPath) -> Self {
+    ///
+    /// `ocultos` es el estado INICIAL de `[ui] show_hidden` (#107). Lo trae
+    /// quien construye porque es configuración, y el pane nace enseñándolo
+    /// todo: sin esto, una ventana con `show_hidden = false` en su config
+    /// arrancaba enseñando los dotfiles igual, y `pane.toggle-hidden` los
+    /// apartaba «por primera vez» en cada arranque.
+    fn vacio(dir: VPath, ocultos: bool) -> Self {
+        let mut pane = PaneState::new(dir, Vec::new());
+        pane.set_show_hidden(ocultos);
         Self {
-            pane: PaneState::new(dir, Vec::new()),
+            pane,
             historial: History::default(),
             primera_visible: 0,
             visibles: 64,
@@ -1872,15 +1886,20 @@ impl Estado {
     /// Un hueco de listado por cada `browser` del árbol, todos en el mismo
     /// directorio: de dónde arranca cada uno es cosa de la sesión (y hasta
     /// que exista, arrancar los dos donde arrancó el host es lo honesto).
+    ///
+    /// `[ui] show_hidden` (#107) siembra el estado inicial de cada uno, igual
+    /// que en el TUI: ausente = enseñarlo todo.
     fn huecos_iniciales(
         arbol: &Node,
         kinds: &KindRegistry,
         dir: &VPath,
+        settings: &norte_frontend::config::FrontendConfig,
     ) -> std::collections::BTreeMap<u32, Hueco> {
+        let ocultos = settings.common.ui_show_hidden.unwrap_or(true);
         let mut huecos = std::collections::BTreeMap::new();
         for SlotId(id) in arbol.slot_ids() {
             if es_listado(arbol, SlotId(id), kinds) {
-                huecos.insert(id, Hueco::vacio(dir.clone()));
+                huecos.insert(id, Hueco::vacio(dir.clone(), ocultos));
             }
         }
         huecos
@@ -1934,7 +1953,7 @@ impl Estado {
         let lang = Self::lang_de(&locale);
         let kinds = KindRegistry::builtin();
         let reparto = resolve(rect(viewport), &arbol, &kinds);
-        let huecos = Self::huecos_iniciales(&arbol, &kinds, dir);
+        let huecos = Self::huecos_iniciales(&arbol, &kinds, dir, &settings);
         let activo = huecos.keys().copied().next().unwrap_or(1);
         let roles = Self::roles_iniciales(&arbol, &reparto, &kinds, activo);
         let estado = Self {
@@ -2164,41 +2183,52 @@ impl Estado {
         use futures::StreamExt as _;
         let (mut stream, omitidas) = listado?;
         let mut primera = Vec::with_capacity(FIRST_PAGE);
+        let mut agotado = false;
         while primera.len() < FIRST_PAGE {
             match stream.next().await {
                 Some(Ok(e)) => primera.push(e),
                 // Un error a mitad de página se cuenta como el error del
                 // listado: media página no es un listado.
                 Some(Err(e)) => return Err(e),
-                None => return Ok((primera, omitidas)),
-            }
-        }
-        tokio::spawn(async move {
-            let mut lote = Vec::with_capacity(FILL_BATCH);
-            while let Some(entrada) = stream.next().await {
-                let Ok(entrada) = entrada else {
-                    // El resto se cortó. Lo que ya se pintó sigue siendo
-                    // válido; callarlo es mejor que tirar el listado entero.
+                None => {
+                    agotado = true;
                     break;
-                };
-                lote.push(entrada);
-                if lote.len() >= FILL_BATCH {
-                    let batch = std::mem::take(&mut lote);
-                    if buzon
-                        .send(Mensaje::MasEntradas(Box::new((token, slot, batch))))
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                    lote = Vec::with_capacity(FILL_BATCH);
                 }
             }
-            if !lote.is_empty() {
-                let _ = buzon
-                    .send(Mensaje::MasEntradas(Box::new((token, slot, lote))))
-                    .await;
+        }
+        // La tarea se lanza SIEMPRE, aunque el stream ya se haya agotado: su
+        // último mensaje es lo que baja `drenando`, y sin él un listado que
+        // cabe en una página dejaría el hueco marcado como «sigue llegando»
+        // para el resto de la sesión. Y se lanza APARTE en vez de mandarlo
+        // aquí porque este futuro lo espera el actor: mandar al buzón desde
+        // dentro se bloquearía contra el único que lo vacía.
+        tokio::spawn(async move {
+            let mut lote = Vec::with_capacity(FILL_BATCH);
+            if !agotado {
+                while let Some(entrada) = stream.next().await {
+                    let Ok(entrada) = entrada else {
+                        // El resto se cortó. Lo que ya se pintó sigue siendo
+                        // válido; callarlo es mejor que tirar el listado
+                        // entero.
+                        break;
+                    };
+                    lote.push(entrada);
+                    if lote.len() >= FILL_BATCH {
+                        let batch = std::mem::take(&mut lote);
+                        if buzon
+                            .send(Mensaje::MasEntradas(Box::new((token, slot, batch, false))))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                        lote = Vec::with_capacity(FILL_BATCH);
+                    }
+                }
             }
+            let _ = buzon
+                .send(Mensaje::MasEntradas(Box::new((token, slot, lote, true))))
+                .await;
         });
         Ok((primera, omitidas))
     }
@@ -2279,6 +2309,9 @@ impl Estado {
                 hueco.estado = SlotState::Ready;
             }
             Err(e) => {
+                // Sin stream no hay drenaje que vaya a contestar, así que la
+                // bandera la baja quien la levantó.
+                hueco.drenando = None;
                 hueco.pane.set_listing(dir, Vec::new());
                 hueco.marcas_a_restaurar.clear();
                 hueco.estado = SlotState::Error {
@@ -2958,12 +2991,12 @@ impl Estado {
     /// Un lote más del listado que se está drenando por detrás.
     fn aterrizar_lote(
         &mut self,
-        datos: (RequestToken, u32, Vec<Entry>),
+        datos: (RequestToken, u32, Vec<Entry>, bool),
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let (token, slot, batch) = datos;
-        let u = self.aplicar_lote(slot, token, batch)?;
+        let (token, slot, batch, ultimo) = datos;
+        let u = self.aplicar_lote(slot, token, batch, ultimo)?;
         self.sondear(slot, backend, buzon);
         self.adornar(slot, backend, buzon);
         Some(u)
@@ -3833,6 +3866,9 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let dir = self.hueco().pane.dir().clone();
+        // Un hueco que se estrena nace como los del arranque: con la
+        // ocultación de la configuración puesta.
+        let ocultos = self.config.common.ui_show_hidden.unwrap_or(true);
         self.arbol = arbol;
         self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);
         // Desde el ÁRBOL, no desde el reparto. `placements` y `hidden`
@@ -3853,7 +3889,7 @@ impl Estado {
         self.huecos.retain(|id, _| nuevos.contains(id));
         for id in nuevos {
             if let std::collections::btree_map::Entry::Vacant(hueco) = self.huecos.entry(id) {
-                hueco.insert(Hueco::vacio(dir.clone()));
+                hueco.insert(Hueco::vacio(dir.clone(), ocultos));
             }
         }
         match activo {
@@ -4881,7 +4917,64 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.selector = Some(crate::pickers::Selector::volumenes());
+        self.abrir_volumenes_en(self.activo(), backend, buzon)
+    }
+
+    /// Los volúmenes para el hueco de un LADO de la pantalla.
+    ///
+    /// `pane.select-drive-left`/`-right` nombran un lado y no el foco —es lo
+    /// que hacen `Alt+F1`/`Alt+F2`—, y en un árbol de huecos el único
+    /// significado honesto de «izquierda» es la GEOMETRÍA del reparto: el
+    /// listado que se ve más a la izquierda. Sin ninguno de ese lado se dice,
+    /// en vez de caer al del foco: montar un volumen en el panel equivocado
+    /// es exactamente lo que este comando existe para evitar.
+    fn abrir_volumenes_de_lado(
+        &mut self,
+        derecha: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(slot) = self.listado_del_lado(derecha) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-other-slot".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        self.abrir_volumenes_en(slot, backend, buzon)
+    }
+
+    /// El listado que se ve más a la izquierda —o más a la derecha— del
+    /// reparto de ESTE tamaño.
+    ///
+    /// Solo entre los que se ven: una pestaña de atrás no está en ningún
+    /// lado de la pantalla. Empata por `y` y luego por id, para que dos
+    /// listados en la misma columna den siempre la misma respuesta.
+    fn listado_del_lado(&self, derecha: bool) -> Option<u32> {
+        let mut candidatos: Vec<(u16, u16, u32)> = self
+            .reparto
+            .placements
+            .iter()
+            .filter(|(s, _)| self.huecos.contains_key(&s.0))
+            .map(|(s, r)| (r.x, r.y, s.0))
+            .collect();
+        candidatos.sort_unstable();
+        if derecha {
+            candidatos.last().map(|(_, _, id)| *id)
+        } else {
+            candidatos.first().map(|(_, _, id)| *id)
+        }
+    }
+
+    /// Abre el selector de volúmenes para un hueco concreto y PIDE la tabla.
+    fn abrir_volumenes_en(
+        &mut self,
+        slot: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.selector = Some(crate::pickers::Selector::volumenes(slot));
         self.gen_selector += 1;
         let apertura = self.gen_selector;
         let backend = Arc::clone(backend);
@@ -4991,14 +5084,28 @@ impl Estado {
         let Some(s) = self.selector.as_ref() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
+        // El hueco lo dijo el selector al ABRIRSE: `pane.select-drive-left`
+        // nombra un lado, y leer el foco aquí haría que moverlo con la lista
+        // puesta montara el volumen en otro panel.
+        let slot = s.slot();
         let Some(destino) = s.elegir() else {
+            if s.hay_fila() {
+                // Hay fila y no lleva a ninguna parte: un favorito cuya ruta
+                // no parsea. Se DICE, que es lo que la fila ya avisaba.
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: "hotlist-invalid".to_owned(),
+                    },
+                    Vec::new(),
+                );
+            }
             // Sin filas todavía (o la tabla llegó vacía): no hay a dónde ir.
             return (self.aplicada(), Vec::new());
         };
         self.selector = None;
         let cierre = self.parche(vec![ViewChange::Picker { picker: None }]);
         let mut envios = vec![cierre];
-        envios.extend(self.navegar(&destino, Trail::Record, backend, buzon));
+        envios.extend(self.navegar_hueco(slot, &destino, Trail::Record, backend, buzon));
         (self.aplicada(), envios)
     }
 
@@ -7233,6 +7340,18 @@ impl Estado {
             | Efecto::MoverPestana { .. }
             | Efecto::IrAPestana { .. } => {
                 self.efecto_de_disposicion(efecto, backend, buzon)
+            }
+            Efecto::Ordenar(col) => self.ordenar_por_columna(slot, col),
+            Efecto::Refrescar => self.refrescar_visibles(backend, buzon),
+            Efecto::AlternarOcultos => self.alternar_ocultos(),
+            Efecto::CiclarEncoding => self.ciclar_encoding(),
+            Efecto::Espejo | Efecto::Traer | Efecto::Intercambiar => {
+                self.gesto_de_panel(efecto, backend, buzon)
+            }
+            Efecto::Historial => self.abrir_historial(),
+            Efecto::Hotlist => self.abrir_hotlist(),
+            Efecto::VolumenesDeLado { derecha } => {
+                self.abrir_volumenes_de_lado(derecha, backend, buzon)
             }
             Efecto::Columnas => self.abrir_columnas(),
             Efecto::Buscar => self.pedir_busqueda(),
@@ -11004,6 +11123,327 @@ impl Estado {
         }]
     }
 
+    /// Vuelve a pedir el listado de TODOS los huecos que se ven.
+    ///
+    /// De todos y no solo del enfocado, que es lo que hace el TUI y por el
+    /// mismo motivo: lo que cambia un listado por debajo es un cambio EN EL
+    /// DISCO, y un cambio en el disco no respeta el foco. Los ocultos se
+    /// quedan fuera —lo que no se ve no se trae—; ya los despierta
+    /// `despertar_visibles` cuando el reparto los saca a la luz.
+    fn refrescar_visibles(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let slots: Vec<u32> = self
+            .huecos
+            .keys()
+            .copied()
+            .filter(|id| !self.oculto(*id))
+            .collect();
+        let mut cambios = Vec::new();
+        for slot in slots {
+            cambios.extend(self.refrescar(slot, backend, buzon));
+        }
+        if cambios.is_empty() {
+            // Todos tenían algo en vuelo: lo que va a aterrizar es más nuevo
+            // que esta tecla, así que no hay nada que decir ni que pintar.
+            return (self.aplicada(), Vec::new());
+        }
+        (self.aplicada(), vec![self.parche(cambios)])
+    }
+
+    /// Aparta —o devuelve— las entradas ocultas del panel activo (#107).
+    ///
+    /// Presentación-solo: el provider no vuelve a listar, las entradas
+    /// apartadas siguen en el modelo. Y se ANUNCIA, porque un listado que
+    /// encoge sin decir por qué se lee como un fallo del panel.
+    fn alternar_ocultos(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let (visibles, podadas) = {
+            let hueco = self.hueco_mut();
+            let visibles = hueco.pane.toggle_hidden();
+            (visibles, hueco.pane.pruned_marks())
+        };
+        let clave = if visibles {
+            "msg-hidden-shown"
+        } else {
+            "msg-hidden-hidden"
+        };
+        let mut frase = norte_i18n::t_in(self.lang, clave);
+        if podadas > 0 {
+            // Apartar las ocultas PODA las marcas de las que se van. El
+            // contrato de `PaneState::pruned_marks` es que eso jamás es
+            // silencioso: callarlo mandaría la siguiente op en masa sobre
+            // menos ficheros de los que el lector marcó, creyendo él que van
+            // todos.
+            frase.push_str(", ");
+            frase.push_str(&norte_i18n::ta_in(
+                self.lang,
+                "status-marks-pruned",
+                &[("n", &podadas.to_string())],
+            ));
+        }
+        self.status.message = Some(clamp_display(frase));
+        let filas = self.parche_filas();
+        let cambio = ViewChange::Status(self.status.clone());
+        (self.aplicada(), vec![filas, self.parche(vec![cambio])])
+    }
+
+    /// Cicla la reinterpretación de los nombres que no son UTF-8 (#57).
+    ///
+    /// Display-only (regla 1): lo que cambia es cómo se PINTAN los bytes, no
+    /// los bytes. Por eso las claves de fila siguen valiendo y solo viajan
+    /// las filas visibles.
+    fn ciclar_encoding(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let etiqueta = self.hueco_mut().pane.cycle_name_encoding();
+        let frase = match etiqueta {
+            Some(enc) => norte_i18n::ta_in(self.lang, "msg-names-encoding", &[("enc", enc)]),
+            None => norte_i18n::t_in(self.lang, "msg-names-encoding-off"),
+        };
+        self.status.message = Some(clamp_display(frase));
+        let filas = self.parche_filas();
+        let cambio = ViewChange::Status(self.status.clone());
+        (self.aplicada(), vec![filas, self.parche(vec![cambio])])
+    }
+
+    /// Los tres gestos de panel de la ADR 0058: espejo, traer e intercambiar.
+    ///
+    /// Los tres necesitan el OTRO hueco, y el otro hueco lo dice el rol
+    /// compartido —el mismo del que sale el destino de una copia—, nunca «el
+    /// de al lado»: con tres listados, adivinar es mandar el panel de alguien
+    /// a un sitio que no eligió.
+    fn gesto_de_panel(
+        &mut self,
+        efecto: Efecto,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let otro = match self.hueco_destino() {
+            Ok(id) => id,
+            Err(clave) => {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: clave.to_owned(),
+                    },
+                    Vec::new(),
+                );
+            }
+        };
+        let activo = self.activo();
+        match efecto {
+            // Lo que viaja es A DÓNDE VA el panel de origen, no lo que
+            // enseña: durante una navegación `pane.dir()` responde todavía
+            // por el directorio que se abandona, y espejar eso mandaría al
+            // otro panel al sitio del que el lector acaba de salir.
+            Efecto::Espejo | Efecto::Traer => {
+                let (origen, llega) = if matches!(efecto, Efecto::Espejo) {
+                    (activo, otro)
+                } else {
+                    (otro, activo)
+                };
+                let Some(destino) = self.dir_en_curso(origen) else {
+                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                };
+                if self.dir_en_curso(llega).as_ref() == Some(&destino) {
+                    // Los dos ya están ahí. Un cd redundante RE-LISTA el
+                    // panel que llega: `set_listing` le borra las marcas y
+                    // una navegación —a diferencia de un refresco— no las
+                    // restaura, además de deslizarle el listado bajo el
+                    // cursor. Todo eso a cambio de nada, porque ya enseña lo
+                    // que se le pide. El TUI lo rehúsa por lo mismo
+                    // (`gestures::mirror_plan`).
+                    return (self.aplicada(), Vec::new());
+                }
+                (
+                    self.aplicada(),
+                    self.navegar_hueco(llega, &destino, Trail::Record, backend, buzon),
+                )
+            }
+            Efecto::Intercambiar => self.intercambiar_huecos(activo, otro, backend, buzon),
+            // El `match` de arriba no manda aquí nada más.
+            _ => Self::no_muta(),
+        }
+    }
+
+    /// A dónde va un hueco: el directorio pedido si hay una navegación en
+    /// vuelo, y si no el que enseña.
+    ///
+    /// `None` solo si el hueco no existe, que para quien llama es una
+    /// pantalla que cambió por debajo.
+    fn dir_en_curso(&self, slot: u32) -> Option<VPath> {
+        let h = self.huecos.get(&slot)?;
+        Some(h.dir_pedido.clone().unwrap_or_else(|| h.pane.dir().clone()))
+    }
+
+    /// Los dos listados cambian de sitio. NO toca disco.
+    ///
+    /// Lo que se intercambia es el CONTENIDO del hueco —listado, cursor,
+    /// marcas, rastro y orden—, porque partirlo más sería inventar reglas
+    /// sobre qué se queda dónde. El foco no se mueve: quien lo tenía sigue
+    /// teniéndolo, y ahora enseña lo otro, que es lo que el gesto significa.
+    ///
+    /// Lo único que NO viaja es la ventana de pintado (`primera_visible` y
+    /// `visibles`): esa es geometría del SLOT, no del listado.
+    ///
+    /// Lo que estaba EN VUELO es la parte que no se ve. Una respuesta viaja
+    /// etiquetada con su hueco, así que tras el intercambio llegaría al hueco
+    /// equivocado y se descartaría por testigo: el panel se quedaría cargando
+    /// para siempre. Se vuelve a pedir, apuntando a donde iba. Lo mismo con
+    /// el sondeo y la decoración, que casan por RUTA y por eso no pintarían
+    /// nada raro, pero dejarían la memoria de «ya se pidió» sobre un listado
+    /// que ya no está ahí — o sea columnas de tamaño en blanco para siempre.
+    fn intercambiar_huecos(
+        &mut self,
+        a: u32,
+        b: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if !self.huecos.contains_key(&a) || !self.huecos.contains_key(&b) {
+            // Uno de los dos desapareció entre el rol y aquí. Se comprueba
+            // ANTES de sacar ninguno: los dos `remove` de una tupla se
+            // evalúan los dos antes de casar el patrón, así que salir por el
+            // camino de error con uno ya extraído lo DROPEA — «se deshace lo
+            // hecho» no deshacía nada.
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let (Some(mut ha), Some(mut hb)) = (self.huecos.remove(&a), self.huecos.remove(&b)) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        // La ventana de pintado se queda en SU slot. `primera_visible` y
+        // `visibles` no describen el listado: los pone el renderer con
+        // `set_visible_range`, y su `scrollTop` es suyo — un intercambio no
+        // lo mueve ni dispara un evento de scroll que lo recalcule. Si
+        // viajaran con el hueco, cada panel pintaría filas de una banda que
+        // el lector no tiene delante y los DOS se verían vacíos, sin nada
+        // que lo corrigiera salvo arrastrar la barra a mano.
+        std::mem::swap(&mut ha.primera_visible, &mut hb.primera_visible);
+        std::mem::swap(&mut ha.visibles, &mut hb.visibles);
+        self.huecos.insert(a, hb);
+        self.huecos.insert(b, ha);
+        for slot in [a, b] {
+            if let Some(h) = self.huecos.get_mut(&slot) {
+                h.cancelar_sondeo
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                h.cancelar_sondeo = std::sync::Arc::default();
+                h.sondeando = false;
+                h.sondeados.clear();
+                h.olvidar_adornos();
+                h.adornando = false;
+            }
+            self.reanudar_peticion(slot, backend, buzon);
+        }
+        // Cambian las dos mitades de la pantalla a la vez —filas, cabeceras,
+        // ruta, cursor y estado—, así que viaja una FOTO y no seis parches.
+        let snap = self.snapshot();
+        (
+            self.aplicada(),
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+        )
+    }
+
+    /// Vuelve a pedir lo que este hueco tenía en vuelo, con testigo nuevo.
+    ///
+    /// «En vuelo» son DOS cosas, y mirar solo la primera dejaba pasar el caso
+    /// común. `en_vuelo` se limpia en cuanto aterriza la primera página,
+    /// mientras `drenando` sigue trayendo el resto del stream: en un
+    /// directorio de más de `FIRST_PAGE` entradas —o sea casi cualquiera— hay
+    /// una ventana en la que solo vive el drenaje. Los lotes que siguieran
+    /// llegando se descartarían por testigo (no se cruzan de hueco, eso está
+    /// bien), y el listado se quedaría congelado en las cien primeras
+    /// entradas, en `Ready`, sin decir nada: marcar todo actuaría sobre ese
+    /// trozo.
+    ///
+    /// Los dos casos se repiden distinto:
+    ///
+    /// - **Navegación**: conserva el DESTINO de la petición vieja, no el
+    ///   directorio del que salía.
+    /// - **Solo drenaje**: la primera página ya está en pantalla, así que
+    ///   esto es un REFRESCO de lo que el lector mira — cursor y marcas
+    ///   vuelven, con la misma disciplina que [`Self::refrescar`].
+    ///
+    /// Sin ninguna de las dos no hace nada, y no gasta testigo.
+    fn reanudar_peticion(
+        &mut self,
+        slot: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let Some(h) = self.huecos.get(&slot) else {
+            return;
+        };
+        let navegando = h.en_vuelo.is_some();
+        if !navegando && h.drenando.is_none() {
+            return;
+        }
+        self.token += 1;
+        let token = RequestToken(self.token);
+        let Some(h) = self.huecos.get_mut(&slot) else {
+            return;
+        };
+        let dir = if navegando {
+            h.dir_pedido.clone().unwrap_or_else(|| h.pane.dir().clone())
+        } else {
+            // El hueco YA está en su directorio: lo que faltaba era el resto.
+            h.pane.dir().clone()
+        };
+        if !navegando {
+            if let Some(sel) = h.pane.selected().map(|e| e.path.clone()) {
+                h.pane.set_pending_focus(sel);
+            }
+            h.pane.remember_cursor();
+            // `marked_paths` cae al cursor sin marcas, y restaurar ESO sería
+            // una marca que nadie hizo.
+            h.marcas_a_restaurar = if h.pane.marks_len() > 0 {
+                h.pane.marked_paths()
+            } else {
+                Vec::new()
+            };
+        }
+        h.en_vuelo = Some(token);
+        h.drenando = Some(token);
+        h.estado = SlotState::Loading;
+        self.pedir_listado(slot, &dir, token, backend, buzon);
+    }
+
+    /// Abre el rastro de navegación del hueco activo.
+    ///
+    /// Las filas son el MRU compartido (`History::entries`), más reciente
+    /// primero: qué recuerda un panel no puede depender de quién lo pinta.
+    fn abrir_historial(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let slot = self.activo();
+        let rastro = self.hueco().historial.entries().clone();
+        self.selector = Some(crate::pickers::Selector::historial(slot, &rastro));
+        self.gen_selector += 1;
+        let cambio = ViewChange::Picker {
+            picker: self.vista_selector(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Abre los favoritos de la configuración con la que arrancó la ventana.
+    ///
+    /// Los mismos que alimentan la barra lateral, y de la misma fuente: dos
+    /// listas de favoritos que se leen distinto serían dos configuraciones.
+    fn abrir_hotlist(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let slot = self.activo();
+        let favoritos: Vec<(String, Result<VPath, String>)> = self
+            .config
+            .common
+            .hotlist
+            .iter()
+            .map(|h| (h.name.clone(), h.target.clone()))
+            .collect();
+        self.selector = Some(crate::pickers::Selector::hotlist(
+            slot, &favoritos, self.lang,
+        ));
+        self.gen_selector += 1;
+        let cambio = ViewChange::Picker {
+            picker: self.vista_selector(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
     /// Aplica un snapshot de progreso al tablero.
     fn progreso(
         &mut self,
@@ -11937,30 +12377,49 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let anterior = self.hueco().pane.dir().clone();
+        self.navegar_hueco(self.activo(), destino, trail, backend, buzon)
+    }
+
+    /// Lo mismo, sobre un hueco que NO tiene por qué ser el activo.
+    ///
+    /// Existe porque hay gestos que mueven OTRO panel: el espejo manda la
+    /// ubicación del activo al destino, y un selector de volúmenes abierto
+    /// para un lado de la pantalla monta ahí. Antes esto se hacía leyendo
+    /// `activo()` tres veces por dentro, así que no había forma de decirlo.
+    fn navegar_hueco(
+        &mut self,
+        slot: u32,
+        destino: &VPath,
+        trail: Trail,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.token += 1;
+        let token = RequestToken(self.token);
         let destino = destino.clone();
+        let Some(hueco) = self.huecos.get_mut(&slot) else {
+            return Vec::new();
+        };
+        let anterior = hueco.pane.dir().clone();
         // Un `Replay` es el rastro reproduciéndose: registrar ahí haría que
         // `back` se alimentara de sí mismo y el lector oscilara entre dos
         // directorios.
         if anterior != destino && trail == Trail::Record {
-            self.hueco_mut().historial.record(anterior);
+            hueco.historial.record(anterior);
         }
         // La memoria del cursor se toma con el dir que se ABANDONA todavía
         // puesto (contrato de `remember_cursor`).
-        self.hueco_mut().pane.remember_cursor();
-        self.hueco_mut().estado = SlotState::Loading;
-
-        self.token += 1;
-        let token = RequestToken(self.token);
-        self.hueco_mut().en_vuelo = Some(token);
+        hueco.pane.remember_cursor();
+        hueco.estado = SlotState::Loading;
+        hueco.en_vuelo = Some(token);
         // El drenaje vive MÁS que la primera página: se marca aquí y solo lo
         // releva otra navegación del mismo hueco.
-        self.hueco_mut().drenando = Some(token);
+        hueco.drenando = Some(token);
 
-        self.pedir_listado(self.activo(), &destino, token, backend, buzon);
+        self.pedir_listado(slot, &destino, token, backend, buzon);
 
         let cambio = ViewChange::SlotState {
-            slot_id: self.activo(),
+            slot_id: slot,
             state: SlotState::Loading,
         };
         vec![self.parche(vec![cambio])]
@@ -12279,11 +12738,21 @@ impl Estado {
         slot: u32,
         token: RequestToken,
         batch: Vec<Entry>,
+        ultimo: bool,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         let hueco = self.huecos.get_mut(&slot)?;
         if hueco.drenando != Some(token) {
             // Un lote de una navegación que ya fue relevada: pegarlo sería
             // mezclar dos árboles en una pantalla.
+            return None;
+        }
+        if ultimo {
+            // Se acabó el stream: este hueco ya no está creciendo.
+            hueco.drenando = None;
+        }
+        if batch.is_empty() {
+            // El último lote puede venir vacío —el stream cabía justo—: no
+            // hay filas nuevas que pintar, solo la bandera que bajar.
             return None;
         }
         hueco.pane.extend(batch);
@@ -12351,7 +12820,12 @@ impl Estado {
             .path
             .file_name()
             .map_or(&[][..], norte_proto::Segment::as_bytes);
-        let (texto, hostil) = norte_frontend::display_name(bytes);
+        // CON la reinterpretación que el panel tenga puesta (#57): sin ella
+        // `pane.names-encoding` ciclaba por dentro y la pantalla no cambiaba,
+        // que es un comando que solo se puede leer como roto. Lo que se
+        // reinterpreta es el PINTADO; los bytes no se tocan, y la fila sigue
+        // marcada como hostil (regla 1).
+        let (texto, hostil) = norte_frontend::display_name_with(bytes, hueco.pane.name_encoding());
         // Lo sirve el PANE, que re-enmascara al servir: el host acumula pero
         // no es quien decide qué se pinta.
         let adorno = hueco.pane.decoration_for(&e.path);
@@ -12465,6 +12939,12 @@ impl Estado {
                 continue;
             };
             hueco.pane.begin_loading(estado.path.clone());
+            // El orden y los ocultos se ESCRIBÍAN en la sesión y no los leía
+            // nadie: la ventana se acordaba de dónde estabas y olvidaba cómo
+            // lo estabas mirando, así que ordenar por tamaño o apartar los
+            // dotfiles duraba hasta cerrar.
+            hueco.pane.set_sort(estado.sort);
+            hueco.pane.set_show_hidden(estado.show_hidden);
             hueco
                 .historial
                 .seed(estado.back.clone(), estado.forward.clone());
@@ -13064,6 +13544,20 @@ impl Estado {
                 Vec::new(),
             );
         };
+        self.ordenar_por_columna(slot_id, col)
+    }
+
+    /// Ordena un listado por una columna ya resuelta.
+    ///
+    /// Las dos puertas —el click en la cabecera y los `pane.sort-*` del
+    /// catálogo— acaban AQUÍ, y por eso ordenan igual: la columna activa
+    /// invierte y una nueva empieza ascendente, porque quien lo decide es
+    /// `SortSpec::after_click` y no una tabla por superficie.
+    fn ordenar_por_columna(
+        &mut self,
+        slot_id: u32,
+        col: norte_frontend::SortColumn,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(h) = self.huecos.get_mut(&slot_id) else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };

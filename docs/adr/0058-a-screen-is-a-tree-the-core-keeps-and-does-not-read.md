@@ -134,6 +134,74 @@ Two consequences are part of the work, not extras:
   profiles. A layout that does not mention a `slot_id` does not delete its
   state; orphan state is kept with a cap and an age sweep.
 
+### D9 — A command that names a SIDE resolves it by geometry
+
+Some commands in the shared catalogue name a side of the screen rather than a
+role: `pane.select-drive-left`/`-right` are Total Commander's `Alt+F1`/`Alt+F2`,
+and in a two-pane frontend they mean `panes[0]`/`panes[1]` — deliberately NOT
+the focus, so that a reader can mount a volume in the pane they are not
+standing in.
+
+A tree of slots has no `panes[0]`. It does have a resolved layout, so "left" is
+answered the only way that cannot lie: the **leftmost visible slot** of the
+resolved placement (`x`, then `y`, then id), among the slots that are listings.
+Hidden slots are not on any side of the screen, and a side with no listing is
+said out loud rather than falling back to the focused pane — mounting a volume
+in the wrong pane is exactly what the sided variant exists to prevent.
+
+The side is resolved when the picker OPENS, and the picker carries the slot it
+will navigate. Reading the focus at the moment of choosing would mean that
+moving the focus while the list is up changes which pane ends up somewhere
+else.
+
+Two neighbouring rules follow the same principle — the window answers a
+command with the surface it already has, rather than growing a second one:
+
+- **`pane.sort-*` is the header click.** Both doors end at
+  `SortSpec::after_click`, so the active column inverts and a new one starts
+  ascending, whoever asked. `pane.sort-menu` is the columns dialog, where the
+  column, the direction and `dirs_first` already live.
+- **`pane.properties` is the `metadata` slot**, which already paints name,
+  kind, size and date of the highlighted entry. A properties dialog with
+  permissions and owner is a separate surface, and it is deferred as such.
+
+And `pane.swap` exchanges the CONTENT of two slots, never the slot itself.
+What travels is the listing, the cursor, the marks, the trail and the sort; the
+**paint window does not** (`first_visible`/`visible_count`). That pair is
+geometry of the slot: the renderer sets it per slot and owns the `scrollTop`
+behind it, which a swap neither moves nor causes to be recomputed. Let it
+travel and both panes paint rows outside the band the reader is looking at —
+both appear EMPTY, with no scroll event to correct it.
+
+The same gesture has to re-issue what was in flight, and "in flight" is two
+things, not one. A listing response is labelled with its slot, so after the
+exchange it lands on the wrong slot and is discarded by token: the pane would
+load forever. But the first page landing clears only the first of the two
+flags; the drain that carries the rest of the stream is still alive, and in any
+directory over a page long that is the state a swap will actually find. Both
+are re-issued, and they are re-issued DIFFERENTLY: a navigation keeps its
+destination, whereas a drain is a refresh of what the reader already sees, so
+its cursor and marks are restored. Which in turn requires the drain to say when
+it ENDS — a flag raised at request time and lowered by nobody does not mean
+"still arriving", it means "this was asked for once", and anything consulting
+it decides wrong.
+
+Two more rules of the same family, about not shrinking things silently:
+
+- **A redundant `pane.mirror`/`pane.pull` is refused.** If both slots already
+  show the directory, a `cd` re-lists the receiving pane: `set_listing` clears
+  its marks —a navigation, unlike a refresh, does not restore them— and slides
+  the listing under its cursor, for nothing.
+- **`pane.toggle-hidden` says how many marks it pruned.** Stashing the hidden
+  entries drops the marks on them, and the shared contract is that a selection
+  feeding a bulk op never shrinks in silence.
+
+D8's storage has one rule that reading this ADR should not let anyone forget:
+**what the session writes, the session reads.** Panel state carries the sort
+spec and the hidden-entries toggle; a frontend that writes them and restores
+only the path remembers where you were and forgets how you were looking at it,
+which is worse than not storing them at all.
+
 ## Consequences
 
 **Positive**

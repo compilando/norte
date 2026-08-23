@@ -9,6 +9,50 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window has the panel gestures the terminal always had** (#290, phase
+  A): sort by name, extension, size or time; the sort menu; refresh; hidden
+  entries; name reinterpretation; properties; mirror, pull and swap; the
+  history and favourites lists; and the volume picker for a SIDE of the
+  screen. Sixteen commands, no bridge change: the model for every one of them
+  was already shared, so what was missing was the command — which is what a
+  preset binds and what the help documents. Sorting still happens by clicking
+  the header (both doors end at `SortSpec::after_click`), the sort menu is the
+  columns dialog, and properties is the `metadata` slot: the window answers
+  with the surface it already has instead of growing a second one. A side is
+  resolved by geometry and never falls back to the focused pane (ADR 0058 D9).
+- **`[ui] show_hidden` is honoured by the window** (#107), which had been
+  ignoring it: a config that said "do not show dotfiles" opened showing them
+  anyway.
+
+### Fixed
+
+- **Swapping two panes no longer blanks both of them.** The paint window
+  travelled with the pane, so after a swap each side painted rows from a band
+  the reader was not looking at — and nothing corrected it, because the
+  renderer owns the scroll and a swap does not move it.
+- **A swap during a listing no longer freezes it at a hundred entries.** The
+  gesture re-issued only a navigation, and a directory longer than one page
+  spends most of its listing time in the *other* in-flight state — the drain
+  that carries the rest of the stream. The remainder was then discarded and
+  the listing stayed at its first page, in `Ready`, saying nothing; marking
+  everything acted on that slice. A listing now says when it has FINISHED
+  arriving, which is what its flag always claimed to mean.
+- **A redundant mirror or pull no longer clears the other pane's marks.** With
+  both panes already in the directory, the gesture re-listed the receiving one
+  for nothing, dropping its selection on the way.
+- **Hiding the hidden entries says how many marks it took with it.** They were
+  pruned in silence, so the next bulk op ran on fewer files than the reader
+  had marked.
+- **The window paints names with the reinterpretation the panel has set**
+  (#57). It was cycling the encoding internally and painting the same thing,
+  so `pane.names-encoding` could only be read as broken.
+- **The session gives back the sort order and the hidden-entries toggle.**
+  Both were being written and read by nobody: the window remembered where you
+  were and forgot how you were looking at it, so sorting by size lasted until
+  you closed it.
+
+### Added
+
 - **The window shows what plugins say about each row.** Bridge **18**: a row
   can carry the badge a plugin put on it, with the theme role to paint it in,
   and a configured `plugin:` column brings its value. Both are asked for the

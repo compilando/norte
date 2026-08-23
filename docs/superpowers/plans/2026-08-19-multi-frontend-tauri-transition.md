@@ -2122,12 +2122,12 @@ blocked by platform transport
 No command may disappear merely because nobody remembered it. Update help and
 availability from the same classification.
 
-#### The matrix, measured 2026-08-22
+#### The matrix, measured 2026-08-23
 
 The shared catalogue declares **138** live commands (`viewer.*` included).
-The window implements **87** after #287/#288/#289/#291/#292; the TUI
-implements **111**. Nothing was dropped: every one of the 51 the window lacks
-is classified below, and every
+The window implements **103** after #287/#288/#289/#291/#292 and phase A of
+#290; the TUI implements **111**. Nothing was dropped: every one of the 35 the
+window lacks is classified below, and every
 "deferred" line has an issue that can be closed.
 
 | family | in the window | classification |
@@ -2136,7 +2136,8 @@ is classified below, and every
 | `dialog.confirm/cancel/approve/deny` (4) | through the shared resolver since #287 | **supported** |
 | `dialog.*` others (18) | they name answers of dialogs this window does not have | **not applicable today** |
 | `pane.tab-*` (15) | built (#288): the strip crosses the bridge, and a click picks a tab by SLOT | **supported** |
-| `pane.*` others (27) | sorting is done by clicking the header; the rest have no surface | **deferred — #290** |
+| `pane.sort-*` (5), `refresh`, `toggle-hidden`, `names-encoding`, `properties`, `mirror`, `pull`, `swap`, `history`, `hotlist`, `select-drive-left/right` (16) | built (#290 phase A): the model was already shared, so what was missing was the command — sorting still happens by clicking the header, `sort-menu` is the columns dialog, and `properties` is the `metadata` slot | **supported** |
+| `pane.dir-size`, `tree`, `connect`, `disconnect`, `edit`, `edit-new`, `pack`, `unpack`, `test-archive`, `split-file`, `combine-files` (11) | each needs a surface the window does not have yet, or a method the host backend does not carry (`fs.dir_size`) | **deferred — #290 phase B** |
 | `layout.split-h/v`, `close-slot`, `places`, `processes`, `metadata` (6) | built (#291): the tree is edited, not just painted | **supported** |
 | `layout.preview` (1) | this window cannot PAINT a preview slot — it would open grey, as an unsupported kind, and a slot that only paints off is not open | **deferred — #291** |
 | `mark.all/invert/pattern-add/pattern-remove` (4) | built (#289) | **supported** |
