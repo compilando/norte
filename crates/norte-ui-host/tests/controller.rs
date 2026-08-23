@@ -13612,6 +13612,36 @@ async fn foto(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) -> norte_ui_h
     siguiente_foto(sub).await
 }
 
+/// Espera a que una FOTO cumpla `cond`, sin relojes de intervalo.
+///
+/// Hay que PREGUNTAR: ni `total_rows` ni `path_display` viajan en un parche
+/// —solo en una foto, y la foto la pide `Resync`—, así que quedarse
+/// escuchando no basta. Lo que este ayudante no hace es dormir 25 ms entre
+/// intento e intento: se BLOQUEA en el siguiente mensaje del host, o sea
+/// que va al ritmo del host y no al del planificador. El plazo total está
+/// para que una condición que no se cumple se lea como un fallo con su
+/// frase, y no como un test colgado.
+async fn esperar_foto(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+    que: &str,
+    cond: impl Fn(&norte_ui_host::ViewSnapshot) -> bool,
+) -> norte_ui_host::ViewSnapshot {
+    let espera = async {
+        loop {
+            let f = foto(h, sub).await;
+            if cond(&f) {
+                return f;
+            }
+            let _ = siguiente_foto(sub).await;
+        }
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(10), espera).await {
+        Ok(f) => f,
+        Err(_) => panic!("plazo agotado esperando a que {que}"),
+    }
+}
+
 /// `pane.sort-size` ordena por tamaño y repetirlo INVIERTE.
 ///
 /// La misma semántica que un click en la cabecera porque es el MISMO camino:
@@ -13744,17 +13774,10 @@ async fn refrescar_relista_los_dos_paneles() {
     let mut sub = h.subscribe();
 
     ejecutar_por_paleta(&h, &mut sub, "pane.refresh").await;
-    for _ in 0..40 {
-        if backend.listados() >= antes + 2 {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        let _ = foto(&h, &mut sub).await;
-    }
-    panic!(
-        "solo se relistó {} de los dos paneles",
-        backend.listados() - antes
-    );
+    esperar_foto(&h, &mut sub, "los dos paneles se relisten", |_| {
+        backend.listados() >= antes + 2
+    })
+    .await;
 }
 
 /// `pane.mirror` manda la ubicación del panel ACTIVO al panel destino, y el
@@ -13768,17 +13791,12 @@ async fn el_espejo_manda_la_ubicacion_al_destino() {
     let mut sub = h.subscribe();
 
     ejecutar_por_paleta(&h, &mut sub, "pane.mirror").await;
-    for _ in 0..40 {
-        let f = foto(&h, &mut sub).await;
-        if listado_de(&f, 2).path_display.ends_with("/casa")
-            && listado_de(&f, 1).path_display.ends_with("/casa")
-        {
-            assert_eq!(f.focus, Some(1), "el espejo no mueve el foco");
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("el destino no siguió al activo");
+    let f = esperar_foto(&h, &mut sub, "el destino siga al activo", |f| {
+        listado_de(f, 2).path_display.ends_with("/casa")
+            && listado_de(f, 1).path_display.ends_with("/casa")
+    })
+    .await;
+    assert_eq!(f.focus, Some(1), "el espejo no mueve el foco");
 }
 
 /// `pane.pull` es el mismo gesto al revés: la ubicación sale del destino y
@@ -13789,18 +13807,17 @@ async fn traer_mueve_el_panel_del_foco() {
     let mut sub = h.subscribe();
 
     ejecutar_por_paleta(&h, &mut sub, "pane.pull").await;
-    for _ in 0..40 {
-        let f = foto(&h, &mut sub).await;
-        if listado_de(&f, 1).path_display.ends_with("/casa/docs") {
-            assert!(
-                listado_de(&f, 2).path_display.ends_with("/casa/docs"),
-                "el otro se queda donde estaba"
-            );
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("el panel del foco no se trajo la ubicación del otro");
+    let f = esperar_foto(
+        &h,
+        &mut sub,
+        "el panel del foco se traiga la otra ubicación",
+        |f| listado_de(f, 1).path_display.ends_with("/casa/docs"),
+    )
+    .await;
+    assert!(
+        listado_de(&f, 2).path_display.ends_with("/casa/docs"),
+        "el otro se queda donde estaba"
+    );
 }
 
 /// `pane.swap` cambia los dos listados de sitio SIN tocar disco: nadie
@@ -13917,22 +13934,24 @@ async fn el_intercambio_repide_la_navegacion_en_vuelo() {
         .await
         .expect("host vivo");
 
-    for _ in 0..80 {
-        let f = foto(&h, &mut sub).await;
-        let (izq, der) = (listado_de(&f, 1), listado_de(&f, 2));
-        if der.path_display.ends_with("/casa/docs") && izq.path_display.ends_with("/casa") {
-            assert!(
-                !matches!(izq.state, norte_ui_host::dto::SlotState::Loading)
-                    && !matches!(der.state, norte_ui_host::dto::SlotState::Loading),
-                "ningún panel se queda cargando: {:?} {:?}",
-                izq.state,
-                der.state
-            );
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("la navegación que el intercambio interrumpió no llegó a su destino");
+    let f = esperar_foto(
+        &h,
+        &mut sub,
+        "la navegación interrumpida llegue a su destino",
+        |f| {
+            listado_de(f, 2).path_display.ends_with("/casa/docs")
+                && listado_de(f, 1).path_display.ends_with("/casa")
+        },
+    )
+    .await;
+    let (izq, der) = (listado_de(&f, 1), listado_de(&f, 2));
+    assert!(
+        !matches!(izq.state, norte_ui_host::dto::SlotState::Loading)
+            && !matches!(der.state, norte_ui_host::dto::SlotState::Loading),
+        "ningún panel se queda cargando: {:?} {:?}",
+        izq.state,
+        der.state
+    );
 }
 
 /// Un intercambio durante el DRENAJE también lo repide.
@@ -13956,33 +13975,20 @@ async fn el_intercambio_repide_el_drenaje() {
 
     // La primera página ya está en pantalla y el resto sigue detenido en la
     // puerta: ESTE es el estado que el bug necesitaba.
-    let mut antes = foto(&h, &mut sub).await;
-    for _ in 0..80 {
-        if listado_de(&antes, 1).total_rows == Some(100) {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        antes = foto(&h, &mut sub).await;
-    }
-    assert_eq!(
-        listado_de(&antes, 1).total_rows,
-        Some(100),
-        "la primera página aterrizó y el drenaje sigue detenido"
-    );
+    esperar_foto(&h, &mut sub, "aterrice la primera página", |f| {
+        listado_de(f, 1).total_rows == Some(100)
+    })
+    .await;
 
     h.dispatch(tecla_mod("u", true, false))
         .await
         .expect("host vivo");
     puerta.abrir();
 
-    for _ in 0..80 {
-        let f = foto(&h, &mut sub).await;
-        if listado_de(&f, 1).total_rows == Some(250) && listado_de(&f, 2).total_rows == Some(250) {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("el listado se quedó en la primera página: el intercambio no repidió el drenaje");
+    esperar_foto(&h, &mut sub, "el drenaje se repida y llegue entero", |f| {
+        listado_de(f, 1).total_rows == Some(250) && listado_de(f, 2).total_rows == Some(250)
+    })
+    .await;
 }
 
 /// `pane.toggle-hidden` PODA las marcas de lo que aparta, y lo dice.
@@ -14126,14 +14132,10 @@ async fn el_historial_es_el_rastro_compartido() {
     );
 
     h.dispatch(tecla("Enter")).await.expect("host vivo");
-    for _ in 0..40 {
-        let f = foto(&h, &mut sub).await;
-        if f.picker.is_none() && listado(&f).path_display.ends_with("/casa") {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("elegir en el historial no navegó");
+    esperar_foto(&h, &mut sub, "elegir en el historial navegue", |f| {
+        f.picker.is_none() && listado(f).path_display.ends_with("/casa")
+    })
+    .await;
 }
 
 /// `pane.hotlist` enseña los favoritos de la configuración, y uno cuya ruta

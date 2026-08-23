@@ -1341,6 +1341,15 @@ pub struct BrowserSlotView {
     /// no traduce, y «se saltó una» y «se saltó 3» no se dicen igual en todos
     /// los idiomas.
     pub skipped_note: String,
+    /// Cuántas entradas está APARTANDO la ocultación, ya dicho en el idioma
+    /// del lector. Vacío = ninguna, o la ocultación está apagada.
+    ///
+    /// Permanente y no un mensaje de la barra: el aviso de `pane.toggle-hidden`
+    /// lo pisa la siguiente tecla, y entonces un listado que enseña menos de
+    /// lo que hay se queda mudo. Misma disciplina que [`Self::skipped_note`],
+    /// y traducido aquí por lo mismo — «1 oculta» y «3 ocultas» no se dicen
+    /// igual en todos los idiomas.
+    pub hidden_note: String,
     /// Las cabeceras de las columnas configuradas, en su orden. Incluye el
     /// nombre, que en las filas viaja aparte (`display_name`).
     pub columns: Vec<ColumnHeader>,

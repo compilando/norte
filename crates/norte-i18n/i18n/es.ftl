@@ -612,6 +612,8 @@ ext-config-max = como mucho {$max}
 # `effects` de un tema los interpreta cada renderer: los que este no sabe
 # pintar se NOMBRAN, porque un tema retro idéntico se lee como roto.
 picker-volumes-title = Volúmenes
+picker-volumes-title-left = Volúmenes (panel izquierdo)
+picker-volumes-title-right = Volúmenes (panel derecho)
 picker-volumes-loading = preguntando al host por su tabla de montaje…
 picker-volumes-empty = el host no reportó ningún volumen
 picker-history-title = Historial

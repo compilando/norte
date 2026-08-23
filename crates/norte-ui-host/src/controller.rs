@@ -1120,6 +1120,13 @@ fn nueva_instancia() -> String {
 /// significa «bajar el cursor» (ADR 0066, D14).
 struct Hueco {
     pane: PaneState,
+    /// El esquema cuyo orden lleva puesto `pane` ahora mismo (#108).
+    ///
+    /// `[ui.columns] sort` puede dar un orden POR ESQUEMA, y se reaplica
+    /// cuando el hueco aterriza en un esquema distinto — no en cada `cd`,
+    /// que es lo que hace el TUI: aquí la sesión RESTAURA el orden, y
+    /// reaplicarlo en el primer aterrizaje lo borraría antes de que se vea.
+    esquema_del_orden: String,
     /// De dónde vengo y a dónde vuelvo. También compartido.
     historial: History,
     primera_visible: u64,
@@ -1842,11 +1849,14 @@ impl Hueco {
     /// todo: sin esto, una ventana con `show_hidden = false` en su config
     /// arrancaba enseñando los dotfiles igual, y `pane.toggle-hidden` los
     /// apartaba «por primera vez» en cada arranque.
-    fn vacio(dir: VPath, ocultos: bool) -> Self {
+    fn vacio(dir: VPath, ocultos: bool, orden: norte_frontend::SortSpec) -> Self {
+        let esquema = dir.scheme().to_owned();
         let mut pane = PaneState::new(dir, Vec::new());
         pane.set_show_hidden(ocultos);
+        pane.set_sort(orden);
         Self {
             pane,
+            esquema_del_orden: esquema,
             historial: History::default(),
             primera_visible: 0,
             visibles: 64,
@@ -1894,12 +1904,14 @@ impl Estado {
         kinds: &KindRegistry,
         dir: &VPath,
         settings: &norte_frontend::config::FrontendConfig,
+        columnas: &norte_frontend::columns::ColumnsSettings,
     ) -> std::collections::BTreeMap<u32, Hueco> {
         let ocultos = settings.common.ui_show_hidden.unwrap_or(true);
+        let orden = columnas.sort_for(dir.scheme());
         let mut huecos = std::collections::BTreeMap::new();
         for SlotId(id) in arbol.slot_ids() {
             if es_listado(arbol, SlotId(id), kinds) {
-                huecos.insert(id, Hueco::vacio(dir.clone(), ocultos));
+                huecos.insert(id, Hueco::vacio(dir.clone(), ocultos, orden));
             }
         }
         huecos
@@ -1953,7 +1965,7 @@ impl Estado {
         let lang = Self::lang_de(&locale);
         let kinds = KindRegistry::builtin();
         let reparto = resolve(rect(viewport), &arbol, &kinds);
-        let huecos = Self::huecos_iniciales(&arbol, &kinds, dir, &settings);
+        let huecos = Self::huecos_iniciales(&arbol, &kinds, dir, &settings, &columnas);
         let activo = huecos.keys().copied().next().unwrap_or(1);
         let roles = Self::roles_iniciales(&arbol, &reparto, &kinds, activo);
         let estado = Self {
@@ -2270,9 +2282,21 @@ impl Estado {
     /// cursor los decide `PaneState`, que es quien sabe qué hacer con la
     /// memoria del cursor y con un foco pendiente.
     fn aterriza_en(&mut self, id: u32, dir: VPath, res: Result<(Vec<Entry>, Option<u64>), Error>) {
+        // #108: el orden de `[ui.columns]` es POR ESQUEMA, así que se
+        // reaplica cuando el hueco cambia de esquema — no en cada `cd`, que
+        // es lo que hace el TUI. Aquí la SESIÓN restaura el orden, y
+        // reaplicarlo en el primer aterrizaje lo borraría antes de verse.
+        let cambia_esquema = self
+            .huecos
+            .get(&id)
+            .is_some_and(|h| h.esquema_del_orden != dir.scheme());
+        let orden = cambia_esquema.then(|| self.columnas.sort_for(dir.scheme()));
         let Some(hueco) = self.huecos.get_mut(&id) else {
             return;
         };
+        if cambia_esquema {
+            hueco.esquema_del_orden = dir.scheme().to_owned();
+        }
         hueco.en_vuelo = None;
         hueco.dir_pedido = None;
         // El listado es OTRO: lo sondeado antes no dice nada de estas
@@ -2295,6 +2319,9 @@ impl Estado {
         hueco.adornando = false;
         match res {
             Ok((entradas, omitidas)) => {
+                if let Some(spec) = orden {
+                    hueco.pane.set_sort(spec);
+                }
                 hueco.pane.set_listing(dir, entradas);
                 // Un refresco conserva la selección; un `cd` no tiene ninguna
                 // que conservar y llega con la lista vacía. Lo que la
@@ -3889,7 +3916,11 @@ impl Estado {
         self.huecos.retain(|id, _| nuevos.contains(id));
         for id in nuevos {
             if let std::collections::btree_map::Entry::Vacant(hueco) = self.huecos.entry(id) {
-                hueco.insert(Hueco::vacio(dir.clone(), ocultos));
+                hueco.insert(Hueco::vacio(
+                    dir.clone(),
+                    ocultos,
+                    self.columnas.sort_for(dir.scheme()),
+                ));
             }
         }
         match activo {
@@ -4942,7 +4973,11 @@ impl Estado {
                 Vec::new(),
             );
         };
-        self.abrir_volumenes_en(slot, backend, buzon)
+        self.abrir_volumenes_con(
+            crate::pickers::Selector::volumenes_de_lado(slot, derecha),
+            backend,
+            buzon,
+        )
     }
 
     /// El listado que se ve más a la izquierda —o más a la derecha— del
@@ -4974,7 +5009,17 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.selector = Some(crate::pickers::Selector::volumenes(slot));
+        self.abrir_volumenes_con(crate::pickers::Selector::volumenes(slot), backend, buzon)
+    }
+
+    /// El cuerpo compartido: abre ESTE selector y pide la tabla de montaje.
+    fn abrir_volumenes_con(
+        &mut self,
+        selector: crate::pickers::Selector,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.selector = Some(selector);
         self.gen_selector += 1;
         let apertura = self.gen_selector;
         let backend = Arc::clone(backend);
@@ -5088,6 +5133,20 @@ impl Estado {
         // nombra un lado, y leer el foco aquí haría que moverlo con la lista
         // puesta montara el volumen en otro panel.
         let slot = s.slot();
+        if !self.huecos.contains_key(&slot) || self.oculto(slot) {
+            // El reparto cambió con la lista puesta: el hueco que el selector
+            // capturó al abrirse ya no está, o dejó de verse. Navegar ahí
+            // traería un listado que nadie va a mirar —contra «lo que no se
+            // ve no se trae»— o no haría nada y cerraría el selector en
+            // silencio.
+            self.selector = None;
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-other-slot".to_owned(),
+                },
+                vec![self.parche(vec![ViewChange::Picker { picker: None }])],
+            );
+        }
         let Some(destino) = s.elegir() else {
             if s.hay_fila() {
                 // Hay fila y no lleva a ninguna parte: un favorito cuya ruta
@@ -9692,11 +9751,15 @@ impl Estado {
                 Vec::new(),
             );
         };
-        // La siembra es lo que la FILA pinta, con el saneado canónico: editar
-        // produce el texto que se ve. Para un nombre que no es UTF-8 eso
+        // La siembra es lo que la FILA pinta, con el saneado canónico Y con
+        // la reinterpretación que el panel tenga puesta: editar produce el
+        // texto que se ve, y desde #57 la fila puede estar transcodificada.
+        // Sembrar sin ella dejaba `CAF<FFFD>.TXT` bajo una fila que decía
+        // `CAFÉ.TXT`. Para un nombre que sigue sin ser representable eso
         // lleva un U+FFFD, y ese residuo es justo lo que el guard de la
         // confirmación no deja escribir.
-        let (pintable, hostil) = norte_frontend::display_name(nombre.as_bytes());
+        let (pintable, hostil) =
+            norte_frontend::display_name_with(nombre.as_bytes(), hueco.pane.name_encoding());
         let siembra = clamp_display(pintable.clone());
         if siembra != pintable {
             // El recorte le pega una elipsis al final, y `…` es un carácter
@@ -12771,7 +12834,9 @@ impl Estado {
         sondas: &[(VPath, Entry)],
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         let hueco = self.huecos.get_mut(&slot)?;
-        hueco.sondeando = false;
+        // La bandera se baja SOLO si lo que llega describe este listado. Una
+        // tanda cancelada que aterriza tarde bajaba la de la tanda NUEVA, y
+        // entonces `sondear` dejaba lanzar una segunda sobre el mismo hueco.
         if hueco.pane.dir() != dir {
             // El hueco está en OTRO directorio: pegarle estos tamaños sería
             // mentir sobre lo que se ve. (Un lote de relleno, en cambio, no
@@ -12779,6 +12844,7 @@ impl Estado {
             // por ruta.)
             return None;
         }
+        hueco.sondeando = false;
         for (pedido, e) in sondas {
             // Por la ruta que se PIDIÓ: la que devuelve el provider puede ser
             // otra ortografía del mismo nombre (NFD en HFS+, otra caja en
@@ -13176,7 +13242,11 @@ impl Estado {
         let v = self.visor.as_ref()?;
         let imagen = Self::imagen_de(v);
         let alto = self.alto_del_visor();
-        let (path, hostil) = norte_frontend::path_display(&v.path);
+        // El TUI pinta la ruta del visor con el encoding del panel ENFOCADO
+        // (`ui::panels`), y por lo mismo: es el fichero que se abrió desde
+        // ahí.
+        let (path, hostil) =
+            norte_frontend::path_display_with(&v.path, self.hueco().pane.name_encoding());
         Some(crate::dto::ViewerView {
             path_display: clamp_display(path),
             path_hostile: hostil,
@@ -13632,7 +13702,12 @@ impl Estado {
 
     /// La proyección de UN listado.
     fn browser(&self, id: u32, hueco: &Hueco) -> BrowserSlotView {
-        let (path, hostil) = norte_frontend::path_display(hueco.pane.dir());
+        // Con la MISMA reinterpretación que las filas: pintar la cabecera con
+        // los bytes crudos mientras las filas van transcodificadas deja
+        // `pane.names-encoding` a medias — el mojibake se queda arriba y el
+        // lector no puede saber si el comando hizo algo (#57, #293).
+        let (path, hostil) =
+            norte_frontend::path_display_with(hueco.pane.dir(), hueco.pane.name_encoding());
         BrowserSlotView {
             slot_id: id,
             generation: hueco.pane.listing_epoch(),
@@ -13644,6 +13719,14 @@ impl Estado {
             cursor: (!hueco.pane.entries().is_empty())
                 .then_some(RowKey(hueco.pane.cursor() as u64)),
             marks: hueco.pane.marks_len() as u64,
+            hidden_note: match hueco.pane.hidden_count() {
+                0 => String::new(),
+                n => clamp_display(norte_i18n::ta_in(
+                    self.lang,
+                    "status-hidden",
+                    &[("n", &n.to_string())],
+                )),
+            },
             skipped_note: hueco.pane.skipped().map_or_else(String::new, |n| {
                 clamp_display(norte_i18n::ta_in(
                     self.lang,

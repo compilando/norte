@@ -283,6 +283,7 @@
         "cursor": 1,
         "marks": 0,
         "skipped_note": "se saltaron 2 entradas",
+        "hidden_note": "3 ocultas",
         "columns": [
           {
             "id": "name",

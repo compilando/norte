@@ -1873,6 +1873,16 @@ body {
   unicode-bidi: isolate;
 }
 
+/* Lo que la ocultación aparta: mismo sitio y misma disciplina que
+   `.slot-skipped`, en el tono informativo — no es un listado incompleto,
+   es un filtro que el lector puso. */
+.slot-hidden {
+  color: var(--title-fg);
+  unicode-bidi: isolate;
+  flex: none;
+  margin-left: 8px;
+}
+
 /* --- El selector de columnas ------------------------------------------- */
 
 #columns[data-open="true"] {

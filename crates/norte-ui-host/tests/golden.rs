@@ -584,6 +584,10 @@ fn slots_de_referencia() -> Vec<SlotView> {
             // El provider se saltó dos: se DICE. Un listado al que le faltan
             // entradas y no lo avisa miente por omisión.
             skipped_note: "se saltaron 2 entradas".to_owned(),
+            // Los dos avisos a la vez, que es el caso real: un provider que
+            // se saltó entradas Y una ocultación activa. Si el renderer los
+            // pegara en el mismo nodo, esta fixture lo enseñaría.
+            hidden_note: "3 ocultas".to_owned(),
             columns: vec![
                 ColumnHeader {
                     id: "name".to_owned(),

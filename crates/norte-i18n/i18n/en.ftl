@@ -602,6 +602,8 @@ ext-config-max = at most {$max}
 # `effects` are interpreted per renderer: the ones this one cannot paint
 # are NAMED, because a retro theme that looks identical reads as broken.
 picker-volumes-title = Volumes
+picker-volumes-title-left = Volumes (left pane)
+picker-volumes-title-right = Volumes (right pane)
 picker-volumes-loading = asking the host for its mount table…
 picker-volumes-empty = the host reported no volumes
 picker-history-title = History
