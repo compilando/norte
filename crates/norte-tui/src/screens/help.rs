@@ -970,6 +970,7 @@ mod help_key_tests {
             }],
             columns: Vec::new(),
             has_help: true,
+            manifest_digest: None,
         };
         plugin.has_help = true;
         app.freeze_help_plugins(std::slice::from_ref(&plugin));

@@ -298,3 +298,62 @@ async fn con_un_listado_perezoso_los_tamanos_se_piden() {
         "un stat por fichero sin tamaño"
     );
 }
+
+/// Un subárbol ilegible se CUENTA y viaja (#251).
+///
+/// Antes iba a un contador local, salía por un `tracing::info!` y el snapshot
+/// terminal decía `Completed` con un total seguro y demasiado pequeño. Y esta
+/// es la dirección peligrosa del error: el método existe para contestar
+/// «¿cabe esto en el destino?», así que un número silenciosamente corto dice
+/// que sí a una copia que se queda sin sitio a mitad.
+///
+/// Con el campo, quien pinte dice «al menos X». Es el gemelo del `confidence`
+/// que `fs.compare` le da a cada fila, y por el mismo motivo: un recuento sin
+/// él no puede decir que es una cota inferior.
+#[tokio::test]
+async fn un_subarbol_ilegible_se_cuenta_y_viaja_en_el_progreso() {
+    let (engine, mem) = setup();
+    mkdir(&mem, "mem:///raiz").await;
+    mkdir(&mem, "mem:///raiz/prohibido").await;
+    write_file(&mem, "mem:///raiz/a", 10).await;
+    write_file(&mem, "mem:///raiz/prohibido/secreto", 1000).await;
+    mem.faults().fail_list_at(&vp("mem:///raiz/prohibido"));
+
+    let handle = engine
+        .dir_size_as(params(&["mem:///raiz"]), Actor::User)
+        .await
+        .expect("lanza");
+    let prog = handle.progress();
+    // No falla: contar lo que se puede leer es la respuesta útil. Lo que no
+    // puede es callarse lo que no leyó.
+    assert_eq!(handle.join().await, TaskState::Completed);
+    let p = prog.borrow().clone();
+    assert_eq!(
+        p.bytes_done, 10,
+        "los 1000 del subárbol prohibido no entran"
+    );
+    assert_eq!(
+        p.unreadable,
+        Some(1),
+        "y el snapshot terminal DICE que hubo uno que no se pudo leer"
+    );
+}
+
+/// Y el caso corriente sigue diciendo cero, que es lo que hace legible al
+/// campo: si estuviera a uno por defecto, «al menos X» se pintaría siempre.
+#[tokio::test]
+async fn un_arbol_entero_legible_no_declara_ilegibles() {
+    let (engine, mem) = setup();
+    mkdir(&mem, "mem:///todo").await;
+    write_file(&mem, "mem:///todo/a", 4).await;
+    let handle = engine
+        .dir_size_as(params(&["mem:///todo"]), Actor::User)
+        .await
+        .expect("lanza");
+    let prog = handle.progress();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    // `Some(0)`, no `None`: «los conté y no hubo ninguno» es una respuesta, y
+    // `None` —«quien lo emite no cuenta esto»— sería otra distinta. Un cliente
+    // que las confunda pinta «al menos X» sobre un total que sí es exacto.
+    assert_eq!(prog.borrow().unreadable, Some(0));
+}

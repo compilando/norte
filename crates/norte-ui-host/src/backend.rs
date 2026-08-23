@@ -318,10 +318,13 @@ pub trait HostBackend: Send + Sync + 'static {
     ///
     /// Revocar no es lo mismo que apagar: apagar deja las capabilities
     /// aprobadas para la próxima vez, revocar las retira.
+    /// `expected_digest` es el ancla que la ventana ENSEÑÓ (#282): el core
+    /// rehúsa si ya no casa, de modo que lo que se concede sea lo que se leyó.
     fn plugin_set_approval(
         &self,
         id: String,
         approved: bool,
+        expected_digest: Option<String>,
     ) -> BoxFuture<'static, Result<(), Error>>;
 
     /// Enciende o apaga un plugin YA aprobado.
@@ -641,9 +644,14 @@ impl HostBackend for norte_client::RemoteBackend {
         &self,
         id: String,
         approved: bool,
+        expected_digest: Option<String>,
     ) -> BoxFuture<'static, Result<(), Error>> {
         let backend = self.clone();
-        Box::pin(async move { backend.plugins_set_approval(&id, approved).await })
+        Box::pin(async move {
+            backend
+                .plugins_set_approval(&id, approved, expected_digest.as_deref())
+                .await
+        })
     }
 
     fn plugin_set_enabled(

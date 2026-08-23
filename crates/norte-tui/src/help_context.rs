@@ -223,6 +223,9 @@ mod tests {
     /// [`CONTEXTS`]. No es exhaustiva por compilador (eso lo hace el `match`
     /// de `modal_context`): su trabajo es que ningún id del vocabulario se
     /// quede sin modal que lo produzca, ni al revés.
+    // Una lista LITERAL de variantes: crece con el enum, y es lo que hace
+    // que un modal nuevo sin contexto de ayuda sea un fallo de compilación.
+    #[allow(clippy::too_many_lines)]
     fn un_modal_de_cada_variante() -> Vec<Modal> {
         vec![
             Modal::ConfirmDelete {
@@ -234,6 +237,7 @@ mod tests {
                 name: "Demo".to_owned(),
                 name_hostile: false,
                 caps: vec![("leer ficheros".to_owned(), false)],
+                digest: None,
             },
             Modal::ConfirmTransfer {
                 kind: TransferKind::Copy,

@@ -1,170 +1,196 @@
 {
-  "running_compare": {
-    "task_id": 17,
-    "kind": "compare",
-    "state": {
-      "kind": "running"
-    },
-    "bytes_done": 0,
-    "bytes_total": null,
-    "entries_done": 120,
-    "entries_total": null,
-    "current": "file:///home/user/origen/fotos"
-  },
-  "running_mid_copy": {
-    "task_id": 7,
-    "kind": "copy",
-    "state": {
-      "kind": "running"
-    },
-    "bytes_done": 1024,
-    "bytes_total": 4096,
-    "entries_done": 1,
-    "entries_total": 3,
-    "current": "file:///src/informe%FF%FE.dat"
-  },
-  "running_embed": {
-    "task_id": 11,
-    "kind": "embed",
-    "state": {
-      "kind": "running"
-    },
-    "bytes_done": 0,
-    "bytes_total": null,
-    "entries_done": 2,
-    "entries_total": 10,
-    "current": "file:///home/user/doc.txt"
-  },
-  "running_sync_plan": {
-    "task_id": 19,
-    "kind": "sync_plan",
-    "state": {
-      "kind": "running"
-    },
-    "bytes_done": 0,
-    "bytes_total": null,
-    "entries_done": 120,
-    "entries_total": null,
-    "current": "file:///home/user/origen/fotos"
-  },
-  "running_sync": {
-    "task_id": 20,
-    "kind": "sync",
-    "state": {
-      "kind": "running"
-    },
+  "dir_size_con_ilegibles": {
     "bytes_done": 4096,
-    "bytes_total": 65536,
-    "entries_done": 3,
-    "entries_total": 40,
-    "current": "file:///home/user/copia/informe%FF%FE.dat"
-  },
-  "running_mkdir": {
-    "task_id": 9,
-    "kind": "mkdir",
+    "bytes_total": 4096,
+    "current": null,
+    "entries_done": 12,
+    "entries_total": 12,
+    "kind": "dir_size",
     "state": {
-      "kind": "running"
+      "kind": "completed"
     },
-    "bytes_done": 0,
-    "bytes_total": null,
-    "entries_done": 0,
-    "entries_total": 1,
-    "current": "file:///tmp/nueva-carpeta"
+    "task_id": 21,
+    "unreadable": 3
+  },
+  "dir_size_todo_legible": {
+    "bytes_done": 4096,
+    "bytes_total": 4096,
+    "current": null,
+    "entries_done": 12,
+    "entries_total": 12,
+    "kind": "dir_size",
+    "state": {
+      "kind": "completed"
+    },
+    "task_id": 22,
+    "unreadable": 0
   },
   "pending_unknown_totals": {
-    "task_id": 1,
+    "bytes_done": 0,
+    "bytes_total": null,
+    "current": null,
+    "entries_done": 0,
+    "entries_total": null,
     "kind": "move",
     "state": {
       "kind": "pending"
     },
-    "bytes_done": 0,
-    "bytes_total": null,
-    "entries_done": 0,
-    "entries_total": null,
-    "current": null
-  },
-  "terminal_cancelled": {
-    "task_id": 3,
-    "kind": "delete",
-    "state": {
-      "kind": "cancelled"
-    },
-    "bytes_done": 512,
-    "bytes_total": 4096,
-    "entries_done": 0,
-    "entries_total": 2,
-    "current": null
-  },
-  "running_rename_batch": {
-    "task_id": 13,
-    "kind": "rename_batch",
-    "state": {
-      "kind": "running"
-    },
-    "bytes_done": 0,
-    "bytes_total": null,
-    "entries_done": 2,
-    "entries_total": 3,
-    "current": "file:///home/user/fotos/informe%FF%FE.dat"
-  },
-  "running_dir_size": {
-    "task_id": 31,
-    "kind": "dir_size",
-    "state": {
-      "kind": "running"
-    },
-    "bytes_done": 4096,
-    "bytes_total": null,
-    "entries_done": 12,
-    "entries_total": null,
-    "current": "file:///home/user/proj/src"
-  },
-  "running_pack": {
-    "task_id": 32,
-    "kind": "pack",
-    "state": {
-      "kind": "running"
-    },
-    "bytes_done": 2048,
-    "bytes_total": 8192,
-    "entries_done": 2,
-    "entries_total": 5,
-    "current": "file:///proj/src/main.rs"
-  },
-  "running_test_archive": {
-    "task_id": 33,
-    "kind": "test_archive",
-    "state": {
-      "kind": "running"
-    },
-    "bytes_done": 1024,
-    "bytes_total": null,
-    "entries_done": 4,
-    "entries_total": 9,
-    "current": "file:///a.zip"
-  },
-  "running_split": {
-    "task_id": 34,
-    "kind": "split",
-    "state": {
-      "kind": "running"
-    },
-    "bytes_done": 1048576,
-    "bytes_total": 3145728,
-    "entries_done": 1,
-    "entries_total": 3,
-    "current": "file:///trozos/g.iso.002"
+    "task_id": 1
   },
   "running_combine": {
-    "task_id": 35,
+    "bytes_done": 2097152,
+    "bytes_total": 3145728,
+    "current": "file:///g.iso",
+    "entries_done": 2,
+    "entries_total": 3,
     "kind": "combine",
     "state": {
       "kind": "running"
     },
-    "bytes_done": 2097152,
-    "bytes_total": 3145728,
+    "task_id": 35
+  },
+  "running_compare": {
+    "bytes_done": 0,
+    "bytes_total": null,
+    "current": "file:///home/user/origen/fotos",
+    "entries_done": 120,
+    "entries_total": null,
+    "kind": "compare",
+    "state": {
+      "kind": "running"
+    },
+    "task_id": 17
+  },
+  "running_dir_size": {
+    "bytes_done": 4096,
+    "bytes_total": null,
+    "current": "file:///home/user/proj/src",
+    "entries_done": 12,
+    "entries_total": null,
+    "kind": "dir_size",
+    "state": {
+      "kind": "running"
+    },
+    "task_id": 31
+  },
+  "running_embed": {
+    "bytes_done": 0,
+    "bytes_total": null,
+    "current": "file:///home/user/doc.txt",
+    "entries_done": 2,
+    "entries_total": 10,
+    "kind": "embed",
+    "state": {
+      "kind": "running"
+    },
+    "task_id": 11
+  },
+  "running_mid_copy": {
+    "bytes_done": 1024,
+    "bytes_total": 4096,
+    "current": "file:///src/informe%FF%FE.dat",
+    "entries_done": 1,
+    "entries_total": 3,
+    "kind": "copy",
+    "state": {
+      "kind": "running"
+    },
+    "task_id": 7
+  },
+  "running_mkdir": {
+    "bytes_done": 0,
+    "bytes_total": null,
+    "current": "file:///tmp/nueva-carpeta",
+    "entries_done": 0,
+    "entries_total": 1,
+    "kind": "mkdir",
+    "state": {
+      "kind": "running"
+    },
+    "task_id": 9
+  },
+  "running_pack": {
+    "bytes_done": 2048,
+    "bytes_total": 8192,
+    "current": "file:///proj/src/main.rs",
+    "entries_done": 2,
+    "entries_total": 5,
+    "kind": "pack",
+    "state": {
+      "kind": "running"
+    },
+    "task_id": 32
+  },
+  "running_rename_batch": {
+    "bytes_done": 0,
+    "bytes_total": null,
+    "current": "file:///home/user/fotos/informe%FF%FE.dat",
     "entries_done": 2,
     "entries_total": 3,
-    "current": "file:///g.iso"
+    "kind": "rename_batch",
+    "state": {
+      "kind": "running"
+    },
+    "task_id": 13
+  },
+  "running_split": {
+    "bytes_done": 1048576,
+    "bytes_total": 3145728,
+    "current": "file:///trozos/g.iso.002",
+    "entries_done": 1,
+    "entries_total": 3,
+    "kind": "split",
+    "state": {
+      "kind": "running"
+    },
+    "task_id": 34
+  },
+  "running_sync": {
+    "bytes_done": 4096,
+    "bytes_total": 65536,
+    "current": "file:///home/user/copia/informe%FF%FE.dat",
+    "entries_done": 3,
+    "entries_total": 40,
+    "kind": "sync",
+    "state": {
+      "kind": "running"
+    },
+    "task_id": 20
+  },
+  "running_sync_plan": {
+    "bytes_done": 0,
+    "bytes_total": null,
+    "current": "file:///home/user/origen/fotos",
+    "entries_done": 120,
+    "entries_total": null,
+    "kind": "sync_plan",
+    "state": {
+      "kind": "running"
+    },
+    "task_id": 19
+  },
+  "running_test_archive": {
+    "bytes_done": 1024,
+    "bytes_total": null,
+    "current": "file:///a.zip",
+    "entries_done": 4,
+    "entries_total": 9,
+    "kind": "test_archive",
+    "state": {
+      "kind": "running"
+    },
+    "task_id": 33
+  },
+  "terminal_cancelled": {
+    "bytes_done": 512,
+    "bytes_total": 4096,
+    "current": null,
+    "entries_done": 0,
+    "entries_total": 2,
+    "kind": "delete",
+    "state": {
+      "kind": "cancelled"
+    },
+    "task_id": 3
   }
 }

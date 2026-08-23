@@ -207,6 +207,7 @@ mod tests {
                 .collect(),
             columns: Vec::new(),
             has_help: false,
+            manifest_digest: None,
         }
     }
 

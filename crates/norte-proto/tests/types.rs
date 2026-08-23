@@ -465,6 +465,7 @@ fn task_progress_roundtrip() {
         entries_done: 1,
         entries_total: Some(3),
         current: Some(vpath("file:///a/b")),
+        unreadable: None,
     };
     assert_eq!(roundtrip(&p), p);
 }
@@ -481,6 +482,7 @@ fn task_progress_unknown_totals() {
         entries_done: 0,
         entries_total: None,
         current: None,
+        unreadable: None,
     };
     assert_eq!(roundtrip(&p), p);
 }
@@ -1169,10 +1171,18 @@ fn version_ventana_actual() {
     // bloqueo que no se entiende SIGUE bloqueando, que es la degradación que
     // hace falta. Lo que se pierde contra un daemon viejo es la comprobación,
     // no la corrección.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.52.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.51.0"), "N-1");
+    // 0.53.0 (#251, #265, #282): tres campos opcionales, y los tres desplazan
+    // la ventana por el mismo motivo — lo que se pierde contra un peer viejo
+    // es una COMPROBACIÓN, no la corrección. `TaskProgress.unreadable` a cero
+    // es lo que un daemon 0.52 sabía decir, así que un `fs.dir_size` contra él
+    // sigue sin poder avisar de que su número es una cota inferior;
+    // `PluginLoadError.dir_bytes` ausente deja la fila del error sin poder
+    // marcar que se convirtió; y sin `expected_digest` el daemon concede lo
+    // que tiene en vez de lo que se leyó.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.53.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.52.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.50.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.51.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -1234,10 +1244,12 @@ fn plugin_types_roundtrip() {
             commands: vec![],
             columns: vec![],
             has_help: false,
+            manifest_digest: None,
         }],
         errors: vec![PluginLoadError {
             dir: "/plugins/broken".into(),
             reason: "manifiesto inválido".into(),
+            dir_bytes: None,
         }],
     };
     let back: PluginListResult =
@@ -1294,6 +1306,7 @@ fn plugin_info_none_description_omitted_on_wire() {
         commands: vec![],
         columns: vec![],
         has_help: false,
+        manifest_digest: None,
     };
     let wire = serde_json::to_string(&info).unwrap();
     assert!(

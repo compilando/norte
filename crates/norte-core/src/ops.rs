@@ -2067,6 +2067,7 @@ pub(crate) async fn dir_size(
                 ctx.progress.update(|p| {
                     p.bytes_done = bytes;
                     p.entries_done = entries;
+                    p.unreadable = Some(ilegibles);
                 });
                 continue;
             }
@@ -2148,10 +2149,12 @@ pub(crate) async fn dir_size(
                 ctx.progress.update(|p| {
                     p.bytes_done = bytes;
                     p.entries_done = entries;
+                    p.unreadable = Some(ilegibles);
                 });
             }
         }
     }
+    // El número VIAJA (#251), no se queda en un log. `fs.dir_size` existe para
     if ilegibles > 0 {
         tracing::info!(
             ilegibles,
@@ -2165,6 +2168,14 @@ pub(crate) async fn dir_size(
         // de dejarla en un «de cuánto» que nunca llegó.
         p.bytes_total = Some(bytes);
         p.entries_total = Some(entries);
+        // Y el número VIAJA (#251), no se queda en el log de arriba: este
+        // método existe para contestar «¿cabe esto en el destino?», y un
+        // árbol del que la mitad dio `EACCES` reportaba `Completed` con un
+        // total confiado y demasiado pequeño. Con esto, quien pinte dice «al
+        // menos X». `Some` siempre: `fs.dir_size` SÍ cuenta ilegibles, y
+        // `Some(0)` es una respuesta —«los conté y no hubo»— que `None` no
+        // sabe dar.
+        p.unreadable = Some(ilegibles);
         p.current = None;
     });
     Ok(())

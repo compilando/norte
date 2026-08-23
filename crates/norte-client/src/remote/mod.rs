@@ -1459,6 +1459,7 @@ impl RemoteBackend {
                 entries_done: 0,
                 entries_total: None,
                 current: None,
+                unreadable: None,
             };
             let (sender, rx) = watch::channel(initial);
             watches.insert(id.get(), sender);
@@ -1603,15 +1604,26 @@ impl RemoteBackend {
 
     /// `plugin.set_approval` contra el daemon (M4-P3).
     ///
+    /// `expected_digest` es el ancla que el humano LEYÓ (#282): el daemon
+    /// rehúsa si ya no casa con la suya, de modo que lo que se concede sea lo
+    /// que se enseñó. `None` deja el comportamiento de 0.52 — la comprobación
+    /// es lo que se pierde, no la corrección.
+    ///
     /// # Errors
     /// Lo que responda el daemon.
-    pub async fn plugins_set_approval(&self, id: &str, approved: bool) -> Result<(), Error> {
+    pub async fn plugins_set_approval(
+        &self,
+        id: &str,
+        approved: bool,
+        expected_digest: Option<&str>,
+    ) -> Result<(), Error> {
         let _: methods::PluginSetApprovalResult = self
             .call_timed(
                 methods::PLUGIN_SET_APPROVAL,
                 &methods::PluginSetApprovalParams {
                     id: id.to_owned(),
                     approved,
+                    expected_digest: expected_digest.map(ToOwned::to_owned),
                 },
             )
             .await?;
@@ -2379,6 +2391,7 @@ mod tests {
             entries_done: 0,
             entries_total: None,
             current: None,
+            unreadable: None,
         }
     }
 

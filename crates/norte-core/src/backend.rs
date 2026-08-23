@@ -200,6 +200,7 @@ impl TaskRef {
 ///     bytes_total: None,
 ///     entries_done: 0,
 ///     entries_total: None,
+///     unreadable: None,
 ///     current: None,
 /// });
 /// let task = TaskRef::synthetic_for_tests(TaskId::new(7), rx);
@@ -1894,26 +1895,55 @@ impl Backend {
     /// # Errors
     /// [`Error::NotFound`] si el id es desconocido; taxonomía del protocolo en
     /// lo demás.
-    pub async fn plugins_set_approval(&self, id: &str, approved: bool) -> Result<(), Error> {
+    pub async fn plugins_set_approval(
+        &self,
+        id: &str,
+        approved: bool,
+        expected_digest: Option<&str>,
+    ) -> Result<(), Error> {
         match self {
             Self::Embedded(_) => {
                 let dir = crate::connect::config_dir();
                 let id = id.to_owned();
+                let esperado = expected_digest.map(ToOwned::to_owned);
                 let applied = tokio::task::spawn_blocking(move || {
                     let mut reg = crate::PluginRegistry::discover(&dir)?;
-                    reg.set_approval(&id, approved)
+                    // La comprobación de #282 importa MÁS aquí que en el
+                    // daemon: éste descubre el catálogo una vez al arrancar,
+                    // así que su ventana está cerrada por accidente. Este
+                    // `discover` corre en CADA llamada, o sea que el
+                    // `plugin.toml` que se lee ahora puede no ser el que el
+                    // humano leyó hace un momento.
+                    // Un id desconocido NO es un ancla rancia: los dos dan
+                    // `None` aquí, y confundirlos daría «el manifiesto
+                    // cambió» a quien nombró un plugin que no existe.
+                    if approved
+                        && let Some(actual) = reg.manifest_digest(&id)
+                        && let Some(esperado) = &esperado
+                        && &actual != esperado
+                    {
+                        return Ok(None);
+                    }
+                    reg.set_approval(&id, approved).map(Some)
                 })
                 .await
                 .map_err(|_| Error::Internal { panic: true })?
                 .map_err(|_| Error::Io { retryable: false })?;
-                if applied {
-                    Ok(())
-                } else {
-                    Err(Error::NotFound)
+                match applied {
+                    Some(true) => Ok(()),
+                    Some(false) => Err(Error::NotFound),
+                    // El manifiesto cambió bajo los pies: no se concede, y se
+                    // dice con la variante que significa exactamente eso —la
+                    // misma que `session.put` con una revisión rancia—. No
+                    // `Exists`, que se lee como «el destino ya está» y aquí no
+                    // significa nada.
+                    None => Err(Error::Conflict {
+                        conflict: norte_proto::ConflictKind::StaleRevision,
+                    }),
                 }
             }
             #[cfg(unix)]
-            Self::Remote(r) => r.plugins_set_approval(id, approved).await,
+            Self::Remote(r) => r.plugins_set_approval(id, approved, expected_digest).await,
         }
     }
 
@@ -2523,6 +2553,7 @@ mod observer_tests {
             entries_done: 0,
             entries_total: None,
             current: None,
+            unreadable: None,
         });
         // El emisor se devuelve para que el test lo retenga vivo: un `watch`
         // sin emisor no es lo que este test observa.
@@ -2560,6 +2591,7 @@ mod observer_tests {
             entries_done: 0,
             entries_total: None,
             current: None,
+            unreadable: None,
         });
         let task = TaskRef::synthetic_for_tests(TaskId::new(9), rx);
         let observador = task.observer();

@@ -446,6 +446,43 @@ fn golden_task_progress() {
         "task_progress.json",
         &[
             (
+                // 0.53.0 (#251): un `fs.dir_size` que terminó habiendo dejado
+                // subárboles sin leer. Es el ÚNICO caso que congela el nombre
+                // `unreadable` y su forma: los demás lo llevan a `None` y por
+                // tanto no lo emiten, así que sin éste renombrarlo o anidarlo
+                // no pondría rojo nada.
+                //
+                // Y `Some(0)` no es `None`: «los conté y no hubo» es una
+                // respuesta, «no los cuento» es otra, y confundirlas es lo que
+                // hace que un cliente pinte un total corto con cara de seguro.
+                "dir_size_con_ilegibles",
+                TaskProgress {
+                    task_id: TaskId::new(21),
+                    kind: TaskKind::DirSize,
+                    state: TaskState::Completed,
+                    bytes_done: 4096,
+                    bytes_total: Some(4096),
+                    entries_done: 12,
+                    entries_total: Some(12),
+                    current: None,
+                    unreadable: Some(3),
+                },
+            ),
+            (
+                "dir_size_todo_legible",
+                TaskProgress {
+                    task_id: TaskId::new(22),
+                    kind: TaskKind::DirSize,
+                    state: TaskState::Completed,
+                    bytes_done: 4096,
+                    bytes_total: Some(4096),
+                    entries_done: 12,
+                    entries_total: Some(12),
+                    current: None,
+                    unreadable: Some(0),
+                },
+            ),
+            (
                 "running_mid_copy",
                 TaskProgress {
                     task_id: TaskId::new(7),
@@ -456,6 +493,7 @@ fn golden_task_progress() {
                     entries_done: 1,
                     entries_total: Some(3),
                     current: Some(vpath("file:///src/informe%FF%FE.dat")),
+                    unreadable: None,
                 },
             ),
             (
@@ -470,6 +508,7 @@ fn golden_task_progress() {
                     entries_done: 2,
                     entries_total: Some(10),
                     current: Some(vpath("file:///home/user/doc.txt")),
+                    unreadable: None,
                 },
             ),
             (
@@ -488,6 +527,7 @@ fn golden_task_progress() {
                     entries_done: 2,
                     entries_total: Some(3),
                     current: Some(vpath("file:///home/user/fotos/informe%FF%FE.dat")),
+                    unreadable: None,
                 },
             ),
             (
@@ -507,6 +547,7 @@ fn golden_task_progress() {
                     entries_done: 12,
                     entries_total: None,
                     current: Some(vpath("file:///home/user/proj/src")),
+                    unreadable: None,
                 },
             ),
             (
@@ -525,6 +566,7 @@ fn golden_task_progress() {
                     entries_done: 2,
                     entries_total: Some(5),
                     current: Some(vpath("file:///proj/src/main.rs")),
+                    unreadable: None,
                 },
             ),
             (
@@ -542,6 +584,7 @@ fn golden_task_progress() {
                     entries_done: 4,
                     entries_total: Some(9),
                     current: Some(vpath("file:///a.zip")),
+                    unreadable: None,
                 },
             ),
             (
@@ -559,6 +602,7 @@ fn golden_task_progress() {
                     entries_done: 1,
                     entries_total: Some(3),
                     current: Some(vpath("file:///trozos/g.iso.002")),
+                    unreadable: None,
                 },
             ),
             (
@@ -576,6 +620,7 @@ fn golden_task_progress() {
                     entries_done: 2,
                     entries_total: Some(3),
                     current: Some(vpath("file:///g.iso")),
+                    unreadable: None,
                 },
             ),
             (
@@ -595,6 +640,7 @@ fn golden_task_progress() {
                     entries_done: 120,
                     entries_total: None,
                     current: Some(vpath("file:///home/user/origen/fotos")),
+                    unreadable: None,
                 },
             ),
             (
@@ -613,6 +659,7 @@ fn golden_task_progress() {
                     entries_done: 120,
                     entries_total: None,
                     current: Some(vpath("file:///home/user/origen/fotos")),
+                    unreadable: None,
                 },
             ),
             (
@@ -633,6 +680,7 @@ fn golden_task_progress() {
                     entries_done: 3,
                     entries_total: Some(40),
                     current: Some(vpath("file:///home/user/copia/informe%FF%FE.dat")),
+                    unreadable: None,
                 },
             ),
             (
@@ -647,6 +695,7 @@ fn golden_task_progress() {
                     entries_done: 0,
                     entries_total: Some(1),
                     current: Some(vpath("file:///tmp/nueva-carpeta")),
+                    unreadable: None,
                 },
             ),
             (
@@ -660,6 +709,7 @@ fn golden_task_progress() {
                     entries_done: 0,
                     entries_total: None,
                     current: None,
+                    unreadable: None,
                 },
             ),
             (
@@ -673,6 +723,7 @@ fn golden_task_progress() {
                     entries_done: 0,
                     entries_total: Some(2),
                     current: None,
+                    unreadable: None,
                 },
             ),
         ],
@@ -975,7 +1026,13 @@ fn golden_methods() {
     // archive_test_result_clean (la forma que de verdad devuelve un archivo
     // sano: con todos los campos `serde(default)`, un resultado limpio es `{}`
     // en el wire, y es el que ningún golden fijaba).
-    assert_eq!(fixtures.len(), 158, "[methods.json] fixtures sin caso Rust");
+    // 158 → 161 en 0.53.0: + plugin_info_with_digest y
+    // plugin_set_approval_params_anchored (#282, el ancla que un humano leyó
+    // viajando a la ida y a la vuelta) y plugin_list_result_dir_bytes (#265,
+    // los bytes del basename). Los tres campos son opcionales, así que sin
+    // estas fixturas su NOMBRE y su forma en el wire —el hex de un sha256, el
+    // base64 de `label_wire`— no los congelaba nada.
+    assert_eq!(fixtures.len(), 161, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
@@ -1437,6 +1494,7 @@ fn check_methods_plugin_help(fixtures: &BTreeMap<String, Value>) {
             commands: Vec::new(),
             columns: Vec::new(),
             has_help: true,
+            manifest_digest: None,
         },
     );
     check_one(
@@ -1518,6 +1576,9 @@ fn check_methods_plugin_help(fixtures: &BTreeMap<String, Value>) {
 /// `description`/`commands`, el shape CON ambos poblados, y el tipo suelto
 /// `PluginCommandInfo`. Función propia para no desbordar el límite de
 /// líneas de `check_methods_plugin_governance`.
+// Una lista LITERAL de casos golden: cada uno es una forma congelada del wire
+// con su porqué, y partirla en mitades arbitrarias solo escondería cuáles hay.
+#[allow(clippy::too_many_lines)]
 fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
         PluginColumnInfo, PluginCommandInfo, PluginInfo, PluginListResult, PluginLoadError,
@@ -1554,6 +1615,7 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
             commands: vec![],
             columns: vec![],
             has_help: false,
+            manifest_digest: None,
         },
     );
     // (P1/G3c) description + commands + columns POBLADOS: golden nuevo, no
@@ -1586,6 +1648,29 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
                 header: "Git".into(),
             }],
             has_help: false,
+            manifest_digest: None,
+        },
+    );
+    // 0.53.0 (#282): el ancla que viaja con el catálogo y vuelve con el sí.
+    check_one(
+        fixtures,
+        "plugin_info_with_digest",
+        &PluginInfo {
+            id: "org.norte.demo".into(),
+            name: "Demo Previewer".into(),
+            publisher: "norte".into(),
+            version: "0.1.0".into(),
+            category: "previewer".into(),
+            capabilities: vec!["fs-read".into()],
+            approved: true,
+            enabled: true,
+            description: None,
+            commands: vec![],
+            columns: vec![],
+            has_help: false,
+            manifest_digest: Some(
+                "7aec1a5a3d48445efc60e4ede6a6257fc1b2a651f2c89e625228982440307376".into(),
+            ),
         },
     );
     check_one(
@@ -1605,10 +1690,34 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
                 commands: vec![],
                 columns: vec![],
                 has_help: false,
+                manifest_digest: None,
             }],
             errors: vec![PluginLoadError {
-                dir: "/plugins/broken".into(),
+                // El BASENAME, nunca la ruta absoluta: ésta revelaría el home
+                // del usuario a un agente que llame a `plugin.list`, y el
+                // rustdoc del campo lo declara invariante. El golden anterior
+                // congelaba `/plugins/broken`, o sea el contrario.
+                dir: "broken".into(),
                 reason: "manifiesto inválido".into(),
+                dir_bytes: None,
+            }],
+        },
+    );
+    // 0.53.0 (#265): con los bytes del basename al lado. Es el caso que
+    // CONGELA la forma base64 de `label_wire` para este campo — sin él, el
+    // alfabeto y el relleno no los fija nada, y la ausencia del otro caso no
+    // fija ni siquiera el NOMBRE `dir_bytes`.
+    check_one(
+        fixtures,
+        "plugin_list_result_dir_bytes",
+        &PluginListResult {
+            plugins: vec![],
+            errors: vec![PluginLoadError {
+                dir: "caf\u{FFFD}".into(),
+                reason: "manifiesto inválido".into(),
+                // `caf\xff`: los bytes que la cadena de arriba ya no puede
+                // decir, que es la razón de ser del campo.
+                dir_bytes: Some(vec![b'c', b'a', b'f', 0xFF]),
             }],
         },
     );
@@ -1629,6 +1738,21 @@ fn check_methods_plugin_governance(fixtures: &BTreeMap<String, Value>) {
         &PluginSetApprovalParams {
             id: "org.norte.demo".into(),
             approved: true,
+            expected_digest: None,
+        },
+    );
+    // 0.53.0 (#282): con el ancla que el humano leyó. Congela el nombre del
+    // campo y su forma (hex minúscula de un sha256), que es lo que el daemon
+    // compara byte a byte antes de conceder.
+    check_one(
+        fixtures,
+        "plugin_set_approval_params_anchored",
+        &PluginSetApprovalParams {
+            id: "org.norte.demo".into(),
+            approved: true,
+            expected_digest: Some(
+                "7aec1a5a3d48445efc60e4ede6a6257fc1b2a651f2c89e625228982440307376".into(),
+            ),
         },
     );
     check_one(
@@ -2945,6 +3069,7 @@ fn check_methods_v05(fixtures: &BTreeMap<String, Value>) {
                 entries_done: 1,
                 entries_total: Some(3),
                 current: Some(vpath("file:///src/a.txt")),
+                unreadable: None,
             }],
         },
     );
@@ -3366,7 +3491,13 @@ fn method_names_frozen() {
     // `session.put` ACEPTA (un esquema que este core no sabe leer se rehúsa,
     // en vez de escribirse y matar la persistencia desde el arranque
     // siguiente). Un bump por comportamiento del wire, que también cuenta.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.52.0");
+    // 0.53.0 (#251, #265, #282): tres campos OPCIONALES —el recuento de
+    // ilegibles de una task, los bytes del directorio de un plugin roto y el
+    // ancla que un humano leyó al aprobar—. Los tres se omiten cuando no hay
+    // nada que decir, así que el JSON de un caso corriente no cambia; lo que
+    // desplaza la ventana es que un peer viejo no puede hacer la comprobación
+    // que cada uno habilita.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.53.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

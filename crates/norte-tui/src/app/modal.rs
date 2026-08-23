@@ -63,6 +63,10 @@ pub enum Modal {
         /// cuenta y con su bandera: pegarlas en una frase dejaría que una
         /// finja ser otra.
         caps: Vec<(String, bool)>,
+        /// El ancla del manifiesto que se ESTÁ ENSEÑANDO (#282), si el core la
+        /// manda. Viaja con el sí, y el core rehúsa si el `plugin.toml` cambió
+        /// entre la pregunta y la respuesta.
+        digest: Option<String>,
     },
     /// Confirmación de borrado (F8) sobre las MARCAS. `permanent = false` →
     /// papelera.

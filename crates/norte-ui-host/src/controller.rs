@@ -147,10 +147,12 @@ enum Cambio {
 ///
 /// Aparte de [`Cambio`] a propósito: `a` sobre una fila significa cosas
 /// distintas según cómo esté, y la que viaja al daemon es la resuelta.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Gobierno {
-    /// `plugin.set_approval`.
-    Aprobar(bool),
+    /// `plugin.set_approval`, con el ancla que se ENSEÑÓ (#282). `None` al
+    /// revocar: quitar un permiso no concede nada, y rehusarlo por un digest
+    /// rancio dejaría vivo justo lo que alguien intenta quitar.
+    Aprobar(bool, Option<String>),
     /// `plugin.set_enabled`.
     Encender(bool),
 }
@@ -1319,6 +1321,16 @@ enum Pendiente {
         /// capabilities de esa extensión — y entonces el sí concedería algo
         /// que nadie leyó. Si han cambiado, se vuelve a preguntar.
         capabilities: Vec<String>,
+        /// El ancla del manifiesto TAL COMO ESTABA AL PREGUNTAR (#282).
+        ///
+        /// Aquí, y no releída al confirmar, por la misma razón que las
+        /// capabilities de arriba: leerla en el momento del sí devolvería el
+        /// ancla del catálogo que haya aterrizado mientras tanto, o sea que el
+        /// host certificaría al core «esto es lo que el humano leyó» sobre
+        /// algo que el humano no leyó. Y la comparación de capabilities no lo
+        /// tapa: `category` y `contributions` —cuándo y cómo se dispara—
+        /// entran en el ancla y NO en la lista que se pinta.
+        digest: Option<String>,
     },
     /// Decidir sobre una op de agente. La op real la tiene el daemon ligada
     /// al id: aquí solo viaja el sí o el no.
@@ -6094,7 +6106,7 @@ impl Estado {
             // Conceder PREGUNTA; retirar, no.
             Cambio::Aprobacion if !aprobada => self.preguntar_por_aprobacion(&id),
             Cambio::Aprobacion => {
-                let fuera = self.gobernar(&id, Gobierno::Aprobar(false), backend, buzon);
+                let fuera = self.gobernar(&id, Gobierno::Aprobar(false, None), backend, buzon);
                 (self.aplicada(), fuera)
             }
             // ENCENDER un plugin sin aprobar no es una decisión que esta
@@ -6123,7 +6135,8 @@ impl Estado {
         let Some(concesion) = self.extensiones.as_ref().and_then(|e| e.concesion(id)) else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        let (nombre, capabilities) = (concesion.nombre, concesion.capabilities);
+        let (nombre, capabilities, ancla) =
+            (concesion.nombre, concesion.capabilities, concesion.digest);
         // Una capability por LÍNEA, y el nombre de la extensión aparte: son
         // los operandos de la decisión, y meterlos en la frase es lo que
         // deja a un nombre de tercero imitando el texto de la ventana. Cada
@@ -6200,6 +6213,7 @@ impl Estado {
             al_confirmar: Some(Pendiente::AprobarExtension {
                 id: id.to_owned(),
                 capabilities: capabilities.into_iter().map(|(t, _)| t).collect(),
+                digest: ancla,
             }),
         });
         let cambio = ViewChange::Dialogs {
@@ -6217,6 +6231,7 @@ impl Estado {
         &mut self,
         id: &str,
         leidas: &[String],
+        ancla_leida: Option<String>,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
@@ -6231,9 +6246,15 @@ impl Estado {
                     .collect::<Vec<_>>()
             });
         if ahora.as_deref() == Some(leidas) {
+            // El ancla que viaja es la de LA PREGUNTA, jamás la del catálogo
+            // de ahora (#282): releerla aquí certificaría al core «esto es lo
+            // que el humano leyó» sobre lo que el humano no leyó, que es
+            // exactamente el agujero que el campo cierra. Y la comparación de
+            // capabilities de arriba no lo tapa: `category` y `contributions`
+            // entran en el ancla y no en la lista pintada.
             return (
                 None,
-                self.gobernar(id, Gobierno::Aprobar(true), backend, buzon),
+                self.gobernar(id, Gobierno::Aprobar(true, ancla_leida), backend, buzon),
             );
         }
         let mut fuera = self.decir("host-extension-changed");
@@ -6256,7 +6277,7 @@ impl Estado {
         let id2 = id.to_owned();
         tokio::spawn(async move {
             let llamada = match que {
-                Gobierno::Aprobar(v) => backend2.plugin_set_approval(id2, v),
+                Gobierno::Aprobar(v, digest) => backend2.plugin_set_approval(id2, v, digest),
                 Gobierno::Encender(v) => backend2.plugin_set_enabled(id2, v),
             };
             let res = match tokio::time::timeout(PLAZO_PLUGINS, llamada).await {
@@ -10757,8 +10778,12 @@ impl Estado {
                 rehusado = motivo;
                 salidas.extend(partes);
             }
-            Some(Pendiente::AprobarExtension { id, capabilities }) => {
-                let (motivo, partes) = self.conceder(&id, &capabilities, backend, buzon);
+            Some(Pendiente::AprobarExtension {
+                id,
+                capabilities,
+                digest,
+            }) => {
+                let (motivo, partes) = self.conceder(&id, &capabilities, digest, backend, buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }

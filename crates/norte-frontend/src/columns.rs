@@ -141,6 +141,7 @@ mod validated_plugin_requests_tests {
                 })
                 .collect(),
             has_help: false,
+            manifest_digest: None,
         }
     }
 

@@ -123,7 +123,13 @@ impl Extensiones {
             .iter()
             .take(MAX_EXTENSIONES)
             .map(|e| {
-                let (dir, enmascarado) = norte_frontend::display_name(e.dir.as_bytes());
+                // Los BYTES si el peer los manda (#265), y solo entonces
+                // `display_name` puede hacer la conversión y MARCARLA. La
+                // cadena `dir` es el respaldo para un peer 0.52, que es donde
+                // sigue valiendo la heurística de abajo.
+                let (dir, enmascarado) = norte_frontend::display_name(
+                    e.dir_bytes.as_deref().unwrap_or(e.dir.as_bytes()),
+                );
                 let (reason, reason_enmascarado) =
                     norte_frontend::display_name(e.reason.as_bytes());
                 ExtensionErrorView {
@@ -138,13 +144,16 @@ impl Extensiones {
                     // REEMPLAZO sí se ve, y verlo ya significa que lo
                     // pintado difiere de lo que hay.
                     //
-                    // Es media solución: `lossy_collapse_ff` y
-                    // `lossy_collapse_fe` siguen colapsando en la misma fila,
-                    // y distinguirlas pide que el daemon mande los bytes o su
-                    // marca (issue abierta). Marcarlas es lo que se puede
-                    // hacer desde este lado, y es estrictamente mejor que no
-                    // marcarlas.
-                    hostile: enmascarado || dir_ya_convertido(&e.dir),
+                    // Era media solución: `lossy_collapse_ff` y
+                    // `lossy_collapse_fe` colapsaban en la misma fila, y
+                    // distinguirlas pedía los bytes. Desde 0.53.0 el daemon
+                    // los manda (#265) y esta rama es solo el respaldo para
+                    // un peer viejo.
+                    // Con bytes, la bandera de `display_name` es la buena y
+                    // la heurística sobra —y sería un falso positivo sobre un
+                    // directorio que se llame `caf\u{FFFD}` de verdad—. Sin
+                    // ellos, sigue siendo lo único que hay.
+                    hostile: enmascarado || (e.dir_bytes.is_none() && dir_ya_convertido(&e.dir)),
                     // El motivo lo escribe el core, pero puede CITAR el
                     // manifiesto del plugin —y un `Path::display()`—, así que
                     // entra por la misma puerta que el resto del texto de
@@ -186,6 +195,7 @@ impl Extensiones {
         Some(Concesion {
             nombre: texto_de_tercero(&p.name),
             capabilities: p.capabilities.iter().map(|c| texto_de_tercero(c)).collect(),
+            digest: p.manifest_digest.clone(),
         })
     }
 
@@ -368,6 +378,15 @@ pub(crate) struct Concesion {
     pub(crate) nombre: Texto,
     /// Qué se concede, una por línea.
     pub(crate) capabilities: Vec<Texto>,
+    /// El ancla del manifiesto que se ENSEÑÓ (#282), si el peer la manda.
+    ///
+    /// La comparación de capabilities que hace `conceder` cubre lo que se
+    /// PINTA; ésta cubre lo que se CONCEDE, que es más: `category` y
+    /// `contributions` —cuándo y cómo se dispara la extensión— entran en el
+    /// ancla y no en la lista. Y la comparación local solo ve cambios dentro
+    /// de este cliente: el `plugin.toml` que cambia bajo el core lo caza el
+    /// core, con esto.
+    pub(crate) digest: Option<String>,
 }
 
 /// La ficha abierta: QUIÉN, su editor de `[config]` y qué comandos aporta.

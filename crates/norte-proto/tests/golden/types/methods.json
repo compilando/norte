@@ -14,6 +14,44 @@
   "ai_rename_plan_result_empty": {
     "entries": []
   },
+  "archive_pack_params": {
+    "base": "file:///proj",
+    "dest": "file:///proj.zip",
+    "format": "tar_gz",
+    "level": 9,
+    "sources": [
+      "file:///proj/src",
+      "file:///proj/LEEME"
+    ]
+  },
+  "archive_test_params": {
+    "path": "file:///a.zip"
+  },
+  "archive_test_report_params": {
+    "task_id": 7
+  },
+  "archive_test_result": {
+    "checked": [
+      "crc"
+    ],
+    "entries": 3,
+    "failed": [
+      {
+        "name": "roto.txt",
+        "path": "zip+file:///a.zip/!/roto.txt",
+        "reason": "crc"
+      }
+    ],
+    "truncated": false
+  },
+  "archive_test_result_clean": {
+    "checked": [
+      "gzip_crc"
+    ],
+    "entries": 9,
+    "failed": [],
+    "truncated": false
+  },
   "compare_rows_batch": {
     "rows": [
       {
@@ -34,6 +72,12 @@
   "compare_rows_batch_empty": {
     "rows": [],
     "task_id": 7
+  },
+  "connection_close_params": {
+    "path": "sftp://host/casa"
+  },
+  "connection_close_result": {
+    "closed": true
   },
   "connection_degraded": {
     "host": "backup.example",
@@ -74,6 +118,15 @@
     "role": "warning"
   },
   "decoration_wire_empty": {},
+  "file_combine_params": {
+    "dest": "file:///g.iso",
+    "first": "file:///g.iso.001"
+  },
+  "file_split_params": {
+    "dest_dir": "file:///trozos",
+    "part_bytes": 1048576,
+    "path": "file:///g.iso"
+  },
   "fs_capabilities_params": {
     "path": "file:///home"
   },
@@ -150,6 +203,12 @@
   "fs_delete_params_permanent": {
     "mode": "permanent",
     "path": "file:///tmp/victim"
+  },
+  "fs_dir_size_params": {
+    "paths": [
+      "file:///a",
+      "file:///b/c"
+    ]
   },
   "fs_list_params": {
     "cursor": null,
@@ -616,6 +675,21 @@
     "publisher": "norte",
     "version": "0.1.0"
   },
+  "plugin_info_with_digest": {
+    "approved": true,
+    "capabilities": [
+      "fs-read"
+    ],
+    "category": "previewer",
+    "columns": [],
+    "commands": [],
+    "enabled": true,
+    "id": "org.norte.demo",
+    "manifest_digest": "7aec1a5a3d48445efc60e4ede6a6257fc1b2a651f2c89e625228982440307376",
+    "name": "Demo Previewer",
+    "publisher": "norte",
+    "version": "0.1.0"
+  },
   "plugin_info_with_help": {
     "approved": true,
     "capabilities": [
@@ -635,7 +709,7 @@
   "plugin_list_result": {
     "errors": [
       {
-        "dir": "/plugins/broken",
+        "dir": "broken",
         "reason": "manifiesto inválido"
       }
     ],
@@ -655,6 +729,16 @@
         "version": "0.1.0"
       }
     ]
+  },
+  "plugin_list_result_dir_bytes": {
+    "errors": [
+      {
+        "dir": "caf�",
+        "dir_bytes": "Y2Fm/w==",
+        "reason": "manifiesto inválido"
+      }
+    ],
+    "plugins": []
   },
   "plugin_preview_params": {
     "path": "file:///home/user/doc.md"
@@ -724,6 +808,11 @@
   },
   "plugin_set_approval_params": {
     "approved": true,
+    "id": "org.norte.demo"
+  },
+  "plugin_set_approval_params_anchored": {
+    "approved": true,
+    "expected_digest": "7aec1a5a3d48445efc60e4ede6a6257fc1b2a651f2c89e625228982440307376",
     "id": "org.norte.demo"
   },
   "plugin_set_approval_result": {},
@@ -867,6 +956,14 @@
       },
       "revision": 3,
       "version": 1
+    }
+  },
+  "session_get_result_empty": {
+    "owner": false,
+    "session": {
+      "body": null,
+      "revision": 0,
+      "version": 0
     }
   },
   "session_put_params": {
@@ -1121,72 +1218,5 @@
     "label": "//4=",
     "mount": "file:///media/informe%FF%FE",
     "read_only": true
-  },
-  "session_get_result_empty": {
-    "owner": false,
-    "session": {
-      "body": null,
-      "revision": 0,
-      "version": 0
-    }
-  },
-  "fs_dir_size_params": {
-    "paths": [
-      "file:///a",
-      "file:///b/c"
-    ]
-  },
-  "connection_close_params": {
-    "path": "sftp://host/casa"
-  },
-  "connection_close_result": {
-    "closed": true
-  },
-  "archive_pack_params": {
-    "sources": [
-      "file:///proj/src",
-      "file:///proj/LEEME"
-    ],
-    "dest": "file:///proj.zip",
-    "format": "tar_gz",
-    "level": 9,
-    "base": "file:///proj"
-  },
-  "archive_test_params": {
-    "path": "file:///a.zip"
-  },
-  "archive_test_result": {
-    "entries": 3,
-    "failed": [
-      {
-        "path": "zip+file:///a.zip/!/roto.txt",
-        "name": "roto.txt",
-        "reason": "crc"
-      }
-    ],
-    "truncated": false,
-    "checked": [
-      "crc"
-    ]
-  },
-  "file_split_params": {
-    "path": "file:///g.iso",
-    "part_bytes": 1048576,
-    "dest_dir": "file:///trozos"
-  },
-  "file_combine_params": {
-    "first": "file:///g.iso.001",
-    "dest": "file:///g.iso"
-  },
-  "archive_test_report_params": {
-    "task_id": 7
-  },
-  "archive_test_result_clean": {
-    "entries": 9,
-    "failed": [],
-    "truncated": false,
-    "checked": [
-      "gzip_crc"
-    ]
   }
 }

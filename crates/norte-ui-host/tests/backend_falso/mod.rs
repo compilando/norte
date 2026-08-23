@@ -165,6 +165,9 @@ pub struct Falso {
     pub volumenes: Vec<norte_proto::methods::Volume>,
     /// Directorios de plugin que no cargaron: `(dir, motivo)`.
     pub errores_de_carga: Vec<(String, String)>,
+    /// Los BYTES del directorio de un error de carga (#265), por su cadena.
+    /// Lo que un daemon 0.53 manda; ausente = un peer 0.52.
+    pub bytes_de_carga: std::collections::HashMap<String, Vec<u8>>,
     /// El esquema `[config]` de cada extensión, por id.
     pub esquemas: HashMap<String, Vec<norte_proto::methods::PluginConfigKeyWire>>,
     /// Lo que contesta `ai.rename_plan`. `None` = el daemon falla.
@@ -339,6 +342,7 @@ impl Falso {
             entries_done: 0,
             entries_total: Some(1),
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -439,6 +443,7 @@ impl HostBackend for Falso {
             .map(|(dir, reason)| norte_proto::methods::PluginLoadError {
                 dir: dir.clone(),
                 reason: reason.clone(),
+                dir_bytes: self.bytes_de_carga.get(dir).cloned(),
             })
             .collect();
         Box::pin(async move {
@@ -499,6 +504,7 @@ impl HostBackend for Falso {
                 entries_done: 0,
                 entries_total: None,
                 current: None,
+                unreadable: None,
             });
             tokio::spawn(async move {
                 let entradas: Vec<norte_proto::Entry> = hallazgos
@@ -535,6 +541,7 @@ impl HostBackend for Falso {
                     entries_done: 1,
                     entries_total: Some(1),
                     current: None,
+                    unreadable: None,
                 });
                 // El emisor vive lo que la task: soltarlo cierra el canal y
                 // eso ES el final de la búsqueda.
@@ -644,6 +651,7 @@ impl HostBackend for Falso {
             entries_done: 0,
             entries_total: None,
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         self.progresos
@@ -664,11 +672,15 @@ impl HostBackend for Falso {
         &self,
         id: String,
         approved: bool,
+        expected_digest: Option<String>,
     ) -> BoxFuture<'static, Result<(), Error>> {
-        self.gobierno
-            .lock()
-            .expect("gobierno")
-            .push(format!("approval:{id}:{approved}"));
+        // El ancla se APUNTA (#282): que la ventana la mande es lo que un test
+        // puede afirmar desde aquí, y sin apuntarla el hilo entero sería una
+        // cadena de firmas sin nadie que las lea.
+        self.gobierno.lock().expect("gobierno").push(format!(
+            "approval:{id}:{approved}:{}",
+            expected_digest.as_deref().unwrap_or("-")
+        ));
         let fallo = self.error_al_gobernar.lock().expect("gobierno").clone();
         // Y el catálogo cambia: el host lo REPIDE tras un OK, así que un
         // falso que contestara siempre lo mismo dejaría pasar una pantalla
@@ -859,6 +871,7 @@ impl HostBackend for Falso {
             entries_done: 0,
             entries_total: None,
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -918,6 +931,7 @@ impl HostBackend for Falso {
             entries_done: 0,
             entries_total: None,
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -983,6 +997,7 @@ impl HostBackend for Falso {
             entries_done: 0,
             entries_total: None,
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -1044,6 +1059,7 @@ impl HostBackend for Falso {
             entries_done: 1,
             entries_total: Some(1),
             current: None,
+            unreadable: None,
         };
         let (_tx, rx) = tokio::sync::watch::channel(progreso);
         Box::pin(async move {
@@ -1231,6 +1247,7 @@ impl HostBackend for Falso {
             entries_done: 0,
             entries_total: Some(1),
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -1307,6 +1324,7 @@ impl HostBackend for Falso {
             entries_done: 0,
             entries_total: Some(1),
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx);

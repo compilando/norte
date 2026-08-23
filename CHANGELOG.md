@@ -9,6 +9,21 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Protocol 0.53.0** (#251, #265, #282, ADR 0071): three optional fields,
+  bundled into one bump because each alone would have cost its own version
+  window. `TaskProgress.unreadable` says how many subtrees a task could not
+  read, so `fs.dir_size` can answer "at least X" instead of a confident total
+  that is short — the dangerous direction of wrong for a method that exists to
+  answer "does this fit?". `PluginLoadError.dir_bytes` carries the bytes of a
+  broken plugin's directory name, which used to cross the wire already
+  converted by an unmarked `to_string_lossy` and therefore painted a name that
+  differed from disk while declaring itself faithful.
+  `PluginSetApprovalParams.expected_digest` (with `PluginInfo.manifest_digest`
+  on the way out) makes what gets granted be what the human read: the daemon
+  refuses when the manifest changed between the catalogue and the yes.
+  Window shifts to N=0.53.x / N-1=0.52.x — a 0.52 peer loses the warning, the
+  mark and the refusal, never correctness.
+
 - **The window has the panel gestures the terminal always had** (#290, phase
   A): sort by name, extension, size or time; the sort menu; refresh; hidden
   entries; name reinterpretation; properties; mirror, pull and swap; the

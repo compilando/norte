@@ -200,7 +200,7 @@ async fn plugin_decorate_y_column_values_e2e_wasm_real_a_traves_del_backend() {
     );
 
     backend
-        .plugins_set_approval("org.norte.decor", true)
+        .plugins_set_approval("org.norte.decor", true, None)
         .await
         .expect("aprobar decorator por el wire");
     backend
@@ -208,7 +208,7 @@ async fn plugin_decorate_y_column_values_e2e_wasm_real_a_traves_del_backend() {
         .await
         .expect("activar decorator por el wire");
     backend
-        .plugins_set_approval("org.norte.cols", true)
+        .plugins_set_approval("org.norte.cols", true, None)
         .await
         .expect("aprobar columns por el wire");
     backend

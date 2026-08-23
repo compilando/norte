@@ -939,6 +939,7 @@ props-count-hint = sin contar (ciérralo y usa «contar cuánto ocupa»)
 props-hint = [Esc] cerrar
 msg-dir-size-counting = contando lo que ocupa…
 msg-dir-size = { $size } en { $count } entradas
+msg-dir-size-partial = al menos { $size } en { $count } entradas ({ $skipped } sin poder leer)
 help-cmd-pane-mkdir = crear un directorio (F7)
 help-cmd-pane-ai-rename = renombrado IA del directorio actual (plan revisable)
 help-cmd-pane-semantic-search = búsqueda semántica sobre el índice (IA)

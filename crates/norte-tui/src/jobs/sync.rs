@@ -776,6 +776,7 @@ mod sync_tests {
             entries_done: 0,
             entries_total: None,
             current: None,
+            unreadable: None,
         });
         (
             SyncRun {

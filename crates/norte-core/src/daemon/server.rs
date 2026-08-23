@@ -3107,15 +3107,46 @@ async fn handle_plugin_set_approval(
     // Muta EN MEMORIA bajo el lock y captura el snapshot + el dir; el lock se
     // libera al cerrar el bloque, ANTES de cualquier `.await` (regla 2: nada de
     // I/O bloqueante en el reactor, ni sostener un std::Mutex a través de await).
-    let (applied, snapshot, dir) = {
+    let (applied, rancio, snapshot, dir) = {
         let mut reg = shared.plugins.lock().expect("plugins lock sano");
-        let applied = reg.set_approval_in_memory(&p.id, p.approved);
+        // Lo que se CONCEDE tiene que ser lo que el humano LEYÓ (#282). Este
+        // daemon descubre el catálogo una vez al arrancar, así que hoy la
+        // ventana está cerrada por accidente; la comprobación la hace real, y
+        // el `Backend` embebido —que redescubre en cada llamada— la necesita
+        // de verdad.
+        //
+        // Solo al APROBAR: revocar no concede nada, y rehusar una revocación
+        // por un ancla rancia dejaría vivo el permiso que alguien quita.
+        //
+        // Un id DESCONOCIDO no es un ancla rancia: `manifest_digest` devuelve
+        // `None` para los dos casos, y contestar «el manifiesto cambió» a
+        // quien nombró un plugin que no existe es un diagnóstico equivocado
+        // sobre el error más común de un cliente mal escrito. Se pregunta
+        // primero si se conoce.
+        let conocido = reg.manifest_digest(&p.id).is_some();
+        let rancio = p.approved
+            && conocido
+            && p.expected_digest
+                .as_ref()
+                .is_some_and(|esperado| reg.manifest_digest(&p.id).as_ref() != Some(esperado));
+        let applied = !rancio && reg.set_approval_in_memory(&p.id, p.approved);
         (
             applied,
+            rancio,
             reg.state_snapshot(),
             reg.config_dir().to_path_buf(),
         )
     };
+    if rancio {
+        // NO `INVALID_PARAMS`: ése es el código de «ese plugin no existe» tres
+        // líneas más abajo, y un cliente que reciba los dos iguales no puede
+        // distinguir «vuelve a leerlo y aprueba» de «ese id no está». Es la
+        // misma forma que `session.put` con una revisión rancia, y usa la
+        // misma variante: `ConflictKind::StaleRevision`.
+        return Err(RpcError::from(norte_proto::Error::Conflict {
+            conflict: norte_proto::ConflictKind::StaleRevision,
+        }));
+    }
     if !applied {
         return Err(RpcError::protocol(
             codes::INVALID_PARAMS,

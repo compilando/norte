@@ -24,6 +24,7 @@ fn plugin(id: &str, name: &str, category: &str, caps: &[&str], approved: bool) -
         commands: Vec::new(),
         columns: Vec::new(),
         has_help: false,
+        manifest_digest: None,
     }
 }
 
@@ -188,6 +189,7 @@ fn render_muestra_errores_de_carga() {
         errors: vec![PluginLoadError {
             dir: "/plugins/roto".into(),
             reason: "manifiesto inválido".into(),
+            dir_bytes: None,
         }],
         cursor: 0,
         config: None,

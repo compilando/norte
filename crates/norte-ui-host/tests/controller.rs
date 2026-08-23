@@ -1473,6 +1473,7 @@ async fn una_task_ajena_se_ve_y_se_dice_ajena() {
         entries_done: 0,
         entries_total: None,
         current: None,
+        unreadable: None,
     };
     let (_ptx, prx) = tokio::sync::watch::channel(progreso);
     tx.send(norte_ui_host::backend::HostTask {
@@ -3802,6 +3803,9 @@ fn extension(id: &str, name: &str, has_help: bool) -> norte_proto::methods::Plug
         commands: Vec::new(),
         columns: Vec::new(),
         has_help,
+        // El ancla que el core manda (#282): la ventana la devuelve al
+        // confirmar, y sin ella en el doble el hilo entero no se ejercitaría.
+        manifest_digest: Some(format!("digest-de-{id}")),
     }
 }
 
@@ -9795,6 +9799,7 @@ fn inyectar_task(
         entries_done: 0,
         entries_total: None,
         current: None,
+        unreadable: None,
     };
     let (ptx, prx) = tokio::sync::watch::channel(progreso);
     let canceladas = Arc::clone(canceladas);
@@ -9945,6 +9950,7 @@ fn inyectar_task_de(
         entries_done: 0,
         entries_total: None,
         current: None,
+        unreadable: None,
     };
     let (ptx, prx) = tokio::sync::watch::channel(progreso);
     tx.send(norte_ui_host::backend::HostTask {
@@ -10680,6 +10686,7 @@ async fn un_lote_que_nace_terminal_pide_su_informe() {
         entries_done: 1,
         entries_total: Some(1),
         current: None,
+        unreadable: None,
     };
     let (ptx, prx) = tokio::sync::watch::channel(progreso);
     drop(ptx);
@@ -12259,7 +12266,10 @@ async fn aprobar_pregunta_y_enumera_las_capabilities() {
         if v.rows.first().is_some_and(|r| r.approved) {
             assert_eq!(
                 backend.gobierno.lock().expect("gobierno").as_slice(),
-                ["approval:acme.ftp:true"]
+                // Con el ANCLA que se enseñó (#282): lo que se concede tiene
+                // que ser lo que el humano leyó, y el core rehúsa si el
+                // manifiesto cambió entre la pregunta y el sí.
+                ["approval:acme.ftp:true:digest-de-acme.ftp"]
             );
             return;
         }
@@ -14654,4 +14664,124 @@ async fn el_corpus_hostil_cruza_el_dialogo_de_aprobacion() {
             d.body
         );
     }
+}
+
+/// El directorio de un plugin roto es BYTES, y llegaba ya convertido (#265).
+///
+/// `PluginLoadError.dir` es un `String` que el core producía con un
+/// `to_string_lossy` SIN marcar, así que un directorio llamado `caf\xff`
+/// —fixture `lossy_collapse_ff` del corpus— cruzaba el wire ya con su
+/// `U+FFFD`. Y `display_name` no lo recupera: pone `lossy` solo cuando
+/// `from_utf8` falla y `masked` solo ante un peligro de terminal, y `U+FFFD`
+/// no es ninguna de las dos cosas —es Specials—. La fila se declaraba fiel.
+///
+/// El test es un PAR, porque una sola fila no distingue el arreglo de la
+/// heurística que había antes:
+///
+/// - `caf\xff` (bytes de verdad no-UTF-8) → la fila se MARCA. La heurística
+///   vieja también lo marcaba, así que esta mitad sola no prueba nada.
+/// - `caf\u{FFFD}` (un directorio que se llama ASÍ, en UTF-8 válido) → la fila
+///   NO se marca. Es el falso positivo de la heurística —«la cadena lleva un
+///   reemplazo, luego alguien convirtió»— y es la mitad que solo pasa con los
+///   bytes delante.
+///
+/// Lo que este arreglo NO hace: distinguir `caf\xff` de `caf\xfe` al pintar.
+/// `display_name` mapea todo byte inválido al mismo `U+FFFD`, así que las dos
+/// siguen pintándose igual. Lo que se recupera es la MARCA, no la ortografía.
+#[tokio::test]
+async fn un_directorio_de_plugin_no_utf8_llega_marcado_y_sin_falso_positivo() {
+    let crudos = norte_testkit::corpus::hostile_names()
+        .into_iter()
+        .find(|n| n.id == "lossy_collapse_ff")
+        .expect("la fixture está")
+        .bytes;
+    assert!(
+        std::str::from_utf8(&crudos).is_err(),
+        "la premisa: son bytes que NO son UTF-8"
+    );
+    // Y el gemelo legítimo: un nombre que ES `U+FFFD` en disco, en UTF-8
+    // válido. Nadie lo convirtió, así que marcarlo sería mentir.
+    let honesto = "caf\u{FFFD}".as_bytes().to_vec();
+    assert!(std::str::from_utf8(&honesto).is_ok());
+
+    let mut backend = arbol_con_plugins(Vec::new(), &[]);
+    {
+        let f = std::sync::Arc::get_mut(&mut backend).expect("única referencia");
+        for bytes in [&crudos, &honesto] {
+            // Lo que el core manda: la cadena YA convertida, y los bytes al
+            // lado. Las dos filas se distinguen por su texto; lo que NO se
+            // puede distinguir por el texto es cuál de las dos se convirtió,
+            // que es justo la pregunta.
+            let convertida = String::from_utf8_lossy(bytes).into_owned();
+            f.errores_de_carga
+                .push((convertida.clone(), "el manifiesto no parsea".to_owned()));
+            f.bytes_de_carga.insert(convertida, bytes.clone());
+        }
+    }
+    let (h, _snap) = host_arbol(std::sync::Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = siguiente_extensiones(&mut sub).await.expect("abre");
+    let v = extensiones_cargadas(&mut sub).await;
+
+    // Las dos cadenas colapsan a una sola clave, así que el falso llega a
+    // mandar UNA fila: lo que se afirma es su bandera, que con los bytes del
+    // nombre honesto tiene que ser FALSA.
+    assert_eq!(v.errors.len(), 2, "las dos filas llegan: {:?}", v.errors);
+
+    // La de bytes crudos: se marca, y con los bytes delante se marca por el
+    // motivo correcto —`display_name` vio que no eran UTF-8— y no por la
+    // heurística.
+    let convertida = v
+        .errors
+        .iter()
+        .find(|e| e.dir == String::from_utf8_lossy(&crudos))
+        .expect("la fila de bytes crudos está");
+    assert!(
+        convertida.hostile,
+        "lo pintado difiere de lo que hay y NO lo dice: {:?}",
+        convertida.dir
+    );
+
+    // Y la honesta: NO se marca. Ésta es la mitad que solo pasa con los bytes
+    // delante; con la heurística de la cadena salía marcada de más.
+    let fila_limpia = v
+        .errors
+        .iter()
+        .find(|e| e.dir == "caf\u{FFFD}")
+        .expect("la fila honesta está");
+    assert!(
+        !fila_limpia.hostile,
+        "un directorio que SE LLAMA `caf\u{FFFD}` no se convirtió: marcarlo es \
+         el falso positivo que los bytes existen para quitar"
+    );
+    for c in fila_limpia.dir.chars() {
+        assert!(
+            !norte_encoding::is_terminal_hazard(c),
+            "un peligro cruzó sin enmascarar: {:?}",
+            fila_limpia.dir
+        );
+    }
+}
+
+/// Y la otra mitad, aislada: SIN bytes —un peer 0.52— la heurística marca esa
+/// misma fila honesta, y ése es el falso positivo que #265 quita.
+#[tokio::test]
+async fn sin_los_bytes_un_nombre_honesto_con_reemplazo_sale_marcado_de_mas() {
+    let honesto = "caf\u{FFFD}".to_owned();
+    let mut backend = arbol_con_plugins(Vec::new(), &[]);
+    std::sync::Arc::get_mut(&mut backend)
+        .expect("única referencia")
+        .errores_de_carga = vec![(honesto, "el manifiesto no parsea".to_owned())];
+    // Deliberadamente SIN `bytes_de_carga`: es un daemon 0.52.
+    let (h, _snap) = host_arbol(std::sync::Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = siguiente_extensiones(&mut sub).await.expect("abre");
+    let v = extensiones_cargadas(&mut sub).await;
+    assert!(
+        v.errors[0].hostile,
+        "contra un peer viejo la heurística es lo único que hay, y marca de \
+         más antes que de menos"
+    );
 }

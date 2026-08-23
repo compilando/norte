@@ -2775,6 +2775,13 @@
           "description": "Id estable del plugin (namespace inverso, p. ej. `org.norte.demo`).",
           "type": "string"
         },
+        "manifest_digest": {
+          "description": "El ancla de aprobación del manifiesto Y del binario, tal como el daemon\nla calcula AHORA (0.53.0, #282). Hex sha256, o `None` en un peer viejo.\n\nEs lo que un humano está mirando cuando decide, así que es lo que\n[`PluginSetApprovalParams::expected_digest`] devuelve al confirmar. Sin\nél, un cliente solo puede comparar la LISTA de capabilities, que es lo\nque se pinta y no lo que se concede: `category` y `contributions`\n—cuándo y cómo se dispara el plugin— entran en el ancla y no en la\nlista.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "description": "Nombre legible para mostrar.",
           "type": "string"
@@ -2832,8 +2839,16 @@
       "description": "Un directorio de plugin que NO se pudo cargar (elemento de\n[`PluginListResult::errors`], M4-P3): se reporta para diagnóstico, sin\ntumbar el resto del catálogo.",
       "properties": {
         "dir": {
-          "description": "Directorio del plugin que falló (display; puede llevar bytes lossy).",
+          "description": "Directorio del plugin que falló (display; puede llevar bytes lossy).\n\nEs el basename, nunca la ruta absoluta: ésta revelaría el home del\nusuario a un agente que llame a `plugin.list`.\n\nSe conserva por compatibilidad y sigue siendo lo que un cliente pinta\ncuando [`Self::dir_bytes`] no viene. Lo que NO puede es decir si se\nalteró: el `to_string_lossy` que lo produce pone `U+FFFD`, y `U+FFFD`\nno es un peligro de terminal —es Specials, ni control ni\n`Default_Ignorable`—, así que ninguna heurística del receptor lo\nrecupera. Por eso existe el campo de al lado (#265).",
           "type": "string"
+        },
+        "dir_bytes": {
+          "contentEncoding": "base64",
+          "description": "Los BYTES del basename, tal como el OS los dio (0.53.0, #265).\n\nEl nombre de un directorio de plugin es bytes: en Linux `caf\\xff` es\nun nombre legal, y `PluginLoadError.dir` llegaba ya convertido con un\n`to_string_lossy` SIN marcar, así que la fila del error se declaraba\nfiel. Con los bytes, el receptor hace su propia conversión y sabe\nmarcarla — que es la regla de siempre: lo que se enmascara se dice.\n\nAditivo: un daemon 0.52 no lo emite y el receptor cae a [`Self::dir`],\nque es exactamente lo que hacía antes. Lo que se pierde contra el\nviejo es la marca, no el nombre.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "reason": {
           "description": "Motivo legible del fallo (manifiesto inválido, versión no soportada…).",
@@ -3028,6 +3043,13 @@
         "approved": {
           "description": "`true` = aprobar las capabilities, `false` = revocar.",
           "type": "boolean"
+        },
+        "expected_digest": {
+          "description": "El ancla que el humano LEYÓ, si el cliente la tiene (0.53.0, #282).\n\nEl daemon ancla el digest que ÉL tiene en el momento de escribir, no el\nque se enseñó, así que entre el `plugin.list` que vio el humano y el\n`set_approval` que confirma cabe un `plugin.toml` distinto. Hoy esa\nventana está cerrada por ACCIDENTE en el daemon —descubre el catálogo\nuna vez al arrancar— y NO lo está en el `Backend` embebido, que\nredescubre en cada llamada.\n\nCon este campo el daemon rehúsa si no casa, y lo que se concede es\nexactamente lo que se leyó. Solo aplica al APROBAR: revocar no concede\nnada, y rehusar una revocación por un digest rancio dejaría vivo un\npermiso que alguien está intentando quitar.\n\nAditivo: `None` es «el cliente no lo manda», y entonces el daemon se\ncomporta como 0.52 — la comprobación es lo que se pierde contra un\ncliente viejo, no la corrección.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "id": {
           "description": "Id del plugin a (des)aprobar.",
@@ -4580,7 +4602,7 @@
       "type": "object"
     },
     "TaskProgress": {
-      "description": "Snapshot de progreso de una Task (payload de la notificación `task.progress`).\n\nTotales `None` = aún desconocidos (walk en curso), jamás un 0 fingido.\nEl emisor coalesce; el último snapshot de una Task siempre lleva estado\nterminal y totales finales.\n\n```\nuse norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};\nlet p = TaskProgress {\n    task_id: TaskId::new(7),\n    kind: TaskKind::Copy,\n    state: TaskState::Running,\n    bytes_done: 512,\n    bytes_total: Some(4096),\n    entries_done: 0,\n    entries_total: Some(2),\n    current: None,\n};\nlet json = serde_json::to_string(&p).unwrap();\nassert_eq!(serde_json::from_str::<TaskProgress>(&json).unwrap(), p);\n```",
+      "description": "Snapshot de progreso de una Task (payload de la notificación `task.progress`).\n\nTotales `None` = aún desconocidos (walk en curso), jamás un 0 fingido.\nEl emisor coalesce; el último snapshot de una Task siempre lleva estado\nterminal y totales finales.\n\n```\nuse norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};\nlet p = TaskProgress {\n    task_id: TaskId::new(7),\n    kind: TaskKind::Copy,\n    state: TaskState::Running,\n    bytes_done: 512,\n    bytes_total: Some(4096),\n    entries_done: 0,\n    entries_total: Some(2),\n    current: None,\n    // `None` = esta task no cuenta ilegibles; `Some(0)` sería «los cuenta\n    // y no hubo». Ver el campo.\n    unreadable: None,\n};\nlet json = serde_json::to_string(&p).unwrap();\nassert_eq!(serde_json::from_str::<TaskProgress>(&json).unwrap(), p);\n```",
       "properties": {
         "bytes_done": {
           "description": "Bytes ya procesados.",
@@ -4637,6 +4659,15 @@
         "task_id": {
           "$ref": "#/$defs/TaskId",
           "description": "Task a la que pertenece el snapshot."
+        },
+        "unreadable": {
+          "description": "Subárboles o entradas que la task NO pudo leer (0.53.0, #251).\n\n`None` = **quien lo emite no cuenta esto**, y `Some(0)` = lo cuenta y\nno hubo ninguno. La distinción no es cosmética y es la misma regla que\n[`crate::methods::Volume::total_bytes`] escribe para su caso: un cero\nque hace de desconocido se lee como una respuesta, y aquí la respuesta\nque fabricaría es la peligrosa. Un daemon 0.52 no emite el campo; si\nesto fuera `u64`, un cliente 0.53 leería `0` y pintaría un total\n«seguro» que no lo es.\n\nLo que lo hace necesario es `fs.dir_size`: contaba los subárboles\nilegibles en un contador LOCAL, emitía un `tracing::info!` y nada más,\nasí que un árbol del que la mitad daba `EACCES` reportaba `Completed`\ncon un total confiado y equivocado — y el método existe para contestar\n«¿cabe esto en el destino?», donde un número silenciosamente pequeño\nes la dirección peligrosa.\n\nCon esto, un cliente pinta «al menos X» en vez de «X». Es el gemelo\ndel `confidence` que `fs.compare` le da a cada fila, y por el mismo\nmotivo: un recuento sin él no puede decir que es una cota inferior.\n\nSe omite cuando es `None`, que es el valor de toda task que no cuenta\nilegibles — o sea casi todas, y un `task.progress` viaja muchas veces\npor segundo y por task.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [

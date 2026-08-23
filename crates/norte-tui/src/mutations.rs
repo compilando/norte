@@ -146,8 +146,9 @@ pub async fn confirm_modal(
         // Ya lo confirmó un humano que leyó las capabilities enumeradas
         // (#280). Lo que sigue lo dice el CORE: se concede y se relista, en
         // vez de creerse un `bool` local que el daemon no confirmó.
-        Modal::ConfirmPluginApproval { id, .. } => {
-            crate::screens::extensions::conceder_aprobacion(app, backend, &id).await;
+        Modal::ConfirmPluginApproval { id, digest, .. } => {
+            crate::screens::extensions::conceder_aprobacion(app, backend, &id, digest.as_deref())
+                .await;
         }
         Modal::ConfirmTransfer {
             kind, items, to, ..

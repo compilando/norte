@@ -252,6 +252,7 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
                 return;
             }
             let (id, name) = (sel.id.clone(), sel.name.clone());
+            let digest = sel.manifest_digest.clone();
             // Las capabilities, cada una enmascarada POR SU CUENTA y con su
             // bandera: son texto de un tercero, y pegarlas en una frase deja
             // que una finja ser otra.
@@ -266,6 +267,7 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
                 name: nombre,
                 name_hostile: nombre_hostil,
                 caps,
+                digest,
             });
         }
         "dialog.toggle-enabled" => {
@@ -368,6 +370,7 @@ mod extensions_help_tests {
             commands: Vec::new(),
             columns: Vec::new(),
             has_help,
+            manifest_digest: None,
         }
     }
 
@@ -409,15 +412,22 @@ mod extensions_help_tests {
 ///
 /// Revocar va en la dirección segura, así que no pregunta.
 async fn revocar_o_decir(app: &mut App, backend: &Backend, id: &str) {
-    match backend.plugins_set_approval(id, false).await {
+    // Sin ancla a propósito (#282): revocar no concede nada, y rehusarlo por
+    // un digest rancio dejaría vivo justo el permiso que se quiere quitar.
+    match backend.plugins_set_approval(id, false, None).await {
         Ok(()) => relistar_extensiones(app, backend).await,
         Err(e) => app.message = Some(error_message(&e)),
     }
 }
 
 /// Concede la aprobación —ya confirmada por un humano— y RELISTA.
-pub(crate) async fn conceder_aprobacion(app: &mut App, backend: &Backend, id: &str) {
-    match backend.plugins_set_approval(id, true).await {
+pub(crate) async fn conceder_aprobacion(
+    app: &mut App,
+    backend: &Backend,
+    id: &str,
+    digest: Option<&str>,
+) {
+    match backend.plugins_set_approval(id, true, digest).await {
         Ok(()) => relistar_extensiones(app, backend).await,
         Err(e) => {
             // Un fallo se DICE **y** se relista: un plazo vencido, o un
@@ -489,6 +499,7 @@ mod aprobacion_tests {
             commands: Vec::new(),
             columns: Vec::new(),
             has_help: false,
+            manifest_digest: None,
         }
     }
 

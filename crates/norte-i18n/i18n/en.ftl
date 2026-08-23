@@ -941,6 +941,7 @@ props-count-hint = not counted (close this and use "count how much space it take
 props-hint = [Esc] close
 msg-dir-size-counting = counting how much space it takes…
 msg-dir-size = { $size } in { $count } entries
+msg-dir-size-partial = at least { $size } in { $count } entries ({ $skipped } unreadable)
 help-cmd-pane-mkdir = create a directory (F7)
 help-cmd-pane-ai-rename = AI rename of the current directory (reviewable plan)
 help-cmd-pane-semantic-search = Semantic search over the index (AI)
