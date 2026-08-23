@@ -119,20 +119,52 @@ travel with the request, which `fs.copy` has no field for. That is the
 follow-up, and it is why #219 stays open, narrowed.
 
 **Other paths that still resolve by path**, listed rather than implied, and now
-also in the `ConfinedRoot` rustdoc: the sync executor's `destroy_leaf` and
-`destroy_tree` (which hold a root and do not use it), the source deletion of a
-move-by-copy, `RenameAuto`'s candidate probing (up to a thousand stats), and
-`copy_native` (unreachable today — only `norte-vfs-object` declares
-`SERVER_COPY` and it has no `open_root` — but it bypasses the root entirely the
-day some provider has both).
+also in the `ConfinedRoot` rustdoc: the source deletion of a move-by-copy,
+`RenameAuto`'s candidate probing (up to a thousand stats), and `copy_native`
+(unreachable today — only `norte-vfs-object` declares `SERVER_COPY` and it has
+no `open_root` — but it bypasses the root entirely the day some provider has
+both).
 
-**Resume for a single file is now off.** `Dest::resumes()` is `false` whenever
-there is a confined root, because a confined staging name is ephemeral per
-sink. A leaf used to be unconfined and therefore resumable; it no longer is, so
-`ResumePolicy::On` recopies from zero for exactly the case where resume matters
-most — one large file over a flaky link. That is a real regression in kind, not
-in correctness, and giving `LocalConfinedRoot` a real `open_resumable` is what
-undoes it.
+The sync executor's `destroy_leaf` and `destroy_tree` were on that list and are
+not any more (#296): `ConfinedRoot` grew `rmdir` — the twin of `mkdir`, separate
+from `remove` for the same reason `unlinkat` has `AT_REMOVEDIR` — so a
+`Mirror`'s post-order walk names the class of what it destroys instead of
+letting the path decide. Deciding the class from the walk's older snapshot is
+fail-safe by construction: `unlinkat(0)` cannot remove a directory and
+`unlinkat(AT_REMOVEDIR)` cannot remove anything else, so a substitution between
+the walk and the deletion produces a refusal, never a destruction of the wrong
+kind. `Provider::remove` decided in the moment and therefore *applied* the
+substitution.
+
+**Resume for a single file was off, and is on again** (#297). Confining a leaf
+made `Dest::resumes()` false, because a confined staging name was ephemeral per
+sink and nothing could find it again — so `ResumePolicy::On` became a no-op for
+exactly the case where resume matters most, one large file over a flaky link.
+`LocalConfinedRoot` now opens the *stable* staging name, the one ADR 0012
+already defined for the by-path route, and `ConfinedRoot::resumes()` says so.
+
+That has three consequences worth stating rather than discovering:
+
+- **The stable name is predictable**, since it is a hash of the final name. So
+  the reopen is not blind: after `openat` (with `O_NOFOLLOW` *and*
+  `O_NONBLOCK`, because a planted FIFO would otherwise hang a blocking-pool
+  thread forever with no way to cancel it) the descriptor is `fstat`ed and
+  refused unless it is a regular file, with one link, owned by us. Without
+  that, someone with write access to the destination directory could plant the
+  staging and have their bytes published under the legitimate name — with their
+  owner, their permissions, and their write descriptor still open on it.
+  `partial_digest` gets the same treatment for the same reason: verifying the
+  prefix of a file that is not the one being continued verifies nothing.
+- **Two concurrent writers to the same destination now share a staging.** That
+  is inherent to a stable name and is exactly why the ephemeral one carries pid
+  and sequence. The by-path route has had this since ADR 0012; the confined one
+  was immune until now. Interleaved appends can publish a mixture of the right
+  size, which the post-transient disambiguation would accept.
+- **A cancelled confined copy now leaves a partial behind.** `keep` keeps and
+  `Drop` keeps, which is the point — but there is no automatic sweeper:
+  `gc_partials` is single-directory and only `norte gc <dir>` calls it. The
+  confined destination is no longer left clean on cancellation. Same contract
+  the by-path route already had, extended, and said out loud here.
 
 **Cost.** Three extra syscalls per leaf transfer (`open`, `fstat`, two
 `node_id`s), against the five to ten each leaf already pays. `open_leaf_root`

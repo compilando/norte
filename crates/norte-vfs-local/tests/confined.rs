@@ -710,3 +710,104 @@ async fn el_rmdir_confinado_borra_lo_vacio_y_rehusa_lo_lleno() {
     assert!(!matches!(err, Error::NotFound), "{err:?}");
     assert!(dentro.join("lleno/x.txt").exists(), "y no se llevó nada");
 }
+
+// ---------------------------------------------------------------------------
+// El staging estable es un nombre PREDECIBLE, así que lo que hay al otro lado
+// puede haberlo puesto otro. Los tres casos que `O_NOFOLLOW` no cubre.
+// ---------------------------------------------------------------------------
+
+/// El nombre del staging, tal como lo calcula quien sepa el nombre de destino.
+fn nombre_de_staging(final_name: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    let d = Sha256::digest(final_name);
+    let mut hex = String::new();
+    for b in &d[..16] {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{b:02x}");
+    }
+    format!(".norte-partial.{hex}")
+}
+
+/// Un FICHERO REGULAR plantado con el nombre del staging NO se reanuda.
+///
+/// `O_NOFOLLOW` descarta un enlace y nada más. Reanudar sobre el fichero de
+/// otro publica bajo el nombre legítimo un inodo que no es nuestro: con su
+/// contenido delante de los nuestros, con su dueño y con sus permisos, y con
+/// el descriptor de escritura del atacante todavía abierto encima.
+#[tokio::test]
+async fn un_staging_plantado_por_otro_no_se_reanuda() {
+    let (p, raiz, dentro, _fuera) = escenario();
+    let plantado = dentro.join(nombre_de_staging(b"grande.bin"));
+    std::fs::write(&plantado, b"CONTENIDO AJENO").expect("plantado");
+
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    // Se planta un HARDLINK, que es lo que hace observable «este inodo tiene
+    // otro nombre» sin depender del uid (el test corre como el mismo usuario).
+    let otro_nombre = dentro.join("lo-mio.txt");
+    std::fs::hard_link(&plantado, &otro_nombre).expect("hardlink");
+
+    let Err(err) = root.open_resumable(&[seg(b"grande.bin")]).await else {
+        panic!("reanudó sobre un fichero que no es suyo");
+    };
+    assert!(
+        matches!(err, Error::Conflict { .. }),
+        "tiene que ser un conflicto, no un error de E/S: {err:?}"
+    );
+    assert_eq!(
+        std::fs::read(&plantado).expect("sigue"),
+        b"CONTENIDO AJENO",
+        "y no se le anexó nada"
+    );
+}
+
+/// Un FIFO con el nombre del staging tampoco: sin `O_NONBLOCK` el `openat`
+/// se queda colgado PARA SIEMPRE dentro del pool de bloqueo, y el token de
+/// cancelación no puede interrumpir un `openat` en curso.
+#[tokio::test]
+async fn un_fifo_con_el_nombre_del_staging_no_cuelga_el_abrir() {
+    let (p, raiz, dentro, _fuera) = escenario();
+    let fifo = dentro.join(nombre_de_staging(b"grande.bin"));
+    let c = std::ffi::CString::new(fifo.as_os_str().as_bytes()).expect("cstring");
+    // SAFETY: `c` es una CString viva y NUL-terminada; `mkfifo` no requiere
+    // privilegio y solo escribe en el sistema de ficheros.
+    let rc = unsafe { libc::mkfifo(c.as_ptr(), 0o666) };
+    assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
+
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    // Con un plazo: lo que este test comprueba es que NO se cuelga.
+    let r = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        root.open_resumable(&[seg(b"grande.bin")]),
+    )
+    .await
+    .expect("el abrir tiene que volver, no colgarse");
+    let Err(_err) = r else {
+        panic!("un FIFO no es un staging");
+    };
+    // Cuál sea el error da igual y no se fija: con `O_NONBLOCK`, un FIFO sin
+    // lector contesta `ENXIO` y ni siquiera se llega al `fstat`. Lo que este
+    // test afirma es que VUELVE — sin la bandera, el `openat` se queda dentro
+    // del pool de bloqueo esperando un lector que no va a llegar, y ahí no hay
+    // token de cancelación que valga.
+}
+
+/// Y el camino normal sigue funcionando: un staging que creamos nosotros se
+/// reanuda. La defensa no puede costar la operación que existe para proteger.
+#[tokio::test]
+async fn un_staging_propio_si_se_reanuda_tras_la_comprobacion() {
+    let (p, raiz, _dentro, _fuera) = escenario();
+    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let (mut sink, ya) = root
+        .open_resumable(&[seg(b"grande.bin")])
+        .await
+        .expect("abre");
+    assert_eq!(ya, 0);
+    sink.write(Bytes::from_static(b"abc")).await.expect("mitad");
+    sink.keep().await.expect("conserva");
+
+    let (_sink, ya) = root
+        .open_resumable(&[seg(b"grande.bin")])
+        .await
+        .expect("reabre lo suyo");
+    assert_eq!(ya, 3, "el nuestro pasa la comprobación y se continúa");
+}

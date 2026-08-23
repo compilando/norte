@@ -553,6 +553,73 @@ impl LocalRoot {
         Ok(())
     }
 
+    /// El digest de los primeros `len` bytes del parcial de `rel`, abierto POR
+    /// EL DESCRIPTOR del directorio ya resuelto.
+    ///
+    /// Las MISMAS comprobaciones que [`Self::open_resumable`] —`O_NOFOLLOW`,
+    /// fichero regular, un solo enlace, nuestro—: verificar el prefijo de un
+    /// fichero que no es el que vamos a continuar no verifica nada.
+    #[allow(unsafe_code)]
+    pub(crate) fn partial_digest(
+        &self,
+        rel: &[Segment],
+        len: u64,
+    ) -> Result<Option<[u8; 32]>, Error> {
+        use std::io::Read as _;
+
+        use sha2::{Digest as _, Sha256};
+        let (dir, name) = self.parent_of(rel)?;
+        let staging_name = CString::new(crate::provider::stable_partial_name(name.as_bytes()))
+            .map_err(|_| Error::InvalidPath)?;
+        // SAFETY: `dir` vive durante la llamada y `staging_name` es una CString
+        // NUL-terminada viva también. Solo lectura, y sin `O_CREAT`: si no está
+        // no hay digest y el caller degrada a `Length`.
+        let raw = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                staging_name.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        };
+        if raw < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::NotFound {
+                return Ok(None);
+            }
+            return Err(map_errno(&e));
+        }
+        // SAFETY: `raw` es un fd recién abierto y sin dueño; `File` pasa a serlo.
+        let file = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(raw) };
+        let st = fstat_de(&file)?;
+        // SAFETY: `geteuid` no toma punteros y no puede fallar.
+        if st.st_mode & libc::S_IFMT != libc::S_IFREG
+            || st.st_nlink != 1
+            || st.st_uid != unsafe { libc::geteuid() }
+        {
+            // No es el parcial que dejamos: sin digest, y el caller degrada.
+            // Que la reanudación lo rechace es trabajo de `open_resumable`.
+            return Ok(None);
+        }
+        let mut reader = file.take(len);
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut vistos: u64 = 0;
+        loop {
+            let n = reader
+                .read(&mut buf)
+                .map_err(|e| crate::provider::map_io(&e))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            vistos += n as u64;
+        }
+        if vistos < len {
+            return Ok(None);
+        }
+        Ok(Some(hasher.finalize().into()))
+    }
+
     /// `unlinkat(AT_REMOVEDIR)` del directorio VACÍO que hay en `rel` (#296).
     #[allow(unsafe_code)]
     pub(crate) fn rmdir(&self, rel: &[Segment]) -> Result<(), Error> {
@@ -630,9 +697,21 @@ impl LocalRoot {
         let staging_name = CString::new(crate::provider::stable_partial_name(name.as_bytes()))
             .map_err(|_| Error::InvalidPath)?;
         // SAFETY: `dir` vive durante la llamada y `staging_name` es una CString
-        // NUL-terminada viva también. Sin `O_EXCL` a propósito —se reabre— y
-        // con `O_NOFOLLOW`, que es lo que impide que un enlace plantado con ese
-        // nombre desvíe la escritura.
+        // NUL-terminada viva también.
+        //
+        // Sin `O_EXCL` a propósito —se REABRE, que es de lo que va reanudar— y
+        // por eso hacen falta las banderas siguientes y el `fstat` de abajo.
+        // Este nombre es PREDECIBLE: lo calcula cualquiera que sepa el nombre
+        // de destino, así que el fichero que hay al otro lado puede haberlo
+        // puesto otro.
+        //
+        // - `O_NOFOLLOW`: no es un enlace.
+        // - `O_NONBLOCK`: un FIFO plantado con ese nombre colgaría el `openat`
+        //   PARA SIEMPRE dentro del pool de bloqueo, y el token de cancelación
+        //   no puede interrumpir un `openat` en curso. Se quita después de
+        //   comprobar que es un fichero regular.
+        // - `0o600` y no `0o666`: lo que se crea aquí es nuestro y de nadie
+        //   más mientras dure.
         let raw = unsafe {
             libc::openat(
                 dir.as_raw_fd(),
@@ -641,8 +720,9 @@ impl LocalRoot {
                     | libc::O_CREAT
                     | libc::O_APPEND
                     | libc::O_NOFOLLOW
+                    | libc::O_NONBLOCK
                     | libc::O_CLOEXEC,
-                0o666,
+                0o600,
             )
         };
         if raw < 0 {
@@ -650,10 +730,37 @@ impl LocalRoot {
         }
         // SAFETY: `raw` es un fd recién abierto y sin dueño; `File` pasa a serlo.
         let file = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(raw) };
-        let already = file
-            .metadata()
-            .map_err(|e| crate::provider::map_io(&e))?
-            .len();
+        // **Y ahora se MIRA lo que se ha abierto**, que es lo que faltaba.
+        // `O_NOFOLLOW` descarta un enlace y nada más: un fichero regular del
+        // atacante, un FIFO o un hardlink al fichero de una víctima pasan por
+        // esa puerta. Reanudar sobre cualquiera de los tres publica bajo el
+        // nombre legítimo un inodo que no es nuestro —con su contenido, su
+        // dueño y sus permisos— o anexa nuestros bytes FUERA de la raíz
+        // aprobada, que es justo lo que el confinamiento existe para impedir.
+        let st = fstat_de(&file)?;
+        if st.st_mode & libc::S_IFMT != libc::S_IFREG {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::TypeMismatch,
+            });
+        }
+        // Un hardlink: nuestros bytes irían también al otro nombre, que puede
+        // estar fuera de la raíz.
+        if st.st_nlink != 1 {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::EscapesRoot,
+            });
+        }
+        // SAFETY: `geteuid` no toma punteros y no puede fallar.
+        if st.st_uid != unsafe { libc::geteuid() } {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::EscapesRoot,
+            });
+        }
+        // Comprobado que es un fichero regular nuestro, el `O_NONBLOCK` ya no
+        // pinta nada; se quita para no pasar a otra capa un fd con una bandera
+        // que no espera.
+        quita_nonblock(&file)?;
+        let already = u64::try_from(st.st_size).unwrap_or(0);
         Ok((
             ConfinedStaging {
                 dir,
@@ -842,6 +949,38 @@ fn create_exclusive(dir: RawFd, name: &CString) -> Result<std::fs::File, Error> 
     Ok(unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(raw) })
 }
 
+/// `fstat` de un descriptor ya abierto.
+#[allow(unsafe_code)]
+fn fstat_de(file: &std::fs::File) -> Result<libc::stat, Error> {
+    use std::os::fd::AsRawFd as _;
+    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `file` vive durante la llamada y `st` es un `stat` propio y
+    // alineado que se rellena entero. Solo se lee tras el 0.
+    let rc = unsafe { libc::fstat(file.as_raw_fd(), st.as_mut_ptr()) };
+    if rc != 0 {
+        return Err(map_errno(&std::io::Error::last_os_error()));
+    }
+    // SAFETY: `fstat` devolvió 0, así que dejó `st` inicializado.
+    Ok(unsafe { st.assume_init() })
+}
+
+/// Quita `O_NONBLOCK` de un descriptor ya abierto.
+#[allow(unsafe_code)]
+fn quita_nonblock(file: &std::fs::File) -> Result<(), Error> {
+    use std::os::fd::AsRawFd as _;
+    // SAFETY: `file` vive durante las dos llamadas; `F_GETFL`/`F_SETFL` no
+    // toman punteros.
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0 {
+        return Err(map_errno(&std::io::Error::last_os_error()));
+    }
+    let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags & !libc::O_NONBLOCK) };
+    if rc < 0 {
+        return Err(map_errno(&std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
 /// Nombre de staging efímero, con la MISMA forma que el del provider
 /// (`.norte-partial.<16 hex>.<pid>-<seq>`) para que el barredor de parciales
 /// lo siga reconociendo — esto es otra manera de llegar a los mismos ficheros,
@@ -1003,6 +1142,12 @@ impl norte_vfs::ConfinedRoot for LocalConfinedRoot {
         let root = std::sync::Arc::clone(&self.root);
         let rel = rel.to_vec();
         crate::provider::blocking(move || root.rmdir(&rel)).await
+    }
+
+    async fn partial_digest(&self, rel: &[Segment], len: u64) -> Result<Option<[u8; 32]>, Error> {
+        let root = std::sync::Arc::clone(&self.root);
+        let rel = rel.to_vec();
+        crate::provider::blocking(move || root.partial_digest(&rel, len)).await
     }
 }
 

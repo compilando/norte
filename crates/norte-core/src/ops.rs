@@ -154,7 +154,7 @@ impl<'a> Dest<'a> {
     /// confinado devuelve [`Error::Unsupported`] y el llamante RECHAZA la
     /// política. Caerse a la ruta sería reabrir el agujero justo en el caso
     /// que este método existe para cerrar, y encima en silencio.
-    pub(crate) async fn remove(&self, cancel: &CancellationToken) -> Result<(), Error> {
+    async fn remove(&self, cancel: &CancellationToken) -> Result<(), Error> {
         match &self.confined {
             // El MISMO bucle que el camino por ruta, y no un `with_retry`
             // pelado: sin él, un `unlinkat` que sufre un transitorio y luego
@@ -165,6 +165,14 @@ impl<'a> Dest<'a> {
                 .await
                 .map_err(|(e, _)| e),
             None => remove_retrying(self.provider, &self.path, cancel).await,
+        }
+    }
+
+    /// El digest del parcial de este destino, por el descriptor cuando lo hay.
+    async fn partial_digest(&self, len: u64) -> Result<Option<[u8; 32]>, Error> {
+        match &self.confined {
+            Some((root, rel)) => root.partial_digest(rel, len).await,
+            None => self.provider.partial_digest(&self.path, len).await,
         }
     }
 
@@ -1596,7 +1604,12 @@ async fn should_discard_partial(
     }
     // Hash: sin digest del staging el provider no permite verificar → degrada
     // a Length (el check de tamaño de arriba ya se aplicó).
-    let Some(partial_dig) = dest.provider().partial_digest(dest.path(), already).await? else {
+    // Por el DESCRIPTOR cuando hay raíz: por ruta, esto resuelve el nombre del
+    // staging siguiendo cada componente, así que la ÚNICA verificación que hay
+    // sobre los bytes que se reanudan se hacía por la puerta que el
+    // confinamiento cerró para el `stat` y el `remove` — y un componente
+    // intermedio sustituido le da el digest de otro fichero.
+    let Some(partial_dig) = dest.partial_digest(already).await? else {
         return Ok(false);
     };
     // `None` = origen más corto que el parcial → descartar. Un error REAL se

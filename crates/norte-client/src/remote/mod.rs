@@ -1646,26 +1646,23 @@ impl RemoteBackend {
 
     /// ¿Entiende el peer `expected_digest` en `plugin.set_approval` (#282)?
     ///
-    /// `false` solo cuando se SABE que no: sin versión retenida —todavía sin
-    /// conectar— se contesta `true` y quien decide es el daemon, que es el
-    /// comportamiento de siempre.
+    /// La comparación la hace [`methods::version_at_least`], que es la función
+    /// canónica y **falla CERRADO**: una versión que no parsea contesta
+    /// `false`, «sin saber qué habla el otro, no se le supone nada». Esto tuvo
+    /// su propio parser durante media hora y fallaba ABIERTO, que es la
+    /// dirección equivocada — la cadena la elige el PEER, o sea justo la parte
+    /// que se está intentando clasificar, y un `"norte-0.52"` se habría
+    /// saltado la comprobación entera.
+    ///
+    /// Sin versión retenida —todavía sin conectar— se contesta `true` y quien
+    /// decide es el daemon: ahí no hay ninguna afirmación que hacer, y el
+    /// handshake va antes que cualquier llamada.
     fn peer_comprueba_el_ancla(&self) -> bool {
         let Some(v) = self.peer_protocol_version() else {
             return true;
         };
-        // `expected_digest` llegó en 0.53.0. La comparación es por MINOR
-        // porque así se versiona este protocolo: la ventana N/N-1 se mueve con
-        // el minor y el patch no añade campos.
-        let mut partes = v.split('.');
-        let (mayor, menor) = (partes.next(), partes.next());
-        match (
-            mayor.and_then(|s| s.parse::<u32>().ok()),
-            menor.and_then(|s| s.parse::<u32>().ok()),
-        ) {
-            (Some(0), Some(m)) => m >= 53,
-            // Un 1.x o cualquier cosa que no parsee: no se le presume viejo.
-            _ => true,
-        }
+        // `expected_digest` llegó en 0.53.0.
+        methods::version_at_least(&v, 0, 53)
     }
 
     /// `plugin.set_approval` contra el daemon (M4-P3).
@@ -1689,6 +1686,14 @@ impl RemoteBackend {
         // quien quiera conceder de todas formas puede mandar `None` — que es
         // decir explícitamente «sin comprobar».
         if approved && expected_digest.is_some() && !self.peer_comprueba_el_ancla() {
+            // Se DICE, con la versión dentro: el punto entero de #294 es hacer
+            // audible una degradación silenciosa, y un `Unsupported` mudo se
+            // lee igual que «este daemon no hace plugins».
+            tracing::warn!(
+                peer = self.peer_protocol_version().as_deref().unwrap_or("?"),
+                "el daemon es anterior a 0.53 y no puede comprobar el ancla de la aprobación: \
+                 se rehúsa en vez de conceder sin comprobar (#294)"
+            );
             return Err(Error::Unsupported);
         }
         let _: methods::PluginSetApprovalResult = self

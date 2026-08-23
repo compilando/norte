@@ -563,11 +563,6 @@ pub struct NodeId {
 /// sobrescritura y la única que seguía yendo por ruta. Quedan fuera, y son
 /// deuda escrita, no cobertura:
 ///
-/// - **El borrado del ejecutor de SINCRONIZACIÓN.** `sync::exec` tiene la raíz
-///   en la mano (`SyncTargets::dest_confined`) y sus `destroy_leaf` /
-///   `destroy_tree` siguen resolviendo por ruta. Lo tiene mucho más tapado que
-///   una copia —revalida contra el testigo (clase, tamaño y mtime) antes de
-///   destruir— pero tapado no es confinado.
 /// - **El borrado del ORIGEN de un `move` por copia**, que es igual de
 ///   destructivo y va por ruta: el origen no cuelga de la raíz del destino, y
 ///   confinarlo pediría abrir otra.
@@ -700,5 +695,26 @@ pub trait ConfinedRoot: Send + Sync {
     async fn rmdir(&self, rel: &[Segment]) -> Result<(), Error> {
         let _ = rel;
         Err(Error::Unsupported)
+    }
+
+    /// El digest de los primeros `len` bytes del parcial de `rel`, POR EL
+    /// DESCRIPTOR (#297 revisión).
+    ///
+    /// Gemelo de [`Provider::partial_digest`], y existe por lo mismo que
+    /// [`Self::stat`]: con un destino confinado, ése resuelve el nombre del
+    /// staging por RUTA, así que la única verificación que hay sobre los bytes
+    /// que se reanudan (`VerifyPolicy::Hash`) se hacía por la puerta que el
+    /// confinamiento cerró para el `stat` y el `remove`. Un componente
+    /// intermedio sustituido le da el digest de OTRO fichero, y `Hash` deja de
+    /// verificar nada.
+    ///
+    /// `Ok(None)` = este backend no sabe (mismo contrato que el de
+    /// `Provider`), y entonces el caller degrada a `Length`.
+    ///
+    /// # Errors
+    /// Los de leer el parcial ya abierto.
+    async fn partial_digest(&self, rel: &[Segment], len: u64) -> Result<Option<[u8; 32]>, Error> {
+        let _ = (rel, len);
+        Ok(None)
     }
 }
