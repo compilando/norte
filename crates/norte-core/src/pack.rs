@@ -250,6 +250,33 @@ async fn enumera(
             conflict: norte_proto::ConflictKind::Exists,
         });
     }
+    // **Y dos que PLIEGAN al mismo nombre tampoco** (#250). El caso de arriba
+    // es que los bytes coincidan; éste es que coincidan allí donde el archivo
+    // se vaya a extraer, que es lo que un archivo no puede saber: `café.txt`
+    // en NFD y en NFC son dos ficheros en ext4 y uno en APFS, `µ` y `μ` son
+    // dos aquí y uno en NTFS, y `straße` y `strasse` son dos en casi todas
+    // partes y una en un ext4 `+F`. Extraído allí, uno de los dos desaparece
+    // sin decir nada.
+    //
+    // Se pliega con el modo MÁS ANCHO a propósito: el destino de un archivo es
+    // por definición desconocido —se manda por ahí—, así que la pregunta no es
+    // «¿colisionan en esta máquina?» sino «¿colisionan en alguna?». El precio
+    // es rechazar una pareja que aquí es legítima; el de no hacerlo es un
+    // fichero perdido en silencio en la máquina de otro, y ésa es la dirección
+    // que ADR 0005 dice no tomar.
+    let mut claves: Vec<Vec<u8>> = out
+        .iter()
+        .map(|p| {
+            norte_encoding::name_key(&p.entry.name, norte_encoding::FoldMode::Full).into_owned()
+        })
+        .collect();
+    claves.sort_unstable();
+    if claves.windows(2).any(|k| k[0] == k[1]) {
+        tracing::warn!("archive.pack: dos entradas serían el mismo nombre al extraerlas");
+        return Err(Error::Conflict {
+            conflict: norte_proto::ConflictKind::Exists,
+        });
+    }
     Ok(out)
 }
 

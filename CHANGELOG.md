@@ -9,6 +9,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Packing refuses two entries that fold to one name** (#250, item 1). Bytes
+  being different is not enough: what decides is whether they collide *where the
+  archive gets extracted*, and an archive cannot know — it gets sent elsewhere.
+  `café.txt` in NFD and NFC are two files on ext4 and one on APFS; `µ` and `μ`
+  are two here and one on NTFS; `straße` and `strasse` are two almost everywhere
+  and one on an ext4 with `+F`. Extracted there, one of the two disappears
+  without a word. The fold uses the widest mode on purpose, so the question is
+  "do these collide anywhere?" rather than "do they collide here?".
 - **A confined destination resumes again** (#297). Confining a single-file copy
   (#219) silently turned `ResumePolicy::On` into a no-op for exactly the case
   where resume matters most — one large file over a link that drops — because a
