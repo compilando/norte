@@ -300,11 +300,43 @@ fn rutas(capas: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
     }
 }
 
-/// Las otras dos PANTALLAS del mismo preset: el visor y el diálogo.
+/// Lo que la primera foto tiene que DECIR, si hay algo.
 ///
-/// No son capas, son pantallas: con el visor abierto las teclas son suyas
-/// (`esc` cierra, `e` recarga con otro encoding), y con una pregunta delante
-/// también — y eso último es lo que hace que quien reata `dialog.confirm`
+/// Va en el mensaje de la foto inicial, que es el equivalente exacto del
+/// `app.message` del arranque del terminal: lo pisa la primera acción del
+/// lector, no antes.
+///
+/// El de Lua va el ÚLTIMO y por eso gana: un `lua:` que un repositorio pone
+/// en su capa de proyecto se descarta —un repositorio no elige qué código
+/// corre una tecla— y ése es el aviso que no puede quedar pisado. El de la
+/// capa de proyecto ignorada (#260) es el otro: saltársela en silencio deja
+/// al lector con una configuración que cree activa y no lo está.
+fn aviso_de_arranque(
+    cfg: &norte_frontend::config::FrontendConfig,
+    lang: Lang,
+    lua_descartadas: usize,
+) -> Option<String> {
+    let mut msg = None;
+    if !cfg.common.project_warnings.is_empty() {
+        for aviso in &cfg.common.project_warnings {
+            tracing::warn!(motivo = %aviso, "capa de proyecto ignorada");
+        }
+        msg = Some(norte_i18n::ta_in(
+            lang,
+            "msg-project-config-skipped",
+            &[("n", &cfg.common.project_warnings.len().to_string())],
+        ));
+    }
+    if lua_descartadas > 0 {
+        msg = Some(norte_i18n::ta_in(
+            lang,
+            "msg-lua-keymap-project",
+            &[("n", &lua_descartadas.to_string())],
+        ));
+    }
+    msg
+}
+
 /// Los tres keymaps EFECTIVOS: preset de fábrica más las capas del usuario.
 ///
 /// SOLO LECTURA hasta la fase 5. El preset ata F7/F8 a crear y borrar, y que
@@ -497,32 +529,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     })
     .await?;
     let mut snapshot = snapshot;
-    if !cfg.common.project_warnings.is_empty() {
-        // Un `.norte.toml` roto ya no tumba el arranque (#260), pero
-        // saltárselo en silencio dejaría al lector con una configuración de
-        // proyecto que cree activa y no lo está.
-        snapshot.status.message = Some(norte_i18n::ta_in(
-            lang,
-            "msg-project-config-skipped",
-            &[("n", &cfg.common.project_warnings.len().to_string())],
-        ));
-        for aviso in &cfg.common.project_warnings {
-            tracing::warn!(motivo = %aviso, "capa de proyecto ignorada");
-        }
-    }
-    if capas_lua_descartadas > 0 {
-        // Se DICE, como en el terminal: un `lua:` que un repositorio pone en
-        // su capa de proyecto se descarta —un repositorio no elige qué código
-        // corre una tecla—, y descartarlo en silencio deja una tecla que no
-        // hace lo que su fichero dice. Va en el mensaje de la primera foto,
-        // que es el equivalente exacto del `app.message` del arranque del
-        // TUI: lo pisa la primera acción del lector, no antes.
-        snapshot.status.message = Some(norte_i18n::ta_in(
-            lang,
-            "msg-lua-keymap-project",
-            &[("n", &capas_lua_descartadas.to_string())],
-        ));
-    }
+    snapshot.status.message = aviso_de_arranque(&cfg, lang, capas_lua_descartadas);
     Ok(Boot {
         host,
         snapshot,

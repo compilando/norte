@@ -500,6 +500,11 @@ pub async fn apply_ai_rename(
     entries: &[norte_proto::methods::AiRenameEntry],
     plan: &norte_frontend::BatchPlan,
 ) {
+    // Solo la FORMA. La comprobación de que cada `from` existe ya corrió al
+    // aterrizar el plan, contra el directorio que se PLANEÓ (#275); repetirla
+    // aquí contra el pane enfocado la haría contra otro directorio, porque el
+    // lector puede haberse movido mientras leía la revisión. Y el core la
+    // hace por su cuenta antes de tocar nada.
     let Some(pairs) = norte_frontend::rename_pairs(entries) else {
         app.message = Some(t("msg-ai-rename-invalid-plan"));
         return;

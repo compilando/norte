@@ -98,6 +98,9 @@ modal-rename-batch-collision = ✗ { $n }. { $kind }: { $name }
 # La misma línea para un veredicto cuyo pair_index no señala ninguna fila de
 # la petición: se cae el índice antes que señalar una fila que no está.
 modal-rename-batch-collision-unindexed = ✗ { $kind }: { $name }
+modal-rename-batch-collision-prefix = ✗ { $n }. { $kind }:
+modal-rename-batch-collision-prefix-unindexed = ✗ { $kind }:
+modal-rename-batch-temp-part = { $n } paso(s) temporal(es) del planificador
 modal-rename-batch-collision-internal = otra pareja se lo llevó
 modal-rename-batch-collision-external = ya existe
 modal-rename-batch-collision-absent-source = el origen no está

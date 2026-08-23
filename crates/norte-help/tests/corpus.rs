@@ -477,7 +477,7 @@ fn the_hazard_sweep_catches_a_hostile_title_in_every_slot() {
 /// is: a list computed from the corpus cannot notice that the corpus stopped
 /// documenting something. A mark added or dropped shows up here as a diff, and
 /// the number is the one phase H3h has to move.
-const DOCUMENTED: [&str; 133] = [
+const DOCUMENTED: [&str; 134] = [
     "app.extensions",
     "app.help",
     "app.menu",
@@ -543,6 +543,7 @@ const DOCUMENTED: [&str; 133] = [
     "pane.ai-rename",
     "pane.columns",
     "pane.command-line",
+    "pane.copy-path",
     "pane.compare-dirs",
     "pane.connect",
     "pane.copy",
@@ -623,7 +624,7 @@ const DOCUMENTED: [&str; 133] = [
 /// `tests/help_gate.rs`, which reads `help_context::CONTEXTS` directly; this
 /// is the pin that the corpus does not drift from it in the meantime, and a
 /// disagreement surfaces there as an `UnknownContext`.
-const CONTEXTS: [&str; 16] = [
+const CONTEXTS: [&str; 17] = [
     "browse",
     "viewer",
     "dialog.confirm",
@@ -631,6 +632,7 @@ const CONTEXTS: [&str; 16] = [
     "dialog.approval",
     "dialog.trust-host",
     "dialog.trust-lua",
+    "dialog.plugin-approval",
     "dialog.quit",
     "dialog.mark-pattern",
     "dialog.transfer-name",

@@ -615,7 +615,13 @@ pub async fn on_key(
                             // Relanzar con un run vivo lo ABORTA
                             // (dropear el handle solo desvincula):
                             // a lo sumo una petición en vuelo.
-                            let run = AiRenameRun { handle, dir };
+                            let names: Vec<Vec<u8>> = app
+                                .focused()
+                                .entries()
+                                .iter()
+                                .filter_map(|e| e.path.file_name().map(|s| s.as_bytes().to_vec()))
+                                .collect();
+                            let run = AiRenameRun { handle, dir, names };
                             if let Some(old) = work.ai_rename.replace(run) {
                                 old.handle.abort();
                             }

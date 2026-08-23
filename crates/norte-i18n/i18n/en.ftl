@@ -96,6 +96,9 @@ modal-rename-batch-collision = ✗ { $n }. { $kind }: { $name }
 # Same line for a verdict whose pair_index does not point at any row of the
 # request: the index is dropped rather than pointing at a row that is not there.
 modal-rename-batch-collision-unindexed = ✗ { $kind }: { $name }
+modal-rename-batch-collision-prefix = ✗ { $n }. { $kind }:
+modal-rename-batch-collision-prefix-unindexed = ✗ { $kind }:
+modal-rename-batch-temp-part = { $n } planner temp step(s)
 modal-rename-batch-collision-internal = another pair took it
 modal-rename-batch-collision-external = already exists
 modal-rename-batch-collision-absent-source = source not there

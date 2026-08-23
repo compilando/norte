@@ -1762,7 +1762,7 @@ struct Estado {
     /// entre pedir el plan y que llegue el lector puede haber navegado: un
     /// plan de `series/` abierto diciendo `descargas/` estaría prometiendo
     /// renombrar lo que se ve, y renombraría otra cosa.
-    ia_en_vuelo: Option<(u64, VPath)>,
+    ia_en_vuelo: Option<(u64, VPath, Vec<Vec<u8>>)>,
     /// El tablero: lo que está en marcha, por id de task.
     tasks: std::collections::BTreeMap<u64, TaskViva>,
     /// La sesión de UI: qué revisión se leyó, si esta ventana es su dueña, y
@@ -6831,6 +6831,70 @@ impl Estado {
         self.ayuda.as_mut().is_some_and(|a| a.recongelar(hechos))
     }
 
+    /// Una parte del detalle de un veredicto, en LÍNEAS separadas (#273).
+    ///
+    /// La causa y el nombre van en líneas distintas, que es la forma que
+    /// tiene esta superficie de separarlos FUERA de banda: componerlos en
+    /// una sola dejaba que un fichero llamado `✗ 4. ya existe: otro.txt`
+    /// fabricara una entrada de la lista que no existe. El nombre viaja solo
+    /// y con su marca, que es lo único que un tercero controla.
+    fn lineas_de_detalle(&self, parte: &norte_frontend::DetailPart) -> Vec<crate::dto::DialogLine> {
+        use norte_frontend::DetailPart;
+        let plana = |texto: String| crate::dto::DialogLine {
+            text: clamp_display(texto),
+            hostile: false,
+        };
+        match parte {
+            DetailPart::Temp { count } => vec![plana(norte_i18n::ta_in(
+                self.lang,
+                "modal-rename-batch-temp",
+                &[("n", &count.to_string())],
+            ))],
+            DetailPart::Collision {
+                index,
+                kind_key,
+                name,
+                hostile,
+            } => {
+                let kind = norte_i18n::t_in(self.lang, kind_key);
+                let causa = match index {
+                    Some(n) => norte_i18n::ta_in(
+                        self.lang,
+                        "modal-rename-batch-collision-prefix",
+                        &[("n", &n.to_string()), ("kind", &kind)],
+                    ),
+                    None => norte_i18n::ta_in(
+                        self.lang,
+                        "modal-rename-batch-collision-prefix-unindexed",
+                        &[("kind", &kind)],
+                    ),
+                };
+                vec![
+                    plana(causa),
+                    crate::dto::DialogLine {
+                        text: clamp_display(name.clone()),
+                        hostile: *hostile,
+                    },
+                ]
+            }
+            DetailPart::More {
+                shown,
+                total,
+                hostile,
+            } => vec![crate::dto::DialogLine {
+                text: clamp_display(norte_i18n::ta_in(
+                    self.lang,
+                    "modal-rename-batch-collision-more",
+                    &[("shown", &shown.to_string()), ("total", &total.to_string())],
+                )),
+                // El resumen no lleva nombre, pero SÍ la marca de que alguna
+                // de las ocultas lo tiene hostil: lo escondido no se cuela
+                // limpio.
+                hostile: *hostile,
+            }],
+        }
+    }
+
     /// La proyección de la ayuda.
     fn vista_ayuda(&self) -> Option<crate::dto::HelpView> {
         let a = self.ayuda.as_ref()?;
@@ -9356,7 +9420,19 @@ impl Estado {
         }
         self.epoca_ia += 1;
         let epoca = self.epoca_ia;
-        self.ia_en_vuelo = Some((epoca, dir.clone()));
+        // Los nombres del directorio que se PLANEA, guardados con la
+        // petición: el cinturón de #275 exige que cada `from` exista donde se
+        // va a aplicar, y para cuando el modelo conteste el lector puede
+        // estar en otro sitio. Preguntarle al panel entonces validaría el
+        // plan contra un directorio que no es el suyo.
+        let nombres: Vec<Vec<u8>> = self
+            .hueco()
+            .pane
+            .entries()
+            .iter()
+            .filter_map(|e| e.path.file_name().map(|s| s.as_bytes().to_vec()))
+            .collect();
+        self.ia_en_vuelo = Some((epoca, dir.clone(), nombres));
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
@@ -9406,7 +9482,7 @@ impl Estado {
         // delante la petición VIVA. La secuencia era normal —pedir, no ver
         // nada, volver a pedir— y se quedaban las dos sin abrir, sin decir
         // nada y sin poder distinguirse de un daemon muerto.
-        let Some((_, dir)) = self.ia_en_vuelo.take_if(|(e, _)| *e == epoca) else {
+        let Some((_, dir, nombres)) = self.ia_en_vuelo.take_if(|(e, _, _)| *e == epoca) else {
             return Vec::new();
         };
         let plan = match res {
@@ -9419,7 +9495,11 @@ impl Estado {
         if plan.entries.len() > norte_frontend::MAX_AI_PLAN_ENTRIES {
             return self.decir_de_ia(epoca, "msg-ai-rename-invalid-plan");
         }
-        let Some(parejas) = norte_frontend::rename_pairs(&plan.entries) else {
+        // CONTRA el directorio que se PLANEÓ (#275), no contra lo que el
+        // panel enseñe ahora: un plan adulterado no puede renombrar algo que
+        // no estaba ahí, y el lector puede haberse ido a otro sitio mientras
+        // el modelo pensaba.
+        let Some(parejas) = norte_frontend::rename_pairs_in(&plan.entries, Some(&nombres)) else {
             return self.decir_de_ia(epoca, "msg-ai-rename-invalid-plan");
         };
         // El veredicto se pide EN EL MISMO viaje: la revisión necesita el
@@ -9544,12 +9624,9 @@ impl Estado {
             // que lo derive por su cuenta es donde se pierde el saneado.
             detail: r
                 .plan
-                .detail_lines(r.parejas.len())
+                .detail_parts(r.parejas.len(), self.lang)
                 .into_iter()
-                .map(|(text, hostile)| crate::dto::DialogLine {
-                    text: clamp_display(text),
-                    hostile,
-                })
+                .flat_map(|parte| self.lineas_de_detalle(&parte))
                 .collect(),
             // Aprobar exige las DOS cosas: que el core lo acepte y que el
             // lector haya llegado al final. Lo segundo no lo puede saber el
