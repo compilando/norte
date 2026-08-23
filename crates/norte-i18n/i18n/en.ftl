@@ -96,6 +96,9 @@ modal-rename-batch-collision = ✗ { $n }. { $kind }: { $name }
 # Same line for a verdict whose pair_index does not point at any row of the
 # request: the index is dropped rather than pointing at a row that is not there.
 modal-rename-batch-collision-unindexed = ✗ { $kind }: { $name }
+modal-rename-batch-collision-prefix = ✗ { $n }. { $kind }:
+modal-rename-batch-collision-prefix-unindexed = ✗ { $kind }:
+modal-rename-batch-temp-part = { $n } planner temp step(s)
 modal-rename-batch-collision-internal = another pair took it
 modal-rename-batch-collision-external = already exists
 modal-rename-batch-collision-absent-source = source not there
@@ -362,6 +365,7 @@ status-watch-degraded = directory watching degraded to polling (inotify limit?) 
 msg-names-encoding = names shown as { $enc } (display only; bytes unchanged)
 msg-names-encoding-off = names shown as-is (reinterpretation off)
 msg-hidden-shown = hidden entries shown
+msg-project-config-skipped = { $n } project config did not load and was ignored
 msg-mkdir-in-search = search results have no destination directory — leave the search first
 msg-ai-rename-running = AI rename: thinking… (Esc cancels)
 # GUI variant: the GUI has no path to abort the in-flight request, so it must
@@ -602,6 +606,8 @@ ext-config-max = at most {$max}
 # `effects` are interpreted per renderer: the ones this one cannot paint
 # are NAMED, because a retro theme that looks identical reads as broken.
 picker-volumes-title = Volumes
+picker-volumes-title-left = Volumes (left pane)
+picker-volumes-title-right = Volumes (right pane)
 picker-volumes-loading = asking the host for its mount table…
 picker-volumes-empty = the host reported no volumes
 picker-history-title = History
@@ -672,6 +678,9 @@ msg-hotlist-removed = favorite removed: { $name }
 msg-plugin-run-ok = extension: { $output }
 # G3c: `dialog.confirm` on a plugin with an empty `[config]` schema.
 msg-plugin-config-empty = this plugin declares no configurable settings
+msg-plugin-not-approved = this extension is not approved: approve it before enabling it
+modal-plugin-approval-title = Grant these capabilities?
+modal-plugin-approval-note = an approved extension acts on your behalf with everything listed here
 msg-extensions-no-help = this extension ships no help page
 # G3c: plugin.set_config succeeded — { $key } is the manifest-declared,
 # charset-safe config key (never plugin free text); { $value } is the new
@@ -932,6 +941,7 @@ props-count-hint = not counted (close this and use "count how much space it take
 props-hint = [Esc] close
 msg-dir-size-counting = counting how much space it takes…
 msg-dir-size = { $size } in { $count } entries
+msg-dir-size-partial = at least { $size } in { $count } entries ({ $skipped } unreadable)
 help-cmd-pane-mkdir = create a directory (F7)
 help-cmd-pane-ai-rename = AI rename of the current directory (reviewable plan)
 help-cmd-pane-semantic-search = Semantic search over the index (AI)
@@ -1598,6 +1608,9 @@ task-batch-half = batch left half done: { $applied } applied, { $back } rolled b
 task-batch-unverified = finished, report unavailable
 host-plan-unseen = scroll through the whole plan before applying it
 host-same-directory = source and destination are the same directory
+host-batch-too-large = too many entries for a single transfer
+host-batch-folds-to-one = two of the marks are one name on the destination
+host-task-board-full = the task board is full
 host-read-only = this window is mounted without effects: it does not write
 host-no-tabs = this panel is not in a tab group
 host-no-such-tab = there are not that many tabs
@@ -1606,6 +1619,8 @@ host-nothing-selected = nothing is selected
 host-not-local = that is not on this disk: there is no native path to hand the desktop
 host-no-desktop = this window has no desktop behind it: it cannot copy to the clipboard or launch anything
 msg-paths-copied = { $n } path(s) on the clipboard
+msg-paths-copied-osc52 = { $n } path(s) sent to the terminal clipboard (OSC 52); check by pasting
+msg-clipboard-failed = the clipboard refused the paths
 msg-opening-external = opening with the desktop’s application…
 msg-opening-terminal = opening a terminal here…
 host-plugin-running = running the extension command…
@@ -1621,3 +1636,4 @@ modal-extension-approve-title = grant these capabilities?
 host-settings-read-only = settings are read-only here
 msg-nav-at-root = already at the root
 msg-nothing-selected = nothing selected
+msg-batch-summary = { $total } transfers: { $ok } ok, { $fail } failed

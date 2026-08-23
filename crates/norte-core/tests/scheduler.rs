@@ -263,3 +263,60 @@ async fn progress_is_coalesced_but_terminal_always_flushes() {
         "el snapshot terminal lleva el último dato"
     );
 }
+
+/// #278 — un relevo del daemon (`daemon.going_away { reconnect: true }`) es
+/// rutinario, y hasta aquí el proceso nuevo repartía los MISMOS ids que el
+/// viejo: un frontend con un informe en vuelo acertaba por colisión sobre la
+/// fila equivocada. El core ya sembraba con el reloj en `daemon/approvals.rs`
+/// y las tasks nunca recibieron ese trato.
+///
+/// Aquí se prueba lo que se puede probar dentro de un proceso: la secuencia NO
+/// arranca en 1, y dos schedulers distintos no reparten el mismo primer id
+/// salvo que el reloj no haya avanzado — cosa que este test NO afirma, porque
+/// la separación entre procesos es best-effort por definición.
+#[tokio::test]
+async fn los_ids_de_task_no_arrancan_en_uno() {
+    let sched = Scheduler::new(2);
+    let h = sched.submit(
+        "mem",
+        TaskKind::Copy,
+        Priority::Normal,
+        Actor::User,
+        body(|_| Box::pin(async { Ok(()) })),
+    );
+    assert!(
+        h.id().get() > 1,
+        "la secuencia arranca en 1: un daemon nuevo repite los ids del viejo"
+    );
+    let _ = h.join().await;
+}
+
+/// Y el techo: un `task_id` VIAJA al renderer dentro de `TaskView`, que es
+/// JSON leído por JavaScript. Una semilla en nanosegundos —lo que usa
+/// `approvals.rs`, cuyos ids NO cruzan el puente— pasaría de 2^53 y dos ids
+/// distintos colapsarían en el mismo `Number`. Eso es peor que la colisión
+/// que la semilla arregla.
+#[tokio::test]
+async fn los_ids_de_task_caben_donde_f64_es_exacto() {
+    const TOPE: u64 = 1 << 53;
+    let sched = Scheduler::new(2);
+    let mut ids = Vec::new();
+    for _ in 0..4 {
+        let h = sched.submit(
+            "mem",
+            TaskKind::Copy,
+            Priority::Normal,
+            Actor::User,
+            body(|_| Box::pin(async { Ok(()) })),
+        );
+        ids.push(h.id().get());
+        let _ = h.join().await;
+    }
+    for id in &ids {
+        assert!(*id < TOPE, "id {id} no es exacto como f64 (tope 2^53)");
+    }
+    // Y siguen siendo consecutivos: la semilla desplaza el origen, no el paso.
+    for par in ids.windows(2) {
+        assert_eq!(par[1], par[0] + 1);
+    }
+}

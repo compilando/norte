@@ -23,8 +23,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use crate::action::UiAction;
 use crate::backend::HostBackend;
 use crate::bridge::{
-    ActionAck, BridgeEnvelope, InstanceId, MAX_DIALOGS, MAX_ROWS_PER_BATCH, MAX_TASKS, ModalId,
-    RequestToken, RowKey, StaleAction, clamp_display,
+    ActionAck, BridgeEnvelope, InstanceId, MAX_DIALOGS, MAX_ROWS_PER_BATCH, MAX_TASKS,
+    MAX_TASKS_RETAINED, MAX_TRANSFER_BATCH, ModalId, RequestToken, RowKey, StaleAction,
+    clamp_display,
 };
 use crate::commands::{Efecto, efecto_de};
 use crate::dto::{
@@ -146,10 +147,12 @@ enum Cambio {
 ///
 /// Aparte de [`Cambio`] a propósito: `a` sobre una fila significa cosas
 /// distintas según cómo esté, y la que viaja al daemon es la resuelta.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Gobierno {
-    /// `plugin.set_approval`.
-    Aprobar(bool),
+    /// `plugin.set_approval`, con el ancla que se ENSEÑÓ (#282). `None` al
+    /// revocar: quitar un permiso no concede nada, y rehusarlo por un digest
+    /// rancio dejaría vivo justo lo que alguien intenta quitar.
+    Aprobar(bool, Option<String>),
     /// `plugin.set_enabled`.
     Encender(bool),
 }
@@ -446,7 +449,14 @@ enum Mensaje {
     /// directorios que dejará distintos.
     TaskNueva(Box<(crate::backend::HostTask, Vec<VPath>)>),
     /// Encolarla falló. El usuario tiene que enterarse: pidió un borrado.
+    /// Cómo pliega nombres la ubicación de un hueco (#268).
+    Pliegue(u32, VPath, norte_encoding::FoldMode),
     TaskFallida(Box<Error>),
+    /// Un rechazo al encolar UNA entrada de un lote (#271). Separado de
+    /// [`Self::TaskFallida`] a propósito: aquél lo manda todo el que encola
+    /// algo —una búsqueda, un plan, un undo— y su sitio es la barra; éste solo
+    /// lo manda el bucle de un lote, y su sitio es la CUENTA del lote.
+    TaskDeLoteRechazada(Box<Error>),
     /// La conexión con el daemon cambió de estado.
     Conexion(norte_client::ConnEvent),
     /// Una sesión de un provider viaja SIN cifrar (#44).
@@ -811,6 +821,10 @@ pub enum UiError {
 }
 
 /// El bucle del ÚNICO escritor.
+// El REPARTO de mensajes del actor: un brazo por variante, y cada brazo
+// delega. Largo por número de variantes, no por lógica — partirlo en dos
+// mitades arbitrarias solo escondería dónde se atiende cada mensaje.
+#[allow(clippy::too_many_lines)]
 async fn actor(
     mut rx: mpsc::Receiver<Mensaje>,
     mut estado: Estado,
@@ -873,7 +887,7 @@ async fn actor(
                 }
             }
             Mensaje::MasEntradas(datos) => {
-                if let Some(u) = estado.aterrizar_lote(*datos, &backend, &buzon) {
+                for u in estado.aterrizar_lote(*datos, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
@@ -891,8 +905,16 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
+            Mensaje::Pliegue(slot, dir, modo) => {
+                estado.aplicar_pliegue(slot, &dir, modo);
+            }
             Mensaje::TaskFallida(e) => {
                 for u in estado.task_fallida(&e) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::TaskDeLoteRechazada(e) => {
+                for u in estado.rechazo_de_lote(&e) {
                     let _ = updates.send(u);
                 }
             }
@@ -1120,6 +1142,25 @@ fn nueva_instancia() -> String {
 /// significa «bajar el cursor» (ADR 0066, D14).
 struct Hueco {
     pane: PaneState,
+    /// Cómo PLIEGA nombres el directorio en el que este hueco está (#268).
+    ///
+    /// Por UBICACIÓN y no por esquema (#215): un pincho FAT montado bajo el
+    /// mismo `file://` que un `/home` sensible a la caja da otra respuesta, y
+    /// contestar por el provider sería contestar por el sitio equivocado.
+    ///
+    /// Se pide al ATERRIZAR y no delante de cada diálogo: preguntarlo en el
+    /// momento de copiar metería un viaje al daemon en el camino de F5, que es
+    /// la tecla que más se pulsa. `None` = todavía no ha llegado, y entonces no
+    /// se pliega nada — la comprobación es una cortesía y el core es la
+    /// autoridad.
+    pliegue: Option<norte_encoding::FoldMode>,
+    /// El esquema cuyo orden lleva puesto `pane` ahora mismo (#108).
+    ///
+    /// `[ui.columns] sort` puede dar un orden POR ESQUEMA, y se reaplica
+    /// cuando el hueco aterriza en un esquema distinto — no en cada `cd`,
+    /// que es lo que hace el TUI: aquí la sesión RESTAURA el orden, y
+    /// reaplicarlo en el primer aterrizaje lo borraría antes de que se vea.
+    esquema_del_orden: String,
     /// De dónde vengo y a dónde vuelvo. También compartido.
     historial: History,
     primera_visible: u64,
@@ -1144,6 +1185,14 @@ struct Hueco {
     /// Vacío siempre que lo que vuela es una navegación: ahí las filas son de
     /// otro directorio y una marca no significa nada. Se consume al aterrizar.
     marcas_a_restaurar: Vec<VPath>,
+    /// Hay filas mezcladas que no se han publicado todavía.
+    ///
+    /// El relleno se calla cuando el lote que mezcla no cambia la ventana
+    /// visible (#252), pero cada mezcla sube la ÉPOCA del listado y el
+    /// renderer nombra las filas por época: si se callan TODOS los parches,
+    /// se queda con una época vieja y sus clics se rechazan por rancios. Esta
+    /// bandera es la deuda, y el último lote la salda.
+    filas_por_publicar: bool,
     /// El drenaje que sigue trayendo lotes por detrás, si lo hay.
     ///
     /// SEPARADO de `en_vuelo` porque son dos vidas distintas: la primera
@@ -1289,6 +1338,16 @@ enum Pendiente {
         /// capabilities de esa extensión — y entonces el sí concedería algo
         /// que nadie leyó. Si han cambiado, se vuelve a preguntar.
         capabilities: Vec<String>,
+        /// El ancla del manifiesto TAL COMO ESTABA AL PREGUNTAR (#282).
+        ///
+        /// Aquí, y no releída al confirmar, por la misma razón que las
+        /// capabilities de arriba: leerla en el momento del sí devolvería el
+        /// ancla del catálogo que haya aterrizado mientras tanto, o sea que el
+        /// host certificaría al core «esto es lo que el humano leyó» sobre
+        /// algo que el humano no leyó. Y la comparación de capabilities no lo
+        /// tapa: `category` y `contributions` —cuándo y cómo se dispara—
+        /// entran en el ancla y NO en la lista que se pinta.
+        digest: Option<String>,
     },
     /// Decidir sobre una op de agente. La op real la tiene el daemon ligada
     /// al id: aquí solo viaja el sí o el no.
@@ -1557,6 +1616,45 @@ struct TaskViva {
     afectados: Vec<VPath>,
 }
 
+/// La cuenta de UN lote de transferencias (#271).
+///
+/// Un lote grande contra un destino poblado produce muchas filas `Failed` —
+/// `CollisionPolicy::Fail` es lo que se manda—, y el tablero las enseña una a
+/// una hasta su tope. Lo que el lector necesita no es la fila 213: es «de
+/// estas 500, 460 bien y 40 mal».
+///
+/// Y los rechazos al ENCOLAR tenían el problema gemelo: cada uno pintaba un
+/// mensaje en la barra y el siguiente lo pisaba, así que de N rechazos
+/// sobrevivía el último. Se cuentan en vez de decirse.
+///
+/// UNA sola frase, y al final: la mitad del lote no es una respuesta, es
+/// ruido que se pisa a sí mismo. El lote se cierra cuando todo lo que se pidió
+/// está resuelto — encolado o rechazado, y lo encolado, terminal.
+#[derive(Debug, Default)]
+struct Lote {
+    /// Cuántas entradas se pidieron.
+    total: usize,
+    /// Cuántas llegaron a ser task.
+    encoladas: usize,
+    /// Cuántas rechazó el daemon al encolar.
+    rechazadas: usize,
+    /// Los ids de las que se encolaron, para reconocer su desenlace. Un id que
+    /// no está aquí es de otra cosa (una búsqueda, un undo, otro cliente).
+    ids: std::collections::BTreeSet<u64>,
+    /// Desenlaces terminales BUENOS de las encoladas.
+    hechas: usize,
+    /// Desenlaces terminales malos: falló o se canceló.
+    fallidas: usize,
+}
+
+impl Lote {
+    /// Todo lo que se pidió está resuelto.
+    fn cerrado(&self) -> bool {
+        self.encoladas + self.rechazadas >= self.total
+            && self.hechas + self.fallidas >= self.encoladas
+    }
+}
+
 /// El estado semántico. Solo el actor lo toca.
 struct Estado {
     instance: InstanceId,
@@ -1747,9 +1845,11 @@ struct Estado {
     /// entre pedir el plan y que llegue el lector puede haber navegado: un
     /// plan de `series/` abierto diciendo `descargas/` estaría prometiendo
     /// renombrar lo que se ve, y renombraría otra cosa.
-    ia_en_vuelo: Option<(u64, VPath)>,
+    ia_en_vuelo: Option<(u64, VPath, Vec<Vec<u8>>)>,
     /// El tablero: lo que está en marcha, por id de task.
     tasks: std::collections::BTreeMap<u64, TaskViva>,
+    /// El lote de transferencias en curso, si lo hay (#271).
+    lote: Option<Lote>,
     /// La sesión de UI: qué revisión se leyó, si esta ventana es su dueña, y
     /// si el esquema que hay guardado es de una versión que este host no
     /// entiende (ADR 0059).
@@ -1842,17 +1942,22 @@ impl Hueco {
     /// todo: sin esto, una ventana con `show_hidden = false` en su config
     /// arrancaba enseñando los dotfiles igual, y `pane.toggle-hidden` los
     /// apartaba «por primera vez» en cada arranque.
-    fn vacio(dir: VPath, ocultos: bool) -> Self {
+    fn vacio(dir: VPath, ocultos: bool, orden: norte_frontend::SortSpec) -> Self {
+        let esquema = dir.scheme().to_owned();
         let mut pane = PaneState::new(dir, Vec::new());
         pane.set_show_hidden(ocultos);
+        pane.set_sort(orden);
         Self {
             pane,
+            pliegue: None,
+            esquema_del_orden: esquema,
             historial: History::default(),
             primera_visible: 0,
             visibles: 64,
             en_vuelo: None,
             dir_pedido: None,
             marcas_a_restaurar: Vec::new(),
+            filas_por_publicar: false,
             drenando: None,
             sondeando: false,
             cancelar_sondeo: std::sync::Arc::default(),
@@ -1894,12 +1999,14 @@ impl Estado {
         kinds: &KindRegistry,
         dir: &VPath,
         settings: &norte_frontend::config::FrontendConfig,
+        columnas: &norte_frontend::columns::ColumnsSettings,
     ) -> std::collections::BTreeMap<u32, Hueco> {
         let ocultos = settings.common.ui_show_hidden.unwrap_or(true);
+        let orden = columnas.sort_for(dir.scheme());
         let mut huecos = std::collections::BTreeMap::new();
         for SlotId(id) in arbol.slot_ids() {
             if es_listado(arbol, SlotId(id), kinds) {
-                huecos.insert(id, Hueco::vacio(dir.clone(), ocultos));
+                huecos.insert(id, Hueco::vacio(dir.clone(), ocultos, orden));
             }
         }
         huecos
@@ -1932,6 +2039,10 @@ impl Estado {
         roles
     }
 
+    /// Largo porque es un LITERAL de estructura: un campo por línea, con el
+    /// porqué de los que no son obvios. No hay nada que extraer que no sea
+    /// mover campos a una función que los devuelva de uno en uno.
+    #[allow(clippy::too_many_lines)]
     fn nuevo(instance: InstanceId, options: UiHostOptions) -> (Self, Arc<dyn HostBackend>) {
         let UiHostOptions {
             backend,
@@ -1953,7 +2064,7 @@ impl Estado {
         let lang = Self::lang_de(&locale);
         let kinds = KindRegistry::builtin();
         let reparto = resolve(rect(viewport), &arbol, &kinds);
-        let huecos = Self::huecos_iniciales(&arbol, &kinds, dir, &settings);
+        let huecos = Self::huecos_iniciales(&arbol, &kinds, dir, &settings, &columnas);
         let activo = huecos.keys().copied().next().unwrap_or(1);
         let roles = Self::roles_iniciales(&arbol, &reparto, &kinds, activo);
         let estado = Self {
@@ -2014,6 +2125,7 @@ impl Estado {
             epoca_ia: 0,
             ia_en_vuelo: None,
             tasks: std::collections::BTreeMap::new(),
+            lote: None,
             sesion: Sesion {
                 revision: 0,
                 owner: false,
@@ -2270,9 +2382,21 @@ impl Estado {
     /// cursor los decide `PaneState`, que es quien sabe qué hacer con la
     /// memoria del cursor y con un foco pendiente.
     fn aterriza_en(&mut self, id: u32, dir: VPath, res: Result<(Vec<Entry>, Option<u64>), Error>) {
+        // #108: el orden de `[ui.columns]` es POR ESQUEMA, así que se
+        // reaplica cuando el hueco cambia de esquema — no en cada `cd`, que
+        // es lo que hace el TUI. Aquí la SESIÓN restaura el orden, y
+        // reaplicarlo en el primer aterrizaje lo borraría antes de verse.
+        let cambia_esquema = self
+            .huecos
+            .get(&id)
+            .is_some_and(|h| h.esquema_del_orden != dir.scheme());
+        let orden = cambia_esquema.then(|| self.columnas.sort_for(dir.scheme()));
         let Some(hueco) = self.huecos.get_mut(&id) else {
             return;
         };
+        if cambia_esquema {
+            dir.scheme().clone_into(&mut hueco.esquema_del_orden);
+        }
         hueco.en_vuelo = None;
         hueco.dir_pedido = None;
         // El listado es OTRO: lo sondeado antes no dice nada de estas
@@ -2295,6 +2419,9 @@ impl Estado {
         hueco.adornando = false;
         match res {
             Ok((entradas, omitidas)) => {
+                if let Some(spec) = orden {
+                    hueco.pane.set_sort(spec);
+                }
                 hueco.pane.set_listing(dir, entradas);
                 // Un refresco conserva la selección; un `cd` no tiene ninguna
                 // que conservar y llega con la lista vacía. Lo que la
@@ -2911,6 +3038,52 @@ impl Estado {
         )
     }
 
+    /// Pregunta cómo pliega nombres el directorio de un hueco (#268).
+    ///
+    /// Se pide al ATERRIZAR y no delante de cada diálogo: hacerlo al copiar
+    /// metería un viaje al daemon en el camino de F5, que es la tecla que más
+    /// se pulsa de un gestor ortodoxo. Aquí va detrás de un listado que ya
+    /// costó una ronda, y la respuesta sirve para todas las copias que salgan
+    /// de ese directorio.
+    ///
+    /// Un fallo no dice nada y no rompe nada: sin respuesta no se pliega, que
+    /// es exactamente lo que se hacía antes de #268.
+    fn pedir_pliegue(
+        &mut self,
+        slot: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let Some(hueco) = self.huecos.get_mut(&slot) else {
+            return;
+        };
+        let dir = hueco.pane.dir().clone();
+        // El de antes ya no vale: es de otro sitio.
+        hueco.pliegue = None;
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let Ok(caps) = backend.capabilities(dir.clone()).await else {
+                return;
+            };
+            let modo = norte_vfs::fold_mode_of(caps);
+            let _ = buzon.send(Mensaje::Pliegue(slot, dir, modo)).await;
+        });
+    }
+
+    /// Guarda el modo de plegado, si el hueco sigue donde estaba.
+    ///
+    /// La comprobación del directorio no es paranoia: entre pedir y contestar
+    /// cabe una navegación entera, y guardar el pliegue de otro sitio haría
+    /// que la comprobación del lote mintiera en la dirección permisiva.
+    fn aplicar_pliegue(&mut self, slot: u32, dir: &VPath, modo: norte_encoding::FoldMode) {
+        if let Some(h) = self.huecos.get_mut(&slot)
+            && h.pane.dir() == dir
+        {
+            h.pliegue = Some(modo);
+        }
+    }
+
     /// Un listado que se pidió antes acaba de volver.
     ///
     /// `None` = llegó TARDE y otra navegación lo relevó. Se descarta aquí y
@@ -2926,8 +3099,14 @@ impl Estado {
             return None;
         }
         self.aterriza_en(slot, dir, res);
+        self.pedir_pliegue(slot, backend, buzon);
         self.sondear(slot, backend, buzon);
         self.adornar(slot, backend, buzon);
+        // Los hechos de la ayuda describen la entrada bajo el CURSOR, y este
+        // listado es otro (#262). La foto de abajo la lleva ya re-congelada,
+        // así que aquí no se fabrica parche: gastaría un número de secuencia
+        // que nadie recibiría.
+        self.recongelar_hechos_de_ayuda();
         // Un `cd` cambia la pantalla entera —directorio, filas, cursor,
         // marcas—, así que se manda una foto en vez de enumerar parches que
         // el renderer tendría que casar.
@@ -2994,12 +3173,19 @@ impl Estado {
         datos: (RequestToken, u32, Vec<Entry>, bool),
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
-    ) -> Option<BridgeEnvelope<UiUpdate>> {
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let (token, slot, batch, ultimo) = datos;
-        let u = self.aplicar_lote(slot, token, batch, ultimo)?;
+        let Some(u) = self.aplicar_lote(slot, token, batch, ultimo) else {
+            return Vec::new();
+        };
         self.sondear(slot, backend, buzon);
         self.adornar(slot, backend, buzon);
-        Some(u)
+        // El listado creció por debajo: si la ayuda está delante, sus hechos
+        // hablan de otra entrada (#262). Aquí no hay foto que lo arrastre,
+        // así que va su propio parche.
+        let mut salida = vec![u];
+        salida.extend(self.recongelar_ayuda());
+        salida
     }
 
     /// El movimiento, cuando el foco está en un panel que no es un listado.
@@ -3889,7 +4075,11 @@ impl Estado {
         self.huecos.retain(|id, _| nuevos.contains(id));
         for id in nuevos {
             if let std::collections::btree_map::Entry::Vacant(hueco) = self.huecos.entry(id) {
-                hueco.insert(Hueco::vacio(dir.clone(), ocultos));
+                hueco.insert(Hueco::vacio(
+                    dir.clone(),
+                    ocultos,
+                    self.columnas.sort_for(dir.scheme()),
+                ));
             }
         }
         match activo {
@@ -4942,7 +5132,11 @@ impl Estado {
                 Vec::new(),
             );
         };
-        self.abrir_volumenes_en(slot, backend, buzon)
+        self.abrir_volumenes_con(
+            crate::pickers::Selector::volumenes_de_lado(slot, derecha),
+            backend,
+            buzon,
+        )
     }
 
     /// El listado que se ve más a la izquierda —o más a la derecha— del
@@ -4974,7 +5168,17 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.selector = Some(crate::pickers::Selector::volumenes(slot));
+        self.abrir_volumenes_con(crate::pickers::Selector::volumenes(slot), backend, buzon)
+    }
+
+    /// El cuerpo compartido: abre ESTE selector y pide la tabla de montaje.
+    fn abrir_volumenes_con(
+        &mut self,
+        selector: crate::pickers::Selector,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.selector = Some(selector);
         self.gen_selector += 1;
         let apertura = self.gen_selector;
         let backend = Arc::clone(backend);
@@ -5088,6 +5292,20 @@ impl Estado {
         // nombra un lado, y leer el foco aquí haría que moverlo con la lista
         // puesta montara el volumen en otro panel.
         let slot = s.slot();
+        if !self.huecos.contains_key(&slot) || self.oculto(slot) {
+            // El reparto cambió con la lista puesta: el hueco que el selector
+            // capturó al abrirse ya no está, o dejó de verse. Navegar ahí
+            // traería un listado que nadie va a mirar —contra «lo que no se
+            // ve no se trae»— o no haría nada y cerraría el selector en
+            // silencio.
+            self.selector = None;
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-other-slot".to_owned(),
+                },
+                vec![self.parche(vec![ViewChange::Picker { picker: None }])],
+            );
+        }
         let Some(destino) = s.elegir() else {
             if s.hay_fila() {
                 // Hay fila y no lleva a ninguna parte: un favorito cuya ruta
@@ -5953,7 +6171,7 @@ impl Estado {
             // Conceder PREGUNTA; retirar, no.
             Cambio::Aprobacion if !aprobada => self.preguntar_por_aprobacion(&id),
             Cambio::Aprobacion => {
-                let fuera = self.gobernar(&id, Gobierno::Aprobar(false), backend, buzon);
+                let fuera = self.gobernar(&id, Gobierno::Aprobar(false, None), backend, buzon);
                 (self.aplicada(), fuera)
             }
             // ENCENDER un plugin sin aprobar no es una decisión que esta
@@ -5982,7 +6200,8 @@ impl Estado {
         let Some(concesion) = self.extensiones.as_ref().and_then(|e| e.concesion(id)) else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        let (nombre, capabilities) = (concesion.nombre, concesion.capabilities);
+        let (nombre, capabilities, ancla) =
+            (concesion.nombre, concesion.capabilities, concesion.digest);
         // Una capability por LÍNEA, y el nombre de la extensión aparte: son
         // los operandos de la decisión, y meterlos en la frase es lo que
         // deja a un nombre de tercero imitando el texto de la ventana. Cada
@@ -6059,6 +6278,7 @@ impl Estado {
             al_confirmar: Some(Pendiente::AprobarExtension {
                 id: id.to_owned(),
                 capabilities: capabilities.into_iter().map(|(t, _)| t).collect(),
+                digest: ancla,
             }),
         });
         let cambio = ViewChange::Dialogs {
@@ -6076,6 +6296,7 @@ impl Estado {
         &mut self,
         id: &str,
         leidas: &[String],
+        ancla_leida: Option<String>,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
@@ -6090,9 +6311,15 @@ impl Estado {
                     .collect::<Vec<_>>()
             });
         if ahora.as_deref() == Some(leidas) {
+            // El ancla que viaja es la de LA PREGUNTA, jamás la del catálogo
+            // de ahora (#282): releerla aquí certificaría al core «esto es lo
+            // que el humano leyó» sobre lo que el humano no leyó, que es
+            // exactamente el agujero que el campo cierra. Y la comparación de
+            // capabilities de arriba no lo tapa: `category` y `contributions`
+            // entran en el ancla y no en la lista pintada.
             return (
                 None,
-                self.gobernar(id, Gobierno::Aprobar(true), backend, buzon),
+                self.gobernar(id, Gobierno::Aprobar(true, ancla_leida), backend, buzon),
             );
         }
         let mut fuera = self.decir("host-extension-changed");
@@ -6115,7 +6342,7 @@ impl Estado {
         let id2 = id.to_owned();
         tokio::spawn(async move {
             let llamada = match que {
-                Gobierno::Aprobar(v) => backend2.plugin_set_approval(id2, v),
+                Gobierno::Aprobar(v, digest) => backend2.plugin_set_approval(id2, v, digest),
                 Gobierno::Encender(v) => backend2.plugin_set_enabled(id2, v),
             };
             let res = match tokio::time::timeout(PLAZO_PLUGINS, llamada).await {
@@ -6716,6 +6943,105 @@ impl Estado {
         }
     }
 
+    /// Re-congela los hechos de la ayuda si está abierta, y devuelve su
+    /// parche (#262).
+    ///
+    /// El congelado de `abrir_ayuda` es contra que se mueva el LECTOR, no
+    /// contra que se mueva el mundo. Dos de los hechos —`enterable` y
+    /// `viewable`— describen la entrada bajo el cursor, y una copia o un
+    /// borrado que terminan con la ayuda delante re-listan el panel por
+    /// debajo: la frase de motivo se quedaba explicando por qué no aplica a
+    /// una selección que ya no existe. No había despacho incorrecto
+    /// —`activar_en_ayuda` vuelve a preguntar antes de correr—, pero una
+    /// pantalla que explica algo falso es una pantalla que miente.
+    fn recongelar_ayuda(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
+        if !self.recongelar_hechos_de_ayuda() {
+            return None;
+        }
+        let cambio = ViewChange::Help {
+            help: self.vista_ayuda(),
+        };
+        Some(self.parche(vec![cambio]))
+    }
+
+    /// Re-congela y NO fabrica parche. Para los caminos que ya mandan una
+    /// foto: `parche` gasta un número de secuencia, y tirar el sobre después
+    /// de gastarlo deja un HUECO en la secuencia — que es exactamente la
+    /// condición que obliga al renderer a pedir una foto entera.
+    ///
+    /// Devuelve si la ayuda estaba abierta Y sus hechos han CAMBIADO.
+    fn recongelar_hechos_de_ayuda(&mut self) -> bool {
+        if self.ayuda.is_none() {
+            return false;
+        }
+        let hechos = self.hechos();
+        self.ayuda.as_mut().is_some_and(|a| a.recongelar(hechos))
+    }
+
+    /// Una parte del detalle de un veredicto, en LÍNEAS separadas (#273).
+    ///
+    /// La causa y el nombre van en líneas distintas, que es la forma que
+    /// tiene esta superficie de separarlos FUERA de banda: componerlos en
+    /// una sola dejaba que un fichero llamado `✗ 4. ya existe: otro.txt`
+    /// fabricara una entrada de la lista que no existe. El nombre viaja solo
+    /// y con su marca, que es lo único que un tercero controla.
+    fn lineas_de_detalle(&self, parte: &norte_frontend::DetailPart) -> Vec<crate::dto::DialogLine> {
+        use norte_frontend::DetailPart;
+        let plana = |texto: String| crate::dto::DialogLine {
+            text: clamp_display(texto),
+            hostile: false,
+        };
+        match parte {
+            DetailPart::Temp { count } => vec![plana(norte_i18n::ta_in(
+                self.lang,
+                "modal-rename-batch-temp",
+                &[("n", &count.to_string())],
+            ))],
+            DetailPart::Collision {
+                index,
+                kind_key,
+                name,
+                hostile,
+            } => {
+                let kind = norte_i18n::t_in(self.lang, kind_key);
+                let causa = match index {
+                    Some(n) => norte_i18n::ta_in(
+                        self.lang,
+                        "modal-rename-batch-collision-prefix",
+                        &[("n", &n.to_string()), ("kind", &kind)],
+                    ),
+                    None => norte_i18n::ta_in(
+                        self.lang,
+                        "modal-rename-batch-collision-prefix-unindexed",
+                        &[("kind", &kind)],
+                    ),
+                };
+                vec![
+                    plana(causa),
+                    crate::dto::DialogLine {
+                        text: clamp_display(name.clone()),
+                        hostile: *hostile,
+                    },
+                ]
+            }
+            DetailPart::More {
+                shown,
+                total,
+                hostile,
+            } => vec![crate::dto::DialogLine {
+                text: clamp_display(norte_i18n::ta_in(
+                    self.lang,
+                    "modal-rename-batch-collision-more",
+                    &[("shown", &shown.to_string()), ("total", &total.to_string())],
+                )),
+                // El resumen no lleva nombre, pero SÍ la marca de que alguna
+                // de las ocultas lo tiene hostil: lo escondido no se cuela
+                // limpio.
+                hostile: *hostile,
+            }],
+        }
+    }
+
     /// La proyección de la ayuda.
     fn vista_ayuda(&self) -> Option<crate::dto::HelpView> {
         let a = self.ayuda.as_ref()?;
@@ -6768,13 +7094,25 @@ impl Estado {
             "Tab" | "tab" => a.estado.toggle_focus(),
             "ArrowDown" | "down" => a.estado.down(),
             "ArrowUp" | "up" => a.estado.up(),
-            // La página la da el MODELO, que sabe lo que significa en cada
-            // mitad: en la lateral camina y enseña UNA vez, y en el cuerpo
-            // mueve el scroll y no el cursor, porque una página es un
-            // movimiento sobre prosa. Repetir `down()` diez veces hacía diez
+            // La página la da el MODELO, que sabe lo que significa en la
+            // LATERAL: camina por los temas y enseña uno, en vez de diez
             // transiciones de página por tecla.
-            "PageDown" | "pgdn" => a.estado.page_down(PAGINA_DE_AYUDA),
-            "PageUp" | "pgup" => a.estado.page_up(PAGINA_DE_AYUDA),
+            //
+            // En el CUERPO no. El cuerpo de una página cruza el puente
+            // entero y quien lo desplaza es el DOM, que es lo que un
+            // renderer con scroll nativo hace bien y sin preguntar; el
+            // renderer ni siquiera manda estas teclas cuando el cuerpo tiene
+            // el foco. Moverlo aquí crearía una SEGUNDA verdad sobre por
+            // dónde va la ayuda —el `scrollTop` del DOM y el `body_scroll`
+            // del modelo— y solo una de las dos se pinta (#267). El modelo
+            // conserva su paginación de cuerpo porque el TUI la usa: ahí no
+            // hay scroll nativo que delegar.
+            "PageDown" | "pgdn" if a.estado.focus() == norte_frontend::help::Focus::Topics => {
+                a.estado.page_down(PAGINA_DE_AYUDA);
+            }
+            "PageUp" | "pgup" if a.estado.focus() == norte_frontend::help::Focus::Topics => {
+                a.estado.page_up(PAGINA_DE_AYUDA);
+            }
             "Backspace" | "backspace" => {
                 if a.estado.filtering() {
                     a.estado.backspace();
@@ -9229,7 +9567,19 @@ impl Estado {
         }
         self.epoca_ia += 1;
         let epoca = self.epoca_ia;
-        self.ia_en_vuelo = Some((epoca, dir.clone()));
+        // Los nombres del directorio que se PLANEA, guardados con la
+        // petición: el cinturón de #275 exige que cada `from` exista donde se
+        // va a aplicar, y para cuando el modelo conteste el lector puede
+        // estar en otro sitio. Preguntarle al panel entonces validaría el
+        // plan contra un directorio que no es el suyo.
+        let nombres: Vec<Vec<u8>> = self
+            .hueco()
+            .pane
+            .entries()
+            .iter()
+            .filter_map(|e| e.path.file_name().map(|s| s.as_bytes().to_vec()))
+            .collect();
+        self.ia_en_vuelo = Some((epoca, dir.clone(), nombres));
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
@@ -9279,7 +9629,7 @@ impl Estado {
         // delante la petición VIVA. La secuencia era normal —pedir, no ver
         // nada, volver a pedir— y se quedaban las dos sin abrir, sin decir
         // nada y sin poder distinguirse de un daemon muerto.
-        let Some((_, dir)) = self.ia_en_vuelo.take_if(|(e, _)| *e == epoca) else {
+        let Some((_, dir, nombres)) = self.ia_en_vuelo.take_if(|(e, _, _)| *e == epoca) else {
             return Vec::new();
         };
         let plan = match res {
@@ -9292,7 +9642,11 @@ impl Estado {
         if plan.entries.len() > norte_frontend::MAX_AI_PLAN_ENTRIES {
             return self.decir_de_ia(epoca, "msg-ai-rename-invalid-plan");
         }
-        let Some(parejas) = norte_frontend::rename_pairs(&plan.entries) else {
+        // CONTRA el directorio que se PLANEÓ (#275), no contra lo que el
+        // panel enseñe ahora: un plan adulterado no puede renombrar algo que
+        // no estaba ahí, y el lector puede haberse ido a otro sitio mientras
+        // el modelo pensaba.
+        let Some(parejas) = norte_frontend::rename_pairs_in(&plan.entries, Some(&nombres)) else {
             return self.decir_de_ia(epoca, "msg-ai-rename-invalid-plan");
         };
         // El veredicto se pide EN EL MISMO viaje: la revisión necesita el
@@ -9417,12 +9771,9 @@ impl Estado {
             // que lo derive por su cuenta es donde se pierde el saneado.
             detail: r
                 .plan
-                .detail_lines(r.parejas.len())
+                .detail_parts(r.parejas.len(), self.lang)
                 .into_iter()
-                .map(|(text, hostile)| crate::dto::DialogLine {
-                    text: clamp_display(text),
-                    hostile,
-                })
+                .flat_map(|parte| self.lineas_de_detalle(&parte))
                 .collect(),
             // Aprobar exige las DOS cosas: que el core lo acepte y que el
             // lector haya llegado al final. Lo segundo no lo puede saber el
@@ -9692,11 +10043,15 @@ impl Estado {
                 Vec::new(),
             );
         };
-        // La siembra es lo que la FILA pinta, con el saneado canónico: editar
-        // produce el texto que se ve. Para un nombre que no es UTF-8 eso
+        // La siembra es lo que la FILA pinta, con el saneado canónico Y con
+        // la reinterpretación que el panel tenga puesta: editar produce el
+        // texto que se ve, y desde #57 la fila puede estar transcodificada.
+        // Sembrar sin ella dejaba `CAF<FFFD>.TXT` bajo una fila que decía
+        // `CAFÉ.TXT`. Para un nombre que sigue sin ser representable eso
         // lleva un U+FFFD, y ese residuo es justo lo que el guard de la
         // confirmación no deja escribir.
-        let (pintable, hostil) = norte_frontend::display_name(nombre.as_bytes());
+        let (pintable, hostil) =
+            norte_frontend::display_name_with(nombre.as_bytes(), hueco.pane.name_encoding());
         let siembra = clamp_display(pintable.clone());
         if siembra != pintable {
             // El recorte le pega una elipsis al final, y `…` es un carácter
@@ -9847,10 +10202,103 @@ impl Estado {
     /// la misma regla que dejó sin parámetro al comando de los bytes de una
     /// imagen (ADR 0069), y por el mismo motivo — un nombre que viene de la
     /// webview es un nombre que la webview puede elegir.
+    /// ¿Hay dos entradas del lote cuyos NOMBRES son uno solo en el destino?
+    ///
+    /// Se pliega con la clave compartida bajo el modo del DESTINO —la trampa
+    /// del dominio de siempre: la caja y la normalización las decide el sitio
+    /// al que van, no el del que salen—. Sin modo todavía (el hueco acaba de
+    /// aterrizar, o el daemon no contestó) no se pliega: esto es una cortesía
+    /// del cliente y la autoridad es el core.
+    fn dos_marcas_pliegan_igual(&self, paths: &[VPath]) -> bool {
+        let Some(modo) = self
+            .hueco_destino()
+            .ok()
+            .and_then(|id| self.huecos.get(&id))
+            .and_then(|h| h.pliegue)
+        else {
+            return false;
+        };
+        if modo == norte_encoding::FoldMode::None {
+            return false;
+        }
+        let mut vistas = std::collections::HashSet::new();
+        paths
+            .iter()
+            .filter_map(|p| p.file_name())
+            .any(|n| !vistas.insert(norte_encoding::name_key(n.as_bytes(), modo)))
+    }
+
+    /// Los dos topes de un lote (#271), o `None` si cabe.
+    ///
+    /// Se preguntan antes de abrir diálogo alguno: preguntar por algo que no
+    /// se va a poder hacer es peor que decirlo de entrada.
+    fn lote_no_cabe(&self, cuantas: usize) -> Option<&'static str> {
+        if cuantas > MAX_TRANSFER_BATCH {
+            return Some("host-batch-too-large");
+        }
+        // Y que quepa en lo que el host RETIENE: el desalojo solo puede tirar
+        // tasks terminales, así que un lote sobre un tablero ya lleno de vivas
+        // no tendría dónde caer.
+        if self.tasks.len().saturating_add(cuantas) > MAX_TASKS_RETAINED {
+            return Some("host-task-board-full");
+        }
+        None
+    }
+
+    /// Sobre QUÉ y hacia DÓNDE opera una transferencia, o el motivo por el que
+    /// no se puede preguntar siquiera. Devuelve `(origen_dir, destino, paths)`.
+    fn operandos_de_transferencia(&self) -> Result<(VPath, VPath, Vec<VPath>), &'static str> {
+        let destino = self.directorio_destino()?;
+        let origen_dir = self.hueco().pane.dir().clone();
+        if origen_dir == destino {
+            // Los dos listados en el mismo sitio. El daemon lo rechazaría
+            // igual, pero abrir un diálogo que promete algo imposible es
+            // peor que decirlo antes.
+            //
+            // BYTE A BYTE a propósito (#269): en un volumen que pliega,
+            // `/casa/docs` y `/casa/DOCS` son el mismo sitio y este atajo NO
+            // los ve. Saberlo cuesta un `fs.capabilities` —o sea un viaje al
+            // daemon delante de CADA diálogo de copia—, y el error de este
+            // lado solo puede ser por PERMISIVO: la autoridad es
+            // `norte_core::ops`, que sí pliega (#215) y devuelve
+            // `InvalidPath`. Ser más estricto aquí sí rompería algo: negaría
+            // una operación legítima en un volumen sensible a la caja.
+            return Err("host-same-directory");
+        }
+        // `marked_paths` ya cae al cursor cuando no hay marcas: es la fuente
+        // única de «sobre qué opera esto», y duplicar aquí ese respaldo
+        // sería un segundo sitio del que se pueden separar.
+        let paths: Vec<VPath> = self.hueco().pane.marked_paths();
+        if paths.is_empty() {
+            return Err("msg-nothing-selected");
+        }
+        if let Some(motivo) = self.lote_no_cabe(paths.len()) {
+            return Err(motivo);
+        }
+        // Dos marcas que PLIEGAN al mismo nombre en el destino (#268): en un
+        // ext4 `README.txt` y `readme.txt` son dos ficheros, y en NTFS o APFS
+        // son uno. Encolar las dos deja que una gane —cuál, no es
+        // determinista— y que la otra falle sin explicación sobre un miembro
+        // arbitrario de la pareja. Con `CollisionPolicy::Fail` el resultado es
+        // al menos un error visible; el día que la ventana ofrezca elegir
+        // sobrescribir, el mismo lote pierde un fichero en silencio.
+        if self.dos_marcas_pliegan_igual(&paths) {
+            return Err("host-batch-folds-to-one");
+        }
+        // Una entrada sin último segmento es una RAÍZ, y una raíz no tiene
+        // nombre que componer en el destino. Se rechaza el lote entero en vez
+        // de saltársela: transferir «casi todo lo que pediste» en silencio es
+        // exactamente lo que no puede hacer una mutación.
+        if paths.iter().any(|p| p.file_name().is_none()) {
+            return Err("host-cannot-transfer-root");
+        }
+        Ok((origen_dir, destino, paths))
+    }
+
     fn pedir_transferencia(&mut self, mover: bool) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let activo = self.activo();
-        let destino = match self.directorio_destino() {
-            Ok(d) => d,
+        let (origen_dir, destino, paths) = match self.operandos_de_transferencia() {
+            Ok(t) => t,
             Err(reason_key) => {
                 return (
                     ActionAck::Unavailable {
@@ -9860,43 +10308,6 @@ impl Estado {
                 );
             }
         };
-        let hueco = self.hueco();
-        let origen_dir = hueco.pane.dir().clone();
-        if origen_dir == destino {
-            // Los dos listados en el mismo sitio. El daemon lo rechazaría
-            // igual, pero abrir un diálogo que promete algo imposible es
-            // peor que decirlo antes.
-            return (
-                ActionAck::Unavailable {
-                    reason_key: "host-same-directory".to_owned(),
-                },
-                Vec::new(),
-            );
-        }
-        // `marked_paths` ya cae al cursor cuando no hay marcas: es la fuente
-        // única de «sobre qué opera esto», y duplicar aquí ese respaldo
-        // sería un segundo sitio del que se pueden separar.
-        let paths: Vec<VPath> = hueco.pane.marked_paths();
-        if paths.is_empty() {
-            return (
-                ActionAck::Unavailable {
-                    reason_key: "msg-nothing-selected".to_owned(),
-                },
-                Vec::new(),
-            );
-        }
-        // Una entrada sin último segmento es una RAÍZ, y una raíz no tiene
-        // nombre que componer en el destino. Se rechaza el lote entero en vez
-        // de saltársela: transferir «casi todo lo que pediste» en silencio es
-        // exactamente lo que no puede hacer una mutación.
-        if paths.iter().any(|p| p.file_name().is_none()) {
-            return (
-                ActionAck::Unavailable {
-                    reason_key: "host-cannot-transfer-root".to_owned(),
-                },
-                Vec::new(),
-            );
-        }
         // El destino va en SU CAMPO, no como una línea con una flecha: un
         // directorio puede llamarse `docs → /casa/BORRAR` y esa flecha es
         // legítima, no se enmascara y no se marca, así que la línea se leería
@@ -10408,6 +10819,16 @@ impl Estado {
                 destino,
                 mover,
             }) => {
+                // El lote se abre AQUÍ, con el número que se va a pedir: la
+                // cuenta tiene que existir antes de que llegue el primer
+                // desenlace, que con una task que nace terminal puede ser
+                // antes de que el bucle de envío haya pedido la segunda.
+                // Uno solo no es un lote: su desenlace ya se dice en su fila
+                // y su rechazo en la barra, con la frase tipada del error.
+                self.lote = (paths.len() > 1).then(|| Lote {
+                    total: paths.len(),
+                    ..Lote::default()
+                });
                 Self::lanzar_transferencia(&paths, &origen_dir, &destino, mover, backend, buzon);
                 // Las marcas las CONSUME el envío, no el desenlace (mismo
                 // criterio que el TUI y que mc): una selección a medio
@@ -10458,8 +10879,12 @@ impl Estado {
                 rehusado = motivo;
                 salidas.extend(partes);
             }
-            Some(Pendiente::AprobarExtension { id, capabilities }) => {
-                let (motivo, partes) = self.conceder(&id, &capabilities, backend, buzon);
+            Some(Pendiente::AprobarExtension {
+                id,
+                capabilities,
+                digest,
+            }) => {
+                let (motivo, partes) = self.conceder(&id, &capabilities, digest, backend, buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }
@@ -10827,7 +11252,9 @@ impl Estado {
                 };
                 let mensaje = match encolada {
                     Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados.clone()))),
-                    Err(e) => Mensaje::TaskFallida(Box::new(e)),
+                    // A la CUENTA del lote, no a la barra: N rechazos eran N
+                    // mensajes de los que solo sobrevivía el último (#271).
+                    Err(e) => Mensaje::TaskDeLoteRechazada(Box::new(e)),
                 };
                 if buzon.send(mensaje).await.is_err() {
                     // El actor ya no está: lo que quede del lote no le
@@ -10836,6 +11263,36 @@ impl Estado {
                 }
             }
         });
+    }
+
+    /// Hace sitio en el tablero tirando lo más viejo TERMINADO.
+    ///
+    /// Se prefiere desalojar una TERMINADA BIEN: una fallida o una cancelada
+    /// es la única superficie que dice qué no llegó —un fallo no deja entrada
+    /// de journal—, y en un lote grande con colisiones son justo las que se
+    /// acumulan. Una VIVA no se toca: tiene progreso que bombear y, quizá, un
+    /// directorio que relistar.
+    fn desalojar_del_tablero(&mut self) {
+        if self.tasks.len() < MAX_TASKS {
+            return;
+        }
+        let viejo = self
+            .tasks
+            .iter()
+            .find(|(_, t)| t.vista.state == crate::dto::TaskStateView::Done)
+            .or_else(|| {
+                self.tasks
+                    .iter()
+                    .find(|(_, t)| Self::terminal(t.vista.state))
+            })
+            .map(|(k, _)| *k);
+        if let Some(viejo) = viejo {
+            debug_assert!(
+                self.tasks[&viejo].afectados.is_empty(),
+                "se desaloja una task con un refresco pendiente"
+            );
+            self.tasks.remove(&viejo);
+        }
     }
 
     /// Mete una Task recién encolada en el tablero y deja su progreso
@@ -10849,31 +11306,25 @@ impl Estado {
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let id = task.id.get();
         let ajena = task.foreign;
-        if self.tasks.len() >= MAX_TASKS {
-            // El tablero está acotado: lo más viejo TERMINADO se cae antes de
-            // que la memoria del host dependa de cuántas operaciones lanzó
-            // alguien.
-            // Se prefiere desalojar una TERMINADA BIEN: una fallida o una
-            // cancelada es la única superficie que dice qué no llegó —un
-            // fallo no deja entrada de journal—, y en un lote grande con
-            // colisiones son justo las que se acumulan.
-            let viejo = self
-                .tasks
-                .iter()
-                .find(|(_, t)| t.vista.state == crate::dto::TaskStateView::Done)
-                .or_else(|| {
-                    self.tasks
-                        .iter()
-                        .find(|(_, t)| Self::terminal(t.vista.state))
-                })
-                .map(|(k, _)| *k);
-            if let Some(viejo) = viejo {
-                debug_assert!(
-                    self.tasks[&viejo].afectados.is_empty(),
-                    "se desaloja una task con un refresco pendiente"
-                );
-                self.tasks.remove(&viejo);
-            }
+        // Alta en la cuenta del lote (#271), antes de cualquier desalojo: lo
+        // que se encoló se encoló aunque su fila no llegue a caber.
+        if let Some(lote) = self.lote.as_mut()
+            && !ajena
+            && lote.encoladas + lote.rechazadas < lote.total
+            && lote.ids.insert(id)
+        {
+            lote.encoladas += 1;
+        }
+        self.desalojar_del_tablero();
+        // Y el techo DURO de lo retenido (#271). Solo se llega aquí con el
+        // tablero lleno de tasks VIVAS, y solo desde el canal de ajenas: las
+        // propias no pasan de `pedir_transferencia`, que rehúsa el lote entero
+        // si no cabe. Una fila ajena que se cae no pierde nada —viene con
+        // `afectados` vacío, o sea sin refresco que deber— salvo una fila que
+        // esta ventana nunca prometió enseñar.
+        if self.tasks.len() >= MAX_TASKS_RETAINED && !self.tasks.contains_key(&id) {
+            tracing::debug!(task = id, "tablero lleno: no se retiene una task ajena");
+            return Vec::new();
         }
         let mut rx = task.progress.clone();
         let nacio = rx.borrow().clone();
@@ -10976,11 +11427,17 @@ impl Estado {
         if apaga_el_aviso {
             cambios.push(self.cambio_de_banners());
         }
-        if self
+        if let Some(estado) = self
             .tasks
             .get(&id)
-            .is_some_and(|t| Self::terminal(t.vista.state))
+            .map(|t| t.vista.state)
+            .filter(|e| Self::terminal(*e))
         {
+            // Nace TERMINAL: su desenlace entra en la cuenta del lote aquí,
+            // porque `progreso` no se llamará nunca para ella.
+            if self.anota_desenlace_de_lote(id, estado) {
+                cambios.push(self.cambio_de_banners());
+            }
             cambios.extend(self.refrescar_afectados(id, backend, buzon));
             // Y su informe, por el mismo motivo que el relistado: si nació
             // terminal, `progreso` no se llama NUNCA, y el informe es la
@@ -11462,9 +11919,16 @@ impl Estado {
         // solo para mirar su estado cuesta dos `String` y un `path_display`
         // en cada tick de progreso de cada task del lote.
         let acabo = Self::terminal(viva.vista.state);
+        let estado_final = viva.vista.state;
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
         }];
+        // El desenlace entra en la cuenta del lote (#271). Solo cuando el lote
+        // queda RESUELTO viaja algo: doscientas frases de «una más» no dicen
+        // nada que la fila no diga ya.
+        if acabo && self.anota_desenlace_de_lote(p.task_id.get(), estado_final) {
+            cambios.push(self.cambio_de_banners());
+        }
         // Un deshacer que TERMINA suelta su sesión: mientras corre, la fila
         // lo dice y `u` sobre ella se rehúsa —dos undos de la misma sesión
         // caminan la misma lista de entradas— y eso no puede quedarse pegado
@@ -11565,6 +12029,80 @@ impl Estado {
             detail: None,
         }));
         vec![parche, aviso]
+    }
+
+    /// Una entrada del lote la rechazó el daemon al encolar (#271).
+    ///
+    /// No pinta nada: cuenta. Con `CollisionPolicy::Fail` contra un destino
+    /// poblado los rechazos son la norma, y N mensajes de los que sobrevive el
+    /// último no dicen ni cuántos hubo.
+    ///
+    /// Sin lote abierto —no debería pasar, el bucle solo manda esto dentro de
+    /// uno— cae a la barra, que es lo que hacía antes: perder el aviso entero
+    /// es peor que pintarlo donde ya se pintaba.
+    fn rechazo_de_lote(&mut self, e: &Error) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(lote) = self.lote.as_mut() else {
+            return self.task_fallida(e);
+        };
+        lote.rechazadas += 1;
+        // Un rechazo por journal sigue significando lo mismo aunque venga de
+        // un lote: esta sesión NO muta hasta que el fichero se arregle (regla
+        // dura 4), y eso dura más que cualquier resumen — y es lo único de un
+        // rechazo suelto que SÍ viaja antes del final.
+        let antes = self.journal_rehusado;
+        self.journal_rehusado |= matches!(e, Error::JournalUnavailable);
+        let banner_nuevo = self.journal_rehusado != antes;
+        if !self.resumen_de_lote_si_cerrado() && !banner_nuevo {
+            // Un parche por rechazo es la tormenta que esto existe para
+            // apagar: mientras el lote siga abierto, nada viaja.
+            return Vec::new();
+        }
+        let cambio = self.cambio_de_banners();
+        vec![self.parche(vec![cambio])]
+    }
+
+    /// Anota el desenlace de UNA task del lote (#271). `true` si con ella el
+    /// lote quedó resuelto y `status.message` ya lleva el resumen.
+    ///
+    /// El id se saca de la cuenta al anotarlo: un progreso terminal puede
+    /// llegar más de una vez —un reanuncio tras reconectar trae el estado
+    /// final otra vez— y la segunda no es un segundo desenlace.
+    fn anota_desenlace_de_lote(&mut self, id: u64, estado: TaskStateView) -> bool {
+        let Some(lote) = self.lote.as_mut() else {
+            return false;
+        };
+        if !lote.ids.remove(&id) {
+            return false;
+        }
+        if estado == TaskStateView::Done {
+            lote.hechas += 1;
+        } else {
+            lote.fallidas += 1;
+        }
+        self.resumen_de_lote_si_cerrado()
+    }
+
+    /// Si el lote está resuelto, pone el resumen en la barra y lo cierra.
+    fn resumen_de_lote_si_cerrado(&mut self) -> bool {
+        let Some(lote) = self.lote.as_ref() else {
+            return false;
+        };
+        if !lote.cerrado() {
+            return false;
+        }
+        // Rechazada al encolar y terminada mal son el mismo desenlace para
+        // quien mira: no llegó. Distinguirlas pediría dos números más en una
+        // frase que tiene que caber en la barra.
+        let total = lote.total.to_string();
+        let bien = lote.hechas.to_string();
+        let mal = (lote.rechazadas + lote.fallidas).to_string();
+        self.lote = None;
+        self.status.message = Some(clamp_display(norte_i18n::ta_in(
+            self.lang,
+            "msg-batch-summary",
+            &[("total", &total), ("ok", &bien), ("fail", &mal)],
+        )));
+        true
     }
 
     /// Un informe llegó: al tablero, y delante si dejó algo a medias.
@@ -12750,12 +13288,47 @@ impl Estado {
             // Se acabó el stream: este hueco ya no está creciendo.
             hueco.drenando = None;
         }
-        if batch.is_empty() {
-            // El último lote puede venir vacío —el stream cabía justo—: no
-            // hay filas nuevas que pintar, solo la bandera que bajar.
+        if batch.is_empty() && !hueco.filas_por_publicar {
+            // Nada que pegar y nada pendiente: el stream cerró sin resto.
             return None;
         }
-        hueco.pane.extend(batch);
+        // Lo que se ve AHORA, para compararlo con lo que se verá. Un
+        // directorio de cien mil entradas se drena en lotes de 500 y cada
+        // lote publicaba su parche: doscientos parches en ráfaga contra un
+        // canal de 64, o sea que cualquier suscriptor que no drene a esa
+        // velocidad recibe `Lagged` y tiene que pedir una foto entera. Y casi
+        // todos esos parches llevaban las MISMAS filas: lo que se estaba
+        // mezclando caía muy por debajo de la ventana visible (#252).
+        let antes = self
+            .huecos
+            .get(&slot)
+            .map(|h| self.filas_de(h))
+            .unwrap_or_default();
+        if !batch.is_empty()
+            && let Some(hueco) = self.huecos.get_mut(&slot)
+        {
+            hueco.pane.extend(batch);
+        }
+        let despues = self
+            .huecos
+            .get(&slot)
+            .map(|h| self.filas_de(h))
+            .unwrap_or_default();
+        // Callar un parche no es gratis: `extend` sube la ÉPOCA del listado y
+        // el renderer nombra cada fila con la época en la que la vio, así que
+        // un renderer al que se le callan todos los parches se queda con una
+        // época vieja y cada clic suyo se rechaza por rancio. Por eso lo que
+        // se calla se APUNTA, y el último lote —aunque venga vacío, que pasa
+        // cuando el resto es múltiplo exacto del lote— salda la deuda.
+        let calla = !ultimo && antes == despues;
+        if let Some(h) = self.huecos.get_mut(&slot) {
+            // Se calla: queda deuda. Se publica: la deuda se salda, porque el
+            // parche lleva la época de AHORA.
+            h.filas_por_publicar = calla;
+        }
+        if calla {
+            return None;
+        }
         Some(self.parche_filas_de(slot))
     }
 
@@ -12771,7 +13344,9 @@ impl Estado {
         sondas: &[(VPath, Entry)],
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         let hueco = self.huecos.get_mut(&slot)?;
-        hueco.sondeando = false;
+        // La bandera se baja SOLO si lo que llega describe este listado. Una
+        // tanda cancelada que aterriza tarde bajaba la de la tanda NUEVA, y
+        // entonces `sondear` dejaba lanzar una segunda sobre el mismo hueco.
         if hueco.pane.dir() != dir {
             // El hueco está en OTRO directorio: pegarle estos tamaños sería
             // mentir sobre lo que se ve. (Un lote de relleno, en cambio, no
@@ -12779,6 +13354,7 @@ impl Estado {
             // por ruta.)
             return None;
         }
+        hueco.sondeando = false;
         for (pedido, e) in sondas {
             // Por la ruta que se PIDIÓ: la que devuelve el provider puede ser
             // otra ortografía del mismo nombre (NFD en HFS+, otra caja en
@@ -13176,7 +13752,11 @@ impl Estado {
         let v = self.visor.as_ref()?;
         let imagen = Self::imagen_de(v);
         let alto = self.alto_del_visor();
-        let (path, hostil) = norte_frontend::path_display(&v.path);
+        // El TUI pinta la ruta del visor con el encoding del panel ENFOCADO
+        // (`ui::panels`), y por lo mismo: es el fichero que se abrió desde
+        // ahí.
+        let (path, hostil) =
+            norte_frontend::path_display_with(&v.path, self.hueco().pane.name_encoding());
         Some(crate::dto::ViewerView {
             path_display: clamp_display(path),
             path_hostile: hostil,
@@ -13632,7 +14212,12 @@ impl Estado {
 
     /// La proyección de UN listado.
     fn browser(&self, id: u32, hueco: &Hueco) -> BrowserSlotView {
-        let (path, hostil) = norte_frontend::path_display(hueco.pane.dir());
+        // Con la MISMA reinterpretación que las filas: pintar la cabecera con
+        // los bytes crudos mientras las filas van transcodificadas deja
+        // `pane.names-encoding` a medias — el mojibake se queda arriba y el
+        // lector no puede saber si el comando hizo algo (#57, #293).
+        let (path, hostil) =
+            norte_frontend::path_display_with(hueco.pane.dir(), hueco.pane.name_encoding());
         BrowserSlotView {
             slot_id: id,
             generation: hueco.pane.listing_epoch(),
@@ -13644,6 +14229,14 @@ impl Estado {
             cursor: (!hueco.pane.entries().is_empty())
                 .then_some(RowKey(hueco.pane.cursor() as u64)),
             marks: hueco.pane.marks_len() as u64,
+            hidden_note: match hueco.pane.hidden_count() {
+                0 => String::new(),
+                n => clamp_display(norte_i18n::ta_in(
+                    self.lang,
+                    "status-hidden",
+                    &[("n", &n.to_string())],
+                )),
+            },
             skipped_note: hueco.pane.skipped().map_or_else(String::new, |n| {
                 clamp_display(norte_i18n::ta_in(
                     self.lang,

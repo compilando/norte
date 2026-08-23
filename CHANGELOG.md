@@ -7,7 +7,46 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A single-file copy is confined, and so is the deletion an overwrite
+  performs** (#218 closed, #219 narrowed, ADR 0072). `ops::copy_task` used an
+  unconfined destination for a lone file or symlink, so `fs.copy` — the most
+  common operation in the product — still had #164 open. It now opens its
+  destination *directory* as a confined root: that directory is resolved once
+  instead of three times plus a retry each, and a substitution after that point
+  redirects nothing. `ConfinedRoot` gains `remove`, and the `stat` that decides
+  a collision plus the `remove` that executes it both go through the descriptor
+  — that was the destructive half of `Overwrite`, and by path it could destroy
+  a file outside the approved tree while the write that followed refused.
+  What is **not** closed: a symlink already in place when the core first looks.
+  From inside the core that is indistinguishable from a legitimate
+  `~/copias -> /mnt/disco/copias`, and rejecting both would break copying to
+  `/tmp` on macOS and `/bin` on a usrmerge Linux. Closing it needs the identity
+  observed at approval time to travel with the request.
+- **A transfer batch refuses when two of its marks are one name on the
+  destination** (#268). `README.txt` and `readme.txt` are two files on ext4 and
+  one on NTFS or APFS; enqueuing both let one win non-deterministically while
+  the other failed without explanation. The window now asks each pane's
+  location how it folds when the listing lands — not in front of the dialog,
+  which would put a round trip on the F5 path.
+
 ### Added
+
+- **Protocol 0.53.0** (#251, #265, #282, ADR 0071): three optional fields,
+  bundled into one bump because each alone would have cost its own version
+  window. `TaskProgress.unreadable` says how many subtrees a task could not
+  read, so `fs.dir_size` can answer "at least X" instead of a confident total
+  that is short — the dangerous direction of wrong for a method that exists to
+  answer "does this fit?". `PluginLoadError.dir_bytes` carries the bytes of a
+  broken plugin's directory name, which used to cross the wire already
+  converted by an unmarked `to_string_lossy` and therefore painted a name that
+  differed from disk while declaring itself faithful.
+  `PluginSetApprovalParams.expected_digest` (with `PluginInfo.manifest_digest`
+  on the way out) makes what gets granted be what the human read: the daemon
+  refuses when the manifest changed between the catalogue and the yes.
+  Window shifts to N=0.53.x / N-1=0.52.x — a 0.52 peer loses the warning, the
+  mark and the refusal, never correctness.
 
 - **The window has the panel gestures the terminal always had** (#290, phase
   A): sort by name, extension, size or time; the sort menu; refresh; hidden

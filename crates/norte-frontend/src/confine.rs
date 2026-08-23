@@ -16,11 +16,21 @@
 //!
 //! # Lo que la línea NO promete
 //!
-//! Su ausencia dice que el destino SABE confinar, no que esta operación en
-//! concreto vaya confinada: una hoja suelta no cuelga de ninguna raíz aprobada
-//! —no hay ventana que aprovechar, la ruta se compone y se escribe seguido— y
-//! el core no le abre raíz. Lo que la capability describe es la UBICACIÓN, que
-//! es de lo que va ADR 0054.
+//! Su ausencia dice que el destino SABE confinar. Desde #219 eso alcanza a
+//! TODA transferencia y no solo a las recursivas: una hoja suelta también
+//! cuelga de un árbol aprobado —su directorio destino, que es el que el humano
+//! eligió— y el core le abre raíz. El razonamiento que decía lo contrario
+//! («una hoja no tiene ventana que aprovechar») era falso: entre el gate y los
+//! bytes hay el `stat` de la colisión, la creación del staging, su publicación
+//! y hasta tres reintentos, cada uno resolviendo la ruta otra vez.
+//!
+//! Lo que sigue sin cubrir, y por eso esto no promete «esta operación va
+//! confinada» sino «este sitio sabe confinar»: un componente INTERMEDIO del
+//! directorio aprobado sustituido antes de abrirlo. El ancla se consigue
+//! abriendo una ruta, así que esa primera resolución es por ruta por
+//! definición — es el mismo residuo que una copia recursiva acepta para su
+//! propio destino. Lo que la capability describe es la UBICACIÓN, que es de lo
+//! que va ADR 0054.
 
 use norte_i18n::{Lang, t_in};
 use norte_proto::{Capabilities, CapabilityFlags};

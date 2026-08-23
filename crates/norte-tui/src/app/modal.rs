@@ -45,6 +45,29 @@ pub enum Modal {
         /// `(bytes, entradas)` cuando el recuento terminó.
         size: Option<(u64, u64)>,
     },
+    /// Conceder capabilities a una extensión (#280).
+    ///
+    /// Es LA decisión de seguridad del sistema de extensiones: lo que se
+    /// concede es leer ficheros, correr programas o salir a la red en nombre
+    /// del usuario. Aquí se aprobaba con una tecla y sin enumerar nada,
+    /// mientras la ventana gráfica ya preguntaba. REVOCAR no pasa por aquí:
+    /// va en la dirección segura.
+    ConfirmPluginApproval {
+        /// El id de la extensión, tal como el core la nombra.
+        id: String,
+        /// Su nombre, ya saneado para pintar.
+        name: String,
+        /// El nombre difiere del real y hay que marcarlo.
+        name_hostile: bool,
+        /// Las capabilities que se conceden, cada una enmascarada por su
+        /// cuenta y con su bandera: pegarlas en una frase dejaría que una
+        /// finja ser otra.
+        caps: Vec<(String, bool)>,
+        /// El ancla del manifiesto que se ESTÁ ENSEÑANDO (#282), si el core la
+        /// manda. Viaja con el sí, y el core rehúsa si el `plugin.toml` cambió
+        /// entre la pregunta y la respuesta.
+        digest: Option<String>,
+    },
     /// Confirmación de borrado (F8) sobre las MARCAS. `permanent = false` →
     /// papelera.
     ConfirmDelete {

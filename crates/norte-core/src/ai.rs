@@ -333,15 +333,24 @@ pub struct RenamePlan {
 }
 
 /// Core → proto: el plan solo contiene nombres UTF-8 (invariante del engine:
-/// hostiles rechazados fail-loud pre-proveedor) — lossy es identidad.
+/// hostiles rechazados fail-loud pre-proveedor).
+///
+/// La conversión NO es lossy, y por eso se hace con `from_utf8` y no con
+/// `from_utf8_lossy` (#275). El invariante que lo garantiza vive dos
+/// funciones más allá —`build_rename_prompt` rehúsa el directorio entero si
+/// algún nombre no es representable— y un `lossy` aquí lo daba por hecho en
+/// silencio: el día que ese invariante se mueva, esto colaría un U+FFFD en un
+/// nombre de fichero en vez de decirlo. Una entrada que no sea UTF-8 se
+/// SALTA, que es lo mismo que hace el validador con lo que no entiende.
 pub(crate) fn ai_plan_to_proto(plan: RenamePlan) -> norte_proto::methods::AiRenamePlanResult {
     norte_proto::methods::AiRenamePlanResult {
         entries: plan
             .entries
             .into_iter()
-            .map(|e| norte_proto::methods::AiRenameEntry {
-                from: String::from_utf8_lossy(e.from.as_bytes()).into_owned(),
-                to: String::from_utf8_lossy(e.to.as_bytes()).into_owned(),
+            .filter_map(|e| {
+                let from = String::from_utf8(e.from.as_bytes().to_vec()).ok()?;
+                let to = String::from_utf8(e.to.as_bytes().to_vec()).ok()?;
+                Some(norte_proto::methods::AiRenameEntry { from, to })
             })
             .collect(),
     }

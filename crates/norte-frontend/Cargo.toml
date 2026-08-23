@@ -55,13 +55,16 @@ regex.workspace = true
 unicode-width = "0.2"
 # Shell integration (`shell.rs`, S2 `--pick`): `vpath_to_native` is the ONE
 # function that turns a `file://` VPath into the bytes a shell-side tool can
-# open, and it already lives here (rule 1: no frontend may re-derive native
-# path rules from the wire form). The alternative is duplicating the local
-# scheme's authority/segment rules a second time in this crate, which is
-# exactly the drift `norte-vfs-local` exists to prevent. Already in the
-# workspace graph (every provider that composes over local goes through it);
-# nothing new enters the dependency tree.
-norte-vfs-local.workspace = true
+# open (rule 1: no frontend may re-derive native path rules from the wire
+# form). It used to live in `norte-vfs-local`, and depending on that crate
+# pulled the one crate allowed `unsafe` — with `openat2` and `ConfinedRoot`
+# inside — into every frontend for a string conversion. It now lives in
+# `norte-vfs`, which is the trait crate and touches no disk (#254).
+norte-vfs.workspace = true
+# OSC 52 (#286): la única forma de copiar al portapapeles desde un terminal
+# por SSH es mandarle al EMULADOR la secuencia con el texto en base64. Ya es
+# dependencia del workspace (proto, client, mcp): no entra nada nuevo.
+base64.workspace = true
 # Vigilancia de los dirs visibles (#106), compartida por los dos frontends: la
 # TUI la estrenó y la GUI la necesita igual, y duplicarla sería duplicar también
 # el pitfall de inotify que ya está resuelto una vez aquí. `notify` ya es

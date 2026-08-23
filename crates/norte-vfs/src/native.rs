@@ -1,6 +1,16 @@
 //! Conversión `VPath` ↔ paths nativos y prefijo `\\?\` (paths >260, nombres
 //! reservados, trailing dots/spaces).
 //!
+//! Vive AQUÍ y no en el provider local porque son reglas de la FORMA de una
+//! ruta, no acceso al disco, y hay dos frontends que las necesitan sin querer
+//! un provider: el terminal para pasarle una ruta a una herramienta de shell,
+//! y la ventana gráfica para saber dónde arranca. Tenerlas en
+//! `norte-vfs-local` obligaba a los dos a arrastrar el único crate del
+//! proyecto que puede usar `unsafe`, con `openat2` y `ConfinedRoot` dentro, a
+//! un proceso cuyo único transporte es un socket — justo lo contrario de lo
+//! que promete la ADR 0066 (#254). Tampoco caben en `norte-proto`: eso es el
+//! wire, y un `Path` del sistema no cruza ningún cable.
+//!
 //! Frontera de seguridad (ADR 0001): en Windows los bytes de un segmento se
 //! validan como WTF-8 y se DECODIFICAN a UTF-16 (`OsStringExt::from_wide`) —
 //! cero `unsafe`: la reconstrucción unchecked de `OsStr` queda prohibida
@@ -18,13 +28,11 @@ use norte_proto::{Error, VPath};
 ///
 /// Unix: los bytes del OS tal cual. Windows: WTF-8 (`as_encoded_bytes`).
 ///
-/// Hoisted to [`norte_vfs::wtf8::os_to_bytes`] (2026-08-10-volumes.md task
-/// V4): `norte-core::volumes::windows` needs the exact same conversion for
-/// `Volume::label`, and `norte-proto`/`norte-core` cannot depend on this
-/// crate (wrong direction), so the one function both sides need now lives in
-/// `norte-vfs`, which both already depend on. This is a thin re-export so the
-/// two call sites below do not have to spell the other crate's path.
-pub(crate) use norte_vfs::wtf8::os_to_bytes;
+/// Un re-export fino de [`crate::wtf8::os_to_bytes`], que es donde vive la
+/// conversión desde que `norte-core::volumes::windows` la necesitó para
+/// `Volume::label`. Ahora este módulo es su vecino y el re-export solo ahorra
+/// deletrear la ruta en los dos sitios de abajo.
+pub(crate) use crate::wtf8::os_to_bytes;
 
 /// Reconstruye un `OsString` desde los bytes de un segmento.
 ///
@@ -34,7 +42,7 @@ pub(crate) use norte_vfs::wtf8::os_to_bytes;
 /// unchecked sería unsound).
 #[cfg(unix)]
 #[allow(clippy::unnecessary_wraps)] // firma común con la variante Windows, que sí falla
-pub(crate) fn bytes_to_os(bytes: &[u8]) -> Result<OsString, Error> {
+pub fn bytes_to_os(bytes: &[u8]) -> Result<OsString, Error> {
     use std::os::unix::ffi::OsStrExt;
     // Unix: cualquier byte es válido en un nombre; conversión segura 1:1.
     Ok(OsStr::from_bytes(bytes).to_os_string())
@@ -49,7 +57,7 @@ pub(crate) fn bytes_to_os(bytes: &[u8]) -> Result<OsString, Error> {
 /// componentes) o `:` (Alternate Data Stream de NTFS: los datos acabarían
 /// escondidos en un stream que `list` jamás devuelve).
 #[cfg(windows)]
-pub(crate) fn bytes_to_os(bytes: &[u8]) -> Result<OsString, Error> {
+pub fn bytes_to_os(bytes: &[u8]) -> Result<OsString, Error> {
     use std::os::windows::ffi::OsStringExt;
     if bytes.contains(&b'\\') || bytes.contains(&b':') {
         return Err(Error::InvalidPath);
@@ -60,17 +68,24 @@ pub(crate) fn bytes_to_os(bytes: &[u8]) -> Result<OsString, Error> {
 
 /// Destino de un symlink → `OsString`. Unix: bytes tal cual. El target NO
 /// es un segmento: no se le aplican las restricciones de `bytes_to_os`.
+///
+/// # Errors
+/// [`Error::InvalidPath`] si los bytes no son representables como ruta del
+/// sistema (en Windows, si no son WTF-8 válido).
 #[cfg(unix)]
 #[allow(clippy::unnecessary_wraps)] // firma común con la variante Windows
-pub(crate) fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
+pub fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
     use std::os::unix::ffi::OsStrExt;
     Ok(OsStr::from_bytes(bytes).to_os_string())
 }
 
 /// Destino de un symlink → `OsString` (Windows): WTF-8 validado, SIN las
 /// restricciones de segmento — un target legítimo contiene `\` y `:`.
+///
+/// # Errors
+/// [`Error::InvalidPath`] si los bytes no son WTF-8 válido.
 #[cfg(windows)]
-pub(crate) fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
+pub fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
     use std::os::windows::ffi::OsStringExt;
     let wide = norte_vfs::wtf8::decode_to_wide(bytes).ok_or(Error::InvalidPath)?;
     Ok(OsString::from_wide(&wide))
@@ -84,7 +99,10 @@ pub(crate) fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
 /// `base` vacío = "raíz del OS" — el PRIMER segmento es el prefijo de unidad
 /// (`C:`) y se le restituye su separador (evita el path drive-relative
 /// `C:Users` que produciría un `push` ingenuo).
-pub(crate) fn to_native(base: &Path, p: &VPath) -> Result<PathBuf, Error> {
+///
+/// # Errors
+/// [`Error::InvalidPath`] si algún segmento no es representable nativamente.
+pub fn to_native(base: &Path, p: &VPath) -> Result<PathBuf, Error> {
     let mut segs = p.segments();
     let mut out = if cfg!(windows) && base.as_os_str().is_empty() {
         let Some(first) = segs.next() else {
@@ -169,7 +187,7 @@ fn is_bare_unc_body(body: &[u8]) -> bool {
 
 /// Convierte un `VPath` `file://` (sin authority) a su path NATIVO — la
 /// inversa de [`vpath_from_native`]. La base es la raíz del OS (igual que
-/// [`crate::LocalProvider::os_root`]): `/` en unix; en Windows la unidad/UNC
+/// `LocalProvider::os_root`): `/` en unix; en Windows la unidad/UNC
 /// que viaje en el primer segmento. Byte a byte (regla 1).
 ///
 /// Uso: un frontend que necesita la ruta real para lanzar un programa
@@ -186,7 +204,7 @@ fn is_bare_unc_body(body: &[u8]) -> bool {
 ///     .join(Segment::new(b"hosts".to_vec()).unwrap());
 /// # #[cfg(unix)]
 /// assert_eq!(
-///     norte_vfs_local::vpath_to_native(&vp).unwrap(),
+///     norte_vfs::native::vpath_to_native(&vp).unwrap(),
 ///     std::path::Path::new("/etc/hosts")
 /// );
 /// ```
@@ -205,7 +223,7 @@ pub fn vpath_to_native(p: &VPath) -> Result<PathBuf, Error> {
 }
 
 /// Convierte un path NATIVO absoluto a `VPath` (`file:///…`), byte a byte.
-/// La inversa de la resolución de [`crate::LocalProvider::os_root`].
+/// La inversa de la resolución de `LocalProvider::os_root`.
 ///
 /// # Errors
 /// [`Error::InvalidPath`] si el path no puede normalizarse o contiene
@@ -241,13 +259,15 @@ pub fn vpath_from_native(path: &Path) -> Result<VPath, Error> {
 
 /// Aplica el prefijo verbatim en Windows; identidad en el resto.
 #[cfg(not(windows))]
-pub(crate) fn verbatim(p: PathBuf) -> PathBuf {
+#[must_use]
+pub fn verbatim(p: PathBuf) -> PathBuf {
     p
 }
 
 /// Aplica el prefijo verbatim en Windows; identidad en el resto.
 #[cfg(windows)]
-pub(crate) fn verbatim(p: PathBuf) -> PathBuf {
+#[must_use]
+pub fn verbatim(p: PathBuf) -> PathBuf {
     use std::path::{Component, Prefix};
     // Ya verbatim: no tocar.
     if let Some(Component::Prefix(pr)) = p.components().next() {

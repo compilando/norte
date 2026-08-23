@@ -237,30 +237,55 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
         "dialog.up" => mgr.up(),
         "dialog.down" => mgr.down(),
         "dialog.cancel" => app.extensions = None,
+        // CONCEDER pregunta; REVOCAR no (#280). La asimetría es la de todo
+        // este árbol: lo que va en la dirección segura no necesita permiso, y
+        // conceder capabilities es LA decisión de seguridad del sistema de
+        // extensiones — la ventana gráfica ya preguntaba y aquí se aprobaba
+        // con una tecla, enumerando nada.
         "dialog.approve" => {
-            // Id y estado ANTES del await (suelta el borrow de `mgr`).
-            let Some((id, cur)) = mgr.selected().map(|p| (p.id.clone(), p.approved)) else {
+            let Some(sel) = mgr.selected() else {
                 return;
             };
-            match backend.plugins_set_approval(&id, !cur).await {
-                Ok(()) => {
-                    if let Some(mgr) = &mut app.extensions {
-                        mgr.set_local_approved(!cur);
-                    }
-                }
-                Err(e) => app.message = Some(error_message(&e)),
+            if sel.approved {
+                let id = sel.id.clone();
+                revocar_o_decir(app, backend, &id).await;
+                return;
             }
+            let (id, name) = (sel.id.clone(), sel.name.clone());
+            let digest = sel.manifest_digest.clone();
+            // Las capabilities, cada una enmascarada POR SU CUENTA y con su
+            // bandera: son texto de un tercero, y pegarlas en una frase deja
+            // que una finja ser otra.
+            let caps: Vec<(String, bool)> = sel
+                .capabilities
+                .iter()
+                .map(|c| norte_frontend::help_badge::plugin_label_flagged(c))
+                .collect();
+            let (nombre, nombre_hostil) = crate::app::display_name(name.as_bytes());
+            app.modal = Some(crate::app::Modal::ConfirmPluginApproval {
+                id,
+                name: nombre,
+                name_hostile: nombre_hostil,
+                caps,
+                digest,
+            });
         }
         "dialog.toggle-enabled" => {
-            let Some((id, cur)) = mgr.selected().map(|p| (p.id.clone(), p.enabled)) else {
+            let Some((id, cur, aprobado)) = mgr
+                .selected()
+                .map(|p| (p.id.clone(), p.enabled, p.approved))
+            else {
                 return;
             };
+            // Encender lo que no está aprobado, no. Apagar lo que sí lo está
+            // —aunque le hayan revocado la aprobación—, sí: apagar siempre va
+            // en la dirección segura.
+            if !cur && !aprobado {
+                app.message = Some(t("msg-plugin-not-approved"));
+                return;
+            }
             match backend.plugins_set_enabled(&id, !cur).await {
-                Ok(()) => {
-                    if let Some(mgr) = &mut app.extensions {
-                        mgr.set_local_enabled(!cur);
-                    }
-                }
+                Ok(()) => relistar_extensiones(app, backend).await,
                 Err(e) => app.message = Some(error_message(&e)),
             }
         }
@@ -345,6 +370,7 @@ mod extensions_help_tests {
             commands: Vec::new(),
             columns: Vec::new(),
             has_help,
+            manifest_digest: None,
         }
     }
 
@@ -379,5 +405,139 @@ mod extensions_help_tests {
             app.message.as_deref(),
             Some(norte_i18n::t("msg-extensions-no-help").as_str())
         );
+    }
+}
+
+/// Revoca la aprobación de un plugin y RELISTA.
+///
+/// Revocar va en la dirección segura, así que no pregunta.
+async fn revocar_o_decir(app: &mut App, backend: &Backend, id: &str) {
+    // Sin ancla a propósito (#282): revocar no concede nada, y rehusarlo por
+    // un digest rancio dejaría vivo justo el permiso que se quiere quitar.
+    match backend.plugins_set_approval(id, false, None).await {
+        Ok(()) => relistar_extensiones(app, backend).await,
+        Err(e) => app.message = Some(error_message(&e)),
+    }
+}
+
+/// Concede la aprobación —ya confirmada por un humano— y RELISTA.
+pub(crate) async fn conceder_aprobacion(
+    app: &mut App,
+    backend: &Backend,
+    id: &str,
+    digest: Option<&str>,
+) {
+    match backend.plugins_set_approval(id, true, digest).await {
+        Ok(()) => relistar_extensiones(app, backend).await,
+        Err(e) => {
+            // Un fallo se DICE **y** se relista: un plazo vencido, o un
+            // daemon que rehúsa, no es «no pasó nada» — y la pantalla tiene
+            // que enseñar lo que el core cree, no lo que este proceso
+            // esperaba.
+            app.message = Some(error_message(&e));
+            relistar_extensiones(app, backend).await;
+        }
+    }
+}
+
+/// Vuelve a pedirle el catálogo al core y repinta la pantalla con ÉL.
+///
+/// El camino anterior era `set_local_approved`: un `bool` de este proceso que
+/// el daemon no había confirmado. La razón por la que no vale está escrita en
+/// la ventana gráfica, que ya lo hacía así — «un optimismo local que el
+/// daemon no confirmó es una pantalla que miente sobre quién puede leer tus
+/// ficheros» (#280).
+async fn relistar_extensiones(app: &mut App, backend: &Backend) {
+    let cursor = app.extensions.as_ref().map_or(0, |m| m.cursor);
+    match backend.plugins_list().await {
+        Ok(list) => {
+            let mut plugins = list.plugins;
+            crate::app::clamp_plugin_descriptions(&mut plugins);
+            let config = app.extensions.as_mut().and_then(|m| m.config.take());
+            let tope = plugins.len().saturating_sub(1);
+            app.extensions = Some(crate::app::ExtensionManager {
+                plugins,
+                errors: list.errors,
+                cursor: cursor.min(tope),
+                config,
+            });
+        }
+        Err(e) => app.message = Some(error_message(&e)),
+    }
+}
+
+/// Conceder capabilities PREGUNTA (#280).
+#[cfg(test)]
+mod aprobacion_tests {
+    use super::{App, ExtensionManager};
+    use crate::app::{Modal, Pane};
+    use norte_vfs::VPath;
+
+    fn app_con(p: norte_proto::methods::PluginInfo) -> App {
+        let d = VPath::parse("file:///x").expect("wire de test");
+        let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
+        app.extensions = Some(ExtensionManager {
+            plugins: vec![p],
+            errors: Vec::new(),
+            cursor: 0,
+            config: None,
+        });
+        app
+    }
+
+    fn plugin(approved: bool, enabled: bool) -> norte_proto::methods::PluginInfo {
+        norte_proto::methods::PluginInfo {
+            id: "org.acme.demo".to_owned(),
+            name: "Demo".to_owned(),
+            publisher: "ACME".to_owned(),
+            version: "1.0.0".to_owned(),
+            category: "command".to_owned(),
+            capabilities: vec!["location".to_owned(), "process".to_owned()],
+            approved,
+            enabled,
+            description: None,
+            commands: Vec::new(),
+            columns: Vec::new(),
+            has_help: false,
+            manifest_digest: None,
+        }
+    }
+
+    /// `dialog.approve` sobre una extensión SIN aprobar abre la pregunta y no
+    /// concede nada todavía. Con el camino viejo esto llamaba al daemon en la
+    /// misma tecla, sin enumerar una sola capability.
+    #[tokio::test]
+    async fn conceder_abre_la_pregunta_y_enumera_las_capabilities() {
+        let mut app = app_con(plugin(false, false));
+        // Un engine embebido y vacío: estos dos tests comprueban que NO se
+        // llama al daemon, así que lo que haya detrás da igual mientras
+        // exista.
+        let backend =
+            norte_core::backend::Backend::Embedded(std::sync::Arc::new(norte_core::Engine::new()));
+
+        super::on_extensions_list_cmd(&mut app, &backend, "dialog.approve").await;
+
+        let Some(Modal::ConfirmPluginApproval { id, caps, .. }) = &app.modal else {
+            panic!("conceder tiene que preguntar: {:?}", app.modal);
+        };
+        assert_eq!(id, "org.acme.demo");
+        assert_eq!(caps.len(), 2, "una línea por capability: {caps:?}");
+    }
+
+    /// Y encender lo que no está aprobado se REHÚSA: un plugin apagado y sin
+    /// aprobar no puede saltarse la pregunta por la otra tecla.
+    #[tokio::test]
+    async fn encender_sin_aprobar_se_rehusa() {
+        let mut app = app_con(plugin(false, false));
+        // Un engine embebido y vacío: estos dos tests comprueban que NO se
+        // llama al daemon, así que lo que haya detrás da igual mientras
+        // exista.
+        let backend =
+            norte_core::backend::Backend::Embedded(std::sync::Arc::new(norte_core::Engine::new()));
+
+        super::on_extensions_list_cmd(&mut app, &backend, "dialog.toggle-enabled").await;
+
+        assert!(app.modal.is_none(), "no abre ninguna pregunta");
+        assert!(app.message.is_some(), "y lo DICE en vez de callarse");
     }
 }

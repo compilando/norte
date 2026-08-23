@@ -286,7 +286,7 @@ async fn una_task_de_otro_cliente_se_ve_y_se_puede_parar() {
         .set_latency_per_op(Some(Duration::from_millis(30)));
     let task = otro
         .transfer(
-            norte_proto::methods::FS_COPY,
+            norte_client::Transfer::Copy,
             &vp("mem:///casa/grande.bin"),
             &vp("mem:///casa/copia.bin"),
             norte_client::TransferOptions::default(),
@@ -336,5 +336,80 @@ async fn una_task_de_otro_cliente_se_ve_y_se_puede_parar() {
     assert!(
         matches!(ack, norte_ui_host::bridge::ActionAck::Applied { .. }),
         "{ack:?}"
+    );
+}
+
+/// #270 — `norte_ui_host::backend::transferir` manda
+/// `TransferOptions { on_collision, ..Default::default() }`, o sea
+/// `SymlinkPolicy::Preserve` y `ResumePolicy::Off`. Que esos dos lleguen así
+/// lo AFIRMABA un comentario y nada más: el doble de test del host implementa
+/// `HostBackend` directamente y no pasa por este impl.
+///
+/// `Preserve` es lo que impide que una copia DEREFERENCIE un symlink hostil
+/// del origen, así que se comprueba por su efecto y no por serialización: el
+/// enlace sigue siendo un enlace del otro lado, con su target intacto. Si el
+/// default se cayera del camino, el destino sería un fichero con el contenido
+/// del target — que es exactamente la fuga que `Preserve` existe para evitar.
+#[tokio::test]
+async fn una_copia_del_host_preserva_los_symlinks_del_origen() {
+    use norte_proto::CollisionPolicy;
+    use norte_ui_host::backend::HostBackend;
+
+    let d = daemon().await;
+    d.mem
+        .mkdir(&vp("mem:///casa/src"))
+        .await
+        .expect("mkdir src");
+    escribe(&d.mem, "mem:///casa/src/real.txt", b"secreto").await;
+    d.mem
+        .symlink(
+            &vp("mem:///casa/src/enlace"),
+            b"real.txt",
+            norte_vfs::SymlinkKind::File,
+        )
+        .await
+        .expect("symlink");
+
+    let backend = RemoteBackend::connect(
+        d.socket.clone(),
+        None,
+        ClientInfo {
+            name: "ui-host-e2e-symlink".into(),
+            version: "0.0.0".into(),
+        },
+    )
+    .await
+    .expect("conecta");
+
+    let task = backend
+        .copy(
+            vp("mem:///casa/src"),
+            vp("mem:///casa/dst"),
+            CollisionPolicy::Fail,
+        )
+        .await
+        .expect("encola la copia");
+    let mut progreso = task.progress;
+    loop {
+        let estado = progreso.borrow_and_update().state.clone();
+        if estado.is_terminal() {
+            assert_eq!(estado, norte_proto::TaskState::Completed, "{estado:?}");
+            break;
+        }
+        tokio::time::timeout(Duration::from_secs(10), progreso.changed())
+            .await
+            .expect("la copia termina antes del plazo")
+            .expect("el canal de progreso sigue vivo");
+    }
+
+    let copiado = d
+        .mem
+        .stat(&vp("mem:///casa/dst/enlace"))
+        .await
+        .expect("el enlace llegó al destino");
+    assert_eq!(
+        copiado.kind,
+        norte_proto::EntryKind::Symlink,
+        "la copia DEREFERENCIÓ el enlace: `SymlinkPolicy::Preserve` no llegó al wire"
     );
 }

@@ -41,6 +41,7 @@ mod tests {
             entries_done: 1,
             entries_total: entradas,
             current: None,
+            unreadable: None,
         }
     }
 

@@ -180,6 +180,7 @@ mod clamp_plugin_descriptions_tests {
             commands: Vec::new(),
             columns: Vec::new(),
             has_help: false,
+            manifest_digest: None,
         }
     }
 

@@ -98,6 +98,9 @@ modal-rename-batch-collision = ✗ { $n }. { $kind }: { $name }
 # La misma línea para un veredicto cuyo pair_index no señala ninguna fila de
 # la petición: se cae el índice antes que señalar una fila que no está.
 modal-rename-batch-collision-unindexed = ✗ { $kind }: { $name }
+modal-rename-batch-collision-prefix = ✗ { $n }. { $kind }:
+modal-rename-batch-collision-prefix-unindexed = ✗ { $kind }:
+modal-rename-batch-temp-part = { $n } paso(s) temporal(es) del planificador
 modal-rename-batch-collision-internal = otra pareja se lo llevó
 modal-rename-batch-collision-external = ya existe
 modal-rename-batch-collision-absent-source = el origen no está
@@ -364,6 +367,7 @@ status-watch-degraded = vigilancia de directorios degradada a sondeo (¿límite 
 msg-names-encoding = nombres mostrados como { $enc } (solo display; los bytes no cambian)
 msg-names-encoding-off = nombres tal cual (reinterpretación apagada)
 msg-hidden-shown = entradas ocultas visibles
+msg-project-config-skipped = { $n } configuración de proyecto no cargó y se ignoró
 msg-mkdir-in-search = los resultados de búsqueda no tienen directorio destino — sal antes de la búsqueda
 msg-ai-rename-running = Renombrado IA: pensando… (Esc cancela)
 # Variante GUI: la GUI no tiene camino para abortar la petición en vuelo, así
@@ -612,6 +616,8 @@ ext-config-max = como mucho {$max}
 # `effects` de un tema los interpreta cada renderer: los que este no sabe
 # pintar se NOMBRAN, porque un tema retro idéntico se lee como roto.
 picker-volumes-title = Volúmenes
+picker-volumes-title-left = Volúmenes (panel izquierdo)
+picker-volumes-title-right = Volúmenes (panel derecho)
 picker-volumes-loading = preguntando al host por su tabla de montaje…
 picker-volumes-empty = el host no reportó ningún volumen
 picker-history-title = Historial
@@ -667,6 +673,9 @@ msg-hotlist-removed = favorito eliminado: { $name }
 msg-plugin-run-ok = extensión: { $output }
 # G3c: `dialog.confirm` sobre un plugin con esquema `[config]` vacío.
 msg-plugin-config-empty = este plugin no declara ajustes configurables
+msg-plugin-not-approved = esta extensión no está aprobada: apruébala antes de encenderla
+modal-plugin-approval-title = ¿Conceder estas capacidades?
+modal-plugin-approval-note = una extensión aprobada actúa en tu nombre con lo que aquí se lista
 msg-extensions-no-help = esta extensión no trae página de ayuda
 # G3c: `plugin.set_config` tuvo éxito — { $key } es la clave declarada por el
 # manifiesto (charset seguro, nunca texto libre del plugin); { $value } es el
@@ -930,6 +939,7 @@ props-count-hint = sin contar (ciérralo y usa «contar cuánto ocupa»)
 props-hint = [Esc] cerrar
 msg-dir-size-counting = contando lo que ocupa…
 msg-dir-size = { $size } en { $count } entradas
+msg-dir-size-partial = al menos { $size } en { $count } entradas ({ $skipped } sin poder leer)
 help-cmd-pane-mkdir = crear un directorio (F7)
 help-cmd-pane-ai-rename = renombrado IA del directorio actual (plan revisable)
 help-cmd-pane-semantic-search = búsqueda semántica sobre el índice (IA)
@@ -1625,6 +1635,9 @@ task-batch-half = lote a medias: { $applied } aplicados, { $back } devueltos
 task-batch-unverified = terminado, sin informe
 host-plan-unseen = recorre el plan entero antes de aplicarlo
 host-same-directory = el origen y el destino son el mismo directorio
+host-batch-too-large = demasiadas entradas para una sola transferencia
+host-batch-folds-to-one = dos de las marcas son el mismo nombre en el destino
+host-task-board-full = el tablero de tareas está lleno
 host-read-only = esta ventana está montada sin efectos: no escribe
 host-no-tabs = este panel no está en un grupo de pestañas
 host-no-such-tab = no hay tantas pestañas
@@ -1633,6 +1646,8 @@ host-nothing-selected = no hay nada señalado
 host-not-local = eso no está en este disco: no hay ruta nativa que darle al escritorio
 host-no-desktop = esta ventana no tiene escritorio detrás: no puede copiar al portapapeles ni lanzar nada
 msg-paths-copied = { $n } ruta(s) al portapapeles
+msg-paths-copied-osc52 = { $n } ruta(s) al portapapeles del terminal (OSC 52); comprueba pegando
+msg-clipboard-failed = el portapapeles no aceptó las rutas
 msg-opening-external = abriendo con la aplicación del escritorio…
 msg-opening-terminal = abriendo un terminal aquí…
 host-plugin-running = ejecutando el comando de la extensión…
@@ -1648,3 +1663,4 @@ modal-extension-approve-title = ¿conceder estas capabilities?
 host-settings-read-only = los ajustes aquí son de solo lectura
 msg-nav-at-root = ya estás en la raíz
 msg-nothing-selected = nada seleccionado
+msg-batch-summary = { $total } transferencias: { $ok } bien, { $fail } mal

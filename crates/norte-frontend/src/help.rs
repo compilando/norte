@@ -642,6 +642,13 @@ impl HelpState {
     /// Paging the body moves the SCROLL and not the action cursor: a page is
     /// a movement over prose, and most of a topic is prose with no action on
     /// it at all.
+    /// **Quién llama a esto, por superficie** (#267): el TUI, en las dos
+    /// mitades, porque pinta en una rejilla y no tiene scroll que delegar.
+    /// La ventana gráfica SOLO en la lateral: el cuerpo de una página cruza
+    /// su puente entero y lo desplaza el DOM, así que mover aquí
+    /// `body_scroll` crearía una segunda verdad sobre por dónde va la ayuda
+    /// y solo una de las dos se pintaría. Un tercer renderer sin scroll
+    /// nativo usa las dos mitades, como el TUI.
     pub fn page_up(&mut self, n: usize) {
         // Paginar es leer, no elegir: la vista manda y el cursor se queda
         // donde el lector lo deje al volver a moverlo.

@@ -623,6 +623,9 @@ pub enum ManifestError {
     /// PARSEO, no reinterpreta aprobaciones existentes.
     #[error("contributions.command[].id excede el tope de 64 caracteres")]
     CommandIdTooLong,
+    /// `[contributions]` declara más de [`COMMAND_MAX_COUNT`] comandos (#281).
+    #[error("contributions declara más comandos de los permitidos (tope: {COMMAND_MAX_COUNT})")]
+    TooManyCommands,
     /// `[config]` declara más de [`CONFIG_MAX_KEYS`] claves (P2 decisión 1).
     #[error("[config] declara más claves de las permitidas (tope: {CONFIG_MAX_KEYS})")]
     ConfigTooManyKeys,
@@ -681,6 +684,16 @@ pub const COMMAND_TITLE_MAX_CHARS: usize = 120;
 
 /// Tope de `contributions.command[].id` (P1 encoding audit M2).
 pub const COMMAND_ID_MAX_CHARS: usize = 64;
+
+/// Tope de CUÁNTOS comandos declara un manifiesto (#281), del mismo tamaño y
+/// por el mismo motivo que [`CONFIG_MAX_KEYS`]: cada comando aprobado se
+/// convierte en una fila de paleta en cada cliente
+/// (`norte_frontend::palette::plugin_rows`), y el sitio donde eso se corta de
+/// raíz es la validación del manifiesto, no cada paleta.
+///
+/// Como los otros topes de `[[command]]`, es un cap de PARSEO: rechaza
+/// manifiestos NUEVOS, nunca reinterpreta una aprobación ya concedida.
+pub const COMMAND_MAX_COUNT: usize = 32;
 
 /// El alfabeto de un id de plugin, definido junto al tipo del wire que lo
 /// transporta ([`norte_proto::methods::is_valid_plugin_id`]).
@@ -760,6 +773,11 @@ impl Manifest {
         // con el de `description` — CHARS, no bytes. `id` primero: es el que
         // viaja al wire para despachar (`plugin.run_command`), acotarlo
         // primero da el error más específico si AMBOS desbordan a la vez.
+        // Cuántos, antes de cuánto mide cada uno: con mil comandos el error
+        // útil es «son demasiados», no el `id` largo del número 400.
+        if raw.contributions.command.len() > COMMAND_MAX_COUNT {
+            return Err(ManifestError::TooManyCommands);
+        }
         for c in &raw.contributions.command {
             if c.id.chars().count() > COMMAND_ID_MAX_CHARS {
                 return Err(ManifestError::CommandIdTooLong);

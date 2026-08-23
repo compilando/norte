@@ -33,6 +33,7 @@ pub const CONTEXTS: &[&str] = &[
     "dialog.approval",
     "dialog.trust-host",
     "dialog.trust-lua",
+    "dialog.plugin-approval",
     "dialog.quit",
     "dialog.mark-pattern",
     "dialog.transfer-name",
@@ -69,6 +70,10 @@ fn modal_context(modal: &Modal) -> &'static str {
         Modal::ConfirmQuit => "dialog.quit",
         Modal::Collision { .. } => "dialog.collision",
         Modal::ApproveAgentOp { .. } => "dialog.approval",
+        // Conceder capabilities NO comparte página con aprobar la operación
+        // de un agente: son dos cosas distintas de las que tener cuidado, y
+        // quien pulsa F1 encima de una no puede recibir prosa de la otra.
+        Modal::ConfirmPluginApproval { .. } => "dialog.plugin-approval",
         Modal::TrustHostKey { .. } => "dialog.trust-host",
         Modal::TrustLuaInit { .. } => "dialog.trust-lua",
         Modal::MarkPattern { .. } => "dialog.mark-pattern",
@@ -137,6 +142,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::ConfirmQuit
         | Modal::Collision { .. }
         | Modal::ApproveAgentOp { .. }
+        | Modal::ConfirmPluginApproval { .. }
         | Modal::TrustHostKey { .. }
         | Modal::AiRenamePlan { .. }
         // #139: se lee, no se escribe — F1 encima no le roba una tecla a nadie.
@@ -217,11 +223,21 @@ mod tests {
     /// [`CONTEXTS`]. No es exhaustiva por compilador (eso lo hace el `match`
     /// de `modal_context`): su trabajo es que ningún id del vocabulario se
     /// quede sin modal que lo produzca, ni al revés.
+    // Una lista LITERAL de variantes: crece con el enum, y es lo que hace
+    // que un modal nuevo sin contexto de ayuda sea un fallo de compilación.
+    #[allow(clippy::too_many_lines)]
     fn un_modal_de_cada_variante() -> Vec<Modal> {
         vec![
             Modal::ConfirmDelete {
                 items: vec![vp("file:///x/a")],
                 permanent: false,
+            },
+            Modal::ConfirmPluginApproval {
+                id: "org.acme.demo".to_owned(),
+                name: "Demo".to_owned(),
+                name_hostile: false,
+                caps: vec![("leer ficheros".to_owned(), false)],
+                digest: None,
             },
             Modal::ConfirmTransfer {
                 kind: TransferKind::Copy,

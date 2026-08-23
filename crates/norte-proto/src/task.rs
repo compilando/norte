@@ -265,6 +265,9 @@ impl TaskState {
 ///     entries_done: 0,
 ///     entries_total: Some(2),
 ///     current: None,
+///     // `None` = esta task no cuenta ilegibles; `Some(0)` sería «los cuenta
+///     // y no hubo». Ver el campo.
+///     unreadable: None,
 /// };
 /// let json = serde_json::to_string(&p).unwrap();
 /// assert_eq!(serde_json::from_str::<TaskProgress>(&json).unwrap(), p);
@@ -291,4 +294,30 @@ pub struct TaskProgress {
     /// Entrada en curso (para pintar "copiando X…"); puede faltar.
     #[serde(default)]
     pub current: Option<VPath>,
+    /// Subárboles o entradas que la task NO pudo leer (0.53.0, #251).
+    ///
+    /// `None` = **quien lo emite no cuenta esto**, y `Some(0)` = lo cuenta y
+    /// no hubo ninguno. La distinción no es cosmética y es la misma regla que
+    /// [`crate::methods::Volume::total_bytes`] escribe para su caso: un cero
+    /// que hace de desconocido se lee como una respuesta, y aquí la respuesta
+    /// que fabricaría es la peligrosa. Un daemon 0.52 no emite el campo; si
+    /// esto fuera `u64`, un cliente 0.53 leería `0` y pintaría un total
+    /// «seguro» que no lo es.
+    ///
+    /// Lo que lo hace necesario es `fs.dir_size`: contaba los subárboles
+    /// ilegibles en un contador LOCAL, emitía un `tracing::info!` y nada más,
+    /// así que un árbol del que la mitad daba `EACCES` reportaba `Completed`
+    /// con un total confiado y equivocado — y el método existe para contestar
+    /// «¿cabe esto en el destino?», donde un número silenciosamente pequeño
+    /// es la dirección peligrosa.
+    ///
+    /// Con esto, un cliente pinta «al menos X» en vez de «X». Es el gemelo
+    /// del `confidence` que `fs.compare` le da a cada fila, y por el mismo
+    /// motivo: un recuento sin él no puede decir que es una cota inferior.
+    ///
+    /// Se omite cuando es `None`, que es el valor de toda task que no cuenta
+    /// ilegibles — o sea casi todas, y un `task.progress` viaja muchas veces
+    /// por segundo y por task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable: Option<u64>,
 }

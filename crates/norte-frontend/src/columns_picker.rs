@@ -765,6 +765,7 @@ mod plugin_offer_tests {
                 })
                 .collect(),
             has_help: false,
+            manifest_digest: None,
         }
     }
 

@@ -138,13 +138,44 @@ struct SchedulerInner {
     queues: Mutex<HashMap<String, Arc<ProviderQueue>>>,
 }
 
+/// Origen NO-cero de la secuencia de ids de task (#278).
+///
+/// Un relevo del daemon —`daemon.going_away { reconnect: true }`— es un evento
+/// PREVISTO: sin esto, el proceso nuevo reparte los mismos ids que el viejo y
+/// un frontend con un informe en vuelo acierta por colisión sobre la fila
+/// equivocada. `daemon/approvals.rs` ya se sembraba así, con el mismo
+/// argumento escrito; las tasks no.
+///
+/// La diferencia con `approvals.rs` es el TECHO, y es la razón de que esto no
+/// sea una copia de aquella función: un `task_id` viaja al renderer dentro de
+/// `TaskView`, o sea JSON que lee JavaScript, donde el último entero exacto es
+/// 2^53. La semilla en nanosegundos de `approvals` vale allí porque un id de
+/// aprobación NO cruza ese puente; aquí pasaría de 2^53 y dos ids distintos
+/// colapsarían en el mismo `Number`, que es peor que la colisión que arregla.
+///
+/// Así que milisegundos truncados a 40 bits: hasta ~1,1e12, lo que deja ~9e15
+/// de recorrido por debajo de 2^53 para el `fetch_add`. El truncado da la
+/// vuelta cada ~34 años, y la unicidad DENTRO del proceso la sigue dando el
+/// contador, no el reloj. Separación best-effort, como la de `approvals`: dos
+/// arranques en el mismo milisegundo colisionan, y eso no pasa.
+fn semilla_de_ids() -> u64 {
+    /// 40 bits: ~1,1e12 ms, tres órdenes de magnitud por debajo de 2^53.
+    const MASCARA: u64 = (1 << 40) - 1;
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0));
+    // El 1 de siempre como suelo: un reloj a cero no debe devolver la
+    // secuencia a un origen que ya se repartió.
+    (millis & MASCARA).max(1)
+}
+
 impl Scheduler {
     /// Scheduler con `permits` tasks concurrentes por provider (cap a 4).
     #[must_use]
     pub fn new(permits: usize) -> Self {
         Self {
             inner: Arc::new(SchedulerInner {
-                next_id: AtomicU64::new(1),
+                next_id: AtomicU64::new(semilla_de_ids()),
                 per_provider_permits: permits.clamp(1, 4),
                 queues: Mutex::new(HashMap::new()),
             }),

@@ -215,6 +215,7 @@ commands! {
     "pane.mkdir" => PaneMkdir,
     "pane.rename" => PaneRename,
     "pane.refresh" => PaneRefresh,
+    "pane.copy-path" => PaneCopyPath,
     "mark.toggle" => MarkToggle,
     "mark.all" => MarkAll,
     "mark.invert" => MarkInvert,

@@ -11,12 +11,25 @@ use std::collections::BTreeMap;
 use norte_i18n::Lang;
 use norte_theme::{Role, Theme};
 use norte_ui_host::{BRIDGE_VERSION, InstanceId};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// El paquete de arranque del renderer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// **Es el quinto mensaje del cable y el único que no vivía en
+/// `norte-ui-host`**, así que ni el puente versionado ni su corpus golden lo
+/// cubrían (#259). Sigue aquí —lo que lleva son textos traducidos y colores,
+/// que son cosa de quien pinta y no del host—, pero ya no viaja sin red:
+/// `Deserialize` y un caso en `tests/catalogo_wire.rs` clavan su forma.
+///
+/// Su `bridge_version` es INFORMATIVO. La compatibilidad la decide el
+/// renderer sobre el sobre que está a punto de interpretar
+/// (`session.ts`), que ya lleva la suya: confiar para eso en un mensaje
+/// lateral sería creerse un número que no acompaña a los datos.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostCatalog {
-    /// La versión del contrato que habla este host.
+    /// La versión del contrato que habla este host, para diagnóstico.
+    ///
+    /// No es lo que decide si el renderer sigue: eso lo dice el sobre.
     pub bridge_version: u32,
     /// La instancia viva. Un mensaje de otra no se interpreta.
     pub instance_id: String,

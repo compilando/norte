@@ -706,7 +706,25 @@ use crate::{
 /// Ventana N=0.52.x / N-1=0.51.x: un daemon 0.51 no emite la clase y un
 /// cliente 0.51 la degrada. Lo que se pierde contra el viejo es la
 /// comprobación, no la corrección.
-pub const PROTOCOL_VERSION: &str = "0.52.0";
+///
+/// `0.53.0` (#251, #265, #282, ADR 0071): tres campos OPCIONALES, agrupados en
+/// un bump porque cada uno solo habría costado su propia ventana.
+/// [`crate::TaskProgress::unreadable`] dice cuántos subárboles no se pudieron
+/// leer —`fs.dir_size` los contaba en un local y los tiraba a un log, así que
+/// contestaba con un total confiado y corto—; [`PluginLoadError::dir_bytes`]
+/// lleva los bytes del basename, que hasta ahora cruzaban ya convertidos por
+/// un `to_string_lossy` sin marcar; y
+/// [`PluginSetApprovalParams::expected_digest`] hace que lo que se concede sea
+/// lo que el humano leyó.
+///
+/// Ventana N=0.53.x / N-1=0.52.x. Los tres se omiten cuando no hay nada que
+/// decir, así que el JSON corriente no cambia, y lo que un peer 0.52 pierde es
+/// una COMPROBACIÓN y no la corrección. Con un matiz que ADR 0071 registra: la
+/// degradación de `expected_digest` es segura porque un daemon 0.52 descubre
+/// el catálogo UNA vez al arrancar y por tanto no tiene ventana que explotar
+/// — es una propiedad de aquella implementación, no del protocolo, y ningún
+/// cliente puede comprobarla.
+pub const PROTOCOL_VERSION: &str = "0.53.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -6082,6 +6100,17 @@ pub struct PluginInfo {
     /// deserializar aquí (mismo criterio aditivo que `commands` en 0.26.0).
     #[serde(default)]
     pub columns: Vec<PluginColumnInfo>,
+    /// El ancla de aprobación del manifiesto Y del binario, tal como el daemon
+    /// la calcula AHORA (0.53.0, #282). Hex sha256, o `None` en un peer viejo.
+    ///
+    /// Es lo que un humano está mirando cuando decide, así que es lo que
+    /// [`PluginSetApprovalParams::expected_digest`] devuelve al confirmar. Sin
+    /// él, un cliente solo puede comparar la LISTA de capabilities, que es lo
+    /// que se pinta y no lo que se concede: `category` y `contributions`
+    /// —cuándo y cómo se dispara el plugin— entran en el ancla y no en la
+    /// lista.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_digest: Option<String>,
     /// `true` si el plugin trae un `help.md` SERVIBLE junto a su `plugin.toml`
     /// (H3e, 0.34.0). Es DISCOVERY barato: decide si el nodo del plugin
     /// aparece en la barra de temas de la ayuda, y evita que
@@ -6123,7 +6152,34 @@ pub struct PluginInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginLoadError {
     /// Directorio del plugin que falló (display; puede llevar bytes lossy).
+    ///
+    /// Es el basename, nunca la ruta absoluta: ésta revelaría el home del
+    /// usuario a un agente que llame a `plugin.list`.
+    ///
+    /// Se conserva por compatibilidad y sigue siendo lo que un cliente pinta
+    /// cuando [`Self::dir_bytes`] no viene. Lo que NO puede es decir si se
+    /// alteró: el `to_string_lossy` que lo produce pone `U+FFFD`, y `U+FFFD`
+    /// no es un peligro de terminal —es Specials, ni control ni
+    /// `Default_Ignorable`—, así que ninguna heurística del receptor lo
+    /// recupera. Por eso existe el campo de al lado (#265).
     pub dir: String,
+    /// Los BYTES del basename, tal como el OS los dio (0.53.0, #265).
+    ///
+    /// El nombre de un directorio de plugin es bytes: en Linux `caf\xff` es
+    /// un nombre legal, y `PluginLoadError.dir` llegaba ya convertido con un
+    /// `to_string_lossy` SIN marcar, así que la fila del error se declaraba
+    /// fiel. Con los bytes, el receptor hace su propia conversión y sabe
+    /// marcarla — que es la regla de siempre: lo que se enmascara se dice.
+    ///
+    /// Aditivo: un daemon 0.52 no lo emite y el receptor cae a [`Self::dir`],
+    /// que es exactamente lo que hacía antes. Lo que se pierde contra el
+    /// viejo es la marca, no el nombre.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "label_wire")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<String>", extend("contentEncoding" = "base64"))
+    )]
+    pub dir_bytes: Option<Vec<u8>>,
     /// Motivo legible del fallo (manifiesto inválido, versión no soportada…).
     pub reason: String,
 }
@@ -6153,6 +6209,25 @@ pub struct PluginSetApprovalParams {
     pub id: String,
     /// `true` = aprobar las capabilities, `false` = revocar.
     pub approved: bool,
+    /// El ancla que el humano LEYÓ, si el cliente la tiene (0.53.0, #282).
+    ///
+    /// El daemon ancla el digest que ÉL tiene en el momento de escribir, no el
+    /// que se enseñó, así que entre el `plugin.list` que vio el humano y el
+    /// `set_approval` que confirma cabe un `plugin.toml` distinto. Hoy esa
+    /// ventana está cerrada por ACCIDENTE en el daemon —descubre el catálogo
+    /// una vez al arrancar— y NO lo está en el `Backend` embebido, que
+    /// redescubre en cada llamada.
+    ///
+    /// Con este campo el daemon rehúsa si no casa, y lo que se concede es
+    /// exactamente lo que se leyó. Solo aplica al APROBAR: revocar no concede
+    /// nada, y rehusar una revocación por un digest rancio dejaría vivo un
+    /// permiso que alguien está intentando quitar.
+    ///
+    /// Aditivo: `None` es «el cliente no lo manda», y entonces el daemon se
+    /// comporta como 0.52 — la comprobación es lo que se pierde contra un
+    /// cliente viejo, no la corrección.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_digest: Option<String>,
 }
 
 /// Result de [`PLUGIN_SET_APPROVAL`]: objeto vacío, reservado para extensión.

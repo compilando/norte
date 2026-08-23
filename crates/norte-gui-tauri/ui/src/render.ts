@@ -2639,6 +2639,15 @@ export class Screen {
       aviso.textContent = slot.skipped_note;
       dom.title.append(aviso);
     }
+    if (slot.hidden_note !== "") {
+      // Lo que la OCULTACIÓN aparta, por la misma razón y en el mismo sitio:
+      // no hay ninguna fila donde tropezarse con lo que no se pinta.
+      const ocultas = document.createElement("span");
+      ocultas.className = "slot-hidden";
+      ocultas.setAttribute("role", "status");
+      ocultas.textContent = slot.hidden_note;
+      dom.title.append(ocultas);
+    }
     dom.root.setAttribute("aria-label", slot.path_display);
     dom.generation = slot.generation;
 

@@ -50,13 +50,32 @@ pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream)
                 // Si el diálogo de propiedades esperaba ESTE recuento, el
                 // número va ahí; si no, a la barra.
                 if !app.properties_sized(fin.progress.task_id, bytes, entradas) {
-                    app.message = Some(ta(
-                        "msg-dir-size",
-                        &[
-                            ("size", &norte_frontend::human_bytes(bytes)),
-                            ("count", &entradas.to_string()),
-                        ],
-                    ));
+                    // «Al menos» cuando parte del árbol no se pudo leer
+                    // (#251). El número corto es la dirección peligrosa del
+                    // error —este recuento se usa para decidir si algo cabe
+                    // en el destino—, así que decirlo redondo sin haberlo
+                    // podido contar entero es una respuesta equivocada, no
+                    // una respuesta incompleta.
+                    //
+                    // `Some(0)` y `None` NO son lo mismo: el primero es «los
+                    // conté y no hubo», el segundo «quien lo emite no cuenta
+                    // esto» (un daemon 0.52). Solo el primero autoriza a
+                    // decir el total a secas.
+                    let saltados = fin.progress.unreadable.unwrap_or(0);
+                    let tamano = norte_frontend::human_bytes(bytes);
+                    let cuantas = entradas.to_string();
+                    app.message = Some(if saltados > 0 {
+                        ta(
+                            "msg-dir-size-partial",
+                            &[
+                                ("size", &tamano),
+                                ("count", &cuantas),
+                                ("skipped", &saltados.to_string()),
+                            ],
+                        )
+                    } else {
+                        ta("msg-dir-size", &[("size", &tamano), ("count", &cuantas)])
+                    });
                 }
             }
             TaskState::Completed => {

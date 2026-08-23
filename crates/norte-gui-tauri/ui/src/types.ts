@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 35;
+export const BRIDGE_VERSION = 36;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -125,6 +125,12 @@ export interface BrowserSlotView {
    * ninguna, o el provider no lleva la cuenta.
    */
   skipped_note: string;
+  /**
+   * Cuántas entradas aparta la ocultación, ya dicho. Vacío = ninguna. Va
+   * en la cabecera y es PERMANENTE: un listado que enseña menos de lo que
+   * hay no puede quedarse mudo en cuanto el lector cambie de tecla.
+   */
+  hidden_note: string;
   columns: ColumnHeader[];
   state: SlotState;
   quick: QuickView | null;

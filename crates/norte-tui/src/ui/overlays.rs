@@ -68,7 +68,13 @@ pub(crate) fn draw_extensions(
             }
         }
         for e in &mgr.errors {
-            let (dir, _) = display_name(e.dir.as_bytes());
+            // Los BYTES si el peer los manda (#265): la cadena `dir` viene de
+            // un `to_string_lossy` del core, así que un directorio llamado
+            // `caf\xff` llegaría por ahí ya convertido. La insignia de abajo
+            // va SIEMPRE —una fila de error de carga es, por definición, algo
+            // que no se pudo leer bien— así que aquí lo que cambia es el
+            // nombre, no la marca.
+            let (dir, _) = display_name(e.dir_bytes.as_deref().unwrap_or(e.dir.as_bytes()));
             let (reason, _) = display_name(e.reason.as_bytes());
             lines.push(Line::styled(
                 format!(" {HOSTILE_BADGE} {dir}: {reason}"),
@@ -683,6 +689,7 @@ mod plugin_description_line_tests {
             commands: Vec::new(),
             columns: Vec::new(),
             has_help: false,
+            manifest_digest: None,
         }
     }
 

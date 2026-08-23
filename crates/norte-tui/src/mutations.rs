@@ -143,6 +143,13 @@ pub async fn confirm_modal(
         Modal::ConfirmDelete { items, permanent } => {
             submit_deletes(app, backend, &items, permanent).await;
         }
+        // Ya lo confirmó un humano que leyó las capabilities enumeradas
+        // (#280). Lo que sigue lo dice el CORE: se concede y se relista, en
+        // vez de creerse un `bool` local que el daemon no confirmó.
+        Modal::ConfirmPluginApproval { id, digest, .. } => {
+            crate::screens::extensions::conceder_aprobacion(app, backend, &id, digest.as_deref())
+                .await;
+        }
         Modal::ConfirmTransfer {
             kind, items, to, ..
         } => {
@@ -494,6 +501,11 @@ pub async fn apply_ai_rename(
     entries: &[norte_proto::methods::AiRenameEntry],
     plan: &norte_frontend::BatchPlan,
 ) {
+    // Solo la FORMA. La comprobación de que cada `from` existe ya corrió al
+    // aterrizar el plan, contra el directorio que se PLANEÓ (#275); repetirla
+    // aquí contra el pane enfocado la haría contra otro directorio, porque el
+    // lector puede haberse movido mientras leía la revisión. Y el core la
+    // hace por su cuenta antes de tocar nada.
     let Some(pairs) = norte_frontend::rename_pairs(entries) else {
         app.message = Some(t("msg-ai-rename-invalid-plan"));
         return;

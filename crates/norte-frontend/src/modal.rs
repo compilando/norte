@@ -73,13 +73,63 @@ pub const MAX_AI_PLAN_ENTRIES: usize = 256;
 pub fn validate_ai_plan(
     entries: &[norte_proto::methods::AiRenameEntry],
 ) -> Option<Vec<(Segment, Segment)>> {
+    validate_ai_plan_in(entries, None)
+}
+
+/// Como [`validate_ai_plan`], y además exige que cada `from` EXISTA entre
+/// `names` cuando se pasan.
+///
+/// El cinturón existe para sobrevivir a un daemon hostil o roto, y era más
+/// flojo que el validador del que defiende (#275): `norte_core::ai` comprueba
+/// tres cosas más que aquí no se miraban.
+///
+/// - **`!` no es un nombre**: es el marcador de archivo-como-directorio
+///   (ADR 0018), y dejarlo pasar convierte un renombrado en una travesía
+///   hacia dentro de un archivo.
+/// - **`\` tampoco**: es separador en Windows, así que `..\evil` es un
+///   traversal que `Segment` no ve porque solo mira `/`. Que
+///   `norte-vfs-local::native_path` lo rechace después no lo arregla: es un
+///   error lejos de su causa, y el cinturón está aquí precisamente para que
+///   el error salga donde se puede explicar.
+/// - **`from` tiene que existir** donde se va a aplicar. Sin esa comprobación
+///   un plan adulterado puede renombrar algo que el lector no está mirando.
+///   `None` en `names` significa «este llamante no tiene el listado
+///   delante», no «da igual»: los dos frontends sí lo tienen y lo pasan.
+///
+/// UNA pareja inválida tumba el plan ENTERO, como antes: nunca un skip
+/// silencioso que aplique «lo demás» de un plan adulterado.
+///
+/// ```
+/// use norte_proto::methods::AiRenameEntry;
+/// use norte_frontend::validate_ai_plan_in;
+///
+/// let e = AiRenameEntry { from: "a.txt".into(), to: "b.txt".into() };
+/// assert!(validate_ai_plan_in(std::slice::from_ref(&e), Some(&[b"a.txt".to_vec()])).is_some());
+/// // El mismo plan sobre un directorio donde `a.txt` no está: se rechaza.
+/// assert!(validate_ai_plan_in(std::slice::from_ref(&e), Some(&[b"otro.txt".to_vec()])).is_none());
+/// ```
+#[must_use]
+pub fn validate_ai_plan_in(
+    entries: &[norte_proto::methods::AiRenameEntry],
+    names: Option<&[Vec<u8>]>,
+) -> Option<Vec<(Segment, Segment)>> {
     entries
         .iter()
         .map(|e| {
-            Some((
-                Segment::new(e.from.as_bytes().to_vec()).ok()?,
-                Segment::new(e.to.as_bytes().to_vec()).ok()?,
-            ))
+            let from = Segment::new(e.from.as_bytes().to_vec()).ok()?;
+            let to = Segment::new(e.to.as_bytes().to_vec()).ok()?;
+            if from.as_bytes() == b"!" || to.as_bytes() == b"!" {
+                return None;
+            }
+            if to.as_bytes().contains(&b'\\') {
+                return None;
+            }
+            if let Some(names) = names
+                && !names.iter().any(|n| n.as_slice() == from.as_bytes())
+            {
+                return None;
+            }
+            Some((from, to))
         })
         .collect()
 }
@@ -103,8 +153,18 @@ pub fn validate_ai_plan(
 pub fn rename_pairs(
     entries: &[norte_proto::methods::AiRenameEntry],
 ) -> Option<Vec<norte_proto::methods::RenamePair>> {
+    rename_pairs_in(entries, None)
+}
+
+/// Como [`rename_pairs`], con la comprobación de existencia de
+/// [`validate_ai_plan_in`].
+#[must_use]
+pub fn rename_pairs_in(
+    entries: &[norte_proto::methods::AiRenameEntry],
+    names: Option<&[Vec<u8>]>,
+) -> Option<Vec<norte_proto::methods::RenamePair>> {
     Some(
-        validate_ai_plan(entries)?
+        validate_ai_plan_in(entries, names)?
             .into_iter()
             .map(|(from, to)| norte_proto::methods::RenamePair { from, to })
             .collect(),
@@ -171,6 +231,51 @@ pub fn collision_kind_key(kind: norte_proto::methods::RenameCollisionKind) -> &'
 }
 
 /// En qué punto está el plan de lote (`fs.rename_batch_plan`, spec §17) que
+/// Una línea del DETALLE de un veredicto, EN PARTES.
+///
+/// En partes y no en una cadena (#273): la forma anterior componía
+/// `✗ { $n }. { $kind }: { $name }` aquí, y ni el `✗`, ni los dígitos, ni el
+/// `.`, ni el `:` los enmascara `display_name` —son todos legítimos en un
+/// nombre—, así que un fichero llamado `✗ 4. ya existe: otro.txt` producía
+/// `✗ 3. ya existe: ✗ 4. ya existe: otro.txt`. Es la forma exacta que la
+/// fixture `cause_join_spoof` del corpus existe para prohibir: la causa y la
+/// ortografía del destino se separan FUERA de banda. Agrava que `norte-i18n`
+/// llama a `set_use_isolating(false)`, así que Fluent no mete FSI/PDI
+/// alrededor del placeable y un nombre con letras RTL fuertes reordena el
+/// `✗`, el índice y el `:` dentro de la línea.
+///
+/// Cada frontend las coloca como pueda: la ventana con un elemento por
+/// parte, el terminal poniendo el nombre en su propia línea.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetailPart {
+    /// El planificador necesitó pasos temporales. No lleva nada de nadie.
+    Temp {
+        /// Cuántos.
+        count: usize,
+    },
+    /// Una colisión concreta.
+    Collision {
+        /// Índice 1-based de la pareja, si de verdad señala una fila.
+        index: Option<usize>,
+        /// Clave Fluent del veredicto.
+        kind_key: &'static str,
+        /// El nombre, YA saneado y recortado. Es lo único que controla un
+        /// tercero, y por eso viaja solo.
+        name: String,
+        /// El nombre difiere del real.
+        hostile: bool,
+    },
+    /// Las colisiones que no caben.
+    More {
+        /// Cuántas se enseñan.
+        shown: usize,
+        /// Cuántas hay.
+        total: usize,
+        /// Alguna de las OCULTAS tiene nombre hostil.
+        hostile: bool,
+    },
+}
+
 /// el modal del rename IA necesita para poder confirmar.
 ///
 /// Tres estados y no un `Option`, porque «todavía no ha contestado» y «no va
@@ -180,7 +285,7 @@ pub fn collision_kind_key(kind: norte_proto::methods::RenameCollisionKind) -> &'
 ///
 /// El tipo es COMPARTIDO por todas las superficies, y con él toda la política
 /// de presentación del veredicto ([`Self::status_key`],
-/// [`Self::detail_lines`]): cada superficie pinta nombres que un atacante
+/// [`Self::detail_parts`]): cada superficie pinta nombres que un atacante
 /// controla, y una que derive por su cuenta es exactamente cómo se pierde el
 /// saneado en ella sin que nadie lo note.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,76 +384,64 @@ impl BatchPlan {
     /// el modal señale una fila que no existe; la línea pierde el índice y
     /// conserva el veredicto.
     #[must_use]
-    pub fn detail_lines(&self, pair_count: usize) -> Vec<(String, bool)> {
-        let mut lines = Vec::new();
+    pub fn detail_parts(&self, pair_count: usize, lang: norte_i18n::Lang) -> Vec<DetailPart> {
+        let mut out = Vec::new();
         let Some(plan) = self.ready() else {
-            return lines;
+            return out;
         };
         let temps = self.temp_steps();
         if temps > 0 {
-            lines.push((
-                norte_i18n::ta("modal-rename-batch-temp", &[("n", &temps.to_string())]),
-                false,
-            ));
+            out.push(DetailPart::Temp { count: temps });
         }
         let shown = plan.collisions.len().min(RENAME_COLLISION_LIMIT);
         for c in plan.collisions.iter().take(shown) {
-            let (name, hostil) = crate::display_name(c.name.as_bytes());
-            let kind = norte_i18n::t(collision_kind_key(c.kind));
-            // El índice de pareja es 1-based, como la etiqueta del `from`, y
-            // solo se pinta si de verdad señala una fila de la petición.
-            let indexado = (c.pair_index as usize) < pair_count;
-            let render = |name: &str| {
-                if indexado {
-                    norte_i18n::ta(
-                        "modal-rename-batch-collision",
-                        &[
-                            ("n", &c.pair_index.saturating_add(1).to_string()),
-                            ("kind", &kind),
-                            ("name", name),
-                        ],
-                    )
-                } else {
-                    norte_i18n::ta(
-                        "modal-rename-batch-collision-unindexed",
-                        &[("kind", &kind), ("name", name)],
-                    )
-                }
-            };
+            let (name, hostile) = crate::display_name(c.name.as_bytes());
             // El presupuesto del nombre sale de lo que MIDE el prefijo ya
             // traducido, no de una constante adivinada contra la etiqueta más
-            // corta: se pinta la línea con el nombre vacío, se mide, y lo que
-            // queda del presupuesto de línea es lo que se le da al nombre.
-            let prefijo = crate::cells(&render(""));
+            // corta.
+            let kind_key = collision_kind_key(c.kind);
+            let prefijo = crate::cells(&norte_i18n::ta_in(
+                lang,
+                "modal-rename-batch-collision-prefix",
+                &[
+                    ("n", &c.pair_index.saturating_add(1).to_string()),
+                    ("kind", &norte_i18n::t_in(lang, kind_key)),
+                ],
+            ));
             let presupuesto = COLLISION_LINE_COLS
                 .saturating_sub(prefijo)
                 .max(COLLISION_NAME_MIN_COLS);
-            lines.push((render(&crate::middle_ellipsis(&name, presupuesto)), hostil));
+            out.push(DetailPart::Collision {
+                // El índice de pareja es 1-based, como la etiqueta del
+                // `from`, y solo viaja si de verdad señala una fila de la
+                // petición: un daemon hostil que conteste «pareja 41» sobre
+                // un plan de 3 no puede hacer que el modal señale una fila
+                // que no existe.
+                index: ((c.pair_index as usize) < pair_count)
+                    .then(|| c.pair_index.saturating_add(1) as usize),
+                kind_key,
+                name: crate::middle_ellipsis(&name, presupuesto),
+                hostile,
+            });
         }
         if plan.collisions.len() > shown {
-            // Lo escondido no se cuela limpio (molde del indicador de
-            // parejas): una colisión OCULTA con nombre hostil marca el
-            // resumen.
-            let hidden_hostil = plan
+            // Lo escondido no se cuela limpio: una colisión OCULTA con nombre
+            // hostil marca el resumen.
+            let hostile = plan
                 .collisions
                 .iter()
                 .skip(shown)
                 .any(|c| crate::display_name(c.name.as_bytes()).1);
-            lines.push((
-                norte_i18n::ta(
-                    "modal-rename-batch-collision-more",
-                    &[
-                        ("shown", &shown.to_string()),
-                        ("total", &plan.collisions.len().to_string()),
-                    ],
-                ),
-                hidden_hostil,
-            ));
+            out.push(DetailPart::More {
+                shown,
+                total: plan.collisions.len(),
+                hostile,
+            });
         }
-        lines
+        out
     }
 
-    /// Cuántas líneas pinta [`Self::detail_lines`], sin construirlas. El alto
+    /// Cuántas líneas pinta [`Self::detail_parts`], sin construirlas. El alto
     /// del modal de la TUI se recalcula en CADA frame; interpolar Fluent y
     /// alocar un `Vec<String>` solo para contar sería trabajo por frame.
     #[must_use]
@@ -357,7 +450,9 @@ impl BatchPlan {
             return 0;
         };
         let shown = plan.collisions.len().min(RENAME_COLLISION_LIMIT);
-        usize::from(self.temp_steps() > 0) + shown + usize::from(plan.collisions.len() > shown)
+        // DOS por colisión desde #273: la causa y el nombre no comparten
+        // línea, para que un nombre no pueda fabricar la causa de otra.
+        usize::from(self.temp_steps() > 0) + shown * 2 + usize::from(plan.collisions.len() > shown)
     }
 }
 
@@ -465,7 +560,7 @@ mod ai_plan_tests {
     use super::validate_ai_plan;
     use norte_proto::methods::AiRenameEntry;
 
-    fn e(from: &str, to: &str) -> AiRenameEntry {
+    pub(super) fn e(from: &str, to: &str) -> AiRenameEntry {
         AiRenameEntry {
             from: from.into(),
             to: to.into(),
@@ -481,6 +576,14 @@ mod ai_plan_tests {
         assert!(validate_ai_plan(&[e("a", "b"), e("c", "..")]).is_none());
         assert!(validate_ai_plan(&[e("a/b", "c"), e("d", "e")]).is_none());
         assert!(validate_ai_plan(&[e("", "x")]).is_none());
+        // #275: lo que el validador del engine rechaza y el cinturón dejaba
+        // pasar. `!` es el marcador de archivo-como-directorio (ADR 0018) y
+        // `\\` es separador en Windows, o sea travesía que `Segment` no ve
+        // porque solo mira `/`.
+        assert!(validate_ai_plan(&[e("a.txt", "!")]).is_none());
+        assert!(validate_ai_plan(&[e("!", "a.txt")]).is_none());
+        assert!(validate_ai_plan(&[e("a.txt", "..\\evil")]).is_none());
+        assert!(validate_ai_plan(&[e("a.txt", "sub\\x")]).is_none());
         assert!(validate_ai_plan(&[e("ok", "tambien-ok"), e("x", "a/b")]).is_none());
     }
 
@@ -575,8 +678,16 @@ mod batch_plan_tests {
             }
         }
         // Sin plan no hay detalle que pintar (ni una línea fantasma).
-        assert!(BatchPlan::Pending.detail_lines(1).is_empty());
-        assert!(BatchPlan::Failed.detail_lines(1).is_empty());
+        assert!(
+            BatchPlan::Pending
+                .detail_parts(1, norte_i18n::active())
+                .is_empty()
+        );
+        assert!(
+            BatchPlan::Failed
+                .detail_parts(1, norte_i18n::active())
+                .is_empty()
+        );
     }
 
     /// El VEREDICTO es lo accionable y va antes del nombre, en los DOS
@@ -591,11 +702,21 @@ mod batch_plan_tests {
         );
         for lang in [Lang::En, Lang::Es] {
             let _ = norte_i18n::force(lang);
-            let verdicto = norte_i18n::t(super::collision_kind_key(RenameCollisionKind::External));
-            let (linea, _) = plan.detail_lines(1).remove(0);
-            let iv = linea.find(&verdicto).expect("el veredicto está");
-            let inom = linea.find("zzzzz.txt").expect("el nombre está");
-            assert!(iv < inom, "{lang:?}: veredicto DESPUÉS del nombre: {linea}");
+            let partes = plan.detail_parts(1, lang);
+            let super::DetailPart::Collision { kind_key, name, .. } = &partes[0] else {
+                panic!("{lang:?}: la parte es una colisión: {partes:?}");
+            };
+            assert_eq!(
+                *kind_key,
+                super::collision_kind_key(RenameCollisionKind::External)
+            );
+            assert_eq!(name, "zzzzz.txt");
+            // El veredicto va en SU parte y el nombre en la suya: el orden lo
+            // decide el frontend, y ninguno puede recortar al otro.
+            assert!(
+                !name.contains(&norte_i18n::t_in(lang, kind_key)),
+                "{lang:?}: el nombre no lleva el veredicto dentro"
+            );
         }
         let _ = norte_i18n::force(Lang::En);
     }
@@ -616,13 +737,23 @@ mod batch_plan_tests {
                 RenameCollisionKind::Unknown,
             ] {
                 let plan = listo(vec![colision(0, &largo, kind)], vec![], false);
-                let (linea, _) = plan.detail_lines(1).remove(0);
-                assert!(
-                    crate::cells(&linea) <= COLLISION_LINE_COLS,
-                    "{lang:?} {kind:?}: {} celdas > {COLLISION_LINE_COLS}: {linea}",
-                    crate::cells(&linea),
+                let partes = plan.detail_parts(1, lang);
+                let super::DetailPart::Collision { kind_key, name, .. } = &partes[0] else {
+                    panic!("{lang:?} {kind:?}: {partes:?}");
+                };
+                // El presupuesto sigue siendo de la LÍNEA entera: causa más
+                // nombre. Quien se acorta es el nombre, y va MARCADO.
+                let causa = norte_i18n::ta_in(
+                    lang,
+                    "modal-rename-batch-collision-prefix",
+                    &[("n", "1"), ("kind", &norte_i18n::t_in(lang, kind_key))],
                 );
-                assert!(linea.contains('…'), "el recorte se MARCA: {linea}");
+                let celdas = crate::cells(&causa) + crate::cells(name);
+                assert!(
+                    celdas <= COLLISION_LINE_COLS,
+                    "{lang:?} {kind:?}: {celdas} celdas > {COLLISION_LINE_COLS}"
+                );
+                assert!(name.contains('…'), "el recorte se MARCA: {name}");
             }
         }
         let _ = norte_i18n::force(Lang::En);
@@ -643,9 +774,8 @@ mod batch_plan_tests {
                 vec![],
                 false,
             )
-            .detail_lines(1)
+            .detail_parts(1, norte_i18n::active())
             .remove(0)
-            .0
         };
         assert_ne!(render(v2), render(v3), "la cola distingue, y sobrevive");
         let _ = norte_i18n::force(Lang::En);
@@ -662,19 +792,24 @@ mod batch_plan_tests {
             vec![],
             false,
         );
-        let (linea, _) = plan.detail_lines(3).remove(0);
-        assert!(
-            !linea.contains("4294967295") && !linea.contains("4294967296"),
-            "{linea}"
-        );
-        assert!(linea.contains("z.txt"), "{linea}");
-        // Con la petición de verdad detrás, el índice SÍ se pinta 1-based.
+        let partes = plan.detail_parts(3, norte_i18n::active());
+        let super::DetailPart::Collision { index, name, .. } = &partes[0] else {
+            panic!("{partes:?}");
+        };
+        assert_eq!(*index, None, "un índice imposible no viaja");
+        assert_eq!(name, "z.txt", "el nombre sigue ahí");
+        // Con la petición de verdad detrás, el índice SÍ viaja 1-based.
         let plan = listo(
             vec![colision(1, b"z.txt", RenameCollisionKind::Internal)],
             vec![],
             false,
         );
-        assert!(plan.detail_lines(3).remove(0).0.contains("2."));
+        let super::DetailPart::Collision { index, .. } =
+            &plan.detail_parts(3, norte_i18n::active())[0]
+        else {
+            panic!("colisión");
+        };
+        assert_eq!(*index, Some(2));
     }
 
     /// El tope de colisiones se respeta, el resumen no calla cuántas quedan
@@ -707,18 +842,29 @@ mod batch_plan_tests {
                 }],
                 false,
             );
-            let lines = plan.detail_lines(n.max(1));
-            assert_eq!(lines.len(), plan.detail_line_count(), "n={n}");
+            let partes = plan.detail_parts(n.max(1), norte_i18n::active());
+            // Cada colisión pinta DOS líneas (causa y nombre); el aviso de
+            // temporales una, y el resumen otra.
+            let pintadas: usize = partes
+                .iter()
+                .map(|p| usize::from(matches!(p, super::DetailPart::Collision { .. })) + 1)
+                .sum();
+            assert_eq!(pintadas, plan.detail_line_count(), "n={n}");
             assert!(
-                lines.len() <= 1 + RENAME_COLLISION_LIMIT + 1,
-                "n={n}: {lines:?}"
+                partes.len() <= 1 + RENAME_COLLISION_LIMIT + 1,
+                "n={n}: {partes:?}"
             );
             if n > RENAME_COLLISION_LIMIT {
-                let (resumen, _) = lines.last().expect("resumen");
-                assert!(resumen.contains(&n.to_string()), "n={n}: {resumen}");
+                let super::DetailPart::More { total, .. } = partes.last().expect("resumen") else {
+                    panic!("n={n}: el último es el resumen: {partes:?}");
+                };
+                assert_eq!(*total, n, "n={n}");
             }
             // Un temporal se CUENTA, jamás se nombra.
-            assert!(!lines.iter().any(|(l, _)| l.contains(".norte-rename-")));
+            assert!(!partes.iter().any(|p| matches!(
+                p,
+                super::DetailPart::Collision { name, .. } if name.contains(".norte-rename-")
+            )));
         }
     }
 
@@ -734,17 +880,20 @@ mod batch_plan_tests {
                 vec![],
                 false,
             );
-            let lines = plan.detail_lines(1);
-            assert_eq!(lines.len(), 1, "corpus {}: {lines:?}", fixture.id);
-            let (fila, marcado) = &lines[0];
+            let partes = plan.detail_parts(1, norte_i18n::active());
+            assert_eq!(partes.len(), 1, "corpus {}: {partes:?}", fixture.id);
+            let super::DetailPart::Collision { name, hostile, .. } = &partes[0] else {
+                panic!("corpus {}: {partes:?}", fixture.id);
+            };
             assert!(
-                !fila.chars().any(norte_encoding::is_terminal_hazard),
-                "corpus {}: hazard vivo: {fila:?}",
+                !name.chars().any(norte_encoding::is_terminal_hazard),
+                "corpus {}: hazard vivo: {name:?}",
                 fixture.id
             );
-            assert!(!fila.contains('\n'), "corpus {}: {fila:?}", fixture.id);
+            // Ni un salto: un nombre no puede fabricar una línea de la lista.
+            assert!(!name.contains('\n'), "corpus {}: {name:?}", fixture.id);
             assert_eq!(
-                *marcado,
+                *hostile,
                 crate::display_name(&fixture.bytes).1,
                 "corpus {}: el flag hostil tiene que llegar al frontend",
                 fixture.id
@@ -859,5 +1008,36 @@ mod tests {
                 fixture.id,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod belt_tests {
+    use super::ai_plan_tests::e;
+    use super::validate_ai_plan_in;
+
+    /// El `from` tiene que existir DONDE se va a aplicar (#275).
+    ///
+    /// Sin esto, un plan adulterado renombra algo que el lector no está
+    /// mirando: la pantalla que aprueba enseña un directorio y la operación
+    /// toca otro fichero del mismo.
+    #[test]
+    fn un_from_que_no_esta_en_el_listado_tumba_el_plan() {
+        let nombres = vec![b"a.txt".to_vec(), b"b.txt".to_vec()];
+        assert!(validate_ai_plan_in(&[e("a.txt", "c.txt")], Some(&nombres)).is_some());
+        assert!(validate_ai_plan_in(&[e("z.txt", "c.txt")], Some(&nombres)).is_none());
+        // Y una sola mala tumba el lote entero, como el resto del cinturón.
+        assert!(
+            validate_ai_plan_in(&[e("a.txt", "c.txt"), e("z.txt", "d.txt")], Some(&nombres))
+                .is_none()
+        );
+    }
+
+    /// Sin listado delante se comprueba la FORMA y nada más: `None` significa
+    /// «este llamante no lo tiene», no «da igual».
+    #[test]
+    fn sin_listado_solo_se_comprueba_la_forma() {
+        assert!(validate_ai_plan_in(&[e("z.txt", "c.txt")], None).is_some());
+        assert!(validate_ai_plan_in(&[e("z.txt", "..")], None).is_none());
     }
 }

@@ -14,6 +14,7 @@ authors.workspace = true
 futures.workspace = true
 norte-client.workspace = true
 norte-encoding.workspace = true
+norte-vfs.workspace = true
 norte-frontend.workspace = true
 # La configuración YA cargada entra en el host para la vista de ajustes en
 # solo lectura (tarea 4.5). El host no la LEE de disco —quien lo arranca se la

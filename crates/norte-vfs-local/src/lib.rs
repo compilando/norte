@@ -23,7 +23,7 @@ mod location;
 pub mod mounts_macos;
 #[cfg(windows)]
 pub mod mounts_windows;
-mod native_path;
+
 mod provider;
 /// Papelera freedesktop propia (Linux/BSD): la única que sabe DÓNDE dejó el
 /// fichero, que es lo que el undo necesita.
@@ -39,5 +39,8 @@ mod trash_fdo;
 pub use location::{
     Bounds, ConfinedRoot, LocationDirent, LocationError, LocationKind, LocationMeta,
 };
-pub use native_path::{vpath_from_native, vpath_to_native};
+// Las dos conversiones VIVEN en `norte-vfs` desde #254: son reglas de forma
+// y las necesitan dos frontends que no quieren un provider en el proceso.
+// Se re-exportan aquí porque este era su sitio y el core las llama así.
+pub use norte_vfs::native::{vpath_from_native, vpath_to_native};
 pub use provider::LocalProvider;

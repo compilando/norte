@@ -7,8 +7,8 @@
   },
   "agent_select_row": {
     "action": "agent_select_row",
-    "row": 1,
-    "generation": 4
+    "generation": 4,
+    "row": 1
   },
   "ai_rename_decide": {
     "action": "ai_rename_decide",
@@ -28,8 +28,8 @@
   },
   "compare_set_visible_range": {
     "action": "compare_set_visible_range",
-    "first": 40,
-    "count": 20
+    "count": 20,
+    "first": 40
   },
   "compare_toggle_filter": {
     "action": "compare_toggle_filter",
@@ -96,13 +96,13 @@
   },
   "picker_select_row": {
     "action": "picker_select_row",
-    "row": 0,
-    "generation": 3
+    "generation": 3,
+    "row": 0
   },
   "place_activate_row": {
     "action": "place_activate_row",
-    "row": 1,
-    "generation": 4
+    "generation": 4,
+    "row": 1
   },
   "resync": {
     "action": "resync"

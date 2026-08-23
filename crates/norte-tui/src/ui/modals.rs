@@ -85,6 +85,31 @@ pub(crate) fn modal_title_body(
         // truncada por la política COMPARTIDA con la GUI
         // (`norte_frontend::item_lines_with`), jamás dos rutas en la misma
         // línea (un nombre hostil fabricaría una entrada de la lista).
+        // Las capabilities van UNA POR LÍNEA, cada una con su bandera si su
+        // texto difiere del real: son texto de un tercero, y una lista pegada
+        // en una frase deja que una finja ser otra (#280).
+        Modal::ConfirmPluginApproval {
+            name,
+            name_hostile,
+            caps,
+            ..
+        } => (
+            t("modal-plugin-approval-title"),
+            [
+                vec![format!(
+                    "{name}{}",
+                    if *name_hostile { HOSTILE_BADGE } else { "" }
+                )],
+                caps.iter()
+                    .map(|(texto, hostil)| {
+                        format!("  · {texto}{}", if *hostil { HOSTILE_BADGE } else { "" })
+                    })
+                    .collect(),
+                vec![t("modal-plugin-approval-note"), hints.approval.clone()],
+            ]
+            .concat()
+            .join("\n"),
+        ),
         Modal::ConfirmDelete { items, permanent } => (
             if *permanent {
                 t("modal-delete-permanent-title")
@@ -773,11 +798,48 @@ pub(crate) fn ai_rename_plan_modal_text(
     // superficies: son nombres que controla un atacante, y una política
     // duplicada por frontend se desvía en uno de ellos sin que nada avise.
     // Este frontend solo pone SU badge.
-    lines.extend(
-        plan.detail_lines(entries.len())
-            .into_iter()
-            .map(|(linea, hostile)| badge_prefixed(hostile, linea)),
-    );
+    // En PARTES, y el nombre en su propia línea (#273): componer
+    // `✗ 3. ya existe: <nombre>` dejaba que un fichero llamado
+    // `✗ 4. ya existe: otro.txt` fabricara una entrada de la lista. Aquí no
+    // hay elementos hermanos que separen la causa del nombre, así que los
+    // separa el SALTO DE LÍNEA, y solo el nombre lleva el badge.
+    for parte in plan.detail_parts(entries.len(), norte_i18n::active()) {
+        match parte {
+            norte_frontend::DetailPart::Temp { count } => {
+                lines.push(ta("modal-rename-batch-temp", &[("n", &count.to_string())]));
+            }
+            norte_frontend::DetailPart::Collision {
+                index,
+                kind_key,
+                name,
+                hostile,
+            } => {
+                let kind = t(kind_key);
+                lines.push(match index {
+                    Some(n) => ta(
+                        "modal-rename-batch-collision-prefix",
+                        &[("n", &n.to_string()), ("kind", &kind)],
+                    ),
+                    None => ta(
+                        "modal-rename-batch-collision-prefix-unindexed",
+                        &[("kind", &kind)],
+                    ),
+                });
+                lines.push(format!("  {}", badge_prefixed(hostile, name)));
+            }
+            norte_frontend::DetailPart::More {
+                shown,
+                total,
+                hostile,
+            } => lines.push(badge_prefixed(
+                hostile,
+                ta(
+                    "modal-rename-batch-collision-more",
+                    &[("shown", &shown.to_string()), ("total", &total.to_string())],
+                ),
+            )),
+        }
+    }
     // H3c: con una ayuda encima, `y`/`n` no responden — el pie dice eso en
     // vez de ofrecerlos (gemelo de `DialogHints::with_modals_inert`, para los
     // dos modales cuya pista es prosa y no hint generado).
@@ -1400,20 +1462,25 @@ mod ai_rename_plan_modal_tests {
             &plan,
         );
         let lines: Vec<&str> = body.lines().collect();
-        // dir + estado + pareja × 2 + colisión + hint = 6.
-        assert_eq!(lines.len(), 6, "{body:?}");
+        // dir + estado + pareja × 2 + causa + nombre + hint = 7. La causa y
+        // el nombre van SEPARADOS desde #273.
+        assert_eq!(lines.len(), 7, "{body:?}");
         assert_eq!(lines[1], t("modal-rename-batch-not-applicable"), "{body:?}");
         assert!(
             lines[4].contains(&t("modal-rename-batch-collision-external")),
             "el veredicto se enseña: {body:?}"
         );
-        assert!(lines[4].contains("z.txt"), "y el nombre ofensor: {body:?}");
+        assert!(lines[5].contains("z.txt"), "y el nombre ofensor: {body:?}");
+        assert!(
+            !lines[5].contains(&t("modal-rename-batch-collision-external")),
+            "pero el nombre NO lleva la causa dentro: {body:?}"
+        );
         // `pair_index` 0 se pinta 1-based, como la etiqueta del `from`: la
         // fila culpable es señalable.
         assert!(lines[4].contains("1."), "{body:?}");
         // El pie NO ofrece una tecla muda.
         assert_eq!(
-            lines[5],
+            lines[6],
             t("modal-rename-batch-plan-hint-blocked"),
             "{body:?}"
         );
@@ -1438,7 +1505,7 @@ mod ai_rename_plan_modal_tests {
             &plan,
         );
         let lines: Vec<&str> = body.lines().collect();
-        assert_eq!(lines.len(), 6, "el modal sigue entero: {body:?}");
+        assert_eq!(lines.len(), 7, "el modal sigue entero: {body:?}");
         assert!(lines[2].contains("a.txt"), "las parejas se siguen viendo");
         assert!(
             lines[4].contains(&t("modal-rename-batch-collision-unknown")),
@@ -1547,17 +1614,26 @@ mod ai_rename_plan_modal_tests {
                 "corpus {}: un hazard sobrevivió al render: {body:?}",
                 n.id
             );
-            // UNA línea por colisión: un nombre no puede fabricar otra.
-            assert_eq!(body.lines().count(), 6, "corpus {}: {body:?}", n.id);
-            let line = body.lines().nth(4).expect("línea de la colisión");
+            // DOS líneas por colisión desde #273: la causa y el nombre van
+            // separados, porque un nombre que contenga la causa entera
+            // fabricaba una entrada de la lista que no existe. Siguen siendo
+            // exactamente dos: un nombre no puede fabricar una tercera.
+            assert_eq!(body.lines().count(), 7, "corpus {}: {body:?}", n.id);
+            let causa = body.lines().nth(4).expect("línea de la causa");
+            let nombre = body.lines().nth(5).expect("línea del nombre");
             assert!(
-                line.contains(&verdict),
-                "corpus {}: el veredicto sobrevive al nombre: {body:?}",
+                causa.contains(&verdict),
+                "corpus {}: el veredicto va en SU línea: {body:?}",
+                n.id
+            );
+            assert!(
+                !nombre.contains(&verdict),
+                "corpus {}: el nombre no lleva la causa dentro: {body:?}",
                 n.id
             );
             if display_name(&n.bytes).1 {
                 assert!(
-                    line.starts_with(HOSTILE_BADGE),
+                    nombre.trim_start().starts_with(HOSTILE_BADGE),
                     "corpus {}: enmascarado SIN badge: {body:?}",
                     n.id
                 );
@@ -1594,9 +1670,10 @@ mod ai_rename_plan_modal_tests {
             &plan,
         );
         let lines: Vec<&str> = body.lines().collect();
-        // dir + estado + pareja × 2 + 5 colisiones + resumen + hint = 11.
-        assert_eq!(lines.len(), 11, "{body:?}");
-        let summary = lines[9];
+        // dir + estado + pareja × 2 + 5 colisiones × 2 (causa y nombre van
+        // separados desde #273) + resumen + hint = 16.
+        assert_eq!(lines.len(), 16, "{body:?}");
+        let summary = lines[14];
         assert!(
             summary.contains(&norte_frontend::RENAME_COLLISION_LIMIT.to_string())
                 && summary.contains(&total.to_string()),

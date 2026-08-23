@@ -1390,6 +1390,14 @@ pub struct CommonConfig {
     pub ai: AiSettings,
     /// Files that participated (watcher + diagnostics).
     pub sources: Vec<std::path::PathBuf>,
+    /// Capas de PROYECTO que no cargaron, con su motivo ya dicho.
+    ///
+    /// Un `.norte.toml` roto en un repositorio no puede dejar sin gestor de
+    /// ficheros a quien hace `cd` ahí (#260): la capa se salta y el arranque
+    /// sigue con las demás, que es lo que el usuario tenía. Vacío = todo
+    /// cargó. Quien pinta lo enseña; callarlo dejaría una configuración de
+    /// proyecto que el lector cree activa y no lo está.
+    pub project_warnings: Vec<String>,
 }
 
 /// Merges one layer's `[ai]` section (already filtered to non-Project by the
@@ -1801,11 +1809,78 @@ fn parse_confirm_quit(raw: &str, norte: &Path) -> Result<ConfirmQuit, ConfigErro
     }
 }
 
+/// `[ui] quick_search` de esta capa, o el valor de antes si la capa es de
+/// PROYECTO y el valor no vale — con su aviso.
+///
+/// Mismo criterio que [`parse_layer`]: un repositorio ajeno no deja sin
+/// gestor de ficheros a quien hace `cd` ahí (#260).
+fn merge_quick_search(
+    actual: QuickSearch,
+    valor: &str,
+    path: &std::path::Path,
+    kind: Layer,
+    avisos: &mut Vec<String>,
+) -> Result<QuickSearch, ConfigError> {
+    match parse_quick_search(valor, path) {
+        Ok(v) => Ok(v),
+        Err(e) if kind == Layer::Project => {
+            avisos.push(e.to_string());
+            Ok(actual)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// El error que un `norte.toml` que no parsea produce, con su diagnóstico.
+fn layer_error(raw: &str, path: &std::path::Path) -> ConfigError {
+    match toml::from_str::<NorteToml>(raw) {
+        Ok(_) => ConfigError::Toml {
+            path: path.to_path_buf(),
+            message: String::new(),
+        },
+        Err(e) => ConfigError::Toml {
+            path: path.to_path_buf(),
+            message: toml_diag(raw, &e),
+        },
+    }
+}
+
+/// Parsea una capa. `Ok(None)` = era de PROYECTO y no parsea, así que se
+/// salta.
+///
+/// Cualquier clave desconocida es fatal bajo `deny_unknown_fields`, así que
+/// un `.norte.toml` con una errata rompía el gestor de ficheros entero al
+/// hacer `cd` a ese repositorio — y quien lo escribió puede no ser quien lo
+/// sufre (#260). Las capas de usuario y de sistema siguen siendo fatales:
+/// ésas SÍ son suyas, y arrancar ignorándolas en silencio sería peor que no
+/// arrancar.
+fn parse_layer(
+    raw: &str,
+    path: &std::path::Path,
+    kind: Layer,
+) -> Result<Option<NorteToml>, ConfigError> {
+    match toml::from_str::<NorteToml>(raw) {
+        Ok(p) => Ok(Some(p)),
+        Err(_) if kind == Layer::Project => Ok(None),
+        Err(e) => Err(ConfigError::Toml {
+            path: path.to_path_buf(),
+            message: toml_diag(raw, &e),
+        }),
+    }
+}
+
 /// Loads and merges every layer (ADR 0007/0035).
 ///
 /// # Errors
 /// [`ConfigError`] naming the offending file; an ABSENT layer is not an
 /// error.
+// `too_many_lines`: es un merge por CAPAS, y el orden de las asignaciones ES
+// la semántica (última capa gana, salvo lo que el carve-out de proyecto
+// excluye). Partirlo en ayudantes que se pasaran quince parámetros de salida
+// escondería justo eso, y cambiaría un lint por otro
+// (`too_many_arguments`). Lo que sí se ha sacado son las decisiones con
+// nombre propio: `parse_layer`, `merge_quick_search` y los `merge_*_layer`.
+#[allow(clippy::too_many_lines)]
 pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut preset: Option<String> = None;
     let mut ui_lang: Option<String> = None;
@@ -1827,20 +1902,36 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut archive = ArchiveAccum::default();
     let mut ai = AiSettings::default();
     let mut sources = Vec::new();
+    let mut project_warnings: Vec<String> = Vec::new();
     for (dir, kind) in &layers.dirs {
         let norte = dir.join("norte.toml");
         if let Some(raw) = schema::read_optional(&norte)? {
-            let parsed: NorteToml = toml::from_str(&raw).map_err(|e| ConfigError::Toml {
-                path: norte.clone(),
-                message: toml_diag(&raw, &e),
-            })?;
+            let parsed: NorteToml = match parse_layer(&raw, &norte, *kind) {
+                Ok(Some(p)) => p,
+                // Una capa de PROYECTO que no parsea se SALTA, con su motivo.
+                Ok(None) => {
+                    project_warnings.push(layer_error(&raw, &norte).to_string());
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             merge_ui_flags(
                 &mut ui_show_hidden,
                 &mut ui_mouse,
                 &mut ui_layout,
                 &parsed.ui,
             );
-            if let Some(p) = parsed.keymap.preset {
+            // `keymap.preset` NO se honra desde proyecto (#260). Está
+            // acotado a los siete presets de fábrica, así que no es
+            // ejecución de código — pero los presets DISCREPAN sobre qué
+            // hace cada tecla: `far` ata `shift+delete` a `pane.delete` y
+            // `orthodox` ata `shift+f8` a `pane.delete-permanent`. Un
+            // repositorio hostil elegiría en silencio qué tecla borra, y
+            // «elegir la disposición del teclado» no es presentación: es
+            // decidir qué pasa cuando el lector pulsa algo.
+            if *kind != Layer::Project
+                && let Some(p) = parsed.keymap.preset
+            {
                 preset = Some(p);
             }
             if let Some(l) = parsed.ui.lang {
@@ -1850,7 +1941,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 ui_theme = Some(th);
             }
             if let Some(qs) = &parsed.ui.quick_search {
-                quick_search = parse_quick_search(qs, &norte)?;
+                quick_search =
+                    merge_quick_search(quick_search, qs, &norte, *kind, &mut project_warnings)?;
             }
             merge_ui_fonts(
                 &mut ui_font,
@@ -1887,7 +1979,9 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             //
             // Los ESCALARES de UI (quick_search, theme, lang) SÍ se honran
             // desde proyecto: son presentación, y ninguno de ellos lanza,
-            // escribe ni redirige nada. Ésa es la línea.
+            // escribe ni redirige nada. Ésa es la línea, y `keymap.preset`
+            // cae del otro lado (#260): elegir qué tecla borra no es
+            // presentación. Se filtra donde se lee, más arriba.
             if *kind != Layer::Project {
                 for entry in parsed.hotlist {
                     merge_hotlist_entry(&mut hotlist, entry);
@@ -1925,6 +2019,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         archive_rar_delegate: archive.rar_delegate,
         ai,
         sources,
+        project_warnings,
     })
 }
 
@@ -4186,5 +4281,93 @@ mod persist_keymap_tests {
                 "{s}"
             );
         }
+    }
+}
+
+/// Lo que una capa de PROYECTO puede y no puede decidir (#260).
+#[cfg(test)]
+mod project_layer_tests {
+    use super::*;
+
+    fn capas(sistema: &std::path::Path, proyecto: &std::path::Path) -> Layers {
+        Layers {
+            dirs: vec![
+                (sistema.to_path_buf(), Layer::User),
+                (proyecto.to_path_buf(), Layer::Project),
+            ],
+        }
+    }
+
+    /// Un repositorio NO elige el preset de teclado.
+    ///
+    /// Está acotado a los siete de fábrica, así que no es ejecución de
+    /// código — pero los presets discrepan sobre qué hace cada tecla:
+    /// `far` ata `shift+delete` a `pane.delete` y `orthodox` ata `shift+f8`
+    /// a `pane.delete-permanent`. Elegir cuál borra no es presentación.
+    #[test]
+    fn una_capa_de_proyecto_no_elige_el_preset() {
+        let usuario = tempfile::tempdir().unwrap();
+        let proyecto = tempfile::tempdir().unwrap();
+        std::fs::write(
+            usuario.path().join("norte.toml"),
+            "[keymap]\npreset = \"orthodox\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            proyecto.path().join("norte.toml"),
+            "[keymap]\npreset = \"far\"\n",
+        )
+        .unwrap();
+
+        let cfg = load(&capas(usuario.path(), proyecto.path())).expect("carga");
+        assert_eq!(
+            cfg.preset, "orthodox",
+            "el preset lo elige el usuario, no el repositorio"
+        );
+    }
+
+    /// Y un `.norte.toml` roto no deja a nadie sin gestor de ficheros.
+    ///
+    /// Cualquier clave desconocida es fatal bajo `deny_unknown_fields`, así
+    /// que una errata en un repositorio ajeno rompía el arranque al hacer
+    /// `cd` ahí. Ahora la capa se salta, se DICE, y lo demás sigue.
+    #[test]
+    fn una_capa_de_proyecto_rota_se_salta_y_se_dice() {
+        let usuario = tempfile::tempdir().unwrap();
+        let proyecto = tempfile::tempdir().unwrap();
+        std::fs::write(
+            usuario.path().join("norte.toml"),
+            "[ui]\ntheme = \"nord\"\n",
+        )
+        .unwrap();
+        std::fs::write(proyecto.path().join("norte.toml"), "[ui]\nno_existe = 1\n").unwrap();
+
+        let cfg = load(&capas(usuario.path(), proyecto.path())).expect("arranca igual");
+        assert_eq!(
+            cfg.ui_theme.as_deref(),
+            Some("nord"),
+            "lo del usuario sigue"
+        );
+        assert_eq!(cfg.project_warnings.len(), 1, "y se dice por qué");
+        assert!(
+            cfg.project_warnings[0].contains("no_existe")
+                || cfg.project_warnings[0].contains("norte.toml"),
+            "el aviso nombra el problema: {:?}",
+            cfg.project_warnings
+        );
+    }
+
+    /// La capa del USUARIO sigue siendo fatal: ésa sí es suya, y arrancar
+    /// ignorándola en silencio sería peor que no arrancar.
+    #[test]
+    fn una_capa_de_usuario_rota_sigue_siendo_fatal() {
+        let usuario = tempfile::tempdir().unwrap();
+        let proyecto = tempfile::tempdir().unwrap();
+        std::fs::write(usuario.path().join("norte.toml"), "[ui]\nno_existe = 1\n").unwrap();
+
+        assert!(
+            load(&capas(usuario.path(), proyecto.path())).is_err(),
+            "una config del usuario rota se dice a gritos"
+        );
     }
 }

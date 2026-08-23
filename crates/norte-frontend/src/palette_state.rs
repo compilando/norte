@@ -300,6 +300,7 @@ mod palette_tests {
             }],
             columns: Vec::new(),
             has_help: false,
+            manifest_digest: None,
         };
         let mut all = rows();
         all.extend(crate::palette::plugin_rows(&[plugin]));

@@ -9,6 +9,19 @@
 //! 2. **Todo lo pintable está acotado en Rust** ([`crate::bridge`]).
 //! 3. **Nada aquí decide.** Un `enabled: false` es lo que el host resolvió;
 //!    el renderer lo pinta, no lo calcula.
+//!
+//! Y una regla sobre los NÚMEROS, que hoy no cuesta nada y mañana sí (#258).
+//! Cada `u64` de este módulo —`RowKey`, `ModalId`, `sequence`, `generation`,
+//! `task_id`, `total_rows`, `first_visible`, `marks`, `first_line`— llega al
+//! renderer como un `number` de JavaScript, o sea un `f64`: exacto solo hasta
+//! 2^53. Todos son contadores pequeños (un índice de fila, una época de
+//! listado, el contador del scheduler), así que hoy no hay nada roto. **El
+//! día que uno deje de ser un contador pequeño —un hash, un id aleatorio, un
+//! valor con la hora dentro— pasa a ser una `String` en el cable ANTES de
+//! cambiar de naturaleza**, porque si no el renderer lo redondea y dos filas
+//! distintas colisionan sin que nada se ponga rojo. Hacer `RowKey`
+//! infalsificable fue considerado y descartado en la ADR 0068; si alguien lo
+//! retoma, éste es el párrafo que hay que leer primero.
 
 use serde::{Deserialize, Serialize};
 
@@ -1341,6 +1354,15 @@ pub struct BrowserSlotView {
     /// no traduce, y «se saltó una» y «se saltó 3» no se dicen igual en todos
     /// los idiomas.
     pub skipped_note: String,
+    /// Cuántas entradas está APARTANDO la ocultación, ya dicho en el idioma
+    /// del lector. Vacío = ninguna, o la ocultación está apagada.
+    ///
+    /// Permanente y no un mensaje de la barra: el aviso de `pane.toggle-hidden`
+    /// lo pisa la siguiente tecla, y entonces un listado que enseña menos de
+    /// lo que hay se queda mudo. Misma disciplina que [`Self::skipped_note`],
+    /// y traducido aquí por lo mismo — «1 oculta» y «3 ocultas» no se dicen
+    /// igual en todos los idiomas.
+    pub hidden_note: String,
     /// Las cabeceras de las columnas configuradas, en su orden. Incluye el
     /// nombre, que en las filas viaja aparte (`display_name`).
     pub columns: Vec<ColumnHeader>,

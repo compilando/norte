@@ -10,7 +10,8 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use norte_client::{ConnEvent, EntryStream};
 use norte_proto::{
-    AttrCatalog, CollisionPolicy, DeleteMode, Entry, Error, TaskId, TaskProgress, VPath, methods,
+    AttrCatalog, Capabilities, CollisionPolicy, DeleteMode, Entry, Error, TaskId, TaskProgress,
+    VPath, methods,
 };
 use tokio::sync::watch;
 
@@ -76,6 +77,17 @@ pub trait HostBackend: Send + Sync + 'static {
         dir: VPath,
         attrs: Vec<String>,
     ) -> BoxFuture<'static, Result<(EntryStream, Option<u64>), Error>>;
+
+    /// Las capacidades de UNA UBICACIÓN (#215): las contesta el mount, no el
+    /// provider, así que un pincho FAT bajo un `/home` sensible a la caja no
+    /// hereda la respuesta de `/home`.
+    ///
+    /// Lo que la ventana hace con ellas es plegar nombres como los plegaría el
+    /// destino (#268): dos marcas que en un ext4 son `README.txt` y
+    /// `readme.txt` son UN nombre en NTFS o APFS, y encolarlas las dos deja
+    /// que una gane de forma no determinista mientras la otra falla sin
+    /// explicación.
+    fn capabilities(&self, path: VPath) -> BoxFuture<'static, Result<Capabilities, Error>>;
 
     /// Crea UN directorio. Devuelve la Task ya encolada.
     fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>>;
@@ -318,10 +330,13 @@ pub trait HostBackend: Send + Sync + 'static {
     ///
     /// Revocar no es lo mismo que apagar: apagar deja las capabilities
     /// aprobadas para la próxima vez, revocar las retira.
+    /// `expected_digest` es el ancla que la ventana ENSEÑÓ (#282): el core
+    /// rehúsa si ya no casa, de modo que lo que se concede sea lo que se leyó.
     fn plugin_set_approval(
         &self,
         id: String,
         approved: bool,
+        expected_digest: Option<String>,
     ) -> BoxFuture<'static, Result<(), Error>>;
 
     /// Enciende o apaga un plugin YA aprobado.
@@ -526,6 +541,11 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move { backend.stat(&path, attrs).await })
     }
 
+    fn capabilities(&self, path: VPath) -> BoxFuture<'static, Result<Capabilities, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.capabilities(&path).await })
+    }
+
     fn read(
         &self,
         path: VPath,
@@ -641,9 +661,14 @@ impl HostBackend for norte_client::RemoteBackend {
         &self,
         id: String,
         approved: bool,
+        expected_digest: Option<String>,
     ) -> BoxFuture<'static, Result<(), Error>> {
         let backend = self.clone();
-        Box::pin(async move { backend.plugins_set_approval(&id, approved).await })
+        Box::pin(async move {
+            backend
+                .plugins_set_approval(&id, approved, expected_digest.as_deref())
+                .await
+        })
     }
 
     fn plugin_set_enabled(
@@ -957,12 +982,12 @@ fn transferir(
     // El SDK sigue tomando el método como CADENA, y su cuerpo es
     // `if method == FS_COPY { copiar } else { mover }`: cualquier cosa que no
     // sea exactamente la constante de copiar se convierte en un movimiento.
-    // Aquí no puede pasar porque lo que entra es un enum de dos variantes y
-    // la conversión vive en un sitio; el `else` del SDK está anotado en la
-    // issue que propone el enum también allí.
+    // Aquí no puede pasar porque lo que entra es un enum de dos variantes, y
+    // desde #270 el SDK también toma un enum: el `else` que convertía
+    // cualquier método desconocido en un movimiento ya no existe.
     let metodo = match verbo {
-        Verbo::Copiar => norte_proto::methods::FS_COPY,
-        Verbo::Mover => norte_proto::methods::FS_MOVE,
+        Verbo::Copiar => norte_client::Transfer::Copy,
+        Verbo::Mover => norte_client::Transfer::Move,
     };
     Box::pin(async move {
         let task = backend

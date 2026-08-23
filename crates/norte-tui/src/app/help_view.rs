@@ -650,6 +650,7 @@ mod help_view_tests {
             commands: Vec::new(),
             columns: Vec::new(),
             has_help: true,
+            manifest_digest: None,
         }
     }
 
@@ -903,6 +904,7 @@ mod help_plugin_snapshot_tests {
             commands: Vec::new(),
             columns: Vec::new(),
             has_help: true,
+            manifest_digest: None,
         }
     }
 

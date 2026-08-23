@@ -19,7 +19,10 @@ mod hashing;
 mod index_build;
 mod index_embed;
 pub mod journal;
-pub mod logging;
+/// El montaje de `tracing` vive en `norte-config` desde #255: la ventana
+/// gráfica lo necesita igual y no puede depender del motor (ADR 0066). Se
+/// re-exporta aquí porque éste era su sitio y la CLI lo llama así.
+pub use norte_config::logging;
 mod observer;
 mod ops;
 mod pack;

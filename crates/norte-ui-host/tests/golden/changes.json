@@ -1,45 +1,44 @@
 {
   "agents": {
-    "change": "agents",
     "agents": {
+      "cursor": 0,
+      "empty": "ningún agente ha pedido permiso",
+      "forgotten": 2,
+      "generation": 4,
+      "note": "solo las sesiones que esta ventana ha visto",
       "rows": [
         {
+          "counts": "pidió 7, aprobadas desde aquí 3",
+          "last_op": "delete",
+          "last_op_hostile": false,
           "session": "agente�1",
           "session_hostile": true,
-          "counts": "pidió 7, aprobadas desde aquí 3",
-          "undoing": true,
-          "last_op": "delete",
-          "last_op_hostile": false
+          "undoing": true
         },
         {
+          "counts": "pidió 1, aprobadas desde aquí 0",
+          "last_op": "copy",
+          "last_op_hostile": false,
           "session": "agente-2",
           "session_hostile": false,
-          "counts": "pidió 1, aprobadas desde aquí 0",
-          "undoing": false,
-          "last_op": "copy",
-          "last_op_hostile": false
+          "undoing": false
         }
-      ],
-      "cursor": 0,
-      "generation": 4,
-      "forgotten": 2,
-      "note": "solo las sesiones que esta ventana ha visto",
-      "empty": "ningún agente ha pedido permiso"
-    }
+      ]
+    },
+    "change": "agents"
   },
   "ai_rename": {
-    "change": "ai_rename",
     "ai_rename": {
       "confirmable": true,
       "detail": [
         {
-          "text": "✗ 2. ya existe: otro.mkv",
-          "hostile": false
+          "hostile": false,
+          "text": "✗ 2. ya existe: otro.mkv"
         }
       ],
       "dir": {
-        "text": "⟨file⟩/home/oscar/series",
-        "hostile": false
+        "hostile": false,
+        "text": "⟨file⟩/home/oscar/series"
       },
       "first_visible": 0,
       "hidden_hostile": true,
@@ -47,12 +46,12 @@
       "pairs": [
         {
           "from": {
-            "text": "ep1.mkv",
-            "hostile": false
+            "hostile": false,
+            "text": "ep1.mkv"
           },
           "to": {
-            "text": "caf�.mkv",
-            "hostile": true
+            "hostile": true,
+            "text": "caf�.mkv"
           }
         }
       ],
@@ -60,7 +59,8 @@
       "seen_all": false,
       "status": "lote: aplicable — una task, un deshacer",
       "total": 3
-    }
+    },
+    "change": "ai_rename"
   },
   "columns": {
     "change": "columns",
@@ -123,65 +123,65 @@
   "compare": {
     "change": "compare",
     "compare": {
+      "filters": [
+        {
+          "count": 4,
+          "hidden": true,
+          "id": "same",
+          "label": "iguales"
+        }
+      ],
+      "first_visible": 0,
       "left": "⟨file⟩/home/oscar/a",
       "left_hostile": false,
       "right": "⟨file⟩/home/oscar/b",
       "right_hostile": true,
       "rows": [
         {
-          "id": 1,
-          "verdict": "igual",
           "category": "same",
           "confidence": "cierto",
           "criterion": "size",
-          "reason": null,
+          "id": 1,
           "left": {
-            "name": "notas.txt",
             "hostile": false,
-            "size": "1,2 kB",
+            "is_dir": false,
             "mtime": "2026-08-22 10:00",
-            "is_dir": false
+            "name": "notas.txt",
+            "size": "1,2 kB"
           },
+          "paired_under": null,
+          "reason": null,
           "right": {
-            "name": "notas.txt",
             "hostile": false,
-            "size": "1,2 kB",
+            "is_dir": false,
             "mtime": "2026-08-22 10:00",
-            "is_dir": false
+            "name": "notas.txt",
+            "size": "1,2 kB"
           },
-          "paired_under": null
+          "verdict": "igual"
         },
         {
-          "id": 2,
-          "verdict": "solo a la izquierda",
           "category": "only-left",
           "confidence": "cierto",
           "criterion": "presence",
-          "reason": null,
+          "id": 2,
           "left": {
-            "name": "caf�.txt",
             "hostile": true,
-            "size": "",
+            "is_dir": false,
             "mtime": "2026-08-22 10:00",
-            "is_dir": false
+            "name": "caf�.txt",
+            "size": ""
           },
+          "paired_under": "los dos nombres se escriben distinto",
+          "reason": null,
           "right": null,
-          "paired_under": "los dos nombres se escriben distinto"
+          "verdict": "solo a la izquierda"
         }
       ],
-      "first_visible": 0,
-      "total": 9,
+      "running": false,
       "selected": 2,
-      "filters": [
-        {
-          "id": "same",
-          "label": "iguales",
-          "count": 4,
-          "hidden": true
-        }
-      ],
       "status": "comparación: 9 filas",
-      "running": false
+      "total": 9
     }
   },
   "connection": {
@@ -199,10 +199,14 @@
     "change": "dialogs",
     "dialogs": [
       {
+        "asker": {
+          "hostile": false,
+          "text": "agente-1"
+        },
         "body": [
           {
-            "text": "/home/oscar",
-            "hostile": true
+            "hostile": true,
+            "text": "/home/oscar"
           }
         ],
         "choices": [
@@ -217,108 +221,104 @@
             "label_key": "dialog-cancel"
           }
         ],
+        "deadline": "caduca en 30 s",
+        "destination": {
+          "hostile": false,
+          "text": "/home/oscar/destino"
+        },
         "id": 3,
         "input": "",
         "input_hostile": false,
-        "title_key": "modal-mkdir-title",
-        "destination": {
-          "text": "/home/oscar/destino",
-          "hostile": false
-        },
         "overflow_note": "… se enseñan 1 de 3",
         "subject": {
-          "text": "delete",
-          "hostile": false
+          "hostile": false,
+          "text": "delete"
         },
-        "asker": {
-          "text": "agente-1",
-          "hostile": false
-        },
-        "deadline": "caduca en 30 s"
+        "title_key": "modal-mkdir-title"
       }
     ]
   },
   "extensions": {
     "change": "extensions",
     "extensions": {
-      "rows": [
-        {
-          "id": "acme.ftp",
-          "name": "FTP de ACME",
-          "publisher": "ACME",
-          "version": "1.2.0",
-          "category": "provider",
-          "description": "Sirve ficheros por FTP",
-          "approved": true,
-          "enabled": true,
-          "has_help": true,
-          "commands": 2,
-          "columns": 0,
-          "capabilities": [
-            "net",
-            "fs-read"
-          ]
-        },
-        {
-          "id": "org.norte.demo",
-          "name": "Demo",
-          "publisher": "",
-          "version": "0.1.0",
-          "category": "previewer",
-          "description": "",
-          "approved": false,
-          "enabled": false,
-          "has_help": false,
-          "commands": 1,
-          "columns": 1,
-          "capabilities": [
-            "fs-read"
-          ]
-        }
-      ],
       "cursor": 0,
       "detail": {
-        "id": "acme.ftp",
+        "commands": [
+          {
+            "hostile": false,
+            "id": "greet",
+            "title": "Saludar"
+          }
+        ],
         "config": [
           {
-            "key": "timeout",
-            "kind": "int",
-            "value": "30",
             "default": "10",
             "description": "Segundos antes de rendirse",
             "domain": "entre 1 y 300",
+            "editable": true,
             "hostile": false,
-            "editable": true
+            "key": "timeout",
+            "kind": "int",
+            "value": "30"
           },
           {
-            "key": "mode",
-            "kind": "enum",
-            "value": "safe",
             "default": "safe",
             "description": "",
             "domain": "safe · fast� · read-only",
+            "editable": true,
             "hostile": true,
-            "editable": true
-          }
-        ],
-        "commands": [
-          {
-            "id": "greet",
-            "title": "Saludar",
-            "hostile": false
+            "key": "mode",
+            "kind": "enum",
+            "value": "safe"
           }
         ],
         "cursor": 0,
         "editing": null,
-        "editing_hostile": false
+        "editing_hostile": false,
+        "id": "acme.ftp"
       },
-      "loading": false,
       "errors": [
         {
           "dir": "/home/oscar/.config/norte/plugins/roto",
           "hostile": false,
           "reason": "el manifiesto no parsea",
           "reason_hostile": false
+        }
+      ],
+      "loading": false,
+      "rows": [
+        {
+          "approved": true,
+          "capabilities": [
+            "net",
+            "fs-read"
+          ],
+          "category": "provider",
+          "columns": 0,
+          "commands": 2,
+          "description": "Sirve ficheros por FTP",
+          "enabled": true,
+          "has_help": true,
+          "id": "acme.ftp",
+          "name": "FTP de ACME",
+          "publisher": "ACME",
+          "version": "1.2.0"
+        },
+        {
+          "approved": false,
+          "capabilities": [
+            "fs-read"
+          ],
+          "category": "previewer",
+          "columns": 1,
+          "commands": 1,
+          "description": "",
+          "enabled": false,
+          "has_help": false,
+          "id": "org.norte.demo",
+          "name": "Demo",
+          "publisher": "",
+          "version": "0.1.0"
         }
       ]
     }
@@ -412,8 +412,8 @@
               "chord": "F5",
               "enabled": false,
               "label": "copiar",
-              "reason": "aquí no",
-              "label_hostile": false
+              "label_hostile": false,
+              "reason": "aquí no"
             }
           ]
         }
@@ -439,60 +439,61 @@
     }
   },
   "layout": {
-    "change": "layout",
     "cells": [
       120,
       40
     ],
+    "change": "layout",
     "placements": [
       {
-        "slot_id": 1,
-        "x": 0,
-        "y": 0,
-        "width": 60,
+        "focus_index": 0,
         "height": 38,
         "role": "active",
-        "focus_index": 0
+        "slot_id": 1,
+        "width": 60,
+        "x": 0,
+        "y": 0
       },
       {
-        "slot_id": 2,
-        "x": 60,
-        "y": 0,
-        "width": 60,
+        "focus_index": 1,
         "height": 38,
         "role": "target",
-        "focus_index": 1
+        "slot_id": 2,
+        "width": 60,
+        "x": 60,
+        "y": 0
       },
       {
+        "focus_index": 2,
+        "height": 2,
+        "role": null,
         "slot_id": 5,
+        "width": 40,
         "x": 0,
-        "y": 38,
-        "width": 40,
-        "height": 2,
-        "role": null,
-        "focus_index": 2
+        "y": 38
       },
       {
+        "focus_index": 3,
+        "height": 2,
+        "role": null,
         "slot_id": 6,
-        "x": 40,
-        "y": 38,
         "width": 40,
-        "height": 2,
-        "role": null,
-        "focus_index": 3
+        "x": 40,
+        "y": 38
       },
       {
-        "slot_id": 7,
-        "x": 80,
-        "y": 38,
-        "width": 40,
+        "focus_index": 4,
         "height": 2,
         "role": null,
-        "focus_index": 4
+        "slot_id": 7,
+        "width": 40,
+        "x": 80,
+        "y": 38
       }
     ],
     "tabs": [
       {
+        "active": 0,
         "slot_id": 1,
         "tabs": [
           {
@@ -505,8 +506,7 @@
             "title": "caf�",
             "title_hostile": true
           }
-        ],
-        "active": 0
+        ]
       }
     ]
   },
@@ -519,6 +519,7 @@
         "·bbbbbbbb·"
       ],
       "problem": "",
+      "problem_hostile": false,
       "rows": [
         {
           "broken": false,
@@ -535,24 +536,23 @@
           "shares_keymap_name": false
         }
       ],
-      "title": "Disposiciones",
-      "problem_hostile": false
+      "title": "Disposiciones"
     }
   },
   "palette": {
     "change": "palette",
     "palette": {
+      "cursor": 0,
       "query": "orde",
       "rows": [
         {
-          "text": "pane.sort-name",
-          "desc": "Ordenar por nombre",
           "chord": "ctrl+f3",
+          "desc": "Ordenar por nombre",
           "enabled": true,
-          "hostile": false
+          "hostile": false,
+          "text": "pane.sort-name"
         }
       ],
-      "cursor": 0,
       "total": 42
     }
   },
@@ -575,19 +575,19 @@
   "plugin_output": {
     "change": "plugin_output",
     "output": {
-      "plugin": {
-        "text": "ACME�FTP",
-        "hostile": true
-      },
-      "plugin_id": "acme.ftp",
       "command": {
-        "text": "Saludar",
-        "hostile": false
+        "hostile": false,
+        "text": "Saludar"
       },
       "lines": [
         "hola",
         "mundo"
       ],
+      "plugin": {
+        "hostile": true,
+        "text": "ACME�FTP"
+      },
+      "plugin_id": "acme.ftp",
       "text_hostile": false,
       "truncated": true
     }
@@ -643,8 +643,8 @@
         }
       ],
       "running": true,
-      "status": "búsqueda: 2 hallazgos (buscando…)",
-      "semantic": false
+      "semantic": false,
+      "status": "búsqueda: 2 hallazgos (buscando…)"
     }
   },
   "settings": {
@@ -712,49 +712,6 @@
   "sync": {
     "change": "sync",
     "sync": {
-      "source": {
-        "text": "⟨file⟩/home/oscar/a",
-        "hostile": false
-      },
-      "dest": {
-        "text": "⟨file⟩/home/oscar/b",
-        "hostile": false
-      },
-      "mode": "update",
-      "steps": [
-        {
-          "id": 1,
-          "kind": "copiar",
-          "reason": "",
-          "undo": "se deshace",
-          "anchor": "source",
-          "anchor_label": "",
-          "path": "docs/a.md",
-          "path_hostile": false,
-          "dest_path": null,
-          "dest_path_hostile": false,
-          "twins": false
-        },
-        {
-          "id": 2,
-          "kind": "borrar",
-          "reason": "no hay papelera en el destino",
-          "undo": "no vuelve",
-          "anchor": "dest",
-          "anchor_label": "en el destino",
-          "path": "caf�.txt",
-          "path_hostile": true,
-          "dest_path": "café.txt",
-          "dest_path_hostile": false,
-          "twins": true
-        }
-      ],
-      "first_visible": 0,
-      "total": 2,
-      "summary": [
-        "2 pasos: 1 copiar, 1 borrar",
-        "1 no se puede deshacer"
-      ],
       "blockers": [
         {
           "label": "el destino es de solo lectura",
@@ -763,21 +720,64 @@
         }
       ],
       "blockers_total": 900,
-      "status": "2 pasos · este plan no se puede aprobar",
-      "hint": "↑↓ mover · Esc cerrar",
+      "can_approve": false,
+      "cancel_requested": false,
       "confirming": "esto borra 2 árboles enteros. ¿seguro? (y/n)",
+      "dest": {
+        "hostile": false,
+        "text": "⟨file⟩/home/oscar/b"
+      },
       "failures": [
         {
+          "anchor": "either",
+          "anchor_label": "en cualquiera de los dos",
           "cause": "permiso denegado",
           "path": "docs/a.md",
-          "path_hostile": false,
-          "anchor": "either",
-          "anchor_label": "en cualquiera de los dos"
+          "path_hostile": false
         }
       ],
-      "cancel_requested": false,
-      "can_approve": false,
-      "running": false
+      "first_visible": 0,
+      "hint": "↑↓ mover · Esc cerrar",
+      "mode": "update",
+      "running": false,
+      "source": {
+        "hostile": false,
+        "text": "⟨file⟩/home/oscar/a"
+      },
+      "status": "2 pasos · este plan no se puede aprobar",
+      "steps": [
+        {
+          "anchor": "source",
+          "anchor_label": "",
+          "dest_path": null,
+          "dest_path_hostile": false,
+          "id": 1,
+          "kind": "copiar",
+          "path": "docs/a.md",
+          "path_hostile": false,
+          "reason": "",
+          "twins": false,
+          "undo": "se deshace"
+        },
+        {
+          "anchor": "dest",
+          "anchor_label": "en el destino",
+          "dest_path": "café.txt",
+          "dest_path_hostile": false,
+          "id": 2,
+          "kind": "borrar",
+          "path": "caf�.txt",
+          "path_hostile": true,
+          "reason": "no hay papelera en el destino",
+          "twins": true,
+          "undo": "no vuelve"
+        }
+      ],
+      "summary": [
+        "2 pasos: 1 copiar, 1 borrar",
+        "1 no se puede deshacer"
+      ],
+      "total": 2
     }
   },
   "tasks": {
@@ -785,12 +785,12 @@
     "tasks": [
       {
         "detail": "notas.txt",
+        "detail_hostile": false,
         "foreign": false,
         "kind": "copy",
         "percent": 40,
         "state": "running",
-        "task_id": 7,
-        "detail_hostile": false
+        "task_id": 7
       }
     ]
   },
@@ -810,8 +810,8 @@
       ],
       "unsupported_effects": [
         {
-          "key": "crt",
-          "hostile": false
+          "hostile": false,
+          "key": "crt"
         }
       ]
     }

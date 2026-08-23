@@ -121,11 +121,33 @@ struct Fila {
 impl Selector {
     /// El selector de volúmenes, todavía sin la lista: se pide y llega.
     pub(crate) fn volumenes(slot: u32) -> Self {
+        Self::volumenes_con_titulo(slot, "picker-volumes-title")
+    }
+
+    /// El selector de volúmenes de un LADO de la pantalla.
+    ///
+    /// El título lo dice, porque nada más puede decirlo: el slot no cruza el
+    /// puente y los dos lados abren la misma lista. En Total Commander lo
+    /// dice la posición de la ventana; aquí, con el foco en el otro panel,
+    /// sin el título no hay forma de saber dónde se va a montar hasta que se
+    /// monta (ADR 0058 D9, #293).
+    pub(crate) fn volumenes_de_lado(slot: u32, derecha: bool) -> Self {
+        Self::volumenes_con_titulo(
+            slot,
+            if derecha {
+                "picker-volumes-title-right"
+            } else {
+                "picker-volumes-title-left"
+            },
+        )
+    }
+
+    fn volumenes_con_titulo(slot: u32, titulo: &'static str) -> Self {
         Self {
             filas: Vec::new(),
             cursor: 0,
             vacio: "picker-volumes-loading",
-            titulo: "picker-volumes-title",
+            titulo,
             slot,
         }
     }

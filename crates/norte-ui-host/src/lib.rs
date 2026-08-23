@@ -45,8 +45,8 @@ pub mod settings;
 pub use action::UiAction;
 pub use backend::HostBackend;
 pub use bridge::{
-    ActionAck, BRIDGE_VERSION, BridgeEnvelope, InstanceId, ModalId, RequestToken, RowKey,
-    StaleAction,
+    ActionAck, BRIDGE_VERSION, BridgeEnvelope, InstanceId, MAX_TASKS_RETAINED, MAX_TRANSFER_BATCH,
+    ModalId, RequestToken, RowKey, StaleAction,
 };
 pub use controller::{ShutdownReport, UiHost, UiHostOptions, UiSubscription, Update};
 pub use dto::{UiNotice, UiUpdate, ViewPatch, ViewSnapshot};

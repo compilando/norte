@@ -38,7 +38,7 @@ path = "src/main.rs"
 norte-client.workspace = true
 # El predicado de peligros de terminal: el MISMO que enmascara los nombres.
 norte-encoding.workspace = true
-norte-config.workspace = true
+norte-config = { workspace = true, features = ["logging"] }
 norte-frontend.workspace = true
 norte-i18n.workspace = true
 norte-proto.workspace = true
@@ -57,10 +57,13 @@ tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 # `vpath_from_native`: la ÚNICA función que convierte una ruta del sistema en
-# un `VPath`, y ya está en el grafo — `norte-frontend` depende de ella por la
-# conversión inversa. Re-derivar aquí las reglas del esquema local sería
-# exactamente la duplicación que ese crate existe para evitar (regla 1).
-norte-vfs-local.workspace = true
+# un `VPath`. Re-derivar aquí las reglas del esquema local sería exactamente
+# la duplicación que esa función existe para evitar (regla 1). Vive en
+# `norte-vfs` —el crate del trait, que no toca disco— y no en el provider
+# local: este binario habla con el daemon por un socket, y arrastrar el único
+# crate con `unsafe`, `openat2` y `ConfinedRoot` para convertir una cadena es
+# lo contrario de lo que promete la ADR 0066 (#254).
+norte-vfs.workspace = true
 
 [build-dependencies]
 tauri-build.workspace = true
@@ -68,7 +71,10 @@ tauri-build.workspace = true
 [dev-dependencies]
 norte-core.workspace = true
 norte-testkit.workspace = true
-norte-vfs.workspace = true
+# Solo en TESTS: `celdas_locales` monta un `LocalProvider` de verdad contra un
+# directorio temporal. Las dependencias de desarrollo no viajan en el binario,
+# y `tests/dependency_boundary.rs` las excluye a propósito (#254).
+norte-vfs-local.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 

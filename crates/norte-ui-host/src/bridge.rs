@@ -30,6 +30,10 @@ use serde::{Deserialize, Serialize};
 ///   hará DE VERDAD —los dos ya traducidos, porque el catálogo no sustituye
 ///   variables—, si hay un nombre alterado FUERA de la ventana, y si el
 ///   lector ha recorrido el plan entero. Y se puede contestar con el ratón.
+/// - **36**: un listado dice cuántas entradas está APARTANDO por ocultas, de
+///   forma permanente y no como mensaje que la siguiente tecla pisa. Un
+///   listado que enseña menos de lo que hay no puede quedarse mudo (#107,
+///   #293).
 /// - **35**: la disposición lleva sus grupos de PESTAÑAS —qué hay detrás de
 ///   lo que se pinta, con el rótulo de cada una y su bandera—, porque una
 ///   pestaña inactiva no se coloca y sin esto la ventana enseñaba la de
@@ -129,7 +133,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 35;
+pub const BRIDGE_VERSION: u32 = 36;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///
@@ -145,6 +149,29 @@ pub const MAX_NOTICES: usize = 32;
 
 /// Tasks proyectadas a la vez.
 pub const MAX_TASKS: usize = 256;
+
+/// Tasks RETENIDAS a la vez, proyectadas o no (#271).
+///
+/// [`MAX_TASKS`] acota lo que cruza el puente; esto acota lo que el host
+/// guarda. No son el mismo número porque no son la misma pregunta: una fila
+/// que se cae de la proyección sigue teniendo un progreso que bombear y un
+/// directorio que relistar cuando termine, y tirarla por no caber en la
+/// pantalla perdería el refresco.
+///
+/// El desalojo de `registrar_task` solo puede tirar tasks TERMINALES, así que
+/// sin este segundo tope un lote de tres mil copias encoladas —ninguna
+/// terminal todavía— retenía las tres mil. 512 es lo que un daemon acepta
+/// vivas a la vez (`MAX_LIVE_TASKS`), o sea el techo real del otro lado.
+pub const MAX_TASKS_RETAINED: usize = 512;
+
+/// Entradas que admite UNA transferencia (#271).
+///
+/// `pane.copy` opera sobre las marcas, y marcar no tiene tope: un lote se
+/// encolaba entero y se descubría el límite cuando el daemon empezaba a
+/// rechazar por `MAX_LIVE_TASKS`, o sea a mitad, con la mitad hecha y sin
+/// nada que dijera dónde se cortó. Decirlo ANTES es más honesto que
+/// descubrirlo a medias.
+pub const MAX_TRANSFER_BATCH: usize = 512;
 
 /// Diálogos apilados a la vez.
 ///

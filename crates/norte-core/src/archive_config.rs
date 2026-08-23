@@ -233,15 +233,15 @@ mod tests {
 
     /// C1 review, item 2: a broken/hostile `./.norte/norte.toml` (Project
     /// layer) must not be able to abort `norte daemon run`. This is pinned
-    /// two ways: `load_archive_limits_from` keeps its documented semantics
-    /// unchanged — given an EXPLICIT `Layers` that still includes a broken
-    /// Project entry, it still errors fail-loud (nothing here silently
-    /// swallows a broken layer the caller asked to include). The actual
-    /// fix is that `load_archive_limits()` no longer asks for that entry at
-    /// all: it uses `standard_layers_no_project()`, whose exclusion of
-    /// `Layer::Project` is pinned at the `norte-config` level by
-    /// `standard_layers_no_project_excluye_proyecto`. Reproduced here with a
-    /// same-shape User+Project pair to show what the daemon would have hit.
+    /// two ways, and one of them changed with #260. A broken PROJECT layer is
+    /// now SKIPPED rather than fatal —the same reasoning one layer up: a
+    /// `.norte.toml` someone else wrote must not break the file manager of
+    /// whoever `cd`s into that repository— and the skip is REPORTED in
+    /// `project_warnings`, never silent. The other half is unchanged and is
+    /// the real fix for the daemon: `load_archive_limits()` does not ask for
+    /// that entry at all, because it uses `standard_layers_no_project()`,
+    /// whose exclusion of `Layer::Project` is pinned at the `norte-config`
+    /// level by `standard_layers_no_project_excluye_proyecto`.
     #[test]
     fn norte_toml_de_proyecto_roto_no_aborta_el_daemon() {
         let user = tempfile::tempdir().unwrap();
@@ -255,18 +255,31 @@ mod tests {
         // project checkout could ship.
         std::fs::write(proyecto.path().join("norte.toml"), "[archive\n").unwrap();
 
-        // Explicit layers INCLUDING the broken project entry: semantics of
-        // `load_archive_limits_from` are unchanged — it still errors when
-        // the caller hands it a broken layer.
+        // Explicit layers INCLUDING the broken project entry. Since #260 a
+        // broken PROJECT layer is skipped rather than fatal — a `.norte.toml`
+        // someone else wrote must not break the file manager of whoever `cd`s
+        // into that repository — so this no longer errors. It is not
+        // swallowed either: the layer is reported, and here the limits come
+        // out as the USER's, which is what "the project layer contributed
+        // nothing" means.
         let with_project = norte_config::Layers {
             dirs: vec![
                 (user.path().to_path_buf(), norte_config::Layer::User),
                 (proyecto.path().to_path_buf(), norte_config::Layer::Project),
             ],
         };
-        assert!(
-            load_archive_limits_from(&with_project).is_err(),
-            "an explicitly-included broken Project layer still errors"
+        let limits = load_archive_limits_from(&with_project)
+            .expect("a broken PROJECT layer is skipped, not fatal");
+        assert_eq!(
+            limits.expect("hay límites").max_entries,
+            5,
+            "the user's layer still applies"
+        );
+        let cfg = norte_config::load(&with_project).expect("carga");
+        assert_eq!(
+            cfg.project_warnings.len(),
+            1,
+            "and the skipped layer is REPORTED, never silent"
         );
 
         // What the daemon actually does (`load_archive_limits()`, via

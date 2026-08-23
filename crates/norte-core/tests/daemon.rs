@@ -2730,6 +2730,7 @@ async fn plugin_set_approval_humano_se_refleja_y_persiste() {
             &methods::PluginSetApprovalParams {
                 id: "org.norte.demo".into(),
                 approved: true,
+                expected_digest: None,
             },
         )
         .await
@@ -2762,6 +2763,7 @@ async fn plugin_set_approval_agente_es_invalid_request() {
             &methods::PluginSetApprovalParams {
                 id: "org.norte.demo".into(),
                 approved: true,
+                expected_digest: None,
             },
         )
         .await
@@ -2789,6 +2791,137 @@ async fn plugin_set_approval_id_desconocido_es_invalid_params() {
             &methods::PluginSetApprovalParams {
                 id: "org.norte.fantasma".into(),
                 approved: true,
+                expected_digest: None,
+            },
+        )
+        .await
+        .expect_err("id desconocido");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+}
+
+/// El ancla que el humano LEYÓ es la que se concede (#282).
+///
+/// El daemon anclaba el digest que ÉL tenía al escribir, no el que se enseñó,
+/// así que entre el `plugin.list` que vio el humano y el `set_approval` que
+/// confirma cabía un `plugin.toml` distinto. Con `expected_digest` el daemon
+/// rehúsa, y con la variante que significa «vuelve a leerlo»: NO
+/// `INVALID_PARAMS`, que es el código de «ese plugin no existe» y dejaría a un
+/// cliente sin poder distinguir las dos cosas.
+#[tokio::test]
+async fn plugin_set_approval_con_ancla_rancia_se_rehusa() {
+    let d = spawn_daemon_plugins().await;
+    let human = connected_client(&d).await;
+    let err = human
+        .call::<_, methods::PluginSetApprovalResult>(
+            methods::PLUGIN_SET_APPROVAL,
+            &methods::PluginSetApprovalParams {
+                id: "org.norte.demo".into(),
+                approved: true,
+                expected_digest: Some("no-es-el-ancla-de-nadie".into()),
+            },
+        )
+        .await
+        .expect_err("un ancla que no casa no concede");
+    assert!(
+        matches!(&err, ClientError::Rpc(rpc) if rpc.code != codes::INVALID_PARAMS),
+        "un ancla rancia y un id desconocido no pueden compartir código: {err:?}"
+    );
+
+    // Y no concedió nada: la comprobación tiene que ser fail-closed.
+    let list: methods::PluginListResult = human
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list");
+    assert!(!list.plugins[0].approved, "el rechazo no dejó rastro");
+}
+
+/// Y con el ancla BUENA —la que el propio `plugin.list` acaba de dar— sí
+/// concede: el campo cierra una ventana, no la puerta.
+#[tokio::test]
+async fn plugin_set_approval_con_el_ancla_que_se_leyo_concede() {
+    let d = spawn_daemon_plugins().await;
+    let human = connected_client(&d).await;
+    let list: methods::PluginListResult = human
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list");
+    let ancla = list.plugins[0]
+        .manifest_digest
+        .clone()
+        .expect("el catálogo trae el ancla que un humano lee");
+
+    let _: methods::PluginSetApprovalResult = human
+        .call(
+            methods::PLUGIN_SET_APPROVAL,
+            &methods::PluginSetApprovalParams {
+                id: "org.norte.demo".into(),
+                approved: true,
+                expected_digest: Some(ancla),
+            },
+        )
+        .await
+        .expect("el ancla que se leyó concede");
+
+    let despues: methods::PluginListResult = human
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list tras aprobar");
+    assert!(despues.plugins[0].approved);
+}
+
+/// REVOCAR no comprueba el ancla, y es deliberado: quitar un permiso no
+/// concede nada, y rehusar la revocación por un ancla rancia dejaría vivo
+/// justo el permiso que alguien intenta quitar.
+#[tokio::test]
+async fn revocar_no_se_rehusa_por_un_ancla_rancia() {
+    let d = spawn_daemon_plugins().await;
+    let human = connected_client(&d).await;
+    let _: methods::PluginSetApprovalResult = human
+        .call(
+            methods::PLUGIN_SET_APPROVAL,
+            &methods::PluginSetApprovalParams {
+                id: "org.norte.demo".into(),
+                approved: true,
+                expected_digest: None,
+            },
+        )
+        .await
+        .expect("aprobada primero");
+
+    let _: methods::PluginSetApprovalResult = human
+        .call(
+            methods::PLUGIN_SET_APPROVAL,
+            &methods::PluginSetApprovalParams {
+                id: "org.norte.demo".into(),
+                approved: false,
+                expected_digest: Some("no-es-el-ancla-de-nadie".into()),
+            },
+        )
+        .await
+        .expect("revocar no mira el ancla");
+
+    let list: methods::PluginListResult = human
+        .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
+        .await
+        .expect("plugin.list");
+    assert!(!list.plugins[0].approved, "la revocación se aplicó");
+}
+
+/// Un id DESCONOCIDO con ancla sigue siendo `INVALID_PARAMS`: `manifest_digest`
+/// devuelve `None` para los dos casos, y contestar «el manifiesto cambió» a
+/// quien nombró un plugin que no existe es un diagnóstico equivocado sobre el
+/// error más común de un cliente mal escrito.
+#[tokio::test]
+async fn un_id_desconocido_con_ancla_no_se_confunde_con_una_rancia() {
+    let d = spawn_daemon_plugins().await;
+    let human = connected_client(&d).await;
+    let err = human
+        .call::<_, methods::PluginSetApprovalResult>(
+            methods::PLUGIN_SET_APPROVAL,
+            &methods::PluginSetApprovalParams {
+                id: "org.norte.fantasma".into(),
+                approved: true,
+                expected_digest: Some("da-igual".into()),
             },
         )
         .await
@@ -3397,6 +3530,7 @@ async fn plugin_gestor_e2e_lista_gobierna_y_persiste() {
             &methods::PluginSetApprovalParams {
                 id: "org.norte.demo".into(),
                 approved: true,
+                expected_digest: None,
             },
         )
         .await
@@ -3447,6 +3581,7 @@ async fn plugin_gestor_e2e_lista_gobierna_y_persiste() {
             &methods::PluginSetApprovalParams {
                 id: "org.norte.demo".into(),
                 approved: false,
+                expected_digest: None,
             },
         )
         .await

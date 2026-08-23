@@ -587,6 +587,7 @@ fn snapshot_extensions_80x24() {
             commands: Vec::new(),
             columns: Vec::new(),
             has_help: false,
+            manifest_digest: None,
         }],
         errors: Vec::new(),
         cursor: 0,
@@ -632,6 +633,7 @@ fn snapshot_extensions_description_hostil_80x24() {
             commands: Vec::new(),
             columns: Vec::new(),
             has_help: false,
+            manifest_digest: None,
         }],
         errors: Vec::new(),
         cursor: 0,
@@ -1320,6 +1322,7 @@ fn snapshot_ayuda_pagina_de_plugin_hostil() {
         }],
         columns: Vec::new(),
         has_help: true,
+        manifest_digest: None,
     };
     app.freeze_help_plugins(std::slice::from_ref(&plugin));
     let view = app.help.as_mut().expect("overlay abierto");
@@ -1935,6 +1938,7 @@ fn snapshot_palette_fila_de_plugin_hostil() {
         }],
         columns: Vec::new(),
         has_help: false,
+        manifest_digest: None,
     };
     // Sin query: `plugin_rows` sobre UN plugin con UN comando ya deja una
     // sola fila — "filtrada a solo ella" por construcción, no por texto

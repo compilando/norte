@@ -558,16 +558,26 @@ pub struct NodeId {
 ///
 /// # Lo que esta superficie NO cubre, y conviene no leerlo de más
 ///
-/// Es corta a propósito: `Copy` y `CreateDir` son las dos operaciones por las
-/// que el agujero era alcanzable ESCRIBIENDO. Quedan fuera, y son deuda
-/// escrita, no cobertura:
+/// Desde #218 cubre también el `stat` que DECIDE una colisión y el `remove`
+/// que la ejecuta **en `norte_core::ops`**, que era la mitad destructiva de una
+/// sobrescritura y la única que seguía yendo por ruta. Quedan fuera, y son
+/// deuda escrita, no cobertura:
 ///
-/// - **El borrado que hace una sobrescritura.** `CollisionPolicy::Overwrite` y
-///   `Newer` vacían el destino antes de copiar, y ese borrado sigue yendo por
-///   ruta: bajo un componente hostil destruye fuera de la raíz aunque la
-///   escritura que viene detrás se niegue. La sincronización lo tiene mucho
-///   más tapado (revalida contra el testigo antes de destruir), la copia
-///   recursiva no.
+/// - **El borrado del ejecutor de SINCRONIZACIÓN.** `sync::exec` tiene la raíz
+///   en la mano (`SyncTargets::dest_confined`) y sus `destroy_leaf` /
+///   `destroy_tree` siguen resolviendo por ruta. Lo tiene mucho más tapado que
+///   una copia —revalida contra el testigo (clase, tamaño y mtime) antes de
+///   destruir— pero tapado no es confinado.
+/// - **El borrado del ORIGEN de un `move` por copia**, que es igual de
+///   destructivo y va por ruta: el origen no cuelga de la raíz del destino, y
+///   confinarlo pediría abrir otra.
+/// - **`RenameAuto`**, que sondea nombres candidatos por ruta hasta mil veces
+///   antes de escribir. La escritura sí va confinada y es create-new, así que
+///   no es un escape; lo que puede es ELEGIR el nombre mirando otro árbol.
+/// - **`copy_native`**, que escribe por ruta puenteando la raíz entera. Hoy es
+///   inalcanzable —solo `norte-vfs-object` declara `SERVER_COPY` y ese
+///   provider no implementa `open_root`—, pero el día que un provider tenga
+///   los dos, todo esto se desactiva sin que nada chirríe.
 /// - **`DeleteTree` y `rename`.** Esquivan el agujero por razones propias
 ///   —`DeleteTree` no desciende symlinks, la revalidación es un `lstat`—, que
 ///   es distinto de estar confinados.
@@ -632,4 +642,31 @@ pub trait ConfinedRoot: Send + Sync {
     /// Mismo contrato que [`Provider::stat`]: describe el LINK, jamás su
     /// destino.
     async fn stat(&self, rel: &[Segment]) -> Result<Entry, Error>;
+
+    /// Borra la HOJA que hay en `rel`. Mismo contrato que [`Provider::remove`]
+    /// para un no-directorio (#218).
+    ///
+    /// Existe porque una copia con `Overwrite` o `Newer` **destruye antes de
+    /// escribir**, y esa mitad se quedó fuera del confinamiento: el `write`
+    /// iba por el descriptor y el `remove` que lo precede iba por ruta. Con
+    /// `dest/sub` sustituido por un puente hacia otro árbol, el borrado se
+    /// llevaba un fichero de FUERA de la raíz aprobada y solo entonces el
+    /// write confinado se negaba — un fichero destruido, nada escrito en su
+    /// lugar, y una entrada de journal nombrando un sitio que no era.
+    ///
+    /// Un directorio NO se borra por aquí: reemplazar un dir por una hoja es
+    /// `TypeMismatch`, que es una respuesta y no una política.
+    ///
+    /// El default es [`Error::Unsupported`], y el llamante tiene que tratarlo
+    /// como tal: una raíz que no sabe borrar hace que `Overwrite` se RECHACE,
+    /// jamás que se caiga al borrado por ruta —eso sería reabrir el agujero
+    /// justo en el caso que esto existe para cerrar—.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si este backend no sabe borrar confinado;
+    /// [`Error::NotFound`] si no hay nada en `rel`; los del borrado si no.
+    async fn remove(&self, rel: &[Segment]) -> Result<(), Error> {
+        let _ = rel;
+        Err(Error::Unsupported)
+    }
 }

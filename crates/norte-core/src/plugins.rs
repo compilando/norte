@@ -32,6 +32,38 @@ use norte_proto::methods::{
 };
 use toml_edit::{DocumentMut, InlineTable, Item, Table, Value};
 
+/// Los bytes CRUDOS de un `OsStr`, o `None` si esta plataforma no los tiene.
+///
+/// En Unix son los bytes literales y no hay más que decir.
+///
+/// Fuera de Unix devuelve `None` **a propósito**, y no la forma lossy. Mandar
+/// lossy sería peor que no mandar nada: el receptor toma `dir_bytes` por
+/// crudos, así que unos bytes ya convertidos le devuelven `lossy = false,
+/// masked = false` —un nombre alterado declarándose fiel— y además DESACTIVAN
+/// la heurística de respaldo, que es lo único que hoy marca un sustituto
+/// suelto de Windows. Con `None` el receptor cae a `dir` y a esa heurística,
+/// que es exactamente lo que hacía antes de #265.
+///
+/// La conversión correcta allí es WTF-8 (la convención que documenta
+/// `norte_proto::methods::Volume::label`), y llegará con el resto del soporte
+/// de Windows.
+// En Unix el `None` no existe —lo elimina el `cfg`— y clippy ve un `Option`
+// que siempre es `Some`. Fuera de Unix es la única rama, y es la que hace
+// correcto al campo del wire.
+#[cfg_attr(unix, allow(clippy::unnecessary_wraps))]
+fn bytes_de(s: &std::ffi::OsStr) -> Option<Vec<u8>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        Some(s.as_bytes().to_vec())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = s;
+        None
+    }
+}
+
 /// Estado que el usuario fija sobre un plugin descubierto. Ausente = ambos
 /// `false` (descubierto pero sin aprobar ni activar).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -513,6 +545,13 @@ impl PluginRegistry {
                             header: c.header.clone(),
                         })
                         .collect(),
+                    // El ancla que el humano está MIRANDO (#282): es lo que
+                    // devuelve al confirmar, y lo que el daemon compara con la
+                    // suya antes de conceder. Cubre `category` y
+                    // `contributions` —cuándo y cómo se dispara— además de las
+                    // capabilities, o sea justo lo que la lista pintada NO
+                    // dice.
+                    manifest_digest: Some(norte_plugin_host::PluginEntry::approval_anchor(e)),
                     // (H3e, 0.34.0) NO gateado por approved/enabled — la
                     // documentación de un plugin es justo lo que un humano lee
                     // ANTES de aprobarlo, mismo criterio que
@@ -546,17 +585,26 @@ impl PluginRegistry {
             .catalog
             .errors
             .iter()
-            .map(|e| PluginLoadError {
+            .map(|e| {
                 // Solo el NOMBRE del directorio del plugin, nunca la ruta
                 // absoluta: revelaría el home del usuario (`~/.config/norte/...`)
                 // a un agente que llame a `plugin.list`. El basename basta para
                 // que un humano identifique el plugin roto.
-                dir: e
-                    .dir
-                    .file_name()
-                    .map_or_else(|| e.dir.to_string_lossy(), |n| n.to_string_lossy())
-                    .into_owned(),
-                reason: e.error.to_string(),
+                // `file_name()` es `None` para un path acabado en `..`; caer
+                // ahí a `as_os_str()` mandaría la ruta ABSOLUTA, que es justo
+                // lo que el rustdoc del campo promete que nunca pasa (revela
+                // el home del usuario a un agente que llame a `plugin.list`).
+                let base = e.dir.file_name().unwrap_or_else(|| "?".as_ref());
+                PluginLoadError {
+                    dir: base.to_string_lossy().into_owned(),
+                    // Y los BYTES al lado (#265): el `to_string_lossy` de
+                    // arriba pone `U+FFFD`, que NO es un peligro de terminal,
+                    // así que ninguna heurística del receptor puede recuperar
+                    // que hubo conversión. Con los bytes la hace él y la
+                    // marca, que es la regla de siempre.
+                    dir_bytes: bytes_de(base),
+                    reason: e.error.to_string(),
+                }
             })
             .collect();
         PluginListResult { plugins, errors }
@@ -794,7 +842,7 @@ impl PluginRegistry {
         // (issue #69): si el `plugin.toml` cambia después, el digest dejará de
         // casar y `resolve_*` re-pedirá consentimiento. Requiere que el id exista
         // en el catálogo (de lo contrario no hay manifiesto que digestar).
-        let Some(digest) = self.current_digest(id) else {
+        let Some(digest) = self.manifest_digest(id) else {
             return false;
         };
         let st = self.state.entry(id.to_string()).or_default();
@@ -1082,10 +1130,17 @@ impl PluginRegistry {
         self.catalog.plugins.iter().any(|e| e.manifest.id == id)
     }
 
-    /// Digest actual del MANIFIESTO de `id` en el catálogo (capabilities +
-    /// category + contributions), o `None` si el id no está descubierto (issue
-    /// #69).
-    fn current_digest(&self, id: &str) -> Option<String> {
+    /// El ancla de aprobación de `id` tal como está AHORA en el catálogo, o
+    /// `None` si el id no está descubierto (issue #69).
+    ///
+    /// Cubre el MANIFIESTO —capabilities, `category` y `contributions`, o sea
+    /// qué pide y cuándo se dispara— **y el binario** (#241).
+    ///
+    /// Es lo que ancla una aprobación al darla, lo que el daemon compara para
+    /// contestar «¿sigue siendo el que enseñaste?» (#282), y lo que
+    /// `plugin.list` pone en `PluginInfo::manifest_digest`.
+    #[must_use]
+    pub fn manifest_digest(&self, id: &str) -> Option<String> {
         self.catalog
             .plugins
             .iter()
@@ -1214,6 +1269,59 @@ pub(crate) fn persist_state(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// #282: el ancla que un humano LEE tiene que cambiar cuando cambia lo
+    /// que se le enseñó, o `expected_digest` no protege de nada.
+    ///
+    /// Es la premisa del campo, no su uso: el uso está en el daemon
+    /// (`handle_plugin_set_approval`) y en el `Backend` embebido, que es donde
+    /// de verdad hay ventana — redescubre el catálogo en CADA llamada.
+    #[test]
+    fn el_ancla_de_un_manifiesto_cambia_cuando_cambia_lo_que_declara() {
+        const ANTES: &str = r#"
+[plugin]
+id = "org.norte.anchor"
+name = "Anchor"
+publisher = "norte"
+version = "0.1.0"
+category = "command"
+"#;
+        // Lo que cambia NO son las capabilities: es `contributions`, o sea
+        // CUÁNDO y CÓMO se dispara. Es justo lo que la lista pintada no dice y
+        // el ancla sí cubre — por eso la comparación de capabilities que hace
+        // el cliente no basta.
+        const DESPUES: &str = r#"
+[plugin]
+id = "org.norte.anchor"
+name = "Anchor"
+publisher = "norte"
+version = "0.1.0"
+category = "command"
+[contributions]
+command = [{ id = "run", title = "Run" }]
+"#;
+        let cfg = TempDir::new().expect("tempdir");
+        let dir = cfg.path().join("plugins").join("org.norte.anchor");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("plugin.toml"), ANTES).expect("write");
+        std::fs::write(dir.join("plugin.wasm"), b"\0asm\x01\0\0\0").expect("write wasm");
+
+        let reg = PluginRegistry::discover(cfg.path()).expect("discover");
+        let antes = reg
+            .manifest_digest("org.norte.anchor")
+            .expect("el catálogo trae el ancla sin necesidad de un wasm real");
+
+        std::fs::write(dir.join("plugin.toml"), DESPUES).expect("rewrite");
+        let reg2 = PluginRegistry::discover(cfg.path()).expect("rediscover");
+        let despues = reg2
+            .manifest_digest("org.norte.anchor")
+            .expect("sigue descubierto");
+        assert_ne!(
+            antes, despues,
+            "el ancla no se movió: `expected_digest` no protegería de un \
+             manifiesto cambiado bajo los pies"
+        );
+    }
 
     /// #29/§6.2: `decode_for_preview` entrega TEXTO decodificado al previewer;
     /// UTF-8 válido no es lossy (#101).

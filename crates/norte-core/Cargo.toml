@@ -42,7 +42,7 @@ norte-compare.workspace = true
 # plan en sí no conoce ninguna de las tres cosas. Mismo reparto que
 # norte-compare.
 norte-sync.workspace = true
-norte-config.workspace = true
+norte-config = { workspace = true, features = ["logging"] }
 norte-connect.workspace = true
 # Modelo de plugins (M4-P3): catálogo + manifiesto que el PluginRegistry expone.
 norte-plugin-host.workspace = true

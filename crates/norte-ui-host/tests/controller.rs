@@ -1473,6 +1473,7 @@ async fn una_task_ajena_se_ve_y_se_dice_ajena() {
         entries_done: 0,
         entries_total: None,
         current: None,
+        unreadable: None,
     };
     let (_ptx, prx) = tokio::sync::watch::channel(progreso);
     tx.send(norte_ui_host::backend::HostTask {
@@ -3802,6 +3803,9 @@ fn extension(id: &str, name: &str, has_help: bool) -> norte_proto::methods::Plug
         commands: Vec::new(),
         columns: Vec::new(),
         has_help,
+        // El ancla que el core manda (#282): la ventana la devuelve al
+        // confirmar, y sin ella en el doble el hilo entero no se ejercitaría.
+        manifest_digest: Some(format!("digest-de-{id}")),
     }
 }
 
@@ -6245,13 +6249,22 @@ async fn un_hallazgo_hostil_va_marcado() {
 /// lo DICE.
 ///
 /// Una tabla sobre el corpus de `norte-testkit`, que es lo que faltaba: las
-/// nueve superficies de esta fase se escribieron sin que ninguna lo tocara, y
-/// todas las banderas que se calculaban y se tiraban —el nombre de un
-/// favorito, la etiqueta de un volumen, el valor de un atributo, el valor de
-/// un ajuste— habrían salido de aquí. La propiedad es un PAR: lo pintado no
-/// lleva peligro Y la marca está puesta. Comprobar solo lo primero es lo que
-/// deja pasar una superficie que enmascara en silencio.
+/// superficies de esta fase se escribieron sin que ninguna lo tocara, y todas
+/// las banderas que se calculaban y se tiraban habrían salido de aquí. La
+/// propiedad es un PAR: lo pintado no lleva peligro Y la marca está puesta.
+/// Comprobar solo lo primero es lo que deja pasar una superficie que enmascara
+/// en silencio.
+///
+/// TRES superficies, y se dice cuáles porque el doc de antes prometía nueve y
+/// ejercitaba dos (#277): el nombre de un FAVORITO (lo escribe el usuario en
+/// su `norte.toml`), la etiqueta de un VOLUMEN (la da el sistema y son bytes)
+/// y el valor de un ATRIBUTO (el nombre de la entrada bajo el cursor). El
+/// diálogo de APROBACIÓN tiene su propia tabla, porque sus rutas llegan del
+/// daemon ya redactadas y hay que pasarlas antes por el mismo lossy.
 #[tokio::test]
+// Larga por TABLA, no por lógica: cada superficie es un bloque con su
+// aserción y su frase, y partirla escondería cuáles se cubren.
+#[allow(clippy::too_many_lines)]
 async fn ninguna_superficie_enmascara_en_silencio() {
     let corpus = norte_testkit::corpus::hostile_names();
     assert!(
@@ -6292,7 +6305,9 @@ async fn ninguna_superficie_enmascara_en_silencio() {
             target: norte_proto::VPath::parse("mem:///casa").map_err(|_| "err".to_owned()),
         }];
         let mut f = Falso::default();
-        f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+        // La entrada bajo el cursor es la hostil: su nombre es el primer campo
+        // de la HOJA DE ATRIBUTOS, que es la tercera superficie.
+        f.pon("mem:///casa", vec![(n.bytes.clone(), false)]);
         // 2. La etiqueta de un VOLUMEN: la da el sistema y son bytes.
         f.volumenes = vec![norte_proto::methods::Volume {
             label: Some(n.bytes.clone()),
@@ -6360,6 +6375,27 @@ async fn ninguna_superficie_enmascara_en_silencio() {
                 break;
             }
         }
+
+        // 3. El valor de un ATRIBUTO: el primer campo de la hoja es el nombre
+        //    de la entrada bajo el cursor, o sea bytes del provider (#277).
+        //    El doc de este test la nombraba desde el principio y nadie la
+        //    ejercitaba.
+        let foto = esperar_foto(&h, &mut sub, "la hoja tiene el nombre", |f| {
+            hoja(f).is_some_and(|m| !m.fields.is_empty())
+        })
+        .await;
+        let campo = hoja(&foto)
+            .expect("la disposición `full` coloca la hoja")
+            .fields
+            .first()
+            .expect("el primer campo es el nombre")
+            .clone();
+        sin_peligro(&campo.value, &n.id, "el valor de un atributo");
+        assert!(
+            campo.hostile,
+            "[{}] el valor del atributo se enmascara y NO lo dice: {:?}",
+            n.id, campo.value
+        );
     }
 }
 
@@ -7228,10 +7264,15 @@ async fn dos_paneles_con_destino_aparte(
     .expect("host vivo");
     // La foto del aterrizaje: sin esperarla, F5 vería el destino todavía en
     // el directorio de partida y el test probaría otra cosa.
-    let mut despues = siguiente_foto(&mut sub).await;
-    while !listado_de(&despues, 2).path_display.ends_with("/casa/docs") {
-        despues = siguiente_foto(&mut sub).await;
-    }
+    //
+    // Se PIDE (`esperar_foto` manda `Resync`) en vez de quedarse escuchando:
+    // con un listado grande el aterrizaje viaja en PARCHES y la foto que lo
+    // contaría puede haber pasado ya, así que un `siguiente_foto` en bucle se
+    // quedaba esperando una que no vuelve a salir — colgado, no rojo.
+    let despues = esperar_foto(&h, &mut sub, "el destino aterriza en /casa/docs", |f| {
+        listado_de(f, 2).path_display.ends_with("/casa/docs")
+    })
+    .await;
     h.dispatch(UiAction::FocusSlot { slot_id: 1 })
         .await
         .expect("host vivo");
@@ -9758,6 +9799,7 @@ fn inyectar_task(
         entries_done: 0,
         entries_total: None,
         current: None,
+        unreadable: None,
     };
     let (ptx, prx) = tokio::sync::watch::channel(progreso);
     let canceladas = Arc::clone(canceladas);
@@ -9908,6 +9950,7 @@ fn inyectar_task_de(
         entries_done: 0,
         entries_total: None,
         current: None,
+        unreadable: None,
     };
     let (ptx, prx) = tokio::sync::watch::channel(progreso);
     tx.send(norte_ui_host::backend::HostTask {
@@ -10643,6 +10686,7 @@ async fn un_lote_que_nace_terminal_pide_su_informe() {
         entries_done: 1,
         entries_total: Some(1),
         current: None,
+        unreadable: None,
     };
     let (ptx, prx) = tokio::sync::watch::channel(progreso);
     drop(ptx);
@@ -12222,7 +12266,10 @@ async fn aprobar_pregunta_y_enumera_las_capabilities() {
         if v.rows.first().is_some_and(|r| r.approved) {
             assert_eq!(
                 backend.gobierno.lock().expect("gobierno").as_slice(),
-                ["approval:acme.ftp:true"]
+                // Con el ANCLA que se enseñó (#282): lo que se concede tiene
+                // que ser lo que el humano leyó, y el core rehúsa si el
+                // manifiesto cambió entre la pregunta y el sí.
+                ["approval:acme.ftp:true:digest-de-acme.ftp"]
             );
             return;
         }
@@ -13612,6 +13659,40 @@ async fn foto(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) -> norte_ui_h
     siguiente_foto(sub).await
 }
 
+/// Espera a que una FOTO cumpla `cond`, sin relojes de intervalo.
+///
+/// Hay que PREGUNTAR: ni `total_rows` ni `path_display` viajan en un parche
+/// —solo en una foto, y la foto la pide `Resync`—, así que quedarse
+/// escuchando no basta. Lo que este ayudante no hace es dormir 25 ms entre
+/// intento e intento: se BLOQUEA en el siguiente mensaje del host, o sea
+/// que va al ritmo del host y no al del planificador. El plazo total está
+/// para que una condición que no se cumple se lea como un fallo con su
+/// frase, y no como un test colgado.
+async fn esperar_foto(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+    que: &str,
+    cond: impl Fn(&norte_ui_host::ViewSnapshot) -> bool,
+) -> norte_ui_host::ViewSnapshot {
+    let espera = async {
+        loop {
+            let f = foto(h, sub).await;
+            if cond(&f) {
+                return f;
+            }
+            // CUALQUIER mensaje del host, no la siguiente FOTO: las fotos las
+            // pide el renderer, y un drenaje viaja entero en PARCHES. Esperar
+            // otra foto era esperar a que el host mandara una por su cuenta,
+            // que es justo lo que no hace: el bucle se colgaba en vez de
+            // agotar el plazo, y un test colgado no dice qué falló.
+            let _ = sub.recv().await.expect("el host sigue vivo");
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(10), espera)
+        .await
+        .unwrap_or_else(|_| panic!("plazo agotado esperando a que {que}"))
+}
+
 /// `pane.sort-size` ordena por tamaño y repetirlo INVIERTE.
 ///
 /// La misma semántica que un click en la cabecera porque es el MISMO camino:
@@ -13744,17 +13825,10 @@ async fn refrescar_relista_los_dos_paneles() {
     let mut sub = h.subscribe();
 
     ejecutar_por_paleta(&h, &mut sub, "pane.refresh").await;
-    for _ in 0..40 {
-        if backend.listados() >= antes + 2 {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        let _ = foto(&h, &mut sub).await;
-    }
-    panic!(
-        "solo se relistó {} de los dos paneles",
-        backend.listados() - antes
-    );
+    esperar_foto(&h, &mut sub, "los dos paneles se relisten", |_| {
+        backend.listados() >= antes + 2
+    })
+    .await;
 }
 
 /// `pane.mirror` manda la ubicación del panel ACTIVO al panel destino, y el
@@ -13768,17 +13842,12 @@ async fn el_espejo_manda_la_ubicacion_al_destino() {
     let mut sub = h.subscribe();
 
     ejecutar_por_paleta(&h, &mut sub, "pane.mirror").await;
-    for _ in 0..40 {
-        let f = foto(&h, &mut sub).await;
-        if listado_de(&f, 2).path_display.ends_with("/casa")
-            && listado_de(&f, 1).path_display.ends_with("/casa")
-        {
-            assert_eq!(f.focus, Some(1), "el espejo no mueve el foco");
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("el destino no siguió al activo");
+    let f = esperar_foto(&h, &mut sub, "el destino siga al activo", |f| {
+        listado_de(f, 2).path_display.ends_with("/casa")
+            && listado_de(f, 1).path_display.ends_with("/casa")
+    })
+    .await;
+    assert_eq!(f.focus, Some(1), "el espejo no mueve el foco");
 }
 
 /// `pane.pull` es el mismo gesto al revés: la ubicación sale del destino y
@@ -13789,18 +13858,17 @@ async fn traer_mueve_el_panel_del_foco() {
     let mut sub = h.subscribe();
 
     ejecutar_por_paleta(&h, &mut sub, "pane.pull").await;
-    for _ in 0..40 {
-        let f = foto(&h, &mut sub).await;
-        if listado_de(&f, 1).path_display.ends_with("/casa/docs") {
-            assert!(
-                listado_de(&f, 2).path_display.ends_with("/casa/docs"),
-                "el otro se queda donde estaba"
-            );
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("el panel del foco no se trajo la ubicación del otro");
+    let f = esperar_foto(
+        &h,
+        &mut sub,
+        "el panel del foco se traiga la otra ubicación",
+        |f| listado_de(f, 1).path_display.ends_with("/casa/docs"),
+    )
+    .await;
+    assert!(
+        listado_de(&f, 2).path_display.ends_with("/casa/docs"),
+        "el otro se queda donde estaba"
+    );
 }
 
 /// `pane.swap` cambia los dos listados de sitio SIN tocar disco: nadie
@@ -13917,22 +13985,24 @@ async fn el_intercambio_repide_la_navegacion_en_vuelo() {
         .await
         .expect("host vivo");
 
-    for _ in 0..80 {
-        let f = foto(&h, &mut sub).await;
-        let (izq, der) = (listado_de(&f, 1), listado_de(&f, 2));
-        if der.path_display.ends_with("/casa/docs") && izq.path_display.ends_with("/casa") {
-            assert!(
-                !matches!(izq.state, norte_ui_host::dto::SlotState::Loading)
-                    && !matches!(der.state, norte_ui_host::dto::SlotState::Loading),
-                "ningún panel se queda cargando: {:?} {:?}",
-                izq.state,
-                der.state
-            );
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("la navegación que el intercambio interrumpió no llegó a su destino");
+    let f = esperar_foto(
+        &h,
+        &mut sub,
+        "la navegación interrumpida llegue a su destino",
+        |f| {
+            listado_de(f, 2).path_display.ends_with("/casa/docs")
+                && listado_de(f, 1).path_display.ends_with("/casa")
+        },
+    )
+    .await;
+    let (izq, der) = (listado_de(&f, 1), listado_de(&f, 2));
+    assert!(
+        !matches!(izq.state, norte_ui_host::dto::SlotState::Loading)
+            && !matches!(der.state, norte_ui_host::dto::SlotState::Loading),
+        "ningún panel se queda cargando: {:?} {:?}",
+        izq.state,
+        der.state
+    );
 }
 
 /// Un intercambio durante el DRENAJE también lo repide.
@@ -13956,33 +14026,20 @@ async fn el_intercambio_repide_el_drenaje() {
 
     // La primera página ya está en pantalla y el resto sigue detenido en la
     // puerta: ESTE es el estado que el bug necesitaba.
-    let mut antes = foto(&h, &mut sub).await;
-    for _ in 0..80 {
-        if listado_de(&antes, 1).total_rows == Some(100) {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        antes = foto(&h, &mut sub).await;
-    }
-    assert_eq!(
-        listado_de(&antes, 1).total_rows,
-        Some(100),
-        "la primera página aterrizó y el drenaje sigue detenido"
-    );
+    esperar_foto(&h, &mut sub, "aterrice la primera página", |f| {
+        listado_de(f, 1).total_rows == Some(100)
+    })
+    .await;
 
     h.dispatch(tecla_mod("u", true, false))
         .await
         .expect("host vivo");
     puerta.abrir();
 
-    for _ in 0..80 {
-        let f = foto(&h, &mut sub).await;
-        if listado_de(&f, 1).total_rows == Some(250) && listado_de(&f, 2).total_rows == Some(250) {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("el listado se quedó en la primera página: el intercambio no repidió el drenaje");
+    esperar_foto(&h, &mut sub, "el drenaje se repida y llegue entero", |f| {
+        listado_de(f, 1).total_rows == Some(250) && listado_de(f, 2).total_rows == Some(250)
+    })
+    .await;
 }
 
 /// `pane.toggle-hidden` PODA las marcas de lo que aparta, y lo dice.
@@ -14126,14 +14183,10 @@ async fn el_historial_es_el_rastro_compartido() {
     );
 
     h.dispatch(tecla("Enter")).await.expect("host vivo");
-    for _ in 0..40 {
-        let f = foto(&h, &mut sub).await;
-        if f.picker.is_none() && listado(&f).path_display.ends_with("/casa") {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("elegir en el historial no navegó");
+    esperar_foto(&h, &mut sub, "elegir en el historial navegue", |f| {
+        f.picker.is_none() && listado(f).path_display.ends_with("/casa")
+    })
+    .await;
 }
 
 /// `pane.hotlist` enseña los favoritos de la configuración, y uno cuya ruta
@@ -14365,5 +14418,481 @@ async fn la_config_siembra_la_ocultacion() {
             .iter()
             .all(|r| r.display_name != ".oculto"),
         "la configuración decía que no se enseñan"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Un LOTE de transferencias: sus topes y su cuenta (#271).
+// ---------------------------------------------------------------------------
+
+/// Marca las N primeras filas del hueco activo, una a una.
+async fn marca_todo(h: &UiHost, sub: &mut norte_ui_host::controller::UiSubscription, slot: u32) {
+    let foto = foto(h, sub).await;
+    let b = listado_de(&foto, slot);
+    let (generation, claves): (u64, Vec<_>) =
+        (b.generation, b.rows.iter().map(|r| r.key).collect());
+    for key in claves {
+        h.dispatch(UiAction::ToggleMark {
+            slot_id: slot,
+            key,
+            generation,
+        })
+        .await
+        .expect("host vivo");
+    }
+}
+
+/// Un lote cuyos rechazos al encolar son TODOS: la barra dice UNA frase con la
+/// cuenta, no N frases de las que sobrevive la última (#271, punto 3).
+#[tokio::test]
+async fn los_rechazos_de_un_lote_se_dicen_una_sola_vez() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![
+            (b"docs".to_vec(), true),
+            (b"notas.txt".to_vec(), false),
+            (b"a.txt".to_vec(), false),
+            (b"b.txt".to_vec(), false),
+        ],
+    );
+    f.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
+    f.transferencia_rechazada = Some(norte_proto::Error::Unsupported);
+    let backend = Arc::new(f);
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    marca_todo(&h, &mut sub, 1).await;
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    // El resumen dice CUÁNTAS, o sea que la cuenta existió: sin ella la barra
+    // llevaría la frase del último error y nada más.
+    let foto = esperar_foto(&h, &mut sub, "el lote se resume", |f| {
+        f.status.message.as_deref().is_some_and(|m| m.contains('4'))
+    })
+    .await;
+    let msg = foto.status.message.clone().expect("hay resumen");
+    assert!(msg.contains('4'), "el resumen no cuenta el lote: {msg}");
+    assert!(foto.tasks.is_empty(), "ninguna llegó a ser task");
+}
+
+/// Y con las tasks encoladas: el resumen cuenta los DESENLACES, y solo cuando
+/// el lote entero está resuelto (#271, punto 2).
+#[tokio::test]
+async fn el_lote_dice_cuantas_terminaron_bien_y_cuantas_no() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![
+            (b"docs".to_vec(), true),
+            (b"notas.txt".to_vec(), false),
+            (b"a.txt".to_vec(), false),
+            (b"b.txt".to_vec(), false),
+        ],
+    );
+    f.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
+    // Nacen TERMINALES y bien: el camino donde `progreso` no se llama nunca.
+    f.estado_transferencia = Some(norte_proto::TaskState::Completed);
+    let backend = Arc::new(f);
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    marca_todo(&h, &mut sub, 1).await;
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+
+    let foto = esperar_foto(&h, &mut sub, "el lote se resume", |f| {
+        f.status.message.is_some()
+    })
+    .await;
+    let msg = foto.status.message.clone().expect("hay resumen");
+    assert!(
+        msg.contains('4') && msg.contains('0'),
+        "el resumen dice 4 pedidas y 0 mal: {msg}"
+    );
+}
+
+/// El tope de lote (#271, punto 4): `pane.copy` opera sobre las marcas y
+/// marcar no tiene techo. Sin este tope el lote se encolaba entero y el límite
+/// se descubría a mitad, cuando el daemon empezaba a rechazar por
+/// `MAX_LIVE_TASKS`: con la mitad hecha y nada que dijera dónde se cortó.
+#[tokio::test]
+async fn un_lote_por_encima_del_tope_se_rechaza_entero() {
+    const CUANTAS: usize = norte_ui_host::MAX_TRANSFER_BATCH + 8;
+    let mut f = Falso::default();
+    let mut entradas: Vec<(Vec<u8>, bool)> =
+        vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)];
+    for i in 0..CUANTAS {
+        entradas.push((format!("f{i:04}.txt").into_bytes(), false));
+    }
+    f.pon("mem:///casa", entradas);
+    f.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
+    let backend = Arc::new(f);
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+    // El destino, a mano y no con el ayudante de dos paneles: con un listado
+    // de este tamaño el drenaje MUEVE la generación, y un `Activate` con la
+    // del arranque llega rancio. Se espera a que el listado esté entero y se
+    // lee la generación de ESA foto.
+    let asentado = esperar_foto(&h, &mut sub, "el drenaje termina", |f| {
+        listado_de(f, 2).total_rows.unwrap_or(0) >= CUANTAS as u64 + 2
+    })
+    .await;
+    let b2 = listado_de(&asentado, 2);
+    let docs = b2
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("el directorio está");
+    let (key, generation) = (docs.key, b2.generation);
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Activate {
+        slot_id: 2,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    esperar_foto(&h, &mut sub, "el destino aterriza en /casa/docs", |f| {
+        listado_de(f, 2).path_display.ends_with("/casa/docs")
+    })
+    .await;
+    h.dispatch(UiAction::FocusSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    // Y el origen entero cargado: `invert_marks` marca lo CARGADO, y con el
+    // drenaje a medias marcaría cien y el tope no se rozaría.
+    esperar_foto(&h, &mut sub, "el origen está entero", |f| {
+        listado_de(f, 1).total_rows.unwrap_or(0) >= CUANTAS as u64 + 2
+    })
+    .await;
+    ejecutar_por_paleta(&h, &mut sub, "mark.invert").await;
+    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-batch-too-large"),
+        "{ack:?}"
+    );
+    let foto = foto(&h, &mut sub).await;
+    assert!(
+        foto.dialogs.is_empty(),
+        "no se abre un diálogo que promete algo que no se va a hacer"
+    );
+}
+
+/// El corpus canónico contra el diálogo de APROBACIÓN (#277).
+///
+/// Es la superficie donde más caro sale mentir: lo que se lee ahí es lo único
+/// que un humano tiene para decidir si un agente borra sus ficheros.
+///
+/// Las rutas llegan del daemon como TEXTO ya redactado, no como `VPath`, así
+/// que el test las pasa antes por `display_lossy` —que es lo que hace
+/// `norte_core::engine::span_path`, y no se puede llamar desde aquí porque el
+/// host no depende del core (ADR 0066)—. Ese paso ES lo que hace que el test
+/// signifique algo: alimentar bytes crudos encendería la bandera por un camino
+/// que en producción no ocurre.
+#[tokio::test]
+async fn el_corpus_hostil_cruza_el_dialogo_de_aprobacion() {
+    // Las cuatro que el lossy del daemon ALTERA, y `zwsp_twin` como CONTRASTE:
+    // a ésa el lossy no la toca —es UTF-8 válido— y su bandera se tiene que
+    // encender por el otro camino, el del enmascarado.
+    let casos = [
+        "lossy_collapse_ff",
+        "lossy_collapse_fe",
+        "rtl_override",
+        "control_escape",
+        "zwsp_twin",
+    ];
+    let corpus = norte_testkit::corpus::hostile_names();
+    for id in casos {
+        let n = corpus
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("la fixture {id} está en el corpus"));
+        let p = norte_proto::VPath::parse("mem:///casa")
+            .expect("raíz")
+            .join(norte_proto::Segment::new(n.bytes.clone()).expect("segmento"));
+        // El paso del daemon: `span_path` es esto para cualquier autoridad sin
+        // userinfo, que es el caso de un `mem://`.
+        let redactada = p.display_lossy().clone();
+
+        let falso = arbol_como_falso();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+        let (host, _snap) = host_arbol(Arc::new(falso)).await;
+        let mut sub = host.subscribe();
+        tx.send(norte_proto::methods::PolicyApprovalRequired {
+            approval_id: 7,
+            session: Some("agente-1".to_owned()),
+            op: "delete".to_owned(),
+            paths: vec![redactada.clone()],
+            paths_total: 1,
+            ttl_ms: 30_000,
+        })
+        .expect("el host escucha");
+
+        let dialogos = siguientes_dialogos(&mut sub).await;
+        let d = &dialogos[0];
+        let linea = d.body.first().expect("la ruta está");
+        sin_peligro(&linea.text, id, "una ruta del diálogo de aprobación");
+        assert!(
+            linea.hostile,
+            "[{id}] la línea se pinta distinta de lo que hay y NO lo dice: {:?}",
+            linea.text
+        );
+        // Y el plazo va en SU campo, nunca entre las rutas: entre ellas lo
+        // podría suplantar un nombre de fichero (`approval_ttl_line_spoof`).
+        assert!(
+            d.deadline.is_some(),
+            "[{id}] el plazo tiene que tener campo propio"
+        );
+        assert!(
+            d.body.iter().all(|l| Some(&l.text) != d.deadline.as_ref()),
+            "[{id}] el plazo se coló entre las rutas: {:?}",
+            d.body
+        );
+    }
+}
+
+/// El directorio de un plugin roto es BYTES, y llegaba ya convertido (#265).
+///
+/// `PluginLoadError.dir` es un `String` que el core producía con un
+/// `to_string_lossy` SIN marcar, así que un directorio llamado `caf\xff`
+/// —fixture `lossy_collapse_ff` del corpus— cruzaba el wire ya con su
+/// `U+FFFD`. Y `display_name` no lo recupera: pone `lossy` solo cuando
+/// `from_utf8` falla y `masked` solo ante un peligro de terminal, y `U+FFFD`
+/// no es ninguna de las dos cosas —es Specials—. La fila se declaraba fiel.
+///
+/// El test es un PAR, porque una sola fila no distingue el arreglo de la
+/// heurística que había antes:
+///
+/// - `caf\xff` (bytes de verdad no-UTF-8) → la fila se MARCA. La heurística
+///   vieja también lo marcaba, así que esta mitad sola no prueba nada.
+/// - `caf\u{FFFD}` (un directorio que se llama ASÍ, en UTF-8 válido) → la fila
+///   NO se marca. Es el falso positivo de la heurística —«la cadena lleva un
+///   reemplazo, luego alguien convirtió»— y es la mitad que solo pasa con los
+///   bytes delante.
+///
+/// Lo que este arreglo NO hace: distinguir `caf\xff` de `caf\xfe` al pintar.
+/// `display_name` mapea todo byte inválido al mismo `U+FFFD`, así que las dos
+/// siguen pintándose igual. Lo que se recupera es la MARCA, no la ortografía.
+#[tokio::test]
+async fn un_directorio_de_plugin_no_utf8_llega_marcado_y_sin_falso_positivo() {
+    let crudos = norte_testkit::corpus::hostile_names()
+        .into_iter()
+        .find(|n| n.id == "lossy_collapse_ff")
+        .expect("la fixture está")
+        .bytes;
+    assert!(
+        std::str::from_utf8(&crudos).is_err(),
+        "la premisa: son bytes que NO son UTF-8"
+    );
+    // Y el gemelo legítimo: un nombre que ES `U+FFFD` en disco, en UTF-8
+    // válido. Nadie lo convirtió, así que marcarlo sería mentir.
+    let honesto = "caf\u{FFFD}".as_bytes().to_vec();
+    assert!(std::str::from_utf8(&honesto).is_ok());
+
+    let mut backend = arbol_con_plugins(Vec::new(), &[]);
+    {
+        let f = std::sync::Arc::get_mut(&mut backend).expect("única referencia");
+        for bytes in [&crudos, &honesto] {
+            // Lo que el core manda: la cadena YA convertida, y los bytes al
+            // lado. Las dos filas se distinguen por su texto; lo que NO se
+            // puede distinguir por el texto es cuál de las dos se convirtió,
+            // que es justo la pregunta.
+            let convertida = String::from_utf8_lossy(bytes).into_owned();
+            f.errores_de_carga
+                .push((convertida.clone(), "el manifiesto no parsea".to_owned()));
+            f.bytes_de_carga.insert(convertida, bytes.clone());
+        }
+    }
+    let (h, _snap) = host_arbol(std::sync::Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = siguiente_extensiones(&mut sub).await.expect("abre");
+    let v = extensiones_cargadas(&mut sub).await;
+
+    // Las dos cadenas colapsan a una sola clave, así que el falso llega a
+    // mandar UNA fila: lo que se afirma es su bandera, que con los bytes del
+    // nombre honesto tiene que ser FALSA.
+    assert_eq!(v.errors.len(), 2, "las dos filas llegan: {:?}", v.errors);
+
+    // La de bytes crudos: se marca, y con los bytes delante se marca por el
+    // motivo correcto —`display_name` vio que no eran UTF-8— y no por la
+    // heurística.
+    let convertida = v
+        .errors
+        .iter()
+        .find(|e| e.dir == String::from_utf8_lossy(&crudos))
+        .expect("la fila de bytes crudos está");
+    assert!(
+        convertida.hostile,
+        "lo pintado difiere de lo que hay y NO lo dice: {:?}",
+        convertida.dir
+    );
+
+    // Y la honesta: NO se marca. Ésta es la mitad que solo pasa con los bytes
+    // delante; con la heurística de la cadena salía marcada de más.
+    let fila_limpia = v
+        .errors
+        .iter()
+        .find(|e| e.dir == "caf\u{FFFD}")
+        .expect("la fila honesta está");
+    assert!(
+        !fila_limpia.hostile,
+        "un directorio que SE LLAMA `caf\u{FFFD}` no se convirtió: marcarlo es \
+         el falso positivo que los bytes existen para quitar"
+    );
+    for c in fila_limpia.dir.chars() {
+        assert!(
+            !norte_encoding::is_terminal_hazard(c),
+            "un peligro cruzó sin enmascarar: {:?}",
+            fila_limpia.dir
+        );
+    }
+}
+
+/// Y la otra mitad, aislada: SIN bytes —un peer 0.52— la heurística marca esa
+/// misma fila honesta, y ése es el falso positivo que #265 quita.
+#[tokio::test]
+async fn sin_los_bytes_un_nombre_honesto_con_reemplazo_sale_marcado_de_mas() {
+    let honesto = "caf\u{FFFD}".to_owned();
+    let mut backend = arbol_con_plugins(Vec::new(), &[]);
+    std::sync::Arc::get_mut(&mut backend)
+        .expect("única referencia")
+        .errores_de_carga = vec![(honesto, "el manifiesto no parsea".to_owned())];
+    // Deliberadamente SIN `bytes_de_carga`: es un daemon 0.52.
+    let (h, _snap) = host_arbol(std::sync::Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F12")).await.expect("host vivo");
+    let _ = siguiente_extensiones(&mut sub).await.expect("abre");
+    let v = extensiones_cargadas(&mut sub).await;
+    assert!(
+        v.errors[0].hostile,
+        "contra un peer viejo la heurística es lo único que hay, y marca de \
+         más antes que de menos"
+    );
+}
+
+/// #268 — dos marcas que son UN nombre en el destino se rechazan enteras.
+///
+/// En un ext4 `README.txt` y `readme.txt` son dos ficheros; en NTFS o APFS son
+/// uno. Encolar las dos deja que una gane —cuál, no es determinista— y que la
+/// otra falle sin explicación sobre un miembro arbitrario de la pareja.
+///
+/// El test corre las TRES parejas del corpus canónico, que son tres pliegues
+/// distintos: caja ASCII, normalización NFC/NFD, y el pliegue completo de un
+/// ext4 `+F`. Un arreglo que solo mirase la caja pasaría el primero y fallaría
+/// los otros dos.
+#[tokio::test]
+async fn dos_marcas_que_pliegan_al_mismo_nombre_no_se_encolan() {
+    let corpus = norte_testkit::corpus::hostile_names();
+    let bytes_de = |id: &str| {
+        corpus
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("la fixture {id} está"))
+            .bytes
+            .clone()
+    };
+    let parejas = [
+        ("ascii_case_twin_upper", "ascii_case_twin_lower"),
+        ("nfc_e_acute", "nfd_e_acute"),
+        ("ext4_full_fold_ss", "ext4_full_fold_es_zett"),
+    ];
+    for (a, b) in parejas {
+        let (uno, otro) = (bytes_de(a), bytes_de(b));
+        assert_ne!(uno, otro, "[{a}/{b}] la premisa: son bytes distintos");
+
+        let mut f = Falso::default();
+        f.pon(
+            "mem:///casa",
+            vec![
+                (b"docs".to_vec(), true),
+                (b"notas.txt".to_vec(), false),
+                (uno.clone(), false),
+                (otro.clone(), false),
+            ],
+        );
+        f.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
+        // El DESTINO pliega: un APFS, un NTFS o un ext4 `+F`. Sin este mando
+        // el caso no se podía escribir, que es lo que la issue decía.
+        f.capacidades.insert(
+            "mem:///casa/docs".to_owned(),
+            norte_proto::Capabilities {
+                flags: norte_proto::CapabilityFlags::FULL_FOLD,
+                max_path: None,
+            },
+        );
+        let backend = Arc::new(f);
+        let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+        let mut sub = h.subscribe();
+        // Que el pliegue del destino haya llegado: se pide al aterrizar, no
+        // delante del diálogo, así que hay que esperarlo.
+        esperar_foto(&h, &mut sub, "el destino dice cómo pliega", |_| true).await;
+        marca_todo(&h, &mut sub, 1).await;
+        let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+
+        assert!(
+            matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-batch-folds-to-one"),
+            "[{a}/{b}] {ack:?}"
+        );
+        assert!(
+            backend
+                .transferencias
+                .lock()
+                .expect("transferencias")
+                .is_empty(),
+            "[{a}/{b}] no se encoló ni una: el lote se rechaza ENTERO"
+        );
+    }
+}
+
+/// Y en un destino que NO pliega, las mismas dos marcas son dos ficheros y el
+/// lote sale. La comprobación no puede costar la operación legítima.
+#[tokio::test]
+async fn dos_gemelos_de_caja_hacia_un_destino_sensible_si_se_encolan() {
+    let corpus = norte_testkit::corpus::hostile_names();
+    let bytes_de = |id: &str| {
+        corpus
+            .iter()
+            .find(|n| n.id == id)
+            .expect("la fixture está")
+            .bytes
+            .clone()
+    };
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![
+            (b"docs".to_vec(), true),
+            (b"notas.txt".to_vec(), false),
+            (bytes_de("ascii_case_twin_upper"), false),
+            (bytes_de("ascii_case_twin_lower"), false),
+        ],
+    );
+    f.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
+    // Sin mando = ext4 corriente, que distingue la caja.
+    let backend = Arc::new(f);
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    esperar_foto(&h, &mut sub, "el destino dice cómo pliega", |_| true).await;
+    marca_todo(&h, &mut sub, 1).await;
+    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Applied { .. }),
+        "un ext4 distingue la caja: son dos ficheros y el lote es legítimo: {ack:?}"
     );
 }

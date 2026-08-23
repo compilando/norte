@@ -163,8 +163,18 @@ pub struct Falso {
     pub busquedas: std::sync::Mutex<Vec<String>>,
     /// Los volúmenes que contesta `host.volumes`.
     pub volumenes: Vec<norte_proto::methods::Volume>,
+    /// Cómo PLIEGA nombres cada ubicación (#268/#274). Clave: el wire del
+    /// directorio. Ausente = lo que dice `Capabilities::default()`.
+    ///
+    /// Es el mando que faltaba para poder escribir estos tests: sin él ningún
+    /// doble podía fingir un APFS, un NTFS o un exFAT, y las fixtures de
+    /// gemelos de caja del corpus no tenían contra qué correr.
+    pub capacidades: std::collections::HashMap<String, norte_proto::Capabilities>,
     /// Directorios de plugin que no cargaron: `(dir, motivo)`.
     pub errores_de_carga: Vec<(String, String)>,
+    /// Los BYTES del directorio de un error de carga (#265), por su cadena.
+    /// Lo que un daemon 0.53 manda; ausente = un peer 0.52.
+    pub bytes_de_carga: std::collections::HashMap<String, Vec<u8>>,
     /// El esquema `[config]` de cada extensión, por id.
     pub esquemas: HashMap<String, Vec<norte_proto::methods::PluginConfigKeyWire>>,
     /// Lo que contesta `ai.rename_plan`. `None` = el daemon falla.
@@ -339,6 +349,7 @@ impl Falso {
             entries_done: 0,
             entries_total: Some(1),
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -427,6 +438,29 @@ pub fn arbol_de_prueba() -> Falso {
 }
 
 impl HostBackend for Falso {
+    fn capabilities(
+        &self,
+        path: VPath,
+    ) -> BoxFuture<'static, Result<norte_proto::Capabilities, Error>> {
+        // Por UBICACIÓN, no por provider: se busca el directorio exacto y, si
+        // no está, su padre — que es lo que hace un mount de verdad.
+        let caps = self
+            .capacidades
+            .get(&path.to_wire())
+            .or_else(|| {
+                path.parent()
+                    .and_then(|p| self.capacidades.get(&p.to_wire()))
+            })
+            .copied()
+            // Sin mando: lo que dice un ext4 corriente —distingue la caja— que
+            // es el suelo honesto para un doble que corre en Linux.
+            .unwrap_or(norte_proto::Capabilities {
+                flags: norte_proto::CapabilityFlags::CASE_SENSITIVE,
+                max_path: None,
+            });
+        Box::pin(async move { Ok(caps) })
+    }
+
     fn plugin_list(
         &self,
     ) -> BoxFuture<'static, Result<norte_proto::methods::PluginListResult, Error>> {
@@ -439,6 +473,7 @@ impl HostBackend for Falso {
             .map(|(dir, reason)| norte_proto::methods::PluginLoadError {
                 dir: dir.clone(),
                 reason: reason.clone(),
+                dir_bytes: self.bytes_de_carga.get(dir).cloned(),
             })
             .collect();
         Box::pin(async move {
@@ -499,6 +534,7 @@ impl HostBackend for Falso {
                 entries_done: 0,
                 entries_total: None,
                 current: None,
+                unreadable: None,
             });
             tokio::spawn(async move {
                 let entradas: Vec<norte_proto::Entry> = hallazgos
@@ -535,6 +571,7 @@ impl HostBackend for Falso {
                     entries_done: 1,
                     entries_total: Some(1),
                     current: None,
+                    unreadable: None,
                 });
                 // El emisor vive lo que la task: soltarlo cierra el canal y
                 // eso ES el final de la búsqueda.
@@ -644,6 +681,7 @@ impl HostBackend for Falso {
             entries_done: 0,
             entries_total: None,
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         self.progresos
@@ -664,11 +702,15 @@ impl HostBackend for Falso {
         &self,
         id: String,
         approved: bool,
+        expected_digest: Option<String>,
     ) -> BoxFuture<'static, Result<(), Error>> {
-        self.gobierno
-            .lock()
-            .expect("gobierno")
-            .push(format!("approval:{id}:{approved}"));
+        // El ancla se APUNTA (#282): que la ventana la mande es lo que un test
+        // puede afirmar desde aquí, y sin apuntarla el hilo entero sería una
+        // cadena de firmas sin nadie que las lea.
+        self.gobierno.lock().expect("gobierno").push(format!(
+            "approval:{id}:{approved}:{}",
+            expected_digest.as_deref().unwrap_or("-")
+        ));
         let fallo = self.error_al_gobernar.lock().expect("gobierno").clone();
         // Y el catálogo cambia: el host lo REPIDE tras un OK, así que un
         // falso que contestara siempre lo mismo dejaría pasar una pantalla
@@ -859,6 +901,7 @@ impl HostBackend for Falso {
             entries_done: 0,
             entries_total: None,
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -918,6 +961,7 @@ impl HostBackend for Falso {
             entries_done: 0,
             entries_total: None,
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -983,6 +1027,7 @@ impl HostBackend for Falso {
             entries_done: 0,
             entries_total: None,
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -1044,6 +1089,7 @@ impl HostBackend for Falso {
             entries_done: 1,
             entries_total: Some(1),
             current: None,
+            unreadable: None,
         };
         let (_tx, rx) = tokio::sync::watch::channel(progreso);
         Box::pin(async move {
@@ -1231,6 +1277,7 @@ impl HostBackend for Falso {
             entries_done: 0,
             entries_total: Some(1),
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -1307,6 +1354,7 @@ impl HostBackend for Falso {
             entries_done: 0,
             entries_total: Some(1),
             current: None,
+            unreadable: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx);

@@ -1,9 +1,19 @@
-//! Inicialización de tracing para los binarios (cli/daemon).
+//! Inicialización de tracing para los binarios.
+//!
+//! Vive AQUÍ, y no en el core, porque hay dos familias de binarios que lo
+//! necesitan y solo una puede depender del motor: la ventana gráfica habla
+//! con el daemon por un socket y no puede arrastrar el engine, los providers
+//! y el host de plugins para escribir una línea de log (ADR 0066). Montarlo
+//! por duplicado fue la decisión anterior, y lo que costó una vez fue que la
+//! copia se dejó el endurecimiento: un log legible por cualquier cuenta local
+//! con las rutas por las que el usuario había navegado, durante seis commits
+//! (#255). Este crate ya era dueño de `state_dir()` y de las claves `[log]`,
+//! así que aquí el permiso se pone en UN sitio.
 //!
 //! Cap de SEGURIDAD (issue #43, regla 10): `suppaftp` loguea cada comando del
 //! canal de control a nivel TRACE del crate `log`, incluido `PASS <password>`.
 //! El bridge `tracing-log` (feature default de `tracing-subscriber`) lo
-//! materializaría con `RUST_LOG=trace`. [`init`] añade una directiva estática
+//! materializaría con `RUST_LOG=trace`. [`init`](crate::logging::init) añade una directiva estática
 //! `suppaftp=info` AL FINAL del filtro, así que gana a cualquier `RUST_LOG`
 //! —incluido `suppaftp=trace` explícito— y la password nunca llega al sink.
 
@@ -30,8 +40,8 @@ fn filter_from(env: Option<&str>) -> EnvFilter {
     base.add_directive("suppaftp=info".parse().expect("directiva estática válida"))
 }
 
-/// Prefijo de los ficheros rotados. La rotación es DIARIA, así que el nombre
-/// real lleva la fecha detrás.
+/// Prefijo por defecto de los ficheros rotados. La rotación es DIARIA, así
+/// que el nombre real lleva la fecha detrás.
 const LOG_PREFIX: &str = "norte.log";
 
 /// Crea el directorio del log CERRADO, y aprieta lo que ya haya dentro.
@@ -52,7 +62,7 @@ const LOG_PREFIX: &str = "norte.log";
 /// `journal.db`, `lua-trust.toml` y el spool. En una instalación nueva, y sin
 /// que nada avisara.
 #[cfg(unix)]
-fn create_dir_locked(dir: &Path) -> std::io::Result<()> {
+fn create_dir_locked(dir: &Path, prefix: &str) -> std::io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
     std::fs::DirBuilder::new()
         .recursive(true)
@@ -66,7 +76,7 @@ fn create_dir_locked(dir: &Path) -> std::io::Result<()> {
         if entrada
             .file_name()
             .as_encoded_bytes()
-            .starts_with(LOG_PREFIX.as_bytes())
+            .starts_with(prefix.as_bytes())
         {
             let _ =
                 std::fs::set_permissions(entrada.path(), std::fs::Permissions::from_mode(0o600));
@@ -78,7 +88,7 @@ fn create_dir_locked(dir: &Path) -> std::io::Result<()> {
 /// En Windows los permisos son ACLs y `<state_dir>` cuelga de `%LOCALAPPDATA%`,
 /// que ya es del usuario. Sin equivalente que aplicar aquí.
 #[cfg(not(unix))]
-fn create_dir_locked(dir: &Path) -> std::io::Result<()> {
+fn create_dir_locked(dir: &Path, _prefix: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)
 }
 
@@ -95,14 +105,14 @@ fn create_dir_locked(dir: &Path) -> std::io::Result<()> {
 ///
 /// `None` en vez de `Err`: un log es diagnóstico, y un diagnóstico que impide
 /// arrancar es peor que no tenerlo.
-fn file_layer<S>(dir: &Path, retain: usize) -> Option<impl Layer<S>>
+fn file_layer<S>(dir: &Path, retain: usize, prefix: &str) -> Option<impl Layer<S>>
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
-    create_dir_locked(dir).ok()?;
+    create_dir_locked(dir, prefix).ok()?;
     let appender = tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
-        .filename_prefix(LOG_PREFIX)
+        .filename_prefix(prefix)
         // `max_log_files(0)` haría que la poda borrase el fichero que está a
         // punto de escribir: uno es el mínimo que significa algo.
         .max_log_files(retain.max(1))
@@ -139,9 +149,9 @@ pub fn log_dir(configured: Option<&Path>) -> Option<std::path::PathBuf> {
                 dir = %d.display(),
                 "[log] dir es relativo y se ignora: el log iría a parar al cwd"
             );
-            norte_config::dirs::state_dir().map(|s| s.join("logs"))
+            crate::dirs::state_dir().map(|s| s.join("logs"))
         }
-        None => norte_config::dirs::state_dir().map(|s| s.join("logs")),
+        None => crate::dirs::state_dir().map(|s| s.join("logs")),
     }
 }
 
@@ -156,6 +166,12 @@ pub struct LogConfig<'a> {
     pub dir: Option<&'a Path>,
     /// `[log] retain`. `None` = una semana de ficheros.
     pub retain: Option<usize>,
+    /// Prefijo del fichero rotado. `None` = `norte.log`.
+    ///
+    /// Existe porque dos procesos distintos NO deben rotar el mismo fichero:
+    /// la ventana gráfica y el daemon pueden estar vivos a la vez, y la
+    /// retención de uno podadaría los ficheros del otro.
+    pub prefix: Option<&'a str>,
 }
 
 /// Instala el subscriber global: stderr MÁS el fichero rotatorio, con el cap de
@@ -181,7 +197,11 @@ pub fn init_to_file(cfg: LogConfig<'_>) {
 /// El montaje común. `stderr` decide si va también la capa de terminal.
 fn init_with(stderr: bool, cfg: LogConfig<'_>) {
     let file = match log_dir(cfg.dir) {
-        Some(d) => file_layer(&d, cfg.retain.unwrap_or(RETAIN_DEFAULT)),
+        Some(d) => file_layer(
+            &d,
+            cfg.retain.unwrap_or(RETAIN_DEFAULT),
+            cfg.prefix.unwrap_or(LOG_PREFIX),
+        ),
         None => None,
     };
     let terminal = stderr.then(|| tracing_subscriber::fmt::layer().with_writer(std::io::stderr));
@@ -254,7 +274,7 @@ mod tests {
     #[test]
     fn el_log_aterriza_en_un_fichero() {
         let dir = tempfile::tempdir().expect("tmp");
-        let layer = file_layer(dir.path(), 3).expect("appender");
+        let layer = file_layer(dir.path(), 3, LOG_PREFIX).expect("appender");
         let sub = tracing_subscriber::registry()
             .with(layer)
             .with(filter_from(None));
@@ -277,7 +297,7 @@ mod tests {
     #[test]
     fn la_password_de_ftp_no_llega_al_fichero() {
         let dir = tempfile::tempdir().expect("tmp");
-        let layer = file_layer(dir.path(), 3).expect("appender");
+        let layer = file_layer(dir.path(), 3, LOG_PREFIX).expect("appender");
         let sub = tracing_subscriber::registry()
             .with(layer)
             .with(filter_from(Some("trace,suppaftp=trace")));
@@ -307,7 +327,7 @@ mod tests {
 
         let tmp = tempfile::tempdir().expect("tmp");
         let dir = tmp.path().join("logs");
-        let layer = file_layer(&dir, 3).expect("appender");
+        let layer = file_layer(&dir, 3, LOG_PREFIX).expect("appender");
         let sub = tracing_subscriber::registry()
             .with(layer)
             .with(filter_from(None));
@@ -349,7 +369,7 @@ mod tests {
         std::fs::write(&ajeno, b"ajeno").expect("fichero");
         std::fs::set_permissions(&ajeno, std::fs::Permissions::from_mode(0o644)).expect("chmod");
 
-        create_dir_locked(&dir).expect("barrido");
+        create_dir_locked(&dir, LOG_PREFIX).expect("barrido");
 
         let modo =
             |p: &std::path::Path| std::fs::metadata(p).expect("stat").permissions().mode() & 0o777;
@@ -373,8 +393,8 @@ mod tests {
 
         let tmp = tempfile::tempdir().expect("tmp");
         let state = tmp.path().join("state").join("norte");
-        let _layer =
-            file_layer::<tracing_subscriber::Registry>(&state.join("logs"), 3).expect("appender");
+        let _layer = file_layer::<tracing_subscriber::Registry>(&state.join("logs"), 3, LOG_PREFIX)
+            .expect("appender");
 
         let modo = std::fs::metadata(&state)
             .expect("stat")
@@ -393,7 +413,7 @@ mod tests {
         // Un FICHERO donde debería ir el directorio: `create_dir_all` falla.
         let ocupado = dir.path().join("ocupado");
         std::fs::write(&ocupado, b"no soy un directorio").expect("fichero");
-        let capa = file_layer::<tracing_subscriber::Registry>(&ocupado, 3);
+        let capa = file_layer::<tracing_subscriber::Registry>(&ocupado, 3, LOG_PREFIX);
         assert!(capa.is_none(), "no se puede crear ahí, así que no hay capa");
     }
 }

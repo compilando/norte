@@ -74,6 +74,9 @@ async fn main() -> Result<()> {
     norte_core::logging::init_to_file(norte_core::logging::LogConfig {
         dir: cfg.common.log_dir.as_deref(),
         retain: cfg.common.log_retain,
+        // El fichero compartido: la CLI, el daemon y el terminal no coinciden
+        // vivos sobre el mismo estado como sí lo hacen el daemon y la ventana.
+        prefix: None,
     });
     let (browse_eff, viewer_eff, dialog_eff) = build_keymaps(&cfg, cli_preset.as_deref())?;
     // Bindings `lua:` descartados del keymap.toml de PROYECTO (seguridad,
@@ -213,6 +216,17 @@ async fn main() -> Result<()> {
     let watch = config::watch(&layers, cfg_tx).await;
     if watch.mode == WatchMode::Polling {
         app.message = Some(t("msg-config-polling"));
+    }
+    // Una capa de proyecto que no cargó (#260): antes del de Lua, que es el
+    // que no puede quedar pisado.
+    if !cfg.common.project_warnings.is_empty() {
+        app.message = Some(ta(
+            "msg-project-config-skipped",
+            &[("n", &cfg.common.project_warnings.len().to_string())],
+        ));
+        for aviso in &cfg.common.project_warnings {
+            tracing::warn!(motivo = %aviso, "capa de proyecto ignorada");
+        }
     }
     // DESPUÉS del aviso de polling: el de seguridad no debe quedar pisado.
     if discarded_lua > 0 {

@@ -16,7 +16,8 @@ use norte_proto::{
 use norte_vfs::{ByteSink, ByteStream, EntryStream, Provider};
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::native_path::{os_to_bytes, to_native};
+use norte_vfs::native::{to_native, verbatim};
+use norte_vfs::wtf8::os_to_bytes;
 
 /// Tamaño de chunk de lectura (alineado con el copy engine: 256 KiB).
 const READ_CHUNK: usize = 256 * 1024;
@@ -618,8 +619,8 @@ fn probe_case_sensitivity(base: &Path) -> Option<bool> {
     let pid = std::process::id();
     // verbatim: la sonda debe funcionar también bajo paths >260 en Windows
     // (misma promesa que el resto del provider).
-    let upper = crate::native_path::verbatim(base.join(format!(".norte-probe-{pid}-{seq}-A")));
-    let lower = crate::native_path::verbatim(base.join(format!(".norte-probe-{pid}-{seq}-a")));
+    let upper = verbatim(base.join(format!(".norte-probe-{pid}-{seq}-A")));
+    let lower = verbatim(base.join(format!(".norte-probe-{pid}-{seq}-a")));
     let file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -756,8 +757,7 @@ fn effective_symlink_kind(
             // aunque apunte a un dir (hallazgo del encoding-auditor).
             // Target drive-relative (`C:foo`): irresoluble sin el CWD de
             // aquella unidad — degrada a File, documentado.
-            let resolved =
-                crate::native_path::verbatim(std::path::absolute(&resolved).unwrap_or(resolved));
+            let resolved = verbatim(std::path::absolute(&resolved).unwrap_or(resolved));
             match std::fs::metadata(&resolved) {
                 Ok(md) if md.is_dir() => norte_vfs::SymlinkKind::Dir,
                 _ => norte_vfs::SymlinkKind::File,
@@ -1635,7 +1635,7 @@ impl Provider for LocalProvider {
             return Err(Error::Unsupported);
         }
         let native = self.native(link)?;
-        let target = crate::native_path::link_target_to_os(target)?;
+        let target = norte_vfs::native::link_target_to_os(target)?;
         blocking(move || make_symlink(&target, &native, kind)).await
     }
 

@@ -5090,6 +5090,9 @@ dependencies = [
  "tokio-util",
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.25.13+spec-1.1.0",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -5196,6 +5199,7 @@ dependencies = [
 name = "norte-frontend"
 version = "0.3.0-alpha.2"
 dependencies = [
+ "base64 0.22.1",
  "globset",
  "norte-config",
  "norte-encoding",
@@ -5204,7 +5208,7 @@ dependencies = [
  "norte-proto",
  "norte-testkit",
  "norte-theme",
- "norte-vfs-local",
+ "norte-vfs",
  "notify",
  "proptest",
  "regex",
@@ -5451,6 +5455,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
+ "norte-encoding",
  "norte-proto",
  "norte-testkit",
  "tokio",

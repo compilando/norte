@@ -131,6 +131,19 @@ pub async fn drain_pending(
             outcome,
         );
     }
+    // La secuencia va al EMULADOR y no al programa: se escribe cruda en la
+    // salida del terminal, que es de este bucle y no de `dispatch` (#286).
+    if let Some(bytes) = app.pending_osc52.take() {
+        use std::io::Write as _;
+        let mut salida = std::io::stdout();
+        if salida
+            .write_all(&bytes)
+            .and_then(|()| salida.flush())
+            .is_err()
+        {
+            app.message = Some(t("msg-clipboard-failed"));
+        }
+    }
     if let Some(pending) = app.pending_shell.take() {
         let crate::app::PendingShell {
             argv,

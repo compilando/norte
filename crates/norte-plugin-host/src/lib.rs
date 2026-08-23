@@ -41,7 +41,7 @@ pub use config_values::{
     persist_plugin_setting_typed, resolve_settings,
 };
 pub use manifest::{
-    COMMAND_ID_MAX_CHARS, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
+    COMMAND_ID_MAX_CHARS, COMMAND_MAX_COUNT, COMMAND_TITLE_MAX_CHARS, CONFIG_DESCRIPTION_MAX_CHARS,
     CONFIG_ENUM_MAX_VALUES, CONFIG_KEY_MAX_CHARS, CONFIG_MAX_KEYS, CONFIG_STRING_MAX_CHARS,
     Category, ColumnContrib, CommandContrib, ConfigKeySpec, Contributions, DecoratorContrib,
     HookContrib, Manifest, ManifestError, PreviewerContrib, ProviderContrib, is_valid_plugin_id,

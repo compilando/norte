@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Screen } from "../src/render";
 import { catalogoReal } from "./fixtures";
+import { BRIDGE_VERSION } from "../src/types";
 import type {
   BrowserSlotView,
   HostCatalog,
@@ -22,7 +23,10 @@ const CELL_H = 20;
 
 function catalogo(): HostCatalog {
   return {
-    bridge_version: 5,
+    // De la constante, NUNCA un literal: éste decía 5 durante tres bumps
+    // sin que nadie lo notara, que es la misma clase de rancio contra la
+    // que existe el resto de este fichero (#259).
+    bridge_version: BRIDGE_VERSION,
     instance_id: "host-1",
     locale: "es",
     // El catálogo DE VERDAD, no dos claves inventadas: con un fixture
@@ -73,6 +77,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
         cursor: 0,
         marks: 0,
         skipped_note: "",
+        hidden_note: "",
         columns: [
           { id: "name", label: "Nombre", sort: "asc", sortable: true },
           { id: "size", label: "Tamaño", sort: null, sortable: true },

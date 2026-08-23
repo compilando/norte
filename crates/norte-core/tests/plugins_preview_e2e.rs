@@ -398,7 +398,7 @@ mod styled {
         );
 
         backend
-            .plugins_set_approval("org.norte.prev", true)
+            .plugins_set_approval("org.norte.prev", true, None)
             .await
             .expect("aprobar por el wire");
         backend

@@ -58,7 +58,11 @@ pub fn harvest_ai_rename(
                 // MAJOR-2): una pareja que no es un `Segment`
                 // delata un daemon hostil/roto — ni se le pide
                 // plan al core, y confirmar queda muerto.
-                let state = if let Some(pairs) = norte_frontend::rename_pairs(&plan.entries) {
+                // Contra el directorio que se PLANEÓ, no contra el que el
+                // pane enseñe ahora (#275).
+                let state = if let Some(pairs) =
+                    norte_frontend::rename_pairs_in(&plan.entries, Some(&run.names))
+                {
                     let b = backend.clone();
                     let d = run.dir.clone();
                     let handle = tokio::spawn(async move { b.rename_batch_plan(&d, &pairs).await });
@@ -73,6 +77,7 @@ pub fn harvest_ai_rename(
                 };
                 let ready = PendingAiPlan {
                     dir: run.dir,
+                    names: run.names,
                     entries: plan.entries,
                     plan: state,
                 };

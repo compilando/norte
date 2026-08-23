@@ -30,6 +30,13 @@ pub struct AiRenameRun {
     /// Dir del pane al LANZAR; el plan se aplica AQUÍ aunque el usuario
     /// navegue mientras el modelo piensa.
     pub dir: VPath,
+    /// Los nombres que había en ese dir al lanzar.
+    ///
+    /// El cinturón exige que cada `from` del plan EXISTA donde se va a
+    /// aplicar (#275), y para cuando el modelo conteste el lector puede estar
+    /// en otro sitio: preguntarle al pane entonces validaría el plan contra
+    /// un directorio que no es el suyo.
+    pub names: Vec<Vec<u8>>,
 }
 
 /// Un plan IA YA cosechado que espera a que se cierre el modal de turno
@@ -39,6 +46,9 @@ pub struct AiRenameRun {
 pub struct PendingAiPlan {
     /// Dir del pane al LANZAR (donde aterriza el lote).
     pub dir: VPath,
+    /// Los nombres de ese dir al lanzar, por el mismo motivo que en
+    /// [`AiRenameRun::names`].
+    pub names: Vec<Vec<u8>>,
     /// Parejas from→to del modelo.
     pub entries: Vec<norte_proto::methods::AiRenameEntry>,
     /// Veredicto del lote: en vuelo, resuelto, o fallido.

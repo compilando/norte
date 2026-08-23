@@ -14,7 +14,7 @@
 mod common;
 
 use common::{collect_spans, payload, strings};
-use norte_help::{Block, Limits, Origin, Parsed, Span, Topic, parse_untrusted};
+use norte_help::{Block, Limits, Origin, Parsed, Span, Topic, TopicId, parse_untrusted};
 
 /// The cap on every string a plugin header contributes to the model, in
 /// CHARACTERS. Pinned here on purpose: the number is the one the plugin
@@ -840,4 +840,101 @@ fn a_dispatch_key_of_combining_marks_is_accepted_knowingly() {
     );
     // And the promise that IS made still holds over it.
     assert_no_hazard(&parsed.topic, "zalgo command key");
+}
+
+// ---------------------------------------------------------------------------
+// Las dos familias del corpus que la ayuda de tercero convirtió en superficie
+// viva (#263). Antes cada uno de estos casos era un literal DENTRO de este
+// crate, así que ni el host ni el renderer podían alcanzarlos.
+// ---------------------------------------------------------------------------
+
+/// Cada `help.md` hostil del corpus cumple el contrato que su `why` nombra.
+///
+/// Un solo test para las seis porque lo que se afirma es lo mismo: la puerta
+/// de lo no confiable no revienta, no devuelve un modelo vacío, y lo que
+/// cuenta de cada una es distinto — el título decodificado, la insignia, el
+/// recorte de la lista de comandos.
+#[test]
+fn cada_documento_hostil_del_corpus_cruza_la_puerta_no_confiable() {
+    let docs = norte_testkit::corpus::hostile_help_docs();
+    assert!(docs.len() >= 6, "el corpus canónico no encoge");
+    for d in &docs {
+        let parsed = parse_untrusted(
+            &d.bytes,
+            "org.acme.demo",
+            d.publisher.map(std::borrow::ToOwned::to_owned),
+        );
+        assert_no_hazard(&parsed.topic, d.id);
+        match d.id {
+            // La decodificación DETECTADA llega al título: leído como UTF-8 el
+            // 0xED sería un U+FFFD en mitad del nombre.
+            "doc_windows1252_title" => {
+                assert_eq!(parsed.topic.title, "Título", "[{}]", d.id);
+            }
+            // Y el BOM es lo único entre una página legible y un «binario».
+            "doc_utf16le_bom" => {
+                assert_eq!(parsed.topic.title, "Página", "[{}]", d.id);
+            }
+            // Un título de tres rellenos hangul no es vacío ni es espacio: si
+            // se aceptara, la fila no tendría nombre que nadie pueda decir.
+            "doc_title_all_invisibles" => {
+                assert_eq!(
+                    parsed.topic.title, "org.acme.demo",
+                    "[{}] un título invisible cae al id del host",
+                    d.id
+                );
+            }
+            // El publicador es quien FIRMA la página: su override bidi no
+            // puede llegar crudo a la insignia (lo cubre `assert_no_hazard`,
+            // que recorre la proyección entera incluido el origen).
+            "doc_publisher_bidi" => {
+                assert_eq!(parsed.topic.title, "Demo", "[{}]", d.id);
+            }
+            // Una valla sin cerrar es un borde de `Limits`, no un error.
+            "doc_unterminated_fence" => {
+                assert!(!parsed.topic.blocks.is_empty(), "[{}]", d.id);
+            }
+            // Uno por encima del tope de cabecera: se CORTA a 16, y el corte
+            // se DICE — cada entrada que se queda es una fila ejecutable en
+            // el mismo camino de despacho que la paleta.
+            "doc_17_commands" => {
+                assert_eq!(parsed.topic.commands.len(), 16, "[{}]", d.id);
+                assert!(parsed.truncated, "[{}] un corte que no se dice", d.id);
+            }
+            otro => panic!("fixture sin contrato afirmado: {otro}"),
+        }
+    }
+}
+
+/// Un id es una CLAVE, y las claves no se pliegan (#263).
+///
+/// Lo que se afirma es que las cuatro parejas siguen siendo parejas: un
+/// recorte, un `trim` o un paso NFC que las convierta en una sola es la
+/// regresión que la familia existe para cazar.
+#[test]
+fn los_ids_hostiles_del_corpus_siguen_siendo_distintos() {
+    let ids = norte_testkit::corpus::hostile_topic_ids();
+    assert!(ids.len() >= 4, "el corpus canónico no encoge");
+    for i in &ids {
+        let uno = TopicId::new(i.text.clone());
+        assert_eq!(uno.as_str(), i.text, "[{}] un id conserva sus bytes", i.id);
+        let Some(gemelo) = &i.twin else { continue };
+        assert_ne!(
+            uno,
+            TopicId::new(gemelo.clone()),
+            "[{}] dos ids distintos colisionaron",
+            i.id
+        );
+    }
+    // Y el relleno hangul es BLANCO para el parser aunque `trim` lo conserve:
+    // ésa es la diferencia que `is_blank_id` existe para nombrar.
+    let hueco = ids
+        .iter()
+        .find(|i| i.id == "id_hangul_filler")
+        .expect("la fixture está");
+    assert!(norte_help::is_blank_id("\u{3164}"));
+    assert!(
+        !norte_help::is_blank_id(&hueco.text),
+        "un id con prefijo real no es blanco: lo blanco es el sufijo"
+    );
 }

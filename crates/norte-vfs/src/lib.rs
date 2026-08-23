@@ -10,6 +10,12 @@
 mod contract;
 mod contract_ro;
 pub mod deadline;
+/// Conversión entre `VPath` y rutas NATIVAS del sistema.
+///
+/// Reglas de forma, no acceso a disco: por eso viven aquí y no en el provider
+/// local, que es el único crate con `unsafe` y al que un frontend
+/// daemon-only no debe arrastrar (ADR 0066, #254).
+pub mod native;
 mod options;
 mod provider;
 mod sink;
@@ -109,5 +115,50 @@ pub mod __private {
                 }
             }
         }
+    }
+}
+
+/// Cómo pliega nombres una UBICACIÓN, según lo que sus capacidades declaran.
+///
+/// Vive aquí —y no en `norte-compare`, de donde vino— porque es la regla que
+/// dice qué SIGNIFICAN las banderas del [`Provider`] cuyo contrato define este
+/// crate, y porque la preguntan tres capas que no se ven entre sí: el motor de
+/// comparación, el core cuando decide si dos rutas son el mismo nodo, y la
+/// ventana cuando comprueba si dos marcas de un lote colisionarían en el
+/// destino (#268). Tres copias de tres líneas es como se separan.
+///
+/// `CASE_SENSITIVE` gana sobre nada, y `FULL_FOLD` gana sobre `CASE_SENSITIVE`:
+/// un ext4 con `+F` declara los dos y pliega, que es lo que el orden dice.
+///
+/// Se pregunta por UBICACIÓN, jamás por provider (#215): un pincho FAT montado
+/// bajo el mismo `file://` que un `/home` sensible a la caja da otra respuesta,
+/// y contestar por el provider es contestar por el sitio equivocado.
+///
+/// ```
+/// use norte_encoding::FoldMode;
+/// use norte_proto::{Capabilities, CapabilityFlags};
+/// use norte_vfs::fold_mode_of;
+///
+/// let ext4 = Capabilities { flags: CapabilityFlags::CASE_SENSITIVE, max_path: None };
+/// assert_eq!(fold_mode_of(ext4), FoldMode::None);
+///
+/// let apfs = Capabilities { flags: CapabilityFlags::empty(), max_path: None };
+/// assert_eq!(fold_mode_of(apfs), FoldMode::Simple);
+///
+/// let ext4_f = Capabilities {
+///     flags: CapabilityFlags::CASE_SENSITIVE | CapabilityFlags::FULL_FOLD,
+///     max_path: None,
+/// };
+/// assert_eq!(fold_mode_of(ext4_f), FoldMode::Full);
+/// ```
+#[must_use]
+pub fn fold_mode_of(caps: norte_proto::Capabilities) -> norte_encoding::FoldMode {
+    use norte_proto::CapabilityFlags;
+    if caps.flags.contains(CapabilityFlags::FULL_FOLD) {
+        norte_encoding::FoldMode::Full
+    } else if caps.flags.contains(CapabilityFlags::CASE_SENSITIVE) {
+        norte_encoding::FoldMode::None
+    } else {
+        norte_encoding::FoldMode::Simple
     }
 }
