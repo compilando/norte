@@ -134,6 +134,43 @@ Two consequences are part of the work, not extras:
   profiles. A layout that does not mention a `slot_id` does not delete its
   state; orphan state is kept with a cap and an age sweep.
 
+### D9 — A command that names a SIDE resolves it by geometry
+
+Some commands in the shared catalogue name a side of the screen rather than a
+role: `pane.select-drive-left`/`-right` are Total Commander's `Alt+F1`/`Alt+F2`,
+and in a two-pane frontend they mean `panes[0]`/`panes[1]` — deliberately NOT
+the focus, so that a reader can mount a volume in the pane they are not
+standing in.
+
+A tree of slots has no `panes[0]`. It does have a resolved layout, so "left" is
+answered the only way that cannot lie: the **leftmost visible slot** of the
+resolved placement (`x`, then `y`, then id), among the slots that are listings.
+Hidden slots are not on any side of the screen, and a side with no listing is
+said out loud rather than falling back to the focused pane — mounting a volume
+in the wrong pane is exactly what the sided variant exists to prevent.
+
+The side is resolved when the picker OPENS, and the picker carries the slot it
+will navigate. Reading the focus at the moment of choosing would mean that
+moving the focus while the list is up changes which pane ends up somewhere
+else.
+
+Two neighbouring rules follow the same principle — the window answers a
+command with the surface it already has, rather than growing a second one:
+
+- **`pane.sort-*` is the header click.** Both doors end at
+  `SortSpec::after_click`, so the active column inverts and a new one starts
+  ascending, whoever asked. `pane.sort-menu` is the columns dialog, where the
+  column, the direction and `dirs_first` already live.
+- **`pane.properties` is the `metadata` slot**, which already paints name,
+  kind, size and date of the highlighted entry. A properties dialog with
+  permissions and owner is a separate surface, and it is deferred as such.
+
+D8's storage has one rule that reading this ADR should not let anyone forget:
+**what the session writes, the session reads.** Panel state carries the sort
+spec and the hidden-entries toggle; a frontend that writes them and restores
+only the path remembers where you were and forgets how you were looking at it,
+which is worse than not storing them at all.
+
 ## Consequences
 
 **Positive**

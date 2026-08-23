@@ -144,6 +144,25 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.semantic-search",
     "pane.compare-dirs",
     "pane.sync-dirs",
+    // #290 fase A: los gestos de panel que el TUI tenía y la ventana no.
+    // Ninguno escribe ni saca datos del proceso, así que ninguno va en
+    // `MUTAN`: re-listar es lo mismo que ya hace navegar.
+    "pane.sort-name",
+    "pane.sort-ext",
+    "pane.sort-size",
+    "pane.sort-time",
+    "pane.sort-menu",
+    "pane.refresh",
+    "pane.toggle-hidden",
+    "pane.names-encoding",
+    "pane.properties",
+    "pane.mirror",
+    "pane.pull",
+    "pane.swap",
+    "pane.history",
+    "pane.hotlist",
+    "pane.select-drive-left",
+    "pane.select-drive-right",
     "task.cancel",
     "task.next",
     "task.prev",
@@ -426,6 +445,47 @@ pub enum Efecto {
     /// transferencia de OTRO cliente y dejarle un parcial. Sus propias tasks
     /// son otra cosa: si pudo lanzarlas, puede pararlas.
     CancelarTask,
+    /// Ordena el listado enfocado por esta columna.
+    ///
+    /// La misma semántica que un click en la cabecera: la columna activa
+    /// invierte, una nueva ordena ascendente. Quien lo decide es
+    /// `SortSpec::after_click`, no una segunda tabla de aquí.
+    Ordenar(norte_frontend::SortColumn),
+    /// Vuelve a pedir el listado de los huecos que se ven.
+    ///
+    /// De TODOS, no solo del enfocado: un cambio externo raramente respeta
+    /// el foco, que es por lo que el TUI refresca los dos paneles.
+    Refrescar,
+    /// Aparta o devuelve los ficheros ocultos del panel activo.
+    ///
+    /// Presentación-solo (#107): el provider no re-lista.
+    AlternarOcultos,
+    /// Cicla la reinterpretación de los nombres que no son UTF-8 (#57).
+    ///
+    /// Display-only, regla 1: los bytes no se tocan.
+    CiclarEncoding,
+    /// La ubicación del hueco ACTIVO viaja al hueco DESTINO.
+    Espejo,
+    /// La ubicación del hueco DESTINO viaja al ACTIVO: el espejo al revés.
+    Traer,
+    /// Los dos huecos —activo y destino— cambian de sitio.
+    ///
+    /// No toca disco: los dos listados ya existían.
+    Intercambiar,
+    /// Abre la lista del rastro de navegación del hueco activo.
+    Historial,
+    /// Abre la lista de favoritos de la configuración.
+    Hotlist,
+    /// Abre el selector de volúmenes para un LADO de la pantalla.
+    ///
+    /// Un lado, no el foco: es lo que hacen `Alt+F1`/`Alt+F2` de Total
+    /// Commander, y lo que el TUI hace con sus `panes[0]`/`panes[1]`. Aquí
+    /// el lado lo decide la GEOMETRÍA del reparto, que es lo único que en
+    /// un árbol de huecos significa «izquierda».
+    VolumenesDeLado {
+        /// El de más a la derecha en vez del de más a la izquierda.
+        derecha: bool,
+    },
     /// Pide renombrar la entrada bajo el cursor. NO renombra: abre el nombre
     /// para editarlo.
     ///
@@ -479,7 +539,11 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "layout.close-slot" => Efecto::CerrarHueco,
         "layout.places" => Efecto::AlternarHueco { kind: "places" },
         "layout.processes" => Efecto::AlternarHueco { kind: "processes" },
-        "layout.metadata" => Efecto::AlternarHueco { kind: "metadata" },
+        // `pane.properties` cae aquí a propósito: las propiedades de esta
+        // ventana SON la hoja de atributos, que ya enseña nombre, clase,
+        // tamaño y fecha de lo señalado. Lo hace de otra forma, igual que
+        // ordena pulsando la cabecera.
+        "layout.metadata" | "pane.properties" => Efecto::AlternarHueco { kind: "metadata" },
         "pane.tab-new" => Efecto::PestanaNueva,
         "pane.tab-close" => Efecto::CerrarPestana,
         "pane.tab-next" => Efecto::CiclarPestana { atras: false },
@@ -495,7 +559,11 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.tab-goto-7" => Efecto::IrAPestana { n: 7 },
         "pane.tab-goto-8" => Efecto::IrAPestana { n: 8 },
         "pane.tab-goto-9" => Efecto::IrAPestana { n: 9 },
-        "pane.columns" => Efecto::Columnas,
+        // El «menú de orden» ES el diálogo de columnas: ahí están la columna,
+        // la dirección y `dirs_first`. Una segunda pantalla para lo mismo
+        // sería otra que mantener y otra que aprender, y es la misma decisión
+        // que tomó el TUI.
+        "pane.columns" | "pane.sort-menu" => Efecto::Columnas,
         "app.palette" => Efecto::Paleta,
         "app.help" => Efecto::Ayuda,
         "app.settings" => Efecto::Ajustes,
@@ -519,6 +587,22 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.semantic-search" => Efecto::BuscarSemantica,
         "pane.compare-dirs" => Efecto::Comparar,
         "pane.sync-dirs" => Efecto::Sincronizar,
+        // #138: la misma semántica que un click en la cabecera, y sobre el
+        // hueco con el FOCO — el orden es de un listado, como el cursor.
+        "pane.sort-name" => Efecto::Ordenar(norte_frontend::SortColumn::Name),
+        "pane.sort-ext" => Efecto::Ordenar(norte_frontend::SortColumn::Extension),
+        "pane.sort-size" => Efecto::Ordenar(norte_frontend::SortColumn::Size),
+        "pane.sort-time" => Efecto::Ordenar(norte_frontend::SortColumn::Mtime),
+        "pane.refresh" => Efecto::Refrescar,
+        "pane.toggle-hidden" => Efecto::AlternarOcultos,
+        "pane.names-encoding" => Efecto::CiclarEncoding,
+        "pane.mirror" => Efecto::Espejo,
+        "pane.pull" => Efecto::Traer,
+        "pane.swap" => Efecto::Intercambiar,
+        "pane.history" => Efecto::Historial,
+        "pane.hotlist" => Efecto::Hotlist,
+        "pane.select-drive-left" => Efecto::VolumenesDeLado { derecha: false },
+        "pane.select-drive-right" => Efecto::VolumenesDeLado { derecha: true },
         "task.next" => Efecto::TaskVecina { atras: false },
         "task.prev" => Efecto::TaskVecina { atras: true },
         "task.dismiss" => Efecto::DescartarTask,

@@ -13579,3 +13579,507 @@ async fn un_clic_en_una_pestana_la_pone_delante() {
         "{ack:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #290 fase A: los gestos de panel que el TUI tenía y la ventana no.
+//
+// Ninguno inventa modelo. Lo que estos tests comprueban es que la ventana usa
+// el COMPARTIDO —`SortSpec::after_click`, `PaneState::toggle_hidden`,
+// `History::entries`, el rol `Target` de la ADR 0058— y que lo que no puede
+// hacer lo DICE, en vez de quedarse muda.
+// ---------------------------------------------------------------------------
+
+/// La columna por la que se ordena, y en qué sentido, leídas de las cabeceras
+/// que cruzan el puente: es lo único que el renderer sabe del orden.
+fn orden_de(b: &norte_ui_host::dto::BrowserSlotView) -> (String, String) {
+    let marcadas: Vec<&norte_ui_host::dto::ColumnHeader> =
+        b.columns.iter().filter(|c| c.sort.is_some()).collect();
+    assert_eq!(
+        marcadas.len(),
+        1,
+        "una sola columna lleva la marca de orden: {:?}",
+        b.columns
+    );
+    (
+        marcadas[0].id.clone(),
+        marcadas[0].sort.clone().expect("marcada"),
+    )
+}
+
+/// Una foto de ahora mismo.
+async fn foto(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) -> norte_ui_host::ViewSnapshot {
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    siguiente_foto(sub).await
+}
+
+/// `pane.sort-size` ordena por tamaño y repetirlo INVIERTE.
+///
+/// La misma semántica que un click en la cabecera porque es el MISMO camino:
+/// quien decide es `SortSpec::after_click`, no una tabla por superficie.
+#[tokio::test]
+async fn el_comando_de_orden_es_el_click_en_la_cabecera() {
+    let (h, snap) = host_arbol(arbol()).await;
+    let (columna_inicial, _) = orden_de(listado(&snap));
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.sort-size").await;
+    let despues = foto(&h, &mut sub).await;
+    let (columna, sentido) = orden_de(listado(&despues));
+    assert_ne!(columna, columna_inicial, "ordena por OTRA columna");
+    assert_eq!(sentido, "asc", "una columna nueva empieza ascendente");
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.sort-size").await;
+    let otra_vez = foto(&h, &mut sub).await;
+    let (misma, sentido) = orden_de(listado(&otra_vez));
+    assert_eq!(misma, columna, "sigue siendo la misma columna");
+    assert_eq!(sentido, "desc", "la columna activa INVIERTE");
+}
+
+/// `pane.sort-menu` no estrena pantalla: abre el selector de COLUMNAS, donde
+/// están la columna, la dirección y `dirs_first`. Es la decisión del TUI, y
+/// dos pantallas para lo mismo serían otra que mantener y otra que aprender.
+#[tokio::test]
+async fn el_menu_de_orden_es_el_selector_de_columnas() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "pane.sort-menu").await;
+    let despues = foto(&h, &mut sub).await;
+    assert!(
+        despues.columns.is_some(),
+        "el menú de orden es el selector de columnas"
+    );
+}
+
+/// `pane.toggle-hidden` aparta los dotfiles del panel y lo ANUNCIA.
+///
+/// Presentación-solo (#107): el provider no vuelve a listar, así que el
+/// backend no ve una petición más.
+#[tokio::test]
+async fn ocultar_es_presentacion_y_se_dice() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![
+            (b"docs".to_vec(), true),
+            (b".oculto".to_vec(), false),
+            (b"notas.txt".to_vec(), false),
+        ],
+    );
+    let backend = Arc::new(f);
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let antes = listado(&snap).rows.len();
+    assert!(
+        listado(&snap)
+            .rows
+            .iter()
+            .any(|r| r.display_name == ".oculto"),
+        "sin `[ui] show_hidden` en la config se enseña todo"
+    );
+    let listados = backend.listados();
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.toggle-hidden").await;
+    let despues = foto(&h, &mut sub).await;
+    assert!(
+        listado(&despues)
+            .rows
+            .iter()
+            .all(|r| r.display_name != ".oculto"),
+        "los ocultos se apartaron"
+    );
+    assert_eq!(
+        backend.listados(),
+        listados,
+        "y se apartaron SIN volver a pedir el directorio"
+    );
+    assert!(
+        despues.status.message.is_some(),
+        "un listado que encoge sin decir por qué se lee como un fallo"
+    );
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.toggle-hidden").await;
+    let otra_vez = foto(&h, &mut sub).await;
+    assert_eq!(
+        listado(&otra_vez).rows.len(),
+        antes,
+        "y vuelve a devolverlos, sin re-listar"
+    );
+}
+
+/// `pane.names-encoding` cambia cómo se PINTA un nombre que no es UTF-8, y no
+/// los bytes: la fila sigue marcada como hostil y su clave sigue valiendo.
+#[tokio::test]
+async fn ciclar_el_encoding_repinta_sin_tocar_los_bytes() {
+    let (h, snap) = host_arbol(arbol()).await;
+    let hostil = listado(&snap)
+        .rows
+        .iter()
+        .find(|r| r.hostile)
+        .expect("el árbol trae un nombre que no es UTF-8");
+    let (clave, pintado) = (hostil.key, hostil.display_name.clone());
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.names-encoding").await;
+    let despues = foto(&h, &mut sub).await;
+    let misma = listado(&despues)
+        .rows
+        .iter()
+        .find(|r| r.key == clave)
+        .expect("la clave sigue valiendo: los bytes no cambiaron");
+    assert_ne!(misma.display_name, pintado, "se pinta de otra forma");
+    assert!(
+        despues.status.message.is_some(),
+        "y se dice con qué se está reinterpretando"
+    );
+}
+
+/// `pane.refresh` vuelve a pedir TODOS los listados que se ven, no solo el
+/// enfocado: lo que cambia un directorio por debajo es un cambio en el DISCO,
+/// y un cambio en el disco no respeta el foco.
+#[tokio::test]
+async fn refrescar_relista_los_dos_paneles() {
+    let backend = arbol();
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
+    let antes = backend.listados();
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.refresh").await;
+    for _ in 0..40 {
+        if backend.listados() >= antes + 2 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        let _ = foto(&h, &mut sub).await;
+    }
+    panic!(
+        "solo se relistó {} de los dos paneles",
+        backend.listados() - antes
+    );
+}
+
+/// `pane.mirror` manda la ubicación del panel ACTIVO al panel destino, y el
+/// destino sale del rol compartido — nunca de «el de al lado».
+#[tokio::test]
+async fn el_espejo_manda_la_ubicacion_al_destino() {
+    let (h, snap) = crate::dos_paneles_con_destino_aparte(arbol()).await;
+    // El escenario deja el 2 en `/casa/docs` y el foco en el 1, que sigue en
+    // `/casa`: espejar tiene que llevarse el 2 de vuelta.
+    assert!(listado_de(&snap, 2).path_display.ends_with("/casa/docs"));
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.mirror").await;
+    for _ in 0..40 {
+        let f = foto(&h, &mut sub).await;
+        if listado_de(&f, 2).path_display.ends_with("/casa")
+            && listado_de(&f, 1).path_display.ends_with("/casa")
+        {
+            assert_eq!(f.focus, Some(1), "el espejo no mueve el foco");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("el destino no siguió al activo");
+}
+
+/// `pane.pull` es el mismo gesto al revés: la ubicación sale del destino y
+/// viaja el panel con el foco.
+#[tokio::test]
+async fn traer_mueve_el_panel_del_foco() {
+    let (h, _snap) = crate::dos_paneles_con_destino_aparte(arbol()).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.pull").await;
+    for _ in 0..40 {
+        let f = foto(&h, &mut sub).await;
+        if listado_de(&f, 1).path_display.ends_with("/casa/docs") {
+            assert!(
+                listado_de(&f, 2).path_display.ends_with("/casa/docs"),
+                "el otro se queda donde estaba"
+            );
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("el panel del foco no se trajo la ubicación del otro");
+}
+
+/// `pane.swap` cambia los dos listados de sitio SIN tocar disco: nadie
+/// vuelve a pedir un directorio, y el foco se queda donde estaba.
+#[tokio::test]
+async fn intercambiar_no_pide_nada_al_backend() {
+    let backend = arbol();
+    let (h, snap) = crate::dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    assert!(listado_de(&snap, 1).path_display.ends_with("/casa"));
+    assert!(listado_de(&snap, 2).path_display.ends_with("/casa/docs"));
+    let listados = backend.listados();
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.swap").await;
+    let despues = foto(&h, &mut sub).await;
+    assert!(
+        listado_de(&despues, 1).path_display.ends_with("/casa/docs"),
+        "el panel del foco enseña lo otro: {}",
+        listado_de(&despues, 1).path_display
+    );
+    assert!(listado_de(&despues, 2).path_display.ends_with("/casa"));
+    assert_eq!(despues.focus, Some(1), "el foco no se mueve con el gesto");
+    assert_eq!(
+        backend.listados(),
+        listados,
+        "los dos listados ya existían: intercambiarlos no toca disco"
+    );
+}
+
+/// Un gesto de panel sin otro panel se DICE, y con la frase que distingue
+/// «no hay otro» de «hay varios, designa uno».
+#[tokio::test]
+async fn un_gesto_sin_otro_panel_se_dice() {
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    for cmd in ["pane.mirror", "pane.pull", "pane.swap"] {
+        let ack = ejecutar_por_paleta_ack(&h, &mut sub, cmd).await;
+        match ack {
+            ActionAck::Unavailable { reason_key } => {
+                assert_eq!(reason_key, "host-no-other-slot", "{cmd}");
+            }
+            otro => panic!("{cmd} con un solo panel: {otro:?}"),
+        }
+    }
+}
+
+/// `pane.history` enseña el rastro del panel, y elegir una fila navega.
+///
+/// Las filas son las de `History::entries` —el MRU compartido—: qué recuerda
+/// un panel y en qué orden no puede depender de quién lo pinta.
+#[tokio::test]
+async fn el_historial_es_el_rastro_compartido() {
+    let (h, snap) = host_arbol(arbol()).await;
+    let docs = listado(&snap)
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("el directorio está");
+    let (key, generation) = (docs.key, listado(&snap).generation);
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::Activate {
+        slot_id: 1,
+        key,
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    let mut despues = siguiente_foto(&mut sub).await;
+    while !listado(&despues).path_display.ends_with("/casa/docs") {
+        despues = siguiente_foto(&mut sub).await;
+    }
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.history").await;
+    let abierto = foto(&h, &mut sub).await;
+    let picker = abierto.picker.expect("el historial está abierto");
+    assert!(
+        picker.rows.iter().any(|r| r.label.ends_with("/casa")),
+        "el sitio del que se salió está en el rastro: {:?}",
+        picker.rows
+    );
+
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    for _ in 0..40 {
+        let f = foto(&h, &mut sub).await;
+        if f.picker.is_none() && listado(&f).path_display.ends_with("/casa") {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("elegir en el historial no navegó");
+}
+
+/// `pane.hotlist` enseña los favoritos de la configuración, y uno cuya ruta
+/// no parsea SE QUEDA con su aviso: la hotlist es data del usuario, y un
+/// favorito que desaparece en silencio es un fallo que nadie puede ver.
+#[tokio::test]
+async fn un_favorito_invalido_se_queda_y_se_dice() {
+    let mut ajustes = norte_ui_host::ajustes_por_defecto();
+    ajustes.common.hotlist = vec![
+        norte_config::HotlistItem {
+            name: "casa".to_owned(),
+            target: Ok(dir()),
+        },
+        norte_config::HotlistItem {
+            name: "roto".to_owned(),
+            target: Err("err-invalid-path".to_owned()),
+        },
+    ];
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: arbol(),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes,
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.hotlist").await;
+    let abierto = foto(&h, &mut sub).await;
+    let picker = abierto.picker.expect("los favoritos están abiertos");
+    assert_eq!(picker.rows.len(), 2, "el inválido NO se cae de la lista");
+    assert_eq!(picker.rows[1].label, "roto");
+    assert!(
+        !picker.rows[1].detail.is_empty(),
+        "y su detalle dice que la ruta no vale"
+    );
+
+    // El cursor sobre el inválido: elegirlo no puede navegar a ninguna parte,
+    // y quedarse mudo no se distingue de una tecla rota.
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    let ack = h.dispatch(tecla("Enter")).await.expect("host vivo");
+    match ack {
+        ActionAck::Unavailable { reason_key } => assert_eq!(reason_key, "hotlist-invalid"),
+        otro => panic!("un favorito inválido: {otro:?}"),
+    }
+}
+
+/// `pane.select-drive-left` nombra un LADO de la pantalla, no el foco: con el
+/// foco en el panel derecho, el selector sigue siendo el del izquierdo.
+#[tokio::test]
+async fn los_volumenes_por_lado_no_siguen_al_foco() {
+    let (h, _snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.select-drive-left").await;
+    let abierto = foto(&h, &mut sub).await;
+    assert!(
+        abierto.picker.is_some(),
+        "el selector del lado izquierdo se abre con el foco en el derecho"
+    );
+}
+
+/// Las propiedades de esta ventana son el hueco `metadata`, que ya enseña
+/// nombre, clase, tamaño y fecha de lo señalado. La ventana lo hace de otra
+/// forma, igual que ordena pulsando la cabecera.
+#[tokio::test]
+async fn las_propiedades_abren_la_hoja_de_atributos() {
+    let (h, snap) = host_arbol(arbol()).await;
+    assert!(
+        !snap
+            .slots
+            .iter()
+            .any(|s| matches!(s, SlotView::Metadata(_))),
+        "de fábrica `simple` no trae hoja de atributos"
+    );
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.properties").await;
+    let despues = foto(&h, &mut sub).await;
+    assert!(
+        despues
+            .slots
+            .iter()
+            .any(|s| matches!(s, SlotView::Metadata(_))),
+        "las propiedades abren la hoja"
+    );
+}
+
+/// El orden y la ocultación VUELVEN de la sesión.
+///
+/// Se escribían y no los leía nadie: la ventana se acordaba de dónde estabas
+/// y olvidaba cómo lo estabas mirando, así que ordenar por tamaño o apartar
+/// los dotfiles duraba hasta cerrar.
+#[tokio::test]
+async fn la_sesion_devuelve_el_orden_y_los_ocultos() {
+    let mut falso = Falso::default();
+    falso.pon(
+        "mem:///casa",
+        vec![
+            (b"docs".to_vec(), true),
+            (b".oculto".to_vec(), false),
+            (b"notas.txt".to_vec(), false),
+        ],
+    );
+    let mut body = norte_frontend::session::SessionBody::default();
+    body.slots.insert(
+        1,
+        norte_frontend::session::SlotState {
+            path: dir(),
+            cursor: 0,
+            back: Vec::new(),
+            forward: Vec::new(),
+            sort: norte_frontend::SortSpec {
+                column: norte_frontend::SortColumn::Size,
+                dir: norte_frontend::SortDir::Desc,
+                dirs_first: true,
+            },
+            columns: Vec::new(),
+            show_hidden: false,
+            touched_ms: 0,
+        },
+    );
+    *falso.sesion.lock().expect("sesión") = (
+        norte_proto::methods::Session {
+            version: norte_frontend::session::SCHEMA_VERSION,
+            revision: 7,
+            body: serde_json::to_value(&body).expect("json"),
+        },
+        true,
+    );
+
+    let (_h, snap) = host_arbol(Arc::new(falso)).await;
+    let b = listado(&snap);
+    assert!(
+        b.rows.iter().all(|r| r.display_name != ".oculto"),
+        "la sesión decía que estaban apartados"
+    );
+    let (_, sentido) = orden_de(b);
+    assert_eq!(sentido, "desc", "y que se ordenaba al revés");
+}
+
+/// `[ui] show_hidden = false` siembra el estado inicial de los paneles, igual
+/// que en el TUI (#107). Sin esto, la clave estaba muerta en esta ventana.
+#[tokio::test]
+async fn la_config_siembra_la_ocultacion() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(b".oculto".to_vec(), false), (b"notas.txt".to_vec(), false)],
+    );
+    let mut ajustes = norte_ui_host::ajustes_por_defecto();
+    ajustes.common.ui_show_hidden = Some(false);
+    let (_h, snap) = UiHost::start(UiHostOptions {
+        backend: Arc::new(f),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes,
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    assert!(
+        listado(&snap)
+            .rows
+            .iter()
+            .all(|r| r.display_name != ".oculto"),
+        "la configuración decía que no se enseñan"
+    );
+}

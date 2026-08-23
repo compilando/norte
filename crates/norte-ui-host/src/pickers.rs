@@ -99,6 +99,16 @@ pub(crate) struct Selector {
     cursor: usize,
     /// La lista está vacía y esta es la clave Fluent que lo explica.
     vacio: &'static str,
+    /// Cómo se llama, en clave Fluent. Estaba CLAVADO en el de volúmenes, que
+    /// era el único; con tres, un título fijo miente en dos de ellos.
+    titulo: &'static str,
+    /// A qué hueco navega lo elegido.
+    ///
+    /// Explícito y no «el activo»: `pane.select-drive-left` nombra un LADO de
+    /// la pantalla, y el lado se resuelve al ABRIR. Leerlo al elegir haría
+    /// que mover el foco mientras la lista está puesta cambiara el panel que
+    /// acaba montando el volumen.
+    slot: u32,
 }
 
 /// Una fila con lo que hace falta para ACTUAR, además de para pintar.
@@ -110,12 +120,91 @@ struct Fila {
 
 impl Selector {
     /// El selector de volúmenes, todavía sin la lista: se pide y llega.
-    pub(crate) fn volumenes() -> Self {
+    pub(crate) fn volumenes(slot: u32) -> Self {
         Self {
             filas: Vec::new(),
             cursor: 0,
             vacio: "picker-volumes-loading",
+            titulo: "picker-volumes-title",
+            slot,
         }
+    }
+
+    /// El rastro de navegación de un hueco, más reciente primero.
+    ///
+    /// Las filas son las de `History::entries` —el MRU compartido— y no una
+    /// segunda lista de aquí: qué recuerda un panel y en qué orden no puede
+    /// depender de quién lo pinta.
+    pub(crate) fn historial(slot: u32, rastro: &std::collections::VecDeque<VPath>) -> Self {
+        let filas = rastro
+            .iter()
+            .map(|p| {
+                let (pintable, hostile) = norte_frontend::display::path_display(p);
+                Fila {
+                    vista: PickerRowView {
+                        label: clamp_display(pintable),
+                        hostile,
+                        detail: String::new(),
+                    },
+                    destino: Some(p.clone()),
+                }
+            })
+            .collect();
+        Self {
+            filas,
+            cursor: 0,
+            vacio: "picker-history-empty",
+            titulo: "picker-history-title",
+            slot,
+        }
+    }
+
+    /// Los favoritos de la configuración.
+    ///
+    /// Un favorito cuya ruta no parsea SE QUEDA, con su aviso y sin destino:
+    /// la hotlist es data del usuario, y uno que desaparece en silencio es un
+    /// fallo que nadie puede ver (mismo criterio que la barra lateral).
+    pub(crate) fn hotlist(
+        slot: u32,
+        favoritos: &[(String, Result<VPath, String>)],
+        lang: Lang,
+    ) -> Self {
+        let filas = favoritos
+            .iter()
+            .map(|(nombre, destino)| {
+                // El nombre de un favorito son BYTES tanto como una ruta: lo
+                // escribió una persona en un fichero y puede llevar bidi.
+                let (nombre_pintable, nombre_hostil) =
+                    norte_frontend::display_name(nombre.as_bytes());
+                let (detalle, detalle_hostil, destino) = match destino {
+                    Ok(p) => {
+                        let (pintable, hostile) = norte_frontend::display::path_display(p);
+                        (pintable, hostile, Some(p.clone()))
+                    }
+                    Err(_) => (norte_i18n::t_in(lang, "hotlist-invalid"), false, None),
+                };
+                Fila {
+                    vista: PickerRowView {
+                        label: clamp_display(nombre_pintable),
+                        hostile: nombre_hostil || detalle_hostil,
+                        detail: clamp_display(detalle),
+                    },
+                    destino,
+                }
+            })
+            .collect();
+        Self {
+            filas,
+            cursor: 0,
+            vacio: "picker-hotlist-empty",
+            titulo: "picker-hotlist-title",
+            slot,
+        }
+    }
+
+    /// A qué hueco navega lo que se elija aquí.
+    pub(crate) fn slot(&self) -> u32 {
+        self.slot
     }
 
     /// Mete los volúmenes que contestó el host.
@@ -169,6 +258,15 @@ impl Selector {
         }
     }
 
+    /// Hay una fila bajo el cursor, tenga destino o no.
+    ///
+    /// Distingue «la lista está vacía» de «esta fila no lleva a ninguna
+    /// parte» —un favorito cuya ruta no parsea—, que son dos respuestas
+    /// distintas y sin esto se contestaban igual: con silencio.
+    pub(crate) fn hay_fila(&self) -> bool {
+        self.filas.get(self.cursor).is_some()
+    }
+
     /// A dónde navega la fila del cursor, si hay alguna.
     pub(crate) fn elegir(&self) -> Option<VPath> {
         self.filas.get(self.cursor)?.destino.clone()
@@ -177,7 +275,7 @@ impl Selector {
     /// La proyección.
     pub(crate) fn vista(&self, lang: Lang) -> PickerView {
         PickerView {
-            title: clamp_display(norte_i18n::t_in(lang, "picker-volumes-title")),
+            title: clamp_display(norte_i18n::t_in(lang, self.titulo)),
             rows: self.filas.iter().map(|f| f.vista.clone()).collect(),
             cursor: (!self.filas.is_empty()).then_some(self.cursor as u64),
             empty: if self.filas.is_empty() {
