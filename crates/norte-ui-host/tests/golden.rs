@@ -37,10 +37,35 @@ fn load(name: &str) -> BTreeMap<String, Value> {
 }
 
 /// Cobertura 1:1 entre fixtures y casos, y match exacto en ambos sentidos.
+/// Reescribe las fixtures de una familia desde los casos Rust.
+///
+/// Solo con `NORTE_BLESS=1`, y a propósito: el corpus ES el acuerdo con un
+/// renderer que no comparte tipos, así que regenerarlo tiene que ser un acto
+/// explícito que se lee en el diff. Sin esto, un campo nuevo obligaba a
+/// parchear el JSON a mano —y a mano es donde se cuelan los valores que no
+/// corresponden a ningún caso.
+fn bless<T: Serialize>(file: &str, cases: &[(&str, T)]) {
+    let mut mapa = serde_json::Map::new();
+    for (nombre, valor) in cases {
+        mapa.insert(
+            (*nombre).to_owned(),
+            serde_json::to_value(valor).expect("serializable"),
+        );
+    }
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden")
+        .join(file);
+    let texto = serde_json::to_string_pretty(&Value::Object(mapa)).expect("json");
+    std::fs::write(&path, texto + "\n").expect("escribir la fixture");
+}
+
 fn check_family<T>(file: &str, cases: &[(&str, T)])
 where
     T: Serialize + DeserializeOwned + PartialEq + Debug,
 {
+    if std::env::var_os("NORTE_BLESS").is_some_and(|v| v == "1") {
+        bless(file, cases);
+    }
     let fixtures = load(file);
     let fixture_names: Vec<&str> = fixtures.keys().map(String::as_str).collect();
     let mut case_names: Vec<&str> = cases.iter().map(|(n, _)| *n).collect();
@@ -1629,4 +1654,230 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
         ),
     ]);
     casos
+}
+
+/// Ningún número del corpus se sale de donde un `f64` es exacto (#258).
+///
+/// El renderer los recibe como `number` de JavaScript, que es un `f64`: por
+/// encima de 2^53 dos enteros distintos son el mismo. Hoy todos son
+/// contadores pequeños y esto pasa de sobra; existe para que el día que
+/// alguien meta un hash o un id aleatorio en un `u64` del puente, el corpus
+/// se ponga rojo antes de que dos filas colisionen en silencio.
+#[test]
+fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
+    /// 2^53: el último entero que un `f64` representa sin vecinos perdidos.
+    const TOPE: u64 = 1 << 53;
+
+    fn recorre(v: &Value, donde: &str, malos: &mut Vec<String>) {
+        match v {
+            Value::Number(n) => {
+                if let Some(u) = n.as_u64()
+                    && u > TOPE
+                {
+                    malos.push(format!("{donde} = {u}"));
+                }
+            }
+            Value::Array(xs) => {
+                for (i, x) in xs.iter().enumerate() {
+                    recorre(x, &format!("{donde}[{i}]"), malos);
+                }
+            }
+            Value::Object(m) => {
+                for (k, x) in m {
+                    recorre(x, &format!("{donde}.{k}"), malos);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut malos = Vec::new();
+    for fichero in [
+        "updates.json",
+        "changes.json",
+        "actions.json",
+        "acks.json",
+        "envelope.json",
+    ] {
+        for (caso, valor) in load(fichero) {
+            recorre(&valor, &format!("{fichero}/{caso}"), &mut malos);
+        }
+    }
+    assert!(
+        malos.is_empty(),
+        "un número del puente pasa de 2^53 y el renderer lo redondearía: {malos:?}"
+    );
+}
+
+/// Cada VARIANTE de los enums del puente cruza al menos una vez (#257).
+///
+/// La cobertura de `UiAction` ya la vigila el compilador (`tag_de_accion` es
+/// un `match` exhaustivo sin comodín). Los enums que viajan DENTRO de una
+/// foto no la tenían: `SlotState::Error` —el camino de error de un listado—
+/// no se serializó jamás, `TaskStateView` solo cruzaba `running`, y `RowKind`
+/// solo `file`, mientras el renderer decide la afordancia de carpeta mirando
+/// `dir`. Aquí cada familia se nombra con un `match` exhaustivo, así que una
+/// variante nueva no compila hasta que alguien le da su fixture.
+mod variantes {
+    use super::{RowKind, SlotState, TaskStateView, check_family, fila};
+    use norte_ui_host::dto::{
+        CellView, ConnectionView, DialogChoice, DialogView, QuickView, SlotPlacement, SlotRole,
+    };
+
+    fn nombre_estado(s: &SlotState) -> &'static str {
+        match s {
+            SlotState::Ready => "slot_state_ready",
+            SlotState::Loading => "slot_state_loading",
+            SlotState::Error { .. } => "slot_state_error",
+        }
+    }
+
+    fn nombre_conexion(c: &ConnectionView) -> &'static str {
+        match c {
+            ConnectionView::Connected => "connection_connected",
+            ConnectionView::Reconnecting => "connection_reconnecting",
+            ConnectionView::Lost { .. } => "connection_lost",
+        }
+    }
+
+    fn nombre_task(t: TaskStateView) -> &'static str {
+        match t {
+            TaskStateView::Queued => "task_queued",
+            TaskStateView::Running => "task_running",
+            TaskStateView::Done => "task_done",
+            TaskStateView::Failed => "task_failed",
+            TaskStateView::Cancelled => "task_cancelled",
+        }
+    }
+
+    fn nombre_clase(k: RowKind) -> &'static str {
+        match k {
+            RowKind::Dir => "row_kind_dir",
+            RowKind::File => "row_kind_file",
+            RowKind::Symlink => "row_kind_symlink",
+            RowKind::Other => "row_kind_other",
+        }
+    }
+
+    /// Las FORMAS vacías, que son las que un renderer lee mal sin que nada se
+    /// queje: un `None` se pinta igual que un campo que no llegó.
+    fn formas_vacias() -> Vec<(&'static str, serde_json::Value)> {
+        vec![
+            (
+                "cell_text_none",
+                serde_json::to_value(CellView {
+                    column: "size".to_owned(),
+                    text: None,
+                })
+                .expect("json"),
+            ),
+            (
+                "placement_role_none",
+                serde_json::to_value(SlotPlacement {
+                    slot_id: 9,
+                    x: 0,
+                    y: 0,
+                    width: 10,
+                    height: 4,
+                    role: None,
+                    focus_index: 0,
+                })
+                .expect("json"),
+            ),
+            (
+                "placement_role_target",
+                serde_json::to_value(SlotPlacement {
+                    slot_id: 2,
+                    x: 10,
+                    y: 0,
+                    width: 10,
+                    height: 4,
+                    role: Some(SlotRole::Target),
+                    focus_index: 1,
+                })
+                .expect("json"),
+            ),
+            (
+                "quick_jump",
+                serde_json::to_value(QuickView {
+                    query: "ca".to_owned(),
+                    mode: "jump".to_owned(),
+                    matches: 3,
+                })
+                .expect("json"),
+            ),
+            (
+                "dialog_input_none",
+                serde_json::to_value(DialogView {
+                    id: norte_ui_host::ModalId(1),
+                    title_key: "modal-delete-title".to_owned(),
+                    destination: None,
+                    subject: None,
+                    asker: None,
+                    deadline: None,
+                    body: Vec::new(),
+                    overflow_note: String::new(),
+                    choices: vec![DialogChoice {
+                        id: "cancel".to_owned(),
+                        label_key: "choice-cancel".to_owned(),
+                        destructive: false,
+                    }],
+                    input: None,
+                    input_hostile: false,
+                })
+                .expect("json"),
+            ),
+        ]
+    }
+
+    #[test]
+    fn cada_variante_de_enum_tiene_su_fixture() {
+        let estados = vec![
+            SlotState::Ready,
+            SlotState::Loading,
+            SlotState::Error {
+                reason_key: "err-permission-denied".to_owned(),
+                detail: Some("EACCES".to_owned()),
+            },
+        ];
+        let conexiones = vec![
+            ConnectionView::Connected,
+            ConnectionView::Reconnecting,
+            ConnectionView::Lost {
+                reason_key: "err-daemon-gone".to_owned(),
+            },
+        ];
+        let tasks = vec![
+            TaskStateView::Queued,
+            TaskStateView::Running,
+            TaskStateView::Done,
+            TaskStateView::Failed,
+            TaskStateView::Cancelled,
+        ];
+        let clases = vec![
+            RowKind::Dir,
+            RowKind::File,
+            RowKind::Symlink,
+            RowKind::Other,
+        ];
+
+        let mut casos: Vec<(&str, serde_json::Value)> = Vec::new();
+        for e in &estados {
+            casos.push((nombre_estado(e), serde_json::to_value(e).expect("json")));
+        }
+        for c in &conexiones {
+            casos.push((nombre_conexion(c), serde_json::to_value(c).expect("json")));
+        }
+        for t in &tasks {
+            casos.push((nombre_task(*t), serde_json::to_value(t).expect("json")));
+        }
+        for k in &clases {
+            let mut f = fila(1, "x", false);
+            f.kind = *k;
+            casos.push((nombre_clase(*k), serde_json::to_value(&f).expect("json")));
+        }
+        casos.extend(formas_vacias());
+        casos.sort_by(|a, b| a.0.cmp(b.0));
+        check_family("variants.json", &casos);
+    }
 }

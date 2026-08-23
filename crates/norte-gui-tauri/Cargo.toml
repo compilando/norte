@@ -71,6 +71,10 @@ tauri-build.workspace = true
 [dev-dependencies]
 norte-core.workspace = true
 norte-testkit.workspace = true
+# Solo en TESTS: `celdas_locales` monta un `LocalProvider` de verdad contra un
+# directorio temporal. Las dependencias de desarrollo no viajan en el binario,
+# y `tests/dependency_boundary.rs` las excluye a propósito (#254).
+norte-vfs-local.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 

@@ -305,6 +305,46 @@ fn rutas(capas: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
 /// No son capas, son pantallas: con el visor abierto las teclas son suyas
 /// (`esc` cierra, `e` recarga con otro encoding), y con una pregunta delante
 /// también — y eso último es lo que hace que quien reata `dialog.confirm`
+/// Los tres keymaps EFECTIVOS: preset de fábrica más las capas del usuario.
+///
+/// SOLO LECTURA hasta la fase 5. El preset ata F7/F8 a crear y borrar, y que
+/// la tecla exista no es permiso: los comandos que escriben no entran en el
+/// keymap efectivo —la tecla se responde «aquí no» en vez de quedarse muda— y
+/// el host los rechaza aunque llegaran por otra vía.
+///
+/// CON las capas del usuario, igual que el terminal: sin ellas un
+/// `keymap.toml` con rebinds se ignoraba en silencio aquí mientras el otro
+/// frontend sí lo honraba (#253). `UiHostOptions::keymap` documenta que lo
+/// que recibe ya viene fusionado, y fusionarlo es trabajo de quien lee disco.
+///
+/// El visor y los diálogos son otras PANTALLAS con el mismo preset: `esc`
+/// cierra y `e` recarga con otro encoding porque lo dice el preset, no porque
+/// el renderer lo decida.
+///
+/// Un preset que no existe se DICE: el mismo fichero rechaza a gritos un flag
+/// mal escrito, y tragarse un VALOR mal escrito para arrancar con otra cosa
+/// sería la incoherencia contraria.
+fn keymaps(
+    preset: &str,
+    cfg: &norte_frontend::config::FrontendConfig,
+) -> Result<
+    (
+        norte_frontend::keymap::Effective,
+        norte_frontend::keymap::Effective,
+        norte_frontend::keymap::Effective,
+    ),
+    StartupError,
+> {
+    let keymap =
+        norte_ui_host::keys::keymap_de_preset_con_capas(preset, &cfg.keymap_layers, EFECTOS)
+            .map_err(|_| StartupError::Desconocido {
+                que: "preset",
+                valor: preset.to_owned(),
+            })?;
+    let (visor, dialogo) = otras_pantallas(preset, &cfg.keymap_layers)?;
+    Ok((keymap, visor, dialogo))
+}
+
 /// cambie esta ventana igual que el TUI (#287).
 fn otras_pantallas(
     preset: &str,
@@ -394,30 +434,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     } else {
         cfg.common.preset.clone()
     };
-    // SOLO LECTURA hasta la fase 5. El preset ata F7/F8 a crear y borrar, y
-    // que la tecla exista no es permiso: el gate de salida de la fase 4 dice
-    // que ninguna mutación está viva hasta que la fase 5 traiga su camino
-    // seguro. Aquí eso significa que esos comandos no entran en el keymap
-    // efectivo —la tecla se responde «aquí no» en vez de quedarse muda— y que
-    // el host los rechaza aunque llegaran por otra vía.
-    // Un preset que no existe se DICE. El mismo fichero rechaza a gritos un
-    // flag mal escrito; tragarse un VALOR mal escrito y arrancar con otra
-    // cosa es la incoherencia contraria.
-    // CON las capas del usuario, igual que el terminal: sin ellas un
-    // `keymap.toml` con rebinds se ignoraba en silencio aquí mientras el otro
-    // frontend sí lo honraba (#253). `UiHostOptions::keymap` documenta que lo
-    // que recibe es el keymap EFECTIVO, preset y capas ya fusionados, y
-    // construirlo es trabajo de quien lee disco — o sea de aquí.
-    let keymap =
-        norte_ui_host::keys::keymap_de_preset_con_capas(&preset, &cfg.keymap_layers, EFECTOS)
-            .map_err(|_| StartupError::Desconocido {
-                que: "preset",
-                valor: preset.clone(),
-            })?;
-    // El visor es otra PANTALLA, con el mismo preset: `esc` cierra y `e`
-    // recarga con otro encoding porque eso es lo que dice el preset, no
-    // porque el renderer lo decida.
-    let (keymap_viewer, keymap_dialog) = otras_pantallas(&preset, &cfg.keymap_layers)?;
+    let (keymap, keymap_viewer, keymap_dialog) = keymaps(&preset, &cfg)?;
     // Un `lua:` de la capa de PROYECTO se descarta —un repositorio no elige
     // qué código corre una tecla—, y se DICE, como en el terminal: un
     // descarte silencioso es una tecla que no hace lo que su fichero dice.
@@ -554,6 +571,27 @@ fn start_dir(dir: Option<PathBuf>) -> Result<VPath, StartupError> {
         .map_err(|e| StartupError::Dir(format!("{}: {e}", nativo.display())))
 }
 
+/// El log va al FICHERO y solo al fichero.
+///
+/// El MONTAJE es el compartido (`norte_config::logging`): rotación diaria,
+/// directorio 0700 y ficheros 0600, retención acotada y el cap de seguridad
+/// de `suppaftp`. Aquí se montaba a mano —porque el helper vivía en el core y
+/// este binario habla con el daemon por un socket—, y lo que costó fue que la
+/// copia se dejó el endurecimiento: un log legible por cualquier cuenta local
+/// con las rutas por las que el usuario había navegado (#255). El helper vive
+/// ahora en `norte-config`, que ya era dueño de `state_dir()` y de `[log]`.
+///
+/// El prefijo SÍ es propio: el daemon y esta ventana pueden estar vivos a la
+/// vez, y compartir fichero de rotación haría que la retención de uno podase
+/// los ficheros del otro.
+fn logging(cfg: &norte_frontend::config::FrontendConfig) {
+    norte_config::logging::init_to_file(norte_config::logging::LogConfig {
+        dir: cfg.common.log_dir.as_deref(),
+        retain: cfg.common.log_retain,
+        prefix: Some("norte-gui.log"),
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,25 +644,4 @@ mod tests {
         let e = start_dir(Some(PathBuf::from("/no/existe/ni/de/lejos"))).expect_err("falla");
         assert!(matches!(e, StartupError::Dir(_)), "{e}");
     }
-}
-
-/// El log va al FICHERO y solo al fichero.
-///
-/// El MONTAJE es el compartido (`norte_config::logging`): rotación diaria,
-/// directorio 0700 y ficheros 0600, retención acotada y el cap de seguridad
-/// de `suppaftp`. Aquí se montaba a mano —porque el helper vivía en el core y
-/// este binario habla con el daemon por un socket—, y lo que costó fue que la
-/// copia se dejó el endurecimiento: un log legible por cualquier cuenta local
-/// con las rutas por las que el usuario había navegado (#255). El helper vive
-/// ahora en `norte-config`, que ya era dueño de `state_dir()` y de `[log]`.
-///
-/// El prefijo SÍ es propio: el daemon y esta ventana pueden estar vivos a la
-/// vez, y compartir fichero de rotación haría que la retención de uno podase
-/// los ficheros del otro.
-fn logging(cfg: &norte_frontend::config::FrontendConfig) {
-    norte_config::logging::init_to_file(norte_config::logging::LogConfig {
-        dir: cfg.common.log_dir.as_deref(),
-        retain: cfg.common.log_retain,
-        prefix: Some("norte-gui.log"),
-    });
 }

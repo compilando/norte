@@ -28,8 +28,12 @@ async fn host_grande() -> (UiHost, norte_ui_host::ViewSnapshot) {
         .map(|i| (format!("fichero-{i:06}.txt").into_bytes(), false))
         .collect();
     f.pon("mem:///casa", nombres);
+    host_de(Arc::new(f)).await
+}
+
+async fn host_de(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot) {
     UiHost::start(UiHostOptions {
-        backend: Arc::new(f),
+        backend,
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
@@ -54,7 +58,14 @@ fn bytes(u: &norte_ui_host::BridgeEnvelope<UiUpdate>) -> usize {
 
 /// Espera al primer parche que cumpla `pred`, saltándose el relleno del
 /// listado (el host sigue drenando cien mil entradas por detrás) y los avisos
-/// de retraso, que en un directorio así son parte del paisaje.
+/// de retraso.
+///
+/// Desde #252 el relleno ya no publica un parche por lote —solo cuando la
+/// ventana visible cambia de verdad, más el último—, así que lo que hay que
+/// saltarse son dos o tres parches y no doscientos. El ayudante se queda
+/// porque esos dos siguen pudiendo colarse entre la acción y su respuesta;
+/// lo que desapareció es la ráfaga que forzaba un `Lagged` y una foto
+/// entera.
 async fn siguiente_parche(
     sub: &mut norte_ui_host::UiSubscription,
     pred: impl Fn(&norte_ui_host::dto::ViewPatch) -> bool,
@@ -214,4 +225,72 @@ async fn la_foto_inicial_no_lleva_cien_mil_filas() {
     );
     assert!(n < 64 * 1024, "la foto inicial son {n} bytes");
     println!("foto inicial con {GRANDE} entradas: {n} bytes, {filas} filas");
+}
+
+/// Rellenar un listado grande NO publica un parche por lote (#252).
+///
+/// Se drena en lotes de 500 y cada uno publicaba su parche de filas: en un
+/// directorio de cien mil entradas eso son doscientos parches en ráfaga
+/// contra un canal de 64, así que cualquier suscriptor que no drene a esa
+/// velocidad recibe `Lagged` y tiene que pedir una foto entera. Y casi todos
+/// llevaban las MISMAS filas, porque lo que se mezclaba caía muy por debajo
+/// de la ventana visible: el renderer repintaba doscientas veces lo mismo.
+///
+/// El tope es holgado a propósito. Lo que se afirma no es un número fino
+/// —cuántas veces cambia la ventana depende del orden en que el provider
+/// entregue— sino que ya no hay UNO POR LOTE.
+#[tokio::test]
+async fn el_relleno_no_publica_un_parche_por_lote() {
+    let cuantas = GRANDE;
+    // La puerta del doble detiene el stream justo tras la primera página, así
+    // que al suscribirse el relleno NO ha empezado: sin ella, el falso drena
+    // cien mil entradas en memoria antes de que este test mire.
+    let puerta = Arc::new(backend_falso::Puerta::default());
+    let mut f = Falso::default();
+    let nombres: Vec<(Vec<u8>, bool)> = (0..cuantas)
+        .map(|i| (format!("fichero-{i:06}.txt").into_bytes(), false))
+        .collect();
+    f.pon("mem:///casa", nombres);
+    f.puerta_drenaje = Some(Arc::clone(&puerta));
+    let (h, _snap) = host_de(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+    puerta.abrir();
+
+    let mut parches_de_filas = 0usize;
+    let mut visto_el_final = false;
+    for _ in 0..2000 {
+        // Los plazos NO son un ritmo: son «el host se ha callado». Treinta
+        // segundos para que el relleno ARRANQUE —cien mil entradas se mezclan
+        // en doscientos lotes, y con los otros tests de este fichero a la vez
+        // eso tarda lo que tarda—, y cinco para la cola, que es lo que evita
+        // que el test se pase medio minuto esperando a nada.
+        let plazo = if parches_de_filas == 0 { 30 } else { 5 };
+        let Ok(Some(siguiente)) =
+            tokio::time::timeout(std::time::Duration::from_secs(plazo), sub.recv()).await
+        else {
+            break;
+        };
+        if let Update::Message(m) = siguiente
+            && let UiUpdate::Patch(p) = &m.payload
+        {
+            for c in &p.changes {
+                if let ViewChange::Rows { rows, .. } = c {
+                    parches_de_filas += 1;
+                    // El último parche del relleno trae la ventana completa.
+                    visto_el_final = !rows.is_empty();
+                }
+            }
+        }
+    }
+
+    let lotes = cuantas / 500;
+    assert!(
+        visto_el_final,
+        "el relleno tiene que publicar al menos un parche de filas"
+    );
+    assert!(
+        parches_de_filas < lotes / 4,
+        "{parches_de_filas} parches de filas para {lotes} lotes: el relleno \
+         sigue publicando uno por lote"
+    );
 }

@@ -1,0 +1,142 @@
+{
+  "cell_text_none": {
+    "column": "size",
+    "text": null
+  },
+  "connection_connected": {
+    "state": "connected"
+  },
+  "connection_lost": {
+    "reason_key": "err-daemon-gone",
+    "state": "lost"
+  },
+  "connection_reconnecting": {
+    "state": "reconnecting"
+  },
+  "dialog_input_none": {
+    "asker": null,
+    "body": [],
+    "choices": [
+      {
+        "destructive": false,
+        "id": "cancel",
+        "label_key": "choice-cancel"
+      }
+    ],
+    "deadline": null,
+    "destination": null,
+    "id": 1,
+    "input": null,
+    "input_hostile": false,
+    "overflow_note": "",
+    "subject": null,
+    "title_key": "modal-delete-title"
+  },
+  "placement_role_none": {
+    "focus_index": 0,
+    "height": 4,
+    "role": null,
+    "slot_id": 9,
+    "width": 10,
+    "x": 0,
+    "y": 0
+  },
+  "placement_role_target": {
+    "focus_index": 1,
+    "height": 4,
+    "role": "target",
+    "slot_id": 2,
+    "width": 10,
+    "x": 10,
+    "y": 0
+  },
+  "quick_jump": {
+    "matches": 3,
+    "mode": "jump",
+    "query": "ca"
+  },
+  "row_kind_dir": {
+    "badge": "",
+    "badge_hostile": false,
+    "badge_role": "",
+    "cells": [
+      {
+        "column": "size",
+        "text": "1.2 KiB"
+      }
+    ],
+    "display_name": "x",
+    "hostile": false,
+    "key": 1,
+    "kind": "dir",
+    "marked": false,
+    "selected": false
+  },
+  "row_kind_file": {
+    "badge": "",
+    "badge_hostile": false,
+    "badge_role": "",
+    "cells": [
+      {
+        "column": "size",
+        "text": "1.2 KiB"
+      }
+    ],
+    "display_name": "x",
+    "hostile": false,
+    "key": 1,
+    "kind": "file",
+    "marked": false,
+    "selected": false
+  },
+  "row_kind_other": {
+    "badge": "",
+    "badge_hostile": false,
+    "badge_role": "",
+    "cells": [
+      {
+        "column": "size",
+        "text": "1.2 KiB"
+      }
+    ],
+    "display_name": "x",
+    "hostile": false,
+    "key": 1,
+    "kind": "other",
+    "marked": false,
+    "selected": false
+  },
+  "row_kind_symlink": {
+    "badge": "",
+    "badge_hostile": false,
+    "badge_role": "",
+    "cells": [
+      {
+        "column": "size",
+        "text": "1.2 KiB"
+      }
+    ],
+    "display_name": "x",
+    "hostile": false,
+    "key": 1,
+    "kind": "symlink",
+    "marked": false,
+    "selected": false
+  },
+  "slot_state_error": {
+    "detail": "EACCES",
+    "reason_key": "err-permission-denied",
+    "state": "error"
+  },
+  "slot_state_loading": {
+    "state": "loading"
+  },
+  "slot_state_ready": {
+    "state": "ready"
+  },
+  "task_cancelled": "cancelled",
+  "task_done": "done",
+  "task_failed": "failed",
+  "task_queued": "queued",
+  "task_running": "running"
+}

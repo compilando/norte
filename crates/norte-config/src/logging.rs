@@ -13,7 +13,7 @@
 //! Cap de SEGURIDAD (issue #43, regla 10): `suppaftp` loguea cada comando del
 //! canal de control a nivel TRACE del crate `log`, incluido `PASS <password>`.
 //! El bridge `tracing-log` (feature default de `tracing-subscriber`) lo
-//! materializaría con `RUST_LOG=trace`. [`init`] añade una directiva estática
+//! materializaría con `RUST_LOG=trace`. [`init`](crate::logging::init) añade una directiva estática
 //! `suppaftp=info` AL FINAL del filtro, así que gana a cualquier `RUST_LOG`
 //! —incluido `suppaftp=trace` explícito— y la password nunca llega al sink.
 
@@ -393,8 +393,8 @@ mod tests {
 
         let tmp = tempfile::tempdir().expect("tmp");
         let state = tmp.path().join("state").join("norte");
-        let _layer =
-            file_layer::<tracing_subscriber::Registry>(&state.join("logs"), 3, LOG_PREFIX).expect("appender");
+        let _layer = file_layer::<tracing_subscriber::Registry>(&state.join("logs"), 3, LOG_PREFIX)
+            .expect("appender");
 
         let modo = std::fs::metadata(&state)
             .expect("stat")

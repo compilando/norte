@@ -28,12 +28,10 @@ use norte_proto::{Error, VPath};
 ///
 /// Unix: los bytes del OS tal cual. Windows: WTF-8 (`as_encoded_bytes`).
 ///
-/// Hoisted to [`norte_vfs::wtf8::os_to_bytes`] (2026-08-10-volumes.md task
-/// V4): `norte-core::volumes::windows` needs the exact same conversion for
-/// `Volume::label`, and `norte-proto`/`norte-core` cannot depend on this
-/// crate (wrong direction), so the one function both sides need now lives in
-/// `norte-vfs`, which both already depend on. This is a thin re-export so the
-/// two call sites below do not have to spell the other crate's path.
+/// Un re-export fino de [`crate::wtf8::os_to_bytes`], que es donde vive la
+/// conversión desde que `norte-core::volumes::windows` la necesitó para
+/// `Volume::label`. Ahora este módulo es su vecino y el re-export solo ahorra
+/// deletrear la ruta en los dos sitios de abajo.
 pub(crate) use crate::wtf8::os_to_bytes;
 
 /// Reconstruye un `OsString` desde los bytes de un segmento.
@@ -70,6 +68,10 @@ pub fn bytes_to_os(bytes: &[u8]) -> Result<OsString, Error> {
 
 /// Destino de un symlink → `OsString`. Unix: bytes tal cual. El target NO
 /// es un segmento: no se le aplican las restricciones de `bytes_to_os`.
+///
+/// # Errors
+/// [`Error::InvalidPath`] si los bytes no son representables como ruta del
+/// sistema (en Windows, si no son WTF-8 válido).
 #[cfg(unix)]
 #[allow(clippy::unnecessary_wraps)] // firma común con la variante Windows
 pub fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
@@ -79,6 +81,9 @@ pub fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
 
 /// Destino de un symlink → `OsString` (Windows): WTF-8 validado, SIN las
 /// restricciones de segmento — un target legítimo contiene `\` y `:`.
+///
+/// # Errors
+/// [`Error::InvalidPath`] si los bytes no son WTF-8 válido.
 #[cfg(windows)]
 pub fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
     use std::os::windows::ffi::OsStringExt;
@@ -94,6 +99,9 @@ pub fn link_target_to_os(bytes: &[u8]) -> Result<OsString, Error> {
 /// `base` vacío = "raíz del OS" — el PRIMER segmento es el prefijo de unidad
 /// (`C:`) y se le restituye su separador (evita el path drive-relative
 /// `C:Users` que produciría un `push` ingenuo).
+///
+/// # Errors
+/// [`Error::InvalidPath`] si algún segmento no es representable nativamente.
 pub fn to_native(base: &Path, p: &VPath) -> Result<PathBuf, Error> {
     let mut segs = p.segments();
     let mut out = if cfg!(windows) && base.as_os_str().is_empty() {
@@ -196,7 +204,7 @@ fn is_bare_unc_body(body: &[u8]) -> bool {
 ///     .join(Segment::new(b"hosts".to_vec()).unwrap());
 /// # #[cfg(unix)]
 /// assert_eq!(
-///     norte_vfs_local::vpath_to_native(&vp).unwrap(),
+///     norte_vfs::native::vpath_to_native(&vp).unwrap(),
 ///     std::path::Path::new("/etc/hosts")
 /// );
 /// ```
@@ -251,12 +259,14 @@ pub fn vpath_from_native(path: &Path) -> Result<VPath, Error> {
 
 /// Aplica el prefijo verbatim en Windows; identidad en el resto.
 #[cfg(not(windows))]
+#[must_use]
 pub fn verbatim(p: PathBuf) -> PathBuf {
     p
 }
 
 /// Aplica el prefijo verbatim en Windows; identidad en el resto.
 #[cfg(windows)]
+#[must_use]
 pub fn verbatim(p: PathBuf) -> PathBuf {
     use std::path::{Component, Prefix};
     // Ya verbatim: no tocar.

@@ -13636,10 +13636,9 @@ async fn esperar_foto(
             let _ = siguiente_foto(sub).await;
         }
     };
-    match tokio::time::timeout(std::time::Duration::from_secs(10), espera).await {
-        Ok(f) => f,
-        Err(_) => panic!("plazo agotado esperando a que {que}"),
-    }
+    tokio::time::timeout(std::time::Duration::from_secs(10), espera)
+        .await
+        .unwrap_or_else(|_| panic!("plazo agotado esperando a que {que}"))
 }
 
 /// `pane.sort-size` ordena por tamaño y repetirlo INVIERTE.

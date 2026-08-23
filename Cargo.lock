@@ -5238,6 +5238,7 @@ dependencies = [
  "norte-theme",
  "norte-ui-host",
  "norte-vfs",
+ "norte-vfs-local",
  "serde",
  "serde_json",
  "tauri",

@@ -40,6 +40,11 @@ pub(crate) struct Ayuda {
     /// El resolver con el que se pinta ESTA apertura, con sus hechos ya
     /// congelados.
     chords: Chords,
+    /// Los hechos que `chords` lleva dentro, para saber si re-congelar
+    /// cambia algo. `Chords` no los devuelve, y preguntar «¿ha cambiado?»
+    /// es la diferencia entre un parche cuando el listado se mueve y un
+    /// parche por cada lote de relleno.
+    hechos: norte_frontend::availability::Facts,
     /// La hoja de teclado, generada una vez con el mapa efectivo del lector.
     teclas: Vec<HelpBlockView>,
     /// A quién atribuir la página de cada plugin, ya enmascarado y acotado.
@@ -89,8 +94,33 @@ impl Ayuda {
             // mapa `dialog` en el que resolver un verbo suyo y ponerle una
             // tecla sería ponerla en una página que nadie va a pulsar.
             chords: Chords::over(&[listado, visor], lang).with_facts(facts),
+            hechos: facts,
             teclas: hoja_de_teclado(listado, visor, lang),
         }
+    }
+
+    /// Vuelve a congelar los hechos SIN perder lo demás.
+    ///
+    /// El congelado es contra que se mueva el LECTOR, no contra que se mueva
+    /// el mundo: dos de los hechos —`enterable` y `viewable`— describen la
+    /// entrada bajo el cursor, y una copia o un borrado que terminan con la
+    /// ayuda delante re-listan el panel por debajo. Sin esto, la frase de
+    /// motivo se queda hablando de una selección que ya no existe (#262). El
+    /// TUI hace lo mismo por su embudo de refresco.
+    ///
+    /// Conserva la FOTO de plugins a propósito (`with_facts` la copia): esa
+    /// no la cambia un listado, y volver a pedirla dejaría la lateral sin
+    /// páginas de extensión durante un parpadeo.
+    /// Devuelve si los hechos CAMBIARON. Volver a congelar lo mismo no es un
+    /// cambio de pantalla, y publicarlo como tal sería un parche por cada
+    /// lote de relleno de un directorio que el lector ni está mirando.
+    pub(crate) fn recongelar(&mut self, facts: norte_frontend::availability::Facts) -> bool {
+        if self.hechos == facts {
+            return false;
+        }
+        self.hechos = facts;
+        self.chords = self.chords.with_facts(facts);
+        true
     }
 
     /// La proyección entera.

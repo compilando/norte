@@ -873,7 +873,7 @@ async fn actor(
                 }
             }
             Mensaje::MasEntradas(datos) => {
-                if let Some(u) = estado.aterrizar_lote(*datos, &backend, &buzon) {
+                for u in estado.aterrizar_lote(*datos, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
@@ -1151,6 +1151,14 @@ struct Hueco {
     /// Vacío siempre que lo que vuela es una navegación: ahí las filas son de
     /// otro directorio y una marca no significa nada. Se consume al aterrizar.
     marcas_a_restaurar: Vec<VPath>,
+    /// Hay filas mezcladas que no se han publicado todavía.
+    ///
+    /// El relleno se calla cuando el lote que mezcla no cambia la ventana
+    /// visible (#252), pero cada mezcla sube la ÉPOCA del listado y el
+    /// renderer nombra las filas por época: si se callan TODOS los parches,
+    /// se queda con una época vieja y sus clics se rechazan por rancios. Esta
+    /// bandera es la deuda, y el último lote la salda.
+    filas_por_publicar: bool,
     /// El drenaje que sigue trayendo lotes por detrás, si lo hay.
     ///
     /// SEPARADO de `en_vuelo` porque son dos vidas distintas: la primera
@@ -1863,6 +1871,7 @@ impl Hueco {
             en_vuelo: None,
             dir_pedido: None,
             marcas_a_restaurar: Vec::new(),
+            filas_por_publicar: false,
             drenando: None,
             sondeando: false,
             cancelar_sondeo: std::sync::Arc::default(),
@@ -2295,7 +2304,7 @@ impl Estado {
             return;
         };
         if cambia_esquema {
-            hueco.esquema_del_orden = dir.scheme().to_owned();
+            dir.scheme().clone_into(&mut hueco.esquema_del_orden);
         }
         hueco.en_vuelo = None;
         hueco.dir_pedido = None;
@@ -2955,6 +2964,11 @@ impl Estado {
         self.aterriza_en(slot, dir, res);
         self.sondear(slot, backend, buzon);
         self.adornar(slot, backend, buzon);
+        // Los hechos de la ayuda describen la entrada bajo el CURSOR, y este
+        // listado es otro (#262). La foto de abajo la lleva ya re-congelada,
+        // así que aquí no se fabrica parche: gastaría un número de secuencia
+        // que nadie recibiría.
+        self.recongelar_hechos_de_ayuda();
         // Un `cd` cambia la pantalla entera —directorio, filas, cursor,
         // marcas—, así que se manda una foto en vez de enumerar parches que
         // el renderer tendría que casar.
@@ -3021,12 +3035,19 @@ impl Estado {
         datos: (RequestToken, u32, Vec<Entry>, bool),
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
-    ) -> Option<BridgeEnvelope<UiUpdate>> {
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let (token, slot, batch, ultimo) = datos;
-        let u = self.aplicar_lote(slot, token, batch, ultimo)?;
+        let Some(u) = self.aplicar_lote(slot, token, batch, ultimo) else {
+            return Vec::new();
+        };
         self.sondear(slot, backend, buzon);
         self.adornar(slot, backend, buzon);
-        Some(u)
+        // El listado creció por debajo: si la ayuda está delante, sus hechos
+        // hablan de otra entrada (#262). Aquí no hay foto que lo arrastre,
+        // así que va su propio parche.
+        let mut salida = vec![u];
+        salida.extend(self.recongelar_ayuda());
+        salida
     }
 
     /// El movimiento, cuando el foco está en un panel que no es un listado.
@@ -6775,6 +6796,41 @@ impl Estado {
         }
     }
 
+    /// Re-congela los hechos de la ayuda si está abierta, y devuelve su
+    /// parche (#262).
+    ///
+    /// El congelado de `abrir_ayuda` es contra que se mueva el LECTOR, no
+    /// contra que se mueva el mundo. Dos de los hechos —`enterable` y
+    /// `viewable`— describen la entrada bajo el cursor, y una copia o un
+    /// borrado que terminan con la ayuda delante re-listan el panel por
+    /// debajo: la frase de motivo se quedaba explicando por qué no aplica a
+    /// una selección que ya no existe. No había despacho incorrecto
+    /// —`activar_en_ayuda` vuelve a preguntar antes de correr—, pero una
+    /// pantalla que explica algo falso es una pantalla que miente.
+    fn recongelar_ayuda(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
+        if !self.recongelar_hechos_de_ayuda() {
+            return None;
+        }
+        let cambio = ViewChange::Help {
+            help: self.vista_ayuda(),
+        };
+        Some(self.parche(vec![cambio]))
+    }
+
+    /// Re-congela y NO fabrica parche. Para los caminos que ya mandan una
+    /// foto: `parche` gasta un número de secuencia, y tirar el sobre después
+    /// de gastarlo deja un HUECO en la secuencia — que es exactamente la
+    /// condición que obliga al renderer a pedir una foto entera.
+    ///
+    /// Devuelve si la ayuda estaba abierta Y sus hechos han CAMBIADO.
+    fn recongelar_hechos_de_ayuda(&mut self) -> bool {
+        if self.ayuda.is_none() {
+            return false;
+        }
+        let hechos = self.hechos();
+        self.ayuda.as_mut().is_some_and(|a| a.recongelar(hechos))
+    }
+
     /// La proyección de la ayuda.
     fn vista_ayuda(&self) -> Option<crate::dto::HelpView> {
         let a = self.ayuda.as_ref()?;
@@ -6827,13 +6883,25 @@ impl Estado {
             "Tab" | "tab" => a.estado.toggle_focus(),
             "ArrowDown" | "down" => a.estado.down(),
             "ArrowUp" | "up" => a.estado.up(),
-            // La página la da el MODELO, que sabe lo que significa en cada
-            // mitad: en la lateral camina y enseña UNA vez, y en el cuerpo
-            // mueve el scroll y no el cursor, porque una página es un
-            // movimiento sobre prosa. Repetir `down()` diez veces hacía diez
+            // La página la da el MODELO, que sabe lo que significa en la
+            // LATERAL: camina por los temas y enseña uno, en vez de diez
             // transiciones de página por tecla.
-            "PageDown" | "pgdn" => a.estado.page_down(PAGINA_DE_AYUDA),
-            "PageUp" | "pgup" => a.estado.page_up(PAGINA_DE_AYUDA),
+            //
+            // En el CUERPO no. El cuerpo de una página cruza el puente
+            // entero y quien lo desplaza es el DOM, que es lo que un
+            // renderer con scroll nativo hace bien y sin preguntar; el
+            // renderer ni siquiera manda estas teclas cuando el cuerpo tiene
+            // el foco. Moverlo aquí crearía una SEGUNDA verdad sobre por
+            // dónde va la ayuda —el `scrollTop` del DOM y el `body_scroll`
+            // del modelo— y solo una de las dos se pinta (#267). El modelo
+            // conserva su paginación de cuerpo porque el TUI la usa: ahí no
+            // hay scroll nativo que delegar.
+            "PageDown" | "pgdn" if a.estado.focus() == norte_frontend::help::Focus::Topics => {
+                a.estado.page_down(PAGINA_DE_AYUDA);
+            }
+            "PageUp" | "pgup" if a.estado.focus() == norte_frontend::help::Focus::Topics => {
+                a.estado.page_up(PAGINA_DE_AYUDA);
+            }
             "Backspace" | "backspace" => {
                 if a.estado.filtering() {
                     a.estado.backspace();
@@ -12813,12 +12881,47 @@ impl Estado {
             // Se acabó el stream: este hueco ya no está creciendo.
             hueco.drenando = None;
         }
-        if batch.is_empty() {
-            // El último lote puede venir vacío —el stream cabía justo—: no
-            // hay filas nuevas que pintar, solo la bandera que bajar.
+        if batch.is_empty() && !hueco.filas_por_publicar {
+            // Nada que pegar y nada pendiente: el stream cerró sin resto.
             return None;
         }
-        hueco.pane.extend(batch);
+        // Lo que se ve AHORA, para compararlo con lo que se verá. Un
+        // directorio de cien mil entradas se drena en lotes de 500 y cada
+        // lote publicaba su parche: doscientos parches en ráfaga contra un
+        // canal de 64, o sea que cualquier suscriptor que no drene a esa
+        // velocidad recibe `Lagged` y tiene que pedir una foto entera. Y casi
+        // todos esos parches llevaban las MISMAS filas: lo que se estaba
+        // mezclando caía muy por debajo de la ventana visible (#252).
+        let antes = self
+            .huecos
+            .get(&slot)
+            .map(|h| self.filas_de(h))
+            .unwrap_or_default();
+        if !batch.is_empty()
+            && let Some(hueco) = self.huecos.get_mut(&slot)
+        {
+            hueco.pane.extend(batch);
+        }
+        let despues = self
+            .huecos
+            .get(&slot)
+            .map(|h| self.filas_de(h))
+            .unwrap_or_default();
+        // Callar un parche no es gratis: `extend` sube la ÉPOCA del listado y
+        // el renderer nombra cada fila con la época en la que la vio, así que
+        // un renderer al que se le callan todos los parches se queda con una
+        // época vieja y cada clic suyo se rechaza por rancio. Por eso lo que
+        // se calla se APUNTA, y el último lote —aunque venga vacío, que pasa
+        // cuando el resto es múltiplo exacto del lote— salda la deuda.
+        let calla = !ultimo && antes == despues;
+        if let Some(h) = self.huecos.get_mut(&slot) {
+            // Se calla: queda deuda. Se publica: la deuda se salda, porque el
+            // parche lleva la época de AHORA.
+            h.filas_por_publicar = calla;
+        }
+        if calla {
+            return None;
+        }
         Some(self.parche_filas_de(slot))
     }
 
