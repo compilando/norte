@@ -11,6 +11,14 @@
 
 pub mod dirs;
 pub mod load;
+/// Montaje de `tracing` para los binarios: fichero rotatorio con permisos
+/// cerrados, y el cap de seguridad de `suppaftp` (#43, regla 10).
+///
+/// Tras una feature porque arrastra `tracing-subscriber` y
+/// `tracing-appender`, y solo los BINARIOS los necesitan: una biblioteca que
+/// depende de este crate por leer `norte.toml` no tiene por qué compilarlos.
+#[cfg(feature = "logging")]
+pub mod logging;
 pub mod schema;
 #[cfg(feature = "watch")]
 pub mod watch;

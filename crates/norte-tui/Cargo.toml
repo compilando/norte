@@ -26,7 +26,7 @@ serde_json.workspace = true
 crossterm = { workspace = true, features = ["event-stream"] }
 futures.workspace = true
 mlua.workspace = true
-norte-config = { workspace = true, features = ["watch"] }
+norte-config = { workspace = true, features = ["watch", "logging"] }
 norte-core.workspace = true
 norte-encoding.workspace = true
 norte-frontend.workspace = true

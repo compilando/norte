@@ -104,7 +104,7 @@ fn copiar(bytes: &[u8]) -> Resultado {
 
 /// Abre `path` con la aplicación que el escritorio elija.
 fn abrir(path: &norte_proto::VPath) -> Resultado {
-    let Ok(nativa) = norte_vfs_local::vpath_to_native(path) else {
+    let Ok(nativa) = norte_vfs::native::vpath_to_native(path) else {
         // El host ya lo comprueba; aquí es el cinturón: a `xdg-open` no se le
         // da algo que no está en este disco.
         return Resultado::SinPrograma;
@@ -118,7 +118,7 @@ fn abrir(path: &norte_proto::VPath) -> Resultado {
 
 /// Abre un terminal sentado en `dir`.
 fn terminal(dir: &norte_proto::VPath) -> Resultado {
-    let Ok(nativa) = norte_vfs_local::vpath_to_native(dir) else {
+    let Ok(nativa) = norte_vfs::native::vpath_to_native(dir) else {
         return Resultado::SinPrograma;
     };
     for argv in norte_frontend::shell::terminal_candidates(&nativa) {

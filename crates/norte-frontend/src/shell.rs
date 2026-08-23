@@ -32,7 +32,7 @@
 pub fn pick_bytes(paths: &[norte_proto::VPath]) -> Vec<u8> {
     let mut out = Vec::new();
     for p in paths {
-        match norte_vfs_local::vpath_to_native(p) {
+        match norte_vfs::native::vpath_to_native(p) {
             #[cfg(unix)]
             Ok(native) => {
                 use std::os::unix::ffi::OsStrExt;
@@ -58,7 +58,7 @@ pub fn pick_bytes(paths: &[norte_proto::VPath]) -> Vec<u8> {
 /// write nothing at all — an empty file tells the wrapper to leave the shell
 /// where it is, and a norte that died mid-write can therefore never move a
 /// shell to half a path. Whether a pane is local IS whether
-/// `norte_vfs_local::vpath_to_native` accepts it: `file://` with no
+/// `norte_vfs::native::vpath_to_native` accepts it: `file://` with no
 /// authority, exactly the same test `pick_bytes` uses for its native/wire
 /// split — so a `sftp://`/`s3://` pane, or a `file://` one with an
 /// authority, is `None` here too.
@@ -67,7 +67,7 @@ pub fn pick_bytes(paths: &[norte_proto::VPath]) -> Vec<u8> {
 /// `cd` into a real directory on disk, and a wire form is not one.
 #[must_use]
 pub fn cd_bytes(dir: &norte_proto::VPath) -> Option<Vec<u8>> {
-    let native = norte_vfs_local::vpath_to_native(dir).ok()?;
+    let native = norte_vfs::native::vpath_to_native(dir).ok()?;
     #[cfg(unix)]
     let mut bytes = {
         use std::os::unix::ffi::OsStrExt;
@@ -347,7 +347,7 @@ fn command_flag_for(shell: &std::path::Path) -> &'static str {
 ///
 /// On unix this is the path unchanged. On Windows it is the point where two
 /// requirements of this repository collide (S4 encoding audit, M5):
-/// `norte_vfs_local::vpath_to_native` deliberately returns a VERBATIM
+/// `norte_vfs::native::vpath_to_native` deliberately returns a VERBATIM
 /// (`\\?\`) path so that reserved names, trailing dots and spaces, and paths
 /// over 260 characters survive at all — and `CreateProcessW`'s
 /// `lpCurrentDirectory` does not accept that namespace, nor does `wt -d`.
@@ -398,7 +398,7 @@ pub fn child_cwd(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     }
 }
 
-/// The verbatim prefix `norte_vfs_local::vpath_to_native` puts on every
+/// The verbatim prefix `norte_vfs::native::vpath_to_native` puts on every
 /// Windows path.
 #[cfg(windows)]
 const VERBATIM_PREFIX: &str = r"\\?\";
@@ -495,7 +495,7 @@ pub fn clipboard_bytes(paths: &[norte_proto::VPath]) -> Vec<u8> {
         if i > 0 {
             out.push(b'\n');
         }
-        match norte_vfs_local::vpath_to_native(p) {
+        match norte_vfs::native::vpath_to_native(p) {
             #[cfg(unix)]
             Ok(native) => {
                 use std::os::unix::ffi::OsStrExt;
@@ -524,7 +524,7 @@ pub fn clipboard_bytes(paths: &[norte_proto::VPath]) -> Vec<u8> {
 /// ```
 #[must_use]
 pub fn is_local(path: &norte_proto::VPath) -> bool {
-    norte_vfs_local::vpath_to_native(path).is_ok()
+    norte_vfs::native::vpath_to_native(path).is_ok()
 }
 
 /// Every argv worth trying, in order, to put text on the system clipboard —

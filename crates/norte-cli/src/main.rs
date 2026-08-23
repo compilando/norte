@@ -631,6 +631,8 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     norte_core::logging::init(norte_core::logging::LogConfig {
         dir: cfg_log.as_ref().and_then(|c| c.log_dir.as_deref()),
         retain: cfg_log.as_ref().and_then(|c| c.log_retain),
+        // El fichero compartido: es el que lee `norte doctor`.
+        prefix: None,
     });
 
     // El daemon construye SU PROPIO engine (con journal+policy, M3-4): el

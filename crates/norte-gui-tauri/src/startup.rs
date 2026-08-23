@@ -308,6 +308,7 @@ fn rutas(capas: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
 /// cambie esta ventana igual que el TUI (#287).
 fn otras_pantallas(
     preset: &str,
+    capas: &[norte_frontend::keymap::KeymapFile],
 ) -> Result<
     (
         norte_frontend::keymap::Effective,
@@ -319,9 +320,10 @@ fn otras_pantallas(
         que: "preset",
         valor: preset.to_owned(),
     };
-    let visor = norte_ui_host::keys::keymap_visor_de_preset(preset).map_err(|_| desconocido())?;
-    let dialogo =
-        norte_ui_host::keys::keymap_dialogo_de_preset(preset).map_err(|_| desconocido())?;
+    let visor = norte_ui_host::keys::keymap_visor_de_preset_con_capas(preset, capas)
+        .map_err(|_| desconocido())?;
+    let dialogo = norte_ui_host::keys::keymap_dialogo_de_preset_con_capas(preset, capas)
+        .map_err(|_| desconocido())?;
     Ok((visor, dialogo))
 }
 
@@ -381,6 +383,12 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         source,
     })?;
 
+    // El log, DESPUÉS de cargar la config porque `[log] dir` y `[log] retain`
+    // salen de ella —la ventana los ignoraba— y antes que nada más, para que
+    // lo que falle a partir de aquí deje rastro. Misma regla que el terminal:
+    // un `--help` sale antes y no escribe nada, que es lo correcto.
+    logging(&cfg);
+
     let preset = if let Some(p) = &cli.preset {
         nombre_de(p, "--preset")?
     } else {
@@ -395,16 +403,28 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // Un preset que no existe se DICE. El mismo fichero rechaza a gritos un
     // flag mal escrito; tragarse un VALOR mal escrito y arrancar con otra
     // cosa es la incoherencia contraria.
-    let keymap = norte_ui_host::keys::keymap_de_preset_con(&preset, EFECTOS).map_err(|_| {
-        StartupError::Desconocido {
-            que: "preset",
-            valor: preset.clone(),
-        }
-    })?;
+    // CON las capas del usuario, igual que el terminal: sin ellas un
+    // `keymap.toml` con rebinds se ignoraba en silencio aquí mientras el otro
+    // frontend sí lo honraba (#253). `UiHostOptions::keymap` documenta que lo
+    // que recibe es el keymap EFECTIVO, preset y capas ya fusionados, y
+    // construirlo es trabajo de quien lee disco — o sea de aquí.
+    let keymap =
+        norte_ui_host::keys::keymap_de_preset_con_capas(&preset, &cfg.keymap_layers, EFECTOS)
+            .map_err(|_| StartupError::Desconocido {
+                que: "preset",
+                valor: preset.clone(),
+            })?;
     // El visor es otra PANTALLA, con el mismo preset: `esc` cierra y `e`
     // recarga con otro encoding porque eso es lo que dice el preset, no
     // porque el renderer lo decida.
-    let (keymap_viewer, keymap_dialog) = otras_pantallas(&preset)?;
+    let (keymap_viewer, keymap_dialog) = otras_pantallas(&preset, &cfg.keymap_layers)?;
+    // Un `lua:` de la capa de PROYECTO se descarta —un repositorio no elige
+    // qué código corre una tecla—, y se DICE, como en el terminal: un
+    // descarte silencioso es una tecla que no hace lo que su fichero dice.
+    let capas_lua_descartadas = keymap
+        .discarded_lua_bindings()
+        .max(keymap_viewer.discarded_lua_bindings())
+        .max(keymap_dialog.discarded_lua_bindings());
 
     // De la línea de órdenes se exige que exista; de la CONFIGURACIÓN se cae
     // a la de siempre, que es lo que el usuario tenía antes de escribir la
@@ -459,6 +479,20 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         user_layouts,
     })
     .await?;
+    let mut snapshot = snapshot;
+    if capas_lua_descartadas > 0 {
+        // Se DICE, como en el terminal: un `lua:` que un repositorio pone en
+        // su capa de proyecto se descarta —un repositorio no elige qué código
+        // corre una tecla—, y descartarlo en silencio deja una tecla que no
+        // hace lo que su fichero dice. Va en el mensaje de la primera foto,
+        // que es el equivalente exacto del `app.message` del arranque del
+        // TUI: lo pisa la primera acción del lector, no antes.
+        snapshot.status.message = Some(norte_i18n::ta_in(
+            lang,
+            "msg-lua-keymap-project",
+            &[("n", &capas_lua_descartadas.to_string())],
+        ));
+    }
     Ok(Boot {
         host,
         snapshot,
@@ -516,7 +550,7 @@ fn start_dir(dir: Option<PathBuf>) -> Result<VPath, StartupError> {
         }
         None => std::env::current_dir().map_err(|e| StartupError::Dir(e.to_string()))?,
     };
-    norte_vfs_local::vpath_from_native(&nativo)
+    norte_vfs::native::vpath_from_native(&nativo)
         .map_err(|e| StartupError::Dir(format!("{}: {e}", nativo.display())))
 }
 
@@ -572,4 +606,25 @@ mod tests {
         let e = start_dir(Some(PathBuf::from("/no/existe/ni/de/lejos"))).expect_err("falla");
         assert!(matches!(e, StartupError::Dir(_)), "{e}");
     }
+}
+
+/// El log va al FICHERO y solo al fichero.
+///
+/// El MONTAJE es el compartido (`norte_config::logging`): rotación diaria,
+/// directorio 0700 y ficheros 0600, retención acotada y el cap de seguridad
+/// de `suppaftp`. Aquí se montaba a mano —porque el helper vivía en el core y
+/// este binario habla con el daemon por un socket—, y lo que costó fue que la
+/// copia se dejó el endurecimiento: un log legible por cualquier cuenta local
+/// con las rutas por las que el usuario había navegado (#255). El helper vive
+/// ahora en `norte-config`, que ya era dueño de `state_dir()` y de `[log]`.
+///
+/// El prefijo SÍ es propio: el daemon y esta ventana pueden estar vivos a la
+/// vez, y compartir fichero de rotación haría que la retención de uno podase
+/// los ficheros del otro.
+fn logging(cfg: &norte_frontend::config::FrontendConfig) {
+    norte_config::logging::init_to_file(norte_config::logging::LogConfig {
+        dir: cfg.common.log_dir.as_deref(),
+        retain: cfg.common.log_retain,
+        prefix: Some("norte-gui.log"),
+    });
 }

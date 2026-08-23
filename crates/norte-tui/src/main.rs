@@ -74,6 +74,9 @@ async fn main() -> Result<()> {
     norte_core::logging::init_to_file(norte_core::logging::LogConfig {
         dir: cfg.common.log_dir.as_deref(),
         retain: cfg.common.log_retain,
+        // El fichero compartido: la CLI, el daemon y el terminal no coinciden
+        // vivos sobre el mismo estado como sí lo hacen el daemon y la ventana.
+        prefix: None,
     });
     let (browse_eff, viewer_eff, dialog_eff) = build_keymaps(&cfg, cli_preset.as_deref())?;
     // Bindings `lua:` descartados del keymap.toml de PROYECTO (seguridad,

@@ -10,6 +10,12 @@
 mod contract;
 mod contract_ro;
 pub mod deadline;
+/// Conversión entre `VPath` y rutas NATIVAS del sistema.
+///
+/// Reglas de forma, no acceso a disco: por eso viven aquí y no en el provider
+/// local, que es el único crate con `unsafe` y al que un frontend
+/// daemon-only no debe arrastrar (ADR 0066, #254).
+pub mod native;
 mod options;
 mod provider;
 mod sink;

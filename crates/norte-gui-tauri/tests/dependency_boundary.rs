@@ -1,39 +1,40 @@
-//! La frontera del host, comprobada contra el grafo REAL de cargo.
+//! La frontera de la VENTANA, comprobada contra el grafo real de cargo.
 //!
-//! Dos cosas que este crate no puede alcanzar, por motivos distintos
-//! (ADR 0066):
-//!
-//! - **Ningún toolkit de pintado.** Si el host conociera a uno, dejaría de
-//!   ser el host de los demás — y la decisión D2 dice que el renderer es un
-//!   adaptador, no una capa de la arquitectura.
-//! - **El core.** El host habla por el SDK; arrastrar el engine, los
-//!   providers o el scheduler sería reabrir justo la puerta que la fase 1
-//!   cerró.
+//! Un frontend que solo habla con el daemon no puede arrastrar el motor ni un
+//! provider (ADR 0066, decisión D10). El caso que motivó este test: la ventana
+//! dependía de `norte-vfs-local` —el único crate con `unsafe`, `openat2` y
+//! `ConfinedRoot`— para UNA conversión de cadena a `VPath` (#254). La
+//! conversión vive ahora en `norte-vfs`, que es el crate del trait y no toca
+//! disco; esto es lo que impide que la arista vuelva.
 //!
 //! Las dependencias de DESARROLLO no cuentan: un test puede usar lo que le
 //! haga falta sin que viaje en el binario de nadie.
 
 use std::collections::{HashMap, HashSet};
 
-/// Lo que jamás debe alcanzar a `norte-ui-host` en tiempo de ejecución.
+/// Lo que jamás debe alcanzar a `norte-gui-tauri` en tiempo de ejecución.
 ///
-/// `norte-vfs-local` SÍ está desde #254: las conversiones de ruta nativa se
-/// mudaron a `norte-vfs` —el crate del trait, que no toca disco— así que ya
-/// no queda ninguna razón para que el único crate con `unsafe`, `openat2` y
-/// `ConfinedRoot` aparezca por aquí.
+/// `norte-vfs-local` NO está: `norte-frontend` ya lo consume para los paths
+/// nativos, y el host vive sobre `norte-frontend` a propósito. Lo que se
+/// vigila aquí es que no aparezca un toolkit ni el core.
 const PROHIBIDAS: &[&str] = &[
+    // El motor y sus vecinos: esta ventana habla por un socket (ADR 0066).
     "norte-core",
-    "norte-vfs-local",
-    "norte-vfs-sftp",
-    "norte-vfs-object",
-    "norte-vfs-archive",
     "norte-index",
     "norte-ai",
     "norte-plugin-host",
     "norte-compare",
     "norte-sync",
-    "tauri",
-    "wry",
+    // Y NINGÚN provider. `norte-vfs-local` es el único crate del proyecto al
+    // que se le permite `unsafe`, y lleva dentro `openat2` y `ConfinedRoot`:
+    // arrastrarlo a un proceso cuyo único transporte es un socket, para
+    // convertir una cadena en un `VPath`, es lo contrario de lo que la ADR
+    // promete (#254). La conversión vive en `norte-vfs`, que no toca disco.
+    "norte-vfs-local",
+    "norte-vfs-sftp",
+    "norte-vfs-object",
+    "norte-vfs-archive",
+    // Ni otro toolkit de pintado: el renderer de esta ventana es la webview.
     "gpui",
     "ratatui",
     "crossterm",
@@ -43,7 +44,7 @@ const PROHIBIDAS: &[&str] = &[
 ];
 
 #[test]
-fn el_host_no_conoce_toolkit_ni_core() {
+fn la_ventana_no_arrastra_un_provider_ni_el_core() {
     let salida = std::process::Command::new(env!("CARGO"))
         .args(["metadata", "--format-version", "1", "--all-features"])
         .output()
@@ -75,9 +76,9 @@ fn el_host_no_conoce_toolkit_ni_core() {
 
     let raiz = grafo
         .iter()
-        .find(|(_, (nombre, _))| nombre == "norte-ui-host")
+        .find(|(_, (nombre, _))| nombre == "norte-gui-tauri")
         .map(|(id, _)| *id)
-        .expect("norte-ui-host está en el grafo");
+        .expect("norte-gui-tauri está en el grafo");
 
     let mut vistos: HashSet<&str> = HashSet::new();
     let mut pila = vec![raiz];
@@ -98,7 +99,7 @@ fn el_host_no_conoce_toolkit_ni_core() {
     culpables.dedup();
     assert!(
         culpables.is_empty(),
-        "el host alcanza lo que no debe: {culpables:?}"
+        "la ventana alcanza lo que no debe: {culpables:?}"
     );
 }
 

@@ -164,7 +164,30 @@ pub fn keymap_de_preset_con(
     nombre: &str,
     efectos: crate::commands::Efectos,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    efectivo_con(nombre, norte_frontend::keymap::Screen::Browse, efectos)
+    keymap_de_preset_con_capas(nombre, &[], efectos)
+}
+
+/// El keymap del listado del preset MÁS las capas del usuario.
+///
+/// Ésta es la que usa un frontend de verdad. Las de arriba construyen sobre
+/// el preset de fábrica y nada más —lo mínimo para un test o un primer
+/// arranque—, y usarlas en un binario deja al usuario con los atajos de
+/// fábrica en silencio mientras el otro frontend sí honra su `keymap.toml`
+/// (#253).
+///
+/// # Errors
+/// [`KeymapError`] si el preset no existe, o si una capa no valida.
+pub fn keymap_de_preset_con_capas(
+    nombre: &str,
+    capas: &[norte_frontend::keymap::KeymapFile],
+    efectos: crate::commands::Efectos,
+) -> Result<norte_frontend::keymap::Effective, KeymapError> {
+    efectivo_con(
+        nombre,
+        norte_frontend::keymap::Screen::Browse,
+        capas,
+        efectos,
+    )
 }
 
 /// El keymap efectivo de la pantalla del VISOR, del mismo preset.
@@ -178,7 +201,23 @@ pub fn keymap_de_preset_con(
 pub fn keymap_visor_de_preset(
     nombre: &str,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    efectivo(nombre, norte_frontend::keymap::Screen::Viewer)
+    keymap_visor_de_preset_con_capas(nombre, &[])
+}
+
+/// El keymap del VISOR del preset más las capas del usuario (#253).
+///
+/// # Errors
+/// [`KeymapError`] si el preset no existe, o si una capa no valida.
+pub fn keymap_visor_de_preset_con_capas(
+    nombre: &str,
+    capas: &[norte_frontend::keymap::KeymapFile],
+) -> Result<norte_frontend::keymap::Effective, KeymapError> {
+    efectivo_con(
+        nombre,
+        norte_frontend::keymap::Screen::Viewer,
+        capas,
+        crate::commands::Efectos::Completo,
+    )
 }
 
 /// El keymap efectivo de un DIÁLOGO, del mismo preset.
@@ -193,37 +232,43 @@ pub fn keymap_visor_de_preset(
 pub fn keymap_dialogo_de_preset(
     nombre: &str,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    let fuente = norte_frontend::keymap::presets::source(nombre).ok_or(KeymapError::BadChord {
-        chord: nombre.to_owned(),
-    })?;
-    let preset = norte_frontend::keymap::parse_keymap(fuente)?;
+    keymap_dialogo_de_preset_con_capas(nombre, &[])
+}
+
+/// El keymap de un DIÁLOGO del preset más las capas del usuario (#253).
+///
+/// # Errors
+/// [`KeymapError`] si el preset no existe, o si una capa no valida.
+pub fn keymap_dialogo_de_preset_con_capas(
+    nombre: &str,
+    capas: &[norte_frontend::keymap::KeymapFile],
+) -> Result<norte_frontend::keymap::Effective, KeymapError> {
+    let preset = preset_de(nombre)?;
     norte_frontend::keymap::Effective::build_for(
         &preset,
-        &[],
+        capas,
         crate::commands::IMPLEMENTADOS_DIALOGO,
         norte_frontend::keymap::Screen::Dialog,
     )
 }
 
-fn efectivo(
-    nombre: &str,
-    pantalla: norte_frontend::keymap::Screen,
-) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    efectivo_con(nombre, pantalla, crate::commands::Efectos::Completo)
+fn preset_de(nombre: &str) -> Result<norte_frontend::keymap::KeymapFile, KeymapError> {
+    let fuente = norte_frontend::keymap::presets::source(nombre).ok_or(KeymapError::BadChord {
+        chord: nombre.to_owned(),
+    })?;
+    norte_frontend::keymap::parse_keymap(fuente)
 }
 
 fn efectivo_con(
     nombre: &str,
     pantalla: norte_frontend::keymap::Screen,
+    capas: &[norte_frontend::keymap::KeymapFile],
     efectos: crate::commands::Efectos,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    let fuente = norte_frontend::keymap::presets::source(nombre).ok_or(KeymapError::BadChord {
-        chord: nombre.to_owned(),
-    })?;
-    let preset = norte_frontend::keymap::parse_keymap(fuente)?;
+    let preset = preset_de(nombre)?;
     norte_frontend::keymap::Effective::build_for(
         &preset,
-        &[],
+        capas,
         &crate::commands::todos_con(efectos),
         pantalla,
     )
@@ -233,6 +278,44 @@ fn efectivo_con(
 mod tests {
     use super::*;
     use norte_frontend::keymap::{KeyCode, Mods};
+
+    /// Una capa del usuario cambia el keymap EFECTIVO de esta ventana (#253).
+    ///
+    /// Se construía siempre desde el preset de fábrica con `&[]` de capas, así
+    /// que un `keymap.toml` con rebinds se ignoraba en silencio aquí mientras
+    /// el terminal sí lo honraba. El test compara las dos construcciones: la
+    /// de fábrica NO tiene la atadura y la de la capa SÍ, que es lo único que
+    /// distingue «se leyó la capa» de «el preset ya lo traía».
+    #[test]
+    fn una_capa_del_usuario_cambia_el_keymap_de_la_ventana() {
+        let capa = norte_frontend::keymap::parse_keymap(
+            "[pane]\nprepend_keymap = [{ on = [\"ctrl+alt+j\"], run = \"pane.refresh\" }]\n",
+        )
+        .expect("la capa parsea");
+        let atado = |e: &norte_frontend::keymap::Effective| {
+            e.bindings()
+                .into_iter()
+                .any(|(seq, cmd)| seq == "ctrl+alt+j" && cmd == "pane.refresh")
+        };
+
+        let fabrica = keymap_de_preset("orthodox").expect("preset");
+        assert!(
+            !atado(&fabrica),
+            "el preset de fábrica no ata `ctrl+alt+j`, o el test no prueba nada"
+        );
+
+        let con_capa = keymap_de_preset_con_capas(
+            "orthodox",
+            std::slice::from_ref(&capa),
+            crate::commands::Efectos::Completo,
+        )
+        .expect("preset + capa");
+        assert!(
+            atado(&con_capa),
+            "la capa del usuario tiene que llegar al keymap efectivo: {:?}",
+            con_capa.bindings()
+        );
+    }
 
     #[test]
     fn el_vocabulario_del_navegador_se_traduce() {

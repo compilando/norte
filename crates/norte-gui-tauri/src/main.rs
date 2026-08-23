@@ -153,7 +153,6 @@ fn main() -> ExitCode {
         println!("norte-gui {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
-    logging();
     // Se toca aquí para que la referencia sea el arranque del proceso y no la
     // primera vez que alguien la lee.
     let _ = *ARRANQUE;
@@ -267,71 +266,3 @@ fn guardia_de_navegacion<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 
 /// Lo que se espera al apagar antes de cerrar la ventana de todas formas.
 const PLAZO_APAGADO: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Ficheros de log que sobreviven a la rotación.
-const RETENCION: usize = 7;
-
-/// El log va al FICHERO y solo al fichero.
-///
-/// Montado aquí y no con el del core a propósito: este binario habla con el
-/// daemon por un socket y no debe arrastrar el motor, los providers y el host
-/// de plugins para escribir una línea de log (ADR 0066). Es duplicación de
-/// MONTAJE, no de reglas; cuando haya un segundo consumidor, se iza.
-fn logging() {
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-
-    let Some(dir) = norte_config::dirs::state_dir().map(|d| d.join("logs")) else {
-        return;
-    };
-    // 0700 en el directorio y 0600 en cada fichero: aquí dentro va por dónde
-    // ha navegado el usuario. El helper del core lo endurece así, y duplicar
-    // el MONTAJE (ADR 0066) no era licencia para dejarse la protección.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
-        if !dir.exists()
-            && std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(&dir)
-                .is_err()
-        {
-            return;
-        }
-        if let Ok(md) = std::fs::metadata(&dir) {
-            let mut perms = md.permissions();
-            perms.set_mode(0o700);
-            let _ = std::fs::set_permissions(&dir, perms);
-        }
-    }
-    #[cfg(not(unix))]
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    let appender = tracing_appender::rolling::Builder::new()
-        .rotation(tracing_appender::rolling::Rotation::DAILY)
-        .filename_prefix("norte-gui.log")
-        // Retención acotada: un log que crece para siempre es un log que
-        // nadie borra.
-        .max_log_files(RETENCION)
-        .build(&dir);
-    let Ok(appender) = appender else {
-        return;
-    };
-    // NO bloqueante: escribir el log es I/O, y este proceso lo hace desde
-    // dentro del runtime (regla 2). El guard se filtra a propósito — vive lo
-    // que el proceso, y soltarlo dejaría de escribir.
-    let (writer, guard) = tracing_appender::non_blocking(appender);
-    std::mem::forget(guard);
-    let _ = tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(writer)
-                .with_ansi(false),
-        )
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("NORTE_LOG").unwrap_or_else(|_| "warn".to_owned()),
-        ))
-        .try_init();
-}
