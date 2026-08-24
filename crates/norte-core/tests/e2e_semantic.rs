@@ -120,3 +120,67 @@ async fn semantic_e2e_small_corpus() {
         .expect("search receta");
     assert_eq!(hits[0].0, vp("mem:///receta.txt"), "top-1 es la receta");
 }
+
+/// **Una denegación se aplica hacia ATRÁS** (#122).
+///
+/// El filtro de `denied_prefixes` decide qué se LEE, así que protege lo que
+/// todavía no se ha embebido. Un fichero embebido ANTES de que el usuario lo
+/// denegara dejaba su vector guardado para siempre —y un vector es invertible
+/// a una aproximación del texto—, así que la única forma de honrar una
+/// denegación nueva era borrar `index.db` entero.
+///
+/// Se comprueba contra la BÚSQUEDA y no contra la tabla: lo que le importa al
+/// usuario es que el fichero denegado deje de contestar.
+#[tokio::test]
+async fn denegar_despues_de_embeber_olvida_el_vector() {
+    let (engine, mem) = setup().await;
+    write_file(&mem, &vp("mem:///publico.txt"), b"informe anual 2024").await;
+    mem.mkdir(&vp("mem:///privado")).await.expect("privado");
+    write_file(&mem, &vp("mem:///privado/diario.txt"), b"contenido intimo").await;
+
+    let (h, _) = engine
+        .index_build_as(vp("mem:///"), Actor::User)
+        .await
+        .expect("build");
+    assert_eq!(h.join().await, TaskState::Completed);
+    let h = engine
+        .index_embed_as(vp("mem:///"), Actor::User)
+        .await
+        .expect("embed");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    // Con los dos embebidos, el privado contesta a su propio contenido.
+    let hits = engine
+        .index_search_semantic(Some(&vp("mem:///")), "contenido intimo", 10)
+        .await
+        .expect("search");
+    assert_eq!(hits[0].0, vp("mem:///privado/diario.txt"));
+
+    // El usuario lo deniega DESPUÉS.
+    engine.set_ai_config(AiConfig {
+        denied_prefixes: vec![vp("mem:///privado")],
+        ..ai_cfg()
+    });
+    let h = engine
+        .index_embed_as(vp("mem:///"), Actor::User)
+        .await
+        .expect("embed tras denegar");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let hits = engine
+        .index_search_semantic(Some(&vp("mem:///")), "contenido intimo", 10)
+        .await
+        .expect("search tras denegar");
+    assert!(
+        hits.iter()
+            .all(|(p, _)| p != &vp("mem:///privado/diario.txt")),
+        "el vector del fichero denegado sigue contestando: {hits:?}"
+    );
+    // Y lo permitido NO se lo lleva por delante: purgar de más sería tirar el
+    // índice a la primera denegación.
+    let hits = engine
+        .index_search_semantic(Some(&vp("mem:///")), "informe anual 2024", 10)
+        .await
+        .expect("search publico");
+    assert_eq!(hits[0].0, vp("mem:///publico.txt"));
+}
