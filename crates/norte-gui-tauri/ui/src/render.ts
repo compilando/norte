@@ -3174,6 +3174,22 @@ function statusNodes(
       host.className = "banner-host";
       host.textContent = b.subject.host;
       sujeto.append(esquema, host);
+      // El MOTIVO, en su propio elemento y por lo mismo que la conexión: es
+      // texto ya traducido por el host, y no se interpola en la frase. Sin
+      // él, un motivo que el host no conoce se leía igual que «FTP en
+      // claro» — un aviso de seguridad afirmando una causa que nadie dijo.
+      const motivo = document.createElement("span");
+      motivo.className = "banner-reason";
+      motivo.textContent = b.subject.reason;
+      sujeto.append(motivo);
+      // El detalle solo viene con un motivo desconocido, y ya llega
+      // enmascarado y acotado: es texto del otro extremo.
+      if (b.subject.detail !== undefined && b.subject.detail !== "") {
+        const detalle = document.createElement("span");
+        detalle.className = "banner-detail";
+        detalle.textContent = b.subject.detail;
+        sujeto.append(detalle);
+      }
       if (b.subject.hostile) {
         sujeto.classList.add("hostile");
         sujeto.append(badge(tr("hostile-name")));

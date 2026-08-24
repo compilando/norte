@@ -37,8 +37,26 @@ pub enum ClientError {
     #[error("result malformado: {0}")]
     BadResult(#[from] serde_json::Error),
     /// No se pudo arrancar el daemon (autoarranque).
+    ///
+    /// Es «sigue vivo y todavía no acepta», no «no va a aceptar nunca»: lo
+    /// segundo es [`ClientError::SpawnFailed`].
     #[error("el daemon no arrancó a tiempo")]
     SpawnTimeout,
+    /// El daemon arrancó y MURIÓ, con lo que dijo por `stderr`.
+    ///
+    /// Existe separado de [`ClientError::SpawnTimeout`] porque son consejos
+    /// opuestos: uno invita a esperar y el otro a leer. Un daemon que muere al
+    /// abrir un journal que no puede migrar no va a arrancar por mucho que se
+    /// reintente, y la frase que dice qué hacer solo la tiene él.
+    #[error("el daemon no pudo arrancar{}: {}",
+        match .status { Some(c) => format!(" (salió con {c})"), None => String::new() },
+        if .stderr.is_empty() { "no dijo por qué" } else { .stderr })]
+    SpawnFailed {
+        /// Código de salida, si lo hubo (`None` = lo mató una señal).
+        status: Option<i32>,
+        /// Lo que escribió por `stderr`, recortado. Puede venir vacío.
+        stderr: String,
+    },
     /// El socket lo sirve OTRO usuario: jamás se le habla (spoof en el
     /// fallback /tmp — hallazgo M2 del security-reviewer).
     #[error("el daemon del socket pertenece a otro usuario")]

@@ -49,13 +49,42 @@ impl Drop for CancelOnAbandon {
     }
 }
 
-pub(super) fn to_taxonomy(e: ClientError) -> Error {
+/// Traduce un error del cliente a la taxonomía del wire.
+///
+/// Es lo que hace [`super::RemoteBackend::connect`] por dentro, y es público
+/// porque un frontend que use [`super::RemoteBackend::connect_detallado`]
+/// —para poder enseñar lo que dijo un daemon que murió— necesita traducir
+/// todos los DEMÁS casos igual que se traducirían solos.
+///
+/// La pérdida es deliberada y va en un sentido: la taxonomía no lleva texto
+/// libre, así que lo que el daemon escribió no sobrevive a esta función.
+///
+/// ```
+/// use norte_client::{ClientError, to_taxonomy};
+/// // Arrancó y murió: reintentar no lo arregla, y se dice.
+/// let e = to_taxonomy(ClientError::SpawnFailed {
+///     status: Some(1),
+///     stderr: "journal corrupto".to_owned(),
+/// });
+/// assert_eq!(e, norte_proto::Error::ProviderUnavailable { retryable: false });
+/// // Todavía no acepta: eso sí se reintenta.
+/// let e = to_taxonomy(ClientError::SpawnTimeout);
+/// assert_eq!(e, norte_proto::Error::ProviderUnavailable { retryable: true });
+/// ```
+#[must_use]
+pub fn to_taxonomy(e: ClientError) -> Error {
     match e {
         // La taxonomía viaja en data (ADR 0011): se entrega tal cual.
         ClientError::Rpc(rpc) => rpc.data.unwrap_or(Error::Internal { panic: false }),
         ClientError::Io(_) | ClientError::ConnectionClosed | ClientError::SpawnTimeout => {
             Error::ProviderUnavailable { retryable: true }
         }
+        // Arrancó y murió: reintentar no lo va a arreglar, así que
+        // `retryable: false`. Lo que DIJO no cabe en la taxonomía —no lleva
+        // texto libre, y no es un error del wire sino de esta máquina—, así
+        // que quien lo necesite conecta con
+        // [`super::RemoteBackend::connect_detallado`].
+        ClientError::SpawnFailed { .. } => Error::ProviderUnavailable { retryable: false },
         ClientError::BadResult(_) => Error::Internal { panic: false },
         ClientError::ForeignDaemon => Error::PermissionDenied,
     }

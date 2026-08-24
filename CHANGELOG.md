@@ -35,6 +35,24 @@ independently through `PROTOCOL_VERSION`.
   decide whether something *fits*, so giving a round total without having been
   able to count it whole is a wrong answer, not an incomplete one.
 
+- **The window starts the daemon, and says what killed it when it dies**
+  (#300). `norte-gui` used to require a daemon already running: opening a
+  window meant opening a terminal first, which is not an architecture decision
+  but a chore left to the reader. It now starts one the way the CLI's
+  `--daemon` does — looking for `norte` next to its own executable first,
+  then on `PATH`, never the working directory.
+  When the daemon starts and *dies*, what it said now survives. Its `stderr`
+  went to `/dev/null`, so the one sentence explaining why it would never come
+  up — "this journal predates `undoes_seq` and has history" — was lost, and the
+  caller waited the full ~3.2s backoff to get a `SpawnTimeout` inviting it to
+  retry something that could not change. The child is now watched with
+  `try_wait` on every turn: if it died, its output comes back in a new
+  `ClientError::SpawnFailed` **without exhausting the backoff** (measured: 0.03s
+  instead of 3.19s), and the window shows that sentence instead of its own
+  "could not connect (retryable: true)". A daemon that *does* start leaves a
+  thread draining the pipe, because one nobody reads fills up and blocks the
+  daemon on its next write.
+
 ### Fixed
 
 - **A degradation reason nobody knows no longer reads as "plaintext FTP"**

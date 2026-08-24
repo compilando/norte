@@ -27,7 +27,7 @@ use norte_proto::{
 };
 use tokio::sync::{mpsc, watch};
 
-mod calls;
+pub mod calls;
 mod paging;
 mod routes;
 
@@ -335,6 +335,31 @@ impl RemoteBackend {
         spawn_cmd: Option<Vec<std::ffi::OsString>>,
         client_info: ClientInfo,
     ) -> Result<Self, Error> {
+        Self::connect_inner(socket, spawn_cmd, client_info, None)
+            .await
+            .map_err(crate::remote::calls::to_taxonomy)
+    }
+
+    /// Como [`Self::connect`], pero devolviendo el error CRUDO del cliente.
+    ///
+    /// Existe por lo que la taxonomía del wire no puede llevar: cuando el
+    /// daemon arranca y MUERE —un journal que no se puede migrar, un socket
+    /// de otro usuario—, la única frase que dice qué hacer la escribe él por
+    /// `stderr`, y `Error::ProviderUnavailable` no tiene dónde ponerla.
+    ///
+    /// Un frontend que ARRANCA el daemon debería usar esta: es el único que
+    /// puede enseñar esa frase, porque es quien lo parió. Para todo lo demás,
+    /// [`Self::connect`] y su taxonomía.
+    ///
+    /// # Errors
+    /// [`ClientError::SpawnFailed`] si el daemon arrancó y murió;
+    /// [`ClientError::SpawnTimeout`] si sigue vivo y no acepta; lo que dé el
+    /// handshake en otro caso.
+    pub async fn connect_detallado(
+        socket: PathBuf,
+        spawn_cmd: Option<Vec<std::ffi::OsString>>,
+        client_info: ClientInfo,
+    ) -> Result<Self, crate::ClientError> {
         Self::connect_inner(socket, spawn_cmd, client_info, None).await
     }
 
@@ -362,17 +387,23 @@ impl RemoteBackend {
         client_info: ClientInfo,
         agent_session: String,
     ) -> Result<Self, Error> {
-        Self::connect_inner(socket, None, client_info, Some(agent_session)).await
+        Self::connect_inner(socket, None, client_info, Some(agent_session))
+            .await
+            .map_err(crate::remote::calls::to_taxonomy)
     }
 
     /// El cuerpo compartido de [`Self::connect`] y
     /// [`Self::connect_as_agent`]: un solo handshake, una sola bomba.
+    ///
+    /// Devuelve el error CRUDO y traduce cada llamante: lo que un daemon dice
+    /// al morir no cabe en la taxonomía, y traducir aquí lo perdería para
+    /// todos (ver [`Self::connect_detallado`]).
     async fn connect_inner(
         socket: PathBuf,
         spawn_cmd: Option<Vec<std::ffi::OsString>>,
         client_info: ClientInfo,
         agent_session: Option<String>,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, crate::ClientError> {
         let (foreign_tx, foreign_rx) = mpsc::unbounded_channel();
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let (approvals_tx, approvals_rx) = mpsc::unbounded_channel();
@@ -406,7 +437,7 @@ impl RemoteBackend {
         // La 1ª conexión SÍ arranca el daemon (spawn); las reconexiones
         // NO (M3 del rust-reviewer: reconectar jamás debe resucitar un
         // daemon que el usuario acaba de parar).
-        let notifications = backend.establish(true).await.map_err(to_taxonomy)?;
+        let notifications = backend.establish(true).await?;
         // UNA task de bomba para toda la vida del backend. Sostiene un
         // Weak (no un Arc): cuando el último `RemoteBackend` externo se
         // suelta, `Inner` se libera y la bomba sale sola — sin ciclo de

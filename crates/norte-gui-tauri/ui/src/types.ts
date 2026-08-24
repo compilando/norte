@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 36;
+export const BRIDGE_VERSION = 37;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -216,6 +216,12 @@ export interface BannerView {
 export interface BannerSubjectView {
   scheme: string;
   host: string;
+  /** Por qué está degradada, ya traducido por el host. Un motivo que el host
+   *  no conoce dice «motivo desconocido» y no hereda la frase del que sí. */
+  reason: string;
+  /** El detalle del wire, ya enmascarado y acotado por el host. Solo viene
+   *  con un motivo desconocido. */
+  detail?: string;
   hostile: boolean;
 }
 

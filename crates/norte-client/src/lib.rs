@@ -24,6 +24,7 @@ mod transport;
 pub mod types;
 
 pub use remote::RemoteBackend;
+pub use remote::calls::to_taxonomy;
 pub use rpc::{Client, ClientError, is_version_mismatch};
 pub use socket::{default_socket_path, process_uid_best_effort};
 pub use task::{RemoteTask, RemoteTaskCanceller};

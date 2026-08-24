@@ -74,6 +74,51 @@ OPCIONES:
     -V, --version        La versión
 ";
 
+/// El comando que arranca el daemon, o `None` si no hay binario que lanzar.
+///
+/// **`norte-gui` no sabe ser daemon**, al revés que el CLI: aquel usa su
+/// propio `current_exe` porque el mismo ejecutable trae el subcomando. Aquí
+/// hay que encontrar a `norte`, y el orden importa:
+///
+/// 1. **El hermano**: `norte` en el mismo directorio que este ejecutable. Es
+///    lo determinista — el par que se instaló junto — y funciona con
+///    `just link`, donde los dos symlinks apuntan al mismo `target/debug`
+///    (`current_exe` ya resuelve el enlace, así que el hermano es el del
+///    árbol y no el de `~/.local/bin`).
+/// 2. **El `PATH`**, como último recurso.
+///
+/// Nunca el directorio de trabajo: ahí el binario lo elige quien haya dejado
+/// un fichero, y esto lanza un proceso. El hermano no añade riesgo — quien
+/// pueda escribir en el directorio de este ejecutable ya controla la ventana
+/// que está corriendo.
+///
+/// `None` deja el arranque como estaba: se intenta conectar y, si no hay
+/// nadie, se dice.
+async fn comando_de_daemon(socket: &std::path::Path) -> Option<Vec<std::ffi::OsString>> {
+    let socket = socket.to_path_buf();
+    // Sondas de FS fuera del runtime (regla 2).
+    tokio::task::spawn_blocking(move || {
+        let hermano = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|d| d.join("norte")))
+            .filter(|p| p.is_file());
+        let programa: std::ffi::OsString = match hermano {
+            Some(p) => p.into(),
+            None => "norte".into(),
+        };
+        Some(vec![
+            programa,
+            "daemon".into(),
+            "run".into(),
+            "--socket".into(),
+            socket.into(),
+        ])
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 /// Lo que puede impedir arrancar.
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
@@ -94,6 +139,20 @@ pub enum StartupError {
         /// Qué dijo el daemon (o el socket).
         #[source]
         source: norte_proto::Error,
+    },
+    /// El daemon se arrancó y MURIÓ, con lo que él dijo.
+    ///
+    /// Separado de [`StartupError::Connect`] porque el consejo es el
+    /// contrario: aquello invita a comprobar si hay un daemon, y esto a leer
+    /// una frase que ya explica el problema. Reintentar no lo arregla.
+    #[error("el daemon no pudo arrancar{}:\n{}",
+        match .status { Some(c) => format!(" (salió con {c})"), None => String::new() },
+        if .stderr.is_empty() { "y no dijo por qué" } else { .stderr })]
+    DaemonMuerto {
+        /// Código de salida, si lo hubo (`None` = lo mató una señal).
+        status: Option<i32>,
+        /// Lo que escribió por `stderr`. Puede venir vacío.
+        stderr: String,
     },
     /// Un valor de la línea de órdenes que no existe.
     #[error("{que}: «{valor}» no existe")]
@@ -439,20 +498,35 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         .unwrap_or_else(|| norte_client::default_socket_path(None));
 
     // Daemon y SOLO daemon: la GUI de referencia no construye un `Engine` en
-    // su proceso (decisión D10). Si no hay daemon, se dice; no se levanta un
-    // motor por detrás con otras garantías de journal y de sesión.
-    let backend = RemoteBackend::connect(
+    // su proceso (decisión D10). Lo que sí hace es ARRANCARLO si no hay
+    // ninguno, igual que el `--daemon` del CLI: exigir que el lector abra un
+    // terminal antes de poder abrir una ventana no es una decisión de
+    // arquitectura, es una tarea que se le queda al lector.
+    //
+    // Y se conecta con `connect_detallado` a propósito: cuando el daemon
+    // arranca y MUERE —un journal que no se puede migrar es el caso real—, la
+    // única frase que dice qué hacer la escribe él por `stderr`, y la
+    // taxonomía del wire no tiene dónde ponerla. Sin esto, la ventana decía
+    // «no se pudo conectar (retryable: true)», o sea «espera», sobre algo que
+    // no iba a llegar nunca.
+    let arranque = comando_de_daemon(&socket).await;
+    let backend = RemoteBackend::connect_detallado(
         socket.clone(),
-        None,
+        arranque,
         ClientInfo {
             name: "norte-gui".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
         },
     )
     .await
-    .map_err(|source| StartupError::Connect {
-        socket: socket.display().to_string(),
-        source,
+    .map_err(|e| match e {
+        norte_client::ClientError::SpawnFailed { status, stderr } => {
+            StartupError::DaemonMuerto { status, stderr }
+        }
+        otro => StartupError::Connect {
+            socket: socket.display().to_string(),
+            source: norte_client::to_taxonomy(otro),
+        },
     })?;
 
     // El log, DESPUÉS de cargar la config porque `[log] dir` y `[log] retain`
