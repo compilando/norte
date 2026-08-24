@@ -26,6 +26,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A resumed copy is published with the same mode as an uninterrupted one**
+  (#299). The stable staging is created `0o600` and has to be: its name is
+  predictable, so while it exists it must be ours and nobody else's (#297,
+  #298). But publishing is a `rename`, which does not touch the mode — so a
+  copy that got cut in half landed as `0o600` while the very same copy without
+  interruptions landed as `0o644`. Same operation, two outcomes, and since #219
+  the resumable route is the default one for a single file. The mode is now
+  restored on `commit` to what a `create` would have given (`0o666` minus the
+  umask, read from `/proc/self/status` where available and assumed `0o022`
+  elsewhere — `umask(2)` only reports by *setting*, which would race every
+  other write in flight). It is applied to the **descriptor** after the rename,
+  never to the path and never before: relaxing a staging still named
+  `.norte-partial.<hash>` would leave the most predictable name in the
+  directory readable by anyone, for a file nobody has asked for yet. What this
+  does *not* do is preserve the source's mode the way `cp -p` does; norte
+  preserves permissions on no copy today, and that is a product decision rather
+  than something to slip into a fix.
+
 - **The by-path stable staging is no longer reopened blind** (#298). The name a
   resume reopens is `.norte-partial.` plus the SHA-256-128 of the destination
   name — *calculable by anyone who knows where the copy is going* — and it was
