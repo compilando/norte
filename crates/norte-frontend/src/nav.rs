@@ -763,6 +763,102 @@ impl TrailStep {
     }
 }
 
+/// Si la entrada es un contenedor navegable (`.<formato>` de la whitelist de
+/// proto, extensión ASCII case-insensitive), la raíz de su interior (ADR
+/// 0018). El mapa extensión→formato es azúcar de presentación; la validación
+/// real es del core. Un SYMLINK a un archivo no entra como contenedor en v1
+/// (decisión consciente: exigiría resolver el target por stat del core).
+///
+/// Vive aquí y no en un frontend porque la responden DOS: el TUI para decidir
+/// si `Enter` entra, y la ventana para decidir si `pane.unpack` y
+/// `pane.test-archive` están disponibles. Dos tablas de extensiones son dos
+/// sitios donde una se olvida, y entonces la misma entrada se navega en una
+/// superficie y no en la otra (ADR 0066, decisión D14).
+///
+/// ```
+/// use norte_proto::{Entry, EntryKind, VPath};
+/// let e = Entry {
+///     attrs: std::collections::BTreeMap::new(),
+///     path: VPath::parse("file:///x/cosas.ZIP").unwrap(),
+///     kind: EntryKind::File,
+///     size: None,
+///     mtime_ms: None,
+/// };
+/// // La extensión no distingue mayúsculas…
+/// assert!(norte_frontend::nav::archive_root_for(&e).is_some());
+/// // …y un directorio no es un contenedor por mucho que se llame así.
+/// let d = Entry { kind: EntryKind::Dir, ..e };
+/// assert!(norte_frontend::nav::archive_root_for(&d).is_none());
+/// ```
+#[must_use]
+pub fn archive_root_for(e: &norte_proto::Entry) -> Option<norte_proto::VPath> {
+    use norte_proto::{EntryKind, VPath};
+    // Extensiones cuyo sufijo no coincide con el token del formato (#55):
+    // `tar+gz` no tiene un `.tar+gz` real en el mundo, la gente escribe
+    // `.tgz`/`.tar.gz`. Se comprueban ANTES del genérico `.{formato}` — un
+    // `.tar.gz` no casaría de todos modos con `.tar` (termina en `.gz`), así
+    // que el orden es defensivo, no estrictamente necesario hoy.
+    const EXT_ALIASES: &[(&[u8], &str)] = &[(b".tar.gz", "tar+gz"), (b".tgz", "tar+gz")];
+    fn ends_ci(name: &[u8], suffix: &[u8]) -> bool {
+        name.len() >= suffix.len() && name[name.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+    }
+    if e.kind != EntryKind::File {
+        return None;
+    }
+    let name = e.path.file_name()?.as_bytes();
+    let format = EXT_ALIASES
+        .iter()
+        .find(|(suffix, _)| ends_ci(name, suffix))
+        .map(|(_, format)| *format)
+        .or_else(|| {
+            norte_proto::ARCHIVE_FORMATS
+                .iter()
+                .find(|f| ends_ci(name, format!(".{f}").as_bytes()))
+                .copied()
+        })?;
+    // Falla (exterior con `!`, ya compuesto…): no es navegable — Enter no-op.
+    VPath::archive_compose(format, &e.path, &[]).ok()
+}
+
+/// El formato de archivo que sugiere un NOMBRE, entre los que se saben
+/// ESCRIBIR (#132).
+///
+/// Azúcar de presentación, igual que [`archive_root_for`]: lo que decide es el
+/// campo explícito del wire, y esto solo traduce lo que el lector acaba de
+/// teclear. `rar` no está —se delega y solo para leer (ADR 0056)—, así que un
+/// `.rar` cae en `None` y el diálogo lo dice en vez de empaquetar un zip con
+/// nombre de rar.
+///
+/// Compartida por el mismo motivo que su vecina: el TUI y la ventana ofrecen
+/// el mismo diálogo, y dos tablas de extensiones acabarían empaquetando en
+/// formatos distintos ante el mismo nombre.
+///
+/// ```
+/// use norte_proto::methods::ArchiveFormat;
+/// use norte_frontend::nav::format_by_name;
+/// assert_eq!(format_by_name(b"cosas.TGZ"), Some(ArchiveFormat::TarGz));
+/// assert_eq!(format_by_name(b"cosas.zip"), Some(ArchiveFormat::Zip));
+/// // Lo que no se sabe escribir no se inventa.
+/// assert_eq!(format_by_name(b"cosas.rar"), None);
+/// ```
+#[must_use]
+pub fn format_by_name(name: &[u8]) -> Option<norte_proto::methods::ArchiveFormat> {
+    use norte_proto::methods::ArchiveFormat as F;
+    let ends = |suf: &[u8]| {
+        name.len() >= suf.len() && name[name.len() - suf.len()..].eq_ignore_ascii_case(suf)
+    };
+    if ends(b".tar.gz") || ends(b".tgz") {
+        return Some(F::TarGz);
+    }
+    if ends(b".tar") {
+        return Some(F::Tar);
+    }
+    if ends(b".zip") {
+        return Some(F::Zip);
+    }
+    None
+}
+
 #[cfg(test)]
 mod history_tests {
     use super::*;

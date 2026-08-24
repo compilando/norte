@@ -7483,6 +7483,105 @@ async fn copiar_pide_confirmacion_y_dice_a_donde() {
     );
 }
 
+/// **Empaquetar saca el FORMATO del nombre tecleado** (#132, #290), y la base
+/// es el directorio del panel: quien desempaquete espera ver lo que se veía en
+/// pantalla, no rutas absolutas.
+#[tokio::test]
+async fn empaquetar_saca_el_formato_del_nombre() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.pack").await;
+    let id = siguientes_dialogos(&mut sub).await.last().expect("hay").id;
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: "cosas.tar.gz".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+    let ps = backend.empaquetados.lock().expect("empaquetados");
+    assert_eq!(ps.len(), 1, "un gesto, una task");
+    assert_eq!(
+        ps[0].format,
+        norte_proto::methods::ArchiveFormat::TarGz,
+        "`.tar.gz` no es `.tar`: el sufijo compuesto se mira ANTES"
+    );
+    assert_eq!(ps[0].dest.to_wire(), "mem:///casa/cosas.tar.gz");
+    assert_eq!(
+        ps[0].base.to_wire(),
+        "mem:///casa",
+        "la base es el directorio del panel"
+    );
+}
+
+/// Un nombre cuyo formato NO se sabe escribir se rehúsa, en vez de empaquetar
+/// en otra cosa. `.rar` es el caso real: se lee por delegación y no se escribe.
+#[tokio::test]
+async fn empaquetar_rehusa_un_formato_que_no_se_escribe() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.pack").await;
+    let id = siguientes_dialogos(&mut sub).await.last().expect("hay").id;
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: "cosas.rar".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let ack = h
+        .dispatch(UiAction::Dialog {
+            id,
+            choice: "confirm".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "msg-pack-unknown-format"),
+        "{ack:?}"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        backend
+            .empaquetados
+            .lock()
+            .expect("empaquetados")
+            .is_empty(),
+        "y no se empaqueta nada"
+    );
+}
+
+/// Comprobar solo vale sobre un CONTENEDOR, y lo decide la misma función que
+/// usa `Enter` para entrar en uno: dos tablas de extensiones serían dos sitios
+/// donde una se olvida.
+#[tokio::test]
+async fn comprobar_un_archivo_exige_que_lo_sea() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    // El cursor arranca sobre `docs/`, que es un directorio.
+    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.test-archive").await;
+    assert!(
+        matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "msg-unpack-not-archive"),
+        "un directorio no es un contenedor: {ack:?}"
+    );
+    assert!(
+        backend.comprobados.lock().expect("comprobados").is_empty(),
+        "y no se pide comprobar nada"
+    );
+}
+
 /// **Una transferencia que CHOCA tiene salida** (#274).
 ///
 /// La ventana manda siempre `CollisionPolicy::Fail`, que es el default seguro,

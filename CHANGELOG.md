@@ -24,6 +24,24 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **The window packs, unpacks and checks containers** (#132, #290).
+  `pane.pack` asks for the name and takes the *format* from it — a name whose
+  format we cannot write is refused rather than packed into something nobody
+  asked for, which is what `.rar` does: read by delegation, never written. The
+  base for the stored names is the panel's directory, so whoever unpacks sees
+  what was on screen instead of absolute paths. `pane.unpack` needs no method
+  of its own: the copy engine accepts an archive's interior as a source, so it
+  is the copy the reader could have made by hand — with its journal, its undo
+  and its cancellation, and now with the collision dialog of #274 behind it.
+  `pane.test-archive` reads the whole container and answers; it writes nothing
+  and is not in `MUTAN`.
+
+  Two presentation rules moved to the shared crate on the way (ADR 0066, D14):
+  which entries are containers, and which format a name suggests. Both lived in
+  the TUI, and two tables of extensions are two places for one to be forgotten
+  — after which the same entry navigates on one surface and does not unpack on
+  the other.
+
 - **The window can count how much something takes up** (#139, #290).
   `pane.dir-size` counts what is marked — or what sits under the cursor — as a
   single Task for the whole batch, because counting each entry separately would

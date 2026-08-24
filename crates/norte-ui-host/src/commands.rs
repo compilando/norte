@@ -67,6 +67,11 @@ pub const MUTAN: &[&str] = &[
     // nada, que es tan de solo lectura como leer un nombre.
     "pane.open",
     "app.terminal",
+    // Empaquetar ESCRIBE un fichero; desempaquetar es una copia con otro
+    // nombre. Comprobar no está aquí: lee el archivo entero y contesta, que es
+    // tan de solo lectura como comparar.
+    "pane.pack",
+    "pane.unpack",
 ];
 
 /// Los comandos que el host ejecuta HOY.
@@ -157,6 +162,9 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.names-encoding",
     "pane.properties",
     "pane.dir-size",
+    "pane.pack",
+    "pane.unpack",
+    "pane.test-archive",
     "pane.mirror",
     "pane.pull",
     "pane.swap",
@@ -405,6 +413,25 @@ pub enum Efecto {
     /// NO muta: camina los dos árboles y contesta. Es una tarea larga y
     /// cancelable, y cancelarla es su único freno.
     Comparar,
+    /// Empaqueta lo MARCADO en un contenedor nuevo (#132).
+    ///
+    /// Está en [`MUTAN`]: escribe un fichero. El nombre se teclea, y de él
+    /// sale el FORMATO — un nombre sin extensión conocida se rehúsa en vez de
+    /// empaquetar en algo que nadie pidió.
+    Empaquetar,
+    /// Copia el INTERIOR del contenedor bajo el cursor al panel destino
+    /// (#132).
+    ///
+    /// No lleva método propio y no le hace falta: el motor de copia acepta el
+    /// interior de un archivo como origen, así que desempaquetar es la copia
+    /// que el lector podría haber hecho a mano — con su journal, su undo, su
+    /// política de colisiones y su cancelación.
+    Desempaquetar,
+    /// Comprueba el contenedor bajo el cursor (#132).
+    ///
+    /// NO está en [`MUTAN`]: lee el archivo entero y contesta si está sano,
+    /// sin escribir nada. Es la misma categoría que comparar.
+    ComprobarArchivo,
     /// Cuenta lo que ocupa lo MARCADO —o lo que hay bajo el cursor— (#139).
     ///
     /// No está en [`MUTAN`] por lo mismo que [`Efecto::Comparar`]: camina un
@@ -595,6 +622,9 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.semantic-search" => Efecto::BuscarSemantica,
         "pane.compare-dirs" => Efecto::Comparar,
         "pane.dir-size" => Efecto::TamanoDeDirectorio,
+        "pane.pack" => Efecto::Empaquetar,
+        "pane.unpack" => Efecto::Desempaquetar,
+        "pane.test-archive" => Efecto::ComprobarArchivo,
         "pane.sync-dirs" => Efecto::Sincronizar,
         // #138: la misma semántica que un click en la cabecera, y sobre el
         // hueco con el FOCO — el orden es de un listado, como el cursor.

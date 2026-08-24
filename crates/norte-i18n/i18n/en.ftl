@@ -803,6 +803,7 @@ msg-session-detached = another window owns the session; this one runs on its own
 msg-session-slots-timeout = { $n } panels did not list in time at startup: enter them again to fill them
 pane-unlisted = not listed
 modal-pack = Pack into
+modal-pack-title = Pack
 modal-pack-hint = Enter packs · Esc cancels
 modal-pack-hint-zip = zip · Enter packs · Esc cancels
 modal-pack-hint-tar = tar · Enter packs · Esc cancels

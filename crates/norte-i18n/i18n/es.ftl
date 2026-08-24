@@ -799,6 +799,7 @@ msg-session-detached = otra ventana tiene la sesión; ésta va por su cuenta
 msg-session-slots-timeout = { $n } paneles no listaron a tiempo al arrancar: entra en ellos para rellenarlos
 pane-unlisted = sin listar
 modal-pack = Empaquetar en
+modal-pack-title = Empaquetar
 modal-pack-hint = Enter empaqueta · Esc cancela
 modal-pack-hint-zip = zip · Enter empaqueta · Esc cancela
 modal-pack-hint-tar = tar · Enter empaqueta · Esc cancela
