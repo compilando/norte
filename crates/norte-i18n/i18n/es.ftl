@@ -806,6 +806,7 @@ modal-pack-hint-tar = tar · Enter empaqueta · Esc cancela
 modal-pack-hint-targz = tar.gz · Enter empaqueta · Esc cancela
 modal-pack-hint-unknown = extensión desconocida — usa .zip, .tar, .tar.gz o .tgz
 modal-split = Partir en trozos de
+modal-split-title = Partir
 modal-split-hint = 4096, 10M, 700M · los trozos van al otro panel · Enter parte · Esc cancela
 msg-pack-read-only = ese panel es de solo lectura: ahí no se puede escribir
 msg-pack-nothing = no hay nada marcado ni bajo el cursor

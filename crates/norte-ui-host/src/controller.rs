@@ -1398,6 +1398,15 @@ enum Pendiente {
         /// Con qué se relanza.
         con: Reintento,
     },
+    /// Partir el fichero bajo el cursor en trozos del tamaño que se teclea
+    /// (#132).
+    Partir {
+        /// Qué se parte.
+        path: VPath,
+        /// Dónde caen los trozos. El panel DESTINO, como una copia: partir un
+        /// fichero de un giga donde ya está suele no caber.
+        dest_dir: VPath,
+    },
     /// Empaquetar lo MARCADO en el contenedor que se teclea (#132).
     ///
     /// Lleva el directorio y no el nombre: el nombre es lo que el lector
@@ -5686,6 +5695,62 @@ impl Estado {
         (None, Vec::new())
     }
 
+    /// Los dos pendientes que fabrican ficheros a partir de lo TECLEADO:
+    /// partir por tamaño y empaquetar por nombre (#132, #290).
+    fn ejecutar_de_archivo(
+        &mut self,
+        pendiente: Pendiente,
+        tecleado: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
+        match pendiente {
+            Pendiente::Partir { path, dest_dir } => {
+                self.partir_fichero(path, dest_dir, tecleado, backend, buzon)
+            }
+            Pendiente::Empaquetar { dir, sources } => {
+                self.empaquetar(&dir, sources, tecleado, backend, buzon)
+            }
+            // El llamante ya filtró; nombrarlos aquí hace que un tercero sea
+            // un error de compilación.
+            _ => (None, Vec::new()),
+        }
+    }
+
+    /// Parte `path` en trozos del tamaño que se tecleó (#132, #290).
+    ///
+    /// El tamaño lo lee la misma función que el TUI: `10M` son 10 MiB y no
+    /// diez millones, que es lo que significa en un gestor de ficheros. Un
+    /// cero se rehúsa — trozos de cero bytes no terminan nunca.
+    fn partir_fichero(
+        &mut self,
+        path: VPath,
+        dest_dir: VPath,
+        tamano: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(part_bytes) = norte_frontend::nav::parse_size(tamano) else {
+            return (Some("msg-split-bad-size"), self.decir("msg-split-bad-size"));
+        };
+        let afectados = vec![dest_dir.clone()];
+        let params = norte_proto::methods::FileSplitParams {
+            path,
+            part_bytes,
+            dest_dir,
+        };
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let mensaje = match backend.split_file(params).await {
+                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados, None))),
+                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+            };
+            let _ = buzon.send(mensaje).await;
+        });
+        (None, Vec::new())
+    }
+
     /// Empaqueta `sources` en el contenedor que se tecleó (#132, #290).
     ///
     /// El FORMATO sale del nombre y viaja explícito: un nombre sin extensión
@@ -7070,7 +7135,10 @@ impl Estado {
                     | Pendiente::Patron { .. }
                     // Y empaquetar: lo que se teclea es el nombre del
                     // contenedor, de donde sale el formato.
-                    | Pendiente::Empaquetar { .. },
+                    | Pendiente::Empaquetar { .. }
+                    // Partir pide un TAMAÑO, pero es el mismo diálogo de un
+                    // campo de texto y una confirmación.
+                    | Pendiente::Partir { .. },
                 ) => "dialog.mkdir",
                 None => "browse",
             };
@@ -7894,7 +7962,9 @@ impl Estado {
             Efecto::TamanoDeDirectorio
             | Efecto::Empaquetar
             | Efecto::Desempaquetar
-            | Efecto::ComprobarArchivo => self.efecto_sobre_entradas(efecto, backend, buzon),
+            | Efecto::ComprobarArchivo
+            | Efecto::PartirFichero
+            | Efecto::Juntar => self.efecto_sobre_entradas(efecto, backend, buzon),
             // Como comparar: necesita el backend porque sale a preguntar en
             // cuanto se abre, y el panel nace diciendo que planifica.
             Efecto::Sincronizar => self.pedir_sincronizacion(backend, buzon),
@@ -10940,8 +11010,10 @@ impl Estado {
             Efecto::Empaquetar => self.pedir_empaquetado(),
             Efecto::Desempaquetar => self.desempaquetar(backend, buzon),
             Efecto::ComprobarArchivo => self.comprobar_archivo(backend, buzon),
-            // El llamante ya filtró: nombrar los cuatro aquí es lo que hace
-            // que añadir un quinto sea un error de compilación.
+            Efecto::PartirFichero => self.pedir_partido(),
+            Efecto::Juntar => self.juntar_trozos(backend, buzon),
+            // El llamante ya filtró: nombrarlos aquí es lo que hace que
+            // añadir uno más sea un error de compilación.
             _ => (self.aplicada(), Vec::new()),
         }
     }
@@ -11003,6 +11075,126 @@ impl Estado {
             dialogs: self.vistas_de_dialogos(),
         };
         (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// `pane.split-file` (#132, #290): pide el TAMAÑO de los trozos.
+    ///
+    /// Los trozos van al panel destino, como una copia y por lo mismo: partir
+    /// un fichero de un giga en el sitio donde ya está suele no caber.
+    fn pedir_partido(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(entrada) = self.hueco().pane.selected().cloned() else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-nothing-selected".to_owned(),
+                },
+                self.decir("msg-nothing-selected"),
+            );
+        };
+        let dest_dir = match self.directorio_destino() {
+            Ok(d) => d,
+            Err(reason_key) => {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: reason_key.to_owned(),
+                    },
+                    self.decir(reason_key),
+                );
+            }
+        };
+        let donde = Self::linea_de_ruta(&dest_dir);
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: "modal-split-title".to_owned(),
+            destination: Some(donde),
+            subject: None,
+            asker: None,
+            deadline: None,
+            deadline_at_ms: None,
+            body: vec![crate::dto::DialogLine {
+                text: clamp_display(norte_i18n::t_in(self.lang, "modal-split-hint")),
+                hostile: false,
+            }],
+            overflow_note: String::new(),
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: Some(String::new()),
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista: vista.clone(),
+            input_crudo: String::new(),
+            reconocido: true,
+            al_confirmar: Some(Pendiente::Partir {
+                path: entrada.path.clone(),
+                dest_dir,
+            }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// `pane.combine-files` (#132, #290): junta los trozos desde el `.001`
+    /// bajo el cursor.
+    ///
+    /// Solo desde el PRIMERO, y la regla vive en el crate compartido: empezar
+    /// por el `.007` uniría media cosa, y el core solo busca hacia delante.
+    fn juntar_trozos(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(entrada) = self.hueco().pane.selected().cloned() else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-nothing-selected".to_owned(),
+                },
+                self.decir("msg-nothing-selected"),
+            );
+        };
+        let nombre = entrada
+            .path
+            .file_name()
+            .map(|s| s.as_bytes().to_vec())
+            .unwrap_or_default();
+        let Some(base) = norte_frontend::nav::base_de_trozos(&nombre) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-combine-needs-first".to_owned(),
+                },
+                self.decir("msg-combine-needs-first"),
+            );
+        };
+        let dir = self.hueco().pane.dir().clone();
+        let params = norte_proto::methods::FileCombineParams {
+            first: entrada.path.clone(),
+            dest: dir.join(base),
+        };
+        let afectados = vec![dir];
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let mensaje = match backend.combine_files(params).await {
+                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados, None))),
+                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+            };
+            let _ = buzon.send(mensaje).await;
+        });
+        (self.aplicada(), self.decir("msg-combine-started"))
     }
 
     /// `pane.unpack` (#132, #290): copia el INTERIOR del contenedor bajo el
@@ -11285,9 +11477,11 @@ impl Estado {
                 rehusado = motivo;
                 salidas.extend(partes);
             }
-            Some(Pendiente::Empaquetar { dir, sources }) => {
+            // Los dos que fabrican ficheros a partir de lo tecleado, juntos:
+            // este `match` es un despachador y ya roza su tope.
+            Some(p @ (Pendiente::Partir { .. } | Pendiente::Empaquetar { .. })) => {
                 let (motivo, partes) =
-                    self.empaquetar(&dir, sources, &dialogo.input_crudo, backend, buzon);
+                    self.ejecutar_de_archivo(p, &dialogo.input_crudo, backend, buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }

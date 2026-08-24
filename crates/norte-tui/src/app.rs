@@ -49,26 +49,9 @@ use help_view::default_help_chords;
 /// la ventana ofrecen el mismo diálogo (D14).
 pub use norte_frontend::nav::format_by_name;
 
-/// Un tamaño con sufijo (`4096`, `10M`, `1G`) en bytes, o `None` si no se
-/// entiende (#132).
-///
-/// Sufijos binarios, que es lo que significan en un gestor de ficheros: `M` es
-/// 1 MiB y no un millón. Sin sufijo son bytes.
-#[must_use]
-pub fn parse_size(s: &str) -> Option<u64> {
-    let s = s.trim();
-    if s.is_empty() {
-        return None;
-    }
-    let (num, mult) = match s.as_bytes()[s.len() - 1].to_ascii_uppercase() {
-        b'K' => (&s[..s.len() - 1], 1024_u64),
-        b'M' => (&s[..s.len() - 1], 1024 * 1024),
-        b'G' => (&s[..s.len() - 1], 1024 * 1024 * 1024),
-        _ => (s, 1),
-    };
-    let n: u64 = num.trim().parse().ok()?;
-    n.checked_mul(mult).filter(|v| *v > 0)
-}
+/// El tamaño con sufijo lo lee el crate COMPARTIDO: el mismo diálogo lo pide
+/// en las dos superficies (D14).
+pub use norte_frontend::nav::parse_size;
 
 /// El estado del run (`CompareState`) y el panel abierto (`CompareView`)
 /// viven en [`norte_frontend::compare`] (#158): la GUI necesita exactamente

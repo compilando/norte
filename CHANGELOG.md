@@ -24,6 +24,16 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **The window splits and joins files** (#132, #290). `pane.split-file` asks
+  for a piece size and reads it in **binary** — `10M` is 10 MiB, which is what
+  it means in a file manager, not ten million — and refuses a zero, because
+  pieces of zero bytes never finish. The pieces land in the *target* panel for
+  the same reason a copy does: splitting a one-gigabyte file where it already
+  sits usually does not fit. `pane.combine-files` only starts from the `.001`:
+  beginning at the `.007` would join half a thing, and the core only searches
+  forward. Reading a size and finding a piece base moved to the shared crate
+  alongside the two rules that moved with packing.
+
 - **The window packs, unpacks and checks containers** (#132, #290).
   `pane.pack` asks for the name and takes the *format* from it — a name whose
   format we cannot write is refused rather than packed into something nobody

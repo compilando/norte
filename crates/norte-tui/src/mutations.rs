@@ -403,17 +403,9 @@ pub async fn combine_pieces(app: &mut App, backend: &Backend) {
         .map(|s| s.as_bytes().to_vec())
         .unwrap_or_default();
     // Solo desde el PRIMER trozo: empezar por el `.007` uniría media cosa, y
-    // el core ya solo sabe buscar hacia delante.
-    let Some(base) = name
-        .len()
-        .checked_sub(4)
-        .filter(|n| name[*n] == b'.' && &name[n + 1..] == b"001")
-        .map(|n| name[..n].to_vec())
-    else {
-        app.message = Some(t("msg-combine-needs-first"));
-        return;
-    };
-    let Ok(seg) = norte_proto::Segment::new(base) else {
+    // el core ya solo sabe buscar hacia delante. La regla vive en el crate
+    // compartido — la ventana pide lo mismo (D14).
+    let Some(seg) = norte_frontend::nav::base_de_trozos(&name) else {
         app.message = Some(t("msg-combine-needs-first"));
         return;
     };
