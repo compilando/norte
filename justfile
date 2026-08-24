@@ -485,6 +485,35 @@ link-gui dir="debug":
     printf '%-9s → %s\n' norte-gui "$(readlink ~/.local/bin/norte-gui)"
     echo "recuerda: el symlink apunta a ESTE árbol; un 'just prune-all' lo deja colgando"
 
-# El paquete (deb + AppImage). Necesita la CLI de Tauri del lockfile.
+# La build de PRODUCCIÓN, sin empaquetar. Necesita la CLI de Tauri del
+# lockfile.
+#
+# Se ejecuta desde el directorio del CRATE y no desde `ui/` (#256): la CLI
+# busca `tauri.conf.json` en el directorio actual y sus subdirectorios, y el
+# fichero vive aquí, no bajo `ui/`. Corriéndola desde `ui/` aborta con
+# «Couldn't recognize the current folder as a Tauri project» — que es lo que
+# hacía esta receta desde que se escribió, y por qué nunca produjo nada.
+#
+# Se invoca el binario del lockfile por su ruta en vez de con `npx`: `npx`
+# resuelve contra el directorio desde el que se llama, y desde el crate no hay
+# `node_modules`.
+gui-build-release: gui-build
+    cd {{gui_dir}} && ./ui/node_modules/.bin/tauri build --no-bundle
+
+# El paquete de verdad: `.deb` y AppImage en `target/release/bundle/`.
+#
+# **`NO_STRIP=1` no es opcional en un sistema moderno** (#256). El AppImage de
+# `linuxdeploy` trae su propio `strip`, de un binutils viejo que no reconoce la
+# sección `.relr.dyn` que usan las bibliotecas de una distribución al día. Sin
+# la variable, falla con `failed to run linuxdeploy` después de un muro de
+# «Unable to recognise the format of the input file» — que no dice en ningún
+# sitio que el problema sea el strip.
+#
+# La salida correcta a medio plazo es construir sobre la baseline más VIEJA de
+# glibc/WebKitGTK, que es lo que la tarea 7.1 del plan pide de todas formas;
+# esto es lo que hace que el paquete salga hoy, en la máquina de referencia.
 gui-package: gui-build
-    cd {{gui_dir}}/ui && npx tauri build --no-bundle
+    cd {{gui_dir}} && NO_STRIP=1 ./ui/node_modules/.bin/tauri build
+    @echo
+    @echo "AVISO (#256): estos paquetes llevan SOLO \`norte-gui\`, no \`norte\`."
+    @echo "En una instalación limpia la ventana no encontrará su daemon."
