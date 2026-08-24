@@ -251,6 +251,11 @@ dev:
 #
 # `dir` (por defecto debug) elige el perfil: `just link release` para medir
 # arranque, que es lo único que debug no puede decirte.
+#
+# La ventana gráfica NO entra aquí: tiene su propia receta (`just link-gui`),
+# por el mismo motivo por el que `core_pkgs` la excluye del gate — compilarla
+# arrastra WebKitGTK, GTK3, libsoup3 y npm, y meterla en esta receta dejaría
+# sin `ntc` a cualquier máquina que no los tenga.
 link dir="debug":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -453,6 +458,32 @@ gui-run *args: gui-build
 # Lo mismo en release: es lo ÚNICO que vale para medir (la 3.6).
 gui-run-release *args: gui-build
     cargo run --release -p norte-gui-tauri --bin norte-gui -- {{args}}
+
+# Pone `norte-gui` en el PATH apuntando al binario de ESTE árbol, igual que
+# `just link` hace con `ntc` y `norte`.
+#
+# Depende de `gui-build` y no es opcional: `frontendDist` es `ui/dist`, o sea
+# que Tauri EMBEBE la webview en el binario al compilar. Sin reconstruir el
+# bundle, el enlace apuntaría a un binario con una webview vieja dentro — y
+# eso no se ve, porque el ejecutable existe y arranca.
+#
+# Que esté embebida es también lo que hace que el symlink funcione: el binario
+# es autocontenido y no busca `ui/dist` en el cwd.
+#
+# Separada de `just link` a propósito: ver el comentario de aquella receta.
+link-gui dir="debug":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just gui-build
+    if [ "{{dir}}" = "release" ]; then
+        cargo build --release -p norte-gui-tauri --bin norte-gui {{gui_features}}
+    else
+        cargo build -p norte-gui-tauri --bin norte-gui {{gui_features}}
+    fi
+    mkdir -p ~/.local/bin
+    ln -sfn "$PWD/target/{{dir}}/norte-gui" ~/.local/bin/norte-gui
+    printf '%-9s → %s\n' norte-gui "$(readlink ~/.local/bin/norte-gui)"
+    echo "recuerda: el symlink apunta a ESTE árbol; un 'just prune-all' lo deja colgando"
 
 # El paquete (deb + AppImage). Necesita la CLI de Tauri del lockfile.
 gui-package: gui-build

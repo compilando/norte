@@ -257,7 +257,14 @@ wrongly-swept `.rlib` costs a full compile.
 **To run the dev build: `just link`, not `just install`.** It symlinks `ntc` and
 `norte` from `~/.local/bin` (which precedes cargo's bin on PATH) to this tree's
 `target/debug`, so the binary is whatever the last build produced — cost zero,
-and never stale while you run tests. `cargo install --path` compiles in a target
+and never stale while you run tests. **`just link-gui` does the same for
+`norte-gui`**, and is a separate recipe for the same reason `core_pkgs` keeps
+the window out of the gate: building it drags in WebKitGTK, GTK3, libsoup3 and
+npm, and folding it into `link` would leave any machine without them unable to
+get `ntc`. It rebuilds the webview bundle first, and that is not optional —
+`frontendDist` is `ui/dist`, so Tauri *embeds* the webview into the binary at
+compile time; skip it and the link points at a binary carrying a stale webview
+inside, which nothing shows you because the executable exists and starts. `cargo install --path` compiles in a target
 directory of its OWN: a full cold build and another universe of disk every time
 you want to try a change. `just link release` when you need to measure the
 <50 ms cold start. Keep `cargo install` for installing for real, and note that a
