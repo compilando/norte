@@ -19,6 +19,7 @@
 //!     symlinks: Default::default(),
 //!     resume: Default::default(),
 //!     verify: Default::default(),
+//!     dest_anchor: None,
 //! };
 //! let wire = serde_json::to_string(&params).unwrap();
 //! let back: FsCopyParams = serde_json::from_str(&wire).unwrap();
@@ -724,7 +725,26 @@ use crate::{
 /// el catálogo UNA vez al arrancar y por tanto no tiene ventana que explotar
 /// — es una propiedad de aquella implementación, no del protocolo, y ningún
 /// cliente puede comprobarla.
-pub const PROTOCOL_VERSION: &str = "0.53.0";
+///
+/// `0.54.0` (#295, ADR 0073): [`FsListResult::dir_anchor`] y el
+/// [`FsCopyParams::dest_anchor`] / [`FsMoveParams::dest_anchor`] que lo
+/// devuelve — la identidad OPACA del directorio que el humano estaba mirando
+/// cuando aprobó, viajando con la petición que escribe en él.
+///
+/// Cierra lo que ADR 0072 deja abierto: un enlace **ya plantado** cuando el
+/// core mira por primera vez es, desde el core, indistinguible de un
+/// `~/copias -> /mnt/disco/copias` legítimo. Fuera del core sí hay algo que lo
+/// distingue, y es que el humano no estaba mirando ESE nodo.
+///
+/// Ventana N=0.54.x / N-1=0.53.x. Los dos campos se omiten cuando no hay nada
+/// que decir, así que el JSON corriente no cambia. Un daemon 0.53 no emite
+/// ancla, luego un cliente 0.54 no tiene ninguna que devolver y no manda el
+/// campo; un cliente 0.53 contra un daemon 0.54 tampoco lo manda. En los dos
+/// casos se pierde la COMPROBACIÓN y no la corrección, con el mismo matiz de
+/// ADR 0071: quien no la recibe no puede saber que no ocurrió, y por eso la
+/// versión del peer —que el SDK retiene desde #294— es lo que decide si se
+/// puede prometer.
+pub const PROTOCOL_VERSION: &str = "0.54.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -1605,6 +1625,20 @@ pub struct FsListResult {
     /// señalizarlo cuando es `Some(n)` con `n > 0`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped: Option<u64>,
+    /// La identidad OPACA del directorio listado (#295, desde 0.54.0): lo que
+    /// un cliente retiene para poder decir DESPUÉS, al copiar o mover aquí,
+    /// cuál era el directorio que el humano estaba mirando cuando aprobó.
+    ///
+    /// Se repite en cada página del mismo listado, como `skipped` y por el
+    /// mismo motivo: una página no es un directorio distinto. Ausente
+    /// (`None`) = el destino no sabe dar identidad de nodo (un bucket, un
+    /// SFTP) o el daemon es 0.53 o anterior; entonces el cliente no manda
+    /// ancla y la escritura se comporta como siempre.
+    ///
+    /// Un cliente **no la interpreta jamás**: la guarda tal cual y la
+    /// devuelve en [`FsCopyParams::dest_anchor`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir_anchor: Option<crate::entry::DirAnchor>,
 }
 
 /// Params de [`FS_STAT`].
@@ -1681,6 +1715,22 @@ pub struct FsCopyParams {
     /// Verificación del parcial al reanudar; default `Length`.
     #[serde(default)]
     pub verify: VerifyPolicy,
+    /// La identidad que el cliente observó para el DIRECTORIO de `to` cuando
+    /// lo listó (#295, desde 0.54.0), tal como se la dio
+    /// [`FsListResult::dir_anchor`].
+    ///
+    /// Presente = «escribe ahí solo si ese directorio sigue siendo el mismo
+    /// nodo que yo estaba mirando». Es lo único que distingue un
+    /// `dest/sub -> /etc` plantado antes de que nadie mirase de un
+    /// `~/copias -> /mnt/disco/copias` legítimo, porque los dos resuelven a
+    /// otro sitio y desde el core se ven igual (ADR 0072).
+    ///
+    /// Ausente (`None`) = el comportamiento de 0.53: se confina igual, sin esa
+    /// comprobación. Un cliente 0.53 no lo manda y no pierde corrección, solo
+    /// la comprobación — y no puede saber que no ocurrió, que es el matiz que
+    /// ADR 0071 registra para `expected_digest` y que aquí vale igual.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dest_anchor: Option<crate::entry::DirAnchor>,
 }
 
 /// Params de [`FS_MOVE`].
@@ -1704,6 +1754,16 @@ pub struct FsMoveParams {
     /// Verificación del parcial al reanudar; default `Length`.
     #[serde(default)]
     pub verify: VerifyPolicy,
+    /// La identidad observada del directorio de `to` (ver
+    /// [`FsCopyParams::dest_anchor`]; #295, desde 0.54.0).
+    ///
+    /// Aplica a los DOS caminos de un movimiento. El de copia escribe igual
+    /// que una copia y además borra el origen después; y el rename, aunque no
+    /// componga ninguna ruta nueva bajo el destino, sí resuelve `to` una vez
+    /// por ruta — con el directorio hecho enlace, deja el fichero al otro lado
+    /// exactamente igual.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dest_anchor: Option<crate::entry::DirAnchor>,
 }
 
 /// Params de [`FS_DELETE`].

@@ -370,6 +370,11 @@ impl Bridge {
                     symlinks: norte_proto::SymlinkPolicy::default(),
                     resume: norte_proto::ResumePolicy::default(),
                     verify: norte_proto::VerifyPolicy::default(),
+                    // Un agente no ancla su destino (#295): el ancla dice qué
+                    // estaba mirando un HUMANO cuando aprobó, y aquí no hay
+                    // listado humano detrás. Lo que acota a un agente es su
+                    // scope de policy, que es otra cosa y sigue aplicando.
+                    dest_anchor: None,
                 },
                 daemon_id,
             )
@@ -384,6 +389,8 @@ impl Bridge {
                     symlinks: norte_proto::SymlinkPolicy::default(),
                     resume: norte_proto::ResumePolicy::default(),
                     verify: norte_proto::VerifyPolicy::default(),
+                    // Sin ancla, por lo mismo que la copia de arriba.
+                    dest_anchor: None,
                 },
                 daemon_id,
             )

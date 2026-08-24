@@ -188,6 +188,15 @@
     "to": "file:///dst/a.txt",
     "verify": "length"
   },
+  "fs_copy_params_anchored": {
+    "dest_anchor": "3f2a91c40b7d6e58aa10c4d9f8e37b62",
+    "from": "file:///src/a.txt",
+    "on_collision": "fail",
+    "resume": "off",
+    "symlinks": "preserve",
+    "to": "file:///dst/sub/a.txt",
+    "verify": "length"
+  },
   "fs_copy_params_policies": {
     "from": "file:///src/a.txt",
     "on_collision": "rename_auto",
@@ -240,6 +249,18 @@
     ],
     "next_cursor": null
   },
+  "fs_list_result_anchored": {
+    "dir_anchor": "3f2a91c40b7d6e58aa10c4d9f8e37b62",
+    "entries": [
+      {
+        "kind": "file",
+        "mtime_ms": 1720000000000,
+        "path": "file:///home/user/doc.txt",
+        "size": 1234
+      }
+    ],
+    "next_cursor": null
+  },
   "fs_list_result_con_skipped": {
     "entries": [
       {
@@ -272,6 +293,15 @@
     "resume": "off",
     "symlinks": "preserve",
     "to": "sftp://nas:22/backup/dir",
+    "verify": "length"
+  },
+  "fs_move_params_anchored": {
+    "dest_anchor": "3f2a91c40b7d6e58aa10c4d9f8e37b62",
+    "from": "file:///src/dir/a.txt",
+    "on_collision": "fail",
+    "resume": "off",
+    "symlinks": "preserve",
+    "to": "file:///dst/sub/a.txt",
     "verify": "length"
   },
   "fs_read_params": {

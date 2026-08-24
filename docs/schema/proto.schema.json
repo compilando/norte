@@ -973,6 +973,10 @@
         }
       ]
     },
+    "DirAnchor": {
+      "description": "La identidad OPACA del directorio que un listado devolvió, para que la\npetición que escribe en él pueda decir CUÁL era (#295, 0.54.0).\n\n# Qué problema resuelve\n\nEl core abre el directorio destino como raíz confinada (ADR 0072), así que\nuna sustitución POSTERIOR a esa apertura ya no desvía nada. Lo que no puede\ndistinguir es un enlace que **ya estaba puesto** cuando miró por primera\nvez: desde dentro del core, `dest/sub -> /etc` recién plantado y un\n`~/copias -> /mnt/disco/copias` legítimo son idénticos —los dos resuelven a\notro sitio—, y rechazar los dos rompe copiar a `/tmp` en macOS o a `/bin`\nen un Linux con usrmerge.\n\nLo único que los separa es la identidad que se observó **cuando el humano\naprobó**: el listado que estaba mirando. Eso es esto.\n\n# Es opaco a propósito\n\nDentro no hay un inodo ni un número de volumen, sino un valor derivado de\nellos con un secreto del daemon: dos rutas del mismo nodo dan el mismo\nancla, y un cliente no puede ni fabricar una ni deducir qué nodo hay\ndetrás. Un cliente lo trata como bytes: lo guarda, lo devuelve y jamás lo\ninterpreta ni lo construye.\n\nUn ancla **no sobrevive al reinicio del daemon**, que renueva el secreto.\nUn cliente que reconecta ha perdido su listado de todas formas y vuelve a\npedirlo, así que la ventana que importa —mirar, aprobar, escribir— cae\nentera dentro de una sesión.\n\n```\nuse norte_proto::entry::{DIR_ANCHOR_LEN, DirAnchor};\nlet a = DirAnchor::new(\"0123456789abcdef0123456789abcdef\".to_owned());\nassert!(a.is_well_formed());\nassert_eq!(a.as_str().len(), DIR_ANCHOR_LEN);\n// Va por el wire como una cadena y nada más.\nassert_eq!(\n    serde_json::to_string(&a).unwrap(),\n    \"\\\"0123456789abcdef0123456789abcdef\\\"\"\n);\n\n// Lo que no está bien formado NO es un error de decodificación: llega,\n// y quien compare no encontrará jamás un nodo que le case, que es la\n// respuesta segura (un ancla que no se reconoce no autoriza nada).\nlet raro: DirAnchor = serde_json::from_str(\"\\\"../etc\\\"\").unwrap();\nassert!(!raro.is_well_formed());\n```",
+      "type": "string"
+    },
     "Entry": {
       "description": "Metadatos de un nodo del VFS.\n\nCampos opcionales `None` = \"el provider no lo sabe\", nunca un 0 fingido.\n\n```\nuse norte_proto::attrs::AttrValue;\nuse norte_proto::{Entry, EntryKind, VPath};\nlet e = Entry {\n    path: VPath::parse(\"file:///a.txt\").unwrap(),\n    kind: EntryKind::File,\n    size: Some(42),\n    mtime_ms: None,\n    attrs: [(\"posix.mode\".to_owned(), AttrValue::Uint(0o100_644))].into(),\n};\nlet json = serde_json::to_string(&e).unwrap();\nassert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), e);\n\n// Sin attrs, el wire es EXACTAMENTE el de 0.29.\nlet plain = Entry { attrs: Default::default(), ..e };\nassert!(!serde_json::to_string(&plain).unwrap().contains(\"attrs\"));\n\n// Una clave de atributo mal formada NO llega al mapa: se descarta al\n// decodificar, sin error (ver [`Entry::attrs`]).\nlet wire = r#\"{\"path\":\"file:///a.txt\",\"kind\":\"file\",\"attrs\":{\"MODE\":{\"uint\":1}}}\"#;\nlet filtrada: Entry = serde_json::from_str(wire).unwrap();\nassert!(filtrada.attrs.is_empty());\n```\n\nOJO: `PartialEq`/`Eq`/`Hash` derivados son REPRESENTACIONALES, no de\nIDENTIDAD: dos `Entry` del MISMO nodo difieren si una se pidió con\natributos y la otra no, o si se pidieron ids distintos. Para \"¿es el mismo\nnodo?\" se compara [`Entry::path`]; estas derivaciones existen para\nfixtures, tests y deduplicado de listados idénticos, no para decidir\nidentidad.",
       "properties": {
@@ -1577,6 +1581,17 @@
     "FsCopyParams": {
       "description": "Params de [`FS_COPY`].",
       "properties": {
+        "dest_anchor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DirAnchor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "La identidad que el cliente observó para el DIRECTORIO de `to` cuando\nlo listó (#295, desde 0.54.0), tal como se la dio\n[`FsListResult::dir_anchor`].\n\nPresente = «escribe ahí solo si ese directorio sigue siendo el mismo\nnodo que yo estaba mirando». Es lo único que distingue un\n`dest/sub -> /etc` plantado antes de que nadie mirase de un\n`~/copias -> /mnt/disco/copias` legítimo, porque los dos resuelven a\notro sitio y desde el core se ven igual (ADR 0072).\n\nAusente (`None`) = el comportamiento de 0.53: se confina igual, sin esa\ncomprobación. Un cliente 0.53 no lo manda y no pierde corrección, solo\nla comprobación — y no puede saber que no ocurrió, que es el matiz que\nADR 0071 registra para `expected_digest` y que aquí vale igual."
+        },
         "from": {
           "$ref": "#/$defs/VPath",
           "description": "Origen (archivo o directorio)."
@@ -1688,6 +1703,17 @@
     "FsListResult": {
       "description": "Result de [`FS_LIST`].\n\nCláusula de compatibilidad (ADR 0004/0017): sin `cursor` NI `limit`, el\ncore DEVUELVE el listado COMPLETO con `next_cursor: null` — un cliente\n0.7 (N-1) recibe exactamente lo de antes, jamás un truncado en silencio.",
       "properties": {
+        "dir_anchor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DirAnchor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "La identidad OPACA del directorio listado (#295, desde 0.54.0): lo que\nun cliente retiene para poder decir DESPUÉS, al copiar o mover aquí,\ncuál era el directorio que el humano estaba mirando cuando aprobó.\n\nSe repite en cada página del mismo listado, como `skipped` y por el\nmismo motivo: una página no es un directorio distinto. Ausente\n(`None`) = el destino no sabe dar identidad de nodo (un bucket, un\nSFTP) o el daemon es 0.53 o anterior; entonces el cliente no manda\nancla y la escritura se comporta como siempre.\n\nUn cliente **no la interpreta jamás**: la guarda tal cual y la\ndevuelve en [`FsCopyParams::dest_anchor`]."
+        },
         "entries": {
           "description": "Entradas de ESTA página (orden: el del provider, sin garantía).",
           "items": {
@@ -1734,6 +1760,17 @@
     "FsMoveParams": {
       "description": "Params de [`FS_MOVE`].",
       "properties": {
+        "dest_anchor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DirAnchor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "La identidad observada del directorio de `to` (ver\n[`FsCopyParams::dest_anchor`]; #295, desde 0.54.0).\n\nAplica a los DOS caminos de un movimiento. El de copia escribe igual\nque una copia y además borra el origen después; y el rename, aunque no\ncomponga ninguna ruta nueva bajo el destino, sí resuelve `to` una vez\npor ruta — con el directorio hecho enlace, deja el fichero al otro lado\nexactamente igual."
+        },
         "from": {
           "$ref": "#/$defs/VPath",
           "description": "Origen."

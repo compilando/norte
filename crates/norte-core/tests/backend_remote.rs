@@ -192,6 +192,103 @@ async fn remote_copy_list_read_capabilities_como_el_embebido() {
     assert_eq!(entry.size, Some(16));
 }
 
+/// **La costura entera de #295, por el socket y sin una línea de frontend**
+/// (ADR 0073): el SDK retiene el ancla de lo que LISTA y la devuelve sola en
+/// el `transfer`. Aquí se ejerce lo que ningún test de engine puede ver —que
+/// `fs.list` la trae por el wire y que `fs.copy` la lleva de vuelta.
+///
+/// El destino se sustituye por OTRO nodo con el mismo nombre (borrar y
+/// recrear, que es lo que hace un atacante que no puede escribir dentro). El
+/// core no tiene con qué distinguirlo; el cliente sí, porque no estaba
+/// mirando ESE nodo.
+#[tokio::test]
+async fn el_sdk_ancla_el_destino_que_listo_y_la_copia_lo_comprueba() {
+    let d = spawn_daemon().await;
+    d.mem.mkdir(&vp("mem:///d")).await.expect("destino");
+    write_file(&d.mem, "mem:///src.bin", b"contenido").await;
+    let backend = Backend::Remote(remote(&d).await);
+
+    // Listar es lo que ancla: el cliente mira `d/` y retiene su identidad.
+    backend
+        .list(&vp("mem:///d"))
+        .await
+        .expect("list del destino");
+    let task = backend
+        .copy(
+            &vp("mem:///src.bin"),
+            &vp("mem:///d/copia.bin"),
+            norte_core::TransferOptions::default(),
+        )
+        .await
+        .expect("copy");
+    assert_eq!(
+        join_ref(task).await,
+        TaskState::Completed,
+        "el directorio sigue siendo el que se listó"
+    );
+
+    // El cambiazo: mismo NOMBRE, otro NODO.
+    d.mem
+        .remove(&vp("mem:///d/copia.bin"))
+        .await
+        .expect("vaciar");
+    d.mem.remove(&vp("mem:///d")).await.expect("borrar destino");
+    d.mem.mkdir(&vp("mem:///d")).await.expect("recrear destino");
+
+    let task = backend
+        .copy(
+            &vp("mem:///src.bin"),
+            &vp("mem:///d/otra.bin"),
+            norte_core::TransferOptions::default(),
+        )
+        .await
+        .expect("encola");
+    assert!(
+        matches!(
+            join_ref(task).await,
+            TaskState::Failed {
+                error: norte_proto::Error::Conflict {
+                    conflict: norte_proto::ConflictKind::EscapesRoot
+                }
+            }
+        ),
+        "el ancla retenida ya no nombra a este directorio"
+    );
+
+    // Y refrescar el panel es el arreglo: re-listar re-ancla.
+    backend.list(&vp("mem:///d")).await.expect("re-list");
+    let task = backend
+        .copy(
+            &vp("mem:///src.bin"),
+            &vp("mem:///d/otra.bin"),
+            norte_core::TransferOptions::default(),
+        )
+        .await
+        .expect("copy");
+    assert_eq!(join_ref(task).await, TaskState::Completed);
+}
+
+/// Un destino que este cliente NUNCA listó no manda ancla, y eso NO es un
+/// fallo: es un `norte cp` con una ruta escrita a mano, que se comporta como
+/// en 0.53.
+#[tokio::test]
+async fn un_destino_que_nadie_listo_copia_sin_ancla() {
+    let d = spawn_daemon().await;
+    d.mem.mkdir(&vp("mem:///d")).await.expect("destino");
+    write_file(&d.mem, "mem:///src.bin", b"contenido").await;
+    let backend = Backend::Remote(remote(&d).await);
+
+    let task = backend
+        .copy(
+            &vp("mem:///src.bin"),
+            &vp("mem:///d/copia.bin"),
+            norte_core::TransferOptions::default(),
+        )
+        .await
+        .expect("copy");
+    assert_eq!(join_ref(task).await, TaskState::Completed);
+}
+
 /// Un clon de `Backend::Remote` comparte conexión/watches pero NO puede
 /// robarle al dueño original los canales one-shot (`take_foreign_tasks`,
 /// `take_conn_events`, `take_approvals`): si el clon los tomara, la TUI
@@ -834,6 +931,7 @@ fn spawn_agent_copy(
                     symlinks: norte_proto::SymlinkPolicy::default(),
                     resume: norte_proto::ResumePolicy::default(),
                     verify: norte_proto::VerifyPolicy::default(),
+                    dest_anchor: None,
                 },
             )
             .await

@@ -144,3 +144,110 @@ pub struct Entry {
     )]
     pub attrs: std::collections::BTreeMap<String, crate::attrs::AttrValue>,
 }
+
+/// Longitud exacta, en caracteres, de un [`DirAnchor`] bien formado.
+pub const DIR_ANCHOR_LEN: usize = 32;
+
+/// La identidad OPACA del directorio que un listado devolvió, para que la
+/// petición que escribe en él pueda decir CUÁL era (#295, 0.54.0).
+///
+/// # Qué problema resuelve
+///
+/// El core abre el directorio destino como raíz confinada (ADR 0072), así que
+/// una sustitución POSTERIOR a esa apertura ya no desvía nada. Lo que no puede
+/// distinguir es un enlace que **ya estaba puesto** cuando miró por primera
+/// vez: desde dentro del core, `dest/sub -> /etc` recién plantado y un
+/// `~/copias -> /mnt/disco/copias` legítimo son idénticos —los dos resuelven a
+/// otro sitio—, y rechazar los dos rompe copiar a `/tmp` en macOS o a `/bin`
+/// en un Linux con usrmerge.
+///
+/// Lo único que los separa es la identidad que se observó **cuando el humano
+/// aprobó**: el listado que estaba mirando. Eso es esto.
+///
+/// # Es opaco a propósito
+///
+/// Dentro no hay un inodo ni un número de volumen, sino un valor derivado de
+/// ellos con un secreto del daemon: dos rutas del mismo nodo dan el mismo
+/// ancla, y un cliente no puede ni fabricar una ni deducir qué nodo hay
+/// detrás. Un cliente lo trata como bytes: lo guarda, lo devuelve y jamás lo
+/// interpreta ni lo construye.
+///
+/// Un ancla **no sobrevive al reinicio del daemon**, que renueva el secreto.
+/// Un cliente que reconecta ha perdido su listado de todas formas y vuelve a
+/// pedirlo, así que la ventana que importa —mirar, aprobar, escribir— cae
+/// entera dentro de una sesión.
+///
+/// ```
+/// use norte_proto::entry::{DIR_ANCHOR_LEN, DirAnchor};
+/// let a = DirAnchor::new("0123456789abcdef0123456789abcdef".to_owned());
+/// assert!(a.is_well_formed());
+/// assert_eq!(a.as_str().len(), DIR_ANCHOR_LEN);
+/// // Va por el wire como una cadena y nada más.
+/// assert_eq!(
+///     serde_json::to_string(&a).unwrap(),
+///     "\"0123456789abcdef0123456789abcdef\""
+/// );
+///
+/// // Lo que no está bien formado NO es un error de decodificación: llega,
+/// // y quien compare no encontrará jamás un nodo que le case, que es la
+/// // respuesta segura (un ancla que no se reconoce no autoriza nada).
+/// let raro: DirAnchor = serde_json::from_str("\"../etc\"").unwrap();
+/// assert!(!raro.is_well_formed());
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DirAnchor(String);
+
+impl DirAnchor {
+    /// Envuelve el valor que produjo el daemon.
+    ///
+    /// No valida: quien lo emite sabe lo que emite, y quien lo recibe por el
+    /// wire pregunta con [`DirAnchor::is_well_formed`]. Esa asimetría es la
+    /// misma que [`Entry::attrs`] documenta y por el mismo motivo — el fallo
+    /// de un productor tiene que seguir siendo visible.
+    ///
+    /// ```
+    /// use norte_proto::entry::DirAnchor;
+    /// assert_eq!(DirAnchor::new("ab".to_owned()).as_str(), "ab");
+    /// ```
+    #[must_use]
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    /// El valor tal cual, para guardarlo o devolverlo. Nunca para leerlo.
+    ///
+    /// ```
+    /// use norte_proto::entry::DirAnchor;
+    /// let a = DirAnchor::new("0123456789abcdef0123456789abcdef".to_owned());
+    /// assert!(a.as_str().chars().all(|c| c.is_ascii_hexdigit()));
+    /// ```
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// ¿Tiene la forma que emite un daemon: [`DIR_ANCHOR_LEN`] dígitos hex en
+    /// minúscula?
+    ///
+    /// Un ancla mal formada no es un error del wire —no rompe la petición—,
+    /// pero tampoco casa con ningún nodo, así que la operación que la traía se
+    /// rechaza. Fallar cerrado es lo correcto aquí: el ancla existe para
+    /// autorizar, no para dispensar.
+    ///
+    /// ```
+    /// use norte_proto::entry::DirAnchor;
+    /// assert!(DirAnchor::new("0123456789abcdef0123456789abcdef".to_owned()).is_well_formed());
+    /// assert!(!DirAnchor::new("0123456789ABCDEF0123456789ABCDEF".to_owned()).is_well_formed());
+    /// assert!(!DirAnchor::new("corto".to_owned()).is_well_formed());
+    /// ```
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        self.0.len() == DIR_ANCHOR_LEN
+            && self
+                .0
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }
+}

@@ -1515,6 +1515,10 @@ struct OpenListing {
     /// listado: cada página lo repite (el cliente puede engancharse en
     /// cualquiera; el total es por-contenedor, no por página).
     skipped: Option<u64>,
+    /// El ancla del directorio listado (#295), capturada al ABRIR por el mismo
+    /// motivo que `skipped`: una página no es un directorio distinto, y el
+    /// cliente puede engancharse en cualquiera.
+    dir_anchor: Option<norte_proto::DirAnchor>,
     /// Petición de attrs RESUELTA al abrir el listado (#108 bloque 2): el
     /// stream nació con ella, así que las continuaciones la reusan para el
     /// cinturón de emisión (los `attrs` de una continuación se ignoran).
@@ -1762,6 +1766,16 @@ async fn handle_fs_list(
             tracing::warn!(error = %e, "list_skipped falló; omitidas = desconocido");
             None
         });
+    // El ancla del directorio (#295), también UNA vez al abrir. Un fallo aquí
+    // NO tumba el listado: degrada a `None`, que es lo que dice un provider
+    // que no sabe dar identidad, y entonces el cliente no manda ancla y la
+    // escritura se comporta como en 0.53. Ir al revés —negarse a listar
+    // porque no se puede anclar— dejaría sin listar un bucket entero por una
+    // comprobación que ese destino no puede dar.
+    let dir_anchor = shared.engine.dir_anchor(&p.path).await.unwrap_or_else(|e| {
+        tracing::debug!(error = %e, "no se pudo anclar el directorio listado (#295)");
+        None
+    });
     match drain_page(&mut stream, cap, &mut entries).await {
         Ok(Drained::Done) => {
             for e in &mut entries {
@@ -1771,6 +1785,7 @@ async fn handle_fs_list(
                 entries,
                 next_cursor: None,
                 skipped,
+                dir_anchor,
             })
         }
         Ok(Drained::More) => {
@@ -1788,6 +1803,7 @@ async fn handle_fs_list(
                             entries,
                             next_cursor: None,
                             skipped,
+                            dir_anchor,
                         });
                     }
                     Err(e) => return Err(RpcError::from(e)),
@@ -1807,6 +1823,7 @@ async fn handle_fs_list(
                     stream,
                     last_used: now,
                     skipped,
+                    dir_anchor: dir_anchor.clone(),
                     attrs: request,
                     _guard: ListingGuard {
                         global: Arc::clone(&shared.open_listings),
@@ -1817,6 +1834,7 @@ async fn handle_fs_list(
                 entries,
                 next_cursor: Some(id.to_string()),
                 skipped,
+                dir_anchor,
             })
         }
         Err(e) => Err(RpcError::from(e)),
@@ -1837,7 +1855,7 @@ async fn continue_listing(
 ) -> Result<serde_json::Value, RpcError> {
     // Cursor no-numérico o desconocido = expirado (el cliente reinicia).
     let id: u64 = cursor.parse().map_err(|_| cursor_expired())?;
-    let (drained, skipped) = {
+    let (drained, skipped, dir_anchor) = {
         let listing = conn.listings.get_mut(&id).ok_or_else(cursor_expired)?;
         if listing.path != *path {
             return Err(RpcError::protocol(
@@ -1846,13 +1864,17 @@ async fn continue_listing(
             ));
         }
         let skipped = listing.skipped;
+        // El ancla del ABRIR, repetida en cada página (#295): volver a
+        // preguntarla aquí contestaría por el directorio de AHORA, que es
+        // justo lo que el ancla existe para no confundir con el de entonces.
+        let dir_anchor = listing.dir_anchor.clone();
         let drained = drain_page(&mut listing.stream, cap, &mut entries).await;
         // Cinturón de emisión con la petición del ABRIR (#108 bloque 2).
         let allowed = listing.attrs.clone();
         for e in &mut entries {
             enforce_attr_caps(e, &allowed);
         }
-        (drained, skipped)
+        (drained, skipped, dir_anchor)
     };
     match drained {
         Ok(Drained::More) => {
@@ -1864,6 +1886,7 @@ async fn continue_listing(
                 entries,
                 next_cursor: Some(id.to_string()),
                 skipped,
+                dir_anchor,
             })
         }
         Ok(Drained::Done) => {
@@ -1872,6 +1895,7 @@ async fn continue_listing(
                 entries,
                 next_cursor: None,
                 skipped,
+                dir_anchor,
             })
         }
         Err(e) => {
@@ -4797,7 +4821,7 @@ async fn dispatch_fs_task(
             };
             let handle = shared
                 .engine
-                .copy_with_as(&p.from, &p.to, opts, actor.clone())
+                .copy_anchored(&p.from, &p.to, opts, actor.clone(), p.dest_anchor)
                 .await
                 .map_err(RpcError::from)?;
             // INVARIANTE (#64): CERO `.await` entre el submit del engine y
@@ -4817,7 +4841,7 @@ async fn dispatch_fs_task(
             };
             let handle = shared
                 .engine
-                .move_with_as(&p.from, &p.to, opts, actor.clone())
+                .move_anchored(&p.from, &p.to, opts, actor.clone(), p.dest_anchor)
                 .await
                 .map_err(RpcError::from)?;
             register_task(shared, handle, actor)

@@ -306,6 +306,66 @@ pub(crate) fn rel_under(root: &VPath, path: &VPath) -> Option<Vec<Segment>> {
         .collect()
 }
 
+/// La misma comprobación de ancla que hace [`open_leaf_root`], pero por RUTA y
+/// sobre el PADRE de `to` (#295), para los caminos que CREAN su destino.
+///
+/// Un árbol se copia creando `to` y confinando debajo, así que en el momento
+/// de comprobar no hay descriptor que preguntar: lo que el humano listó es el
+/// directorio donde el árbol va a caer, o sea el padre. La comprobación es por
+/// ruta y por tanto tiene su propia ventana —minúscula, entre preguntar y
+/// crear—, pero el caso que este ancla existe para cerrar es el enlace **ya
+/// plantado** antes de que nadie mirara, y ese lo caza igual.
+async fn anchor_parent_or_fail(
+    dst: &dyn Provider,
+    to: &VPath,
+    anchor: Option<&norte_proto::DirAnchor>,
+    task_id: u64,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    let (Some(anchor), Some(dir)) = (anchor, to.parent()) else {
+        return Ok(());
+    };
+    let observado = with_retry(cancel, || {
+        dst.node_id(&dir, norte_vfs::FollowLinks::Yes).boxed()
+    })
+    .await?;
+    match observado {
+        Some(id) if crate::anchor::casa(anchor, id) => Ok(()),
+        Some(_) => {
+            tracing::warn!(
+                task_id,
+                dest = %crate::engine::span_path(&dir),
+                "el directorio destino ya no es el nodo que el cliente listó: se rehúsa \
+                 escribir (#295)"
+            );
+            Err(Error::Conflict {
+                conflict: norte_proto::ConflictKind::EscapesRoot,
+            })
+        }
+        None => {
+            tracing::debug!(
+                task_id,
+                dest = %crate::engine::span_path(&dir),
+                "vino un ancla y este destino no sabe dar identidad: no se comprueba (#295)"
+            );
+            Ok(())
+        }
+    }
+}
+
+/// El destino de una hoja, con raíz si `open_leaf_root` pudo darla.
+fn destino_de_hoja<'a>(
+    dst: &'a dyn Provider,
+    dir: Option<&'a VPath>,
+    raiz: Option<&'a dyn norte_vfs::ConfinedRoot>,
+    to: &'a VPath,
+) -> Destination<'a> {
+    match dir {
+        Some(dir) => Destination::new(dst, raiz, dir),
+        None => Destination::unconfined(dst, to),
+    }
+}
+
 /// La raíz de una transferencia de UNA hoja: su DIRECTORIO destino (#219).
 ///
 /// Devuelve `(directorio, raíz)`; `None` en la raíz = no hay dónde anclarse y
@@ -331,34 +391,24 @@ pub(crate) fn rel_under(root: &VPath, path: &VPath) -> Option<Vec<Segment>> {
 /// —crear el staging, renombrar, y otra vez por cada uno de los tres
 /// reintentos de 100/200/400 ms.
 ///
-/// **No cierra un enlace que YA estaba** cuando el core miró por primera vez, y
-/// eso no es un descuido: desde aquí un `~/copias -> /mnt/disco/copias`
+/// Un enlace que YA estaba cuando el core miró por primera vez no lo cierra
+/// ese confinamiento, y no puede: desde aquí un `~/copias -> /mnt/disco/copias`
 /// legítimo y un enlace hostil son indistinguibles, porque los dos resuelven a
-/// otro sitio. Distinguirlos pide la identidad que se observó al APROBAR —el
-/// listado que el humano miró—, y eso tendría que viajar con la petición.
-/// Mientras no viaje, un directorio destino que es un enlace se copia por
-/// ruta, exactamente como antes de #219, y se dice en el log.
+/// otro sitio. Lo que los separa es la identidad que se observó al APROBAR —el
+/// listado que el humano miró—, y desde #295 esa identidad VIAJA con la
+/// petición: es el `anchor` de esta función (ADR 0073). Sin ancla, un
+/// directorio destino que es un enlace se copia por ruta, exactamente como
+/// antes de #219, y se dice en el log.
 ///
-/// Tampoco cierra la sustitución de un componente INTERMEDIO del directorio:
-/// el ancla se consigue ABRIENDO una ruta, así que esa primera resolución es
-/// por ruta por definición. Es el mismo residuo que una copia recursiva acepta
+/// Lo que sigue sin cerrarse es la sustitución de un componente INTERMEDIO del
+/// directorio: la raíz se consigue ABRIENDO una ruta, así que esa primera
+/// resolución es por ruta por definición, y el ancla nombra el directorio
+/// final, no los de encima. Es el mismo residuo que una copia recursiva acepta
 /// para su propio destino.
-/// El destino de una hoja, con raíz si `open_leaf_root` pudo darla.
-fn destino_de_hoja<'a>(
-    dst: &'a dyn Provider,
-    dir: Option<&'a VPath>,
-    raiz: Option<&'a dyn norte_vfs::ConfinedRoot>,
-    to: &'a VPath,
-) -> Destination<'a> {
-    match dir {
-        Some(dir) => Destination::new(dst, raiz, dir),
-        None => Destination::unconfined(dst, to),
-    }
-}
-
 async fn open_leaf_root(
     dst: &dyn Provider,
     to: &VPath,
+    anchor: Option<&norte_proto::DirAnchor>,
     task_id: u64,
     cancel: &CancellationToken,
 ) -> Result<(Option<VPath>, Option<Box<dyn norte_vfs::ConfinedRoot>>), Error> {
@@ -429,6 +479,55 @@ async fn open_leaf_root(
         && !es_enlace
     {
         same_root_or_fail(dst, root, &dir, cancel).await?;
+    }
+    // El ANCLA (#295, ADR 0073): ¿este directorio sigue siendo el nodo que el
+    // humano estaba mirando cuando aprobó?
+    //
+    // Es lo ÚNICO que separa un `dest/sub -> /etc` plantado antes de que nadie
+    // mirase de un `~/copias -> /mnt/disco/copias` legítimo, porque los dos
+    // resuelven a otro sitio y desde aquí se ven igual. Y se contesta contra
+    // el DESCRIPTOR ya abierto —`root_id`—, no volviendo a resolver la ruta:
+    // la raíz que se comprueba es exactamente la raíz por la que se va a
+    // escribir, sin ventana en medio. Sobre un enlace vale igual, que es la
+    // diferencia con la comprobación de arriba: al ancla no le importa por qué
+    // nombre se llegó, solo A QUÉ NODO.
+    if let Some(anchor) = anchor {
+        let observado = match root.as_deref() {
+            Some(root) => root.root_id().await?,
+            // Sin raíz confinada (el destino no sabe) queda la ruta, que es
+            // peor y se dice: sigue cerrando el enlace YA plantado, que es el
+            // caso del issue, y no la sustitución de después.
+            None => {
+                with_retry(cancel, || {
+                    dst.node_id(&dir, norte_vfs::FollowLinks::Yes).boxed()
+                })
+                .await?
+            }
+        };
+        match observado {
+            Some(id) if crate::anchor::casa(anchor, id) => {}
+            Some(_) => {
+                tracing::warn!(
+                    task_id,
+                    dest = %crate::engine::span_path(&dir),
+                    "el directorio destino ya no es el nodo que el cliente listó: se rehúsa \
+                     escribir (#295)"
+                );
+                return Err(Error::Conflict {
+                    conflict: norte_proto::ConflictKind::EscapesRoot,
+                });
+            }
+            // El destino no sabe dar identidad de nodo. No se puede comprobar
+            // y NO se inventa un veredicto: se sigue, como sin ancla. Un
+            // cliente contra un destino así tampoco recibió ancla que mandar,
+            // así que llegar aquí es un cliente que se la inventó o un destino
+            // que cambió de opinión.
+            None => tracing::debug!(
+                task_id,
+                dest = %crate::engine::span_path(&dir),
+                "vino un ancla y este destino no sabe dar identidad: no se comprueba (#295)"
+            ),
+        }
     }
     if es_enlace {
         tracing::debug!(
@@ -1289,12 +1388,17 @@ async fn copy_symlink_leaf(
 /// el destino — todo lo commiteado fue observado como `Created` (el undo del
 /// journal M3 lo revertirá; hasta entonces es limpieza manual).
 #[tracing::instrument(skip_all, fields(from = %from.display_lossy(), to = %to.display_lossy()))]
+// El octavo argumento es el ancla del destino (#295). Agruparla con `opts`
+// costaría el `Copy` de `TransferOptions`, que se copia en cada paso de un
+// árbol; agruparla con los providers mezclaría el QUÉ con el DÓNDE.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn copy_task(
     src: Arc<dyn Provider>,
     dst: Arc<dyn Provider>,
     from: VPath,
     to: VPath,
     opts: TransferOptions,
+    dest_anchor: Option<norte_proto::DirAnchor>,
     observer: Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
@@ -1334,7 +1438,8 @@ pub(crate) async fn copy_task(
             // tercero —un dir-symlink bajo `Follow`— se desvía a `copy_tree`,
             // que abre la suya, y pagar aquí una raíz que descarta le haría
             // heredar además sus errores.
-            let (dir, raiz) = open_leaf_root(&*dst, &to, tarea, &ctx.cancel).await?;
+            let (dir, raiz) =
+                open_leaf_root(&*dst, &to, dest_anchor.as_ref(), tarea, &ctx.cancel).await?;
             let into = destino_de_hoja(&*dst, dir.as_ref(), raiz.as_deref(), &to);
             copy_file_leaf(&*src, &into, &src_entry, &to, opts, &observer, ctx).await?;
             ctx.progress.update(|p| p.entries_done = 1);
@@ -1346,6 +1451,7 @@ pub(crate) async fn copy_task(
             if opts.symlinks == SymlinkPolicy::Follow
                 && probe_symlink_target(&*src, &from, &ctx.cancel).await? == TargetKind::Dir
             {
+                anchor_parent_or_fail(&*dst, &to, dest_anchor.as_ref(), tarea, &ctx.cancel).await?;
                 let mut plan = walk_following(&*src, &from, true, &ctx.cancel).await?;
                 hydrate_plan(&*src, &mut plan, ctx).await?;
                 return copy_tree(&src, &dst, &from, &to, &plan, opts, &observer, ctx)
@@ -1356,13 +1462,18 @@ pub(crate) async fn copy_task(
                 p.entries_total = Some(1);
                 p.current = Some(from.clone());
             });
-            let (dir, raiz) = open_leaf_root(&*dst, &to, tarea, &ctx.cancel).await?;
+            let (dir, raiz) =
+                open_leaf_root(&*dst, &to, dest_anchor.as_ref(), tarea, &ctx.cancel).await?;
             let into = destino_de_hoja(&*dst, dir.as_ref(), raiz.as_deref(), &to);
             copy_symlink_leaf(&*src, &into, &src_entry, &to, opts, &observer, ctx).await?;
             ctx.progress.update(|p| p.entries_done = 1);
             Ok(())
         }
         EntryKind::Dir => {
+            // Un árbol crea su destino, así que aquí el ancla se comprueba
+            // sobre el PADRE y por ruta (ver `anchor_parent_or_fail`): la raíz
+            // que confina lo demás todavía no existe.
+            anchor_parent_or_fail(&*dst, &to, dest_anchor.as_ref(), tarea, &ctx.cancel).await?;
             let mut plan = plan_for(&*src, &from, opts, &ctx.cancel).await?;
             hydrate_plan(&*src, &mut plan, ctx).await?;
             copy_tree(&src, &dst, &from, &to, &plan, opts, &observer, ctx)
@@ -1837,12 +1948,15 @@ async fn release(sink: Box<dyn norte_vfs::ByteSink>, to: &VPath, resume: bool) {
 /// política Y lo aparecido tras el walk sobreviven en el origen — jamás
 /// pérdida silenciosa.
 #[tracing::instrument(skip_all, fields(from = %from.display_lossy(), to = %to.display_lossy()))]
+// Octavo argumento: el ancla del destino (#295), ver `copy_task`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn move_task(
     src: Arc<dyn Provider>,
     dst: Arc<dyn Provider>,
     from: VPath,
     to: VPath,
     opts: TransferOptions,
+    dest_anchor: Option<norte_proto::DirAnchor>,
     observer: Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
@@ -1853,6 +1967,21 @@ pub(crate) async fn move_task(
     // entrada y `removed` por cada una, así que una Task a medio registrar deja
     // un undo que restaura la mitad del origen sobre la mitad del destino.
     let observer = crate::observer::pin_for_task(observer).await?;
+    // El ancla, ANTES de decidir por qué camino va el movimiento (#295).
+    //
+    // El rename no compone rutas nuevas bajo el destino y por eso no necesita
+    // confinamiento, pero SÍ resuelve `to` por ruta una vez: con `d/sub` hecho
+    // enlace, `rename` deja el fichero al otro lado igual que lo dejaría una
+    // copia. Comprobar aquí cubre los dos caminos; el de copia vuelve a
+    // comprobar contra el descriptor, que es exacto.
+    anchor_parent_or_fail(
+        &*dst,
+        &to,
+        dest_anchor.as_ref(),
+        ctx.progress.snapshot().task_id.get(),
+        &ctx.cancel,
+    )
+    .await?;
     if Arc::ptr_eq(&src, &dst) {
         if is_descendant_folded(&to, &from, &*dst).await {
             return Err(Error::InvalidPath);
@@ -1872,7 +2001,7 @@ pub(crate) async fn move_task(
             Err(e) => return Err(e),
         }
     }
-    move_by_copy(src, dst, from, to, opts, observer, ctx).await
+    move_by_copy(src, dst, from, to, opts, dest_anchor, observer, ctx).await
 }
 
 /// Overwrite/Newer jamás cruzan tipos (ADR 0005): dir sobre hoja o
@@ -2030,12 +2159,15 @@ async fn rename_with_policy(
 // copia y su fase de borrado. Separarlas duplicaría la guarda de «dentro de sí
 // mismo» y el plan, que es donde estaría el error si se separaran.
 #[allow(clippy::too_many_lines)]
+// Octavo argumento: el ancla del destino (#295), ver `copy_task`.
+#[allow(clippy::too_many_arguments)]
 async fn move_by_copy(
     src: Arc<dyn Provider>,
     dst: Arc<dyn Provider>,
     from: VPath,
     to: VPath,
     opts: TransferOptions,
+    dest_anchor: Option<norte_proto::DirAnchor>,
     observer: Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
@@ -2075,6 +2207,7 @@ async fn move_by_copy(
             let (dir_destino, raiz) = open_leaf_root(
                 &*dst,
                 &to,
+                dest_anchor.as_ref(),
                 ctx.progress.snapshot().task_id.get(),
                 &ctx.cancel,
             )
@@ -2102,6 +2235,14 @@ async fn move_by_copy(
             Ok(())
         }
         Some(mut plan) => {
+            anchor_parent_or_fail(
+                &*dst,
+                &to,
+                dest_anchor.as_ref(),
+                ctx.progress.snapshot().task_id.get(),
+                &ctx.cancel,
+            )
+            .await?;
             hydrate_plan(&*src, &mut plan, ctx).await?;
             let skipped = copy_tree(&src, &dst, &from, &to, &plan, opts, &observer, ctx).await?;
             // Fase delete: el total crece con los pasos de borrado (la barra

@@ -1179,10 +1179,15 @@ fn version_ventana_actual() {
     // `PluginLoadError.dir_bytes` ausente deja la fila del error sin poder
     // marcar que se convirtió; y sin `expected_digest` el daemon concede lo
     // que tiene en vez de lo que se leyó.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.53.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.52.0"), "N-1");
+    // 0.54.0 (#295): la identidad opaca del directorio que el humano miró,
+    // viajando con la petición que escribe en él. Contra un daemon 0.53 no
+    // hay ancla que retener, así que un cliente 0.54 no manda ninguna y la
+    // escritura hace lo de 0.53 —se confina igual y no se comprueba la
+    // identidad—: se pierde la comprobación, no la corrección.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.54.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.53.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.51.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.52.9"),
         "N-2 fuera de la ventana"
     );
 }

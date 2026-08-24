@@ -23,7 +23,7 @@ pub use attrs::{
     AttrValue, is_valid_attr_id, sanitize_catalog,
 };
 pub use caps::{Capabilities, CapabilityFlags};
-pub use entry::{Entry, EntryKind};
+pub use entry::{DIR_ANCHOR_LEN, DirAnchor, Entry, EntryKind};
 pub use error::{ConflictKind, Error, RootOverlap};
 pub use methods::PROTOCOL_VERSION;
 pub use task::{TaskId, TaskKind, TaskProgress, TaskState};

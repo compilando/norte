@@ -7,6 +7,23 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **A copy can say which directory the human was looking at** (#295, protocol
+  **0.54.0**, ADR 0073). `fs.list` now returns a `dir_anchor` — the opaque
+  identity of the directory it listed — and `fs.copy`/`fs.move` accept it back
+  as `dest_anchor` and refuse to write when the destination is no longer that
+  node. It closes what ADR 0072 could not: a symlink *already in place* when
+  the core first looks is, from inside the core, indistinguishable from a
+  legitimate `~/copias -> /mnt/disco/copias`, and rejecting both would break
+  copying to `/tmp` on macOS or `/bin` on a usrmerge Linux. The one thing that
+  separates them lives outside the core — the human was not looking at that
+  other node. The anchor carries no inode or device number: it is a hash under
+  a per-process secret, so equality survives and neither forgery nor deduction
+  does. The SDK remembers the anchor of every directory it lists and sends the
+  right one automatically, so every frontend gains the check without a line of
+  code, and a `norte cp` against a hand-typed path behaves exactly as before.
+
 ### Fixed
 
 - **The by-path stable staging is no longer reopened blind** (#298). The name a
