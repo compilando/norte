@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 37;
+export const BRIDGE_VERSION = 38;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -251,6 +251,9 @@ export interface DialogView {
   asker: DialogLine | null;
   /** Cuándo deja de aceptarse la respuesta, ya traducido. */
   deadline: string | null;
+  /** Cuándo vence, en epoch-ms, para poder contar de verdad. Ausente = no hay
+   *  plazo o no se conoce, y entonces la frase se pinta tal cual. */
+  deadline_at_ms?: number;
   /** Cuando son rutas, se numeran POR POSICIÓN: la etiqueta es estructural y
    *  ningún nombre de fichero puede escribirla. */
   body: DialogLine[];

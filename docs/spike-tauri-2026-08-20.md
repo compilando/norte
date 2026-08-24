@@ -207,6 +207,26 @@ against the same host. Nothing in phases 1 and 2 depends on this answer.
   app is Wayland-only, and therefore `xdotool` cannot drive it (it only reaches
   X clients), which is why the scripted checks go through synthetic DOM events
   in the measurement pass rather than through the compositor.
+
+  **Narrowed down on 2026-08-24 (#261), and the first finding corrects the
+  sentence above: the page does load.** The renderer logs `primera foto pedida`
+  when its script has run and asks the host for the first snapshot, and that
+  line appears under X11 too — so this is not a load, CSP or asset failure. It
+  is compositing. The time to that line separates the cases:
+
+  | run | to first snapshot |
+  | --- | --- |
+  | Wayland (baseline) | 415 ms |
+  | `GDK_BACKEND=x11` | 1328 ms |
+  | x11 + `WEBKIT_DISABLE_COMPOSITING_MODE=1` | 719 ms |
+  | x11 + `WEBKIT_DISABLE_DMABUF_RENDERER=1` | **317 ms** |
+
+  Disabling the DMA-BUF renderer is not just faster than the other X11 runs, it
+  beats the Wayland baseline — which points at WebKitGTK's DMA-BUF path under
+  Xwayland as the culprit, the buffer being shared in a way the X server never
+  composites. What is still missing is the visual confirmation that the page
+  actually paints with that variable set: nothing here can capture the window
+  (see the next bullet), so a human has to look once.
 - **Screenshots go through `spectacle -b -n -a -o <file>`.** `grim` refuses
   (the compositor does not expose the screencopy protocol) and `import -window
   root` captures only the X layer.

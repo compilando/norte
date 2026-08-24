@@ -405,7 +405,9 @@ enum Mensaje {
     /// A esta aprobación se le acabó el TTL: el daemon ya no la acepta.
     AprobacionCaducada(u64),
     /// El `policy.decide` que APROBABA no llegó al daemon.
-    AprobacionNoEntregada,
+    /// Un `policy.decide` que no salió bien: qué aprobación y con qué clave
+    /// se cuenta (#279).
+    AprobacionNoEntregada(u64, &'static str),
     /// Más entradas del listado que se está drenando por detrás.
     ///
     /// El `bool` dice si es el ÚLTIMO lote. Sin él, `drenando` se levantaba
@@ -860,8 +862,11 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::AprobacionNoEntregada => {
-                for u in estado.decir("msg-approval-not-delivered") {
+            Mensaje::AprobacionNoEntregada(approval_id, clave) => {
+                // NOMBRA la aprobación (#279): con dos apiladas, «la
+                // aprobación no llegó» no dice cuál de las dos, y son
+                // decisiones de seguridad sobre operandos distintos.
+                for u in estado.decir_con(clave, &[("id", &approval_id.to_string())]) {
                     let _ = updates.send(u);
                 }
             }
@@ -1005,6 +1010,53 @@ fn kind_de(arbol: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId>
 
 /// El ahora, en milisegundos. Lo inyecta el proyector para que el formato de
 /// una fecha relativa («hace 3 días») no dependa de cuándo se serializó.
+/// Manda el «sí» al daemon, y si no sale bien lo CUENTA con la frase que toca.
+///
+/// Aparte porque el desenlace tiene tres formas distintas de salir mal y
+/// ninguna de ellas es asunto de la función que decide qué hacer con un
+/// diálogo (#279).
+fn lanzar_aprobacion(
+    approval_id: u64,
+    backend: &Arc<dyn HostBackend>,
+    buzon: &mpsc::Sender<Mensaje>,
+) {
+    let backend = Arc::clone(backend);
+    let buzon = buzon.clone();
+    tokio::spawn(async move {
+        if let Err(e) = backend.policy_decide(approval_id, true).await {
+            let _ = buzon
+                .send(Mensaje::AprobacionNoEntregada(
+                    approval_id,
+                    clave_de_aprobacion_perdida(&e),
+                ))
+                .await;
+        }
+    });
+}
+
+/// Qué frase toca cuando un `policy.decide` no sale bien (#279).
+///
+/// Las tres formas de «esa aprobación ya no está» piden consejos distintos, y
+/// antes las tres se pintaban como la primera: «tu clic no llegó» sobre una
+/// aprobación que sí llegó y venció es una frase que manda al lector a
+/// reintentar algo que ya se decidió sin él.
+///
+/// Un `reason` que este binario no conozca cae en «desconocida» y nunca en una
+/// de las otras: el vocabulario del wire puede crecer, y adivinar en una
+/// superficie de seguridad es peor que decir que no se sabe.
+fn clave_de_aprobacion_perdida(e: &norte_proto::Error) -> &'static str {
+    match e {
+        norte_proto::Error::ApprovalGone { reason } => match reason.as_str() {
+            "expired" => "msg-approval-expired",
+            "already-decided" => "msg-approval-already-decided",
+            _ => "msg-approval-unknown",
+        },
+        // Cualquier otro error es que la petición NO llegó (el daemon se cayó
+        // entre la pregunta y la respuesta), que es el caso original.
+        _ => "msg-approval-not-delivered",
+    }
+}
+
 /// La CLASE de una task, en el vocabulario del bridge.
 ///
 /// Un `match` y no `format!("{:?}").to_lowercase()`. El `Debug` daba
@@ -3313,6 +3365,7 @@ impl Estado {
                 subject: None,
                 asker: None,
                 deadline: None,
+                deadline_at_ms: None,
                 body: Vec::new(),
                 overflow_note: String::new(),
                 choices: vec![
@@ -3381,6 +3434,7 @@ impl Estado {
                 subject: None,
                 asker: None,
                 deadline: None,
+                deadline_at_ms: None,
                 body: vec![donde],
                 overflow_note: String::new(),
                 choices: vec![
@@ -5480,6 +5534,7 @@ impl Estado {
             }),
             asker: None,
             deadline: None,
+            deadline_at_ms: None,
             // El cuerpo dice qué ALCANCE tiene, que es lo que no se ve en la
             // fila: deshacer una sesión revierte TODO lo que hizo, no lo
             // último, y lo que no se pueda revertir —algo irreversible, algo
@@ -6249,6 +6304,7 @@ impl Estado {
             }),
             asker: None,
             deadline: None,
+            deadline_at_ms: None,
             body: cuerpo,
             overflow_note: nota,
             choices: vec![
@@ -9388,6 +9444,7 @@ impl Estado {
             subject: None,
             asker: None,
             deadline: None,
+            deadline_at_ms: None,
             body: vec![crate::dto::DialogLine {
                 text: clamp_display(norte_i18n::t_in(self.lang, "modal-semantic-scope")),
                 hostile: false,
@@ -9556,6 +9613,7 @@ impl Estado {
             subject: None,
             asker: None,
             deadline: None,
+            deadline_at_ms: None,
             body: vec![Self::linea_de_ruta(&dir)],
             overflow_note: String::new(),
             choices: vec![
@@ -10119,6 +10177,7 @@ impl Estado {
             subject: None,
             asker: None,
             deadline: None,
+            deadline_at_ms: None,
             body: vec![Self::linea_de_ruta(&from)],
             overflow_note: String::new(),
             choices: vec![
@@ -10377,6 +10436,7 @@ impl Estado {
             subject: None,
             asker: None,
             deadline: None,
+            deadline_at_ms: None,
             body: cuerpo,
             overflow_note: nota,
             choices: vec![
@@ -10464,6 +10524,7 @@ impl Estado {
             subject: None,
             asker: None,
             deadline: None,
+            deadline_at_ms: None,
             body: cuerpo,
             overflow_note: nota,
             choices: vec![
@@ -10640,6 +10701,12 @@ impl Estado {
         } else {
             clamp_display(norte_i18n::t_in(self.lang, "modal-approval-ttl-unknown"))
         });
+        // Y CUÁNDO vence, para que el renderer cuente en vez de repetir una
+        // frase congelada (#279). Solo con un TTL conocido: contar hacia atrás
+        // desde un plazo inventado sería peor que no contar.
+        let vence_en = (req.ttl_ms > 0)
+            .then(|| i64::try_from(req.ttl_ms).ok().map(|ms| ahora_ms() + ms))
+            .flatten();
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
@@ -10649,6 +10716,7 @@ impl Estado {
             subject: Some(sujeto),
             asker: quien,
             deadline: plazo,
+            deadline_at_ms: vence_en,
             body: cuerpo,
             overflow_note: nota,
             choices: vec![
@@ -10723,7 +10791,9 @@ impl Estado {
             dialogs: self.vistas_de_dialogos(),
         };
         let mut salidas = vec![self.parche(vec![cambio])];
-        salidas.extend(self.decir("msg-approval-expired"));
+        // NOMBRA la que caducó (#279). Con dos apiladas, «la aprobación
+        // caducó» no dice cuál se cerró sola ni cuál sigue esperando.
+        salidas.extend(self.decir_con("msg-approval-expired", &[("id", &approval_id.to_string())]));
         salidas
     }
 
@@ -10742,6 +10812,7 @@ impl Estado {
             subject: None,
             asker: None,
             deadline: None,
+            deadline_at_ms: None,
             body: vec![donde],
             overflow_note: String::new(),
             choices: vec![
@@ -10956,13 +11027,7 @@ impl Estado {
                 // por hecho que la autorizó: «lo dije» y «llegó» no son lo
                 // mismo en una superficie de seguridad. Denegar es al revés:
                 // si esa no llega, el desenlace es el mismo que se pidió.
-                let backend = Arc::clone(backend);
-                let buzon = buzon.clone();
-                tokio::spawn(async move {
-                    if backend.policy_decide(approval_id, true).await.is_err() {
-                        let _ = buzon.send(Mensaje::AprobacionNoEntregada).await;
-                    }
-                });
+                lanzar_aprobacion(approval_id, backend, buzon);
             }
             None => {}
         }
@@ -12547,6 +12612,7 @@ impl Estado {
             subject: None,
             asker: None,
             deadline: None,
+            deadline_at_ms: None,
             body: cuerpo,
             overflow_note: String::new(),
             choices: vec![DialogChoice {

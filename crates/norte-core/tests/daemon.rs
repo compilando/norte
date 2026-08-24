@@ -1474,7 +1474,10 @@ async fn ask_denegado_es_policy_denied_sin_tocar_el_fs() {
         "el destino no se tocó"
     );
 
-    // Re-decidir el mismo id: la decisión lo consumió → INVALID_PARAMS.
+    // Re-decidir el mismo id: la decisión lo consumió. Y desde #279 el motivo
+    // VIAJA — `already-decided`, no un `INVALID_PARAMS` mudo—: con dos
+    // ventanas abiertas eso es exactamente lo que ha pasado, y decirle a quien
+    // pulsó «tu clic no llegó» le manda a reintentar algo ya decidido.
     let err = human
         .call::<_, PolicyDecideResult>(
             methods::POLICY_DECIDE,
@@ -1485,7 +1488,35 @@ async fn ask_denegado_es_policy_denied_sin_tocar_el_fs() {
         )
         .await
         .expect_err("id ya decidido");
-    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(norte_proto::Error::ApprovalGone { ref reason }) if reason == "already-decided"),
+            "tenía que decir cuál de las tres, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+
+    // Y un id que este daemon no ha emitido nunca es OTRA cosa: un modal
+    // rancio de antes de un reinicio, no una carrera entre ventanas.
+    let err = human
+        .call::<_, PolicyDecideResult>(
+            methods::POLICY_DECIDE,
+            &PolicyDecideParams {
+                approval_id: notif.approval_id.saturating_add(10_000),
+                approve: true,
+            },
+        )
+        .await
+        .expect_err("id que no existe");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(norte_proto::Error::ApprovalGone { ref reason }) if reason == "unknown"),
+            "un id jamás emitido es `unknown`, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
 }
 
 /// Sin decisión, el TTL vence y deniega (`not-approved`): un humano ausente no
@@ -1565,7 +1596,11 @@ async fn pending_resync_y_un_agente_ni_decide_ni_lista() {
         .expect_err("un agente no lista");
     assert!(matches!(err2, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
 
-    // Decidir un id desconocido → INVALID_PARAMS.
+    // Decidir un id que este daemon no ha emitido nunca. Desde #279 lo DICE:
+    // `unknown`, no «ya se decidió». La secuencia arranca en una semilla del
+    // reloj precisamente para que un modal rancio no acierte por colisión, así
+    // que un 9999 cae por debajo del primer id posible — y eso es exactamente
+    // lo que hay que saber distinguir.
     let err3 = human
         .call::<_, PolicyDecideResult>(
             methods::POLICY_DECIDE,
@@ -1576,7 +1611,14 @@ async fn pending_resync_y_un_agente_ni_decide_ni_lista() {
         )
         .await
         .expect_err("id desconocido");
-    assert!(matches!(err3, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+    match err3 {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(Error::ApprovalGone { ref reason }) if reason == "unknown"),
+            "un id fuera del rango emitido es `unknown`, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba ApprovalGone, fue {other:?}"),
+    }
 
     // Desbloquea y cierra: denegada, y la lista queda vacía.
     let _: PolicyDecideResult = human
@@ -4314,7 +4356,11 @@ async fn cancel_gana_a_un_decide_posterior() {
     }
 
     // ACCIÓN 2 (llega TARDE): el humano intenta aprobar la ya-retirada. La
-    // pendiente no existe → INVALID_PARAMS, no un ok silencioso.
+    // pendiente no existe → error, jamás un ok silencioso. Y desde #279 dice
+    // cuál de las tres formas: `already-decided`, porque ese id SÍ existió y
+    // alguien lo resolvió —aquí, el propio peticionario retirándolo—. Lo que
+    // no puede contestar es `unknown`, que mandaría a quien pulsó a buscar un
+    // daemon reiniciado que no existe.
     let decide: Result<PolicyDecideResult, ClientError> = human
         .call(
             methods::POLICY_DECIDE,
@@ -4325,12 +4371,12 @@ async fn cancel_gana_a_un_decide_posterior() {
         )
         .await;
     match decide {
-        Err(ClientError::Rpc(rpc)) => assert_eq!(
-            rpc.code,
-            codes::INVALID_PARAMS,
-            "decide sobre pendiente retirada debe ser INVALID_PARAMS"
+        Err(ClientError::Rpc(rpc)) => assert!(
+            matches!(rpc.data, Some(Error::ApprovalGone { ref reason }) if reason == "already-decided"),
+            "decide sobre una pendiente retirada tiene que decir que ya se resolvió, fue {:?}",
+            rpc.data
         ),
-        other => panic!("esperaba INVALID_PARAMS, fue {other:?}"),
+        other => panic!("esperaba ApprovalGone, fue {other:?}"),
     }
 
     // El destino jamás se ejecutó.

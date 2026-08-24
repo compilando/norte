@@ -2935,15 +2935,25 @@ fn handle_policy_decide(
             "only a human (non-agent) connection may decide an approval",
         ));
     }
-    if !shared.approvals.decide(p.approval_id, p.approve) {
-        return Err(RpcError::protocol(
-            codes::INVALID_PARAMS,
-            "unknown, expired or already-decided approval_id",
-        ));
-    }
-    // Efecto de seguridad (material de auditoría M3-5): quién decidió qué.
-    tracing::info!("aprobación de policy decidida por el humano");
-    to_value(&methods::PolicyDecideResult {})
+    // Los tres modos de fallo viajan DISTINTOS (#279): «tu clic no llegó»,
+    // «llegaste tarde» y «esa aprobación no es de este daemon» piden respuestas
+    // distintas de quien mira la pantalla, y antes se colapsaban en un
+    // `INVALID_PARAMS` con el motivo dentro de un `message` en inglés que
+    // ningún frontend puede clasificar.
+    use crate::daemon::approvals::Decision;
+    let reason = match shared.approvals.decide(p.approval_id, p.approve) {
+        Decision::Aplicada => {
+            // Efecto de seguridad (material de auditoría M3-5): quién decidió qué.
+            tracing::info!("aprobación de policy decidida por el humano");
+            return to_value(&methods::PolicyDecideResult {});
+        }
+        Decision::Vencida => "expired",
+        Decision::YaDecidida => "already-decided",
+        Decision::Desconocida => "unknown",
+    };
+    Err(RpcError::from(norte_proto::Error::ApprovalGone {
+        reason: reason.to_owned(),
+    }))
 }
 
 /// `policy.pending` (M3-3b Task 4): resync de aprobaciones pendientes para un

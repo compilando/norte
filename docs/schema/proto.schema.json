@@ -1179,6 +1179,24 @@
           "type": "object"
         },
         {
+          "description": "La aprobación que se intentaba decidir ya no está (#279, desde 0.55.0).\n\nExiste porque las tres formas de «ya no está» piden respuestas\ndistintas de quien mira la pantalla, y antes se colapsaban en un\n`INVALID_PARAMS` con un texto en inglés dentro del `message`: un\nfrontend solo podía decir «la aprobación no llegó al daemon», que es\nverdad en UNO de los tres casos y mentira en los otros dos. «Llegó y el\ndaemon ya la había denegado por TTL» se leía como «tu clic se perdió».",
+          "properties": {
+            "kind": {
+              "const": "approval_gone",
+              "type": "string"
+            },
+            "reason": {
+              "description": "Cuál de las tres. Vocabulario CERRADO y comparable por igualdad,\ncomo `PolicyDenied.rule`: `\"unknown\"` (ese id nunca existió, o el\ndaemon se reinició), `\"expired\"` (estaba pendiente pero quien la\npidió ya no escucha) y `\"already-decided\"` (ese id existió y\nalguien lo resolvió antes — otra ventana, su TTL, o el propio\npeticionario retirándolo).\n\nUn valor que este binario no conozca se trata como `\"unknown\"`: el\nconjunto puede CRECER de forma aditiva, y quien no lo reconozca no\ndebe inventar una explicación.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Una transcodificación habría perdido datos y se abortó.",
           "properties": {
             "kind": {

@@ -55,6 +55,33 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A lost approval says which of the three things happened** (#279, protocol
+  **0.55.0**, bridge **38**). `policy.decide` collapsed "that id never existed",
+  "it expired" and "someone already decided it" into one `INVALID_PARAMS` whose
+  reason lived in an English `message` string, so a frontend could only ever say
+  "the approval did not reach the daemon" — true in one case and false in the
+  other two, on a security surface. `Error::ApprovalGone` now carries a closed
+  vocabulary (`unknown` / `expired` / `already-decided`) and the window picks
+  the matching sentence, naming *which* approval — with two stacked, "the
+  approval" did not say which. Telling "never existed" from "already resolved"
+  needs both bounds of the id range, not just the upper one: the sequence is
+  seeded from the clock so a stale dialog cannot hit by collision, which means
+  any small invented id sits below it.
+
+- **The painted deadline counts down** (#279). It was computed when the dialog
+  opened and never updated, so a modal four minutes old still read "expires in
+  300 s". The host now also sends *when* it expires and the renderer counts —
+  substituting the number inside the host's own translated sentence, because
+  the phrase belongs to the host and the renderer cannot say "expires in" in
+  this window's language. With no known deadline nothing counts: counting down
+  from an invented one would be worse than not counting.
+
+- **Compressing an archive no longer holds a runtime thread** (#250). Packing
+  ran `deflate` inline on the async worker; at level 9 over a large tree that
+  keeps a runtime thread busy in long bursts, and those threads are what serve
+  every other client of the daemon. Each chunk is compressed on the blocking
+  pool instead.
+
 - **`ai.rename_plan` stops being an oracle for agents** (#122). AI is
   human-only, but the actor check ran *after* parsing the params, checking the
   instruction size and running the read gate — so a denied agent could still

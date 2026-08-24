@@ -2966,6 +2966,31 @@ export class Screen {
       plazo.className = "dialog-deadline";
       plazo.setAttribute("role", "status");
       plazo.textContent = top.deadline;
+      // Y si el host dijo CUÁNDO vence, se cuenta de verdad (#279). La frase
+      // del host se calcula al abrir y se congelaba: un modal que llevaba
+      // cuatro minutos delante seguía diciendo «caduca en 300 s».
+      //
+      // El texto lo sigue componiendo el host —aquí solo se sustituye el
+      // número dentro de él— porque la frase es suya y está traducida: el
+      // renderer no sabe decir «caduca en» en el idioma de esta ventana.
+      const vence = top.deadline_at_ms;
+      if (vence !== undefined && vence !== null) {
+        const plantilla = top.deadline;
+        const pintar = (): boolean => {
+          const quedan = Math.max(0, Math.ceil((vence - Date.now()) / 1000));
+          plazo.textContent = plantilla.replace(/\d+/, String(quedan));
+          return quedan > 0;
+        };
+        pintar();
+        const tick = window.setInterval(() => {
+          // Cuando llega a cero se para solo: el diálogo lo cierra el host al
+          // vencer, y seguir contando en negativo sobre algo que ya no está
+          // es ruido.
+          if (!pintar() || !plazo.isConnected) {
+            window.clearInterval(tick);
+          }
+        }, 1000);
+      }
       box.append(plazo);
     }
     if (top.overflow_note !== "") {

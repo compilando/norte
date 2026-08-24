@@ -1,4 +1,16 @@
 {
+  "approval_gone_already_decided": {
+    "kind": "approval_gone",
+    "reason": "already-decided"
+  },
+  "approval_gone_expired": {
+    "kind": "approval_gone",
+    "reason": "expired"
+  },
+  "approval_gone_unknown": {
+    "kind": "approval_gone",
+    "reason": "unknown"
+  },
   "cancelled": {
     "kind": "cancelled"
   },
