@@ -45,31 +45,9 @@ pub use trail::*;
 // lo `pub`, asi que estos tres se nombran uno a uno.
 use help_view::default_help_chords;
 
-/// El formato de archivo que sugiere un NOMBRE, entre los que se saben
-/// ESCRIBIR (#132).
-///
-/// Azúcar de presentación, igual que el mapa de `nav::archive_root_for`: lo
-/// que decide es el campo explícito del wire, y esto solo rellena el diálogo
-/// con lo que el usuario acaba de teclear. `rar` no está — se delega y solo
-/// para leer (ADR 0056)—, así que un `.rar` cae en `None` y el diálogo lo dice
-/// en vez de empaquetar un zip con nombre de rar.
-#[must_use]
-pub fn format_by_name(name: &[u8]) -> Option<norte_proto::methods::ArchiveFormat> {
-    use norte_proto::methods::ArchiveFormat as F;
-    let ends = |suf: &[u8]| {
-        name.len() >= suf.len() && name[name.len() - suf.len()..].eq_ignore_ascii_case(suf)
-    };
-    if ends(b".tar.gz") || ends(b".tgz") {
-        return Some(F::TarGz);
-    }
-    if ends(b".tar") {
-        return Some(F::Tar);
-    }
-    if ends(b".zip") {
-        return Some(F::Zip);
-    }
-    None
-}
+/// El formato que sugiere un nombre vive en el crate COMPARTIDO: el TUI y
+/// la ventana ofrecen el mismo diálogo (D14).
+pub use norte_frontend::nav::format_by_name;
 
 /// Un tamaño con sufijo (`4096`, `10M`, `1G`) en bytes, o `None` si no se
 /// entiende (#132).

@@ -92,6 +92,10 @@ pub struct Falso {
     /// Los lotes que pidió `dir_size`, en orden: es lo que permite comprobar
     /// que se cuenta lo MARCADO y en UNA sola Task.
     pub recuentos: std::sync::Mutex<Vec<Vec<VPath>>>,
+    /// Lo que se pidió empaquetar, con su formato y su base.
+    pub empaquetados: std::sync::Mutex<Vec<norte_proto::methods::ArchivePackParams>>,
+    /// Los contenedores que se mandó comprobar.
+    pub comprobados: std::sync::Mutex<Vec<norte_proto::methods::ArchiveTestParams>>,
     /// Contenido por path, para el visor.
     pub contenido: HashMap<String, Vec<u8>>,
     /// Los paths que se sondearon, en orden: es lo que permite comprobar que
@@ -320,6 +324,39 @@ impl Falso {
 
     /// El cuerpo compartido de copiar y mover en el falso: apunta lo que se
     /// pidió y devuelve una Task con id PROPIO.
+    /// Una task de archivo (empaquetar o comprobar) con su propio id, para que
+    /// dos gestos seguidos no se pisen el canal de progreso.
+    fn task_de_archivo(
+        &self,
+        kind: norte_proto::TaskKind,
+        id: u64,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let progreso = norte_proto::TaskProgress {
+            task_id: norte_proto::TaskId::new(id),
+            kind,
+            state: norte_proto::TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+            unreadable: None,
+        };
+        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        *self.progreso.lock().expect("progreso") = Some(tx);
+        let cancelaciones = Arc::clone(&self.cancelaciones);
+        Box::pin(async move {
+            Ok(HostTask {
+                id: norte_proto::TaskId::new(id),
+                progress: rx,
+                cancel: Arc::new(move || {
+                    cancelaciones.fetch_add(1, Ordering::SeqCst);
+                }),
+                foreign: false,
+            })
+        })
+    }
+
     fn transferir(
         &self,
         from: VPath,
@@ -1372,6 +1409,22 @@ impl HostBackend for Falso {
                 foreign: false,
             })
         })
+    }
+
+    fn pack(
+        &self,
+        params: norte_proto::methods::ArchivePackParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.empaquetados.lock().expect("empaquetados").push(params);
+        self.task_de_archivo(norte_proto::TaskKind::Pack, 11)
+    }
+
+    fn test_archive(
+        &self,
+        params: norte_proto::methods::ArchiveTestParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.comprobados.lock().expect("comprobados").push(params);
+        self.task_de_archivo(norte_proto::TaskKind::TestArchive, 12)
     }
 
     fn dir_size(&self, paths: Vec<VPath>) -> BoxFuture<'static, Result<HostTask, Error>> {

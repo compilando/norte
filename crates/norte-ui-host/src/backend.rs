@@ -194,6 +194,26 @@ pub trait HostBackend: Send + Sync + 'static {
         on_collision: CollisionPolicy,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
+    /// Empaqueta `sources` dentro de un contenedor nuevo, como Task (#132).
+    ///
+    /// El FORMATO viaja explícito y sale del nombre que se tecleó: empaquetar
+    /// en uno que el usuario no pidió es peor que rehusar, así que quien llama
+    /// resuelve el nombre ANTES y un nombre sin extensión conocida no llega
+    /// aquí.
+    fn pack(
+        &self,
+        params: methods::ArchivePackParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
+
+    /// Comprueba un contenedor, como Task (#132).
+    ///
+    /// No muta nada: lee el archivo entero y contesta si está sano. Su
+    /// resultado, como el de un recuento, viaja en el progreso terminal.
+    fn test_archive(
+        &self,
+        params: methods::ArchiveTestParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
+
     /// Cuenta lo que ocupan `paths` — bytes y entradas — como Task (#139).
     ///
     /// Es de las pocas Tasks cuyo RESULTADO **es** su progreso: no publica
@@ -884,6 +904,40 @@ impl HostBackend for norte_client::RemoteBackend {
         on_collision: CollisionPolicy,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         transferir(self, Verbo::Copiar, from, to, on_collision)
+    }
+
+    fn pack(
+        &self,
+        params: methods::ArchivePackParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.pack(params).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
+        })
+    }
+
+    fn test_archive(
+        &self,
+        params: methods::ArchiveTestParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.test_archive(params).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
+        })
     }
 
     fn dir_size(&self, paths: Vec<VPath>) -> BoxFuture<'static, Result<HostTask, Error>> {

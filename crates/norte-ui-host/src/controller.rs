@@ -1398,6 +1398,19 @@ enum Pendiente {
         /// Con qué se relanza.
         con: Reintento,
     },
+    /// Empaquetar lo MARCADO en el contenedor que se teclea (#132).
+    ///
+    /// Lleva el directorio y no el nombre: el nombre es lo que el lector
+    /// escribe, y de él sale el formato. Se resuelve al confirmar, no al
+    /// abrir, porque hasta entonces no hay nada que resolver.
+    Empaquetar {
+        /// Dónde cae el contenedor y, además, la BASE de los nombres que se
+        /// guardan dentro: quien desempaquete espera ver lo que veía en
+        /// pantalla, no rutas absolutas.
+        dir: VPath,
+        /// Qué se mete, en orden de listado.
+        sources: Vec<VPath>,
+    },
     /// Deshacer TODO lo que hizo una sesión de agente (#276).
     DeshacerSesion {
         /// La clave OPACA con la que el core la resuelve, cruda.
@@ -5673,6 +5686,52 @@ impl Estado {
         (None, Vec::new())
     }
 
+    /// Empaqueta `sources` en el contenedor que se tecleó (#132, #290).
+    ///
+    /// El FORMATO sale del nombre y viaja explícito: un nombre sin extensión
+    /// que sepamos ESCRIBIR se rehúsa aquí en vez de empaquetar en algo que
+    /// nadie pidió — un `.rar` cae ahí, porque se delega y solo para leer.
+    ///
+    /// La base de los nombres guardados es el directorio del panel: quien
+    /// desempaquete espera ver lo que se veía en pantalla, no rutas absolutas.
+    fn empaquetar(
+        &mut self,
+        dir: &VPath,
+        sources: Vec<VPath>,
+        nombre: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
+        let seg = match Self::segmento_tecleado(nombre) {
+            Ok(seg) => seg,
+            Err(clave) => return (Some(clave), self.decir(clave)),
+        };
+        let Some(format) = norte_frontend::nav::format_by_name(seg.as_bytes()) else {
+            return (
+                Some("msg-pack-unknown-format"),
+                self.decir("msg-pack-unknown-format"),
+            );
+        };
+        let params = norte_proto::methods::ArchivePackParams {
+            sources,
+            dest: dir.join(seg),
+            format,
+            level: None,
+            base: dir.clone(),
+        };
+        let afectados = vec![dir.clone()];
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let mensaje = match backend.pack(params).await {
+                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados, None))),
+                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+            };
+            let _ = buzon.send(mensaje).await;
+        });
+        (None, Vec::new())
+    }
+
     /// Confirma el deshacer de UNA sesión: comprueba que no haya otro en
     /// marcha, lo lanza, y repinta la fila.
     ///
@@ -7008,7 +7067,10 @@ impl Estado {
                     | Pendiente::ConsultaSemantica
                     // Marcar por patrón, igual: un diálogo que pide que
                     // teclees algo.
-                    | Pendiente::Patron { .. },
+                    | Pendiente::Patron { .. }
+                    // Y empaquetar: lo que se teclea es el nombre del
+                    // contenedor, de donde sale el formato.
+                    | Pendiente::Empaquetar { .. },
                 ) => "dialog.mkdir",
                 None => "browse",
             };
@@ -7806,14 +7868,7 @@ impl Estado {
             }
             Efecto::Columnas => self.abrir_columnas(),
             Efecto::Buscar => self.pedir_busqueda(),
-            Efecto::BuscarRapido => {
-                // Filtrar es el modo por defecto: es el que no mueve el
-                // listado bajo el cursor mientras se teclea.
-                self.hueco_mut()
-                    .pane
-                    .quick_start(norte_frontend::nav::Mode::Filter);
-                (self.aplicada(), vec![self.parche_filas()])
-            }
+            Efecto::BuscarRapido => self.buscar_rapido(),
             Efecto::CrearDirectorio
             | Efecto::Borrar { .. }
             | Efecto::Transferir { .. }
@@ -7836,7 +7891,10 @@ impl Estado {
             Efecto::AbrirExterno => self.abrir_externo(),
             Efecto::Terminal => self.abrir_terminal(),
             Efecto::Comparar => self.pedir_comparacion(backend, buzon),
-            Efecto::TamanoDeDirectorio => self.contar_tamano(backend, buzon),
+            Efecto::TamanoDeDirectorio
+            | Efecto::Empaquetar
+            | Efecto::Desempaquetar
+            | Efecto::ComprobarArchivo => self.efecto_sobre_entradas(efecto, backend, buzon),
             // Como comparar: necesita el backend porque sale a preguntar en
             // cuanto se abre, y el panel nace diciendo que planifica.
             Efecto::Sincronizar => self.pedir_sincronizacion(backend, buzon),
@@ -10854,6 +10912,197 @@ impl Estado {
     }
 
     /// Abre el prompt de crear directorio, con su campo de texto vacío.
+    /// Arranca el buscador incremental del listado.
+    ///
+    /// Filtrar es el modo por defecto: es el que no mueve el listado bajo el
+    /// cursor mientras se teclea.
+    fn buscar_rapido(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.hueco_mut()
+            .pane
+            .quick_start(norte_frontend::nav::Mode::Filter);
+        (self.aplicada(), vec![self.parche_filas()])
+    }
+
+    /// Los gestos que operan sobre lo MARCADO —o lo que hay bajo el cursor— y
+    /// lanzan una task: contar, empaquetar, desempaquetar y comprobar (#132,
+    /// #139, #290).
+    ///
+    /// Juntos por la misma razón que los de disposición: `aplicar_efecto` es
+    /// un despachador y no puede crecer un brazo por cada gesto nuevo.
+    fn efecto_sobre_entradas(
+        &mut self,
+        efecto: Efecto,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match efecto {
+            Efecto::TamanoDeDirectorio => self.contar_tamano(backend, buzon),
+            Efecto::Empaquetar => self.pedir_empaquetado(),
+            Efecto::Desempaquetar => self.desempaquetar(backend, buzon),
+            Efecto::ComprobarArchivo => self.comprobar_archivo(backend, buzon),
+            // El llamante ya filtró: nombrar los cuatro aquí es lo que hace
+            // que añadir un quinto sea un error de compilación.
+            _ => (self.aplicada(), Vec::new()),
+        }
+    }
+
+    /// `pane.pack` (#132, #290): pide el NOMBRE del contenedor.
+    ///
+    /// El nombre se teclea porque de él sale el formato. Aquí no se valida
+    /// nada más que haya algo que empaquetar: la extensión se resuelve al
+    /// confirmar, que es cuando hay nombre.
+    fn pedir_empaquetado(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // `marked_paths` cae al cursor sin marcas, igual que en una
+        // transferencia: una sola fuente de «sobre qué opera esto».
+        let sources: Vec<VPath> = self.hueco().pane.marked_paths();
+        if sources.is_empty() {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-nothing-selected".to_owned(),
+                },
+                self.decir("msg-nothing-selected"),
+            );
+        }
+        let dir = self.hueco().pane.dir().clone();
+        let donde = Self::linea_de_ruta(&dir);
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: "modal-pack-title".to_owned(),
+            destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
+            deadline_at_ms: None,
+            body: vec![donde],
+            overflow_note: String::new(),
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: Some(String::new()),
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista: vista.clone(),
+            input_crudo: String::new(),
+            reconocido: true,
+            al_confirmar: Some(Pendiente::Empaquetar { dir, sources }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// `pane.unpack` (#132, #290): copia el INTERIOR del contenedor bajo el
+    /// cursor al panel destino.
+    ///
+    /// Sin método propio y sin hacerle falta: el motor de copia acepta el
+    /// interior de un archivo como origen, así que esto es la copia que el
+    /// lector podría haber hecho a mano — con su journal, su undo y su
+    /// cancelación.
+    fn desempaquetar(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(entrada) = self.hueco().pane.selected().cloned() else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-nothing-selected".to_owned(),
+                },
+                self.decir("msg-nothing-selected"),
+            );
+        };
+        // La MISMA función que decide si `Enter` entra en un contenedor
+        // (`norte_frontend::nav`): dos tablas de extensiones serían dos sitios
+        // donde una se olvida, y entonces la misma entrada se navega en una
+        // superficie y no se desempaqueta en la otra.
+        let Some(raiz) = norte_frontend::nav::archive_root_for(&entrada) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-unpack-not-archive".to_owned(),
+                },
+                self.decir("msg-unpack-not-archive"),
+            );
+        };
+        let destino = match self.directorio_destino() {
+            Ok(d) => d,
+            Err(reason_key) => {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: reason_key.to_owned(),
+                    },
+                    self.decir(reason_key),
+                );
+            }
+        };
+        // Una copia como cualquier otra, con `Fail` y su reintento: si el
+        // destino ya tiene lo que va dentro, el lector decide igual que en una
+        // transferencia (#274).
+        Self::lanzar_reintento(
+            Reintento {
+                from: raiz,
+                to: destino,
+                mover: false,
+            },
+            norte_proto::CollisionPolicy::Fail,
+            backend,
+            buzon,
+        );
+        (self.aplicada(), self.decir("msg-unpack-started"))
+    }
+
+    /// `pane.test-archive` (#132, #290): comprueba el contenedor bajo el
+    /// cursor. No escribe nada; su resultado es el desenlace de la Task.
+    fn comprobar_archivo(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(entrada) = self.hueco().pane.selected().cloned() else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-nothing-selected".to_owned(),
+                },
+                self.decir("msg-nothing-selected"),
+            );
+        };
+        if norte_frontend::nav::archive_root_for(&entrada).is_none() {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-unpack-not-archive".to_owned(),
+                },
+                self.decir("msg-unpack-not-archive"),
+            );
+        }
+        let params = norte_proto::methods::ArchiveTestParams {
+            path: entrada.path.clone(),
+        };
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let mensaje = match backend.test_archive(params).await {
+                // Comprobar no cambia nada: no hay directorios que refrescar.
+                Ok(task) => Mensaje::TaskNueva(Box::new((task, Vec::new(), None))),
+                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+            };
+            let _ = buzon.send(mensaje).await;
+        });
+        (self.aplicada(), self.decir("msg-test-archive-started"))
+    }
+
     fn pedir_mkdir(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let dir = self.hueco().pane.dir().clone();
         let donde = Self::linea_de_ruta(&dir);
@@ -11033,6 +11282,12 @@ impl Estado {
             Some(Pendiente::CrearDirectorio { dir }) => {
                 let (motivo, partes) =
                     self.crear_directorio(&dir, &dialogo.input_crudo, backend, buzon);
+                rehusado = motivo;
+                salidas.extend(partes);
+            }
+            Some(Pendiente::Empaquetar { dir, sources }) => {
+                let (motivo, partes) =
+                    self.empaquetar(&dir, sources, &dialogo.input_crudo, backend, buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }
