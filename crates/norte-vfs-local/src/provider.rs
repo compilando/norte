@@ -337,10 +337,11 @@ fn umask_del_proceso() -> u32 {
 /// quien quiera saberlo mira el modo del fichero.
 #[cfg(unix)]
 pub(crate) fn reponer_modo_publicado(file: &std::fs::File, estable: bool) {
+    use std::os::fd::AsRawFd as _;
+
     if !estable {
         return;
     }
-    use std::os::fd::AsRawFd as _;
     // SAFETY: `file` está vivo y su fd es válido durante toda la llamada.
     // `fchmod` no toma punteros.
     #[allow(unsafe_code)]

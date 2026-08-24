@@ -7723,6 +7723,7 @@ impl Estado {
             Efecto::AbrirExterno => self.abrir_externo(),
             Efecto::Terminal => self.abrir_terminal(),
             Efecto::Comparar => self.pedir_comparacion(backend, buzon),
+            Efecto::TamanoDeDirectorio => self.contar_tamano(backend, buzon),
             // Como comparar: necesita el backend porque sale a preguntar en
             // cuanto se abre, y el panel nace diciendo que planifica.
             Efecto::Sincronizar => self.pedir_sincronizacion(backend, buzon),
@@ -9110,6 +9111,45 @@ impl Estado {
             self.aplicada(),
             self.lanzar_comparacion(izquierda, derecha, backend, buzon),
         )
+    }
+
+    /// `pane.dir-size` (#139, #290): cuenta lo que ocupa lo MARCADO —o lo que
+    /// hay bajo el cursor— y lo deja en el tablero.
+    ///
+    /// UNA Task para el lote entero, al revés que copiar o borrar: el método
+    /// del wire toma una lista, y contar por separado obligaría a quien
+    /// pregunta a sumar los bytes **y** los ilegibles, que no se suman igual
+    /// —un total redondo compuesto de dos cuentas parciales es una respuesta
+    /// equivocada, no una incompleta—.
+    ///
+    /// No hay directorios afectados que refrescar: esto no escribe nada. Su
+    /// resultado ES su progreso terminal, que el tablero ya sabe leer.
+    fn contar_tamano(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // `marked_paths` cae al cursor cuando no hay marcas: la misma fuente
+        // de «sobre qué opera esto» que usa una transferencia.
+        let paths: Vec<VPath> = self.hueco().pane.marked_paths();
+        if paths.is_empty() {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-nothing-selected".to_owned(),
+                },
+                self.decir("msg-nothing-selected"),
+            );
+        }
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let mensaje = match backend.dir_size(paths).await {
+                Ok(task) => Mensaje::TaskNueva(Box::new((task, Vec::new()))),
+                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+            };
+            let _ = buzon.send(mensaje).await;
+        });
+        (self.aplicada(), Vec::new())
     }
 
     /// Encola `fs.compare` y engancha su canal de filas al actor.
@@ -11963,8 +12003,59 @@ impl Estado {
             cambios.extend(self.cerrar_comparacion(p));
             cambios.extend(self.cerrar_sincronizacion(p));
             self.pedir_informe_de_sync(p, backend, buzon);
+            cambios.extend(self.decir_el_recuento(p));
         }
         vec![self.parche(cambios)]
+    }
+
+    /// El TOTAL de un recuento, que es lo único que ese recuento produce
+    /// (#139, #290).
+    ///
+    /// `fs.dir_size` no publica nada ni muta nada: su resultado **es** su
+    /// progreso terminal. Sin esto, la ventana lanzaría la cuenta, la vería
+    /// terminar en el tablero y no diría nunca cuánto ocupaba.
+    ///
+    /// **Un total con algo ilegible dentro se dice DISTINTO**: un recuento
+    /// sirve para decidir si algo CABE en el destino, así que darlo redondo
+    /// sin haberlo podido contar entero es una respuesta equivocada, no una
+    /// incompleta. Con ilegibles se dice «al menos», que es lo que se sabe.
+    ///
+    /// `unreadable: None` —un daemon 0.52, que no los contaba— se lee como
+    /// cero, igual que en el TUI (`refresh.rs`): callar el total porque el
+    /// otro extremo es viejo sería peor que darlo. Las dos superficies tienen
+    /// que decir lo mismo ante el mismo progreso.
+    ///
+    /// Solo con `Completed`: una cuenta cancelada o fallida no tiene total que
+    /// dar, y pintar el parcial de una cancelación como si fuera la respuesta
+    /// es el mismo error de arriba con otro nombre.
+    fn decir_el_recuento(&mut self, p: &norte_proto::TaskProgress) -> Vec<ViewChange> {
+        if p.kind != norte_proto::TaskKind::DirSize
+            || !matches!(p.state, norte_proto::TaskState::Completed)
+        {
+            return Vec::new();
+        }
+        let tamano = norte_frontend::human_bytes(p.bytes_done);
+        let cuantas = p.entries_done.to_string();
+        let saltados = p.unreadable.unwrap_or(0);
+        let mensaje = if saltados > 0 {
+            norte_i18n::ta_in(
+                self.lang,
+                "msg-dir-size-partial",
+                &[
+                    ("size", &tamano),
+                    ("count", &cuantas),
+                    ("skipped", &saltados.to_string()),
+                ],
+            )
+        } else {
+            norte_i18n::ta_in(
+                self.lang,
+                "msg-dir-size",
+                &[("size", &tamano), ("count", &cuantas)],
+            )
+        };
+        self.status.message = Some(clamp_display(mensaje));
+        vec![ViewChange::Status(self.status.clone())]
     }
 
     /// Un lote de renombrado que acaba de terminar: se le pide su informe.

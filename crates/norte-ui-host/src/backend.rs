@@ -194,6 +194,18 @@ pub trait HostBackend: Send + Sync + 'static {
         on_collision: CollisionPolicy,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
+    /// Cuenta lo que ocupan `paths` — bytes y entradas — como Task (#139).
+    ///
+    /// Es de las pocas Tasks cuyo RESULTADO **es** su progreso: no publica
+    /// nada, no muta nada, y lo que quien la lanzó quiere saber viaja en el
+    /// progreso terminal. Por eso devuelve la Task y no un total.
+    ///
+    /// Un lote de verdad y no una Task por ruta, al revés que
+    /// [`Self::delete`] y [`Self::copy`]: el método del wire toma una lista,
+    /// y contar dos árboles por separado obligaría a quien pregunta a sumar
+    /// —y a sumar también los saltados, que no se suman igual—.
+    fn dir_size(&self, paths: Vec<VPath>) -> BoxFuture<'static, Result<HostTask, Error>>;
+
     /// Le pide al modelo un plan de renombrado para un DIRECTORIO.
     ///
     /// NO muta nada: lo que vuelve es una propuesta que hay que revisar,
@@ -872,6 +884,20 @@ impl HostBackend for norte_client::RemoteBackend {
         on_collision: CollisionPolicy,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         transferir(self, Verbo::Copiar, from, to, on_collision)
+    }
+
+    fn dir_size(&self, paths: Vec<VPath>) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.dir_size(methods::FsDirSizeParams { paths }).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
+        })
     }
 
     fn ai_rename_plan(

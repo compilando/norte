@@ -24,6 +24,17 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **The window can count how much something takes up** (#139, #290).
+  `pane.dir-size` counts what is marked — or what sits under the cursor — as a
+  single Task for the whole batch, because counting each entry separately would
+  make the caller add up the bytes *and* the unreadable ones, and those two do
+  not add up the same way. The total is what that Task produces: `fs.dir_size`
+  publishes nothing and mutates nothing, its result *is* its terminal progress,
+  so the window says it in the status bar when the Task ends. A count with
+  unreadable entries inside gets a different sentence — a count is used to
+  decide whether something *fits*, so giving a round total without having been
+  able to count it whole is a wrong answer, not an incomplete one.
+
 ### Fixed
 
 - **A resumed copy is published with the same mode as an uninterrupted one**
