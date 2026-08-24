@@ -39,6 +39,33 @@ const MAX_PENDING_APPROVALS: usize = 256;
 /// `bind_with_policy` con un closure que captura un `Weak`).
 type Broadcaster = Box<dyn Fn(PolicyApprovalRequired) + Send + Sync>;
 
+/// Qué pasó al intentar decidir una aprobación (#279).
+///
+/// Los tres modos de fallo son distintos para quien mira la pantalla: uno
+/// dice «vuelve a intentarlo», otro «llegaste tarde» y el tercero «esa
+/// aprobación no es de este daemon». Colapsarlos en un booleano obligaba al
+/// frontend a elegir una frase y acertar un tercio de las veces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// Decidida: el gate suspendido se despertó con la respuesta.
+    Aplicada,
+    /// Estaba pendiente, pero el peticionario ya no escucha — su TTL venció o
+    /// su dispatch se canceló. La decisión no tuvo efecto.
+    Vencida,
+    /// Ese id existió y ya no está pendiente: alguien lo resolvió antes —otra
+    /// ventana, su propio TTL barriéndolo, o el peticionario RETIRÁNDOLO con
+    /// un `rpc.cancel`—.
+    ///
+    /// Los tres se cuentan juntos porque el consejo a quien pulsó es el mismo
+    /// —esa decisión ya no es suya, refresca la lista— y porque distinguirlos
+    /// pediría recordar por qué salió cada id, que es memoria por un matiz que
+    /// nadie usa.
+    YaDecidida,
+    /// Ese id no se ha emitido nunca en este proceso. Un modal rancio de antes
+    /// de un reinicio del daemon aterriza aquí.
+    Desconocida,
+}
+
 /// Una aprobación en vuelo: metadatos para `policy.pending` (resync) y el
 /// canal por el que `policy.decide` despierta al gate suspendido.
 struct PendingEntry {
@@ -56,6 +83,14 @@ struct PendingEntry {
 struct Inner {
     pending: Mutex<HashMap<u64, PendingEntry>>,
     next_id: AtomicU64,
+    /// El PRIMER id que este proceso pudo emitir (#279).
+    ///
+    /// Hace falta porque la secuencia no arranca en cero: se siembra con el
+    /// reloj para que un modal rancio de antes de un reinicio no acierte por
+    /// colisión. Sin esta cota, «existió» se decidiría solo con `id < next_id`
+    /// y CUALQUIER número pequeño inventado pasaría por «ya decidida», que es
+    /// justo la explicación equivocada para un id que nadie emitió nunca.
+    first_id: u64,
     broadcaster: Mutex<Option<Broadcaster>>,
 }
 
@@ -91,6 +126,7 @@ impl DaemonApprovalResolver {
             inner: Arc::new(Inner {
                 pending: Mutex::new(HashMap::new()),
                 next_id: AtomicU64::new(seed),
+                first_id: seed,
                 broadcaster: Mutex::new(None),
             }),
             ttl,
@@ -112,17 +148,19 @@ impl DaemonApprovalResolver {
     }
 
     /// Resuelve la pendiente `approval_id` con `approve` y despierta al gate.
-    /// `false` si el id no existe, ya se decidió, o el peticionario ya no
-    /// escucha (TTL recién vencido / dispatch cancelado — la decisión NO tuvo
-    /// efecto y el ack no debe mentir, ni el log de auditoría M3-5): el
-    /// llamante lo traduce a `INVALID_PARAMS`. Una decisión consume la
-    /// pendiente — un segundo `decide` del mismo id falla (anti
-    /// doble-decisión).
+    ///
+    /// Una decisión CONSUME la pendiente — un segundo `decide` del mismo id
+    /// falla (anti doble-decisión).
+    ///
+    /// **Distingue las tres formas de fallar** (#279), porque piden respuestas
+    /// distintas de quien mira la pantalla y antes se colapsaban en un solo
+    /// `false` que el frontend solo podía contar como «tu clic no llegó» —
+    /// verdad en uno de los tres casos y mentira en los otros dos.
     ///
     /// # Panics
     /// Solo si el lock interno queda envenenado.
     #[must_use]
-    pub fn decide(&self, approval_id: u64, approve: bool) -> bool {
+    pub fn decide(&self, approval_id: u64, approve: bool) -> Decision {
         let entry = self
             .inner
             .pending
@@ -130,10 +168,28 @@ impl DaemonApprovalResolver {
             .expect("pending approvals lock sano")
             .remove(&approval_id);
         match entry {
-            // `send` falla si el receptor murió en la carrera (timeout ya
-            // consumido, guard aún sin dropear): se reporta como vencida.
-            Some(e) => e.decide.send(approve).is_ok(),
-            None => false,
+            // `send` falla si el receptor murió en la carrera: el TTL ya se
+            // consumió o el dispatch se canceló. La decisión NO tuvo efecto y
+            // el ack no puede mentir (ni el log de auditoría M3-5).
+            Some(e) => {
+                if e.decide.send(approve).is_ok() {
+                    Decision::Aplicada
+                } else {
+                    Decision::Vencida
+                }
+            }
+            // No está pendiente. El id lo dice, pero hacen falta las DOS cotas:
+            // la secuencia arranca en una semilla del reloj, así que «menor que
+            // el siguiente» por sí solo daría por existente cualquier número
+            // pequeño que alguien invente. Dentro del rango que este proceso ha
+            // emitido, existió y ya lo resolvió alguien; fuera, no se emitió
+            // nunca aquí.
+            None if (self.inner.first_id..self.inner.next_id.load(Ordering::Relaxed))
+                .contains(&approval_id) =>
+            {
+                Decision::YaDecidida
+            }
+            None => Decision::Desconocida,
         }
     }
 
@@ -316,10 +372,32 @@ mod tests {
         let task = ask(&r);
         wait_pending(&r, 1).await;
         let id = r.pending()[0].approval_id;
-        assert!(r.decide(id, true), "existía");
+        assert_eq!(r.decide(id, true), Decision::Aplicada, "existía");
         assert_eq!(task.await.expect("join"), ApprovalOutcome::Approved);
-        assert!(!r.decide(id, true), "una decisión consume el id");
+        // Una decisión consume el id — y lo que se contesta al segundo intento
+        // es «ya la decidió alguien», no «no existe» (#279): con dos ventanas
+        // abiertas eso es exactamente lo que ha pasado.
+        assert_eq!(r.decide(id, true), Decision::YaDecidida);
         assert!(r.pending().is_empty());
+    }
+
+    /// Un id que este proceso no ha emitido nunca se distingue de uno que ya
+    /// se decidió (#279): el primero es un modal rancio de antes de un
+    /// reinicio, y el consejo al usuario no es el mismo.
+    #[tokio::test]
+    async fn un_id_jamas_emitido_es_desconocido() {
+        let r = Arc::new(DaemonApprovalResolver::new(Duration::from_secs(30)));
+        r.set_broadcaster(Box::new(|_| {}));
+        let task = ask(&r);
+        wait_pending(&r, 1).await;
+        let id = r.pending()[0].approval_id;
+        assert_eq!(
+            r.decide(id.saturating_add(1000), true),
+            Decision::Desconocida
+        );
+        // Y la de verdad sigue pendiente: preguntar por otra no la toca.
+        assert_eq!(r.decide(id, false), Decision::Aplicada);
+        let _ = task.await;
     }
 
     #[tokio::test]
@@ -329,7 +407,7 @@ mod tests {
         let task = ask(&r);
         wait_pending(&r, 1).await;
         let id = r.pending()[0].approval_id;
-        assert!(r.decide(id, false));
+        assert_eq!(r.decide(id, false), Decision::Aplicada);
         assert_eq!(task.await.expect("join"), ApprovalOutcome::Denied);
     }
 

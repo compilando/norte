@@ -340,9 +340,13 @@ pub(crate) async fn pack(
     }
 
     for pieza in piezas {
-        if let Err(e) = una_pieza(&pieza, &mut w, &mut *sink, &mut leidos, ctx).await {
-            abortando!(e);
-        }
+        // El escritor va y VUELVE: `una_pieza` lo mueve al pool bloqueante
+        // para comprimir (#250). En el camino de error no vuelve, y no hace
+        // falta — cualquier error aquí aborta el archivo entero.
+        w = match una_pieza(&pieza, w, &mut *sink, &mut leidos, ctx).await {
+            Ok(w) => w,
+            Err(e) => abortando!(e),
+        };
         hechas = hechas.saturating_add(1);
         ctx.progress.update(|p| p.entries_done = hechas);
     }
@@ -371,13 +375,21 @@ pub(crate) async fn pack(
 /// líneas, y porque es la unidad que se lee entera de un vistazo: abrir,
 /// copiar, cerrar. El dueño del sink es quien llama — un error aquí ABORTA el
 /// archivo, no se salta la entrada.
+///
+/// Toma el escritor por VALOR y lo devuelve (#250): comprimir es CPU, no I/O
+/// bloqueante, pero un `deflate` de nivel 9 sobre un árbol grande retiene un
+/// hilo del runtime en ráfagas largas — y los hilos del runtime son los que
+/// atienden a todos los demás clientes del daemon. Cada trozo se comprime en
+/// el pool bloqueante, que es donde ese trabajo no le quita el sitio a nadie.
+/// En el camino de error el escritor no vuelve, y no hace falta: cualquier
+/// error aquí aborta el archivo entero.
 async fn una_pieza(
     pieza: &Pieza,
-    w: &mut ArchiveWriter,
+    mut w: ArchiveWriter,
     sink: &mut dyn norte_vfs::ByteSink,
     leidos: &mut u64,
     ctx: &TaskCtx,
-) -> Result<(), Error> {
+) -> Result<ArchiveWriter, Error> {
     if ctx.cancel.is_cancelled() {
         return Err(Error::Cancelled);
     }
@@ -392,12 +404,24 @@ async fn una_pieza(
                 return Err(Error::Cancelled);
             }
             let chunk = chunk?;
-            escritos = escritos.saturating_add(chunk.len() as u64);
-            w.data(&chunk).map_err(de_pack)?;
-            *leidos = leidos.saturating_add(chunk.len() as u64);
+            // El tamaño se apunta ANTES de mover el trozo al pool: el progreso
+            // cuenta los bytes LEÍDOS del origen, no los comprimidos.
+            let n = chunk.len() as u64;
+            escritos = escritos.saturating_add(n);
+            // Comprimir y drenar, los dos en el pool: `take` sin `data` sería
+            // un viaje de ida y vuelta por nada.
+            let (devuelto, salida, res) = tokio::task::spawn_blocking(move || {
+                let res = w.data(&chunk);
+                let salida = w.take();
+                (w, salida, res)
+            })
+            .await
+            .map_err(|_| Error::Internal { panic: true })?;
+            w = devuelto;
+            res.map_err(de_pack)?;
+            *leidos = leidos.saturating_add(n);
             let hechos = *leidos;
             ctx.progress.update(|p| p.bytes_done = hechos);
-            let salida = w.take();
             if !salida.is_empty() {
                 sink.write(bytes::Bytes::from(salida)).await?;
             }
@@ -413,12 +437,20 @@ async fn una_pieza(
             });
         }
     }
-    w.end().map_err(de_pack)?;
-    let salida = w.take();
+    // El cierre de una entrada vacía el buffer del compresor, así que también
+    // es trabajo de CPU: al pool, como el resto.
+    let (w, salida, res) = tokio::task::spawn_blocking(move || {
+        let res = w.end();
+        let salida = w.take();
+        (w, salida, res)
+    })
+    .await
+    .map_err(|_| Error::Internal { panic: true })?;
+    res.map_err(de_pack)?;
     if !salida.is_empty() {
         sink.write(bytes::Bytes::from(salida)).await?;
     }
-    Ok(())
+    Ok(w)
 }
 
 /// Un fallo del escritor, en la taxonomía del wire.

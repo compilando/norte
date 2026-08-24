@@ -1829,6 +1829,24 @@ pub struct DialogView {
     /// plazo cuando el plazo REAL no se conoce —una pendiente reconstruida
     /// por el resync de `policy.pending` no transporta el TTL restante—.
     pub deadline: Option<String>,
+    /// CUÁNDO vence, en epoch-ms, para que el renderer pueda contar (#279).
+    ///
+    /// [`Self::deadline`] es una frase calculada al ABRIR, así que se congela:
+    /// un modal que lleva cuatro minutos delante seguía diciendo «caduca en
+    /// 300 s». No miente de forma peligrosa —el diálogo se cierra solo al
+    /// vencer— pero deja de informar justo cuando más falta hace.
+    ///
+    /// Viaja el instante y no los segundos restantes porque lo que se necesita
+    /// es una referencia FIJA: los segundos habría que refrescarlos con otro
+    /// parche por segundo, que es exactamente el trabajo que esto evita.
+    /// Host y renderer comparten máquina, así que comparten reloj.
+    ///
+    /// `None` = no hay plazo o no se conoce (una pendiente reconstruida por el
+    /// resync de `policy.pending` no transporta el TTL restante). Entonces el
+    /// renderer pinta la frase tal cual y no cuenta nada: contar hacia atrás
+    /// desde un plazo inventado sería peor que no contar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_at_ms: Option<i64>,
     /// Líneas de cuerpo, ya saneadas y acotadas.
     ///
     /// Cuando son RUTAS, el renderer las numera por posición: la etiqueta es

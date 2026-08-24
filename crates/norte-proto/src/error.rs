@@ -190,6 +190,28 @@ pub enum Error {
         /// aplique), `"not-approved"` (un `ask` fue denegado o su TTL venció).
         rule: String,
     },
+    /// La aprobación que se intentaba decidir ya no está (#279, desde 0.55.0).
+    ///
+    /// Existe porque las tres formas de «ya no está» piden respuestas
+    /// distintas de quien mira la pantalla, y antes se colapsaban en un
+    /// `INVALID_PARAMS` con un texto en inglés dentro del `message`: un
+    /// frontend solo podía decir «la aprobación no llegó al daemon», que es
+    /// verdad en UNO de los tres casos y mentira en los otros dos. «Llegó y el
+    /// daemon ya la había denegado por TTL» se leía como «tu clic se perdió».
+    #[error("the approval is gone: {reason}")]
+    ApprovalGone {
+        /// Cuál de las tres. Vocabulario CERRADO y comparable por igualdad,
+        /// como `PolicyDenied.rule`: `"unknown"` (ese id nunca existió, o el
+        /// daemon se reinició), `"expired"` (estaba pendiente pero quien la
+        /// pidió ya no escucha) y `"already-decided"` (ese id existió y
+        /// alguien lo resolvió antes — otra ventana, su TTL, o el propio
+        /// peticionario retirándolo).
+        ///
+        /// Un valor que este binario no conozca se trata como `"unknown"`: el
+        /// conjunto puede CRECER de forma aditiva, y quien no lo reconozca no
+        /// debe inventar una explicación.
+        reason: String,
+    },
     /// Una transcodificación habría perdido datos y se abortó.
     #[error("encoding loss")]
     EncodingLoss,

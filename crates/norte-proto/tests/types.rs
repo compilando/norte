@@ -1184,10 +1184,16 @@ fn version_ventana_actual() {
     // hay ancla que retener, así que un cliente 0.54 no manda ninguna y la
     // escritura hace lo de 0.53 —se confina igual y no se comprueba la
     // identidad—: se pierde la comprobación, no la corrección.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.54.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.53.0"), "N-1");
+    // 0.55.0 (#279): `Error::ApprovalGone`, que dice cuál de las tres formas
+    // de «esa aprobación ya no está» ocurrió. Degrada solo —la categoría cae
+    // en `Unknown` (ADR 0004)— y aun así la ventana se DESPLAZA: contra un
+    // daemon 0.54 las tres siguen llegando como el error genérico de antes,
+    // así que un cliente 0.55 no puede distinguir «llegaste tarde» de «tu clic
+    // no llegó» y tiene que seguir dando el consejo prudente.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.55.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.54.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.52.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.53.9"),
         "N-2 fuera de la ventana"
     );
 }

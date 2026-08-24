@@ -415,6 +415,10 @@ fn dialogo_de_referencia() -> DialogView {
             hostile: false,
         }),
         deadline: Some("caduca en 30 s".to_owned()),
+        // Un instante FIJO en la fixture: lo que el golden congela es la forma
+        // del campo, y un `ahora + 30 s` de verdad haría el fichero distinto
+        // en cada ejecución.
+        deadline_at_ms: Some(1_700_000_030_000),
         body: vec![norte_ui_host::dto::DialogLine {
             text: "/home/oscar".to_owned(),
             hostile: true,
@@ -1815,6 +1819,7 @@ mod variantes {
                     subject: None,
                     asker: None,
                     deadline: None,
+                    deadline_at_ms: None,
                     body: Vec::new(),
                     overflow_note: String::new(),
                     choices: vec![DialogChoice {

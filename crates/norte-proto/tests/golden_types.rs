@@ -348,6 +348,28 @@ fn golden_error() {
                     rule: "no_delete_home".to_owned(),
                 },
             ),
+            // Las TRES del vocabulario cerrado de #279: van una a una porque
+            // lo que este golden congela es el vocabulario, y una sola fixture
+            // dejaría que las otras dos cambiaran de nombre sin que nada lo
+            // notara.
+            (
+                "approval_gone_unknown",
+                Error::ApprovalGone {
+                    reason: "unknown".to_owned(),
+                },
+            ),
+            (
+                "approval_gone_expired",
+                Error::ApprovalGone {
+                    reason: "expired".to_owned(),
+                },
+            ),
+            (
+                "approval_gone_already_decided",
+                Error::ApprovalGone {
+                    reason: "already-decided".to_owned(),
+                },
+            ),
             ("encoding_loss", Error::EncodingLoss),
             ("unsupported", Error::Unsupported),
             ("invalid_path", Error::InvalidPath),
@@ -3564,7 +3586,12 @@ fn method_names_frozen() {
     // omiten cuando no hay nada que decir, así que el JSON corriente no
     // cambia; lo que desplaza la ventana es que un peer 0.53 no puede hacer
     // la comprobación que habilitan.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.54.0");
+    // 0.55.0 (#279): `Error::ApprovalGone`, que dice CUÁL de las tres formas
+    // de «esa aprobación ya no está» ocurrió. Aditivo —`Error` es
+    // `#[non_exhaustive]` y una categoría desconocida cae en `Unknown`—, así
+    // que lo que desplaza la ventana no es el JSON sino que un peer 0.54
+    // seguirá contando las tres como un error genérico.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.55.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,
