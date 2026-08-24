@@ -220,6 +220,38 @@ pub(crate) async fn embed_for_index(
         // un build concurrente que vació el root.
         return Err(Error::NotFound);
     }
+    // **Lo que ya está guardado y AHORA está denegado, se borra** (#122).
+    //
+    // El filtro de abajo decide qué se lee, o sea que protege lo que todavía
+    // no se ha embebido. Un fichero que se embebió ANTES de que el usuario lo
+    // añadiera a `denied_prefixes` deja su vector ahí para siempre, y un
+    // vector es invertible a una aproximación del texto: la denegación nueva
+    // no se podía honrar sin borrar `index.db` entero.
+    //
+    // Va aquí, al principio de la task, porque el predicado ya está calculado
+    // y porque es el único momento en que alguien mira esta lista. No es un
+    // recolector de basura: es la denegación aplicándose hacia atrás.
+    if !denied.is_empty() {
+        let guardados = index
+            .embedded_files(&root)
+            .await
+            .map_err(|e| index_to_proto(&e))?;
+        let a_olvidar: Vec<i64> = guardados
+            .into_iter()
+            .filter(|(_, p)| denied.iter().any(|d| crate::policy::is_under(d, p)))
+            .map(|(id, _)| id)
+            .collect();
+        if !a_olvidar.is_empty() {
+            let borrados = index
+                .forget_embeddings(&a_olvidar)
+                .await
+                .map_err(|e| index_to_proto(&e))?;
+            tracing::info!(
+                borrados,
+                "index.embed: vectores de ficheros ahora denegados, olvidados (#122)"
+            );
+        }
+    }
     // Filtro ANTES de leer nada: primero denied_prefixes (ni un byte de un
     // prefijo denegado se lee ni sale — spec §9), luego la heurística de
     // texto/tamaño.

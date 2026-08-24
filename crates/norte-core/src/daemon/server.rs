@@ -4705,6 +4705,23 @@ async fn dispatch_fs_task(
         // ai.rename_plan (0.32.0, M4-IA, ADR 0031): plan de rename revisable.
         // Respuesta DIRECTA; cancelable (#72) — la llamada al proveedor tarda.
         methods::AI_RENAME_PLAN => {
+            // IA solo para el humano (M4-IA security): un agente con scope de
+            // lectura NO puede quemar cuota del proveedor ni empujar basenames
+            // + instrucción fuera de la máquina sin rastro (el path de lectura
+            // no journaliza). El MCP tampoco expone ai.* como tool. Categoría
+            // del vocabulario CERRADO de [`crate::policy::DenyReason`].
+            //
+            // **El gate va ANTES del parseo** (#122), como en `index.embed` y
+            // por el mismo motivo: estando después, un agente distinguía
+            // «params malos» de «instrucción demasiado larga» de «dentro o
+            // fuera de mi scope» ANTES de que se le denegara — o sea que la
+            // respuesta dependía de cosas que él controla, y eso convierte un
+            // método vedado en un oráculo sobre el árbol del humano.
+            if !matches!(actor, Actor::User) {
+                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+                    rule: "not-approved".into(),
+                }));
+            }
             let p: methods::AiRenamePlanParams = parse_params(req.params)?;
             if p.instruction.len() > MAX_AI_INSTRUCTION_BYTES {
                 return Err(RpcError::protocol(
@@ -4713,16 +4730,6 @@ async fn dispatch_fs_task(
                 ));
             }
             read_gate(&actor, &p.dir, shared)?; // #80
-            // IA solo para el humano (M4-IA security): un agente con scope de
-            // lectura NO puede quemar cuota del proveedor ni empujar basenames
-            // + instrucción fuera de la máquina sin rastro (el path de lectura
-            // no journaliza). El MCP tampoco expone ai.* como tool. Categoría
-            // del vocabulario CERRADO de [`crate::policy::DenyReason`].
-            if !matches!(actor, Actor::User) {
-                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
-                    rule: "not-approved".into(),
-                }));
-            }
             let plan = shared
                 .engine
                 .ai_rename_plan(&p.dir, &p.instruction)

@@ -394,6 +394,84 @@ impl Index {
             .collect())
     }
 
+    /// Borra los embeddings de los ficheros de `root` cuyo `file_id` esté en
+    /// `file_ids`, y dice CUÁNTOS borró (#122).
+    ///
+    /// Existe para que una denegación pueda aplicarse hacia ATRÁS. El filtro
+    /// de `denied_prefixes` decide qué se lee, o sea que protege lo que
+    /// todavía no se ha embebido; un fichero que se embebió ANTES de que el
+    /// usuario lo denegara deja su vector guardado para siempre, y un vector
+    /// es invertible a una aproximación del texto. Sin esto, la única forma de
+    /// honrar una denegación nueva era borrar `index.db` entero.
+    ///
+    /// Toma `file_ids` y no rutas a propósito: quién cae bajo un prefijo lo
+    /// decide `norte-core` con su `policy::is_under` —que sabe de plegado y de
+    /// fronteras de segmento—, y reimplementar aquí una comparación de rutas
+    /// en SQL sería una segunda respuesta a la misma pregunta.
+    ///
+    /// # Errors
+    /// [`IndexError::Sqlite`].
+    pub async fn forget_embeddings(&self, file_ids: &[i64]) -> Result<u64, IndexError> {
+        if file_ids.is_empty() {
+            return Ok(0);
+        }
+        // De uno en uno y no con un `IN (...)` construido a mano: `sqlx` no
+        // liga listas, y componer el SQL con los ids sería concatenar valores
+        // dentro de una sentencia. Son unidades o decenas, y esto corre una
+        // vez por task de embed.
+        let mut borrados = 0u64;
+        for id in file_ids {
+            let r = sqlx::query("DELETE FROM embeddings WHERE file_id = ?1")
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+            borrados += r.rows_affected();
+        }
+        Ok(borrados)
+    }
+
+    /// Los `file_id` y rutas de TODOS los ficheros de `root` que tienen
+    /// embedding guardado, sea del modelo que sea (#122).
+    ///
+    /// «Sea del modelo que sea» es deliberado: lo que se purga es un dato del
+    /// usuario, y un vector de un modelo viejo lo sigue siendo. Filtrar por
+    /// modelo dejaría atrás justo las filas rancias que nadie vuelve a mirar y
+    /// que nada recoge.
+    ///
+    /// # Errors
+    /// [`IndexError::Sqlite`].
+    pub async fn embedded_files(&self, root: &VPath) -> Result<Vec<(i64, VPath)>, IndexError> {
+        let rows = sqlx::query(
+            "SELECT e.file_id AS file_id, f.path AS path
+             FROM embeddings e
+             JOIN files f ON f.id = e.file_id
+             WHERE f.root_id = ?1",
+        )
+        .bind(root_id(root))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                let file_id: i64 = r.get("file_id");
+                let raw: String = r.get("path");
+                // Un path ilegible no se puede comparar contra un prefijo
+                // denegado, así que NO se puede afirmar que esté permitido. Se
+                // deja fuera de la purga y se DICE: un salto mudo aquí es un
+                // vector que sobrevive a una denegación sin que nada lo cuente.
+                let Ok(path) = VPath::parse(&raw) else {
+                    tracing::warn!(
+                        file_id,
+                        path_len = raw.len(),
+                        "embedding con path ilegible: no se puede decidir si está denegado"
+                    );
+                    return None;
+                };
+                Some((file_id, path))
+            })
+            .collect())
+    }
+
     /// `text_hash` por `file_id` de los embeddings de `root` calculados con
     /// `model`. Un embedding de un modelo DISTINTO no aparece (stale = ausente):
     /// el caller lo tratará como pendiente de re-embeber. Una fila con BLOB
@@ -929,5 +1007,97 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(idx.files_for_embed(&root).await.unwrap().len(), 1);
+    }
+
+    /// **Un vector guardado se puede OLVIDAR** (#122): sin esto, la única
+    /// forma de honrar una denegación nueva era borrar `index.db` entero.
+    #[tokio::test]
+    async fn un_embedding_se_puede_olvidar() {
+        let idx = Index::open_memory().await.unwrap();
+        let root = root();
+        let tok = CancellationToken::new();
+        idx.build(
+            &root,
+            vec![entry(&root, b"publico.txt"), entry(&root, b"secreto.txt")],
+            &tok,
+        )
+        .await
+        .unwrap();
+        for c in idx.files_for_embed(&root).await.unwrap() {
+            idx.upsert_embedding(c.file_id, "m", &[1.0, 2.0], b"h")
+                .await
+                .unwrap();
+        }
+        assert_eq!(idx.embedded_files(&root).await.unwrap().len(), 2);
+
+        let secreto = idx
+            .embedded_files(&root)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|(_, p)| p.display_lossy().ends_with("secreto.txt"))
+            .expect("está");
+        assert_eq!(idx.forget_embeddings(&[secreto.0]).await.unwrap(), 1);
+
+        let quedan = idx.embedded_files(&root).await.unwrap();
+        assert_eq!(quedan.len(), 1, "solo se fue el denegado");
+        assert!(quedan[0].1.display_lossy().ends_with("publico.txt"));
+        // Y desaparece de la BÚSQUEDA, que es lo que de verdad importa: un
+        // vector que sigue puntuando es el texto del fichero contestando.
+        assert_eq!(
+            idx.embeddings_for_root(Some(&root), "m")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    /// Olvidar una lista vacía no borra nada. Es el caso de cada task de embed
+    /// sin nada denegado, o sea el común.
+    #[tokio::test]
+    async fn olvidar_nada_no_borra_nada() {
+        let idx = Index::open_memory().await.unwrap();
+        let root = root();
+        let tok = CancellationToken::new();
+        idx.build(&root, vec![entry(&root, b"a.txt")], &tok)
+            .await
+            .unwrap();
+        let c = idx.files_for_embed(&root).await.unwrap();
+        idx.upsert_embedding(c[0].file_id, "m", &[1.0], b"h")
+            .await
+            .unwrap();
+        assert_eq!(idx.forget_embeddings(&[]).await.unwrap(), 0);
+        assert_eq!(idx.embedded_files(&root).await.unwrap().len(), 1);
+    }
+
+    /// **`embedded_files` no filtra por modelo, y es deliberado**: un vector de
+    /// un modelo viejo sigue siendo un dato del usuario. Filtrar dejaría atrás
+    /// justo las filas rancias que nadie vuelve a mirar y que nada recoge.
+    #[tokio::test]
+    async fn un_vector_de_otro_modelo_tambien_se_ve_para_purgar() {
+        let idx = Index::open_memory().await.unwrap();
+        let root = root();
+        let tok = CancellationToken::new();
+        idx.build(&root, vec![entry(&root, b"a.txt")], &tok)
+            .await
+            .unwrap();
+        let c = idx.files_for_embed(&root).await.unwrap();
+        idx.upsert_embedding(c[0].file_id, "modelo-viejo", &[1.0], b"h")
+            .await
+            .unwrap();
+
+        assert!(
+            idx.embeddings_for_root(Some(&root), "modelo-nuevo")
+                .await
+                .unwrap()
+                .is_empty(),
+            "la búsqueda con el modelo nuevo ya no lo ve…"
+        );
+        assert_eq!(
+            idx.embedded_files(&root).await.unwrap().len(),
+            1,
+            "…pero la purga sí, que es el punto"
+        );
     }
 }

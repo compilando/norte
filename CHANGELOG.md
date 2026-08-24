@@ -55,6 +55,29 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **`ai.rename_plan` stops being an oracle for agents** (#122). AI is
+  human-only, but the actor check ran *after* parsing the params, checking the
+  instruction size and running the read gate — so a denied agent could still
+  tell "malformed params" from "instruction too long" from "inside vs outside
+  my scope" before being turned away. A method that is closed answered
+  differently depending on what the caller sent, which makes it a probe for the
+  human's tree. The check now runs first, exactly as `index.embed` already did.
+  Wire behaviour changes for an out-of-scope agent: it used to get
+  `out-of-scope` and now gets `not-approved`, the same answer every other agent
+  gets.
+
+- **Denying a prefix now applies backwards to embeddings already stored**
+  (#122). The `denied_prefixes` filter decides what gets *read*, so it only
+  ever protected files not yet embedded. A file embedded *before* the user
+  denied it kept its vector for good — and a vector inverts to an
+  approximation of the text — so the only way to honour a new denial was
+  deleting `index.db` outright. `index.embed` now forgets the stored vectors of
+  files that fall under a denied prefix before doing anything else, using the
+  predicate it already computes. What is purged is decided by `policy::is_under`
+  in the core, not by a second path comparison written in SQL. Vectors from
+  *older models* are purged too: search ignores them, nothing collects them, and
+  a stale vector is still the user's data.
+
 - **A degradation reason nobody knows no longer reads as "plaintext FTP"**
   (#279). `connection.degraded` carries a `reason` from a closed vocabulary
   that the protocol says may *grow*, plus an optional human `detail` — and both
