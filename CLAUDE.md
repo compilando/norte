@@ -271,6 +271,24 @@ you want to try a change. `just link release` when you need to measure the
 stale `cargo install` shadows nothing but confuses everything — the binary was
 renamed `norte-tui`→`ntc` once already and the installed copy kept the old name.
 
+**Packaging the window: `just gui-package`**, and two things about it are
+load-bearing. It runs the Tauri CLI from the *crate* directory, not from `ui/`
+— the CLI looks for `tauri.conf.json` in the current folder and its
+subdirectories, and that file lives in the crate; run it from `ui/` and it
+aborts with "Couldn't recognize the current folder as a Tauri project". And it
+sets `NO_STRIP=1`, without which the AppImage fails on any up-to-date
+distribution: `linuxdeploy` carries its own `strip` from an old binutils that
+does not recognise the `.relr.dyn` section modern libraries use, and the
+failure surfaces as `failed to run linuxdeploy` after a wall of "Unable to
+recognise the format of the input file" that never mentions strip. The real fix
+is building on the oldest supported glibc/WebKitGTK baseline, which phase 7
+asks for anyway.
+
+**The packages ship `norte-gui` alone, not `norte`** — so on a clean install
+the window cannot start its daemon. Whether GUI and CLI/daemon ship as one
+bundle or as coordinated packages is an open question phase 7 has to answer
+(#256).
+
 ## Workspace map
 
 - `crates/norte-proto`: protocol types. Any change affects the wire format and
