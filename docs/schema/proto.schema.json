@@ -1186,7 +1186,7 @@
               "type": "string"
             },
             "reason": {
-              "description": "Cuál de las tres. Vocabulario CERRADO y comparable por igualdad,\ncomo `PolicyDenied.rule`: `\"unknown\"` (ese id nunca existió, o el\ndaemon se reinició), `\"expired\"` (venció su TTL y se denegó sola) y\n`\"already-decided\"` (alguien —quizá otra ventana— ya la decidió).\n\nUn valor que este binario no conozca se trata como `\"unknown\"`: el\nconjunto puede CRECER de forma aditiva, y quien no lo reconozca no\ndebe inventar una explicación.",
+              "description": "Cuál de las tres. Vocabulario CERRADO y comparable por igualdad,\ncomo `PolicyDenied.rule`: `\"unknown\"` (ese id nunca existió, o el\ndaemon se reinició), `\"expired\"` (estaba pendiente pero quien la\npidió ya no escucha) y `\"already-decided\"` (ese id existió y\nalguien lo resolvió antes — otra ventana, su TTL, o el propio\npeticionario retirándolo).\n\nUn valor que este binario no conozca se trata como `\"unknown\"`: el\nconjunto puede CRECER de forma aditiva, y quien no lo reconozca no\ndebe inventar una explicación.",
               "type": "string"
             }
           },

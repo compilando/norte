@@ -745,7 +745,7 @@ use crate::{
 /// versión del peer —que el SDK retiene desde #294— es lo que decide si se
 /// puede prometer.
 ///
-/// `0.55.0` (#279): [`norte_proto::Error::ApprovalGone`], que dice CUÁL de las
+/// `0.55.0` (#279): [`crate::Error::ApprovalGone`], que dice CUÁL de las
 /// tres formas de «esa aprobación ya no está» ocurrió — `unknown`, `expired` o
 /// `already-decided`. Antes las tres salían como un `INVALID_PARAMS` con el
 /// motivo dentro de un `message` en inglés, así que un frontend solo podía
@@ -754,7 +754,7 @@ use crate::{
 ///
 /// Ventana N=0.55.x / N-1=0.54.x. Aditivo: la variante es nueva y `Error` es
 /// `#[non_exhaustive]`, así que un cliente 0.54 la deserializa a
-/// [`norte_proto::Error::Unknown`] y degrada a «error genérico» — que es
+/// [`crate::Error::Unknown`] y degrada a «error genérico» — que es
 /// exactamente lo que hacía antes con el `INVALID_PARAMS`.
 pub const PROTOCOL_VERSION: &str = "0.55.0";
 

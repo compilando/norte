@@ -20,7 +20,6 @@ modal-approval-ttl = caduca en { $s } s
 modal-approval-ttl-unknown = plazo desconocido (reconstruida tras una reconexión): puede haber caducado ya
 dialog-subject = pide:
 dialog-asker = agente:
-msg-approval-expired = la aprobación caducó y quedó denegada
 msg-approval-not-delivered = la aprobación { $id } no llegó al daemon: la operación sigue denegada
 msg-approval-expired = la aprobación { $id } venció antes de tu respuesta: la operación quedó denegada
 msg-approval-already-decided = la aprobación { $id } ya la había decidido alguien

@@ -20,7 +20,6 @@ modal-approval-ttl = expires in { $s } s
 modal-approval-ttl-unknown = deadline unknown (rebuilt after a reconnect): it may already have expired
 dialog-subject = asks to:
 dialog-asker = agent:
-msg-approval-expired = the approval expired and was denied
 msg-approval-not-delivered = approval { $id } did not reach the daemon: the operation is still denied
 msg-approval-expired = approval { $id } expired before your answer: the operation was denied
 msg-approval-already-decided = approval { $id } had already been decided by someone

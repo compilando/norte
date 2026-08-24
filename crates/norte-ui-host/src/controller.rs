@@ -10791,7 +10791,9 @@ impl Estado {
             dialogs: self.vistas_de_dialogos(),
         };
         let mut salidas = vec![self.parche(vec![cambio])];
-        salidas.extend(self.decir("msg-approval-expired"));
+        // NOMBRA la que caducó (#279). Con dos apiladas, «la aprobación
+        // caducó» no dice cuál se cerró sola ni cuál sigue esperando.
+        salidas.extend(self.decir_con("msg-approval-expired", &[("id", &approval_id.to_string())]));
         salidas
     }
 
