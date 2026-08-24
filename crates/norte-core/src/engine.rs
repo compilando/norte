@@ -1063,6 +1063,31 @@ impl Engine {
         self.provider_for(p).await?.list_skipped(p).await
     }
 
+    /// El ancla del directorio `p` (#295): la identidad OPACA del nodo que un
+    /// listado devuelve, para que la copia que escriba ahí después pueda decir
+    /// cuál era.
+    ///
+    /// Se pregunta SIGUIENDO enlaces, porque lo que el humano estaba mirando es
+    /// el directorio cuyo contenido se listó, no el enlace por el que se llegó.
+    /// Un `~/copias -> /mnt/disco/copias` y `/mnt/disco/copias` dan la misma
+    /// ancla, que es exactamente lo que hace falta: el mismo destino aprobado
+    /// por dos nombres no puede ser dos destinos.
+    ///
+    /// `None` = este provider no sabe dar identidad de nodo (un bucket, un
+    /// SFTP sin extensiones). Entonces no hay ancla, el cliente no manda
+    /// ninguna y la escritura se comporta como en 0.53.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
+    pub async fn dir_anchor(&self, p: &VPath) -> Result<Option<norte_proto::DirAnchor>, Error> {
+        let id = self
+            .provider_for(p)
+            .await?
+            .node_id(p, norte_vfs::FollowLinks::Yes)
+            .await?;
+        Ok(id.map(crate::anchor::de_nodo))
+    }
+
     /// Lectura de un archivo como stream (directa, sin Task), con rango
     /// opcional — el viewer lee cabeceras de archivos enormes sin tragarse
     /// el resto (ADR 0005).
@@ -2399,13 +2424,40 @@ impl Engine {
     /// no se puede abrir (#178); [`Error::PolicyDenied`] si la policy
     /// deniega; [`Error::Unsupported`] si algún scheme no tiene provider
     /// registrado.
-    #[tracing::instrument(skip(self, actor), fields(from = %span_path(from), to = %span_path(to)))]
     pub async fn copy_with_as(
         &self,
         from: &VPath,
         to: &VPath,
         opts: TransferOptions,
         actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        self.copy_anchored(from, to, opts, actor, None).await
+    }
+
+    /// Como [`Engine::copy_with_as`], pero con el ANCLA que el cliente observó
+    /// para el directorio destino cuando lo listó (#295, ADR 0073).
+    ///
+    /// Con ancla, la transferencia se niega a escribir si ese directorio ya no
+    /// es el nodo que el humano estaba mirando cuando aprobó — que es lo único
+    /// capaz de separar un `dest/sub -> /etc` plantado de antemano de un
+    /// `~/copias -> /mnt/disco/copias` legítimo, porque desde dentro del core
+    /// los dos se ven igual (ADR 0072).
+    ///
+    /// Sin ancla (`None`) hace exactamente lo de 0.53: se confina igual y esa
+    /// comprobación no ocurre.
+    ///
+    /// # Errors
+    /// Las de [`Engine::copy_with_as`], más [`Error::Conflict`] con
+    /// [`ConflictKind::EscapesRoot`](norte_proto::ConflictKind::EscapesRoot) si
+    /// el directorio destino ya no es el nodo anclado.
+    #[tracing::instrument(skip(self, actor, dest_anchor), fields(from = %span_path(from), to = %span_path(to), anclado = dest_anchor.is_some()))]
+    pub async fn copy_anchored(
+        &self,
+        from: &VPath,
+        to: &VPath,
+        opts: TransferOptions,
+        actor: crate::journal::Actor,
+        dest_anchor: Option<norte_proto::DirAnchor>,
     ) -> Result<TaskHandle, Error> {
         self.gate(&actor, crate::policy::PolicyOp::Copy, &[from, to])
             .await?;
@@ -2420,9 +2472,9 @@ impl Engine {
             Priority::Normal,
             actor,
             Box::new(move |ctx| {
-                Box::pin(
-                    async move { ops::copy_task(src, dst, from, to, opts, observer, &ctx).await },
-                )
+                Box::pin(async move {
+                    ops::copy_task(src, dst, from, to, opts, dest_anchor, observer, &ctx).await
+                })
             }),
         ))
     }
@@ -2459,13 +2511,34 @@ impl Engine {
     /// no se puede abrir (#178); [`Error::PolicyDenied`] si la policy
     /// deniega; [`Error::Unsupported`] si algún scheme no tiene provider
     /// registrado.
-    #[tracing::instrument(skip(self, actor), fields(from = %span_path(from), to = %span_path(to)))]
     pub async fn move_with_as(
         &self,
         from: &VPath,
         to: &VPath,
         opts: TransferOptions,
         actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        self.move_anchored(from, to, opts, actor, None).await
+    }
+
+    /// Como [`Engine::move_with_as`], con el ancla del directorio destino
+    /// (#295, ADR 0073; ver [`Engine::copy_anchored`]).
+    ///
+    /// Vale para los dos caminos: el de copia escribe igual que una copia, y
+    /// el rename resuelve su destino por ruta una vez —con el directorio hecho
+    /// enlace, deja el fichero al otro lado igual—.
+    ///
+    /// # Errors
+    /// Las de [`Engine::move_with_as`], más [`Error::Conflict`] si el
+    /// directorio destino ya no es el nodo anclado.
+    #[tracing::instrument(skip(self, actor, dest_anchor), fields(from = %span_path(from), to = %span_path(to), anclado = dest_anchor.is_some()))]
+    pub async fn move_anchored(
+        &self,
+        from: &VPath,
+        to: &VPath,
+        opts: TransferOptions,
+        actor: crate::journal::Actor,
+        dest_anchor: Option<norte_proto::DirAnchor>,
     ) -> Result<TaskHandle, Error> {
         self.gate(&actor, crate::policy::PolicyOp::Move, &[from, to])
             .await?;
@@ -2480,9 +2553,9 @@ impl Engine {
             Priority::Normal,
             actor,
             Box::new(move |ctx| {
-                Box::pin(
-                    async move { ops::move_task(src, dst, from, to, opts, observer, &ctx).await },
-                )
+                Box::pin(async move {
+                    ops::move_task(src, dst, from, to, opts, dest_anchor, observer, &ctx).await
+                })
             }),
         ))
     }

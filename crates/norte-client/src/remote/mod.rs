@@ -189,6 +189,60 @@ struct Inner {
     /// ellos es normativo. Con dos mapas ese orden dependería de cómo el
     /// runtime despierta dos receptores; con uno es la cola.
     sync_routes: Mutex<BatchRoutes<SyncPlanEvent>>,
+    /// La identidad OPACA de los directorios que este cliente ha LISTADO
+    /// (#295, ADR 0073), para poder decir al copiar «el destino era ESE».
+    ///
+    /// Vive en `Inner` y no por instancia: quien lista es el panel y quien
+    /// copia puede ser otro clon del mismo backend. Y se guarda AQUÍ, no en
+    /// el frontend, para que un cliente cualquiera —la TUI, la ventana, el
+    /// CLI— gane la comprobación sin escribir una línea.
+    ///
+    /// Acotado y best-effort: son directorios que un humano tiene abiertos,
+    /// o sea unidades. Perder uno cuesta la comprobación de esa copia, jamás
+    /// la copia.
+    anchors: Mutex<AnchorCache>,
+}
+
+/// Anclas de directorio retenidas, con tope y orden de llegada (#295).
+///
+/// Un mapa a secas crecería con cada directorio visitado en una sesión larga.
+/// El tope es de escala humana: los paneles abiertos, su historia reciente y
+/// poco más.
+#[derive(Debug, Default)]
+struct AnchorCache {
+    by_dir: HashMap<VPath, norte_proto::DirAnchor>,
+    order: std::collections::VecDeque<VPath>,
+}
+
+/// Cuántos directorios se recuerdan a la vez.
+const ANCHORS_MAX: usize = 64;
+
+impl AnchorCache {
+    /// Recuerda (o refresca) el ancla de `dir`.
+    ///
+    /// `None` BORRA la que hubiera, y eso es deliberado: un listado que ya no
+    /// trae ancla —porque el destino dejó de saber darla, o porque se reconectó
+    /// contra un daemon 0.53— no puede dejar viva la de antes. Una copia que
+    /// mandara un ancla vieja se rechazaría a sí misma sin motivo.
+    fn remember(&mut self, dir: &VPath, anchor: Option<norte_proto::DirAnchor>) {
+        let Some(anchor) = anchor else {
+            self.by_dir.remove(dir);
+            self.order.retain(|d| d != dir);
+            return;
+        };
+        if self.by_dir.insert(dir.clone(), anchor).is_none() {
+            self.order.push_back(dir.clone());
+            while self.order.len() > ANCHORS_MAX {
+                if let Some(viejo) = self.order.pop_front() {
+                    self.by_dir.remove(&viejo);
+                }
+            }
+        }
+    }
+
+    fn get(&self, dir: &VPath) -> Option<norte_proto::DirAnchor> {
+        self.by_dir.get(dir).cloned()
+    }
 }
 
 impl Inner {
@@ -212,6 +266,22 @@ impl Inner {
     /// Encola un aviso `connection.degraded` (#44) hacia el frontend.
     fn push_degraded(&self, d: ConnectionDegraded) {
         let _ = self.degraded_tx.send(d);
+    }
+
+    /// Retiene el ancla del directorio recién listado (#295).
+    ///
+    /// Un lock envenenado se traga sin ruido, y es la respuesta correcta: lo
+    /// que se pierde es la COMPROBACIÓN de una copia, nunca la copia. Hacerlo
+    /// panicar convertiría un fallo de otro hilo en la muerte del listado.
+    fn remember_anchor(&self, dir: &VPath, anchor: Option<norte_proto::DirAnchor>) {
+        if let Ok(mut cache) = self.anchors.lock() {
+            cache.remember(dir, anchor);
+        }
+    }
+
+    /// El ancla retenida de `dir`, si este cliente lo listó.
+    fn anchor_for(&self, dir: &VPath) -> Option<norte_proto::DirAnchor> {
+        self.anchors.lock().ok()?.get(dir)
     }
 }
 
@@ -326,6 +396,7 @@ impl RemoteBackend {
                 search_routes: Mutex::new(BatchRoutes::default()),
                 compare_routes: Mutex::new(BatchRoutes::default()),
                 sync_routes: Mutex::new(BatchRoutes::default()),
+                anchors: Mutex::new(AnchorCache::default()),
             }),
             foreign_rx: Mutex::new(Some(foreign_rx)),
             events_rx: Mutex::new(Some(events_rx)),
@@ -710,6 +781,10 @@ impl RemoteBackend {
             )
             .await?;
         let skipped = first.skipped;
+        // El ancla del directorio que se acaba de listar (#295): se retiene
+        // aquí para que un `transfer` hacia él la devuelva sola. Es el listado
+        // que el humano está mirando, que es exactamente lo que el ancla dice.
+        self.inner.remember_anchor(dir, first.dir_anchor.clone());
         let done = first.next_cursor.is_none();
         let state = PageState {
             backend: self.clone(),
@@ -868,6 +943,11 @@ impl RemoteBackend {
         to: &VPath,
         opts: TransferOptions,
     ) -> Result<RemoteTask, Error> {
+        // El ancla del DIRECTORIO destino, si este cliente lo listó (#295).
+        // Sale sola: ningún frontend tiene que acordarse, y quien no listó el
+        // destino —un `norte cp` con una ruta escrita a mano— manda `None` y
+        // obtiene el comportamiento de 0.53.
+        let dest_anchor = to.parent().and_then(|dir| self.inner.anchor_for(&dir));
         let result: FsTaskResult = match what {
             Transfer::Copy => {
                 self.call_timed_guarded(
@@ -879,6 +959,7 @@ impl RemoteBackend {
                         symlinks: opts.symlinks,
                         resume: opts.resume,
                         verify: opts.verify,
+                        dest_anchor,
                     },
                 )
                 .await?
@@ -893,6 +974,7 @@ impl RemoteBackend {
                         symlinks: opts.symlinks,
                         resume: opts.resume,
                         verify: opts.verify,
+                        dest_anchor,
                     },
                 )
                 .await?
@@ -2268,6 +2350,95 @@ async fn pump_loop(
 mod tests {
     use super::*;
 
+    fn vpd(wire: &str) -> VPath {
+        VPath::parse(wire).expect("wire válido")
+    }
+
+    /// Lo que el `transfer` va a preguntar: el ancla del directorio listado.
+    #[test]
+    fn el_ancla_de_un_directorio_listado_se_recuerda_y_se_devuelve() {
+        let inner = test_inner();
+        let dir = vpd("file:///d/sub");
+        let a = norte_proto::DirAnchor::new("0123456789abcdef0123456789abcdef".to_owned());
+        inner.remember_anchor(&dir, Some(a.clone()));
+        assert_eq!(inner.anchor_for(&dir), Some(a));
+        assert_eq!(
+            inner.anchor_for(&vpd("file:///otro")),
+            None,
+            "un directorio que nadie listó no tiene ancla que mandar"
+        );
+    }
+
+    /// **Un listado SIN ancla borra la que hubiera**, y esto es lo que evita el
+    /// fallo tonto: reconectar contra un daemon 0.53 —o listar un destino que
+    /// dejó de saber identificar nodos— dejaría viva un ancla vieja, y la copia
+    /// siguiente se rechazaría a sí misma sin que nada hubiera pasado.
+    #[test]
+    fn un_listado_sin_ancla_olvida_la_anterior() {
+        let inner = test_inner();
+        let dir = vpd("file:///d/sub");
+        inner.remember_anchor(
+            &dir,
+            Some(norte_proto::DirAnchor::new(
+                "0123456789abcdef0123456789abcdef".to_owned(),
+            )),
+        );
+        inner.remember_anchor(&dir, None);
+        assert_eq!(inner.anchor_for(&dir), None);
+    }
+
+    /// El tope no puede dejar sin ancla al directorio recién listado: lo que se
+    /// tira es lo VIEJO. Un panel abierto en una sesión larga visita muchos
+    /// directorios y el que importa es siempre el último.
+    #[test]
+    fn el_tope_tira_lo_viejo_y_conserva_lo_recien_listado() {
+        let inner = test_inner();
+        for i in 0..(ANCHORS_MAX + 5) {
+            inner.remember_anchor(
+                &vpd(&format!("file:///d{i}")),
+                Some(norte_proto::DirAnchor::new(format!("{i:032x}"))),
+            );
+        }
+        assert_eq!(
+            inner.anchor_for(&vpd("file:///d0")),
+            None,
+            "el primero ya no cabe"
+        );
+        let ultimo = ANCHORS_MAX + 4;
+        assert_eq!(
+            inner.anchor_for(&vpd(&format!("file:///d{ultimo}"))),
+            Some(norte_proto::DirAnchor::new(format!("{ultimo:032x}"))),
+            "y el último sigue"
+        );
+    }
+
+    /// Re-listar el MISMO directorio refresca su ancla sin gastar hueco: si
+    /// contara como entrada nueva, un panel refrescándose con F5 se comería el
+    /// tope él solo y tiraría los otros paneles.
+    #[test]
+    fn relistar_el_mismo_directorio_no_gasta_hueco() {
+        let inner = test_inner();
+        let dir = vpd("file:///d/sub");
+        for i in 0..(ANCHORS_MAX + 5) {
+            inner.remember_anchor(&dir, Some(norte_proto::DirAnchor::new(format!("{i:032x}"))));
+        }
+        inner.remember_anchor(
+            &vpd("file:///otro"),
+            Some(norte_proto::DirAnchor::new(format!("{:032x}", 999))),
+        );
+        let ultimo = ANCHORS_MAX + 4;
+        assert_eq!(
+            inner.anchor_for(&dir),
+            Some(norte_proto::DirAnchor::new(format!("{ultimo:032x}"))),
+            "la última gana"
+        );
+        assert_eq!(
+            inner.anchor_for(&vpd("file:///otro")),
+            Some(norte_proto::DirAnchor::new(format!("{:032x}", 999))),
+            "y el otro directorio no lo desalojó nadie"
+        );
+    }
+
     fn test_inner() -> Arc<Inner> {
         test_inner_en(PathBuf::from("/nonexistent/test.sock"))
     }
@@ -2298,6 +2469,7 @@ mod tests {
             search_routes: Mutex::new(BatchRoutes::default()),
             compare_routes: Mutex::new(BatchRoutes::default()),
             sync_routes: Mutex::new(BatchRoutes::default()),
+            anchors: Mutex::new(AnchorCache::default()),
         })
     }
 
@@ -2561,6 +2733,7 @@ mod tests {
             search_routes: Mutex::new(BatchRoutes::default()),
             compare_routes: Mutex::new(BatchRoutes::default()),
             sync_routes: Mutex::new(BatchRoutes::default()),
+            anchors: Mutex::new(AnchorCache::default()),
         });
         let backend = RemoteBackend {
             inner: Arc::clone(&inner),

@@ -1032,7 +1032,12 @@ fn golden_methods() {
     // los bytes del basename). Los tres campos son opcionales, así que sin
     // estas fixturas su NOMBRE y su forma en el wire —el hex de un sha256, el
     // base64 de `label_wire`— no los congelaba nada.
-    assert_eq!(fixtures.len(), 161, "[methods.json] fixtures sin caso Rust");
+    // 161 → 164 en 0.54.0 (#295): + fs_list_result_anchored,
+    // fs_copy_params_anchored y fs_move_params_anchored. Los tres campos son
+    // opcionales y se omiten, así que sin estas fixturas ni el NOMBRE del
+    // campo ni su forma en el wire —una cadena hex opaca, jamás un inodo—
+    // los congelaba nada.
+    assert_eq!(fixtures.len(), 164, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
@@ -2424,6 +2429,7 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
             entries: vec![sample_entry.clone()],
             next_cursor: None,
             skipped: None,
+            dir_anchor: None,
         },
     );
     check_one(
@@ -2433,6 +2439,7 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
             entries: vec![sample_entry.clone()],
             next_cursor: Some("3".to_owned()),
             skipped: None,
+            dir_anchor: None,
         },
     );
     check_one(
@@ -2442,6 +2449,23 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
             entries: vec![sample_entry.clone()],
             next_cursor: None,
             skipped: Some(3),
+            dir_anchor: None,
+        },
+    );
+    // 0.54.0 (#295): la identidad OPACA del directorio listado, que el cliente
+    // retiene para poder decir DESPUÉS cuál era. Congela el nombre del campo y
+    // su forma en el wire —una cadena hex, nunca un inodo ni un volumen—, que
+    // es lo único que un cliente puede ver de ella.
+    check_one(
+        fixtures,
+        "fs_list_result_anchored",
+        &FsListResult {
+            entries: vec![sample_entry.clone()],
+            next_cursor: None,
+            skipped: None,
+            dir_anchor: Some(norte_proto::DirAnchor::new(
+                "3f2a91c40b7d6e58aa10c4d9f8e37b62".to_owned(),
+            )),
         },
     );
     check_one(
@@ -2965,6 +2989,7 @@ fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
             symlinks: SymlinkPolicy::Preserve,
             resume: ResumePolicy::Off,
             verify: VerifyPolicy::Length,
+            dest_anchor: None,
         },
     );
     check_one(
@@ -2977,6 +3002,7 @@ fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
             symlinks: SymlinkPolicy::Skip,
             resume: ResumePolicy::On,
             verify: VerifyPolicy::Hash,
+            dest_anchor: None,
         },
     );
     check_one(
@@ -2989,6 +3015,41 @@ fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
             symlinks: SymlinkPolicy::Preserve,
             resume: ResumePolicy::Off,
             verify: VerifyPolicy::Length,
+            dest_anchor: None,
+        },
+    );
+    // 0.54.0 (#295): el ancla del listado VOLVIENDO con la petición que
+    // escribe. Las dos fixturas —copiar y mover— congelan que el campo se
+    // llama igual en las dos y que se OMITE cuando no está: sin eso, un
+    // cliente 0.53 y uno 0.54 sin ancla no producirían el mismo JSON.
+    check_one(
+        fixtures,
+        "fs_copy_params_anchored",
+        &FsCopyParams {
+            from: vpath("file:///src/a.txt"),
+            to: vpath("file:///dst/sub/a.txt"),
+            on_collision: CollisionPolicy::Fail,
+            symlinks: SymlinkPolicy::Preserve,
+            resume: ResumePolicy::Off,
+            verify: VerifyPolicy::Length,
+            dest_anchor: Some(norte_proto::DirAnchor::new(
+                "3f2a91c40b7d6e58aa10c4d9f8e37b62".to_owned(),
+            )),
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_move_params_anchored",
+        &FsMoveParams {
+            from: vpath("file:///src/dir/a.txt"),
+            to: vpath("file:///dst/sub/a.txt"),
+            on_collision: CollisionPolicy::Fail,
+            symlinks: SymlinkPolicy::Preserve,
+            resume: ResumePolicy::Off,
+            verify: VerifyPolicy::Length,
+            dest_anchor: Some(norte_proto::DirAnchor::new(
+                "3f2a91c40b7d6e58aa10c4d9f8e37b62".to_owned(),
+            )),
         },
     );
 }
@@ -3497,7 +3558,13 @@ fn method_names_frozen() {
     // nada que decir, así que el JSON de un caso corriente no cambia; lo que
     // desplaza la ventana es que un peer viejo no puede hacer la comprobación
     // que cada uno habilita.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.53.0");
+    // 0.54.0 (#295): dos campos OPCIONALES que son el mismo dato en los dos
+    // sentidos —la identidad opaca del directorio que un listado devolvió, y
+    // la que la copia o el movimiento devuelven para decir «era ese»—. Se
+    // omiten cuando no hay nada que decir, así que el JSON corriente no
+    // cambia; lo que desplaza la ventana es que un peer 0.53 no puede hacer
+    // la comprobación que habilitan.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.54.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

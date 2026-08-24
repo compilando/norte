@@ -804,6 +804,7 @@ async fn agente_sin_scope_ve_policy_denied_humano_copia() {
         symlinks: norte_proto::SymlinkPolicy::default(),
         resume: norte_proto::ResumePolicy::default(),
         verify: norte_proto::VerifyPolicy::default(),
+        dest_anchor: None,
     };
 
     // Agente sin scope: denegado por policy, sin tocar el FS.
@@ -1112,6 +1113,7 @@ async fn scope_request_grant_abre_la_frontera_y_solo_dentro() {
         symlinks: norte_proto::SymlinkPolicy::default(),
         resume: norte_proto::ResumePolicy::default(),
         verify: norte_proto::VerifyPolicy::default(),
+        dest_anchor: None,
     };
     let assert_out_of_scope = |err: ClientError| match err {
         ClientError::Rpc(rpc) => assert!(
@@ -1324,6 +1326,7 @@ fn copy_params(from: &str, to: &str) -> FsCopyParams {
         symlinks: norte_proto::SymlinkPolicy::default(),
         resume: norte_proto::ResumePolicy::default(),
         verify: norte_proto::VerifyPolicy::default(),
+        dest_anchor: None,
     }
 }
 
@@ -1781,6 +1784,7 @@ async fn fs_copy_progresa_hasta_completed() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -1822,6 +1826,7 @@ async fn task_cancel_por_el_socket_cancela_limpio() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -1862,6 +1867,7 @@ async fn el_progreso_se_difunde_a_todos_los_clientes() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -1972,6 +1978,7 @@ async fn un_relevo_con_una_task_viva_se_rehusa_y_no_toca_nada() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -2038,6 +2045,7 @@ async fn el_socket_se_retira_antes_de_drenar() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -2366,6 +2374,7 @@ async fn task_list_da_el_snapshot_de_tasks_vivas() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -2584,6 +2593,7 @@ async fn policy_undo_session_revierte_lo_del_agente() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -3612,6 +3622,7 @@ async fn task_list_de_agente_solo_muestra_sus_tasks() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -3628,6 +3639,7 @@ async fn task_list_de_agente_solo_muestra_sus_tasks() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -3679,6 +3691,7 @@ async fn task_cancel_de_agente_no_toca_task_del_humano() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -3722,6 +3735,7 @@ async fn task_cancel_de_agente_cancela_la_suya() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -3785,6 +3799,7 @@ async fn progreso_de_task_humana_no_llega_a_conexiones_agente() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -3894,6 +3909,7 @@ async fn terminales_de_agente_no_desplazan_los_del_humano() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -3912,6 +3928,7 @@ async fn terminales_de_agente_no_desplazan_los_del_humano() {
                     symlinks: norte_proto::SymlinkPolicy::default(),
                     resume: norte_proto::ResumePolicy::default(),
                     verify: norte_proto::VerifyPolicy::default(),
+                    dest_anchor: None,
                 },
             )
             .await
@@ -3956,6 +3973,7 @@ async fn tasks_vivas_de_agente_no_agotan_el_cupo_del_humano() {
                     symlinks: norte_proto::SymlinkPolicy::default(),
                     resume: norte_proto::ResumePolicy::default(),
                     verify: norte_proto::VerifyPolicy::default(),
+                    dest_anchor: None,
                 },
             )
             .await
@@ -3972,6 +3990,7 @@ async fn tasks_vivas_de_agente_no_agotan_el_cupo_del_humano() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
@@ -3989,6 +4008,7 @@ async fn tasks_vivas_de_agente_no_agotan_el_cupo_del_humano() {
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
                 verify: norte_proto::VerifyPolicy::default(),
+                dest_anchor: None,
             },
         )
         .await
