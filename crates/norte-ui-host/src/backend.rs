@@ -214,6 +214,21 @@ pub trait HostBackend: Send + Sync + 'static {
         params: methods::ArchiveTestParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
+    /// Parte un fichero en trozos de `part_bytes`, como Task (#132).
+    fn split_file(
+        &self,
+        params: methods::FileSplitParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
+
+    /// Junta los trozos a partir del PRIMERO, como Task (#132).
+    ///
+    /// Solo desde el `.001`: el core busca hacia delante, así que empezar por
+    /// otro uniría media cosa. Quien llama ya lo comprobó.
+    fn combine_files(
+        &self,
+        params: methods::FileCombineParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
+
     /// Cuenta lo que ocupan `paths` — bytes y entradas — como Task (#139).
     ///
     /// Es de las pocas Tasks cuyo RESULTADO **es** su progreso: no publica
@@ -930,6 +945,40 @@ impl HostBackend for norte_client::RemoteBackend {
         let backend = self.clone();
         Box::pin(async move {
             let task = backend.test_archive(params).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
+        })
+    }
+
+    fn split_file(
+        &self,
+        params: methods::FileSplitParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.split_file(params).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
+        })
+    }
+
+    fn combine_files(
+        &self,
+        params: methods::FileCombineParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.combine_files(params).await?;
             let canceller = task.canceller();
             Ok(HostTask {
                 id: task.id(),

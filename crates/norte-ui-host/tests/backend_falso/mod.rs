@@ -96,6 +96,10 @@ pub struct Falso {
     pub empaquetados: std::sync::Mutex<Vec<norte_proto::methods::ArchivePackParams>>,
     /// Los contenedores que se mandó comprobar.
     pub comprobados: std::sync::Mutex<Vec<norte_proto::methods::ArchiveTestParams>>,
+    /// Lo que se mandó partir, con su tamaño de trozo ya en bytes.
+    pub partidos: std::sync::Mutex<Vec<norte_proto::methods::FileSplitParams>>,
+    /// Los trozos que se mandó juntar.
+    pub juntados: std::sync::Mutex<Vec<norte_proto::methods::FileCombineParams>>,
     /// Contenido por path, para el visor.
     pub contenido: HashMap<String, Vec<u8>>,
     /// Los paths que se sondearon, en orden: es lo que permite comprobar que
@@ -1425,6 +1429,22 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.comprobados.lock().expect("comprobados").push(params);
         self.task_de_archivo(norte_proto::TaskKind::TestArchive, 12)
+    }
+
+    fn split_file(
+        &self,
+        params: norte_proto::methods::FileSplitParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.partidos.lock().expect("partidos").push(params);
+        self.task_de_archivo(norte_proto::TaskKind::Split, 13)
+    }
+
+    fn combine_files(
+        &self,
+        params: norte_proto::methods::FileCombineParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.juntados.lock().expect("juntados").push(params);
+        self.task_de_archivo(norte_proto::TaskKind::Combine, 14)
     }
 
     fn dir_size(&self, paths: Vec<VPath>) -> BoxFuture<'static, Result<HostTask, Error>> {

@@ -72,6 +72,9 @@ pub const MUTAN: &[&str] = &[
     // tan de solo lectura como comparar.
     "pane.pack",
     "pane.unpack",
+    // Partir y juntar fabrican ficheros nuevos.
+    "pane.split-file",
+    "pane.combine-files",
 ];
 
 /// Los comandos que el host ejecuta HOY.
@@ -165,6 +168,8 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.pack",
     "pane.unpack",
     "pane.test-archive",
+    "pane.split-file",
+    "pane.combine-files",
     "pane.mirror",
     "pane.pull",
     "pane.swap",
@@ -432,6 +437,15 @@ pub enum Efecto {
     /// NO está en [`MUTAN`]: lee el archivo entero y contesta si está sano,
     /// sin escribir nada. Es la misma categoría que comparar.
     ComprobarArchivo,
+    /// Parte el fichero bajo el cursor en trozos del tamaño que se teclee
+    /// (#132). Está en [`MUTAN`]: escribe los trozos.
+    ///
+    /// `PartirFichero` y no `Partir` a secas: [`Efecto::Partir`] es partir un
+    /// HUECO de la disposición, que no tiene nada que ver.
+    PartirFichero,
+    /// Junta los trozos a partir del `.001` bajo el cursor (#132). También
+    /// escribe, así que también está en [`MUTAN`].
+    Juntar,
     /// Cuenta lo que ocupa lo MARCADO —o lo que hay bajo el cursor— (#139).
     ///
     /// No está en [`MUTAN`] por lo mismo que [`Efecto::Comparar`]: camina un
@@ -625,6 +639,8 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.pack" => Efecto::Empaquetar,
         "pane.unpack" => Efecto::Desempaquetar,
         "pane.test-archive" => Efecto::ComprobarArchivo,
+        "pane.split-file" => Efecto::PartirFichero,
+        "pane.combine-files" => Efecto::Juntar,
         "pane.sync-dirs" => Efecto::Sincronizar,
         // #138: la misma semántica que un click en la cabecera, y sobre el
         // hueco con el FOCO — el orden es de un listado, como el cursor.

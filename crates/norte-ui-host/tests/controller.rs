@@ -7483,6 +7483,128 @@ async fn copiar_pide_confirmacion_y_dice_a_donde() {
     );
 }
 
+/// **Partir lee el tamaño en BINARIO** (#132, #290): `10M` son 10 MiB, que es
+/// lo que significa en un gestor de ficheros, y no diez millones.
+#[tokio::test]
+async fn partir_lee_el_tamano_en_binario() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
+    let mut sub = h.subscribe();
+    separar_los_paneles(&h, &mut sub).await;
+    // El cursor, sobre un FICHERO: arranca en `docs/`, que además es el
+    // directorio destino, y ahí la comprobación de abajo no distinguiría nada.
+    h.dispatch(tecla("Down")).await.expect("host vivo");
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.split-file").await;
+    let id = siguientes_dialogos(&mut sub).await.last().expect("hay").id;
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: "10M".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+    let ps = backend.partidos.lock().expect("partidos");
+    assert_eq!(ps.len(), 1);
+    assert_eq!(ps[0].part_bytes, 10 * 1024 * 1024, "MiB, no millones");
+    // Cuál sea la entrada bajo el cursor da igual —el listado ordena y el
+    // corpus mete un nombre hostil por medio—; lo que este test fija es de
+    // QUÉ panel sale cada cosa.
+    assert_eq!(
+        ps[0].path.parent().map(|p| p.to_wire()).as_deref(),
+        Some("mem:///casa"),
+        "el fichero sale del panel ACTIVO"
+    );
+    assert_eq!(
+        ps[0].dest_dir.to_wire(),
+        "mem:///casa/docs",
+        "y los trozos van al panel DESTINO: partir uno enorme donde ya está \
+         suele no caber"
+    );
+}
+
+/// Un tamaño que no se entiende se rehúsa y no parte nada. El cero entra ahí:
+/// trozos de cero bytes no terminan nunca.
+#[tokio::test]
+async fn partir_rehusa_un_tamano_que_no_vale() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
+    let mut sub = h.subscribe();
+    separar_los_paneles(&h, &mut sub).await;
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.split-file").await;
+    let id = siguientes_dialogos(&mut sub).await.last().expect("hay").id;
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: "0".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let ack = h
+        .dispatch(UiAction::Dialog {
+            id,
+            choice: "confirm".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "msg-split-bad-size"),
+        "{ack:?}"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(backend.partidos.lock().expect("partidos").is_empty());
+}
+
+/// **Juntar solo desde el PRIMER trozo** (#132, #290): empezar por el `.007`
+/// uniría media cosa, y el core solo busca hacia delante.
+#[tokio::test]
+async fn juntar_exige_empezar_por_el_primer_trozo() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![
+            (b"pelicula.mkv.001".to_vec(), false),
+            (b"pelicula.mkv.007".to_vec(), false),
+        ],
+    );
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    // El cursor arranca en la primera fila: el `.001`.
+    ejecutar_por_paleta(&h, &mut sub, "pane.combine-files").await;
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    {
+        let js = backend.juntados.lock().expect("juntados");
+        assert_eq!(js.len(), 1, "desde el .001 sí");
+        assert_eq!(
+            js[0].dest.to_wire(),
+            "mem:///casa/pelicula.mkv",
+            "el destino es el nombre SIN el sufijo de trozo"
+        );
+    }
+
+    // Bajar al `.007` y volver a pedirlo: ahí no.
+    h.dispatch(tecla("Down")).await.expect("host vivo");
+    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.combine-files").await;
+    assert!(
+        matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "msg-combine-needs-first"),
+        "desde otro trozo no: {ack:?}"
+    );
+    assert_eq!(
+        backend.juntados.lock().expect("juntados").len(),
+        1,
+        "y no se pide nada nuevo"
+    );
+}
+
 /// **Empaquetar saca el FORMATO del nombre tecleado** (#132, #290), y la base
 /// es el directorio del panel: quien desempaquete espera ver lo que se veía en
 /// pantalla, no rutas absolutas.

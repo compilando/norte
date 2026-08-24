@@ -810,6 +810,7 @@ modal-pack-hint-tar = tar · Enter packs · Esc cancels
 modal-pack-hint-targz = tar.gz · Enter packs · Esc cancels
 modal-pack-hint-unknown = unknown extension — use .zip, .tar, .tar.gz or .tgz
 modal-split = Split into pieces of
+modal-split-title = Split
 modal-split-hint = 4096, 10M, 700M · pieces land in the other panel · Enter splits · Esc cancels
 msg-pack-read-only = that panel is read-only: nothing can be written there
 msg-pack-nothing = nothing marked and nothing under the cursor

@@ -859,6 +859,65 @@ pub fn format_by_name(name: &[u8]) -> Option<norte_proto::methods::ArchiveFormat
     None
 }
 
+/// Un tamaño con sufijo (`4096`, `10M`, `1G`) en bytes, o `None` si no se
+/// entiende (#132).
+///
+/// Sufijos BINARIOS, que es lo que significan en un gestor de ficheros: `M` es
+/// 1 MiB y no un millón. Sin sufijo son bytes. El cero no vale: partir en
+/// trozos de cero bytes no termina nunca.
+///
+/// Compartida por lo mismo que sus vecinas: el TUI y la ventana piden el mismo
+/// tamaño en el mismo diálogo, y dos maneras de leer `10M` son dos ficheros
+/// partidos distinto ante lo mismo que se tecleó.
+///
+/// ```
+/// use norte_frontend::nav::parse_size;
+/// assert_eq!(parse_size("4096"), Some(4096));
+/// assert_eq!(parse_size("10M"), Some(10 * 1024 * 1024), "binario, no decimal");
+/// assert_eq!(parse_size("0"), None, "un trozo de cero bytes no acaba nunca");
+/// assert_eq!(parse_size("diez"), None);
+/// ```
+#[must_use]
+pub fn parse_size(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (num, mult) = match s.as_bytes()[s.len() - 1].to_ascii_uppercase() {
+        b'K' => (&s[..s.len() - 1], 1024_u64),
+        b'M' => (&s[..s.len() - 1], 1024 * 1024),
+        b'G' => (&s[..s.len() - 1], 1024 * 1024 * 1024),
+        _ => (s, 1),
+    };
+    let n: u64 = num.trim().parse().ok()?;
+    n.checked_mul(mult).filter(|v| *v > 0)
+}
+
+/// El nombre BASE de un fichero partido, dado el PRIMER trozo (#132).
+///
+/// Solo desde el `.001`: empezar por el `.007` uniría media cosa, y el core
+/// solo sabe buscar hacia delante. `None` si el nombre no acaba en `.001` o si
+/// lo que queda no es un nombre legal.
+///
+/// ```
+/// use norte_frontend::nav::base_de_trozos;
+/// assert_eq!(
+///     base_de_trozos(b"pelicula.mkv.001").map(|s| s.as_bytes().to_vec()),
+///     Some(b"pelicula.mkv".to_vec())
+/// );
+/// // Desde otro trozo, no: uniría media cosa.
+/// assert!(base_de_trozos(b"pelicula.mkv.007").is_none());
+/// ```
+#[must_use]
+pub fn base_de_trozos(nombre: &[u8]) -> Option<norte_proto::Segment> {
+    let base = nombre
+        .len()
+        .checked_sub(4)
+        .filter(|n| nombre[*n] == b'.' && &nombre[n + 1..] == b"001")
+        .map(|n| nombre[..n].to_vec())?;
+    norte_proto::Segment::new(base).ok()
+}
+
 #[cfg(test)]
 mod history_tests {
     use super::*;
