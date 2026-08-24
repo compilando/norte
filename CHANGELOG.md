@@ -55,6 +55,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **`ai.rename_plan` stops being an oracle for agents** (#122). AI is
+  human-only, but the actor check ran *after* parsing the params, checking the
+  instruction size and running the read gate — so a denied agent could still
+  tell "malformed params" from "instruction too long" from "inside vs outside
+  my scope" before being turned away. A method that is closed answered
+  differently depending on what the caller sent, which makes it a probe for the
+  human's tree. The check now runs first, exactly as `index.embed` already did.
+  Wire behaviour changes for an out-of-scope agent: it used to get
+  `out-of-scope` and now gets `not-approved`, the same answer every other agent
+  gets.
+
 - **Denying a prefix now applies backwards to embeddings already stored**
   (#122). The `denied_prefixes` filter decides what gets *read*, so it only
   ever protected files not yet embedded. A file embedded *before* the user

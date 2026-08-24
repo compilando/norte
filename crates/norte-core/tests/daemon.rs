@@ -6269,13 +6269,23 @@ async fn ai_rename_plan_sin_proveedor_es_unsupported() {
     }
 }
 
-/// El gate de LECTURA (#80) también cubre `ai.rename_plan`: un agente sin
-/// scope no lista nombres vía la IA (denegado ANTES de tocar el engine).
+/// **`ai.rename_plan` le contesta lo MISMO a un agente pase lo que pase**
+/// (#122): la IA es solo del humano, y el gate va ANTES del parseo.
+///
+/// Antes contestaba `out-of-scope` a quien estaba fuera y `not-approved` a
+/// quien estaba dentro, y comprobaba el tamaño de la instrucción y la validez
+/// de los params antes que nada. O sea que un método VEDADO respondía cosas
+/// distintas según lo que el agente mandara: eso es un oráculo sobre el árbol
+/// del humano —«¿existe este directorio?», «¿lo cubre mi scope?»— servido por
+/// una puerta que se supone cerrada.
+///
+/// Se afirman los dos agentes juntos a propósito: lo que hay que sostener no
+/// es una categoría concreta, es que **las dos respuestas sean iguales**.
 #[tokio::test]
-async fn agente_sin_scope_no_puede_ai_rename_plan() {
+async fn ai_rename_plan_le_dice_lo_mismo_a_todo_agente() {
     let d = spawn_daemon_policy().await;
-    let agent = connected_agent(&d, "s1").await;
-    let err = agent
+    let sin_scope = connected_agent(&d, "s1").await;
+    let err_sin = sin_scope
         .call::<_, methods::AiRenamePlanResult>(
             methods::AI_RENAME_PLAN,
             &methods::AiRenamePlanParams {
@@ -6284,11 +6294,73 @@ async fn agente_sin_scope_no_puede_ai_rename_plan() {
             },
         )
         .await
-        .expect_err("agente sin scope denegado");
+        .expect_err("agente denegado");
+
+    // El mismo agente, ahora CON scope de lectura vivo sobre otro directorio.
+    let human = connected_client(&d).await;
+    grant_copy_scope(&sin_scope, &human, "s1").await;
+    let err_con = sin_scope
+        .call::<_, methods::AiRenamePlanResult>(
+            methods::AI_RENAME_PLAN,
+            &methods::AiRenamePlanParams {
+                dir: vp("mem:///proj"),
+                instruction: "x".into(),
+            },
+        )
+        .await
+        .expect_err("agente denegado igual");
+
+    for (quien, err) in [("sin scope", err_sin), ("con scope", err_con)] {
+        match err {
+            ClientError::Rpc(rpc) => assert!(
+                matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
+                "[{quien}] tenía que ser `not-approved` y fue {:?}",
+                rpc.data
+            ),
+            other => panic!("[{quien}] esperaba Rpc, fue {other:?}"),
+        }
+    }
+}
+
+/// Y tampoco distingue por los PARAMS: unos ilegibles y una instrucción que
+/// pasa del tope reciben la misma denegación que unos válidos. Si no, el
+/// agente aprende dónde está el tope y qué forma tiene el params sin que nadie
+/// le haya dejado llamar.
+#[tokio::test]
+async fn ai_rename_plan_no_distingue_params_malos_para_un_agente() {
+    let d = spawn_daemon_policy().await;
+    let agent = connected_agent(&d, "s1").await;
+
+    let err = agent
+        .call::<_, methods::AiRenamePlanResult>(
+            methods::AI_RENAME_PLAN,
+            &serde_json::json!({ "esto": "no es el params" }),
+        )
+        .await
+        .expect_err("denegado");
     match err {
         ClientError::Rpc(rpc) => assert!(
-            matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-            "PolicyDenied out-of-scope, fue {:?}",
+            matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
+            "params ilegibles tenían que dar `not-approved`, fue {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+
+    let err = agent
+        .call::<_, methods::AiRenamePlanResult>(
+            methods::AI_RENAME_PLAN,
+            &methods::AiRenamePlanParams {
+                dir: vp("mem:///"),
+                instruction: "x".repeat(64 * 1024),
+            },
+        )
+        .await
+        .expect_err("denegado");
+    match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
+            "una instrucción enorme tenía que dar `not-approved`, fue {:?}",
             rpc.data
         ),
         other => panic!("esperaba Rpc, fue {other:?}"),
