@@ -55,6 +55,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A transfer that collides now has a way forward in the window** (#274). The
+  window always sends `CollisionPolicy::Fail` — the safe wire default, because
+  overwriting or renaming are the reader's calls — but it had nowhere to make
+  them: what was left was a failed task on the board and no path onward, while
+  the TUI has offered the four exits all along. A collision now opens a dialog
+  with the same four (`overwrite`, `newer`, `rename`, `skip`) plus cancel,
+  taken from the shared `dialog.*` catalogue rather than invented here, and the
+  retry repeats the **same verb** — an "overwrite" on a copy that turned into a
+  move would delete a source nobody asked to touch. Cancelling relaunches
+  nothing: not choosing is an answer, and the failed task stays as it was.
+
 - **A lost approval says which of the three things happened** (#279, protocol
   **0.55.0**, bridge **38**). `policy.decide` collapsed "that id never existed",
   "it expired" and "someone already decided it" into one `INVALID_PARAMS` whose

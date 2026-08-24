@@ -7483,6 +7483,140 @@ async fn copiar_pide_confirmacion_y_dice_a_donde() {
     );
 }
 
+/// **Una transferencia que CHOCA tiene salida** (#274).
+///
+/// La ventana manda siempre `CollisionPolicy::Fail`, que es el default seguro,
+/// pero no tenía dónde tomar la decisión: quedaba una task fallida en el
+/// tablero y ningún camino hacia delante, mientras el TUI sí ofrece las
+/// cuatro. Se comprueba lo que de verdad importa: que la segunda transferencia
+/// SALE, con la política elegida y el mismo verbo.
+#[tokio::test]
+async fn una_copia_que_choca_se_puede_reintentar_con_otra_politica() {
+    let backend = arbol();
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let _ = siguientes_tasks(&mut sub).await;
+
+    // El daemon dice que el destino ya existe.
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| {
+        p.state = norte_proto::TaskState::Failed {
+            error: norte_proto::Error::Conflict {
+                conflict: norte_proto::ConflictKind::Exists,
+            },
+        };
+    });
+
+    // Y ahora SÍ hay una pregunta que contestar.
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let colision = dialogos.last().expect("el diálogo de colisión");
+    let opciones: Vec<&str> = colision.choices.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(
+        opciones,
+        vec!["overwrite", "newer", "rename", "skip", "cancel"],
+        "las cuatro salidas del TUI, más cancelar"
+    );
+    assert!(
+        colision
+            .choices
+            .iter()
+            .any(|c| c.id == "overwrite" && c.destructive),
+        "sobrescribir se marca como destructivo: destruye lo que hay"
+    );
+
+    // Se abrió SOLO, así que la primera respuesta solo lo reconoce.
+    let cid = colision.id;
+    h.dispatch(UiAction::Dialog {
+        id: cid,
+        choice: "overwrite".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id: cid,
+        choice: "overwrite".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+    let ts = backend.transferencias.lock().expect("transferencias");
+    assert_eq!(ts.len(), 2, "la original y el reintento: {ts:?}");
+    let (from, to, mover, colision) = &ts[1];
+    assert_eq!(
+        *colision,
+        norte_proto::CollisionPolicy::Overwrite,
+        "el reintento va con la política que se eligió"
+    );
+    assert!(
+        !mover,
+        "y con el MISMO verbo: un reintento de copia no mueve"
+    );
+    assert_eq!(from.to_wire(), ts[0].0.to_wire(), "mismo origen");
+    assert_eq!(to.to_wire(), ts[0].1.to_wire(), "y mismo destino");
+}
+
+/// Cancelar la colisión no relanza nada: no elegir es una respuesta, y la task
+/// fallida se queda como estaba.
+#[tokio::test]
+async fn cancelar_una_colision_no_reintenta() {
+    let backend = arbol();
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let _ = siguientes_tasks(&mut sub).await;
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| {
+        p.state = norte_proto::TaskState::Failed {
+            error: norte_proto::Error::Conflict {
+                conflict: norte_proto::ConflictKind::Exists,
+            },
+        };
+    });
+    let cid = siguientes_dialogos(&mut sub).await.last().expect("hay").id;
+
+    // Cancelar está EXENTO del reconocimiento: quitarse de encima algo que uno
+    // no ha pedido sale a la primera.
+    h.dispatch(UiAction::Dialog {
+        id: cid,
+        choice: "cancel".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+    assert_eq!(
+        backend.transferencias.lock().expect("transferencias").len(),
+        1,
+        "cancelar no relanza"
+    );
+}
+
 /// Confirmada, la copia sale con el destino COMPUESTO en Rust: el directorio
 /// del hueco destino más el nombre de la entrada, byte a byte.
 #[tokio::test]

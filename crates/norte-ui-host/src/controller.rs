@@ -449,7 +449,7 @@ enum Mensaje {
     Hidratado(Box<Sondas>),
     /// Una Task recién encolada, con su progreso, su cancelación y los
     /// directorios que dejará distintos.
-    TaskNueva(Box<(crate::backend::HostTask, Vec<VPath>)>),
+    TaskNueva(Box<(crate::backend::HostTask, Vec<VPath>, Option<Reintento>)>),
     /// Encolarla falló. El usuario tiene que enterarse: pidió un borrado.
     /// Cómo pliega nombres la ubicación de un hueco (#268).
     Pliegue(u32, VPath, norte_encoding::FoldMode),
@@ -708,7 +708,7 @@ impl UiHost {
             tokio::spawn(async move {
                 while let Some(task) = ajenas.recv().await {
                     if buzon
-                        .send(Mensaje::TaskNueva(Box::new((task, Vec::new()))))
+                        .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
                         .await
                         .is_err()
                     {
@@ -905,8 +905,8 @@ async fn actor(
                 let _ = updates.send(estado.sesion_degradada(*d));
             }
             Mensaje::TaskNueva(task) => {
-                let (task, afectados) = *task;
-                for u in estado.registrar_task(task, afectados, &backend, &buzon) {
+                let (task, afectados, reintento) = *task;
+                for u in estado.registrar_task(task, afectados, reintento, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
@@ -1010,6 +1010,26 @@ fn kind_de(arbol: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId>
 
 /// El ahora, en milisegundos. Lo inyecta el proyector para que el formato de
 /// una fecha relativa («hace 3 días») no dependa de cuándo se serializó.
+/// La política que corresponde a cada salida del diálogo de colisión (#274).
+///
+/// `None` para `cancel` y para cualquier otra cosa: no elegir es una respuesta
+/// válida —la task fallida se queda como está— y una opción que el diálogo no
+/// ofreció no se interpreta.
+///
+/// Los ids son los del catálogo compartido de `dialog.*`, los mismos que ata
+/// el TUI: dos vocabularios para la misma pregunta serían dos sitios donde una
+/// tecla acaba haciendo otra cosa.
+fn politica_de_colision(choice: &str) -> Option<norte_proto::CollisionPolicy> {
+    use norte_proto::CollisionPolicy as P;
+    match choice {
+        "overwrite" => Some(P::Overwrite),
+        "newer" => Some(P::Newer),
+        "rename" => Some(P::RenameAuto),
+        "skip" => Some(P::Skip),
+        _ => None,
+    }
+}
+
 /// Manda el «sí» al daemon, y si no sale bien lo CUENTA con la frase que toca.
 ///
 /// Aparte porque el desenlace tiene tres formas distintas de salir mal y
@@ -1367,6 +1387,17 @@ enum Pendiente {
         /// `true` añade marcas, `false` las quita.
         marcar: bool,
     },
+    /// Volver a intentar una transferencia que CHOCÓ, con otra política
+    /// (#274).
+    ///
+    /// La pregunta no es si seguir: es CUÁL de las cuatro salidas, así que la
+    /// política sale del `choice` que el lector pulsó y no de aquí. Cancelar
+    /// es no elegir ninguna, y entonces la task fallida se queda como estaba —
+    /// que es lo que pasaba siempre antes de esto.
+    Reintentar {
+        /// Con qué se relanza.
+        con: Reintento,
+    },
     /// Deshacer TODO lo que hizo una sesión de agente (#276).
     DeshacerSesion {
         /// La clave OPACA con la que el core la resuelve, cruda.
@@ -1639,6 +1670,24 @@ struct Hallazgo {
 }
 
 /// Una task viva en el tablero.
+/// Con qué se puede volver a intentar una transferencia que CHOCÓ (#274).
+///
+/// La ventana manda siempre `CollisionPolicy::Fail`, que es el default
+/// seguro: sobrescribir o renombrar son decisiones del lector. Lo que faltaba
+/// era dónde tomarlas — una task fallida y ningún camino hacia delante— y para
+/// ofrecerlas hay que recordar QUÉ se pidió: el progreso de la task dice qué
+/// fichero va por dentro, no cuál era el origen ni el destino.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reintento {
+    /// El origen, tal cual se pidió.
+    from: VPath,
+    /// El destino EXACTO, con su nombre ya compuesto.
+    to: VPath,
+    /// Mover en vez de copiar: el reintento tiene que repetir el mismo verbo,
+    /// o un «sobrescribir» sobre una copia se convertiría en un movimiento.
+    mover: bool,
+}
+
 struct TaskViva {
     vista: TaskView,
     /// Cómo pedirle que pare. Cancelar dos veces no es un error.
@@ -1666,6 +1715,9 @@ struct TaskViva {
     /// Vacío = nada que refrescar (una búsqueda, una task ajena de la que
     /// solo se conoce el id).
     afectados: Vec<VPath>,
+    /// Con qué reintentar si CHOCA (#274). `None` en todo lo que no es una
+    /// transferencia: un borrado o un undo no tienen otra política que ofrecer.
+    reintento: Option<Reintento>,
 }
 
 /// La cuenta de UN lote de transferencias (#271).
@@ -3501,7 +3553,7 @@ impl Estado {
             let id = task.id;
             let cancel = Arc::clone(&task.cancel);
             let _ = buzon2
-                .send(Mensaje::TaskNueva(Box::new((task, Vec::new()))))
+                .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
                 .await;
             // Bautizada AQUÍ y no con el primer lote: puede no haber primer
             // lote —el core no manda lotes vacíos— y entonces la búsqueda se
@@ -5610,7 +5662,7 @@ impl Estado {
             match backend.mkdir(destino).await {
                 Ok(task) => {
                     let _ = buzon
-                        .send(Mensaje::TaskNueva(Box::new((task, vec![dir]))))
+                        .send(Mensaje::TaskNueva(Box::new((task, vec![dir], None))))
                         .await;
                 }
                 Err(e) => {
@@ -5680,7 +5732,7 @@ impl Estado {
                         ))))
                         .await;
                     let _ = buzon
-                        .send(Mensaje::TaskNueva(Box::new((task, afectados))))
+                        .send(Mensaje::TaskNueva(Box::new((task, afectados, None))))
                         .await;
                 }
                 Err(e) => {
@@ -6929,6 +6981,10 @@ impl Estado {
                 // Una transferencia comparte página con el borrado: las dos
                 // son «la pregunta que hay que responder antes de que algo
                 // cambie», y el corpus tiene UNA que habla de eso.
+                // La colisión tiene su PROPIA página en el corpus: sus teclas
+                // son otras (`dialog.overwrite`, `dialog.skip`…), y mandar al
+                // lector a la de confirmar le enseñaría las que no valen.
+                Some(Pendiente::Reintentar { .. }) => "dialog.collision",
                 Some(Pendiente::Borrar { .. } | Pendiente::Transferir { .. }) => "dialog.confirm",
                 Some(
                     Pendiente::Decidir { .. }
@@ -8374,7 +8430,7 @@ impl Estado {
                 Ok(task) => {
                     let id = task.id;
                     let _ = buzon2
-                        .send(Mensaje::TaskNueva(Box::new((task, Vec::new()))))
+                        .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
                         .await;
                     let _ = buzon2
                         .send(Mensaje::Fondo(Box::new(Fondo::SyncAplicando(epoca, id))))
@@ -8804,7 +8860,7 @@ impl Estado {
             let id = task.id;
             let cancel = Arc::clone(&task.cancel);
             let _ = buzon2
-                .send(Mensaje::TaskNueva(Box::new((task, Vec::new()))))
+                .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
                 .await;
             let _ = buzon2
                 .send(Mensaje::Fondo(Box::new(Fondo::PlanDeSyncVivo(epoca, id))))
@@ -9201,7 +9257,7 @@ impl Estado {
         let buzon = buzon.clone();
         tokio::spawn(async move {
             let mensaje = match backend.dir_size(paths).await {
-                Ok(task) => Mensaje::TaskNueva(Box::new((task, Vec::new()))),
+                Ok(task) => Mensaje::TaskNueva(Box::new((task, Vec::new(), None))),
                 Err(e) => Mensaje::TaskFallida(Box::new(e)),
             };
             let _ = buzon.send(mensaje).await;
@@ -9270,7 +9326,7 @@ impl Estado {
             let id = task.id;
             let cancel = Arc::clone(&task.cancel);
             let _ = buzon2
-                .send(Mensaje::TaskNueva(Box::new((task, Vec::new()))))
+                .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
                 .await;
             let _ = buzon2
                 .send(Mensaje::Fondo(Box::new(Fondo::ComparacionViva(epoca, id))))
@@ -10082,7 +10138,7 @@ impl Estado {
         let buzon2 = buzon.clone();
         tokio::spawn(async move {
             let mensaje = match backend2.rename_batch(dir, parejas, hash).await {
-                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados))),
+                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados, None))),
                 Err(e) => Mensaje::TaskFallida(Box::new(e)),
             };
             let _ = buzon2.send(mensaje).await;
@@ -11029,7 +11085,11 @@ impl Estado {
                 // si esa no llega, el desenlace es el mismo que se pidió.
                 lanzar_aprobacion(approval_id, backend, buzon);
             }
-            None => {}
+            // Una colisión no se contesta con «confirmar»: cada salida ES una
+            // política, y quien las traduce es `responder_dialogo`, que sabe
+            // cuál se pulsó. Llegar aquí sería una respuesta que este diálogo
+            // no ofreció, y esas no se interpretan.
+            Some(Pendiente::Reintentar { .. }) | None => {}
         }
         (rehusado, salidas)
     }
@@ -11112,6 +11172,14 @@ impl Estado {
             tokio::spawn(async move {
                 let _ = backend.policy_decide(approval_id, false).await;
             });
+        } else if let Some(Pendiente::Reintentar { con }) = &dialogo.al_confirmar {
+            // Las cuatro salidas de una colisión no son «confirmar» (#274):
+            // cada una ES una política distinta, y cuál se pulsó es la
+            // respuesta entera. `cancel` no traduce a ninguna y entonces no se
+            // relanza nada — la task fallida se queda como estaba.
+            if let Some(politica) = politica_de_colision(choice) {
+                Self::lanzar_reintento(con.clone(), politica, backend, buzon);
+            }
         }
         let cambio = ViewChange::Dialogs {
             dialogs: self.vistas_de_dialogos(),
@@ -11152,7 +11220,7 @@ impl Estado {
                 match backend.delete(path, mode).await {
                     Ok(task) => {
                         let _ = buzon
-                            .send(Mensaje::TaskNueva(Box::new((task, afectados))))
+                            .send(Mensaje::TaskNueva(Box::new((task, afectados, None))))
                             .await;
                     }
                     Err(e) => {
@@ -11277,7 +11345,7 @@ impl Estado {
                 .move_(from, to, norte_proto::CollisionPolicy::Fail)
                 .await
             {
-                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados))),
+                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados, None))),
                 Err(e) => Mensaje::TaskFallida(Box::new(e)),
             };
             let _ = buzon.send(mensaje).await;
@@ -11347,6 +11415,15 @@ impl Estado {
         // acota es cuántas peticiones hay volando a la vez.
         tokio::spawn(async move {
             for (from, to) in trabajos {
+                // El par ORIGINAL viaja con la task (#274): si esto choca, es
+                // lo único con lo que se puede volver a intentar con otra
+                // política. Recomponerlo desde el progreso no vale — dice qué
+                // fichero va por dentro, no qué se pidió.
+                let reintento = Reintento {
+                    from: from.clone(),
+                    to: to.clone(),
+                    mover,
+                };
                 let encolada = if mover {
                     backend
                         .move_(from, to, norte_proto::CollisionPolicy::Fail)
@@ -11357,7 +11434,9 @@ impl Estado {
                         .await
                 };
                 let mensaje = match encolada {
-                    Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados.clone()))),
+                    Ok(task) => {
+                        Mensaje::TaskNueva(Box::new((task, afectados.clone(), Some(reintento))))
+                    }
                     // A la CUENTA del lote, no a la barra: N rechazos eran N
                     // mensajes de los que solo sobrevivía el último (#271).
                     Err(e) => Mensaje::TaskDeLoteRechazada(Box::new(e)),
@@ -11403,10 +11482,67 @@ impl Estado {
 
     /// Mete una Task recién encolada en el tablero y deja su progreso
     /// bombeando hacia el actor.
+    /// Relanza la transferencia que chocó, con la política elegida (#274).
+    ///
+    /// Repite el MISMO verbo: un «sobrescribir» sobre una copia que se
+    /// convirtiera en un movimiento borraría el origen que nadie mandó tocar.
+    /// Y vuelve a viajar con su `Reintento`, porque el segundo intento puede
+    /// chocar otra vez —`Skip` y `RenameAuto` no, pero `Newer` sí— y entonces
+    /// hay que poder volver a preguntar.
+    fn lanzar_reintento(
+        con: Reintento,
+        politica: norte_proto::CollisionPolicy,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        // El destino cambia; el origen también deja de estar si es un
+        // movimiento. Se apuntan los dos padres, como en la transferencia
+        // original.
+        let mut afectados: Vec<VPath> = con.to.parent().into_iter().collect();
+        if con.mover
+            && let Some(padre) = con.from.parent()
+            && !afectados.contains(&padre)
+        {
+            afectados.push(padre);
+        }
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let encolada = if con.mover {
+                backend
+                    .move_(con.from.clone(), con.to.clone(), politica)
+                    .await
+            } else {
+                backend
+                    .copy(con.from.clone(), con.to.clone(), politica)
+                    .await
+            };
+            let mensaje = match encolada {
+                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados, Some(con)))),
+                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+            };
+            let _ = buzon.send(mensaje).await;
+        });
+    }
+
+    /// El reintento que ya tenía esta task, si la hay y es de esta época.
+    ///
+    /// Un reanuncio de la reconexión no sabe con qué se pidió la task, así que
+    /// sustituirlo por `None` dejaría sin salida justo a la colisión que el
+    /// lector encuentra al volver. La época importa: tras un relevo del daemon
+    /// los ids vuelven a empezar, y lo que había con ese número era otra cosa.
+    fn reintento_heredado(&self, id: u64) -> Option<Reintento> {
+        self.tasks
+            .get(&id)
+            .filter(|t| t.epoca == self.epoca_conexion)
+            .and_then(|t| t.reintento.clone())
+    }
+
     fn registrar_task(
         &mut self,
         task: crate::backend::HostTask,
         afectados: Vec<VPath>,
+        reintento: Option<Reintento>,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
@@ -11486,12 +11622,14 @@ impl Estado {
             .tasks
             .get(&id)
             .is_some_and(|t| t.informe_pedido && t.epoca == self.epoca_conexion);
+        let reintento = reintento.or_else(|| self.reintento_heredado(id));
         self.tasks.insert(
             id,
             TaskViva {
                 vista,
                 cancel: task.cancel,
                 afectados,
+                reintento,
                 informe_pedido,
                 epoca: self.epoca_conexion,
                 progreso: task.progress.clone(),
@@ -12070,6 +12208,7 @@ impl Estado {
             cambios.extend(self.cerrar_sincronizacion(p));
             self.pedir_informe_de_sync(p, backend, buzon);
             cambios.extend(self.decir_el_recuento(p));
+            cambios.extend(self.ofrecer_reintento(p));
         }
         vec![self.parche(cambios)]
     }
@@ -12094,6 +12233,106 @@ impl Estado {
     /// Solo con `Completed`: una cuenta cancelada o fallida no tiene total que
     /// dar, y pintar el parcial de una cancelación como si fuera la respuesta
     /// es el mismo error de arriba con otro nombre.
+    /// Una transferencia que CHOCÓ abre la pregunta que faltaba (#274).
+    ///
+    /// La ventana manda siempre `CollisionPolicy::Fail`, que es el default
+    /// seguro —sobrescribir o renombrar son decisiones del lector—, pero no
+    /// tenía dónde tomarlas: quedaba una task fallida en el tablero y ningún
+    /// camino hacia delante, mientras el TUI sí ofrece las cuatro salidas.
+    ///
+    /// Solo con un `Conflict` y solo si la task trae con qué reintentar: un
+    /// borrado o un undo no tienen otra política que ofrecer, y una task ajena
+    /// no es de esta ventana.
+    fn ofrecer_reintento(&mut self, p: &norte_proto::TaskProgress) -> Vec<ViewChange> {
+        if !matches!(
+            p.state,
+            norte_proto::TaskState::Failed {
+                error: norte_proto::Error::Conflict { .. }
+            }
+        ) {
+            return Vec::new();
+        }
+        let Some(con) = self
+            .tasks
+            .get(&p.task_id.get())
+            .and_then(|t| t.reintento.clone())
+        else {
+            return Vec::new();
+        };
+        // El destino, en su propio campo y enmascarado: es un nombre de
+        // fichero del otro extremo, y es LO que el lector tiene que mirar para
+        // decidir si sobrescribe.
+        let (destino, destino_hostil) =
+            norte_frontend::display_name(con.to.display_lossy().as_bytes());
+        let modal = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id: modal,
+            title_key: "modal-collision-title".to_owned(),
+            destination: Some(crate::dto::DialogLine {
+                text: clamp_display(destino),
+                hostile: destino_hostil,
+            }),
+            subject: None,
+            asker: None,
+            deadline: None,
+            deadline_at_ms: None,
+            body: vec![crate::dto::DialogLine {
+                text: clamp_display(norte_i18n::t_in(self.lang, "modal-collision-body")),
+                hostile: false,
+            }],
+            overflow_note: String::new(),
+            // Las MISMAS cuatro que el TUI, y en el mismo orden: es la tabla
+            // de `dialog.*` del catálogo compartido, no una lista inventada
+            // aquí.
+            choices: vec![
+                DialogChoice {
+                    id: "overwrite".to_owned(),
+                    label_key: "dialog-overwrite".to_owned(),
+                    // Sobrescribir DESTRUYE lo que hay en el destino.
+                    destructive: true,
+                },
+                DialogChoice {
+                    id: "newer".to_owned(),
+                    label_key: "dialog-newer".to_owned(),
+                    // También sobrescribe, solo que condicionado a la fecha.
+                    destructive: true,
+                },
+                DialogChoice {
+                    id: "rename".to_owned(),
+                    label_key: "dialog-rename".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "skip".to_owned(),
+                    label_key: "dialog-skip".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: None,
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id: modal,
+            vista,
+            input_crudo: String::new(),
+            // Se abrió SOLO —llega cuando la task termina, encima de lo que el
+            // lector estuviera haciendo—, así que la primera respuesta solo lo
+            // reconoce. Es la misma regla que una aprobación de agente, y aquí
+            // importa igual: la primera opción es «sobrescribir».
+            reconocido: false,
+            al_confirmar: Some(Pendiente::Reintentar { con }),
+        });
+        vec![ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        }]
+    }
+
     fn decir_el_recuento(&mut self, p: &norte_proto::TaskProgress) -> Vec<ViewChange> {
         if p.kind != norte_proto::TaskKind::DirSize
             || !matches!(p.state, norte_proto::TaskState::Completed)
