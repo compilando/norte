@@ -1763,7 +1763,18 @@ pub struct BannerSubjectView {
     pub scheme: String,
     /// Host, ya enmascarado y acotado.
     pub host: String,
-    /// Lo pintado difiere de lo que hay (en el esquema o en el host).
+    /// POR QUÉ está degradada, ya traducido (#279).
+    ///
+    /// Un motivo que este binario no conoce dice «motivo desconocido» y no
+    /// hereda la frase del que sí conoce: un aviso de seguridad no puede
+    /// afirmar una causa que nadie ha dicho.
+    pub reason: String,
+    /// El detalle humano del wire, enmascarado y acotado, y solo cuando el
+    /// motivo es desconocido — que es cuando el contrato del proto dice
+    /// apoyarse en él.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Lo pintado difiere de lo que hay (en el esquema, el host o el detalle).
     pub hostile: bool,
 }
 

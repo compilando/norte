@@ -37,6 +37,26 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A degradation reason nobody knows no longer reads as "plaintext FTP"**
+  (#279). `connection.degraded` carries a `reason` from a closed vocabulary
+  that the protocol says may *grow*, plus an optional human `detail` — and both
+  were ignored, so a newer daemon reporting a brand-new kind of degradation
+  produced the exact same sentence as `ftp-plaintext`: a security indicator
+  asserting a cause nobody had stated. Known reasons now get their own phrase,
+  an unknown one falls back to a generic "degraded session" and leans on
+  `detail`, which is what the protocol asks for. That `detail` is wire text, so
+  it goes through the same masking and truncation as the host, it says when it
+  was altered, and it only travels when the reason is unknown — with a known
+  reason it adds nothing and would be free-form text from the other end inside
+  a security indicator. Bridge **37**.
+
+- **The degradation ceiling can no longer be bypassed** (#279). The retained
+  degradations were a bare `VecDeque` with a free function that ordered it, so
+  the cap and the dedupe key only applied if the caller went through that
+  function and nothing stopped a direct `push_back` past both. They are now a
+  `DegradedSet` that owns its data: there is no way to write to it without
+  going through the rule.
+
 - **A resumed copy is published with the same mode as an uninterrupted one**
   (#299). The stable staging is created `0o600` and has to be: its name is
   predictable, so while it exists it must be ours and nobody else's (#297,

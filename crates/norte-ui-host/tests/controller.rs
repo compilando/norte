@@ -10340,6 +10340,46 @@ async fn una_sesion_en_claro_deja_aviso_persistente() {
     );
 }
 
+/// **Un motivo que este binario no conoce no se lee como «FTP en claro»**
+/// (#279). El vocabulario del wire puede crecer, y antes de esto un daemon más
+/// nuevo informando de una degradación NUEVA producía exactamente la misma
+/// frase: un aviso de seguridad afirmando una causa que nadie había dicho.
+#[tokio::test]
+async fn un_motivo_desconocido_no_se_pinta_como_el_conocido() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.degradadas.lock().expect("degradadas") = Some(rx);
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    tx.send(norte_proto::methods::ConnectionDegraded {
+        scheme: "sftp".to_owned(),
+        host: "archivo.example".to_owned(),
+        reason: "algo-que-no-existia".to_owned(),
+        detail: Some("el servidor negoció un perfil antiguo".to_owned()),
+    })
+    .expect("el host escucha");
+
+    let banners = siguientes_banners(&mut sub).await;
+    let subject = banners
+        .iter()
+        .find_map(|b| b.subject.as_ref())
+        .expect("el aviso nombra la conexión");
+    assert_eq!(
+        subject.reason,
+        norte_i18n::t_in(norte_i18n::Lang::Es, "degraded-reason-unknown"),
+        "un motivo desconocido lo dice: {subject:?}"
+    );
+    assert_ne!(
+        subject.reason,
+        norte_i18n::t_in(norte_i18n::Lang::Es, "degraded-reason-ftp-plaintext"),
+    );
+    assert_eq!(
+        subject.detail.as_deref(),
+        Some("el servidor negoció un perfil antiguo"),
+        "y se apoya en `detail`, que es lo que el proto pide"
+    );
+}
+
 /// El daemon que avisa de que se PARA lo dice, y lo dice de forma persistente:
 /// «reconectando…» sobre un daemon que no vuelve es una espera falsa.
 #[tokio::test]

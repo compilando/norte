@@ -1858,7 +1858,7 @@ struct Estado {
     conexion: ConnectionView,
     /// Las sesiones de provider que viajan sin cifrar (#44), acotadas por el
     /// módulo compartido.
-    degradadas: std::collections::VecDeque<norte_proto::methods::ConnectionDegraded>,
+    degradadas: norte_frontend::banners::DegradedSet,
     /// Lo que el daemon dijo de sí mismo antes de irse: relevo o parada.
     /// `None` = no ha dicho nada, o ya volvió.
     aviso_de_daemon: Option<&'static str>,
@@ -2138,7 +2138,7 @@ impl Estado {
             },
             status: StatusView::default(),
             conexion: ConnectionView::Connected,
-            degradadas: std::collections::VecDeque::new(),
+            degradadas: norte_frontend::banners::DegradedSet::default(),
             epoca_conexion: 0,
             semantica_en_vuelo: None,
             comparacion: None,
@@ -6717,7 +6717,7 @@ impl Estado {
         &mut self,
         d: norte_proto::methods::ConnectionDegraded,
     ) -> BridgeEnvelope<UiUpdate> {
-        norte_frontend::banners::note_degraded(&mut self.degradadas, d);
+        self.degradadas.note(d);
         let cambio = self.cambio_de_banners();
         self.parche(vec![cambio])
     }
@@ -6741,8 +6741,7 @@ impl Estado {
         if let Some(clave) = self.aviso_de_daemon {
             banners.push(frase(clave));
         }
-        if let Some(aviso) = norte_frontend::banners::connection_banner(self.lang, &self.degradadas)
-        {
+        if let Some(aviso) = self.degradadas.banner(self.lang) {
             // La conexión va en su propio campo, jamás dentro de la frase:
             // ver el rustdoc de `connection_banner`.
             banners.push(crate::dto::BannerView {
@@ -6750,6 +6749,8 @@ impl Estado {
                 subject: Some(crate::dto::BannerSubjectView {
                     scheme: clamp_display(aviso.scheme),
                     host: clamp_display(aviso.host),
+                    reason: clamp_display(aviso.reason),
+                    detail: aviso.detail.map(clamp_display),
                     hostile: aviso.hostile,
                 }),
             });

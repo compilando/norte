@@ -13,7 +13,7 @@ impl App {
     /// gráfica tiene el mismo indicador, y dos copias de un aviso de
     /// SEGURIDAD son dos sitios donde el enmascarado se olvida.
     pub fn note_degraded(&mut self, d: norte_proto::methods::ConnectionDegraded) {
-        norte_frontend::banners::note_degraded(&mut self.degraded, d);
+        self.degraded.note(d);
     }
 
     /// The degradation reported for `scheme`, if any.
@@ -23,7 +23,7 @@ impl App {
     /// wire vocabulary means "unencrypted", not "unusable".
     #[must_use]
     pub fn degraded_for(&self, scheme: &str) -> Option<&norte_proto::methods::ConnectionDegraded> {
-        self.degraded.iter().rev().find(|d| d.scheme == scheme)
+        self.degraded.for_scheme(scheme)
     }
 
     /// El aviso persistente de conexiones en claro, o `None` si no hay
@@ -33,20 +33,31 @@ impl App {
     /// qué eso es una decisión y no un olvido.
     #[must_use]
     pub fn connection_banner(&self) -> Option<String> {
-        let b = norte_frontend::banners::connection_banner(norte_i18n::active(), &self.degraded)?;
+        let b = self.degraded.banner(norte_i18n::active())?;
         // La barra del TUI es UNA línea de texto, así que aquí sí hay que
         // juntar la frase y la conexión — pero no como una URL: `scheme://host`
         // convierte a `banco.example@malo.example` en algo que se lee como
         // userinfo de un host legítimo. Etiquetado y separado, que es lo que
         // el resto de los modales de este frontend ya hacen.
-        Some(norte_i18n::ta(
+        //
+        // El motivo va también (#279): sin él, un motivo que este binario no
+        // conoce se leía exactamente igual que «FTP en claro».
+        let linea = norte_i18n::ta(
             "status-degraded-subject",
             &[
                 ("banner", &b.text),
                 ("scheme", &b.scheme),
                 ("host", &b.host),
+                ("reason", &b.reason),
             ],
-        ))
+        );
+        // Y el detalle detrás, cuando lo hay — o sea solo con un motivo
+        // desconocido, que es cuando el contrato del proto dice apoyarse en
+        // él. Va enmascarado y acotado desde el módulo compartido.
+        Some(match &b.detail {
+            Some(d) => format!("{linea}: {d}"),
+            None => linea,
+        })
     }
 
     /// Anota que esta sesión no está registrando sus mutaciones (#177).
