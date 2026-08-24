@@ -156,6 +156,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.toggle-hidden",
     "pane.names-encoding",
     "pane.properties",
+    "pane.dir-size",
     "pane.mirror",
     "pane.pull",
     "pane.swap",
@@ -404,6 +405,13 @@ pub enum Efecto {
     /// NO muta: camina los dos árboles y contesta. Es una tarea larga y
     /// cancelable, y cancelarla es su único freno.
     Comparar,
+    /// Cuenta lo que ocupa lo MARCADO —o lo que hay bajo el cursor— (#139).
+    ///
+    /// No está en [`MUTAN`] por lo mismo que [`Efecto::Comparar`]: camina un
+    /// árbol y contesta, sin escribir ni sacar nada del proceso que listar no
+    /// sacara ya. Es larga y cancelable, y el tablero la enseña como
+    /// `dir-size`.
+    TamanoDeDirectorio,
     /// Pide una búsqueda SEMÁNTICA contra el índice: abre el prompt de la
     /// consulta.
     ///
@@ -586,6 +594,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.ai-rename" => Efecto::RenameIa,
         "pane.semantic-search" => Efecto::BuscarSemantica,
         "pane.compare-dirs" => Efecto::Comparar,
+        "pane.dir-size" => Efecto::TamanoDeDirectorio,
         "pane.sync-dirs" => Efecto::Sincronizar,
         // #138: la misma semántica que un click en la cabecera, y sobre el
         // hueco con el FOCO — el orden es de un listado, como el cursor.

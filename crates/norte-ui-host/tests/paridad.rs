@@ -54,7 +54,6 @@ const APLAZADOS: &[(&str, u32)] = &[
     ("dialog.up", 287),
     ("pane.combine-files", 290),
     ("pane.connect", 290),
-    ("pane.dir-size", 290),
     ("pane.disconnect", 290),
     ("pane.edit", 290),
     ("pane.edit-new", 290),

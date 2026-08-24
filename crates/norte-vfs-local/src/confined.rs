@@ -1306,15 +1306,22 @@ impl norte_vfs::ByteSink for ConfinedSink {
         let dir = self.dir.take().ok_or(Error::Io { retryable: false })?;
         let staging = self.staging.clone();
         let final_name = self.final_name.clone();
+        let estable = self.estable;
         let res = crate::provider::blocking(move || {
             file.sync_all().map_err(|e| crate::provider::map_io(&e))?;
-            drop(file);
+            // El descriptor sigue vivo durante el `publish` a propósito
+            // (#299): el modo se repone DESPUÉS de publicar y sobre el fd.
+            // Relajarlo antes dejaría legible por otros un staging con el
+            // nombre más predecible del directorio.
             let out = publish(dir.as_raw_fd(), &staging, &final_name);
             if out.is_err() {
                 // Un publish que no publica no deja el staging por ahí: es la
                 // misma promesa del sink de siempre.
                 let _ = discard(dir.as_raw_fd(), &staging);
+            } else {
+                crate::provider::reponer_modo_publicado(&file, estable);
             }
+            drop(file);
             out
         })
         .await;

@@ -487,7 +487,7 @@ pub struct App {
     ///
     /// Private: read through [`Self::degraded_for`] /
     /// [`Self::connection_banner`], written through [`Self::note_degraded`].
-    degraded: std::collections::VecDeque<norte_proto::methods::ConnectionDegraded>,
+    degraded: norte_frontend::banners::DegradedSet,
     /// #177: esta sesión NO está registrando sus mutaciones en el journal.
     ///
     /// El brazo embebido abre el journal del directorio de estado en su primera
@@ -767,7 +767,7 @@ impl App {
             extensions: None,
             lua_pending_trust: None,
             lua_status: None,
-            degraded: std::collections::VecDeque::new(),
+            degraded: norte_frontend::banners::DegradedSet::default(),
             no_journal: None,
             history: crate::panel::Histories::new(),
             hotlist: Vec::new(),

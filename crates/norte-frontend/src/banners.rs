@@ -25,31 +25,75 @@ const HOST_MAX: usize = 48;
 /// existe porque el wire puede mandar cualquier cosa.
 const SCHEME_MAX: usize = 16;
 
-/// Anota una degradación en la colección, UNA por SESIÓN.
+/// Cuántas celdas se le dan al detalle de un motivo DESCONOCIDO.
 ///
-/// Y una sesión es `(scheme, host)`, no `scheme`. Deduplicar por el scheme a
-/// secas era la regla vieja del TUI, con la justificación de que «el viejo
-/// hablaba de la misma sesión»: con dos FTP a hosts distintos eso es falso, y
-/// el segundo aviso BORRABA el primero dejando el contador de «y otras N» en
-/// cero. El que desaparecía era justo el host que el lector no estaba
-/// mirando, y «¿cuál?» es la única pregunta que este indicador contesta.
+/// Corto a propósito: es texto libre del wire, sirve para orientar y no para
+/// decidir, y lo que decide —el scheme y el host— va en su propio campo.
+const DETAIL_MAX: usize = 64;
+
+/// Las degradaciones retenidas, con su regla dentro.
 ///
-/// La identidad se decide plegando a minúsculas ASCII: `FTP` y `ftp` del wire
-/// son la misma sesión. Los BYTES que se pintan son los del informe último —
-/// plegar sirve para decidir, no para reescribir lo que se enseña.
-///
-/// Pasado [`DEGRADED_MAX`] se cae el más antiguo.
-pub fn note_degraded(
-    degraded: &mut std::collections::VecDeque<ConnectionDegraded>,
-    d: ConnectionDegraded,
-) {
-    let clave =
-        |x: &ConnectionDegraded| (x.scheme.to_ascii_lowercase(), x.host.to_ascii_lowercase());
-    let nueva = clave(&d);
-    degraded.retain(|old| clave(old) != nueva);
-    degraded.push_back(d);
-    while degraded.len() > DEGRADED_MAX {
-        degraded.pop_front();
+/// **El tipo existe para que la regla no sea opcional.** Antes esto era una
+/// `VecDeque` pelada y una función libre que la ordenaba: el techo y la clave
+/// de dedupe solo se aplicaban si quien llamaba pasaba por ahí, y nada impedía
+/// un `push_back` directo que se saltara los dos. Con los datos dentro, no hay
+/// forma de escribir en la colección sin pasar por [`DegradedSet::note`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DegradedSet(std::collections::VecDeque<ConnectionDegraded>);
+
+impl DegradedSet {
+    /// Anota una degradación, UNA por SESIÓN.
+    ///
+    /// Y una sesión es `(scheme, host)`, no `scheme`. Deduplicar por el scheme
+    /// a secas era la regla vieja del TUI, con la justificación de que «el
+    /// viejo hablaba de la misma sesión»: con dos FTP a hosts distintos eso es
+    /// falso, y el segundo aviso BORRABA el primero dejando el contador de «y
+    /// otras N» en cero. El que desaparecía era justo el host que el lector no
+    /// estaba mirando, y «¿cuál?» es la única pregunta que este indicador
+    /// contesta.
+    ///
+    /// La identidad se decide plegando a minúsculas ASCII: `FTP` y `ftp` del
+    /// wire son la misma sesión. Los BYTES que se pintan son los del informe
+    /// último — plegar sirve para decidir, no para reescribir lo que se
+    /// enseña.
+    ///
+    /// Pasado [`DEGRADED_MAX`] se cae el más antiguo.
+    pub fn note(&mut self, d: ConnectionDegraded) {
+        let clave =
+            |x: &ConnectionDegraded| (x.scheme.to_ascii_lowercase(), x.host.to_ascii_lowercase());
+        let nueva = clave(&d);
+        self.0.retain(|old| clave(old) != nueva);
+        self.0.push_back(d);
+        while self.0.len() > DEGRADED_MAX {
+            self.0.pop_front();
+        }
+    }
+
+    /// La degradación informada para `scheme`, si la hay: la más reciente.
+    ///
+    /// No veta nada por sí sola — el vocabulario del wire dice «sin cifrar»,
+    /// no «inservible».
+    #[must_use]
+    pub fn for_scheme(&self, scheme: &str) -> Option<&ConnectionDegraded> {
+        self.0.iter().rev().find(|d| d.scheme == scheme)
+    }
+
+    /// Cuántas sesiones degradadas se retienen.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// ¿Ninguna?
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// El aviso persistente, o `None` si no hay ninguna degradación.
+    #[must_use]
+    pub fn banner(&self, lang: norte_i18n::Lang) -> Option<DegradedBanner> {
+        connection_banner(lang, &self.0)
     }
 }
 
@@ -62,8 +106,39 @@ pub struct DegradedBanner {
     pub scheme: String,
     /// El host, enmascarado y acortado.
     pub host: String,
-    /// Lo pintado difiere de lo que hay, en el esquema o en el host.
+    /// POR QUÉ está degradada, ya traducido (#279).
+    ///
+    /// El vocabulario del wire es cerrado y comparable por igualdad, y puede
+    /// CRECER de forma aditiva. Un motivo que este binario no conoce cae en la
+    /// frase genérica —«sesión degradada»— en vez de heredar la de
+    /// `ftp-plaintext`, que es lo que pasaba antes: un daemon más nuevo
+    /// informando de una degradación NUEVA se leía como «FTP en claro», o sea
+    /// un aviso de seguridad afirmando algo que nadie había dicho.
+    pub reason: String,
+    /// El detalle humano del wire, enmascarado y acotado, y SOLO cuando el
+    /// motivo es desconocido.
+    ///
+    /// Es lo que el contrato del proto pide: ante un `reason` que no se
+    /// conoce, degradar «apoyándose en `detail`». Con un motivo conocido no
+    /// aporta nada y sería texto libre del otro extremo dentro de un indicador
+    /// de seguridad, así que no viaja.
+    pub detail: Option<String>,
+    /// Lo pintado difiere de lo que hay, en el esquema, el host o el detalle.
     pub hostile: bool,
+}
+
+/// La clave i18n del motivo, o `None` si este binario no lo conoce.
+///
+/// Un `match` sobre el vocabulario CERRADO del wire y no un
+/// `format!("degraded-reason-{reason}")`: componer la clave con la cadena del
+/// otro extremo deja que un daemon elija qué mensaje del catálogo se pinta, y
+/// un motivo inventado saldría como su propio identificador crudo en la barra.
+fn clave_de_motivo(reason: &str) -> Option<&'static str> {
+    match reason {
+        "ftp-plaintext" => Some("degraded-reason-ftp-plaintext"),
+        "tls-auth-rejected" => Some("degraded-reason-tls-auth-rejected"),
+        _ => None,
+    }
 }
 
 /// Compone el aviso: la frase por un lado y la conexión por otro.
@@ -108,11 +183,25 @@ pub fn connection_banner(
             &[("n", &others.to_string())],
         )
     };
+    // El MOTIVO de la que se nombra (#279). Un motivo desconocido no hereda
+    // la frase de `ftp-plaintext`: cae en la genérica y se apoya en `detail`,
+    // que es lo que el contrato del proto pide.
+    let conocido = clave_de_motivo(&last.reason);
+    let reason = norte_i18n::t_in(lang, conocido.unwrap_or("degraded-reason-unknown"));
+    let (detail, detail_hostil) = match (conocido, last.detail.as_deref()) {
+        (None, Some(d)) if !d.is_empty() => {
+            let (pintable, hostil) = crate::display_name(d.as_bytes());
+            (Some(crate::middle_ellipsis(&pintable, DETAIL_MAX)), hostil)
+        }
+        _ => (None, false),
+    };
     Some(DegradedBanner {
         text,
         scheme,
         host,
-        hostile: scheme_hostil || host_hostil,
+        reason,
+        detail,
+        hostile: scheme_hostil || host_hostil || detail_hostil,
     })
 }
 
@@ -187,11 +276,11 @@ mod tests {
     /// último informe.
     #[test]
     fn la_misma_sesion_repetida_reemplaza_su_entrada() {
-        let mut d = std::collections::VecDeque::new();
-        note_degraded(&mut d, degradacion("ftp", "uno.example"));
-        note_degraded(&mut d, degradacion("FTP", "UNO.example"));
+        let mut d = DegradedSet::default();
+        d.note(degradacion("ftp", "uno.example"));
+        d.note(degradacion("FTP", "UNO.example"));
         assert_eq!(d.len(), 1, "la caja del wire no hace dos sesiones");
-        let aviso = connection_banner(norte_i18n::active(), &d).expect("hay aviso");
+        let aviso = d.banner(norte_i18n::active()).expect("hay aviso");
         assert_eq!(aviso.host, "UNO.example", "pinta los bytes del último");
     }
 
@@ -200,11 +289,11 @@ mod tests {
     /// está mirando.
     #[test]
     fn dos_hosts_del_mismo_scheme_no_se_pisan() {
-        let mut d = std::collections::VecDeque::new();
-        note_degraded(&mut d, degradacion("ftp", "banco.example"));
-        note_degraded(&mut d, degradacion("ftp", "otro.example"));
+        let mut d = DegradedSet::default();
+        d.note(degradacion("ftp", "banco.example"));
+        d.note(degradacion("ftp", "otro.example"));
         assert_eq!(d.len(), 2);
-        let aviso = connection_banner(norte_i18n::active(), &d).expect("hay aviso");
+        let aviso = d.banner(norte_i18n::active()).expect("hay aviso");
         assert_eq!(aviso.host, "otro.example");
         assert!(aviso.text.contains('1'), "y cuenta la otra: {}", aviso.text);
     }
@@ -212,10 +301,10 @@ mod tests {
     /// Con varias, se nombra una Y se dice cuántas más hay.
     #[test]
     fn con_varias_se_nombra_una_y_se_cuentan_las_otras() {
-        let mut d = std::collections::VecDeque::new();
-        note_degraded(&mut d, degradacion("ftp", "uno.example"));
-        note_degraded(&mut d, degradacion("sftp", "dos.example"));
-        let aviso = connection_banner(norte_i18n::active(), &d).expect("hay aviso");
+        let mut d = DegradedSet::default();
+        d.note(degradacion("ftp", "uno.example"));
+        d.note(degradacion("sftp", "dos.example"));
+        let aviso = d.banner(norte_i18n::active()).expect("hay aviso");
         assert_eq!(aviso.host, "dos.example");
         assert!(aviso.text.contains('1'), "{}", aviso.text);
     }
@@ -224,9 +313,9 @@ mod tests {
     /// cadena del wire, y esto es un indicador de seguridad.
     #[test]
     fn un_host_hostil_se_enmascara() {
-        let mut d = std::collections::VecDeque::new();
-        note_degraded(&mut d, degradacion("ftp", "ma\u{7}lo\u{202e}.example"));
-        let aviso = connection_banner(norte_i18n::active(), &d).expect("hay aviso");
+        let mut d = DegradedSet::default();
+        d.note(degradacion("ftp", "ma\u{7}lo\u{202e}.example"));
+        let aviso = d.banner(norte_i18n::active()).expect("hay aviso");
         assert!(
             !aviso.host.contains('\u{7}') && !aviso.host.contains('\u{202e}'),
             "{aviso:?}"
@@ -238,7 +327,84 @@ mod tests {
     #[test]
     fn sin_degradaciones_no_hay_aviso() {
         assert!(
-            connection_banner(norte_i18n::active(), &std::collections::VecDeque::new()).is_none()
+            DegradedSet::default()
+                .banner(norte_i18n::active())
+                .is_none()
+        );
+    }
+
+    /// **Un motivo DESCONOCIDO no hereda la frase de `ftp-plaintext`** (#279).
+    ///
+    /// El vocabulario del wire puede crecer, y antes de esto un daemon más
+    /// nuevo informando de una degradación nueva se leía como «FTP en claro»:
+    /// un indicador de seguridad afirmando algo que nadie había dicho.
+    #[test]
+    fn un_motivo_desconocido_cae_en_la_frase_generica() {
+        let mut d = DegradedSet::default();
+        let mut nueva = degradacion("sftp", "uno.example");
+        nueva.reason = "quantum-downgrade".to_owned();
+        nueva.detail = Some("el servidor negoció un perfil antiguo".to_owned());
+        d.note(nueva);
+        let aviso = d.banner(norte_i18n::Lang::Es).expect("hay aviso");
+
+        let conocido = {
+            let mut d = DegradedSet::default();
+            d.note(degradacion("ftp", "uno.example"));
+            d.banner(norte_i18n::Lang::Es).expect("hay aviso").reason
+        };
+        assert_ne!(aviso.reason, conocido, "no puede leerse como FTP en claro");
+        assert_eq!(
+            aviso.detail.as_deref(),
+            Some("el servidor negoció un perfil antiguo"),
+            "y se apoya en `detail`, que es lo que el proto pide"
+        );
+    }
+
+    /// Con un motivo CONOCIDO el detalle no viaja: no aporta nada y sería
+    /// texto libre del otro extremo dentro de un indicador de seguridad.
+    #[test]
+    fn un_motivo_conocido_no_arrastra_el_detalle() {
+        let mut d = DegradedSet::default();
+        let mut conocida = degradacion("ftp", "uno.example");
+        conocida.detail = Some("cualquier cosa".to_owned());
+        d.note(conocida);
+        let aviso = d.banner(norte_i18n::Lang::Es).expect("hay aviso");
+        assert_eq!(aviso.detail, None);
+    }
+
+    /// El detalle es una cadena del WIRE, así que pasa por el mismo
+    /// enmascarado que el host — y cuando se altera, se dice.
+    #[test]
+    fn el_detalle_de_un_motivo_desconocido_se_enmascara() {
+        let mut d = DegradedSet::default();
+        let mut nueva = degradacion("sftp", "uno.example");
+        nueva.reason = "nuevo".to_owned();
+        nueva.detail = Some("ma\u{7}lo\u{202e}".to_owned());
+        d.note(nueva);
+        let aviso = d.banner(norte_i18n::Lang::Es).expect("hay aviso");
+        let detalle = aviso.detail.clone().expect("hay detalle");
+        assert!(
+            !detalle.contains('\u{7}') && !detalle.contains('\u{202e}'),
+            "{aviso:?}"
+        );
+        assert!(aviso.hostile, "y se dice: {aviso:?}");
+    }
+
+    /// El techo se aplica SIEMPRE, porque ya no hay forma de escribir en la
+    /// colección sin pasar por `note`: era el agujero del punto 4 de #279.
+    #[test]
+    fn el_techo_no_se_puede_esquivar() {
+        let mut d = DegradedSet::default();
+        for i in 0..(DEGRADED_MAX + 10) {
+            d.note(degradacion("ftp", &format!("h{i}.example")));
+        }
+        assert_eq!(d.len(), DEGRADED_MAX);
+        let aviso = d.banner(norte_i18n::active()).expect("hay aviso");
+        let ultimo = DEGRADED_MAX + 9;
+        assert_eq!(
+            aviso.host,
+            format!("h{ultimo}.example"),
+            "y el último sigue"
         );
     }
 }

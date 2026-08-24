@@ -329,7 +329,10 @@ cli-inline-password = la URL no debe llevar el password inline (user:pass@…); 
 cli-connection-degraded = ⚠ { $scheme }://{ $host }: sesión SIN cifrar (el servidor rechazó AUTH TLS, tls="allow"). Datos y credenciales viajan en claro.
 status-connection-degraded = ⚠ sesión SIN cifrar
 status-connections-degraded = ⚠ sesión SIN cifrar (y otras { $n })
-status-degraded-subject = { $banner } — esquema { $scheme }, host { $host }
+status-degraded-subject = { $banner } — esquema { $scheme }, host { $host } ({ $reason })
+degraded-reason-ftp-plaintext = FTP sin cifrado
+degraded-reason-tls-auth-rejected = el servidor rechazó TLS
+degraded-reason-unknown = motivo desconocido
 status-archive-skipped = ⚠ { $n } entradas omitidas (nombres hostiles/límites)
 status-names-encoding = nombres: { $enc }
 status-hidden = { $n } ocultas

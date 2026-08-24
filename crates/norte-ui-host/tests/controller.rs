@@ -1973,6 +1973,151 @@ async fn un_resync_no_se_come_las_tasks_vivas() {
     assert_eq!(foto.tasks, vivas, "el snapshot lleva el tablero entero");
 }
 
+/// Espera a que el falso reciba un lote de `dir_size` (el brazo lo lanza en
+/// una tarea aparte, así que no está listo al volver del dispatch).
+async fn siguiente_recuento(falso: &Falso) -> Vec<VPath> {
+    for _ in 0..200 {
+        if let Some(lote) = falso.recuentos.lock().expect("recuentos").first() {
+            return lote.clone();
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("nadie pidió contar");
+}
+
+/// El mensaje de la barra tras un desenlace, reintentando: el progreso viaja
+/// por su propio canal y el parche puede tardar un tick en salir.
+async fn siguiente_mensaje_de_estado(
+    h: &UiHost,
+    sub: &mut norte_ui_host::controller::UiSubscription,
+) -> String {
+    for _ in 0..40 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(sub).await;
+        if let Some(m) = foto.status.message.clone() {
+            return m;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("la barra no dijo nada");
+}
+
+/// `pane.dir-size` cuenta lo MARCADO, y en UNA sola Task (#139, #290).
+///
+/// Una Task por marca obligaría a quien pregunta a sumar los bytes y los
+/// ilegibles por su cuenta, y esos dos no se suman igual.
+#[tokio::test]
+async fn contar_el_tamano_manda_las_marcas_en_un_solo_lote() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let epoca = listado(&snap).generation;
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::MarkRange {
+        slot_id: 1,
+        from: RowKey(1),
+        to: RowKey(2),
+        generation: epoca,
+    })
+    .await
+    .expect("host vivo");
+    let _ = sub.recv().await.expect("host vivo");
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.dir-size").await;
+
+    let lote = siguiente_recuento(&backend).await;
+    assert_eq!(lote.len(), 2, "las dos marcas, en un solo lote: {lote:?}");
+    assert_eq!(
+        backend.recuentos.lock().expect("recuentos").len(),
+        1,
+        "y una sola Task"
+    );
+}
+
+/// **El total de un recuento se DICE.** `fs.dir_size` no publica nada: su
+/// resultado es su progreso terminal, así que sin esto la ventana lanzaría la
+/// cuenta, la vería terminar y no diría jamás cuánto ocupaba.
+#[tokio::test]
+async fn el_total_de_un_recuento_llega_a_la_barra() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "pane.dir-size").await;
+    let _ = siguiente_recuento(&backend).await;
+
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| {
+        p.state = norte_proto::TaskState::Completed;
+        p.bytes_done = 2048;
+        p.entries_done = 3;
+    });
+
+    let mensaje = siguiente_mensaje_de_estado(&h, &mut sub).await;
+    assert!(
+        mensaje.contains('3'),
+        "el total dice cuántas entradas: {mensaje}"
+    );
+}
+
+/// Y lo que NO se pudo leer cambia la frase: un recuento sirve para decidir si
+/// algo CABE, así que un total redondo sin haber podido contarlo entero es una
+/// respuesta equivocada, no una incompleta.
+#[tokio::test]
+async fn un_recuento_con_ilegibles_no_da_el_total_a_secas() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "pane.dir-size").await;
+    let _ = siguiente_recuento(&backend).await;
+
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| {
+        p.state = norte_proto::TaskState::Completed;
+        p.bytes_done = 2048;
+        p.entries_done = 3;
+        p.unreadable = Some(2);
+    });
+
+    let mensaje = siguiente_mensaje_de_estado(&h, &mut sub).await;
+    assert!(
+        mensaje.contains('2'),
+        "tiene que decir cuántas no pudo leer: {mensaje}"
+    );
+    assert_ne!(
+        mensaje,
+        norte_i18n::ta_in(
+            norte_i18n::Lang::Es,
+            "msg-dir-size",
+            &[("size", "2,0 KB"), ("count", "3")]
+        ),
+        "y no puede ser la frase del total redondo"
+    );
+}
+
+/// Sin marcas se cuenta lo que hay bajo el CURSOR: es la misma fuente de
+/// «sobre qué opera esto» que usa una transferencia, y no un segundo respaldo
+/// que se pueda separar del primero.
+#[tokio::test]
+async fn contar_el_tamano_sin_marcas_usa_el_cursor() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.dir-size").await;
+
+    let lote = siguiente_recuento(&backend).await;
+    assert_eq!(lote.len(), 1, "solo el del cursor: {lote:?}");
+}
+
 /// Un barrido con el ratón marca el rango entero de UNA vez, con la regla
 /// compartida: qué entra en el rango no lo decide quien pinta.
 #[tokio::test]
@@ -10192,6 +10337,46 @@ async fn una_sesion_en_claro_deja_aviso_persistente() {
             .as_ref()
             .is_some_and(|s| s.host == "archivo.example")),
         "el aviso nombra la conexión, en su propio campo: {banners:?}"
+    );
+}
+
+/// **Un motivo que este binario no conoce no se lee como «FTP en claro»**
+/// (#279). El vocabulario del wire puede crecer, y antes de esto un daemon más
+/// nuevo informando de una degradación NUEVA producía exactamente la misma
+/// frase: un aviso de seguridad afirmando una causa que nadie había dicho.
+#[tokio::test]
+async fn un_motivo_desconocido_no_se_pinta_como_el_conocido() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.degradadas.lock().expect("degradadas") = Some(rx);
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    tx.send(norte_proto::methods::ConnectionDegraded {
+        scheme: "sftp".to_owned(),
+        host: "archivo.example".to_owned(),
+        reason: "algo-que-no-existia".to_owned(),
+        detail: Some("el servidor negoció un perfil antiguo".to_owned()),
+    })
+    .expect("el host escucha");
+
+    let banners = siguientes_banners(&mut sub).await;
+    let subject = banners
+        .iter()
+        .find_map(|b| b.subject.as_ref())
+        .expect("el aviso nombra la conexión");
+    assert_eq!(
+        subject.reason,
+        norte_i18n::t_in(norte_i18n::Lang::Es, "degraded-reason-unknown"),
+        "un motivo desconocido lo dice: {subject:?}"
+    );
+    assert_ne!(
+        subject.reason,
+        norte_i18n::t_in(norte_i18n::Lang::Es, "degraded-reason-ftp-plaintext"),
+    );
+    assert_eq!(
+        subject.detail.as_deref(),
+        Some("el servidor negoció un perfil antiguo"),
+        "y se apoya en `detail`, que es lo que el proto pide"
     );
 }
 

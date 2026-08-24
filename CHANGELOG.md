@@ -24,7 +24,56 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **The window can count how much something takes up** (#139, #290).
+  `pane.dir-size` counts what is marked — or what sits under the cursor — as a
+  single Task for the whole batch, because counting each entry separately would
+  make the caller add up the bytes *and* the unreadable ones, and those two do
+  not add up the same way. The total is what that Task produces: `fs.dir_size`
+  publishes nothing and mutates nothing, its result *is* its terminal progress,
+  so the window says it in the status bar when the Task ends. A count with
+  unreadable entries inside gets a different sentence — a count is used to
+  decide whether something *fits*, so giving a round total without having been
+  able to count it whole is a wrong answer, not an incomplete one.
+
 ### Fixed
+
+- **A degradation reason nobody knows no longer reads as "plaintext FTP"**
+  (#279). `connection.degraded` carries a `reason` from a closed vocabulary
+  that the protocol says may *grow*, plus an optional human `detail` — and both
+  were ignored, so a newer daemon reporting a brand-new kind of degradation
+  produced the exact same sentence as `ftp-plaintext`: a security indicator
+  asserting a cause nobody had stated. Known reasons now get their own phrase,
+  an unknown one falls back to a generic "degraded session" and leans on
+  `detail`, which is what the protocol asks for. That `detail` is wire text, so
+  it goes through the same masking and truncation as the host, it says when it
+  was altered, and it only travels when the reason is unknown — with a known
+  reason it adds nothing and would be free-form text from the other end inside
+  a security indicator. Bridge **37**.
+
+- **The degradation ceiling can no longer be bypassed** (#279). The retained
+  degradations were a bare `VecDeque` with a free function that ordered it, so
+  the cap and the dedupe key only applied if the caller went through that
+  function and nothing stopped a direct `push_back` past both. They are now a
+  `DegradedSet` that owns its data: there is no way to write to it without
+  going through the rule.
+
+- **A resumed copy is published with the same mode as an uninterrupted one**
+  (#299). The stable staging is created `0o600` and has to be: its name is
+  predictable, so while it exists it must be ours and nobody else's (#297,
+  #298). But publishing is a `rename`, which does not touch the mode — so a
+  copy that got cut in half landed as `0o600` while the very same copy without
+  interruptions landed as `0o644`. Same operation, two outcomes, and since #219
+  the resumable route is the default one for a single file. The mode is now
+  restored on `commit` to what a `create` would have given (`0o666` minus the
+  umask, read from `/proc/self/status` where available and assumed `0o022`
+  elsewhere — `umask(2)` only reports by *setting*, which would race every
+  other write in flight). It is applied to the **descriptor** after the rename,
+  never to the path and never before: relaxing a staging still named
+  `.norte-partial.<hash>` would leave the most predictable name in the
+  directory readable by anyone, for a file nobody has asked for yet. What this
+  does *not* do is preserve the source's mode the way `cp -p` does; norte
+  preserves permissions on no copy today, and that is a product decision rather
+  than something to slip into a fix.
 
 - **The by-path stable staging is no longer reopened blind** (#298). The name a
   resume reopens is `.norte-partial.` plus the SHA-256-128 of the destination

@@ -327,7 +327,10 @@ cli-inline-password = the URL must not carry an inline password (user:pass@…);
 cli-connection-degraded = ⚠ { $scheme }://{ $host }: UNENCRYPTED session (server rejected AUTH TLS, tls="allow"). Data and credentials travel in cleartext.
 status-connection-degraded = ⚠ UNENCRYPTED session
 status-connections-degraded = ⚠ UNENCRYPTED session (and { $n } more)
-status-degraded-subject = { $banner } — scheme { $scheme }, host { $host }
+status-degraded-subject = { $banner } — scheme { $scheme }, host { $host } ({ $reason })
+degraded-reason-ftp-plaintext = FTP without encryption
+degraded-reason-tls-auth-rejected = the server rejected TLS
+degraded-reason-unknown = unknown reason
 status-archive-skipped = ⚠ { $n } entries omitted (hostile names/limits)
 status-names-encoding = names: { $enc }
 status-hidden = { $n } hidden

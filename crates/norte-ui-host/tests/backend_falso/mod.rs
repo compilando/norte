@@ -89,6 +89,9 @@ pub struct Falso {
     pub stat_grita: bool,
     /// Los `attrs` que se pidieron en cada listado, en orden.
     pub attrs_pedidos: std::sync::Mutex<Vec<Vec<String>>>,
+    /// Los lotes que pidió `dir_size`, en orden: es lo que permite comprobar
+    /// que se cuenta lo MARCADO y en UNA sola Task.
+    pub recuentos: std::sync::Mutex<Vec<Vec<VPath>>>,
     /// Contenido por path, para el visor.
     pub contenido: HashMap<String, Vec<u8>>,
     /// Los paths que se sondearon, en orden: es lo que permite comprobar que
@@ -1362,6 +1365,34 @@ impl HostBackend for Falso {
         Box::pin(async move {
             Ok(HostTask {
                 id: norte_proto::TaskId::new(7),
+                progress: rx,
+                cancel: Arc::new(move || {
+                    cancelaciones.fetch_add(1, Ordering::SeqCst);
+                }),
+                foreign: false,
+            })
+        })
+    }
+
+    fn dir_size(&self, paths: Vec<VPath>) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.recuentos.lock().expect("recuentos").push(paths);
+        let progreso = norte_proto::TaskProgress {
+            task_id: norte_proto::TaskId::new(9),
+            kind: norte_proto::TaskKind::DirSize,
+            state: norte_proto::TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+            unreadable: None,
+        };
+        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        *self.progreso.lock().expect("progreso") = Some(tx);
+        let cancelaciones = Arc::clone(&self.cancelaciones);
+        Box::pin(async move {
+            Ok(HostTask {
+                id: norte_proto::TaskId::new(9),
                 progress: rx,
                 cancel: Arc::new(move || {
                     cancelaciones.fetch_add(1, Ordering::SeqCst);

@@ -276,6 +276,84 @@ pub(crate) fn stable_partial_name(final_name: &[u8]) -> Vec<u8> {
     format!("{PARTIAL_PREFIX}{hex}").into_bytes()
 }
 
+/// El modo con el que se PUBLICA lo que pasó por el staging ESTABLE (#299).
+///
+/// Ese staging nace `0o600` y no puede nacer de otra forma: su nombre es
+/// predecible, así que mientras dure tiene que ser nuestro y de nadie más
+/// (#298). Pero publicar es un `rename`, que no toca el modo, y sin esto una
+/// copia REANUDADA acabaría en `0o600` mientras la misma copia sin cortes
+/// acaba en `0o644`. Misma operación, dos resultados, y el reanudable es hoy
+/// el camino por defecto de una hoja.
+///
+/// Así que se reproduce lo que habría dado un `create`: `0o666` recortado por
+/// la umask. Lo que NO se hace es preservar el modo del ORIGEN —eso es lo que
+/// hace `cp -p` y es una decisión de producto que norte todavía no ha tomado
+/// (hoy no preserva permisos en ninguna copia); colarla aquí sería decidirla
+/// por descarte dentro de un arreglo.
+#[cfg(unix)]
+pub(crate) fn modo_publicado() -> u32 {
+    0o666 & !umask_del_proceso()
+}
+
+/// La umask del proceso, SIN cambiarla.
+///
+/// `umask(2)` solo la devuelve poniéndola, y eso es global al proceso: hacerlo
+/// aquí sería una carrera con cualquier otra escritura en vuelo, en un daemon
+/// que escribe desde muchas tasks a la vez. Linux la publica de solo lectura
+/// en `/proc/self/status` (`Umask:`, desde 4.7).
+///
+/// Donde no se puede leer se supone `0o022`, que es la de una configuración
+/// corriente y da el `0o644` de siempre. Suponer de menos —`0o000`— publicaría
+/// más abierto de lo que el usuario pidió, y eso no se hace ni una vez.
+#[cfg(unix)]
+fn umask_del_proceso() -> u32 {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+            for linea in status.lines() {
+                if let Some(valor) = linea.strip_prefix("Umask:")
+                    && let Ok(u) = u32::from_str_radix(valor.trim(), 8)
+                {
+                    return u;
+                }
+            }
+        }
+    }
+    0o022
+}
+
+/// Le da al fichero RECIÉN PUBLICADO el modo que habría tenido si la copia no
+/// se hubiera cortado (#299). No hace nada si el staging no era el estable.
+///
+/// Va sobre el DESCRIPTOR, que sigue apuntando al mismo inodo después del
+/// rename: por ruta habría una ventana entre publicar y ajustar en la que otro
+/// podría sustituir el nombre y recibir el `chmod`.
+///
+/// **Best-effort a propósito, y en silencio.** Un fallo aquí deja el fichero
+/// en `0o600`: copiado, con sus bytes y su nombre buenos, y más restrictivo de
+/// lo pedido. Convertirlo en error tiraría una copia entera por un permiso.
+/// Y no se registra porque este crate no tiene `tracing` —es el único que
+/// puede usar `unsafe` y se mantiene sin dependencias de instrumentación—;
+/// quien quiera saberlo mira el modo del fichero.
+#[cfg(unix)]
+pub(crate) fn reponer_modo_publicado(file: &std::fs::File, estable: bool) {
+    use std::os::fd::AsRawFd as _;
+
+    if !estable {
+        return;
+    }
+    // SAFETY: `file` está vivo y su fd es válido durante toda la llamada.
+    // `fchmod` no toma punteros.
+    #[allow(unsafe_code)]
+    let _ = unsafe { libc::fchmod(file.as_raw_fd(), modo_publicado() as libc::mode_t) };
+}
+
+/// Windows no tiene modo POSIX que reponer: el fichero hereda la ACL de su
+/// directorio y el staging nunca se restringió a mano.
+#[cfg(windows)]
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn reponer_modo_publicado(_file: &std::fs::File, _estable: bool) {}
+
 /// Abre (o crea) el staging estable de `path` para REANUDAR, y dice cuántos
 /// bytes había.
 ///
@@ -1736,6 +1814,7 @@ impl Provider for LocalProvider {
             partial: partial_native,
             final_path: final_native,
             done: false,
+            estable: false,
         }))
     }
 
@@ -1817,6 +1896,7 @@ impl Provider for LocalProvider {
                 partial: partial_native,
                 final_path: final_native,
                 done: false,
+                estable: true,
             }),
             already,
         ))
@@ -2104,6 +2184,11 @@ struct LocalSink {
     final_path: PathBuf,
     /// `true` cuando commit/abort ya se ocuparon del staging (Drop no toca nada).
     done: bool,
+    /// El staging es el ESTABLE, o sea que nació `0o600` (#298) y hay que
+    /// darle en el `commit` el modo que habría tenido una copia sin cortes
+    /// (#299). El efímero nace `0o666` recortado por la umask y no necesita
+    /// nada.
+    estable: bool,
 }
 
 #[async_trait]
@@ -2127,13 +2212,22 @@ impl ByteSink for LocalSink {
         let file = self.file.take().ok_or(Error::Io { retryable: false })?;
         let partial = self.partial.clone();
         let final_path = self.final_path.clone();
+        let estable = self.estable;
         let res = blocking(move || {
             file.sync_all().map_err(|e| map_io(&e))?;
-            drop(file);
+            // El descriptor sigue VIVO durante el rename a propósito (#299):
+            // el modo se arregla DESPUÉS de publicar y sobre el fd, no sobre
+            // la ruta. Al revés —relajar el `0o600` mientras todavía se llama
+            // `.norte-partial`— dejaría legible por otros un staging con el
+            // nombre más predecible del directorio, y por un fichero que aún
+            // no es el que nadie pidió.
             // No-replace atómico: la colisión aparecida entre write() y
             // commit() la detecta el PROPIO rename, sin ventana TOCTOU.
             match rename_noreplace(&partial, &final_path) {
-                Ok(()) => Ok(()),
+                Ok(()) => {
+                    reponer_modo_publicado(&file, estable);
+                    Ok(())
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     let kind = collision_kind_for(&final_path);
                     let _ = std::fs::remove_file(&partial);
@@ -2151,7 +2245,9 @@ impl ByteSink for LocalSink {
                             std::fs::rename(&partial, &final_path).map_err(|e| {
                                 let _ = std::fs::remove_file(&partial);
                                 map_io(&e)
-                            })
+                            })?;
+                            reponer_modo_publicado(&file, estable);
+                            Ok(())
                         }
                         Err(e) => {
                             let _ = std::fs::remove_file(&partial);
