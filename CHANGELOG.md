@@ -24,6 +24,22 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **The packages carry the daemon** (#256). The `.deb` and the AppImage
+  shipped `norte-gui` alone, so on a clean install the window had nothing to
+  start — and since #300 starting the daemon is exactly what it does. They now
+  carry `norte` and `ntc` as well, landing in `/usr/bin` where the window looks
+  for them (next to its own executable, then `PATH`). The `.deb` goes from
+  5.6 MB to 43 MB, which is the honest size of a file manager that brings its
+  own engine.
+
+- **F4 opens with the desktop's application** (#290). The TUI launches
+  `$EDITOR` because it is already inside a terminal; this window is not, and
+  opening one on top just to edit a file is more noise than help. What is lost
+  is honouring `$EDITOR` — here the desktop decides, and it may open a viewer.
+  `pane.edit-new` stays unimplemented for a reason worth writing down: the TUI
+  version launches the editor with *no file* and lets it ask for a name on
+  save, and `xdg-open` cannot do that — it opens files, not empty editors.
+
 - **The window splits and joins files** (#132, #290). `pane.split-file` asks
   for a piece size and reads it in **binary** — `10M` is 10 MiB, which is what
   it means in a file manager, not ten million — and refuses a zero, because

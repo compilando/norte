@@ -664,10 +664,21 @@ async fn el_contador_lo_resuelve_el_host() {
 async fn un_comando_que_el_host_no_hace_no_dispara_nada() {
     let (h, snap) = host_arbol(arbol()).await;
     let antes = listado(&snap).clone();
-    // `F4` es editar en el preset ortodoxo: existe, está ligada, y este host
-    // no la implementa. (Era `F5` hasta que la tarea 5.1 construyó copiar;
-    // el ejemplo tiene que ser un comando que de verdad no esté.)
-    let ack = h.dispatch(tecla("F4")).await.expect("host vivo");
+    // `alt+t` es el panel de árbol en el preset ortodoxo: existe, está ligada,
+    // y este host todavía no la implementa. El ejemplo ha ido cambiando según
+    // se construía lo anterior —fue `F5` hasta copiar, y `F4` hasta que editar
+    // pasó a abrir con el escritorio (#290)—, y esa rotación es justamente la
+    // señal de que la ventana se acerca a la paridad.
+    let ack = h
+        .dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+            key: "t".to_owned(),
+            ctrl: false,
+            alt: true,
+            shift: false,
+            meta: false,
+        }))
+        .await
+        .expect("host vivo");
     match ack {
         ActionAck::Unavailable { reason_key } => assert_eq!(reason_key, "cmd-not-here"),
         otro => panic!("se esperaba no disponible: {otro:?}"),
@@ -4242,14 +4253,18 @@ async fn una_fila_de_otra_pantalla_no_se_ofrece_encendida() {
         pagina = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
     }
     assert_eq!(pagina.topic_id, "viewer", "la página del visor existe");
-    // `pane.open` sale en esta página y NO es del visor: abre lo señalado en
-    // el LISTADO con la aplicación del escritorio, así que estar viva aquí es
-    // lo correcto. Las demás filas de la página sí necesitan el visor.
-    let abrir = norte_frontend::keymap::paint_chord("alt+f4");
+    // `pane.open` y `pane.edit` salen en esta página y NO son del visor: los
+    // dos actúan sobre lo señalado en el LISTADO con la aplicación del
+    // escritorio, así que estar vivos aquí es lo correcto (#290 hizo que
+    // editar fuera lo segundo). Las demás filas sí necesitan el visor.
+    let del_listado = [
+        norte_frontend::keymap::paint_chord("alt+f4"),
+        norte_frontend::keymap::paint_chord("f4"),
+    ];
     let corribles: Vec<&norte_ui_host::dto::HelpActionView> = pagina
         .actions
         .iter()
-        .filter(|a| !a.opens_topic && a.chord != abrir)
+        .filter(|a| !a.opens_topic && !del_listado.contains(&a.chord))
         .collect();
     assert!(!corribles.is_empty(), "documenta comandos");
     for a in corribles {
