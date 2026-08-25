@@ -1119,6 +1119,7 @@ fn clase_de_task(kind: norte_proto::TaskKind) -> &'static str {
         K::Undo => "undo",
         K::Search => "search",
         K::Mkdir => "mkdir",
+        K::Create => "create",
         K::Index => "index",
         K::Embed => "embed",
         K::RenameBatch => "rename-batch",
@@ -1391,6 +1392,15 @@ struct Dialogo {
     /// es una respuesta, porque la pregunta la hizo quien está delante.
     reconocido: bool,
 }
+/// Un fichero que se está creando para editarlo (#290).
+#[derive(Debug)]
+struct Creacion {
+    /// La task que lo crea. `None` mientras se encola: el id no existe hasta
+    /// que el daemon contesta, y el gesto ya ha vuelto.
+    task: Option<u64>,
+    /// Qué abrir cuando esa task termine BIEN.
+    path: VPath,
+}
 
 /// Lo que un diálogo tiene pendiente de hacer.
 enum Pendiente {
@@ -1508,14 +1518,14 @@ enum Pendiente {
         /// Dónde empieza el walk.
         root: VPath,
     },
-    /// Crear un directorio dentro de este otro. El nombre lo teclea el
-    /// usuario y se valida al confirmar, no al teclear: corregir un nombre a
-    /// medias es peor que verlo rechazado al final.
     /// Crear un fichero VACÍO y abrirlo con el escritorio (#290).
     CrearFichero {
         /// Dónde se crea. El nombre es lo que se teclea.
         dir: VPath,
     },
+    /// Crear un directorio dentro de este otro. El nombre lo teclea el
+    /// usuario y se valida al confirmar, no al teclear: corregir un nombre a
+    /// medias es peor que verlo rechazado al final.
     CrearDirectorio {
         /// Dónde se crea.
         dir: VPath,
@@ -1929,12 +1939,12 @@ struct Estado {
     ramas: Option<norte_frontend::tree::Tree>,
     /// Sube cada vez que cambia el conjunto de ramas visibles.
     gen_ramas: u64,
-    /// El fichero recién creado que hay que abrir en cuanto exista (#290).
+    /// El fichero que hay que abrir en cuanto exista (#290), con la task que
+    /// lo está creando.
     ///
     /// Uno como mucho: el gesto pide un nombre, y hasta que ese diálogo se
-    /// contesta no hay otro. Se consume en el primer desenlace de una task de
-    /// creación, bueno o malo.
-    abrir_al_crear: Option<VPath>,
+    /// contesta no hay otro.
+    abrir_al_crear: Option<Creacion>,
     /// El cursor del panel de procesos.
     ///
     /// Se acota al LEER y no al mover: las filas aparecen y desaparecen
@@ -12319,7 +12329,10 @@ impl Estado {
                 }
             }
         });
-        self.abrir_al_crear = Some(abrir);
+        self.abrir_al_crear = Some(Creacion {
+            task: None,
+            path: abrir,
+        });
         (None, Vec::new())
     }
 
@@ -12329,12 +12342,22 @@ impl Estado {
     /// sobre un fichero que no está, y lo que ese editor enseñe —un buffer
     /// vacío que al guardar crea el fichero— parecería que funcionó.
     fn abrir_lo_creado(&mut self, p: &norte_proto::TaskProgress) {
-        if p.kind != norte_proto::TaskKind::Create {
+        // Por ID, no por kind. `task.progress` se difunde a TODA conexión
+        // humana, así que un `fs.create` de la TUI —o de otra ventana sobre el
+        // mismo daemon— llegaba aquí, se comía la intención y abría un fichero
+        // que todavía no estaba: justo el fallo que este orden existe para
+        // evitar. Y al revés, el que sí se creó no se abría nunca.
+        if self
+            .abrir_al_crear
+            .as_ref()
+            .is_none_or(|c| c.task != Some(p.task_id.get()))
+        {
             return;
         }
-        let Some(path) = self.abrir_al_crear.take() else {
+        let Some(c) = self.abrir_al_crear.take() else {
             return;
         };
+        let path = c.path;
         if p.state != norte_proto::TaskState::Completed {
             return;
         }
@@ -13033,6 +13056,22 @@ impl Estado {
             .and_then(|t| t.reintento.clone())
     }
 
+    /// Ata la intención de «editar uno nuevo» a la task que lo crea (#290).
+    ///
+    /// Aquí y no antes: el id no existe hasta que el daemon contesta, y el
+    /// gesto ya había vuelto. Solo a una task PROPIA y solo si la intención
+    /// todavía no tiene id — una ajena que pase por aquí no puede adoptar la
+    /// intención de esta ventana, que es justo el fallo que esto evita.
+    fn atar_la_creacion(&mut self, id: u64, ajena: bool, kind: norte_proto::TaskKind) {
+        if !ajena
+            && kind == norte_proto::TaskKind::Create
+            && let Some(c) = self.abrir_al_crear.as_mut()
+            && c.task.is_none()
+        {
+            c.task = Some(id);
+        }
+    }
+
     fn registrar_task(
         &mut self,
         task: crate::backend::HostTask,
@@ -13065,6 +13104,7 @@ impl Estado {
         }
         let mut rx = task.progress.clone();
         let nacio = rx.borrow().clone();
+        self.atar_la_creacion(id, ajena, nacio.kind);
         let mut vista = Self::vista_de(&nacio);
         vista.foreign = ajena;
         // Un REANUNCIO —el SDK vuelve a ofrecer las tasks al reconectar— trae
@@ -13981,6 +14021,16 @@ impl Estado {
         // ESTA SESIÓN no muta hasta que el fichero se arregle (regla dura 4).
         // Eso dura más que un mensaje.
         self.journal_rehusado |= matches!(e, Error::JournalUnavailable);
+        // Una creación que ni llegó a encolarse suelta su intención: sin task
+        // no hay desenlace que la consuma, y quedarse pegada haría que el
+        // SIGUIENTE `edit-new` abriera el fichero de este, que no existe.
+        if self
+            .abrir_al_crear
+            .as_ref()
+            .is_some_and(|c| c.task.is_none())
+        {
+            self.abrir_al_crear = None;
+        }
         let cambio = self.cambio_de_banners();
         let parche = self.parche(vec![cambio]);
         let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {

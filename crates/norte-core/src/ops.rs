@@ -2451,17 +2451,21 @@ pub(crate) async fn mkdir_task(
 /// Crea un fichero VACÍO (#290). Lo mismo que [`mkdir_task`] con la otra clase
 /// de nodo, y con sus mismas reglas.
 ///
-/// El `stat` previo es la única forma de negarse a pisar lo que haya: el sink
-/// del provider PUBLICA por rename, así que escribir sin mirar reemplazaría un
-/// fichero existente en silencio. Es una comprobación con carrera —entre el
-/// `stat` y el rename cabe otra cosa— y aun así va, porque el modo de fallo que
-/// evita (crear encima de un fichero del usuario) es de pérdida de datos y el
-/// que deja abierto es que dos creaciones simultáneas del mismo nombre no se
-/// vean. No se puede cerrar aquí sin un `create_new` en el trait, que es otro
-/// cambio y de otra ADR.
+/// **La exclusividad NO la pone este `stat`: la pone el provider.**
+/// [`Provider::write`](norte_vfs::Provider::write) contrata create-new, y cada
+/// implementación lo cumple con la fuerza que su transporte permite — el local
+/// con un `rename_noreplace` atómico en el commit, el de objetos con un
+/// `If-None-Match`, `MemProvider` revalidando bajo su lock. La única ventana
+/// TOCTOU real es la de SFTP, y es de SFTP: v3 no tiene rename atómico.
+///
+/// El `stat` de aquí es lo mismo que hace [`mkdir_task`] y por el mismo motivo:
+/// dar un `Conflict` limpio y TEMPRANO —antes de crear el staging— y no
+/// reclamar como nuestro un nodo que ya estaba. Quitarlo no abriría un agujero;
+/// solo movería el error más tarde y más feo.
 pub(crate) async fn create_task(
     provider: Arc<dyn Provider>,
     path: VPath,
+    dest_anchor: Option<norte_proto::DirAnchor>,
     observer: Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
@@ -2473,6 +2477,16 @@ pub(crate) async fn create_task(
         p.entries_total = Some(1);
         p.current = Some(path.clone());
     });
+    // El ancla ANTES del `stat`: si el directorio ya no es el que el humano
+    // listó, no hay nada que comprobar dentro de él.
+    anchor_parent_or_fail(
+        &*provider,
+        &path,
+        dest_anchor.as_ref(),
+        ctx.progress.snapshot().task_id.get(),
+        &ctx.cancel,
+    )
+    .await?;
     match with_retry(&ctx.cancel, || provider.stat(&path).boxed()).await {
         Ok(_) => {
             return Err(Error::Conflict {
@@ -3182,6 +3196,52 @@ mod tests {
                 .await
                 .is_err(),
             "nada creado bajo cancelación"
+        );
+    }
+
+    /// Regla dura 3: toda task nueva tiene su test de cancelación limpia.
+    ///
+    /// `create_task` mira el token UNA vez, al entrar, y eso basta porque no
+    /// tiene bucle: lo que hay después es un `stat`, un `write` y un `commit`,
+    /// y partir la creación de un fichero vacío por la mitad no significa
+    /// nada. Lo que este test clava es que bajo cancelación NO queda un
+    /// fichero a medias en el destino.
+    #[tokio::test]
+    async fn create_task_honra_el_token_cancelado() {
+        use crate::journal::Actor;
+        use crate::progress::ProgressReporter;
+        use crate::scheduler::TaskCtx;
+        use norte_proto::{Error, TaskId, TaskKind, VPath};
+        use norte_testkit::MemProvider;
+        use norte_vfs::Provider as _;
+        use std::sync::Arc;
+        use tokio_util::sync::CancellationToken;
+
+        let mem = Arc::new(MemProvider::new());
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let (reporter, _rx) = ProgressReporter::new(TaskId::new(1), TaskKind::Create);
+        let ctx = TaskCtx {
+            cancel,
+            progress: Arc::new(reporter),
+            actor: Actor::User,
+        };
+        let observer: Arc<dyn crate::MutationObserver> = Arc::new(crate::observer::NoopObserver);
+        let r = super::create_task(
+            mem.clone(),
+            VPath::parse("mem:///nuevo.txt").expect("wire"),
+            None,
+            observer,
+            &ctx,
+        )
+        .await;
+        assert!(matches!(r, Err(Error::Cancelled)), "{r:?}");
+        assert!(
+            (*mem)
+                .stat(&VPath::parse("mem:///nuevo.txt").expect("wire"))
+                .await
+                .is_err(),
+            "nada creado bajo cancelación, ni siquiera vacío"
         );
     }
 

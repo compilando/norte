@@ -87,7 +87,9 @@ impl OpSet {
     #[must_use]
     pub fn all() -> Self {
         Self {
-            kinds: ["copy", "move", "delete", "mkdir"].into_iter().collect(),
+            kinds: ["copy", "move", "delete", "mkdir", "create"]
+                .into_iter()
+                .collect(),
         }
     }
     /// Con un conjunto explícito de op-kinds.
@@ -632,6 +634,42 @@ mod tests {
 
     fn vp(w: &str) -> VPath {
         VPath::parse(w).expect("wire")
+    }
+
+    /// **Todo `PolicyOp` tiene que ser CONCEDIBLE por wire** (#290).
+    ///
+    /// `create` entró como op nueva y `OpSet::all()` se quedó con cuatro
+    /// kinds, así que `from_names(["create"])` devolvía un conjunto VACÍO sin
+    /// error: un agente pedía el scope, el daemon trazaba que se lo concedía,
+    /// y cada `fs.create` se denegaba con `OutOfScope` — un motivo que además
+    /// mentía, porque la ruta sí estaba dentro. Falla cerrado, pero convierte
+    /// un permiso en algo que solo existe para negar.
+    ///
+    /// Este test recorre el enum ENTERO para que el siguiente no se olvide.
+    #[test]
+    fn todo_op_kind_se_puede_conceder_por_wire() {
+        let todos = [
+            PolicyOp::Copy,
+            PolicyOp::Move,
+            PolicyOp::Delete {
+                mode: DeleteMode::Trash,
+            },
+            PolicyOp::Mkdir,
+            PolicyOp::Create,
+        ];
+        for op in todos {
+            let nombre = op.kind();
+            let set = OpSet::from_names(&[nombre]);
+            assert!(
+                set.allows(op),
+                "`{nombre}` es un op-kind del core que el wire no puede conceder: \
+                 falta en `OpSet::all()`"
+            );
+            assert!(
+                OpSet::all().allows(op),
+                "`{nombre}` tampoco lo concede un scope COMPLETO"
+            );
+        }
     }
 
     #[test]

@@ -4980,7 +4980,7 @@ async fn dispatch_fs_task(
             let p: methods::FsCreateParams = parse_params(req.params)?;
             let handle = shared
                 .engine
-                .create_file_as(&p.path, actor.clone())
+                .create_file_as(&p.path, p.dest_anchor, actor.clone())
                 .await
                 .map_err(RpcError::from)?;
             register_task(shared, handle, actor)

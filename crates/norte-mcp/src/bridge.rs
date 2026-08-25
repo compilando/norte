@@ -1369,12 +1369,12 @@ fn task_status_tool_def() -> Value {
 fn request_scope_tool_def() -> Value {
     json!({
         "name": "request_scope",
-        "description": "Request access to path subtrees with specific operations (copy/move/delete/mkdir) for a TTL. The request stays PENDING until a human grants it (`norte policy grant <request_id>` or from the TUI); retry your operation after the grant.",
+        "description": "Request access to path subtrees with specific operations (copy/move/delete/mkdir/create) for a TTL. The request stays PENDING until a human grants it (`norte policy grant <request_id>` or from the TUI); retry your operation after the grant.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "roots": {"type": "array", "items": {"type": "string"}, "description": "subtree roots (VPath URLs)"},
-                "ops": {"type": "array", "items": {"type": "string", "enum": ["copy", "move", "delete", "mkdir"]}},
+                "ops": {"type": "array", "items": {"type": "string", "enum": ["copy", "move", "delete", "mkdir", "create"]}},
                 "ttl_ms": {"type": "integer", "minimum": 1, "description": "time-to-live in milliseconds (capped server-side at 24h)"}
             },
             "required": ["roots", "ops", "ttl_ms"]

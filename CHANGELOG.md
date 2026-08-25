@@ -56,7 +56,14 @@ independently through `PROTOCOL_VERSION`.
   a list you can edit, and the window's only list (settings) is read-only.
 
 - **`fs.create`: the protocol can create an empty file** (protocol **0.57.0**,
-  ADR 0076). It was the gap behind `pane.edit-new`, the last command of #290 the
+  ADR 0076). It carries an optional `dest_anchor` (#295) that `fs.mkdir` does
+  not, because it is the only method on the wire whose success hands a path to a
+  program *outside* norte: a frontend creates the file to open it with the
+  desktop's editor, so a symlink swapped in between the listing and the
+  confirmation costs not an empty file but the whole editing session typed
+  afterwards, into a directory the human was never looking at. And `create` is
+  its own policy permission — `PolicyOp::Create`, grantable over the wire like
+  the other four. It was the gap behind `pane.edit-new`, the last command of #290 the
   window could not do: `fs.mkdir` makes a directory, `fs.copy` writes one that
   already exists somewhere else, and nothing said "an empty file, here, by this
   name". The TUI never needed it — it launches `$EDITOR` and lets the editor

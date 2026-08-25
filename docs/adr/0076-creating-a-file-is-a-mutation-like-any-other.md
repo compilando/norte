@@ -37,15 +37,28 @@ comes with being a mutation: journal `Created` with its undo, a policy gate
 
 There is no reading of "create" that means "empty whatever is there". A method
 that truncates in silence is data loss with an innocent name, so a taken name
-is `Conflict { Exists }` — the same answer `fs.mkdir` gives, and for the same
-reason.
+is `Conflict { Exists }` — the same answer `fs.mkdir` gives.
 
-The check is a `stat` before the write, and it **races**: between the stat and
-the sink's publishing rename, something else can appear. It ships anyway,
-because the failure mode it removes (creating over the reader's file) is data
-loss, and the one it leaves open (two simultaneous creations of the same name
-not seeing each other) is not. Closing it properly needs a `create_new` on the
-`Provider` trait, which is a different change with a different blast radius.
+**Where that exclusivity comes from is not the same, though, and this ADR said
+it wrong at first.** `mkdir` is atomic everywhere because `mkdir(2)` fails with
+`EEXIST`. Creating a file is open-then-commit, in two steps, so the atomicity is
+not a theorem of the core: each provider supplies it separately, and
+`Provider::write` already contracts create-new for exactly this reason. The
+local provider publishes with an atomic `rename_noreplace` — its own comment
+says "no TOCTOU window". The object provider uses `If-None-Match`.
+`MemProvider` revalidates under its lock. **SFTP cannot**: v3 has no atomic
+rename, and there the window is real and documented in that provider.
+
+The `stat` in `create_task` is therefore *not* what stops us overwriting
+anything. It is the same early check `mkdir_task` does, for the same reason: a
+clean `Conflict` before a staging file is created, and never claiming a
+pre-existing node as ours. The first draft of this ADR described it as the only
+protection and filed a `create_new` on the trait as future debt; the review
+caught both. That method already exists, and it is `write`.
+
+The consequence worth writing down: the day a new provider implements `write`
+with a truncate, it violates a contract its own rustdoc already states, and
+`fs.create` is the caller that loses data for it.
 
 ### `PolicyOp::Create` is its own permission
 
@@ -64,6 +77,28 @@ save) would look exactly like success.
 It is refused on a remote pane, and said *before* the name is typed: what opens
 afterwards is the desktop application, and `xdg-open` cannot be given an
 `sftp://`. Saying it once the name is written arrives too late.
+
+### It carries `dest_anchor`, and `fs.mkdir` does not
+
+The first draft left the anchor of ADR 0073 out by symmetry with `fs.mkdir`,
+without thinking about it. The review pushed back with a better argument than
+the one for leaving it out, and it stands:
+
+**`fs.create` is the only method on the wire whose success hands a path to a
+program outside norte.** A frontend creates the file in order to open it with
+the desktop's editor. Put a symlink in place between the listing and the
+confirmation, and what is lost is not an empty file — it is the whole editing
+session the human types afterwards, into a directory they were never looking
+at. That is exactly the case ADR 0073 exists for, and it is *more* acute here
+than in a copy, not less.
+
+Creating a directory in the wrong place is a misplaced empty directory. Creating
+a file in the wrong place is an invitation to write into it.
+
+The field is optional and omitted, so a caller who did not list the directory
+behaves exactly as before; `norte-client` remembers the anchor of every
+directory it lists and sends it on its own, so every frontend gains the check
+without a line of code.
 
 ## Consequences
 

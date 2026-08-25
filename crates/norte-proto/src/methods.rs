@@ -780,9 +780,24 @@ use crate::{
 /// haya», y un método que trunca en silencio es una pérdida de datos con
 /// nombre inocente.
 ///
+/// [`FsCreateParams`] lleva `dest_anchor` opcional (#295): `fs.mkdir` no la
+/// tiene y este método sí, porque es el único cuyo éxito entrega una ruta a un
+/// programa de fuera de norte. Se omite cuando no hay, así que el JSON de quien
+/// no listó el directorio no cambia.
+///
+/// Con él crece el VOCABULARIO de op-kinds de la política: `create` se une a
+/// `copy|move|delete|mkdir` en [`RequestScopeParams::ops`] y en
+/// [`PolicyApprovalRequired::op`]. Eso también es cable, aunque no cambie
+/// ningún tipo: un daemon 0.56 DESCARTA `create` de un scope pedido —
+/// fail-closed, sin error—, así que un agente 0.57 contra un daemon viejo
+/// obtiene el scope sin esa op y sus creaciones se deniegan.
+///
 /// Ventana N=0.57.x / N-1=0.56.x. Aditivo: un cliente 0.56 no conoce el método
 /// y no lo llama, y degrada el kind nuevo a `TaskKind::Unknown` por su
-/// `serde(other)` — nada que gatear en emisión.
+/// `serde(other)` — nada que gatear en emisión. La combinación que el
+/// handshake SÍ permite es esa —cliente 0.56 contra daemon 0.57—, y no la
+/// contraria: un cliente del futuro se rechaza entero (ver
+/// [`version_compatible`]).
 pub const PROTOCOL_VERSION: &str = "0.57.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
@@ -998,6 +1013,15 @@ pub const FS_MKDIR: &str = "fs.mkdir";
 /// porque crear no ofrece políticas de choque. No hay ninguna lectura de
 /// «crear» que signifique «vaciar lo que haya», y un método que trunca en
 /// silencio es una pérdida de datos con nombre inocente.
+///
+/// **De dónde viene esa exclusividad, y hasta dónde llega.** `fs.mkdir` es
+/// atómico en todas partes porque `mkdir(2)` falla con `EEXIST`; crear un
+/// fichero es abrir-y-confirmar en DOS pasos, así que la atomicidad no es un
+/// teorema del core: la aporta cada provider por separado. El local publica con
+/// un rename no-replace atómico, el de objetos con `If-None-Match`. **SFTP no
+/// puede**: v3 no tiene rename atómico, así que ahí queda una ventana entre la
+/// comprobación y la publicación. Un cliente que necesite la garantía fuerte
+/// tiene que mirar el scheme; el resto puede tratar `Conflict` como definitivo.
 ///
 /// Vacío y nada más: escribir contenido es `fs.copy` desde algún sitio, o el
 /// programa que lo abra después. Journal `Created` con undo (regla 4); gateado
@@ -1866,6 +1890,19 @@ pub struct FsDeleteParams {
 pub struct FsCreateParams {
     /// El fichero a crear, COMPLETO. El padre debe existir; no se crea camino.
     pub path: VPath,
+    /// El ancla del directorio en el que se crea (#295, ADR 0073). Se omite
+    /// cuando quien llama no listó ese directorio.
+    ///
+    /// `fs.mkdir` no la lleva y este método SÍ, y la diferencia no es un
+    /// descuido de simetría: `fs.create` es el ÚNICO método del wire cuyo
+    /// éxito entrega una ruta a un programa de FUERA de norte —un frontend
+    /// crea el fichero para abrirlo con el editor del escritorio—. Con un
+    /// enlace plantado entre el listado y la confirmación no se pierde un
+    /// fichero vacío: se pierde la sesión de edición entera que el humano
+    /// escribe después, en un directorio que él no estaba mirando. Ahí el
+    /// ancla vale MÁS, no menos.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dest_anchor: Option<crate::DirAnchor>,
 }
 
 /// Params de [`FS_MKDIR`] (#104).
@@ -5923,7 +5960,12 @@ pub struct RequestScopeParams {
     pub session: String,
     /// Raíces solicitadas (contención por subtree-prefix).
     pub roots: Vec<VPath>,
-    /// Op-kinds solicitados (`copy|move|delete|mkdir`).
+    /// Op-kinds solicitados (`copy|move|delete|mkdir|create`).
+    ///
+    /// `create` entra en 0.57.0 con [`FS_CREATE`]. Un nombre que el daemon no
+    /// reconozca se DESCARTA sin error (fail-closed), así que un cliente 0.57
+    /// que pida `create` a un daemon 0.56 recibe un scope sin esa op y sus
+    /// creaciones se deniegan — no se conceden por accidente.
     pub ops: Vec<String>,
     /// TTL solicitado en milisegundos.
     pub ttl_ms: u64,
@@ -5960,7 +6002,10 @@ pub struct PolicyApprovalRequired {
     /// Sesión de agente que pidió la op (si aplica).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
-    /// Op-kind (`copy|move|delete|mkdir`).
+    /// Op-kind (`copy|move|delete|mkdir|create`).
+    ///
+    /// SOLO display: un cliente que no reconozca el valor lo pinta tal cual y
+    /// sigue pudiendo aprobar o denegar, que es lo que la aprobación necesita.
     pub op: String,
     /// Rutas implicadas (wire, redactadas). SOLO display: jamás se reparsan a
     /// una operación — la op real va ligada server-side por `approval_id`.

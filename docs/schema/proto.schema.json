@@ -1682,6 +1682,17 @@
     "FsCreateParams": {
       "description": "Params de [`FS_CREATE`] (#290).\n\n```\nuse norte_proto::methods::FsCreateParams;\nlet p: FsCreateParams =\n    serde_json::from_str(r#\"{\"path\":\"file:///casa/nuevo.txt\"}\"#).expect(\"params\");\nassert_eq!(p.path.file_name().expect(\"nombre\").as_bytes(), b\"nuevo.txt\");\n```",
       "properties": {
+        "dest_anchor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DirAnchor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "El ancla del directorio en el que se crea (#295, ADR 0073). Se omite\ncuando quien llama no listó ese directorio.\n\n`fs.mkdir` no la lleva y este método SÍ, y la diferencia no es un\ndescuido de simetría: `fs.create` es el ÚNICO método del wire cuyo\néxito entrega una ruta a un programa de FUERA de norte —un frontend\ncrea el fichero para abrirlo con el editor del escritorio—. Con un\nenlace plantado entre el listado y la confirmación no se pierde un\nfichero vacío: se pierde la sesión de edición entera que el humano\nescribe después, en un directorio que él no estaba mirando. Ahí el\nancla vale MÁS, no menos."
+        },
         "path": {
           "$ref": "#/$defs/VPath",
           "description": "El fichero a crear, COMPLETO. El padre debe existir; no se crea camino."
@@ -3227,7 +3238,7 @@
           "type": "integer"
         },
         "op": {
-          "description": "Op-kind (`copy|move|delete|mkdir`).",
+          "description": "Op-kind (`copy|move|delete|mkdir|create`).\n\nSOLO display: un cliente que no reconozca el valor lo pinta tal cual y\nsigue pudiendo aprobar o denegar, que es lo que la aprobación necesita.",
           "type": "string"
         },
         "paths": {
@@ -3579,7 +3590,7 @@
       "description": "Params de [`POLICY_REQUEST_SCOPE`] (M3-3b): un agente pide un scope.",
       "properties": {
         "ops": {
-          "description": "Op-kinds solicitados (`copy|move|delete|mkdir`).",
+          "description": "Op-kinds solicitados (`copy|move|delete|mkdir|create`).\n\n`create` entra en 0.57.0 con [`FS_CREATE`]. Un nombre que el daemon no\nreconozca se DESCARTA sin error (fail-closed), así que un cliente 0.57\nque pida `create` a un daemon 0.56 recibe un scope sin esa op y sus\ncreaciones se deniegan — no se conceden por accidente.",
           "items": {
             "type": "string"
           },
