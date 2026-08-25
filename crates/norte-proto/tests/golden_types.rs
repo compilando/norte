@@ -1059,7 +1059,10 @@ fn golden_methods() {
     // opcionales y se omiten, así que sin estas fixturas ni el NOMBRE del
     // campo ni su forma en el wire —una cadena hex opaca, jamás un inodo—
     // los congelaba nada.
-    assert_eq!(fixtures.len(), 164, "[methods.json] fixtures sin caso Rust");
+    // 0.57.0 (#290): fs_create_params con su nombre percent-encoded, y su
+    // pareja anclada — `fs.create` lleva `dest_anchor` y `fs.mkdir` no, que es
+    // lo que hay que congelar.
+    assert_eq!(fixtures.len(), 166, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
@@ -2435,6 +2438,10 @@ fn check_methods_fs_params(fixtures: &BTreeMap<String, Value>) {
 }
 
 /// Familia fs.* + task.cancel (list/stat/copy/move/delete/task).
+#[expect(
+    clippy::too_many_lines,
+    reason = "una fixtura por método de la familia fs.*, sin lógica dentro"
+)]
 fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
     let sample_entry = Entry {
         attrs: std::collections::BTreeMap::new(),
@@ -2527,6 +2534,30 @@ fn check_methods_fs(fixtures: &BTreeMap<String, Value>) {
         "fs_mkdir_params",
         &norte_proto::methods::FsMkdirParams {
             path: vpath("file:///tmp/nueva-carpeta"),
+        },
+    );
+    // 0.57.0 (#290): fs.create. Con un nombre PERCENT-ENCODED, que es el
+    // motivo por el que estas fixturas existen: lo que hay que congelar no es
+    // que el campo se llame `path`, es que un nombre con bytes que no son
+    // ASCII imprimible cruza el cable y vuelve IGUAL (regla dura 1).
+    check_one(
+        fixtures,
+        "fs_create_params",
+        &norte_proto::methods::FsCreateParams {
+            path: vpath("file:///tmp/borrador-%FF%FE.txt"),
+            dest_anchor: None,
+        },
+    );
+    // Y con ancla: `fs.create` la lleva y `fs.mkdir` no, así que la pareja
+    // omitida/presente hace falta aquí igual que en copiar y mover.
+    check_one(
+        fixtures,
+        "fs_create_params_anchored",
+        &norte_proto::methods::FsCreateParams {
+            path: vpath("file:///tmp/borrador-%FF%FE.txt"),
+            dest_anchor: Some(norte_proto::DirAnchor::new(
+                "3f2a91c40b7d6e58aa10c4d9f8e37b62".to_owned(),
+            )),
         },
     );
     check_methods_search(fixtures);
@@ -3413,6 +3444,7 @@ fn method_names_frozen() {
     // FsCapabilitiesResult.attrs y los dos attrs de petición (sin método nuevo).
     // 0.31.0 (#104): fs.mkdir (Task) + TaskKind::Mkdir. Aditivo sobre 0.30.x.
     assert_eq!(methods::FS_MKDIR, "fs.mkdir");
+    assert_eq!(methods::FS_CREATE, "fs.create");
     // 0.32.0 (M4-IA, ADR 0031): ai.rename_plan — respuesta directa cancelable.
     assert_eq!(methods::AI_RENAME_PLAN, "ai.rename_plan");
     // 0.33.0 (M4-IA-2, ADR 0031 A3): index.embed (Task, TaskKind::Embed) +

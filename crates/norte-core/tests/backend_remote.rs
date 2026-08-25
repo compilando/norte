@@ -305,6 +305,53 @@ async fn remote_mkdir_como_task() {
     assert!(d.mem.stat(&vp("mem:///wire-dir")).await.is_ok());
 }
 
+/// `fs.create` POR EL CABLE (#290): el brazo del dispatcher, el `parse_params`
+/// y la Task hasta terminal, que en proceso no los ejecuta nada.
+#[tokio::test]
+async fn remote_create_como_task() {
+    let d = spawn_daemon().await;
+    let backend = Backend::Remote(remote(&d).await);
+    let task = backend
+        .create_file(&vp("mem:///wire-nuevo.txt"))
+        .await
+        .expect("create");
+    assert_eq!(join_ref(task).await, TaskState::Completed);
+    let e = d
+        .mem
+        .stat(&vp("mem:///wire-nuevo.txt"))
+        .await
+        .expect("está");
+    assert_eq!(e.size, Some(0), "y VACÍO: crear no inventa contenido");
+}
+
+/// Y por el cable, un destino ocupado también es un conflicto — no un
+/// truncado silencioso.
+#[tokio::test]
+async fn remote_create_sobre_algo_que_existe_es_conflicto() {
+    let d = spawn_daemon().await;
+    write_file(&d.mem, "mem:///wire-ocupado.txt", b"lo que importa").await;
+    let backend = Backend::Remote(remote(&d).await);
+    let task = backend
+        .create_file(&vp("mem:///wire-ocupado.txt"))
+        .await
+        .expect("encola");
+    assert!(
+        matches!(
+            join_ref(task).await,
+            TaskState::Failed {
+                error: norte_proto::Error::Conflict { .. }
+            }
+        ),
+        "un nombre ocupado es un conflicto"
+    );
+    let e = d
+        .mem
+        .stat(&vp("mem:///wire-ocupado.txt"))
+        .await
+        .expect("sigue");
+    assert_eq!(e.size, Some(14), "con sus bytes intactos");
+}
+
 #[tokio::test]
 async fn un_clon_no_roba_los_canales_del_dueno() {
     let d = spawn_daemon().await;

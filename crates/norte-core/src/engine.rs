@@ -3044,7 +3044,8 @@ impl Engine {
     /// # Errors
     /// [`Error::Unsupported`] si el scheme no tiene provider registrado.
     pub async fn create_file(&self, path: &VPath) -> Result<TaskHandle, Error> {
-        self.create_file_as(path, crate::journal::Actor::User).await
+        self.create_file_as(path, None, crate::journal::Actor::User)
+            .await
     }
 
     /// [`Self::create_file`] con ACTOR explícito: gateado por
@@ -3058,6 +3059,7 @@ impl Engine {
     pub async fn create_file_as(
         &self,
         path: &VPath,
+        dest_anchor: Option<norte_proto::DirAnchor>,
         actor: crate::journal::Actor,
     ) -> Result<TaskHandle, Error> {
         self.gate(&actor, crate::policy::PolicyOp::Create, &[path])
@@ -3072,7 +3074,9 @@ impl Engine {
             Priority::Normal,
             actor,
             Box::new(move |ctx| {
-                Box::pin(async move { ops::create_task(provider, path, observer, &ctx).await })
+                Box::pin(async move {
+                    ops::create_task(provider, path, dest_anchor, observer, &ctx).await
+                })
             }),
         ))
     }

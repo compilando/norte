@@ -263,3 +263,56 @@ async fn mover_a_un_destino_sustituido_ni_escribe_ni_borra_el_origen() {
         "y no borró el origen: un move que no coloca no borra"
     );
 }
+
+/// **Crear un fichero también va anclado** (#290), y es donde el ancla vale
+/// MÁS, no menos.
+///
+/// `fs.create` es el único método del wire cuyo éxito entrega una ruta a un
+/// programa de FUERA de norte: la ventana crea el fichero para abrirlo con el
+/// editor del escritorio. Con el enlace plantado entre el listado y la
+/// confirmación no se pierde un fichero vacío — se pierde la sesión de edición
+/// entera que el humano escribe después, en un directorio que él no estaba
+/// mirando.
+#[tokio::test]
+async fn crear_un_fichero_en_un_destino_sustituido_se_rehusa() {
+    let a = arbol();
+    let visto = ancla(&a, "file:///d/sub").await;
+
+    // El atacante cambia `d/sub` por un enlace a `fuera/`.
+    std::fs::remove_dir(a.dir.path().join("d/sub")).expect("quitar sub");
+    std::os::unix::fs::symlink(a.dir.path().join("fuera"), a.dir.path().join("d/sub"))
+        .expect("plantar el enlace");
+
+    let estado = a
+        .engine
+        .create_file_as(&vp("file:///d/sub/borrador.md"), Some(visto), Actor::User)
+        .await
+        .expect("encola")
+        .join()
+        .await;
+
+    rehusado(&estado);
+    assert!(
+        !a.dir.path().join("fuera/borrador.md").exists(),
+        "no creó nada al otro lado del enlace"
+    );
+}
+
+/// Y sin ancla se comporta como antes de #295: se crea donde diga la ruta.
+///
+/// La comprobación es una MEJORA que quien lista puede pedir, no un requisito
+/// nuevo — un `norte` contra una ruta tecleada a mano sigue funcionando.
+#[tokio::test]
+async fn crear_sin_ancla_sigue_creando() {
+    let a = arbol();
+    let estado = a
+        .engine
+        .create_file_as(&vp("file:///d/sub/borrador.md"), None, Actor::User)
+        .await
+        .expect("encola")
+        .join()
+        .await;
+
+    assert_eq!(estado, TaskState::Completed, "{estado:?}");
+    assert!(a.dir.path().join("d/sub/borrador.md").is_file());
+}

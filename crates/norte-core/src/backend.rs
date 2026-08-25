@@ -860,6 +860,20 @@ impl Backend {
         }
     }
 
+    /// Creación de UN fichero VACÍO como Task (#290). Destino ocupado =
+    /// `Conflict{Exists}`; la exclusividad la aporta el provider (atómica en
+    /// local y en objetos, con ventana en SFTP v3).
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo.
+    pub async fn create_file(&self, path: &VPath) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(engine) => Ok(TaskRef::from_handle(&engine.create_file(path).await?)),
+            #[cfg(unix)]
+            Self::Remote(r) => r.create_file(path).await.map(TaskRef::from),
+        }
+    }
+
     /// El plan REVISABLE de un lote de renames dentro de `dir` (spec §17, ADR
     /// 0042). NO muta nada: ni Task, ni journal.
     ///

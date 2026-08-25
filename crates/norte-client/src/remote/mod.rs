@@ -1247,10 +1247,17 @@ impl RemoteBackend {
     /// # Errors
     /// Lo que responda el daemon al encolar.
     pub async fn create_file(&self, path: &VPath) -> Result<RemoteTask, Error> {
+        // El ancla del directorio en el que se crea, si este SDK lo listó
+        // (#295). Va sola, como en `copy`/`move`: un frontend gana la
+        // comprobación sin escribir una línea.
+        let dest_anchor = path.parent().and_then(|dir| self.inner.anchor_for(&dir));
         let result: FsTaskResult = self
             .call_timed_guarded(
                 methods::FS_CREATE,
-                &norte_proto::methods::FsCreateParams { path: path.clone() },
+                &norte_proto::methods::FsCreateParams {
+                    path: path.clone(),
+                    dest_anchor,
+                },
             )
             .await?;
         Ok(self.own_task(result.task_id, TaskKind::Create))
