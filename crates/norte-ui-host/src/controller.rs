@@ -544,6 +544,11 @@ enum Fondo {
     /// Los volúmenes del host, con la APERTURA del selector que los pidió.
     /// Ver [`Fondo::Catalogo`].
     Volumenes(u64, Result<Vec<norte_proto::methods::Volume>, Error>),
+    /// Las conexiones configuradas, con la APERTURA que las pidió (#264).
+    Conexiones(
+        u64,
+        Result<Vec<norte_proto::methods::ConnectionEntry>, Error>,
+    ),
     /// Un lote de resultados, con la época de la búsqueda que lo pidió.
     Resultados(u64, Box<norte_proto::methods::SearchHits>),
     /// La respuesta de una consulta SEMÁNTICA: entera, de una vez.
@@ -5371,6 +5376,59 @@ impl Estado {
         Some(self.parche(vec![cambio]))
     }
 
+    /// `pane.connect` (#264): el selector de conexiones configuradas.
+    ///
+    /// La lista la da el DAEMON, no este proceso: leer `connections.toml`
+    /// aquí metería russh, opendal, age y el keyring en un binario que solo
+    /// quiere pintar nombres. Elegir una NAVEGA a su URL, y eso establece la
+    /// sesión por el camino de siempre — con su TOFU y su política.
+    fn abrir_conexiones(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.selector = Some(crate::pickers::Selector::conexiones(self.activo()));
+        self.gen_selector += 1;
+        let apertura = self.gen_selector;
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.connections()).await {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::Conexiones(apertura, res))))
+                .await;
+        });
+        let cambio = ViewChange::Picker {
+            picker: self.vista_selector(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Llegaron las conexiones (#264). Misma guarda de apertura que los
+    /// volúmenes: una respuesta de la lista anterior no la rellena.
+    fn aplicar_conexiones(
+        &mut self,
+        apertura: u64,
+        res: Result<Vec<norte_proto::methods::ConnectionEntry>, Error>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        if apertura != self.gen_selector {
+            return None;
+        }
+        let s = self.selector.as_mut()?;
+        // Un fallo se pinta como lista VACÍA con su frase, no como una lista
+        // sin explicación: «no tienes ninguna» y «no se pudo preguntar» no son
+        // lo mismo, y sin la frase las dos se leen igual.
+        s.con_conexiones(res.unwrap_or_default());
+        self.gen_selector += 1;
+        let cambio = ViewChange::Picker {
+            picker: self.vista_selector(),
+        };
+        Some(self.parche(vec![cambio]))
+    }
+
     /// La proyección del selector.
     fn vista_selector(&self) -> Option<crate::dto::PickerView> {
         let mut v = self.selector.as_ref()?.vista(self.lang);
@@ -5952,6 +6010,9 @@ impl Estado {
             Fondo::SalidaDeComando(apertura, datos) => self.aplicar_salida(apertura, *datos),
             Fondo::Volumenes(apertura, res) => {
                 self.aplicar_volumenes(apertura, res).into_iter().collect()
+            }
+            Fondo::Conexiones(apertura, res) => {
+                self.aplicar_conexiones(apertura, res).into_iter().collect()
             }
             Fondo::SitiosVolumenes(res) => self.aplicar_sitios(res).into_iter().collect(),
             Fondo::Resultados(epoca, lote) => {
@@ -7867,6 +7928,20 @@ impl Estado {
     /// Es el MISMO camino que toman las acciones directas del renderer (un
     /// click, un arrastre): que una tecla y un gesto que significan lo mismo
     /// hagan lo mismo no puede depender de que alguien se acuerde.
+    ///
+    /// **Es un DESPACHADOR, y por eso crece una línea por cada gesto nuevo.**
+    /// Lo que el lint mide aquí no dice nada sobre su complejidad: cada brazo
+    /// es un nombre y una llamada, y el `match` exhaustivo es justo lo que
+    /// hace que añadir un `Efecto` sin atenderlo sea un error de compilación.
+    /// Repartir los brazos por funciones para bajar del umbral esconde ese
+    /// reparto en un segundo sitio sin mejorar nada — ya se hizo tres veces,
+    /// y las tres volvió a rozarlo el gesto siguiente. Los grupos que SÍ
+    /// significan algo —lo que abre, lo que dispone, lo que actúa sobre
+    /// entradas— están agrupados; el resto se queda aquí a la vista.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "despachador exhaustivo: un brazo por gesto, sin lógica dentro"
+    )]
     fn aplicar_efecto(
         &mut self,
         efecto: Efecto,
@@ -7949,8 +8024,6 @@ impl Estado {
             Efecto::Espejo | Efecto::Traer | Efecto::Intercambiar => {
                 self.gesto_de_panel(efecto, backend, buzon)
             }
-            Efecto::Historial => self.abrir_historial(),
-            Efecto::Hotlist => self.abrir_hotlist(),
             Efecto::VolumenesDeLado { derecha } => {
                 self.abrir_volumenes_de_lado(derecha, backend, buzon)
             }
@@ -7995,6 +8068,12 @@ impl Estado {
             | Efecto::Agentes
             | Efecto::Tema
             | Efecto::Volumenes
+            | Efecto::Conexiones
+            // El historial y la hotlist son otros dos selectores: van con el
+            // resto de lo que ABRE, y no cada uno con su brazo — este `match`
+            // reparte, y crece un brazo por cada gesto nuevo.
+            | Efecto::Historial
+            | Efecto::Hotlist
             | Efecto::Ver => self.efecto_que_abre(efecto, backend, buzon),
             Efecto::CrearDirectorio
             | Efecto::Borrar { .. }
@@ -8206,6 +8285,9 @@ impl Estado {
             Efecto::Agentes => self.abrir_agentes(),
             Efecto::Tema => self.abrir_tema(),
             Efecto::Volumenes => self.abrir_volumenes(backend, buzon),
+            Efecto::Conexiones => self.abrir_conexiones(backend, buzon),
+            Efecto::Historial => self.abrir_historial(),
+            Efecto::Hotlist => self.abrir_hotlist(),
             Efecto::Ver => self.pedir_visor(backend, buzon),
             // Los demás no llegan aquí: el `match` de arriba los reparte.
             _ => Self::no_muta(),

@@ -2523,6 +2523,22 @@ async fn dispatch(
             )?;
             handle_host_volumes(p).await
         }
+        // `connection.list` (0.56.0, #264): los nombres de `connections.toml`,
+        // para que un frontend ofrezca un selector sin leer ese fichero él
+        // mismo — leerlo le costaría la pila de red entera.
+        //
+        // El gate va ANTES del parseo, mismo criterio que `host.volumes` y por
+        // el mismo motivo: la lista nombra los servidores del humano, y un
+        // agente no distingue «vedado» de «params malos» fuzzeando nada. Sin
+        // params definidos: null o ausente se acepta (ADR 0004).
+        methods::CONNECTION_LIST => {
+            if !matches!(conn.actor, Actor::User) {
+                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+                    rule: "not-approved".into(),
+                }));
+            }
+            handle_connection_list().await
+        }
         // plugin.* (M4-P3): listar el catálogo (cualquier conexión) y aprobar/
         // activar (SOLO humanos — es consentir capabilities, acto de seguridad).
         methods::PLUGIN_LIST => handle_plugin_list(req.params, shared),
@@ -3095,6 +3111,29 @@ async fn handle_host_volumes(p: methods::HostVolumesParams) -> Result<serde_json
         volumes: volumes
             .into_iter()
             .map(crate::backend::volume_to_proto)
+            .collect(),
+    })
+}
+
+/// `connection.list` (0.56.0, #264): las conexiones nombradas del daemon.
+///
+/// Lee el `connections.toml` del DAEMON, que es lo que hace útil el método: el
+/// frontend no lo tiene y no debería tenerlo. Un fichero que no está es una
+/// lista vacía —no tener conexiones es lo normal el primer día—, y uno que no
+/// parsea es un error, porque decir «no tienes ninguna» cuando hay una coma de
+/// más sería mentir sobre lo que el usuario escribió.
+///
+/// Jamás un secreto: lo que sale es el par `(nombre, url)` tal como está
+/// escrito, y las credenciales se REFERENCIAN (ADR 0015).
+async fn handle_connection_list() -> Result<serde_json::Value, RpcError> {
+    let dir = crate::connect::config_dir();
+    let conexiones = crate::connect::named_connections(&dir)
+        .await
+        .map_err(RpcError::from)?;
+    to_value(&methods::ConnectionListResult {
+        connections: conexiones
+            .into_iter()
+            .map(|(name, url)| methods::ConnectionEntry { name, url })
             .collect(),
     })
 }

@@ -143,6 +143,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.copy-path",
     "app.theme",
     "pane.select-drive",
+    "pane.connect",
     "pane.view",
     "pane.quick-search",
     "pane.search",
@@ -441,6 +442,12 @@ pub enum Efecto {
     /// NO está en [`MUTAN`]: lee el archivo entero y contesta si está sano,
     /// sin escribir nada. Es la misma categoría que comparar.
     ComprobarArchivo,
+    /// El selector de conexiones configuradas (#264).
+    ///
+    /// NO está en [`MUTAN`]: listar no abre nada. Elegir una NAVEGA, y navegar
+    /// es lo que establece la sesión — con el mismo gate que cualquier otro
+    /// listado, y su TOFU si hace falta.
+    Conexiones,
     /// Parte el fichero bajo el cursor en trozos del tamaño que se teclee
     /// (#132). Está en [`MUTAN`]: escribe los trozos.
     ///
@@ -632,6 +639,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "app.terminal" => Efecto::Terminal,
         "app.theme" => Efecto::Tema,
         "pane.select-drive" => Efecto::Volumenes,
+        "pane.connect" => Efecto::Conexiones,
         "pane.view" => Efecto::Ver,
         "pane.quick-search" => Efecto::BuscarRapido,
         "pane.search" => Efecto::Buscar,

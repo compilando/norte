@@ -13646,6 +13646,77 @@ async fn copiar_la_ruta_manda_bytes_al_escritorio() {
 
 /// En solo lectura NO se abre nada ni se lanza un terminal: se DICE.
 ///
+/// **El selector de conexiones lo llena el DAEMON** (#264): la ventana no lee
+/// `connections.toml`, que es lo que le costaría meter la pila de red entera.
+///
+/// Y la URL se enmascara como una AUTORIDAD, no como una ruta: aquí «¿a qué
+/// máquina me conecto?» es la única pregunta que el selector contesta.
+#[tokio::test]
+async fn el_selector_de_conexiones_lo_llena_el_daemon() {
+    let falso = arbol_como_falso();
+    *falso.conexiones.lock().expect("conexiones") = Some(Ok(vec![
+        norte_proto::methods::ConnectionEntry {
+            name: "trabajo".to_owned(),
+            url: "sftp://oscar@servidor.example/datos".to_owned(),
+        },
+        norte_proto::methods::ConnectionEntry {
+            name: "archivo".to_owned(),
+            url: "s3://mi-bucket".to_owned(),
+        },
+    ]));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.connect").await;
+
+    let mut con_filas = None;
+    for _ in 0..20 {
+        let Some(v) = siguiente_selector(&mut sub).await else {
+            continue;
+        };
+        if !v.rows.is_empty() {
+            con_filas = Some(v);
+            break;
+        }
+    }
+    let v = con_filas.expect("la lista del daemon llega");
+    assert_eq!(v.rows.len(), 2);
+    assert_eq!(v.rows[0].label, "trabajo");
+    assert!(
+        v.rows[0].detail.contains("servidor.example"),
+        "el detalle es la URL: {:?}",
+        v.rows[0]
+    );
+}
+
+/// Sin ninguna configurada, el selector lo DICE. «No tienes ninguna» y
+/// «todavía no ha contestado» no son lo mismo, y una lista vacía sin frase se
+/// lee siempre como lo primero.
+#[tokio::test]
+async fn sin_conexiones_configuradas_el_selector_lo_dice() {
+    let falso = arbol_como_falso();
+    *falso.conexiones.lock().expect("conexiones") = Some(Ok(Vec::new()));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.connect").await;
+
+    let mut visto = None;
+    for _ in 0..20 {
+        let Some(v) = siguiente_selector(&mut sub).await else {
+            continue;
+        };
+        if v.empty == norte_i18n::t_in(norte_i18n::Lang::Es, "picker-connections-empty") {
+            visto = Some(v);
+            break;
+        }
+    }
+    let v = visto.expect("la frase de lista vacía llega");
+    assert!(v.rows.is_empty());
+}
+
 /// **Con la ventana delante NO se avisa por el escritorio** (#285): la barra
 /// y el tablero ya cuentan lo mismo, y repetirlo fuera es ruido.
 #[tokio::test]

@@ -152,6 +152,61 @@ impl Selector {
         }
     }
 
+    /// El selector de CONEXIONES, todavía sin la lista: se pide al daemon y
+    /// llega (#264).
+    ///
+    /// Vacío al abrir, como el de volúmenes y con la misma carrera: la lista
+    /// viene de una respuesta, así que su `generation` es lo que impide que un
+    /// click pintado sobre una lista se atienda sobre otra.
+    pub(crate) fn conexiones(slot: u32) -> Self {
+        Self {
+            filas: Vec::new(),
+            cursor: 0,
+            vacio: "picker-connections-loading",
+            titulo: "picker-connections-title",
+            slot,
+        }
+    }
+
+    /// Rellena el selector de conexiones con lo que contestó el daemon.
+    ///
+    /// **La URL se enmascara como una autoridad y no como una ruta**: un host
+    /// puede llamarse `banco.example@malo.example` sin llevar un solo carácter
+    /// que se enmascare, y eso se lee como userinfo de un host legítimo. Es el
+    /// mismo cuidado que el aviso de sesión degradada, y por el mismo motivo:
+    /// aquí «¿a qué máquina me estoy conectando?» es la única pregunta.
+    ///
+    /// Lo que se navega es la URL: ir ahí ESTABLECE la sesión por el camino de
+    /// siempre. Una que no parsea como `VPath` se enseña sin destino — se ve
+    /// que está configurada y que no se puede abrir, que es más honesto que
+    /// esconderla.
+    pub(crate) fn con_conexiones(
+        &mut self,
+        conexiones: Vec<norte_proto::methods::ConnectionEntry>,
+    ) {
+        self.filas = conexiones
+            .into_iter()
+            .map(|c| {
+                let (nombre, nombre_hostil) = norte_frontend::display_name(c.name.as_bytes());
+                let (url, url_hostil) = norte_frontend::display_name(c.url.as_bytes());
+                Fila {
+                    vista: PickerRowView {
+                        label: clamp_display(nombre),
+                        hostile: nombre_hostil || url_hostil,
+                        detail: clamp_display(url),
+                    },
+                    destino: VPath::parse(&c.url).ok(),
+                }
+            })
+            .collect();
+        self.cursor = 0;
+        self.vacio = if self.filas.is_empty() {
+            "picker-connections-empty"
+        } else {
+            ""
+        };
+    }
+
     /// El rastro de navegación de un hueco, más reciente primero.
     ///
     /// Las filas son las de `History::entries` —el MRU compartido— y no una

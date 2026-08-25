@@ -857,6 +857,49 @@ async fn agente_sin_scope_ve_policy_denied_humano_copia() {
 /// agente con params inválidos veía `INVALID_PARAMS` en vez de
 /// `PolicyDenied` — un oráculo que el agente controla con la forma de su
 /// propia petición).
+/// `connection.list` es SOLO del humano (#264), por lo mismo que
+/// `host.volumes`: la lista nombra los servidores del usuario, y un scope de
+/// rutas no lo necesita para nada.
+///
+/// Y el gate corre ANTES del parseo, así que un agente ve lo mismo mande lo
+/// que mande — no puede distinguir «vedado» de «params malos» fuzzeando la
+/// forma de su propia petición.
+#[tokio::test]
+async fn connection_list_es_solo_del_humano() {
+    let d = spawn_daemon(None).await;
+
+    let agent = connected_agent(&d, "s1").await;
+    for params in [
+        serde_json::json!({}),
+        serde_json::json!({"algo": "que no existe"}),
+        serde_json::Value::Null,
+    ] {
+        let err = agent
+            .call::<_, methods::ConnectionListResult>(methods::CONNECTION_LIST, &params)
+            .await
+            .expect_err("un agente no lista conexiones");
+        match err {
+            ClientError::Rpc(rpc) => assert!(
+                matches!(
+                    rpc.data,
+                    Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"
+                ),
+                "vedado pase lo que pase, fue {:?}",
+                rpc.data
+            ),
+            other => panic!("esperaba Rpc, fue {other:?}"),
+        }
+    }
+
+    // El humano SÍ, y sin params: la ausencia se acepta (ADR 0004). Cuántas
+    // haya depende de la máquina; lo que se sostiene es que contesta.
+    let human = connected_client(&d).await;
+    let _: methods::ConnectionListResult = human
+        .call(methods::CONNECTION_LIST, &serde_json::Value::Null)
+        .await
+        .expect("el humano lista sin gate");
+}
+
 #[tokio::test]
 async fn agente_ve_policy_denied_en_host_volumes_humano_lo_lista() {
     let d = spawn_daemon(None).await;

@@ -3443,6 +3443,10 @@ fn method_names_frozen() {
     // 0.37.0 (#131): host.volumes — enumeración de los volúmenes del host,
     // SOLO para una conexión User (diseño §C de `2026-08-10-volumes-design.md`).
     assert_eq!(methods::HOST_VOLUMES, "host.volumes");
+    // 0.56.0 (#264): connection.list — las conexiones nombradas del daemon,
+    // para que un frontend ofrezca un selector sin leer `connections.toml` él
+    // mismo. SOLO `User`, por lo mismo que `host.volumes`.
+    assert_eq!(methods::CONNECTION_LIST, "connection.list");
     // 0.38.0 (task V3.5 del plan de volúmenes): `Volume::label` pasa a
     // `Option<Vec<u8>>` — corrección de wire dentro de la misma rama sin
     // publicar, ventana desplazada igual que cualquier bump.
@@ -3591,7 +3595,11 @@ fn method_names_frozen() {
     // `#[non_exhaustive]` y una categoría desconocida cae en `Unknown`—, así
     // que lo que desplaza la ventana no es el JSON sino que un peer 0.54
     // seguirá contando las tres como un error genérico.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.55.0");
+    // 0.56.0 (#264): `connection.list`. Aditivo —un método que un cliente
+    // viejo no llama—, y aun así la ventana se DESPLAZA: contra un daemon
+    // 0.55 no hay selector de conexiones. Lo que no se pierde es conectar,
+    // que sigue siendo navegar a una URL.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.56.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,
