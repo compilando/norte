@@ -1823,6 +1823,13 @@ struct Estado {
     /// Lo que esta ventana tiene del ESCRITORIO: por dónde salen los efectos
     /// nativos y la salida del último comando de extensión.
     escritorio: Escritorio,
+    /// Hay un selector de carpeta abierto, y esto dice si lo que se pidió era
+    /// MOVER (#284). `None` = no se pidió ninguno.
+    ///
+    /// Solo el verbo: los operandos se recalculan cuando la respuesta vuelve.
+    /// Congelarlos aquí prometería una operación sobre un listado que el
+    /// lector pudo cambiar mientras el selector estaba delante.
+    destino_pendiente: Option<bool>,
 
     /// El tema, tal como lo resolvió el arranque.
     tema: crate::pickers::HostTheme,
@@ -2205,6 +2212,7 @@ impl Estado {
             extensiones: None,
             agencia: Agencia::default(),
             escritorio: Escritorio::default(),
+            destino_pendiente: None,
             tema: theme,
             mirando_tema: false,
             cursor_procesos: 0,
@@ -2690,13 +2698,7 @@ impl Estado {
                 )
             }
             UiAction::Key(k) => self.tecla(k, backend, buzon),
-            UiAction::SetViewerRows { rows } => {
-                self.visor_filas = Some(usize::try_from(*rows).unwrap_or(1).max(1));
-                let cambio = ViewChange::Viewer {
-                    viewer: self.vista_visor(),
-                };
-                (self.aplicada(), vec![self.parche(vec![cambio])])
-            }
+            UiAction::SetViewerRows { rows } => self.fijar_filas_del_visor(*rows),
             UiAction::AiRenameDecide { approve } => {
                 self.decidir_revision_ia(*approve, backend, buzon)
             }
@@ -2719,6 +2721,7 @@ impl Estado {
             // (crear directorio, renombrar). Decirlo es más honesto que
             // aceptar texto que nadie va a leer.
             UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
+            UiAction::DirectoryPicked { path } => self.destino_elegido(path.clone()),
             otra => self.fila_por_indice(otra, backend, buzon),
         }
     }
@@ -10529,10 +10532,18 @@ impl Estado {
         None
     }
 
-    /// Sobre QUÉ y hacia DÓNDE opera una transferencia, o el motivo por el que
-    /// no se puede preguntar siquiera. Devuelve `(origen_dir, destino, paths)`.
-    fn operandos_de_transferencia(&self) -> Result<(VPath, VPath, Vec<VPath>), &'static str> {
-        let destino = self.directorio_destino()?;
+    /// Sobre QUÉ opera una transferencia hacia `destino`, o el motivo por el
+    /// que no se puede preguntar siquiera. Devuelve `(origen_dir, paths)`.
+    ///
+    /// El destino llega por PARÁMETRO desde #284: casi siempre sale del rol
+    /// compartido, pero con un solo listado en pantalla lo elige el lector en
+    /// el selector del escritorio, y las dos formas tienen que pasar por las
+    /// mismas comprobaciones.
+    fn operandos_de_transferencia(
+        &self,
+        destino: &VPath,
+    ) -> Result<(VPath, Vec<VPath>), &'static str> {
+        let destino = destino.clone();
         let origen_dir = self.hueco().pane.dir().clone();
         if origen_dir == destino {
             // Los dos listados en el mismo sitio. El daemon lo rechazaría
@@ -10576,12 +10587,104 @@ impl Estado {
         if paths.iter().any(|p| p.file_name().is_none()) {
             return Err("host-cannot-transfer-root");
         }
-        Ok((origen_dir, destino, paths))
+        let _ = destino;
+        Ok((origen_dir, paths))
     }
 
+    /// Abre la confirmación de copiar o mover, resolviendo el destino.
+    ///
+    /// Con un solo listado en pantalla no hay panel destino, y hasta #284 eso
+    /// era el final del camino: la operación se rehusaba y quien no había
+    /// partido la ventana no podía copiar. Ahora se le pregunta al escritorio.
     fn pedir_transferencia(&mut self, mover: bool) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match self.directorio_destino() {
+            Ok(destino) => self.confirmar_transferencia(&destino, mover),
+            // Sin OTRO hueco al que apuntar: lo elige el lector fuera.
+            Err("host-no-other-slot") => self.pedir_destino_al_escritorio(mover),
+            Err(reason_key) => (
+                ActionAck::Unavailable {
+                    reason_key: reason_key.to_owned(),
+                },
+                Vec::new(),
+            ),
+        }
+    }
+
+    /// Cuántas filas caben en el visor, según lo mide el renderer.
+    ///
+    /// Al menos una: un visor de cero filas no pinta nada y su paginación
+    /// dividiría por cero.
+    fn fijar_filas_del_visor(&mut self, rows: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.visor_filas = Some(usize::try_from(rows).unwrap_or(1).max(1));
+        let cambio = ViewChange::Viewer {
+            viewer: self.vista_visor(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Le pide al ESCRITORIO que el lector elija el destino (#284).
+    ///
+    /// Se recuerda solo el VERBO —copiar o mover—, no los operandos: cuando la
+    /// respuesta vuelva se recalculan del estado de entonces. Congelar aquí
+    /// las marcas sería prometer una operación sobre un listado que el lector
+    /// pudo cambiar mientras el selector estaba abierto.
+    fn pedir_destino_al_escritorio(
+        &mut self,
+        mover: bool,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // El directorio del panel es solo la SUGERENCIA de dónde abrir el
+        // selector, y por eso no se exige que sea local: lo que el selector
+        // devuelve es siempre una carpeta de esta máquina, y copiar de un
+        // `sftp://` a una carpeta local es una operación legítima que el core
+        // hace desde siempre. Con un panel remoto, quien ejecuta abre donde
+        // pueda — la sugerencia se pierde, la operación no.
+        let desde = self.hueco().pane.dir().clone();
+        if !self.nativo(crate::dto::NativeEffect::PickDirectory { desde }) {
+            return Self::sin_escritorio();
+        }
+        self.destino_pendiente = Some(mover);
+        (self.aplicada(), self.decir("host-pick-destination"))
+    }
+
+    /// Volvió el selector del escritorio (#284).
+    ///
+    /// `None` = se cerró sin elegir, y entonces no pasa nada: cancelar es una
+    /// respuesta. Con una ruta, se confirma como cualquier otra transferencia
+    /// — y eso significa que el destino se ENSEÑA antes de mover un byte, que
+    /// es lo que acota que la ruta haya pasado por el renderer.
+    fn destino_elegido(
+        &mut self,
+        path: Option<String>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(mover) = self.destino_pendiente.take() else {
+            // Nadie pidió un destino: una respuesta que no contesta a ninguna
+            // pregunta no se interpreta.
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let Some(nativa) = path else {
+            return (self.aplicada(), Vec::new());
+        };
+        let Some(destino) = norte_frontend::shell::vpath_de_ruta_nativa(&nativa) else {
+            let fuera = self.decir("host-bad-destination");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-bad-destination".to_owned(),
+                },
+                fuera,
+            );
+        };
+        self.confirmar_transferencia(&destino, mover)
+    }
+
+    /// La confirmación propiamente dicha, con el destino ya resuelto.
+    fn confirmar_transferencia(
+        &mut self,
+        destino: &VPath,
+        mover: bool,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let activo = self.activo();
-        let (origen_dir, destino, paths) = match self.operandos_de_transferencia() {
+        let destino = destino.clone();
+        let (origen_dir, paths) = match self.operandos_de_transferencia(&destino) {
             Ok(t) => t,
             Err(reason_key) => {
                 return (

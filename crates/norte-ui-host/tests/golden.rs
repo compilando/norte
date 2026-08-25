@@ -156,6 +156,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::FocusSlot { .. } => "focus_slot",
         UiAction::Dialog { .. } => "dialog",
         UiAction::DialogInput { .. } => "dialog_input",
+        UiAction::DirectoryPicked { .. } => "directory_picked",
         UiAction::CancelTask { .. } => "cancel_task",
         UiAction::CompareSelectRow { .. } => "compare_select_row",
         UiAction::CompareActivateRow { .. } => "compare_activate_row",
@@ -223,7 +224,32 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
                 text: "carpeta nueva".to_owned(),
             },
         ),
+        // La vuelta del selector del escritorio (#284). Un caso por variante,
+        // que es la regla de arriba; el `path: null` de un selector cerrado
+        // sin elegir lo cubre `un_selector_cancelado_viaja_como_null`.
+        (
+            "directory_picked",
+            UiAction::DirectoryPicked {
+                path: Some("/home/oscar/destino".to_owned()),
+            },
+        ),
     ]
+}
+
+/// Cerrar el selector sin elegir viaja como `null`, y vuelve como `None`
+/// (#284). Fuera de la familia golden porque ahí solo cabe un caso por
+/// variante — pero la forma en el cable importa igual: un renderer que
+/// mandara `""` estaría nombrando la raíz.
+#[test]
+fn un_selector_cancelado_viaja_como_null() {
+    let a = UiAction::DirectoryPicked { path: None };
+    let json = serde_json::to_value(&a).expect("serializa");
+    assert_eq!(
+        json,
+        serde_json::json!({"action": "directory_picked", "path": null})
+    );
+    let vuelta: UiAction = serde_json::from_value(json).expect("deserializa");
+    assert!(matches!(vuelta, UiAction::DirectoryPicked { path: None }));
 }
 
 /// Las que nombran una fila de un OVERLAY por su índice.

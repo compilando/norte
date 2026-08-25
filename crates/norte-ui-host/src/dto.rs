@@ -2261,6 +2261,21 @@ pub enum NativeEffect {
         /// `xdg-open`—.
         path: norte_proto::VPath,
     },
+    /// Pide al ESCRITORIO que el lector elija un directorio (#284).
+    ///
+    /// Existe porque con un solo listado en pantalla no hay panel destino del
+    /// que sacar el sitio, y rehusar la operación era dejar sin copiar a quien
+    /// no ha partido la ventana. El selector lo pinta el sistema, no norte.
+    ///
+    /// **La ruta que vuelva es texto del renderer y se trata como tal**: el
+    /// host la valida y, sobre todo, la ENSEÑA en la confirmación antes de
+    /// mover un byte. Los operandos —qué se copia— siguen saliendo del estado
+    /// del host y no del mensaje, que es la regla de ADR 0069.
+    PickDirectory {
+        /// Dónde abrir el selector: el directorio del panel activo. Es una
+        /// sugerencia, no una restricción — el lector puede irse a otro sitio.
+        desde: norte_proto::VPath,
+    },
     /// Abre un terminal sentado en ESTE directorio.
     OpenTerminal {
         /// Dónde se sienta.

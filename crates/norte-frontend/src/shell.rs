@@ -527,6 +527,90 @@ pub fn is_local(path: &norte_proto::VPath) -> bool {
     norte_vfs::native::vpath_to_native(path).is_ok()
 }
 
+/// Los selectores de carpeta del ESCRITORIO que sabemos invocar, en orden
+/// (#284).
+///
+/// Una LISTA y no una elección, por lo mismo que [`terminal_candidates`]:
+/// elegir pide sondear el `PATH` y esta función no hace I/O. Vacía significa
+/// que aquí no hay ninguno, y eso se DICE en vez de tragárselo — «no pasó
+/// nada» sobre un selector que nunca se abrió es lo que deja a alguien
+/// esperando una ventana.
+///
+/// Cada candidato imprime la carpeta elegida por `stdout` y sale con código
+/// distinto de cero si se cierra sin elegir, que es lo que hace que cancelar
+/// y elegir se distingan sin analizar texto.
+///
+/// El conjunto es CERRADO —zenity, kdialog, yad— porque los argumentos
+/// difieren en cada uno, y adivinar los de un programa desconocido es cómo se
+/// acaba abriendo un selector de FICHEROS donde se pedía uno de carpetas.
+///
+/// ```
+/// use norte_frontend::shell::directory_picker_candidates;
+/// let cands = directory_picker_candidates(std::path::Path::new("/tmp"));
+/// // En una máquina sin ninguno, la lista está vacía y quien llama lo dice.
+/// for argv in &cands {
+///     assert!(!argv.is_empty(), "un candidato sin programa no se lanza");
+/// }
+/// ```
+#[must_use]
+pub fn directory_picker_candidates(desde: &std::path::Path) -> Vec<Vec<std::ffi::OsString>> {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let d = desde.as_os_str().to_os_string();
+        // La `/` final es lo que hace que zenity y yad ENTREN en el
+        // directorio, en vez de dejarlo señalado desde el padre.
+        let arranque = || {
+            let mut s = std::ffi::OsString::from("--filename=");
+            s.push(&d);
+            s.push("/");
+            s
+        };
+        vec![
+            vec![
+                "zenity".into(),
+                "--file-selection".into(),
+                "--directory".into(),
+                arranque(),
+            ],
+            vec!["kdialog".into(), "--getexistingdirectory".into(), d.clone()],
+            vec![
+                "yad".into(),
+                "--file".into(),
+                "--directory".into(),
+                arranque(),
+            ],
+        ]
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let _ = desde;
+        Vec::new()
+    }
+}
+
+/// El `VPath` de una ruta NATIVA que llega de fuera — el selector de carpetas
+/// del escritorio (#284) —, o `None` si no se puede nombrar.
+///
+/// Va aquí y no en el host porque quien recibe esa ruta es un frontend, y la
+/// conversión tiene una regla que no se puede reinventar: **los bytes son los
+/// bytes**. Un nombre de fichero no es UTF-8 garantizado (regla 1), y una ruta
+/// que se decodifique con pérdida por el camino abre otro fichero.
+///
+/// ```
+/// use norte_frontend::shell::vpath_de_ruta_nativa;
+/// assert!(vpath_de_ruta_nativa("/tmp").is_some());
+/// // Una ruta relativa no nombra nada sin un «desde», así que se rehúsa.
+/// assert!(vpath_de_ruta_nativa("tmp").is_none());
+/// ```
+#[must_use]
+pub fn vpath_de_ruta_nativa(nativa: &str) -> Option<norte_proto::VPath> {
+    let p = std::path::Path::new(nativa);
+    if !p.is_absolute() {
+        return None;
+    }
+    norte_vfs::native::vpath_from_native(p).ok()
+}
+
 /// Every argv worth trying, in order, to put text on the system clipboard —
 /// for a frontend that has no terminal to ask (the GUI, task 6.5).
 ///

@@ -38,9 +38,27 @@ pub enum Resultado {
 /// Cada uno se ejecuta en un hilo bloqueante: arrancar un proceso y escribir
 /// en su stdin son llamadas bloqueantes, y hacerlas en el ejecutor async es
 /// la regla 2 rota en un sitio donde nadie lo miraría.
-pub async fn bombear(mut rx: tokio::sync::broadcast::Receiver<NativeEffect>) {
+pub async fn bombear(
+    mut rx: tokio::sync::broadcast::Receiver<NativeEffect>,
+    host: std::sync::Arc<norte_ui_host::UiHost>,
+) {
     loop {
         match rx.recv().await {
+            // El selector de carpeta es el único que CONTESTA (#284): los
+            // demás se lanzan y se olvidan, pero de este el host espera una
+            // ruta, así que su respuesta vuelve por `dispatch` como cualquier
+            // otra acción — la misma puerta que usa el renderer.
+            Ok(NativeEffect::PickDirectory { desde }) => {
+                let host = std::sync::Arc::clone(&host);
+                tokio::task::spawn(async move {
+                    let elegido = tokio::task::spawn_blocking(move || elegir_directorio(&desde))
+                        .await
+                        .unwrap_or(None);
+                    let _ = host
+                        .dispatch(norte_ui_host::UiAction::DirectoryPicked { path: elegido })
+                        .await;
+                });
+            }
             Ok(efecto) => {
                 // Sin esperar al resultado: un `xdg-open` puede tardar
                 // segundos en devolver, y el siguiente gesto de quien está
@@ -62,7 +80,59 @@ pub fn ejecutar(efecto: &NativeEffect) -> Resultado {
         NativeEffect::CopyBytes { bytes, .. } => copiar(bytes),
         NativeEffect::OpenPath { path } => abrir(path),
         NativeEffect::OpenTerminal { dir } => terminal(dir),
+        // Lo atiende `bombear`, que es quien puede devolverle la ruta al host.
+        // Aquí no hay a quién contestar.
+        NativeEffect::PickDirectory { .. } => Resultado::SinPrograma,
     }
+}
+
+/// Abre el selector de carpeta del ESCRITORIO y devuelve lo que se eligió
+/// (#284). `None` = se cerró sin elegir, o aquí no hay ningún selector.
+///
+/// Bloquea a propósito —se llama desde `spawn_blocking`—: un selector se queda
+/// abierto todo el tiempo que el lector tarde en decidir, que puede ser un
+/// minuto.
+///
+/// Los candidatos se prueban en orden y el primero que EXISTE decide: un
+/// programa que no está da `NotFound` al arrancar y se pasa al siguiente, que
+/// es el mismo sondeo por intento que hacen el portapapeles y el terminal.
+/// Cancelar se distingue de elegir por el código de salida, no analizando el
+/// texto — un directorio puede llamarse como cualquier mensaje de error.
+#[must_use]
+fn elegir_directorio(desde: &norte_proto::VPath) -> Option<String> {
+    // Con un panel REMOTO no hay ruta nativa donde abrir, y eso no impide
+    // nada: el selector devuelve siempre una carpeta de esta máquina, y copiar
+    // de un `sftp://` a una carpeta local es legítimo. Se pierde la sugerencia
+    // de dónde empezar, no la operación.
+    let nativo = norte_vfs::native::vpath_to_native(desde).unwrap_or_else(|_| {
+        std::env::var_os("HOME")
+            .map_or_else(|| std::path::PathBuf::from("/"), std::path::PathBuf::from)
+    });
+    for argv in norte_frontend::shell::directory_picker_candidates(&nativo) {
+        let (programa, args) = argv.split_first()?;
+        let salida = std::process::Command::new(programa)
+            .args(args)
+            // Sin stdin: un selector no lee nada, y dejárselo abierto es una
+            // puerta que no hace falta (misma regla 9 que el resto).
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+        let Ok(salida) = salida else {
+            // No está en el PATH: al siguiente.
+            continue;
+        };
+        if !salida.status.success() {
+            // Existe y se cerró sin elegir. NO se prueba el siguiente: el
+            // lector ya contestó, y abrirle otro selector sería no aceptar un
+            // «no».
+            return None;
+        }
+        let ruta = String::from_utf8_lossy(&salida.stdout)
+            .trim_end()
+            .to_owned();
+        return (!ruta.is_empty()).then_some(ruta);
+    }
+    None
 }
 
 /// Escribe `bytes` en el portapapeles con el primer helper que exista.
