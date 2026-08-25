@@ -24,6 +24,18 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **The window has a directory tree** (`pane.tree`, bridge **40**, ADR 0075).
+  It occupies a slot like any other kind — it splits, closes and resizes with
+  the gestures that already exist — and choosing a branch navigates the
+  *listing*, not the tree: the tree stays anchored where it was opened, which
+  is what makes having it open worth anything. Two gestures per row, because
+  both are needed: the twisty folds, the name navigates. It is lazy and asks
+  for one branch per turn, chained — a tree that read itself whole on opening
+  would take minutes on a large `$HOME` and hours against a remote. A branch
+  that cannot be read is marked read and empty, so it is not re-requested
+  forever. The model moved from `norte-tui` to `norte-frontend`, so the TUI and
+  the window share it rather than drifting apart.
+
 - **You can drop files from the desktop onto the window** (#283, bridge **39**,
   ADR 0074). Dropping does not copy: it opens the same confirmation a copy
   does, with the destination in its own field and the sources masked line by

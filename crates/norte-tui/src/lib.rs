@@ -40,7 +40,11 @@ pub mod suspend;
 pub mod tasks;
 pub mod theme;
 pub mod trail;
-pub mod tree;
+/// El panel de árbol vive en `norte-frontend` desde que la ventana también lo
+/// pinta: es estado de presentación, y dos copias del mismo modelo se separan
+/// (ADR 0066 D14). Se reexporta para no reescribir `crate::tree::` en veinte
+/// sitios.
+pub use norte_frontend::tree;
 pub mod tty;
 pub mod turn;
 pub mod ui;

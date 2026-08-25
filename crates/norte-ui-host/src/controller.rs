@@ -606,6 +606,11 @@ enum Fondo {
     /// Aparte de los del selector por el mismo motivo que los dos catálogos
     /// de plugins: son dos superficies con dos vidas.
     SitiosVolumenes(Result<Vec<norte_proto::methods::Volume>, Error>),
+    /// Los subdirectorios de una rama del ÁRBOL, ya filtrados y ordenados.
+    ///
+    /// Sin `Result`: una rama que no se deja leer llega VACÍA y se marca como
+    /// leída, porque la alternativa es volver a pedirla en cada vuelta.
+    RamasDeArbol(VPath, Vec<VPath>),
 }
 
 impl UiHost {
@@ -1908,6 +1913,11 @@ struct Estado {
     /// como mucho: dos listas idénticas de discos no son una disposición,
     /// son un fallo (lo dice el registro compartido, `multi: false`).
     sitios: Option<norte_frontend::places::PlacesState>,
+    /// El árbol de directorios, si la disposición coloca uno. Hay UNO como
+    /// mucho, por lo mismo que la barra de sitios.
+    ramas: Option<norte_frontend::tree::Tree>,
+    /// Sube cada vez que cambia el conjunto de ramas visibles.
+    gen_ramas: u64,
     /// El cursor del panel de procesos.
     ///
     /// Se acota al LEER y no al mover: las filas aparecen y desaparecen
@@ -2250,6 +2260,8 @@ impl Estado {
             cursor_procesos: 0,
             sitios: None,
             gen_sitios: 0,
+            ramas: None,
+            gen_ramas: 0,
             gen_selector: 0,
             gen_extensiones: 0,
             gen_catalogo: 0,
@@ -2789,6 +2801,12 @@ impl Estado {
             }
             UiAction::PlaceActivateRow { row, generation } => {
                 self.activar_sitio(*row, *generation, backend, buzon)
+            }
+            UiAction::TreeActivateRow { row, generation } => {
+                self.tocar_rama(*row, *generation, true, backend, buzon)
+            }
+            UiAction::TreeToggleRow { row, generation } => {
+                self.tocar_rama(*row, *generation, false, backend, buzon)
             }
             UiAction::LayoutActivateRow { row } => self.elegir_disposicion(*row, backend, buzon),
             UiAction::SearchActivateRow { row } => self.ir_al_resultado(*row, backend, buzon),
@@ -4785,12 +4803,227 @@ impl Estado {
         let (borde, tamano) = match kind {
             "places" => (Edge::Left, Size::Fixed(16)),
             "processes" => (Edge::Bottom, Size::Fixed(8)),
+            // El árbol a la izquierda y con el ancho de la barra de sitios: es
+            // el mismo gesto —una columna de navegación al lado del listado— y
+            // dos anchos distintos para lo mismo se notan.
+            "tree" => (Edge::Left, Size::Fixed(24)),
             _ => (Edge::Right, Size::Fixed(30)),
         };
         let nuevo = self
             .arbol
             .dock(SlotId(self.enfocado()), borde, tamano, &hoja);
-        self.aplicar_disposicion(nuevo, backend, buzon)
+        let salida = self.aplicar_disposicion(nuevo, backend, buzon);
+        if kind == "tree" {
+            // Anclar al abrirlo, y solo entonces: el árbol se queda donde
+            // está mientras el listado navega, que es lo que hace útil tenerlo
+            // abierto. Re-anclarlo en cada navegación tiraría las ramas
+            // abiertas cada vez que el lector entra en una carpeta.
+            self.sembrar_ramas();
+            self.pedir_ramas(backend, buzon);
+        }
+        salida
+    }
+
+    /// Tope de ramas hijas de UNA rama.
+    ///
+    /// Un directorio con cien mil subdirectorios no se pinta: se recorta, y lo
+    /// que se ve es «hasta aquí». Sin tope, una sola rama abierta convierte
+    /// cada foto del host en un mensaje de megabytes.
+    const MAX_RAMAS: usize = 2000;
+
+    /// El hueco del árbol, si la disposición coloca uno.
+    fn hueco_de_ramas(&self) -> Option<SlotId> {
+        self.arbol
+            .slot_ids()
+            .into_iter()
+            .find(|s| kind_de(&self.arbol, *s).is_some_and(|k| k.as_str() == "tree"))
+    }
+
+    /// Ancla el árbol donde esté MIRANDO el listado enfocado.
+    fn sembrar_ramas(&mut self) {
+        let raiz = self.hueco().pane.dir().clone();
+        self.ramas
+            .get_or_insert_with(norte_frontend::tree::Tree::default)
+            .anchor(raiz);
+        self.gen_ramas += 1;
+    }
+
+    /// Pide la siguiente rama que haga falta, y UNA por vuelta.
+    ///
+    /// Perezoso por la misma razón que el listado local no trae tamaños: un
+    /// árbol que se leyera entero al abrirse tardaría minutos en un `$HOME`
+    /// grande y horas contra un remoto. Una rama por vuelta acota además lo
+    /// que un directorio enorme o un servidor lento pueden trabar: la
+    /// siguiente pide la siguiente.
+    fn pedir_ramas(&mut self, backend: &Arc<dyn HostBackend>, buzon: &mpsc::Sender<Mensaje>) {
+        if self.hueco_de_ramas().is_none() {
+            return;
+        }
+        let Some(dir) = self
+            .ramas
+            .as_ref()
+            .and_then(norte_frontend::tree::Tree::wants)
+        else {
+            return;
+        };
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            // Sin atributos: el árbol enseña nombres de directorio y nada más,
+            // y pedir tamaños o permisos por rama sería pagarlos por cada
+            // carpeta que alguien despliega.
+            let hijos = match backend.list(dir.clone(), Vec::new()).await {
+                Ok((stream, _)) => Self::ramas_del_listado(stream).await,
+                // Una rama que no se deja leer se marca como leída y VACÍA:
+                // sin esto se volvería a pedir en cada vuelta, que es un bucle
+                // de peticiones contra un directorio prohibido.
+                Err(_) => Vec::new(),
+            };
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::RamasDeArbol(dir, hijos))))
+                .await;
+        });
+    }
+
+    /// Los subdirectorios de un listado, en el orden del panel de al lado.
+    async fn ramas_del_listado(mut stream: norte_client::EntryStream) -> Vec<VPath> {
+        use futures::StreamExt as _;
+        let mut entradas = Vec::new();
+        while entradas.len() < Self::MAX_RAMAS {
+            match stream.next().await {
+                Some(Ok(e)) => {
+                    if e.kind == norte_proto::EntryKind::Dir {
+                        entradas.push(e);
+                    }
+                }
+                // Un error a mitad de rama deja lo que se leyó: media rama
+                // enseña menos de lo que hay, pero no enseña nada FALSO, y la
+                // alternativa es tirar el trabajo de un directorio enorme por
+                // su última entrada.
+                Some(Err(_)) | None => break,
+            }
+        }
+        // El MISMO comparador que el listado de al lado: dos columnas que
+        // enseñan lo mismo en distinto orden se leen como si dijeran cosas
+        // distintas.
+        norte_frontend::sort_entries(&mut entradas);
+        entradas.into_iter().map(|e| e.path).collect()
+    }
+
+    /// Llegaron los hijos de una rama.
+    ///
+    /// Y se pide la siguiente aquí mismo: es lo que encadena el recorrido
+    /// perezoso sin un reloj de por medio.
+    fn aplicar_ramas(
+        &mut self,
+        dir: VPath,
+        hijos: Vec<VPath>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        // Solo si el árbol EXISTE en esta disposición: una respuesta rezagada
+        // de un panel ya cerrado no resucita su estado ni manda una foto.
+        self.hueco_de_ramas()?;
+        let arbol = self.ramas.as_mut()?;
+        arbol.insert_children(dir, hijos);
+        // Las filas nuevas se insertan EN MEDIO: todo índice pintado hasta
+        // ahora nombra otra rama.
+        self.gen_ramas += 1;
+        self.pedir_ramas(backend, buzon);
+        let snap = self.snapshot();
+        Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+    }
+
+    /// El árbol, proyectado.
+    ///
+    /// Sin estado se proyecta VACÍO en vez de no proyectarse: un hueco que la
+    /// disposición coloca y el host no pinta desaparecería de la pantalla, y
+    /// preservar lo que hay es la regla de la sesión (ADR 0059).
+    fn arbol_de_ramas(&self, id: u32) -> crate::dto::TreeSlotView {
+        let vacio = norte_frontend::tree::Tree::default();
+        let arbol = self.ramas.as_ref().unwrap_or(&vacio);
+        let filas = arbol.rows();
+        let raiz = arbol.root().cloned();
+        let rows = filas
+            .iter()
+            .map(|r| {
+                // La raíz lleva su ruta entera: «`/`» a secas, o el nombre de
+                // la última carpeta, no dicen desde dónde cuelga esto.
+                let (pintable, hostil) = if raiz.as_ref() == Some(&r.path) {
+                    norte_frontend::path_display(&r.path)
+                } else {
+                    // Sin nombre solo la raíz de un provider, y esa ya se fue
+                    // por la otra rama: aun así se pinta la ruta entera en vez
+                    // de quedarse en blanco.
+                    r.path.file_name().map_or_else(
+                        || norte_frontend::path_display(&r.path),
+                        |n| norte_frontend::display_name(n.as_bytes()),
+                    )
+                };
+                crate::dto::TreeRowView {
+                    label: clamp_display(pintable),
+                    hostile: hostil,
+                    depth: u32::try_from(r.depth).unwrap_or(u32::MAX),
+                    expanded: r.expanded,
+                    children: r.children,
+                }
+            })
+            .collect();
+        crate::dto::TreeSlotView {
+            slot_id: id,
+            rows,
+            cursor: arbol.cursor() as u64,
+            generation: self.gen_ramas,
+        }
+    }
+
+    /// Un click en una rama: la elige, y según el gesto navega o la pliega.
+    fn tocar_rama(
+        &mut self,
+        row: u32,
+        generation: u64,
+        navegar: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if generation != self.gen_ramas {
+            // Lo pulsado y lo que hay ahora no son el mismo árbol: los hijos
+            // de una rama aterrizan EN MEDIO. Rechazar es lo único correcto —
+            // seguir habría navegado a otra carpeta.
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let Some(arbol) = self.ramas.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        if row as usize >= arbol.rows().len() {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        arbol.set_cursor(row as usize);
+        if !navegar {
+            arbol.toggle();
+            self.gen_ramas += 1;
+            self.pedir_ramas(backend, buzon);
+            let snap = self.snapshot();
+            return (
+                self.aplicada(),
+                vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            );
+        }
+        // Desplegar Y navegar: quien pulsa sobre una rama quiere ver qué hay
+        // dentro, y verlo en el listado es la respuesta completa.
+        arbol.expand();
+        let Some(destino) = arbol.selected() else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        self.gen_ramas += 1;
+        self.pedir_ramas(backend, buzon);
+        // Al listado ENFOCADO, por el mismo camino que cualquier otra
+        // navegación: es lo que hace que tener el árbol abierto no cambie a
+        // dónde van las operaciones.
+        (
+            self.aplicada(),
+            self.navegar(&destino, Trail::Record, backend, buzon),
+        )
     }
 
     /// Cambia el tamaño del hueco con el FOCO, no del listado activo.
@@ -6030,6 +6263,10 @@ impl Estado {
                 self.aplicar_conexiones(apertura, res).into_iter().collect()
             }
             Fondo::SitiosVolumenes(res) => self.aplicar_sitios(res).into_iter().collect(),
+            Fondo::RamasDeArbol(dir, hijos) => self
+                .aplicar_ramas(dir, hijos, backend, buzon)
+                .into_iter()
+                .collect(),
             Fondo::Resultados(epoca, lote) => {
                 self.aplicar_resultados(epoca, &lote).into_iter().collect()
             }
@@ -14861,6 +15098,7 @@ impl Estado {
                     slots.push(SlotView::Metadata(Box::new(self.hoja_de_atributos(*slot))));
                 }
                 Some("places") => slots.push(SlotView::Places(Box::new(self.barra_de_sitios(id)))),
+                Some("tree") => slots.push(SlotView::Tree(Box::new(self.arbol_de_ramas(id)))),
                 Some("processes") => slots.push(SlotView::Processes {
                     slot_id: id,
                     // Índice sobre las filas PINTADAS, que es lo que el

@@ -54,7 +54,6 @@ const APLAZADOS: &[(&str, u32)] = &[
     ("dialog.up", 287),
     ("pane.disconnect", 290),
     ("pane.edit-new", 290),
-    ("pane.tree", 290),
     // El único de los siete de la ADR 0058 que sigue fuera: esta ventana no
     // sabe PINTAR un hueco de preview —caería a «kind no soportado», en
     // gris—, y abrir un hueco que solo se pinta apagado no es abrirlo.

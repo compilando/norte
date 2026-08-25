@@ -1527,6 +1527,50 @@ body {
   color: var(--selection-fg);
 }
 
+/* --- El árbol de directorios ------------------------------------------ */
+
+.tree {
+  overflow: auto;
+}
+
+.tree-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tree-row {
+  /* El triángulo y el nombre EN LA MISMA línea, al revés que la barra de
+     sitios: aquí la segunda columna es la sangría, no un detalle largo, y
+     partir la fila rompería la única cosa que un árbol tiene que enseñar
+     —qué cuelga de qué. */
+  display: grid;
+  grid-template-columns: 2ch 1fr;
+  gap: 0 2px;
+  padding-right: 6px;
+  /* La sangría por nivel, con la profundidad que el host mandó. */
+  padding-left: calc(6px + var(--depth, 0) * 1.5ch);
+  cursor: pointer;
+}
+
+.tree-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.tree-twisty {
+  color: var(--title-fg);
+}
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Un nombre de directorio son BYTES del sistema de ficheros: no se parte en
+     dos líneas ni se deja envolver, porque un nombre partido se lee como dos.
+     El mismo criterio que la barra de sitios. */
+  white-space: nowrap;
+}
+
 /* --- La barra lateral de sitios --------------------------------------- */
 
 .places {

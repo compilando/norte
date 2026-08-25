@@ -917,6 +917,44 @@ pub struct MetadataFieldView {
     pub hostile: bool,
 }
 
+/// El panel de árbol de directorios.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreeSlotView {
+    /// Id del hueco.
+    pub slot_id: u32,
+    /// Las ramas visibles, en orden de pintado.
+    pub rows: Vec<TreeRowView>,
+    /// Qué fila tiene el cursor.
+    pub cursor: u64,
+    /// Sube cada vez que cambia el CONJUNTO de filas.
+    ///
+    /// Y cambia solo: desplegar una rama pide su listado, y ese listado llega
+    /// de una task de fondo e inserta filas EN MEDIO. Entre que el lector
+    /// suelta el botón sobre una y el host atiende la acción, esa fila puede
+    /// ser otra — el mismo peligro que la barra de sitios, y la misma cura
+    /// (ADR 0068).
+    pub generation: u64,
+}
+
+/// Una rama del árbol.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreeRowView {
+    /// El nombre del directorio, saneado. La raíz lleva su ruta entera:
+    /// «`/`» a secas no dice desde dónde cuelga esto.
+    pub label: String,
+    /// El nombre PINTADO difiere de los bytes reales.
+    pub hostile: bool,
+    /// Cuántos niveles por debajo de la raíz (la raíz es 0).
+    pub depth: u32,
+    /// Está desplegada.
+    pub expanded: bool,
+    /// Tiene hijos que enseñar. `None` = todavía no se ha mirado, y son tres
+    /// estados distintos para el lector: una rama que se puede abrir, una hoja
+    /// que no, y una que aún no se sabe. Pintar «hoja» a algo que no se ha
+    /// leído es una respuesta inventada.
+    pub children: Option<bool>,
+}
+
 /// La barra lateral de sitios.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlacesSlotView {
@@ -1294,6 +1332,12 @@ pub enum SlotView {
     /// La barra lateral de sitios: los volúmenes del host y los favoritos
     /// del usuario, con su cursor.
     Places(Box<PlacesSlotView>),
+    /// El árbol de directorios: qué ramas hay abiertas y cuál tiene el cursor.
+    ///
+    /// **Solo directorios**, y **perezoso**: desplegar una rama lista ESE
+    /// directorio y nada más. Un árbol que se leyera entero al abrirse tardaría
+    /// minutos en un `$HOME` grande y horas contra un remoto.
+    Tree(Box<TreeSlotView>),
     /// El panel de procesos: las MISMAS tareas que pinta la franja, con su
     /// propio cursor.
     ///

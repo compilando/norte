@@ -327,6 +327,27 @@ pub enum UiAction {
         /// que se pulsó. Una que no case se rechaza.
         generation: u64,
     },
+    /// Elige una rama del árbol (un click) y NAVEGA a ella: el listado
+    /// enfocado va a ese directorio, y la rama queda desplegada.
+    ///
+    /// Desplegar *y* navegar, las dos: quien pulsa sobre una rama quiere ver
+    /// qué hay dentro, y verlo en el listado es la respuesta completa. El
+    /// árbol se queda donde está, que es lo que hace útil tenerlo abierto.
+    TreeActivateRow {
+        /// Fila, en el orden en que viajaron.
+        row: u32,
+        /// La generación con la que se pintó. Obligatoria por lo mismo que en
+        /// la barra de sitios: desplegar pide un listado, y ese listado inserta
+        /// filas EN MEDIO cuando llega.
+        generation: u64,
+    },
+    /// Pliega o despliega la rama, sin navegar a ninguna parte.
+    TreeToggleRow {
+        /// Fila, en el orden en que viajaron.
+        row: u32,
+        /// La generación con la que se pintó.
+        generation: u64,
+    },
     /// Elige una disposición del selector (un click) y la APLICA.
     LayoutActivateRow {
         /// Fila, en el orden en que viajaron.

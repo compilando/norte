@@ -116,6 +116,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.places",
     "layout.processes",
     "layout.metadata",
+    "pane.tree",
     "pane.tab-new",
     "pane.tab-close",
     "pane.tab-next",
@@ -374,7 +375,7 @@ pub enum Efecto {
     CerrarHueco,
     /// Abre —o cierra— el hueco auxiliar de este kind.
     AlternarHueco {
-        /// `places`, `processes` o `metadata`: los tres que esta ventana sabe
+        /// `places`, `processes`, `metadata` o `tree`: los que esta ventana sabe
         /// PINTAR. Abrir uno que solo se pintaría en gris no es abrirlo.
         kind: &'static str,
     },
@@ -599,6 +600,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "layout.close-slot" => Efecto::CerrarHueco,
         "layout.places" => Efecto::AlternarHueco { kind: "places" },
         "layout.processes" => Efecto::AlternarHueco { kind: "processes" },
+        "pane.tree" => Efecto::AlternarHueco { kind: "tree" },
         // `pane.properties` cae aquí a propósito: las propiedades de esta
         // ventana SON la hoja de atributos, que ya enseña nombre, clase,
         // tamaño y fecha de lo señalado. Lo hace de otra forma, igual que

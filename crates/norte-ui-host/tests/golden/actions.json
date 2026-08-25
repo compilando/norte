@@ -49,9 +49,9 @@
     "action": "directory_picked",
     "path": "/home/oscar/destino"
   },
-  "window_focus": {
-    "action": "window_focus",
-    "focused": false
+  "extension_select_row": {
+    "action": "extension_select_row",
+    "row": 1
   },
   "files_dropped": {
     "action": "files_dropped",
@@ -59,10 +59,6 @@
       "/home/oscar/uno.txt",
       "/home/oscar/dos.txt"
     ]
-  },
-  "extension_select_row": {
-    "action": "extension_select_row",
-    "row": 1
   },
   "focus_slot": {
     "action": "focus_slot",
@@ -165,5 +161,19 @@
     "generation": 4,
     "key": 7,
     "slot_id": 1
+  },
+  "tree_activate_row": {
+    "action": "tree_activate_row",
+    "generation": 6,
+    "row": 2
+  },
+  "tree_toggle_row": {
+    "action": "tree_toggle_row",
+    "generation": 6,
+    "row": 2
+  },
+  "window_focus": {
+    "action": "window_focus",
+    "focused": false
   }
 }

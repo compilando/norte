@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 39;
+export const BRIDGE_VERSION = 40;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -186,9 +186,38 @@ export interface PlacesSlotView {
   generation: number;
 }
 
+export interface TreeRowView {
+  /** El nombre del directorio. La raíz lleva su ruta entera. */
+  label: string;
+  hostile: boolean;
+  /** Niveles por debajo de la raíz. La raíz es 0. */
+  depth: number;
+  expanded: boolean;
+  /**
+   * Tiene hijos que enseñar. `null` = todavía no se ha mirado, y son tres
+   * cosas distintas para quien lee: rama que se abre, hoja, y sin leer.
+   * Pintar «hoja» a algo que no se ha leído es una respuesta inventada.
+   */
+  children: boolean | null;
+}
+
+export interface TreeSlotView {
+  kind: "tree";
+  slot_id: number;
+  rows: TreeRowView[];
+  cursor: number;
+  /**
+   * Sube cada vez que cambia el conjunto de ramas. Va de vuelta en el click,
+   * por lo mismo que en la barra de sitios: desplegar una rama pide su
+   * listado, y ese listado inserta filas EN MEDIO cuando llega.
+   */
+  generation: number;
+}
+
 export type SlotView =
   | BrowserSlotView
   | PlacesSlotView
+  | TreeSlotView
   | MetadataSlotView
   | ProcessesSlotView
   | UnsupportedSlotView;
@@ -928,6 +957,8 @@ export type UiAction =
   | { action: "select_tab"; slot_id: number }
   | { action: "picker_select_row"; row: number; generation: number }
   | { action: "place_activate_row"; row: number; generation: number }
+  | { action: "tree_activate_row"; row: number; generation: number }
+  | { action: "tree_toggle_row"; row: number; generation: number }
   | { action: "layout_activate_row"; row: number }
   | { action: "search_activate_row"; row: number }
   | { action: "ai_rename_decide"; approve: boolean }

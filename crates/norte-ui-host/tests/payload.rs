@@ -206,6 +206,7 @@ fn filas_de(s: &norte_ui_host::dto::SlotView) -> usize {
     match s {
         SlotView::Browser(b) => b.rows.len(),
         SlotView::Places(p) => p.rows.len(),
+        SlotView::Tree(t) => t.rows.len(),
         SlotView::Metadata(m) => m.fields.len(),
         // El panel de procesos no lleva sus filas en el hueco: las lleva
         // `ViewSnapshot::tasks`, que es una sola lista para toda la pantalla.

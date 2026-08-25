@@ -490,6 +490,15 @@
         "width": 40,
         "x": 80,
         "y": 38
+      },
+      {
+        "focus_index": 5,
+        "height": 2,
+        "role": null,
+        "slot_id": 8,
+        "width": 24,
+        "x": 0,
+        "y": 36
       }
     ],
     "tabs": [
