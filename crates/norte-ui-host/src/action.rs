@@ -134,6 +134,19 @@ pub enum UiAction {
         /// Respuesta elegida.
         choice: String,
     },
+    /// La ventana ganó o perdió el foco del escritorio (#285).
+    ///
+    /// El host lo necesita para no avisar por fuera de lo que ya se está
+    /// viendo: con la ventana delante, la barra y el tablero cuentan lo mismo
+    /// que contaría una notificación, y duplicarlo es ruido.
+    ///
+    /// Se asume ENFOCADA mientras nadie diga lo contrario: un renderer que no
+    /// mande esto se comporta como antes de #285 —avisa siempre— en vez de
+    /// callarse, que sería perder avisos sin que nadie lo note.
+    WindowFocus {
+        /// `true` si la ventana está delante.
+        focused: bool,
+    },
     /// El lector eligió un directorio en el selector del ESCRITORIO, o lo
     /// cerró sin elegir (#284).
     ///

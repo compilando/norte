@@ -853,6 +853,12 @@ async fn actor(
                 let _ = updates.send(estado.aplicar_catalogo(scheme, catalogo));
             }
             Mensaje::Aprobacion(req) => {
+                // Y por el ESCRITORIO si la ventana no está delante (#285).
+                // Es el aviso que justifica el mecanismo: una aprobación
+                // caduca sola si nadie contesta, así que no enterarse cambia
+                // el desenlace — al revés que una copia, que sigue terminada
+                // cuando vuelves.
+                estado.avisar_de_aprobacion(&req);
                 for u in estado.abrir_aprobacion(&req, &buzon) {
                     let _ = updates.send(u);
                 }
@@ -1823,6 +1829,12 @@ struct Estado {
     /// Lo que esta ventana tiene del ESCRITORIO: por dónde salen los efectos
     /// nativos y la salida del último comando de extensión.
     escritorio: Escritorio,
+    /// La ventana tiene el foco del escritorio (#285).
+    ///
+    /// Arranca en `true` y no en `false`: un renderer que no mande
+    /// `WindowFocus` se comporta como antes —avisa siempre— en vez de
+    /// callarse. Perder un aviso es peor que repetirlo.
+    enfocada: bool,
     /// Hay un selector de carpeta abierto, y esto dice si lo que se pidió era
     /// MOVER (#284). `None` = no se pidió ninguno.
     ///
@@ -2212,6 +2224,7 @@ impl Estado {
             extensiones: None,
             agencia: Agencia::default(),
             escritorio: Escritorio::default(),
+            enfocada: true,
             destino_pendiente: None,
             tema: theme,
             mirando_tema: false,
@@ -2722,6 +2735,10 @@ impl Estado {
             // aceptar texto que nadie va a leer.
             UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
             UiAction::DirectoryPicked { path } => self.destino_elegido(path.clone()),
+            UiAction::WindowFocus { focused } => {
+                self.enfocada = *focused;
+                (self.aplicada(), Vec::new())
+            }
             otra => self.fila_por_indice(otra, backend, buzon),
         }
     }
@@ -12761,6 +12778,7 @@ impl Estado {
             self.pedir_informe_de_sync(p, backend, buzon);
             cambios.extend(self.decir_el_recuento(p));
             cambios.extend(self.ofrecer_reintento(p));
+            self.avisar_del_desenlace(p);
         }
         vec![self.parche(cambios)]
     }
@@ -12785,6 +12803,72 @@ impl Estado {
     /// Solo con `Completed`: una cuenta cancelada o fallida no tiene total que
     /// dar, y pintar el parcial de una cancelación como si fuera la respuesta
     /// es el mismo error de arriba con otro nombre.
+    /// Saca un aviso por el escritorio cuando un agente PIDE permiso (#285).
+    ///
+    /// De los tres avisos, este es el que justifica el mecanismo: una
+    /// aprobación tiene TTL y se deniega sola si nadie contesta, así que no
+    /// enterarse cambia el desenlace. Una copia terminada sigue terminada
+    /// cuando vuelves.
+    ///
+    /// Lleva la OPERACIÓN y quién la pide, no las rutas: el cuerpo de la
+    /// petición puede ser largo y el diálogo lo enseña entero cuando se abra.
+    /// Lo que la notificación tiene que conseguir es que alguien mire.
+    fn avisar_de_aprobacion(&mut self, req: &norte_proto::methods::PolicyApprovalRequired) {
+        if self.enfocada {
+            return;
+        }
+        let (quien, _) =
+            norte_frontend::display_name(req.session.as_deref().unwrap_or_default().as_bytes());
+        let (op, _) = norte_frontend::display_name(req.op.as_bytes());
+        let titulo = clamp_display(norte_i18n::t_in(self.lang, "notify-approval-title"));
+        let cuerpo = clamp_display(norte_i18n::ta_in(
+            self.lang,
+            "notify-approval-body",
+            &[("op", &op), ("who", &quien)],
+        ));
+        self.nativo(crate::dto::NativeEffect::Notify { titulo, cuerpo });
+    }
+
+    /// Saca un aviso por el escritorio cuando una task TERMINA (#285).
+    ///
+    /// Solo con la ventana SIN foco: si está delante, la barra y el tablero
+    /// cuentan ya lo mismo, y repetirlo por fuera es ruido. Es la única
+    /// condición — un aviso que además dependiera de cuánto tardó la task
+    /// necesitaría un umbral, y elegirlo bien es otra decisión.
+    ///
+    /// El nombre del fichero SÍ va dentro, y por eso pasa por el mismo
+    /// enmascarado que el listado: una notificación acaba en el historial del
+    /// escritorio y puede verse en la pantalla de bloqueo, así que un nombre
+    /// con bidi o con caracteres de control no puede fingir ahí lo que no
+    /// puede fingir aquí.
+    fn avisar_del_desenlace(&mut self, p: &norte_proto::TaskProgress) {
+        if self.enfocada {
+            return;
+        }
+        let (clave, cuenta) = match &p.state {
+            norte_proto::TaskState::Completed => ("notify-task-done", p.entries_done),
+            norte_proto::TaskState::Failed { .. } => ("notify-task-failed", p.entries_done),
+            // Cancelar lo pidió quien está delante: no hace falta contárselo.
+            _ => return,
+        };
+        // Qué fichero iba, si el progreso lo dice. `current` es una ruta del
+        // otro extremo: se enmascara y se acorta igual que una fila.
+        let detalle = p.current.as_ref().map_or_else(
+            || cuenta.to_string(),
+            |path| {
+                let (texto, _) = norte_frontend::display_name(path.display_lossy().as_bytes());
+                clamp_display(texto)
+            },
+        );
+        let titulo = clamp_display(norte_i18n::t_in(self.lang, clave));
+        let cuerpo = clamp_display(norte_i18n::ta_in(
+            self.lang,
+            "notify-task-body",
+            &[("what", &detalle), ("kind", clase_de_task(p.kind))],
+        ));
+        self.nativo(crate::dto::NativeEffect::Notify { titulo, cuerpo });
+    }
+
     /// Una transferencia que CHOCÓ abre la pregunta que faltaba (#274).
     ///
     /// La ventana manda siempre `CollisionPolicy::Fail`, que es el default

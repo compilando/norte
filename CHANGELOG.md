@@ -24,6 +24,24 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **Desktop notifications, for the three things worth interrupting for**
+  (#285): an agent asking for permission, a task finishing, a task failing.
+  The first is the one that justifies the mechanism — an approval expires on
+  its own if nobody answers, so missing it changes the outcome, while a copy
+  is still finished when you come back.
+
+  **Only when the window does not have focus.** With it in front, the status
+  bar and the task board already say the same thing, and repeating it outside
+  is noise. A renderer that never reports focus behaves as before — notifying
+  always — rather than going quiet: losing a notice is worse than repeating it.
+
+  The body carries the file name, and therefore goes through the same masking
+  and truncation as a listing row: a notification ends up in the desktop's
+  history and may show on the lock screen, so a name with bidi or control
+  characters must not be able to pretend there what it cannot pretend here. No
+  new dependency: `notify-send` or `kdialog`, through the same native-effects
+  channel and the same candidate-list shape as everything else in it.
+
 - **With one panel open, the destination is asked of the desktop** (#284).
   Copying or moving used to be refused outright when there was no second
   listing to take the destination from, which left anyone who had not split the

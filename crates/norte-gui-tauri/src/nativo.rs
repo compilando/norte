@@ -80,10 +80,40 @@ pub fn ejecutar(efecto: &NativeEffect) -> Resultado {
         NativeEffect::CopyBytes { bytes, .. } => copiar(bytes),
         NativeEffect::OpenPath { path } => abrir(path),
         NativeEffect::OpenTerminal { dir } => terminal(dir),
+        NativeEffect::Notify { titulo, cuerpo } => avisar(titulo, cuerpo),
         // Lo atiende `bombear`, que es quien puede devolverle la ruta al host.
         // Aquí no hay a quién contestar.
         NativeEffect::PickDirectory { .. } => Resultado::SinPrograma,
     }
+}
+
+/// Saca el aviso con el primer programa que exista (#285).
+///
+/// El texto llega YA compuesto, traducido, enmascarado y acotado: aquí no se
+/// decide nada sobre él, solo se entrega. Un aviso que no se puede dar se DICE
+/// —`SinPrograma`— en vez de tragarse: quien cree que le van a avisar y no
+/// tiene `notify-send` merece saberlo una vez.
+fn avisar(titulo: &str, cuerpo: &str) -> Resultado {
+    for argv in norte_frontend::shell::notify_candidates(titulo, cuerpo) {
+        let Some((programa, args)) = argv.split_first() else {
+            continue;
+        };
+        let salida = std::process::Command::new(programa)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        match salida {
+            Ok(st) if st.success() => return Resultado::Hecho,
+            // Está y falló: no se prueba el siguiente. Dos avisos del mismo
+            // suceso es peor que ninguno.
+            Ok(_) => return Resultado::Fallo,
+            // No está en el PATH: al siguiente candidato.
+            Err(_) => {}
+        }
+    }
+    Resultado::SinPrograma
 }
 
 /// Abre el selector de carpeta del ESCRITORIO y devuelve lo que se eligió

@@ -204,6 +204,20 @@ fn main() -> ExitCode {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // El foco, al host (#285): con la ventana delante no se avisa por
+            // el escritorio, porque la barra y el tablero ya lo cuentan.
+            if let tauri::WindowEvent::Focused(focused) = event {
+                let estado: tauri::State<'_, AppState> = window.state();
+                if let Ok(bridge) = estado.bridge() {
+                    let host = bridge.host_compartido();
+                    let focused = *focused;
+                    tauri::async_runtime::spawn(async move {
+                        let _ = host
+                            .dispatch(norte_ui_host::UiAction::WindowFocus { focused })
+                            .await;
+                    });
+                }
+            }
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 let estado: tauri::State<'_, AppState> = window.state();
                 if let Ok(bridge) = estado.bridge() {

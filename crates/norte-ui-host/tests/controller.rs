@@ -13646,6 +13646,91 @@ async fn copiar_la_ruta_manda_bytes_al_escritorio() {
 
 /// En solo lectura NO se abre nada ni se lanza un terminal: se DICE.
 ///
+/// **Con la ventana delante NO se avisa por el escritorio** (#285): la barra
+/// y el tablero ya cuentan lo mismo, y repetirlo fuera es ruido.
+#[tokio::test]
+async fn con_la_ventana_delante_no_se_avisa_fuera() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut nativos = h.native_effects();
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let _ = siguientes_tasks(&mut sub).await;
+
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+    assert!(
+        nativos.try_recv().is_err(),
+        "con el foco puesto, ningún aviso sale al escritorio"
+    );
+}
+
+/// Y sin foco SÍ, con el nombre de lo que iba dentro (#285).
+///
+/// El nombre va ENMASCARADO como en el listado: una notificación acaba en el
+/// historial del escritorio y puede verse en la pantalla de bloqueo, así que
+/// lo que no puede fingir aquí tampoco puede fingir allí.
+#[tokio::test]
+async fn sin_foco_el_aviso_sale_y_lleva_el_nombre() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut nativos = h.native_effects();
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::WindowFocus { focused: false })
+        .await
+        .expect("host vivo");
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let _ = siguientes_tasks(&mut sub).await;
+
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| {
+        p.state = norte_proto::TaskState::Completed;
+        p.current = Some(VPath::parse("mem:///casa/notas.txt").expect("vpath"));
+    });
+
+    let mut visto = None;
+    for _ in 0..40 {
+        if let Ok(norte_ui_host::dto::NativeEffect::Notify { titulo, cuerpo }) = nativos.try_recv()
+        {
+            visto = Some((titulo, cuerpo));
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let (titulo, cuerpo) = visto.expect("sin foco, el aviso sale");
+    assert!(!titulo.is_empty(), "el aviso dice QUÉ pasó");
+    assert!(
+        cuerpo.contains("notas.txt"),
+        "y con qué fichero: {cuerpo:?}"
+    );
+}
+
 /// **Con UN solo panel, copiar pide el destino al escritorio** (#284).
 ///
 /// Antes se rehusaba: quien no había partido la ventana no podía copiar. Lo

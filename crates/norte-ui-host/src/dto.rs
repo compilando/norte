@@ -2261,6 +2261,19 @@ pub enum NativeEffect {
         /// `xdg-open`—.
         path: norte_proto::VPath,
     },
+    /// Saca un aviso por el ESCRITORIO (#285).
+    ///
+    /// El texto viaja YA COMPUESTO, traducido, enmascarado y acotado: una
+    /// notificación sale del proceso y puede acabar en un historial o en la
+    /// pantalla de bloqueo, así que lo que lleva dentro tiene que haber
+    /// pasado por las mismas manos que lo que se pinta en la barra. Quien la
+    /// entrega solo la entrega.
+    Notify {
+        /// La primera línea: qué pasó, en categoría.
+        titulo: String,
+        /// El detalle, con el nombre del fichero cuando lo hay.
+        cuerpo: String,
+    },
     /// Pide al ESCRITORIO que el lector elija un directorio (#284).
     ///
     /// Existe porque con un solo listado en pantalla no hay panel destino del

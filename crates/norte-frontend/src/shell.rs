@@ -527,6 +527,51 @@ pub fn is_local(path: &norte_proto::VPath) -> bool {
     norte_vfs::native::vpath_to_native(path).is_ok()
 }
 
+/// Los programas de aviso del ESCRITORIO que sabemos invocar, en orden
+/// (#285).
+///
+/// Misma forma que [`directory_picker_candidates`] y por lo mismo: una lista,
+/// sin sondear el `PATH`, y quien ejecuta prueba en orden.
+///
+/// El texto va como ARGUMENTO y nunca dentro de una línea de comandos. Aquí
+/// eso importa el doble: el cuerpo lleva un nombre de fichero, y un nombre con
+/// una comilla o un `$` o rompe la línea o ejecuta parte de sí mismo.
+///
+/// ```
+/// use norte_frontend::shell::notify_candidates;
+/// let cands = notify_candidates("norte", "hecho");
+/// for argv in &cands {
+///     assert!(argv.len() >= 3, "programa, título y cuerpo van separados");
+/// }
+/// ```
+#[must_use]
+pub fn notify_candidates(titulo: &str, cuerpo: &str) -> Vec<Vec<std::ffi::OsString>> {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        vec![
+            vec![
+                "notify-send".into(),
+                // Que el aviso se pueda cerrar y no se apile: norte manda uno
+                // por evento, no un flujo.
+                "--app-name=norte".into(),
+                titulo.into(),
+                cuerpo.into(),
+            ],
+            vec!["kdialog".into(), "--passivepopup".into(), {
+                let mut s = std::ffi::OsString::from(titulo);
+                s.push("\n");
+                s.push(cuerpo);
+                s
+            }],
+        ]
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let _ = (titulo, cuerpo);
+        Vec::new()
+    }
+}
+
 /// Los selectores de carpeta del ESCRITORIO que sabemos invocar, en orden
 /// (#284).
 ///
