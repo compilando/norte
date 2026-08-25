@@ -94,10 +94,16 @@ fn la_ventana_no_trae_nada_de_serie() {
         cfg["build"]["devUrl"].is_null(),
         "un binario de producción no apunta a un servidor de desarrollo"
     );
+    // Soltar SÍ significa algo desde #283 (ADR 0074), y lo que significa es
+    // una pregunta: el drop llega al proceso —nunca a la webview, que no ve
+    // las rutas— y abre la confirmación de copia. La afirmación se queda
+    // porque el valor es una decisión, no un descuido: si alguien lo vuelve a
+    // poner en `false` habrá borrado el gesto entero sin tocar una línea de
+    // Rust.
     assert_eq!(
         cfg["app"]["windows"][0]["dragDropEnabled"],
-        serde_json::Value::Bool(false),
-        "soltar un fichero en la ventana todavía no significa nada: que no lo parezca"
+        serde_json::Value::Bool(true),
+        "soltar entra por el proceso y abre una confirmación (#283)"
     );
 }
 

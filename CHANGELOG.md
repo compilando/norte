@@ -24,6 +24,19 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **You can drop files from the desktop onto the window** (#283, bridge **39**,
+  ADR 0074). Dropping does not copy: it opens the same confirmation a copy
+  does, with the destination in its own field and the sources masked line by
+  line. That dialog is the only chance the reader gets to see that what arrived
+  is not what they dragged — a drop is a gesture without confirmation by
+  nature, and the list of URIs is composed by *another* process. It only comes
+  in (dragging out would publish the paths of everything marked to any
+  application that accepts a drop) and it only copies (moving what another
+  application dragged would delete it from wherever that process keeps it, and
+  nobody asked that). The destination may be remote: uploading to the server
+  what you drag off the desktop is the comfortable case. A path that is not a
+  path on this machine is *said*, not swallowed.
+
 - **The window offers a connection picker** (#264). `pane.connect` lists what
   the daemon has configured and navigating to one establishes the session the
   usual way. The URL is masked as an *authority* rather than a path — a host

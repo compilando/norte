@@ -159,6 +159,24 @@ pub enum UiAction {
         /// del sistema de ficheros, no un `VPath`: convertirla es del host.
         path: Option<String>,
     },
+    /// El lector SOLTÓ ficheros del escritorio sobre la ventana (#283).
+    ///
+    /// Solo entra: arrastrar hacia FUERA no se ofrece, porque eso es publicar
+    /// las rutas de lo marcado a cualquier aplicación que acepte el drop, y
+    /// ese es otro diseño (ADR 0074).
+    ///
+    /// Las rutas vienen de OTRO proceso —el emisor compone la lista a mano si
+    /// quiere—, así que no se copia nada por recibirlas: abren la misma
+    /// confirmación que copiar, con los nombres enmascarados. Un drop es un
+    /// gesto sin confirmación por naturaleza y esta ventana pregunta antes de
+    /// escribir; la pregunta es justamente lo que acota que la lista sea
+    /// ajena.
+    FilesDropped {
+        /// Rutas NATIVAS de esta máquina, tal cual las manda el escritorio.
+        /// Texto del sistema de ficheros, no `VPath`: convertirlas es del
+        /// host, y la que no convierta se descarta diciéndolo.
+        paths: Vec<String>,
+    },
     /// Teclea en el campo de texto del diálogo abierto.
     DialogInput {
         /// Diálogo.

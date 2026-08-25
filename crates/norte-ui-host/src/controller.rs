@@ -1390,6 +1390,20 @@ enum Pendiente {
         /// Permanente (sin papelera): el diálogo lo AVISA.
         permanente: bool,
     },
+    /// Copiar al panel lo que se SOLTÓ desde el escritorio (#283).
+    ///
+    /// Separada de [`Pendiente::Transferir`] por dos razones, y ninguna es
+    /// cosmética: aquí los orígenes no salen de ningún panel —así que no hay
+    /// marcas que consumir, y consumirlas borraría una selección que el lector
+    /// hizo para otra cosa—, y el verbo es siempre COPIAR: mover lo que
+    /// arrastró otra aplicación significaría borrarlo de donde ese proceso lo
+    /// tenga, y esta ventana no ha preguntado eso.
+    Soltar {
+        /// Qué llegó, ya convertido y filtrado.
+        paths: Vec<VPath>,
+        /// Dónde cae, que es el directorio del panel activo cuando se soltó.
+        destino: VPath,
+    },
     /// Preguntar al índice por SIGNIFICADO. Lo que se teclea es la consulta,
     /// y no lleva más operandos: el alcance es el índice entero.
     ConsultaSemantica,
@@ -2740,6 +2754,7 @@ impl Estado {
             // aceptar texto que nadie va a leer.
             UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
             UiAction::DirectoryPicked { path } => self.destino_elegido(path.clone()),
+            UiAction::FilesDropped { paths } => self.soltados(paths),
             UiAction::WindowFocus { focused } => {
                 self.enfocada = *focused;
                 (self.aplicada(), Vec::new())
@@ -7190,7 +7205,11 @@ impl Estado {
                 // son otras (`dialog.overwrite`, `dialog.skip`…), y mandar al
                 // lector a la de confirmar le enseñaría las que no valen.
                 Some(Pendiente::Reintentar { .. }) => "dialog.collision",
-                Some(Pendiente::Borrar { .. } | Pendiente::Transferir { .. }) => "dialog.confirm",
+                Some(
+                    Pendiente::Borrar { .. }
+                    | Pendiente::Transferir { .. }
+                    | Pendiente::Soltar { .. },
+                ) => "dialog.confirm",
                 Some(
                     Pendiente::Decidir { .. }
                     | Pendiente::AprobarExtension { .. }
@@ -10775,6 +10794,117 @@ impl Estado {
         self.confirmar_transferencia(&destino, mover)
     }
 
+    /// Llegaron ficheros soltados desde el escritorio (#283).
+    ///
+    /// No copia: abre la misma confirmación que copiar, con el destino en su
+    /// campo y los nombres enmascarados. La lista la compone OTRO proceso, así
+    /// que enseñarla antes de escribir no es cortesía —es la única ocasión que
+    /// tiene el lector de ver que lo que llegó no es lo que arrastró.
+    ///
+    /// Lo que no convierte a `VPath` se descarta, y el recorte se DICE: quedan
+    /// nueve de diez y copiar sin avisar sería mentir sobre el lote.
+    fn soltados(&mut self, paths: &[String]) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let llegaron = paths.len();
+        let usables: Vec<VPath> = paths
+            .iter()
+            .filter_map(|p| norte_frontend::shell::vpath_de_ruta_nativa(p))
+            // Una raíz no tiene nombre que darle en el destino, y el envío la
+            // saltaría en silencio: se cae aquí, donde todavía se puede contar.
+            .filter(|v| v.file_name().is_some())
+            .collect();
+        if usables.is_empty() {
+            let clave = if llegaron == 0 {
+                "host-drop-empty"
+            } else {
+                "host-drop-unusable"
+            };
+            let fuera = self.decir(clave);
+            return (
+                ActionAck::Unavailable {
+                    reason_key: clave.to_owned(),
+                },
+                fuera,
+            );
+        }
+        if let Some(motivo) = self.lote_no_cabe(usables.len()) {
+            let fuera = self.decir(motivo);
+            return (
+                ActionAck::Unavailable {
+                    reason_key: motivo.to_owned(),
+                },
+                fuera,
+            );
+        }
+        // Mismo motivo que en una copia normal (#268): dos que pliegan al
+        // mismo nombre dejan que una gane sin decir cuál. Y aquí el lote no lo
+        // eligió el lector marcando, así que descubrirlo después sería aún
+        // menos explicable.
+        if self.dos_marcas_pliegan_igual(&usables) {
+            let fuera = self.decir("host-batch-folds-to-one");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-batch-folds-to-one".to_owned(),
+                },
+                fuera,
+            );
+        }
+        // El panel ACTIVO, y sin exigir que sea local: subir al servidor lo que
+        // se arrastra del escritorio es el caso cómodo, y el core copia entre
+        // providers desde siempre.
+        let destino = self.hueco().pane.dir().clone();
+        let destino_linea = Self::linea_de_ruta(&destino);
+        let cuerpo: Vec<crate::dto::DialogLine> = usables
+            .iter()
+            .take(Self::MAX_LINEAS_DIALOGO)
+            .map(Self::linea_de_ruta)
+            .collect();
+        // El recorte cuenta contra lo que LLEGÓ, no contra lo que se pudo
+        // convertir: «se enseñan 16 de 40» tiene que seguir siendo cierto
+        // cuando cuatro de esas 40 se cayeron por el camino.
+        let nota = self.nota_de_recorte(cuerpo.len(), llegaron.max(usables.len()));
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: "modal-drop-title".to_owned(),
+            destination: Some(destino_linea),
+            subject: None,
+            asker: None,
+            deadline: None,
+            deadline_at_ms: None,
+            body: cuerpo,
+            overflow_note: nota,
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: None,
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista,
+            input_crudo: String::new(),
+            reconocido: true,
+            al_confirmar: Some(Pendiente::Soltar {
+                paths: usables,
+                destino,
+            }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
     /// La confirmación propiamente dicha, con el destino ya resuelto.
     fn confirmar_transferencia(
         &mut self,
@@ -11630,17 +11760,7 @@ impl Estado {
                 destino,
                 mover,
             }) => {
-                // El lote se abre AQUÍ, con el número que se va a pedir: la
-                // cuenta tiene que existir antes de que llegue el primer
-                // desenlace, que con una task que nace terminal puede ser
-                // antes de que el bucle de envío haya pedido la segunda.
-                // Uno solo no es un lote: su desenlace ya se dice en su fila
-                // y su rechazo en la barra, con la frase tipada del error.
-                self.lote = (paths.len() > 1).then(|| Lote {
-                    total: paths.len(),
-                    ..Lote::default()
-                });
-                Self::lanzar_transferencia(&paths, &origen_dir, &destino, mover, backend, buzon);
+                self.enviar_lote(&paths, &origen_dir, &destino, mover, backend, buzon);
                 // Las marcas las CONSUME el envío, no el desenlace (mismo
                 // criterio que el TUI y que mc): una selección a medio
                 // consumir significaría cosas distintas según qué task de
@@ -11655,6 +11775,17 @@ impl Estado {
                 if let Some(h) = self.huecos.get_mut(&origen) {
                     h.pane.clear_marks();
                 }
+                salidas.push(self.parche_filas());
+            }
+            Some(Pendiente::Soltar { paths, destino }) => {
+                // `origen_dir` es el DESTINO a propósito: solo se usa para
+                // apuntar qué directorios quedan desactualizados cuando se
+                // mueve, y aquí nunca se mueve. Lo de donde salió es de otro
+                // proceso y esta ventana no lo lista.
+                //
+                // Y NO se tocan las marcas: las de este panel las puso el
+                // lector para otra cosa, y lo que se copia no salió de ahí.
+                self.enviar_lote(&paths, &destino, &destino, false, backend, buzon);
                 salidas.push(self.parche_filas());
             }
             Some(Pendiente::Buscar { root }) => {
@@ -11909,6 +12040,7 @@ impl Estado {
                     p,
                     Pendiente::Borrar { .. }
                         | Pendiente::Transferir { .. }
+                        | Pendiente::Soltar { .. }
                         | Pendiente::CrearDirectorio { .. }
                         | Pendiente::Decidir { .. }
                         | Pendiente::Renombrar { .. }
@@ -12018,6 +12150,29 @@ impl Estado {
     /// renombrar son decisiones del lector, y esta ventana todavía no tiene
     /// dónde tomarlas — elegirlas por él sería la clase de silencio que borra
     /// ficheros.
+    /// Abre el lote y lanza el envío. Las dos cosas van juntas siempre.
+    ///
+    /// El lote se abre ANTES de lanzar, con el número que se va a pedir: la
+    /// cuenta tiene que existir antes de que llegue el primer desenlace, que
+    /// con una task que nace terminal puede ser antes de que el bucle de envío
+    /// haya pedido la segunda. Uno solo no es un lote: su desenlace ya se dice
+    /// en su fila y su rechazo en la barra, con la frase tipada del error.
+    fn enviar_lote(
+        &mut self,
+        paths: &[VPath],
+        origen_dir: &VPath,
+        destino: &VPath,
+        mover: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        self.lote = (paths.len() > 1).then(|| Lote {
+            total: paths.len(),
+            ..Lote::default()
+        });
+        Self::lanzar_transferencia(paths, origen_dir, destino, mover, backend, buzon);
+    }
+
     fn lanzar_transferencia(
         paths: &[VPath],
         origen_dir: &VPath,
