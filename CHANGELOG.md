@@ -24,6 +24,21 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **`connection.list`: the daemon answers which connections are configured**
+  (#264, protocol **0.56.0**). It exists so a frontend can offer a connection
+  picker *without reading `connections.toml` itself* — reading it would drag
+  russh, opendal, suppaftp, age and keyring into a binary that only wants to
+  paint a list of names, and the daemon already has all of that because it is
+  what opens the sessions.
+
+  It never carries a secret: a connection spec *references* its credentials
+  (ADR 0015), and what travels is the URL as written. And it does not connect —
+  it answers where one could go; going is navigating to that URL, which already
+  establishes the session the usual way, with its TOFU and its policy. A method
+  that "connected" would be a second door to what `fs.list` already does.
+  Human-only, like `host.volumes`, and the actor gate runs before parsing so an
+  agent cannot tell "denied" from "malformed" by the shape of its own request.
+
 - **Desktop notifications, for the three things worth interrupting for**
   (#285): an agent asking for permission, a task finishing, a task failing.
   The first is the one that justifies the mechanism — an approval expires on

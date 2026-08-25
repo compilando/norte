@@ -659,6 +659,56 @@ mod tests {
         assert_eq!(authority_of(&spec.endpoint().unwrap()), "mi-bucket");
     }
 
+    /// La lista que alimenta el selector (#140, y desde #264 también el de la
+    /// ventana por `connection.list`): pares `(nombre, url)`, alfabéticos.
+    #[tokio::test]
+    async fn named_connections_lista_alfabetico_y_sin_secretos() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("connections.toml"),
+            r#"
+[connections.trabajo]
+url = "sftp://oscar@servidor.example/datos"
+
+[connections.archivo]
+url = "s3://mi-bucket"
+"#,
+        )
+        .expect("escribir");
+
+        let cs = named_connections(dir.path()).await.expect("lista");
+        assert_eq!(
+            cs.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["archivo", "trabajo"],
+            "alfabético: el orden del fichero no decide el del selector"
+        );
+        // Lo que viaja es la URL tal cual, y las credenciales se REFERENCIAN
+        // (ADR 0015): no hay nada que resolver ni que filtrar aquí.
+        assert_eq!(cs[1].1, "sftp://oscar@servidor.example/datos");
+    }
+
+    /// Un fichero que NO ESTÁ es una lista vacía —no tener conexiones es lo
+    /// normal el primer día—, pero uno que no PARSEA es un error: decir «no
+    /// tienes ninguna» cuando hay una coma de más miente sobre lo que el
+    /// usuario escribió.
+    #[tokio::test]
+    async fn sin_fichero_es_vacio_y_un_fichero_roto_es_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(
+            named_connections(dir.path())
+                .await
+                .expect("sin fichero no es error")
+                .is_empty()
+        );
+
+        std::fs::write(dir.path().join("connections.toml"), "esto no es toml [[[")
+            .expect("escribir");
+        assert!(
+            named_connections(dir.path()).await.is_err(),
+            "un fichero roto se DICE"
+        );
+    }
+
     #[test]
     fn config_dir_respeta_override() {
         // Sin tocar env global (unsafe en edition 2024): solo el camino puro.

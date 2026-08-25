@@ -83,6 +83,8 @@ struct ProtocolSchema {
     grant_scope_result: GrantScopeResult,
     host_volumes_params: HostVolumesParams,
     host_volumes_result: HostVolumesResult,
+    connection_entry: ConnectionEntry,
+    connection_list_result: ConnectionListResult,
     index_build_params: IndexBuildParams,
     index_build_result: IndexBuildResult,
     index_embed_params: IndexEmbedParams,

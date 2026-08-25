@@ -756,7 +756,18 @@ use crate::{
 /// `#[non_exhaustive]`, así que un cliente 0.54 la deserializa a
 /// [`crate::Error::Unknown`] y degrada a «error genérico» — que es
 /// exactamente lo que hacía antes con el `INVALID_PARAMS`.
-pub const PROTOCOL_VERSION: &str = "0.55.0";
+///
+/// `0.56.0` (#264): método nuevo [`CONNECTION_LIST`] → [`ConnectionListResult`],
+/// las conexiones nombradas que el daemon tiene configuradas. Existe para que
+/// un frontend pueda ofrecer un selector sin leer `connections.toml` él mismo
+/// — leerlo obligaría a meter la pila de red entera en un binario que solo
+/// quiere pintar nombres.
+///
+/// Ventana N=0.56.x / N-1=0.55.x. Aditivo: un cliente 0.55 no conoce el método
+/// y no lo llama. Lo que se pierde contra un daemon N-1 es el selector, no la
+/// capacidad de conectar — ir a una URL sigue estableciendo la sesión por el
+/// camino de siempre, y eso no cambió.
+pub const PROTOCOL_VERSION: &str = "0.56.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -814,6 +825,29 @@ pub const FS_CAPABILITIES: &str = "fs.capabilities";
 /// agente (`agent_session` en `initialize`) la ve como `Error::PolicyDenied`
 /// — información que un scope de rutas no necesita para nada (diseño §C).
 pub const HOST_VOLUMES: &str = "host.volumes";
+
+/// `connection.list` — las conexiones NOMBRADAS que el daemon tiene
+/// configuradas (0.56.0, #264): `(nombre, url)` en orden alfabético.
+///
+/// Existe para que un frontend pueda ofrecer un selector de conexiones **sin
+/// leer `connections.toml` él mismo**. Leerlo obligaría a meter la pila de red
+/// entera —russh, opendal, suppaftp, age, keyring— en un binario que solo
+/// quiere pintar una lista de nombres, y el daemon ya tiene todo eso porque es
+/// quien abre las sesiones.
+///
+/// **Jamás un secreto.** Un `ConnectionSpec` REFERENCIA sus credenciales (ADR
+/// 0015): viven en el keyring o cifradas, y lo que viaja aquí es la URL tal
+/// como está escrita en el fichero. Un `password` en línea es algo que la
+/// propia CLI rehúsa, y esta lista no lo inventa ni lo resuelve.
+///
+/// **No conecta.** Devuelve a dónde se podría ir; ir es navegar a esa URL, y
+/// eso ya establece la sesión por el camino de siempre — con su TOFU, su
+/// política y su aviso de degradación. Un método que «conectara» sería una
+/// segunda puerta a lo que `fs.list` ya hace.
+///
+/// SOLO una conexión `User`, por lo mismo que [`HOST_VOLUMES`]: la lista
+/// nombra los servidores del humano, y un scope de rutas no lo necesita.
+pub const CONNECTION_LIST: &str = "connection.list";
 
 /// Tope de bytes devueltos por UNA llamada a [`FS_READ`] (antes de
 /// base64). Pedir más no es error: se recorta y `eof` lo cuenta.
@@ -2981,6 +3015,48 @@ pub struct HostVolumesParams {
 pub struct HostVolumesResult {
     /// The host's volumes, in no particular guaranteed order.
     pub volumes: Vec<Volume>,
+}
+
+/// UNA conexión nombrada de las que el daemon tiene configuradas (0.56.0,
+/// #264).
+///
+/// ```
+/// use norte_proto::methods::ConnectionEntry;
+/// let e: ConnectionEntry = serde_json::from_str(
+///     r#"{"name": "trabajo", "url": "sftp://oscar@servidor.example/datos"}"#,
+/// )
+/// .unwrap();
+/// assert_eq!(e.name, "trabajo");
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionEntry {
+    /// El nombre con el que el usuario la escribió en `connections.toml`.
+    ///
+    /// Es texto que eligió el humano, no un identificador del sistema: quien
+    /// lo pinte lo enmascara como cualquier otro nombre.
+    pub name: String,
+    /// La URL tal como está en el fichero.
+    ///
+    /// Puede llevar un usuario (`sftp://oscar@host/…`), que es lo normal.
+    /// **Nunca una contraseña**: las credenciales se REFERENCIAN (ADR 0015) y
+    /// esta lista no las resuelve. Quien la pinte la trata como una autoridad
+    /// del wire, con el mismo cuidado que un aviso de sesión degradada — un
+    /// host puede llamarse `banco.example@malo.example`.
+    pub url: String,
+}
+
+/// Result de [`CONNECTION_LIST`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionListResult {
+    /// Las conexiones, en orden alfabético por nombre.
+    ///
+    /// Vacío = no hay ninguna configurada, que es lo normal el primer día. Un
+    /// fichero que no PARSEA sí es un error: decir «no tienes ninguna» cuando
+    /// lo que pasa es que hay una coma de más sería mentir sobre lo que el
+    /// usuario escribió.
+    pub connections: Vec<ConnectionEntry>,
 }
 
 /// What a comparison concluded about ONE pair (0.39.0, ADR 0048).

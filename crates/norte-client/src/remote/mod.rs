@@ -1701,6 +1701,27 @@ impl RemoteBackend {
         Ok(result.volumes)
     }
 
+    /// `connection.list` (0.56.0, #264): las conexiones nombradas que el
+    /// DAEMON tiene configuradas.
+    ///
+    /// Se pregunta en vez de leer `connections.toml` porque leerlo obligaría a
+    /// meter la pila de red entera —russh, opendal, suppaftp, age, keyring—
+    /// en un binario que solo quiere pintar una lista de nombres.
+    ///
+    /// Lo que vuelve NO conecta: es a dónde se podría ir. Ir es navegar a esa
+    /// URL, y eso ya establece la sesión por el camino de siempre, con su
+    /// TOFU y su política.
+    ///
+    /// # Errors
+    /// Taxonomía: `PolicyDenied` si la conexión es de agente; `InvalidPath` si
+    /// el fichero del daemon existe y no parsea.
+    pub async fn connections(&self) -> Result<Vec<methods::ConnectionEntry>, Error> {
+        let result: methods::ConnectionListResult = self
+            .call_timed(methods::CONNECTION_LIST, &serde_json::json!({}))
+            .await?;
+        Ok(result.connections)
+    }
+
     /// `session.get` contra el daemon (L2): la pantalla y si ESTA conexión
     /// es la dueña.
     ///

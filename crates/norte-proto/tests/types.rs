@@ -1190,10 +1190,14 @@ fn version_ventana_actual() {
     // daemon 0.54 las tres siguen llegando como el error genérico de antes,
     // así que un cliente 0.55 no puede distinguir «llegaste tarde» de «tu clic
     // no llegó» y tiene que seguir dando el consejo prudente.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.55.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.54.0"), "N-1");
+    // 0.56.0 (#264): `connection.list`. Un método nuevo que un cliente viejo
+    // no llama, así que degrada solo; lo que desplaza la ventana es que
+    // contra un daemon 0.55 no hay selector de conexiones que ofrecer.
+    // Conectar no se pierde: sigue siendo navegar a una URL.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.56.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.55.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.53.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.54.9"),
         "N-2 fuera de la ventana"
     );
 }

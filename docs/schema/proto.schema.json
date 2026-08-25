@@ -819,6 +819,40 @@
       ],
       "type": "object"
     },
+    "ConnectionEntry": {
+      "description": "UNA conexión nombrada de las que el daemon tiene configuradas (0.56.0,\n#264).\n\n```\nuse norte_proto::methods::ConnectionEntry;\nlet e: ConnectionEntry = serde_json::from_str(\n    r#\"{\"name\": \"trabajo\", \"url\": \"sftp://oscar@servidor.example/datos\"}\"#,\n)\n.unwrap();\nassert_eq!(e.name, \"trabajo\");\n```",
+      "properties": {
+        "name": {
+          "description": "El nombre con el que el usuario la escribió en `connections.toml`.\n\nEs texto que eligió el humano, no un identificador del sistema: quien\nlo pinte lo enmascara como cualquier otro nombre.",
+          "type": "string"
+        },
+        "url": {
+          "description": "La URL tal como está en el fichero.\n\nPuede llevar un usuario (`sftp://oscar@host/…`), que es lo normal.\n**Nunca una contraseña**: las credenciales se REFERENCIAN (ADR 0015) y\nesta lista no las resuelve. Quien la pinte la trata como una autoridad\ndel wire, con el mismo cuidado que un aviso de sesión degradada — un\nhost puede llamarse `banco.example@malo.example`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url"
+      ],
+      "type": "object"
+    },
+    "ConnectionListResult": {
+      "description": "Result de [`CONNECTION_LIST`].",
+      "properties": {
+        "connections": {
+          "description": "Las conexiones, en orden alfabético por nombre.\n\nVacío = no hay ninguna configurada, que es lo normal el primer día. Un\nfichero que no PARSEA sí es un error: decir «no tienes ninguna» cuando\nlo que pasa es que hay una coma de más sería mentir sobre lo que el\nusuario escribió.",
+          "items": {
+            "$ref": "#/$defs/ConnectionEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "connections"
+      ],
+      "type": "object"
+    },
     "ConnectionTrustHostKeyParams": {
       "description": "Params de [`CONNECTION_TRUST_HOST_KEY`] (flujo TOFU, ADR 0015 D). Lleva el\nfingerprint que el usuario VERIFICÓ; el core lo compara con la clave que\nvuelve a presentar el servidor al reintentar, y solo registra si coincide.",
       "properties": {
@@ -5048,6 +5082,12 @@
     "connection_degraded": {
       "$ref": "#/$defs/ConnectionDegraded"
     },
+    "connection_entry": {
+      "$ref": "#/$defs/ConnectionEntry"
+    },
+    "connection_list_result": {
+      "$ref": "#/$defs/ConnectionListResult"
+    },
     "connection_trust_host_key_params": {
       "$ref": "#/$defs/ConnectionTrustHostKeyParams"
     },
@@ -5535,6 +5575,8 @@
     "grant_scope_result",
     "host_volumes_params",
     "host_volumes_result",
+    "connection_entry",
+    "connection_list_result",
     "index_build_params",
     "index_build_result",
     "index_embed_params",
