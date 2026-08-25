@@ -223,6 +223,17 @@ pub trait HostBackend: Send + Sync + 'static {
     /// No conecta. Devuelve a dónde se PODRÍA ir; ir es navegar a esa URL.
     fn connections(&self) -> BoxFuture<'static, Result<Vec<methods::ConnectionEntry>, Error>>;
 
+    /// Cierra la SESIÓN de una conexión, nombrada por cualquiera de sus rutas
+    /// (#140).
+    ///
+    /// El core la tiene cacheada por `scheme://authority`, así que quien llama
+    /// manda el sitio donde está el panel y no tiene que saber cómo se llavea
+    /// una sesión por dentro.
+    ///
+    /// `false` = no había ninguna abierta. No es un fallo, y decir «cerrada»
+    /// cuando no se cerró nada enseña a no fiarse del mensaje.
+    fn close_connection(&self, path: VPath) -> BoxFuture<'static, Result<bool, Error>>;
+
     /// Parte un fichero en trozos de `part_bytes`, como Task (#132).
     fn split_file(
         &self,
@@ -967,6 +978,11 @@ impl HostBackend for norte_client::RemoteBackend {
     fn connections(&self) -> BoxFuture<'static, Result<Vec<methods::ConnectionEntry>, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.connections().await })
+    }
+
+    fn close_connection(&self, path: VPath) -> BoxFuture<'static, Result<bool, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.close_connection(&path).await })
     }
 
     fn split_file(

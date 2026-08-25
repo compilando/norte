@@ -13648,6 +13648,143 @@ async fn copiar_la_ruta_manda_bytes_al_escritorio() {
 
 /// En solo lectura NO se abre nada ni se lanza un terminal: se DICE.
 ///
+/// Un host que arranca en un directorio concreto.
+async fn host_en(backend: Arc<Falso>, inicio: &str) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: VPath::parse(inicio).expect("vpath"),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca")
+}
+
+/// Espera a una foto cuyo primer listado está en `sufijo`.
+async fn listado_en(
+    sub: &mut norte_ui_host::UiSubscription,
+    sufijo: &str,
+) -> norte_ui_host::ViewSnapshot {
+    for _ in 0..30 {
+        let foto = siguiente_foto(sub).await;
+        if primer_listado(&foto).path_display.ends_with(sufijo) {
+            return foto;
+        }
+    }
+    panic!("el listado nunca llegó a `{sufijo}`");
+}
+
+/// **Desconectar devuelve el panel a donde estaba ANTES de conectar** (#140).
+///
+/// El rastro hacia atrás, no «a casa»: el panel estaba en algún sitio antes de
+/// saltar a la máquina, y ese sitio es la respuesta que el lector espera.
+#[tokio::test]
+async fn desconectar_vuelve_a_donde_estaba_antes() {
+    let mut falso = arbol_como_falso();
+    falso.pon("sftp://servidor/datos", vec![(b"a.txt".to_vec(), false)]);
+    *falso.conexiones.lock().expect("conexiones") =
+        Some(Ok(vec![norte_proto::methods::ConnectionEntry {
+            name: "trabajo".to_owned(),
+            url: "sftp://servidor/datos".to_owned(),
+        }]));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    // Conectar de verdad, por el selector: es el camino que un lector recorre,
+    // y es lo que deja el rastro que después se deshace.
+    ejecutar_por_paleta(&h, &mut sub, "pane.connect").await;
+    for _ in 0..20 {
+        let Some(v) = siguiente_selector(&mut sub).await else {
+            continue;
+        };
+        if !v.rows.is_empty() {
+            break;
+        }
+    }
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    let _ = listado_en(&mut sub, "/datos").await;
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.disconnect").await;
+    let _ = listado_en(&mut sub, "/casa").await;
+
+    let cerradas = backend.cerradas.lock().expect("cerradas");
+    assert_eq!(cerradas.len(), 1, "{cerradas:?}");
+    assert_eq!(cerradas[0].to_wire(), "sftp://servidor/datos");
+}
+
+/// Y NUNCA a otra ruta de la misma máquina: eso reabriría la sesión que se
+/// acaba de cerrar, que es justo lo que el gesto pidió no tener.
+#[tokio::test]
+async fn desconectar_no_vuelve_a_la_misma_maquina() {
+    let mut falso = Falso::default();
+    falso.pon("sftp://servidor/uno", vec![(b"dos".to_vec(), true)]);
+    falso.pon("sftp://servidor/uno/dos", vec![(b"b.txt".to_vec(), false)]);
+    let backend = Arc::new(falso);
+    let (h, snap) = host_en(Arc::clone(&backend), "sftp://servidor/uno").await;
+    let mut sub = h.subscribe();
+
+    let b = listado(&snap);
+    h.dispatch(UiAction::Activate {
+        slot_id: b.slot_id,
+        key: b.rows[0].key,
+        generation: b.generation,
+    })
+    .await
+    .expect("host vivo");
+    let _ = listado_en(&mut sub, "/uno/dos").await;
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.disconnect").await;
+
+    let mut visto = None;
+    for _ in 0..30 {
+        let foto = siguiente_foto(&mut sub).await;
+        let p = primer_listado(&foto).path_display.clone();
+        if !p.contains("servidor") {
+            visto = Some(p);
+            break;
+        }
+    }
+    let donde = visto.expect("el panel sale de la máquina cerrada");
+    assert!(
+        !donde.contains("servidor"),
+        "todo su rastro era de esa máquina, así que cae a casa: {donde}"
+    );
+}
+
+/// En un panel LOCAL no hay nada que cerrar, y se dice.
+///
+/// Una tecla que contesta «hecho» sobre algo que no ha hecho nada enseña a no
+/// fiarse del mensaje.
+#[tokio::test]
+async fn en_un_panel_local_no_hay_conexion_que_cerrar() {
+    let mut falso = Falso::default();
+    falso.pon("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_en(Arc::clone(&backend), "file:///casa").await;
+    let mut sub = h.subscribe();
+
+    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.disconnect").await;
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "msg-disconnect-local"),
+        "{ack:?}"
+    );
+    assert!(
+        backend.cerradas.lock().expect("cerradas").is_empty(),
+        "y no se le pide nada al daemon"
+    );
+}
+
 /// Busca el hueco de ÁRBOL en una foto.
 fn arbol_de(snap: &norte_ui_host::ViewSnapshot) -> &norte_ui_host::dto::TreeSlotView {
     snap.slots
