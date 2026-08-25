@@ -241,7 +241,15 @@ Filed as issues on 2026-08-21 rather than left in this document:
 - **#254** — a daemon-only frontend depends on a provider crate for one path
   conversion.
 - **#255** — log setup duplicated instead of shared.
-- **#256** — packaging has never been exercised.
+- **#256** — ~~packaging has never been exercised~~. **Exercised 2026-08-25**:
+  `just gui-package` produces a `.deb` (42 MB) and an AppImage (131 MB), both
+  carrying `norte-gui`, `norte` and `ntc`, so a clean install has a daemon to
+  talk to. The AppImage's own daemon binds a socket, serves its own CLI and
+  shuts down cleanly. Four things were wrong and none of them was the build:
+  the package description read "Spike vertical del renderer de Tauri", the
+  category was a bare `Utility`, there was no `MimeType` (so "open folder
+  with…" never offered norte), and `Exec` handed a `file://` URL to a binary
+  that takes a path. `tests/empaquetado.rs` now pins all four.
 - **#257** — the golden corpus checks coverage against a hand-written list, and
   misses ten variants.
 - **#258** — `u64` counters become `f64` in the renderer.
