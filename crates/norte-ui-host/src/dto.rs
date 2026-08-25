@@ -778,6 +778,12 @@ pub struct ColumnsPickerView {
     /// ESTA ventana y se pierde al cerrarla. Callarlo dejaría al usuario
     /// creyendo que acaba de configurar norte.
     pub note: String,
+    /// El pie con las teclas, pintado desde el KEYMAP (#287).
+    ///
+    /// Viene del host y no de una cadena del renderer porque los verbos
+    /// `dialog.*` se pueden reatar: un pie que dice `Shift+↑/↓` sobre un
+    /// keymap que ata otra cosa es una mentira que solo se descubre probando.
+    pub hint: String,
 }
 
 /// Una fila del selector de columnas.

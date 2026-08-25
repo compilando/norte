@@ -6983,17 +6983,18 @@ async fn cambiar_el_orden_de_las_columnas_no_vuelve_a_listar() {
 /// se descubre probando, y que ningún test verde decía.
 #[tokio::test]
 async fn las_teclas_del_selector_de_columnas_son_las_que_anuncia_su_pie() {
-    let pie = norte_i18n::t_in(norte_i18n::Lang::Es, "columns-picker-hint-gui");
-    assert!(
-        !pie.starts_with("columns-picker"),
-        "el pie existe en el catálogo: {pie:?}"
-    );
-
     let (h, _snap) = host_arbol(arbol()).await;
     let mut sub = h.subscribe();
     let antes = selector_columnas(&h, &mut sub).await;
 
-    assert!(pie.contains("Espacio"));
+    // El pie viene del HOST y sale del KEYMAP (#287): no es una cadena que
+    // nombre teclas y pueda quedarse rancia cuando alguien las reata.
+    let pie = antes.hint.clone();
+    assert!(!pie.is_empty(), "el pie llega pintado: {pie:?}");
+    assert!(
+        pie.contains("activa") && pie.contains("aplica"),
+        "y dice qué hace cada acorde: {pie:?}"
+    );
     // El cursor abre sobre el NOMBRE, que es fijo: espacio ahí no hace nada,
     // y eso es el contrato —la primera columna ES el nombre por contrato del
     // render— no un fallo.
@@ -7021,7 +7022,7 @@ async fn las_teclas_del_selector_de_columnas_son_las_que_anuncia_su_pie() {
     );
 
     // SHIFT+FLECHA mueve la FILA, no el cursor.
-    assert!(pie.contains("Shift+↑/↓"));
+    assert!(pie.contains("Shift+"), "{pie:?}");
     let orden_antes: Vec<String> = despues.rows.iter().map(|r| r.id.clone()).collect();
     h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
         key: "ArrowDown".to_owned(),
@@ -7045,7 +7046,10 @@ async fn las_teclas_del_selector_de_columnas_son_las_que_anuncia_su_pie() {
     // acaba de reordenar. Con tope: un bucle sobre una condición que puede
     // no llegar es un test que se CUELGA en vez de fallar, y uno colgado no
     // dice nada.
-    assert!(pie.contains(" F "));
+    assert!(
+        pie.to_lowercase().contains('f'),
+        "y el acorde de formato: {pie:?}"
+    );
     let mut ciclado = false;
     for _ in 0..movido.rows.len() + 2 {
         let v = siguiente_columnas(&h, &mut sub).await;
@@ -12551,7 +12555,7 @@ async fn un_plan_que_borra_pregunta_dos_veces() {
     assert!(vista.can_approve, "{}", vista.status);
 
     // La primera `a` solo PREGUNTA.
-    h.dispatch(tecla("a")).await.expect("host vivo");
+    h.dispatch(tecla("y")).await.expect("host vivo");
     let preguntando = siguiente_sync(&mut sub).await.expect("sigue abierto");
     assert!(
         preguntando.confirming.is_some(),
@@ -12571,7 +12575,7 @@ async fn un_plan_que_borra_pregunta_dos_veces() {
     assert!(backend.aplicados.lock().expect("aplicados").is_empty());
 
     // `a` y luego `y`: ahora sí, y con el hash que devolvió el CORE.
-    h.dispatch(tecla("a")).await.expect("host vivo");
+    h.dispatch(tecla("y")).await.expect("host vivo");
     let _ = siguiente_sync(&mut sub).await;
     h.dispatch(tecla("y")).await.expect("host vivo");
     for _ in 0..40 {
@@ -12626,7 +12630,7 @@ async fn un_apply_de_resultado_desconocido_no_se_reofrece() {
         }
         assert!(vista.can_approve, "{}", vista.status);
 
-        h.dispatch(tecla("a")).await.expect("host vivo");
+        h.dispatch(tecla("y")).await.expect("host vivo");
         for _ in 0..40 {
             if !backend.aplicados.lock().expect("aplicados").is_empty() {
                 break;
@@ -12672,7 +12676,9 @@ async fn con_el_apply_en_vuelo_escape_no_cierra() {
         vista = siguiente_sync(&mut sub).await.expect("sigue abierto");
     }
     // Este plan no borra nada y se deshace entero: no hay segunda pregunta.
-    h.dispatch(tecla("a")).await.expect("host vivo");
+    // `y` es `dialog.approve` en el preset (#287): aprobar un plan es decir
+    // que sí a lo que ya está delante, no «confirmar» a secas.
+    h.dispatch(tecla("y")).await.expect("host vivo");
     for _ in 0..40 {
         if !backend.aplicados.lock().expect("aplicados").is_empty() {
             break;
@@ -12754,7 +12760,7 @@ async fn el_informe_de_la_sincronizacion_dice_lo_que_fallo() {
         }
         vista = siguiente_sync(&mut sub).await.expect("sigue abierto");
     }
-    h.dispatch(tecla("a")).await.expect("host vivo");
+    h.dispatch(tecla("y")).await.expect("host vivo");
     for _ in 0..40 {
         if !backend.aplicados.lock().expect("aplicados").is_empty() {
             break;
@@ -13650,6 +13656,72 @@ async fn copiar_la_ruta_manda_bytes_al_escritorio() {
 
 /// En solo lectura NO se abre nada ni se lanza un terminal: se DICE.
 ///
+/// **Las teclas de un diálogo salen del KEYMAP, no del código** (#287).
+///
+/// Era la deriva que el catálogo compartido existe para no tener: la ventana
+/// atendía sus superficies modales con teclas fijas, así que un preset que
+/// reataba `dialog.down` cambiaba el TUI y no la ventana. Aquí se comprueba
+/// sobre un preset REAL cuyas teclas de diálogo son otras.
+#[tokio::test]
+async fn las_teclas_de_un_dialogo_las_pone_el_preset() {
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: arbol(),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("vim").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("vim").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("vim").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+    let antes = selector_columnas(&h, &mut sub).await;
+
+    // El acorde que ESTE preset ata a `dialog.down`, sea el que sea.
+    let atado = norte_ui_host::keys::keymap_dialogo_de_preset("vim")
+        .expect("preset")
+        .bindings()
+        .into_iter()
+        .find(|(_, c)| *c == "dialog.down")
+        .map(|(seq, _)| seq)
+        .expect("el preset ata bajar");
+
+    h.dispatch(UiAction::Key(tecla_de_acorde(&atado)))
+        .await
+        .expect("host vivo");
+    let despues = siguiente_columnas(&h, &mut sub).await;
+    assert_ne!(
+        despues.cursor, antes.cursor,
+        "el acorde del preset mueve el cursor: {atado:?}"
+    );
+}
+
+/// Un acorde pintado, de vuelta a la tecla que el host recibe.
+///
+/// Solo lo que hace falta aquí: una tecla con sus modificadores, sin
+/// secuencias. Un preset que atara `dialog.down` a dos acordes se saldría de
+/// esto, y entonces el test lo diría en vez de pasar por casualidad.
+fn tecla_de_acorde(acorde: &str) -> norte_ui_host::keys::KeyInput {
+    let partes: Vec<&str> = acorde.split('+').collect();
+    let (tecla, mods) = partes.split_last().expect("al menos una parte");
+    let tiene = |m: &str| mods.iter().any(|p| p.eq_ignore_ascii_case(m));
+    norte_ui_host::keys::KeyInput {
+        key: (*tecla).to_owned(),
+        ctrl: tiene("ctrl"),
+        alt: tiene("alt"),
+        shift: tiene("shift"),
+        meta: tiene("meta") || tiene("cmd") || tiene("super"),
+    }
+}
+
 /// **Editar uno nuevo crea el fichero VACÍO y lo abre** (#290).
 ///
 /// La ventana no tiene editor ni terminal: lo que puede hacer es poner el

@@ -211,6 +211,30 @@ pub const IMPLEMENTADOS_DIALOGO: &[&str] = &[
     "dialog.cancel",
     "dialog.approve",
     "dialog.deny",
+    // Las cuatro salidas de una colisión (#287). Cada una nombra SU
+    // respuesta: «confirmar» no dice cuál de las cuatro.
+    "dialog.overwrite",
+    "dialog.skip",
+    "dialog.rename",
+    "dialog.newer",
+    // Andar por una lista modal. `Home`/`End` no están porque el catálogo
+    // compartido no tiene verbo para «al principio» dentro de un diálogo:
+    // siguen siendo teclas fijas, y eso se ve aquí por su ausencia.
+    "dialog.up",
+    "dialog.down",
+    "dialog.page-up",
+    "dialog.page-down",
+    // El selector de columnas y el gestor de extensiones.
+    "dialog.toggle-enabled",
+    "dialog.move-up",
+    "dialog.move-down",
+    "dialog.sort",
+    "dialog.cycle-format",
+    "dialog.add",
+    // Cambiar de lado (comparar, ayuda), volver (ayuda) y filtrar (ayuda).
+    "dialog.pane",
+    "dialog.back",
+    "dialog.filter",
 ];
 
 /// Los comandos del VISOR que este host implementa.

@@ -822,6 +822,8 @@ describe("el selector de columnas", () => {
       title: "Columnas — sftp",
       cursor: 1,
       note: "se aplica a esta ventana; no se guarda",
+      // El pie lo pinta el HOST desde el keymap (#287).
+      hint: "Espacio activa · Enter aplica",
       rows: [
         {
           id: "name",

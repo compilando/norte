@@ -2891,6 +2891,15 @@ impl Estado {
                     "dialog.cancel" => Some("dialog.cancel"),
                     "dialog.approve" => Some("dialog.approve"),
                     "dialog.deny" => Some("dialog.deny"),
+                    // Las cuatro salidas de una colisión (#287). Cada una
+                    // nombra SU respuesta: `dialog.confirm` sobre una
+                    // colisión no elige ninguna, porque «confirmar» no dice
+                    // cuál de las cuatro, y la que se elige por descarte es
+                    // la que destruye.
+                    "dialog.overwrite" => Some("dialog.overwrite"),
+                    "dialog.skip" => Some("dialog.skip"),
+                    "dialog.rename" => Some("dialog.rename"),
+                    "dialog.newer" => Some("dialog.newer"),
                     _ => None,
                 },
                 _ => None,
@@ -2908,6 +2917,13 @@ impl Estado {
             Some("dialog.confirm") => d.vista.choices.iter().find(|c| c.id == "confirm"),
             Some("dialog.approve") => d.vista.choices.iter().find(|c| c.id == "approve"),
             Some("dialog.deny") => d.vista.choices.iter().find(|c| c.id == "deny"),
+            // Las de la colisión, cada una por su nombre. Un diálogo que no
+            // las ofrece las ignora, que es la regla de siempre: aquí no hay
+            // respuestas implícitas.
+            Some("dialog.overwrite") => d.vista.choices.iter().find(|c| c.id == "overwrite"),
+            Some("dialog.skip") => d.vista.choices.iter().find(|c| c.id == "skip"),
+            Some("dialog.rename") => d.vista.choices.iter().find(|c| c.id == "rename"),
+            Some("dialog.newer") => d.vista.choices.iter().find(|c| c.id == "newer"),
             Some("dialog.cancel") => d
                 .vista
                 .choices
@@ -2923,6 +2939,39 @@ impl Estado {
             return (self.aplicada(), Vec::new());
         };
         self.responder_dialogo(id, &choice, backend, buzon)
+    }
+
+    /// El verbo `dialog.*` de una tecla, por el resolutor COMPARTIDO (#287).
+    ///
+    /// Es la única puerta: las superficies modales de esta ventana atendían
+    /// teclas fijas, así que un preset que reataba `dialog.up` cambiaba el TUI
+    /// y no la ventana — justo la deriva que el catálogo común existe para no
+    /// tener.
+    ///
+    /// `None` cuando la tecla no forma acorde, no está atada, o abre una
+    /// secuencia todavía sin resolver. En los tres casos la superficie no hace
+    /// nada, que es lo que hacía antes con una tecla que no entendía.
+    fn verbo_de_dialogo(&mut self, k: &crate::keys::KeyInput) -> Option<String> {
+        let chord = k.to_chord().ok()?;
+        match self.resolver_dialogo.push(chord) {
+            Resolution::Run { command, .. } => Some(command),
+            _ => None,
+        }
+    }
+
+    /// El acorde atado a un verbo `dialog.*`, ya pintado. Vacío si ninguno.
+    ///
+    /// Para los PIES de las superficies modales: se pintan con lo que el
+    /// keymap dice, no con un literal traducido, porque el literal deja de ser
+    /// cierto en cuanto alguien reata la tecla.
+    fn acorde_de_dialogo(&self, comando: &str) -> String {
+        self.resolver_dialogo
+            .effective()
+            .bindings()
+            .into_iter()
+            .find(|(_, c)| *c == comando)
+            .map(|(seq, _)| norte_frontend::keymap::paint_chord(&seq))
+            .unwrap_or_default()
     }
 
     fn tecla_de_un_overlay(
@@ -3993,7 +4042,36 @@ impl Estado {
             // para ella y se pierde al cerrarla. Callarlo dejaría al usuario
             // creyendo que acaba de configurar norte.
             note: clamp_display(norte_i18n::t_in(self.lang, "columns-picker-session-only")),
+            hint: clamp_display(self.pie_de_columnas()),
         })
+    }
+
+    /// El pie del selector de columnas, con los acordes que el keymap ATA.
+    ///
+    /// Se compone aquí y no en el renderer porque los verbos se pueden
+    /// reatar, y una cadena traducida que nombra teclas concretas deja de ser
+    /// cierta en cuanto alguien lo hace. Un verbo sin atar se cae del pie
+    /// entero: anunciarlo sin tecla no ayuda a nadie.
+    fn pie_de_columnas(&self) -> String {
+        let partes = [
+            ("dialog.toggle-enabled", "columns-picker-hint-toggle"),
+            ("dialog.move-up", "columns-picker-hint-move"),
+            ("dialog.sort", "columns-picker-hint-sort"),
+            ("dialog.cycle-format", "columns-picker-hint-format"),
+            ("dialog.confirm", "columns-picker-hint-apply"),
+            ("dialog.cancel", "columns-picker-hint-close"),
+        ];
+        partes
+            .iter()
+            .filter_map(|(cmd, clave)| {
+                let acorde = self.acorde_de_dialogo(cmd);
+                if acorde.is_empty() {
+                    return None;
+                }
+                Some(format!("{acorde} {}", norte_i18n::t_in(self.lang, clave)))
+            })
+            .collect::<Vec<_>>()
+            .join(" · ")
     }
 
     /// Las teclas del selector de columnas.
@@ -4007,24 +4085,31 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.selector_columnas.is_none() {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        // Por el resolutor COMPARTIDO (#287), no por teclas fijas: un preset
+        // que reata `dialog.move-up` tiene que cambiar esta ventana igual que
+        // cambia el TUI, que es para lo que existe el catálogo común. Y el pie
+        // se pinta con los acordes que salen de aquí, no con un literal: un
+        // pie que dice `Shift+↑/↓` sobre un código que escucha otra cosa es
+        // una mentira que solo se descubre probando.
+        let Some(verbo) = self.verbo_de_dialogo(k) else {
+            return (self.aplicada(), Vec::new());
+        };
         let Some(p) = self.selector_columnas.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        // Las teclas son las que el PIE de la ventana anuncia
-        // (`columns-picker-hint-gui`), no otras: un pie que dice `Shift+↑/↓`
-        // sobre un código que escucha `J`/`K` es una mentira que solo se
-        // descubre probando. Con `shift`, la flecha MUEVE la fila en vez de
-        // mover el cursor, que es la misma tecla haciendo lo esperable.
-        match (k.key.as_str(), k.shift) {
-            ("Escape" | "esc", _) => self.selector_columnas = None,
-            ("ArrowDown" | "down", false) => p.down(),
-            ("ArrowUp" | "up", false) => p.up(),
-            ("ArrowDown" | "down", true) => p.move_down(),
-            ("ArrowUp" | "up", true) => p.move_up(),
-            (" " | "space", _) => p.toggle(),
-            ("s" | "S", _) => p.sort_current(),
-            ("f" | "F", _) => p.cycle_format(),
-            ("Enter" | "enter", _) => return self.aplicar_columnas(backend, buzon),
+        match verbo.as_str() {
+            "dialog.cancel" => self.selector_columnas = None,
+            "dialog.down" => p.down(),
+            "dialog.up" => p.up(),
+            "dialog.move-down" => p.move_down(),
+            "dialog.move-up" => p.move_up(),
+            "dialog.toggle-enabled" => p.toggle(),
+            "dialog.sort" => p.sort_current(),
+            "dialog.cycle-format" => p.cycle_format(),
+            "dialog.confirm" => return self.aplicar_columnas(backend, buzon),
             _ => return (self.aplicada(), Vec::new()),
         }
         let cambio = ViewChange::ColumnsPicker {
@@ -4155,14 +4240,18 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.selector_disposicion.is_none() {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        let verbo = self.verbo_de_dialogo(k);
         let Some(p) = self.selector_disposicion.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        match k.key.as_str() {
-            "Escape" | "esc" => self.selector_disposicion = None,
-            "ArrowDown" | "down" => p.down(),
-            "ArrowUp" | "up" => p.up(),
-            "Enter" | "enter" => return self.aplicar_disposicion_elegida(backend, buzon),
+        match verbo.as_deref() {
+            Some("dialog.cancel") => self.selector_disposicion = None,
+            Some("dialog.down") => p.down(),
+            Some("dialog.up") => p.up(),
+            Some("dialog.confirm") => return self.aplicar_disposicion_elegida(backend, buzon),
             _ => return (self.aplicada(), Vec::new()),
         }
         let cambio = ViewChange::Layouts {
@@ -5822,19 +5911,37 @@ impl Estado {
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         /// Cuántas filas mueve una página.
         const PAGINA: i64 = 10;
+        if self.selector.is_none() {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        // `Home`/`End` siguen siendo teclas fijas: el catálogo compartido no
+        // tiene verbo para «al principio» dentro de un diálogo, y esperar a
+        // que lo tenga habría dejado la lista sin extremos.
+        let extremo = match k.key.as_str() {
+            "Home" | "home" => Some(i64::MIN / 2),
+            "End" | "end" => Some(i64::MAX / 2),
+            _ => None,
+        };
+        let verbo = if extremo.is_some() {
+            None
+        } else {
+            self.verbo_de_dialogo(k)
+        };
         let Some(s) = self.selector.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        match k.key.as_str() {
-            "Escape" | "esc" => self.selector = None,
-            "ArrowDown" | "down" => s.mover(1),
-            "ArrowUp" | "up" => s.mover(-1),
-            "PageDown" | "pgdn" => s.mover(PAGINA),
-            "PageUp" | "pgup" => s.mover(-PAGINA),
-            "Home" | "home" => s.mover(i64::MIN / 2),
-            "End" | "end" => s.mover(i64::MAX / 2),
-            "Enter" | "enter" => return self.elegir_del_selector(backend, buzon),
-            _ => return (self.aplicada(), Vec::new()),
+        if let Some(salto) = extremo {
+            s.mover(salto);
+        } else {
+            match verbo.as_deref() {
+                Some("dialog.cancel") => self.selector = None,
+                Some("dialog.down") => s.mover(1),
+                Some("dialog.up") => s.mover(-1),
+                Some("dialog.page-down") => s.mover(PAGINA),
+                Some("dialog.page-up") => s.mover(-PAGINA),
+                Some("dialog.confirm") => return self.elegir_del_selector(backend, buzon),
+                _ => return (self.aplicada(), Vec::new()),
+            }
         }
         let cambio = ViewChange::Picker {
             picker: self.vista_selector(),
@@ -5960,14 +6067,23 @@ impl Estado {
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         /// Cuántas filas mueve una página.
         const PAGINA: i64 = 10;
-        match k.key.as_str() {
-            "Escape" | "esc" => self.agencia.panel = false,
-            "ArrowDown" | "down" => self.agencia.sesiones.mover(1),
-            "ArrowUp" | "up" => self.agencia.sesiones.mover(-1),
-            "PageDown" | "pgdn" => self.agencia.sesiones.mover(PAGINA),
-            "PageUp" | "pgup" => self.agencia.sesiones.mover(-PAGINA),
-            "Home" | "home" => self.agencia.sesiones.mover(i64::MIN / 2),
-            "End" | "end" => self.agencia.sesiones.mover(i64::MAX / 2),
+        // `Home`/`End` y `u` siguen siendo teclas fijas: el catálogo
+        // compartido no tiene verbo para «al principio» ni para «deshacer la
+        // sesión», y esperar a que los tenga habría dejado el panel sin
+        // extremos y sin su única operación.
+        let verbo = match k.key.as_str() {
+            "Home" | "home" | "End" | "end" => None,
+            "u" if !k.ctrl && !k.alt && !k.meta => None,
+            _ => self.verbo_de_dialogo(k),
+        };
+        match (verbo.as_deref(), k.key.as_str()) {
+            (Some("dialog.cancel"), _) => self.agencia.panel = false,
+            (Some("dialog.down"), _) => self.agencia.sesiones.mover(1),
+            (Some("dialog.up"), _) => self.agencia.sesiones.mover(-1),
+            (Some("dialog.page-down"), _) => self.agencia.sesiones.mover(PAGINA),
+            (Some("dialog.page-up"), _) => self.agencia.sesiones.mover(-PAGINA),
+            (_, "Home" | "home") => self.agencia.sesiones.mover(i64::MIN / 2),
+            (_, "End" | "end") => self.agencia.sesiones.mover(i64::MAX / 2),
             // `u` DESHACE la sesión entera, y pregunta antes: es la operación
             // más grande que esta ventana puede lanzar de un tirón —revierte
             // todo lo que un agente hizo, en orden inverso— y no hay ninguna
@@ -5976,7 +6092,7 @@ impl Estado {
             // este host: `ctrl+u` es memoria muscular de otra cosa, y esta es
             // la operación más grande que la ventana puede lanzar de un
             // tirón.
-            "u" if !k.ctrl && !k.alt && !k.meta => return self.preguntar_por_deshacer(),
+            (_, "u") if !k.ctrl && !k.alt && !k.meta => return self.preguntar_por_deshacer(),
             _ => return (self.aplicada(), Vec::new()),
         }
         let _ = (backend, buzon);
@@ -6561,8 +6677,17 @@ impl Estado {
         if e.editando() {
             return self.tecla_editando_config(k, backend, buzon);
         }
-        match k.key.as_str() {
-            "Escape" | "esc" => {
+        // `Home`/`End` se quedan fijas: el catálogo compartido no tiene verbo
+        // para «al principio» dentro de un diálogo.
+        let verbo = match k.key.as_str() {
+            "Home" | "home" | "End" | "end" => None,
+            _ => self.verbo_de_dialogo(k),
+        };
+        let Some(e) = self.extensiones.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match (verbo.as_deref(), k.key.as_str()) {
+            (Some("dialog.cancel"), _) => {
                 // El primer `esc` cierra la FICHA, no el gestor: dejar la
                 // lista por cerrar un detalle pierde dónde estaba el lector.
                 if e.tiene_ficha() {
@@ -6573,12 +6698,12 @@ impl Estado {
             }
             // Con la ficha abierta, las flechas recorren SUS claves: mover el
             // catálogo por debajo tiraría la ficha que se está leyendo.
-            "ArrowDown" | "down" => {
+            (Some("dialog.down"), _) => {
                 if !e.mover_en_ficha(1) {
                     e.mover(1);
                 }
             }
-            "ArrowUp" | "up" => {
+            (Some("dialog.up"), _) => {
                 if !e.mover_en_ficha(-1) {
                     e.mover(-1);
                 }
@@ -6586,34 +6711,42 @@ impl Estado {
             // Las de página y los extremos, por la misma puerta que las
             // flechas: con la ficha abierta recorren SUS claves, y solo
             // cuando no hay nada que andar caen al catálogo.
-            "PageDown" | "pgdn" => {
+            (Some("dialog.page-down"), _) => {
                 if !e.mover_en_ficha(PAGINA) {
                     e.mover(PAGINA);
                 }
             }
-            "PageUp" | "pgup" => {
+            (Some("dialog.page-up"), _) => {
                 if !e.mover_en_ficha(-PAGINA) {
                     e.mover(-PAGINA);
                 }
             }
-            "Home" | "home" => {
+            (_, "Home" | "home") => {
                 if !e.mover_en_ficha(i64::MIN / 2) {
                     e.mover(i64::MIN / 2);
                 }
             }
-            "End" | "end" => {
+            (_, "End" | "end") => {
                 if !e.mover_en_ficha(i64::MAX / 2) {
                     e.mover(i64::MAX / 2);
                 }
             }
-            "Enter" | "enter" => {
+            (Some("dialog.confirm"), _) => {
                 if e.tiene_ficha() {
                     return self.activar_clave(backend, buzon);
                 }
                 return self.pedir_ficha(backend, buzon);
             }
-            "a" => return self.gobernar_elegida(Cambio::Aprobacion, backend, buzon),
-            "e" => return self.gobernar_elegida(Cambio::Encendido, backend, buzon),
+            // Aprobar es `dialog.add` —conceder— y encender/apagar es
+            // `dialog.toggle-enabled`: los dos verbos del catálogo que
+            // significan justo eso, en vez de dos letras que solo esta
+            // ventana conocía.
+            (Some("dialog.add"), _) => {
+                return self.gobernar_elegida(Cambio::Aprobacion, backend, buzon);
+            }
+            (Some("dialog.toggle-enabled"), _) => {
+                return self.gobernar_elegida(Cambio::Encendido, backend, buzon);
+            }
             _ => return (self.aplicada(), Vec::new()),
         }
         let cambio = ViewChange::Extensions {
@@ -7243,18 +7376,25 @@ impl Estado {
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         /// Cuántas filas mueve una página.
         const PAGINA: i64 = 10;
+        if self.ajustes.is_none() {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        let verbo = match k.key.as_str() {
+            "Home" | "home" | "End" | "end" => None,
+            _ => self.verbo_de_dialogo(k),
+        };
         let Some(a) = self.ajustes.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        match k.key.as_str() {
-            "Escape" | "esc" => self.ajustes = None,
-            "ArrowDown" | "down" => a.mover(1),
-            "ArrowUp" | "up" => a.mover(-1),
-            "PageDown" | "pgdn" => a.mover(PAGINA),
-            "PageUp" | "pgup" => a.mover(-PAGINA),
-            "Home" | "home" => a.mover(i64::MIN / 2),
-            "End" | "end" => a.mover(i64::MAX / 2),
-            "Enter" | "enter" => {
+        match (verbo.as_deref(), k.key.as_str()) {
+            (Some("dialog.cancel"), _) => self.ajustes = None,
+            (Some("dialog.down"), _) => a.mover(1),
+            (Some("dialog.up"), _) => a.mover(-1),
+            (Some("dialog.page-down"), _) => a.mover(PAGINA),
+            (Some("dialog.page-up"), _) => a.mover(-PAGINA),
+            (_, "Home" | "home") => a.mover(i64::MIN / 2),
+            (_, "End" | "end") => a.mover(i64::MAX / 2),
+            (Some("dialog.confirm"), _) => {
                 // No es un descarte silencioso: quien pulsa `enter` sobre un
                 // ajuste espera editarlo, y esta ventana todavía no escribe.
                 return (
@@ -7777,11 +7917,21 @@ impl Estado {
             ];
             return (self.aplicada(), vec![self.parche(cambios)]);
         }
+        // FILTRANDO, las teclas son LETRAS: resolverlas por el keymap
+        // convertiría escribir «documento» en abrir, cerrar y filtrar. Solo
+        // `Escape`, `Backspace` y `Enter` siguen significando algo, y esos
+        // tres van por su nombre porque el filtro es un campo de texto.
+        let filtrando = self.ayuda.as_ref().is_some_and(|a| a.estado.filtering());
+        let verbo = if filtrando {
+            None
+        } else {
+            self.verbo_de_dialogo(k)
+        };
         let Some(a) = self.ayuda.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        match k.key.as_str() {
-            "Escape" | "esc" => {
+        match (verbo.as_deref(), k.key.as_str()) {
+            (Some("dialog.cancel"), _) | (None, "Escape" | "esc") => {
                 // Filtrando, `esc` deja de filtrar y no cierra: cerrar la
                 // ayuda entera por abandonar una búsqueda es perder la
                 // página que se estaba leyendo.
@@ -7791,9 +7941,9 @@ impl Estado {
                     self.ayuda = None;
                 }
             }
-            "Tab" | "tab" => a.estado.toggle_focus(),
-            "ArrowDown" | "down" => a.estado.down(),
-            "ArrowUp" | "up" => a.estado.up(),
+            (Some("dialog.pane"), _) => a.estado.toggle_focus(),
+            (Some("dialog.down"), _) => a.estado.down(),
+            (Some("dialog.up"), _) => a.estado.up(),
             // La página la da el MODELO, que sabe lo que significa en la
             // LATERAL: camina por los temas y enseña uno, en vez de diez
             // transiciones de página por tecla.
@@ -7807,13 +7957,17 @@ impl Estado {
             // del modelo— y solo una de las dos se pinta (#267). El modelo
             // conserva su paginación de cuerpo porque el TUI la usa: ahí no
             // hay scroll nativo que delegar.
-            "PageDown" | "pgdn" if a.estado.focus() == norte_frontend::help::Focus::Topics => {
+            (Some("dialog.page-down"), _)
+                if a.estado.focus() == norte_frontend::help::Focus::Topics =>
+            {
                 a.estado.page_down(PAGINA_DE_AYUDA);
             }
-            "PageUp" | "pgup" if a.estado.focus() == norte_frontend::help::Focus::Topics => {
+            (Some("dialog.page-up"), _)
+                if a.estado.focus() == norte_frontend::help::Focus::Topics =>
+            {
                 a.estado.page_up(PAGINA_DE_AYUDA);
             }
-            "Backspace" | "backspace" => {
+            (Some("dialog.back"), _) | (None, "Backspace" | "backspace") => {
                 if a.estado.filtering() {
                     a.estado.backspace();
                 } else if !a.estado.back() {
@@ -7823,9 +7977,11 @@ impl Estado {
                     self.ayuda = None;
                 }
             }
-            "Enter" | "enter" => return self.enter_en_ayuda(backend, buzon),
-            "/" if !a.estado.filtering() => a.estado.start_filter(),
-            otra => {
+            (Some("dialog.confirm"), _) | (None, "Enter" | "enter") => {
+                return self.enter_en_ayuda(backend, buzon);
+            }
+            (Some("dialog.filter"), _) if !a.estado.filtering() => a.estado.start_filter(),
+            (_, otra) => {
                 // Una tecla de TEXTO es un punto de código, no un nombre de
                 // tecla (`ArrowLeft` no se teclea), y solo cuenta con el
                 // filtro abierto: teclear «d» leyendo una página no puede
@@ -8836,10 +8992,14 @@ impl Estado {
     ///
     /// `Escape` DOS veces, por lo mismo que en el panel de diferencias: la
     /// primera pide cancelar la Task viva —la del plan, o la del apply si ya
-    /// está escribiendo—, la segunda cierra pase lo que pase. `a` aprueba, y
-    /// cuando el plan borra o deja algo sin vuelta atrás, `y` contesta la
-    /// segunda pregunta: es la última pantalla donde todavía se puede decir
-    /// que no.
+    /// está escribiendo—, la segunda cierra pase lo que pase.
+    /// `dialog.approve` aprueba, y cuando el plan borra o deja algo sin vuelta
+    /// atrás contesta también la SEGUNDA pregunta: es la última pantalla donde
+    /// todavía se puede decir que no.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "despachador de una pantalla con dos regímenes de tecla"
+    )]
     fn tecla_en_sincronizacion(
         &mut self,
         k: &crate::keys::KeyInput,
@@ -8853,7 +9013,12 @@ impl Estado {
         // contesta que sí, y cualquier otra cosa la retira. Una pregunta que
         // se puede contestar con cualquier tecla no es una pregunta.
         if sinc.vista.confirming.is_some() {
-            let si = matches!(k.key.as_str(), "y" | "Y");
+            let si = self
+                .verbo_de_dialogo(k)
+                .is_some_and(|v| v == "dialog.approve");
+            let Some(sinc) = self.sincronizacion.as_mut() else {
+                return (Self::obsoleta(StaleAction::Modal), Vec::new());
+            };
             sinc.vista.confirming = None;
             if si {
                 return self.aplicar_plan(backend, buzon);
@@ -8863,9 +9028,22 @@ impl Estado {
             };
             return (self.aplicada(), vec![self.parche(vec![cambio])]);
         }
-        match k.key.as_str() {
-            "a" | "A" => self.pedir_aprobacion(backend, buzon),
-            "Escape" | "esc" => {
+        // `Home`/`End` se quedan fijas: el catálogo compartido no tiene verbo
+        // para «al principio» dentro de un diálogo.
+        let verbo = match k.key.as_str() {
+            "Home" | "home" | "End" | "end" => None,
+            _ => self.verbo_de_dialogo(k),
+        };
+        let Some(sinc) = self.sincronizacion.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match (verbo.as_deref(), k.key.as_str()) {
+            // Aprobar el plan es `dialog.approve`, no `dialog.confirm`: lo
+            // que se contesta aquí es «sí, escribe» sobre un plan que ya está
+            // delante, que es exactamente lo que ese verbo nombra — y es el
+            // mismo con el que se contesta la SEGUNDA pregunta.
+            (Some("dialog.approve"), _) => self.pedir_aprobacion(backend, buzon),
+            (Some("dialog.cancel"), _) => {
                 // Mientras el daemon ESCRIBE, `Escape` pide cancelar y no
                 // cierra: cerrar pierde el informe —y con él el recuento, los
                 // fallos y el asa del deshacer— sobre un destino que se
@@ -8942,8 +9120,8 @@ impl Estado {
                 };
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
-            "ArrowDown" | "Down" | "ArrowUp" | "Up" | "PageDown" | "pgdn" | "PageUp" | "pgup"
-            | "Home" | "home" | "End" | "end" => {
+            (Some("dialog.down" | "dialog.up" | "dialog.page-down" | "dialog.page-up"), _)
+            | (_, "Home" | "home" | "End" | "end") => {
                 let total = sinc.vista.steps().len();
                 if total == 0 {
                     return (self.aplicada(), Vec::new());
@@ -8954,12 +9132,12 @@ impl Estado {
                 // doscientos dejaba de mandar el primer paso.
                 let tope = total.saturating_sub(sinc.ventana.max(1));
                 let pagina = sinc.ventana.max(1);
-                sinc.primera_visible = match k.key.as_str() {
-                    "ArrowDown" | "Down" => sinc.primera_visible.saturating_add(1),
-                    "ArrowUp" | "Up" => sinc.primera_visible.saturating_sub(1),
-                    "PageDown" | "pgdn" => sinc.primera_visible.saturating_add(pagina),
-                    "PageUp" | "pgup" => sinc.primera_visible.saturating_sub(pagina),
-                    "Home" | "home" => 0,
+                sinc.primera_visible = match (verbo.as_deref(), k.key.as_str()) {
+                    (Some("dialog.down"), _) => sinc.primera_visible.saturating_add(1),
+                    (Some("dialog.up"), _) => sinc.primera_visible.saturating_sub(1),
+                    (Some("dialog.page-down"), _) => sinc.primera_visible.saturating_add(pagina),
+                    (Some("dialog.page-up"), _) => sinc.primera_visible.saturating_sub(pagina),
+                    (_, "Home" | "home") => 0,
                     _ => tope,
                 }
                 .min(tope);
@@ -9128,11 +9306,23 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.comparacion.is_none() {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
+        // Los DÍGITOS de los filtros no pasan por el resolutor: son
+        // posicionales —el n-ésimo de `CATEGORIES`— y no hay cinco verbos que
+        // los nombren. Es la misma decisión que en el TUI.
+        let digito = k.key.len() == 1 && k.key.chars().all(|c| ('1'..='5').contains(&c));
+        let verbo = if digito {
+            None
+        } else {
+            self.verbo_de_dialogo(k)
+        };
         let Some(c) = self.comparacion.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        match k.key.as_str() {
-            "Escape" | "esc" => {
+        match (verbo.as_deref(), k.key.as_str()) {
+            (Some("dialog.cancel"), _) => {
                 if c.vista.cancel_requested {
                     let task = c.task;
                     c.abandonada
@@ -9156,7 +9346,7 @@ impl Estado {
                 };
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
-            "Tab" | "tab" => {
+            (Some("dialog.pane"), _) => {
                 // Cambiar de lado cambia a qué panel navega `Enter` y sobre
                 // qué lado operan las teclas de fichero.
                 c.vista.pane.swap_active_side();
@@ -9165,14 +9355,14 @@ impl Estado {
                 };
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
-            "Enter" | "enter" => {
+            (Some("dialog.confirm"), _) => {
                 let Some(id) = c.vista.pane.selected_id() else {
                     return (self.aplicada(), Vec::new());
                 };
                 self.comparacion_activa(id, backend, buzon)
             }
-            "ArrowUp" | "Up" | "ArrowDown" | "Down" => {
-                let abajo = k.key.ends_with("Down");
+            (Some(v @ ("dialog.up" | "dialog.down")), _) => {
+                let abajo = v == "dialog.down";
                 let visibles = c.vista.pane.visible_ids();
                 if visibles.is_empty() {
                     return (self.aplicada(), Vec::new());
@@ -9197,7 +9387,7 @@ impl Estado {
             }
             // 1..5: los filtros, en el orden fijo de las categorías, igual
             // que en el TUI.
-            d if d.len() == 1 && d.chars().all(|c| ('1'..='5').contains(&c)) => {
+            (_, d) if digito => {
                 let i = d.chars().next().and_then(|c| c.to_digit(10)).unwrap_or(1) as usize - 1;
                 let Some(cat) = norte_frontend::compare::CATEGORIES.get(i).copied() else {
                     return (self.aplicada(), Vec::new());

@@ -78,6 +78,7 @@
     "change": "columns_picker",
     "columns": {
       "cursor": 1,
+      "hint": "Espacio activa · Shift+↑ mueve · Ctrl+S ordena",
       "note": "se aplica a esta ventana; no se guarda",
       "rows": [
         {

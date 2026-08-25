@@ -656,6 +656,8 @@ export interface LayoutRowView {
  * guarda.
  */
 export interface ColumnsPickerView {
+  /** El pie con las teclas, ya pintado desde el keymap por el host. */
+  hint: string;
   title: string;
   rows: ColumnsPickerRowView[];
   cursor: number;
