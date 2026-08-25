@@ -50,6 +50,11 @@
     ],
     "category": "Utility",
     "shortDescription": "norte, gestor de ficheros ortodoxo",
-    "longDescription": "Spike vertical del renderer de Tauri sobre norte-ui-host."
+    "longDescription": "Un gestor de ficheros de dos paneles con un núcleo sin interfaz, un daemon y acceso para agentes. Esta es la ventana; el paquete trae también el daemon y el cliente de terminal.",
+    "linux": {
+      "deb": {
+        "desktopTemplate": "norte.desktop"
+      }
+    }
   }
 }

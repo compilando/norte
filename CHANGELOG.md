@@ -24,6 +24,22 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **Packaging works, and it was exercised for the first time** (#256).
+  `just gui-package` produces a `.deb` and an AppImage, and both carry
+  `norte-gui`, `norte` and `ntc` — so on a clean install the window has a
+  daemon to start. Verified end to end from inside the AppImage: its own daemon
+  binds its socket, its own CLI lists through it, and it shuts down cleanly.
+  The build itself was fine; four things around it were not, and every one of
+  them is invisible until someone installs the thing. The package description
+  read "Spike vertical del renderer de Tauri sobre norte-ui-host" — a
+  development note in front of whoever is deciding whether to install this. The
+  category was a bare `Utility`, which keeps a file manager out of the list
+  where file managers are looked for. There was no `MimeType`, so "open folder
+  with…" never offered norte — for a file manager that is the whole desktop
+  integration. And `Exec` handed `%U` (a `file://` URL) to a binary that takes
+  a path, which would have opened the window on an error instead of on the
+  folder the desktop just named. All four are now pinned by tests.
+
 - **The window's dialogs now go through the shared key resolver** (#287). They
   used to answer to fixed keys, so a preset that rebound `dialog.confirm`
   changed the TUI and not the window — exactly the drift the shared catalogue
