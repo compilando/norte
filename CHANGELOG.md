@@ -24,6 +24,17 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **The window can close a connection** (`pane.disconnect`). The panel does not
+  stay looking at something it can no longer read: it walks its own back-trail
+  and returns to where it was *before* connecting, skipping anything on the
+  machine it just left — going back to another path of the same session would
+  reopen the connection the gesture asked to close. With nothing else in the
+  trail it falls back to `$HOME`. On a local panel there is nothing to close
+  and it says so, rather than answering "done" over work it did not do. A close
+  that *fails* does not navigate: the panel stays and the session is still
+  there, which is what the error says. (The TUI still goes straight home; the
+  two will be aligned.)
+
 - **The window has a directory tree** (`pane.tree`, bridge **40**, ADR 0075).
   It occupies a slot like any other kind — it splits, closes and resizes with
   the gestures that already exist — and choosing a branch navigates the

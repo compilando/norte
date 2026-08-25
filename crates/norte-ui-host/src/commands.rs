@@ -145,6 +145,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "app.theme",
     "pane.select-drive",
     "pane.connect",
+    "pane.disconnect",
     "pane.view",
     "pane.quick-search",
     "pane.search",
@@ -449,6 +450,12 @@ pub enum Efecto {
     /// es lo que establece la sesión — con el mismo gate que cualquier otro
     /// listado, y su TOFU si hace falta.
     Conexiones,
+    /// Cierra la sesión del panel activo y lo saca de ahí (#140).
+    ///
+    /// NO está en [`MUTAN`]: soltar una sesión no escribe un byte en ningún
+    /// sitio. Lo que sí hace es dejar el panel mirando algo que ya no se puede
+    /// leer, y por eso navega a continuación.
+    Desconectar,
     /// Parte el fichero bajo el cursor en trozos del tamaño que se teclee
     /// (#132). Está en [`MUTAN`]: escribe los trozos.
     ///
@@ -642,6 +649,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "app.theme" => Efecto::Tema,
         "pane.select-drive" => Efecto::Volumenes,
         "pane.connect" => Efecto::Conexiones,
+        "pane.disconnect" => Efecto::Desconectar,
         "pane.view" => Efecto::Ver,
         "pane.quick-search" => Efecto::BuscarRapido,
         "pane.search" => Efecto::Buscar,

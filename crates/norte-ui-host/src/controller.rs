@@ -611,6 +611,12 @@ enum Fondo {
     /// Sin `Result`: una rama que no se deja leer llega VACÍA y se marca como
     /// leída, porque la alternativa es volver a pedirla en cada vuelta.
     RamasDeArbol(VPath, Vec<VPath>),
+    /// La sesión de un panel se cerró (#140): el hueco, cómo fue, y a dónde va
+    /// ese panel ahora.
+    ///
+    /// El destino viaja DENTRO del mensaje porque se decidió antes de soltar
+    /// la sesión: después, la ruta del panel ya no sirve para elegirlo.
+    Desconectada(u32, Result<bool, Error>, VPath),
 }
 
 impl UiHost {
@@ -5655,6 +5661,104 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
+    /// Cierra la sesión del panel activo y lo saca de ahí (#140).
+    ///
+    /// En un panel LOCAL no hay nada que cerrar y se DICE: una tecla que
+    /// contesta «hecho» sobre algo que no ha hecho nada enseña a no fiarse del
+    /// mensaje.
+    ///
+    /// El destino se decide AQUÍ, antes de soltar la sesión, porque después la
+    /// ruta del panel ya no sirve de clave.
+    fn desconectar(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let slot = self.activo();
+        let dir = self.hueco().pane.dir().clone();
+        if dir.scheme() == "file" {
+            let fuera = self.decir("msg-disconnect-local");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-disconnect-local".to_owned(),
+                },
+                fuera,
+            );
+        }
+        let destino = self.donde_volver_tras_desconectar(&dir);
+        let backend_c = Arc::clone(backend);
+        let buzon_c = buzon.clone();
+        let clave = dir.clone();
+        tokio::spawn(async move {
+            let res = backend_c.close_connection(clave).await;
+            let _ = buzon_c
+                .send(Mensaje::Fondo(Box::new(Fondo::Desconectada(
+                    slot, res, destino,
+                ))))
+                .await;
+        });
+        (self.aplicada(), Vec::new())
+    }
+
+    /// A dónde va un panel cuya sesión se acaba de cerrar.
+    ///
+    /// El RASTRO hacia atrás, del más reciente al más viejo, saltándose todo lo
+    /// que sea de la misma sesión: volver a `sftp://servidor/otra-carpeta`
+    /// sería reabrir la conexión que se acaba de cerrar, que es exactamente lo
+    /// que el gesto pidió no tener.
+    ///
+    /// Y si no queda nada —el panel nació remoto, o todo su rastro es de esa
+    /// máquina— se cae a casa. Lo que no puede pasar es que el panel se quede
+    /// mirando lo que ya no se lee.
+    fn donde_volver_tras_desconectar(&self, cerrada: &VPath) -> VPath {
+        let misma =
+            |p: &VPath| p.scheme() == cerrada.scheme() && p.authority() == cerrada.authority();
+        let historial = &self.hueco().historial;
+        if let Some(p) = historial.trail().iter().rev().find(|p| !misma(p)) {
+            return p.clone();
+        }
+        Self::casa()
+    }
+
+    /// El directorio del usuario, o la raíz local si el entorno no lo dice.
+    ///
+    /// La raíz y no un error: un destino que no existe deja el panel donde
+    /// estaba, que es lo único inaceptable aquí.
+    fn casa() -> VPath {
+        std::env::home_dir()
+            .and_then(|h| {
+                h.to_str()
+                    .and_then(norte_frontend::shell::vpath_de_ruta_nativa)
+            })
+            .unwrap_or_else(|| {
+                VPath::parse("file:///").unwrap_or_else(|_| unreachable!("`file:///` parsea"))
+            })
+    }
+
+    /// La sesión se cerró (o no había ninguna): se dice y el panel se va.
+    fn aplicar_desconexion(
+        &mut self,
+        slot: u32,
+        res: Result<bool, Error>,
+        destino: &VPath,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let clave = match res {
+            Ok(true) => "msg-disconnect-done",
+            // `false` no es un fallo: no había sesión abierta. Y aun así el
+            // panel se va, porque seguir ahí exigiría reabrirla.
+            Ok(false) => "msg-disconnect-none",
+            Err(e) => {
+                // Un cierre que falla NO navega: el panel sigue donde estaba y
+                // la sesión sigue viva, que es lo que el error dice.
+                return self.decir(norte_frontend::error::error_key(&e));
+            }
+        };
+        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+        self.navegar_hueco(slot, destino, Trail::Record, backend, buzon)
+    }
+
     /// Llegaron las conexiones (#264). Misma guarda de apertura que los
     /// volúmenes: una respuesta de la lista anterior no la rellena.
     fn aplicar_conexiones(
@@ -6261,6 +6365,9 @@ impl Estado {
             }
             Fondo::Conexiones(apertura, res) => {
                 self.aplicar_conexiones(apertura, res).into_iter().collect()
+            }
+            Fondo::Desconectada(slot, res, destino) => {
+                self.aplicar_desconexion(slot, res, &destino, backend, buzon)
             }
             Fondo::SitiosVolumenes(res) => self.aplicar_sitios(res).into_iter().collect(),
             Fondo::RamasDeArbol(dir, hijos) => self
@@ -8308,6 +8415,7 @@ impl Estado {
             Efecto::AbrirExterno => self.abrir_externo(),
             Efecto::Terminal => self.abrir_terminal(),
             Efecto::Comparar => self.pedir_comparacion(backend, buzon),
+            Efecto::Desconectar => self.desconectar(backend, buzon),
             Efecto::TamanoDeDirectorio
             | Efecto::Empaquetar
             | Efecto::Desempaquetar

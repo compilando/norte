@@ -104,6 +104,10 @@ pub struct Falso {
     /// lista vacía, que es lo que ve quien no tiene ninguna configurada.
     pub conexiones:
         std::sync::Mutex<Option<Result<Vec<norte_proto::methods::ConnectionEntry>, Error>>>,
+    /// Las sesiones que se mandó CERRAR, en orden (#140).
+    pub cerradas: std::sync::Mutex<Vec<VPath>>,
+    /// Lo que `connection.close` contesta. `None` = «sí, había una».
+    pub cierre: std::sync::Mutex<Option<Result<bool, Error>>>,
     /// Contenido por path, para el visor.
     pub contenido: HashMap<String, Vec<u8>>,
     /// Los paths que se sondearon, en orden: es lo que permite comprobar que
@@ -1445,6 +1449,17 @@ impl HostBackend for Falso {
             .clone()
             .unwrap_or_else(|| Ok(Vec::new()));
         Box::pin(async move { cs })
+    }
+
+    fn close_connection(&self, path: VPath) -> BoxFuture<'static, Result<bool, Error>> {
+        self.cerradas.lock().expect("cerradas").push(path);
+        let res = self
+            .cierre
+            .lock()
+            .expect("cierre")
+            .clone()
+            .unwrap_or(Ok(true));
+        Box::pin(async move { res })
     }
 
     fn split_file(
