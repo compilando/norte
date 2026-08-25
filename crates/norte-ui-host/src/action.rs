@@ -134,6 +134,18 @@ pub enum UiAction {
         /// Respuesta elegida.
         choice: String,
     },
+    /// El lector eligió un directorio en el selector del ESCRITORIO, o lo
+    /// cerró sin elegir (#284).
+    ///
+    /// La ruta viene del renderer, así que se trata como todo lo que viene de
+    /// ahí: se valida, y sobre todo se ENSEÑA en la confirmación antes de
+    /// tocar nada. Lo que NO viene en este mensaje es qué se copia — eso sigue
+    /// siendo del estado del host, que es la regla de ADR 0069.
+    DirectoryPicked {
+        /// La ruta NATIVA elegida, o `None` si se cerró el selector. Es texto
+        /// del sistema de ficheros, no un `VPath`: convertirla es del host.
+        path: Option<String>,
+    },
     /// Teclea en el campo de texto del diálogo abierto.
     DialogInput {
         /// Diálogo.

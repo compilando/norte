@@ -7909,26 +7909,39 @@ async fn mover_es_otro_verbo_y_lo_dice() {
     assert!(ts[0].2, "F6 mueve");
 }
 
-/// Con un solo listado no hay a dónde copiar, y se DICE en vez de inventar un
-/// destino.
+/// Con un solo listado no hay a dónde copiar **dentro de la ventana**, así que
+/// se pregunta fuera (#284) — y hasta que llegue la respuesta no se transfiere
+/// nada. Lo que este test sostiene es que no se INVENTA un destino: ni el
+/// propio directorio, ni el último que se usó.
+///
+/// Antes de #284 esto se rehusaba con `host-no-other-slot`. La cadena completa
+/// —efecto, respuesta y confirmación— la cubre
+/// `con_un_panel_el_destino_lo_elige_el_escritorio`.
 #[tokio::test]
-async fn sin_otro_hueco_no_hay_a_donde_transferir() {
+async fn sin_otro_hueco_el_destino_se_pregunta_fuera() {
     let backend = arbol();
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "simple", (120, 40)).await;
+    let mut nativos = h.native_effects();
     let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
-    assert_eq!(
-        ack,
-        ActionAck::Unavailable {
-            reason_key: "host-no-other-slot".to_owned()
-        },
-        "{ack:?}"
+    assert!(
+        matches!(ack, ActionAck::Applied { .. }),
+        "se acepta el gesto y se pregunta: {ack:?}"
     );
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+        .await
+        .expect("sale el selector")
+        .expect("canal vivo");
+    assert!(matches!(
+        efecto,
+        norte_ui_host::dto::NativeEffect::PickDirectory { .. }
+    ));
     assert!(
         backend
             .transferencias
             .lock()
             .expect("transferencias")
-            .is_empty()
+            .is_empty(),
+        "y nada se mueve hasta que haya destino"
     );
 }
 
@@ -13633,6 +13646,109 @@ async fn copiar_la_ruta_manda_bytes_al_escritorio() {
 
 /// En solo lectura NO se abre nada ni se lanza un terminal: se DICE.
 ///
+/// **Con UN solo panel, copiar pide el destino al escritorio** (#284).
+///
+/// Antes se rehusaba: quien no había partido la ventana no podía copiar. Lo
+/// que se comprueba aquí es la cadena entera —el efecto sale, la respuesta
+/// entra, y la transferencia acaba yendo a donde se eligió— porque cada mitad
+/// por separado no dice nada sobre la otra.
+#[tokio::test]
+async fn con_un_panel_el_destino_lo_elige_el_escritorio() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut nativos = h.native_effects();
+    let mut sub = h.subscribe();
+
+    // F5 con un solo listado: en vez de rehusar, sale el efecto.
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+        .await
+        .expect("el efecto sale antes del timeout")
+        .expect("canal vivo");
+    let desde = match efecto {
+        norte_ui_host::dto::NativeEffect::PickDirectory { desde } => desde,
+        otro => panic!("se esperaba el selector de carpeta: {otro:?}"),
+    };
+    assert_eq!(
+        desde.to_wire(),
+        "mem:///casa",
+        "el selector abre donde está el panel"
+    );
+
+    // Y la respuesta entra por la misma puerta que el resto.
+    h.dispatch(UiAction::DirectoryPicked {
+        path: Some("/tmp".to_owned()),
+    })
+    .await
+    .expect("host vivo");
+
+    // Lo que sale es la confirmación de siempre, con ESE destino: el lector ve
+    // a dónde van sus ficheros antes de que se mueva un byte, que es lo que
+    // acota que la ruta haya venido de fuera.
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let confirmacion = dialogos.last().expect("hay confirmación");
+    let destino = confirmacion
+        .destination
+        .as_ref()
+        .expect("la confirmación NOMBRA el destino");
+    assert!(
+        destino.text.contains("/tmp"),
+        "el destino elegido se enseña: {destino:?}"
+    );
+}
+
+/// Cerrar el selector sin elegir no copia nada: cancelar es una respuesta.
+#[tokio::test]
+async fn cerrar_el_selector_sin_elegir_no_transfiere() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut nativos = h.native_effects();
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+        .await
+        .expect("sale el efecto");
+
+    h.dispatch(UiAction::DirectoryPicked { path: None })
+        .await
+        .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        backend
+            .transferencias
+            .lock()
+            .expect("transferencias")
+            .is_empty(),
+        "cancelar el selector no transfiere"
+    );
+}
+
+/// Una respuesta del selector que NADIE pidió no se interpreta. Es la misma
+/// regla que un diálogo obsoleto: en una superficie que mueve ficheros, un
+/// mensaje suelto no puede iniciar una operación.
+#[tokio::test]
+async fn un_destino_que_nadie_pidio_no_hace_nada() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let ack = h
+        .dispatch(UiAction::DirectoryPicked {
+            path: Some("/tmp".to_owned()),
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Stale { .. }),
+        "sin selector abierto, la respuesta es obsoleta: {ack:?}"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        backend
+            .transferencias
+            .lock()
+            .expect("transferencias")
+            .is_empty()
+    );
+}
+
 /// Lo que haga con los ficheros un editor o un shell no lo decide esta
 /// ventana, así que una montada sin efectos no los arranca.
 #[tokio::test]

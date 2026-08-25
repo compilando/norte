@@ -14,7 +14,10 @@ use crate::catalog::HostCatalog;
 
 /// El estado que Tauri inyecta en cada comando.
 pub struct Bridge {
-    host: UiHost,
+    /// En `Arc` porque el bombeo de efectos nativos necesita un handle
+    /// `'static`: el selector de carpeta le CONTESTA al host (#284), y para
+    /// eso tiene que poder llamar a `dispatch` desde su propia task.
+    host: Arc<UiHost>,
     /// La foto de arranque, en su sobre (secuencia 0).
     inicial: BridgeEnvelope<UiUpdate>,
     catalog: Arc<HostCatalog>,
@@ -30,7 +33,7 @@ impl Bridge {
             UiUpdate::Snapshot(Box::new(snapshot)),
         );
         Self {
-            host,
+            host: Arc::new(host),
             inicial,
             catalog: Arc::new(catalog),
         }
@@ -40,6 +43,13 @@ impl Bridge {
     #[must_use]
     pub fn host(&self) -> &UiHost {
         &self.host
+    }
+
+    /// El mismo, compartible: lo necesita el bombeo de efectos nativos, que
+    /// vive en su propia task y le contesta al host.
+    #[must_use]
+    pub fn host_compartido(&self) -> Arc<UiHost> {
+        Arc::clone(&self.host)
     }
 
     /// La foto de arranque. Es la secuencia 0 y hay exactamente una: el

@@ -24,6 +24,23 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **With one panel open, the destination is asked of the desktop** (#284).
+  Copying or moving used to be refused outright when there was no second
+  listing to take the destination from, which left anyone who had not split the
+  window unable to copy at all. The window now opens the desktop's folder
+  picker. No new dependency and no new capability: it goes through the same
+  native-effects channel as the clipboard and the terminal, invoking `zenity`,
+  `kdialog` or `yad` — the same "list of candidates, first one that exists
+  wins" shape those already use. Cancelling is an answer and transfers
+  nothing.
+
+  The path comes back through the renderer's own door, so it is treated like
+  everything from there: validated, and above all **shown in the confirmation
+  before a byte moves**. What does *not* travel in that message is what gets
+  copied — the operands are still the host's, which is the rule of ADR 0069.
+  Only the verb is remembered while the picker is open; the operands are
+  recomputed on the way back, because the listing may have changed underneath.
+
 - **The packages carry the daemon** (#256). The `.deb` and the AppImage
   shipped `norte-gui` alone, so on a clean install the window had nothing to
   start — and since #300 starting the daemon is exactly what it does. They now

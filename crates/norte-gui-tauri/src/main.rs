@@ -193,7 +193,13 @@ fn main() -> ExitCode {
                 // nada— sino por este proceso, con una puerta estrecha por
                 // cosa (ADR 0066 D11).
                 let nativos = bridge.host().native_effects();
-                tauri::async_runtime::spawn(norte_gui_tauri::nativo::bombear(nativos));
+                // El host va también, y no solo el canal: el selector de
+                // carpeta le CONTESTA (#284), y esa respuesta entra por
+                // `dispatch` como cualquier otra acción.
+                tauri::async_runtime::spawn(norte_gui_tauri::nativo::bombear(
+                    nativos,
+                    bridge.host_compartido(),
+                ));
             }
             Ok(())
         })
