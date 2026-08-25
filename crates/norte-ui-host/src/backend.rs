@@ -214,6 +214,15 @@ pub trait HostBackend: Send + Sync + 'static {
         params: methods::ArchiveTestParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
+    /// Las conexiones NOMBRADAS que el daemon tiene configuradas (#264).
+    ///
+    /// Se pregunta en vez de leer `connections.toml`: leerlo metería la pila
+    /// de red entera en un binario que solo quiere pintar nombres, y el daemon
+    /// ya la tiene porque es quien abre las sesiones.
+    ///
+    /// No conecta. Devuelve a dónde se PODRÍA ir; ir es navegar a esa URL.
+    fn connections(&self) -> BoxFuture<'static, Result<Vec<methods::ConnectionEntry>, Error>>;
+
     /// Parte un fichero en trozos de `part_bytes`, como Task (#132).
     fn split_file(
         &self,
@@ -953,6 +962,11 @@ impl HostBackend for norte_client::RemoteBackend {
                 foreign: false,
             })
         })
+    }
+
+    fn connections(&self) -> BoxFuture<'static, Result<Vec<methods::ConnectionEntry>, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.connections().await })
     }
 
     fn split_file(

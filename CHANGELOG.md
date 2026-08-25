@@ -24,6 +24,15 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **The window offers a connection picker** (#264). `pane.connect` lists what
+  the daemon has configured and navigating to one establishes the session the
+  usual way. The URL is masked as an *authority* rather than a path — a host
+  can be called `banco.example@malo.example` without carrying a single
+  character that gets masked, and "which machine am I connecting to" is the
+  only question this picker answers. A URL that does not parse is shown without
+  a destination: seeing that it is configured and cannot be opened is more
+  honest than hiding it.
+
 - **`connection.list`: the daemon answers which connections are configured**
   (#264, protocol **0.56.0**). It exists so a frontend can offer a connection
   picker *without reading `connections.toml` itself* — reading it would drag

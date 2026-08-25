@@ -52,7 +52,6 @@ const APLAZADOS: &[(&str, u32)] = &[
     ("dialog.sort", 287),
     ("dialog.toggle-enabled", 287),
     ("dialog.up", 287),
-    ("pane.connect", 290),
     ("pane.disconnect", 290),
     ("pane.edit-new", 290),
     ("pane.tree", 290),

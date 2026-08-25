@@ -100,6 +100,10 @@ pub struct Falso {
     pub partidos: std::sync::Mutex<Vec<norte_proto::methods::FileSplitParams>>,
     /// Los trozos que se mandó juntar.
     pub juntados: std::sync::Mutex<Vec<norte_proto::methods::FileCombineParams>>,
+    /// Lo que el daemon contesta a `connection.list` (#264). Por defecto una
+    /// lista vacía, que es lo que ve quien no tiene ninguna configurada.
+    pub conexiones:
+        std::sync::Mutex<Option<Result<Vec<norte_proto::methods::ConnectionEntry>, Error>>>,
     /// Contenido por path, para el visor.
     pub contenido: HashMap<String, Vec<u8>>,
     /// Los paths que se sondearon, en orden: es lo que permite comprobar que
@@ -1429,6 +1433,18 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.comprobados.lock().expect("comprobados").push(params);
         self.task_de_archivo(norte_proto::TaskKind::TestArchive, 12)
+    }
+
+    fn connections(
+        &self,
+    ) -> BoxFuture<'static, Result<Vec<norte_proto::methods::ConnectionEntry>, Error>> {
+        let cs = self
+            .conexiones
+            .lock()
+            .expect("conexiones")
+            .clone()
+            .unwrap_or_else(|| Ok(Vec::new()));
+        Box::pin(async move { cs })
     }
 
     fn split_file(
