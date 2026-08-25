@@ -1238,6 +1238,24 @@ impl RemoteBackend {
         }
     }
 
+    /// `fs.create`: un fichero VACÍO, como Task (#290).
+    ///
+    /// Falla si el destino existe. Crear es una afirmación sobre un nombre
+    /// libre, y un método que trunca en silencio es una pérdida de datos con
+    /// nombre inocente.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon al encolar.
+    pub async fn create_file(&self, path: &VPath) -> Result<RemoteTask, Error> {
+        let result: FsTaskResult = self
+            .call_timed_guarded(
+                methods::FS_CREATE,
+                &norte_proto::methods::FsCreateParams { path: path.clone() },
+            )
+            .await?;
+        Ok(self.own_task(result.task_id, TaskKind::Create))
+    }
+
     /// `fs.mkdir`, como Task (la mutación pasa por journal y policy igual).
     ///
     /// # Errors

@@ -38,6 +38,59 @@ async fn run_undo(engine: &Engine, actor: Actor) -> (TaskState, UndoReport) {
     (state, r)
 }
 
+/// **`fs.create` crea un fichero VACÍO, y su deshacer lo borra** (#290).
+///
+/// Es una mutación como cualquier otra: journal `Created` con su reversa. Lo
+/// que este test clava es que no hay excepción por ser pequeña.
+#[tokio::test]
+async fn crear_un_fichero_vacio_se_deshace() {
+    let (engine, mem, _j) = setup().await;
+    let h = engine
+        .create_file(&vp("mem:///nuevo.txt"))
+        .await
+        .expect("create");
+    assert_eq!(h.join().await, TaskState::Completed);
+    let e = mem.stat(&vp("mem:///nuevo.txt")).await.expect("existe");
+    assert_eq!(e.size, Some(0), "y VACÍO: crear no inventa contenido");
+
+    let (state, r) = run_undo(&engine, Actor::User).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(r.undone, 1);
+    assert!(matches!(
+        mem.stat(&vp("mem:///nuevo.txt")).await,
+        Err(norte_proto::Error::NotFound)
+    ));
+}
+
+/// Y NUNCA pisa lo que haya.
+///
+/// No hay ninguna lectura de «crear» que signifique «vaciar lo que hay», y un
+/// método que trunca en silencio es una pérdida de datos con nombre inocente.
+#[tokio::test]
+async fn crear_sobre_algo_que_existe_falla_sin_tocarlo() {
+    let (engine, mem, _j) = setup().await;
+    write_file(&mem, "mem:///ocupado.txt", b"contenido que importa").await;
+    let h = engine
+        .create_file(&vp("mem:///ocupado.txt"))
+        .await
+        .expect("submit");
+    assert!(
+        matches!(
+            h.join().await,
+            TaskState::Failed {
+                error: norte_proto::Error::Conflict { .. }
+            }
+        ),
+        "un nombre ocupado es un conflicto"
+    );
+    let e = mem.stat(&vp("mem:///ocupado.txt")).await.expect("sigue");
+    assert_eq!(
+        e.size,
+        Some(21),
+        "y con sus bytes intactos: el fallo no vació nada"
+    );
+}
+
 #[tokio::test]
 async fn undo_deletes_created() {
     let (engine, mem, _j) = setup().await;

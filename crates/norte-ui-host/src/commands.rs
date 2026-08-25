@@ -50,6 +50,7 @@ pub fn implementados(efectos: Efectos) -> Vec<&'static str> {
 /// La alternativa —dos listas— sería un sitio donde olvidarse de una.
 pub const MUTAN: &[&str] = &[
     "pane.mkdir",
+    "pane.edit-new",
     "pane.delete",
     "pane.delete-permanent",
     "pane.copy",
@@ -150,6 +151,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.quick-search",
     "pane.search",
     "pane.mkdir",
+    "pane.edit-new",
     "pane.delete",
     "pane.delete-permanent",
     "pane.copy",
@@ -483,6 +485,11 @@ pub enum Efecto {
     Buscar,
     /// Abre el prompt de crear directorio.
     CrearDirectorio,
+    /// Abre el prompt de crear un fichero VACÍO y editarlo (#290).
+    ///
+    /// Está en [`MUTAN`]: crea un nodo en el disco, con su entrada de journal
+    /// y su deshacer, exactamente como crear un directorio.
+    CrearFichero,
     /// Pide borrar lo marcado (o lo que haya bajo el cursor). NO borra: abre
     /// la confirmación, que es por donde pasan TODAS las vías —tecla, menú,
     /// gesto—, porque una operación destructiva con dos puertas acaba
@@ -654,6 +661,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.quick-search" => Efecto::BuscarRapido,
         "pane.search" => Efecto::Buscar,
         "pane.mkdir" => Efecto::CrearDirectorio,
+        "pane.edit-new" => Efecto::CrearFichero,
         "pane.delete" => Efecto::Borrar { permanente: false },
         "pane.delete-permanent" => Efecto::Borrar { permanente: true },
         "pane.copy" => Efecto::Transferir { mover: false },

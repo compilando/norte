@@ -24,6 +24,28 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **`fs.create`: the protocol can create an empty file** (protocol **0.57.0**,
+  ADR 0076). It was the gap behind `pane.edit-new`, the last command of #290 the
+  window could not do: `fs.mkdir` makes a directory, `fs.copy` writes one that
+  already exists somewhere else, and nothing said "an empty file, here, by this
+  name". The TUI never needed it — it launches `$EDITOR` and lets the editor
+  create the file on save — and a window has no terminal to hand a process to.
+  It is a mutation like any other: journal `Created` with its undo, its own
+  policy permission (`PolicyOp::Create`, not folded into `mkdir` — letting
+  something create folders is not letting it create files), progress and
+  cancellation. It **fails if the destination exists**: there is no reading of
+  "create" that means "empty whatever is there", and a method that truncates in
+  silence is data loss with an innocent name.
+
+- **The window can create a file and edit it** (`pane.edit-new`). It asks for
+  the name, creates the file, and only when the task actually *succeeds* hands
+  it to the desktop application. Opening earlier would launch an editor over a
+  file that is not there yet, and the empty buffer it shows would look exactly
+  like success. On a remote pane it is refused before the name is typed:
+  `xdg-open` cannot be given an `sftp://`, and saying so afterwards arrives too
+  late. With this, **every command of #290 that needed new surface is built**
+  except `layout.preview`, which stays out with its reason.
+
 - **The window can close a connection** (`pane.disconnect`). The panel does not
   stay looking at something it can no longer read: it walks its own back-trail
   and returns to where it was *before* connecting, skipping anything on the

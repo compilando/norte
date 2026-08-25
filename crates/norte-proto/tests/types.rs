@@ -1194,10 +1194,16 @@ fn version_ventana_actual() {
     // no llama, así que degrada solo; lo que desplaza la ventana es que
     // contra un daemon 0.55 no hay selector de conexiones que ofrecer.
     // Conectar no se pierde: sigue siendo navegar a una URL.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.56.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.55.0"), "N-1");
+    // 0.57.0 (#290): `fs.create`, un fichero vacío como Task. Método nuevo que
+    // un cliente viejo no llama y kind nuevo que degrada a `Unknown`, así que
+    // no rompe nada; lo que desplaza la ventana es que contra un daemon 0.56
+    // un frontend SIN TERMINAL no puede ofrecer «editar uno nuevo» — no hay
+    // forma de crear el fichero, y lanzar un editor a que lo cree al guardar
+    // es justo lo que una ventana no puede hacer.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.57.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.56.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.54.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.55.9"),
         "N-2 fuera de la ventana"
     );
 }
