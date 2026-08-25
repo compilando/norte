@@ -49,6 +49,10 @@
     "action": "directory_picked",
     "path": "/home/oscar/destino"
   },
+  "window_focus": {
+    "action": "window_focus",
+    "focused": false
+  },
   "extension_select_row": {
     "action": "extension_select_row",
     "row": 1

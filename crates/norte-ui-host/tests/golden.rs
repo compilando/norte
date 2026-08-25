@@ -157,6 +157,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::Dialog { .. } => "dialog",
         UiAction::DialogInput { .. } => "dialog_input",
         UiAction::DirectoryPicked { .. } => "directory_picked",
+        UiAction::WindowFocus { .. } => "window_focus",
         UiAction::CancelTask { .. } => "cancel_task",
         UiAction::CompareSelectRow { .. } => "compare_select_row",
         UiAction::CompareActivateRow { .. } => "compare_activate_row",
@@ -233,6 +234,9 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
                 path: Some("/home/oscar/destino".to_owned()),
             },
         ),
+        // `false` y no `true`: es el valor que CAMBIA algo. Con la ventana
+        // enfocada el host se comporta como antes de #285.
+        ("window_focus", UiAction::WindowFocus { focused: false }),
     ]
 }
 
