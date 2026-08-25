@@ -159,6 +159,8 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::DirectoryPicked { .. } => "directory_picked",
         UiAction::WindowFocus { .. } => "window_focus",
         UiAction::FilesDropped { .. } => "files_dropped",
+        UiAction::TreeActivateRow { .. } => "tree_activate_row",
+        UiAction::TreeToggleRow { .. } => "tree_toggle_row",
         UiAction::CancelTask { .. } => "cancel_task",
         UiAction::CompareSelectRow { .. } => "compare_select_row",
         UiAction::CompareActivateRow { .. } => "compare_activate_row",
@@ -304,6 +306,20 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
             UiAction::PlaceActivateRow {
                 row: 1,
                 generation: 4,
+            },
+        ),
+        (
+            "tree_activate_row",
+            UiAction::TreeActivateRow {
+                row: 2,
+                generation: 6,
+            },
+        ),
+        (
+            "tree_toggle_row",
+            UiAction::TreeToggleRow {
+                row: 2,
+                generation: 6,
             },
         ),
         (
@@ -572,10 +588,10 @@ fn disposicion_de_referencia() -> LayoutView {
                 role: Some(SlotRole::Target),
                 focus_index: 1,
             },
-            // Los otros tres huecos de `slots` también se COLOCAN. Sin esto
-            // el corpus describía una pantalla que nombra cinco huecos y
-            // pinta dos, así que un renderer podía pasar el contrato sin
-            // saber pintar la barra lateral, la ficha ni los procesos.
+            // Los otros huecos de `slots` también se COLOCAN. Sin esto el
+            // corpus describía una pantalla que nombra seis huecos y pinta
+            // dos, así que un renderer podía pasar el contrato sin saber
+            // pintar la barra lateral, la ficha, los procesos ni el árbol.
             SlotPlacement {
                 slot_id: 5,
                 x: 0,
@@ -602,6 +618,15 @@ fn disposicion_de_referencia() -> LayoutView {
                 height: 2,
                 role: None,
                 focus_index: 4,
+            },
+            SlotPlacement {
+                slot_id: 8,
+                x: 0,
+                y: 36,
+                width: 24,
+                height: 2,
+                role: None,
+                focus_index: 5,
             },
         ],
     }
@@ -636,7 +661,14 @@ fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
 }
 
 /// Los huecos de la foto de referencia: un listado, la hoja de atributos, el
-/// panel de procesos y uno de un tipo que este host no proyecta.
+/// panel de procesos, la barra de sitios, el árbol y uno de un tipo que este
+/// host no proyecta.
+///
+/// Larga a propósito, y crece con cada `SlotView` nueva: es UNA lista de
+/// literales sin lógica dentro, y repartirla escondería justo lo que este
+/// fichero existe para enseñar de un vistazo — la forma en el cable de cada
+/// variante, entera y en un sitio.
+#[expect(clippy::too_many_lines, reason = "lista de literales, sin lógica")]
 fn slots_de_referencia() -> Vec<SlotView> {
     vec![
         SlotView::Browser(Box::new(BrowserSlotView {
@@ -730,6 +762,37 @@ fn slots_de_referencia() -> Vec<SlotView> {
             ],
             cursor: 1,
             generation: 5,
+        })),
+        // El árbol: sus tres estados de `children` son tres cosas distintas
+        // para quien lee —rama abierta, hoja, y todavía no se ha mirado—, así
+        // que los tres cruzan el cable aquí.
+        SlotView::Tree(Box::new(norte_ui_host::dto::TreeSlotView {
+            slot_id: 8,
+            rows: vec![
+                norte_ui_host::dto::TreeRowView {
+                    label: "\u{27e8}file\u{27e9}/home/oscar".to_owned(),
+                    hostile: false,
+                    depth: 0,
+                    expanded: true,
+                    children: Some(true),
+                },
+                norte_ui_host::dto::TreeRowView {
+                    label: "caf\u{fffd}".to_owned(),
+                    hostile: true,
+                    depth: 1,
+                    expanded: false,
+                    children: None,
+                },
+                norte_ui_host::dto::TreeRowView {
+                    label: "vacia".to_owned(),
+                    hostile: false,
+                    depth: 1,
+                    expanded: true,
+                    children: Some(false),
+                },
+            ],
+            cursor: 1,
+            generation: 3,
         })),
         SlotView::Unsupported {
             slot_id: 2,

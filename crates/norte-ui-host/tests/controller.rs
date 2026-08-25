@@ -664,14 +664,16 @@ async fn el_contador_lo_resuelve_el_host() {
 async fn un_comando_que_el_host_no_hace_no_dispara_nada() {
     let (h, snap) = host_arbol(arbol()).await;
     let antes = listado(&snap).clone();
-    // `alt+t` es el panel de árbol en el preset ortodoxo: existe, está ligada,
-    // y este host todavía no la implementa. El ejemplo ha ido cambiando según
-    // se construía lo anterior —fue `F5` hasta copiar, y `F4` hasta que editar
-    // pasó a abrir con el escritorio (#290)—, y esa rotación es justamente la
-    // señal de que la ventana se acerca a la paridad.
+    // `alt+q` es el hueco de previsualización en el preset ortodoxo: existe,
+    // está ligada, y este host todavía no la implementa —no sabe PINTAR un
+    // hueco `preview`, y abrir uno que solo se pinta en gris no es abrirlo. El
+    // ejemplo ha ido cambiando según se construía lo anterior —fue `F5` hasta
+    // copiar, `F4` hasta que editar pasó a abrir con el escritorio (#290) y
+    // `alt+t` hasta el panel de árbol—, y esa rotación es justamente la señal
+    // de que la ventana se acerca a la paridad.
     let ack = h
         .dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
-            key: "t".to_owned(),
+            key: "q".to_owned(),
             ctrl: false,
             alt: true,
             shift: false,
@@ -13646,6 +13648,136 @@ async fn copiar_la_ruta_manda_bytes_al_escritorio() {
 
 /// En solo lectura NO se abre nada ni se lanza un terminal: se DICE.
 ///
+/// Busca el hueco de ÁRBOL en una foto.
+fn arbol_de(snap: &norte_ui_host::ViewSnapshot) -> &norte_ui_host::dto::TreeSlotView {
+    snap.slots
+        .iter()
+        .find_map(|s| match s {
+            SlotView::Tree(t) => Some(&**t),
+            _ => None,
+        })
+        .expect("hay un hueco de árbol")
+}
+
+/// Espera a una foto en la que el árbol ya tiene sus ramas.
+async fn arbol_con_ramas(
+    sub: &mut norte_ui_host::UiSubscription,
+    cuantas: usize,
+) -> norte_ui_host::ViewSnapshot {
+    for _ in 0..20 {
+        let foto = siguiente_foto(sub).await;
+        if foto
+            .slots
+            .iter()
+            .any(|s| matches!(s, SlotView::Tree(t) if t.rows.len() >= cuantas))
+        {
+            return foto;
+        }
+    }
+    panic!("el árbol nunca trajo {cuantas} ramas");
+}
+
+/// **El árbol lista UNA rama, y solo cuando se abre** (`pane.tree`).
+///
+/// Perezoso por la misma razón que el listado local no trae tamaños: uno que
+/// se leyera entero al abrirse tardaría minutos en un `$HOME` grande y horas
+/// contra un remoto. Al abrirlo se pide la RAÍZ y nada más — las hijas de
+/// `docs` no se piden hasta que alguien despliega `docs`.
+#[tokio::test]
+async fn el_arbol_pide_una_rama_y_solo_al_abrirla() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.tree").await;
+    // La raíz y sus hijas DIRECTORIO: `docs` está, `notas.txt` no.
+    let foto = arbol_con_ramas(&mut sub, 2).await;
+    let t = arbol_de(&foto);
+    assert_eq!(t.rows.len(), 2, "raíz + `docs`, sin ficheros: {:?}", t.rows);
+    assert_eq!(t.rows[0].depth, 0);
+    assert!(
+        t.rows[0].label.ends_with("/casa"),
+        "la raíz lleva su ruta entera: {:?}",
+        t.rows[0]
+    );
+    assert_eq!(t.rows[1].label, "docs");
+    assert_eq!(t.rows[1].depth, 1);
+    assert_eq!(
+        t.rows[1].children, None,
+        "todavía no se ha mirado dentro, y eso NO es «es una hoja»"
+    );
+}
+
+/// Elegir una rama navega el LISTADO, y el árbol se queda donde está.
+///
+/// Es lo que hace útil tenerlo abierto: si el árbol se re-anclara en cada
+/// navegación, entrar en una carpeta tiraría todas las ramas abiertas.
+#[tokio::test]
+async fn elegir_una_rama_navega_el_listado_y_el_arbol_no_se_mueve() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "pane.tree").await;
+    let foto = arbol_con_ramas(&mut sub, 2).await;
+    let generacion = arbol_de(&foto).generation;
+
+    h.dispatch(UiAction::TreeActivateRow {
+        row: 1,
+        generation: generacion,
+    })
+    .await
+    .expect("host vivo");
+
+    let mut visto = None;
+    for _ in 0..20 {
+        let foto = siguiente_foto(&mut sub).await;
+        if primer_listado(&foto).path_display.ends_with("/casa/docs") {
+            visto = Some(foto);
+            break;
+        }
+    }
+    let foto = visto.expect("el listado va a la rama elegida");
+    let t = arbol_de(&foto);
+    assert!(
+        t.rows[0].label.ends_with("/casa"),
+        "el árbol sigue anclado donde estaba: {:?}",
+        t.rows[0]
+    );
+}
+
+/// Un click con la generación de OTRA pintada se rechaza, no navega.
+///
+/// Las hijas de una rama aterrizan EN MEDIO de la lista, así que entre que el
+/// lector suelta el botón y el host atiende, esa fila puede ser otra carpeta
+/// (ADR 0068).
+#[tokio::test]
+async fn una_rama_de_otra_pintada_no_navega() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "pane.tree").await;
+    let foto = arbol_con_ramas(&mut sub, 2).await;
+    let generacion = arbol_de(&foto).generation;
+
+    let ack = h
+        .dispatch(UiAction::TreeActivateRow {
+            row: 1,
+            generation: generacion + 99,
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Stale { .. }),
+        "una generación que no case se rechaza: {ack:?}"
+    );
+    let foto = siguiente_foto_tras_resync(&h, &mut sub).await;
+    assert!(
+        primer_listado(&foto).path_display.ends_with("/casa"),
+        "y el listado no se movió: {:?}",
+        primer_listado(&foto).path_display
+    );
+}
+
 /// **Soltar ficheros NO copia: pregunta** (#283).
 ///
 /// Un drop es un gesto sin confirmación por naturaleza, y la lista la compone

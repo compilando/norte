@@ -81,6 +81,15 @@
             "width": 40,
             "x": 80,
             "y": 38
+          },
+          {
+            "focus_index": 5,
+            "height": 2,
+            "role": null,
+            "slot_id": 8,
+            "width": 24,
+            "x": 0,
+            "y": 36
           }
         ],
         "tabs": [
@@ -534,6 +543,15 @@
           "width": 40,
           "x": 80,
           "y": 38
+        },
+        {
+          "focus_index": 5,
+          "height": 2,
+          "role": null,
+          "slot_id": 8,
+          "width": 24,
+          "x": 0,
+          "y": 36
         }
       ],
       "tabs": [
@@ -842,6 +860,35 @@
           }
         ],
         "slot_id": 7
+      },
+      {
+        "cursor": 1,
+        "generation": 3,
+        "kind": "tree",
+        "rows": [
+          {
+            "children": true,
+            "depth": 0,
+            "expanded": true,
+            "hostile": false,
+            "label": "⟨file⟩/home/oscar"
+          },
+          {
+            "children": null,
+            "depth": 1,
+            "expanded": false,
+            "hostile": true,
+            "label": "caf�"
+          },
+          {
+            "children": false,
+            "depth": 1,
+            "expanded": true,
+            "hostile": false,
+            "label": "vacia"
+          }
+        ],
+        "slot_id": 8
       },
       {
         "kind": "unsupported",

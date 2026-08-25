@@ -143,6 +143,17 @@ impl Tree {
         rows.get(self.cursor()).map(|r| r.path.clone())
     }
 
+    /// Pone el cursor en una fila concreta, acotado a las que hay.
+    ///
+    /// Para el ratón: un click nombra una fila por su índice, y el índice
+    /// puede venir de una foto anterior a que llegaran los hijos de una rama.
+    /// Se acota en vez de rechazar porque quien rechaza es la GENERACIÓN, que
+    /// es la que sabe si el árbol pintado es este.
+    pub fn set_cursor(&mut self, row: usize) {
+        let n = self.rows().len();
+        self.cursor = row.min(n.saturating_sub(1));
+    }
+
     /// Sube.
     pub const fn up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
