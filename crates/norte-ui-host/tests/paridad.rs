@@ -54,7 +54,6 @@ const APLAZADOS: &[(&str, u32)] = &[
     ("dialog.up", 287),
     ("pane.connect", 290),
     ("pane.disconnect", 290),
-    ("pane.edit", 290),
     ("pane.edit-new", 290),
     ("pane.tree", 290),
     // El único de los siete de la ADR 0058 que sigue fuera: esta ventana no

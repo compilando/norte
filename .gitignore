@@ -11,3 +11,6 @@ crates/norte-gui-tauri/ui/node_modules/
 crates/norte-gui-tauri/ui/dist/
 crates/norte-gui-tauri/ui/coverage/
 crates/norte-gui-tauri/gen/
+# Copias con sufijo de triple que `just gui-package` deja para Tauri (#256):
+# son artefactos de `target/release`, no fuentes.
+crates/norte-gui-tauri/binaries/

@@ -512,8 +512,22 @@ gui-build-release: gui-build
 # La salida correcta a medio plazo es construir sobre la baseline más VIEJA de
 # glibc/WebKitGTK, que es lo que la tarea 7.1 del plan pide de todas formas;
 # esto es lo que hace que el paquete salga hoy, en la máquina de referencia.
+# Y el paquete lleva los TRES binarios (#256): `norte-gui`, el daemon `norte`
+# y el TUI `ntc`. Un paquete con solo la ventana no arranca en una instalación
+# limpia — desde #300 la ventana levanta su daemon, y para eso tiene que
+# haberlo. Van como `externalBin`, que es como Tauri mete un ejecutable de
+# al lado: en el `.deb` acaban en `/usr/bin`, que es donde la ventana los
+# busca (junto a su propio ejecutable, y si no en el `PATH`).
+#
+# Tauri exige que el fichero fuente lleve el TRIPLE del target en el nombre y
+# lo quita al empaquetar, así que se copian con ese sufijo a `binaries/`.
 gui-package: gui-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    triple=$(rustc -vV | sed -n 's/^host: //p')
+    cargo build --release -p norte-cli -p norte-tui {{features}}
+    mkdir -p {{gui_dir}}/binaries
+    for b in norte ntc; do
+        cp -f "target/release/$b" "{{gui_dir}}/binaries/$b-$triple"
+    done
     cd {{gui_dir}} && NO_STRIP=1 ./ui/node_modules/.bin/tauri build
-    @echo
-    @echo "AVISO (#256): estos paquetes llevan SOLO \`norte-gui\`, no \`norte\`."
-    @echo "En una instalación limpia la ventana no encontrará su daemon."

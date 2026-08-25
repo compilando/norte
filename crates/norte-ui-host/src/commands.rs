@@ -66,6 +66,9 @@ pub const MUTAN: &[&str] = &[
     // Copiar la ruta NO está aquí: pone texto en el portapapeles y no toca
     // nada, que es tan de solo lectura como leer un nombre.
     "pane.open",
+    // Editar es abrir con la aplicación del escritorio, así que lanza un
+    // proceso igual que `pane.open`.
+    "pane.edit",
     "app.terminal",
     // Empaquetar ESCRIBE un fichero; desempaquetar es una copia con otro
     // nombre. Comprobar no está aquí: lee el archivo entero y contesta, que es
@@ -136,6 +139,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "app.agents",
     "app.terminal",
     "pane.open",
+    "pane.edit",
     "pane.copy-path",
     "app.theme",
     "pane.select-drive",
@@ -619,7 +623,12 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "app.extensions" => Efecto::Extensiones,
         "app.agents" => Efecto::Agentes,
         "pane.copy-path" => Efecto::CopiarRuta,
-        "pane.open" => Efecto::AbrirExterno,
+        // F4 abre con la aplicación del ESCRITORIO, igual que `pane.open`
+        // (#290). El TUI lanza `$EDITOR` porque ya está dentro de un
+        // terminal; esta ventana no tiene uno, y abrir uno encima para editar
+        // un fichero es más ruido que ayuda. Lo que se pierde es respetar
+        // `$EDITOR`: aquí decide el escritorio, y puede abrir un visor.
+        "pane.open" | "pane.edit" => Efecto::AbrirExterno,
         "app.terminal" => Efecto::Terminal,
         "app.theme" => Efecto::Tema,
         "pane.select-drive" => Efecto::Volumenes,
