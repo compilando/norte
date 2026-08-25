@@ -2448,6 +2448,51 @@ pub(crate) async fn mkdir_task(
     Ok(())
 }
 
+/// Crea un fichero VACÍO (#290). Lo mismo que [`mkdir_task`] con la otra clase
+/// de nodo, y con sus mismas reglas.
+///
+/// El `stat` previo es la única forma de negarse a pisar lo que haya: el sink
+/// del provider PUBLICA por rename, así que escribir sin mirar reemplazaría un
+/// fichero existente en silencio. Es una comprobación con carrera —entre el
+/// `stat` y el rename cabe otra cosa— y aun así va, porque el modo de fallo que
+/// evita (crear encima de un fichero del usuario) es de pérdida de datos y el
+/// que deja abierto es que dos creaciones simultáneas del mismo nombre no se
+/// vean. No se puede cerrar aquí sin un `create_new` en el trait, que es otro
+/// cambio y de otra ADR.
+pub(crate) async fn create_task(
+    provider: Arc<dyn Provider>,
+    path: VPath,
+    observer: Arc<dyn MutationObserver>,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    if ctx.cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    let observer = crate::observer::pin_for_task(observer).await?;
+    ctx.progress.update(|p| {
+        p.entries_total = Some(1);
+        p.current = Some(path.clone());
+    });
+    match with_retry(&ctx.cancel, || provider.stat(&path).boxed()).await {
+        Ok(_) => {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::Exists,
+            });
+        }
+        Err(Error::NotFound) => {}
+        Err(e) => return Err(e),
+    }
+    // Abrir y cerrar: el sink publica su staging vacío, que es exactamente un
+    // fichero de cero bytes en el destino. Sin `write` ninguno de por medio.
+    let sink = provider.write(&path).await?;
+    sink.commit().await?;
+    observer
+        .on_mutation(&Mutation::Created(&path), &ctx.actor)
+        .await?;
+    ctx.progress.update(|p| p.entries_done = 1);
+    Ok(())
+}
+
 /// Cuánto ocupan `roots`, contando lo que se pueda leer (#139).
 ///
 /// El total NO se devuelve: viaja en el progreso (`bytes_done`/`entries_done`),

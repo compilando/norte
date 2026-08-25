@@ -767,7 +767,23 @@ use crate::{
 /// y no lo llama. Lo que se pierde contra un daemon N-1 es el selector, no la
 /// capacidad de conectar — ir a una URL sigue estableciendo la sesión por el
 /// camino de siempre, y eso no cambió.
-pub const PROTOCOL_VERSION: &str = "0.56.0";
+///
+/// `0.57.0` (#290): método nuevo [`FS_CREATE`] ([`FsCreateParams`] →
+/// [`FsTaskResult`], la misma forma de Task que `fs.mkdir`) y variante
+/// [`crate::TaskKind::Create`]. Crea un fichero VACÍO, y solo eso: es lo que
+/// le faltaba a un frontend sin terminal para ofrecer «editar uno nuevo», que
+/// en la TUI lo resuelve lanzando `$EDITOR` y dejando que el editor cree el
+/// fichero al guardar.
+///
+/// Falla si el destino EXISTE ([`crate::ConflictKind::Exists`]), igual que
+/// `fs.mkdir`: no hay ninguna lectura de «crear» que signifique «vaciar lo que
+/// haya», y un método que trunca en silencio es una pérdida de datos con
+/// nombre inocente.
+///
+/// Ventana N=0.57.x / N-1=0.56.x. Aditivo: un cliente 0.56 no conoce el método
+/// y no lo llama, y degrada el kind nuevo a `TaskKind::Unknown` por su
+/// `serde(other)` — nada que gatear en emisión.
+pub const PROTOCOL_VERSION: &str = "0.57.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -974,6 +990,19 @@ pub const FS_DELETE: &str = "fs.delete";
 /// políticas de choque. Journal `Created` con undo (regla 4); gateado por
 /// `PolicyOp::Mkdir`.
 pub const FS_MKDIR: &str = "fs.mkdir";
+/// `fs.create` — creación de UN fichero VACÍO como Task (#290).
+///
+/// Lo mismo que [`FS_MKDIR`] con la otra clase de nodo, y con sus mismas
+/// reglas: el padre debe existir, un nodo previo en el destino es `Conflict`
+/// —crear es una afirmación sobre un nombre LIBRE—, y sin `on_collision`,
+/// porque crear no ofrece políticas de choque. No hay ninguna lectura de
+/// «crear» que signifique «vaciar lo que haya», y un método que trunca en
+/// silencio es una pérdida de datos con nombre inocente.
+///
+/// Vacío y nada más: escribir contenido es `fs.copy` desde algún sitio, o el
+/// programa que lo abra después. Journal `Created` con undo (regla 4); gateado
+/// por `PolicyOp::Create`.
+pub const FS_CREATE: &str = "fs.create";
 /// `fs.search` — búsqueda viva bajo un subtree (spec §17.1a): nombre por
 /// glob O regex, contenido por literal O regex. Devuelve una Task
 /// (`TaskKind::Search`); los hits llegan por la notificación
@@ -1822,6 +1851,21 @@ pub struct FsDeleteParams {
     /// wire es el SEGURO (ADR 0009).
     #[serde(default)]
     pub mode: DeleteMode,
+}
+
+/// Params de [`FS_CREATE`] (#290).
+///
+/// ```
+/// use norte_proto::methods::FsCreateParams;
+/// let p: FsCreateParams =
+///     serde_json::from_str(r#"{"path":"file:///casa/nuevo.txt"}"#).expect("params");
+/// assert_eq!(p.path.file_name().expect("nombre").as_bytes(), b"nuevo.txt");
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsCreateParams {
+    /// El fichero a crear, COMPLETO. El padre debe existir; no se crea camino.
+    pub path: VPath,
 }
 
 /// Params de [`FS_MKDIR`] (#104).

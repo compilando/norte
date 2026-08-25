@@ -3599,7 +3599,11 @@ fn method_names_frozen() {
     // viejo no llama—, y aun así la ventana se DESPLAZA: contra un daemon
     // 0.55 no hay selector de conexiones. Lo que no se pierde es conectar,
     // que sigue siendo navegar a una URL.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.56.0");
+    // 0.57.0 (#290): `fs.create`, un fichero VACÍO como Task. Aditivo —método
+    // nuevo, kind nuevo que degrada a `Unknown`—, y desplaza la ventana porque
+    // contra un daemon 0.56 un frontend sin terminal no puede ofrecer «editar
+    // uno nuevo»: no hay forma de crear el fichero.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.57.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

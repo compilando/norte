@@ -1679,6 +1679,19 @@
       ],
       "type": "object"
     },
+    "FsCreateParams": {
+      "description": "Params de [`FS_CREATE`] (#290).\n\n```\nuse norte_proto::methods::FsCreateParams;\nlet p: FsCreateParams =\n    serde_json::from_str(r#\"{\"path\":\"file:///casa/nuevo.txt\"}\"#).expect(\"params\");\nassert_eq!(p.path.file_name().expect(\"nombre\").as_bytes(), b\"nuevo.txt\");\n```",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "El fichero a crear, COMPLETO. El padre debe existir; no se crea camino."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
     "FsDeleteParams": {
       "description": "Params de [`FS_DELETE`].",
       "properties": {
@@ -4609,6 +4622,11 @@
           "type": "string"
         },
         {
+          "const": "create",
+          "description": "Creación de un fichero VACÍO (`fs.create`, #290). Lo mismo que\n[`TaskKind::Mkdir`] con la otra clase de nodo: mutación, journal\n`Created` con su undo. Entra en 0.57.0; un cliente N-1 (0.56.x) la\ndegrada a [`TaskKind::Unknown`] vía el `serde(other)`.",
+          "type": "string"
+        },
+        {
           "const": "index",
           "description": "Construcción/actualización del índice de búsqueda de un subtree\n(`index.build`, M4). Entra en 0.25.0; un cliente N-1 (0.24.x) la degrada a\n[`TaskKind::Unknown`] vía el `serde(other)`.",
           "type": "string"
@@ -5142,6 +5160,9 @@
     "fs_copy_params": {
       "$ref": "#/$defs/FsCopyParams"
     },
+    "fs_create_params": {
+      "$ref": "#/$defs/FsCreateParams"
+    },
     "fs_delete_params": {
       "$ref": "#/$defs/FsDeleteParams"
     },
@@ -5559,6 +5580,7 @@
     "fs_list_params",
     "fs_list_result",
     "fs_mkdir_params",
+    "fs_create_params",
     "fs_move_params",
     "fs_read_params",
     "fs_read_result",

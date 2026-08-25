@@ -3039,6 +3039,44 @@ impl Engine {
         ))
     }
 
+    /// Crea un fichero VACÍO (#290).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] si el scheme no tiene provider registrado.
+    pub async fn create_file(&self, path: &VPath) -> Result<TaskHandle, Error> {
+        self.create_file_as(path, crate::journal::Actor::User).await
+    }
+
+    /// [`Self::create_file`] con ACTOR explícito: gateado por
+    /// [`crate::policy::PolicyOp::Create`] PRE-efecto.
+    ///
+    /// # Errors
+    /// [`Error::JournalUnavailable`] si el journal de esta sesión no se puede
+    /// abrir (#178); [`Error::PolicyDenied`] si la policy deniega;
+    /// [`Error::Unsupported`] si el scheme no tiene provider registrado.
+    #[tracing::instrument(skip(self, actor), fields(path = %span_path(path)))]
+    pub async fn create_file_as(
+        &self,
+        path: &VPath,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        self.gate(&actor, crate::policy::PolicyOp::Create, &[path])
+            .await?;
+        let provider = self.provider_for(path).await?;
+        let observer = Arc::clone(&self.observer);
+        let path = path.clone();
+        let key = path.scheme().to_owned();
+        Ok(self.sched.submit(
+            &key,
+            TaskKind::Create,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move { ops::create_task(provider, path, observer, &ctx).await })
+            }),
+        ))
+    }
+
     /// Capabilities de LA UBICACIÓN `p` (para que el frontend decida, p. ej.,
     /// si el F8 va a papelera o avisa de permanente).
     ///

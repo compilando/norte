@@ -1511,6 +1511,11 @@ enum Pendiente {
     /// Crear un directorio dentro de este otro. El nombre lo teclea el
     /// usuario y se valida al confirmar, no al teclear: corregir un nombre a
     /// medias es peor que verlo rechazado al final.
+    /// Crear un fichero VACÍO y abrirlo con el escritorio (#290).
+    CrearFichero {
+        /// Dónde se crea. El nombre es lo que se teclea.
+        dir: VPath,
+    },
     CrearDirectorio {
         /// Dónde se crea.
         dir: VPath,
@@ -1924,6 +1929,12 @@ struct Estado {
     ramas: Option<norte_frontend::tree::Tree>,
     /// Sube cada vez que cambia el conjunto de ramas visibles.
     gen_ramas: u64,
+    /// El fichero recién creado que hay que abrir en cuanto exista (#290).
+    ///
+    /// Uno como mucho: el gesto pide un nombre, y hasta que ese diálogo se
+    /// contesta no hay otro. Se consume en el primer desenlace de una task de
+    /// creación, bueno o malo.
+    abrir_al_crear: Option<VPath>,
     /// El cursor del panel de procesos.
     ///
     /// Se acota al LEER y no al mover: las filas aparecen y desaparecen
@@ -2268,6 +2279,7 @@ impl Estado {
             gen_sitios: 0,
             ramas: None,
             gen_ramas: 0,
+            abrir_al_crear: None,
             gen_selector: 0,
             gen_extensiones: 0,
             gen_catalogo: 0,
@@ -7568,6 +7580,7 @@ impl Estado {
                 Some(Pendiente::InstruccionIa { .. }) => "dialog.ai-rename",
                 Some(
                     Pendiente::CrearDirectorio { .. }
+                    | Pendiente::CrearFichero { .. }
                     | Pendiente::Buscar { .. }
                     | Pendiente::Renombrar { .. }
                     // La consulta semántica es otro diálogo que pide que
@@ -8394,6 +8407,7 @@ impl Estado {
             Efecto::Buscar => self.pedir_busqueda(),
             Efecto::BuscarRapido => self.buscar_rapido(),
             Efecto::CrearDirectorio
+            | Efecto::CrearFichero
             | Efecto::Borrar { .. }
             | Efecto::Transferir { .. }
             | Efecto::Renombrar
@@ -8440,6 +8454,7 @@ impl Estado {
             | Efecto::Hotlist
             | Efecto::Ver => self.efecto_que_abre(efecto, backend, buzon),
             Efecto::CrearDirectorio
+            | Efecto::CrearFichero
             | Efecto::Borrar { .. }
             | Efecto::Transferir { .. }
             | Efecto::Renombrar
@@ -8663,6 +8678,7 @@ impl Estado {
     fn efecto_que_muta(&mut self, efecto: Efecto) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match efecto {
             Efecto::CrearDirectorio => self.pedir_mkdir(),
+            Efecto::CrearFichero => self.pedir_fichero_nuevo(),
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
             Efecto::Transferir { mover } => self.pedir_transferencia(mover),
             Efecto::Renombrar => self.pedir_rename(),
@@ -12019,6 +12035,127 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
+    /// Pide el nombre de un fichero NUEVO para editarlo (#290).
+    ///
+    /// Solo en un panel local: lo que se abre después es la aplicación del
+    /// escritorio, y a `xdg-open` no se le puede dar un `sftp://`. Se dice
+    /// ANTES de teclear el nombre, que es cuando todavía sirve de algo.
+    fn pedir_fichero_nuevo(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let dir = self.hueco().pane.dir().clone();
+        if !norte_frontend::shell::is_local(&dir) {
+            let fuera = self.decir("host-not-local");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-not-local".to_owned(),
+                },
+                fuera,
+            );
+        }
+        let donde = Self::linea_de_ruta(&dir);
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: "modal-new-file-title".to_owned(),
+            destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
+            deadline_at_ms: None,
+            body: vec![donde],
+            overflow_note: String::new(),
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: Some(String::new()),
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista,
+            input_crudo: String::new(),
+            reconocido: true,
+            al_confirmar: Some(Pendiente::CrearFichero { dir }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Crea el fichero vacío y APUNTA que hay que abrirlo cuando exista.
+    ///
+    /// Abrirlo aquí sería abrir algo que todavía no está en el disco: la
+    /// creación es una Task, y hasta su desenlace no hay fichero que darle al
+    /// escritorio.
+    fn crear_fichero(
+        &mut self,
+        dir: &VPath,
+        nombre: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
+        let seg = match Self::segmento_tecleado(nombre) {
+            Ok(seg) => seg,
+            Err(clave) => {
+                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+                let cambio = ViewChange::Status(self.status.clone());
+                return (Some(clave), vec![self.parche(vec![cambio])]);
+            }
+        };
+        let destino = dir.join(seg);
+        let backend_c = Arc::clone(backend);
+        let buzon_c = buzon.clone();
+        let dir_c = dir.clone();
+        let abrir = destino.clone();
+        tokio::spawn(async move {
+            match backend_c.create_file(destino).await {
+                Ok(task) => {
+                    let _ = buzon_c
+                        .send(Mensaje::TaskNueva(Box::new((task, vec![dir_c], None))))
+                        .await;
+                }
+                Err(e) => {
+                    let _ = buzon_c.send(Mensaje::TaskFallida(Box::new(e))).await;
+                }
+            }
+        });
+        self.abrir_al_crear = Some(abrir);
+        (None, Vec::new())
+    }
+
+    /// El fichero recién creado existe: ábrelo con el escritorio.
+    ///
+    /// Solo con un desenlace BUENO. Abrir tras un fallo lanzaría el editor
+    /// sobre un fichero que no está, y lo que ese editor enseñe —un buffer
+    /// vacío que al guardar crea el fichero— parecería que funcionó.
+    fn abrir_lo_creado(&mut self, p: &norte_proto::TaskProgress) {
+        if p.kind != norte_proto::TaskKind::Create {
+            return;
+        }
+        let Some(path) = self.abrir_al_crear.take() else {
+            return;
+        };
+        if p.state != norte_proto::TaskState::Completed {
+            return;
+        }
+        if !self.nativo(crate::dto::NativeEffect::OpenPath { path }) {
+            self.status.message = Some(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "host-no-desktop",
+            )));
+        }
+    }
+
     /// Teclea en el campo de un diálogo.
     ///
     /// El renderer manda el texto ENTERO tras la edición y no un delta: el
@@ -12070,6 +12207,10 @@ impl Estado {
     /// igual para todos: que el id sea el del diálogo abierto, que la
     /// respuesta esté entre las que se ofrecieron, la cerradura de solo
     /// lectura y el cierre. Aquí solo vive lo que cada pendiente hace.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "despachador exhaustivo: un brazo por pendiente, sin lógica dentro"
+    )]
     fn ejecutar_pendiente(
         &mut self,
         dialogo: Dialogo,
@@ -12149,9 +12290,21 @@ impl Estado {
                     salidas.extend(self.lanzar_busqueda(root, patron, backend, buzon));
                 }
             }
-            Some(Pendiente::CrearDirectorio { dir }) => {
-                let (motivo, partes) =
-                    self.crear_directorio(&dir, &dialogo.input_crudo, backend, buzon);
+            // Los dos que crean un nodo VACÍO a partir de un nombre tecleado.
+            // Juntos porque son la misma forma —validar el segmento, encolar,
+            // apuntar el directorio a refrescar— y este `match` es un
+            // despachador que ya roza su tope.
+            Some(p @ (Pendiente::CrearDirectorio { .. } | Pendiente::CrearFichero { .. })) => {
+                let (dir, fichero) = match p {
+                    Pendiente::CrearDirectorio { dir } => (dir, false),
+                    Pendiente::CrearFichero { dir } => (dir, true),
+                    _ => unreachable!("el patrón de arriba solo deja esos dos"),
+                };
+                let (motivo, partes) = if fichero {
+                    self.crear_fichero(&dir, &dialogo.input_crudo, backend, buzon)
+                } else {
+                    self.crear_directorio(&dir, &dialogo.input_crudo, backend, buzon)
+                };
                 rehusado = motivo;
                 salidas.extend(partes);
             }
@@ -12387,6 +12540,7 @@ impl Estado {
                         | Pendiente::Transferir { .. }
                         | Pendiente::Soltar { .. }
                         | Pendiente::CrearDirectorio { .. }
+                        | Pendiente::CrearFichero { .. }
                         | Pendiente::Decidir { .. }
                         | Pendiente::Renombrar { .. }
                         // Conceder capabilities es la decisión de seguridad
@@ -13360,6 +13514,7 @@ impl Estado {
             self.pedir_informe_de_sync(p, backend, buzon);
             cambios.extend(self.decir_el_recuento(p));
             cambios.extend(self.ofrecer_reintento(p));
+            self.abrir_lo_creado(p);
             self.avisar_del_desenlace(p);
         }
         vec![self.parche(cambios)]

@@ -53,10 +53,17 @@ pub enum PolicyOp {
     },
     /// Creación de directorio.
     Mkdir,
+    /// Creación de un fichero VACÍO (#290).
+    ///
+    /// Aparte de [`PolicyOp::Mkdir`] porque son dos permisos distintos: dejar
+    /// que algo cree carpetas no es dejar que cree ficheros, y una regla que
+    /// dijera «mkdir» y concediera las dos cosas sería una que nadie escribió.
+    Create,
 }
 
 impl PolicyOp {
-    /// Etiqueta estable para reglas/scope (`"copy"|"move"|"delete"|"mkdir"`).
+    /// Etiqueta estable para reglas/scope
+    /// (`"copy"|"move"|"delete"|"mkdir"|"create"`).
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
@@ -64,6 +71,7 @@ impl PolicyOp {
             PolicyOp::Move => "move",
             PolicyOp::Delete { .. } => "delete",
             PolicyOp::Mkdir => "mkdir",
+            PolicyOp::Create => "create",
         }
     }
 }

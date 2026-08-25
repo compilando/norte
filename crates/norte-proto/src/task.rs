@@ -89,6 +89,11 @@ pub enum TaskKind {
     /// cliente N-1 (0.30.x) la degrada a [`TaskKind::Unknown`] vía el
     /// `serde(other)`, mismo caso que `Search`/`Index`.
     Mkdir,
+    /// Creación de un fichero VACÍO (`fs.create`, #290). Lo mismo que
+    /// [`TaskKind::Mkdir`] con la otra clase de nodo: mutación, journal
+    /// `Created` con su undo. Entra en 0.57.0; un cliente N-1 (0.56.x) la
+    /// degrada a [`TaskKind::Unknown`] vía el `serde(other)`.
+    Create,
     /// Construcción/actualización del índice de búsqueda de un subtree
     /// (`index.build`, M4). Entra en 0.25.0; un cliente N-1 (0.24.x) la degrada a
     /// [`TaskKind::Unknown`] vía el `serde(other)`.

@@ -1601,6 +1601,7 @@ dialog-newer = Solo si es más nuevo
 dialog-rename = Renombrar automáticamente
 dialog-skip = Saltar
 modal-mkdir-title = Nuevo directorio
+modal-new-file-title = Fichero nuevo
 modal-rename-title = Renombrar
 modal-delete-title = ¿Mover a la papelera?
 # Los tres veredictos del resolver compartido, para una tecla que SÍ está ligada.

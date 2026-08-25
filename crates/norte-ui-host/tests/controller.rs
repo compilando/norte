@@ -4255,13 +4255,15 @@ async fn una_fila_de_otra_pantalla_no_se_ofrece_encendida() {
         pagina = siguiente_ayuda(&mut sub).await.expect("sigue abierta");
     }
     assert_eq!(pagina.topic_id, "viewer", "la página del visor existe");
-    // `pane.open` y `pane.edit` salen en esta página y NO son del visor: los
-    // dos actúan sobre lo señalado en el LISTADO con la aplicación del
+    // `pane.open`, `pane.edit` y `pane.edit-new` salen en esta página y NO son
+    // del visor: los tres actúan sobre el LISTADO con la aplicación del
     // escritorio, así que estar vivos aquí es lo correcto (#290 hizo que
-    // editar fuera lo segundo). Las demás filas sí necesitan el visor.
+    // editar fuera lo segundo, y que crear-y-editar fuera lo tercero). Las
+    // demás filas sí necesitan el visor.
     let del_listado = [
         norte_frontend::keymap::paint_chord("alt+f4"),
         norte_frontend::keymap::paint_chord("f4"),
+        norte_frontend::keymap::paint_chord("shift+f4"),
     ];
     let corribles: Vec<&norte_ui_host::dto::HelpActionView> = pagina
         .actions
@@ -13648,6 +13650,78 @@ async fn copiar_la_ruta_manda_bytes_al_escritorio() {
 
 /// En solo lectura NO se abre nada ni se lanza un terminal: se DICE.
 ///
+/// **Editar uno nuevo crea el fichero VACÍO y lo abre** (#290).
+///
+/// La ventana no tiene editor ni terminal: lo que puede hacer es poner el
+/// fichero en el disco y dárselo al escritorio. Y en ese orden — abrir antes
+/// del desenlace sería lanzar un editor sobre algo que todavía no está.
+#[tokio::test]
+async fn editar_uno_nuevo_crea_el_fichero_y_lo_abre() {
+    let mut falso = Falso::default();
+    falso.pon("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_en(Arc::clone(&backend), "file:///casa").await;
+    let mut sub = h.subscribe();
+    let mut efectos = h.native_effects();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.edit-new").await;
+    let d = siguientes_dialogos(&mut sub).await;
+    assert_eq!(d[0].title_key, "modal-new-file-title");
+    assert!(d[0].input.is_some(), "aquí se teclea un nombre");
+    let id = d[0].id;
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: "borrador.md".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+    {
+        let creados = backend.creados.lock().expect("creados");
+        assert_eq!(creados.len(), 1, "{creados:?}");
+        assert_eq!(creados[0].to_wire(), "file:///casa/borrador.md");
+    }
+
+    let efecto = tokio::time::timeout(std::time::Duration::from_millis(500), efectos.recv())
+        .await
+        .expect("llega el efecto nativo")
+        .expect("canal vivo");
+    match efecto {
+        norte_ui_host::dto::NativeEffect::OpenPath { path } => {
+            assert_eq!(path.to_wire(), "file:///casa/borrador.md");
+        }
+        otro => panic!("se esperaba abrir el fichero recién creado: {otro:?}"),
+    }
+}
+
+/// Sobre un panel REMOTO no se ofrece, y se dice antes de teclear el nombre.
+///
+/// Lo que se abre después es la aplicación del escritorio, y a `xdg-open` no
+/// se le puede dar un `sftp://`. Decirlo cuando el nombre ya está escrito
+/// llega tarde.
+#[tokio::test]
+async fn editar_uno_nuevo_no_se_ofrece_en_un_panel_remoto() {
+    let mut falso = Falso::default();
+    falso.pon("sftp://servidor/datos", vec![(b"a.txt".to_vec(), false)]);
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_en(Arc::clone(&backend), "sftp://servidor/datos").await;
+    let mut sub = h.subscribe();
+
+    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.edit-new").await;
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-not-local"),
+        "{ack:?}"
+    );
+    assert!(backend.creados.lock().expect("creados").is_empty());
+}
+
 /// Un host que arranca en un directorio concreto.
 async fn host_en(backend: Arc<Falso>, inicio: &str) -> (UiHost, norte_ui_host::ViewSnapshot) {
     UiHost::start(UiHostOptions {

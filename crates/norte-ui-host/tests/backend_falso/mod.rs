@@ -1154,6 +1154,50 @@ impl HostBackend for Falso {
         })
     }
 
+    fn create_file(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.creados.lock().expect("creados").push(path);
+        // Con id PROPIO: el gesto de «editar uno nuevo» mira el desenlace de
+        // SU task para abrir el fichero, y compartir el 8 con `mkdir` haría
+        // que un test de crear directorio disparase esa apertura.
+        //
+        // Y nace CORRIENDO, con su terminal por detrás. Las otras del falso
+        // nacen ya terminadas con el emisor caído, y eso no es lo que hace un
+        // backend de verdad: el host bombea los CAMBIOS del canal, así que un
+        // canal muerto no le entrega jamás un desenlace. Lo que aquí hace
+        // falta es justo el desenlace.
+        let vivo = norte_proto::TaskProgress {
+            task_id: norte_proto::TaskId::new(14),
+            kind: norte_proto::TaskKind::Create,
+            state: norte_proto::TaskState::Running,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: Some(1),
+            current: None,
+            unreadable: None,
+        };
+        let (tx, rx) = tokio::sync::watch::channel(vivo.clone());
+        tokio::spawn(async move {
+            let _ = tx.send(norte_proto::TaskProgress {
+                state: norte_proto::TaskState::Completed,
+                entries_done: 1,
+                ..vivo
+            });
+            // El emisor se queda vivo un instante: soltarlo en el mismo
+            // suspiro cierra el canal antes de que el host haya leído el
+            // cambio, y eso es la carrera que este falso existe para no tener.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        });
+        Box::pin(async move {
+            Ok(HostTask {
+                id: norte_proto::TaskId::new(14),
+                progress: rx,
+                cancel: Arc::new(|| {}),
+                foreign: false,
+            })
+        })
+    }
+
     fn list(
         &self,
         dir: VPath,

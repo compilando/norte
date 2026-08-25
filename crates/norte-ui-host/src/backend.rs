@@ -92,6 +92,13 @@ pub trait HostBackend: Send + Sync + 'static {
     /// Crea UN directorio. Devuelve la Task ya encolada.
     fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>>;
 
+    /// Crea un fichero VACÍO, como Task (#290).
+    ///
+    /// Falla si el destino existe: crear es una afirmación sobre un nombre
+    /// libre, y un método que trunca en silencio es una pérdida de datos con
+    /// nombre inocente.
+    fn create_file(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>>;
+
     /// Los datos de UNA entrada.
     ///
     /// Un listado puede venir PEREZOSO —el provider local devuelve `size` y
@@ -646,6 +653,20 @@ impl HostBackend for norte_client::RemoteBackend {
         let backend = self.clone();
         Box::pin(async move {
             let task = backend.mkdir(&path).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
+        })
+    }
+
+    fn create_file(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.create_file(&path).await?;
             let canceller = task.canceller();
             Ok(HostTask {
                 id: task.id(),

@@ -2212,6 +2212,7 @@ async fn handle_value(
                     | methods::FS_MOVE
                     | methods::FS_DELETE
                     | methods::FS_MKDIR
+                    | methods::FS_CREATE
                     | methods::AI_RENAME_PLAN
                     | methods::INDEX_SEARCH_SEMANTIC
                     // 0.36.0: `fs.rename_batch` gatea el lote ENTERO antes de
@@ -4971,6 +4972,15 @@ async fn dispatch_fs_task(
             let handle = shared
                 .engine
                 .mkdir_as(&p.path, actor.clone())
+                .await
+                .map_err(RpcError::from)?;
+            register_task(shared, handle, actor)
+        }
+        methods::FS_CREATE => {
+            let p: methods::FsCreateParams = parse_params(req.params)?;
+            let handle = shared
+                .engine
+                .create_file_as(&p.path, actor.clone())
                 .await
                 .map_err(RpcError::from)?;
             register_task(shared, handle, actor)

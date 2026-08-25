@@ -1574,6 +1574,7 @@ dialog-newer = Only if newer
 dialog-rename = Rename automatically
 dialog-skip = Skip
 modal-mkdir-title = New directory
+modal-new-file-title = New file
 modal-rename-title = Rename
 modal-delete-title = Move to trash?
 # The three verdicts of the shared resolver, for a key that IS bound.
