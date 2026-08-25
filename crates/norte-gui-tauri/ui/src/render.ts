@@ -1837,7 +1837,10 @@ export class Screen {
 
     const pie = document.createElement("footer");
     pie.className = "columns-hint";
-    pie.textContent = this.t("columns-picker-hint-gui");
+    // Del HOST (#287): los verbos `dialog.*` se pueden reatar, y una cadena
+    // de aquí que nombre teclas concretas deja de ser cierta en cuanto
+    // alguien lo hace.
+    pie.textContent = columns.hint;
     caja.append(pie);
     this.columnsRoot.replaceChildren(caja);
   }

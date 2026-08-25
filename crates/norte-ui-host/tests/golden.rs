@@ -1135,6 +1135,10 @@ fn columnas_de_referencia() -> norte_ui_host::dto::ColumnsPickerView {
         ],
         cursor: 1,
         note: "se aplica a esta ventana; no se guarda".to_owned(),
+        // El pie sale del KEYMAP (#287), así que aquí va uno pintado: lo que
+        // el corpus clava es que viaja por el cable, no qué teclas ata este
+        // preset.
+        hint: "Espacio activa · Shift+↑ mueve · Ctrl+S ordena".to_owned(),
     }
 }
 

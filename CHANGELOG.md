@@ -24,6 +24,21 @@ independently through `PROTOCOL_VERSION`.
   right one automatically, so every frontend gains the check without a line of
   code, and a `norte cp` against a hand-typed path behaves exactly as before.
 
+- **The window's dialogs now go through the shared key resolver** (#287). They
+  used to answer to fixed keys, so a preset that rebound `dialog.confirm`
+  changed the TUI and not the window — exactly the drift the shared catalogue
+  exists to prevent. Twenty of the twenty-two `dialog.*` verbs are now honoured:
+  the four collision outcomes (overwrite/skip/rename/newer, which previously had
+  **no key at all**), list navigation everywhere, and the verbs that name what
+  each surface does — `toggle-enabled`, `move-up`/`move-down`, `sort`,
+  `cycle-format`, `add`, `pane`, `back`, `filter`. `Home`/`End` stay fixed keys,
+  because the catalogue has no verb for "to the top" inside a dialog, and their
+  absence from the implemented list is where you can see that. The columns
+  picker's footer is now **built from the keymap** rather than being a
+  translated string naming keys: that string had already stopped being true.
+  Only `dialog.remove` stays deferred — removing a row only means something over
+  a list you can edit, and the window's only list (settings) is read-only.
+
 - **`fs.create`: the protocol can create an empty file** (protocol **0.57.0**,
   ADR 0076). It was the gap behind `pane.edit-new`, the last command of #290 the
   window could not do: `fs.mkdir` makes a directory, `fs.copy` writes one that

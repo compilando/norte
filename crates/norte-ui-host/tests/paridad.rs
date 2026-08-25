@@ -34,24 +34,11 @@ const NO_APLICA: &[&str] = &[
 
 /// Comandos vivos APLAZADOS, con la issue que los cierra.
 const APLAZADOS: &[(&str, u32)] = &[
-    ("dialog.add", 287),
-    ("dialog.back", 287),
-    ("dialog.cycle-format", 287),
-    ("dialog.down", 287),
-    ("dialog.filter", 287),
-    ("dialog.move-down", 287),
-    ("dialog.move-up", 287),
-    ("dialog.newer", 287),
-    ("dialog.overwrite", 287),
-    ("dialog.page-down", 287),
-    ("dialog.page-up", 287),
-    ("dialog.pane", 287),
+    // El resto de `dialog.*` YA pasa por el resolutor compartido (#287). Este
+    // no: quitar una fila de una lista solo significa algo sobre una lista que
+    // se pueda EDITAR, y la única de esta ventana —los ajustes— es de solo
+    // lectura. Atarlo a algo ahora sería inventarle una superficie.
     ("dialog.remove", 287),
-    ("dialog.rename", 287),
-    ("dialog.skip", 287),
-    ("dialog.sort", 287),
-    ("dialog.toggle-enabled", 287),
-    ("dialog.up", 287),
     // El único de los siete de la ADR 0058 que sigue fuera: esta ventana no
     // sabe PINTAR un hueco de preview —caería a «kind no soportado», en
     // gris—, y abrir un hueco que solo se pinta apagado no es abrirlo.
