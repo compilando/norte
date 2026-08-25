@@ -13646,6 +13646,144 @@ async fn copiar_la_ruta_manda_bytes_al_escritorio() {
 
 /// En solo lectura NO se abre nada ni se lanza un terminal: se DICE.
 ///
+/// **Soltar ficheros NO copia: pregunta** (#283).
+///
+/// Un drop es un gesto sin confirmación por naturaleza, y la lista la compone
+/// otro proceso. Enseñarla antes de escribir es la única ocasión que tiene el
+/// lector de ver que lo que llegó no es lo que arrastró.
+#[tokio::test]
+async fn soltar_pregunta_antes_de_copiar() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(UiAction::FilesDropped {
+        paths: vec!["/tmp/uno.txt".to_owned(), "/tmp/dos.txt".to_owned()],
+    })
+    .await
+    .expect("host vivo");
+
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogos.len(), 1);
+    assert_eq!(dialogos[0].title_key, "modal-drop-title");
+    let cuerpo = &dialogos[0].body;
+    assert_eq!(cuerpo.len(), 2, "lo que llegó, línea a línea: {cuerpo:?}");
+    let destino = dialogos[0].destination.as_ref().expect("dice a dónde cae");
+    assert!(
+        destino.text.ends_with("/casa"),
+        "el panel activo, en SU campo: {destino:?}"
+    );
+    assert!(
+        backend
+            .transferencias
+            .lock()
+            .expect("transferencias")
+            .is_empty(),
+        "abrir el diálogo no copia nada"
+    );
+}
+
+/// Confirmado, se COPIA —nunca se mueve— y no se tocan las marcas del panel.
+///
+/// Mover lo que arrastró otra aplicación sería borrarlo de donde ese proceso
+/// lo tenga, y esta ventana no ha preguntado eso. Y las marcas del panel
+/// activo las puso el lector para otra cosa: lo que se copia no salió de ahí.
+#[tokio::test]
+async fn soltar_confirmado_copia_y_respeta_las_marcas() {
+    let backend = arbol();
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let b = listado(&snap);
+    let hueco = b.slot_id;
+    let fila = b.rows.first().expect("hay filas");
+    h.dispatch(UiAction::ToggleMark {
+        slot_id: hueco,
+        key: fila.key,
+        generation: b.generation,
+    })
+    .await
+    .expect("host vivo");
+
+    h.dispatch(UiAction::FilesDropped {
+        paths: vec!["/tmp/uno.txt".to_owned()],
+    })
+    .await
+    .expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let id = dialogos[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+    {
+        let ts = backend.transferencias.lock().expect("transferencias");
+        assert_eq!(ts.len(), 1, "{ts:?}");
+        let (from, to, mover, _) = &ts[0];
+        assert!(!*mover, "un drop COPIA, jamás mueve: {ts:?}");
+        assert_eq!(from.to_wire(), "file:///tmp/uno.txt");
+        assert_eq!(
+            to.to_wire(),
+            "mem:///casa/uno.txt",
+            "cae en el directorio del panel, con el nombre que traía"
+        );
+    }
+
+    let foto = siguiente_foto_tras_resync(&h, &mut sub).await;
+    let b = listado(&foto);
+    assert!(
+        b.rows.iter().any(|r| r.marked),
+        "la marca del lector sigue donde estaba: {:?}",
+        b.rows
+    );
+}
+
+/// Lo que llega y no es una ruta de esta máquina se DICE, no se ignora.
+///
+/// Un emisor compone el `text/uri-list` a mano si quiere. Tragárselo en
+/// silencio dejaría al lector mirando un panel que no cambió sin saber por
+/// qué.
+#[tokio::test]
+async fn soltar_lo_que_no_es_ruta_se_dice() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    let ack = h
+        .dispatch(UiAction::FilesDropped {
+            paths: vec!["relativa/mala".to_owned(), String::new()],
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(&ack, norte_ui_host::ActionAck::Unavailable { reason_key } if reason_key == "host-drop-unusable"),
+        "{ack:?}"
+    );
+    // Por `Resync` y no esperando la siguiente foto: rehusar no manda una,
+    // solo el parche de la barra, y un `siguiente_foto` aquí se queda
+    // colgado en vez de ponerse rojo.
+    let foto = siguiente_foto_tras_resync(&h, &mut sub).await;
+    assert!(foto.dialogs.is_empty(), "y no abre ningún diálogo");
+    assert!(
+        foto.status
+            .message
+            .as_deref()
+            .is_some_and(|m| m == norte_i18n::t_in(norte_i18n::Lang::Es, "host-drop-unusable")),
+        "y lo DICE en la barra: {:?}",
+        foto.status.message
+    );
+    assert!(
+        backend
+            .transferencias
+            .lock()
+            .expect("transferencias")
+            .is_empty()
+    );
+}
+
 /// **El selector de conexiones lo llena el DAEMON** (#264): la ventana no lee
 /// `connections.toml`, que es lo que le costaría meter la pila de red entera.
 ///

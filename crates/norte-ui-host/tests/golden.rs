@@ -158,6 +158,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::DialogInput { .. } => "dialog_input",
         UiAction::DirectoryPicked { .. } => "directory_picked",
         UiAction::WindowFocus { .. } => "window_focus",
+        UiAction::FilesDropped { .. } => "files_dropped",
         UiAction::CancelTask { .. } => "cancel_task",
         UiAction::CompareSelectRow { .. } => "compare_select_row",
         UiAction::CompareActivateRow { .. } => "compare_activate_row",
@@ -237,6 +238,18 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
         // `false` y no `true`: es el valor que CAMBIA algo. Con la ventana
         // enfocada el host se comporta como antes de #285.
         ("window_focus", UiAction::WindowFocus { focused: false }),
+        // Lo que llega de un drop del escritorio (#283): una LISTA, porque
+        // arrastrar varios de golpe es el caso normal, y texto nativo sin
+        // convertir — el `VPath` lo hace el host.
+        (
+            "files_dropped",
+            UiAction::FilesDropped {
+                paths: vec![
+                    "/home/oscar/uno.txt".to_owned(),
+                    "/home/oscar/dos.txt".to_owned(),
+                ],
+            },
+        ),
     ]
 }
 

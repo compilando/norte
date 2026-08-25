@@ -203,49 +203,7 @@ fn main() -> ExitCode {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            // El foco, al host (#285): con la ventana delante no se avisa por
-            // el escritorio, porque la barra y el tablero ya lo cuentan.
-            if let tauri::WindowEvent::Focused(focused) = event {
-                let estado: tauri::State<'_, AppState> = window.state();
-                if let Ok(bridge) = estado.bridge() {
-                    let host = bridge.host_compartido();
-                    let focused = *focused;
-                    tauri::async_runtime::spawn(async move {
-                        let _ = host
-                            .dispatch(norte_ui_host::UiAction::WindowFocus { focused })
-                            .await;
-                    });
-                }
-            }
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                let estado: tauri::State<'_, AppState> = window.state();
-                if let Ok(bridge) = estado.bridge() {
-                    // Cerrar vuelca la sesión: es la única oportunidad de
-                    // guardar dónde estaba cada panel, y hacerlo en un hilo
-                    // suelto sería cerrarla a medias.
-                    // CON PLAZO: esto corre en el hilo del bucle de eventos y
-                    // `apagar` espera una respuesta del daemon. Con el socket
-                    // atascado, la ventana dejaba de repintarse y no se
-                    // cerraba nunca — y matar el proceso es justo el camino
-                    // que garantiza perder la sesión.
-                    let informe = tauri::async_runtime::block_on(async {
-                        tokio::time::timeout(PLAZO_APAGADO, bridge.host().shutdown()).await
-                    });
-                    match informe {
-                        Ok(Ok(r)) if r.incomplete => {
-                            tracing::warn!("quedó trabajo sin terminar al cerrar");
-                        }
-                        Ok(Ok(_)) => {}
-                        Ok(Err(e)) => tracing::warn!(error = %e, "el apagado falló"),
-                        Err(_) => tracing::warn!(
-                            "el apagado no contestó en {PLAZO_APAGADO:?}: la sesión puede \
-                             haberse quedado sin escribir"
-                        ),
-                    }
-                }
-            }
-        })
+        .on_window_event(al_evento_de_ventana)
         .run(tauri::generate_context!());
 
     match resultado {
@@ -286,3 +244,79 @@ fn guardia_de_navegacion<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 
 /// Lo que se espera al apagar antes de cerrar la ventana de todas formas.
 const PLAZO_APAGADO: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Los eventos de la VENTANA que el host necesita saber.
+///
+/// Fuera de `main` porque son tres cosas sin relación entre sí —el foco, lo
+/// que se suelta y el cierre— y meterlas en el constructor de la aplicación
+/// hace que se lean como parte del arranque, que es lo que menos son.
+fn al_evento_de_ventana(window: &tauri::Window, event: &tauri::WindowEvent) {
+    // El foco, al host (#285): con la ventana delante no se avisa por
+    // el escritorio, porque la barra y el tablero ya lo cuentan.
+    if let tauri::WindowEvent::Focused(focused) = event {
+        let estado: tauri::State<'_, AppState> = window.state();
+        if let Ok(bridge) = estado.bridge() {
+            let host = bridge.host_compartido();
+            let focused = *focused;
+            tauri::async_runtime::spawn(async move {
+                let _ = host
+                    .dispatch(norte_ui_host::UiAction::WindowFocus { focused })
+                    .await;
+            });
+        }
+    }
+    // Lo que se SUELTA sobre la ventana (#283), y solo lo que se
+    // suelta: `Over`/`Leave` no se reenvían, porque el host no pinta
+    // realce de arrastre y mandarlos sería tráfico por cada píxel que
+    // cruza el puntero. El drop no copia nada por sí solo: abre la
+    // confirmación, que es donde el lector ve qué llegó de verdad.
+    if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+        let estado: tauri::State<'_, AppState> = window.state();
+        if let Ok(bridge) = estado.bridge() {
+            let host = bridge.host_compartido();
+            // A texto tal cual, sin `to_string_lossy`: un nombre que
+            // no sea UTF-8 no se convierte con reemplazos, porque eso
+            // nombraría OTRO fichero. Se descarta aquí y el host no
+            // llega a saberlo —el puente es JSON y no hay forma de que
+            // esos bytes lo crucen—, así que el lector ve una lista
+            // más corta que lo que arrastró. Es el límite conocido de
+            // esta vía, y el que la ve entera es el panel.
+            let paths: Vec<String> = paths
+                .iter()
+                .filter_map(|p| p.to_str().map(str::to_owned))
+                .collect();
+            tauri::async_runtime::spawn(async move {
+                let _ = host
+                    .dispatch(norte_ui_host::UiAction::FilesDropped { paths })
+                    .await;
+            });
+        }
+    }
+    if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+        let estado: tauri::State<'_, AppState> = window.state();
+        if let Ok(bridge) = estado.bridge() {
+            // Cerrar vuelca la sesión: es la única oportunidad de
+            // guardar dónde estaba cada panel, y hacerlo en un hilo
+            // suelto sería cerrarla a medias.
+            // CON PLAZO: esto corre en el hilo del bucle de eventos y
+            // `apagar` espera una respuesta del daemon. Con el socket
+            // atascado, la ventana dejaba de repintarse y no se
+            // cerraba nunca — y matar el proceso es justo el camino
+            // que garantiza perder la sesión.
+            let informe = tauri::async_runtime::block_on(async {
+                tokio::time::timeout(PLAZO_APAGADO, bridge.host().shutdown()).await
+            });
+            match informe {
+                Ok(Ok(r)) if r.incomplete => {
+                    tracing::warn!("quedó trabajo sin terminar al cerrar");
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => tracing::warn!(error = %e, "el apagado falló"),
+                Err(_) => tracing::warn!(
+                    "el apagado no contestó en {PLAZO_APAGADO:?}: la sesión puede \
+                         haberse quedado sin escribir"
+                ),
+            }
+        }
+    }
+}

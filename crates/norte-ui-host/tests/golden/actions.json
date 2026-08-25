@@ -53,6 +53,13 @@
     "action": "window_focus",
     "focused": false
   },
+  "files_dropped": {
+    "action": "files_dropped",
+    "paths": [
+      "/home/oscar/uno.txt",
+      "/home/oscar/dos.txt"
+    ]
+  },
   "extension_select_row": {
     "action": "extension_select_row",
     "row": 1

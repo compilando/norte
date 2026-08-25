@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 38;
+export const BRIDGE_VERSION = 39;
 
 export type RowKey = number;
 export type ModalId = number;
