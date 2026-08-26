@@ -2372,13 +2372,16 @@ impl Backend {
                         else {
                             return Ok(vec![None; expected_len]);
                         };
-                        let runtime = norte_plugin_host::PluginRuntime::new()
-                            .map_err(|_| Error::Internal { panic: false })?;
+                        // El motor y el pool son de PROCESO, como en el daemon
+                        // (#224). Construir un `PluginRuntime` por llamada no
+                        // solo compila el motor otra vez: arranca y para un
+                        // hilo ticker de época por página pintada.
+                        let (runtime, pool) = columnas_de_proceso()?;
                         // MISMA función que el daemon: la capacidad de
                         // ubicación no puede significar una cosa aquí y otra
                         // allí.
-                        Ok(crate::plugins::run_column_values(
-                            &runtime,
+                        Ok(pool.column_values(
+                            runtime,
                             resolved,
                             &column_id_owned,
                             location.as_ref(),
@@ -2548,6 +2551,49 @@ fn run_error_to_taxonomy(e: &crate::plugins::PluginRunError) -> Error {
         E::Unknown(_) | E::NoBinary(_) | E::NotApproved(_) | E::Disabled(_) => Error::NotFound,
         // Fallo del runtime: redactado, sin filtrar el detalle al frontend.
         E::Runtime(_) => Error::Internal { panic: false },
+    }
+}
+
+/// El motor WASM y el pool de instancias de columnas del PROCESO, para el
+/// backend embebido (#224).
+///
+/// El daemon los cuelga de su `Shared`; aquí no hay dónde, porque el backend
+/// embebido redescubre el registro en cada llamada y no tiene estado propio.
+/// Un `static` es lo que hace que las dos mitades del mismo binario —`ntc`
+/// embebido y `ntc --daemon`— paguen lo mismo por la misma página.
+///
+/// Se construye una vez y no se suelta: `PluginRuntime` posee el hilo ticker
+/// que hace avanzar la época del motor, o sea el reloj con el que un guest en
+/// bucle trapa (regla dura 3). Un runtime por llamada arrancaba y paraba ese
+/// hilo por página pintada.
+///
+/// # Errors
+/// Si el motor wasmtime no se puede configurar en esta plataforma. El fallo se
+/// recuerda: reintentarlo por cada página sería pagar el fallo N veces para
+/// llegar al mismo sitio.
+fn columnas_de_proceso() -> Result<
+    (
+        &'static norte_plugin_host::PluginRuntime,
+        &'static crate::plugins::ColumnPool,
+    ),
+    Error,
+> {
+    struct Columnas {
+        runtime: norte_plugin_host::PluginRuntime,
+        pool: crate::plugins::ColumnPool,
+    }
+    static COLUMNAS: std::sync::OnceLock<Option<Columnas>> = std::sync::OnceLock::new();
+    let cel = COLUMNAS.get_or_init(|| {
+        norte_plugin_host::PluginRuntime::new()
+            .ok()
+            .map(|runtime| Columnas {
+                runtime,
+                pool: crate::plugins::ColumnPool::default(),
+            })
+    });
+    match cel {
+        Some(c) => Ok((&c.runtime, &c.pool)),
+        None => Err(Error::Internal { panic: false }),
     }
 }
 

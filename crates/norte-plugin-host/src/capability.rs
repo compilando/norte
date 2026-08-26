@@ -114,7 +114,7 @@ impl LocationCap {
 }
 
 /// Permiso de red: una allow-list de hosts.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct NetCap {
     /// Hosts a los que el plugin puede conectar por TCP SALIENTE (exacto, sin
     /// comodines). Una entrada `ip:puerto` autoriza SOLO ese puerto; una de solo
@@ -126,7 +126,12 @@ pub struct NetCap {
 
 /// El bloque `[capabilities]` del manifiesto, ya validado. Un permiso ausente =
 /// `None`/vacío: sin syscall.
-#[derive(Debug, Clone, Default, Deserialize)]
+/// `PartialEq` no es cosmético: es lo que deja a un pool de instancias
+/// comprobar que la instancia que va a reutilizar tiene EXACTAMENTE los
+/// permisos que el catálogo acaba de resolver (#224). Sin esa comparación, un
+/// consentimiento retirado tardaría en surtir efecto lo que tardase el TTL del
+/// pool, que es una latencia inaceptable para un permiso.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Capabilities {
     /// Lectura de FS.

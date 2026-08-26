@@ -263,6 +263,12 @@ struct Shared {
     /// síncrona) en un `spawn_blocking`, jamás en el reactor con un lock tomado
     /// (regla 2).
     plugin_runtime: Arc<norte_plugin_host::PluginRuntime>,
+    /// Instancias de columnas VIVAS entre páginas (#224). Cuelga de aquí por
+    /// lo mismo que el runtime: es estado de proceso, y la instancia que sirvió
+    /// la página 1 es la que tiene el índice del proyecto ya parseado cuando
+    /// llega la 2. El backend embebido tiene el suyo, y es el MISMO tipo — uno
+    /// con pool y otro sin él sería la asimetría de #165/#201/#181 otra vez.
+    column_pool: Arc<crate::plugins::ColumnPool>,
 }
 
 /// Una petición de scope registrada por un agente, a la espera de que un
@@ -749,6 +755,7 @@ impl Daemon {
             undo_reports: Mutex::new(std::collections::VecDeque::new()),
             plugins: Mutex::new(plugins),
             plugin_runtime,
+            column_pool: Arc::new(crate::plugins::ColumnPool::default()),
             directed_feeds: Mutex::new(HashMap::new()),
             ui_session: Arc::new(crate::ui_session::SessionStore::new(sesion)),
             session_persists: Arc::clone(&session_persists),
@@ -3715,8 +3722,9 @@ async fn handle_plugin_column_values(
         permitido
     });
     let climb = matches!(actor, Actor::User);
+    let pool = Arc::clone(&shared.column_pool);
     let values = tokio::task::spawn_blocking(move || {
-        crate::plugins::run_column_values(
+        pool.column_values(
             &runtime,
             resolved,
             &column_id,
