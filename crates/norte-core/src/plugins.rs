@@ -3203,3 +3203,244 @@ pub(crate) fn run_column_values(
         vec![None; expected_len]
     })
 }
+
+/// Cuántas instancias vivas se retienen a la vez. Ocho porque una página son
+/// dos paneles y unas pocas columnas: por encima de eso lo que se retiene es
+/// memoria de directorios que ya nadie mira.
+const POOL_MAX: usize = 8;
+
+/// Cuánto sobrevive una instancia sin usarse. Un minuto es "el lector sigue
+/// paginando por aquí"; más allá, quien vuelve prefiere no estar pagando la
+/// memoria del guest de un directorio que dejó atrás.
+const POOL_TTL: std::time::Duration = std::time::Duration::from_mins(1);
+
+/// Una instancia de columnas VIVA, con lo que hace falta para saber si sigue
+/// sirviendo.
+struct EnPool {
+    /// `(id del plugin, wasm, ubicación en wire)`. La ubicación entra en la
+    /// clave porque es lo que el guest cachea dentro: un `.git/index` parseado
+    /// no vale para otro proyecto.
+    clave: (String, std::path::PathBuf, String),
+    /// Los permisos con los que se instanció. Si el catálogo resuelve otros
+    /// —un consentimiento retirado, un manifiesto reinstalado— la instancia se
+    /// TIRA: reutilizarla sería correr con permisos que ya nadie concede.
+    caps: norte_plugin_host::Capabilities,
+    /// Quién resuelve los tokens de esta instancia. Sobrevive a la llamada; lo
+    /// que no sobrevive es la SESIÓN, que se acuña y se suelta en cada una.
+    mint: std::sync::Arc<LocationMint>,
+    inst: norte_plugin_host::ColumnsInstance,
+    ultima: std::time::Instant,
+}
+
+/// Instancias de columnas reutilizadas entre páginas (#224).
+///
+/// El coste medido de una página de veinte filas sobre un índice git de dos
+/// mil entradas era **167 ms**, con el componente WASM instanciado y el
+/// `.git/index` parseado desde cero en cada llamada. Nada de eso es trabajo
+/// que cambie entre la página 1 y la página 2 del mismo directorio.
+///
+/// **Lo que el pool compra no es solo reloj.** La frescura es deliberadamente
+/// problema del guest (el host no puede saber de qué depende su respuesta), y
+/// un guest que no sobrevive a la llamada no puede cachear NADA: sin pool, esa
+/// caché no está sin usar, está prohibida.
+///
+/// Vive aquí, al lado de [`run_column_values`], porque hacen falta los dos
+/// caminos: el daemon lo cuelga de su estado compartido y el backend embebido
+/// del suyo. Uno sí y el otro no recrearía justo la asimetría de #165/#201/#181.
+///
+/// **Lo que el pool NO retiene es un token vivo.** La sesión de ubicación se
+/// acuña al empezar cada llamada y se suelta al acabarla —su `Drop` la retira
+/// del acuñador—, así que entre página y página la instancia guardada tiene un
+/// `LocationHost` que no resuelve nada.
+#[derive(Default)]
+pub struct ColumnPool {
+    /// Más reciente al final. Ocho como mucho, así que un `Vec` con búsqueda
+    /// lineal es más rápido —y mucho más fácil de leer— que un mapa con orden
+    /// de uso al lado.
+    vivas: std::sync::Mutex<Vec<EnPool>>,
+    /// Cuántas llamadas encontraron su instancia ya viva.
+    ///
+    /// Es lo que hace TESTEABLE el pool sin cronómetro: que la segunda página
+    /// tarde menos es el síntoma, y un síntoma medido en milisegundos se pone
+    /// rojo el día que la máquina va cargada. Que la instancia se reutilizó es
+    /// el hecho, y es determinista.
+    reutilizadas: std::sync::atomic::AtomicU64,
+}
+
+impl std::fmt::Debug for ColumnPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // A mano y no derivado porque una `ColumnsInstance` no tiene `Debug`
+        // útil (su `Store` de wasmtime no lo tiene), así que lo que se imprime
+        // es CUÁNTAS hay, no cuáles.
+        let n = self.vivas.lock().map_or(0, |v| v.len());
+        f.debug_struct("ColumnPool")
+            .field("vivas", &n)
+            .field("reutilizadas", &self.reutilizadas)
+            .finish()
+    }
+}
+
+impl ColumnPool {
+    /// Los valores de la columna, reutilizando la instancia de esta
+    /// `(plugin, ubicación)` si sigue viva y con los mismos permisos.
+    ///
+    /// Cuántas llamadas encontraron su instancia viva. Ver
+    /// [`Self::reutilizadas`].
+    #[cfg(any(test, feature = "testing"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn reutilizadas(&self) -> u64 {
+        self.reutilizadas.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// [`Self::column_values`] para los e2e, por el mismo motivo y con la misma
+    /// advertencia que [`run_column_values_for_test`]: el test que importa vive
+    /// fuera de este crate, y montar ahí una versión propia del camino es como
+    /// dos caminos se separan.
+    #[cfg(any(test, feature = "testing"))]
+    #[doc(hidden)]
+    #[must_use]
+    #[allow(clippy::too_many_arguments)] // la MISMA lista que `run_column_values`, y a propósito
+    pub fn column_values_for_test(
+        &self,
+        runtime: &norte_plugin_host::PluginRuntime,
+        resolved: ResolvedDecorator,
+        column_id: &str,
+        location_dir: Option<&norte_proto::VPath>,
+        climb: bool,
+        entries: &[Vec<u8>],
+        expected_len: usize,
+    ) -> Vec<Option<String>> {
+        self.column_values(
+            runtime,
+            resolved,
+            column_id,
+            location_dir,
+            climb,
+            entries,
+            expected_len,
+        )
+    }
+
+    /// Mismo contrato que [`run_column_values`] hasta en la degradación: lo
+    /// que no se puede hacer sale como celdas vacías, jamás como un error que
+    /// tumbe el listado. Y BLOQUEANTE igual: va en `spawn_blocking`.
+    #[allow(clippy::too_many_arguments)] // la MISMA lista que `run_column_values`, y a propósito
+    pub(crate) fn column_values(
+        &self,
+        runtime: &norte_plugin_host::PluginRuntime,
+        resolved: ResolvedDecorator,
+        column_id: &str,
+        location_dir: Option<&norte_proto::VPath>,
+        climb: bool,
+        entries: &[Vec<u8>],
+        expected_len: usize,
+    ) -> Vec<Option<String>> {
+        let (id, name, wasm, caps, settings) = resolved;
+        let clave = (
+            id.clone(),
+            wasm.clone(),
+            location_dir
+                .map(norte_proto::VPath::to_wire)
+                .unwrap_or_default(),
+        );
+        let Ok(mut vivas) = self.vivas.lock() else {
+            // El mutex envenenado no es motivo para dejar sin columnas a nadie:
+            // se cae al camino sin pool, que es el de siempre.
+            tracing::warn!("columns: pool envenenado, se instancia sin reutilizar");
+            return run_column_values(
+                runtime,
+                (id, name, wasm, caps, settings),
+                column_id,
+                location_dir,
+                climb,
+                entries,
+                expected_len,
+            );
+        };
+        let ahora = std::time::Instant::now();
+        vivas.retain(|e| ahora.duration_since(e.ultima) < POOL_TTL);
+        let hallada = vivas
+            .iter()
+            .position(|e| e.clave == clave && e.caps == caps)
+            .map(|i| vivas.remove(i));
+        // La instancia sale del pool mientras se usa: el mutex se suelta antes
+        // de entrar al guest, que es la llamada larga, y dos páginas del mismo
+        // directorio a la vez instancian por separado en vez de serializarse.
+        drop(vivas);
+
+        let mut entrada = if let Some(e) = hallada {
+            self.reutilizadas
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            e
+        } else {
+            let mint = LocationMint::new(norte_vfs_local::Bounds::default());
+            let host: Option<std::sync::Arc<dyn norte_plugin_host::LocationHost>> =
+                if caps.location.granted() {
+                    Some(std::sync::Arc::clone(&mint)
+                        as std::sync::Arc<dyn norte_plugin_host::LocationHost>)
+                } else {
+                    None
+                };
+            let Ok(inst) = runtime.instantiate_columns_with_location(&wasm, caps.clone(), host)
+            else {
+                tracing::warn!(plugin = %id, "columns: fallo al instanciar, celdas vacías");
+                return vec![None; expected_len];
+            };
+            EnPool {
+                clave,
+                caps,
+                mint,
+                inst,
+                ultima: ahora,
+            }
+        };
+
+        // La sesión se acuña AQUÍ y muere al final de esta función, la use una
+        // instancia nueva o una reutilizada: lo que se retiene entre páginas es
+        // el guest y su memoria, nunca el permiso de leer.
+        let sesion = if entrada.caps.location.granted() {
+            location_dir.and_then(|dir| {
+                entrada
+                    .mint
+                    .mint_for(dir, entrada.caps.location_root_marker.as_deref(), climb)
+            })
+        } else {
+            None
+        };
+        entrada.inst.set_settings(settings);
+        let refe = sesion.as_ref().map(LocationSession::as_ref);
+        let salida = entrada
+            .inst
+            .column_values(column_id, refe.as_ref(), entries);
+        drop(sesion);
+
+        let raw = match salida {
+            Ok(raw) => raw,
+            Err(e) => {
+                // Una instancia que falló NO vuelve al pool: un guest que
+                // atrapó puede haber dejado su memoria lineal a medias, y
+                // reutilizarla es servir esa mitad en la página siguiente.
+                tracing::warn!(plugin = %id, error = %e, "columns: fallo al ejecutar, celdas vacías");
+                return vec![None; expected_len];
+            }
+        };
+        entrada.ultima = std::time::Instant::now();
+        if let Ok(mut vivas) = self.vivas.lock() {
+            vivas.push(entrada);
+            // Por arriba caen las MÁS VIEJAS, que es lo que hace de esto una
+            // LRU: cada uso vuelve a poner la suya al final.
+            if vivas.len() > POOL_MAX {
+                let sobran = vivas.len() - POOL_MAX;
+                vivas.drain(..sobran);
+            }
+        }
+        column_values_checked(raw, expected_len).unwrap_or_else(|| {
+            tracing::warn!(
+                plugin = %id,
+                "columns: longitud no casa el contrato posicional, celdas vacías"
+            );
+            vec![None; expected_len]
+        })
+    }
+}

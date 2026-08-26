@@ -283,3 +283,127 @@ fn una_pagina_sobre_un_indice_grande_cuesta_lo_que_debe_wasm_real() {
         "una página tardó {coste:?}: eso ya no es una columna, es una espera"
     );
 }
+
+/// La SEGUNDA página del mismo directorio no vuelve a instanciar el componente
+/// ni a parsear el índice desde cero (#224).
+///
+/// Lo que se afirma es el HECHO —la instancia se reutilizó—, no el
+/// cronómetro: un test que exija «la segunda tarda la mitad» se pone rojo el
+/// día que la máquina va cargada, y eso es ruido, no una regresión. El tiempo
+/// se mide y se imprime igual, que es de donde salió el 167 ms de la issue.
+///
+/// Y la reutilización tiene un límite que también se fija aquí: cambiar de
+/// directorio NO reutiliza. La ubicación es parte de la clave porque es lo que
+/// el guest cachea dentro, y un `.git/index` parseado no vale para otro
+/// proyecto.
+#[test]
+fn la_segunda_pagina_del_mismo_directorio_reutiliza_la_instancia() {
+    let Some(wasm) = build_git_status() else {
+        return;
+    };
+    let cfg = tempfile::tempdir().expect("tempdir");
+    let repo = tempfile::tempdir().expect("tempdir");
+    if repo_fixture(repo.path()).is_none() {
+        eprintln!("SKIP: sin `git` instalado no hay repositorio que mirar");
+        return;
+    }
+    let dir = repo.path().join("muchos");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    for i in 0..200 {
+        std::fs::write(dir.join(format!("f{i:05}.txt")), b"x\n").expect("write");
+    }
+    let otro = repo.path().join("otros");
+    std::fs::create_dir_all(&otro).expect("mkdir");
+    std::fs::write(otro.join("a.txt"), b"x\n").expect("write");
+
+    let reg = instala_y_aprueba(cfg.path(), &wasm);
+    let resuelto = |reg: &PluginRegistry| {
+        let (_, _, wasm_path, caps, settings) = reg
+            .resolve_columns_of(Some("org.norte.git-status"), "git-status")
+            .expect("resuelve");
+        (
+            "org.norte.git-status".to_owned(),
+            "Git status".to_owned(),
+            wasm_path,
+            caps,
+            settings,
+        )
+    };
+    let runtime = PluginRuntime::new().expect("runtime");
+    let pool = norte_core::plugins::ColumnPool::default();
+    let pagina = |desde: usize| -> Vec<Vec<u8>> {
+        (desde..desde + 20)
+            .map(|i| format!("f{i:05}.txt").into_bytes())
+            .collect()
+    };
+
+    let primera = pagina(0);
+    let t0 = std::time::Instant::now();
+    let v1 = pool.column_values_for_test(
+        &runtime,
+        resuelto(&reg),
+        "git-status",
+        Some(&vpath_de(&dir)),
+        true,
+        &primera,
+        primera.len(),
+    );
+    let coste1 = t0.elapsed();
+    assert_eq!(v1.len(), 20);
+    assert_eq!(
+        pool.reutilizadas(),
+        0,
+        "la primera no puede reutilizar nada"
+    );
+
+    let segunda = pagina(20);
+    let t1 = std::time::Instant::now();
+    let v2 = pool.column_values_for_test(
+        &runtime,
+        resuelto(&reg),
+        "git-status",
+        Some(&vpath_de(&dir)),
+        true,
+        &segunda,
+        segunda.len(),
+    );
+    let coste2 = t1.elapsed();
+    assert_eq!(v2.len(), 20);
+    assert_eq!(
+        pool.reutilizadas(),
+        1,
+        "la segunda página del MISMO directorio tiene que caer en la instancia viva"
+    );
+    eprintln!("página 1: {coste1:?} · página 2 (reutilizando): {coste2:?}");
+
+    // Otro directorio, otra caché del guest: no se reutiliza.
+    let v3 = pool.column_values_for_test(
+        &runtime,
+        resuelto(&reg),
+        "git-status",
+        Some(&vpath_de(&otro)),
+        true,
+        &[b"a.txt".to_vec()],
+        1,
+    );
+    assert_eq!(v3.len(), 1);
+    assert_eq!(
+        pool.reutilizadas(),
+        1,
+        "cambiar de ubicación instancia de nuevo: la clave lleva el directorio"
+    );
+
+    // Y volver al primero SÍ, que es lo que hace de esto un pool y no un
+    // recuerdo de la última llamada.
+    let v4 = pool.column_values_for_test(
+        &runtime,
+        resuelto(&reg),
+        "git-status",
+        Some(&vpath_de(&dir)),
+        true,
+        &primera,
+        primera.len(),
+    );
+    assert_eq!(v4, v1, "el mismo directorio da los mismos valores");
+    assert_eq!(pool.reutilizadas(), 2);
+}

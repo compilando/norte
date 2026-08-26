@@ -255,6 +255,29 @@ independently through `PROTOCOL_VERSION`.
   thread draining the pipe, because one nobody reads fills up and blocks the
   daemon on its next write.
 
+### Changed
+
+- **A columns plugin now survives from one page to the next** (#224). A
+  twenty-row page over a two-thousand-entry git index cost **167 ms**, with the
+  WASM component instantiated and `.git/index` parsed from scratch every time —
+  none of it work that changes between page 1 and page 2 of the same directory.
+  Instances are now pooled by `(plugin, wasm, location)`, LRU-capped at eight
+  with a one-minute idle TTL. Measured on the same fixture: **297 ms for the
+  first page, 1.3 ms for the second**. What the pool buys beyond wall clock is
+  the reason it was designed for: freshness is deliberately the guest's problem
+  — the host cannot know what a plugin's answer depends on — and a guest that
+  does not survive its call cannot cache anything at all, so that caching was
+  not unused, it was impossible. The embedded backend also stops building a
+  whole WASM engine per call, which was starting and stopping an epoch ticker
+  thread for every page painted. Two things the pool deliberately does not
+  retain: a **live location token** (the session is minted at the start of each
+  call and dropped at the end, so between pages the held instance resolves
+  nothing) and an instance whose **capabilities no longer match** what the
+  catalogue just resolved — a withdrawn consent takes effect on the next call,
+  not when a TTL says so. An instance whose guest trapped is dropped rather
+  than reused: its linear memory may be half-written, and serving that half on
+  the next page is worse than paying for a fresh instance.
+
 ### Removed
 
 - **`norte_frontend::shell::login_shell_editor`** — the editor with no file.
