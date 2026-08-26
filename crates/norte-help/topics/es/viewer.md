@@ -102,9 +102,23 @@ Mientras el editor está delante, norte se aparta: le devuelve la terminal
 entera, igual que con {{cmd:app.terminal}}. Al salir del editor vuelves a los
 paneles y el listado se recarga, así que lo que hayas guardado ya se ve.
 
-{{cmd:pane.edit-new}} abre el editor con un buffer VACÍO en el directorio que
-estás mirando. El nombre lo pides al guardar, que es donde tu editor sabe
-preguntarlo.
+{{cmd:pane.edit-new}} te pide un nombre, crea el fichero vacío y abre el editor
+encima. El nombre se pide aquí, y no en tu editor al guardar, porque el fichero
+lo crea norte: pasa por la política y por el journal, con su reversa, como todo
+lo que norte escribe. Que lo creara el editor a espaldas de norte sería un
+fichero del que nadie da cuenta — y si la política dijera que no, aparecería
+igual.
+
+Si la creación falla no se abre ningún editor: un buffer vacío sobre un fichero
+que no está se parece al éxito hasta el momento en que guardas.
+
+  warning: Lo que norte gobierna es la CREACIÓN. Lo que tu editor escriba
+  dentro después corre con tus permisos, fuera de toda política de norte y
+  fuera del journal — igual que F4 y igual que un shell. Y entre que el fichero
+  se crea y el editor arranca, un nombre en un directorio donde otro puede
+  escribir se puede sustituir por un enlace que apunte a otro sitio; norte no lo
+  vuelve a comprobar, y ningún gestor de ficheros de aquí lo hace. En un
+  directorio donde solo escribes tú, ninguna de las dos cosas aplica.
 
 Dos cosas que no hace, y las dos a propósito: no edita una carpeta (para entrar
 está `⏎`) y no edita en un panel remoto. Un editor abre un fichero del sistema;

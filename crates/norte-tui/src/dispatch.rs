@@ -477,19 +477,27 @@ pub async fn dispatch(
             Ok(pendiente) => app.pending_shell = Some(pendiente),
             Err(msg) => app.message = Some(msg),
         },
-        // Shift+F4: el editor con un buffer VACÍO en este directorio, que es
-        // lo que hacen mc y Krusader. El nombre es cosa del editor —lo pide al
-        // guardar—, y pedirlo aquí sería un diálogo que hace lo mismo peor.
-        Command::PaneEditNew => match shell_cwd(app) {
-            Ok(dir) => {
-                app.pending_shell = Some(crate::app::PendingShell {
-                    argv: vec![norte_frontend::shell::login_shell_editor()],
-                    cwd: Some(dir),
-                    wait_for_key: false,
-                });
+        // Shift+F4: un fichero VACÍO en este directorio y el editor encima.
+        //
+        // El nombre se pide AQUÍ y el fichero lo crea el daemon (`fs.create`,
+        // #290), no el editor al guardar. Dejárselo al editor —lo que hacía
+        // esta tecla— creaba el fichero fuera de norte: sin pasar por la
+        // política, sin entrada en el journal y sin undo (regla dura 4). Es
+        // además lo que hace la ventana con este mismo comando.
+        //
+        // El guard es que el pane tenga forma NATIVA, y no el `shell_cwd` del
+        // shell: aquel falla por dos motivos —pane remoto, o local sin cwd
+        // válido para un hijo (Windows, ruta que solo existe con `\\?\`)— y el
+        // segundo no aplica aquí. Crear no necesita cwd, y el editor lo lleva
+        // como best-effort, así que gatear con él habría rechazado del todo un
+        // `edit-new` en una ruta larga de Windows.
+        Command::PaneEditNew => {
+            if norte_vfs_local::vpath_to_native(app.focused().dir()).is_ok() {
+                app.open_edit_new();
+            } else {
+                app.message = Some(crate::gestures::shell_remote_message(app));
             }
-            Err(msg) => app.message = Some(msg),
-        },
+        }
         // #135 (S4, design §D): los tres se RESUELVEN aquí y los ejecuta el
         // run loop, que es el dueño de la terminal — mismo reparto que
         // `pane.open`. Nada de esto va al journal: un shell que abre el

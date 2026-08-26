@@ -164,7 +164,7 @@ pub fn route_paste(app: &mut App, text: &str) {
             PasteOutcome::Ignored // help navigation: keymap context, not free text
         }
     } else if app.modal.is_some() {
-        // Todo prompt de TEXTO LIBRE recibe el pegado igual, y son los nueve
+        // Todo prompt de TEXTO LIBRE recibe el pegado igual, y son los diez
         // que `prompt_kind` reconoce: antes esto era una lista escrita a mano
         // y se le habían quedado fuera dos (empaquetar y partir), que aceptan
         // teclas pero rechazaban un pegado. Los demás modales

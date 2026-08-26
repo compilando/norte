@@ -76,3 +76,10 @@ edits.
 | [0068](0068-a-row-is-named-by-key-and-generation.md) | A row is named by key AND generation, and the bridge breaks on purpose | accepted |
 | [0069](0069-how-image-bytes-reach-the-webview.md) | How image bytes reach the webview, and what the window still refuses to do | accepted |
 | [0070](0070-a-mutation-names-its-own-operands.md) | A mutation names its own operands, and the surface that approves it labels out of band | accepted |
+| [0071](0071-a-number-a-name-and-an-anchor-that-could-not-say-what-they-were.md) | A number, a name and an anchor that could not say what they were | accepted |
+| [0072](0072-the-approved-directory-is-the-root-a-leaf-hangs-from.md) | The approved directory is the root a leaf hangs from | accepted |
+| [0073](0073-the-directory-the-human-was-looking-at.md) | The directory the human was looking at | accepted |
+| [0074](0074-a-drop-is-a-list-someone-else-wrote.md) | A drop is a list someone else wrote | accepted |
+| [0075](0075-the-tree-does-not-move-when-the-listing-does.md) | The tree does not move when the listing does | accepted |
+| [0076](0076-creating-a-file-is-a-mutation-like-any-other.md) | Creating a file is a mutation like any other | accepted |
+| [0077](0077-the-same-command-means-the-same-thing-in-both-frontends.md) | The same command means the same thing in both frontends | accepted |

@@ -66,8 +66,9 @@ independently through `PROTOCOL_VERSION`.
   the other four. It was the gap behind `pane.edit-new`, the last command of #290 the
   window could not do: `fs.mkdir` makes a directory, `fs.copy` writes one that
   already exists somewhere else, and nothing said "an empty file, here, by this
-  name". The TUI never needed it — it launches `$EDITOR` and lets the editor
-  create the file on save — and a window has no terminal to hand a process to.
+  name". The TUI had been getting away without it — it launched `$EDITOR` and
+  let the editor create the file on save, which ADR 0077 then took out — and a
+  window has no terminal to hand a process to.
   It is a mutation like any other: journal `Created` with its undo, its own
   policy permission (`PolicyOp::Create`, not folded into `mkdir` — letting
   something create folders is not letting it create files), progress and
@@ -191,9 +192,11 @@ independently through `PROTOCOL_VERSION`.
   `$EDITOR` because it is already inside a terminal; this window is not, and
   opening one on top just to edit a file is more noise than help. What is lost
   is honouring `$EDITOR` — here the desktop decides, and it may open a viewer.
-  `pane.edit-new` stays unimplemented for a reason worth writing down: the TUI
-  version launches the editor with *no file* and lets it ask for a name on
-  save, and `xdg-open` cannot do that — it opens files, not empty editors.
+  `pane.edit-new` stayed unimplemented at this point for a reason worth writing
+  down: the TUI version launched the editor with *no file* and let it ask for a
+  name on save, and `xdg-open` cannot do that — it opens files, not empty
+  editors. That is what `fs.create` (ADR 0076) and then ADR 0077 resolved, in
+  the other direction: the TUI stopped doing it that way too.
 
 - **The window splits and joins files** (#132, #290). `pane.split-file` asks
   for a piece size and reads it in **binary** — `10M` is 10 MiB, which is what
@@ -252,7 +255,55 @@ independently through `PROTOCOL_VERSION`.
   thread draining the pipe, because one nobody reads fills up and blocks the
   daemon on its next write.
 
+### Removed
+
+- **`norte_frontend::shell::login_shell_editor`** — the editor with no file.
+  It is a breaking change to a crate that `just semver` checks, and it is
+  deliberate: its only purpose was launching an editor on an empty buffer so
+  that the editor would create the file, which is the behaviour ADR 0077 takes
+  out. Callers want `editor_argv` on the path the daemon created.
+
 ### Fixed
+
+- **The TUI's "edit a new one" no longer creates the file behind norte's back**
+  (`pane.edit-new`, ADR 0077). It launched `$EDITOR` with an empty buffer and
+  let the editor create the file at save time: a file on disk attributed to
+  nobody, with no journal entry and no undo — and one that appeared *even when
+  the policy would have refused it*, because norte never asked. It now does what
+  the window does since ADR 0076: asks for a name, creates the file through
+  `fs.create`, and opens the editor **on the task's successful outcome**. A
+  creation that fails opens nothing, which is the whole point — an editor over a
+  file that is not there shows an empty buffer and creates it on save, which is
+  indistinguishable from success until the reader saves. The intention is
+  remembered by task id, so a copy or a delete finishing in between cannot
+  redeem it and open the editor on the wrong file. The directory is bound when
+  the dialog opens, as the window already did, and the editor's working
+  directory is the created file's parent — so a `:w other.txt` lands beside the
+  file the gesture just made rather than wherever the focus drifted. **What
+  norte governs is the creation**: what the editor writes afterwards runs with
+  your permissions, outside the journal, and the help topic says so next to the
+  sentence that says what *is* governed. Three things the review found and this
+  does not close are filed rather than buried: #301 (the embedded backend sends
+  no destination anchor, and `ntc` runs embedded by default), #302 (the editor
+  is launched with the panel's cwd and an unresolved program name — `pane.edit`
+  has done it since #133) and #303 (the window between creating the name and the
+  editor opening it).
+
+- **A `Ctrl+C` during a creation now quits instead of opening an editor**. The
+  tick that arms the editor also runs the panel refresh that polls the event
+  stream, and the loop drains pending work before it checks `quit` — so quitting
+  norte while `pane.edit-new` was in flight opened the editor first and exited
+  only when it was closed. `App::take_pending_shell` returns nothing once the
+  reader has asked to leave.
+
+- **`pane.disconnect` sends the panel to the same place in both frontends**
+  (#140, ADR 0077). The window walked the panel's trail back to the last place
+  that was not on the machine it just released; the TUI went home, always. Same
+  key, same name, two destinations — and the reason they drifted is that the
+  decision was written twice. It is now one function in `norte-frontend` that
+  both call. The fallback to home also stopped going through `to_str()`: a
+  `$HOME` that is not UTF-8 is a valid home (rule 1), and decoding it lossily
+  sent the reader to `/` without saying why.
 
 - **A transfer that collides now has a way forward in the window** (#274). The
   window always sends `CollisionPolicy::Fail` — the safe wire default, because

@@ -224,7 +224,21 @@ pub fn submit_command_line(app: &mut App, cmd: &str) {
     app.command_line_submitted();
 }
 
-/// Cierra la sesión del panel con foco y lo devuelve a casa (#140).
+/// A dónde va el panel con foco cuando su sesión se cierra.
+///
+/// La decisión la toma `norte-frontend` y la comparten los dos frontends:
+/// el rastro hacia atrás saltándose la máquina que se cierra, y casa cuando
+/// no queda nada. Vivía dos veces —aquí «a casa, siempre», y en la ventana el
+/// rastro—, y la misma tecla dejaba el panel en dos sitios distintos.
+///
+/// Se decide ANTES de soltar la sesión, como en la ventana: después, la ruta
+/// del panel ya no sirve de clave.
+fn destino_tras_desconectar(app: &App, cerrada: &VPath) -> VPath {
+    norte_frontend::nav::regreso_tras_desconectar(cerrada, app.history[app.focus()].trail())
+        .unwrap_or_else(norte_frontend::shell::home_vpath)
+}
+
+/// Cierra la sesión del panel con foco y lo saca de ahí (#140).
 ///
 /// Las dos mitades importan y en este orden: primero se suelta la sesión
 /// —mientras la ruta del panel sigue siendo la remota, que es de donde sale la
@@ -238,6 +252,7 @@ pub async fn disconnect(app: &mut App, backend: &Backend) {
         app.message = Some(t("msg-disconnect-local"));
         return;
     }
+    let destino = destino_tras_desconectar(app, &dir);
     match backend.close_connection(&dir).await {
         Ok(cerrada) => {
             app.message = Some(t(if cerrada {
@@ -245,15 +260,10 @@ pub async fn disconnect(app: &mut App, backend: &Backend) {
             } else {
                 "msg-disconnect-none"
             }));
-            // A casa: el panel no puede quedarse mirando una conexión que
-            // acaba de cerrarse. La navegación la pide el run loop en la
-            // siguiente vuelta, como cualquier otra.
-            // A casa, o a la raíz local si el entorno no dice cuál es: lo que
-            // no puede pasar es que el panel se quede mirando la conexión que
-            // se acaba de cerrar.
-            app.pending_disconnect_home = std::env::home_dir()
-                .and_then(|h| norte_vfs_local::vpath_from_native(&h).ok())
-                .or_else(|| VPath::parse("file:///").ok());
+            // El panel no puede quedarse mirando una conexión que acaba de
+            // cerrarse. La navegación la pide el run loop en la siguiente
+            // vuelta, como cualquier otra.
+            app.pending_disconnect_dest = Some(destino);
         }
         Err(e) => app.message = Some(error_message(&e)),
     }
@@ -295,6 +305,33 @@ pub fn edit_under_cursor(app: &App) -> Result<crate::app::PendingShell, String> 
         cwd,
         // Un editor de pantalla completa se despide él solo; esperar una tecla
         // después sería un paso de más entre guardar y volver a los paneles.
+        wait_for_key: false,
+    })
+}
+
+/// El editor sobre un fichero que el daemon ACABA de crear (#290).
+///
+/// El hermano de [`edit_under_cursor`] para la otra mitad de `pane.edit-new`:
+/// la ruta no sale del cursor —el listado puede no haberse refrescado todavía,
+/// y el cursor puede estar en cualquier sitio— sino de lo que se mandó crear.
+///
+/// El `cwd` sale del PADRE del fichero creado, no del pane con foco: entre el
+/// submit y el desenlace el lector puede haber pulsado Tab o navegado, y un
+/// `:w otro.txt` del editor debe caer donde está el fichero que se acaba de
+/// crear — que es de lo que va el gesto — y no donde quedó el foco.
+///
+/// `None` si esa ruta no tiene forma nativa: no debería pasar (crear se rehúsa
+/// sobre un pane remoto, al abrir el diálogo y otra vez al confirmarlo), pero
+/// abrir un editor sobre lo que no se puede nombrar no es una alternativa. El
+/// llamante lo DICE: media mitad del gesto perdida en silencio es la clase de
+/// cosa que este comando vino a quitar.
+#[must_use]
+pub fn edit_created(path: &VPath) -> Option<crate::app::PendingShell> {
+    let native = norte_vfs_local::vpath_to_native(path).ok()?;
+    let cwd = native.parent().and_then(norte_frontend::shell::child_cwd);
+    Some(crate::app::PendingShell {
+        argv: norte_frontend::shell::editor_argv(&native),
+        cwd,
         wait_for_key: false,
     })
 }
@@ -1302,6 +1339,53 @@ mod open_tests {
 }
 
 #[cfg(test)]
+mod disconnect_tests {
+    use super::*;
+    use crate::app::Pane;
+
+    fn vp(wire: &str) -> VPath {
+        VPath::parse(wire).expect("wire de test")
+    }
+
+    /// Un panel plantado en `sftp://srv/b` con el rastro que se le pasa.
+    fn app_remota(rastro: &[&str]) -> App {
+        let mut app = App::new(
+            Pane::new(vp("sftp://srv/b"), Vec::new()),
+            Pane::new(vp("file:///tmp"), Vec::new()),
+        );
+        let lado = app.focus();
+        for p in rastro {
+            app.history[lado].record(vp(p));
+        }
+        app
+    }
+
+    /// El destino sale del RASTRO, no de `$HOME`: es la misma decisión que
+    /// toma la ventana, y cuando cada frontend la tomaba por su cuenta la
+    /// misma tecla dejaba el panel en dos sitios distintos.
+    #[test]
+    fn el_destino_sale_del_rastro_como_en_la_ventana() {
+        let app = app_remota(&["file:///home/o", "sftp://srv/a"]);
+        assert_eq!(
+            destino_tras_desconectar(&app, &vp("sftp://srv/b")),
+            vp("file:///home/o"),
+            "se salta lo de la máquina que se cierra"
+        );
+    }
+
+    /// Sin nada ajeno en el rastro se cae a casa, que es lo que hace la
+    /// ventana — y lo que hacía esta función SIEMPRE.
+    #[test]
+    fn sin_rastro_ajeno_se_cae_a_casa() {
+        let app = app_remota(&["sftp://srv/a"]);
+        assert_eq!(
+            destino_tras_desconectar(&app, &vp("sftp://srv/b")),
+            norte_frontend::shell::home_vpath(),
+        );
+    }
+}
+
+#[cfg(test)]
 mod edit_tests {
     use super::*;
     use crate::app::Pane;
@@ -1361,6 +1445,38 @@ mod edit_tests {
             None,
         );
         assert!(edit_under_cursor(&app).is_err());
+    }
+
+    /// #290: la otra mitad de `pane.edit-new` abre el editor sobre la ruta que
+    /// se MANDÓ CREAR, no sobre lo que haya bajo el cursor: cuando la task
+    /// termina, el listado puede no haberse refrescado todavía.
+    #[test]
+    fn el_editor_del_fichero_creado_va_sobre_la_ruta_que_se_pidio() {
+        let creado = VPath::parse("file:///tmp/notas.txt").expect("wire");
+        let pending = edit_created(&creado).expect("local");
+        assert_eq!(pending.argv.len(), 2, "programa y ruta, sin línea de shell");
+        assert_eq!(
+            pending.argv[1],
+            std::ffi::OsString::from("/tmp/notas.txt"),
+            "la ruta va como su propio argumento"
+        );
+        assert!(!pending.wait_for_key, "un editor se despide solo");
+        // El cwd es el PADRE del fichero creado, no el pane con foco: entre el
+        // submit y el desenlace el lector puede haberse ido a otro sitio.
+        assert_eq!(
+            pending.cwd.as_deref(),
+            Some(std::path::Path::new("/tmp")),
+            "un `:w otro.txt` cae donde está el fichero recién creado"
+        );
+    }
+
+    /// Y sobre algo que no tiene forma nativa no se abre nada: crear se rehúsa
+    /// en un pane remoto, así que esto no debería pasar — y si pasa, un editor
+    /// sobre lo que no se puede nombrar no es la salida.
+    #[test]
+    fn sin_forma_nativa_no_se_abre_ningun_editor() {
+        let remoto = VPath::parse("sftp://srv/notas.txt").expect("wire");
+        assert!(edit_created(&remoto).is_none());
     }
 
     /// Y sobre un fichero local sale el argv del editor con la ruta APARTE.

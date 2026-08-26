@@ -81,12 +81,34 @@ pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream)
             TaskState::Completed => {
                 refresh = true;
                 app.message = Some(t("msg-done"));
+                // #290: el fichero que `pane.edit-new` mandó crear YA existe;
+                // el editor se abre ahora y sobre la ruta que se pidió, no
+                // sobre lo que haya bajo el cursor.
+                if let Some(pendiente) = tomar_creacion(app, fin.progress.task_id) {
+                    match crate::gestures::edit_created(&pendiente) {
+                        Some(shell) => app.pending_shell = Some(shell),
+                        // El fichero SE CREÓ y el editor no se puede abrir: se
+                        // dice. Tragarse el `None` dejaba `msg-done` en la
+                        // barra y media mitad del gesto perdida sin una
+                        // palabra, que es la clase de silencio que este
+                        // comando vino a quitar.
+                        None => app.message = Some(crate::gestures::shell_remote_message(app)),
+                    }
+                }
             }
             TaskState::Cancelled => {
                 refresh = true;
                 app.message = Some(t("msg-cancelled"));
+                // Sin fichero no hay nada que editar: la intención se suelta
+                // para que el SIGUIENTE `edit-new` no abra el fichero de este.
+                drop(tomar_creacion(app, fin.progress.task_id));
             }
             TaskState::Failed { error } => {
+                // La creación que falló —política, journal, un nombre que el
+                // provider rehúsa— NO abre nada: abrir el editor sobre un
+                // fichero que no existe es dejar que lo cree él, que es
+                // exactamente lo que #290 quitó de en medio.
+                drop(tomar_creacion(app, fin.progress.task_id));
                 if let (Error::Unsupported, Some(target)) = (&error, &fin.trash_target) {
                     // La papelera no pudo AQUÍ (mount sin topdir…): se
                     // reofrece PERMANENTE con aviso — degradación con
@@ -123,6 +145,28 @@ pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream)
         refresh_panes(app, backend, events).await
     } else {
         [false; 2]
+    }
+}
+
+/// La intención de `pane.edit-new` SI la task que acaba de terminar es la
+/// suya, consumiéndola (#290).
+///
+/// El id se compara a propósito: entre el submit y este tick puede terminar
+/// cualquier otra task —una copia, un borrado, otra creación—, y abrir el
+/// editor con la primera que pase abriría el fichero equivocado.
+///
+/// **Solo el id, sin época de conexión, y eso descansa en una invariante del
+/// SDK**: tras un relevo del daemon los ids vuelven a empezar (la ventana sí
+/// lleva época por esto — `Controller::epoca_conexion`). Aquí es correcto
+/// porque `norte-client` sintetiza un desenlace `Failed` para toda task
+/// huérfana ANTES de que la conexión nueva reparta ids, conservando el
+/// `task_id`: la intención se consume en la conexión vieja. Si esa síntesis
+/// desapareciera, un id reciclado abriría el editor sobre un fichero que quizá
+/// no se creó — y entonces lo crearía el editor, que es el bug entero de vuelta.
+fn tomar_creacion(app: &mut App, terminada: norte_proto::TaskId) -> Option<norte_proto::VPath> {
+    match &app.pending_edit_open {
+        Some((id, _)) if *id == terminada => app.pending_edit_open.take().map(|(_, p)| p),
+        _ => None,
     }
 }
 
@@ -243,5 +287,35 @@ pub fn reap_search_run(app: &App, search_run: &mut Option<SearchRun>) {
     {
         s.task.cancel();
         *search_run = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::testutil::app_with_entries;
+
+    fn tid(n: u64) -> norte_proto::TaskId {
+        norte_proto::TaskId::new(n)
+    }
+
+    /// #290: la intención de `edit-new` la consume SU task y solo la suya.
+    /// Cualquier otra que termine mientras tanto —una copia, un borrado— la
+    /// deja intacta; abrirla con la primera que pase abriría otro fichero.
+    #[test]
+    fn solo_la_task_de_la_creacion_se_lleva_la_intencion() {
+        let mut app = app_with_entries(&["a"]);
+        let destino = norte_proto::VPath::parse("mem:///notas.txt").expect("wire");
+        app.pending_edit_open = Some((tid(7), destino.clone()));
+
+        assert_eq!(tomar_creacion(&mut app, tid(9)), None, "otra task, no");
+        assert!(app.pending_edit_open.is_some(), "y la deja donde estaba");
+
+        assert_eq!(tomar_creacion(&mut app, tid(7)), Some(destino));
+        assert!(
+            app.pending_edit_open.is_none(),
+            "consumida: un segundo desenlace no reabre nada"
+        );
+        assert_eq!(tomar_creacion(&mut app, tid(7)), None);
     }
 }

@@ -289,18 +289,12 @@ pub fn editor_argv_from(
     argv
 }
 
-/// Just the editor program, with no file: an EMPTY buffer (#133).
-///
-/// Same resolution as [`editor_argv`] — `$VISUAL`, then `$EDITOR`, then the
-/// fallback — and the same splitting, so `EDITOR="code -w"` keeps its flag.
-#[must_use]
-pub fn login_shell_editor() -> std::ffi::OsString {
-    // Una ruta vacía no añade argumento: `editor_argv` empuja el fichero al
-    // final, así que se pide con uno y se descarta.
-    let mut argv = editor_argv(std::path::Path::new(""));
-    argv.pop();
-    argv.first().cloned().unwrap_or_default()
-}
+// El editor SIN fichero —un buffer vacío— vivía aquí, y era la mitad del
+// `pane.edit-new` que creaba el fichero fuera de norte: lo creaba el editor al
+// guardar, sin política, sin journal y sin undo. Desde #290 el fichero lo crea
+// el daemon (`fs.create`) y el editor se abre sobre él, así que lo único que
+// se necesita es `editor_argv`. Se retira en vez de dejarse: una función que
+// solo sirve para volver a saltarse el journal es una invitación.
 
 /// The argv that runs ONE command line through `shell`, non-interactively.
 ///
@@ -654,6 +648,39 @@ pub fn vpath_de_ruta_nativa(nativa: &str) -> Option<norte_proto::VPath> {
         return None;
     }
     norte_vfs::native::vpath_from_native(p).ok()
+}
+
+/// El directorio del usuario como `VPath`, o la raíz local si el entorno no
+/// lo dice: el destino de última instancia de un panel que se queda sin
+/// sitio (`pane.disconnect`, [`crate::nav::regreso_tras_desconectar`]).
+///
+/// La raíz y no un error: un destino que no existe dejaría el panel mirando
+/// una conexión cerrada, que es lo único inaceptable ahí.
+///
+/// Toma el `Path` ENTERO, sin pasar por `to_str()`: un `$HOME` que no sea
+/// UTF-8 es un home perfectamente válido (regla 1), y decodificarlo con
+/// pérdida mandaba al usuario a `/` sin decir por qué.
+///
+/// **Se llama desde contexto async y se acepta a sabiendas**: sin `$HOME`,
+/// `home_dir` cae a `getpwuid_r`, que puede acabar en NSS (`/etc/passwd`, o
+/// LDAP en una máquina con directorio de red). No va a `spawn_blocking` porque
+/// el caso es el de una sesión sin `$HOME` —donde ya nada del entorno es
+/// normal— y envolverlo obligaría a hacer async una decisión que los dos
+/// frontends toman en medio de pintar. Si alguna vez cuelga, es aquí.
+///
+/// ```
+/// use norte_frontend::shell::home_vpath;
+/// // Siempre nombra algo: con `$HOME` o sin él.
+/// assert_eq!(home_vpath().scheme(), "file");
+/// ```
+#[must_use]
+pub fn home_vpath() -> norte_proto::VPath {
+    std::env::home_dir()
+        .and_then(|h| norte_vfs::native::vpath_from_native(&h).ok())
+        .unwrap_or_else(|| {
+            norte_proto::VPath::parse("file:///")
+                .unwrap_or_else(|_| unreachable!("`file:///` parsea"))
+        })
 }
 
 /// Every argv worth trying, in order, to put text on the system clipboard —

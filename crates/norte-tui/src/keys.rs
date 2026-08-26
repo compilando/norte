@@ -534,7 +534,7 @@ pub async fn on_key(
             app.quit = true;
             return;
         }
-        // Los nueve prompts de TEXTO LIBRE comparten
+        // Los diez prompts de TEXTO LIBRE comparten
         // teclado: teclear, borrar y Esc son la misma
         // operación sobre el prompt abierto, y consumen
         // la tecla ANTES del contexto `dialog` —ninguno
@@ -566,6 +566,21 @@ pub async fn on_key(
                                 // MINOR-1: el nombre sobrevive
                                 // al fallo del submit.
                                 Err(e) => app.mkdir_set_error(error_message(&e)),
+                            }
+                        }
+                    }
+                    // #290: crear el fichero es una task del daemon como
+                    // cualquier otra mutación; el editor se abre en el tick
+                    // que la ve terminar, no aquí.
+                    PromptKind::EditNew => {
+                        if let Some(target) = app.edit_new_confirm() {
+                            match backend.create_file(&target).await {
+                                Ok(task) => {
+                                    app.pending_edit_open = Some((task.id(), target));
+                                    app.board.push(&task, None);
+                                    app.edit_new_submitted();
+                                }
+                                Err(e) => app.edit_new_set_error(error_message(&e)),
                             }
                         }
                     }

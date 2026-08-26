@@ -286,6 +286,29 @@ pub enum Modal {
         /// pintado bajo el campo.
         error: Option<String>,
     },
+    /// Crear un fichero VACÍO (Shift+F4, #290). Mismo molde que
+    /// [`Modal::Mkdir`] con la otra clase de nodo, y por el mismo motivo: el
+    /// fichero lo crea el DAEMON (`fs.create`) y no el editor, así que hace
+    /// falta un nombre antes de lanzar nada.
+    ///
+    /// El editor se abre DESPUÉS, sobre el fichero que ya existe. Dejárselo
+    /// crear a él —lo que hacía esta tecla— saltaba el journal y la política:
+    /// un `pane.edit-new` sobre un directorio donde la política prohíbe
+    /// escribir creaba el fichero igualmente.
+    EditNew {
+        /// El directorio donde se crea, ATADO al abrir el modal.
+        ///
+        /// No se vuelve a preguntar al pane al confirmar, y es la misma
+        /// decisión que toma la ventana (`Pendiente::CrearFichero { dir }`):
+        /// entre abrir el diálogo y confirmarlo, el sitio bajo el pane puede
+        /// haber cambiado, y crear en «donde esté el foco ahora» crea en un
+        /// directorio que el lector no estaba mirando cuando tecleó el nombre.
+        dir: VPath,
+        /// Lo tecleado hasta ahora.
+        name: String,
+        /// Diagnóstico del último intento inválido.
+        error: Option<String>,
+    },
     /// `pane.command-line` (#135). Texto libre, molde [`Modal::Mkdir`]: la
     /// línea CRUDA del usuario, enmascarada al pintarla.
     ///
@@ -458,7 +481,7 @@ pub enum DialogOutcome {
     Retry(norte_proto::CollisionPolicy),
 }
 
-/// Cuál de los nueve prompts de texto libre está abierto.
+/// Cuál de los diez prompts de texto libre está abierto.
 ///
 /// Los métodos con nombre propio (`mkdir_push`, `pack_set_error`…) siguen
 /// existiendo porque son lo que nombran las tablas de despacho; lo que
@@ -478,6 +501,8 @@ pub enum PromptKind {
     Split,
     /// [`Modal::Mkdir`].
     Mkdir,
+    /// [`Modal::EditNew`].
+    EditNew,
     /// [`Modal::CommandLine`].
     CommandLine,
     /// [`Modal::AiRenameInstruction`].
@@ -594,6 +619,7 @@ impl Modal {
             Self::Pack { .. } => PromptKind::Pack,
             Self::Split { .. } => PromptKind::Split,
             Self::Mkdir { .. } => PromptKind::Mkdir,
+            Self::EditNew { .. } => PromptKind::EditNew,
             Self::CommandLine { .. } => PromptKind::CommandLine,
             Self::AiRenameInstruction { .. } => PromptKind::AiRename,
             Self::SemanticQuery { .. } => PromptKind::Semantic,
@@ -604,7 +630,7 @@ impl Modal {
     /// El campo de texto de este modal y su política, o `None` si no es un
     /// prompt.
     ///
-    /// Aquí está, en un solo sitio, TODO lo que distingue a los nueve: cómo
+    /// Aquí está, en un solo sitio, TODO lo que distingue a los diez: cómo
     /// se llama el campo, cuánto admite, si el tope se dice, qué borra el
     /// retroceso y si hay un `touched` que fijar.
     pub fn text_prompt(&mut self) -> Option<TextPrompt<'_>> {
@@ -638,7 +664,9 @@ impl Modal {
                 OverLimit::Say,
                 PopMode::WireChar,
             ),
-            Self::Pack { name, error } | Self::Mkdir { name, error } => (
+            Self::Pack { name, error }
+            | Self::Mkdir { name, error }
+            | Self::EditNew { name, error, .. } => (
                 name,
                 error,
                 None,
@@ -721,7 +749,7 @@ mod tests {
         }
     }
 
-    fn los_nueve() -> Vec<(PromptKind, Modal)> {
+    fn los_diez() -> Vec<(PromptKind, Modal)> {
         vec![
             (PromptKind::MarkPattern, mark_pattern()),
             (PromptKind::TransferName, transfer_name()),
@@ -755,6 +783,14 @@ mod tests {
                 },
             ),
             (
+                PromptKind::EditNew,
+                Modal::EditNew {
+                    dir: VPath::parse("mem:///").unwrap_or_else(|_| unreachable!("wire de test")),
+                    name: String::new(),
+                    error: None,
+                },
+            ),
+            (
                 PromptKind::CommandLine,
                 Modal::CommandLine {
                     command: String::new(),
@@ -778,11 +814,11 @@ mod tests {
         ]
     }
 
-    /// Los nueve prompts de texto se dicen prompts, y teclear llega al campo
+    /// Los diez prompts de texto se dicen prompts, y teclear llega al campo
     /// que cada uno llama de otra manera.
     #[test]
-    fn los_nueve_prompts_exponen_su_campo() {
-        for (kind, mut m) in los_nueve() {
+    fn los_diez_prompts_exponen_su_campo() {
+        for (kind, mut m) in los_diez() {
             assert_eq!(m.prompt_kind(), Some(kind), "{kind:?} no se dice prompt");
             m.text_prompt().expect("campo de texto").push('x');
             let tp = m.text_prompt().expect("campo de texto");
