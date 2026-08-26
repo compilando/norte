@@ -2634,6 +2634,114 @@ keymap = [
         }
     }
 
+    /// **Un comando del núcleo sin tecla en un preset es una DECISIÓN o un
+    /// descuido, y aquí se separan los dos** (#228).
+    ///
+    /// El de al lado —[`todo_preset_alcanza_las_superficies_propias_de_norte`]—
+    /// exige tecla siempre, porque una pantalla propia de norte no la tenía
+    /// ningún original y callarla es perder la pantalla. Estos seis son
+    /// distintos: son comandos que los originales SÍ podían tener, así que
+    /// inventarle un acorde a un preset cuyo sentido entero es la fidelidad es
+    /// peor que dejar el hueco — la hoja de referencia imprime `—` y el
+    /// usuario se entera.
+    ///
+    /// Lo que no puede pasar es que el hueco sea un olvido. Cada excepción va
+    /// en la tabla con su motivo; el preset lo cuenta largo en su cabecera.
+    /// Añadir un preset, o perder una tecla, sale ROJO aquí.
+    #[test]
+    fn cada_hueco_del_nucleo_en_un_preset_esta_decidido() {
+        /// Los seis del inventario de #228: los que el catálogo llama núcleo y
+        /// que los cuatro presets importados podían haber traído.
+        const NUCLEO: &[&str] = &[
+            "pane.compare-dirs",
+            "pane.sync-dirs",
+            "pane.rename",
+            "pane.search",
+            "pane.mirror",
+            "pane.pull",
+        ];
+        /// `(preset, comando, por qué NO se ata)`. El motivo está aquí para
+        /// que quien borre una fila tenga que leerlo antes.
+        const ACEPTADOS: &[(&str, &str, &str)] = &[
+            (
+                "far",
+                "pane.compare-dirs",
+                "«Compare folders» de Far vive en el desplegable de F9 sin acorde propio, \
+                 y Shift+F2 —el que toman los demás de Total Commander— ya es «Unpack files»",
+            ),
+            (
+                "far",
+                "pane.sync-dirs",
+                "Far no trae sincronizador de carpetas en el producto: Advanced Compare es \
+                 un plugin, así que no hay tecla que transcribir",
+            ),
+            (
+                "far",
+                "pane.mirror",
+                "gesto propio de norte: ninguna de las dos fuentes transcritas nombra \
+                 «manda el otro panel a esta ruta»",
+            ),
+            ("far", "pane.pull", "lo mismo que `pane.mirror`, al revés"),
+            (
+                "norton",
+                "pane.compare-dirs",
+                "«Compare directories» era entrada del menú Commands y no sobrevive fuente \
+                 de primera mano que diga si tenía acorde",
+            ),
+            (
+                "norton",
+                "pane.sync-dirs",
+                "NC no tenía sincronizador: no hay ni entrada de menú de la que colgar una \
+                 conjetura",
+            ),
+            (
+                "norton",
+                "pane.rename",
+                "el F6 de NC («RenMov») es renombrar y mover en UNA tecla, y está atado a \
+                 `pane.move`, cuyo diálogo trae el nombre de destino editable",
+            ),
+            (
+                "norton",
+                "pane.mirror",
+                "gesto propio de norte, y este preset es el que menos fuente tiene",
+            ),
+            ("norton", "pane.pull", "lo mismo que `pane.mirror`"),
+            (
+                "total-commander",
+                "pane.mirror",
+                "la familia atestiguada de TC manda al otro panel el directorio de la \
+                 ENTRADA bajo el cursor, que es la dirección ya atada en `pane.pull`",
+            ),
+        ];
+        let known = preset_commands(Screen::Browse);
+        let known: Vec<&str> = known.iter().map(String::as_str).collect();
+        let mut sobran: Vec<(&str, &str)> = Vec::new();
+        for name in presets::NAMES {
+            let src = presets::source(name).expect("NAMES resuelve");
+            let kf = parse_keymap(src).expect("preset parsea");
+            let eff = Effective::build_for(&kf, &[], &known, Screen::Browse)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            for cmd in NUCLEO {
+                let atado = eff.bindings().iter().any(|(_, c)| c == cmd);
+                let aceptado = ACEPTADOS.iter().any(|(p, c, _)| p == name && c == cmd);
+                assert!(
+                    atado || aceptado,
+                    "preset {name}: `{cmd}` no tiene tecla y no está en la tabla de huecos \
+                     decididos. O se ata, o se apunta ahí con el motivo — un comando que solo \
+                     se alcanza por la paleta es un comando que nadie alcanza"
+                );
+                if atado && aceptado {
+                    sobran.push((name, cmd));
+                }
+            }
+        }
+        assert!(
+            sobran.is_empty(),
+            "estas filas de la tabla ya no describen nada —el preset SÍ ata el comando— y una \
+             excepción que no excluye nada es la que sobrevive a que alguien la lea: {sobran:?}"
+        );
+    }
+
     /// WHICH presets count is a decision, not an implementation detail: `vim`
     /// does because vim does, `orthodox` and `cua` do not because their
     /// originals do not and turning it on would take `1`..`9` away from them.

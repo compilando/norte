@@ -18,9 +18,13 @@
 # Far's own "Set file attributes" dialog, which lands on `pane.properties`
 # (Planned); Far has no documented select-all key in these two sources, so
 # `mark.all`/`mark.clear` are simply unbound here rather than approximated
-# onto Ctrl+A. Shift+F5/Shift+F6 ("Copy"/"Rename or move" file under cursor,
-# ignoring selection) are the same in-place variant TC and Krusader both
+# onto Ctrl+A. Shift+F5 ("Copy" the file under the cursor,
+# ignoring the selection) is the same in-place variant TC and Krusader both
 # omitted at their own Shift+F5/Shift+F7 — omitted here for the same reason.
+# Shift+F6 was omitted with it and should not have been (#228): Far's own
+# "Rename or move" IS what norte calls `pane.rename`, it is the chord
+# `total-commander.toml` already gives that command, and without it the
+# preset had no rename key at all.
 # Shift+Gray+ and Shift+Gray- (select-all-files / deselect-all-files) cannot
 # be expressed at all: `parse_chord` rejects `shift+<char>` for ANY
 # single-character key, not only letters, and `+`/`-`/`*` are single-character
@@ -35,6 +39,12 @@
 # `pane.sync-dirs` is unbound for the same reason and a stronger one: Far
 # has no folder synchroniser in the shipped product at all (Advanced Compare
 # is a plugin), so there is no key to transcribe.
+# `pane.mirror` and `pane.pull` are unbound too, and this is the third shape
+# of the same decision (#228): they are norte's own panel gestures — send the
+# other panel to this path, and bring its path here — and neither
+# far-funccmd.txt nor far-panelcmd.txt names anything that does either. What
+# Far has in that neighbourhood is Ctrl+U, which SWAPS the two panels, and
+# that is already bound to `pane.swap`.
 #
 # Omitted families (norte has no concept): the pull-down menu bar (F9) and
 # its "select last menu item" (Shift+F10); the user menu (F2); the plugin
@@ -118,6 +128,14 @@ keymap = [
     { on = ["f4"], run = "pane.edit" },
     { on = ["f5"], run = "pane.copy" },
     { on = ["f6"], run = "pane.move" },
+    # Shift+F6 is Far's own "Rename or move the file under the cursor", and it
+    # is the same chord `total-commander.toml` gives `pane.rename` — because it
+    # is the same key in the original. It was omitted here as an "in-place
+    # variant ignoring the selection", lumped in with Shift+F5; that reading
+    # fits Shift+F5 (which really would only duplicate `pane.copy`) and not
+    # this one: renaming in place is a command of its own in norte, and
+    # without this it had no key in the whole preset (#228).
+    { on = ["shift+f6"], run = "pane.rename" },
     { on = ["f7"], run = "pane.mkdir" },
     { on = ["f8"], run = "pane.delete" },
     { on = ["shift+f8"], run = "pane.delete" },

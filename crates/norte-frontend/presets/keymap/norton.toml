@@ -27,6 +27,15 @@
 # had no directory synchroniser, so there is not even a menu entry to hang a
 # guess on.
 #
+# Three more core commands are unbound here ON PURPOSE, and #228 is why they
+# are written down rather than left to be rediscovered as a gap:
+# `pane.rename`, because NC's F6 ("RenMov") renames and moves with ONE key and
+# that key is bound — to `pane.move`, whose dialog carries an editable
+# destination name, which is how an NC user renames; and `pane.mirror` and
+# `pane.pull`, which are norte's own panel gestures and which no source, first
+# or second hand, attributes to NC. The reference sheet prints `—` for each,
+# so what the reader is told is the truth.
+#
 # Omitted families (norte has no concept): the pull-down menu bar (F9) and
 # the user menu (F2); Ctrl+Q and Ctrl+L — no first-hand description survives
 # to say what either did in NC, so both are left unbound rather than guessed
@@ -77,6 +86,13 @@ keymap = [
     { on = ["f8"], run = "pane.delete" },
     { on = ["alt+f1"], run = "pane.select-drive-left" },
     { on = ["alt+f2"], run = "pane.select-drive-right" },
+    # Alt+F7 ("Find file") entra por la MISMA regla de corroboración que esta
+    # cabecera ya usa para F5/F6/F7/F8 y Ctrl+U: no hay fuente de primera mano
+    # de NC, pero el acorde recurre sin cambios en los dos presets que SÍ se
+    # transcribieron de fuente —`far.toml` y `total-commander.toml`—, y ambos
+    # programas se documentan como sucesores de NC. Sin esto, buscar no tenía
+    # tecla en el único preset donde tampoco la tiene nada parecido (#228).
+    { on = ["alt+f7"], run = "pane.search" },
     { on = ["ctrl+u"], run = "pane.swap" },
     { on = ["ctrl+r"], run = "pane.refresh" },
     { on = ["insert"], run = "mark.toggle" },
