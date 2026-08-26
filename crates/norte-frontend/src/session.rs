@@ -21,7 +21,7 @@ use crate::sort::SortSpec;
 
 /// Esquema del cuerpo. Lo posee este crate, no el wire: añadir un campo a
 /// [`SlotState`] es subir ESTE número, no la versión del protocolo.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Entradas de historial por hueco y por sentido.
 pub const HISTORY_CAP: usize = 64;
@@ -105,7 +105,20 @@ pub struct SlotState {
 /// La pantalla guardada: las disposiciones por nombre y el estado por hueco.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionBody {
-    /// Disposiciones por nombre. `default` es la que se aplica al arrancar.
+    /// El perfil activo. Vacío = ninguno.
+    ///
+    /// Es ESTADO, no configuración: lo que estabas haciendo, no lo que
+    /// decidiste. Por eso vive aquí y no en el `norte.toml` del lector, que
+    /// sigue siendo un fichero que escribió él.
+    ///
+    /// Es `String` y no `OsString` porque es la CLAVE de [`Self::layouts`],
+    /// que es un objeto JSON y por tanto UTF-8 por construcción. Un perfil
+    /// cuyo directorio no sea UTF-8 vale para configuración y no puede llevar
+    /// estado, tampoco pegajoso (spec 2026-08-26, D4).
+    #[serde(default)]
+    pub active: String,
+    /// Disposiciones por nombre DE PERFIL. Vacío o `default` es la del lector
+    /// sin perfil; con [`Self::active`] puesto, la clave es ese nombre.
     #[serde(default)]
     pub layouts: BTreeMap<String, Node>,
     /// Estado por hueco, indexado por [`SlotId`].
@@ -456,6 +469,7 @@ mod tests {
             ],
         );
         let body = SessionBody {
+            active: String::new(),
             layouts: std::iter::once(("default".to_owned(), sin_listado)).collect(),
             slots: std::collections::BTreeMap::new(),
         };
@@ -601,6 +615,40 @@ mod tests {
             );
             assert_eq!(vuelta.slots[&1].path, ruta, "{}", name.id);
         }
+    }
+
+    /// Un cuerpo v1 no trae `active`, y eso significa exactamente «sin
+    /// perfil». Leerlo tiene que seguir funcionando: quitarle la sesión a
+    /// quien actualiza el binario es justo lo que ADR 0059 promete que no
+    /// pasa.
+    #[test]
+    fn un_cuerpo_v1_se_lee_como_sin_perfil() {
+        let v1 = serde_json::json!({ "version": 1, "layouts": {}, "slots": {} });
+        let b = SessionBody::from_value(1, &v1).expect("un v1 se sigue leyendo");
+        assert_eq!(b.active, "", "sin perfil, que es la verdad");
+    }
+
+    #[test]
+    fn el_perfil_activo_sobrevive_al_viaje() {
+        let mut b = SessionBody {
+            active: "work".to_owned(),
+            ..SessionBody::default()
+        };
+        b.layouts
+            .insert("work".into(), Node::slot(SlotId(1), KindId::browser()));
+        let vuelta = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("ida y vuelta");
+        assert_eq!(vuelta.active, "work");
+    }
+
+    /// Y un cuerpo del FUTURO se sigue rehusando entero: subir a 2 no puede
+    /// abrir la puerta a un 3.
+    #[test]
+    fn un_cuerpo_v3_se_sigue_rehusando() {
+        let v3 = serde_json::json!({ "layouts": {}, "slots": {}, "active": "x" });
+        assert!(matches!(
+            SessionBody::from_value(SCHEMA_VERSION + 1, &v3),
+            Err(SessionError::FromTheFuture { .. })
+        ));
     }
 
     /// Un kind que este binario no declara vuelve intacto, `params` incluidos:
