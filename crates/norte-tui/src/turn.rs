@@ -118,10 +118,10 @@ pub async fn drain_pending(
     if let Some(hash) = app.pending_sync_apply.take() {
         launch_sync_apply(app, backend, &mut work.sync, &hash).await;
     }
-    // #140: el panel que acaba de desconectar vuelve a casa por el mismo
-    // `cd` que cualquier otra navegación, con su ritual de vuelta.
-    if let Some(casa) = app.pending_disconnect_home.take() {
-        let outcome = cd(app, backend, events, casa).await;
+    // #140: el panel que acaba de desconectar se va por el mismo `cd` que
+    // cualquier otra navegación, con su ritual de vuelta.
+    if let Some(destino) = app.pending_disconnect_dest.take() {
+        let outcome = cd(app, backend, events, destino).await;
         apply_cd(
             &app.panes,
             &mut work.fill,

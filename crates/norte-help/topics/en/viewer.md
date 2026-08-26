@@ -100,9 +100,15 @@ While the editor is up, norte steps aside and hands it the whole terminal, just
 as {{cmd:app.terminal}} does. Leaving the editor brings the panels back and
 reloads the listing, so whatever you saved is already visible.
 
-{{cmd:pane.edit-new}} opens the editor on an EMPTY buffer in the directory you
-are looking at. The name is asked for when you save, which is where your editor
-knows how to ask.
+{{cmd:pane.edit-new}} asks you for a name, creates the empty file, and opens the
+editor on it. The name is asked here and not by your editor at save time because
+the file is created by norte: it goes through the policy gate and into the
+journal, with an undo, like every other thing norte writes. An editor creating
+it behind norte's back would be a file nobody could account for — and if the
+policy said no, it would appear anyway.
+
+If creating it fails, no editor opens: an empty buffer over a file that is not
+there looks exactly like success right up to the moment you save.
 
 Two things it will not do, both on purpose: it does not edit a folder (`⏎` is
 how you enter one) and it does not edit in a remote panel. An editor opens a

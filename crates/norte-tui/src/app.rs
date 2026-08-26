@@ -558,7 +558,16 @@ pub struct App {
     /// adivinar a dónde —lo decide quien desconectó— y `App` no engorda su
     /// cuenta de `bool`s, que es un lint de este repo y una señal de que el
     /// estado se estaba volviendo una bolsa de banderitas.
-    pub pending_disconnect_home: Option<VPath>,
+    pub pending_disconnect_dest: Option<VPath>,
+    /// El fichero que `pane.edit-new` mandó crear y el editor abrirá CUANDO
+    /// exista (#290), con el id de la task que lo está creando.
+    ///
+    /// Abrirlo al encolar sería abrir algo que todavía no está en el disco —y
+    /// que puede no llegar a estarlo: si la política deniega la creación, el
+    /// editor lo crearía él, que es justo lo que esta tecla dejó de hacer—.
+    /// El id es lo que distingue ESTA creación de cualquier otra task que
+    /// termine mientras tanto.
+    pub pending_edit_open: Option<(norte_proto::TaskId, VPath)>,
     /// Reinterpretación de nombres (#57) del lado ORIGEN, congelada junto con
     /// [`Self::pending_sync`] y no cuando el run loop abre el panel: entre una
     /// cosa y la otra el lector puede haber pulsado `Alt+E`, y un plan que se
@@ -743,7 +752,8 @@ impl App {
             sync: None,
             pending_sync: None,
             pending_sync_apply: None,
-            pending_disconnect_home: None,
+            pending_disconnect_dest: None,
+            pending_edit_open: None,
             pending_sync_encoding: (None, None),
             // Fail-CLOSED: el `App` de un test no tiene backend, y ofrecer
             // sincronizar por defecto convertiría cada test en un permiso.

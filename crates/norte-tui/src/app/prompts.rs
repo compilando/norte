@@ -542,6 +542,47 @@ impl App {
         self.prompt_set_error(PromptKind::Mkdir, msg);
     }
 
+    /// Abre el modal de crear fichero vacío (Shift+F4, #290).
+    ///
+    /// Pide un nombre porque el fichero lo crea el DAEMON (`fs.create`) y no
+    /// el editor: así la creación pasa por la política y por el journal, con
+    /// su undo, como cualquier otra mutación (regla dura 4). Antes se lanzaba
+    /// el editor con un buffer vacío y el fichero aparecía al guardar, fuera
+    /// de norte entero.
+    pub fn open_edit_new(&mut self) {
+        self.modal = Some(Modal::EditNew {
+            name: String::new(),
+            error: None,
+        });
+    }
+
+    /// Valida el nombre y devuelve el DESTINO completo. Mismo contrato que
+    /// [`Self::mkdir_confirm`], incluido el de NO cerrar el modal: lo cierra
+    /// [`Self::edit_new_submitted`] cuando la task ya encoló.
+    pub fn edit_new_confirm(&mut self) -> Option<VPath> {
+        let Some(Modal::EditNew { name, .. }) = &self.modal else {
+            return None;
+        };
+        match norte_proto::Segment::new(name.as_bytes().to_vec()) {
+            Ok(seg) => Some(self.focused().dir().join(seg)),
+            Err(e) => {
+                let msg = e.to_string();
+                self.edit_new_set_error(msg);
+                None
+            }
+        }
+    }
+
+    /// Cierra el modal tras un submit que SÍ encoló.
+    pub fn edit_new_submitted(&mut self) {
+        self.prompt_submitted(PromptKind::EditNew);
+    }
+
+    /// Deja el diagnóstico de un submit fallido; el nombre sobrevive.
+    pub fn edit_new_set_error(&mut self, msg: String) {
+        self.prompt_set_error(PromptKind::EditNew, msg);
+    }
+
     /// Abre el prompt de destino de una transferencia ([`Modal::TransferDest`]).
     ///
     /// Prellenado con la dirección del panel con foco, en forma wire: es la
@@ -1102,6 +1143,45 @@ mod tests {
         // Cancelar cierra sin nada.
         app.cancel_mkdir();
         assert!(app.modal.is_none());
+    }
+
+    /// #290: `pane.edit-new` PIDE un nombre, porque el fichero lo crea el
+    /// daemon y no el editor. Mismo contrato que el de F7 —valida con las
+    /// reglas del `VPath`, no cierra al confirmar, conserva lo tecleado tras
+    /// un submit fallido— sobre la otra clase de nodo.
+    #[test]
+    fn el_modal_de_fichero_nuevo_valida_y_construye_el_destino() {
+        let mut app = app_with_entries(&["a"]);
+        app.open_edit_new();
+        for c in "notas.txt".chars() {
+            app.prompt_push(PromptKind::EditNew, c);
+        }
+        let target = app.edit_new_confirm().expect("nombre válido");
+        assert_eq!(target, VPath::parse("mem:///notas.txt").unwrap());
+        assert!(app.modal.is_some(), "confirmar NO cierra: cierra el submit");
+
+        // Un submit fallido —política, journal— conserva el nombre.
+        app.edit_new_set_error("policy".into());
+        assert!(matches!(
+            &app.modal,
+            Some(Modal::EditNew { error: Some(_), name }) if name == "notas.txt"
+        ));
+        app.edit_new_submitted();
+        assert!(app.modal.is_none(), "submitted cierra el modal");
+
+        // Y los nombres que jamás son un destino siguen sin serlo aquí.
+        for malo in ["", "..", "a/b"] {
+            app.open_edit_new();
+            for c in malo.chars() {
+                app.prompt_push(PromptKind::EditNew, c);
+            }
+            assert!(app.edit_new_confirm().is_none(), "{malo} no es un nombre");
+            assert!(
+                matches!(&app.modal, Some(Modal::EditNew { error: Some(_), .. })),
+                "{malo}: el diagnóstico queda en el modal"
+            );
+            app.cancel_prompt(PromptKind::EditNew);
+        }
     }
 
     /// #103 T9: el modal de patrón marca/desmarca y reporta cuántas marcas

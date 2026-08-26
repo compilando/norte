@@ -89,9 +89,12 @@ here is what you wrote there — name and address, never a password: credentials
 are referenced rather than stored, which is what the keyring is for.
 
 {{cmd:pane.disconnect}} does both things its name promises: it **releases the
-session** — the socket closes now, not when it eventually times out — and sends
-the panel back to your home directory. On a local panel there is nothing to
-close and it says so, rather than answering "done" to something it did not do.
+session** — the socket closes now, not when it eventually times out — and takes
+the panel out of there. Where it goes is the last place in its trail that is not
+on that machine: going back to another folder on the same server would reopen
+the connection you just asked to close. If its whole trail is that machine, it
+falls back to your home directory. On a local panel there is nothing to close
+and it says so, rather than answering "done" to something it did not do.
 
 Closing does not forbid: next time you navigate there, norte connects again the
 usual way.

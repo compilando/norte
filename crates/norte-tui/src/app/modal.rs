@@ -286,6 +286,21 @@ pub enum Modal {
         /// pintado bajo el campo.
         error: Option<String>,
     },
+    /// Crear un fichero VACÍO (Shift+F4, #290). Mismo molde que
+    /// [`Modal::Mkdir`] con la otra clase de nodo, y por el mismo motivo: el
+    /// fichero lo crea el DAEMON (`fs.create`) y no el editor, así que hace
+    /// falta un nombre antes de lanzar nada.
+    ///
+    /// El editor se abre DESPUÉS, sobre el fichero que ya existe. Dejárselo
+    /// crear a él —lo que hacía esta tecla— saltaba el journal y la política:
+    /// un `pane.edit-new` sobre un directorio donde la política prohíbe
+    /// escribir creaba el fichero igualmente.
+    EditNew {
+        /// Lo tecleado hasta ahora.
+        name: String,
+        /// Diagnóstico del último intento inválido.
+        error: Option<String>,
+    },
     /// `pane.command-line` (#135). Texto libre, molde [`Modal::Mkdir`]: la
     /// línea CRUDA del usuario, enmascarada al pintarla.
     ///
@@ -478,6 +493,8 @@ pub enum PromptKind {
     Split,
     /// [`Modal::Mkdir`].
     Mkdir,
+    /// [`Modal::EditNew`].
+    EditNew,
     /// [`Modal::CommandLine`].
     CommandLine,
     /// [`Modal::AiRenameInstruction`].
@@ -594,6 +611,7 @@ impl Modal {
             Self::Pack { .. } => PromptKind::Pack,
             Self::Split { .. } => PromptKind::Split,
             Self::Mkdir { .. } => PromptKind::Mkdir,
+            Self::EditNew { .. } => PromptKind::EditNew,
             Self::CommandLine { .. } => PromptKind::CommandLine,
             Self::AiRenameInstruction { .. } => PromptKind::AiRename,
             Self::SemanticQuery { .. } => PromptKind::Semantic,
@@ -638,7 +656,9 @@ impl Modal {
                 OverLimit::Say,
                 PopMode::WireChar,
             ),
-            Self::Pack { name, error } | Self::Mkdir { name, error } => (
+            Self::Pack { name, error }
+            | Self::Mkdir { name, error }
+            | Self::EditNew { name, error } => (
                 name,
                 error,
                 None,
@@ -750,6 +770,13 @@ mod tests {
             (
                 PromptKind::Mkdir,
                 Modal::Mkdir {
+                    name: String::new(),
+                    error: None,
+                },
+            ),
+            (
+                PromptKind::EditNew,
+                Modal::EditNew {
                     name: String::new(),
                     error: None,
                 },

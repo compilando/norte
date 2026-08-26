@@ -477,17 +477,18 @@ pub async fn dispatch(
             Ok(pendiente) => app.pending_shell = Some(pendiente),
             Err(msg) => app.message = Some(msg),
         },
-        // Shift+F4: el editor con un buffer VACÍO en este directorio, que es
-        // lo que hacen mc y Krusader. El nombre es cosa del editor —lo pide al
-        // guardar—, y pedirlo aquí sería un diálogo que hace lo mismo peor.
+        // Shift+F4: un fichero VACÍO en este directorio y el editor encima.
+        //
+        // El nombre se pide AQUÍ y el fichero lo crea el daemon (`fs.create`,
+        // #290), no el editor al guardar. Dejárselo al editor —lo que hacía
+        // esta tecla— creaba el fichero fuera de norte: sin pasar por la
+        // política, sin entrada en el journal y sin undo (regla dura 4). Es
+        // además lo que hace la ventana con este mismo comando.
+        //
+        // El guard de pane remoto es el del shell: un editor abre un fichero
+        // DEL SISTEMA, y crearlo en el otro extremo no daría ninguno.
         Command::PaneEditNew => match shell_cwd(app) {
-            Ok(dir) => {
-                app.pending_shell = Some(crate::app::PendingShell {
-                    argv: vec![norte_frontend::shell::login_shell_editor()],
-                    cwd: Some(dir),
-                    wait_for_key: false,
-                });
-            }
+            Ok(_) => app.open_edit_new(),
             Err(msg) => app.message = Some(msg),
         },
         // #135 (S4, design §D): los tres se RESUELVEN aquí y los ejecuta el

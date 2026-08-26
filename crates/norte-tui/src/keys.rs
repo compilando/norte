@@ -569,6 +569,21 @@ pub async fn on_key(
                             }
                         }
                     }
+                    // #290: crear el fichero es una task del daemon como
+                    // cualquier otra mutación; el editor se abre en el tick
+                    // que la ve terminar, no aquí.
+                    PromptKind::EditNew => {
+                        if let Some(target) = app.edit_new_confirm() {
+                            match backend.create_file(&target).await {
+                                Ok(task) => {
+                                    app.pending_edit_open = Some((task.id(), target));
+                                    app.board.push(&task, None);
+                                    app.edit_new_submitted();
+                                }
+                                Err(e) => app.edit_new_set_error(error_message(&e)),
+                            }
+                        }
+                    }
                     PromptKind::Pack => {
                         if let Some(params) = app.pack_confirm() {
                             match backend.pack(params).await {

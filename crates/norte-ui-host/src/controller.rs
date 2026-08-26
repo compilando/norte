@@ -5813,37 +5813,13 @@ impl Estado {
 
     /// A dónde va un panel cuya sesión se acaba de cerrar.
     ///
-    /// El RASTRO hacia atrás, del más reciente al más viejo, saltándose todo lo
-    /// que sea de la misma sesión: volver a `sftp://servidor/otra-carpeta`
-    /// sería reabrir la conexión que se acaba de cerrar, que es exactamente lo
-    /// que el gesto pidió no tener.
-    ///
-    /// Y si no queda nada —el panel nació remoto, o todo su rastro es de esa
-    /// máquina— se cae a casa. Lo que no puede pasar es que el panel se quede
-    /// mirando lo que ya no se lee.
+    /// La decisión —el rastro hacia atrás saltándose la máquina que se cierra,
+    /// y casa cuando no queda nada— vive en `norte-frontend` y la comparten los
+    /// dos frontends: cuando estaba aquí, la TUI se iba a casa siempre y esta
+    /// ventana volvía sobre su rastro, con la misma tecla y el mismo nombre.
     fn donde_volver_tras_desconectar(&self, cerrada: &VPath) -> VPath {
-        let misma =
-            |p: &VPath| p.scheme() == cerrada.scheme() && p.authority() == cerrada.authority();
-        let historial = &self.hueco().historial;
-        if let Some(p) = historial.trail().iter().rev().find(|p| !misma(p)) {
-            return p.clone();
-        }
-        Self::casa()
-    }
-
-    /// El directorio del usuario, o la raíz local si el entorno no lo dice.
-    ///
-    /// La raíz y no un error: un destino que no existe deja el panel donde
-    /// estaba, que es lo único inaceptable aquí.
-    fn casa() -> VPath {
-        std::env::home_dir()
-            .and_then(|h| {
-                h.to_str()
-                    .and_then(norte_frontend::shell::vpath_de_ruta_nativa)
-            })
-            .unwrap_or_else(|| {
-                VPath::parse("file:///").unwrap_or_else(|_| unreachable!("`file:///` parsea"))
-            })
+        norte_frontend::nav::regreso_tras_desconectar(cerrada, self.hueco().historial.trail())
+            .unwrap_or_else(norte_frontend::shell::home_vpath)
     }
 
     /// La sesión se cerró (o no había ninguna): se dice y el panel se va.

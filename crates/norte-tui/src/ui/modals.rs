@@ -220,6 +220,14 @@ pub(crate) fn modal_title_body(
         Modal::Mkdir { name, error } => {
             free_text_modal_text("modal-mkdir", "modal-mkdir-hint", name, error.as_deref())
         }
+        // #290: el mismo molde con la otra clase de nodo. El nombre se pide
+        // porque lo crea el daemon, no el editor.
+        Modal::EditNew { name, error } => free_text_modal_text(
+            "modal-new-file",
+            "modal-new-file-hint",
+            name,
+            error.as_deref(),
+        ),
         // #132: mismo enmascarado y mismo molde. El pie del de empaquetar dice
         // qué formato sale del nombre TECLEADO, no del sugerido: es la única
         // forma de que el usuario vea la decisión antes de confirmarla.
@@ -348,6 +356,7 @@ pub(crate) fn modal_height(modal: &crate::app::Modal) -> u16 {
         // Sin error caen al comodín `6` de abajo (match_same_arms).
         Modal::MarkPattern { error: Some(_), .. }
         | Modal::Mkdir { error: Some(_), .. }
+        | Modal::EditNew { error: Some(_), .. }
         | Modal::TransferDest { error: Some(_), .. }
         | Modal::CommandLine { error: Some(_), .. }
         | Modal::AiRenameInstruction { error: Some(_), .. }

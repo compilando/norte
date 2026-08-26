@@ -90,9 +90,12 @@ aquí es lo que escribiste ahí — nombre y dirección, nunca una contraseña: 
 credenciales se referencian, no se guardan (por eso hay un llavero).
 
 {{cmd:pane.disconnect}} hace las dos cosas que su nombre promete: **suelta la
-sesión** —el socket se cierra ahora, no cuando venza sola— y devuelve el panel a
-tu carpeta personal. Sobre un panel local no hay nada que cerrar y te lo dice,
-en vez de contestar «hecho» a algo que no ha hecho nada.
+sesión** —el socket se cierra ahora, no cuando venza sola— y saca al panel de
+ahí. A dónde va es el último sitio de su rastro que no esté en esa máquina:
+volver a otra carpeta del mismo servidor reabriría la conexión que acabas de
+pedir cerrar. Si todo su rastro es esa máquina, se cae a tu carpeta personal.
+Sobre un panel local no hay nada que cerrar y te lo dice, en vez de contestar
+«hecho» a algo que no ha hecho nada.
 
 Cerrar no prohíbe: la siguiente vez que navegues ahí, norte vuelve a conectar
 por el camino de siempre.

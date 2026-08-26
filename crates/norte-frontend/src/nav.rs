@@ -683,6 +683,39 @@ impl History {
     }
 }
 
+/// A dónde va un panel cuya sesión se acaba de cerrar (`pane.disconnect`).
+///
+/// El RASTRO hacia atrás, del más reciente al más viejo, saltándose todo lo
+/// que sea de la MISMA sesión: volver a `sftp://servidor/otra-carpeta` sería
+/// reabrir la conexión que se acaba de cerrar, que es exactamente lo que el
+/// gesto pidió no tener. La misma sesión es scheme Y authority — otro
+/// servidor del mismo scheme es otra conexión, y volver ahí es legítimo.
+///
+/// `None` cuando no queda nada ajeno —el panel nació remoto, o todo su
+/// rastro es de esa máquina—: el llamante cae entonces a
+/// [`crate::shell::home_vpath`]. Lo que no puede pasar es que el panel se
+/// quede mirando lo que ya no se lee.
+///
+/// Compartida por los dos frontends A PROPÓSITO: la decisión es la misma
+/// mire quien la mire, y cuando vivía dos veces la TUI se iba a casa
+/// mientras la ventana volvía sobre su rastro.
+///
+/// ```
+/// use norte_frontend::nav::regreso_tras_desconectar;
+/// use norte_proto::VPath;
+/// let vp = |s: &str| VPath::parse(s).expect("wire");
+/// let rastro = [vp("file:///home/o"), vp("sftp://srv/a")];
+/// assert_eq!(
+///     regreso_tras_desconectar(&vp("sftp://srv/a"), &rastro),
+///     Some(vp("file:///home/o")),
+/// );
+/// ```
+#[must_use]
+pub fn regreso_tras_desconectar(cerrada: &VPath, rastro: &[VPath]) -> Option<VPath> {
+    let misma = |p: &VPath| p.scheme() == cerrada.scheme() && p.authority() == cerrada.authority();
+    rastro.iter().rev().find(|p| !misma(p)).cloned()
+}
+
 // ── Azúcar de navegación por archivos comprimidos (ADR 0018) ──────────────
 //
 // `archive_root_for` vivía en `main.rs`, privada del binario. La necesita
@@ -1081,5 +1114,39 @@ mod history_tests {
         h.record(cur);
         assert!(total(&h) <= HISTORY_MAX);
         assert_eq!(h.fwd_len(), 0, "y poda la rama de delante");
+    }
+
+    /// El rastro se camina del más reciente al más viejo y se devuelve el
+    /// primero que NO sea de la sesión que se cierra.
+    #[test]
+    fn el_regreso_salta_todo_lo_de_la_maquina_cerrada() {
+        let rastro = [vp("file:///home/o"), vp("sftp://srv/a"), vp("sftp://srv/b")];
+        assert_eq!(
+            regreso_tras_desconectar(&vp("sftp://srv/b"), &rastro),
+            Some(vp("file:///home/o")),
+        );
+    }
+
+    /// La misma sesión es scheme Y authority: otro servidor por sftp es otra
+    /// conexión, y volver ahí no reabre la que se cerró.
+    #[test]
+    fn otro_servidor_del_mismo_scheme_si_vale() {
+        let rastro = [vp("sftp://otro/x"), vp("sftp://srv/a")];
+        assert_eq!(
+            regreso_tras_desconectar(&vp("sftp://srv/a"), &rastro),
+            Some(vp("sftp://otro/x")),
+        );
+    }
+
+    /// Un panel que nació remoto —o cuyo rastro entero es de esa máquina— no
+    /// tiene a dónde volver: lo decide el llamante, que cae a casa.
+    #[test]
+    fn sin_nada_ajeno_en_el_rastro_no_hay_regreso() {
+        assert_eq!(regreso_tras_desconectar(&vp("sftp://srv/a"), &[]), None);
+        let todo_suyo = [vp("sftp://srv/a"), vp("sftp://srv/b")];
+        assert_eq!(
+            regreso_tras_desconectar(&vp("sftp://srv/b"), &todo_suyo),
+            None,
+        );
     }
 }
