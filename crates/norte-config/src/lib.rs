@@ -19,6 +19,7 @@ pub mod load;
 /// depende de este crate por leer `norte.toml` no tiene por qué compilarlos.
 #[cfg(feature = "logging")]
 pub mod logging;
+pub mod profiles;
 pub mod schema;
 #[cfg(feature = "watch")]
 pub mod watch;
@@ -33,6 +34,10 @@ pub use load::{
     WidthChoice, load, persist_column_format, persist_columns, persist_hotlist_add,
     persist_hotlist_remove, persist_keymap_bind, persist_keymap_unbind, persist_set,
     persist_ui_theme, persist_ui_theme_to,
+};
+pub use profiles::{
+    list_profiles, profile_dir_from, profiles_dir_from, standard_layers_no_project_with_profile,
+    standard_layers_with_profile,
 };
 pub use schema::{
     AiProviderEntry, AiSection, ArchiveSection, ConfigError, DEFAULT_PRESET, DaemonMode,
