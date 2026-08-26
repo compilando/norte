@@ -29,7 +29,7 @@ use norte_proto::methods::{SESSION_BODY_MAX, Session};
 /// el core NO puede depender del frontend; que no se separen lo comprueba un
 /// test en `norte-tui`, el único crate que ve los dos
 /// (`las_dos_versiones_de_esquema_van_del_brazo`).
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Lo más grande que se acepta LEER del disco.
 ///
