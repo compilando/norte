@@ -9,6 +9,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Configuration profiles: the mechanism** (ADR 0079). A fourth configuration
+  layer the reader picks by name — `profiles/<name>/`, with the shape of any
+  other layer — sitting between the user's own configuration and a trusted
+  project's, plus its own live screen state in the UI session. A profile
+  carries a theme, a keymap, columns, favourites, arrangements and a starting
+  directory per slot; it cannot touch the daemon's transport, the AI, the logs,
+  the anti-bomb limits, the policy engine, or run an `init.lua`. That last line
+  is the decision the ADR is named after: **a profile declares, it does not
+  execute**, because unlike every other layer a profile is chosen from a list
+  while the program is running, and a picker that grants in silence is a
+  permission escalator. A broken profile answers according to who asked for it
+  — `--profile` aborts, a remembered one starts without it and says so, and a
+  switch is refused with the current profile untouched. No protocol change: the
+  session body is opaque to the core, so the arrangement map ADR 0058 left
+  keyed by profile finally has more than one key. **There is no user interface
+  for any of this yet** — the layer and the state land first so the surfaces
+  are built on something already tested.
+
 - **A copy can say which directory the human was looking at** (#295, protocol
   **0.54.0**, ADR 0073). `fs.list` now returns a `dir_anchor` — the opaque
   identity of the directory it listed — and `fs.copy`/`fs.move` accept it back
