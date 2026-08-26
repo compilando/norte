@@ -1410,6 +1410,18 @@ pub struct CommonConfig {
     /// programa en marcha, no como se edita una capa de configuración, y un
     /// selector que concede en silencio es un escalador de permisos.
     pub profile_warnings: Vec<String>,
+    /// `[profile] title` de la capa de perfil activa, para enseñar. La
+    /// IDENTIDAD del perfil es su directorio, no esto.
+    pub profile_title: Option<String>,
+    /// `[profile.start]` ya parseado: dónde abre cada hueco cuando el perfil
+    /// todavía no tiene estado guardado.
+    ///
+    /// Las claves son ids de hueco de la disposición DEL PERFIL. Una clave que
+    /// no parsea como id se tira y se dice en [`Self::profile_warnings`]. Las
+    /// rutas vienen sin expandir: `~` y lo relativo necesitan un directorio de
+    /// trabajo, y resolverlo aquí metería el `$HOME` de este proceso en un
+    /// valor que puede leer el daemon.
+    pub profile_start: std::collections::BTreeMap<u32, std::path::PathBuf>,
 }
 
 /// Merges one layer's `[ai]` section (already filtered to non-Project by the
@@ -1948,6 +1960,35 @@ fn profile_carve_out_warnings(parsed: &NorteToml, path: &std::path::Path) -> Vec
     out
 }
 
+/// Funde el `[profile]` de una capa de PERFIL (spec 2026-08-26, D3).
+///
+/// Last-wins como todo lo demás. Una clave de `start` que no parsea como id de
+/// hueco se TIRA con su aviso, en vez de tumbar el arranque: el fichero es del
+/// usuario, pero un dedazo en un id no vale una negativa a arrancar, y la capa
+/// entera se perdería por una línea.
+fn merge_profile_section(
+    title: &mut Option<String>,
+    start: &mut std::collections::BTreeMap<u32, std::path::PathBuf>,
+    section: &crate::schema::ProfileSection,
+    path: &std::path::Path,
+    avisos: &mut Vec<String>,
+) {
+    if let Some(t) = &section.title {
+        *title = Some(t.clone());
+    }
+    for (clave, valor) in &section.start {
+        match clave.parse::<u32>() {
+            Ok(id) => {
+                start.insert(id, std::path::PathBuf::from(valor));
+            }
+            Err(_) => avisos.push(format!(
+                "{}: [profile.start] «{clave}» no es un id de hueco",
+                path.display()
+            )),
+        }
+    }
+}
+
 /// Loads and merges every layer (ADR 0007/0035).
 ///
 /// # Errors
@@ -1983,6 +2024,9 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut sources = Vec::new();
     let mut project_warnings: Vec<String> = Vec::new();
     let mut profile_warnings: Vec<String> = Vec::new();
+    let mut profile_title: Option<String> = None;
+    let mut profile_start: std::collections::BTreeMap<u32, std::path::PathBuf> =
+        std::collections::BTreeMap::new();
     for (dir, kind) in &layers.dirs {
         let norte = dir.join("norte.toml");
         if let Some(raw) = schema::read_optional(&norte)? {
@@ -1997,6 +2041,18 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             };
             if *kind == Layer::Profile {
                 profile_warnings.extend(profile_carve_out_warnings(&parsed, &norte));
+                merge_profile_section(
+                    &mut profile_title,
+                    &mut profile_start,
+                    &parsed.profile,
+                    &norte,
+                    &mut profile_warnings,
+                );
+            } else if parsed.profile.title.is_some() || !parsed.profile.start.is_empty() {
+                profile_warnings.push(format!(
+                    "{}: [profile] solo significa algo dentro de profiles/<nombre>/",
+                    norte.display()
+                ));
             }
             merge_ui_flags(
                 &mut ui_show_hidden,
@@ -2119,6 +2175,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         sources,
         project_warnings,
         profile_warnings,
+        profile_title,
+        profile_start,
     })
 }
 
@@ -4479,6 +4537,70 @@ path = "/home/u/src"
         assert_eq!(cfg.preset, "far");
         assert_eq!(cfg.hotlist.len(), 1);
         assert!(cfg.profile_warnings.is_empty());
+    }
+
+    /// D3: `[profile.start]` es lo que hace útil un perfil recién creado. Las
+    /// claves son ids de hueco TAL Y COMO los escribe la disposición del
+    /// perfil.
+    #[test]
+    fn profile_start_se_lee_con_sus_ids() {
+        let perfil = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            perfil.path().join("norte.toml"),
+            "[profile]\ntitle = \"Trabajo\"\n\n[profile.start]\n1 = \"/home/u/src\"\n2 = \"/tmp\"\n",
+        )
+        .expect("write");
+        let layers = Layers {
+            dirs: vec![(perfil.path().to_path_buf(), Layer::Profile)],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.profile_title.as_deref(), Some("Trabajo"));
+        assert_eq!(
+            cfg.profile_start.get(&1).map(std::path::PathBuf::as_path),
+            Some(std::path::Path::new("/home/u/src"))
+        );
+        assert_eq!(cfg.profile_start.len(), 2);
+    }
+
+    /// Una clave que no es un id de hueco no rompe el arranque: se tira y se
+    /// dice. El fichero es del usuario, pero un dedazo en un id no vale una
+    /// negativa a arrancar.
+    #[test]
+    fn una_clave_de_start_que_no_es_un_id_se_avisa_y_se_tira() {
+        let perfil = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            perfil.path().join("norte.toml"),
+            "[profile.start]\nizquierda = \"/tmp\"\n1 = \"/home/u\"\n",
+        )
+        .expect("write");
+        let layers = Layers {
+            dirs: vec![(perfil.path().to_path_buf(), Layer::Profile)],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.profile_start.len(), 1, "el bueno sobrevive");
+        assert!(
+            cfg.profile_warnings.iter().any(|w| w.contains("izquierda")),
+            "y el malo se dice por su nombre: {:?}",
+            cfg.profile_warnings
+        );
+    }
+
+    /// `[profile]` en una capa que NO es de perfil no significa nada, y decirlo
+    /// evita que alguien lo escriba en su norte.toml y espere que pase algo.
+    #[test]
+    fn profile_fuera_de_un_perfil_se_ignora_con_aviso() {
+        let usuario = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            usuario.path().join("norte.toml"),
+            "[profile]\ntitle = \"no soy un perfil\"\n",
+        )
+        .expect("write");
+        let layers = Layers {
+            dirs: vec![(usuario.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.profile_title, None);
+        assert_eq!(cfg.profile_warnings.len(), 1);
     }
 
     /// Y el proyecto sigue mandando sobre el perfil (D1): esto es lo que hace

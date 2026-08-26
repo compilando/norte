@@ -42,6 +42,34 @@ pub struct NorteToml {
     /// as `[archive]`).
     #[serde(default)]
     pub ai: AiSection,
+    /// Profile settings (`[profile]`, spec 2026-08-26). Meaningful ONLY in
+    /// `profiles/<name>/norte.toml`; any other layer ignores it with a
+    /// warning.
+    #[serde(default)]
+    pub profile: ProfileSection,
+}
+
+/// `[profile]` — only meaningful in `profiles/<name>/norte.toml` (spec
+/// 2026-08-26, D3). In any other layer it is ignored with a warning, so nobody
+/// writes it into their own `norte.toml` and waits for something to happen.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(default, deny_unknown_fields)]
+pub struct ProfileSection {
+    /// Name to display. The profile's IDENTITY is its directory, not this:
+    /// two profiles may share a title and still be two profiles.
+    pub title: Option<String>,
+    /// Where each slot opens when this profile has no saved state yet.
+    ///
+    /// Keys are slot ids of the profile's own layout, as text — TOML has no
+    /// numeric keys. A key that is not a slot id is dropped with a warning
+    /// rather than refusing to start: the file is the reader's, but a typo in
+    /// an id does not earn a refusal to run.
+    ///
+    /// Values are NOT expanded here (`~`, relative paths): that needs a
+    /// working directory, and resolving it in the loader would bake this
+    /// process's `$HOME` into a value the daemon might read.
+    pub start: std::collections::BTreeMap<String, String>,
 }
 
 /// One `[[hotlist]]` entry as stored in `norte.toml`.
