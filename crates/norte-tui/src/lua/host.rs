@@ -32,6 +32,7 @@ fn lua_layer_label(layer: Layer) -> &'static str {
     match layer {
         Layer::System => "system",
         Layer::User => "user",
+        Layer::Profile => "profile",
         Layer::Project => "project",
     }
 }
@@ -113,10 +114,14 @@ pub async fn load_lua(app: &mut App, layers: &Layers) -> Option<LuaHost> {
         // El kind viaja POR DIR (deuda #75 cerrada): antes se infería por
         // posición y el LABEL fallaba en Windows sin ProgramData (APPDATA
         // quedaba "system").
-        if layer == Layer::Project {
-            load_lua_project(app, &host, dir.clone()).await;
-        } else {
-            match read_optional_bytes(dir.join("init.lua")).await {
+        match lua_de_esta_capa(layer) {
+            LuaDeCapa::TrasConfianza => load_lua_project(app, &host, dir.clone()).await,
+            LuaDeCapa::Ignorada => {
+                if matches!(read_optional_bytes(dir.join("init.lua")).await, Ok(Some(_))) {
+                    app.message = Some(t("err-lua-profile-ignored"));
+                }
+            }
+            LuaDeCapa::SeEjecuta => match read_optional_bytes(dir.join("init.lua")).await {
                 Ok(Some(bytes)) => eval_lua_layer(app, &host, &bytes, layer),
                 Ok(None) => {}
                 Err(e) => {
@@ -128,10 +133,45 @@ pub async fn load_lua(app: &mut App, layers: &Layers) -> Option<LuaHost> {
                         ],
                     ));
                 }
-            }
+            },
         }
     }
     Some(host)
+}
+
+/// Qué se hace con el `init.lua` de una capa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LuaDeCapa {
+    /// Se evalúa sin más: la capa es del lector y nadie se la ha pasado.
+    SeEjecuta,
+    /// Se evalúa solo tras el TOFU de ADR 0026.
+    TrasConfianza,
+    /// No se evalúa nunca, y se dice.
+    Ignorada,
+}
+
+/// Qué hacer con el `init.lua` de `layer`.
+///
+/// Un `match` exhaustivo y NO un `if` contra `Project`, que es lo que había: la
+/// condición era `layer != Layer::Project`, así que `Layer::Profile` heredó en
+/// silencio la EJECUCIÓN DE CÓDIGO de la capa de usuario en cuanto la variante
+/// existió. Es la misma negación que el recorte de `norte-config` vino a matar,
+/// en otro fichero, y compilaba sin decir nada. Ahora una variante nueva de
+/// [`Layer`] no compila hasta que alguien decida de qué lado cae.
+///
+/// **Un perfil DECLARA, no EJECUTA.** Ésa es la línea, y le deja todo lo que la
+/// spec le concedió —tema, `keymap.toml`, `openers.toml`, `layouts/`,
+/// favoritos—, que son ficheros que el lector puede abrir y entender.
+/// `init.lua` no: el host Lua no está sandboxeado (stdlib entera, `os.execute`
+/// incluido), la capa de perfil se elige de una LISTA con el programa en
+/// marcha, y el mismo fichero alcanzado como perfil no pasaría ni por el TOFU
+/// que sí se le exige al de un repositorio.
+pub(crate) const fn lua_de_esta_capa(layer: Layer) -> LuaDeCapa {
+    match layer {
+        Layer::System | Layer::User => LuaDeCapa::SeEjecuta,
+        Layer::Profile => LuaDeCapa::Ignorada,
+        Layer::Project => LuaDeCapa::TrasConfianza,
+    }
 }
 
 /// Resultado de la lectura VERIFICADA del `init.lua` de proyecto.
@@ -408,5 +448,31 @@ pub fn refresh_lua_status(app: &mut App, lua_host: Option<&LuaHost>) {
             "err-lua-statusbar",
             &[("detail", &detail_for_bar(&detail))],
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Layer, LuaDeCapa, lua_de_esta_capa};
+
+    /// El `init.lua` de un PERFIL no se ejecuta.
+    ///
+    /// El host Lua no está sandboxeado y la capa de perfil se elige de una
+    /// lista con el programa en marcha: si corriera, elegir una fila del
+    /// selector sería ejecutar código arbitrario sin un solo diálogo, que es
+    /// el «escalador de permisos» que la spec describe. Y la lista blanca de
+    /// D2 nunca le concedió `init.lua`.
+    #[test]
+    fn un_perfil_no_ejecuta_init_lua() {
+        assert_eq!(lua_de_esta_capa(Layer::Profile), LuaDeCapa::Ignorada);
+    }
+
+    /// Y las otras tres no cambian: sistema y usuario son del lector, y el
+    /// proyecto sigue pidiendo confianza (ADR 0026).
+    #[test]
+    fn las_demas_capas_no_cambian() {
+        assert_eq!(lua_de_esta_capa(Layer::System), LuaDeCapa::SeEjecuta);
+        assert_eq!(lua_de_esta_capa(Layer::User), LuaDeCapa::SeEjecuta);
+        assert_eq!(lua_de_esta_capa(Layer::Project), LuaDeCapa::TrasConfianza);
     }
 }

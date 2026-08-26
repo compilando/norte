@@ -166,6 +166,7 @@ err-keymap-preset-unknown = preset desconocido { $name }; disponibles: { $availa
 err-keymap-invalid = keymap inválido: { $detail }
 # --- Scripting Lua (M4, ADR 0026) — detalles SIEMPRE por detail_for_bar ---
 err-lua-load = init.lua ({ $layer }): { $detail }
+err-lua-profile-ignored = el init.lua del perfil se ha ignorado: un perfil declara, no ejecuta código
 err-lua-unknown = comando Lua desconocido: { $name }
 err-lua-command = el comando Lua falló: { $detail }
 err-lua-cancelled = comando Lua cancelado
@@ -580,6 +581,7 @@ settings-plugins-key-count = {$count} ajustes
 settings-section-paths = Dónde vive cada cosa
 settings-path-config-system = Configuración del sistema
 settings-path-config-user = Tu configuración
+settings-path-config-profile = Perfil activo
 settings-path-config-project = Configuración del proyecto
 settings-path-state = Estado (sesión, historial)
 settings-path-logs = Logs

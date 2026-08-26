@@ -1398,6 +1398,30 @@ pub struct CommonConfig {
     /// cargó. Quien pinta lo enseña; callarlo dejaría una configuración de
     /// proyecto que el lector cree activa y no lo está.
     pub project_warnings: Vec<String>,
+    /// Claves que una capa de PERFIL declaró y no puede fijar (spec
+    /// 2026-08-26, D2), con su motivo ya dicho.
+    ///
+    /// Va aparte de [`Self::project_warnings`] a propósito: son dos
+    /// procedencias distintas, y un lector no puede reaccionar igual a «tu
+    /// perfil pide algo que un perfil no decide» que a «este repositorio trae
+    /// una config que no se aplica». Vacío = el perfil solo pedía lo suyo.
+    ///
+    /// Callarlas sería lo grave: un perfil se elige de una LISTA con el
+    /// programa en marcha, no como se edita una capa de configuración, y un
+    /// selector que concede en silencio es un escalador de permisos.
+    pub profile_warnings: Vec<String>,
+    /// `[profile] title` de la capa de perfil activa, para enseñar. La
+    /// IDENTIDAD del perfil es su directorio, no esto.
+    pub profile_title: Option<String>,
+    /// `[profile.start]` ya parseado: dónde abre cada hueco cuando el perfil
+    /// todavía no tiene estado guardado.
+    ///
+    /// Las claves son ids de hueco de la disposición DEL PERFIL. Una clave que
+    /// no parsea como id se tira y se dice en [`Self::profile_warnings`]. Las
+    /// rutas vienen sin expandir: `~` y lo relativo necesitan un directorio de
+    /// trabajo, y resolverlo aquí metería el `$HOME` de este proceso en un
+    /// valor que puede leer el daemon.
+    pub profile_start: std::collections::BTreeMap<u32, std::path::PathBuf>,
 }
 
 /// Merges one layer's `[ai]` section (already filtered to non-Project by the
@@ -1869,6 +1893,102 @@ fn parse_layer(
     }
 }
 
+/// Qué capas pueden fijar lo que NO es presentación.
+///
+/// Escrito en POSITIVO a propósito. La versión anterior era
+/// `*kind != Layer::Project`, y con ella añadir una variante a [`Layer`]
+/// concedía en SILENCIO el transporte, la IA, los logs y los límites
+/// anti-bomba a la capa nueva. Un `match` exhaustivo obliga a decidirlo cuando
+/// la variante se añade, que es cuando alguien lo está pensando.
+const fn manda_fuera_de_presentacion(kind: Layer) -> bool {
+    match kind {
+        Layer::System | Layer::User => true,
+        Layer::Profile | Layer::Project => false,
+    }
+}
+
+/// Si la capa es un fichero DEL USUARIO, en el sentido que importa aquí: lo
+/// escribió quien lo va a sufrir.
+///
+/// Sistema, usuario y perfil lo son; un `./.norte` de un repositorio ajeno no.
+/// Es la línea de `keymap.preset` (#260 — elegir qué tecla borra no es
+/// presentación) y la de `[[hotlist]]` (un repo ajeno no inyecta favoritos en
+/// la sesión de nadie), y las dos la trazan en el mismo sitio.
+const fn es_capa_del_usuario(kind: Layer) -> bool {
+    match kind {
+        Layer::System | Layer::User | Layer::Profile => true,
+        Layer::Project => false,
+    }
+}
+
+/// Los avisos de una capa de PERFIL que pidió lo que un perfil no decide (D2).
+///
+/// Una sección AUSENTE no avisa de nada: lo que se dice es lo que el fichero
+/// declaró y no se va a aplicar.
+fn profile_carve_out_warnings(parsed: &NorteToml, path: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut di = |seccion: &str, motivo: &str| {
+        out.push(format!(
+            "{}: [{seccion}] no lo decide un perfil ({motivo})",
+            path.display()
+        ));
+    };
+    // Campo a campo y no comparando contra `default()`: tres de las cuatro
+    // secciones no derivan `PartialEq`, y derivarlo en tipos PÚBLICOS para una
+    // comprobación interna es ampliar la API por comodidad. Un campo nuevo en
+    // cualquiera de ellas tiene que aparecer aquí, y el test de las cuatro
+    // secciones es lo que lo va a recordar.
+    if parsed.daemon.mode.is_some() || parsed.daemon.socket.is_some() {
+        di("daemon", "un perfil no redirige el transporte del core");
+    }
+    if parsed.ai != crate::schema::AiSection::default() {
+        di(
+            "ai",
+            "un perfil no enciende la IA ni redirige sus proveedores",
+        );
+    }
+    if parsed.log.dir.is_some() || parsed.log.retain.is_some() {
+        di("log", "un perfil no decide dónde escribe este proceso");
+    }
+    if parsed.archive.max_entries.is_some()
+        || parsed.archive.max_decompressed_bytes.is_some()
+        || parsed.archive.max_nesting.is_some()
+        || parsed.archive.rar_delegate.is_some()
+    {
+        di("archive", "un perfil no sube los límites anti-bomba");
+    }
+    out
+}
+
+/// Funde el `[profile]` de una capa de PERFIL (spec 2026-08-26, D3).
+///
+/// Last-wins como todo lo demás. Una clave de `start` que no parsea como id de
+/// hueco se TIRA con su aviso, en vez de tumbar el arranque: el fichero es del
+/// usuario, pero un dedazo en un id no vale una negativa a arrancar, y la capa
+/// entera se perdería por una línea.
+fn merge_profile_section(
+    title: &mut Option<String>,
+    start: &mut std::collections::BTreeMap<u32, std::path::PathBuf>,
+    section: &crate::schema::ProfileSection,
+    path: &std::path::Path,
+    avisos: &mut Vec<String>,
+) {
+    if let Some(t) = &section.title {
+        *title = Some(t.clone());
+    }
+    for (clave, valor) in &section.start {
+        match clave.parse::<u32>() {
+            Ok(id) => {
+                start.insert(id, std::path::PathBuf::from(valor));
+            }
+            Err(_) => avisos.push(format!(
+                "{}: [profile.start] «{clave}» no es un id de hueco",
+                path.display()
+            )),
+        }
+    }
+}
+
 /// Loads and merges every layer (ADR 0007/0035).
 ///
 /// # Errors
@@ -1903,6 +2023,10 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ai = AiSettings::default();
     let mut sources = Vec::new();
     let mut project_warnings: Vec<String> = Vec::new();
+    let mut profile_warnings: Vec<String> = Vec::new();
+    let mut profile_title: Option<String> = None;
+    let mut profile_start: std::collections::BTreeMap<u32, std::path::PathBuf> =
+        std::collections::BTreeMap::new();
     for (dir, kind) in &layers.dirs {
         let norte = dir.join("norte.toml");
         if let Some(raw) = schema::read_optional(&norte)? {
@@ -1915,6 +2039,21 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 }
                 Err(e) => return Err(e),
             };
+            if *kind == Layer::Profile {
+                profile_warnings.extend(profile_carve_out_warnings(&parsed, &norte));
+                merge_profile_section(
+                    &mut profile_title,
+                    &mut profile_start,
+                    &parsed.profile,
+                    &norte,
+                    &mut profile_warnings,
+                );
+            } else if parsed.profile.title.is_some() || !parsed.profile.start.is_empty() {
+                profile_warnings.push(format!(
+                    "{}: [profile] solo significa algo dentro de profiles/<nombre>/",
+                    norte.display()
+                ));
+            }
             merge_ui_flags(
                 &mut ui_show_hidden,
                 &mut ui_mouse,
@@ -1928,8 +2067,9 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             // `orthodox` ata `shift+f8` a `pane.delete-permanent`. Un
             // repositorio hostil elegiría en silencio qué tecla borra, y
             // «elegir la disposición del teclado» no es presentación: es
-            // decidir qué pasa cuando el lector pulsa algo.
-            if *kind != Layer::Project
+            // decidir qué pasa cuando el lector pulsa algo. Un PERFIL sí lo
+            // elige: es un fichero del usuario, no de un repositorio ajeno.
+            if es_capa_del_usuario(*kind)
                 && let Some(p) = parsed.keymap.preset
             {
                 preset = Some(p);
@@ -1966,7 +2106,9 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             // repetido; una sola vez, con los cinco motivos juntos:
             //
             // - **hotlist** (spec 2026-07-18, decisión 3): un repo ajeno no
-            //   inyecta favoritos en la sesión del usuario.
+            //   inyecta favoritos en la sesión del usuario. Un PERFIL sí los
+            //   trae (spec 2026-08-26, D2), así que va por
+            //   `es_capa_del_usuario` y no por el `if` de abajo.
             // - **`[archive]`** (#95.2): son los límites anti-bomba, y SUBIRLOS
             //   desarma la protección justo donde viven los contenedores
             //   hostiles.
@@ -1982,10 +2124,22 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             // escribe ni redirige nada. Ésa es la línea, y `keymap.preset`
             // cae del otro lado (#260): elegir qué tecla borra no es
             // presentación. Se filtra donde se lee, más arriba.
-            if *kind != Layer::Project {
+            //
+            // Y las cuatro secciones de abajo van por
+            // `manda_fuera_de_presentacion`, que está escrito en POSITIVO: el
+            // `!= Layer::Project` que había aquí concedía todo esto a
+            // cualquier variante nueva de `Layer` sin que nadie lo decidiera.
+            // La **hotlist** se separa del resto en la 0079: un perfil SÍ trae
+            // sus favoritos —es un fichero del usuario y llevarlos es media
+            // razón de que exista un espacio de trabajo— mientras que las
+            // cuatro secciones de abajo siguen siendo suyas de nadie más que
+            // sistema y usuario.
+            if es_capa_del_usuario(*kind) {
                 for entry in parsed.hotlist {
                     merge_hotlist_entry(&mut hotlist, entry);
                 }
+            }
+            if manda_fuera_de_presentacion(*kind) {
                 merge_archive_layer(&mut archive, &parsed.archive);
                 merge_daemon_layer(&mut daemon_mode, &mut daemon_socket, parsed.daemon);
                 merge_log_layer(&mut log_dir, &mut log_retain, parsed.log);
@@ -2020,6 +2174,9 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ai,
         sources,
         project_warnings,
+        profile_warnings,
+        profile_title,
+        profile_start,
     })
 }
 
@@ -4281,6 +4438,196 @@ mod persist_keymap_tests {
                 "{s}"
             );
         }
+    }
+}
+
+/// Lo que una capa de PERFIL puede y no puede decidir (spec 2026-08-26, D2).
+#[cfg(test)]
+mod profile_layer_tests {
+    use super::*;
+
+    fn capas(usuario: &std::path::Path, perfil: &std::path::Path) -> Layers {
+        Layers {
+            dirs: vec![
+                (usuario.to_path_buf(), Layer::User),
+                (perfil.to_path_buf(), Layer::Profile),
+            ],
+        }
+    }
+
+    /// D2: el recorte de proyecto estaba escrito como `!= Layer::Project`, así
+    /// que una cuarta variante heredaba EN SILENCIO todo lo del usuario. Este
+    /// test es el que impide que eso vuelva: un perfil no redirige el
+    /// transporte, no enciende la IA, no elige dónde se escriben los logs y no
+    /// sube los límites anti-bomba.
+    #[test]
+    fn un_perfil_no_puede_tocar_daemon_ai_log_ni_archive() {
+        let usuario = tempfile::tempdir().expect("tempdir");
+        let perfil = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            perfil.path().join("norte.toml"),
+            r#"
+[daemon]
+socket = "/tmp/ajeno.sock"
+[ai]
+enabled = true
+[log]
+dir = "/tmp/logs-ajenos"
+[archive]
+max_entries = 999999999
+"#,
+        )
+        .expect("write");
+
+        let cfg = load(&capas(usuario.path(), perfil.path())).expect("carga");
+
+        assert_eq!(cfg.daemon_socket, None, "el transporte no se redirige");
+        assert!(!cfg.ai.enabled, "la IA no se enciende sola");
+        assert_eq!(cfg.log_dir, None, "los logs no se mudan");
+        assert_eq!(
+            cfg.archive_max_entries, None,
+            "los límites anti-bomba no suben"
+        );
+        assert_eq!(
+            cfg.profile_warnings.len(),
+            4,
+            "y las cuatro se DICEN: callarlas convierte el selector en un \
+             escalador de permisos"
+        );
+        for seccion in ["daemon", "ai", "log", "archive"] {
+            assert!(
+                cfg.profile_warnings.iter().any(|w| w.contains(seccion)),
+                "falta el aviso de [{seccion}]: {:?}",
+                cfg.profile_warnings
+            );
+        }
+    }
+
+    /// Y lo que SÍ puede: presentación entera, más el preset de keymap y los
+    /// favoritos, que la capa de proyecto no puede y ésta sí — un perfil es del
+    /// usuario, un repositorio ajeno no.
+    #[test]
+    fn un_perfil_pisa_presentacion_keymap_y_favoritos() {
+        let usuario = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            usuario.path().join("norte.toml"),
+            "[ui]\ntheme = \"nord\"\nlayout = \"orthodox\"\n[keymap]\npreset = \"orthodox\"\n",
+        )
+        .expect("write");
+        let perfil = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            perfil.path().join("norte.toml"),
+            r#"
+[ui]
+theme = "solarized"
+layout = "explorer"
+[keymap]
+preset = "far"
+[[hotlist]]
+name = "src"
+path = "/home/u/src"
+"#,
+        )
+        .expect("write");
+
+        let cfg = load(&capas(usuario.path(), perfil.path())).expect("carga");
+
+        assert_eq!(cfg.ui_theme.as_deref(), Some("solarized"));
+        assert_eq!(cfg.ui_layout.as_deref(), Some("explorer"));
+        assert_eq!(cfg.preset, "far");
+        assert_eq!(cfg.hotlist.len(), 1);
+        assert!(cfg.profile_warnings.is_empty());
+    }
+
+    /// D3: `[profile.start]` es lo que hace útil un perfil recién creado. Las
+    /// claves son ids de hueco TAL Y COMO los escribe la disposición del
+    /// perfil.
+    #[test]
+    fn profile_start_se_lee_con_sus_ids() {
+        let perfil = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            perfil.path().join("norte.toml"),
+            "[profile]\ntitle = \"Trabajo\"\n\n[profile.start]\n1 = \"/home/u/src\"\n2 = \"/tmp\"\n",
+        )
+        .expect("write");
+        let layers = Layers {
+            dirs: vec![(perfil.path().to_path_buf(), Layer::Profile)],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.profile_title.as_deref(), Some("Trabajo"));
+        assert_eq!(
+            cfg.profile_start.get(&1).map(std::path::PathBuf::as_path),
+            Some(std::path::Path::new("/home/u/src"))
+        );
+        assert_eq!(cfg.profile_start.len(), 2);
+    }
+
+    /// Una clave que no es un id de hueco no rompe el arranque: se tira y se
+    /// dice. El fichero es del usuario, pero un dedazo en un id no vale una
+    /// negativa a arrancar.
+    #[test]
+    fn una_clave_de_start_que_no_es_un_id_se_avisa_y_se_tira() {
+        let perfil = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            perfil.path().join("norte.toml"),
+            "[profile.start]\nizquierda = \"/tmp\"\n1 = \"/home/u\"\n",
+        )
+        .expect("write");
+        let layers = Layers {
+            dirs: vec![(perfil.path().to_path_buf(), Layer::Profile)],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.profile_start.len(), 1, "el bueno sobrevive");
+        assert!(
+            cfg.profile_warnings.iter().any(|w| w.contains("izquierda")),
+            "y el malo se dice por su nombre: {:?}",
+            cfg.profile_warnings
+        );
+    }
+
+    /// `[profile]` en una capa que NO es de perfil no significa nada, y decirlo
+    /// evita que alguien lo escriba en su norte.toml y espere que pase algo.
+    #[test]
+    fn profile_fuera_de_un_perfil_se_ignora_con_aviso() {
+        let usuario = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            usuario.path().join("norte.toml"),
+            "[profile]\ntitle = \"no soy un perfil\"\n",
+        )
+        .expect("write");
+        let layers = Layers {
+            dirs: vec![(usuario.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.profile_title, None);
+        assert_eq!(cfg.profile_warnings.len(), 1);
+    }
+
+    /// Y el proyecto sigue mandando sobre el perfil (D1): esto es lo que hace
+    /// que ADR 0026 y #260 no cambien de significado.
+    #[test]
+    fn proyecto_sigue_pisando_al_perfil_en_presentacion() {
+        let perfil = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            perfil.path().join("norte.toml"),
+            "[ui]\ntheme = \"solarized\"\n",
+        )
+        .expect("write");
+        let proyecto = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            proyecto.path().join("norte.toml"),
+            "[ui]\ntheme = \"nord\"\n",
+        )
+        .expect("write");
+
+        let layers = Layers {
+            dirs: vec![
+                (perfil.path().to_path_buf(), Layer::Profile),
+                (proyecto.path().to_path_buf(), Layer::Project),
+            ],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.ui_theme.as_deref(), Some("nord"));
     }
 }
 

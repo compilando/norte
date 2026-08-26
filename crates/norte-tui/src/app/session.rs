@@ -21,6 +21,10 @@ impl App {
         use norte_frontend::session::{SessionBody, SlotState};
 
         let mut body = SessionBody {
+            // La TUI todavía no elige perfil (eso es P3): escribe el cuerpo v2
+            // diciendo la verdad, que es «ninguno», y la clave sigue siendo
+            // `default`.
+            active: String::new(),
             layouts: std::iter::once(("default".to_owned(), self.layout.clone())).collect(),
             slots: self.session.orphans.clone(),
         };

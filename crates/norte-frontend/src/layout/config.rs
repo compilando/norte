@@ -30,11 +30,6 @@ const EXT: &str = "toml";
 /// TUI que tiene el terminal en modo raw, y `NUL` daría una lectura vacía. Un
 /// nombre reservado no vale más de un lado que del otro, así que se rechaza
 /// donde se escribe y donde se lee.
-const RESERVADOS: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-];
-
 /// ¿Este nombre puede ser un fichero de `layouts/` y nada más?
 ///
 /// `Path::components().count() == 1` NO basta y esa era la comprobación
@@ -42,25 +37,14 @@ const RESERVADOS: &[&str] = &[
 /// —un `Prefix`— y `Path::join` con un prefijo SUSTITUYE la base entera, así
 /// que el `format!` acababa leyendo `C:.toml` relativo al directorio actual de
 /// la unidad C. Aquí se mira el nombre, no su forma de ruta.
+/// Delega en [`norte_config::valid_profile_name`], que es la MISMA pregunta
+/// —«¿puede esto ser una entrada suelta de un directorio nuestro?»— y estaba
+/// contestada dos veces. La canónica vive en `norte-config` porque está
+/// debajo: los perfiles la necesitan para no dejar que un nombre apunte la
+/// capa de configuración a cualquier sitio del disco, y dos copias de una
+/// regla de seguridad divergen.
 fn nombre_usable(name: &OsStr) -> bool {
-    let texto = name.to_string_lossy();
-    if texto.is_empty() || texto == "." || texto == ".." {
-        return false;
-    }
-    // Separadores de LOS DOS sistemas, y los dos puntos: `C:` es un prefijo de
-    // unidad y `notas:secreto` es un flujo alternativo de NTFS.
-    if texto.contains(['/', '\\', ':', '\0']) {
-        return false;
-    }
-    // Windows se come el punto y el espacio finales, así que el fichero que se
-    // abre no es el que se nombró.
-    if texto.ends_with('.') || texto.ends_with(' ') {
-        return false;
-    }
-    // El reservado manda aunque lleve extensión detrás: `CON.toml` ES la
-    // consola para Win32.
-    let raiz = texto.split('.').next().unwrap_or(&texto);
-    !RESERVADOS.iter().any(|r| raiz.eq_ignore_ascii_case(r))
+    norte_config::valid_profile_name(name)
 }
 
 /// `<name>.toml`, sin pasar por `String`.

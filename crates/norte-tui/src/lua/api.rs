@@ -334,6 +334,7 @@ impl LuaHost {
         let layer_name = match layer {
             Layer::System => "init.lua (sistema)",
             Layer::User => "init.lua (usuario)",
+            Layer::Profile => "init.lua (perfil)",
             Layer::Project => "init.lua (proyecto)",
         };
         // Presupuesto de la carga (rust-review T8, `EVAL_BUDGET`): el hook

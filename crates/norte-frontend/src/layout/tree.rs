@@ -958,6 +958,110 @@ impl Node {
         }
     }
 
+    /// Una copia cuyos huecos se numeran desde `base`, más el mapa
+    /// viejo → nuevo.
+    ///
+    /// Es lo que hace que dos perfiles no se pisen (spec 2026-08-26, D5): las
+    /// disposiciones de fábrica usan 1..=8 TODAS, así que adoptar la misma en
+    /// dos perfiles sin reasignar deja los dos compartiendo el hueco 1 —
+    /// mismo directorio, mismo historial, mismas marcas.
+    ///
+    /// El mapa NO es una comodidad. `[profile.start]` viene indexado por los
+    /// ids que el fichero de disposición del perfil escribe, así que aplicarlo
+    /// después de rebasar exige la traducción; devolver solo el árbol dejaría
+    /// esas claves inservibles.
+    ///
+    /// El orden de asignación es el de [`Self::slot_ids`], que es el de
+    /// lectura: determinista, y por tanto el mismo árbol rebasado dos veces
+    /// desde la misma base da el mismo resultado.
+    ///
+    /// # De dónde sale `base`
+    ///
+    /// De [`crate::session::SessionBody::next_slot_base`], y de ningún otro
+    /// sitio. La propiedad de «no colisiona» vive ENTERA ahí: mirar solo el
+    /// árbol del perfil activo daría una base que aterriza encima de los
+    /// huecos huérfanos, que son justo los que nadie está mirando cuando pasa.
+    /// Y el árbol rebasado se mete en `layouts` ANTES de volver a pedir una
+    /// base, o dos perfiles rebasan desde el mismo número.
+    ///
+    /// Sin espacio libre por arriba devuelve el árbol SIN TOCAR y un mapa
+    /// vacío: el llamante se queda como estaba en vez de recibir un árbol con
+    /// ids repetidos.
+    ///
+    /// ```
+    /// use norte_frontend::layout::{Dir, KindId, Node, SlotId};
+    ///
+    /// let arbol = Node::split(
+    ///     Dir::Horizontal,
+    ///     vec![
+    ///         Node::slot(SlotId(1), KindId::browser()),
+    ///         Node::slot(SlotId(2), KindId::browser()),
+    ///     ],
+    /// );
+    /// let (nuevo, mapa) = arbol.rebase_slot_ids(100);
+    /// assert_eq!(nuevo.slot_ids(), vec![SlotId(100), SlotId(101)]);
+    /// assert_eq!(mapa[&SlotId(2)], SlotId(101));
+    /// ```
+    #[must_use]
+    pub fn rebase_slot_ids(&self, base: u32) -> (Self, std::collections::BTreeMap<SlotId, SlotId>) {
+        let mut mapa = std::collections::BTreeMap::new();
+        let mut siguiente = base;
+        for id in self.slot_ids() {
+            // Un árbol con ids repetidos es incoherente de entrada
+            // (`duplicate_slot_ids` lo dice y `validate` lo rechaza); si llega
+            // uno, los dos huecos siguen compartiendo id en vez de que uno se
+            // lleve un número que nadie le dio.
+            if mapa.contains_key(&id) {
+                continue;
+            }
+            // Sin espacio arriba se DEVUELVE EL ÁRBOL TAL CUAL, y esto no es
+            // celo: saturar era peor que envolver. `saturating_add` deja a
+            // todos los huecos siguientes con `u32::MAX`, así que un árbol de
+            // entrada sano salía con ids REPETIDOS; ese árbol se guarda en
+            // `layouts`, y el siguiente `from_value` lo valida y devuelve
+            // `BadLayout` para el cuerpo ENTERO — el estado de todos los
+            // perfiles, no el del roto. Ésa es la pérdida que ADR 0059 promete
+            // que no pasa.
+            let Some(tope) = siguiente.checked_add(1) else {
+                return (self.clone(), std::collections::BTreeMap::new());
+            };
+            mapa.insert(id, SlotId(siguiente));
+            siguiente = tope;
+        }
+        (self.remap_slot_ids(&mapa), mapa)
+    }
+
+    /// Aplica un mapa de ids a una copia del árbol. Lo que no esté en el mapa
+    /// se queda como está.
+    fn remap_slot_ids(&self, mapa: &std::collections::BTreeMap<SlotId, SlotId>) -> Self {
+        match self {
+            Self::Split {
+                dir,
+                children,
+                sizes,
+            } => Self::Split {
+                dir: *dir,
+                children: children.iter().map(|c| c.remap_slot_ids(mapa)).collect(),
+                sizes: sizes.clone(),
+            },
+            Self::Tabs { children, active } => Self::Tabs {
+                children: children.iter().map(|c| c.remap_slot_ids(mapa)).collect(),
+                active: *active,
+            },
+            Self::Slot {
+                id,
+                kind,
+                params,
+                bindings,
+            } => Self::Slot {
+                id: mapa.get(id).copied().unwrap_or(*id),
+                kind: kind.clone(),
+                params: params.clone(),
+                bindings: *bindings,
+            },
+        }
+    }
+
     /// Los ids repetidos, si los hay. Un layout con dos huecos del mismo id es
     /// incoherente y NO se adivina cuál gana.
     #[must_use]
@@ -976,6 +1080,61 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Las disposiciones de fábrica usan 1..=8, TODAS. Sin rebase, dos perfiles
+    /// comparten el hueco 1 y se pisan el directorio y el historial — que es
+    /// exactamente el bug que los perfiles existen para arreglar.
+    #[test]
+    fn rebase_reasigna_desde_la_base_y_devuelve_el_mapa() {
+        let arbol = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        let (nuevo, mapa) = arbol.rebase_slot_ids(100);
+        assert_eq!(nuevo.slot_ids(), vec![SlotId(100), SlotId(101)]);
+        assert_eq!(mapa.get(&SlotId(1)), Some(&SlotId(100)));
+        assert_eq!(mapa.get(&SlotId(2)), Some(&SlotId(101)));
+    }
+
+    /// Rebasar no puede cambiar la FORMA: mismo árbol, mismos kinds, mismos
+    /// tamaños. Solo los números.
+    #[test]
+    fn rebase_conserva_la_forma() {
+        let arbol = Node::split(
+            Dir::Vertical,
+            vec![
+                Node::slot(SlotId(3), KindId::new("places")),
+                Node::split(
+                    Dir::Horizontal,
+                    vec![
+                        Node::slot(SlotId(1), KindId::browser()),
+                        Node::slot(SlotId(2), KindId::new("viewer")),
+                    ],
+                ),
+            ],
+        );
+        let (nuevo, _) = arbol.rebase_slot_ids(50);
+        assert_eq!(nuevo.slot_ids().len(), arbol.slot_ids().len());
+        assert!(crate::layout::validate(&nuevo).is_ok());
+    }
+
+    /// Un árbol sano rebasado no puede FABRICAR un duplicado, sea cual sea el
+    /// orden de los ids originales.
+    #[test]
+    fn rebase_no_fabrica_duplicados() {
+        let arbol = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(7), KindId::browser()),
+                Node::slot(SlotId(1), KindId::browser()),
+            ],
+        );
+        let (nuevo, _) = arbol.rebase_slot_ids(10);
+        assert!(nuevo.duplicate_slot_ids().is_empty());
+    }
 
     /// El árbol hace round-trip: es el MISMO formato que el fichero de config,
     /// el blob de sesión de L2 y lo que escupirá el editor de layouts. Un

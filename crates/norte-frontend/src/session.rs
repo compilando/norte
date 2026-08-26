@@ -21,13 +21,30 @@ use crate::sort::SortSpec;
 
 /// Esquema del cuerpo. Lo posee este crate, no el wire: añadir un campo a
 /// [`SlotState`] es subir ESTE número, no la versión del protocolo.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Entradas de historial por hueco y por sentido.
 pub const HISTORY_CAP: usize = 64;
 
 /// Huecos huérfanos —los que ningún layout menciona— que se guardan.
 pub const ORPHAN_CAP: usize = 128;
+
+/// Cuántos PERFILES conservan estado a la vez (spec 2026-08-26, D6).
+///
+/// El número sale de una MEDIDA, no del gusto:
+/// `un_cuerpo_realista_con_el_tope_lleno_cabe_en_el_sobre` serializa cuatro
+/// perfiles de ocho huecos con el historial lleno en los dos sentidos y rutas
+/// de este repositorio, y da **295 567 bytes** contra los 1 048 576 de
+/// [`norte_proto::methods::SESSION_BODY_MAX`] — 28 % del sobre, con sitio para
+/// que las rutas de otro sean bastante más largas que las de aquí. Si ese test
+/// se pone rojo, la cura es BAJAR este número: el core rehúsa un `put` que se
+/// pase y deja la sesión como estaba, así que pasarse es perder lo que estabas
+/// haciendo.
+///
+/// Pasado el tope se va el estado del perfil que hace más que nadie activa,
+/// ENTERO. Su directorio de configuración no se toca: el perfil sigue
+/// existiendo y su próximo arranque sale de `[profile.start]`.
+pub const PROFILE_STATE_CAP: usize = 4;
 
 /// Edad a la que un huérfano se barre: treinta días en milisegundos.
 pub const MAX_AGE_MS: u64 = 30 * 24 * 60 * 60 * 1000;
@@ -105,7 +122,20 @@ pub struct SlotState {
 /// La pantalla guardada: las disposiciones por nombre y el estado por hueco.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionBody {
-    /// Disposiciones por nombre. `default` es la que se aplica al arrancar.
+    /// El perfil activo. Vacío = ninguno.
+    ///
+    /// Es ESTADO, no configuración: lo que estabas haciendo, no lo que
+    /// decidiste. Por eso vive aquí y no en el `norte.toml` del lector, que
+    /// sigue siendo un fichero que escribió él.
+    ///
+    /// Es `String` y no `OsString` porque es la CLAVE de [`Self::layouts`],
+    /// que es un objeto JSON y por tanto UTF-8 por construcción. Un perfil
+    /// cuyo directorio no sea UTF-8 vale para configuración y no puede llevar
+    /// estado, tampoco pegajoso (spec 2026-08-26, D4).
+    #[serde(default)]
+    pub active: String,
+    /// Disposiciones por nombre DE PERFIL. Vacío o `default` es la del lector
+    /// sin perfil; con [`Self::active`] puesto, la clave es ese nombre.
     #[serde(default)]
     pub layouts: BTreeMap<String, Node>,
     /// Estado por hueco, indexado por [`SlotId`].
@@ -125,11 +155,17 @@ impl SessionBody {
     ///
     /// Un hueco VISIBLE no lo barre ni la edad ni el tope: lo que se ve en
     /// pantalla no se recicla.
+    ///
+    /// Entre el recorte del historial y el barrido de huérfanos va el tope de
+    /// PERFILES con estado ([`PROFILE_STATE_CAP`], spec 2026-08-26, D6): ahí y
+    /// no después, para que el barrido vea ya el mapa más pequeño. El perfil
+    /// [`Self::active`] no lo barre nada, en ningún paso.
     pub fn prune(&mut self, now_ms: u64) {
         for slot in self.slots.values_mut() {
             recorta_historial(&mut slot.back);
             recorta_historial(&mut slot.forward);
         }
+        self.prune_profiles();
         let visibles: BTreeSet<u32> = self
             .layouts
             .values()
@@ -154,6 +190,100 @@ impl SessionBody {
         let sobran = huerfanos.len() - ORPHAN_CAP;
         for (_, id) in huerfanos.into_iter().take(sobran) {
             self.slots.remove(&id);
+        }
+    }
+
+    /// Deja como mucho [`PROFILE_STATE_CAP`] perfiles con estado, tirando
+    /// enteros los que hace más que nadie activa.
+    ///
+    /// «Hace más que nadie lo activa» se DERIVA y no se guarda: es el perfil
+    /// cuyo hueco tocado más recientemente lo fue antes que el de los demás.
+    /// Sin campo nuevo y sin reloj — la misma disciplina que el orden de
+    /// huérfanos de `SlotStore`, donde un reloj haría los tests dependientes
+    /// del tiempo.
+    fn prune_profiles(&mut self) {
+        if self.layouts.len() <= PROFILE_STATE_CAP {
+            return;
+        }
+        let ultimo_toque = |arbol: &Node| -> u64 {
+            arbol
+                .slot_ids()
+                .into_iter()
+                .filter_map(|SlotId(id)| self.slots.get(&id))
+                .map(|s| s.touched_ms)
+                .max()
+                .unwrap_or(0)
+        };
+        let mut orden: Vec<(u64, String)> = self
+            .layouts
+            .iter()
+            .filter(|(nombre, _)| **nombre != self.active)
+            .map(|(nombre, arbol)| (ultimo_toque(arbol), nombre.clone()))
+            .collect();
+        // Del más viejo al más reciente; a igualdad de toque, por nombre, para
+        // que la poda sea determinista y no dependa del orden del mapa.
+        orden.sort_unstable();
+        let sobran = self.layouts.len() - PROFILE_STATE_CAP;
+        let mut candidatos: BTreeSet<u32> = BTreeSet::new();
+        for (_, nombre) in orden.into_iter().take(sobran) {
+            if let Some(arbol) = self.layouts.remove(&nombre) {
+                candidatos.extend(arbol.slot_ids().into_iter().map(|SlotId(id)| id));
+            }
+        }
+        // Los huecos del perfil que se va se borran contra LO QUE QUEDA, no a
+        // ciegas por su árbol.
+        //
+        // Que dos perfiles no compartan hueco es un invariante del REPARTO
+        // (`next_slot_base` + `rebase_slot_ids`), y nada lo impone sobre un
+        // cuerpo que llega de disco: `from_value` valida cada árbol por
+        // separado —duplicados DENTRO de uno— y no dice nada de un id
+        // compartido entre DOS, y el cuerpo es opaco para el core, así que
+        // cualquier cliente puede escribir uno así. Borrando a ciegas, un
+        // cuerpo de ésos se llevaba por delante los huecos del perfil ACTIVO:
+        // el lector perdía el directorio, el cursor y los dos rastros de los
+        // paneles que estaba mirando, que es justo lo que el rustdoc de
+        // `prune` promete que no pasa.
+        //
+        // Y solo se miran los ids del perfil saliente: los huérfanos de otros
+        // NO se tocan aquí, que para eso está el barrido por edad de abajo.
+        let vivos: BTreeSet<u32> = self
+            .layouts
+            .values()
+            .flat_map(Node::slot_ids)
+            .map(|SlotId(id)| id)
+            .collect();
+        for id in candidatos {
+            if !vivos.contains(&id) {
+                self.slots.remove(&id);
+            }
+        }
+    }
+
+    /// El primer id de hueco que no usa NADIE: ni una disposición de ningún
+    /// perfil, ni un estado guardado, huérfanos incluidos.
+    ///
+    /// Es la base que [`Node::rebase_slot_ids`] necesita para que dos perfiles
+    /// no compartan hueco (spec 2026-08-26, D5). Mira TODO y no solo el perfil
+    /// activo a propósito: repartir contra lo que se ve en pantalla acabaría
+    /// reasignando encima del estado guardado de otro perfil, que es
+    /// justamente el estado que nadie está mirando cuando pasa.
+    ///
+    /// Una sesión vacía empieza en 1. `None` = no queda espacio: el id más
+    /// alto en uso es `u32::MAX`, y no hay «el siguiente». Devolverlo saturado
+    /// era decir que `u32::MAX` está libre teniéndolo ocupado, con el
+    /// resultado de que [`Node::rebase_slot_ids`] repartía ese mismo número a
+    /// todos los huecos del árbol.
+    #[must_use]
+    pub fn next_slot_base(&self) -> Option<u32> {
+        let de_arboles = self
+            .layouts
+            .values()
+            .flat_map(Node::slot_ids)
+            .map(|SlotId(id)| id);
+        let de_estados = self.slots.keys().copied();
+        match de_arboles.chain(de_estados).max() {
+            None => Some(1),
+            Some(m) => m.checked_add(1),
         }
     }
 
@@ -443,6 +573,213 @@ mod tests {
         }
     }
 
+    /// Un cuerpo con un perfil por nombre, cada uno con dos huecos propios y
+    /// su `touched_ms`, que es lo que ordena «hace más que nadie lo activa».
+    fn cuerpo_con_perfiles(perfiles: &[(&str, u64)]) -> SessionBody {
+        let fabrica = crate::layout::Node::split(
+            crate::layout::Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        let mut b = SessionBody::default();
+        for (nombre, tocado) in perfiles {
+            let (arbol, _) = fabrica.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
+            for SlotId(id) in arbol.slot_ids() {
+                let mut s = slot("file:///casa");
+                s.touched_ms = *tocado;
+                b.slots.insert(id, s);
+            }
+            b.layouts.insert((*nombre).to_owned(), arbol);
+        }
+        b
+    }
+
+    /// Pasado el tope, el estado del perfil que hace más que nadie activa se va
+    /// ENTERO. Su directorio de configuración no se toca: el perfil sigue
+    /// existiendo y arranca de su `[profile.start]`.
+    #[test]
+    fn pasado_el_tope_se_va_el_perfil_mas_viejo() {
+        let mut b = cuerpo_con_perfiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40), ("e", 50)]);
+        b.active = "e".to_owned();
+        b.prune(100);
+        assert!(!b.layouts.contains_key("a"), "el más viejo se va");
+        assert_eq!(b.layouts.len(), PROFILE_STATE_CAP);
+    }
+
+    /// El ACTIVO no lo barre nada, en ningún paso, ni siendo el más viejo.
+    #[test]
+    fn el_activo_no_se_barre_aunque_sea_el_mas_viejo() {
+        let mut b = cuerpo_con_perfiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40), ("e", 50)]);
+        b.active = "a".to_owned();
+        b.prune(100);
+        assert!(b.layouts.contains_key("a"), "el activo se queda");
+        assert_eq!(b.layouts.len(), PROFILE_STATE_CAP);
+    }
+
+    /// Y tirar un perfil se lleva SUS huecos, no los de otro.
+    #[test]
+    fn tirar_un_perfil_se_lleva_solo_sus_huecos() {
+        let mut b = cuerpo_con_perfiles(&[("a", 10), ("b", 20), ("c", 30), ("d", 40), ("e", 50)]);
+        b.active = "e".to_owned();
+        let de_a: Vec<u32> = b.layouts["a"].slot_ids().iter().map(|s| s.0).collect();
+        let de_b: Vec<u32> = b.layouts["b"].slot_ids().iter().map(|s| s.0).collect();
+        b.prune(100);
+        for id in de_a {
+            assert!(
+                !b.slots.contains_key(&id),
+                "el hueco {id} de «a» se fue con él"
+            );
+        }
+        for id in de_b {
+            assert!(b.slots.contains_key(&id), "el hueco {id} de «b» sigue ahí");
+        }
+    }
+
+    /// Un cuerpo que llega de DISCO puede compartir ids entre dos perfiles: la
+    /// disjunción es un invariante del reparto, y `from_value` solo valida cada
+    /// árbol por separado. Tirar un perfil no puede llevarse por delante los
+    /// huecos del ACTIVO, que es lo que el rustdoc de `prune` promete.
+    #[test]
+    fn tirar_un_perfil_no_toca_huecos_que_otro_sigue_mencionando() {
+        let compartido = crate::layout::Node::split(
+            crate::layout::Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        let mut b = SessionBody::default();
+        // Cinco perfiles con LOS MISMOS ids: nada en el esquema lo prohíbe.
+        for (i, nombre) in ["a", "b", "c", "d", "e"].iter().enumerate() {
+            b.layouts.insert((*nombre).to_owned(), compartido.clone());
+            for SlotId(id) in compartido.slot_ids() {
+                let mut s = slot("file:///casa");
+                s.touched_ms = (i as u64 + 1) * 10;
+                b.slots.insert(id, s);
+            }
+        }
+        b.active = "e".to_owned();
+        b.prune(100);
+
+        assert_eq!(b.layouts.len(), PROFILE_STATE_CAP, "sobra uno y se va");
+        for SlotId(id) in b.layouts[&b.active].slot_ids() {
+            assert!(
+                b.slots.contains_key(&id),
+                "el hueco {id} lo sigue enseñando el perfil activo"
+            );
+        }
+    }
+
+    /// Sin espacio arriba, `next_slot_base` lo DICE en vez de contestar un id
+    /// que está en uso, y `rebase_slot_ids` devuelve el árbol intacto en vez de
+    /// repartir el mismo número a todos sus huecos — lo que fabricaría
+    /// duplicados a partir de un árbol sano y haría que el siguiente
+    /// `from_value` rehusara el cuerpo ENTERO.
+    #[test]
+    fn sin_espacio_arriba_no_se_reparte_nada() {
+        let mut b = SessionBody::default();
+        b.slots.insert(u32::MAX, slot("file:///casa"));
+        assert_eq!(b.next_slot_base(), None, "no hay «el siguiente»");
+
+        let arbol = crate::layout::Node::split(
+            crate::layout::Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        let (nuevo, mapa) = arbol.rebase_slot_ids(u32::MAX);
+        assert_eq!(nuevo, arbol, "el árbol vuelve tal cual");
+        assert!(mapa.is_empty());
+        assert!(
+            nuevo.duplicate_slot_ids().is_empty(),
+            "y sobre todo: sin duplicados fabricados"
+        );
+    }
+
+    /// Un cuerpo realista con el tope lleno cabe en `SESSION_BODY_MAX`. Si este
+    /// test se pone rojo, la cura es BAJAR [`PROFILE_STATE_CAP`], no subir el
+    /// tope del protocolo: el core rehúsa un `put` que se pase y deja la sesión
+    /// como estaba, así que pasarse es perder lo que estabas haciendo.
+    #[test]
+    fn un_cuerpo_realista_con_el_tope_lleno_cabe_en_el_sobre() {
+        // Ocho huecos por perfil, historial lleno en los dos sentidos, y rutas
+        // de este mismo repositorio: una ruta rellenada a mano mediría el
+        // relleno y no el caso.
+        let raiz = "file:///home/u/src/norte/crates/norte-frontend/src";
+        let mut b = SessionBody::default();
+        for p in 0..PROFILE_STATE_CAP {
+            let hijos: Vec<Node> = (1..=8u32)
+                .map(|i| Node::slot(SlotId(i), KindId::browser()))
+                .collect();
+            let arbol = crate::layout::Node::split(crate::layout::Dir::Horizontal, hijos);
+            let (arbol, _) = arbol.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
+            for SlotId(id) in arbol.slot_ids() {
+                let mut s = slot(&format!("{raiz}/modulo{id}"));
+                s.back = (0..HISTORY_CAP)
+                    .map(|i| vp(&format!("{raiz}/modulo{id}/atras{i}")))
+                    .collect();
+                s.forward = (0..HISTORY_CAP)
+                    .map(|i| vp(&format!("{raiz}/modulo{id}/alante{i}")))
+                    .collect();
+                b.slots.insert(id, s);
+            }
+            b.layouts.insert(format!("perfil{p}"), arbol);
+        }
+        b.active = "perfil0".to_owned();
+        b.prune(0);
+
+        let bytes = serde_json::to_vec(&b.to_value()).expect("serializa");
+        assert!(
+            bytes.len() <= norte_proto::methods::SESSION_BODY_MAX,
+            "{} bytes contra un tope de {}",
+            bytes.len(),
+            norte_proto::methods::SESSION_BODY_MAX
+        );
+    }
+
+    /// La base sale de TODO lo que hay: las disposiciones de cada perfil y los
+    /// huecos guardados, huérfanos incluidos. Mirar solo el perfil activo
+    /// reasignaría encima del estado de otro.
+    #[test]
+    fn la_base_deja_atras_todo_lo_que_ya_existe() {
+        let mut b = SessionBody::default();
+        b.layouts
+            .insert("work".into(), Node::slot(SlotId(4), KindId::browser()));
+        b.slots.insert(9, slot("file:///tmp"));
+        assert_eq!(b.next_slot_base(), Some(10));
+    }
+
+    #[test]
+    fn una_sesion_vacia_empieza_en_uno() {
+        assert_eq!(SessionBody::default().next_slot_base(), Some(1));
+    }
+
+    /// Dos perfiles adoptados sobre la MISMA disposición de fábrica acaban con
+    /// conjuntos de huecos disjuntos. Éste es el test que fija el diseño.
+    #[test]
+    fn dos_perfiles_sobre_la_misma_disposicion_no_comparten_hueco() {
+        let fabrica = crate::layout::Node::split(
+            crate::layout::Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        let mut b = SessionBody::default();
+
+        let (t1, _) = fabrica.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
+        b.layouts.insert("work".into(), t1);
+        let (t2, _) = fabrica.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
+        b.layouts.insert("photos".into(), t2);
+
+        let a: BTreeSet<SlotId> = b.layouts["work"].slot_ids().into_iter().collect();
+        let c: BTreeSet<SlotId> = b.layouts["photos"].slot_ids().into_iter().collect();
+        assert!(a.is_disjoint(&c), "work {a:?} y photos {c:?} se pisan");
+    }
+
     /// Una disposición sin listado PARSEA, y al aplicarse dejaba la TUI sin
     /// panel al que apuntar: panic en modo raw, en cada arranque, hasta
     /// borrar el fichero de sesión a mano (#242). Se rechaza al leer.
@@ -456,6 +793,7 @@ mod tests {
             ],
         );
         let body = SessionBody {
+            active: String::new(),
             layouts: std::iter::once(("default".to_owned(), sin_listado)).collect(),
             slots: std::collections::BTreeMap::new(),
         };
@@ -601,6 +939,40 @@ mod tests {
             );
             assert_eq!(vuelta.slots[&1].path, ruta, "{}", name.id);
         }
+    }
+
+    /// Un cuerpo v1 no trae `active`, y eso significa exactamente «sin
+    /// perfil». Leerlo tiene que seguir funcionando: quitarle la sesión a
+    /// quien actualiza el binario es justo lo que ADR 0059 promete que no
+    /// pasa.
+    #[test]
+    fn un_cuerpo_v1_se_lee_como_sin_perfil() {
+        let v1 = serde_json::json!({ "version": 1, "layouts": {}, "slots": {} });
+        let b = SessionBody::from_value(1, &v1).expect("un v1 se sigue leyendo");
+        assert_eq!(b.active, "", "sin perfil, que es la verdad");
+    }
+
+    #[test]
+    fn el_perfil_activo_sobrevive_al_viaje() {
+        let mut b = SessionBody {
+            active: "work".to_owned(),
+            ..SessionBody::default()
+        };
+        b.layouts
+            .insert("work".into(), Node::slot(SlotId(1), KindId::browser()));
+        let vuelta = SessionBody::from_value(SCHEMA_VERSION, &b.to_value()).expect("ida y vuelta");
+        assert_eq!(vuelta.active, "work");
+    }
+
+    /// Y un cuerpo del FUTURO se sigue rehusando entero: subir a 2 no puede
+    /// abrir la puerta a un 3.
+    #[test]
+    fn un_cuerpo_v3_se_sigue_rehusando() {
+        let v3 = serde_json::json!({ "layouts": {}, "slots": {}, "active": "x" });
+        assert!(matches!(
+            SessionBody::from_value(SCHEMA_VERSION + 1, &v3),
+            Err(SessionError::FromTheFuture { .. })
+        ));
     }
 
     /// Un kind que este binario no declara vuelve intacto, `params` incluidos:
