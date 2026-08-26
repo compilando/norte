@@ -255,6 +255,18 @@ independently through `PROTOCOL_VERSION`.
   thread draining the pipe, because one nobody reads fills up and blocks the
   daemon on its next write.
 
+- **An RPM comes out of `just gui-package` too** (phase 7.1). The Fedora-family
+  baseline the plan asks for, alongside the `.deb` and the AppImage, and
+  exercised rather than configured: the built package carries the WebKitGTK and
+  GTK runtime requirements (`webkit2gtk4.1`, `gtk3`, plus the soname-level ones
+  the bundler derives) and the same desktop entry as the deb — the one with
+  `FileManager` and `inode/directory`, without which a file manager is not
+  offered under "open folder with…". The explicit `deb` dependency list that
+  went in with it came straight back out: the bundler already emits exactly
+  those two, so declaring them again produced a `Depends:` field with each name
+  twice. Checked by reading the metadata of the artefacts, not by trusting the
+  config.
+
 - **Packing says which names mean something else elsewhere** (#250, protocol
   **0.58.0**, ADR 0078). `archive.pack_report` is the fourth of the report
   family and the first whose subject is a Task that *succeeded*: the archive is
