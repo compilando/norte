@@ -265,6 +265,25 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **`far` gets a rename key and `norton` a search key, and every other gap in
+  those two presets is now a written decision** (#228). Six core commands were
+  unbound across the seven bundled presets, and the two that were plain
+  transcription misses are fixed: Far's own Shift+F6 ("Rename or move the file
+  under the cursor") is `pane.rename` — the same chord `total-commander.toml`
+  already gives that command — and it had been omitted by being lumped in with
+  Shift+F5, which really is a duplicate of `pane.copy`; and `norton` gets
+  Alt+F7 for `pane.search` under the same corroboration rule that file already
+  states for F5–F8 and Ctrl+U, since the chord recurs unchanged in both presets
+  that *were* transcribed from a source. The rest stay unbound **on purpose**,
+  because inventing a chord for a preset whose whole point is fidelity is worse
+  than the reference sheet printing `—`: Far and NC have no folder
+  synchroniser, NC's rename is F6 ("RenMov") and that key is bound to
+  `pane.move` whose dialog carries an editable destination name, and mirror and
+  pull are norte's own panel gestures that no source attributes to either
+  program. A new test holds the line: a core command in a preset is either
+  bound or listed in a table with the reason it is not, so the next preset — or
+  the next dropped binding — cannot make the gap an oversight again.
+
 - **The TUI's "edit a new one" no longer creates the file behind norte's back**
   (`pane.edit-new`, ADR 0077). It launched `$EDITOR` with an empty buffer and
   let the editor create the file at save time: a file on disk attributed to

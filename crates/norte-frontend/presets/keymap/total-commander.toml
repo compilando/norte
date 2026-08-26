@@ -11,6 +11,14 @@
 # own "Letter -> Redirected to command line" line), so binding one here would
 # steal a keystroke TC gives to something else.
 #
+# `pane.mirror` is deliberately UNBOUND here (#228). The attested family in
+# that neighbourhood sends the OTHER panel to the directory of the entry under
+# the cursor — the direction already bound at Ctrl+I as `pane.pull` — and
+# nothing in the source sends the other panel to THIS panel's path, which is
+# what mirror means. Krusader's Alt+Shift+O ("Sync panels", the Equals Button)
+# is that command and is bound in its own preset; borrowing it into this one
+# would put a Krusader chord in a Total Commander transcription.
+#
 # Omitted families (norte has no concept): the menu bar (F9, F10 non-Alt+F4,
 # Shift+F10); button bars and breadcrumb bars (Alt+F11/F12, Alt+Shift+F11/12);
 # window minimize (Shift+Esc); clipboard file/text ops (Ctrl+C/X/V, and the
