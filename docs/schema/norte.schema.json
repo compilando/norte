@@ -273,6 +273,29 @@
       },
       "type": "object"
     },
+    "ProfileSection": {
+      "additionalProperties": false,
+      "description": "`[profile]` — only meaningful in `profiles/<name>/norte.toml` (spec\n2026-08-26, D3). In any other layer it is ignored with a warning, so nobody\nwrites it into their own `norte.toml` and waits for something to happen.",
+      "properties": {
+        "start": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Where each slot opens when this profile has no saved state yet.\n\nKeys are slot ids of the profile's own layout, as text — TOML has no\nnumeric keys. A key that is not a slot id is dropped with a warning\nrather than refusing to start: the file is the reader's, but a typo in\nan id does not earn a refusal to run.\n\nValues are NOT expanded here (`~`, relative paths): that needs a\nworking directory, and resolving it in the loader would bake this\nprocess's `$HOME` into a value the daemon might read.",
+          "type": "object"
+        },
+        "title": {
+          "default": null,
+          "description": "Name to display. The profile's IDENTITY is its directory, not this:\ntwo profiles may share a title and still be two profiles.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "SchemeColumnsSection": {
       "additionalProperties": false,
       "description": "One scheme's override inside `[ui.columns.scheme.<scheme>]`.",
@@ -579,6 +602,10 @@
     "log": {
       "$ref": "#/$defs/LogSection",
       "description": "Local diagnostic log (`[log]`, roadmap item 9)."
+    },
+    "profile": {
+      "$ref": "#/$defs/ProfileSection",
+      "description": "Profile settings (`[profile]`, spec 2026-08-26). Meaningful ONLY in\n`profiles/<name>/norte.toml`; any other layer ignores it with a\nwarning."
     },
     "ui": {
       "$ref": "#/$defs/UiSection",
