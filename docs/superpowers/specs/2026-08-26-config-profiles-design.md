@@ -348,12 +348,13 @@ Each is a PR under ~400 net lines with one purpose.
 **P1 — the layer.** `Layer::Profile`, its directory resolution (including the
 `NORTE_CONFIG_DIR` seam), precedence, the positive whitelist of D2 with its
 warnings, the `[profile]` section of D3, and the three-way failure rule of D7.
-Mostly `norte-config`; no UI and no wire, but **not free of the bridge**: the
-new `Layer` variant breaks three exhaustive matches
-(`norte-tui/src/lua/host.rs:33`, `norte-tui/src/lua/api.rs:335`,
-`norte-gui-tauri/src/startup.rs:345`), and the third maps into
-`norte_ui_host::settings::ConfigLayer`, which is bridge surface. The bridge
-bump lands here, in the phase that causes it, rather than in P4.
+Mostly `norte-config`, but not confined to it: the new `Layer` variant breaks
+three exhaustive matches (`norte-tui/src/lua/host.rs:33`,
+`norte-tui/src/lua/api.rs:335`, `norte-gui-tauri/src/startup.rs:345`), and the
+third maps into `norte_ui_host::settings::ConfigLayer`. That type is **not**
+wire surface — it resolves to a localized string inside `PathRowView.label`
+and neither `dto.rs` nor the renderer's `types.ts` names it — so the bridge
+does not move here. It moves once, in P4, for the picker.
 
 **P2 — the state.** `SessionBody.active`, arrangements keyed by profile, slot
 ids allocated per profile, the pruning order of D6, `SCHEMA_VERSION` 1 → 2 and
@@ -365,7 +366,7 @@ switch of D8 with its "what could not be applied" line, measured.
 
 **P4 — the window.** DTO, renderer, the golden corpus entry the new picker
 needs (#257 is the precedent for a corpus checked against a hand-written list
-and missing variants), and a second bridge bump for the picker itself.
+and missing variants), and the bridge bump the picker needs.
 
 **P5 — creating one, and checking it.** "Save the current workspace as a
 profile", `norte doctor` validation, help topics, Fluent keys in both locales.

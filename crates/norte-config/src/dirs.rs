@@ -17,6 +17,11 @@ pub enum Layer {
     System,
     /// `$XDG_CONFIG_HOME/norte` (`~/.config/norte`; `%APPDATA%\norte`).
     User,
+    /// `<config>/profiles/<name>` — the layer the reader picks by name
+    /// (spec 2026-08-26, D1). Above `User` because picking a profile is meant
+    /// to override what the user's own `norte.toml` says; below `Project` so
+    /// ADR 0026 and #260 are untouched.
+    Profile,
     /// `./.norte` — SOLO tras trust (ADR 0026).
     Project,
 }
@@ -249,6 +254,16 @@ mod tests {
                 .find(|(n, _)| *n == k)
                 .map(|(_, x)| OsString::from(x))
         }
+    }
+
+    /// El orden del enum ES la precedencia (ADR 0007): sistema → usuario →
+    /// perfil → proyecto. Un `Profile` colocado en otro sitio compila igual y
+    /// deja la capa mandando donde no debe, así que se fija aquí.
+    #[test]
+    fn el_perfil_va_entre_usuario_y_proyecto() {
+        assert!(Layer::System < Layer::User);
+        assert!(Layer::User < Layer::Profile);
+        assert!(Layer::Profile < Layer::Project);
     }
 
     /// Precedencia del directorio de ESTADO, con el entorno inyectado — así la

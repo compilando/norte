@@ -34,6 +34,9 @@ pub enum ConfigLayer {
     System,
     /// `$XDG_CONFIG_HOME/norte`.
     User,
+    /// `<config>/profiles/<nombre>`, la capa que el lector ELIGE por nombre
+    /// (spec 2026-08-26, D1).
+    Profile,
     /// `./.norte`, solo tras trust (ADR 0026).
     Project,
 }
@@ -44,6 +47,7 @@ impl ConfigLayer {
         match self {
             Self::System => "settings-path-config-system",
             Self::User => "settings-path-config-user",
+            Self::Profile => "settings-path-config-profile",
             Self::Project => "settings-path-config-project",
         }
     }

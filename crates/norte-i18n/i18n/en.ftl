@@ -571,6 +571,7 @@ settings-plugins-key-count = {$count} settings
 settings-section-paths = Where things live
 settings-path-config-system = System config
 settings-path-config-user = Your config
+settings-path-config-profile = Active profile
 settings-path-config-project = Project config
 settings-path-state = State (session, history)
 settings-path-logs = Logs

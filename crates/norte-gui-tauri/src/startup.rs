@@ -344,6 +344,7 @@ fn rutas(capas: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
                 let capa = match kind {
                     norte_config::Layer::System => ConfigLayer::System,
                     norte_config::Layer::User => ConfigLayer::User,
+                    norte_config::Layer::Profile => ConfigLayer::Profile,
                     norte_config::Layer::Project => ConfigLayer::Project,
                 };
                 (capa, sitio(dir.clone()))

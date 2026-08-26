@@ -32,6 +32,7 @@ fn lua_layer_label(layer: Layer) -> &'static str {
     match layer {
         Layer::System => "system",
         Layer::User => "user",
+        Layer::Profile => "profile",
         Layer::Project => "project",
     }
 }

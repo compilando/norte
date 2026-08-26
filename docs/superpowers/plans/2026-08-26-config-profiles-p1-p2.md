@@ -15,7 +15,7 @@
 - **Branch:** `feat/config-profiles`. It already carries the spec commit `9e206b34`. Do not branch again.
 - **Protocol:** unchanged at **0.58.0**. No task in this plan may touch `crates/norte-proto`. If one appears to need to, stop and say so — it means a decision was wrong, not that the version should move.
 - **Session body schema:** `norte_frontend::session::SCHEMA_VERSION` goes **1 → 2** exactly once, in Task 6. It is `pub const SCHEMA_VERSION: u32` at `crates/norte-frontend/src/session.rs:24`.
-- **Bridge:** `BRIDGE_VERSION` goes **40 → 41** exactly once, in Task 1. It is declared in TWO places that must match: `crates/norte-ui-host/src/lib.rs` (re-export; the constant itself lives in that crate) and `crates/norte-gui-tauri/ui/src/types.ts:12`. `just ci-fast` does **not** run `gui-ci`, so a desync ships green — Task 1 has an explicit step for the TypeScript side.
+- **Bridge:** `BRIDGE_VERSION` stays at **40**. This corrects the plan as first written, which budgeted a bump in Task 1. `norte_ui_host::settings::ConfigLayer` is *not* wire surface: it resolves to a localized label inside `PathRowView.label` (`crates/norte-ui-host/src/settings.rs:207`), and neither `dto.rs` nor `crates/norte-gui-tauri/ui/src/types.ts` names the type. Adding a variant adds a row's text, not a schema. Do not bump it, and do not touch `types.ts`.
 - **Session body cap:** `norte_proto::methods::SESSION_BODY_MAX` is `1024 * 1024`. It is a limit this plan must respect, never change.
 - **Rule 1 (bytes):** a profile name is a directory name. It is `OsStr`/`OsString` everywhere except the one place the spec's D4 permits: the UTF-8 key of `SessionBody.layouts`. A `to_str().unwrap()` anywhere in this plan's diff is grounds for rejecting it.
 - **Rule 6 (typed errors):** `norte-config` and `norte-frontend` are libraries. `thiserror`, never `anyhow`; no `unwrap()`/`expect()` outside tests without a comment stating the invariant.
@@ -39,11 +39,10 @@
 - `crates/norte-tui/src/lua/host.rs:33`, `crates/norte-tui/src/lua/api.rs:335` — exhaustive matches on `Layer`.
 - `crates/norte-gui-tauri/src/startup.rs:345` — exhaustive match mapping `Layer` into `ConfigLayer`.
 - `crates/norte-ui-host/src/settings.rs:32` — `ConfigLayer::Profile` and its Fluent label.
-- `crates/norte-gui-tauri/ui/src/types.ts` — `BRIDGE_VERSION` and the `ConfigLayer` union.
 - `crates/norte-frontend/src/session.rs` — `SessionBody::active`, `SCHEMA_VERSION` 2, `next_slot_base`, the profile-state cap in `prune`.
 - `crates/norte-frontend/src/layout/tree.rs` — `Node::rebase_slot_ids`.
 - `crates/norte-frontend/src/keymap/rebind.rs:435` — the widened cut of D10.
-- `i18n/en/*.ftl`, `i18n/es/*.ftl` — the `ConfigLayer::Profile` label.
+- `crates/norte-i18n/i18n/en.ftl`, `crates/norte-i18n/i18n/es.ftl` — the `ConfigLayer::Profile` label.
 
 ---
 
@@ -57,8 +56,7 @@ Implements D1's type. This task adds a variant and repairs every place that stop
 - Modify: `crates/norte-tui/src/lua/api.rs:335`
 - Modify: `crates/norte-gui-tauri/src/startup.rs:345`
 - Modify: `crates/norte-ui-host/src/settings.rs:32-39`
-- Modify: `crates/norte-gui-tauri/ui/src/types.ts:12`
-- Modify: `i18n/en/*.ftl`, `i18n/es/*.ftl`
+- Modify: `crates/norte-i18n/i18n/en.ftl`, `crates/norte-i18n/i18n/es.ftl`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -119,16 +117,14 @@ In `crates/norte-config/src/dirs.rs`, between `User` and `Project`:
 
 And in `crates/norte-ui-host/src/settings.rs`, add the variant to `ConfigLayer` between `User` and `Project`, plus its arm in `label_id` returning a new Fluent key (follow the naming of the three keys already there). Add that key to **both** `i18n/en` and `i18n/es` — the settings surfaces have a coverage test that fails on a key present in one locale only.
 
-- [ ] **Step 5: Bump the bridge on both sides**
+- [ ] **Step 5: Confirm the bridge does not move**
 
-`crates/norte-ui-host`: `BRIDGE_VERSION` 40 → 41.
-`crates/norte-gui-tauri/ui/src/types.ts:12`: `export const BRIDGE_VERSION = 41;`, and add `"profile"` to the `ConfigLayer` union in the same file (match the serde renaming the Rust enum uses — check it, do not assume lowercase).
+Verify before assuming either way: `grep -rn "ConfigLayer" crates/norte-ui-host/src/dto.rs crates/norte-gui-tauri/ui/src/types.ts` must return nothing. It does — the type reaches the renderer only as the resolved string in `PathRowView.label`. So `BRIDGE_VERSION` stays at 40 and `types.ts` is untouched.
 
 - [ ] **Step 6: Run the tests**
 
 Run: `just t norte-config` — Expected: PASS.
 Run: `just t norte-ui-host` — Expected: PASS.
-Run: `cd crates/norte-gui-tauri/ui && npm test` — Expected: PASS. This is the step `ci-fast` will not do for you.
 
 - [ ] **Step 7: Commit**
 
