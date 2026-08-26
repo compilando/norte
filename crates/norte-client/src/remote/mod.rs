@@ -1422,6 +1422,33 @@ impl RemoteBackend {
         .await
     }
 
+    /// `archive.pack_report` (0.58.0, #250): qué guardó ese empaquetado que
+    /// SIGNIFICA otra cosa en otro sistema — un `a\b.txt` que en Windows es un
+    /// `b.txt` dentro de una carpeta `a`, un `CON` que allí no se extrae.
+    ///
+    /// El informe está listo antes que el archivo: se calcula sobre la lista de
+    /// entradas antes de escribir el primer byte. Pedirlo al terminar la Task
+    /// es lo natural, pero un informe pedido a mitad ya es definitivo.
+    ///
+    /// **Un informe vacío es una afirmación**, y solo sobre las clases que
+    /// `checked` declare. Este SDK habla siempre con un daemon N o N+1 —el
+    /// handshake rechaza lo demás—, así que un daemon que no conozca el método
+    /// no es un caso alcanzable desde aquí; el `Unsupported` que aun así se
+    /// propaga es la degradación defensiva, no la historia de compatibilidad.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon.
+    pub async fn archive_pack_report(
+        &self,
+        task_id: norte_proto::TaskId,
+    ) -> Result<methods::ArchivePackReportResult, Error> {
+        self.call_maybe_unknown(
+            methods::ARCHIVE_PACK_REPORT,
+            &methods::ArchivePackReportParams { task_id },
+        )
+        .await
+    }
+
     /// `file.split` (0.50.0, #132).
     ///
     /// # Errors

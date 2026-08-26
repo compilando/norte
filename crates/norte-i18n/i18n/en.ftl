@@ -124,6 +124,8 @@ msg-transfer-name-failed = could not enqueue — the name is kept
 
 # --- Status bar messages ---
 msg-done = done
+msg-pack-warnings = packed, but { $risky } name(s) mean something else on another system
+msg-pack-warnings-partial = packed, but at least { $risky } name(s) mean something else on another system
 msg-cancelled = cancelled
 msg-cancelling = cancelling…
 msg-no-tasks = no running tasks

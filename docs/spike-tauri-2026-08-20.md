@@ -201,12 +201,14 @@ against the same host. Nothing in phases 1 and 2 depends on this answer.
 
 ## Two things about driving this window from a script
 
-- **`GDK_BACKEND=x11` renders a blank webview here.** The process starts, the
-  window opens, the title is right — and the page never paints. Under Wayland
-  the same binary paints correctly. Practical consequence: on this machine the
-  app is Wayland-only, and therefore `xdotool` cannot drive it (it only reaches
-  X clients), which is why the scripted checks go through synthetic DOM events
-  in the measurement pass rather than through the compositor.
+- **`GDK_BACKEND=x11` rendered a blank webview here** — on 2026-08-20, against
+  the WebKitGTK of that day. The process started, the window opened, the title
+  was right, and the page never painted. Under Wayland the same binary painted
+  correctly. Practical consequence at the time: the app was Wayland-only on this
+  machine, and therefore `xdotool` could not drive it (it only reaches X
+  clients), which is why the scripted checks go through synthetic DOM events in
+  the measurement pass rather than through the compositor. **Both halves of
+  that have since changed — see the update below.**
 
   **Narrowed down on 2026-08-24 (#261), and the first finding corrects the
   sentence above: the page does load.** The renderer logs `primera foto pedida`
@@ -224,12 +226,30 @@ against the same host. Nothing in phases 1 and 2 depends on this answer.
   Disabling the DMA-BUF renderer is not just faster than the other X11 runs, it
   beats the Wayland baseline — which points at WebKitGTK's DMA-BUF path under
   Xwayland as the culprit, the buffer being shared in a way the X server never
-  composites. What is still missing is the visual confirmation that the page
-  actually paints with that variable set: nothing here can capture the window
-  (see the next bullet), so a human has to look once.
-- **Screenshots go through `spectacle -b -n -a -o <file>`.** `grim` refuses
-  (the compositor does not expose the screencopy protocol) and `import -window
-  root` captures only the X layer.
+  composites.
+
+  **Looked at on 2026-08-26 (#261), and the blank page does not reproduce.**
+  Against webkit2gtk-4.1 **2.52.6** and gtk3 **3.24.52**, a plain
+  `GDK_BACKEND=x11` run — no `WEBKIT_DISABLE_*` variable — paints the whole
+  window: both panels, both listings, headers and status line. Captured, so it
+  is not a matter of opinion.
+
+  Two things follow. The first is that whatever was wrong was **upstream and is
+  gone**: nothing in norte changed here, only the WebKitGTK on this machine.
+  The second is method, and it is why the earlier pass could not see it: the
+  capture that works is **`import -window <id>`** against the *window* id from
+  `xdotool search`, not `import -window root`. The root window of an Xwayland
+  server does not composite its clients, so capturing it showed an empty
+  desktop and looked exactly like a blank webview.
+
+  What this does **not** license is calling X11 supported. One machine, one
+  WebKitGTK version, one compositor. It licenses deleting the sentence that
+  said the page never paints, which was true when it was written and is not
+  true now.
+- **Screenshots go through `spectacle -b -n -a -o <file>`** for the whole
+  screen, or **`import -window <id>`** for one window (see above — `import
+  -window root` under Xwayland captures nothing useful, and `grim` refuses
+  because the compositor does not expose the screencopy protocol).
 
 ## Debt this spike leaves
 
@@ -249,7 +269,12 @@ Filed as issues on 2026-08-21 rather than left in this document:
   the package description read "Spike vertical del renderer de Tauri", the
   category was a bare `Utility`, there was no `MimeType` (so "open folder
   with…" never offered norte), and `Exec` handed a `file://` URL to a binary
-  that takes a path. `tests/empaquetado.rs` now pins all four.
+  that takes a path. `tests/empaquetado.rs` now pins all four. **Extended
+  2026-08-26**: an RPM comes out of the same recipe, carrying `webkit2gtk4.1`
+  and `gtk3` plus the desktop entry with `FileManager`/`inode/directory`. The
+  explicit `deb` dependency list added with it came back out — the bundler
+  already emits exactly those two, and declaring them again gave `Depends:` each
+  name twice.
 - **#257** — the golden corpus checks coverage against a hand-written list, and
   misses ten variants.
 - **#258** — `u64` counters become `f64` in the renderer.
@@ -257,8 +282,11 @@ Filed as issues on 2026-08-21 rather than left in this document:
   fixture.
 - **#260** — a project layer can choose the keymap preset, and a malformed one
   denies startup (`norte-config`, shared with the terminal).
-- **#261** — the manual test matrix of task 3.5 has never been run, and
-  `GDK_BACKEND=x11` renders a blank webview here.
+- **#261** — the manual test matrix of task 3.5 has never been run. Its X11
+  half is answered as of 2026-08-26 (the blank page does not reproduce, see
+  above); the rest is still open, and most of it cannot be answered by a script:
+  an IME, a screen reader, fractional scaling and a compositor restart need a
+  human in front of the screen.
 
 Still only in the plan: watcher, which-key, menu/palette/shortcut views and
 periodic `session.put` are phase-2 debt the renderer will want.

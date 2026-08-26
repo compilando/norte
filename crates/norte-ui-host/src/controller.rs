@@ -1632,6 +1632,10 @@ enum Informe {
     Lote(Result<norte_proto::methods::FsRenameBatchReportResult, Error>),
     /// El de un undo de sesión.
     Undo(Result<norte_proto::methods::PolicyUndoReportResult, Error>),
+    /// El de un empaquetado (#250). El único de los tres que cuenta algo de una
+    /// Task que salió BIEN: el archivo se escribió entero y aun así puede
+    /// llevar nombres que en otro sistema se colocan en otro sitio.
+    Empaquetado(Result<norte_proto::methods::ArchivePackReportResult, Error>),
 }
 
 /// A qué task apunta un `task.cancel`.
@@ -13957,11 +13961,29 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
-        // Dos clases tienen informe, y las dos por el mismo motivo: lo que
-        // quedó a medias no cabe en el desenlace de una Task.
-        let lote = match p.kind {
-            norte_proto::TaskKind::RenameBatch => true,
-            norte_proto::TaskKind::Undo => false,
+        // Tres clases tienen informe, y las tres por el mismo motivo: lo que
+        // hay que decir no cabe en el desenlace de una Task. Las dos primeras
+        // cuentan lo que quedó a medias; la tercera cuenta algo de un
+        // empaquetado que salió BIEN (#250).
+        #[derive(Clone, Copy)]
+        enum Cual {
+            Lote,
+            Undo,
+            Empaquetado,
+        }
+        let cual = match p.kind {
+            norte_proto::TaskKind::RenameBatch => Cual::Lote,
+            norte_proto::TaskKind::Undo => Cual::Undo,
+            // **Solo un empaquetado que COMPLETÓ.** Los otros dos informes
+            // hablan de lo que quedó a medias, así que un `Failed` o un
+            // `Cancelled` es justo cuando más falta hacen; este habla de un
+            // archivo, y de un empaquetado cancelado no hay ninguno —la
+            // cancelación deja el destino limpio—. El informe existe igual
+            // (se calcula antes de escribir), y pintarlo diría «empaquetado,
+            // pero…» sobre algo que nadie empaquetó.
+            norte_proto::TaskKind::Pack if matches!(p.state, norte_proto::TaskState::Completed) => {
+                Cual::Empaquetado
+            }
             _ => return,
         };
         let id = p.task_id;
@@ -13973,10 +13995,10 @@ impl Estado {
         let buzon = buzon.clone();
         let epoca = self.epoca_conexion;
         tokio::spawn(async move {
-            let cual = if lote {
-                Informe::Lote(backend.rename_batch_report(id).await)
-            } else {
-                Informe::Undo(backend.undo_report(id).await)
+            let cual = match cual {
+                Cual::Lote => Informe::Lote(backend.rename_batch_report(id).await),
+                Cual::Undo => Informe::Undo(backend.undo_report(id).await),
+                Cual::Empaquetado => Informe::Empaquetado(backend.archive_pack_report(id).await),
             };
             let _ = buzon
                 .send(Mensaje::Informe(Box::new((epoca, id.get(), cual))))
@@ -14107,7 +14129,43 @@ impl Estado {
         match cual {
             Informe::Lote(r) => self.informe_de_lote(task_id, r),
             Informe::Undo(r) => self.informe_de_undo(task_id, r),
+            Informe::Empaquetado(r) => self.informe_de_empaquetado(r),
         }
+    }
+
+    /// El informe de un empaquetado llegó (#250).
+    ///
+    /// **Un informe limpio no dice nada, y eso es el diseño**: la respuesta
+    /// corriente es que el archivo viaja entero, y avisar de ello enseñaría a
+    /// no leer el aviso que sí importa. Un error tampoco se pinta: contra un
+    /// daemon N-1 el método no existe, y «no se pudo preguntar» no es un
+    /// hallazgo sobre el archivo.
+    fn informe_de_empaquetado(
+        &mut self,
+        res: &Result<norte_proto::methods::ArchivePackReportResult, Error>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Ok(informe) = res else {
+            return Vec::new();
+        };
+        if informe.risky.is_empty() {
+            return Vec::new();
+        }
+        // Recortado dice «al menos»: la lista se corta en
+        // `ARCHIVE_PACK_REPORT_MAX`, y pintar el tope como si fuera el total es
+        // la mentira que `truncated` existe para impedir.
+        let clave = if informe.truncated {
+            "msg-pack-warnings-partial"
+        } else {
+            "msg-pack-warnings"
+        };
+        let texto = norte_i18n::ta_in(
+            self.lang,
+            clave,
+            &[("risky", &informe.risky.len().to_string())],
+        );
+        self.status.message = Some(clamp_display(texto));
+        let cambio = ViewChange::Status(self.status.clone());
+        vec![self.parche(vec![cambio])]
     }
 
     /// El informe de un undo llegó: al tablero, y delante si algo no volvió.

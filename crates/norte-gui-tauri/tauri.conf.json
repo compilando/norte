@@ -37,6 +37,7 @@
     "active": true,
     "targets": [
       "deb",
+      "rpm",
       "appimage"
     ],
     "externalBin": [
@@ -54,6 +55,13 @@
     "linux": {
       "deb": {
         "desktopTemplate": "norte.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "norte.desktop",
+        "depends": [
+          "webkit2gtk4.1",
+          "gtk3"
+        ]
       }
     }
   }

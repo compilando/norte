@@ -1245,6 +1245,8 @@ impl Backend {
         }
         match self {
             Self::Embedded(engine) => {
+                // El informe (#250) se recoge por `archive_pack_report`: aquí
+                // solo viaja el handle.
                 let handle = engine.pack_as(params, crate::journal::Actor::User).await?;
                 Ok(TaskRef::from_handle(&handle))
             }
@@ -1293,6 +1295,26 @@ impl Backend {
                 .ok_or(Error::NotFound),
             #[cfg(unix)]
             Self::Remote(r) => r.archive_test_report(task_id).await,
+        }
+    }
+
+    /// El informe de un `archive.pack` (0.58.0, #250): qué guardó ese
+    /// empaquetado que no sobrevive a salir de aquí.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] si ese id nunca fue un empaquetado o si el anillo ya
+    /// lo desalojó; contra un daemon N-1, lo que responda él.
+    pub async fn archive_pack_report(
+        &self,
+        task_id: norte_proto::TaskId,
+    ) -> Result<norte_proto::methods::ArchivePackReportResult, Error> {
+        match self {
+            Self::Embedded(engine) => engine
+                .archive_pack_report(task_id)
+                .map(|(_, r)| r)
+                .ok_or(Error::NotFound),
+            #[cfg(unix)]
+            Self::Remote(r) => r.archive_pack_report(task_id).await,
         }
     }
 

@@ -1062,7 +1062,15 @@ fn golden_methods() {
     // 0.57.0 (#290): fs_create_params con su nombre percent-encoded, y su
     // pareja anclada — `fs.create` lleva `dest_anchor` y `fs.mkdir` no, que es
     // lo que hay que congelar.
-    assert_eq!(fixtures.len(), 166, "[methods.json] fixtures sin caso Rust");
+    // 166 → 169 en 0.58.0 (#250): + archive_pack_report_params y las dos
+    // formas del informe. Los tokens de `fold` (`unicode`/`case`/`full`) y de
+    // `risk` (`separator`/`stream`/`reserved`/`trailing`) son vocabulario del
+    // wire y estas fixturas son lo único que los congela — uno por valor,
+    // porque una sola dejaría renombrar los otros sin que nada se enterara. Y
+    // la forma LIMPIA va aparte porque significa algo por sí sola: «se
+    // comprobaron doce entradas y no había nada», que no es lo mismo que un
+    // daemon que no comprueba.
+    assert_eq!(fixtures.len(), 169, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
@@ -1165,6 +1173,7 @@ fn check_methods_archive_write(fixtures: &BTreeMap<String, Value>) {
             task_id: norte_proto::TaskId::new(7),
         },
     );
+    check_methods_archive_pack_report(fixtures);
     check_one(
         fixtures,
         "file_split_params",
@@ -1180,6 +1189,88 @@ fn check_methods_archive_write(fixtures: &BTreeMap<String, Value>) {
         &FileCombineParams {
             first: vpath("file:///g.iso.001"),
             dest: vpath("file:///g.iso"),
+        },
+    );
+}
+
+/// `archive.pack_report` (0.58.0, #250): lo que ese empaquetado guardó y que
+/// significa otra cosa fuera.
+///
+/// Los cuatro tokens de `risk` son vocabulario del wire y estos goldens son lo
+/// único que los congela — uno por valor, porque una sola fixture dejaría
+/// renombrar los otros tres sin que nada se enterara.
+///
+/// Lo que NO tiene fixture son las colisiones por plegado, y es deliberado:
+/// esas no se empaquetan —`archive.pack` falla con `Exists` antes de escribir
+/// un byte— así que el informe no tiene dónde llevarlas.
+fn check_methods_archive_pack_report(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{ArchivePackReportParams, ArchivePackReportResult, PackRiskyName};
+    check_one(
+        fixtures,
+        "archive_pack_report_params",
+        &ArchivePackReportParams {
+            task_id: norte_proto::TaskId::new(7),
+        },
+    );
+    check_one(
+        fixtures,
+        "archive_pack_report_result",
+        &ArchivePackReportResult {
+            entries: 5,
+            checked: vec![
+                "separator".to_owned(),
+                "stream".to_owned(),
+                "reserved".to_owned(),
+                "trailing".to_owned(),
+            ],
+            risky: vec![
+                PackRiskyName {
+                    path: "a%5Cb.txt".to_owned(),
+                    name: "a\\b.txt".to_owned(),
+                    risk: "separator".to_owned(),
+                },
+                // Un nombre que NO es UTF-8: `path` es lo único de lo que se
+                // recuperan los bytes —`name` trae el `U+FFFD` de pintarlo—, y
+                // sin esta fixture la propiedad por la que existe ese codec no
+                // la congelaba nada (regla 1).
+                PackRiskyName {
+                    path: "malo%FF%5Cx.txt".to_owned(),
+                    name: "malo\u{fffd}\\x.txt".to_owned(),
+                    risk: "separator".to_owned(),
+                },
+                PackRiskyName {
+                    path: "f%3Aads".to_owned(),
+                    name: "f:ads".to_owned(),
+                    risk: "stream".to_owned(),
+                },
+                PackRiskyName {
+                    path: "CON".to_owned(),
+                    name: "CON".to_owned(),
+                    risk: "reserved".to_owned(),
+                },
+                PackRiskyName {
+                    path: "nombre.".to_owned(),
+                    name: "nombre.".to_owned(),
+                    risk: "trailing".to_owned(),
+                },
+            ],
+            truncated: false,
+        },
+    );
+    // Y el informe LIMPIO, que es la respuesta corriente y la que dice algo por
+    // sí sola: se comprobaron doce entradas y no había nada.
+    check_one(
+        fixtures,
+        "archive_pack_report_result_clean",
+        &ArchivePackReportResult {
+            entries: 12,
+            checked: vec![
+                "separator".to_owned(),
+                "stream".to_owned(),
+                "reserved".to_owned(),
+                "trailing".to_owned(),
+            ],
+            ..Default::default()
         },
     );
 }
@@ -3600,6 +3691,11 @@ fn method_names_frozen() {
     // suite entera. Es el método por el que se recoge qué entrada está
     // corrupta, así que su nombre es contrato igual que los otros cuatro.
     assert_eq!(methods::ARCHIVE_TEST_REPORT, "archive.test_report");
+    // Y el SEXTO, por lo mismo (#250): los goldens congelan la forma del
+    // payload, no la cadena del método, y tanto el brazo del dispatch como el
+    // SDK citan la constante — así que se mueven juntos y renombrarla pasaba
+    // la suite entera.
+    assert_eq!(methods::ARCHIVE_PACK_REPORT, "archive.pack_report");
     // Los topes que un cliente puede enseñar ANTES de mandar nada: 999 trozos
     // es la convención `.001`, y descubrirlo en el trozo 1000 dejaría un
     // conjunto que nadie puede volver a juntar.
@@ -3635,7 +3731,13 @@ fn method_names_frozen() {
     // nuevo, kind nuevo que degrada a `Unknown`—, y desplaza la ventana porque
     // contra un daemon 0.56 un frontend sin terminal no puede ofrecer «editar
     // uno nuevo»: no hay forma de crear el fichero.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.57.0");
+    // 0.58.0 (#250): `archive.pack_report`, qué guardó ese empaquetado que
+    // SIGNIFICA otra cosa fuera. Aditivo —método nuevo que un cliente viejo no
+    // llama— y la ventana se desplaza en la dirección de 0.51.0: un cliente
+    // 0.57 contra un daemon 0.58 empaqueta igual y se queda sin el aviso. (Las
+    // colisiones por plegado no entran en este informe: esas se RECHAZAN al
+    // empaquetar, porque ahí sí desaparece un fichero al extraer.)
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.58.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

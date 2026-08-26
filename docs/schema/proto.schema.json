@@ -114,6 +114,53 @@
       ],
       "type": "object"
     },
+    "ArchivePackReportParams": {
+      "description": "Params de [`ARCHIVE_PACK_REPORT`] (0.58.0, #250).\n\n```\nuse norte_proto::methods::ArchivePackReportParams;\nlet p: ArchivePackReportParams =\n    serde_json::from_str(r#\"{\"task_id\":7}\"#).expect(\"params\");\nassert_eq!(p.task_id.get(), 7);\n```",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "El empaquetado cuyo informe se pide (el `task_id` que devolvió\n[`ARCHIVE_PACK`])."
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "ArchivePackReportResult": {
+      "description": "Result de [`ARCHIVE_PACK_REPORT`] (0.58.0, #250): lo que ese archivo lleva\ndentro y que significa otra cosa fuera de aquí.\n\n**Vacío significa que se miró y no había**, no que no se mirara — pero\ndentro de lo que [`Self::checked`] declare y ni un milímetro más allá. Este\ninforme NO afirma que el archivo viaje intacto a cualquier parte: afirma\nque las clases que dice haber mirado no aparecieron. `<`, `>`, `\"`, `|`,\n`?` y `*` también son ilegales en Windows y hoy no se miran, y sin\n`checked` un informe limpio estaría diciendo lo contrario. Es el mismo\nmotivo por el que [`ArchiveTestResult::checked`] existe: «pasa» significa\ncosas distintas según qué se comprobó.\n\nLo que NO aparece aquí son las colisiones por plegado —dos entradas que en\nmacOS o en NTFS serían un solo fichero—, y no por olvido: **esas no se\nempaquetan**. `archive.pack` falla con\n[`ConflictKind::Exists`](crate::ConflictKind) antes de escribir un byte,\nporque ahí sí se PIERDE un fichero al extraer. Una lista que jamás puede\ntraer nada sería peor que no tenerla.\n\n```\nuse norte_proto::methods::ArchivePackReportResult;\nlet r: ArchivePackReportResult =\n    serde_json::from_str(r#\"{\"entries\":12,\"checked\":[\"separator\"]}\"#).expect(\"informe\");\nassert!(r.risky.is_empty() && !r.truncated);\nassert_eq!(r.entries, 12, \"cuántas entradas se comprobaron\");\n// Y sin `checked`, un informe limpio no autoriza a decir nada.\nlet mudo: ArchivePackReportResult =\n    serde_json::from_str(r#\"{\"entries\":12}\"#).expect(\"informe\");\nassert!(mudo.checked.is_empty());\n```",
+      "properties": {
+        "checked": {
+          "default": [],
+          "description": "QUÉ clases de riesgo se miraron de verdad: `separator`, `stream`,\n`reserved`, `trailing`. Vocabulario ABIERTO y CRECIENTE, igual que\n[`PackRiskyName::risk`] y por el mismo motivo que\n[`ArchiveTestResult::checked`]: un informe limpio solo significa algo\njunto a la lista de lo que se comprobó, y un cliente que pintara «viaja\nintacto» sobre un daemon que mira cuatro clases estaría afirmando lo que\nnadie ha comprobado.\n\nVacío = **no se declara nada**, y entonces un `risky` vacío no autoriza\na decir nada. Es el mismo trato que `checked` en su gemelo.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "entries": {
+          "default": 0,
+          "description": "Entradas comprobadas. Con `risky` vacío, es lo que convierte el informe\nen una afirmación en vez de en un silencio.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "risky": {
+          "default": [],
+          "description": "Entradas cuyo nombre significa otra cosa fuera, hasta\n[`ARCHIVE_PACK_REPORT_MAX`].",
+          "items": {
+            "$ref": "#/$defs/PackRiskyName"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "default": false,
+          "description": "`true` si la lista se quedó corta. Un informe recortado que no lo dijera\nenseñaría «tres nombres» sobre un archivo con cuatrocientos.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ArchiveTestFailure": {
       "description": "Una entrada que no pasó [`ARCHIVE_TEST`].\n\n```\nuse norte_proto::methods::ArchiveTestFailure;\nlet f: ArchiveTestFailure =\n    serde_json::from_str(r#\"{\"name\":\"a.txt\",\"reason\":\"crc\"}\"#).expect(\"fallo\");\nassert_eq!(f.reason, \"crc\");\n```",
       "properties": {
@@ -2497,6 +2544,27 @@
           "type": "string"
         }
       ]
+    },
+    "PackRiskyName": {
+      "description": "Una entrada cuyo nombre SIGNIFICA otra cosa en otro sistema (0.58.0, #250).\n\n```\nuse norte_proto::methods::PackRiskyName;\nlet r: PackRiskyName =\n    serde_json::from_str(r#\"{\"path\":\"a%5Cb.txt\",\"name\":\"a\\\\b.txt\",\"risk\":\"separator\"}\"#)\n        .expect(\"riesgo\");\nassert_eq!(r.risk, \"separator\");\n```",
+      "properties": {
+        "name": {
+          "default": "",
+          "description": "El mismo, para ENSEÑAR, con la conversión con pérdidas que lleva\ncualquier otro nombre que se pinte. Acompaña a [`Self::path`]; no lo\nsustituye — sobre un nombre que no es UTF-8, este trae `U+FFFD` y aquel\nes el único del que se recuperan los bytes.",
+          "type": "string"
+        },
+        "path": {
+          "default": "",
+          "description": "El nombre GUARDADO dentro del archivo: relativo a la base del\nempaquetado, separado por `/`, y **percent-encoded sobre los bytes\ncrudos** — lo único que conserva un nombre que no es UTF-8 (regla 1).\n\n**Esto NO es un [`VPath`] y no debe parsearse como uno**, y ahí se\nsepara de [`ArchiveTestFailure::path`], que sí lleva una ruta wire\ncompleta y parseable. Aquel nombra una entrada DENTRO de un contenedor\nque existe en algún sitio; este nombra una entrada relativa que solo\nsignifica algo dentro del archivo que se acaba de escribir.\n\nEl codec tampoco es el mismo: aquí se escapa todo lo que no sea\n`[A-Za-z0-9._~-]`, así que `café.txt` viaja como `caf%C3%A9.txt` y no\nliteral. La `/` se deja SIN escapar a propósito: es el separador de\ncomponentes del archivo, un componente de nombre Unix no puede llevar\nuna `/` cruda, y todo lo demás va escapado — así que sigue siendo\ninequívoca, y esconderla haría ilegible justo el nombre que hay que ir\na buscar.",
+          "type": "string"
+        },
+        "risk": {
+          "default": "",
+          "description": "Qué le pasa fuera: `separator` (`\\` es separador de directorios en\n7-Zip y el Explorador), `stream` (`:` abre un flujo alternativo en\nNTFS), `reserved` (`CON`, `NUL`, `AUX`… no se pueden extraer en Windows\nen absoluto), `trailing` (un punto o un espacio final que Windows se\ncome sin decirlo).\n\nVocabulario ABIERTO comparable por igualdad, con el MISMO contrato que\n[`ArchiveTestFailure::reason`] y [`ConnectionDegraded::reason`]: puede\nCRECER de forma aditiva —otra plataforma deforma los nombres de maneras\nque este conjunto no tiene—, así que **un cliente que reciba una clase\nque no conozca la enseña tal cual y JAMÁS rechaza el informe por ella**.\nTratar estos cuatro como exhaustivos es leer mal el contrato.",
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "PairTransform": {
       "description": "Bajo qué transformación emparejaron dos nombres que NO son los mismos bytes\n(0.42.0, #152).\n\nLa clave de emparejamiento pliega caja y normaliza a NFC, y **ninguna de las\ndos es inyectiva**: `README` y `readme` emparejan porque un lado no puede\nsostener las dos grafías, y `café` NFC y `café` NFD porque son el MISMO\ntexto escrito de dos maneras. Las dos cosas son el comportamiento que se\nquiere. Lo que no se veía es que la fila resultante —un [`CompareVerdict::Same`]\no un [`CompareVerdict::Different`] perfectamente normales— no decía que sus\ndos mitades no son los mismos bytes, y\n[`CompareRow::reason_is_consistent`] prohíbe un [`CompareReason`] fuera de\n[`CompareVerdict::Ambiguous`]/[`CompareVerdict::Error`], así que no había\ndónde decirlo.\n\n[`PairTransform::NormalizationSingleton`] es el caso por el que este campo\nexiste. NFC tiene descomposiciones SINGLETON —U+212A KELVIN SIGN normaliza\na `K`, U+2126 OHM SIGN a U+03A9—, así que dos ficheros que coexisten en\next4, sin plegado de caja de por medio, y que un lector lee como caracteres\nDISTINTOS, emparejan y se comparan como si fueran uno. Sin marca en el wire,\nuna sincronización lee esa fila como «actualiza el de la derecha con el de\nla izquierda» y escribe encima de un fichero que no tiene nada que ver.\n\n**Separar el singleton del resto es todo el valor de este vocabulario.** Un\nconsumidor que solo supiera «estos dos nombres difieren en bytes» tendría\nque elegir entre fiarse de todo emparejamiento por normalización —que es el\nfallo— o rechazarlos todos, y eso rompe el caso macOS↔Linux para el que la\nclave se diseñó.\n\nDaemon→client: `#[serde(other)]`, como todo el vocabulario de ADR 0048.\n\n```\nuse norte_proto::methods::PairTransform;\nassert_eq!(\n    serde_json::to_string(&PairTransform::NormalizationSingleton).expect(\"json\"),\n    r#\"\"normalization_singleton\"\"#\n);\n// Una transformación de un daemon N+1 degrada; NO tira el lote de filas.\nlet futuro: PairTransform = serde_json::from_str(r#\"\"transliteration\"\"#).expect(\"degrada\");\nassert_eq!(futuro, PairTransform::Unknown);\nassert!(!PairTransform::Unknown.names_one_text());\n```",
@@ -5039,6 +5107,12 @@
     "archive_pack_params": {
       "$ref": "#/$defs/ArchivePackParams"
     },
+    "archive_pack_report_params": {
+      "$ref": "#/$defs/ArchivePackReportParams"
+    },
+    "archive_pack_report_result": {
+      "$ref": "#/$defs/ArchivePackReportResult"
+    },
     "archive_test_failure": {
       "$ref": "#/$defs/ArchiveTestFailure"
     },
@@ -5272,6 +5346,9 @@
     },
     "on_unknown": {
       "$ref": "#/$defs/OnUnknown"
+    },
+    "pack_risky_name": {
+      "$ref": "#/$defs/PackRiskyName"
     },
     "pair_transform": {
       "$ref": "#/$defs/PairTransform"
@@ -5542,6 +5619,9 @@
     "ai_rename_entry",
     "archive_format",
     "archive_pack_params",
+    "archive_pack_report_params",
+    "archive_pack_report_result",
+    "pack_risky_name",
     "archive_test_failure",
     "archive_test_params",
     "archive_test_report_params",

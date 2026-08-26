@@ -334,6 +334,18 @@ pub trait HostBackend: Send + Sync + 'static {
         task_id: TaskId,
     ) -> BoxFuture<'static, Result<methods::PolicyUndoReportResult, Error>>;
 
+    /// El informe de un `archive.pack` (#250): qué guardó ese empaquetado que
+    /// no sobrevive a salir de aquí.
+    ///
+    /// El tercero de la misma familia, y el que más lejos lleva su motivo: los
+    /// otros dos cuentan lo que salió MAL, y este cuenta algo que salió BIEN y
+    /// aun así hay que decir — un `a\b.txt` guardado, que en 7-Zip y en el
+    /// Explorador es un `b.txt` dentro de una carpeta `a`.
+    fn archive_pack_report(
+        &self,
+        task_id: TaskId,
+    ) -> BoxFuture<'static, Result<methods::ArchivePackReportResult, Error>>;
+
     /// Deshace lo que una sesión de AGENTE hizo, entero, en orden inverso.
     ///
     /// La sesión es una clave OPACA: viene del daemon (en la petición de
@@ -1119,6 +1131,14 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<methods::PolicyUndoReportResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.undo_report(task_id).await })
+    }
+
+    fn archive_pack_report(
+        &self,
+        task_id: TaskId,
+    ) -> BoxFuture<'static, Result<methods::ArchivePackReportResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.archive_pack_report(task_id).await })
     }
 
     fn move_(

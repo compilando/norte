@@ -798,7 +798,45 @@ use crate::{
 /// handshake SÍ permite es esa —cliente 0.56 contra daemon 0.57—, y no la
 /// contraria: un cliente del futuro se rechaza entero (ver
 /// [`version_compatible`]).
-pub const PROTOCOL_VERSION: &str = "0.57.0";
+///
+/// `0.58.0` (#250): método nuevo [`ARCHIVE_PACK_REPORT`]
+/// ([`ArchivePackReportParams`] → [`ArchivePackReportResult`]), gemelo de
+/// [`FS_RENAME_BATCH_REPORT`] y por el mismo motivo: **hay una cosa cierta
+/// sobre lo que se acaba de escribir que no cabe en el desenlace de la Task.**
+///
+/// Aquí esa cosa son los nombres que **significan otra cosa fuera**: `a\b` es
+/// un separador de directorios en 7-Zip y en el Explorador, `f:ads` abre un
+/// flujo alternativo en NTFS, `CON` no se puede extraer en Windows en absoluto,
+/// y un punto o un espacio final se los come Windows sin decirlo. Nuestro
+/// propio lector los round-trippea exactos, que es justo por lo que el test de
+/// ida y vuelta no ve ninguno.
+///
+/// **Por qué se AVISA en vez de rechazar, cuando su hermano sí rechaza.** Dos
+/// entradas que pliegan al mismo nombre no se empaquetan: `archive.pack` falla
+/// con [`crate::ConflictKind::Exists`], porque extraído en otra parte uno de
+/// los dos ficheros DESAPARECE y el destino de un archivo es desconocido por
+/// definición. Esto es otra cosa: `a\b.txt` extraído en Linux sigue siendo
+/// `a\b.txt`, y en Windows es un fichero `b.txt` dentro de una carpeta `a`. No
+/// se pierde nada; se coloca distinto. Rechazarlo se llevaría por delante
+/// árboles Unix perfectamente legítimos para prevenir algo que ni siquiera es
+/// una pérdida.
+///
+/// Y para avisar hace falta este método, porque `task.progress` no tiene canal:
+/// su `unreadable` cuenta otra cosa, y un contador que significara dos cosas
+/// distintas según la task no lo podría leer nadie.
+///
+/// Ventana N=0.58.x / N-1=0.57.x. Aditivo, y la pérdida hay que contarla en la
+/// dirección que el handshake PERMITE, que es una sola: **cliente 0.57 contra
+/// daemon 0.58**. Al revés no ocurre — un cliente del futuro se rechaza entero
+/// en `initialize` (ver [`version_compatible`]), así que «un cliente 0.58
+/// contra un daemon 0.57» no es un escenario degradado sino una conexión que no
+/// llega a existir.
+///
+/// Ese cliente 0.57 no conoce el método y no lo llama. **Lo que pierde es el
+/// aviso, no el archivo**: el `.zip` se escribe igual, con las mismas entradas
+/// y los mismos bytes, y quien lo extraiga en Windows se encontrará las
+/// entradas colocadas donde no las dejó sin que nadie se lo haya dicho.
+pub const PROTOCOL_VERSION: &str = "0.58.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -1259,6 +1297,27 @@ pub const FS_DIR_SIZE: &str = "fs.dir_size";
 /// decidir por él sin decírselo, y dos clientes con dos heurísticas darían dos
 /// archivos distintos de la misma petición.
 pub const ARCHIVE_PACK: &str = "archive.pack";
+/// `archive.pack_report` — qué guardó ese empaquetado que no sobrevive a
+/// salir de aquí (0.58.0, #250).
+///
+/// [`ArchivePackReportParams`] → [`ArchivePackReportResult`]. Gemelo de
+/// [`FS_RENAME_BATCH_REPORT`] y de [`POLICY_UNDO_REPORT`], y por la misma razón
+/// que los dos: el desenlace de la Task habla de si el trabajo salió, y esto
+/// habla de lo que quedó ESCRITO. Un `Completed` es verdad y aun así el archivo
+/// puede llevar dos entradas que en macOS son una sola.
+///
+/// Se pide DESPUÉS de que la Task sea terminal, y hasta entonces lo que
+/// devuelve es el informe a medias — igual que el del lote. El server los
+/// retiene en un anillo acotado, así que un id demasiado viejo, o que jamás fue
+/// un empaquetado, es [`Error::NotFound`](crate::Error::NotFound); que un id
+/// desalojado no se distinga de uno que nunca existió es deliberado, mismo
+/// criterio que `fs.rename_batch_report`.
+///
+/// **Un informe vacío es una afirmación**, no un silencio: significa que se
+/// comprobaron las dos cosas y no había ninguna. Lo que no se puede es
+/// distinguirlo de un daemon 0.57, que no conoce el método — por eso el aviso
+/// es del cliente que lo pide, no del que no puede.
+pub const ARCHIVE_PACK_REPORT: &str = "archive.pack_report";
 /// `archive.test` — comprueba lo que el formato promete de cada entrada
 /// (0.50.0, #132).
 ///
@@ -3991,6 +4050,138 @@ pub struct ArchiveTestResult {
     /// un tar plano estaría afirmando lo que el formato no puede sostener.
     pub checked: Vec<String>,
 }
+
+/// Params de [`ARCHIVE_PACK_REPORT`] (0.58.0, #250).
+///
+/// ```
+/// use norte_proto::methods::ArchivePackReportParams;
+/// let p: ArchivePackReportParams =
+///     serde_json::from_str(r#"{"task_id":7}"#).expect("params");
+/// assert_eq!(p.task_id.get(), 7);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchivePackReportParams {
+    /// El empaquetado cuyo informe se pide (el `task_id` que devolvió
+    /// [`ARCHIVE_PACK`]).
+    pub task_id: TaskId,
+}
+
+/// Una entrada cuyo nombre SIGNIFICA otra cosa en otro sistema (0.58.0, #250).
+///
+/// ```
+/// use norte_proto::methods::PackRiskyName;
+/// let r: PackRiskyName =
+///     serde_json::from_str(r#"{"path":"a%5Cb.txt","name":"a\\b.txt","risk":"separator"}"#)
+///         .expect("riesgo");
+/// assert_eq!(r.risk, "separator");
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PackRiskyName {
+    /// El nombre GUARDADO dentro del archivo: relativo a la base del
+    /// empaquetado, separado por `/`, y **percent-encoded sobre los bytes
+    /// crudos** — lo único que conserva un nombre que no es UTF-8 (regla 1).
+    ///
+    /// **Esto NO es un [`VPath`] y no debe parsearse como uno**, y ahí se
+    /// separa de [`ArchiveTestFailure::path`], que sí lleva una ruta wire
+    /// completa y parseable. Aquel nombra una entrada DENTRO de un contenedor
+    /// que existe en algún sitio; este nombra una entrada relativa que solo
+    /// significa algo dentro del archivo que se acaba de escribir.
+    ///
+    /// El codec tampoco es el mismo: aquí se escapa todo lo que no sea
+    /// `[A-Za-z0-9._~-]`, así que `café.txt` viaja como `caf%C3%A9.txt` y no
+    /// literal. La `/` se deja SIN escapar a propósito: es el separador de
+    /// componentes del archivo, un componente de nombre Unix no puede llevar
+    /// una `/` cruda, y todo lo demás va escapado — así que sigue siendo
+    /// inequívoca, y esconderla haría ilegible justo el nombre que hay que ir
+    /// a buscar.
+    pub path: String,
+    /// El mismo, para ENSEÑAR, con la conversión con pérdidas que lleva
+    /// cualquier otro nombre que se pinte. Acompaña a [`Self::path`]; no lo
+    /// sustituye — sobre un nombre que no es UTF-8, este trae `U+FFFD` y aquel
+    /// es el único del que se recuperan los bytes.
+    pub name: String,
+    /// Qué le pasa fuera: `separator` (`\` es separador de directorios en
+    /// 7-Zip y el Explorador), `stream` (`:` abre un flujo alternativo en
+    /// NTFS), `reserved` (`CON`, `NUL`, `AUX`… no se pueden extraer en Windows
+    /// en absoluto), `trailing` (un punto o un espacio final que Windows se
+    /// come sin decirlo).
+    ///
+    /// Vocabulario ABIERTO comparable por igualdad, con el MISMO contrato que
+    /// [`ArchiveTestFailure::reason`] y [`ConnectionDegraded::reason`]: puede
+    /// CRECER de forma aditiva —otra plataforma deforma los nombres de maneras
+    /// que este conjunto no tiene—, así que **un cliente que reciba una clase
+    /// que no conozca la enseña tal cual y JAMÁS rechaza el informe por ella**.
+    /// Tratar estos cuatro como exhaustivos es leer mal el contrato.
+    pub risk: String,
+}
+
+/// Result de [`ARCHIVE_PACK_REPORT`] (0.58.0, #250): lo que ese archivo lleva
+/// dentro y que significa otra cosa fuera de aquí.
+///
+/// **Vacío significa que se miró y no había**, no que no se mirara — pero
+/// dentro de lo que [`Self::checked`] declare y ni un milímetro más allá. Este
+/// informe NO afirma que el archivo viaje intacto a cualquier parte: afirma
+/// que las clases que dice haber mirado no aparecieron. `<`, `>`, `"`, `|`,
+/// `?` y `*` también son ilegales en Windows y hoy no se miran, y sin
+/// `checked` un informe limpio estaría diciendo lo contrario. Es el mismo
+/// motivo por el que [`ArchiveTestResult::checked`] existe: «pasa» significa
+/// cosas distintas según qué se comprobó.
+///
+/// Lo que NO aparece aquí son las colisiones por plegado —dos entradas que en
+/// macOS o en NTFS serían un solo fichero—, y no por olvido: **esas no se
+/// empaquetan**. `archive.pack` falla con
+/// [`ConflictKind::Exists`](crate::ConflictKind) antes de escribir un byte,
+/// porque ahí sí se PIERDE un fichero al extraer. Una lista que jamás puede
+/// traer nada sería peor que no tenerla.
+///
+/// ```
+/// use norte_proto::methods::ArchivePackReportResult;
+/// let r: ArchivePackReportResult =
+///     serde_json::from_str(r#"{"entries":12,"checked":["separator"]}"#).expect("informe");
+/// assert!(r.risky.is_empty() && !r.truncated);
+/// assert_eq!(r.entries, 12, "cuántas entradas se comprobaron");
+/// // Y sin `checked`, un informe limpio no autoriza a decir nada.
+/// let mudo: ArchivePackReportResult =
+///     serde_json::from_str(r#"{"entries":12}"#).expect("informe");
+/// assert!(mudo.checked.is_empty());
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArchivePackReportResult {
+    /// Entradas comprobadas. Con `risky` vacío, es lo que convierte el informe
+    /// en una afirmación en vez de en un silencio.
+    pub entries: u64,
+    /// QUÉ clases de riesgo se miraron de verdad: `separator`, `stream`,
+    /// `reserved`, `trailing`. Vocabulario ABIERTO y CRECIENTE, igual que
+    /// [`PackRiskyName::risk`] y por el mismo motivo que
+    /// [`ArchiveTestResult::checked`]: un informe limpio solo significa algo
+    /// junto a la lista de lo que se comprobó, y un cliente que pintara «viaja
+    /// intacto» sobre un daemon que mira cuatro clases estaría afirmando lo que
+    /// nadie ha comprobado.
+    ///
+    /// Vacío = **no se declara nada**, y entonces un `risky` vacío no autoriza
+    /// a decir nada. Es el mismo trato que `checked` en su gemelo.
+    pub checked: Vec<String>,
+    /// Entradas cuyo nombre significa otra cosa fuera, hasta
+    /// [`ARCHIVE_PACK_REPORT_MAX`].
+    pub risky: Vec<PackRiskyName>,
+    /// `true` si la lista se quedó corta. Un informe recortado que no lo dijera
+    /// enseñaría «tres nombres» sobre un archivo con cuatrocientos.
+    pub truncated: bool,
+}
+
+/// Tope de elementos de la lista de [`ArchivePackReportResult`] (0.58.0).
+///
+/// El mismo criterio que [`ARCHIVE_TEST_MAX_FAILURES`]: un informe es para
+/// LEERLO, y una lista de miles no se lee — lo que se hace con ella es
+/// desplazarse hasta que uno se rinde. Lo que un tope no puede hacer es
+/// mentir sobre lo que dejó fuera, y para eso está
+/// [`ArchivePackReportResult::truncated`].
+pub const ARCHIVE_PACK_REPORT_MAX: usize = 64;
 
 /// Params de [`FILE_SPLIT`] (0.50.0, #132).
 ///
