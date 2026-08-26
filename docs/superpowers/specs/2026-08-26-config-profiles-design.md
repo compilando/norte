@@ -125,6 +125,24 @@ project layer's warnings already use, and the key is ignored. Silence here is
 what turns a picker into a permission escalator: a profile is chosen from a
 list mid-session, and a configuration layer is not.
 
+**And a profile MAY NOT carry an `init.lua`.** This was missing from both lists
+in the first draft, and both reviewers found it in the same place: the Lua
+loader gates on `layer == Layer::Project`, the same negation written in another
+file, so `Layer::Profile` inherited the user layer's **code execution** the
+moment the variant existed. The Lua host is deliberately unsandboxed — full
+stdlib, `os.execute` included — and a profile is picked from a list while the
+program runs, so it would be the escalator this decision exists to prevent, and
+without even the trust prompt a repository's `init.lua` has to pass.
+
+The line, stated once: **a profile declares, it does not execute.** Everything
+D2 grants is a file the reader can open and understand — a theme, a keymap, a
+set of openers, a layout, a list of favourites. `openers.toml` stays granted
+even though it names external programs, because it is a declaration you can
+read in full, its directory is one D4 confines to the reader's own config tree,
+and a profile that could not choose how files open would not be a workspace.
+`init.lua` is the other kind of thing, and it is refused with a message rather
+than ignored in silence.
+
 Connections are deliberately in neither list, because they are not
 configuration: the daemon owns the connection list (ADR 0074, #264). A profile
 cannot define one. Reopening or highlighting a connection on activation is a
@@ -170,6 +188,24 @@ macOS and Windows) and #246 (`--layout` going lossy into a filename). A
 profile name reaches the filesystem in exactly the same way, so it is an
 `OsString` from the picker to the directory, and the comparison against the
 list is byte-for-byte.
+
+**Bytes are not the whole of it: the name is also checked before it is
+joined.** A name reaches the filesystem through `profiles_dir.join(name)`, and
+`Path::join` with an absolute path — or with a Windows drive prefix — replaces
+the base entirely, while `..` climbs out of it. `--profile ../../../tmp/pwn`
+would point a configuration layer at a directory nobody vetted, and an empty
+name would make `profiles/` itself the layer. So a profile name is refused
+unless it can be a single directory entry: not empty, not `.` or `..`, no `/`
+`\` `:` or NUL, no trailing dot or space, and none of the Win32 device names.
+This repository already had that check for layout filenames; it moves down into
+`norte-config`, which is where the security-relevant copy belongs, and the
+layout loader defers to it. Two copies of one rule diverge.
+
+The name must then appear **byte-for-byte in the listing** of `profiles/`
+before it is used. Letting the filesystem resolve it means `WORK` opens `work`
+on macOS and Windows, which is #245 again — and the listing and the loader must
+answer that question the same way, or a profile loads by name and never appears
+in the picker.
 
 The one place it must become text is the key of `SessionBody.layouts`, which
 is a JSON object and therefore UTF-8 by construction. The mapping is explicit

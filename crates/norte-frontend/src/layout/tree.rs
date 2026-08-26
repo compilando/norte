@@ -975,6 +975,19 @@ impl Node {
     /// lectura: determinista, y por tanto el mismo árbol rebasado dos veces
     /// desde la misma base da el mismo resultado.
     ///
+    /// # De dónde sale `base`
+    ///
+    /// De [`crate::session::SessionBody::next_slot_base`], y de ningún otro
+    /// sitio. La propiedad de «no colisiona» vive ENTERA ahí: mirar solo el
+    /// árbol del perfil activo daría una base que aterriza encima de los
+    /// huecos huérfanos, que son justo los que nadie está mirando cuando pasa.
+    /// Y el árbol rebasado se mete en `layouts` ANTES de volver a pedir una
+    /// base, o dos perfiles rebasan desde el mismo número.
+    ///
+    /// Sin espacio libre por arriba devuelve el árbol SIN TOCAR y un mapa
+    /// vacío: el llamante se queda como estaba en vez de recibir un árbol con
+    /// ids repetidos.
+    ///
     /// ```
     /// use norte_frontend::layout::{Dir, KindId, Node, SlotId};
     ///
@@ -998,13 +1011,22 @@ impl Node {
             // (`duplicate_slot_ids` lo dice y `validate` lo rechaza); si llega
             // uno, los dos huecos siguen compartiendo id en vez de que uno se
             // lleve un número que nadie le dio.
-            mapa.entry(id).or_insert_with(|| {
-                let nuevo = SlotId(siguiente);
-                // Saturar y no envolver: una sesión que llegase a u32::MAX
-                // deja de repartir en vez de aterrizar sobre un hueco vivo.
-                siguiente = siguiente.saturating_add(1);
-                nuevo
-            });
+            if mapa.contains_key(&id) {
+                continue;
+            }
+            // Sin espacio arriba se DEVUELVE EL ÁRBOL TAL CUAL, y esto no es
+            // celo: saturar era peor que envolver. `saturating_add` deja a
+            // todos los huecos siguientes con `u32::MAX`, así que un árbol de
+            // entrada sano salía con ids REPETIDOS; ese árbol se guarda en
+            // `layouts`, y el siguiente `from_value` lo valida y devuelve
+            // `BadLayout` para el cuerpo ENTERO — el estado de todos los
+            // perfiles, no el del roto. Ésa es la pérdida que ADR 0059 promete
+            // que no pasa.
+            let Some(tope) = siguiente.checked_add(1) else {
+                return (self.clone(), std::collections::BTreeMap::new());
+            };
+            mapa.insert(id, SlotId(siguiente));
+            siguiente = tope;
         }
         (self.remap_slot_ids(&mapa), mapa)
     }

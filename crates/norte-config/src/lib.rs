@@ -38,6 +38,7 @@ pub use load::{
 pub use profiles::{
     ProfileError, ProfileLoad, ProfileSource, list_profiles, load_with_profile, profile_dir_from,
     profiles_dir_from, standard_layers_no_project_with_profile, standard_layers_with_profile,
+    valid_profile_name,
 };
 pub use schema::{
     AiProviderEntry, AiSection, ArchiveSection, ConfigError, DEFAULT_PRESET, DaemonMode,

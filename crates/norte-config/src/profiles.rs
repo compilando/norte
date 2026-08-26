@@ -49,11 +49,79 @@ pub fn profiles_dir_from(get: &impl Fn(&str) -> Option<OsString>) -> Option<Path
     profiles_dir_on(cfg!(windows), get)
 }
 
-/// One profile's directory. The name is joined as BYTES (rule 1): it is a
-/// directory name, and passing it through `String` is how #245 and #246 sent a
-/// layout name to the wrong file twice.
+/// Names Win32 treats as devices no matter the extension behind them.
+const RESERVADOS: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// Whether `name` can be a directory INSIDE `profiles/`, and nothing else.
+///
+/// This is the canonical check, and `norte_frontend::layout::config` defers to
+/// it for layout filenames — the rules are the same question ("can this name
+/// be a single entry of a directory we own?") and had no business being
+/// answered twice.
+///
+/// `Path::components().count() == 1` does NOT do it, and that was the check
+/// before #246: on Windows `Path::new("C:")` is exactly one component — a
+/// `Prefix` — and [`Path::join`] with a prefix REPLACES the whole base. The
+/// same is true, on every platform, of an absolute path: `profiles.join("/etc")`
+/// is `/etc`. So the name is inspected as a NAME, never as a path.
+///
+/// What this refuses, and why each one matters for a profile:
+///
+/// - empty — `profiles/` itself becomes the layer, so `profiles/norte.toml`
+///   and `profiles/init.lua` load as configuration;
+/// - `.` and `..` — `..` is the user's whole config directory as a second,
+///   duplicated layer;
+/// - anything holding `/`, `\`, `:` or NUL — traversal, a Windows drive
+///   prefix, or an NTFS alternate stream. `--profile ../../../tmp/pwn` points
+///   the layer at a directory nobody vetted;
+/// - a trailing dot or space — Windows eats them, so the directory opened is
+///   not the one named;
+/// - the Win32 device names, extension or not.
+///
+/// It is deliberately NOT enough on its own: [`load_with_profile`] also
+/// requires the name to appear byte-for-byte in [`list_profiles`], because a
+/// legal name still must not be resolved by a case-folding filesystem (#245).
+///
+/// ```
+/// use norte_config::valid_profile_name;
+/// use std::ffi::OsStr;
+///
+/// assert!(valid_profile_name(OsStr::new("work")));
+/// assert!(!valid_profile_name(OsStr::new("..")));
+/// assert!(!valid_profile_name(OsStr::new("/etc/norte")));
+/// assert!(!valid_profile_name(OsStr::new("")));
+/// ```
+#[must_use]
+pub fn valid_profile_name(name: &OsStr) -> bool {
+    let texto = name.to_string_lossy();
+    if texto.is_empty() || texto == "." || texto == ".." {
+        return false;
+    }
+    if texto.contains(['/', '\\', ':', '\0']) {
+        return false;
+    }
+    if texto.ends_with('.') || texto.ends_with(' ') {
+        return false;
+    }
+    let raiz = texto.split('.').next().unwrap_or(&texto);
+    !RESERVADOS.iter().any(|r| raiz.eq_ignore_ascii_case(r))
+}
+
+/// One profile's directory, or `None` when the name cannot be one.
+///
+/// The name is joined as BYTES (rule 1): it is a directory name, and passing it
+/// through `String` is how #245 and #246 sent a layout name to the wrong file
+/// twice. It is also checked with [`valid_profile_name`] FIRST — joining an
+/// unvetted name is how a configuration layer ends up pointing outside the
+/// directory it was supposed to live in.
 #[must_use]
 pub fn profile_dir_from(get: &impl Fn(&str) -> Option<OsString>, name: &OsStr) -> Option<PathBuf> {
+    if !valid_profile_name(name) {
+        return None;
+    }
     profiles_dir_from(get).map(|d| d.join(name))
 }
 
@@ -84,7 +152,9 @@ pub fn standard_layers_with_profile_on(
     name: Option<&OsStr>,
 ) -> Layers {
     let base = standard_layers_on(windows, get);
-    let dir = name.and_then(|n| profiles_dir_on(windows, get).map(|d| d.join(n)));
+    let dir = name
+        .filter(|n| valid_profile_name(n))
+        .and_then(|n| profiles_dir_on(windows, get).map(|d| d.join(n)));
     splice(base, dir)
 }
 
@@ -125,6 +195,22 @@ pub fn standard_layers_no_project_with_profile(name: Option<&OsStr>) -> Layers {
     standard_layers_no_project_on(cfg!(windows), &|k| std::env::var_os(k), name)
 }
 
+/// Whether `dir` is a profile that `dir`'s parent LISTS under exactly these
+/// bytes.
+///
+/// Not `dir.is_dir()`, which was the first version of this and was wrong twice
+/// over. It follows symlinks while [`list_profiles`] does not, so a symlinked
+/// profile loaded and never appeared in the picker; and it lets the operating
+/// system resolve the name, so on a case-folding filesystem asking for `WORK`
+/// opens `work` — #245, exactly, and `norte_frontend::layout::config::load`
+/// learned it first for the same reason.
+fn existe_en_el_listado(dir: &Path, name: &OsStr) -> bool {
+    let Some(padre) = dir.parent() else {
+        return false;
+    };
+    list_profiles(padre).is_ok_and(|v| v.iter().any(|n| n == name))
+}
+
 /// Who asked for this profile. It decides what happens when it does not load
 /// (spec 2026-08-26, D7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +231,16 @@ pub enum ProfileSource {
 /// on it.
 #[derive(Debug, thiserror::Error)]
 pub enum ProfileError {
+    /// The name cannot be a directory inside `profiles/`.
+    #[error("«{}» no puede ser el nombre de un perfil", name.to_string_lossy())]
+    BadName {
+        /// The name that was asked for.
+        name: OsString,
+    },
+    /// There is nowhere to put a profile layer: no user config directory
+    /// resolved, so `profiles/` has no parent.
+    #[error("no hay directorio de configuración de usuario donde colgar un perfil")]
+    NoHome,
     /// The profile directory is not there.
     #[error("el perfil «{}» no está en {}", name.to_string_lossy(), dir.display())]
     NotFound {
@@ -210,29 +306,38 @@ pub fn load_with_profile(
     };
 
     let layers = layers_for(Some(name));
-    let problema: Option<ProfileError> = match layers
-        .dirs
-        .iter()
-        .find(|(_, k)| *k == Layer::Profile)
-        .map(|(d, _)| d.clone())
-    {
-        Some(dir) if !dir.is_dir() => Some(ProfileError::NotFound {
+    let problema: Option<ProfileError> = if valid_profile_name(name) {
+        match layers
+            .dirs
+            .iter()
+            .find(|(_, k)| *k == Layer::Profile)
+            .map(|(d, _)| d.clone())
+        {
+            // A name was asked for and no profile layer came back: the
+            // resolver had nowhere to hang it (no user config directory). This
+            // is a REFUSAL and not a quiet "no profile", or `--profile work`
+            // would start as something else without a word — the outcome D7
+            // declares fatal for an explicit request.
+            None => Some(ProfileError::NoHome),
+            Some(dir) if !existe_en_el_listado(&dir, name) => Some(ProfileError::NotFound {
+                name: name.to_owned(),
+                dir,
+            }),
+            Some(_) => match crate::load::load(&layers) {
+                Ok(config) => {
+                    return Ok(ProfileLoad {
+                        config,
+                        active: Some(name.to_owned()),
+                        degraded: None,
+                    });
+                }
+                Err(e) => Some(ProfileError::Config(e)),
+            },
+        }
+    } else {
+        Some(ProfileError::BadName {
             name: name.to_owned(),
-            dir,
-        }),
-        // No profile layer in these layers at all: nothing was asked of the
-        // resolver that it could refuse, so this is the plain load.
-        None => None,
-        Some(_) => match crate::load::load(&layers) {
-            Ok(config) => {
-                return Ok(ProfileLoad {
-                    config,
-                    active: Some(name.to_owned()),
-                    degraded: None,
-                });
-            }
-            Err(e) => Some(ProfileError::Config(e)),
-        },
+        })
     };
 
     let Some(problema) = problema else {
@@ -282,7 +387,18 @@ pub fn list_profiles(dir: &Path) -> std::io::Result<Vec<OsString>> {
     let mut out = Vec::new();
     for entry in entries {
         let entry = entry?;
-        if entry.file_type()?.is_dir() {
+        // `metadata` and not `entry.file_type()`: the second is `lstat`, so a
+        // symlink to a directory would not be listed — and keeping a profile
+        // in a dotfiles repository and symlinking it here is the obvious way
+        // to carry one between machines, which is a thing the design asks for.
+        // A DECISION, not an accident: whoever can plant a symlink in this
+        // directory can already rewrite the `norte.toml` next to it, so
+        // following one grants nothing new.
+        //
+        // It also has to agree with `existe_en_el_listado`, which asks this
+        // same question for `load_with_profile`. Two answers to one question
+        // is how a profile loads by name and never appears in the picker.
+        if std::fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()) {
             out.push(entry.file_name());
         }
     }
@@ -361,6 +477,78 @@ mod tests {
         // que los pierde acaba probando el camino de «el directorio no está»
         // sin enterarse.
         (f, vec![usuario])
+    }
+
+    /// Un nombre de perfil no puede apuntar la CAPA a cualquier sitio del
+    /// disco. `Path::join` con una ruta absoluta —o con un prefijo de unidad en
+    /// Windows— sustituye la base ENTERA, y `..` sube.
+    #[test]
+    fn un_nombre_no_puede_salirse_del_directorio_de_perfiles() {
+        for malo in [
+            "",
+            ".",
+            "..",
+            "../../../tmp/pwn",
+            "/etc/norte",
+            "C:",
+            "notas:secreto",
+            "work/../..",
+            "work.",
+            "work ",
+            "CON",
+            "con.toml",
+        ] {
+            assert!(
+                !valid_profile_name(OsStr::new(malo)),
+                "«{malo}» no puede ser un nombre de perfil"
+            );
+        }
+        for bueno in ["work", "photos", "mi perfil", "work.2"] {
+            assert!(valid_profile_name(OsStr::new(bueno)), "«{bueno}» sí vale");
+        }
+    }
+
+    /// Y la puerta no es solo el validador: `profile_dir_from` y el resolutor
+    /// de capas se NIEGAN a construir la ruta, en vez de construirla y confiar
+    /// en que alguien mire.
+    #[test]
+    fn un_nombre_hostil_no_produce_ni_ruta_ni_capa() {
+        let e = env(&[("NORTE_CONFIG_DIR", "/custom")]);
+        assert_eq!(profile_dir_from(&e, OsStr::new("..")), None);
+        assert_eq!(profile_dir_from(&e, OsStr::new("/etc/norte")), None);
+
+        let l = standard_layers_with_profile_on(false, &e, Some(OsStr::new("../../etc")));
+        assert!(
+            l.dirs.iter().all(|(_, k)| *k != Layer::Profile),
+            "no se cuela una capa que apunte fuera: {:?}",
+            l.dirs
+        );
+    }
+
+    /// El nombre tiene que estar en el LISTADO, byte a byte. Dejar resolver al
+    /// sistema de ficheros abre `work` cuando se pidió `WORK` en macOS y
+    /// Windows — #245, y es lo que D4 prometía y no estaba.
+    #[test]
+    fn el_nombre_se_compara_contra_el_listado_byte_a_byte() {
+        let (dirs, _guards) = arbol_con_perfil_sano("work");
+        let err = load_with_profile(&dirs, Some(OsStr::new("WORK")), ProfileSource::Explicit)
+            .expect_err("no hay ningún perfil que se llame así");
+        assert!(matches!(err, ProfileError::NotFound { .. }), "{err:?}");
+    }
+
+    /// Un nombre hostil sigue la misma regla de tres respuestas que un perfil
+    /// roto: fatal si lo nombró el humano, degradado si venía de la sesión.
+    #[test]
+    fn un_nombre_hostil_sigue_la_regla_de_tres_respuestas() {
+        let (dirs, _guards) = arbol_con_perfil_sano("work");
+        let err = load_with_profile(&dirs, Some(OsStr::new("..")), ProfileSource::Explicit)
+            .expect_err("aborta");
+        assert!(matches!(err, ProfileError::BadName { .. }), "{err:?}");
+
+        let r = load_with_profile(&dirs, Some(OsStr::new("..")), ProfileSource::Sticky)
+            .expect("arranca sin perfil");
+        assert_eq!(r.active, None);
+        assert!(r.degraded.is_some());
     }
 
     /// `--profile` roto ABORTA: el lector pidió ese perfil por su nombre, y

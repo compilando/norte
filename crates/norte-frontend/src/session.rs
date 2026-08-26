@@ -224,11 +224,37 @@ impl SessionBody {
         // que la poda sea determinista y no dependa del orden del mapa.
         orden.sort_unstable();
         let sobran = self.layouts.len() - PROFILE_STATE_CAP;
+        let mut candidatos: BTreeSet<u32> = BTreeSet::new();
         for (_, nombre) in orden.into_iter().take(sobran) {
             if let Some(arbol) = self.layouts.remove(&nombre) {
-                for SlotId(id) in arbol.slot_ids() {
-                    self.slots.remove(&id);
-                }
+                candidatos.extend(arbol.slot_ids().into_iter().map(|SlotId(id)| id));
+            }
+        }
+        // Los huecos del perfil que se va se borran contra LO QUE QUEDA, no a
+        // ciegas por su árbol.
+        //
+        // Que dos perfiles no compartan hueco es un invariante del REPARTO
+        // (`next_slot_base` + `rebase_slot_ids`), y nada lo impone sobre un
+        // cuerpo que llega de disco: `from_value` valida cada árbol por
+        // separado —duplicados DENTRO de uno— y no dice nada de un id
+        // compartido entre DOS, y el cuerpo es opaco para el core, así que
+        // cualquier cliente puede escribir uno así. Borrando a ciegas, un
+        // cuerpo de ésos se llevaba por delante los huecos del perfil ACTIVO:
+        // el lector perdía el directorio, el cursor y los dos rastros de los
+        // paneles que estaba mirando, que es justo lo que el rustdoc de
+        // `prune` promete que no pasa.
+        //
+        // Y solo se miran los ids del perfil saliente: los huérfanos de otros
+        // NO se tocan aquí, que para eso está el barrido por edad de abajo.
+        let vivos: BTreeSet<u32> = self
+            .layouts
+            .values()
+            .flat_map(Node::slot_ids)
+            .map(|SlotId(id)| id)
+            .collect();
+        for id in candidatos {
+            if !vivos.contains(&id) {
+                self.slots.remove(&id);
             }
         }
     }
@@ -242,19 +268,23 @@ impl SessionBody {
     /// reasignando encima del estado guardado de otro perfil, que es
     /// justamente el estado que nadie está mirando cuando pasa.
     ///
-    /// Una sesión vacía empieza en 1.
+    /// Una sesión vacía empieza en 1. `None` = no queda espacio: el id más
+    /// alto en uso es `u32::MAX`, y no hay «el siguiente». Devolverlo saturado
+    /// era decir que `u32::MAX` está libre teniéndolo ocupado, con el
+    /// resultado de que [`Node::rebase_slot_ids`] repartía ese mismo número a
+    /// todos los huecos del árbol.
     #[must_use]
-    pub fn next_slot_base(&self) -> u32 {
+    pub fn next_slot_base(&self) -> Option<u32> {
         let de_arboles = self
             .layouts
             .values()
             .flat_map(Node::slot_ids)
             .map(|SlotId(id)| id);
         let de_estados = self.slots.keys().copied();
-        de_arboles
-            .chain(de_estados)
-            .max()
-            .map_or(1, |m| m.saturating_add(1))
+        match de_arboles.chain(de_estados).max() {
+            None => Some(1),
+            Some(m) => m.checked_add(1),
+        }
     }
 
     /// El cuerpo como documento JSON.
@@ -555,7 +585,7 @@ mod tests {
         );
         let mut b = SessionBody::default();
         for (nombre, tocado) in perfiles {
-            let (arbol, _) = fabrica.rebase_slot_ids(b.next_slot_base());
+            let (arbol, _) = fabrica.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
             for SlotId(id) in arbol.slot_ids() {
                 let mut s = slot("file:///casa");
                 s.touched_ms = *tocado;
@@ -607,6 +637,68 @@ mod tests {
         }
     }
 
+    /// Un cuerpo que llega de DISCO puede compartir ids entre dos perfiles: la
+    /// disjunción es un invariante del reparto, y `from_value` solo valida cada
+    /// árbol por separado. Tirar un perfil no puede llevarse por delante los
+    /// huecos del ACTIVO, que es lo que el rustdoc de `prune` promete.
+    #[test]
+    fn tirar_un_perfil_no_toca_huecos_que_otro_sigue_mencionando() {
+        let compartido = crate::layout::Node::split(
+            crate::layout::Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        let mut b = SessionBody::default();
+        // Cinco perfiles con LOS MISMOS ids: nada en el esquema lo prohíbe.
+        for (i, nombre) in ["a", "b", "c", "d", "e"].iter().enumerate() {
+            b.layouts.insert((*nombre).to_owned(), compartido.clone());
+            for SlotId(id) in compartido.slot_ids() {
+                let mut s = slot("file:///casa");
+                s.touched_ms = (i as u64 + 1) * 10;
+                b.slots.insert(id, s);
+            }
+        }
+        b.active = "e".to_owned();
+        b.prune(100);
+
+        assert_eq!(b.layouts.len(), PROFILE_STATE_CAP, "sobra uno y se va");
+        for SlotId(id) in b.layouts[&b.active].slot_ids() {
+            assert!(
+                b.slots.contains_key(&id),
+                "el hueco {id} lo sigue enseñando el perfil activo"
+            );
+        }
+    }
+
+    /// Sin espacio arriba, `next_slot_base` lo DICE en vez de contestar un id
+    /// que está en uso, y `rebase_slot_ids` devuelve el árbol intacto en vez de
+    /// repartir el mismo número a todos sus huecos — lo que fabricaría
+    /// duplicados a partir de un árbol sano y haría que el siguiente
+    /// `from_value` rehusara el cuerpo ENTERO.
+    #[test]
+    fn sin_espacio_arriba_no_se_reparte_nada() {
+        let mut b = SessionBody::default();
+        b.slots.insert(u32::MAX, slot("file:///casa"));
+        assert_eq!(b.next_slot_base(), None, "no hay «el siguiente»");
+
+        let arbol = crate::layout::Node::split(
+            crate::layout::Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        let (nuevo, mapa) = arbol.rebase_slot_ids(u32::MAX);
+        assert_eq!(nuevo, arbol, "el árbol vuelve tal cual");
+        assert!(mapa.is_empty());
+        assert!(
+            nuevo.duplicate_slot_ids().is_empty(),
+            "y sobre todo: sin duplicados fabricados"
+        );
+    }
+
     /// Un cuerpo realista con el tope lleno cabe en `SESSION_BODY_MAX`. Si este
     /// test se pone rojo, la cura es BAJAR [`PROFILE_STATE_CAP`], no subir el
     /// tope del protocolo: el core rehúsa un `put` que se pase y deja la sesión
@@ -623,7 +715,7 @@ mod tests {
                 .map(|i| Node::slot(SlotId(i), KindId::browser()))
                 .collect();
             let arbol = crate::layout::Node::split(crate::layout::Dir::Horizontal, hijos);
-            let (arbol, _) = arbol.rebase_slot_ids(b.next_slot_base());
+            let (arbol, _) = arbol.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
             for SlotId(id) in arbol.slot_ids() {
                 let mut s = slot(&format!("{raiz}/modulo{id}"));
                 s.back = (0..HISTORY_CAP)
@@ -657,12 +749,12 @@ mod tests {
         b.layouts
             .insert("work".into(), Node::slot(SlotId(4), KindId::browser()));
         b.slots.insert(9, slot("file:///tmp"));
-        assert_eq!(b.next_slot_base(), 10);
+        assert_eq!(b.next_slot_base(), Some(10));
     }
 
     #[test]
     fn una_sesion_vacia_empieza_en_uno() {
-        assert_eq!(SessionBody::default().next_slot_base(), 1);
+        assert_eq!(SessionBody::default().next_slot_base(), Some(1));
     }
 
     /// Dos perfiles adoptados sobre la MISMA disposición de fábrica acaban con
@@ -678,9 +770,9 @@ mod tests {
         );
         let mut b = SessionBody::default();
 
-        let (t1, _) = fabrica.rebase_slot_ids(b.next_slot_base());
+        let (t1, _) = fabrica.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
         b.layouts.insert("work".into(), t1);
-        let (t2, _) = fabrica.rebase_slot_ids(b.next_slot_base());
+        let (t2, _) = fabrica.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
         b.layouts.insert("photos".into(), t2);
 
         let a: BTreeSet<SlotId> = b.layouts["work"].slot_ids().into_iter().collect();

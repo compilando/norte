@@ -165,6 +165,7 @@ err-keymap-preset-unknown = unknown preset { $name }; available: { $available }
 err-keymap-invalid = invalid keymap: { $detail }
 # --- Lua scripting (M4, ADR 0026) — detalles SIEMPRE por detail_for_bar ---
 err-lua-load = init.lua ({ $layer }): { $detail }
+err-lua-profile-ignored = the profile's init.lua was ignored: a profile declares, it does not run code
 err-lua-unknown = unknown Lua command: { $name }
 err-lua-command = Lua command failed: { $detail }
 err-lua-cancelled = Lua command cancelled
