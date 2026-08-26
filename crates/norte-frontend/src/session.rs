@@ -170,6 +170,30 @@ impl SessionBody {
         }
     }
 
+    /// El primer id de hueco que no usa NADIE: ni una disposición de ningún
+    /// perfil, ni un estado guardado, huérfanos incluidos.
+    ///
+    /// Es la base que [`Node::rebase_slot_ids`] necesita para que dos perfiles
+    /// no compartan hueco (spec 2026-08-26, D5). Mira TODO y no solo el perfil
+    /// activo a propósito: repartir contra lo que se ve en pantalla acabaría
+    /// reasignando encima del estado guardado de otro perfil, que es
+    /// justamente el estado que nadie está mirando cuando pasa.
+    ///
+    /// Una sesión vacía empieza en 1.
+    #[must_use]
+    pub fn next_slot_base(&self) -> u32 {
+        let de_arboles = self
+            .layouts
+            .values()
+            .flat_map(Node::slot_ids)
+            .map(|SlotId(id)| id);
+        let de_estados = self.slots.keys().copied();
+        de_arboles
+            .chain(de_estados)
+            .max()
+            .map_or(1, |m| m.saturating_add(1))
+    }
+
     /// El cuerpo como documento JSON.
     ///
     /// **Sin `version` dentro** desde #247: el esquema del cuerpo lo declara
@@ -454,6 +478,46 @@ mod tests {
             show_hidden: false,
             touched_ms: 0,
         }
+    }
+
+    /// La base sale de TODO lo que hay: las disposiciones de cada perfil y los
+    /// huecos guardados, huérfanos incluidos. Mirar solo el perfil activo
+    /// reasignaría encima del estado de otro.
+    #[test]
+    fn la_base_deja_atras_todo_lo_que_ya_existe() {
+        let mut b = SessionBody::default();
+        b.layouts
+            .insert("work".into(), Node::slot(SlotId(4), KindId::browser()));
+        b.slots.insert(9, slot("file:///tmp"));
+        assert_eq!(b.next_slot_base(), 10);
+    }
+
+    #[test]
+    fn una_sesion_vacia_empieza_en_uno() {
+        assert_eq!(SessionBody::default().next_slot_base(), 1);
+    }
+
+    /// Dos perfiles adoptados sobre la MISMA disposición de fábrica acaban con
+    /// conjuntos de huecos disjuntos. Éste es el test que fija el diseño.
+    #[test]
+    fn dos_perfiles_sobre_la_misma_disposicion_no_comparten_hueco() {
+        let fabrica = crate::layout::Node::split(
+            crate::layout::Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        let mut b = SessionBody::default();
+
+        let (t1, _) = fabrica.rebase_slot_ids(b.next_slot_base());
+        b.layouts.insert("work".into(), t1);
+        let (t2, _) = fabrica.rebase_slot_ids(b.next_slot_base());
+        b.layouts.insert("photos".into(), t2);
+
+        let a: BTreeSet<SlotId> = b.layouts["work"].slot_ids().into_iter().collect();
+        let c: BTreeSet<SlotId> = b.layouts["photos"].slot_ids().into_iter().collect();
+        assert!(a.is_disjoint(&c), "work {a:?} y photos {c:?} se pisan");
     }
 
     /// Una disposición sin listado PARSEA, y al aplicarse dejaba la TUI sin
