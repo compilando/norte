@@ -322,6 +322,25 @@ the lesson about presets that leave core commands unreachable, but binding
 four new commands across seven presets without being asked is the opposite
 mistake.
 
+### D10 — A rebind made under a profile is written into that profile
+
+`RebindSources::split_at` (`norte-frontend/src/keymap/rebind.rs:435`) decides
+which layer the shortcut editor writes to: a leading run of `System`, then at
+most one `User`, and **anything else lands in `above`, the fail-closed side**.
+Its own rustdoc says an unexpected order makes the door refuse writes it
+cannot model.
+
+Left alone, an active profile carrying a `keymap.toml` sits above the user
+layer, so every rebind would either be refused or be written where the profile
+shadows it. Both are wrong for the same reason: the reader rebinding a key
+inside a workspace means it in that workspace.
+
+So the cut widens by exactly one step — `System`\* then `User`? then
+`Profile`? — and the write target is the **last** of `User`/`Profile` present.
+Every other order still falls into `above` and is still refused. This is why
+this belongs to P2 rather than to the frontend phases: it is a rule about
+layers, and it is testable with no UI at all.
+
 ## Phases
 
 Each is a PR under ~400 net lines with one purpose.
@@ -329,18 +348,24 @@ Each is a PR under ~400 net lines with one purpose.
 **P1 — the layer.** `Layer::Profile`, its directory resolution (including the
 `NORTE_CONFIG_DIR` seam), precedence, the positive whitelist of D2 with its
 warnings, the `[profile]` section of D3, and the three-way failure rule of D7.
-`norte-config` only; no UI, no session, no wire.
+Mostly `norte-config`; no UI and no wire, but **not free of the bridge**: the
+new `Layer` variant breaks three exhaustive matches
+(`norte-tui/src/lua/host.rs:33`, `norte-tui/src/lua/api.rs:335`,
+`norte-gui-tauri/src/startup.rs:345`), and the third maps into
+`norte_ui_host::settings::ConfigLayer`, which is bridge surface. The bridge
+bump lands here, in the phase that causes it, rather than in P4.
 
 **P2 — the state.** `SessionBody.active`, arrangements keyed by profile, slot
 ids allocated per profile, the pruning order of D6, `SCHEMA_VERSION` 1 → 2 and
-its round-trip tests including a v1 body. `norte-frontend` only.
+its round-trip tests including a v1 body, and the widened rebind cut of D10.
+`norte-frontend` only.
 
 **P3 — the TUI.** The pure picker, `profile.pick`, `--profile`, and the hot
 switch of D8 with its "what could not be applied" line, measured.
 
-**P4 — the window.** DTO, renderer, bridge bump, the golden corpus entry the
-new picker needs (#257 is the precedent for a corpus checked against a
-hand-written list and missing variants).
+**P4 — the window.** DTO, renderer, the golden corpus entry the new picker
+needs (#257 is the precedent for a corpus checked against a hand-written list
+and missing variants), and a second bridge bump for the picker itself.
 
 **P5 — creating one, and checking it.** "Save the current workspace as a
 profile", `norte doctor` validation, help topics, Fluent keys in both locales.
