@@ -1200,10 +1200,21 @@ fn version_ventana_actual() {
     // un frontend SIN TERMINAL no puede ofrecer «editar uno nuevo» — no hay
     // forma de crear el fichero, y lanzar un editor a que lo cree al guardar
     // es justo lo que una ventana no puede hacer.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.57.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.56.0"), "N-1");
+    // 0.58.0 (#250): `archive.pack_report`. Método nuevo que un cliente viejo
+    // no llama, y la ventana se desplaza en la dirección de 0.51.0. La pérdida
+    // hay que contarla en la dirección que el handshake PERMITE, que es una
+    // sola —cliente 0.57 contra daemon 0.58; al revés el cliente se rechaza
+    // entero en `initialize`—: ese cliente empaqueta igual, con las mismas
+    // entradas y los mismos bytes, y se queda sin el AVISO de que alguno de
+    // esos nombres significa otra cosa al extraerlo en Windows.
+    //
+    // Lo que este informe NO lleva son las colisiones por plegado: esas no se
+    // empaquetan (`archive.pack` falla con `Exists` antes de escribir un byte),
+    // porque ahí sí DESAPARECE un fichero al extraer.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.58.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.57.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.55.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.56.9"),
         "N-2 fuera de la ventana"
     );
 }

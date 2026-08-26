@@ -270,6 +270,11 @@ pub struct Falso {
     pub informe_undo: std::sync::Mutex<Option<norte_proto::methods::PolicyUndoReportResult>>,
     /// Los ids de task cuyo informe de undo se pidió, en orden.
     pub informes_undo_pedidos: std::sync::Mutex<Vec<u64>>,
+    /// El informe que contesta `archive.pack_report` (#250). `None` =
+    /// `Unsupported`, que es lo que contesta un daemon N-1.
+    pub informe_pack: std::sync::Mutex<Option<norte_proto::methods::ArchivePackReportResult>>,
+    /// Los ids cuyo informe de empaquetado se pidió, en orden.
+    pub informes_pack_pedidos: std::sync::Mutex<Vec<u64>>,
     /// Los ids cuya ficha se pidió, en orden.
     pub fichas_pedidas: std::sync::Mutex<Vec<String>>,
     /// Los ids que se pidieron a `plugin.help`, en orden: es lo que permite
@@ -1412,6 +1417,18 @@ impl HostBackend for Falso {
             .expect("informes undo")
             .push(task_id.get());
         let informe = self.informe_undo.lock().expect("informe undo").clone();
+        Box::pin(async move { informe.ok_or(Error::Unsupported) })
+    }
+
+    fn archive_pack_report(
+        &self,
+        task_id: norte_proto::TaskId,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::ArchivePackReportResult, Error>> {
+        self.informes_pack_pedidos
+            .lock()
+            .expect("informes pack")
+            .push(task_id.get());
+        let informe = self.informe_pack.lock().expect("informe pack").clone();
         Box::pin(async move { informe.ok_or(Error::Unsupported) })
     }
 

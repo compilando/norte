@@ -126,6 +126,8 @@ msg-transfer-name-failed = no se pudo encolar — el nombre se conserva
 
 # --- Mensajes de la barra ---
 msg-done = hecho
+msg-pack-warnings = empaquetado, pero { $risky } nombre(s) significan otra cosa en otro sistema
+msg-pack-warnings-partial = empaquetado, pero al menos { $risky } nombre(s) significan otra cosa en otro sistema
 msg-cancelled = cancelado
 msg-cancelling = cancelando…
 msg-no-tasks = no hay tasks en marcha

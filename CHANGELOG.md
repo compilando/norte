@@ -255,6 +255,32 @@ independently through `PROTOCOL_VERSION`.
   thread draining the pipe, because one nobody reads fills up and blocks the
   daemon on its next write.
 
+- **Packing says which names mean something else elsewhere** (#250, protocol
+  **0.58.0**, ADR 0078). `archive.pack_report` is the fourth of the report
+  family and the first whose subject is a Task that *succeeded*: the archive is
+  written correctly and entirely, and it still carries entries that land
+  somewhere else when extracted on another system — `a\b.txt` becomes a file
+  inside a folder `a` in 7-Zip and Explorer, `f:ads` becomes an NTFS alternate
+  data stream, `CON` cannot be extracted on Windows at all, and a trailing dot
+  or space is silently eaten there. Our own reader round-trips all of them
+  exactly, which is why neither the round-trip test nor the `unzip -t`/`tar -tvf`
+  interop test can see any of it: the archive is not malformed. Both frontends
+  ask for the report when a pack finishes and say so on the status bar.
+
+  **It warns rather than refusing, and its sibling refuses.** Two entries whose
+  fold keys match are still rejected outright, because extracted where they
+  collide **one of the two files disappears**. This is not that: nothing is
+  lost, it is placed differently — and refusing would make norte unable to pack
+  an ordinary Unix tree to prevent something that is not a loss. An empty report
+  is an assertion, not a silence — `entries` says how many were checked and
+  `checked` says *which classes were looked for*, because `<`, `>`, `"`, `|`,
+  `?` and `*` are illegal on Windows too and are not among them: a clean report
+  without that list would be claiming the archive travels intact anywhere, which
+  is more than anyone verified. The compatibility story is the one the handshake
+  permits — a 0.57 client against a 0.58 daemon, which packs the same archive
+  and simply never asks; the reverse pairing does not exist, because a
+  from-the-future client is refused outright at `initialize`.
+
 ### Changed
 
 - **A columns plugin now survives from one page to the next** (#224). A

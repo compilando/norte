@@ -701,6 +701,89 @@ async fn dos_entradas_que_pliegan_al_mismo_nombre_no_se_empaquetan() {
     }
 }
 
+/// #250 punto 2 — un nombre que significa OTRA COSA fuera se empaqueta, y se
+/// dice.
+///
+/// La diferencia con el test de arriba es la que sostiene todo el diseño: dos
+/// entradas que pliegan al mismo nombre hacen que al extraer DESAPAREZCA un
+/// fichero, así que se rechazan. `a\b.txt` extraído en Linux sigue siendo
+/// `a\b.txt` y en Windows es un `b.txt` dentro de una carpeta `a`: no se pierde
+/// nada, se coloca distinto. Rechazarlo se llevaría por delante árboles Unix
+/// legítimos para prevenir algo que ni siquiera es una pérdida.
+#[tokio::test]
+async fn un_nombre_que_significa_otra_cosa_fuera_se_empaqueta_y_se_dice() {
+    let (engine, mem) = engine_con(&[
+        ("mem:///p/normal.txt", b"1"),
+        ("mem:///p/a\\b.txt", b"2"),
+        ("mem:///p/CON", b"3"),
+    ])
+    .await;
+    let h = engine
+        .pack_as(
+            pack_params(&["mem:///p"], "mem:///out.zip", "mem:///"),
+            norte_core::journal::Actor::User,
+        )
+        .await
+        .expect("arranca");
+    let id = h.id();
+    assert_eq!(
+        h.join().await,
+        TaskState::Completed,
+        "el archivo SE ESCRIBE"
+    );
+    assert!(!lee(&mem, "mem:///out.zip").await.is_empty());
+
+    let leido = engine
+        .archive_pack_report(id)
+        .expect("el anillo lo tiene")
+        .1;
+    assert_eq!(
+        leido.checked,
+        vec!["separator", "stream", "reserved", "trailing"],
+        "el informe declara QUÉ miró: sin eso, uno limpio no afirma nada"
+    );
+
+    let riesgos: Vec<(&str, &str)> = leido
+        .risky
+        .iter()
+        .map(|r| (r.name.as_str(), r.risk.as_str()))
+        .collect();
+    assert!(
+        riesgos.contains(&("p/a\\b.txt", "separator")),
+        "la barra invertida es separador en 7-Zip y en el Explorador: {riesgos:?}"
+    );
+    assert!(
+        riesgos.contains(&("p/CON", "reserved")),
+        "`CON` no se extrae en Windows en absoluto: {riesgos:?}"
+    );
+    assert!(
+        !riesgos.iter().any(|(n, _)| *n == "p/normal.txt"),
+        "y lo corriente no se nombra: un informe que avisa de todo no lo lee nadie"
+    );
+    assert!(leido.entries >= 3, "cuántas se comprobaron");
+    assert!(!leido.truncated);
+}
+
+/// Y un archivo cuyos nombres viajan todos intactos deja un informe VACÍO, que
+/// no es lo mismo que no haber mirado: `entries` lo dice.
+#[tokio::test]
+async fn un_archivo_limpio_deja_un_informe_que_afirma_en_vez_de_callar() {
+    let (engine, _mem) =
+        engine_con(&[("mem:///p/uno.txt", b"1"), ("mem:///p/dos.txt", b"2")]).await;
+    let h = engine
+        .pack_as(
+            pack_params(&["mem:///p"], "mem:///out.zip", "mem:///"),
+            norte_core::journal::Actor::User,
+        )
+        .await
+        .expect("arranca");
+    let id = h.id();
+    assert_eq!(h.join().await, TaskState::Completed);
+    let leido = engine.archive_pack_report(id).expect("informe").1;
+    assert!(leido.risky.is_empty());
+    assert!(leido.entries >= 2, "se miraron, que es lo que lo hace útil");
+}
+
 /// Y dos nombres que NO pliegan a lo mismo se empaquetan, que es lo normal. La
 /// comprobación no puede costar la operación legítima.
 #[tokio::test]

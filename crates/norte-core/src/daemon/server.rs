@@ -4052,6 +4052,31 @@ async fn handle_archive_pack(
     to_value(&methods::FsTaskResult { task_id })
 }
 
+/// `archive.pack_report` (0.58.0, #250): qué guardó ese empaquetado que no
+/// sobrevive a salir de aquí.
+///
+/// Gemelo exacto de `archive.test_report`, visibilidad incluida: solo lo ve
+/// quien lanzó la Task, y un id de otro actor se contesta igual que uno que no
+/// existe.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+fn handle_archive_pack_report(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::ArchivePackReportParams = parse_params(params)?;
+    let unknown = || RpcError::from(norte_proto::Error::NotFound);
+    let (owner, informe) = shared
+        .engine
+        .archive_pack_report(p.task_id)
+        .ok_or_else(unknown)?;
+    if !may_observe(actor, &owner) {
+        tracing::warn!(actor = ?actor, "archive.pack_report de otro actor");
+        return Err(unknown());
+    }
+    to_value(&informe)
+}
+
 /// `archive.test` (0.50.0, #132): comprueba un archivo como Task.
 ///
 /// No muta, así que solo gate de LECTURA. El informe se recoge después con
@@ -4719,6 +4744,7 @@ async fn dispatch_fs_task(
         methods::ARCHIVE_PACK => handle_archive_pack(req.params, &actor, shared).await,
         methods::ARCHIVE_TEST => handle_archive_test(req.params, &actor, shared).await,
         methods::ARCHIVE_TEST_REPORT => handle_archive_test_report(req.params, &actor, shared),
+        methods::ARCHIVE_PACK_REPORT => handle_archive_pack_report(req.params, &actor, shared),
         methods::FILE_SPLIT => handle_file_split(req.params, &actor, shared).await,
         methods::FILE_COMBINE => handle_file_combine(req.params, &actor, shared).await,
         // connection.close (0.49.0, #140): humano, con gate de lectura.

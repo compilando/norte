@@ -10977,6 +10977,94 @@ async fn un_undo_terminado_pide_su_informe_y_dice_lo_que_no_volvio() {
     assert_eq!(dialogos[0].title_key, "modal-undo-report-title");
 }
 
+/// #250 — un empaquetado que COMPLETA pide su informe y dice lo que guardó que
+/// significa otra cosa fuera.
+#[tokio::test]
+async fn un_empaquetado_terminado_dice_los_nombres_que_significan_otra_cosa() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    *falso.informe_pack.lock().expect("informe pack") =
+        Some(norte_proto::methods::ArchivePackReportResult {
+            entries: 9,
+            checked: vec!["separator".to_owned()],
+            risky: vec![norte_proto::methods::PackRiskyName {
+                path: "a%5Cb.txt".to_owned(),
+                name: "a\\b.txt".to_owned(),
+                risk: "separator".to_owned(),
+            }],
+            truncated: false,
+        });
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let p = inyectar_task_de(&tx, 77, norte_proto::TaskKind::Pack);
+    siguientes_tasks(&mut sub).await;
+    p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+
+    for _ in 0..40 {
+        if let Ok(Some(Update::Message(m))) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv()).await
+            && let UiUpdate::Patch(p) = &m.payload
+            && let Some(norte_ui_host::dto::ViewChange::Status(s)) = p
+                .changes
+                .iter()
+                .find(|c| matches!(c, norte_ui_host::dto::ViewChange::Status(_)))
+            && s.message.as_deref().is_some_and(|t| t.contains('1'))
+        {
+            assert_eq!(
+                *backend.informes_pack_pedidos.lock().expect("pedidos"),
+                vec![77]
+            );
+            return;
+        }
+    }
+    panic!("un empaquetado con un nombre hostil dentro no dijo nada");
+}
+
+/// Y un empaquetado CANCELADO no dice nada, porque no hay archivo del que
+/// hablar (hallazgo del `protocol-guardian`).
+///
+/// El informe existe igual —se calcula antes de escribir el primer byte—, y la
+/// cancelación deja el destino LIMPIO. Pintarlo diría «empaquetado, pero…»
+/// sobre algo que nadie empaquetó, y además haría a la ventana decir una cosa
+/// que la TUI no dice (ADR 0077).
+#[tokio::test]
+async fn un_empaquetado_cancelado_no_avisa_de_un_archivo_que_no_existe() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    *falso.informe_pack.lock().expect("informe pack") =
+        Some(norte_proto::methods::ArchivePackReportResult {
+            entries: 9,
+            checked: vec!["separator".to_owned()],
+            risky: vec![norte_proto::methods::PackRiskyName {
+                path: "a%5Cb.txt".to_owned(),
+                name: "a\\b.txt".to_owned(),
+                risk: "separator".to_owned(),
+            }],
+            truncated: false,
+        });
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let p = inyectar_task_de(&tx, 78, norte_proto::TaskKind::Pack);
+    siguientes_tasks(&mut sub).await;
+    p.send_modify(|p| p.state = norte_proto::TaskState::Cancelled);
+
+    // Se le da tiempo de sobra a que pidiera el informe: lo que se afirma es
+    // que NO lo pide, y eso solo se puede afirmar esperando.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(
+        backend
+            .informes_pack_pedidos
+            .lock()
+            .expect("pedidos")
+            .is_empty(),
+        "de un empaquetado cancelado no hay archivo del que avisar"
+    );
+}
+
 /// Un undo limpio no interrumpe: el tablero lo dice y ya.
 #[tokio::test]
 async fn un_undo_limpio_no_abre_nada() {

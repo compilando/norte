@@ -160,6 +160,15 @@ pub struct Engine {
     /// falló y por qué— no cabe en un `Failed`. El mismo desalojo, con la misma
     /// regla de «primero lo que no cuenta nada».
     test_reports: std::sync::Mutex<std::collections::VecDeque<TestReportEntry>>,
+    /// Anillo ACOTADO de informes de `archive.pack`, por `task_id`
+    /// ([`Engine::archive_pack_report`]).
+    ///
+    /// Cuarto de la familia, y el que más lejos lleva su motivo: los otros tres
+    /// cuentan lo que SALIÓ MAL, y este cuenta algo que salió BIEN y aun así
+    /// hay que decir — un `a\b.txt` guardado, que en Windows es un `b.txt`
+    /// dentro de una carpeta `a`. Un `Completed` es verdad y no lo cubre
+    /// (#250).
+    pack_reports: std::sync::Mutex<std::collections::VecDeque<PackReportEntry>>,
 }
 
 /// La puerta de policy, capturable (#171).
@@ -269,6 +278,7 @@ impl Engine {
             batch_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             sync_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             test_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            pack_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -1845,6 +1855,14 @@ impl Engine {
     /// [`Error::InvalidPath`] sin fuentes, o si alguna no cuelga de `base` —el
     /// nombre guardado se calcula contra ella, y sin nombre no hay entrada—, y
     /// lo que devuelva la resolución de providers.
+    ///
+    /// # Panics
+    ///
+    /// Si el mutex del anillo de informes está envenenado, que solo pasa si
+    /// otro hilo panicó teniéndolo. Mismo trato que sus tres gemelos en el
+    /// camino de ESCRITURA del anillo: aquí sí se panica, porque un anillo a
+    /// medias de actualizar no es un informe rancio sino una entrada que nadie
+    /// va a poder leer nunca.
     pub async fn pack_as(
         &self,
         params: norte_proto::methods::ArchivePackParams,
@@ -1876,6 +1894,11 @@ impl Engine {
         let base = params.base;
         let format = params.format;
         let level = params.level;
+        let informe = Arc::new(std::sync::Mutex::new(
+            norte_proto::methods::ArchivePackReportResult::default(),
+        ));
+        let owner = actor.clone();
+        let vivo = Arc::clone(&informe);
         let handle = self.sched.submit(
             &key,
             TaskKind::Pack,
@@ -1895,13 +1918,55 @@ impl Engine {
                             level,
                         },
                         observer,
+                        vivo,
                         &ctx,
                     )
                     .await
                 })
             }),
         );
+        {
+            let mut ring = self.pack_reports.lock().expect("pack_reports lock sano");
+            ring.push_back((handle.id(), owner, informe));
+            evict_pack_reports(&mut ring);
+        }
+        // El informe NO viaja en el retorno, al revés que en `test_archive_as`:
+        // aquí el único camino de lectura es [`Self::archive_pack_report`], y
+        // devolver además el `Arc<Mutex<…>>` era filtrar un asa a la API
+        // pública para comodidad de un test.
         Ok(handle)
+    }
+
+    /// Informe de un `archive.pack` ya lanzado, por `task_id`, más el ACTOR que
+    /// lo pidió (#250). `None` si ese id nunca fue un empaquetado de esta
+    /// instancia o si el anillo ya lo desalojó.
+    ///
+    /// Snapshot, como sus tres gemelos, y se sirve también antes del terminal:
+    /// el informe se calcula sobre la lista de entradas ANTES de escribir, así
+    /// que ya es definitivo cuando el archivo aún se está escribiendo — y lo
+    /// que dice sigue siendo verdad de un archivo cancelado a medias.
+    #[must_use]
+    pub fn archive_pack_report(
+        &self,
+        task_id: TaskId,
+    ) -> Option<(
+        crate::journal::Actor,
+        norte_proto::methods::ArchivePackReportResult,
+    )> {
+        let ring = self
+            .pack_reports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        ring.iter()
+            .find(|(id, _, _)| *id == task_id)
+            .map(|(_, owner, r)| {
+                (
+                    owner.clone(),
+                    r.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone(),
+                )
+            })
     }
 
     /// Comprueba un archivo como Task cancelable (`archive.test`, 0.50.0,
@@ -3580,6 +3645,9 @@ type SyncReportEntry = ReportEntry<norte_proto::methods::SyncReportResult>;
 /// El anillo de informes de `archive.test` ([`Engine::archive_test_report`]).
 type TestReportEntry = ReportEntry<norte_proto::methods::ArchiveTestResult>;
 
+/// El anillo de informes de `archive.pack` ([`Engine::archive_pack_report`]).
+type PackReportEntry = ReportEntry<norte_proto::methods::ArchivePackReportResult>;
+
 /// Poda el anillo de informes de lote hasta sus topes, sacrificando SIEMPRE lo
 /// que menos hace falta.
 ///
@@ -3726,6 +3794,29 @@ fn evict_test_reports(ring: &mut std::collections::VecDeque<TestReportEntry>) {
         TEST_REPORTS_MAX,
         TEST_REPORTS_AGENTS_MAX,
         |r: &norte_proto::methods::ArchiveTestResult| !r.failed.is_empty() || r.truncated,
+    );
+}
+
+/// Tope del anillo de `archive.pack`. Mismo número que el de `archive.test` y
+/// **atado a propósito**: son informes de la misma familia y del mismo tamaño,
+/// y que compartan cota es una decisión, no el reflejo de haber copiado la
+/// constante de al lado. Cambiar una y no la otra debería costar escribir por
+/// qué.
+pub(crate) const PACK_REPORTS_MAX: usize = TEST_REPORTS_MAX;
+
+/// Sub-tope por clase del anillo de `archive.pack`, atado igual.
+pub(crate) const PACK_REPORTS_AGENTS_MAX: usize = TEST_REPORTS_AGENTS_MAX;
+
+/// Desalojo del anillo de `archive.pack` (#250), con la misma regla que sus
+/// tres gemelos: primero cae lo que no cuenta nada. Aquí «no cuenta nada» es
+/// un archivo cuyos nombres viajan todos intactos, y lo que se protege es el
+/// informe que dice que alguno no.
+fn evict_pack_reports(ring: &mut std::collections::VecDeque<PackReportEntry>) {
+    evict_reports(
+        ring,
+        PACK_REPORTS_MAX,
+        PACK_REPORTS_AGENTS_MAX,
+        |r: &norte_proto::methods::ArchivePackReportResult| !r.risky.is_empty() || r.truncated,
     );
 }
 

@@ -3244,7 +3244,8 @@ struct EnPool {
 /// un guest que no sobrevive a la llamada no puede cachear NADA: sin pool, esa
 /// caché no está sin usar, está prohibida.
 ///
-/// Vive aquí, al lado de [`run_column_values`], porque hacen falta los dos
+/// Vive aquí, al lado de `run_column_values` —privada, así que sin enlace—,
+/// porque hacen falta los dos
 /// caminos: el daemon lo cuelga de su estado compartido y el backend embebido
 /// del suyo. Uno sí y el otro no recrearía justo la asimetría de #165/#201/#181.
 ///
@@ -3322,7 +3323,7 @@ impl ColumnPool {
         )
     }
 
-    /// Mismo contrato que [`run_column_values`] hasta en la degradación: lo
+    /// Mismo contrato que `run_column_values` hasta en la degradación: lo
     /// que no se puede hacer sale como celdas vacías, jamás como un error que
     /// tumbe el listado. Y BLOQUEANTE igual: va en `spawn_blocking`.
     #[allow(clippy::too_many_arguments)] // la MISMA lista que `run_column_values`, y a propósito

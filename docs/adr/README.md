@@ -83,3 +83,4 @@ edits.
 | [0075](0075-the-tree-does-not-move-when-the-listing-does.md) | The tree does not move when the listing does | accepted |
 | [0076](0076-creating-a-file-is-a-mutation-like-any-other.md) | Creating a file is a mutation like any other | accepted |
 | [0077](0077-the-same-command-means-the-same-thing-in-both-frontends.md) | The same command means the same thing in both frontends | accepted |
+| [0078](0078-a-name-that-travels-intact-and-still-means-something-else.md) | A name that travels intact and still means something else | accepted |

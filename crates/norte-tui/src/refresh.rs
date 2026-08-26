@@ -95,6 +95,14 @@ pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream)
                         None => app.message = Some(crate::gestures::shell_remote_message(app)),
                     }
                 }
+                // #250: el archivo se escribió entero y aun así puede llevar
+                // dentro dos entradas que en macOS o en Windows son una sola.
+                // El `Completed` es verdad y no lo cubre, así que se pregunta.
+                if fin.progress.kind == norte_proto::TaskKind::Pack
+                    && let Some(aviso) = aviso_de_empaquetado(backend, fin.progress.task_id).await
+                {
+                    app.message = Some(aviso);
+                }
             }
             TaskState::Cancelled => {
                 refresh = true;
@@ -163,6 +171,38 @@ pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream)
 /// `task_id`: la intención se consume en la conexión vieja. Si esa síntesis
 /// desapareciera, un id reciclado abriría el editor sobre un fichero que quizá
 /// no se creó — y entonces lo crearía el editor, que es el bug entero de vuelta.
+/// El aviso de un empaquetado que acaba de terminar, o `None` si no hay nada
+/// que decir (#250).
+///
+/// Se pregunta al COMPLETAR un `archive.pack` —de uno cancelado no hay archivo
+/// del que avisar— y la respuesta corriente es que no hay nada. Que un archivo
+/// limpio no diga nada es lo que hace que decir algo signifique algo.
+///
+/// Un fallo de la llamada también es `None`: si no se pudo preguntar, no hay
+/// hallazgo que contar sobre el archivo, y pintar «no se pudo comprobar» sobre
+/// un empaquetado que salió bien es ruido.
+///
+/// La llamada se espera DENTRO del tick, como el `refresh_panes` que viene
+/// detrás: contra un daemon atascado el tick ya se para ahí, así que spawnear
+/// esta sola compraría poco y costaría un canal.
+async fn aviso_de_empaquetado(backend: &Backend, task_id: norte_proto::TaskId) -> Option<String> {
+    let informe = backend.archive_pack_report(task_id).await.ok()?;
+    let riesgos = informe.risky.len();
+    if riesgos == 0 {
+        return None;
+    }
+    // Un informe RECORTADO dice «al menos», que es lo único honesto: la lista
+    // se corta en `ARCHIVE_PACK_REPORT_MAX` y pintar «64» sobre un archivo con
+    // cuatrocientos es exactamente la mentira que `truncated` existe para
+    // impedir. Misma forma que el «al menos» de `fs.dir_size` (#251).
+    let clave = if informe.truncated {
+        "msg-pack-warnings-partial"
+    } else {
+        "msg-pack-warnings"
+    };
+    Some(ta(clave, &[("risky", &riesgos.to_string())]))
+}
+
 fn tomar_creacion(app: &mut App, terminada: norte_proto::TaskId) -> Option<norte_proto::VPath> {
     match &app.pending_edit_open {
         Some((id, _)) if *id == terminada => app.pending_edit_open.take().map(|(_, p)| p),

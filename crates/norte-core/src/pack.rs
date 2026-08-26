@@ -151,6 +151,120 @@ struct Pieza {
 /// entradas para la barra (una barra sin total es una barra que no informa),
 /// el rechazo de un nombre imposible ANTES de haber creado el destino, y un
 /// orden estable.
+/// Las clases de riesgo que este daemon SABE mirar, que es lo que viaja en
+/// `ArchivePackReportResult::checked` (#250).
+///
+/// Es una lista y no una constante suelta porque tiene que poder crecer, y
+/// porque lo que hace útil a un informe limpio es exactamente esto: sin ella,
+/// «no encontré nada» se lee como «no hay nada», y hay clases —`<`, `>`, `"`,
+/// `|`, `?`, `*`, todas ilegales en Windows— que aquí no se miran.
+const RIESGOS_COMPROBADOS: &[&str] = &["separator", "stream", "reserved", "trailing"];
+
+/// Nombres reservados de Windows, sin extensión y sin distinguir mayúsculas.
+/// No se pueden extraer ahí EN ABSOLUTO — no es que se renombren: la llamada
+/// falla, porque el nombre lo tiene tomado un dispositivo.
+const RESERVADOS_WINDOWS: &[&str] = &[
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+/// Qué guarda este empaquetado que SIGNIFICA otra cosa fuera de aquí (#250).
+///
+/// `a\b` es un separador de directorios en 7-Zip y en el Explorador; `f:ads`
+/// abre un flujo alternativo en NTFS; `CON` no se extrae en Windows en
+/// absoluto; un punto o un espacio final se los come Windows sin decirlo.
+/// Nuestro propio lector round-trippea los cuatro exactos, que es justo por lo
+/// que el test de ida y vuelta no ve ninguno.
+///
+/// **Esto AVISA, no rechaza, y su hermano de arriba sí rechaza.** Dos entradas
+/// que pliegan al mismo nombre no se empaquetan (ver el chequeo de
+/// [`enumera`]): extraídas en otra parte, una de las dos DESAPARECE. Esto es
+/// otra cosa — `a\b.txt` extraído en Linux sigue siendo `a\b.txt`, y en Windows
+/// es un `b.txt` dentro de una carpeta `a`. No se pierde nada; se coloca
+/// distinto. Rechazarlo se llevaría por delante árboles Unix legítimos para
+/// prevenir algo que ni siquiera es una pérdida.
+fn informe_de_nombres(nombres: &[Vec<u8>]) -> methods::ArchivePackReportResult {
+    let mut out = methods::ArchivePackReportResult {
+        entries: nombres.len() as u64,
+        // Lo que de verdad se mira, y nada más. `<`, `>`, `"`, `|`, `?` y `*`
+        // también son ilegales en Windows y NO están aquí: un informe limpio
+        // que no dijera qué miró estaría afirmando que el archivo viaja
+        // intacto a cualquier parte, que es más de lo que nadie comprobó.
+        checked: RIESGOS_COMPROBADOS
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
+        ..Default::default()
+    };
+    for n in nombres {
+        let Some(riesgo) = riesgo_de_nombre(n) else {
+            continue;
+        };
+        if out.risky.len() >= methods::ARCHIVE_PACK_REPORT_MAX {
+            out.truncated = true;
+            break;
+        }
+        out.risky.push(methods::PackRiskyName {
+            path: wire_de_nombre(n),
+            name: String::from_utf8_lossy(n).into_owned(),
+            risk: riesgo.to_owned(),
+        });
+    }
+    out
+}
+
+/// El nombre guardado en forma WIRE: percent-encoding sobre los bytes, que es
+/// lo único que conserva un nombre que no es UTF-8 (regla 1). La barra se deja
+/// tal cual: separa componentes dentro del archivo y esconderla haría ilegible
+/// justamente el nombre que hay que ir a buscar.
+fn wire_de_nombre(nombre: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(nombre.len());
+    for b in nombre {
+        match b {
+            b'/' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
+            b if b.is_ascii_alphanumeric() => out.push(*b as char),
+            // El `write!` a un `String` no falla; el `_` no tapa un error real.
+            b => {
+                let _ = write!(out, "%{b:02X}");
+            }
+        }
+    }
+    out
+}
+
+/// Qué le pasa a este nombre fuera de aquí, o `None` si viaja intacto.
+///
+/// UNA respuesta por nombre y en este orden: lo que rompe la EXTRACCIÓN antes
+/// que lo que la deforma. Un nombre con dos problemas se cuenta una vez — el
+/// informe es para leerlo, y dos filas del mismo fichero se leen como dos
+/// ficheros.
+fn riesgo_de_nombre(nombre: &[u8]) -> Option<&'static str> {
+    if nombre.contains(&b'\\') {
+        return Some("separator");
+    }
+    if nombre.contains(&b':') {
+        return Some("stream");
+    }
+    for componente in nombre.split(|b| *b == b'/') {
+        // Sin la extensión: en Windows `CON.txt` está tan tomado como `CON`.
+        let base = componente
+            .split(|b| *b == b'.')
+            .next()
+            .unwrap_or(componente);
+        let base = String::from_utf8_lossy(base).to_ascii_lowercase();
+        if RESERVADOS_WINDOWS.contains(&base.as_str()) {
+            return Some("reserved");
+        }
+    }
+    for componente in nombre.split(|b| *b == b'/') {
+        if matches!(componente.last(), Some(b'.' | b' ')) {
+            return Some("trailing");
+        }
+    }
+    None
+}
+
 async fn enumera(
     fuentes: Vec<(Arc<dyn Provider>, VPath)>,
     base: &VPath,
@@ -291,6 +405,7 @@ pub(crate) async fn pack(
     destino: Destino,
     que: Empaquetado,
     observer: Arc<dyn MutationObserver>,
+    informe: Arc<std::sync::Mutex<methods::ArchivePackReportResult>>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
     let Destino {
@@ -315,6 +430,17 @@ pub(crate) async fn pack(
         });
     }
     let piezas = enumera(fuentes, &base, ctx).await?;
+    // El informe se calcula sobre lo que se VA a guardar y ANTES de escribir un
+    // byte (#250): así existe aunque la Task se cancele a mitad, y lo que dice
+    // sigue siendo verdad del archivo a medias — las entradas que colisionan lo
+    // hacen estén todas o solo las primeras.
+    {
+        let nombres: Vec<Vec<u8>> = piezas.iter().map(|p| p.entry.name.clone()).collect();
+        let calculado = informe_de_nombres(&nombres);
+        *informe
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = calculado;
+    }
     let total_bytes: u64 = piezas.iter().map(|p| p.entry.size).sum();
     ctx.progress.update(|p| {
         p.entries_total = Some(piezas.len() as u64);
@@ -1036,6 +1162,142 @@ mod tests {
 
     fn vp(w: &str) -> VPath {
         VPath::parse(w).expect("wire de test")
+    }
+
+    /// El informe NO habla de colisiones por plegado, y no es un olvido: esas
+    /// **no se empaquetan** — las rechaza `enumera`, y hay un test del corpus
+    /// que lo fija (`dos_entradas_que_pliegan_al_mismo_nombre_no_se_empaquetan`,
+    /// en `tests/engine_pack.rs`). Un archivo que EXISTE no puede llevarlas
+    /// dentro, así que una lista para ellas jamás traería nada, y una lista que
+    /// nunca trae nada se lee como «no hay».
+    #[test]
+    fn lo_que_no_es_un_riesgo_no_se_reporta() {
+        let r = informe_de_nombres(&[
+            b"a.txt".to_vec(),
+            b"b.txt".to_vec(),
+            b"src/main.rs".to_vec(),
+            // Estas dos ni llegarían aquí en un empaquetado de verdad, y aun
+            // así el informe calla: no es su pregunta.
+            b"Makefile".to_vec(),
+            b"makefile".to_vec(),
+        ]);
+        assert!(r.risky.is_empty());
+        assert_eq!(
+            r.entries, 5,
+            "vacío es una AFIRMACIÓN: se miraron las cinco"
+        );
+        assert!(!r.truncated);
+    }
+
+    /// La forma wire del nombre guardado conserva los BYTES (regla 1), que es
+    /// lo único por lo que ese codec existe: `name` trae el `U+FFFD` de
+    /// pintarlo y `path` es el único del que se recupera el nombre.
+    #[test]
+    fn el_nombre_guardado_viaja_por_sus_bytes() {
+        let r = informe_de_nombres(&[b"malo\xff\\x.txt".to_vec()]);
+        assert_eq!(r.risky.len(), 1);
+        assert_eq!(
+            r.risky[0].path, "malo%FF%5Cx.txt",
+            "el byte que no es texto sale como %XX, y la barra invertida también"
+        );
+        assert_eq!(
+            r.risky[0].name, "malo\u{fffd}\\x.txt",
+            "y el de PINTAR es el de siempre, con su pérdida"
+        );
+        // La barra separa componentes y se deja legible; el resto va escapado,
+        // así que sigue siendo inequívoca.
+        let hondo = informe_de_nombres(&[b"dir/CON".to_vec()]);
+        assert_eq!(hondo.risky[0].path, "dir/CON");
+        // Y el `%` se escapa: sin eso el codec no sería inyectivo y dos
+        // nombres distintos podrían viajar iguales.
+        let porciento = informe_de_nombres(&[b"100%\\x".to_vec()]);
+        assert_eq!(porciento.risky[0].path, "100%25%5Cx");
+    }
+
+    /// El informe DICE qué clases miró. Sin eso, uno limpio se leería como «el
+    /// archivo viaja intacto a cualquier parte», que es más de lo que se ha
+    /// comprobado: `<`, `>`, `"`, `|`, `?` y `*` también son ilegales en
+    /// Windows y aquí no se miran.
+    #[test]
+    fn el_informe_declara_lo_que_miro() {
+        let r = informe_de_nombres(&[b"limpio.txt".to_vec()]);
+        assert_eq!(
+            r.checked,
+            vec!["separator", "stream", "reserved", "trailing"]
+        );
+        assert!(r.risky.is_empty());
+        let con_ilegal_no_mirado = informe_de_nombres(&[b"pre<post.txt".to_vec()]);
+        assert!(
+            con_ilegal_no_mirado.risky.is_empty(),
+            "hoy no se mira, y por eso `checked` no lo nombra"
+        );
+    }
+
+    /// Los nombres que significan otra cosa fuera, uno por clase.
+    #[test]
+    fn los_nombres_que_significan_otra_cosa_fuera() {
+        let r = informe_de_nombres(&[
+            b"a\\b.txt".to_vec(),
+            b"f:ads".to_vec(),
+            b"CON".to_vec(),
+            b"nombre.".to_vec(),
+            b"otro ".to_vec(),
+            b"normal.txt".to_vec(),
+        ]);
+        let por_riesgo = |cual: &str| -> Vec<&str> {
+            r.risky
+                .iter()
+                .filter(|x| x.risk == cual)
+                .map(|x| x.name.as_str())
+                .collect()
+        };
+        assert_eq!(por_riesgo("separator"), vec!["a\\b.txt"]);
+        assert_eq!(por_riesgo("stream"), vec!["f:ads"]);
+        assert_eq!(por_riesgo("reserved"), vec!["CON"]);
+        assert_eq!(por_riesgo("trailing").len(), 2, "el punto y el espacio");
+        assert!(
+            !r.risky.iter().any(|x| x.name == "normal.txt"),
+            "un nombre corriente no entra"
+        );
+    }
+
+    /// Un nombre reservado lo es POR COMPONENTE y con extensión: `dir/CON.txt`
+    /// no se puede extraer en Windows igual que `CON`.
+    #[test]
+    fn lo_reservado_se_mira_por_componente_y_sin_extension() {
+        let r = informe_de_nombres(&[
+            b"dir/con.txt".to_vec(),
+            b"dir/COM1".to_vec(),
+            b"controlador.rs".to_vec(),
+            b"dir/NULO.txt".to_vec(),
+        ]);
+        let nombres: Vec<&str> = r
+            .risky
+            .iter()
+            .filter(|x| x.risk == "reserved")
+            .map(|x| x.name.as_str())
+            .collect();
+        assert_eq!(
+            nombres,
+            vec!["dir/con.txt", "dir/COM1"],
+            "en el ORDEN en que se empaquetaron, que es como se encuentran"
+        );
+    }
+
+    /// Los topes no mienten sobre lo que dejaron fuera.
+    #[test]
+    fn un_informe_recortado_lo_dice() {
+        let muchos: Vec<Vec<u8>> = (0..methods::ARCHIVE_PACK_REPORT_MAX + 5)
+            .map(|i| format!("d{i}/a\\b.txt").into_bytes())
+            .collect();
+        let r = informe_de_nombres(&muchos);
+        assert_eq!(r.risky.len(), methods::ARCHIVE_PACK_REPORT_MAX);
+        assert!(r.truncated, "y lo DICE");
+        assert_eq!(
+            r.entries,
+            muchos.len() as u64,
+            "el recorte es de la lista, no de lo comprobado"
+        );
     }
 
     /// El nombre guardado sale de la BASE, y una ruta que no cuelga de ella no

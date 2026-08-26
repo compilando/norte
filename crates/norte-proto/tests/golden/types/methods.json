@@ -24,6 +24,57 @@
       "file:///proj/LEEME"
     ]
   },
+  "archive_pack_report_params": {
+    "task_id": 7
+  },
+  "archive_pack_report_result": {
+    "checked": [
+      "separator",
+      "stream",
+      "reserved",
+      "trailing"
+    ],
+    "entries": 5,
+    "risky": [
+      {
+        "name": "a\\b.txt",
+        "path": "a%5Cb.txt",
+        "risk": "separator"
+      },
+      {
+        "name": "malo�\\x.txt",
+        "path": "malo%FF%5Cx.txt",
+        "risk": "separator"
+      },
+      {
+        "name": "f:ads",
+        "path": "f%3Aads",
+        "risk": "stream"
+      },
+      {
+        "name": "CON",
+        "path": "CON",
+        "risk": "reserved"
+      },
+      {
+        "name": "nombre.",
+        "path": "nombre.",
+        "risk": "trailing"
+      }
+    ],
+    "truncated": false
+  },
+  "archive_pack_report_result_clean": {
+    "checked": [
+      "separator",
+      "stream",
+      "reserved",
+      "trailing"
+    ],
+    "entries": 12,
+    "risky": [],
+    "truncated": false
+  },
   "archive_test_params": {
     "path": "file:///a.zip"
   },

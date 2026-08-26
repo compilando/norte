@@ -1142,6 +1142,40 @@ async fn el_informe_de_un_test_de_archivo_no_es_de_cualquiera() {
     }
 }
 
+/// #250 — el informe de un empaquetado tiene la MISMA disciplina que el de un
+/// test de archivo: un id que jamás fue un `archive.pack` se contesta
+/// `NotFound`, que es también lo que se contesta a uno ajeno.
+///
+/// Existe porque el handler es un gemelo del de al lado y «es un gemelo» no es
+/// evidencia: lo que aquí se fija es que el método está CABLEADO en el dispatch
+/// —renombrarlo o no enrutarlo pasaba la suite entera— y que su respuesta a lo
+/// desconocido no filtra existencia.
+#[tokio::test]
+async fn el_informe_de_un_empaquetado_no_es_de_cualquiera() {
+    let d = spawn_daemon(None).await;
+    let humano = connected_client(&d).await;
+    let err = humano
+        .call::<_, methods::ArchivePackReportResult>(
+            methods::ARCHIVE_PACK_REPORT,
+            &methods::ArchivePackReportParams {
+                task_id: norte_proto::TaskId::new(4242),
+            },
+        )
+        .await
+        .expect_err("ese id nunca fue un empaquetado");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(
+                rpc.data,
+                Some(norte_proto::Error::NotFound),
+                "{:?}",
+                rpc.data
+            );
+        }
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
 /// (`grant_scope`) y entonces la copia DENTRO del scope procede, pero FUERA
 /// sigue denegada. Prueba que el registro es el MISMO que consulta el gate.
 #[tokio::test]
