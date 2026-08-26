@@ -405,12 +405,19 @@ impl<'a> RebindSources<'a> {
     /// documentation lists the two ways of guessing it and what each one
     /// silently breaks.
     ///
-    /// Anything that is not a leading run of [`Layer::System`] followed by at
-    /// most one [`Layer::User`] lands in `above`, which is the FAIL-CLOSED
-    /// side: an unexpected order makes the door refuse writes it cannot model,
-    /// never approve one it did not. The two vectors should be the same
-    /// length (a `debug_assert!` says so); a shorter `kinds` also degrades
-    /// into `above`.
+    /// The accepted order is a leading run of [`Layer::System`], then at most
+    /// one [`Layer::User`], then at most one [`Layer::Profile`]; the write
+    /// target is the LAST of those two that is present, and everything left
+    /// above the write must be [`Layer::Project`]. Anything else lands in
+    /// `above`, which is the FAIL-CLOSED side: an unexpected order makes the
+    /// door refuse writes it cannot model, never approve one it did not. The
+    /// two vectors should be the same length (a `debug_assert!` says so); a
+    /// shorter `kinds` also degrades into `above`.
+    ///
+    /// The profile step (spec 2026-08-26, D10) is why the target is the last
+    /// and not the first: an active profile with its own `keymap.toml` sits
+    /// above the user's, so writing into the user's would leave the rebind
+    /// shadowed — visibly saved, and doing nothing.
     ///
     /// ```
     /// use norte_config::Layer;
@@ -450,16 +457,44 @@ impl<'a> RebindSources<'a> {
             .iter()
             .take_while(|k| **k == Layer::System)
             .count();
-        let (target, above_from) = if cut < n && kinds[cut] == Layer::User {
-            (layers[cut].clone(), cut + 1)
-        } else {
-            // No user layer at this position: the user has no `keymap.toml`
-            // (the common case on a fresh install), so the write creates one.
-            (KeymapFile::default(), cut)
-        };
+        // After the system run: at most one `User`, then at most one
+        // `Profile`. The target is the LAST of the two that is present, and
+        // everything the two of them did not claim goes `below`.
+        //
+        // The profile step is what D10 (spec 2026-08-26) adds, and it is not a
+        // nicety. An active profile carrying a `keymap.toml` sits ABOVE the
+        // user layer, so without this the write would land where the profile
+        // shadows it and the reader would see a rebind that does nothing.
+        // Rebinding a key inside a workspace means it in that workspace.
+        let mut below_end = cut;
+        let mut target = KeymapFile::default();
+        let mut above_from = cut;
+        if above_from < n && kinds[above_from] == Layer::User {
+            target = layers[above_from].clone();
+            above_from += 1;
+        }
+        if above_from < n && kinds[above_from] == Layer::Profile {
+            // The user layer, if there was one, is now BELOW the write: the
+            // profile outranks it, exactly as the loader merges them.
+            below_end = above_from;
+            target = layers[above_from].clone();
+            above_from += 1;
+        }
+        // Everything left above the write must be `Project` and nothing else.
+        //
+        // Without this the cut would accept orders no resolver produces — a
+        // `Profile` before a `User`, say — and target the profile while the
+        // user's own layer shadowed it, which is D10's bug mirrored. When the
+        // order is not one the loader can emit, the whole stack degrades into
+        // `above`: refuse a write that cannot be modelled, never approve one.
+        if kinds[above_from..n].iter().any(|k| *k != Layer::Project) {
+            below_end = 0;
+            target = KeymapFile::default();
+            above_from = 0;
+        }
         RebindSplit {
             preset,
-            below: &layers[..cut],
+            below: &layers[..below_end],
             target,
             above: &layers[above_from..],
             known_commands,
@@ -1317,6 +1352,77 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
             vec!["ctrl+j".to_owned()],
             "la capa destino está vacía: se escribe la grafía de `Display`"
         );
+    }
+
+    /// D10: with a profile active, the shortcut is written INTO the profile.
+    ///
+    /// Writing it into the user layer would leave it shadowed by the profile's
+    /// own `keymap.toml`, and the reader would see a rebind that does nothing.
+    /// So the cut widens by one step and the target is the LAST of
+    /// `User`/`Profile` present.
+    #[test]
+    fn con_perfil_activo_el_destino_es_el_perfil() {
+        let preset = parse_keymap(BROWSE).expect("preset");
+        let user = crate::keymap::parse_keymap_layer(
+            "[pane]\nprepend_keymap = [{ on = [\"mod+k\"], run = \"cursor.top\" }]\n",
+        )
+        .expect("user layer");
+        let profile = crate::keymap::parse_keymap_layer(
+            "[pane]\nprepend_keymap = [{ on = [\"ctrl+j\"], run = \"cursor.top\" }]\n",
+        )
+        .expect("profile layer");
+        let layers = [user, profile];
+        let kinds = [Layer::User, Layer::Profile];
+        let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
+        assert_eq!(
+            split.below.len(),
+            1,
+            "la capa del usuario queda DEBAJO de la escritura"
+        );
+        assert!(
+            split.above.is_empty(),
+            "nada por encima del destino: el perfil ES el destino"
+        );
+        // Y el destino es el fichero DEL PERFIL, no uno vacío: rebindear su
+        // propia entrada la reemplaza en sitio, con su grafía.
+        let w = rebind_dry_run(&split.sources(), &[c("ctrl+j")], "pane.move")
+            .expect("se escribe en el perfil");
+        assert_eq!(w.chords, vec!["ctrl+j".to_owned()]);
+    }
+
+    /// Un perfil SIN `keymap.toml` propio no cambia el destino: sigue siendo la
+    /// capa del usuario, y la del perfil ni siquiera está en `kinds`.
+    #[test]
+    fn sin_perfil_el_destino_sigue_siendo_el_usuario() {
+        let preset = parse_keymap(BROWSE).expect("preset");
+        let system = crate::keymap::parse_keymap_layer(
+            "[pane]\nprepend_keymap = [{ on = [\"mod+j\"], run = \"cursor.top\" }]\n",
+        )
+        .expect("system layer");
+        let layers = [system];
+        let kinds = [Layer::System];
+        let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
+        assert_eq!(split.below.len(), 1);
+        assert!(split.above.is_empty());
+        let w = rebind_dry_run(&split.sources(), &[c("ctrl+j")], "pane.move")
+            .expect("la capa del usuario sigue siendo el destino");
+        assert_eq!(w.chords, vec!["ctrl+j".to_owned()]);
+    }
+
+    /// Y cualquier OTRO orden sigue cayendo en `above`, que es el lado
+    /// fail-closed: la puerta rehúsa lo que no sabe modelar, nunca aprueba lo
+    /// que no aprobó. Un perfil DEBAJO del usuario no es un orden que ningún
+    /// resolutor produzca.
+    #[test]
+    fn un_orden_inesperado_sigue_siendo_fail_closed() {
+        let preset = parse_keymap(BROWSE).expect("preset");
+        let a = crate::keymap::parse_keymap_layer("[pane]\nprepend_keymap = []\n").expect("a");
+        let b = crate::keymap::parse_keymap_layer("[pane]\nprepend_keymap = []\n").expect("b");
+        let layers = [a, b];
+        let kinds = [Layer::Profile, Layer::User];
+        let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
+        assert!(split.below.is_empty());
+        assert_eq!(split.above.len(), 2, "todo por encima; no se escribe nada");
     }
 
     /// J1, second miscut: a project layer is LAST in `keymap_layers`, so a
