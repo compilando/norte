@@ -36,8 +36,8 @@ pub use load::{
     persist_ui_theme, persist_ui_theme_to,
 };
 pub use profiles::{
-    list_profiles, profile_dir_from, profiles_dir_from, standard_layers_no_project_with_profile,
-    standard_layers_with_profile,
+    ProfileError, ProfileLoad, ProfileSource, list_profiles, load_with_profile, profile_dir_from,
+    profiles_dir_from, standard_layers_no_project_with_profile, standard_layers_with_profile,
 };
 pub use schema::{
     AiProviderEntry, AiSection, ArchiveSection, ConfigError, DEFAULT_PRESET, DaemonMode,
