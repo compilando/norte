@@ -255,6 +255,14 @@ independently through `PROTOCOL_VERSION`.
   thread draining the pipe, because one nobody reads fills up and blocks the
   daemon on its next write.
 
+### Removed
+
+- **`norte_frontend::shell::login_shell_editor`** — the editor with no file.
+  It is a breaking change to a crate that `just semver` checks, and it is
+  deliberate: its only purpose was launching an editor on an empty buffer so
+  that the editor would create the file, which is the behaviour ADR 0077 takes
+  out. Callers want `editor_argv` on the path the daemon created.
+
 ### Fixed
 
 - **The TUI's "edit a new one" no longer creates the file behind norte's back**
@@ -268,9 +276,25 @@ independently through `PROTOCOL_VERSION`.
   file that is not there shows an empty buffer and creates it on save, which is
   indistinguishable from success until the reader saves. The intention is
   remembered by task id, so a copy or a delete finishing in between cannot
-  redeem it and open the editor on the wrong file. `login_shell_editor` — the
-  editor with no file — is removed rather than left unused: its only purpose was
-  the behaviour being taken out.
+  redeem it and open the editor on the wrong file. The directory is bound when
+  the dialog opens, as the window already did, and the editor's working
+  directory is the created file's parent — so a `:w other.txt` lands beside the
+  file the gesture just made rather than wherever the focus drifted. **What
+  norte governs is the creation**: what the editor writes afterwards runs with
+  your permissions, outside the journal, and the help topic says so next to the
+  sentence that says what *is* governed. Three things the review found and this
+  does not close are filed rather than buried: #301 (the embedded backend sends
+  no destination anchor, and `ntc` runs embedded by default), #302 (the editor
+  is launched with the panel's cwd and an unresolved program name — `pane.edit`
+  has done it since #133) and #303 (the window between creating the name and the
+  editor opening it).
+
+- **A `Ctrl+C` during a creation now quits instead of opening an editor**. The
+  tick that arms the editor also runs the panel refresh that polls the event
+  stream, and the loop drains pending work before it checks `quit` — so quitting
+  norte while `pane.edit-new` was in flight opened the editor first and exited
+  only when it was closed. `App::take_pending_shell` returns nothing once the
+  reader has asked to leave.
 
 - **`pane.disconnect` sends the panel to the same place in both frontends**
   (#140, ADR 0077). The window walked the panel's trail back to the last place

@@ -222,7 +222,7 @@ pub(crate) fn modal_title_body(
         }
         // #290: el mismo molde con la otra clase de nodo. El nombre se pide
         // porque lo crea el daemon, no el editor.
-        Modal::EditNew { name, error } => free_text_modal_text(
+        Modal::EditNew { name, error, .. } => free_text_modal_text(
             "modal-new-file",
             "modal-new-file-hint",
             name,

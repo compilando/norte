@@ -85,7 +85,15 @@ pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream)
                 // el editor se abre ahora y sobre la ruta que se pidió, no
                 // sobre lo que haya bajo el cursor.
                 if let Some(pendiente) = tomar_creacion(app, fin.progress.task_id) {
-                    app.pending_shell = crate::gestures::edit_created(app, &pendiente);
+                    match crate::gestures::edit_created(&pendiente) {
+                        Some(shell) => app.pending_shell = Some(shell),
+                        // El fichero SE CREÓ y el editor no se puede abrir: se
+                        // dice. Tragarse el `None` dejaba `msg-done` en la
+                        // barra y media mitad del gesto perdida sin una
+                        // palabra, que es la clase de silencio que este
+                        // comando vino a quitar.
+                        None => app.message = Some(crate::gestures::shell_remote_message(app)),
+                    }
                 }
             }
             TaskState::Cancelled => {
@@ -146,6 +154,15 @@ pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream)
 /// El id se compara a propósito: entre el submit y este tick puede terminar
 /// cualquier otra task —una copia, un borrado, otra creación—, y abrir el
 /// editor con la primera que pase abriría el fichero equivocado.
+///
+/// **Solo el id, sin época de conexión, y eso descansa en una invariante del
+/// SDK**: tras un relevo del daemon los ids vuelven a empezar (la ventana sí
+/// lleva época por esto — `Controller::epoca_conexion`). Aquí es correcto
+/// porque `norte-client` sintetiza un desenlace `Failed` para toda task
+/// huérfana ANTES de que la conexión nueva reparta ids, conservando el
+/// `task_id`: la intención se consume en la conexión vieja. Si esa síntesis
+/// desapareciera, un id reciclado abriría el editor sobre un fichero que quizá
+/// no se creó — y entonces lo crearía el editor, que es el bug entero de vuelta.
 fn tomar_creacion(app: &mut App, terminada: norte_proto::TaskId) -> Option<norte_proto::VPath> {
     match &app.pending_edit_open {
         Some((id, _)) if *id == terminada => app.pending_edit_open.take().map(|(_, p)| p),

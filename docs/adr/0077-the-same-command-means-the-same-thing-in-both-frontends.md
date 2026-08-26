@@ -91,6 +91,25 @@ the first time two tasks overlap.
 norte's back, and a function that exists solely to do that is an invitation to
 do it again.
 
+### The panel's directory is bound when the dialog opens
+
+Not read again when it is confirmed. The window already did this
+(`Pendiente::CrearFichero { dir }`) and the TUI now matches: between opening the
+prompt and typing a name, what sits under the panel can change, and creating in
+"wherever the focus is now" creates somewhere the reader was not looking when
+they chose the name. The editor's working directory comes from the same place —
+the created file's parent — so a `:w other.txt` lands beside the file the gesture
+just made, not wherever the focus drifted.
+
+### A quit that arrives while the editor is being armed wins
+
+`on_tick` arms the editor and then, in the same tick, runs the panel refresh
+that polls the event stream — where a `Ctrl+C` becomes `quit`. The loop drains
+pending work *before* it checks `quit`, so without a guard, quitting norte
+during a creation opened an editor first and exited only when it was closed.
+`App::take_pending_shell` returns nothing once `quit` is set: nobody pressing
+`Ctrl+C` is asking to be put inside an editor.
+
 ### Where a disconnected panel goes is one decision, in one place
 
 `norte_frontend::nav::regreso_tras_desconectar` takes the released path and the
@@ -99,9 +118,62 @@ scheme *and* authority, so another server on the same scheme is a legitimate
 destination. `None` means nothing in the trail qualifies, and the caller falls
 back to `shell::home_vpath`.
 
+The scheme is compared **without its archive format prefix**. A
+`zip+sftp://server/x.zip!/…` in the trail is served by the same connection as
+`sftp://server/…` — the core evicts both keys together when it closes one — so
+comparing raw schemes made `"zip+sftp" != "sftp"` and landed the panel *inside*
+the machine it had just released, opening a fresh connection with a fresh
+authentication. That is exactly what the gesture asks not to happen.
+
+What it does not do is canonicalise aliases: the core deduplicates authorities
+against `connections.toml` (#47) and a frontend does not have that table, so
+`sftp://work/a` and `sftp://user@host/a` read as two machines when they are one.
+The cost of being wrong there is a reconnection, not a loss.
+
 That fallback also stops going through `to_str()`. A `$HOME` that is not UTF-8
 is a perfectly valid home (rule 1), and lossy-decoding it sent the reader to `/`
 without saying why.
+
+## What this does not close, said plainly
+
+The review of this change surfaced three gaps that live *around* the decision.
+None of them is introduced here, and stating them is the point: a commit whose
+whole subject is "the governed path" must not read as if the governed path were
+airtight.
+
+**The embedded backend sends no destination anchor.** ADR 0076 argued for
+`dest_anchor` on `fs.create` with a specific claim: it is the only wire method
+whose success hands a path to a program outside norte. That program is
+`$EDITOR`, and the frontend that launches it is the TUI — which by default runs
+`Backend::Embedded`, and `Engine::create_file` passes `None`. The anchor cache
+lives in `norte-client`, filled by `fs.list` over the wire; the embedded backend
+has no equivalent, and this is true of `copy` and `move` there too (ADR 0073
+records the same gap). So the frontend with the strongest reason for the check
+is the one that, by default, does not get it. Not fixed here — an anchor cache
+for the embedded backend is its own change — but no longer implicit: **#301**.
+
+**The window between creation and the editor is not closed.** The creation
+itself is safe: the local provider publishes with `rename_noreplace`, so a
+pre-planted name fails with `EEXIST` rather than being adopted. What is open is
+afterwards — norte announces the name by creating it, and between the task's
+outcome and the editor's `exec` that name can be replaced with a symlink by
+anyone who can write in that directory. An `lstat` before launching would narrow
+the window, not close it, and it would buy that narrowing with blocking I/O in
+the run loop (hard rule 2). The same window exists for `pane.edit` on an
+existing file and for the window's `xdg-open`, so it is a property of handing a
+path to another program, not of this command. It is documented in the help topic
+instead, next to the sentence that says what norte does govern, and left open as
+a decision in **#303**.
+
+**The editor is launched with the panel's directory as cwd.** `login_shell_from`
+carries a guard for exactly this shape — on unix `current_dir` applies before
+the program is resolved, so a bare program name plus a `.` in `PATH` executes
+something out of a directory nobody vouched for. `editor_argv` has no such
+guard, and cannot get the same one: a relative `$EDITOR` (`vim`, `code -w`) is
+normal, whereas a relative `$SHELL` is not. This predates the change — `pane.edit`
+has done it since #133 — and this command becomes a second call site. Filed as
+**#302** rather than fixed, because the fix is a `PATH` resolution policy and
+not a line.
 
 ## Consequences
 

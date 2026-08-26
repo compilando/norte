@@ -35,7 +35,7 @@ impl App {
     }
 
     /// Cierra el prompt `kind` tras ENCOLAR lo que pedía, y abre el pendiente
-    /// siguiente. La disciplina es la misma en los nueve: `*_confirm` valida
+    /// siguiente. La disciplina es la misma en los diez: `*_confirm` valida
     /// y NO cierra; cierra esto, y solo cuando el submit salió.
     fn prompt_submitted(&mut self, kind: PromptKind) {
         if self.modal.as_ref().and_then(Modal::prompt_kind) == Some(kind) {
@@ -542,6 +542,21 @@ impl App {
         self.prompt_set_error(PromptKind::Mkdir, msg);
     }
 
+    /// El programa que el bucle debe lanzar en esta vuelta, si alguno.
+    ///
+    /// **Devuelve `None` cuando el usuario ya pidió salir**, y la intención se
+    /// tira: `on_tick` puede ARMAR un `PendingShell` (el editor de
+    /// `pane.edit-new`, cuando la creación termina) y a continuación, dentro
+    /// del mismo tick, tragarse el `Ctrl+C` que el `refresh_panes` de después
+    /// poléa. El bucle drena lo pendiente ANTES de mirar `quit`, así que sin
+    /// esta guarda un `Ctrl+C` durante la creación no salía de norte: abría el
+    /// editor, y solo al cerrarlo salía. Nadie que pulsa `Ctrl+C` está pidiendo
+    /// que se le abra un editor.
+    pub fn take_pending_shell(&mut self) -> Option<super::PendingShell> {
+        let pendiente = self.pending_shell.take();
+        if self.quit { None } else { pendiente }
+    }
+
     /// Abre el modal de crear fichero vacío (Shift+F4, #290).
     ///
     /// Pide un nombre porque el fichero lo crea el DAEMON (`fs.create`) y no
@@ -551,6 +566,7 @@ impl App {
     /// de norte entero.
     pub fn open_edit_new(&mut self) {
         self.modal = Some(Modal::EditNew {
+            dir: self.focused().dir().clone(),
             name: String::new(),
             error: None,
         });
@@ -559,18 +575,37 @@ impl App {
     /// Valida el nombre y devuelve el DESTINO completo. Mismo contrato que
     /// [`Self::mkdir_confirm`], incluido el de NO cerrar el modal: lo cierra
     /// [`Self::edit_new_submitted`] cuando la task ya encoló.
+    ///
+    /// El directorio sale del MODAL, no del pane con foco: se ató al abrirlo
+    /// (ver [`Modal::EditNew`]).
+    ///
+    /// La guarda de localidad se repite sobre ese directorio atado. Con el
+    /// `dir` en el modal es DEFENSIVA —el despacho ya la hizo y nadie puede
+    /// cambiar ese valor—, y se queda porque lo que la haría necesaria es
+    /// exactamente el cambio que a alguien le parecerá una simplificación:
+    /// volver a leer `focused().dir()` aquí. Entonces un pane que se fuera a
+    /// `sftp://` entre abrir y confirmar crearía un fichero que ningún editor
+    /// de esta máquina puede abrir después.
     pub fn edit_new_confirm(&mut self) -> Option<VPath> {
-        let Some(Modal::EditNew { name, .. }) = &self.modal else {
+        let Some(Modal::EditNew { dir, name, .. }) = &self.modal else {
             return None;
         };
-        match norte_proto::Segment::new(name.as_bytes().to_vec()) {
-            Ok(seg) => Some(self.focused().dir().join(seg)),
+        if norte_vfs_local::vpath_to_native(dir).is_err() {
+            // El MISMO mensaje que el shell y el editor: nombra la ubicación
+            // saneada en vez de decir «no» a secas.
+            let msg = crate::gestures::shell_remote_message(self);
+            self.edit_new_set_error(msg);
+            return None;
+        }
+        let destino = match norte_proto::Segment::new(name.as_bytes().to_vec()) {
+            Ok(seg) => dir.join(seg),
             Err(e) => {
                 let msg = e.to_string();
                 self.edit_new_set_error(msg);
-                None
+                return None;
             }
-        }
+        };
+        Some(destino)
     }
 
     /// Cierra el modal tras un submit que SÍ encoló.
@@ -1149,22 +1184,32 @@ mod tests {
     /// daemon y no el editor. Mismo contrato que el de F7 —valida con las
     /// reglas del `VPath`, no cierra al confirmar, conserva lo tecleado tras
     /// un submit fallido— sobre la otra clase de nodo.
+    /// El pane es `file://` a propósito: crear un fichero para editarlo se
+    /// rehúsa donde no hay forma nativa, y `mem://` no la tiene.
+    fn app_local_para_crear() -> App {
+        let d = VPath::parse("file:///tmp").expect("wire");
+        App::new(
+            super::super::Pane::new(d.clone(), Vec::new()),
+            super::super::Pane::new(d, Vec::new()),
+        )
+    }
+
     #[test]
     fn el_modal_de_fichero_nuevo_valida_y_construye_el_destino() {
-        let mut app = app_with_entries(&["a"]);
+        let mut app = app_local_para_crear();
         app.open_edit_new();
         for c in "notas.txt".chars() {
             app.prompt_push(PromptKind::EditNew, c);
         }
         let target = app.edit_new_confirm().expect("nombre válido");
-        assert_eq!(target, VPath::parse("mem:///notas.txt").unwrap());
+        assert_eq!(target, VPath::parse("file:///tmp/notas.txt").unwrap());
         assert!(app.modal.is_some(), "confirmar NO cierra: cierra el submit");
 
         // Un submit fallido —política, journal— conserva el nombre.
         app.edit_new_set_error("policy".into());
         assert!(matches!(
             &app.modal,
-            Some(Modal::EditNew { error: Some(_), name }) if name == "notas.txt"
+            Some(Modal::EditNew { error: Some(_), name, .. }) if name == "notas.txt"
         ));
         app.edit_new_submitted();
         assert!(app.modal.is_none(), "submitted cierra el modal");
@@ -1182,6 +1227,56 @@ mod tests {
             );
             app.cancel_prompt(PromptKind::EditNew);
         }
+    }
+
+    /// El directorio se ATA al abrir el modal, como en la ventana: si el pane
+    /// se va a otro sitio entre abrirlo y confirmarlo, el fichero se crea donde
+    /// el lector estaba mirando cuando tecleó el nombre.
+    #[test]
+    fn el_fichero_nuevo_se_crea_donde_se_abrio_el_dialogo() {
+        let mut app = app_local_para_crear();
+        app.open_edit_new();
+        for c in "notas.txt".chars() {
+            app.prompt_push(PromptKind::EditNew, c);
+        }
+        // El pane se muda DEBAJO del modal.
+        app.panes[0].begin_listing(
+            VPath::parse("file:///otro").unwrap(),
+            Vec::new(),
+            false,
+            None,
+        );
+        assert_eq!(
+            app.edit_new_confirm(),
+            Some(VPath::parse("file:///tmp/notas.txt").unwrap()),
+            "el destino sale del modal, no del pane de ahora"
+        );
+    }
+
+    /// Un `Ctrl+C` que llega mientras se arma el editor NO abre el editor: el
+    /// bucle drena lo pendiente antes de mirar `quit`, así que sin esta guarda
+    /// salir de norte pasaba primero por una sesión de edición que nadie pidió.
+    #[test]
+    fn pedir_salir_tira_el_programa_pendiente() {
+        let mut app = app_with_entries(&["a"]);
+        app.pending_shell = Some(crate::app::PendingShell {
+            argv: vec![std::ffi::OsString::from("vi")],
+            cwd: None,
+            wait_for_key: false,
+        });
+        assert!(app.take_pending_shell().is_some(), "sin salir, se lanza");
+
+        app.pending_shell = Some(crate::app::PendingShell {
+            argv: vec![std::ffi::OsString::from("vi")],
+            cwd: None,
+            wait_for_key: false,
+        });
+        app.quit = true;
+        assert!(app.take_pending_shell().is_none(), "al salir, no");
+        assert!(
+            app.pending_shell.is_none(),
+            "y la intención se tira: no reaparece en la vuelta siguiente"
+        );
     }
 
     /// #103 T9: el modal de patrón marca/desmarca y reporta cuántas marcas

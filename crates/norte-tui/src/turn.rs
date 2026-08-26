@@ -144,7 +144,7 @@ pub async fn drain_pending(
             app.message = Some(t("msg-clipboard-failed"));
         }
     }
-    if let Some(pending) = app.pending_shell.take() {
+    if let Some(pending) = app.take_pending_shell() {
         let crate::app::PendingShell {
             argv,
             cwd,

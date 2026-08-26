@@ -691,6 +691,19 @@ impl History {
 /// gesto pidió no tener. La misma sesión es scheme Y authority — otro
 /// servidor del mismo scheme es otra conexión, y volver ahí es legítimo.
 ///
+/// **El scheme se compara SIN su prefijo de formato** (ADR 0028): un
+/// `zip+sftp://servidor/x.zip!/…` del rastro se sirve por la misma conexión
+/// que `sftp://servidor/…`, y el core evicta las dos claves a la vez al
+/// cerrarla (`sessions`, la barrida de `…+{key}`). Comparando el scheme crudo,
+/// `"zip+sftp" != "sftp"` y el panel aterrizaba justo dentro de la máquina que
+/// se acababa de soltar — abriendo una conexión NUEVA, con su reautenticación,
+/// que es literalmente lo que esta función existe para evitar.
+///
+/// Lo que esto NO hace es canonicalizar alias: el core deduplica autoridades
+/// contra `connections.toml` (#47) y un frontend no tiene esa tabla, así que
+/// `sftp://work/a` y `sftp://user@host/a` se ven como dos máquinas aunque sean
+/// una. El coste de equivocarse ahí es reconectar, no perder nada.
+///
 /// `None` cuando no queda nada ajeno —el panel nació remoto, o todo su
 /// rastro es de esa máquina—: el llamante cae entonces a
 /// [`crate::shell::home_vpath`]. Lo que no puede pasar es que el panel se
@@ -712,8 +725,25 @@ impl History {
 /// ```
 #[must_use]
 pub fn regreso_tras_desconectar(cerrada: &VPath, rastro: &[VPath]) -> Option<VPath> {
-    let misma = |p: &VPath| p.scheme() == cerrada.scheme() && p.authority() == cerrada.authority();
-    rastro.iter().rev().find(|p| !misma(p)).cloned()
+    let de_la_sesion = |p: &VPath| {
+        scheme_de_sesion(p.scheme()) == scheme_de_sesion(cerrada.scheme())
+            && p.authority() == cerrada.authority()
+    };
+    rastro.iter().rev().find(|p| !de_la_sesion(p)).cloned()
+}
+
+/// El scheme que sirve una ruta, sin el prefijo de formato de archivo: el
+/// `sftp` de `zip+sftp`, el `file` de `tar+gz+file`.
+///
+/// Es la mitad de la clave de sesión del core que un frontend puede calcular
+/// sin su tabla de conexiones.
+fn scheme_de_sesion(scheme: &str) -> &str {
+    match norte_proto::scheme_archive_format(scheme) {
+        // El formato y el scheme interior van pegados por un `+`, que también
+        // se salta: `scheme_archive_format` devuelve el prefijo sin él.
+        Some(formato) => &scheme[formato.len() + 1..],
+        None => scheme,
+    }
 }
 
 // ── Azúcar de navegación por archivos comprimidos (ADR 0018) ──────────────
@@ -1123,6 +1153,30 @@ mod history_tests {
         let rastro = [vp("file:///home/o"), vp("sftp://srv/a"), vp("sftp://srv/b")];
         assert_eq!(
             regreso_tras_desconectar(&vp("sftp://srv/b"), &rastro),
+            Some(vp("file:///home/o")),
+        );
+    }
+
+    /// Un archivo SOBRE la máquina que se cierra es esa misma máquina: lo
+    /// sirve la misma conexión (el core evicta las dos claves a la vez), así
+    /// que aterrizar ahí abriría una conexión nueva con su reautenticación —
+    /// justo lo que el gesto pidió no tener. Comparando el scheme crudo,
+    /// `zip+sftp` no casaba con `sftp` y el panel caía dentro.
+    #[test]
+    fn un_archivo_de_esa_maquina_sigue_siendo_esa_maquina() {
+        let rastro = [
+            vp("file:///home/o"),
+            vp("zip+sftp://srv/x.zip%21/dentro"),
+            vp("sftp://srv/a"),
+        ];
+        assert_eq!(
+            regreso_tras_desconectar(&vp("sftp://srv/b"), &rastro),
+            Some(vp("file:///home/o")),
+        );
+        // Y al revés: cerrar desde DENTRO del archivo tampoco vuelve al
+        // exterior de la misma máquina.
+        assert_eq!(
+            regreso_tras_desconectar(&vp("zip+sftp://srv/x.zip%21/dentro"), &rastro),
             Some(vp("file:///home/o")),
         );
     }

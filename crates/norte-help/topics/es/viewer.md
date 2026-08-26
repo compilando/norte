@@ -112,6 +112,14 @@ igual.
 Si la creación falla no se abre ningún editor: un buffer vacío sobre un fichero
 que no está se parece al éxito hasta el momento en que guardas.
 
+  warning: Lo que norte gobierna es la CREACIÓN. Lo que tu editor escriba
+  dentro después corre con tus permisos, fuera de toda política de norte y
+  fuera del journal — igual que F4 y igual que un shell. Y entre que el fichero
+  se crea y el editor arranca, un nombre en un directorio donde otro puede
+  escribir se puede sustituir por un enlace que apunte a otro sitio; norte no lo
+  vuelve a comprobar, y ningún gestor de ficheros de aquí lo hace. En un
+  directorio donde solo escribes tú, ninguna de las dos cosas aplica.
+
 Dos cosas que no hace, y las dos a propósito: no edita una carpeta (para entrar
 está `⏎`) y no edita en un panel remoto. Un editor abre un fichero del sistema;
 bajarlo, editarlo y volver a subirlo es otra cosa —con su conflicto y su

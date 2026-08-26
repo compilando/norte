@@ -661,6 +661,13 @@ pub fn vpath_de_ruta_nativa(nativa: &str) -> Option<norte_proto::VPath> {
 /// UTF-8 es un home perfectamente válido (regla 1), y decodificarlo con
 /// pérdida mandaba al usuario a `/` sin decir por qué.
 ///
+/// **Se llama desde contexto async y se acepta a sabiendas**: sin `$HOME`,
+/// `home_dir` cae a `getpwuid_r`, que puede acabar en NSS (`/etc/passwd`, o
+/// LDAP en una máquina con directorio de red). No va a `spawn_blocking` porque
+/// el caso es el de una sesión sin `$HOME` —donde ya nada del entorno es
+/// normal— y envolverlo obligaría a hacer async una decisión que los dos
+/// frontends toman en medio de pintar. Si alguna vez cuelga, es aquí.
+///
 /// ```
 /// use norte_frontend::shell::home_vpath;
 /// // Siempre nombra algo: con `$HOME` o sin él.

@@ -534,7 +534,7 @@ pub async fn on_key(
             app.quit = true;
             return;
         }
-        // Los nueve prompts de TEXTO LIBRE comparten
+        // Los diez prompts de TEXTO LIBRE comparten
         // teclado: teclear, borrar y Esc son la misma
         // operación sobre el prompt abierto, y consumen
         // la tecla ANTES del contexto `dialog` —ninguno

@@ -485,12 +485,19 @@ pub async fn dispatch(
         // política, sin entrada en el journal y sin undo (regla dura 4). Es
         // además lo que hace la ventana con este mismo comando.
         //
-        // El guard de pane remoto es el del shell: un editor abre un fichero
-        // DEL SISTEMA, y crearlo en el otro extremo no daría ninguno.
-        Command::PaneEditNew => match shell_cwd(app) {
-            Ok(_) => app.open_edit_new(),
-            Err(msg) => app.message = Some(msg),
-        },
+        // El guard es que el pane tenga forma NATIVA, y no el `shell_cwd` del
+        // shell: aquel falla por dos motivos —pane remoto, o local sin cwd
+        // válido para un hijo (Windows, ruta que solo existe con `\\?\`)— y el
+        // segundo no aplica aquí. Crear no necesita cwd, y el editor lo lleva
+        // como best-effort, así que gatear con él habría rechazado del todo un
+        // `edit-new` en una ruta larga de Windows.
+        Command::PaneEditNew => {
+            if norte_vfs_local::vpath_to_native(app.focused().dir()).is_ok() {
+                app.open_edit_new();
+            } else {
+                app.message = Some(crate::gestures::shell_remote_message(app));
+            }
+        }
         // #135 (S4, design §D): los tres se RESUELVEN aquí y los ejecuta el
         // run loop, que es el dueño de la terminal — mismo reparto que
         // `pane.open`. Nada de esto va al journal: un shell que abre el

@@ -315,15 +315,20 @@ pub fn edit_under_cursor(app: &App) -> Result<crate::app::PendingShell, String> 
 /// la ruta no sale del cursor —el listado puede no haberse refrescado todavía,
 /// y el cursor puede estar en cualquier sitio— sino de lo que se mandó crear.
 ///
+/// El `cwd` sale del PADRE del fichero creado, no del pane con foco: entre el
+/// submit y el desenlace el lector puede haber pulsado Tab o navegado, y un
+/// `:w otro.txt` del editor debe caer donde está el fichero que se acaba de
+/// crear — que es de lo que va el gesto — y no donde quedó el foco.
+///
 /// `None` si esa ruta no tiene forma nativa: no debería pasar (crear se rehúsa
-/// sobre un pane remoto), pero abrir un editor sobre lo que no se puede nombrar
-/// no es una alternativa.
+/// sobre un pane remoto, al abrir el diálogo y otra vez al confirmarlo), pero
+/// abrir un editor sobre lo que no se puede nombrar no es una alternativa. El
+/// llamante lo DICE: media mitad del gesto perdida en silencio es la clase de
+/// cosa que este comando vino a quitar.
 #[must_use]
-pub fn edit_created(app: &App, path: &VPath) -> Option<crate::app::PendingShell> {
+pub fn edit_created(path: &VPath) -> Option<crate::app::PendingShell> {
     let native = norte_vfs_local::vpath_to_native(path).ok()?;
-    let cwd = norte_vfs_local::vpath_to_native(app.focused().dir())
-        .ok()
-        .and_then(|d| norte_frontend::shell::child_cwd(&d));
+    let cwd = native.parent().and_then(norte_frontend::shell::child_cwd);
     Some(crate::app::PendingShell {
         argv: norte_frontend::shell::editor_argv(&native),
         cwd,
@@ -1447,9 +1452,8 @@ mod edit_tests {
     /// termina, el listado puede no haberse refrescado todavía.
     #[test]
     fn el_editor_del_fichero_creado_va_sobre_la_ruta_que_se_pidio() {
-        let app = app_local();
         let creado = VPath::parse("file:///tmp/notas.txt").expect("wire");
-        let pending = edit_created(&app, &creado).expect("local");
+        let pending = edit_created(&creado).expect("local");
         assert_eq!(pending.argv.len(), 2, "programa y ruta, sin línea de shell");
         assert_eq!(
             pending.argv[1],
@@ -1457,6 +1461,13 @@ mod edit_tests {
             "la ruta va como su propio argumento"
         );
         assert!(!pending.wait_for_key, "un editor se despide solo");
+        // El cwd es el PADRE del fichero creado, no el pane con foco: entre el
+        // submit y el desenlace el lector puede haberse ido a otro sitio.
+        assert_eq!(
+            pending.cwd.as_deref(),
+            Some(std::path::Path::new("/tmp")),
+            "un `:w otro.txt` cae donde está el fichero recién creado"
+        );
     }
 
     /// Y sobre algo que no tiene forma nativa no se abre nada: crear se rehúsa
@@ -1464,9 +1475,8 @@ mod edit_tests {
     /// sobre lo que no se puede nombrar no es la salida.
     #[test]
     fn sin_forma_nativa_no_se_abre_ningun_editor() {
-        let app = app_local();
         let remoto = VPath::parse("sftp://srv/notas.txt").expect("wire");
-        assert!(edit_created(&app, &remoto).is_none());
+        assert!(edit_created(&remoto).is_none());
     }
 
     /// Y sobre un fichero local sale el argv del editor con la ruta APARTE.

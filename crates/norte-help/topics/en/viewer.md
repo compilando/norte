@@ -110,6 +110,14 @@ policy said no, it would appear anyway.
 If creating it fails, no editor opens: an empty buffer over a file that is not
 there looks exactly like success right up to the moment you save.
 
+  warning: What norte governs is the CREATION. What your editor writes into the
+  file afterwards runs with your permissions, outside every policy norte
+  enforces and outside the journal — the same as F4 and the same as a shell.
+  And between the moment the file is created and the moment the editor starts,
+  a name in a directory somebody else can write to can be swapped for a symlink
+  pointing elsewhere; norte does not re-check it, and no file manager here
+  does. In a directory only you can write to, neither of these applies.
+
 Two things it will not do, both on purpose: it does not edit a folder (`⏎` is
 how you enter one) and it does not edit in a remote panel. An editor opens a
 file on this system; fetching it, editing it and putting it back is a different
