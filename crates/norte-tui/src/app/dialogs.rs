@@ -147,8 +147,13 @@ pub const ALLOW_PLACES: &[&str] = &[
 /// serían siete presets tocados por una tecla nueva. `confirm` CANCELA la
 /// tarea bajo el cursor —es la única acción que el protocolo tiene sobre una
 /// task—, `cancel` devuelve el teclado a los listados sin cerrar el panel, y
-/// `layout.processes` cierra desde dentro (tercera pulsación de abrir →
-/// enfocar → cerrar, igual que `layout.places`).
+/// `layout.processes` cierra desde dentro.
+///
+/// Son DOS pulsaciones y no tres: abrir este panel YA le da el teclado, así
+/// que la siguiente cierra. La secuencia de tres —abrir, enfocar, cerrar— es
+/// la del visor acoplado, y ahí es deliberada por un motivo que aquí no
+/// aplica: el visor sigue al cursor del listado, así que darle el teclado al
+/// abrirlo apagaría lo único que hace. Este panel no sigue a nada.
 pub const ALLOW_PROCESSES: &[&str] = &[
     "dialog.up",
     "dialog.down",

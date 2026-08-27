@@ -50,9 +50,10 @@ pub async fn open_drive_popup(app: &mut App, backend: &Backend, pane: usize, inc
 /// Teclas del árbol (#136): mismo reparto y mismo allowlist que el sidebar.
 ///
 /// `⏎` sobre una rama la despliega o la pliega; `dialog.confirm` con la rama ya
-/// abierta MANDA el listado ahí, que es para lo que se abre un árbol. Cancelar
-/// suelta el teclado y deja el panel abierto — cerrarlo es `pane.tree`, la
-/// misma tercera pulsación que el sidebar.
+/// abierta MANDA el listado ahí, que es para lo que se abre un árbol. `Esc` y
+/// `Tab` sueltan el teclado y dejan el panel abierto — cerrarlo es `pane.tree`,
+/// la misma SEGUNDA pulsación que el sidebar: abrir cualquiera de los dos ya
+/// les da el teclado.
 pub async fn on_tree_key(
     app: &mut App,
     backend: &Backend,
@@ -211,8 +212,8 @@ pub async fn on_places_key(
         // (#244 M1).
         "layout.grow" => app.layout_resize(1),
         "layout.shrink" => app.layout_resize(-1),
-        // Y `layout.places` con el teclado DENTRO cierra: es la tercera
-        // pulsación de la secuencia abrir → enfocar → cerrar.
+        // Y `layout.places` con el teclado DENTRO cierra: es la SEGUNDA
+        // pulsación, porque abrir este panel ya le da el teclado.
         "layout.places" => app.toggle_places(),
         // `⏎` sobre una CABECERA pliega o despliega su sección, como en el
         // árbol de al lado. Antes no hacía nada: `activate()` devuelve `None`

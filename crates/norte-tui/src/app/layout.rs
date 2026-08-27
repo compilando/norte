@@ -62,7 +62,35 @@ impl App {
         self.layout = tree;
         self.panes.refresh_visible(&self.layout);
         self.history.retain_tree(&self.layout);
+        self.settle_key_owner();
         self.set_focus(0);
+    }
+
+    /// Devuelve el teclado a los listados si quien lo tenía ya no está en la
+    /// disposición.
+    ///
+    /// Sin esto, cambiar de disposición con un panel lateral ENFOCADO —cambiar
+    /// de perfil, aplicar un preset, restaurar una sesión— dejaba `key_owner`
+    /// apuntando a un panel que ya no existe. Y entonces TODA tecla se enruta
+    /// a su manejador, `<panel>_slot()` devuelve `None`, cada brazo es un
+    /// no-op, y el gestor entero deja de responder sin nada en pantalla que
+    /// explique por qué. Ni siquiera es reversible a ojo: la tecla del panel
+    /// lo REABRE, así que parece que abrirlo «arregla» el teclado.
+    ///
+    /// Se comprueba por el KIND en el árbol y no por una bandera aparte: la
+    /// pregunta es literalmente «¿sigue ahí?», y una bandera es un segundo
+    /// sitio donde equivocarse.
+    fn settle_key_owner(&mut self) {
+        let sigue = match self.key_owner {
+            KeyOwner::Panes => true,
+            KeyOwner::Places => self.places_slot().is_some(),
+            KeyOwner::Preview => self.preview_slot().is_some(),
+            KeyOwner::Processes => self.processes_slot().is_some(),
+            KeyOwner::Tree => self.tree_slot().is_some(),
+        };
+        if !sigue {
+            self.key_owner = KeyOwner::Panes;
+        }
     }
 
     /// Parte el panel enfocado en dos, con el nuevo al lado.

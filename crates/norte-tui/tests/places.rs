@@ -326,6 +326,36 @@ fn plegar_desde_la_app_esconde_las_filas() {
     assert!(app.places_slot().is_some(), "plegar no cierra el sidebar");
 }
 
+/// Una disposición que ya no tiene el panel NO puede dejar el teclado dentro
+/// de él.
+///
+/// `set_layout` no tocaba `key_owner`, así que con el sidebar enfocado y una
+/// disposición nueva sin sidebar —cambiar de perfil, aplicar un preset,
+/// restaurar una sesión— el teclado se quedaba apuntando a un panel que ya no
+/// estaba. Todas las teclas iban a `on_places_key`, `places_slot()` devolvía
+/// `None`, y cada brazo era un no-op: el gestor entero dejaba de responder sin
+/// nada en pantalla que explicara por qué.
+#[test]
+fn una_disposicion_sin_el_panel_devuelve_el_teclado() {
+    use norte_frontend::layout::{KindId, Node, SlotId};
+
+    // `app_con_sidebar` ya lo abre, y abrirlo YA da el teclado: el ciclo real
+    // es abrir-con-teclado → cerrar, no las tres pulsaciones que algún
+    // comentario del código describe.
+    let mut app = app_con_sidebar();
+    assert_eq!(app.key_owner(), KeyOwner::Places, "el teclado está dentro");
+
+    // Una disposición de un solo listado: sin sidebar.
+    app.set_layout(Node::slot(SlotId(1), KindId::browser()));
+
+    assert!(app.places_slot().is_none(), "el panel ya no está");
+    assert_eq!(
+        app.key_owner(),
+        KeyOwner::Panes,
+        "y el teclado ha vuelto a los listados"
+    );
+}
+
 /// El cursor arranca sobre una CABECERA, que es lo que hace que `⏎` tenga que
 /// contestar ahí.
 ///
