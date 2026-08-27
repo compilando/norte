@@ -670,6 +670,7 @@ places-empty = nothing here yet
 # se abren a mano; la franja de tareas de siempre no se toca.
 processes-title = Processes
 processes-empty = nothing running
+processes-has-keyboard = this panel has the keyboard · Esc returns it
 task-failed = failed
 metadata-title = Details
 metadata-empty = nothing under the cursor

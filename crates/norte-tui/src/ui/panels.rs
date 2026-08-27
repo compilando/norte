@@ -491,11 +491,25 @@ pub(crate) fn draw_processes(
     } else {
         Role::BorderUnfocused
     };
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", t("processes-title")))
         .title_style(theme.role(Role::Title))
         .border_style(theme.role(border));
+    // Que este panel tenga el TECLADO se decía solo con el color del borde, y
+    // un lector que no distinga ese par de colores —o que no sepa que ese par
+    // significa eso— ve un gestor de ficheros en el que las flechas han dejado
+    // de funcionar y no tiene por dónde empezar. Es la misma lección de #111:
+    // una señal solo-color no es una señal.
+    //
+    // El pie dice la salida, no el estado: «tiene el foco» no ayuda a nadie,
+    // «Esc devuelve el teclado» sí.
+    if con_teclado {
+        block = block.title_bottom(Line::styled(
+            format!(" {} ", t("processes-has-keyboard")),
+            theme.role(Role::Info),
+        ));
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {

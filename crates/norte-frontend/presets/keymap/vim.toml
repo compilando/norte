@@ -77,7 +77,8 @@ keymap = [
     # `v` visual-select muscle memory, además de `insert` (#103).
     { on = ["v"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },
-    { on = ["ctrl+A"], run = "mark.clear" },
+    # `alt+a`: `ctrl+A` no llega (mismo byte que `ctrl+a`). Ver orthodox.
+    { on = ["alt+a"], run = "mark.clear" },
     { on = ["*"], run = "mark.invert" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },

@@ -326,6 +326,64 @@ mod k2b_gate_tests {
         }
     }
 
+    /// Ningún preset ata un acorde que un terminal NO PUEDE entregar.
+    ///
+    /// `ctrl+<letra mayúscula>` es esa forma. [`crate::keymap::parse_chord`]
+    /// la guarda como `Char('P')`, y un terminal manda para Ctrl+P y para
+    /// Ctrl+Shift+P el MISMO byte (0x10), que llega como `Char('p')` en
+    /// minúscula. Distinguirlos exige el protocolo de teclado de Kitty, y el
+    /// adaptador de la TUI (`norte_tui::keymap::chord_from_crossterm`)
+    /// documenta que norte NO lo activa —la misma razón por la que `mod+` es
+    /// Ctrl en todas las plataformas—. Así que el binding existe, el catálogo
+    /// lo anuncia, la ayuda lo imprime, y la tecla no hace NADA.
+    ///
+    /// Salió de la paleta de `krusader`: `ctrl+P` para abrirla, con un
+    /// comentario explicando que la mayúscula ES el shift. Lo es en la
+    /// gramática de acordes; no lo es en el cable. Y como `ctrl+p` en
+    /// minúscula sí está atado ahí a `pane.split-file`, quien buscaba la
+    /// paleta se encontraba un diálogo de partir ficheros.
+    ///
+    /// El test vive AQUÍ y no en la TUI porque los presets son de este crate,
+    /// y la regla es sobre lo que un preset puede prometer.
+    #[test]
+    fn ningun_preset_ata_un_acorde_que_el_terminal_no_entrega() {
+        let mut muertos: Vec<String> = Vec::new();
+        for nombre in NAMES {
+            let src = source(nombre).expect("NAMES resuelve");
+            let kf =
+                crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {nombre}: {e}"));
+            for b in [&kf.global, &kf.pane, &kf.viewer, &kf.dialog]
+                .into_iter()
+                .flat_map(|s| s.keymap.iter())
+            {
+                for txt in &b.on {
+                    if crate::keymap::parse_chord(txt).is_err() {
+                        continue; // lo que no parsea ya lo caza otro check
+                    }
+                    // Sobre el TEXTO del binding y no sobre el `Chord`: es
+                    // donde vive la regla —lo que un preset escribió— y el
+                    // tipo no expone sus campos fuera de su módulo.
+                    let mut partes: Vec<&str> = txt.split('+').collect();
+                    let Some(tecla) = partes.pop() else { continue };
+                    let con_ctrl = partes
+                        .iter()
+                        .any(|m| m.eq_ignore_ascii_case("ctrl") || m.eq_ignore_ascii_case("mod"));
+                    let letra_sola = tecla.chars().count() == 1
+                        && tecla.chars().next().is_some_and(|c| c.is_ascii_uppercase());
+                    if con_ctrl && letra_sola {
+                        muertos.push(format!("{nombre}: «{txt}» → {}", b.run));
+                    }
+                }
+            }
+        }
+        assert!(
+            muertos.is_empty(),
+            "acordes que ningún terminal entrega sin el protocolo de Kitty, \
+             que norte no activa:\n  {}",
+            muertos.join("\n  ")
+        );
+    }
+
     /// Los cuatro comandos de perfil existen en el catálogo compartido y
     /// NINGÚN preset los ata.
     ///

@@ -86,7 +86,10 @@ keymap = [
     { on = ["insert"], run = "mark.toggle" },
     { on = ["space"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },
-    { on = ["ctrl+A"], run = "mark.clear" },
+    # `alt+a` y no `ctrl+A`: la mayúscula ES el shift en la gramática de
+    # acordes, pero un terminal manda el MISMO byte para Ctrl+A y Ctrl+Shift+A,
+    # así que el binding existía y la tecla no hacía nada. Hay test.
+    { on = ["alt+a"], run = "mark.clear" },
     { on = ["*"], run = "mark.invert" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },

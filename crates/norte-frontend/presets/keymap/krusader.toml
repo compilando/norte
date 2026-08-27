@@ -67,12 +67,18 @@ keymap = [
     # tanto no hay nada que transcribir: ajustes, extensiones y paleta.
     # Sin ellas la configuración no se alcanza desde el teclado, que es
     # lo que pasaba hasta ahora en este preset. F11/F12 están libres
-    # aquí y son lo que usan orthodox/vim/cua; para la paleta, ctrl+P (la P mayúscula ES el shift: la gramática
-    # de acordes no combina shift con un carácter)
-    # (Ctrl+P es `pane.split-file` en Krusader).
+    # aquí y son lo que usan orthodox/vim/cua; para la paleta, `alt+p`.
+    #
+    # Fue `ctrl+P`, con el razonamiento de que la mayúscula ES el shift. Lo es
+    # en la gramática de acordes y NO en el cable: un terminal manda el mismo
+    # byte (0x10) para Ctrl+P y para Ctrl+Shift+P, y distinguirlos exige el
+    # protocolo de teclado de Kitty, que norte no activa. Así que la paleta
+    # era inalcanzable desde el teclado en este preset, y quien la buscaba se
+    # encontraba el diálogo de partir ficheros — `ctrl+p` en minúscula, que sí
+    # es `pane.split-file` en Krusader. Hay test.
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
-    { on = ["ctrl+P"], run = "app.palette" },
+    { on = ["alt+p"], run = "app.palette" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },
@@ -104,7 +110,8 @@ keymap = [
     { on = ["ctrl+f"], run = "pane.quick-search" },
     { on = ["ctrl+h"], run = "pane.history" },
     { on = ["ctrl+d"], run = "pane.hotlist" },
-    { on = ["ctrl+D"], run = "pane.disconnect" },
+    # `alt+d`: `ctrl+D` no llega (mismo byte que `ctrl+d`, que es la hotlist).
+    { on = ["alt+d"], run = "pane.disconnect" },
     { on = ["ctrl+n"], run = "pane.connect" },
     { on = ["ctrl+p"], run = "pane.split-file" },
     { on = ["ctrl+u"], run = "pane.swap" },

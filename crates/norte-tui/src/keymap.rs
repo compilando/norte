@@ -787,12 +787,18 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
                 "mark.invert",
             ),
             (
+                // `alt+a`, no `ctrl+A`. Este par —`ctrl+a` para marcar todo y
+                // su mayúscula para desmarcar— se leía bien y no funcionaba:
+                // el terminal manda el MISMO byte para Ctrl+A y Ctrl+Shift+A,
+                // así que `mark.clear` estaba anunciado y muerto en los tres
+                // presets nativos. Lo caza
+                // `ningun_preset_ata_un_acorde_que_el_terminal_no_entrega`.
                 Chord::new(
                     Mods {
-                        ctrl: true,
+                        alt: true,
                         ..Default::default()
                     },
-                    KeyCode::Char('A'),
+                    KeyCode::Char('a'),
                 ),
                 "mark.clear",
             ),

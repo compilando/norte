@@ -163,8 +163,12 @@ keymap = [
     { on = ["-"], run = "mark.pattern-remove" },
     { on = ["*"], run = "mark.invert" },
     { on = ["alt+shift+insert"], run = "pane.copy-path" },
-    { on = ["ctrl+T"], run = "pane.tab-new" },
-    { on = ["ctrl+W"], run = "pane.tab-close" },
+    # `alt+t`/`alt+w` y no `ctrl+T`/`ctrl+W`: la mayúscula es el shift en la
+    # gramática y NO en el cable — un terminal manda el mismo byte que para la
+    # minúscula, y `ctrl+t` aquí es `pane.tree`. Las pestañas estaban
+    # anunciadas y no se abrían. Ver la nota larga en krusader.toml.
+    { on = ["alt+t"], run = "pane.tab-new" },
+    { on = ["alt+w"], run = "pane.tab-close" },
     { on = ["alt+n"], run = "pane.tab-next" },
     { on = ["alt+p"], run = "pane.tab-prev" },
     { on = ["alt+h"], run = "layout.split-h" },

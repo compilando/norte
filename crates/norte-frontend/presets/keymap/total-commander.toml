@@ -57,7 +57,10 @@ keymap = [
     # (Ctrl+P es `pane.copy-path` en Total Commander).
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
-    { on = ["ctrl+P"], run = "app.palette" },
+    # `alt+p` y no `ctrl+P`: la mayúscula es el shift en la gramática y NO en
+    # el cable — mismo byte que `ctrl+p`, que aquí es `pane.copy-path`. Ver la
+    # nota larga en krusader.toml. Hay test.
+    { on = ["alt+p"], run = "app.palette" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },
@@ -100,7 +103,8 @@ keymap = [
     { on = ["ctrl+l"], run = "pane.dir-size" },
     { on = ["ctrl+d"], run = "pane.hotlist" },
     { on = ["ctrl+f"], run = "pane.connect" },
-    { on = ["ctrl+F"], run = "pane.disconnect" },
+    # `alt+f`: `ctrl+F` no llega (mismo byte que `ctrl+f`, que es `pane.connect`).
+    { on = ["alt+f"], run = "pane.disconnect" },
     { on = ["ctrl+p"], run = "pane.copy-path" },
     { on = ["ctrl+s"], run = "pane.quick-search" },
     { on = ["ctrl+t"], run = "pane.tab-new" },

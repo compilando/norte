@@ -1599,6 +1599,7 @@ gui-msg-shortcut-saved-not-applied = guardado, pero esta ventana conservó el ke
 # Fase A: el panel de procesos y la hoja de atributos.
 processes-title = Procesos
 processes-empty = nada en marcha
+processes-has-keyboard = este panel tiene el teclado · Esc lo devuelve
 task-failed = falló
 metadata-title = Detalles
 metadata-empty = nada bajo el cursor
