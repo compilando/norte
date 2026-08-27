@@ -57,6 +57,7 @@ pub mod palette_state;
 mod pane;
 pub mod places;
 pub mod plugin_config;
+pub mod profile_picker;
 pub mod session;
 pub mod settings;
 pub mod shell;
