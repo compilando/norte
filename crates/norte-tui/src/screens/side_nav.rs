@@ -445,8 +445,12 @@ async fn hotlist_add(app: &mut App, name: &str) {
     let target = app.focused().dir().clone();
     let wire = target.to_wire();
     let n = name.to_owned();
+    // Al PERFIL activo si lo hay: los favoritos son de un espacio de trabajo,
+    // y escribirlos en la capa del usuario mientras un perfil también los fija
+    // los deja tapados (ADR 0079).
+    let destino = app.config_write_dir();
     let res = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        let dir = user_config_dir_io()?;
+        let dir = destino.map_or_else(user_config_dir_io, Ok)?;
         config::persist_hotlist_add(&dir, &n, &wire)?;
         Ok(())
     })
@@ -470,12 +474,14 @@ async fn hotlist_add(app: &mut App, name: &str) {
     }
 }
 
-/// Retira el favorito `name` del `norte.toml` del USUARIO (`spawn_blocking`,
-/// regla 2). Mismo contrato de consistencia que [`hotlist_add`].
+/// Retira el favorito `name` del `norte.toml` de la capa que se esté editando
+/// —el PERFIL activo si lo hay, si no la del usuario— (`spawn_blocking`, regla
+/// 2). Mismo contrato de consistencia que [`hotlist_add`].
 async fn hotlist_remove(app: &mut App, name: &str) {
     let n = name.to_owned();
+    let destino = app.config_write_dir();
     let res = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        let dir = user_config_dir_io()?;
+        let dir = destino.map_or_else(user_config_dir_io, Ok)?;
         config::persist_hotlist_remove(&dir, &n)?;
         Ok(())
     })

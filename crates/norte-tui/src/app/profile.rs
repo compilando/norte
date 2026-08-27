@@ -85,6 +85,33 @@ pub fn siguiente(
     Some(perfiles[i].name.clone())
 }
 
+impl crate::app::App {
+    /// Dónde va un ajuste que el lector cambia desde la interfaz.
+    ///
+    /// El directorio del perfil ACTIVO si lo hay, y el del usuario si no.
+    ///
+    /// No es una preferencia de estilo: un perfil está POR ENCIMA de la capa
+    /// del usuario (ADR 0079, D1), así que escribir ahí un ajuste que el
+    /// perfil también fija lo deja tapado — el tema se guarda, la barra dice
+    /// «config recargada», y la pantalla no cambia de color. Es exactamente la
+    /// forma del bug que D10 arregló para los atajos, y que el resto de los
+    /// ajustes no tenía arreglada.
+    ///
+    /// Cambiar un ajuste DENTRO de un espacio de trabajo significa cambiarlo
+    /// en ese espacio, lo fije ya el perfil o no. Quien quiera tocar su capa
+    /// de siempre sale del perfil primero.
+    ///
+    /// `None` cuando no hay dónde escribir, que es lo mismo que respondía
+    /// `user_config_dir()` antes: el llamante ya sabe decirlo.
+    #[must_use]
+    pub fn config_write_dir(&self) -> Option<std::path::PathBuf> {
+        match &self.active_profile {
+            Some(name) => norte_config::profile_dir_from(&|k| std::env::var_os(k), name),
+            None => norte_config::user_config_dir(),
+        }
+    }
+}
+
 /// Qué NO se puede aplicar sin reiniciar, de este perfil, en ESTA terminal.
 ///
 /// Medido, no supuesto (D8). Lo que sí se aplica lo aplica
@@ -174,6 +201,49 @@ mod tests {
     #[test]
     fn sin_perfiles_no_hay_nada() {
         assert_eq!(siguiente(&[], None, true), None);
+    }
+
+    /// Un ajuste cambiado con un PERFIL activo se escribe EN EL PERFIL.
+    ///
+    /// Escribirlo en la capa del usuario lo deja tapado por el perfil, que
+    /// está por encima (ADR 0079, D1): el tema se guarda, la barra dice
+    /// «config recargada» y la pantalla no cambia de color. Es la misma forma
+    /// que D10 arregló para los atajos, y que los ajustes no tenían.
+    #[test]
+    fn con_perfil_activo_los_ajustes_se_escriben_en_el_perfil() {
+        let mut app = super::super::App::new(
+            crate::app::Pane::new(
+                norte_proto::VPath::parse("file:///x").expect("wire"),
+                Vec::new(),
+            ),
+            crate::app::Pane::new(
+                norte_proto::VPath::parse("file:///y").expect("wire"),
+                Vec::new(),
+            ),
+        );
+        app.active_profile = Some(OsString::from("work"));
+        let dir = app.config_write_dir().expect("hay directorio");
+        assert!(
+            dir.ends_with("profiles/work"),
+            "el ajuste va al perfil, no a la capa del usuario: {}",
+            dir.display()
+        );
+    }
+
+    /// Y sin perfil, donde siempre.
+    #[test]
+    fn sin_perfil_los_ajustes_van_a_la_capa_del_usuario() {
+        let app = super::super::App::new(
+            crate::app::Pane::new(
+                norte_proto::VPath::parse("file:///x").expect("wire"),
+                Vec::new(),
+            ),
+            crate::app::Pane::new(
+                norte_proto::VPath::parse("file:///y").expect("wire"),
+                Vec::new(),
+            ),
+        );
+        assert_eq!(app.config_write_dir(), norte_config::user_config_dir());
     }
 
     /// Cambiar el idioma se ANUNCIA; cambiar el tema no, porque el tema sí se

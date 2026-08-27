@@ -103,8 +103,17 @@ pub async fn on_theme_picker_key(
     app.theme_picker_input(action);
     if let Some(name) = confirmed {
         // I/O en spawn_blocking: el runtime jamás se bloquea (regla 2).
+        //
+        // Al directorio del PERFIL activo si lo hay, y no siempre al del
+        // usuario: el perfil está por encima, así que un tema escrito abajo
+        // queda TAPADO por el que fije el perfil. Se guardaba, la barra decía
+        // «config recargada», y la pantalla no cambiaba de color (ADR 0079).
         let n = name.clone();
-        match tokio::task::spawn_blocking(move || config::persist_ui_theme(&n)).await {
+        let Some(dir) = app.config_write_dir() else {
+            app.message = Some(t("msg-settings-no-config-dir"));
+            return;
+        };
+        match tokio::task::spawn_blocking(move || config::persist_ui_theme_to(&dir, &n)).await {
             Ok(Ok(path)) => {
                 // El path deriva de XDG_CONFIG_HOME/APPDATA (entorno):
                 // saneado como cualquier detalle (#73).
@@ -344,7 +353,10 @@ async fn apply_picked_columns(
         app.apply_scheme_sort(i);
     }
     let needs_refresh = pane_attr_ids(app) != attrs_before;
-    let Some(dir) = config::user_config_dir() else {
+    // Al PERFIL activo si lo hay: un perfil está por encima de la capa del
+    // usuario, así que escribir ahí lo que el perfil también fija lo deja
+    // tapado — guardado y sin efecto (ADR 0079).
+    let Some(dir) = app.config_write_dir() else {
         app.message = Some(t("msg-settings-no-config-dir"));
         return needs_refresh;
     };

@@ -150,11 +150,16 @@ pub async fn on_settings_key(app: &mut App, maps: &Maps<'_>, mods: KeyModifiers,
 
 /// Persiste un [`PendingWrite`] (S3) — `spawn_blocking` (regla 2), mismo
 /// patrón que el persist del theme picker (`on_theme_picker_key` arriba):
-/// resuelve `user_config_dir()` a mano en vez de reutilizar
+/// resuelve el directorio a mano en vez de reutilizar
 /// `config::persist_ui_theme` (esa wrapper no toma `section`/`key` — S2 solo
 /// dio el genérico `persist_set(dir, ...)` con `dir` explícito).
+///
+/// Y ese directorio es el del PERFIL activo si lo hay
+/// ([`App::config_write_dir`]): el perfil está por encima de la capa del
+/// usuario, así que un ajuste escrito abajo que el perfil también fija queda
+/// tapado — guardado y sin efecto (ADR 0079).
 pub async fn persist_setting(app: &mut App, write: PendingWrite) {
-    let Some(dir) = config::user_config_dir() else {
+    let Some(dir) = app.config_write_dir() else {
         app.message = Some(t("msg-settings-no-config-dir"));
         return;
     };
