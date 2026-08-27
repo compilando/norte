@@ -50,6 +50,8 @@ pub struct ViewSnapshot {
     pub tasks: Vec<TaskView>,
     /// La barra de menús: los títulos, y el desplegado si hay alguno.
     pub menu: MenuView,
+    /// El selector de perfiles, si está abierto.
+    pub profiles: Option<ProfilePickerView>,
     /// La paleta de comandos, si está abierta.
     pub palette: Option<PaletteView>,
     /// El panel de continuaciones, si hay un prefijo a medias.
@@ -95,6 +97,50 @@ pub struct ViewSnapshot {
     pub ai_rename: Option<AiRenameView>,
     /// Idioma negociado, para que el renderer pida el catálogo correcto.
     pub locale: String,
+}
+
+/// El selector de PERFILES (ADR 0079).
+///
+/// Las filas y lo que se dice de cada una son
+/// `norte_frontend::profile_picker`, el mismo modelo que pinta el terminal:
+/// una fila que no se puede usar se ENSEÑA con su motivo en vez de
+/// desaparecer, porque esconder un directorio que el lector creó es peor que
+/// enseñarlo roto.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfilePickerView {
+    /// Las filas, en orden.
+    pub rows: Vec<ProfileRowView>,
+    /// Cuál está señalada.
+    pub cursor: u64,
+    /// La generación con la que se pintaron. La lista se llena desde una
+    /// tarea de fondo —leer `profiles/` es disco—, así que una fila
+    /// nombrada por índice puede nombrar otra cosa (ADR 0068).
+    pub generation: u64,
+}
+
+/// Una fila del selector de perfiles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileRowView {
+    /// El nombre del directorio, ya pintable.
+    pub name: String,
+    /// Lo pintado difiere de los bytes del directorio (#266).
+    pub name_hostile: bool,
+    /// Su `[profile] title`, si lo declara. Nunca EN VEZ del nombre: dos
+    /// perfiles pueden compartir título y seguir siendo dos.
+    pub title: Option<String>,
+    /// Es el que está puesto ahora.
+    pub active: bool,
+    /// Qué OTRA cosa de norte se llama igual, ya dicho en el idioma del
+    /// lector. Vacío = solo es un perfil.
+    ///
+    /// Se avisa porque es una trampa si no se dice: elegir el perfil `far` no
+    /// ata ni una tecla del preset `far`.
+    pub clash: String,
+    /// Este perfil NO puede guardar dónde dejaste cada panel (su nombre no es
+    /// UTF-8, D4). Se dice ANTES de elegirlo, no después de perderlo.
+    pub no_state: bool,
+    /// Por qué no se puede cargar, ya saneado. Vacío = se puede.
+    pub problem: String,
 }
 
 /// La barra de menús.
@@ -2204,6 +2250,11 @@ pub enum ViewChange {
         slot_id: u32,
         /// Las cabeceras, en su orden.
         columns: Vec<ColumnHeader>,
+    },
+    /// El selector de perfiles se abrió, se movió o se cerró.
+    Profiles {
+        /// El selector, o `None` si se cerró.
+        profiles: Option<ProfilePickerView>,
     },
     /// La barra de menús: se desplegó uno, se movió el cursor, o se cerró.
     ///

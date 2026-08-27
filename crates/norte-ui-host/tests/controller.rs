@@ -15032,6 +15032,120 @@ async fn los_huecos_auxiliares_se_abren_y_se_cierran() {
     }
 }
 
+/// Un host con capas de configuración DE VERDAD, para los perfiles.
+///
+/// Los perfiles viven en `profiles/` de la capa del usuario, y el host las
+/// recibe ya resueltas (ADR 0066 D14): sin dárselas, no hay dónde buscar.
+async fn host_con_capas(dir_usuario: &std::path::Path) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    use norte_ui_host::settings::{ConfigLayer, HostPath, HostPaths};
+    UiHost::start(UiHostOptions {
+        backend: arbol(),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: HostPaths {
+            config_layers: vec![(
+                ConfigLayer::User,
+                HostPath {
+                    path: dir_usuario.to_path_buf(),
+                    missing: false,
+                },
+            )],
+            ..HostPaths::default()
+        },
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca")
+}
+
+/// El selector de perfiles: los enseña, y elegir uno lo APLICA.
+///
+/// Un perfil sirve para que el espacio de trabajo se vea y se comporte
+/// distinto, así que lo que se comprueba es que el cambio llegue a la
+/// pantalla: aquí, por el tema, que es lo que se ve.
+#[tokio::test]
+async fn el_selector_de_perfiles_enseña_y_lo_elegido_se_aplica() {
+    use norte_ui_host::dto::NativeEffect;
+    let raiz = tempfile::tempdir().expect("temp");
+    let fotos = raiz.path().join("profiles").join("fotos");
+    std::fs::create_dir_all(&fotos).expect("mkdir");
+    std::fs::write(
+        fotos.join("norte.toml"),
+        "[profile]\ntitle = \"Fotos\"\n\n[ui]\ntheme = \"nord\"\n",
+    )
+    .expect("escribir");
+
+    let (h, _snap) = host_con_capas(raiz.path()).await;
+    let mut sub = h.subscribe();
+    let mut nativos = h.native_effects();
+
+    ejecutar_por_paleta(&h, &mut sub, "profile.pick").await;
+    // La lista llega de una tarea de fondo: la foto que la trae es la que
+    // hay que esperar, no la siguiente que pase.
+    let mut selector = None;
+    for _ in 0..6 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if let Some(p) = siguiente_foto(&mut sub).await.profiles {
+            selector = Some(p);
+            break;
+        }
+    }
+    let p = selector.expect("el selector se abrió con la lista");
+    assert_eq!(p.rows.len(), 1, "el perfil que hay: {:?}", p.rows);
+    assert_eq!(p.rows[0].name, "fotos");
+    assert_eq!(
+        p.rows[0].title.as_deref(),
+        Some("Fotos"),
+        "su título sale del `[profile] title`"
+    );
+    assert!(!p.rows[0].active, "todavía no está puesto");
+
+    // Elegirlo lo aplica: su `[ui] theme` llega a quien hospeda.
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+        .await
+        .expect("sale el aviso de tema")
+        .expect("canal vivo");
+    let NativeEffect::ThemeChanged { name } = efecto else {
+        panic!("el aviso es el del tema: {efecto:?}");
+    };
+    assert_eq!(name, "nord", "el tema del PERFIL, no el de antes");
+}
+
+/// Un perfil que no existe no cambia nada, y se dice.
+///
+/// «Se sigue en el que estabas» es lo que la ADR 0079 D7 pide para un cambio:
+/// arrancar sin perfil es recuperable, quedarse a medias no.
+#[tokio::test]
+async fn un_perfil_que_no_carga_deja_todo_como_estaba() {
+    let raiz = tempfile::tempdir().expect("temp");
+    std::fs::create_dir_all(raiz.path().join("profiles")).expect("mkdir");
+    let (h, _snap) = host_con_capas(raiz.path()).await;
+    let mut sub = h.subscribe();
+
+    // Sin perfiles, girar no tiene a dónde ir — y lo dice en vez de fingir.
+    ejecutar_por_paleta(&h, &mut sub, "profile.next").await;
+    let mut dicho = false;
+    for _ in 0..6 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        if foto.status.message.is_some() {
+            dicho = true;
+            break;
+        }
+    }
+    assert!(dicho, "sin otro perfil se dice, no se calla");
+}
+
 /// La pantalla del tema ELIGE, y lo elegido se ve.
 ///
 /// Antes solo enseñaba: quien hospeda esta ventana resuelve el tema una vez al

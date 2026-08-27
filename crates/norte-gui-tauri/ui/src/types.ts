@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 42;
+export const BRIDGE_VERSION = 43;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -387,6 +387,25 @@ export interface PaletteView {
   rows: PaletteRowView[];
   cursor: number | null;
   total: number;
+}
+
+export interface ProfileRowView {
+  name: string;
+  name_hostile: boolean;
+  title: string | null;
+  active: boolean;
+  /** Qué OTRA cosa se llama igual, ya traducido. Vacío = solo es un perfil. */
+  clash: string;
+  /** No puede guardar dónde dejaste cada panel (nombre no UTF-8). */
+  no_state: boolean;
+  /** Por qué no se puede cargar. Vacío = se puede. */
+  problem: string;
+}
+
+export interface ProfilePickerView {
+  rows: ProfileRowView[];
+  cursor: number;
+  generation: number;
 }
 
 export interface MenuItemView {
@@ -873,6 +892,7 @@ export interface ViewSnapshot {
   dialogs: DialogView[];
   tasks: TaskView[];
   menu: MenuView;
+  profiles: ProfilePickerView | null;
   palette: PaletteView | null;
   whichkey: WhichKeyView | null;
   help: HelpView | null;
@@ -912,6 +932,7 @@ export type ViewChange =
   | { change: "ai_rename"; ai_rename: AiRenameView | null }
   | { change: "which_key"; whichkey: WhichKeyView | null }
   | { change: "menu"; menu: MenuView }
+  | { change: "profiles"; profiles: ProfilePickerView | null }
   | { change: "palette"; palette: PaletteView | null }
   | { change: "help"; help: HelpView | null }
   | { change: "settings"; settings: SettingsView | null }
@@ -994,6 +1015,7 @@ export type UiAction =
   | { action: "menu_point_row"; row: number }
   | { action: "menu_activate_row"; row: number }
   | { action: "menu_close" }
+  | { action: "profile_activate_row"; row: number; generation: number }
   | { action: "resync" };
 
 export type StaleReason = "instance" | "generation" | "modal";

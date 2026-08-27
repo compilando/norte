@@ -538,6 +538,25 @@ enum Fondo {
     ),
     /// La task de un `policy.undo_session` ya tiene id: se ata a su sesión.
     UndoDeSesion(u64, String),
+    /// Los perfiles que hay en `profiles/`, ya leídos, y qué se hace con
+    /// ellos: `None` = abrir el selector, `Some(hacia_delante)` = saltar al
+    /// vecino sin abrir nada.
+    ///
+    /// Leerlos es disco —un directorio y un `norte.toml` por perfil— así que
+    /// va por aquí como todo lo que no puede correr en el actor.
+    Perfiles(
+        Vec<norte_frontend::profile_picker::UserProfile>,
+        Option<bool>,
+    ),
+    /// La configuración de un perfil, ya cargada, con su nombre.
+    ///
+    /// `Err` es la clave del motivo: un perfil que no carga NO cambia nada —
+    /// se sigue en el que estabas, que es lo que la ADR 0079 D7 pide para un
+    /// cambio.
+    PerfilCargado(
+        std::ffi::OsString,
+        Box<Result<norte_frontend::config::FrontendConfig, &'static str>>,
+    ),
     /// El catálogo que pidió la PALETA, para sus filas de plugin.
     PluginsDePaleta(u64, Result<norte_proto::methods::PluginListResult, Error>),
     /// Un cambio de gobierno (aprobar/revocar, encender/apagar) contestó.
@@ -1818,6 +1837,35 @@ struct SeleccionDeTema {
     previo: Box<crate::pickers::HostTheme>,
 }
 
+/// Qué de un perfil NO se puede aplicar sin reiniciar ESTA VENTANA.
+///
+/// Medido, no supuesto, y distinto de la lista del terminal — por eso no se
+/// comparte. Aquí el tema SÍ se aplica (el catálogo vuelve a cruzar), y en
+/// cambio las FUENTES no: viajan en el catálogo del arranque y la hoja de
+/// estilos las lee una vez. `[ui] lang` tampoco: `norte_i18n::force` corre una
+/// vez por proceso.
+///
+/// Un cambio que se callara esto sería un cambio que miente (ADR 0079, D8).
+fn fuera_de_alcance_en_caliente(
+    antes: &norte_config::CommonConfig,
+    despues: &norte_config::CommonConfig,
+) -> Vec<&'static str> {
+    let mut fuera = Vec::new();
+    if antes.ui_lang != despues.ui_lang {
+        fuera.push("ui.lang");
+    }
+    if antes.ui_font != despues.ui_font
+        || antes.ui_mono_font != despues.ui_mono_font
+        || antes.ui_font_size != despues.ui_font_size
+    {
+        fuera.push("ui.font");
+    }
+    if antes.ui_reduce_motion != despues.ui_reduce_motion {
+        fuera.push("ui.reduce_motion");
+    }
+    fuera
+}
+
 /// La clave Fluent de un error de io LOCAL.
 ///
 /// La CLAVE y no el texto: el host localiza con SU idioma
@@ -1972,6 +2020,15 @@ struct Estado {
     /// Se está mirando el tema por dentro.
     /// El selector de tema, si está abierto.
     tema_elegido: Option<SeleccionDeTema>,
+    /// El PERFIL activo (ADR 0079), o ninguno.
+    ///
+    /// `OsString` porque es un nombre de directorio: pasarlo por texto cambia
+    /// cuál se abre (#245).
+    perfil_activo: Option<std::ffi::OsString>,
+    /// El selector de perfiles, si está abierto.
+    selector_perfil: Option<norte_frontend::profile_picker::ProfilePicker>,
+    /// La generación de la lista de perfiles: sube cada vez que se relee.
+    gen_perfiles: u64,
     /// Sube cada vez que cambia el conjunto de filas de la barra lateral.
     gen_sitios: u64,
     /// Sube cada vez que cambia el conjunto de filas del selector. Sirve
@@ -2365,6 +2422,9 @@ impl Estado {
             destino_pendiente: None,
             tema: theme,
             tema_elegido: None,
+            perfil_activo: None,
+            selector_perfil: None,
+            gen_perfiles: 0,
             cursor_procesos: 0,
             sitios: None,
             gen_sitios: 0,
@@ -2856,6 +2916,9 @@ impl Estado {
             UiAction::MenuPointRow { row } => self.apuntar_en_menu(*row),
             UiAction::MenuActivateRow { row } => self.activar_del_menu(*row, backend, buzon),
             UiAction::MenuClose => self.cerrar_menu(),
+            UiAction::ProfileActivateRow { row, generation } => {
+                self.activar_perfil_de_fila(*row, *generation, backend, buzon)
+            }
             UiAction::Dialog { id, choice } => self.responder_dialogo(*id, choice, backend, buzon),
             UiAction::CancelTask { task_id } => self.cancelar(*task_id),
             UiAction::CompareSelectRow { .. }
@@ -3127,6 +3190,9 @@ impl Estado {
         }
         if self.selector.is_some() {
             return Some(self.tecla_en_selector(k, backend, buzon));
+        }
+        if self.selector_perfil.is_some() {
+            return Some(self.tecla_en_perfiles(k, backend, buzon));
         }
         if self.tema_elegido.is_some() {
             return Some(self.tecla_en_tema(k, buzon));
@@ -5746,6 +5812,238 @@ impl Estado {
         }
     }
 
+    /// El perfil cargó (o no): se aplica todo lo que se puede aplicar sin
+    /// reiniciar, y se DICE lo que no.
+    ///
+    /// El orden importa. Primero el tema, que es lo que se ve; después el
+    /// keymap entero, las columnas y los favoritos; y al final la disposición
+    /// que el perfil nombre, porque cambia los huecos y todo lo anterior tiene
+    /// que estar puesto cuando se re-listen.
+    ///
+    /// Un perfil que NO carga no cambia nada: se sigue donde estabas y se dice
+    /// por qué (ADR 0079, D7).
+    fn aplicar_perfil(
+        &mut self,
+        nombre: &std::ffi::OsStr,
+        cargada: Result<norte_frontend::config::FrontendConfig, &'static str>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let cfg = match cargada {
+            Ok(c) => c,
+            Err(clave) => return self.decir(clave),
+        };
+        let antes = self.config.common.clone();
+        self.perfil_activo = Some(nombre.to_os_string());
+        self.selector_perfil = None;
+
+        // El TEMA. Se pone por nombre, y el aviso al que hospeda sale de aquí:
+        // es la mitad de para lo que existe un perfil.
+        if let Some(tema) = cfg.common.ui_theme.clone() {
+            self.aplicar_tema(&tema);
+        }
+        // El KEYMAP entero, con las capas del perfil dentro. Si no se puede
+        // construir se queda el que había: un perfil con un `keymap.toml`
+        // roto no puede dejar la ventana sin teclas.
+        if let Ok(browse) = crate::keys::keymap_de_preset_con_capas(
+            &cfg.common.preset,
+            &cfg.keymap_layers,
+            self.efectos,
+        ) {
+            self.efectivo = browse.clone();
+            self.resolver = Resolver::new(browse);
+        }
+        if let Ok(visor) =
+            crate::keys::keymap_visor_de_preset_con_capas(&cfg.common.preset, &cfg.keymap_layers)
+        {
+            self.efectivo_visor = visor.clone();
+            self.resolver_visor = Resolver::new(visor);
+        }
+        if let Ok(dialogo) =
+            crate::keys::keymap_dialogo_de_preset_con_capas(&cfg.common.preset, &cfg.keymap_layers)
+        {
+            self.resolver_dialogo = Resolver::new(dialogo);
+        }
+        // Columnas y favoritos.
+        self.columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
+        self.config = cfg;
+        self.sembrar_sitios();
+        // Y la DISPOSICIÓN que el perfil nombre, si nombra otra: es lo que
+        // hace que un perfil sea «otra pantalla» y no solo otros colores.
+        let mut cambios = Vec::new();
+        if antes.ui_layout != self.config.common.ui_layout
+            && let Some(nombre) = self.config.common.ui_layout.clone()
+            && let Ok(arbol) = norte_frontend::layout::presets::tree(&nombre)
+        {
+            // Lo que devuelve se DESCARTA: al final de esto sale una foto
+            // completa, y mandar dos seguidas es mandar la primera para nada.
+            let _ = self.aplicar_disposicion(arbol, backend, buzon);
+        }
+        // Lo que NO se puede aplicar sin reiniciar se dice por su nombre: un
+        // cambio que se callara esto sería un cambio que miente (D8).
+        let fuera = fuera_de_alcance_en_caliente(&antes, &self.config.common);
+        if fuera.is_empty() {
+            self.status.message = Some(clamp_display(norte_i18n::ta_in(
+                self.lang,
+                "msg-profile-switched",
+                &[("profile", &nombre.to_string_lossy())],
+            )));
+        } else {
+            self.status.message = Some(clamp_display(norte_i18n::ta_in(
+                self.lang,
+                "msg-profile-switched-partial",
+                &[
+                    ("profile", &nombre.to_string_lossy()),
+                    ("keys", &fuera.join(", ")),
+                ],
+            )));
+        }
+        let snap = self.snapshot();
+        cambios.push(self.sobre(UiUpdate::Snapshot(Box::new(snap))));
+        cambios
+    }
+
+    /// Pide la lista de perfiles, FUERA del actor.
+    ///
+    /// `vecino` dice qué se hace con ella cuando llegue: `None` abre el
+    /// selector, `Some(hacia_delante)` salta al de al lado sin abrir nada —
+    /// que es lo que quiere quien tiene dos perfiles y alterna.
+    ///
+    /// Leer `profiles/` es un directorio y un `norte.toml` por perfil: en el
+    /// actor congelaría la ventana, y con un directorio en un NFS caído la
+    /// congelaría hasta que expire el montaje (regla 2, #244).
+    fn pedir_perfiles(
+        &mut self,
+        vecino: Option<bool>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(dir) = self.dir_de_perfiles() else {
+            return self.no_hay_perfiles();
+        };
+        let buzon = buzon.clone();
+        tokio::task::spawn_blocking(move || {
+            let perfiles = norte_frontend::config::read_profiles(&dir);
+            let _ =
+                buzon.blocking_send(Mensaje::Fondo(Box::new(Fondo::Perfiles(perfiles, vecino))));
+        });
+        (self.aplicada(), Vec::new())
+    }
+
+    /// Dónde vive `profiles/`: la capa del USUARIO.
+    ///
+    /// Del usuario y solo de ella, aunque haya un perfil activo: los perfiles
+    /// no anidan (D1), y buscarlos dentro del perfil puesto sería inventarse
+    /// una jerarquía que la ADR no tiene.
+    fn dir_de_perfiles(&self) -> Option<std::path::PathBuf> {
+        use crate::settings::ConfigLayer;
+        self.paths
+            .config_layers
+            .iter()
+            .find(|(capa, _)| matches!(capa, ConfigLayer::User))
+            .map(|(_, p)| p.path.clone())
+    }
+
+    /// No hay dónde buscar perfiles, y se dice.
+    fn no_hay_perfiles(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let envios = self.decir("host-no-profiles");
+        (
+            ActionAck::Unavailable {
+                reason_key: "host-no-profiles".to_owned(),
+            },
+            envios,
+        )
+    }
+
+    /// La lista de perfiles llegó: o se abre el selector, o se salta al
+    /// vecino.
+    fn con_los_perfiles(
+        &mut self,
+        perfiles: Vec<norte_frontend::profile_picker::UserProfile>,
+        vecino: Option<bool>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.gen_perfiles += 1;
+        let Some(hacia_delante) = vecino else {
+            self.selector_perfil = Some(norte_frontend::profile_picker::ProfilePicker::open(
+                perfiles,
+                self.perfil_activo.as_deref(),
+            ));
+            return vec![self.parche(vec![ViewChange::Profiles {
+                profiles: self.vista_perfiles(),
+            }])];
+        };
+        // Girar sobre uno solo no es un cambio: tirar y recargar la pantalla
+        // para dejarla igual sería peor que no hacer nada, y decirlo es más
+        // honesto que fingir que pasó algo.
+        let Some(siguiente) = norte_frontend::profile_picker::next_profile(
+            &perfiles,
+            self.perfil_activo.as_deref(),
+            hacia_delante,
+        ) else {
+            return self.decir("host-no-other-profile");
+        };
+        self.cambiar_de_perfil(&siguiente, buzon)
+    }
+
+    /// Empieza un cambio de perfil: carga su configuración FUERA del actor.
+    ///
+    /// El cambio no se aplica aquí. Cargar la configuración lee entre uno y
+    /// cuatro ficheros por capa, y hasta que no se sabe si carga no se toca
+    /// nada: un perfil roto deja al lector donde estaba (ADR 0079, D7).
+    fn cambiar_de_perfil(
+        &mut self,
+        nombre: &std::ffi::OsStr,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(capas) = self.capas_con_perfil(nombre) else {
+            return self.decir("host-no-profiles");
+        };
+        let nombre = nombre.to_os_string();
+        let buzon = buzon.clone();
+        tokio::task::spawn_blocking(move || {
+            let res = norte_frontend::config::load(&capas).map_err(|_| "host-profile-broken");
+            let _ = buzon.blocking_send(Mensaje::Fondo(Box::new(Fondo::PerfilCargado(
+                nombre,
+                Box::new(res),
+            ))));
+        });
+        Vec::new()
+    }
+
+    /// Las capas de configuración CON el perfil puesto.
+    ///
+    /// Se construyen sobre las que quien arrancó el host resolvió, no mirando
+    /// el entorno otra vez: la ventana lee de donde de verdad leyó (ADR 0066
+    /// D14). El perfil entra por encima de la del usuario y por debajo de la
+    /// del proyecto, que es su sitio (ADR 0079, D1) — y como aquí las capas
+    /// vienen en precedencia ascendente, basta insertarla justo detrás de la
+    /// del usuario.
+    fn capas_con_perfil(&self, nombre: &std::ffi::OsStr) -> Option<norte_config::Layers> {
+        use crate::settings::ConfigLayer;
+        let mut dirs = Vec::new();
+        let mut puesto = false;
+        for (capa, ruta) in &self.paths.config_layers {
+            match capa {
+                ConfigLayer::System => dirs.push((ruta.path.clone(), norte_config::Layer::System)),
+                ConfigLayer::User => {
+                    dirs.push((ruta.path.clone(), norte_config::Layer::User));
+                    dirs.push((
+                        ruta.path.join("profiles").join(nombre),
+                        norte_config::Layer::Profile,
+                    ));
+                    puesto = true;
+                }
+                // La que hubiera se REEMPLAZA: cambiar de perfil no apila
+                // perfiles.
+                ConfigLayer::Profile => {}
+                ConfigLayer::Project => {
+                    dirs.push((ruta.path.clone(), norte_config::Layer::Project));
+                }
+            }
+        }
+        puesto.then_some(norte_config::Layers { dirs })
+    }
+
     /// Abre el selector de tema, con el cursor en el vigente.
     ///
     /// Antes solo ENSEÑABA el tema activo por dentro, y no por falta de
@@ -6142,6 +6440,71 @@ impl Estado {
     }
 
     /// Las teclas mientras se mira el tema. Solo se cierra.
+    /// Teclas del selector de perfiles.
+    ///
+    /// Fijas, como las de los demás selectores de esta ventana: flechas para
+    /// recorrer, `Enter` para elegir y `Escape` para cerrar sin cambiar nada.
+    fn tecla_en_perfiles(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(p) = self.selector_perfil.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match k.key.as_str() {
+            "Escape" | "esc" => {
+                self.selector_perfil = None;
+                let cambio = ViewChange::Profiles { profiles: None };
+                return (self.aplicada(), vec![self.parche(vec![cambio])]);
+            }
+            "ArrowUp" | "up" => p.up(),
+            "ArrowDown" | "down" => p.down(),
+            "Enter" | "enter" => {
+                let elegido = p.chosen().map(std::ffi::OsStr::to_os_string);
+                return match elegido {
+                    Some(nombre) => {
+                        let envios = self.elegir_perfil(&nombre, backend, buzon);
+                        (self.aplicada(), envios)
+                    }
+                    // Una fila que no se puede cargar no cambia nada, y el
+                    // selector se queda abierto: cerrarlo sería contestar que
+                    // sí a algo que no pasó.
+                    None => (
+                        ActionAck::Unavailable {
+                            reason_key: "host-profile-broken".to_owned(),
+                        },
+                        Vec::new(),
+                    ),
+                };
+            }
+            _ => return (self.aplicada(), Vec::new()),
+        }
+        let cambio = ViewChange::Profiles {
+            profiles: self.vista_perfiles(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Elige un perfil de la lista: si ya es el activo no pasa nada, y si no,
+    /// empieza el cambio.
+    fn elegir_perfil(
+        &mut self,
+        nombre: &std::ffi::OsStr,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let _ = backend;
+        if self.perfil_activo.as_deref() == Some(nombre) {
+            // Ya estabas en él: se cierra y se calla. Tirar y recargar la
+            // pantalla para dejarla igual sería trabajo para nada.
+            self.selector_perfil = None;
+            return vec![self.parche(vec![ViewChange::Profiles { profiles: None }])];
+        }
+        self.cambiar_de_perfil(nombre, buzon)
+    }
+
     fn tecla_en_tema(
         &mut self,
         k: &crate::keys::KeyInput,
@@ -6820,6 +7183,8 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         match f {
+            Fondo::Perfiles(perfiles, vecino) => self.con_los_perfiles(perfiles, vecino, buzon),
+            Fondo::PerfilCargado(nombre, res) => self.aplicar_perfil(&nombre, *res, backend, buzon),
             Fondo::PlanIa(epoca, res) => self.aplicar_plan_ia(epoca, *res, backend, buzon),
             Fondo::PlanDeLote(epoca, res) => self.aplicar_plan_de_lote(epoca, *res),
             Fondo::PluginsDeAyuda(res) => self.aplicar_catalogo_de_plugins(res, backend, buzon),
@@ -8960,6 +9325,8 @@ impl Estado {
             | Efecto::Agentes
             | Efecto::Tema
             | Efecto::Menu
+            | Efecto::PerfilElegir
+            | Efecto::PerfilVecino { .. }
             | Efecto::Volumenes
             | Efecto::Conexiones
             // El historial y la hotlist son otros dos selectores: van con el
@@ -9179,6 +9546,8 @@ impl Estado {
             Efecto::Agentes => self.abrir_agentes(),
             Efecto::Tema => self.abrir_tema(),
             Efecto::Menu => self.abrir_menu(),
+            Efecto::PerfilElegir => self.pedir_perfiles(None, buzon),
+            Efecto::PerfilVecino { atras } => self.pedir_perfiles(Some(!atras), buzon),
             Efecto::Volumenes => self.abrir_volumenes(backend, buzon),
             Efecto::Conexiones => self.abrir_conexiones(backend, buzon),
             Efecto::Historial => self.abrir_historial(),
@@ -16109,6 +16478,7 @@ impl Estado {
             dialogs: self.vistas_de_dialogos(),
             tasks: self.vistas_de_tasks(),
             menu: self.vista_menu(),
+            profiles: self.vista_perfiles(),
             palette: self.vista_paleta(),
             whichkey: self.vista_whichkey(),
             help: self.vista_ayuda(),
@@ -16169,6 +16539,83 @@ impl Estado {
     /// El efectivo del visor, para buscar el atajo de un comando suyo.
     fn resolver_visor_efectivo(&self) -> &Effective {
         &self.efectivo_visor
+    }
+
+    /// Un click sobre una fila del selector de perfiles: la elige y la activa.
+    ///
+    /// La GENERACIÓN no es decorativa: la lista se llena desde una tarea de
+    /// fondo, así que un índice de la pantalla anterior nombra otro perfil
+    /// (ADR 0068). Una generación vieja se rechaza en vez de recortarse.
+    fn activar_perfil_de_fila(
+        &mut self,
+        row: u32,
+        generation: u64,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if generation != self.gen_perfiles {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let Some(p) = self.selector_perfil.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let i = row as usize;
+        let Some(fila) = p.rows().get(i) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        if fila.problem.is_some() {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-profile-broken".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        let nombre = fila.name.clone();
+        let envios = self.elegir_perfil(&nombre, backend, buzon);
+        (self.aplicada(), envios)
+    }
+
+    /// La proyección del selector de perfiles.
+    fn vista_perfiles(&self) -> Option<crate::dto::ProfilePickerView> {
+        use norte_frontend::profile_picker::NameClash;
+        let p = self.selector_perfil.as_ref()?;
+        Some(crate::dto::ProfilePickerView {
+            rows: p
+                .rows()
+                .iter()
+                .map(|r| {
+                    // El nombre son BYTES de un directorio: se enmascara, y se
+                    // dice que se enmascaró (#266).
+                    let (pintable, hostil) =
+                        norte_frontend::display_os_name(std::path::Path::new(&r.name).as_os_str());
+                    crate::dto::ProfileRowView {
+                        name: clamp_display(pintable),
+                        name_hostile: hostil,
+                        title: r.title.clone().map(clamp_display),
+                        active: r.active,
+                        clash: match r.clash {
+                            NameClash::None => String::new(),
+                            NameClash::Layout => {
+                                norte_i18n::t_in(self.lang, "profile-picker-clash-layout")
+                            }
+                            NameClash::Keymap => {
+                                norte_i18n::t_in(self.lang, "profile-picker-clash-keymap")
+                            }
+                            NameClash::Both => {
+                                norte_i18n::t_in(self.lang, "profile-picker-clash-both")
+                            }
+                        },
+                        no_state: !r.carries_state,
+                        // El diagnóstico sale de un fichero del usuario: va
+                        // acotado y enmascarado como todo lo demás (#73).
+                        problem: r.problem.clone().map(clamp_display).unwrap_or_default(),
+                    }
+                })
+                .collect(),
+            cursor: p.cursor() as u64,
+            generation: self.gen_perfiles,
+        })
     }
 
     /// La proyección de la barra de menús.

@@ -40,6 +40,7 @@ import type {
   ExtensionOutputView,
   ColumnsPickerView,
   LayoutPickerView,
+  ProfilePickerView,
   MetadataSlotView,
   SearchView,
   PlacesSlotView,
@@ -134,6 +135,7 @@ export class Screen {
     private readonly extensionsRoot: HTMLElement,
     private readonly themeRoot: HTMLElement,
     private readonly pickerRoot: HTMLElement,
+    private readonly profilesRoot: HTMLElement,
     private readonly layoutsRoot: HTMLElement,
     private readonly columnsRoot: HTMLElement,
     private readonly searchRoot: HTMLElement,
@@ -219,6 +221,7 @@ export class Screen {
     this.paintPluginOutput(view.plugin_output);
     this.paintTheme(view.theme);
     this.paintPicker(view.picker);
+    this.paintProfiles(view.profiles);
     this.paintLayouts(view.layouts);
     this.paintColumns(view.columns);
     this.paintSearch(view.search);
@@ -1977,6 +1980,92 @@ export class Screen {
     pie.textContent = columns.hint;
     caja.append(pie);
     this.columnsRoot.replaceChildren(caja);
+  }
+
+  /**
+   * El selector de PERFILES (ADR 0079).
+   *
+   * Una fila que no se puede cargar se ENSEÑA con su motivo en vez de
+   * desaparecer: esconder un directorio que el lector creó es peor que
+   * enseñarlo roto. Y los dos avisos que la spec pide por su nombre —qué
+   * otra cosa se llama igual, y qué perfil no puede guardar estado— van en
+   * la fila, no en una nota al pie que nadie asocia.
+   */
+  private paintProfiles(profiles: ProfilePickerView | null): void {
+    if (profiles === null) {
+      this.profilesRoot.replaceChildren();
+      this.profilesRoot.dataset["open"] = "false";
+      return;
+    }
+    this.profilesRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "profiles";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", this.t("profile-picker-title"));
+
+    const titulo = document.createElement("h1");
+    titulo.textContent = this.t("profile-picker-title");
+    caja.append(titulo);
+
+    const lista = document.createElement("ul");
+    lista.className = "profiles-rows";
+    lista.setAttribute("role", "listbox");
+    for (const [i, r] of profiles.rows.entries()) {
+      const fila = document.createElement("li");
+      fila.className = "profiles-row";
+      fila.id = `profile-row-${String(i)}`;
+      fila.setAttribute("role", "option");
+      fila.setAttribute("aria-selected", String(profiles.cursor === i));
+      fila.dataset["active"] = String(r.active);
+      fila.dataset["broken"] = String(r.problem !== "");
+      fila.addEventListener("click", () => {
+        this.send({
+          action: "profile_activate_row",
+          row: i,
+          generation: profiles.generation,
+        });
+      });
+      const nombre = document.createElement("span");
+      nombre.className = "profiles-name";
+      nombre.textContent = r.name;
+      if (r.name_hostile) {
+        // El nombre son bytes de un directorio: si se enmascaró, se dice.
+        nombre.append(badge(this.t("hostile-name")));
+      }
+      fila.append(nombre);
+      if (r.title !== null) {
+        const t = document.createElement("span");
+        t.className = "profiles-title";
+        t.textContent = r.title;
+        fila.append(t);
+      }
+      // El orden de las notas es el del terminal: primero por qué NO carga,
+      // luego lo que no podrá guardar, y al final el choque de nombre. De
+      // más grave a menos.
+      const nota =
+        r.problem !== ""
+          ? r.problem
+          : r.no_state
+            ? this.t("profile-picker-no-state")
+            : r.clash;
+      if (nota !== "") {
+        const n = document.createElement("span");
+        n.className = "profiles-note";
+        n.textContent = nota;
+        fila.append(n);
+      }
+      lista.append(fila);
+    }
+    lista.setAttribute("aria-activedescendant", `profile-row-${String(profiles.cursor)}`);
+    if (profiles.rows.length === 0) {
+      const vacio = document.createElement("li");
+      vacio.className = "empty";
+      vacio.textContent = this.t("profile-picker-empty");
+      lista.append(vacio);
+    }
+    caja.append(lista);
+    this.profilesRoot.replaceChildren(caja);
   }
 
   private paintLayouts(layouts: LayoutPickerView | null): void {

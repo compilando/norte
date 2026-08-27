@@ -627,6 +627,33 @@
       "truncated": true
     }
   },
+  "profiles": {
+    "change": "profiles",
+    "profiles": {
+      "cursor": 0,
+      "generation": 4,
+      "rows": [
+        {
+          "active": true,
+          "clash": "",
+          "name": "fotos",
+          "name_hostile": false,
+          "no_state": false,
+          "problem": "",
+          "title": "Fotos"
+        },
+        {
+          "active": false,
+          "clash": "también es un preset de teclado",
+          "name": "far",
+          "name_hostile": false,
+          "no_state": true,
+          "problem": "línea 3: falta `]`",
+          "title": null
+        }
+      ]
+    }
+  },
   "rows": {
     "change": "rows",
     "first_visible": 40,

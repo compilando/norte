@@ -47,13 +47,11 @@ const APLAZADOS: &[(&str, u32)] = &[
     // sabe PINTAR un hueco de preview —caería a «kind no soportado», en
     // gris—, y abrir un hueco que solo se pinta apagado no es abrirlo.
     ("layout.preview", 291),
-    // Los perfiles (ADR 0079) llegan a la TUI en la fase 3 y a la ventana en
-    // la 4. El modelo del selector ya es compartido y puro
-    // (`norte_frontend::profile_picker`), así que lo que falta aquí es el DTO,
-    // el pintor y el bump de puente — no una decisión.
-    ("profile.pick", 307),
-    ("profile.next", 307),
-    ("profile.prev", 307),
+    // Los perfiles (ADR 0079) ya están en las dos: el selector, girar por la
+    // lista y el cambio en caliente. Lo que la ventana todavía no hace es
+    // acordarse de dónde dejaste cada panel DENTRO de cada perfil — la
+    // disposición sale de la configuración del perfil, no de su estado
+    // guardado— y eso es lo único que queda de #307.
 ];
 
 /// Todo comando vivo o lo implementa la ventana, o está clasificado.

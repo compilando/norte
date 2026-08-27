@@ -184,6 +184,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::MenuPointRow { .. } => "menu_point_row",
         UiAction::MenuActivateRow { .. } => "menu_activate_row",
         UiAction::MenuClose => "menu_close",
+        UiAction::ProfileActivateRow { .. } => "profile_activate_row",
         UiAction::Resync => "resync",
     }
 }
@@ -336,6 +337,13 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
         ),
         ("help_select_topic", UiAction::HelpSelectTopic { row: 3 }),
         ("help_activate", UiAction::HelpActivate { index: 1 }),
+        (
+            "profile_activate_row",
+            UiAction::ProfileActivateRow {
+                row: 1,
+                generation: 3,
+            },
+        ),
         ("menu_open", UiAction::MenuOpen { menu: 2 }),
         ("menu_point_row", UiAction::MenuPointRow { row: 3 }),
         ("menu_activate_row", UiAction::MenuActivateRow { row: 3 }),
@@ -810,6 +818,35 @@ fn slots_de_referencia() -> Vec<SlotView> {
     ]
 }
 
+/// El selector de perfiles: uno activo y otro que no carga, porque las dos
+/// filas dicen cosas distintas y el renderer las pinta distinto.
+fn perfiles_de_referencia() -> norte_ui_host::dto::ProfilePickerView {
+    norte_ui_host::dto::ProfilePickerView {
+        rows: vec![
+            norte_ui_host::dto::ProfileRowView {
+                name: "fotos".to_owned(),
+                name_hostile: false,
+                title: Some("Fotos".to_owned()),
+                active: true,
+                clash: String::new(),
+                no_state: false,
+                problem: String::new(),
+            },
+            norte_ui_host::dto::ProfileRowView {
+                name: "far".to_owned(),
+                name_hostile: false,
+                title: None,
+                active: false,
+                clash: "también es un preset de teclado".to_owned(),
+                no_state: true,
+                problem: "línea 3: falta `]`".to_owned(),
+            },
+        ],
+        cursor: 0,
+        generation: 4,
+    }
+}
+
 /// La barra de menús con uno DESPLEGADO: la fixture tiene que llevar las dos
 /// mitades, porque son las dos que el renderer pinta.
 fn menu_de_referencia() -> norte_ui_host::dto::MenuView {
@@ -852,6 +889,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         dialogs: vec![dialogo_de_referencia()],
         tasks: vec![task_de_referencia()],
         menu: menu_de_referencia(),
+        profiles: Some(perfiles_de_referencia()),
         palette: Some(norte_ui_host::dto::PaletteView {
             query: "orde".to_owned(),
             rows: vec![norte_ui_host::dto::PaletteRowView {
@@ -1754,6 +1792,12 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
             "menu",
             ViewChange::Menu {
                 menu: menu_de_referencia(),
+            },
+        ),
+        (
+            "profiles",
+            ViewChange::Profiles {
+                profiles: Some(perfiles_de_referencia()),
             },
         ),
         (

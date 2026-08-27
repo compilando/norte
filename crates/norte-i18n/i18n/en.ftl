@@ -1630,6 +1630,12 @@ host-no-other-slot = there is no other panel
 # directory. Said out loud rather than swallowed — it is what separates
 # "chosen" from "saved".
 host-no-config-dir = there is nowhere to save the configuration
+# No user directory in which to look for `profiles/`.
+host-no-profiles = there is nowhere to look for profiles
+# `profile.next`/`prev` with nowhere to go: no profiles, or only the current one.
+host-no-other-profile = there is no other profile
+# The chosen profile does not load. Nothing changes: you stay where you were.
+host-profile-broken = that profile cannot be loaded
 notify-approval-title = norte: an agent is asking
 notify-approval-body = { $op } — { $who }
 notify-task-done = norte: finished

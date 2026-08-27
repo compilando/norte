@@ -398,6 +398,18 @@ pub enum UiAction {
     },
     /// Cierra el menú desplegado sin ejecutar nada (un click fuera).
     MenuClose,
+    /// Elige una fila del selector de PERFILES y la activa (un click).
+    ///
+    /// Selecciona y activa a la vez, como la barra lateral: un selector de
+    /// perfiles existe para cambiar de perfil, y un click que solo mueve un
+    /// cursor obliga a rematar con el teclado.
+    ProfileActivateRow {
+        /// Fila, en el orden en que viajaron.
+        row: u32,
+        /// La generación con la que se pintó. La lista se llena desde una
+        /// tarea de fondo: sin esto, un índice nombra otro perfil.
+        generation: u64,
+    },
     /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
     Resync,
 }

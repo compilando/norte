@@ -145,6 +145,9 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.copy-path",
     "app.theme",
     "app.menu",
+    "profile.pick",
+    "profile.next",
+    "profile.prev",
     "pane.select-drive",
     "pane.connect",
     "pane.disconnect",
@@ -435,6 +438,13 @@ pub enum Efecto {
     /// ofrece las mismas órdenes del catálogo, ordenadas por tema, para
     /// quien no sabe el nombre de lo que busca.
     Menu,
+    /// Abre el selector de PERFILES (ADR 0079).
+    PerfilElegir,
+    /// Salta al perfil siguiente o al anterior, sin abrir nada.
+    PerfilVecino {
+        /// Hacia el anterior.
+        atras: bool,
+    },
     /// Abre el selector de volúmenes del host.
     Volumenes,
     /// Abre la ayuda. Sobre la página del CONTEXTO donde está el lector —
@@ -684,6 +694,9 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "app.terminal" => Efecto::Terminal,
         "app.theme" => Efecto::Tema,
         "app.menu" => Efecto::Menu,
+        "profile.pick" => Efecto::PerfilElegir,
+        "profile.next" => Efecto::PerfilVecino { atras: false },
+        "profile.prev" => Efecto::PerfilVecino { atras: true },
         "pane.select-drive" => Efecto::Volumenes,
         "pane.connect" => Efecto::Conexiones,
         "pane.disconnect" => Efecto::Desconectar,

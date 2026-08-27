@@ -1488,6 +1488,70 @@ body {
   unicode-bidi: isolate;
 }
 
+#profiles[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10vh;
+  background: rgb(0 0 0 / 45%);
+}
+
+#profiles[data-open="false"] {
+  display: none;
+}
+
+.profiles {
+  width: min(70ch, 90vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  padding: 0 6px 6px;
+}
+
+.profiles-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: auto;
+}
+
+.profiles-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 0 6px;
+  cursor: pointer;
+  unicode-bidi: isolate;
+}
+
+.profiles-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+/* El ACTIVO se marca, y no solo con el cursor: el cursor dice dónde estás
+   mirando y esto dice en cuál estás. */
+.profiles-row[data-active="true"] .profiles-name::before {
+  content: "● ";
+  color: var(--border-focus);
+}
+
+/* Una fila rota se ENSEÑA. Esconder un directorio que el lector creó es peor
+   que enseñarlo con su motivo. */
+.profiles-row[data-broken="true"] .profiles-name {
+  color: var(--error-fg);
+}
+
+.profiles-title,
+.profiles-note {
+  opacity: 0.7;
+}
+
 /* La lista de temas entre los que se elige. Moverse por ella cambia los
    colores de la ventana entera, así que la fila señalada tiene que verse con
    los colores que ya están puestos: nada de color propio, solo la selección

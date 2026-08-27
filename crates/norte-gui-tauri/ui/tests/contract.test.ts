@@ -9,7 +9,7 @@ import { catalogoReal, golden } from "./fixtures";
 /** Una pantalla montada sobre un DOM limpio, con el catálogo de verdad. */
 function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
   document.body.replaceChildren();
-  const nodos = Array.from({ length: 19 }, () => document.createElement("div"));
+  const nodos = Array.from({ length: 20 }, () => document.createElement("div"));
   const root = document.createElement("main");
   document.body.append(root, ...nodos);
   document.documentElement.style.setProperty("--cell-h", "20px");
@@ -32,6 +32,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     extensions,
     theme,
     picker,
+    profiles,
     layouts,
     columns,
     search,
@@ -53,6 +54,7 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     extensions as HTMLElement,
     theme as HTMLElement,
     picker as HTMLElement,
+    profiles as HTMLElement,
     layouts as HTMLElement,
     columns as HTMLElement,
     search as HTMLElement,
@@ -138,6 +140,7 @@ describe("el contrato con el host", () => {
       "palette",
       "picker",
       "plugin_output",
+      "profiles",
       "rows",
       "search",
       "settings",

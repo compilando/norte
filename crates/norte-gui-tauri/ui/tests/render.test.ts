@@ -93,6 +93,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     dialogs: [],
     tasks: [],
     menu: { bar: true, titles: ["Archivo", "Paneles"], open: null, items: [], cursor: 0 },
+    profiles: null,
     palette: null,
     whichkey: null,
     help: null,
@@ -121,6 +122,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
   document.body.replaceChildren();
   const root = document.createElement("main");
   const menu = document.createElement("div");
+  const profiles = document.createElement("div");
   const palette = document.createElement("div");
   const whichkey = document.createElement("div");
   const help = document.createElement("div");
@@ -148,6 +150,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
     extensions,
     theme,
     picker,
+    profiles,
     layouts,
     columns,
     search,
@@ -168,6 +171,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
     extensions,
     theme,
     picker,
+    profiles,
     layouts,
     columns,
     search,
@@ -1812,6 +1816,67 @@ describe("el gestor de extensiones", () => {
     const { screen } = montar();
     screen.paint(vista({}));
     expect(document.querySelector(".extensions")).toBeNull();
+  });
+});
+
+describe("el selector de perfiles", () => {
+  function conPerfiles() {
+    const v = vista({});
+    v.profiles = {
+      rows: [
+        {
+          name: "fotos",
+          name_hostile: false,
+          title: "Fotos",
+          active: true,
+          clash: "",
+          no_state: false,
+          problem: "",
+        },
+        {
+          name: "far",
+          name_hostile: false,
+          title: null,
+          active: false,
+          clash: "también es un preset de teclado",
+          no_state: false,
+          problem: "",
+        },
+        {
+          name: "roto",
+          name_hostile: false,
+          title: null,
+          active: false,
+          clash: "",
+          no_state: false,
+          problem: "línea 3: falta `]`",
+        },
+      ],
+      cursor: 1,
+      generation: 7,
+    };
+    return v;
+  }
+
+  it("marca el activo, el cursor, y ENSEÑA el que no carga", () => {
+    const { screen } = montar();
+    screen.paint(conPerfiles());
+    const filas = [...document.querySelectorAll(".profiles-row")];
+    expect(filas).toHaveLength(3);
+    expect(filas[0]?.getAttribute("data-active")).toBe("true");
+    expect(filas[1]?.getAttribute("aria-selected")).toBe("true");
+    // Una fila rota no desaparece: se enseña con su motivo.
+    expect(filas[2]?.getAttribute("data-broken")).toBe("true");
+    expect(filas[2]?.textContent).toContain("falta");
+    // Y el choque de nombre se dice, que si no es una trampa.
+    expect(filas[1]?.textContent).toContain("preset de teclado");
+  });
+
+  it("un click lo activa, con la generación con la que se pintó", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conPerfiles());
+    (document.querySelectorAll(".profiles-row")[1] as HTMLElement).click();
+    expect(enviadas).toEqual([{ action: "profile_activate_row", row: 1, generation: 7 }]);
   });
 });
 

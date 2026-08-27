@@ -130,6 +130,11 @@
     "generation": 4,
     "row": 1
   },
+  "profile_activate_row": {
+    "action": "profile_activate_row",
+    "generation": 3,
+    "row": 1
+  },
   "resync": {
     "action": "resync"
   },

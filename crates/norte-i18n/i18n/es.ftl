@@ -1658,6 +1658,12 @@ host-no-other-slot = no hay otro panel
 # usuario. Se dice en vez de tragarse el guardado, que es lo que separa
 # «elegido» de «guardado».
 host-no-config-dir = no hay dónde guardar la configuración
+# No hay directorio de usuario donde buscar `profiles/`.
+host-no-profiles = no hay dónde buscar perfiles
+# `profile.next`/`prev` sin a dónde ir: ni perfiles, o solo el que ya está.
+host-no-other-profile = no hay otro perfil
+# El perfil elegido no carga. No se cambia nada: se sigue en el que estabas.
+host-profile-broken = ese perfil no se puede cargar
 notify-approval-title = norte: un agente pide permiso
 notify-approval-body = { $op } — { $who }
 notify-task-done = norte: terminado

@@ -25,6 +25,10 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **43**: la pantalla puede llevar el selector de PERFILES (ADR 0079), con
+///   el activo marcado, lo que no carga dicho por su motivo, y los dos avisos
+///   que la spec pide por su nombre: qué otra cosa se llama igual y qué perfil
+///   no puede guardar estado.
 /// - **42**: la pantalla del tema ELIGE: lleva la lista de temas y el cursor,
 ///   y moverse por ella previsualiza en vivo. Antes solo enseñaba el que
 ///   había, porque quien hospeda resolvía el tema una vez al arrancar; ahora
@@ -141,7 +145,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 42;
+pub const BRIDGE_VERSION: u32 = 43;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///
