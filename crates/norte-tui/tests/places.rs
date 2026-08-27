@@ -326,6 +326,31 @@ fn plegar_desde_la_app_esconde_las_filas() {
     assert!(app.places_slot().is_some(), "plegar no cierra el sidebar");
 }
 
+/// El cursor arranca sobre una CABECERA, que es lo que hace que `⏎` tenga que
+/// contestar ahí.
+///
+/// `places_activate` devuelve `None` sobre una cabecera, así que Enter era
+/// inerte justo en la primera fila del panel: lo abrías, pulsabas la tecla que
+/// se prueba primero sobre algo que se abre, y no pasaba nada. Plegar era
+/// Espacio y solo Espacio.
+#[test]
+fn el_cursor_arranca_sobre_una_cabecera() {
+    let app = app_con_sidebar();
+    assert!(
+        app.places_cursor_on_header(),
+        "la primera fila es la cabecera de una sección"
+    );
+}
+
+/// Y bajando hasta una unidad deja de estarlo: ahí `⏎` navega, que es lo que
+/// Enter significa sobre una hoja.
+#[test]
+fn sobre_una_unidad_el_cursor_ya_no_esta_en_una_cabecera() {
+    let mut app = app_con_sidebar();
+    app.places_down();
+    assert!(!app.places_cursor_on_header());
+}
+
 /// `layout.places` está atado en los SIETE presets, y en `[global]`.
 ///
 /// Lo primero, porque un comando de núcleo atado en unos y no en otros es el

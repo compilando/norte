@@ -128,6 +128,16 @@ pub const ALLOW_PLACES: &[&str] = &[
     // tmux con la suite entera en verde, que es exactamente para lo que
     // sirve el harness.
     "layout.places",
+    // `Tab` sale a los listados sin cerrar el panel. Abrir una columna
+    // lateral dejaba muerta la tecla con la que se cambia de panel toda la
+    // vida: el panel se come lo que no esté aquí.
+    //
+    // Los DOS verbos, y no uno: en la pantalla `dialog` los presets atan `tab`
+    // a `dialog.pane` —que es como se llama «al otro panel» en un diálogo— y
+    // `pane.switch` es como se llama en la de navegar. Aceptar solo el segundo
+    // dejaba el arreglo sin efecto con los presets tal y como se envían.
+    "dialog.pane",
+    "pane.switch",
 ];
 
 /// ALLOWLIST del panel de procesos (`on_processes_key` en main.rs).
@@ -147,6 +157,10 @@ pub const ALLOW_PROCESSES: &[&str] = &[
     "layout.grow",
     "layout.shrink",
     "layout.processes",
+    // Igual que el sidebar: `Tab` devuelve el teclado a los listados, con los
+    // dos nombres que esa tecla tiene según la pantalla.
+    "dialog.pane",
+    "pane.switch",
 ];
 
 /// ALLOWLIST de DESPACHO del popup de navegación (`on_nav_popup_key`,

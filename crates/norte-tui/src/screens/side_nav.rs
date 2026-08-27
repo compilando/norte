@@ -95,7 +95,11 @@ pub async fn on_tree_key(
                 t.toggle();
             }
         }
-        "dialog.cancel" => app.return_keys_to_panes(),
+        // `Esc` suelta el teclado, y `Tab` también: la misma regla que el
+        // sidebar y el panel de procesos. Ninguno de los dos CIERRA el árbol
+        // —eso es `pane.tree`—, y abrir una columna lateral no puede costarte
+        // la tecla con la que se cambia de panel toda la vida.
+        "dialog.cancel" | "dialog.pane" | "pane.switch" => app.return_keys_to_panes(),
         // El ancho del árbol, por lo mismo que el del sidebar (#244 M1).
         "layout.grow" => app.layout_resize(1),
         "layout.shrink" => app.layout_resize(-1),
@@ -190,8 +194,17 @@ pub async fn on_places_key(
                 refresh_places_drives(app, backend).await;
             }
         }
-        // Suelta el teclado, NO cierra el panel: cerrarlo es `layout.places`.
-        "dialog.cancel" => app.return_keys_to_panes(),
+        // `Esc` suelta el teclado, y `Tab` también. Ninguno CIERRA el panel:
+        // cerrarlo es `layout.places`.
+        //
+        // Lo de `Tab` no es simetría por gusto: sin él, abrir el sidebar
+        // dejaba muerta la tecla con la que se cambia de panel toda la vida.
+        // `pane.switch` no está en el vocabulario `dialog.*` y el panel se come
+        // lo que no esté en su allowlist. Sale a los listados sin cambiar de
+        // panel, así que el SIGUIENTE `Tab` hace lo de siempre y la tecla
+        // significa una sola cosa: «a la región siguiente», con el sidebar
+        // contando como región.
+        "dialog.cancel" | "dialog.pane" | "pane.switch" => app.return_keys_to_panes(),
         // El ancho del sidebar, que es el ÚNICO camino por el que se puede
         // cambiar: el llamante de `layout_resize` pasa siempre un listado
         // visible, así que la rama de `Size::Fixed` no la alcanzaba nadie
@@ -201,8 +214,22 @@ pub async fn on_places_key(
         // Y `layout.places` con el teclado DENTRO cierra: es la tercera
         // pulsación de la secuencia abrir → enfocar → cerrar.
         "layout.places" => app.toggle_places(),
+        // `⏎` sobre una CABECERA pliega o despliega su sección, como en el
+        // árbol de al lado. Antes no hacía nada: `activate()` devuelve `None`
+        // para una cabecera, así que Enter sobre «Unidades» era inerte y
+        // plegar era Espacio y solo Espacio. Enter es el gesto que se prueba
+        // primero sobre algo que se abre, y los dos paneles laterales deben
+        // contestarlo igual.
+        //
+        // Sobre una unidad o un favorito sigue NAVEGANDO, que es lo que Enter
+        // significa sobre una hoja.
         "dialog.confirm" => {
-            if let Some(path) = app.places_activate() {
+            if app.places_cursor_on_header() {
+                app.places_toggle_fold();
+                if app.places_drives_visible() {
+                    refresh_places_drives(app, backend).await;
+                }
+            } else if let Some(path) = app.places_activate() {
                 let pane = app.focus();
                 return cd_in(app, backend, events, pane, path, Trail::Record).await;
             }

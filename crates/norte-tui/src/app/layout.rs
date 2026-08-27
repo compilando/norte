@@ -257,7 +257,9 @@ impl App {
     /// - una fila que lleva a un sitio: se devuelve la ruta y el teclado vuelve
     ///   a los listados, porque el sidebar es un MANDO y no un panel con
     ///   directorio propio;
-    /// - una cabecera: no pasa nada, y el teclado se queda donde está;
+    /// - una cabecera: aquí no pasa nada, y el teclado se queda donde está —
+    ///   quien decide qué hace Enter ahí pregunta antes por
+    ///   [`Self::places_cursor_on_header`] y pliega;
     /// - un favorito roto: la barra dice POR QUÉ. Es la otra mitad de pintarlo
     ///   marcado: en catorce celdas cabe el aviso, no la explicación.
     pub fn places_activate(&mut self) -> Option<VPath> {
@@ -275,6 +277,20 @@ impl App {
         let dest = state.activate()?.clone();
         self.key_owner = KeyOwner::Panes;
         Some(dest)
+    }
+
+    /// Si el cursor del sidebar está sobre una CABECERA de sección.
+    ///
+    /// Lo pregunta quien decide qué hace Enter: sobre una cabecera pliega,
+    /// sobre una unidad o un favorito navega. Sin esta pregunta, Enter sobre
+    /// «Unidades» era inerte —[`Self::places_activate`] devuelve `None` ahí— y
+    /// plegar era Espacio y solo Espacio.
+    #[must_use]
+    pub fn places_cursor_on_header(&self) -> bool {
+        use norte_frontend::places::PlaceRow;
+        self.places_slot()
+            .and_then(|id| self.panes.places(id))
+            .is_some_and(|s| matches!(s.rows().get(s.cursor()), Some(PlaceRow::Header { .. })))
     }
 
     /// El hueco del visor acoplado, si está en el árbol.
@@ -500,9 +516,11 @@ impl App {
         match cmd {
             "dialog.up" => self.processes_up(),
             "dialog.down" => self.processes_down(),
-            // Suelta el teclado, NO cierra el panel: cerrarlo es
-            // `layout.processes`.
-            "dialog.cancel" => self.return_keys_to_panes(),
+            // `Esc` suelta el teclado y NO cierra el panel: cerrarlo es
+            // `layout.processes`. Y `Tab` hace lo mismo, por la misma razón
+            // que el sidebar y el árbol: abrir un panel con teclado no puede
+            // costarte la tecla con la que se cambia de panel toda la vida.
+            "dialog.cancel" | "dialog.pane" | "pane.switch" => self.return_keys_to_panes(),
             "layout.grow" => self.layout_resize(1),
             "layout.shrink" => self.layout_resize(-1),
             "layout.processes" => self.toggle_processes(),

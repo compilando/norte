@@ -127,6 +127,37 @@ fn cancelar_suelta_el_teclado_y_su_tecla_cierra_desde_dentro() {
     assert_eq!(app.key_owner(), KeyOwner::Panes);
 }
 
+/// `Tab` devuelve el teclado a los listados sin cerrar el panel.
+///
+/// Abrir un panel con teclado no puede costarte la tecla con la que se cambia
+/// de panel toda la vida. El panel se come lo que no esté en su allowlist, así
+/// que `Tab` quedaba muerto mientras estuviera abierto.
+///
+/// Se prueban los DOS verbos porque esa tecla tiene dos nombres según la
+/// pantalla: en la de diálogo los presets atan `tab` a `dialog.pane`, y en la
+/// de navegar es `pane.switch`. La primera versión de este arreglo solo aceptó
+/// el segundo, y por eso no hizo NADA con los presets tal y como se envían —
+/// la suite pasaba y la tecla seguía muerta. Lo destapó pilotarlo en tmux.
+#[test]
+fn tab_devuelve_el_teclado_sin_cerrar_el_panel() {
+    for verbo in ["dialog.pane", "pane.switch"] {
+        let mut app = app_de_prueba();
+        app.toggle_processes();
+        assert_eq!(app.key_owner(), KeyOwner::Processes);
+
+        assert!(app.processes_command(verbo).is_none());
+        assert_eq!(
+            app.key_owner(),
+            KeyOwner::Panes,
+            "«{verbo}» devuelve el teclado"
+        );
+        assert!(
+            app.processes_slot().is_some(),
+            "y el panel sigue abierto: salir no es cerrar"
+        );
+    }
+}
+
 /// El movimiento del cursor está en el allowlist Y despachado: sin las dos
 /// cosas, el `▶` se queda en la fila 0 para siempre mientras las flechas
 /// mueven otra lista.
