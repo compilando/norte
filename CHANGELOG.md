@@ -9,6 +9,33 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Profiles reach the window** (ADR 0079, bridge 43). `profile.pick`,
+  `profile.next` and `profile.prev` used to answer "not here"; now the window
+  lists them, cycles through them and switches live. The picker is the shared
+  model, so what each row says is not decided twice: a profile that will not
+  load is SHOWN with its reason rather than hidden — hiding a directory the
+  reader created is worse than showing it broken — and the two warnings the
+  spec names are on the row (what else in norte shares that name, and which
+  profile cannot remember your panels). Reading `profiles/` and loading the
+  configuration both happen off the actor. A switch applies the theme, the
+  whole keymap for all three screens, the columns, the favourites and the
+  arrangement the profile names; a profile that fails to load changes nothing
+  and says why. What cannot be applied without restarting is named, and that
+  list is the window's own rather than shared with the terminal: here the theme
+  DOES apply and the fonts do not, which is the opposite of the terminal's
+  answer. Remembering where you left each panel *inside* each profile is still
+  to come — the arrangement comes from the profile's configuration, not from
+  its saved state.
+- **The window can change theme while running** (bridge 42). It could not, and
+  not by oversight: the colours cross to the webview as CSS variables inside
+  the catalog, and that catalog was built once at startup — which is why the
+  theme screen was read-only and said so. A new native effect tells the hosting
+  process which theme is now active; it rebuilds the catalog and the renderer
+  re-applies the variables. With that path open, the theme screen CHOOSES:
+  presets, the cursor on the one in use, live preview as you move, Enter fixes
+  and saves it, Escape goes back to the one you had. The save goes to the
+  highest editable layer — the active profile if there is one, the user's
+  otherwise — which is the rule ADR 0079 already wrote for the terminal.
 - **The window has a menu bar** (bridge 41). It was the most visible gap next
   to the terminal: `app.menu` resolved to "not here", and the parity list said
   so in writing — so the window's commands were reachable only by knowing a
