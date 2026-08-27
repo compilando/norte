@@ -15,6 +15,20 @@ keymap = [
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },
+    # Los paneles laterales tenían tecla para ABRIRSE y ninguna para
+    # recorrerse: `tab` alterna los dos listados y nada más, así que con el
+    # sidebar y el visor en pantalla había que acordarse de la tecla de cada
+    # uno para moverse entre ellos. `alt+o` pasa al SIGUIENTE panel del anillo
+    # —los listados y todo panel que sepa quedarse el teclado, en el orden en
+    # que están en pantalla— y `alt+O` al anterior. Es el «otro» del `C-x o`
+    # de Emacs; aquí no hay nada que transcribir de ningún gestor de
+    # referencia, porque ninguno tenía paneles laterales que enfocar.
+    { on = ["alt+o"], run = "layout.focus-next" },
+    { on = ["alt+O"], run = "layout.focus-prev" },
+    # Y el panel de procesos no tenía tecla en NINGUNO de los siete: al único
+    # sitio que dice qué está copiando norte se llegaba solo por el menú.
+    # `alt+j` de «jobs».
+    { on = ["alt+j"], run = "layout.processes" },
 ]
 
 [pane]

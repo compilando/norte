@@ -874,6 +874,13 @@ pub async fn run(
             )
             .await;
         }
+        // Las unidades del sidebar, una vez por vuelta y DESPUÉS del cambio de
+        // perfil, que monta una pantalla nueva y por tanto también las pide.
+        // Tres caminos —abrir el panel, desplegar su sección, montar una
+        // disposición que ya lo trae— y un solo sitio donde se sirven, que es
+        // lo que evita que falten justo por el que nadie recordó (ver
+        // `App::places_wants_drives`).
+        crate::screens::drain_places_drives(app, backend).await;
         // Resize/Focus/etc: el draw del inicio del loop repinta solo.
     }
 }

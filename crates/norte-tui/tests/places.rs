@@ -545,3 +545,116 @@ fn con_el_teclado_dentro_el_sidebar_cambia_de_ancho() {
 fn el_sidebar_despacha_su_propia_tecla() {
     assert!(norte_tui::app::ALLOW_PLACES.contains(&"layout.places"));
 }
+
+/// Las unidades se PIDEN por bandera, y quien la enciende son los tres
+/// caminos por los que la sección aparece.
+///
+/// `host.volumes` es I/O y `App` no tiene backend, así que cada sitio se lo
+/// pedía por su cuenta — y faltaba justo en los que nadie recordó: arrancar
+/// con una disposición que trae el sidebar, y cambiar de perfil, que monta
+/// una pantalla nueva y con ella un panel vacío.
+#[test]
+fn los_tres_caminos_dejan_las_unidades_pedidas() {
+    use norte_frontend::layout::{Edge, KindId, Node, Size, SlotId};
+    let mut app = app_de_prueba();
+    assert!(!app.places_wants_drives, "sin sidebar no se pide nada");
+
+    // 1 — abrirlo con su tecla.
+    app.toggle_places();
+    assert!(app.places_wants_drives);
+    app.places_wants_drives = false;
+
+    // 2 — plegar NO las pide (no se ven); desplegar, sí.
+    app.places_toggle_fold();
+    assert!(!app.places_wants_drives, "plegadas no se piden");
+    app.places_toggle_fold();
+    assert!(app.places_wants_drives);
+    app.places_wants_drives = false;
+
+    // 3 — una disposición que ya lo trae, sin pasar por la tecla.
+    let arbol = Node::slot(SlotId(0), KindId::browser()).dock(
+        SlotId(0),
+        Edge::Left,
+        Size::Fixed(16),
+        &Node::slot(SlotId(9), KindId::new("places")),
+    );
+    app.set_layout(arbol);
+    assert!(app.places_wants_drives);
+}
+
+/// Un favorito válido, como lo deja la config ya cargada.
+fn favorito(name: &str, wire: &str) -> norte_tui::config::HotlistItem {
+    norte_tui::config::HotlistItem {
+        name: name.to_owned(),
+        target: Ok(vp(wire)),
+    }
+}
+
+/// Los nombres de los favoritos que el sidebar pinta ahora mismo.
+fn favoritos_del_sidebar(app: &App) -> Vec<String> {
+    let id = app.places_slot().expect("el sidebar está abierto");
+    app.panes
+        .places(id)
+        .expect("es un sidebar")
+        .rows()
+        .iter()
+        .filter_map(|r| match r {
+            norte_frontend::places::PlaceRow::Favorite { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Un layout que TRAE el sidebar —`full`, `explorer`, una sesión de ayer— lo
+/// abre sin pasar por su tecla, y era la tecla la que copiaba los favoritos:
+/// el panel salía vacío y nada dentro del programa lo llenaba nunca.
+#[test]
+fn un_layout_que_trae_el_sidebar_lo_arranca_con_los_favoritos() {
+    use norte_frontend::layout::{Edge, KindId, Node, Size, SlotId};
+    let mut app = app_de_prueba();
+    app.set_hotlist(vec![favorito("descargas", "file:///casa/descargas")]);
+    // El sidebar entra por el ÁRBOL, no por `toggle_places`.
+    let arbol = Node::slot(SlotId(0), KindId::browser()).dock(
+        SlotId(0),
+        Edge::Left,
+        Size::Fixed(16),
+        &Node::slot(SlotId(9), KindId::new("places")),
+    );
+    app.set_layout(arbol);
+    assert_eq!(favoritos_del_sidebar(&app), vec!["descargas".to_owned()]);
+}
+
+/// Y un favorito añadido con el sidebar YA abierto sale en él. El popup se
+/// reconstruía y el sidebar no, así que las dos superficies del mismo dato
+/// decían cosas distintas — la queja era exactamente esa.
+#[test]
+fn anadir_un_favorito_lo_pinta_tambien_en_el_sidebar() {
+    let mut app = app_de_prueba();
+    app.toggle_places();
+    assert!(
+        favoritos_del_sidebar(&app).is_empty(),
+        "empieza sin ninguno"
+    );
+
+    app.hotlist_apply_saved("descargas", vp("file:///casa/descargas"));
+    assert_eq!(favoritos_del_sidebar(&app), vec!["descargas".to_owned()]);
+
+    app.hotlist_apply_removed("descargas");
+    assert!(
+        favoritos_del_sidebar(&app).is_empty(),
+        "y quitarlo lo quita de los dos sitios"
+    );
+}
+
+/// Un hot-reload del `norte.toml` —o un cambio de perfil, que pasa por el
+/// mismo sitio— reemplaza la lista entera, y el sidebar la sigue.
+#[test]
+fn recargar_la_config_reemplaza_los_favoritos_del_sidebar() {
+    let mut app = app_de_prueba();
+    app.toggle_places();
+    app.set_hotlist(vec![favorito("viejo", "file:///viejo")]);
+    assert_eq!(favoritos_del_sidebar(&app), vec!["viejo".to_owned()]);
+
+    app.set_hotlist(vec![favorito("nuevo", "file:///nuevo")]);
+    assert_eq!(favoritos_del_sidebar(&app), vec!["nuevo".to_owned()]);
+}

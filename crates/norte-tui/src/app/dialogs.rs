@@ -138,6 +138,21 @@ pub const ALLOW_PLACES: &[&str] = &[
     // dejaba el arreglo sin efecto con los presets tal y como se envían.
     "dialog.pane",
     "pane.switch",
+    // Y el anillo, que es lo que `Tab` NO hace: `pane.switch` devuelve el
+    // teclado a los listados, mientras que esto pasa al panel de al lado sea
+    // el que sea. Sin estas dos, la tecla del anillo se moría justo dentro
+    // del panel del que sirve para salir.
+    "layout.focus-next",
+    "layout.focus-prev",
+    // Y las teclas de los OTROS paneles, por la misma regla que ya trajo aquí
+    // la del propio panel y la de cambiar de listado: abrir una columna
+    // lateral no puede matar la tecla con la que se abre la de al lado. Antes,
+    // con el teclado en el sidebar, `alt+j` no abría nada y no había forma de
+    // saber por qué.
+    "layout.preview",
+    "layout.processes",
+    "layout.metadata",
+    "pane.tree",
 ];
 
 /// ALLOWLIST del panel de procesos (`on_processes_key` en main.rs).
@@ -163,9 +178,17 @@ pub const ALLOW_PROCESSES: &[&str] = &[
     "layout.shrink",
     "layout.processes",
     // Igual que el sidebar: `Tab` devuelve el teclado a los listados, con los
-    // dos nombres que esa tecla tiene según la pantalla.
+    // dos nombres que esa tecla tiene según la pantalla, y el anillo pasa al
+    // panel de al lado.
     "dialog.pane",
     "pane.switch",
+    "layout.focus-next",
+    "layout.focus-prev",
+    // Y las de los otros paneles, igual que en el sidebar.
+    "layout.places",
+    "layout.preview",
+    "layout.metadata",
+    "pane.tree",
 ];
 
 /// ALLOWLIST de DESPACHO del popup de navegación (`on_nav_popup_key`,

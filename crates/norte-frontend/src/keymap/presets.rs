@@ -365,6 +365,48 @@ mod k2b_gate_tests {
         );
     }
 
+    /// Todo panel que pueda quedarse el TECLADO se abre con una tecla, y la
+    /// pantalla se recorre entera con otra.
+    ///
+    /// La misma forma que el test de arriba, sobre la otra familia que ningún
+    /// gestor de referencia tenía: los paneles laterales. `layout.processes`
+    /// estaba sin atar en los siete —al único sitio que dice qué está
+    /// copiando norte se llegaba solo por el menú— y `layout.focus-next`
+    /// también, así que con el sidebar y el visor delante había que acordarse
+    /// de la tecla de cada panel para moverse entre ellos: `tab` alterna los
+    /// dos listados y nada más.
+    ///
+    /// `layout.focus-prev` NO está en la lista: en krusader su acorde es el
+    /// de «Sync panels» y se queda sin atar a propósito (ver el fichero). El
+    /// anillo da la vuelta, así que hacia delante se llega igual.
+    #[test]
+    fn los_paneles_con_teclado_se_abren_y_se_recorren_en_los_siete_presets() {
+        let paneles = [
+            "layout.places",
+            "layout.preview",
+            "layout.processes",
+            "layout.focus-next",
+        ];
+        let mut faltan: Vec<String> = Vec::new();
+        for nombre in NAMES {
+            let src = source(nombre).expect("NAMES resuelve");
+            let kf =
+                crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {nombre}: {e}"));
+            let atados = preset_runs(&kf);
+            for cmd in paneles {
+                if !atados.contains(&cmd) {
+                    faltan.push(format!("{nombre}: {cmd}"));
+                }
+            }
+        }
+        assert!(
+            faltan.is_empty(),
+            "paneles sin tecla — o no se abren, o no se puede salir de ellos \
+             sin ratón:\n  {}",
+            faltan.join("\n  ")
+        );
+    }
+
     /// Ningún preset ata un acorde que un terminal NO PUEDE entregar.
     ///
     /// `ctrl+<letra mayúscula>` es esa forma. [`crate::keymap::parse_chord`]

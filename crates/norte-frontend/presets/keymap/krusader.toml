@@ -89,6 +89,18 @@ keymap = [
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },
+    # El anillo de paneles y el panel de procesos. Ver la nota larga en
+    # orthodox.toml: son superficies propias de norte y no hay nada que
+    # transcribir de Krusader sobre ellas.
+    #
+    # `layout.focus-prev` se queda SIN ATAR aquí, y solo aquí: su tecla en los
+    # otros seis es `alt+O`, que en Krusader es «Sync panels» (el Equals
+    # Button) y está atada a `pane.mirror`. Un `[global]` con ese acorde
+    # quedaría ensombrecido dentro de los listados y activo fuera, que es peor
+    # que no estar: la misma tecla haría dos cosas según dónde estuviera el
+    # teclado. El anillo da la vuelta, así que hacia delante se llega igual.
+    { on = ["alt+o"], run = "layout.focus-next" },
+    { on = ["alt+j"], run = "layout.processes" },
 ]
 
 [pane]

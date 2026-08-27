@@ -440,6 +440,18 @@ pub struct App {
     /// [`crate::navigate::Cd`] — meter un segundo canal de salida en su firma
     /// tocaría a todos sus llamantes para servir a tres brazos.
     pub pending_profile: Option<std::ffi::OsString>,
+    /// El sidebar necesita que le vuelvan a pedir las unidades.
+    ///
+    /// Mismo patrón que [`Self::pending_profile`] y por lo mismo: `host.volumes`
+    /// es I/O y `App` no tiene backend. Lo enciende TODO lo que hace aparecer
+    /// la sección —abrir el sidebar, desplegarla, montar una disposición que
+    /// ya lo trae— y lo drena el run loop una vez por vuelta.
+    ///
+    /// Antes cada sitio pedía los volúmenes por su cuenta, y por eso faltaban
+    /// justo en los que nadie recordó: arrancar con `full`, cambiar de perfil,
+    /// abrir el sidebar desde dentro de otro panel. Una bandera y un drenaje
+    /// es un sitio donde equivocarse en vez de cinco.
+    pub places_wants_drives: bool,
     /// El selector de conexiones (#140), si está abierto.
     pub connections_picker: Option<norte_frontend::connections_picker::ConnectionsPicker>,
     /// Overlay del picker de columnas (#108 7a): mismo patrón que
@@ -779,6 +791,7 @@ impl App {
             menu_bar: true,
             active_profile: None,
             pending_profile: None,
+            places_wants_drives: false,
             connections_picker: None,
             columns_picker: None,
             extensions: None,

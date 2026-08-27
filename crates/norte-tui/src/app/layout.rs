@@ -63,6 +63,13 @@ impl App {
         self.panes.refresh_visible(&self.layout);
         self.history.retain_tree(&self.layout);
         self.settle_key_owner();
+        // Un sidebar recién sembrado nace VACÍO, y quien lo llenaba era su
+        // tecla. Una disposición que lo trae —`full`, `explorer`, la sesión de
+        // ayer, un perfil— no la pulsa nunca, así que el panel se quedaba en
+        // blanco para siempre: los favoritos van aquí mismo y las unidades se
+        // piden por la bandera, porque son I/O.
+        self.sync_places_favorites();
+        self.places_wants_drives |= self.places_drives_visible();
         self.set_focus(0);
     }
 
@@ -142,6 +149,30 @@ impl App {
         self.slot_of_kind("places")
     }
 
+    /// Copia los favoritos vigentes al sidebar, si está en la disposición.
+    ///
+    /// De [`Self::hotlist`], que es la copia que mantienen el arranque y cada
+    /// alta o baja: el sidebar no vuelve a leer la config ni se queda con una
+    /// foto vieja de ella.
+    ///
+    /// El popup de `Ctrl+D` y este panel pintan EL MISMO dato, y durante un
+    /// tiempo solo el popup se enteraba de los cambios: añadías un favorito,
+    /// salía en el popup, y el panel de al lado seguía sin él. Por eso todo
+    /// lo que toca la lista pasa por aquí.
+    pub fn sync_places_favorites(&mut self) {
+        let Some(id) = self.places_slot() else {
+            return;
+        };
+        let items: Vec<(String, Result<VPath, String>)> = self
+            .hotlist
+            .iter()
+            .map(|h| (h.name.clone(), h.target.clone()))
+            .collect();
+        if let Some(state) = self.panes.places_mut(id) {
+            state.set_favorites(&items);
+        }
+    }
+
     /// El primer hueco del ÁRBOL con ese kind, visible o no.
     ///
     /// Del árbol y no del reparto: quien pregunta si el sidebar está abierto
@@ -189,6 +220,11 @@ impl App {
                     &Node::slot(id, KindId::new("places")),
                 );
                 self.panes.refresh_visible(&self.layout);
+                // El sidebar nace vacío: los favoritos son suyos desde el
+                // primer frame, no desde el primer refresco de fuera, y las
+                // unidades se piden por la bandera que drena el bucle.
+                self.sync_places_favorites();
+                self.places_wants_drives = true;
                 self.key_owner = KeyOwner::Places;
             }
         }
@@ -261,6 +297,10 @@ impl App {
         {
             s.toggle_fold();
         }
+        // Desplegar las unidades ES el momento de volver a pedirlas: un disco
+        // montado o desmontado desde que se abrió el panel se ve aquí, y sin
+        // un reloj de por medio.
+        self.places_wants_drives |= self.places_drives_visible();
     }
 
     /// ¿Están DESPLEGADAS las unidades del sidebar?
@@ -549,9 +589,21 @@ impl App {
             // que el sidebar y el árbol: abrir un panel con teclado no puede
             // costarte la tecla con la que se cambia de panel toda la vida.
             "dialog.cancel" | "dialog.pane" | "pane.switch" => self.return_keys_to_panes(),
+            // El anillo pasa al panel de AL LADO, y por eso no es lo mismo que
+            // `Tab`: hay que poder recorrer la pantalla desde dentro de
+            // cualquier panel, no solo volviendo antes a los listados.
+            "layout.focus-next" => self.layout_focus(1),
+            "layout.focus-prev" => self.layout_focus(-1),
             "layout.grow" => self.layout_resize(1),
             "layout.shrink" => self.layout_resize(-1),
             "layout.processes" => self.toggle_processes(),
+            // Y las de los otros paneles, igual que en el sidebar: el sidebar
+            // deja las unidades pedidas y las sirve el bucle, así que abrirlo
+            // desde aquí no necesita backend.
+            "layout.places" => self.toggle_places(),
+            "layout.preview" => self.toggle_preview(),
+            "layout.metadata" => self.toggle_metadata(),
+            "pane.tree" => self.toggle_tree(),
             "dialog.confirm" => {
                 return Some(if self.processes_cancel() {
                     t("msg-cancelling")

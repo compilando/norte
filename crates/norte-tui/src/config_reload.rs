@@ -74,7 +74,7 @@ pub async fn reload_config(
                 *confirm_quit = cfg.common.ui_confirm_quit;
                 // La copia de hotlist también (un popup abierto conserva su
                 // snapshot hasta reabrirse — items congelados a propósito).
-                app.hotlist.clone_from(&cfg.common.hotlist);
+                app.set_hotlist(cfg.common.hotlist.clone());
                 // `[ui] menu_bar` en caliente: el reparto de cada frame lo
                 // lee, así que la barra aparece o desaparece en el siguiente
                 // pintado —y el ratón la sigue, porque lee ese mismo reparto—.

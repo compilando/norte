@@ -28,9 +28,7 @@ use crate::nav;
 use crate::navigate::{Cd, cd};
 use crate::overlays::open_contextual_help;
 use crate::refresh::refresh_panes;
-use crate::screens::{
-    open_drive_popup, plugin_config_summaries, refresh_places_drives, refresh_places_favorites,
-};
+use crate::screens::{open_drive_popup, plugin_config_summaries};
 use crate::trail::{nav_enter_target, walk_trail};
 use crate::viewer_open::{open_viewer, viewer_do};
 use crossterm::event::EventStream;
@@ -158,14 +156,11 @@ pub async fn dispatch(
         // L3: abrir el sidebar es el momento de pedir los volúmenes, y el
         // ÚNICO junto con desplegar su sección. Si ya estaba abierto no se
         // vuelven a pedir: esa pulsación solo se lleva el teclado.
-        Command::LayoutPlaces => {
-            let was = app.places_slot().is_some();
-            app.toggle_places();
-            if !was && app.places_drives_visible() {
-                refresh_places_drives(app, backend).await;
-            }
-            refresh_places_favorites(app);
-        }
+        //
+        // La petición se deja apuntada (`App::places_wants_drives`) y la sirve
+        // el bucle: aquí no se hace I/O, y así el mismo camino vale para los
+        // otros sitios donde el panel aparece sin pasar por esta tecla.
+        Command::LayoutPlaces => app.toggle_places(),
         // El visor acoplado no pide nada aquí: lo que lea sale de
         // `preview::want` en el bucle, contra el cursor de cada frame.
         Command::LayoutPreview => app.toggle_preview(),

@@ -67,6 +67,12 @@ keymap = [
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },
+    # El anillo de paneles y el panel de procesos. Ver la nota larga en
+    # orthodox.toml: son superficies propias de norte y no hay nada que
+    # transcribir de Total Commander sobre ellas.
+    { on = ["alt+o"], run = "layout.focus-next" },
+    { on = ["alt+O"], run = "layout.focus-prev" },
+    { on = ["alt+j"], run = "layout.processes" },
 ]
 
 [pane]

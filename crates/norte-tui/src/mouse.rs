@@ -25,7 +25,7 @@ use crate::event_loop::{launch_pending_open, run_command};
 use crate::keymap::Command;
 use crate::navigate::{apply_cd, cd_in};
 use crate::refresh::reap_search_run;
-use crate::screens::refresh_places_drives;
+use crate::screens::drain_places_drives;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
@@ -963,11 +963,7 @@ pub async fn on_mouse(
         // es el momento de volver a pedirlas —y plegarlas,
         // el de no pedirlas—, así que el ratón no puede
         // ser un cuarto disparador de refresco: es este.
-        self::After::PlacesFolded => {
-            if app.places_drives_visible() {
-                refresh_places_drives(app, backend).await;
-            }
-        }
+        self::After::PlacesFolded => drain_places_drives(app, backend).await,
         // Y activar una fila lleva el listado por el
         // flujo de `cd` de siempre, igual que `Enter`
         // dentro del sidebar.

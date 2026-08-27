@@ -157,10 +157,27 @@ impl App {
         self.nav_popup.as_ref()?.selected()?.hotlist_name.clone()
     }
 
+    /// Reemplaza la lista de favoritos vigente y la lleva a las dos
+    /// superficies que la enseñan.
+    ///
+    /// La usan el arranque, el hot-reload del `norte.toml` y el cambio de
+    /// perfil. Antes cada uno escribía `App::hotlist` a pelo, y el sidebar se
+    /// quedaba con la lista de antes sin que nada volviera a tocarlo.
+    ///
+    /// Un popup ABIERTO no se reconstruye, y eso es lo contrario de lo que
+    /// hacen el alta y la baja: sus items son una foto congelada al abrirlo
+    /// (ver [`NavPopup`]) porque `dialog.remove` borra por el nombre de la
+    /// fila, y una lista que se mueve bajo el cursor por un fichero editado
+    /// fuera borraría otra cosa.
+    pub fn set_hotlist(&mut self, items: Vec<crate::config::HotlistItem>) {
+        self.hotlist = items;
+        self.sync_places_favorites();
+    }
+
     /// Refleja en la copia local un favorito YA persistido con éxito
     /// (reemplaza por `name` conservando posición, o añade al final — la
     /// MISMA semántica que `config::persist_hotlist_add`/`load`) y refresca
-    /// el popup si está abierto.
+    /// las dos superficies que la enseñan: el popup abierto y el sidebar.
     pub fn hotlist_apply_saved(&mut self, name: &str, target: VPath) {
         if let Some(item) = self.hotlist.iter_mut().find(|h| h.name == name) {
             item.target = Ok(target);
@@ -170,13 +187,15 @@ impl App {
                 target: Ok(target),
             });
         }
+        self.sync_places_favorites();
         self.rebuild_hotlist_popup();
     }
 
     /// Refleja en la copia local un favorito YA borrado del disco y
-    /// refresca el popup si está abierto.
+    /// refresca las dos superficies que lo enseñaban.
     pub fn hotlist_apply_removed(&mut self, name: &str) {
         self.hotlist.retain(|h| h.name != name);
+        self.sync_places_favorites();
         self.rebuild_hotlist_popup();
     }
 

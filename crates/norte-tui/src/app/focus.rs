@@ -2,8 +2,8 @@
 //! intercambia, qué ventana de entradas necesita `stat`, y las pestañas de
 //! un hueco (abrir, cerrar, ciclar, ir a una y moverla).
 
-use super::App;
 use super::pane::Pane;
+use super::{App, KeyOwner};
 use norte_proto::{EntryKind, VPath};
 
 impl App {
@@ -183,12 +183,91 @@ impl App {
             .count()
     }
 
-    /// Pasa el foco al siguiente lado visible.
-    pub fn layout_focus(&mut self, delta: isize) {
-        let n = isize::try_from(self.panes.len()).unwrap_or(2);
-        let i = isize::try_from(self.focus).unwrap_or(0);
-        self.set_focus(usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0));
+    /// Los sitios del anillo del teclado, en el orden en que están en
+    /// pantalla.
+    ///
+    /// Un LISTADO por cada `browser` visible y un panel lateral por cada uno
+    /// que sepa quedarse el teclado. Los metadatos NO entran: no tienen
+    /// [`KeyOwner`], así que pararse ahí sería un sitio del que ninguna tecla
+    /// saca — el anillo solo puede visitar lo que también puede soltar.
+    ///
+    /// El orden es el del ÁRBOL, que es el de la pantalla: ciclar tiene que
+    /// seguir la vista, no el orden en que se abrieron los paneles.
+    #[must_use]
+    fn focus_ring(&self) -> Vec<FocusStop> {
+        self.layout
+            .visible_slot_ids()
+            .into_iter()
+            .filter_map(|id| {
+                match self
+                    .layout
+                    .kind_of(id)
+                    .map(|k| k.as_str().to_owned())?
+                    .as_str()
+                {
+                    "browser" => (0..self.panes.len())
+                        .find(|i| self.panes.slot_of(*i) == id)
+                        .map(FocusStop::Pane),
+                    "places" => Some(FocusStop::Side(KeyOwner::Places)),
+                    "viewer" => Some(FocusStop::Side(KeyOwner::Preview)),
+                    crate::processes::KIND => Some(FocusStop::Side(KeyOwner::Processes)),
+                    crate::tree::KIND => Some(FocusStop::Side(KeyOwner::Tree)),
+                    _ => None,
+                }
+            })
+            .collect()
     }
+
+    /// Pasa el teclado al siguiente panel del anillo, ciclando.
+    ///
+    /// A TODOS los paneles, no solo a los listados. `Tab` alterna entre los
+    /// dos listados y cada panel lateral se abre y se enfoca con su propia
+    /// tecla, así que con el sidebar y el visor delante no había forma de
+    /// recorrer la pantalla: para pasar del sidebar al visor había que
+    /// acordarse de la tecla de cada uno. Esta es la que no exige memorizar
+    /// nada.
+    ///
+    /// Un anillo de un solo sitio no hace nada, y ese caso importa: `delta`
+    /// sobre una pantalla con un único listado y ningún panel debe ser un
+    /// no-op, no un `set_focus` que se acota a sí mismo.
+    pub fn layout_focus(&mut self, delta: isize) {
+        let ring = self.focus_ring();
+        if ring.len() < 2 {
+            return;
+        }
+        let actual = match self.key_owner() {
+            KeyOwner::Panes => FocusStop::Pane(self.focus),
+            otro => FocusStop::Side(otro),
+        };
+        // Si el sitio de ahora no está en el anillo —un frame en el que el
+        // reparto todavía no ha colocado nada— se empieza por el principio en
+        // vez de no ir a ninguna parte.
+        let i = ring.iter().position(|s| *s == actual).unwrap_or(0);
+        let n = isize::try_from(ring.len()).unwrap_or(1);
+        let dest =
+            usize::try_from((isize::try_from(i).unwrap_or(0) + delta).rem_euclid(n)).unwrap_or(0);
+        match ring[dest] {
+            FocusStop::Pane(i) => {
+                self.return_keys_to_panes();
+                self.set_focus(i);
+            }
+            FocusStop::Side(owner) => self.key_owner = owner,
+        }
+    }
+}
+
+/// Un sitio del anillo que recorre [`App::layout_focus`].
+///
+/// Un listado se nombra por su POSICIÓN y un panel lateral por quién se queda
+/// el teclado, porque son las dos formas que tiene `App` de decir «aquí»:
+/// [`App::focus`] es un índice sobre los listados visibles y no puede apuntar
+/// a un sidebar (ver [`KeyOwner`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FocusStop {
+    /// El listado en esa posición.
+    Pane(usize),
+    /// El panel lateral que se queda el teclado.
+    Side(KeyOwner),
 }
 
 #[cfg(test)]
@@ -344,5 +423,79 @@ mod tests {
             &vp("mem:///izq"),
             "en el lado derecho ahora está lo que había a la izquierda"
         );
+    }
+
+    /// El anillo recorre TODOS los paneles, no solo los listados.
+    ///
+    /// Era lo que faltaba: `Tab` alterna los dos listados y cada panel lateral
+    /// se abre con su propia tecla, así que con el sidebar y el visor delante
+    /// no había forma de recorrer la pantalla sin acordarse de tres teclas
+    /// distintas.
+    #[test]
+    fn el_anillo_pasa_por_los_paneles_laterales() {
+        let mut app = app_dos_panes();
+        app.toggle_places();
+        app.toggle_preview();
+        // Abrir un panel se lleva el teclado; el anillo se prueba desde los
+        // listados.
+        app.return_keys_to_panes();
+        app.set_focus(0);
+
+        // El sidebar está acoplado a la IZQUIERDA, así que es el primero del
+        // anillo y desde el listado 0 se llega yendo hacia ATRÁS.
+        app.layout_focus(-1);
+        assert_eq!(app.key_owner(), KeyOwner::Places);
+
+        // Y hacia delante se recorren los dos listados y el visor.
+        let mut vistos = vec![(app.key_owner(), app.focus())];
+        for _ in 0..3 {
+            app.layout_focus(1);
+            vistos.push((app.key_owner(), app.focus()));
+        }
+        assert_eq!(
+            vistos,
+            vec![
+                (KeyOwner::Places, 0),
+                (KeyOwner::Panes, 0),
+                (KeyOwner::Panes, 1),
+                (KeyOwner::Preview, 1),
+            ],
+            "el orden es el de la pantalla: sidebar, listados, visor"
+        );
+
+        // Y da la vuelta.
+        app.layout_focus(1);
+        assert_eq!(app.key_owner(), KeyOwner::Places);
+    }
+
+    /// Sin nada más que un listado, ciclar no hace nada. Importa porque el
+    /// cálculo anterior era un módulo sobre el número de listados, y un
+    /// anillo de uno lo dejaba dando vueltas sobre sí mismo.
+    #[test]
+    fn un_anillo_de_uno_no_va_a_ninguna_parte() {
+        use norte_frontend::layout::{KindId, Node, SlotId};
+        let mut app = app_dos_panes();
+        // Una disposición de un solo listado y ningún panel: la trae un
+        // layout guardado, no `layout.close` —que se niega a dejar la
+        // pantalla sin dos listados—.
+        app.set_layout(Node::slot(SlotId(0), KindId::browser()));
+        app.layout_focus(1);
+        assert_eq!(app.key_owner(), KeyOwner::Panes);
+        assert_eq!(app.focus(), 0);
+    }
+
+    /// El panel de METADATOS no entra en el anillo: no tiene `KeyOwner`, así
+    /// que pararse ahí sería un sitio del que ninguna tecla saca.
+    #[test]
+    fn los_metadatos_no_son_una_parada() {
+        let mut app = app_dos_panes();
+        app.toggle_metadata();
+        app.return_keys_to_panes();
+        app.set_focus(0);
+        for _ in 0..2 {
+            app.layout_focus(1);
+        }
+        assert_eq!(app.key_owner(), KeyOwner::Panes);
+        assert_eq!(app.focus(), 0, "dos saltos entre dos listados: vuelta");
     }
 }

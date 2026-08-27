@@ -22,6 +22,6 @@ pub use pickers::{
 };
 pub use settings::{on_settings_key, persist_setting, plugin_config_summaries};
 pub use side_nav::{
-    on_nav_popup_key, on_places_key, on_processes_key, on_tree_key, open_drive_popup,
-    refresh_places_drives, refresh_places_favorites,
+    drain_places_drives, on_nav_popup_key, on_places_key, on_processes_key, on_tree_key,
+    open_drive_popup, refresh_places_drives,
 };

@@ -19,7 +19,7 @@
 use crossterm::event::{EventStream, KeyCode, KeyModifiers};
 use norte_core::backend::Backend;
 use norte_i18n::ta;
-use norte_proto::{Error, VPath};
+use norte_proto::Error;
 
 use crate::app::{
     ALLOW_NAV_POPUP, ALLOW_PLACES, App, NavPopup, NavPopupKind, PickerAction, Trail,
@@ -101,10 +101,20 @@ pub async fn on_tree_key(
         // —eso es `pane.tree`—, y abrir una columna lateral no puede costarte
         // la tecla con la que se cambia de panel toda la vida.
         "dialog.cancel" | "dialog.pane" | "pane.switch" => app.return_keys_to_panes(),
+        // El anillo pasa al panel de AL LADO, que es lo que `Tab` no hace: la
+        // tecla con la que se recorre la pantalla tiene que funcionar también
+        // dentro del panel del que se quiere salir.
+        "layout.focus-next" => app.layout_focus(1),
+        "layout.focus-prev" => app.layout_focus(-1),
         // El ancho del árbol, por lo mismo que el del sidebar (#244 M1).
         "layout.grow" => app.layout_resize(1),
         "layout.shrink" => app.layout_resize(-1),
         "pane.tree" => app.toggle_tree(),
+        // Y las de los otros paneles, igual que en el sidebar.
+        "layout.places" => app.toggle_places(),
+        "layout.preview" => app.toggle_preview(),
+        "layout.processes" => app.toggle_processes(),
+        "layout.metadata" => app.toggle_metadata(),
         "dialog.confirm" => {
             let dest = app.tree().and_then(crate::tree::Tree::selected);
             if let Some(dir) = dest {
@@ -186,15 +196,9 @@ pub async fn on_places_key(
     match cmd.as_str() {
         "dialog.up" => app.places_up(),
         "dialog.down" => app.places_down(),
-        "dialog.toggle-enabled" => {
-            app.places_toggle_fold();
-            // Desplegar las unidades ES el momento de volver a pedirlas: un
-            // disco montado o desmontado desde que se abrió el panel se ve
-            // aquí, y sin un reloj de por medio.
-            if app.places_drives_visible() {
-                refresh_places_drives(app, backend).await;
-            }
-        }
+        // `places_toggle_fold` deja pedidas las unidades si la sección quedó
+        // desplegada; las sirve el bucle.
+        "dialog.toggle-enabled" => app.places_toggle_fold(),
         // `Esc` suelta el teclado, y `Tab` también. Ninguno CIERRA el panel:
         // cerrarlo es `layout.places`.
         //
@@ -206,6 +210,11 @@ pub async fn on_places_key(
         // significa una sola cosa: «a la región siguiente», con el sidebar
         // contando como región.
         "dialog.cancel" | "dialog.pane" | "pane.switch" => app.return_keys_to_panes(),
+        // El anillo pasa al panel de AL LADO, que es lo que `Tab` no hace: la
+        // tecla con la que se recorre la pantalla tiene que funcionar también
+        // dentro del panel del que se quiere salir.
+        "layout.focus-next" => app.layout_focus(1),
+        "layout.focus-prev" => app.layout_focus(-1),
         // El ancho del sidebar, que es el ÚNICO camino por el que se puede
         // cambiar: el llamante de `layout_resize` pasa siempre un listado
         // visible, así que la rama de `Size::Fixed` no la alcanzaba nadie
@@ -215,6 +224,13 @@ pub async fn on_places_key(
         // Y `layout.places` con el teclado DENTRO cierra: es la SEGUNDA
         // pulsación, porque abrir este panel ya le da el teclado.
         "layout.places" => app.toggle_places(),
+        // Las teclas de los otros paneles siguen abriendo lo suyo: estar en
+        // una columna lateral no puede dejar sin efecto la que abre la de al
+        // lado.
+        "layout.preview" => app.toggle_preview(),
+        "layout.processes" => app.toggle_processes(),
+        "layout.metadata" => app.toggle_metadata(),
+        "pane.tree" => app.toggle_tree(),
         // `⏎` sobre una CABECERA pliega o despliega su sección, como en el
         // árbol de al lado. Antes no hacía nada: `activate()` devuelve `None`
         // para una cabecera, así que Enter sobre «Unidades» era inerte y
@@ -227,9 +243,6 @@ pub async fn on_places_key(
         "dialog.confirm" => {
             if app.places_cursor_on_header() {
                 app.places_toggle_fold();
-                if app.places_drives_visible() {
-                    refresh_places_drives(app, backend).await;
-                }
             } else if let Some(path) = app.places_activate() {
                 let pane = app.focus();
                 return cd_in(app, backend, events, pane, path, Trail::Record).await;
@@ -240,29 +253,26 @@ pub async fn on_places_key(
     Cd::Cancelled
 }
 
-/// Copia la hotlist vigente al sidebar.
+/// Sirve la petición de unidades que haya pendiente, si la hay.
 ///
-/// De `App::hotlist`, que ya es la copia que mantienen el arranque y cada
-/// `dialog.add`/`dialog.remove`: el sidebar no vuelve a leer la config ni se
-/// queda con una foto vieja de ella.
-pub fn refresh_places_favorites(app: &mut App) {
-    let Some(id) = app.places_slot() else {
-        return;
-    };
-    let items: Vec<(String, Result<VPath, String>)> = app
-        .hotlist
-        .iter()
-        .map(|h| (h.name.clone(), h.target.clone()))
-        .collect();
-    if let Some(state) = app.panes.places_mut(id) {
-        state.set_favorites(&items);
+/// El ÚNICO consumidor de [`App::places_wants_drives`]: lo drena el run loop
+/// una vez por vuelta y el arranque una vez antes de entrar en él, para que el
+/// primer frame ya salga con la lista puesta.
+///
+/// Existe porque `host.volumes` es I/O y quien enciende la bandera —abrir el
+/// sidebar, desplegar su sección, montar una disposición que ya lo trae— no
+/// siempre tiene un backend delante. Cuando cada uno de esos sitios pedía los
+/// volúmenes por su cuenta, faltaban justo en los que nadie recordó.
+pub async fn drain_places_drives(app: &mut App, backend: &Backend) {
+    if std::mem::take(&mut app.places_wants_drives) {
+        refresh_places_drives(app, backend).await;
     }
 }
 
 /// Pide los volúmenes al host y los deja en el sidebar.
 ///
-/// Lo llaman abrir el sidebar y desplegar su sección de unidades. Y nadie
-/// más: un sidebar con reloj sería la regla de suspensión del ADR 0058 rota
+/// Lo llama [`drain_places_drives`] y nadie más: un sidebar con reloj sería la
+/// regla de suspensión del ADR 0058 rota
 /// desde el primer frame, y `host.volumes` no es gratis (monta y consulta
 /// espacio en cada filesystem).
 ///

@@ -21,7 +21,7 @@ use norte_tui::keymap::Resolver;
 use norte_tui::listing::initial_pane;
 use norte_tui::mouse;
 use norte_tui::navigate::cache_capabilities;
-use norte_tui::screens::apply_theme;
+use norte_tui::screens::{apply_theme, drain_places_drives};
 use norte_tui::session_push::restore_session;
 use norte_tui::shortcuts_editor::build_keymaps;
 use norte_tui::tty;
@@ -216,7 +216,12 @@ async fn main() -> Result<()> {
     apply_theme(&mut app, &cfg);
     // Copia de la hotlist en el App (spec 2026-07-18): la fuente del popup
     // `Ctrl+D`; se refresca en cada hot-reload OK (`reload_config`).
-    app.hotlist = cfg.common.hotlist.clone();
+    app.set_hotlist(cfg.common.hotlist.clone());
+    // Si la disposición ya trae el sidebar —`full`, `explorer`, la sesión de
+    // ayer—, montarla dejó las unidades pedidas. Se sirven AQUÍ y no en la
+    // primera vuelta del bucle porque el bucle pinta antes de atender nada, y
+    // el primer frame enseñaría la sección en blanco.
+    drain_places_drives(&mut app, &backend).await;
     // Hints de pie de página de los overlays (H1 T3, #24): PRECOMPUTADOS del
     // efectivo `dialog` ANTES de que se mueva al `Resolver` de abajo — igual
     // que `help_lines`, se reconstruyen en cada hot-reload OK.
