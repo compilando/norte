@@ -261,7 +261,28 @@ async fn main() -> Result<()> {
 
     // Hot-reload: vigilancia de las capas, con aviso si degrada a polling.
     let (cfg_tx, cfg_rx) = tokio::sync::mpsc::channel(8);
-    let watch = config::watch(&layers, cfg_tx).await;
+    // Se vigilan TODOS los perfiles, no solo el activo.
+    //
+    // El vigilante se crea una vez, aquí, y cambiar de perfil en caliente
+    // rehace las capas del bucle pero NO puede rehacerlo a él. Vigilando solo
+    // las capas del arranque, un ajuste escrito en el perfil al que acabas de
+    // cambiar —el tema, sin ir más lejos— no disparaba recarga: se guardaba en
+    // el sitio correcto y la pantalla no cambiaba.
+    //
+    // Vigilarlos todos cuesta un watch por directorio y sobra para lo que hay
+    // (un puñado de perfiles), y de paso hace que editar el fichero de un
+    // perfil a mano recargue igual que editar el tuyo, que es lo que norte
+    // promete de su configuración.
+    let mut watch_dirs = layers.dirs.clone();
+    if let Some(raiz) = norte_config::profiles_dir_from(&|k| std::env::var_os(k)) {
+        for nombre in norte_config::list_profiles(&raiz).unwrap_or_default() {
+            let dir = raiz.join(nombre);
+            if !watch_dirs.iter().any(|(d, _)| *d == dir) {
+                watch_dirs.push((dir, config::Layer::Profile));
+            }
+        }
+    }
+    let watch = config::watch(&config::Layers { dirs: watch_dirs }, cfg_tx).await;
     if watch.mode == WatchMode::Polling {
         app.message = Some(t("msg-config-polling"));
     }
