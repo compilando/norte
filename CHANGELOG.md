@@ -357,6 +357,36 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The places sidebar was only ever filled by its own key.** One arm of the
+  dispatcher copied the favourites into it, so everything else that touches
+  that list — starting up with a layout that already brings the panel (`full`,
+  `explorer`, yesterday's session), adding or removing a favourite, reloading
+  `norte.toml`, switching profile — left it showing the previous list, or in
+  the startup case nothing at all. The same favourite appeared in the `Ctrl+D`
+  popup and not in the panel beside it. The list now has one funnel and all
+  four paths go through it. An OPEN popup still does not rebuild on a reload,
+  and that is deliberate: its items are frozen when it opens because
+  `dialog.remove` deletes by the row's name, and a list shifting under the
+  cursor because of a file edited elsewhere would delete something else. The
+  drive list had the same problem through another door — `host.volumes` is I/O
+  and `App` has no backend, so each site asked for it itself and it was missing
+  from the ones nobody remembered — and is now a flag the run loop drains, the
+  same pattern as a profile switch: one place that serves it instead of five.
+- **The side panels could not be reached from the keyboard.** `Tab` swaps the
+  two listings and nothing else, each panel opens with its own key, and the
+  processes panel had no key in ANY of the seven presets — the one place that
+  says what norte is copying was reachable only through the menu.
+  `layout.focus-next`/`prev` existed and did half the job: they cycled the
+  listings, which is what `Tab` already does. They now walk the whole ring —
+  the listings and every panel that can hold the keyboard, in screen order —
+  and the details panel stays out of it, because it has no `KeyOwner` and would
+  be a stop no key gets out of. `alt+o`/`alt+O` for the ring and `alt+j` for
+  processes, in all seven presets; in `krusader` `alt+O` is "Sync panels" and
+  is bound to `pane.mirror`, so `focus-prev` is left unbound there rather than
+  have one chord mean two things depending on where the keyboard is — the ring
+  wraps. Each panel's allowlist now takes the ring and the other panels' keys
+  too, by the rule that already put its own key there: opening a side column
+  must not kill the key that opens the one next to it.
 - **The processes panel said what kind of work and nothing else.** A row read
   `copy #7318349021 45%` — the same line for any copy of anything — and a
   finished task stayed there until another one pushed it out, so what the panel
