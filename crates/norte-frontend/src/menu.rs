@@ -145,6 +145,27 @@ impl MenuState {
         Self { menu: 0, item: 0 }
     }
 
+    /// Reabre por el menú que estaba abierto la última vez.
+    ///
+    /// Un menú que siempre se abre por el primero obliga a recorrer la barra
+    /// entera cada vez, y quien usa dos entradas del mismo menú lo paga en
+    /// cada gesto. Un índice que ya no existe —la barra cambió entre una
+    /// apertura y la siguiente— cae al primero en vez de no abrir nada.
+    ///
+    /// El CURSOR sí vuelve al principio: dentro de un menú la lista es corta y
+    /// se lee entera, y recordar también la fila haría que la misma tecla
+    /// ejecutara cosas distintas según lo último que se rozó.
+    ///
+    /// Vive aquí porque es una decisión de presentación y los dos frontends
+    /// tienen que tomarla igual: un menú que en la ventana recuerda y en el
+    /// terminal no son dos programas.
+    #[must_use]
+    pub fn reopen_at(menu: usize) -> Self {
+        let mut estado = Self::new();
+        estado.open(menu);
+        estado
+    }
+
     /// Qué menú está abierto.
     #[must_use]
     pub const fn menu(&self) -> usize {

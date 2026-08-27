@@ -15255,6 +15255,32 @@ async fn el_menu_se_recorre_y_lo_elegido_corre() {
     assert_eq!(siguiente_foto(&mut sub).await.menu.open, None);
 }
 
+/// El menú se REABRE por donde iba, no por el primero.
+///
+/// Abrirlo siempre por el primero obliga a recorrer la barra entera en cada
+/// gesto, y quien usa dos entradas del mismo menú lo paga cada vez.
+#[tokio::test]
+async fn el_menu_se_reabre_por_donde_iba() {
+    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+    // Abrir, moverse dos menús a la derecha y cerrar con `Escape`.
+    h.dispatch(UiAction::MenuOpen { menu: 2 })
+        .await
+        .expect("host vivo");
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert_eq!(
+        siguiente_foto(&mut sub).await.menu.open,
+        None,
+        "cerrado del todo"
+    );
+
+    // Y al reabrirlo sale por el mismo.
+    ejecutar_por_paleta(&h, &mut sub, "app.menu").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert_eq!(siguiente_foto(&mut sub).await.menu.open, Some(2));
+}
+
 /// Elegir en el menú corre el comando, y el menú se cierra ANTES.
 ///
 /// El orden importa: el comando puede abrir otra pantalla, y hacerlo por
@@ -15279,6 +15305,56 @@ async fn lo_elegido_en_el_menu_corre_y_el_menu_se_cierra_antes() {
     let foto = siguiente_foto(&mut sub).await;
     assert_eq!(foto.menu.open, None, "el menú se cerró");
     assert!(foto.help.is_some(), "y lo elegido corrió");
+}
+
+/// Del panel de PROCESOS se sale con la misma tecla con la que se entró.
+///
+/// Un anillo que entra en un panel y no sale de él no es un anillo: es una
+/// trampa, y el lector se queda sin forma de volver al listado sin ratón.
+#[tokio::test]
+async fn del_panel_de_procesos_se_sale_tabulando() {
+    use norte_ui_host::dto::SlotRole;
+    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "layout.processes").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let abierto = siguiente_foto(&mut sub).await;
+    let procesos = abierto
+        .slots
+        .iter()
+        .find_map(|v| match v {
+            SlotView::Processes { slot_id, .. } => Some(*slot_id),
+            _ => None,
+        })
+        .expect("el panel está en pantalla");
+
+    let activo = |s: &norte_ui_host::ViewSnapshot| {
+        s.layout
+            .placements
+            .iter()
+            .find(|p| p.role == Some(SlotRole::Active))
+            .map(|p| p.slot_id)
+    };
+    // Se tabula hasta caer en el panel de procesos...
+    let mut dentro = false;
+    for _ in 0..6 {
+        h.dispatch(tecla("Tab")).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if activo(&siguiente_foto(&mut sub).await) == Some(procesos) {
+            dentro = true;
+            break;
+        }
+    }
+    assert!(dentro, "el anillo llega al panel de procesos");
+
+    // ...y se sale.
+    h.dispatch(tecla("Tab")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert_ne!(
+        activo(&siguiente_foto(&mut sub).await),
+        Some(procesos),
+        "y se SALE de él: un anillo que entra y no sale es una trampa"
+    );
 }
 
 /// El anillo del teclado NO para en la hoja de atributos.

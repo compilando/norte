@@ -434,7 +434,7 @@ fn menu_click(app: &mut App, col: u16, row: u16) -> After {
             After::MenuAccept
         }
         None => {
-            app.menu = None;
+            app.close_menu();
             After::Nothing
         }
     }
@@ -898,7 +898,7 @@ pub async fn on_mouse(
                 .menu
                 .as_ref()
                 .and_then(norte_frontend::menu::MenuState::selected);
-            app.menu = None;
+            app.close_menu();
             if let Some(id) = chosen
                 && let Some(cmd) = Command::parse(id)
             {

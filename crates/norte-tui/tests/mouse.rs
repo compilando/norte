@@ -252,6 +252,34 @@ fn un_click_en_la_barra_de_menu_la_abre() {
     );
 }
 
+/// El menú se REABRE por donde iba.
+///
+/// Abrirlo siempre por el primero obliga a recorrer la barra entera en cada
+/// gesto, y quien usa dos entradas del mismo menú lo paga cada vez. El cierre
+/// pasa por una sola puerta (`App::close_menu`) justamente para que los cinco
+/// sitios que cierran apunten lo mismo.
+#[test]
+fn el_menu_se_reabre_por_donde_iba() {
+    let mut app = app_pintada(5);
+    let mut m = norte_frontend::menu::MenuState::new();
+    m.open(3);
+    app.menu = Some(m);
+    app.close_menu();
+    assert!(app.menu.is_none(), "cerrado");
+
+    app.menu = Some(norte_frontend::menu::MenuState::reopen_at(app.menu_ultimo));
+    assert_eq!(
+        app.menu.as_ref().map(norte_frontend::menu::MenuState::menu),
+        Some(3),
+        "vuelve al que estaba abierto, no al primero"
+    );
+    assert_eq!(
+        app.menu.as_ref().map(norte_frontend::menu::MenuState::item),
+        Some(0),
+        "y el cursor sí vuelve al principio: la lista es corta y se lee entera"
+    );
+}
+
 /// Y con la barra apagada, la fila 0 vuelve a ser del panel: no hay barra que
 /// pulsar, así que el clic no puede abrir nada.
 #[test]

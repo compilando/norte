@@ -307,6 +307,12 @@ pub struct App {
     /// La barra de menús, si está abierta. Overlay: se queda TODAS las teclas
     /// mientras está, como el resto.
     pub menu: Option<norte_frontend::menu::MenuState>,
+    /// Por qué menú se abrió la última vez.
+    ///
+    /// Se reabre por ahí ([`norte_frontend::menu::MenuState::reopen_at`]):
+    /// empezar siempre por el primero obliga a recorrer la barra entera cada
+    /// vez, y quien usa dos entradas del mismo menú lo paga en cada gesto.
+    pub menu_ultimo: usize,
     /// El siguiente `SlotId` a acuñar. Nunca decrece y nunca se reutiliza:
     /// un id reciclado haría que el estado huérfano de un hueco cerrado
     /// resucitara dentro de otro que no tiene nada que ver.
@@ -765,6 +771,7 @@ impl App {
             roles: norte_frontend::layout::Roles::con_active(crate::panel::SLOT_LEFT),
             key_owner: KeyOwner::Panes,
             menu: None,
+            menu_ultimo: 0,
             // Los cuatro primeros son los del preset `orthodox`.
             next_slot: 5,
             render_now_ms: None,
@@ -834,6 +841,19 @@ impl App {
             pick: false,
             picked: None,
         }
+    }
+
+    /// Cierra la barra de menús, apuntando por dónde iba.
+    ///
+    /// UNA puerta, y no por gusto: el menú se cierra desde cinco sitios —la
+    /// tecla, `Esc`, elegir una entrada, pulsar fuera y pulsar en la barra— y
+    /// el que se olvidara de apuntar sería el que hace que la próxima
+    /// apertura empiece por el primero sin motivo aparente.
+    pub fn close_menu(&mut self) {
+        if let Some(m) = &self.menu {
+            self.menu_ultimo = m.menu();
+        }
+        self.menu = None;
     }
 
     /// El reloj de la interfaz, en milisegundos de época.

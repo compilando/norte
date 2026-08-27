@@ -74,7 +74,7 @@ pub async fn on_key(
         // salir del keymap.
         let plain = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
         match key.code {
-            KeyCode::Esc if plain => app.menu = None,
+            KeyCode::Esc if plain => app.close_menu(),
             KeyCode::Left if plain => {
                 if let Some(m) = &mut app.menu {
                     m.cycle_menu(-1);
@@ -106,7 +106,7 @@ pub async fn on_key(
                     .menu
                     .as_ref()
                     .and_then(norte_frontend::menu::MenuState::selected);
-                app.menu = None;
+                app.close_menu();
                 if let Some(id) = chosen
                     && let Some(cmd) = Command::parse(id)
                 {

@@ -134,11 +134,13 @@ pub async fn dispatch(
         Command::AppMenu => {
             // Alternar: la misma tecla lo abre y lo cierra, como los demás
             // overlays.
-            app.menu = if app.menu.is_some() {
-                None
+            if app.menu.is_some() {
+                app.close_menu();
             } else {
-                Some(norte_frontend::menu::MenuState::new())
-            };
+                // Se reabre por donde iba: empezar siempre por el primero
+                // obliga a recorrer la barra entera en cada gesto.
+                app.menu = Some(norte_frontend::menu::MenuState::reopen_at(app.menu_ultimo));
+            }
         }
         Command::LayoutSplitH => app.layout_split(norte_frontend::layout::Dir::Horizontal),
         Command::LayoutSplitV => app.layout_split(norte_frontend::layout::Dir::Vertical),

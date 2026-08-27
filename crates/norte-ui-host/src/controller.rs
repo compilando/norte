@@ -1971,6 +1971,10 @@ struct Estado {
     /// Es un contexto de entrada más, como el buscador incremental y el
     /// visor: mientras esté abierta, las teclas de texto son suyas.
     paleta: Option<norte_frontend::palette_state::Palette>,
+    /// Por qué menú se desplegó la última vez. Se reabre por ahí: empezar
+    /// siempre por el primero obliga a recorrer la barra entera en cada
+    /// gesto, y quien usa dos entradas del mismo menú lo paga cada vez.
+    menu_ultimo: usize,
     /// El menú DESPLEGADO, si hay alguno.
     ///
     /// La barra se pinta siempre (o nunca, según `[ui] menu_bar`); esto es
@@ -2422,6 +2426,7 @@ impl Estado {
             destino_pendiente: None,
             tema: theme,
             tema_elegido: None,
+            menu_ultimo: 0,
             perfil_activo: None,
             selector_perfil: None,
             gen_perfiles: 0,
@@ -3385,7 +3390,7 @@ impl Estado {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
         match k.key.as_str() {
-            "Escape" | "esc" => self.menu = None,
+            "Escape" | "esc" => self.olvidar_menu(),
             "ArrowLeft" | "left" => m.cycle_menu(-1),
             "ArrowRight" | "right" => m.cycle_menu(1),
             "ArrowUp" | "up" => m.cycle_item(-1),
@@ -3414,7 +3419,7 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.menu = None;
+        self.olvidar_menu();
         let cierre = self.parche(vec![ViewChange::Menu {
             menu: self.vista_menu(),
         }]);
@@ -3688,6 +3693,18 @@ impl Estado {
             // proyecte, su brazo entra aquí.
             return None;
         }
+        // Qué es SUYO se decide antes de mirar cuántas filas hay, y ese orden
+        // es el arreglo: con el tablero vacío esto contestaba «aplicado» a
+        // CUALQUIER efecto, así que el tabulador que sirve para salir del
+        // panel se lo tragaba él. Se entraba en procesos y no se salía —un
+        // anillo que entra y no sale es una trampa, y sin ratón no había
+        // vuelta.
+        if !matches!(
+            efecto,
+            Efecto::Cursor(_) | Efecto::Pagina(_) | Efecto::Extremo { .. }
+        ) {
+            return None;
+        }
         let filas = self.filas_de_tablero();
         if filas == 0 {
             return Some((self.aplicada(), Vec::new()));
@@ -3702,6 +3719,8 @@ impl Estado {
             Efecto::Pagina(n) => actual.saturating_add(paso(n).saturating_mul(total)),
             Efecto::Extremo { al_final: false } => 0,
             Efecto::Extremo { al_final: true } => total - 1,
+            // Los tres de arriba son los únicos que llegan aquí: el filtro
+            // está en la guarda de la entrada.
             _ => return None,
         };
         self.cursor_procesos = usize::try_from(destino.max(0)).unwrap_or(0).min(filas - 1);
@@ -5434,6 +5453,15 @@ impl Estado {
         &mut self,
         efecto: Efecto,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        // Lo SUYO, antes de contar filas: por lo mismo que en el panel de
+        // procesos, un panel vacío que contesta «aplicado» a todo se traga la
+        // tecla con la que se sale de él.
+        if !matches!(
+            efecto,
+            Efecto::Cursor(_) | Efecto::Pagina(_) | Efecto::Extremo { .. }
+        ) {
+            return None;
+        }
         let estado = self.sitios.as_mut()?;
         let filas = estado.rows().len();
         if filas == 0 {
@@ -6072,16 +6100,29 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
-    /// Despliega la barra de menús por el primero, o la cierra si ya lo
-    /// estaba.
+    /// Cierra el menú desplegado, apuntando por dónde iba.
+    ///
+    /// UNA puerta: el menú se cierra desde cuatro sitios —la tecla, `Escape`,
+    /// elegir una entrada y pulsar fuera— y el que se olvidara de apuntar
+    /// sería el que hace que la siguiente apertura empiece por el primero sin
+    /// motivo aparente.
+    fn olvidar_menu(&mut self) {
+        if let Some(m) = &self.menu {
+            self.menu_ultimo = m.menu();
+        }
+        self.menu = None;
+    }
+
+    /// Despliega la barra de menús por donde iba, o la cierra si ya estaba.
     ///
     /// La misma tecla abre y cierra, como en el TUI: `alt+m` es «el menú», y
     /// pulsarla dos veces no puede dejar dos desplegables ni exigir `Esc`.
     fn abrir_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.menu = match self.menu {
-            Some(_) => None,
-            None => Some(norte_frontend::menu::MenuState::new()),
-        };
+        if self.menu.is_some() {
+            self.olvidar_menu();
+        } else {
+            self.menu = Some(norte_frontend::menu::MenuState::reopen_at(self.menu_ultimo));
+        }
         let cambio = ViewChange::Menu {
             menu: self.vista_menu(),
         };
@@ -6113,11 +6154,9 @@ impl Estado {
         }
         let mismo = self.menu.as_ref().is_some_and(|m| m.menu() == i);
         if mismo {
-            self.menu = None;
+            self.olvidar_menu();
         } else {
-            let mut estado = norte_frontend::menu::MenuState::new();
-            estado.open(i);
-            self.menu = Some(estado);
+            self.menu = Some(norte_frontend::menu::MenuState::reopen_at(i));
         }
         let cambio = ViewChange::Menu {
             menu: self.vista_menu(),
@@ -6164,7 +6203,7 @@ impl Estado {
         if self.menu.is_none() {
             return (self.aplicada(), Vec::new());
         }
-        self.menu = None;
+        self.olvidar_menu();
         let cambio = ViewChange::Menu {
             menu: self.vista_menu(),
         };
