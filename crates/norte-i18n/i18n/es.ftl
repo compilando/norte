@@ -554,6 +554,10 @@ help-cmd-app-pick-accept = aceptar la selección y salir (modo picker)
 # celdas, así que escribirlas recortaba el resto del pie a media palabra.
 palette-title = Paleta de comandos
 palette-hint = [enter] ejecutar · [esc] cerrar
+# El nombre de la barra de menús para un lector de pantalla. Solo la pinta la
+# VENTANA: en el terminal la barra es una fila de texto y no hay landmark que
+# etiquetar.
+menu-bar-label = Barra de menús
 # H3c, y clave SEPARADA a propósito: `palette-hint` lo pintan los DOS
 # frontends, y solo la TUI tiene overlay de ayuda que F1 pueda abrir (el de la
 # GUI es la fase H3f). Metido en la cadena de arriba, el pie de la GUI

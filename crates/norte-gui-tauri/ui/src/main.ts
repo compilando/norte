@@ -19,6 +19,7 @@ export interface Metrics {
 
 export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const screenEl = doc.getElementById("screen");
+  const menuEl = doc.getElementById("menu");
   const paletteEl = doc.getElementById("palette");
   const whichKeyEl = doc.getElementById("whichkey");
   const helpEl = doc.getElementById("help");
@@ -39,6 +40,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const fatalEl = doc.getElementById("fatal");
   if (
     screenEl === null ||
+    menuEl === null ||
     paletteEl === null ||
     whichKeyEl === null ||
     helpEl === null ||
@@ -96,6 +98,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   };
   const screen = new Screen(
     screenEl,
+    menuEl,
     paletteEl,
     whichKeyEl,
     helpEl,
@@ -124,6 +127,12 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
       return;
     }
     screen.paint(view);
+    // La barra de menús acaba de reservar (o soltar) su fila: el host reparte
+    // sobre el alto que este renderer declara, y sin volver a decirlo la
+    // primera fila del listado se quedaría debajo de la barra.
+    if (screen.takeViewportDirty()) {
+      sendViewport(send, screen, doc);
+    }
     if (pending !== null) {
       const { at, what } = pending;
       pending = null;
@@ -329,10 +338,14 @@ async function medir(
 function sendViewport(send: (a: UiAction) => void, screen: Screen, doc: Document): void {
   const cell = screen.cell();
   const view = doc.defaultView ?? window;
+  // Del elemento que de verdad lleva el reparto, no de la ventana: la barra
+  // de menús le come una fila, y medir la ventana le declararía al host un
+  // alto que no tiene dónde pintarse.
+  const alto = doc.getElementById("screen")?.clientHeight ?? view.innerHeight;
   send({
     action: "set_viewport",
     width: Math.max(1, Math.floor(view.innerWidth / cell.w)),
-    height: Math.max(1, Math.floor(view.innerHeight / cell.h)),
+    height: Math.max(1, Math.floor(alto / cell.h)),
   });
 }
 

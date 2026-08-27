@@ -151,6 +151,9 @@ export class Session {
       case "which_key":
         s.whichkey = c.whichkey;
         return true;
+      case "menu":
+        s.menu = c.menu;
+        return true;
       case "palette":
         s.palette = c.palette;
         return true;

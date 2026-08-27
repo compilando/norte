@@ -25,6 +25,10 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **41**: la pantalla lleva la BARRA DE MENÚS —los títulos, el menú
+///   desplegado y sus entradas con su atajo— y el renderer puede desplegar,
+///   señalar, ejecutar y cerrar. Los menús son `norte_frontend::menu`, el
+///   mismo modelo que pinta el TUI.
 /// - **25**: la revisión de un plan dice lo que le faltaba para poder
 ///   aprobarse a conciencia: cuánto se ve de cuánto hay y cuántos renombrados
 ///   hará DE VERDAD —los dos ya traducidos, porque el catálogo no sustituye
@@ -133,7 +137,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 40;
+pub const BRIDGE_VERSION: u32 = 41;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

@@ -144,6 +144,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.edit",
     "pane.copy-path",
     "app.theme",
+    "app.menu",
     "pane.select-drive",
     "pane.connect",
     "pane.disconnect",
@@ -430,6 +431,10 @@ pub enum Efecto {
     Terminal,
     /// Enseña el tema activo por dentro.
     Tema,
+    /// Despliega la barra de menús. Ni añade capacidades ni las quita:
+    /// ofrece las mismas órdenes del catálogo, ordenadas por tema, para
+    /// quien no sabe el nombre de lo que busca.
+    Menu,
     /// Abre el selector de volúmenes del host.
     Volumenes,
     /// Abre la ayuda. Sobre la página del CONTEXTO donde está el lector —
@@ -678,6 +683,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.open" | "pane.edit" => Efecto::AbrirExterno,
         "app.terminal" => Efecto::Terminal,
         "app.theme" => Efecto::Tema,
+        "app.menu" => Efecto::Menu,
         "pane.select-drive" => Efecto::Volumenes,
         "pane.connect" => Efecto::Conexiones,
         "pane.disconnect" => Efecto::Desconectar,
@@ -717,6 +723,18 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.hotlist" => Efecto::Hotlist,
         "pane.select-drive-left" => Efecto::VolumenesDeLado { derecha: false },
         "pane.select-drive-right" => Efecto::VolumenesDeLado { derecha: true },
+        otro => return efecto_del_tablero(otro),
+    })
+}
+
+/// La cola de [`efecto_de`]: lo que actúa sobre el TABLERO de tasks.
+///
+/// Vive aparte porque el `match` de una sola función se pasa del tope de
+/// líneas, y este es el corte natural: todo lo de arriba actúa sobre un
+/// listado o sobre lo que se enseña encima de él; esto, sobre las tareas en
+/// marcha, que no son ni una cosa ni la otra.
+fn efecto_del_tablero(command: &str) -> Option<Efecto> {
+    Some(match command {
         "task.next" => Efecto::TaskVecina { atras: false },
         "task.prev" => Efecto::TaskVecina { atras: true },
         "task.dismiss" => Efecto::DescartarTask,

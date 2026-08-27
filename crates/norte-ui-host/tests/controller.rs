@@ -15032,6 +15032,84 @@ async fn los_huecos_auxiliares_se_abren_y_se_cierran() {
     }
 }
 
+/// La barra de menús: se despliega, se recorre y lo que se elige CORRE.
+///
+/// Los menús y sus entradas son `norte_frontend::menu`, el mismo modelo que
+/// pinta el TUI, así que aquí no se comprueba QUÉ hay dentro —eso lo cubren
+/// los tests de ese crate— sino que la ventana lo proyecta, lo recorre y
+/// ejecuta por el mismo camino que una tecla.
+#[tokio::test]
+async fn el_menu_se_recorre_y_lo_elegido_corre() {
+    let (h, snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    assert!(snap.menu.bar, "la barra se pinta por defecto");
+    assert_eq!(snap.menu.open, None, "y nace cerrada");
+    assert_eq!(
+        snap.menu.titles.len(),
+        norte_frontend::menu::MENUS.len(),
+        "todos los menús del modelo compartido"
+    );
+
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "app.menu").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let abierto = siguiente_foto(&mut sub).await;
+    assert_eq!(abierto.menu.open, Some(0), "se despliega por el primero");
+    assert!(
+        !abierto.menu.items.is_empty(),
+        "y trae sus entradas: {:?}",
+        abierto.menu.items
+    );
+
+    // Una flecha abajo mueve el cursor DENTRO del menú, no el listado.
+    let cursor_del_listado = |s: &norte_ui_host::ViewSnapshot| {
+        s.slots.iter().find_map(|v| match v {
+            SlotView::Browser(b) => Some(b.cursor),
+            _ => None,
+        })
+    };
+    let cursor_antes = cursor_del_listado(&abierto);
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let movido = siguiente_foto(&mut sub).await;
+    assert_eq!(movido.menu.cursor, 1);
+    assert_eq!(
+        cursor_del_listado(&movido),
+        cursor_antes,
+        "el listado de debajo no se movió"
+    );
+
+    // Y `Escape` cierra sin ejecutar nada.
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert_eq!(siguiente_foto(&mut sub).await.menu.open, None);
+}
+
+/// Elegir en el menú corre el comando, y el menú se cierra ANTES.
+///
+/// El orden importa: el comando puede abrir otra pantalla, y hacerlo por
+/// detrás del menú lo dejaría comiéndose las teclas de la que acaba de
+/// abrirse. Es la misma regla que la paleta.
+#[tokio::test]
+async fn lo_elegido_en_el_menu_corre_y_el_menu_se_cierra_antes() {
+    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+    // El menú «Ayuda» y su primera entrada, que es `app.help`: abre una
+    // pantalla, así que sirve para ver que el menú no se queda encima.
+    let ayuda = norte_frontend::menu::MENUS.len() - 1;
+    h.dispatch(UiAction::MenuOpen {
+        menu: u32::try_from(ayuda).expect("cabe"),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::MenuActivateRow { row: 0 })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    assert_eq!(foto.menu.open, None, "el menú se cerró");
+    assert!(foto.help.is_some(), "y lo elegido corrió");
+}
+
 /// El anillo del teclado NO para en la hoja de atributos.
 ///
 /// El recorrido compartido (`focus_order`) lleva todo lo ENFOCABLE, y la hoja

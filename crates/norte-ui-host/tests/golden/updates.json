@@ -601,6 +601,27 @@
       "title": "Disposiciones"
     },
     "locale": "es",
+    "menu": {
+      "bar": true,
+      "cursor": 1,
+      "items": [
+        {
+          "chord": "tab",
+          "enabled": true,
+          "label": "Cambiar de panel"
+        },
+        {
+          "chord": "—",
+          "enabled": false,
+          "label": "Desconectar"
+        }
+      ],
+      "open": 1,
+      "titles": [
+        "Archivo",
+        "Paneles"
+      ]
+    },
     "palette": {
       "cursor": 0,
       "query": "orde",

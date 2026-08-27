@@ -48,6 +48,8 @@ pub struct ViewSnapshot {
     pub dialogs: Vec<DialogView>,
     /// Tasks vivas y las que acaban de terminar.
     pub tasks: Vec<TaskView>,
+    /// La barra de menús: los títulos, y el desplegado si hay alguno.
+    pub menu: MenuView,
     /// La paleta de comandos, si está abierta.
     pub palette: Option<PaletteView>,
     /// El panel de continuaciones, si hay un prefijo a medias.
@@ -93,6 +95,50 @@ pub struct ViewSnapshot {
     pub ai_rename: Option<AiRenameView>,
     /// Idioma negociado, para que el renderer pida el catálogo correcto.
     pub locale: String,
+}
+
+/// La barra de menús.
+///
+/// Los menús y sus entradas son `norte_frontend::menu`, el MISMO modelo que
+/// pinta el TUI: qué hay en cada menú y en qué orden no se decide dos veces.
+/// Lo que se aporta aquí es la proyección — títulos y etiquetas ya traducidos,
+/// el atajo de cada entrada, y si esta ventana sabe ejecutarla.
+///
+/// No añade capacidades: añade una forma de ENCONTRARLAS. La paleta pide que
+/// sepas el nombre de lo que buscas y la ayuda pide que leas; un menú se
+/// recorre.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MenuView {
+    /// ¿Se pinta la barra? Lo dice `[ui] menu_bar` de la configuración.
+    ///
+    /// Apagada, la barra no ocupa fila y el menú solo se abre por su tecla —
+    /// pero se abre: quien la apaga esconde la barra, no el menú.
+    pub bar: bool,
+    /// Los títulos, de izquierda a derecha, ya traducidos.
+    pub titles: Vec<String>,
+    /// Cuál está DESPLEGADO, si alguno. `None` = solo la barra.
+    pub open: Option<u64>,
+    /// Las entradas del desplegado, vacías si no hay ninguno.
+    pub items: Vec<MenuItemView>,
+    /// Qué entrada va resaltada dentro del desplegado.
+    pub cursor: u64,
+}
+
+/// Una entrada de un menú.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MenuItemView {
+    /// La etiqueta CORTA (`menu-item-*`), no la frase de la ayuda: esa es una
+    /// descripción, y con ella el desplegable se va a setenta columnas.
+    pub label: String,
+    /// El atajo que la corre, o `—` si no tiene ninguno en este preset.
+    pub chord: String,
+    /// Esta ventana puede ejecutarla.
+    ///
+    /// Una entrada apagada SIGUE saliendo: el menú es el sitio donde se ve
+    /// qué existe, y esconder lo que este frontend no hace convertiría una
+    /// limitación en un misterio. Es la misma regla que la paleta aplica a
+    /// las filas que no puede correr.
+    pub enabled: bool,
 }
 
 /// La paleta de comandos abierta.
@@ -2148,6 +2194,16 @@ pub enum ViewChange {
         slot_id: u32,
         /// Las cabeceras, en su orden.
         columns: Vec<ColumnHeader>,
+    },
+    /// La barra de menús: se desplegó uno, se movió el cursor, o se cerró.
+    ///
+    /// Entero y no un delta, como la ayuda: la barra y el desplegable son un
+    /// todo pequeño, y mandarlo por trozos sería inventarse un protocolo para
+    /// ahorrar unos cientos de bytes.
+    Menu {
+        /// La barra, siempre: la fila de títulos sigue ahí con el
+        /// desplegable cerrado.
+        menu: MenuView,
     },
     /// La paleta se abrió, se filtró, se movió o se cerró.
     Palette {

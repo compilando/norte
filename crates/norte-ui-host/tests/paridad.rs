@@ -26,9 +26,13 @@ const NO_APLICA: &[&str] = &[
     "app.pick-accept",
     // La cierra el gestor de ventanas.
     "app.quit",
-    // Una barra de menú y un «pantalla completa» son respuestas con forma de
-    // terminal. La ventana no tiene barra de menú (todavía).
-    "app.menu",
+    // «Pantalla completa» es una respuesta con forma de terminal: esconder
+    // los paneles para ver lo que hay detrás no significa nada en una ventana
+    // que ES el gestor.
+    //
+    // `app.menu` estuvo aquí y ya NO: la ventana tiene barra de menús, con
+    // los mismos menús y las mismas entradas que el TUI, porque el modelo es
+    // `norte_frontend::menu` y no una copia.
     "app.toggle-panels",
 ];
 

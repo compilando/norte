@@ -547,6 +547,9 @@ help-cmd-app-pick-accept = accept the selection and exit (picker mode)
 # them out cut the rest of the footer mid-word instead.
 palette-title = Command palette
 palette-hint = [enter] run · [esc] close
+# The menu bar's name for a screen reader. Only the WINDOW paints it: in the
+# terminal the bar is a row of text, with no landmark to label.
+menu-bar-label = Menu bar
 # H3c, and a SEPARATE key on purpose: `palette-hint` is painted by both
 # frontends, and only the TUI has a help overlay for F1 to open (the GUI's is
 # phase H3f). Folded into the string above, the GUI's footer would advertise a

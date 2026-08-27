@@ -180,6 +180,10 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::LayoutActivateRow { .. } => "layout_activate_row",
         UiAction::SearchActivateRow { .. } => "search_activate_row",
         UiAction::AiRenameDecide { .. } => "ai_rename_decide",
+        UiAction::MenuOpen { .. } => "menu_open",
+        UiAction::MenuPointRow { .. } => "menu_point_row",
+        UiAction::MenuActivateRow { .. } => "menu_activate_row",
+        UiAction::MenuClose => "menu_close",
         UiAction::Resync => "resync",
     }
 }
@@ -332,6 +336,10 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
         ),
         ("help_select_topic", UiAction::HelpSelectTopic { row: 3 }),
         ("help_activate", UiAction::HelpActivate { index: 1 }),
+        ("menu_open", UiAction::MenuOpen { menu: 2 }),
+        ("menu_point_row", UiAction::MenuPointRow { row: 3 }),
+        ("menu_activate_row", UiAction::MenuActivateRow { row: 3 }),
+        ("menu_close", UiAction::MenuClose),
     ]
 }
 
@@ -802,6 +810,29 @@ fn slots_de_referencia() -> Vec<SlotView> {
     ]
 }
 
+/// La barra de menús con uno DESPLEGADO: la fixture tiene que llevar las dos
+/// mitades, porque son las dos que el renderer pinta.
+fn menu_de_referencia() -> norte_ui_host::dto::MenuView {
+    norte_ui_host::dto::MenuView {
+        bar: true,
+        titles: vec!["Archivo".to_owned(), "Paneles".to_owned()],
+        open: Some(1),
+        items: vec![
+            norte_ui_host::dto::MenuItemView {
+                label: "Cambiar de panel".to_owned(),
+                chord: "tab".to_owned(),
+                enabled: true,
+            },
+            norte_ui_host::dto::MenuItemView {
+                label: "Desconectar".to_owned(),
+                chord: "—".to_owned(),
+                enabled: false,
+            },
+        ],
+        cursor: 1,
+    }
+}
+
 fn snapshot_de_referencia() -> ViewSnapshot {
     ViewSnapshot {
         compare: None,
@@ -820,6 +851,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         },
         dialogs: vec![dialogo_de_referencia()],
         tasks: vec![task_de_referencia()],
+        menu: menu_de_referencia(),
         palette: Some(norte_ui_host::dto::PaletteView {
             query: "orde".to_owned(),
             rows: vec![norte_ui_host::dto::PaletteRowView {
@@ -1715,6 +1747,12 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
                 banners: Vec::new(),
                 pending: None,
             }),
+        ),
+        (
+            "menu",
+            ViewChange::Menu {
+                menu: menu_de_referencia(),
+            },
         ),
         (
             "palette",

@@ -40,7 +40,96 @@ body {
 #screen {
   position: relative;
   width: 100vw;
-  height: 100vh;
+  /* La barra de menús RESERVA su fila, no la tapa: el reparto que el host
+     calcula cuenta con la altura que este elemento diga, así que una barra
+     flotante escondería la primera fila del listado. Con `[ui] menu_bar`
+     apagada el renderer pone la variable a cero y no se pierde nada. */
+  height: calc(100vh - var(--menubar-h, 0px));
+}
+
+#menu[data-open="false"],
+#menu[data-open="true"] {
+  position: relative;
+}
+
+.menubar {
+  /* POSICIONADA, y no por gusto: el velo que cierra al pulsar fuera es
+     `fixed`, o sea posicionado, y un elemento posicionado se pinta por encima
+     de los que no lo están sea cual sea el orden del documento. Sin esto el
+     velo tapaba la propia barra y pulsar otro título con un menú abierto
+     cerraba en vez de cambiar de menú. Aquí no hay `z-index` en ninguna
+     parte: manda el orden, y para eso los dos tienen que estar posicionados. */
+  position: relative;
+  display: flex;
+  height: var(--cell-h);
+  align-items: center;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.menubar-title {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0 8px;
+  height: 100%;
+  cursor: pointer;
+  unicode-bidi: isolate;
+}
+
+.menubar-title[aria-expanded="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+/* El velo se queda DEBAJO del desplegable por orden del documento, igual que
+   el resto de esta pantalla: aquí no hay `z-index` en ninguna parte. */
+.menu-veil {
+  position: fixed;
+  inset: 0;
+}
+
+.menu-items {
+  position: absolute;
+  /* Colgando de SU título: un desplegable que se abre siempre a la izquierda
+     no dice de qué menú es. La cuenta es aproximada —los títulos no miden lo
+     mismo— y por eso se acota para que no se salga por la derecha. */
+  left: min(calc(var(--menu-open, 0) * 12ch), calc(100vw - 34ch));
+  margin: 0;
+  padding: 2px 0;
+  list-style: none;
+  min-width: 32ch;
+  max-height: 70vh;
+  overflow: auto;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+}
+
+.menu-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 8px;
+  white-space: nowrap;
+  cursor: pointer;
+  unicode-bidi: isolate;
+}
+
+.menu-item[data-current="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+/* Una entrada que esta ventana no ejecuta SIGUE saliendo, atenuada: el menú
+   es donde se ve qué existe, y esconderla convertiría una limitación en un
+   misterio. */
+.menu-item[data-enabled="false"] {
+  opacity: 0.55;
+}
+
+.menu-chord {
+  opacity: 0.7;
 }
 
 .slot {

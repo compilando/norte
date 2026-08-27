@@ -1876,6 +1876,13 @@ struct Estado {
     /// Es un contexto de entrada más, como el buscador incremental y el
     /// visor: mientras esté abierta, las teclas de texto son suyas.
     paleta: Option<norte_frontend::palette_state::Palette>,
+    /// El menú DESPLEGADO, si hay alguno.
+    ///
+    /// La barra se pinta siempre (o nunca, según `[ui] menu_bar`); esto es
+    /// solo el desplegable. Mientras esté, las teclas son suyas — igual que
+    /// la paleta, y por lo mismo: una flecha que se escapara movería el
+    /// listado de debajo.
+    menu: Option<norte_frontend::menu::MenuState>,
     /// La configuración con la que arrancó esta ventana, para enseñarla.
     config: norte_frontend::config::FrontendConfig,
     /// Dónde vive cada cosa.
@@ -2300,6 +2307,7 @@ impl Estado {
             token: 0,
             locale,
             paleta: None,
+            menu: None,
             ayuda: None,
             ajustes: None,
             extensiones: None,
@@ -2788,24 +2796,18 @@ impl Estado {
                 // Agrandar la ventana saca huecos de `hidden`, y un hueco que
                 // aparece sin listado se queda cargando para siempre.
                 self.despertar_visibles(backend, buzon);
-                let snap = self.snapshot();
-                (
-                    self.aplicada(),
-                    vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
-                )
+                self.responde_con_foto()
             }
             UiAction::Key(k) => self.tecla(k, backend, buzon),
             UiAction::SetViewerRows { rows } => self.fijar_filas_del_visor(*rows),
             UiAction::AiRenameDecide { approve } => {
                 self.decidir_revision_ia(*approve, backend, buzon)
             }
-            UiAction::Resync => {
-                let snap = self.snapshot();
-                (
-                    self.aplicada(),
-                    vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
-                )
-            }
+            UiAction::Resync => self.responde_con_foto(),
+            UiAction::MenuOpen { menu } => self.desplegar_menu(*menu),
+            UiAction::MenuPointRow { row } => self.apuntar_en_menu(*row),
+            UiAction::MenuActivateRow { row } => self.activar_del_menu(*row, backend, buzon),
+            UiAction::MenuClose => self.cerrar_menu(),
             UiAction::Dialog { id, choice } => self.responder_dialogo(*id, choice, backend, buzon),
             UiAction::CancelTask { task_id } => self.cancelar(*task_id),
             UiAction::CompareSelectRow { .. }
@@ -3099,6 +3101,11 @@ impl Estado {
         // cambiarle el teclado de mapa sin gesto suyo. (Un segundo F3 pide su
         // propia lectura y se queda con el testigo nuevo.)
         self.visor_en_vuelo = None;
+        // El menú desplegado se queda las teclas, igual que la paleta: una
+        // flecha que se le escapara movería el listado de debajo.
+        if self.menu.is_some() {
+            return Some(self.tecla_en_menu(k, backend, buzon));
+        }
         if self.paleta.is_some() {
             return Some(self.tecla_en_paleta(k, backend, buzon));
         }
@@ -3247,6 +3254,70 @@ impl Estado {
     /// Fijas a propósito: `esc` cierra, `enter` corre lo seleccionado, las
     /// flechas mueven y lo demás teclea. Es lo mismo que hace el TUI, y por
     /// el mismo motivo — el catálogo no tiene comandos para esto.
+    /// Teclas del menú desplegado.
+    ///
+    /// FIJAS, como las de la paleta y por lo mismo: no hay verbos `dialog.*`
+    /// para «menú siguiente», así que tampoco pueden salir del keymap. Las
+    /// flechas recorren, `Enter` ejecuta y `Escape` cierra; cualquier otra se
+    /// descarta en vez de caer al listado de debajo, que estaría actuando
+    /// sobre una pantalla que el lector no está mirando.
+    fn tecla_en_menu(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(m) = self.menu.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match k.key.as_str() {
+            "Escape" | "esc" => self.menu = None,
+            "ArrowLeft" | "left" => m.cycle_menu(-1),
+            "ArrowRight" | "right" => m.cycle_menu(1),
+            "ArrowUp" | "up" => m.cycle_item(-1),
+            "ArrowDown" | "down" => m.cycle_item(1),
+            "Enter" | "enter" => {
+                let elegido = m.selected();
+                return self.ejecutar_del_menu(elegido, backend, buzon);
+            }
+            _ => return (self.aplicada(), Vec::new()),
+        }
+        let cambio = ViewChange::Menu {
+            menu: self.vista_menu(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Cierra el menú y corre lo elegido.
+    ///
+    /// El cierre viaja en su PROPIO parche y ANTES del efecto, por lo mismo
+    /// que la paleta: el comando puede abrir otra pantalla, y hacerlo por
+    /// detrás del menú lo dejaría comiéndose las teclas de la que acaba de
+    /// abrirse.
+    fn ejecutar_del_menu(
+        &mut self,
+        elegido: Option<&'static str>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.menu = None;
+        let cierre = self.parche(vec![ViewChange::Menu {
+            menu: self.vista_menu(),
+        }]);
+        let Some(cmd) = elegido else {
+            return (self.aplicada(), vec![cierre]);
+        };
+        // Por el MISMO camino que una tecla: un menú es otra puerta al
+        // catálogo, no un segundo despachador.
+        let (ack, mut resto) = match efecto_de(cmd, 1) {
+            Some(efecto) => self.aplicar_efecto(efecto, backend, buzon),
+            None => self.no_implementado(cmd),
+        };
+        let mut envios = vec![cierre];
+        envios.append(&mut resto);
+        (ack, envios)
+    }
+
     fn tecla_en_paleta(
         &mut self,
         k: &crate::keys::KeyInput,
@@ -5632,6 +5703,105 @@ impl Estado {
         self.mirando_tema = true;
         let cambio = ViewChange::Theme {
             theme: self.vista_tema(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Despliega la barra de menús por el primero, o la cierra si ya lo
+    /// estaba.
+    ///
+    /// La misma tecla abre y cierra, como en el TUI: `alt+m` es «el menú», y
+    /// pulsarla dos veces no puede dejar dos desplegables ni exigir `Esc`.
+    fn abrir_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.menu = match self.menu {
+            Some(_) => None,
+            None => Some(norte_frontend::menu::MenuState::new()),
+        };
+        let cambio = ViewChange::Menu {
+            menu: self.vista_menu(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Contesta con la pantalla ENTERA.
+    ///
+    /// Dos acciones lo hacen —un `Resync` y un cambio de tamaño— y las dos por
+    /// el mismo motivo: lo que cambia no cabe en un parche, porque cambia
+    /// todo. Una sola copia para que no diverjan.
+    fn responde_con_foto(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let snap = self.snapshot();
+        (
+            self.aplicada(),
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+        )
+    }
+
+    /// Un click en un título de la barra: despliega ese menú, o pliega el que
+    /// hubiera si era el mismo.
+    ///
+    /// Un índice fuera de la barra se rechaza como obsoleto y no cierra nada:
+    /// es una carrera con un catálogo anterior, no una orden.
+    fn desplegar_menu(&mut self, menu: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let i = menu as usize;
+        if i >= norte_frontend::menu::MENUS.len() {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let mismo = self.menu.as_ref().is_some_and(|m| m.menu() == i);
+        if mismo {
+            self.menu = None;
+        } else {
+            let mut estado = norte_frontend::menu::MenuState::new();
+            estado.open(i);
+            self.menu = Some(estado);
+        }
+        let cambio = ViewChange::Menu {
+            menu: self.vista_menu(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// El ratón por encima de una entrada: mueve el cursor y nada más.
+    fn apuntar_en_menu(&mut self, row: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(m) = self.menu.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        m.point_at(row as usize);
+        let cambio = ViewChange::Menu {
+            menu: self.vista_menu(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Un click sobre una entrada: la ejecuta.
+    ///
+    /// Se resuelve contra el menú que el HOST tiene abierto, no contra lo que
+    /// diga el renderer: una fila que ya no existe —el menú cambió entre el
+    /// pintado y el click— no ejecuta nada.
+    fn activar_del_menu(
+        &mut self,
+        row: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(m) = self.menu.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        m.point_at(row as usize);
+        if m.item() != row as usize {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let elegido = m.selected();
+        self.ejecutar_del_menu(elegido, backend, buzon)
+    }
+
+    /// Un click FUERA del desplegable lo cierra sin ejecutar nada.
+    fn cerrar_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.menu.is_none() {
+            return (self.aplicada(), Vec::new());
+        }
+        self.menu = None;
+        let cambio = ViewChange::Menu {
+            menu: self.vista_menu(),
         };
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
@@ -8612,6 +8782,7 @@ impl Estado {
             | Efecto::Extensiones
             | Efecto::Agentes
             | Efecto::Tema
+            | Efecto::Menu
             | Efecto::Volumenes
             | Efecto::Conexiones
             // El historial y la hotlist son otros dos selectores: van con el
@@ -8830,6 +9001,7 @@ impl Estado {
             Efecto::Extensiones => self.abrir_extensiones(backend, buzon),
             Efecto::Agentes => self.abrir_agentes(),
             Efecto::Tema => self.abrir_tema(),
+            Efecto::Menu => self.abrir_menu(),
             Efecto::Volumenes => self.abrir_volumenes(backend, buzon),
             Efecto::Conexiones => self.abrir_conexiones(backend, buzon),
             Efecto::Historial => self.abrir_historial(),
@@ -15759,6 +15931,7 @@ impl Estado {
             // viva. Lo mismo con el tablero.
             dialogs: self.vistas_de_dialogos(),
             tasks: self.vistas_de_tasks(),
+            menu: self.vista_menu(),
             palette: self.vista_paleta(),
             whichkey: self.vista_whichkey(),
             help: self.vista_ayuda(),
@@ -15819,6 +15992,54 @@ impl Estado {
     /// El efectivo del visor, para buscar el atajo de un comando suyo.
     fn resolver_visor_efectivo(&self) -> &Effective {
         &self.efectivo_visor
+    }
+
+    /// La proyección de la barra de menús.
+    ///
+    /// Los títulos van SIEMPRE —la barra sigue ahí con el desplegable
+    /// cerrado— y las entradas solo cuando hay uno abierto: un menú de doce
+    /// entradas por cada uno de los siete, en cada parche, es media pantalla
+    /// de JSON para pintar una fila de títulos.
+    fn vista_menu(&self) -> crate::dto::MenuView {
+        use norte_frontend::menu::MENUS;
+        let ejecutables = crate::commands::todos_con(self.efectos);
+        let items = self.menu.as_ref().map_or_else(Vec::new, |m| {
+            MENUS.get(m.menu()).map_or_else(Vec::new, |menu| {
+                menu.items
+                    .iter()
+                    .map(|id| crate::dto::MenuItemView {
+                        // La etiqueta CORTA y propia (`menu-item-*`), no la
+                        // frase de `help-cmd-*`: esa es una descripción, y con
+                        // ella el desplegable tapa los dos paneles. Mismo
+                        // criterio que el TUI, que lo aprendió pintando.
+                        label: clamp_display(norte_i18n::t_in(
+                            self.lang,
+                            &format!("menu-item-{}", id.replace('.', "-")),
+                        )),
+                        chord: clamp_display(
+                            norte_frontend::palette::first_chord(id, &self.efectivo)
+                                .or_else(|| {
+                                    norte_frontend::palette::first_chord(id, &self.efectivo_visor)
+                                })
+                                .unwrap_or_else(|| "—".to_owned()),
+                        ),
+                        enabled: ejecutables.contains(id),
+                    })
+                    .collect()
+            })
+        });
+        crate::dto::MenuView {
+            // Por defecto ENCENDIDA, igual que el TUI: quien no ha dicho nada
+            // no ha pedido esconderla.
+            bar: self.config.common.ui_menu_bar.unwrap_or(true),
+            titles: MENUS
+                .iter()
+                .map(|m| clamp_display(norte_i18n::t_in(self.lang, m.title)))
+                .collect(),
+            open: self.menu.as_ref().map(|m| m.menu() as u64),
+            cursor: self.menu.as_ref().map_or(0, |m| m.item() as u64),
+            items,
+        }
     }
 
     /// La proyección de la paleta.

@@ -550,6 +550,30 @@
       "title": "Disposiciones"
     }
   },
+  "menu": {
+    "change": "menu",
+    "menu": {
+      "bar": true,
+      "cursor": 1,
+      "items": [
+        {
+          "chord": "tab",
+          "enabled": true,
+          "label": "Cambiar de panel"
+        },
+        {
+          "chord": "—",
+          "enabled": false,
+          "label": "Desconectar"
+        }
+      ],
+      "open": 1,
+      "titles": [
+        "Archivo",
+        "Paneles"
+      ]
+    }
+  },
   "palette": {
     "change": "palette",
     "palette": {

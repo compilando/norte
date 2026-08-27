@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 40;
+export const BRIDGE_VERSION = 41;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -387,6 +387,26 @@ export interface PaletteView {
   rows: PaletteRowView[];
   cursor: number | null;
   total: number;
+}
+
+export interface MenuItemView {
+  label: string;
+  chord: string;
+  /** Esta ventana puede ejecutarla. Una apagada SIGUE saliendo: el menú es
+   *  donde se ve qué existe. */
+  enabled: boolean;
+}
+
+export interface MenuView {
+  /** `[ui] menu_bar`: si la barra se pinta. Apagada, el menú sigue
+   *  abriéndose por su tecla. */
+  bar: boolean;
+  titles: string[];
+  /** Cuál está desplegado, si alguno. */
+  open: number | null;
+  /** Las entradas del desplegado; vacías si no hay ninguno. */
+  items: MenuItemView[];
+  cursor: number;
 }
 
 export interface WhichKeyRowView {
@@ -848,6 +868,7 @@ export interface ViewSnapshot {
   status: StatusView;
   dialogs: DialogView[];
   tasks: TaskView[];
+  menu: MenuView;
   palette: PaletteView | null;
   whichkey: WhichKeyView | null;
   help: HelpView | null;
@@ -886,6 +907,7 @@ export type ViewChange =
   | { change: "viewer"; viewer: ViewerView | null }
   | { change: "ai_rename"; ai_rename: AiRenameView | null }
   | { change: "which_key"; whichkey: WhichKeyView | null }
+  | { change: "menu"; menu: MenuView }
   | { change: "palette"; palette: PaletteView | null }
   | { change: "help"; help: HelpView | null }
   | { change: "settings"; settings: SettingsView | null }
@@ -964,6 +986,10 @@ export type UiAction =
   | { action: "layout_activate_row"; row: number }
   | { action: "search_activate_row"; row: number }
   | { action: "ai_rename_decide"; approve: boolean }
+  | { action: "menu_open"; menu: number }
+  | { action: "menu_point_row"; row: number }
+  | { action: "menu_activate_row"; row: number }
+  | { action: "menu_close" }
   | { action: "resync" };
 
 export type StaleReason = "instance" | "generation" | "modal";

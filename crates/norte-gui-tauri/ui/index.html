@@ -7,6 +7,12 @@
     <link rel="stylesheet" href="./src/style.css" />
   </head>
   <body>
+    <!-- La barra de menús va ANTES de la pantalla: es una fila fija arriba
+         y el resto se coloca debajo, no encima. Su desplegable sí flota, y
+         por eso el contenedor entero está en el flujo del documento antes
+         que todo lo demás: lo que se abre después lo tapa, que es lo
+         correcto — un diálogo o la ayuda mandan sobre un menú. -->
+    <div id="menu" data-open="false"></div>
     <main id="screen" role="application" aria-label="norte"></main>
     <div id="palette" data-open="false"></div>
     <div id="whichkey" data-open="false"></div>

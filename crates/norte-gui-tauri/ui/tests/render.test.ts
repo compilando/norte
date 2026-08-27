@@ -92,6 +92,7 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     status: { message: "2 entradas", banners: [], pending: null },
     dialogs: [],
     tasks: [],
+    menu: { bar: true, titles: ["Archivo", "Paneles"], open: null, items: [], cursor: 0 },
     palette: null,
     whichkey: null,
     help: null,
@@ -119,6 +120,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
 } {
   document.body.replaceChildren();
   const root = document.createElement("main");
+  const menu = document.createElement("div");
   const palette = document.createElement("div");
   const whichkey = document.createElement("div");
   const help = document.createElement("div");
@@ -138,6 +140,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
   const aiRename = document.createElement("div");
   document.body.append(
     root,
+    menu,
     palette,
     whichkey,
     help,
@@ -157,6 +160,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
   const enviadas: UiAction[] = [];
   const screen = new Screen(
     root,
+    menu,
     palette,
     whichkey,
     help,
@@ -1075,6 +1079,82 @@ describe("which-key", () => {
     const { screen } = montar();
     screen.paint(vista({}));
     expect(document.querySelector(".whichkey")).toBeNull();
+  });
+});
+
+describe("la barra de menús", () => {
+  function conMenu(open: number | null) {
+    const v = vista({});
+    v.menu = {
+      bar: true,
+      titles: ["Archivo", "Paneles"],
+      open,
+      items:
+        open === null
+          ? []
+          : [
+              { label: "Cambiar de panel", chord: "tab", enabled: true },
+              { label: "Desconectar", chord: "—", enabled: false },
+            ],
+      cursor: 1,
+    };
+    return v;
+  }
+
+  it("pinta los títulos y reserva su fila", () => {
+    const { screen } = montar();
+    screen.paint(conMenu(null));
+    const titulos = [...document.querySelectorAll(".menubar-title")].map(
+      (t) => t.textContent,
+    );
+    expect(titulos).toEqual(["Archivo", "Paneles"]);
+    // La fila se RESERVA: el reparto del host se calcula sobre el alto que
+    // este renderer declara, y una barra flotante taparía la primera fila.
+    expect(document.documentElement.style.getPropertyValue("--menubar-h")).toBe(
+      "var(--cell-h)",
+    );
+    expect(document.querySelector(".menu-items")).toBeNull();
+  });
+
+  it("con la barra apagada no reserva nada", () => {
+    const { screen } = montar();
+    const v = conMenu(null);
+    v.menu.bar = false;
+    screen.paint(v);
+    expect(document.documentElement.style.getPropertyValue("--menubar-h")).toBe("0px");
+    expect(document.querySelector(".menubar")).toBeNull();
+  });
+
+  it("el desplegado marca su título, su cursor y lo que no se puede hacer", () => {
+    const { screen } = montar();
+    screen.paint(conMenu(1));
+    const abierto = document.querySelectorAll('.menubar-title[aria-expanded="true"]');
+    expect(abierto).toHaveLength(1);
+    expect(abierto[0]?.textContent).toBe("Paneles");
+    const lista = document.querySelector(".menu-items") as HTMLElement;
+    expect(lista.getAttribute("aria-activedescendant")).toBe("menu-item-1");
+    const filas = [...document.querySelectorAll(".menu-item")];
+    expect(filas[0]?.textContent).toBe("Cambiar de paneltab");
+    // Una entrada que esta ventana no ejecuta SIGUE saliendo: el menú es
+    // donde se ve qué existe.
+    expect(filas[1]?.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("el ratón despliega, señala, ejecuta y cierra", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conMenu(null));
+    (document.querySelectorAll(".menubar-title")[1] as HTMLElement).click();
+    screen.paint(conMenu(1));
+    const fila = document.querySelectorAll(".menu-item")[0] as HTMLElement;
+    fila.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    fila.click();
+    (document.querySelector(".menu-veil") as HTMLElement).click();
+    expect(enviadas).toEqual([
+      { action: "menu_open", menu: 1 },
+      { action: "menu_point_row", row: 0 },
+      { action: "menu_activate_row", row: 0 },
+      { action: "menu_close" },
+    ]);
   });
 });
 

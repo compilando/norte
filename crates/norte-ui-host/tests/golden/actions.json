@@ -96,6 +96,21 @@
     "slot_id": 1,
     "to": 5
   },
+  "menu_activate_row": {
+    "action": "menu_activate_row",
+    "row": 3
+  },
+  "menu_close": {
+    "action": "menu_close"
+  },
+  "menu_open": {
+    "action": "menu_open",
+    "menu": 2
+  },
+  "menu_point_row": {
+    "action": "menu_point_row",
+    "row": 3
+  },
   "move_cursor": {
     "action": "move_cursor",
     "delta": -1,

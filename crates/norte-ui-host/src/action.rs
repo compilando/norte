@@ -375,6 +375,29 @@ pub enum UiAction {
         /// `true` = aplicar. `false` = descartar.
         approve: bool,
     },
+    /// Despliega un menú de la barra por su índice, o cierra el que hubiera
+    /// si ya era ese (un click en el título abierto lo pliega).
+    MenuOpen {
+        /// Qué menú, en el orden en que viajaron sus títulos.
+        menu: u32,
+    },
+    /// Mueve el cursor dentro del menú desplegado (el ratón por encima).
+    MenuPointRow {
+        /// Qué entrada, en el orden en que viajaron.
+        row: u32,
+    },
+    /// Ejecuta una entrada del menú desplegado (un click).
+    ///
+    /// Lleva la fila y no el comando: lo que el renderer sabe es dónde pulsó
+    /// el lector, y el comando lo resuelve el host contra el menú que él
+    /// mismo tiene abierto. Un id de comando que viniera del renderer sería
+    /// un despachador paralelo al keymap (ADR 0069).
+    MenuActivateRow {
+        /// Qué entrada, en el orden en que viajaron.
+        row: u32,
+    },
+    /// Cierra el menú desplegado sin ejecutar nada (un click fuera).
+    MenuClose,
     /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
     Resync,
 }

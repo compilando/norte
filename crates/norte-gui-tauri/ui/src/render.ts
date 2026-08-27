@@ -31,6 +31,7 @@ import type {
   HelpBlockView,
   HelpSpanView,
   HelpView,
+  MenuView,
   PaletteView,
   ExtensionsView,
   TabGroupView,
@@ -118,9 +119,14 @@ export class Screen {
   /** La ayuda está abierta con el CUERPO enfocado. */
   private helpBodyFocused = false;
   private pendingRange = new Map<number, number>();
+  /** La altura que la barra de menús está reservando, ya en CSS. */
+  private menuBarHeight: string | null = null;
+  /** La reserva cambió: el host tiene que oír el alto nuevo. */
+  private viewportSucio = false;
 
   constructor(
     private readonly root: HTMLElement,
+    private readonly menuRoot: HTMLElement,
     private readonly paletteRoot: HTMLElement,
     private readonly whichKeyRoot: HTMLElement,
     private readonly helpRoot: HTMLElement,
@@ -154,6 +160,16 @@ export class Screen {
    */
   helpBodyScrolls(): boolean {
     return this.helpBodyFocused;
+  }
+
+  /**
+   * ¿Cambió lo que la barra de menús reserva desde la última vez que se
+   * preguntó? Consulta que CONSUME: quien la hace vuelve a declarar el alto.
+   */
+  takeViewportDirty(): boolean {
+    const sucio = this.viewportSucio;
+    this.viewportSucio = false;
+    return sucio;
   }
 
   /** Texto de una clave Fluent, traducido EN RUST. La clave, si no está. */
@@ -193,6 +209,7 @@ export class Screen {
       );
       this.paintSlot(dom, slot, view, cell);
     }
+    this.paintMenu(view.menu);
     this.paintPalette(view.palette);
     this.paintWhichKey(view.whichkey);
     this.paintHelp(view.help);
@@ -210,6 +227,100 @@ export class Screen {
     this.paintViewer(view.viewer);
     this.paintAiRename(view.ai_rename);
     this.paintDialogs(view.dialogs);
+  }
+
+  /**
+   * La barra de menús, y el desplegable si hay uno abierto.
+   *
+   * Las mismas órdenes que el teclado, ordenadas por tema. No añade
+   * capacidades: añade una forma de encontrarlas, para quien no sabe el
+   * nombre de lo que busca.
+   *
+   * Una entrada apagada SIGUE saliendo, atenuada: esconder lo que esta
+   * ventana no hace convertiría una limitación en un misterio.
+   */
+  private paintMenu(menu: MenuView): void {
+    // La fila que la barra ocupa sale del CSS y entra en el reparto: el host
+    // reparte sobre el alto que este renderer le declare, así que si la barra
+    // no reservara su fila taparía la primera del listado — el mismo bug que
+    // el TUI tuvo con el visor a pantalla completa.
+    const alto = menu.bar ? "var(--cell-h)" : "0px";
+    if (this.menuBarHeight !== alto) {
+      document.documentElement.style.setProperty("--menubar-h", alto);
+      this.menuBarHeight = alto;
+      this.viewportSucio = true;
+    }
+    if (!menu.bar && menu.open === null) {
+      this.menuRoot.replaceChildren();
+      this.menuRoot.dataset["open"] = "false";
+      return;
+    }
+    this.menuRoot.dataset["open"] = String(menu.open !== null);
+    const barra = document.createElement("nav");
+    barra.className = "menubar";
+    barra.setAttribute("role", "menubar");
+    barra.setAttribute("aria-label", this.t("menu-bar-label"));
+    for (const [i, titulo] of menu.titles.entries()) {
+      const boton = document.createElement("button");
+      boton.type = "button";
+      boton.className = "menubar-title";
+      boton.id = `menu-title-${String(i)}`;
+      boton.textContent = titulo;
+      boton.setAttribute("role", "menuitem");
+      boton.setAttribute("aria-haspopup", "true");
+      boton.setAttribute("aria-expanded", String(menu.open === i));
+      boton.addEventListener("click", () => {
+        this.send({ action: "menu_open", menu: i });
+      });
+      barra.append(boton);
+    }
+    const caja = document.createElement("div");
+    caja.className = "menu";
+    caja.append(barra);
+
+    if (menu.open !== null) {
+      const lista = document.createElement("ul");
+      lista.className = "menu-items";
+      lista.setAttribute("role", "menu");
+      // El desplegable cuelga de SU título, no del borde de la ventana: un
+      // menú que se abre siempre a la izquierda no dice de cuál es.
+      lista.style.setProperty("--menu-open", String(menu.open));
+      for (const [i, item] of menu.items.entries()) {
+        const fila = document.createElement("li");
+        fila.className = "menu-item";
+        fila.id = `menu-item-${String(i)}`;
+        fila.setAttribute("role", "menuitem");
+        fila.setAttribute("aria-disabled", String(!item.enabled));
+        fila.dataset["enabled"] = String(item.enabled);
+        fila.dataset["current"] = String(menu.cursor === i);
+        const label = document.createElement("span");
+        label.className = "menu-label";
+        label.textContent = item.label;
+        const chord = document.createElement("span");
+        chord.className = "menu-chord";
+        chord.textContent = item.chord;
+        fila.append(label, chord);
+        fila.addEventListener("mousemove", () => {
+          this.send({ action: "menu_point_row", row: i });
+        });
+        fila.addEventListener("click", () => {
+          this.send({ action: "menu_activate_row", row: i });
+        });
+        lista.append(fila);
+      }
+      lista.setAttribute("aria-activedescendant", `menu-item-${String(menu.cursor)}`);
+      caja.append(lista);
+      // Un click FUERA cierra, que es lo que hace un menú en todas partes.
+      // El velo va DETRÁS del desplegable en el DOM y sin `z-index`, igual
+      // que el resto de esta pantalla.
+      const velo = document.createElement("div");
+      velo.className = "menu-veil";
+      velo.addEventListener("click", () => {
+        this.send({ action: "menu_close" });
+      });
+      caja.prepend(velo);
+    }
+    this.menuRoot.replaceChildren(caja);
   }
 
   /** La paleta de comandos. */
