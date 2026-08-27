@@ -199,7 +199,9 @@ pub async fn run(
     // `[ui] lang` says `es` an English corpus inside a Spanish UI. Fixed for
     // the session: `force` is called once, so the hot reload keeps this value.
     lang: norte_i18n::Lang,
-    layers: Layers,
+    // `mut` desde los perfiles (ADR 0079): cambiar de perfil rehace las capas
+    // en caliente, así que esto ya no es constante durante la sesión.
+    mut layers: Layers,
     cli_preset: Option<String>,
     // Modo del quick search (`[ui] quick_search`): vive en el run loop como
     // el preset CLI y se actualiza en el hot-reload de config.
@@ -845,8 +847,139 @@ pub async fn run(
                 }
             }
         }
+        // Un cambio de perfil pedido por `profile.pick`/`next`/`prev`, una vez
+        // por vuelta y AQUÍ.
+        //
+        // No al lado de cada `run_command` como `launch_pending_open`: aquél
+        // necesita la terminal, que `keys.rs` tiene; éste necesita las capas,
+        // los tres resolvers y la config entera, que solo están aquí. Cinco
+        // sitios pasándose doce parámetros para servir a tres comandos sería
+        // el cableado peor.
+        if let Some(nombre) = app.pending_profile.take() {
+            cambia_de_perfil(
+                &nombre,
+                app,
+                backend,
+                &mut events,
+                resolver,
+                viewer_resolver,
+                dialog_resolver,
+                help_lines,
+                lang,
+                &mut layers,
+                cli_preset.as_deref(),
+                &mut quick_mode,
+                &mut confirm_quit,
+                &mut cfg,
+            )
+            .await;
+        }
         // Resize/Focus/etc: el draw del inicio del loop repinta solo.
     }
+}
+
+/// Cambia de perfil en caliente (ADR 0079, D8).
+///
+/// El orden ES el diseño:
+///
+/// 1. Volcar el estado del perfil que se deja, ANTES de tocar nada. Si esto
+///    fuese después de recargar, lo que se guardaría bajo el nombre viejo
+///    sería el estado del perfil nuevo.
+/// 2. Rehacer las capas con el directorio del perfil y recargar. Esa recarga
+///    es `reload_config`, que ya era «todo o nada»: si falla, deja la config
+///    vigente y avisa, que es justo lo que D7 pide para un cambio (`Switch`).
+/// 3. Solo si aplicó: montar la disposición guardada del perfil nuevo, darlo
+///    por activo, y decir lo que no se pudo aplicar sin reiniciar.
+///
+/// Lo que NO hace falta hacer a mano: tema, keymap, columnas, favoritos y
+/// openers los aplica el paso 2, y la siembra de cada hueco sale de
+/// `apply_session`, que ya sabe leer la disposición bajo la clave del perfil.
+#[allow(clippy::too_many_arguments)] // wiring del bucle, no API
+async fn cambia_de_perfil(
+    nombre: &std::ffi::OsStr,
+    app: &mut App,
+    backend: &Backend,
+    events: &mut EventStream,
+    resolver: &mut Resolver,
+    viewer_resolver: &mut Resolver,
+    dialog_resolver: &mut Resolver,
+    help_lines: &mut Vec<ratatui::text::Line<'static>>,
+    lang: norte_i18n::Lang,
+    layers: &mut Layers,
+    cli_preset: Option<&str>,
+    quick_mode: &mut nav::Mode,
+    confirm_quit: &mut config::ConfirmQuit,
+    cfg: &mut config::LoadedConfig,
+) {
+    // 1 — el estado del perfil que se DEJA, capturado antes de nada.
+    let saliente = app.session_body();
+    let antes = cfg.common.clone();
+
+    // 2 — las capas nuevas. Un nombre que el resolutor no puede colgar deja
+    // las capas como estaban, y entonces la recarga no cambiaría nada: se
+    // rehúsa el cambio en vez de fingir que pasó algo.
+    let nuevas = norte_config::standard_layers_with_profile(Some(nombre));
+    if !nuevas
+        .dirs
+        .iter()
+        .any(|(_, k)| *k == config::Layer::Profile)
+    {
+        app.message = Some(ta(
+            "msg-profile-not-applied",
+            &[("profile", &nombre.to_string_lossy())],
+        ));
+        return;
+    }
+    let anteriores = std::mem::replace(layers, nuevas);
+    let aplicado = reload_config(
+        app,
+        backend,
+        resolver,
+        viewer_resolver,
+        dialog_resolver,
+        help_lines,
+        lang,
+        layers,
+        cli_preset,
+        quick_mode,
+        confirm_quit,
+        cfg,
+    )
+    .await;
+    if !aplicado {
+        // `reload_config` ya dejó la config vigente y dijo por qué; aquí solo
+        // se devuelven las capas, que son lo único que este nivel había
+        // tocado. El lector se queda en el perfil que tenía, con el estado
+        // que tenía.
+        *layers = anteriores;
+        return;
+    }
+
+    // 3 — el perfil nuevo es el activo, y su pantalla se monta desde el mismo
+    // cuerpo: `apply_session` lee la disposición bajo la clave del perfil y
+    // guarda las de los demás.
+    app.active_profile = Some(nombre.to_os_string());
+    // El vector que devuelve se descarta a propósito, igual que hace
+    // `apply_session_value` en el arranque: quién necesita listado lo resuelve
+    // `refresh_panes` justo después, que es el camino que ya usa la recarga
+    // cuando los attrs de un pane cambian.
+    let _ = app.apply_session(&saliente);
+    let _ = crate::refresh::refresh_panes(app, backend, events).await;
+    let fuera = crate::app::profile::no_aplicable_en_caliente(&antes, &cfg.common);
+    app.message = Some(if fuera.is_empty() {
+        ta(
+            "msg-profile-switched",
+            &[("profile", &nombre.to_string_lossy())],
+        )
+    } else {
+        ta(
+            "msg-profile-switched-partial",
+            &[
+                ("profile", &nombre.to_string_lossy()),
+                ("keys", &fuera.join(", ")),
+            ],
+        )
+    });
 }
 
 /// Dirs NATIVOS vigilables de los panes (#106): solo `file://` (un dir

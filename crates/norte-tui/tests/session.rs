@@ -64,6 +64,43 @@ fn las_disposiciones_de_otros_perfiles_vuelven_intactas() {
     assert_eq!(vuelta.active, "work");
 }
 
+/// El perfil PEGAJOSO llega con la sesión y pide el cambio.
+///
+/// No puede aplicarse antes: vive en la sesión, la sesión la tiene el daemon, y
+/// al daemon se llega con la configuración que ya está cargada. Así que se pide
+/// y lo hace el bucle por el mismo camino que cualquier otro cambio.
+#[test]
+fn el_perfil_pegajoso_pide_el_cambio() {
+    let body = norte_frontend::session::SessionBody {
+        active: "work".to_owned(),
+        ..norte_frontend::session::SessionBody::default()
+    };
+    let mut app = app_basica();
+    app.apply_session_value(norte_frontend::session::SCHEMA_VERSION, &body.to_value());
+    assert_eq!(
+        app.pending_profile.as_deref(),
+        Some(std::ffi::OsStr::new("work"))
+    );
+}
+
+/// Y `--profile` lo GANA: el lector nombró uno para esta vez, así que el que
+/// venía de la sesión no lo pisa.
+#[test]
+fn un_perfil_explicito_gana_al_pegajoso() {
+    let body = norte_frontend::session::SessionBody {
+        active: "photos".to_owned(),
+        ..norte_frontend::session::SessionBody::default()
+    };
+    let mut app = app_basica();
+    app.active_profile = Some(std::ffi::OsString::from("work"));
+    app.apply_session_value(norte_frontend::session::SCHEMA_VERSION, &body.to_value());
+    assert_eq!(app.pending_profile, None, "no se pide ningún cambio");
+    assert_eq!(
+        app.active_profile.as_deref(),
+        Some(std::ffi::OsStr::new("work"))
+    );
+}
+
 /// Sin perfil, la clave sigue siendo `default`: quien nunca elija uno lee y
 /// escribe exactamente donde ya escribía.
 #[test]

@@ -185,6 +185,19 @@ impl App {
     pub fn apply_session_value(&mut self, version: u32, v: &serde_json::Value) {
         match norte_frontend::session::SessionBody::from_value(version, v) {
             Ok(body) => {
+                // El perfil PEGAJOSO llega AQUÍ y no antes: vive en la sesión,
+                // y la sesión la tiene el daemon, al que se llega con la
+                // configuración que ya está cargada. Así que se pide el cambio
+                // y lo hace el bucle por el mismo camino que cualquier otro
+                // (ADR 0079, D8) — con la única baja que ese camino tiene:
+                // `[ui] lang` no se puede reaplicar, y se anuncia.
+                //
+                // Un `--profile` explícito ya dejó `active_profile` puesto
+                // antes de llegar aquí, y entonces el pegajoso NO manda: el
+                // lector nombró uno para esta vez.
+                if self.active_profile.is_none() && !body.active.is_empty() {
+                    self.pending_profile = Some(std::ffi::OsString::from(&body.active));
+                }
                 self.apply_session(&body);
             }
             // Un cuerpo de una versión MÁS NUEVA no se lee y tampoco se pisa:
