@@ -13,6 +13,8 @@ import type { ActionAck, BridgeEnvelope, HostCatalog, UiAction, UiUpdate } from 
 export const EVENT_UPDATE = "norte://update";
 /** El host avisa de que este suscriptor se quedó atrás. */
 export const EVENT_LAGGED = "norte://lagged";
+/** El catálogo cambió (hoy: el tema). Hay que volver a pedirlo. */
+export const EVENT_CATALOG = "norte://catalog";
 
 /** Lo que el renderer necesita del host. Cinco cosas y ninguna genérica. */
 export interface HostPort {
@@ -24,6 +26,9 @@ export interface HostPort {
   imageBytes(): Promise<ArrayBuffer>;
   onUpdate(cb: (env: BridgeEnvelope<UiUpdate>) => void): Promise<() => void>;
   onLagged(cb: () => void): Promise<() => void>;
+  /** El catálogo cambió: hay que volver a pedirlo y re-aplicar lo que salga
+   *  de él. Hoy solo lo mueve el tema. */
+  onCatalog(cb: () => void): Promise<() => void>;
 }
 
 // Adrede NO hay un `rpc(method, params)`: la webview no puede pedirle al
@@ -50,6 +55,12 @@ export const tauriPort: HostPort = {
   },
   onLagged: async (cb) => {
     const un = await listen(EVENT_LAGGED, () => {
+      cb();
+    });
+    return un;
+  },
+  onCatalog: async (cb) => {
+    const un = await listen(EVENT_CATALOG, () => {
       cb();
     });
     return un;

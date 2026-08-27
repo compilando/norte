@@ -5438,6 +5438,7 @@ dependencies = [
  "norte-i18n",
  "norte-proto",
  "norte-testkit",
+ "norte-theme",
  "norte-vfs",
  "serde",
  "serde_json",

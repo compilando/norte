@@ -22,13 +22,56 @@ use norte_proto::VPath;
 use crate::bridge::clamp_display;
 use crate::dto::{PickerRowView, PickerView, ThemeRoleView, ThemeView};
 
-/// El tema tal como lo resolvió quien arrancó el host.
+/// Los roles del tema con su color, en el orden en que se nombran.
 ///
-/// Llega ya resuelto por el mismo motivo que las rutas: el host no lee
-/// ficheros. La correspondencia rol → color es EXPLÍCITA en quien la
-/// construye (`norte_gui_tauri::catalog::variables`), no un volcado
-/// automático, y esta vista enseña exactamente esa lista — la misma que
-/// alimenta las variables CSS, así que lo que se ve aquí es lo que pinta.
+/// La correspondencia es EXPLÍCITA y no automática: una variable de la hoja
+/// de estilos que nadie alimenta se ve (queda el valor por defecto), pero un
+/// volcado automático de `Role` convertiría cada rol nuevo en una variable que
+/// nadie usa y cada rename en un color que desaparece sin ruido.
+///
+/// Vive AQUÍ y no en quien hospeda, aunque los nombres sean los de sus
+/// variables CSS, por una razón concreta: desde que el selector de tema elige,
+/// el host tiene que resolver por nombre un tema que nadie le ha pasado, y
+/// dos listas —una para pintar y otra para enseñar— es exactamente lo que el
+/// comentario original decía que no podía pasar. Quien hospeda la consume.
+#[must_use]
+pub fn roles_de_tema(theme: &norte_theme::Theme) -> Vec<(String, String)> {
+    use norte_theme::Role;
+    let mut out = Vec::new();
+    let mut poner = |nombre: &str, role: Role, fondo: bool| {
+        let style = theme.style(role);
+        let color = if fondo { style.bg } else { style.fg };
+        if let Some(c) = color {
+            out.push((nombre.to_owned(), c.to_hex()));
+        }
+    };
+    poner("bg", Role::Background, true);
+    poner("fg", Role::Regular, false);
+    poner("panel-bg", Role::PaneBackground, true);
+    poner("panel-focus-bg", Role::PaneFocusBackground, true);
+    poner("border", Role::BorderUnfocused, false);
+    poner("border-focus", Role::BorderFocus, false);
+    poner("selection-bg", Role::Selection, true);
+    poner("selection-fg", Role::Selection, false);
+    poner("mark-bg", Role::Mark, true);
+    poner("hostile-fg", Role::HostileBadge, false);
+    poner("status-bg", Role::StatusBar, true);
+    poner("title-fg", Role::Title, false);
+    poner("error-fg", Role::Error, false);
+    // Los dos roles que una DECORACIÓN de plugin puede pedir además de
+    // `error`. Sin ellos, una insignia `warning` caía al color del título y
+    // era indistinguible de una `info`: el rol es vocabulario cerrado
+    // justamente para que signifique algo en pantalla.
+    poner("warning-fg", Role::Warning, false);
+    poner("info-fg", Role::Info, false);
+    out
+}
+
+/// El tema que esta ventana tiene puesto.
+///
+/// La correspondencia rol → color es [`roles_de_tema`], la misma que alimenta
+/// las variables CSS de quien hospeda: lo que se ve en esta pantalla es lo que
+/// pinta.
 #[derive(Debug, Clone, Default)]
 pub struct HostTheme {
     /// Cómo se llama.
@@ -41,11 +84,29 @@ pub struct HostTheme {
 }
 
 impl HostTheme {
+    /// El tema que se llama así, resuelto.
+    ///
+    /// El nombre que se guarda es el PEDIDO, y los colores los del tema que
+    /// de verdad se resolvió: con los presets de fábrica son siempre el
+    /// mismo, y quien la llama ya comprobó que existe.
+    #[must_use]
+    pub fn de(nombre: &str, theme: &norte_theme::Theme) -> Self {
+        Self {
+            name: nombre.to_owned(),
+            roles: roles_de_tema(theme),
+            effects: theme.effect_names().unwrap_or_default(),
+        }
+    }
+
     /// La proyección.
     #[must_use]
     pub(crate) fn vista(&self) -> ThemeView {
         ThemeView {
             name: clamp_display(self.name.clone()),
+            // La lista y el cursor los pone quien tiene el SELECTOR: este
+            // tipo es el tema puesto, no la elección en curso.
+            choices: Vec::new(),
+            cursor: 0,
             roles: self
                 .roles
                 .iter()

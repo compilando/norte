@@ -1488,6 +1488,28 @@ body {
   unicode-bidi: isolate;
 }
 
+/* La lista de temas entre los que se elige. Moverse por ella cambia los
+   colores de la ventana entera, así que la fila señalada tiene que verse con
+   los colores que ya están puestos: nada de color propio, solo la selección
+   del tema vigente. */
+.theme-choices {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+  max-height: 30vh;
+  overflow: auto;
+}
+
+.theme-choice {
+  padding: 0 6px;
+  unicode-bidi: isolate;
+}
+
+.theme-choice[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
 .theme-roles {
   margin: 0;
   padding: 0;

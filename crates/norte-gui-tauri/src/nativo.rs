@@ -41,9 +41,17 @@ pub enum Resultado {
 pub async fn bombear(
     mut rx: tokio::sync::broadcast::Receiver<NativeEffect>,
     host: std::sync::Arc<norte_ui_host::UiHost>,
+    tema: impl Fn(&str) + Send + 'static,
 ) {
     loop {
         match rx.recv().await {
+            // El TEMA no se «ejecuta»: se vuelve a resolver aquí, porque los
+            // colores cruzan a la webview convertidos en variables CSS y esa
+            // conversión es de este proceso. Va sin `spawn_blocking` a
+            // propósito: resolver un preset es aritmética sobre colores, no
+            // I/O, y mandarlo a otro hilo solo añadiría un frame de retraso a
+            // algo que el lector está viendo cambiar bajo el cursor.
+            Ok(NativeEffect::ThemeChanged { name }) => tema(&name),
             // El selector de carpeta es el único que CONTESTA (#284): los
             // demás se lanzan y se olvidan, pero de este el host espera una
             // ruta, así que su respuesta vuelve por `dispatch` como cualquier
@@ -81,9 +89,12 @@ pub fn ejecutar(efecto: &NativeEffect) -> Resultado {
         NativeEffect::OpenPath { path } => abrir(path),
         NativeEffect::OpenTerminal { dir } => terminal(dir),
         NativeEffect::Notify { titulo, cuerpo } => avisar(titulo, cuerpo),
-        // Lo atiende `bombear`, que es quien puede devolverle la ruta al host.
-        // Aquí no hay a quién contestar.
-        NativeEffect::PickDirectory { .. } => Resultado::SinPrograma,
+        // Los dos los atiende `bombear`, y ninguno lanza un programa: al
+        // selector de carpeta hay que CONTESTARLE con la ruta, y el tema es un
+        // catálogo que rehacer. Aquí no hay nada que ejecutar.
+        NativeEffect::PickDirectory { .. } | NativeEffect::ThemeChanged { .. } => {
+            Resultado::SinPrograma
+        }
     }
 }
 

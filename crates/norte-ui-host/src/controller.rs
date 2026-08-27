@@ -414,6 +414,13 @@ enum Mensaje {
     Aprobacion(Box<norte_proto::methods::PolicyApprovalRequired>),
     /// A esta aprobación se le acabó el TTL: el daemon ya no la acepta.
     AprobacionCaducada(u64),
+    /// El tema elegido ya está (o no) en el `norte.toml`. `Some(clave)` es el
+    /// motivo por el que no se pudo guardar; `None` es que se guardó.
+    ///
+    /// Solo el fallo se DICE. Un «guardado» por cada tema elegido sería un
+    /// mensaje por cada Enter en una pantalla cuyo resultado ya se ve: los
+    /// colores cambiaron.
+    TemaPersistido(Option<&'static str>),
     /// A esta task TERMINADA se le acabó su rato en el tablero
     /// ([`TTL_TASK_TERMINAL`]). Lleva la ÉPOCA de conexión en la que se
     /// registró: tras un relevo del daemon los ids vuelven a empezar en 1, y
@@ -969,6 +976,13 @@ async fn actor(
             Mensaje::TaskCaducada(id, epoca) => {
                 for u in estado.caducar_task(id, epoca) {
                     let _ = updates.send(u);
+                }
+            }
+            Mensaje::TemaPersistido(fallo) => {
+                if let Some(clave) = fallo {
+                    for u in estado.decir(clave) {
+                        let _ = updates.send(u);
+                    }
                 }
             }
             Mensaje::Informe(informe) => {
@@ -1786,6 +1800,39 @@ pub struct Reintento {
     mover: bool,
 }
 
+/// El selector de tema abierto.
+///
+/// Mismo modelo que el del terminal: la lista, el cursor, y el que había
+/// puesto al abrir — sin el último, `Escape` dejaría puesto lo que el cursor
+/// rozó de paso, que es cambiar de tema sin querer.
+struct SeleccionDeTema {
+    /// Los presets, en el orden en que se declaran.
+    nombres: Vec<String>,
+    /// Cuál está señalado.
+    cursor: usize,
+    /// El que estaba puesto al abrir, ENTERO y no su nombre.
+    ///
+    /// Entero porque el que había puede no ser un preset —un fichero de tema
+    /// del usuario lo es igual— y volver a resolverlo por nombre lo perdería.
+    /// La lista solo ofrece presets; lo que se restaura es lo que había.
+    previo: Box<crate::pickers::HostTheme>,
+}
+
+/// La clave Fluent de un error de io LOCAL.
+///
+/// La CLAVE y no el texto: el host localiza con SU idioma
+/// (`norte_i18n::t_in`), no con el del proceso. Y jamás el `Display` del
+/// sistema, que el SO traduce a su antojo — «Permission denied (os error
+/// 13)» no es un mensaje de norte (#73).
+fn clave_de_io(e: &std::io::Error) -> &'static str {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => "err-not-found",
+        std::io::ErrorKind::PermissionDenied => "err-permission-denied",
+        std::io::ErrorKind::StorageFull => "err-no-space",
+        _ => "err-io",
+    }
+}
+
 struct TaskViva {
     vista: TaskView,
     /// Cómo pedirle que pare. Cancelar dos veces no es un error.
@@ -1923,7 +1970,8 @@ struct Estado {
     /// El tema, tal como lo resolvió el arranque.
     tema: crate::pickers::HostTheme,
     /// Se está mirando el tema por dentro.
-    mirando_tema: bool,
+    /// El selector de tema, si está abierto.
+    tema_elegido: Option<SeleccionDeTema>,
     /// Sube cada vez que cambia el conjunto de filas de la barra lateral.
     gen_sitios: u64,
     /// Sube cada vez que cambia el conjunto de filas del selector. Sirve
@@ -2316,7 +2364,7 @@ impl Estado {
             enfocada: true,
             destino_pendiente: None,
             tema: theme,
-            mirando_tema: false,
+            tema_elegido: None,
             cursor_procesos: 0,
             sitios: None,
             gen_sitios: 0,
@@ -3080,8 +3128,8 @@ impl Estado {
         if self.selector.is_some() {
             return Some(self.tecla_en_selector(k, backend, buzon));
         }
-        if self.mirando_tema {
-            return Some(self.tecla_en_tema(k));
+        if self.tema_elegido.is_some() {
+            return Some(self.tecla_en_tema(k, buzon));
         }
         if self.extensiones.is_some() {
             return Some(self.tecla_en_extensiones(k, backend, buzon));
@@ -5698,9 +5746,28 @@ impl Estado {
         }
     }
 
-    /// Enseña el tema activo por dentro.
+    /// Abre el selector de tema, con el cursor en el vigente.
+    ///
+    /// Antes solo ENSEÑABA el tema activo por dentro, y no por falta de
+    /// ganas: lo que hospeda a esta ventana resuelve el tema una vez al
+    /// arrancar, así que no había forma de que un tema elegido se viera. Con
+    /// [`NativeEffect::ThemeChanged`] la hay, y este selector es el mismo que
+    /// el del terminal — presets, cursor en el que está puesto, y preview EN
+    /// VIVO al moverse.
     fn abrir_tema(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.mirando_tema = true;
+        let nombres: Vec<String> = norte_theme::preset_names()
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let cursor = nombres
+            .iter()
+            .position(|n| *n == self.tema.name)
+            .unwrap_or(0);
+        self.tema_elegido = Some(SeleccionDeTema {
+            nombres,
+            cursor,
+            previo: Box::new(self.tema.clone()),
+        });
         let cambio = ViewChange::Theme {
             theme: self.vista_tema(),
         };
@@ -5808,7 +5875,11 @@ impl Estado {
 
     /// La proyección del tema.
     fn vista_tema(&self) -> Option<crate::dto::ThemeView> {
-        self.mirando_tema.then(|| self.tema.vista())
+        let sel = self.tema_elegido.as_ref()?;
+        let mut vista = self.tema.vista();
+        vista.choices.clone_from(&sel.nombres);
+        vista.cursor = sel.cursor as u64;
+        Some(vista)
     }
 
     /// Abre el selector de volúmenes y PIDE la tabla de montaje.
@@ -6074,13 +6145,119 @@ impl Estado {
     fn tecla_en_tema(
         &mut self,
         k: &crate::keys::KeyInput,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if !matches!(k.key.as_str(), "Escape" | "esc") {
-            return (self.aplicada(), Vec::new());
+        let Some(sel) = self.tema_elegido.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        match k.key.as_str() {
+            // `Escape` VUELVE al que había. Un selector con preview en vivo
+            // que se cierra dejando puesto lo último que rozó el cursor no
+            // es un selector: es una forma de cambiar de tema sin querer.
+            "Escape" | "esc" => {
+                let previo = *sel.previo.clone();
+                self.tema_elegido = None;
+                // Se restaura el tema ENTERO, no se vuelve a resolver su
+                // nombre: el que había puede no ser un preset. El aviso sale
+                // igual, para que quien hospeda deshaga lo suyo.
+                let nombre = previo.name.clone();
+                self.tema = previo;
+                self.nativo(crate::dto::NativeEffect::ThemeChanged { name: nombre });
+                let cambio = ViewChange::Theme { theme: None };
+                return (self.aplicada(), vec![self.parche(vec![cambio])]);
+            }
+            "ArrowUp" | "up" => sel.cursor = sel.cursor.saturating_sub(1),
+            "ArrowDown" | "down" => {
+                sel.cursor = (sel.cursor + 1).min(sel.nombres.len().saturating_sub(1));
+            }
+            "Enter" | "enter" => {
+                let Some(elegido) = sel.nombres.get(sel.cursor).cloned() else {
+                    return (self.aplicada(), Vec::new());
+                };
+                self.tema_elegido = None;
+                self.aplicar_tema(&elegido);
+                // Y se GUARDA, que es lo que separa elegir un tema de mirarlo.
+                // Al perfil activo si lo hay: escribirlo en la capa del
+                // usuario mientras un perfil fija el suyo lo deja tapado
+                // (ADR 0079 D1).
+                self.persistir_tema(&elegido, buzon);
+                let cambio = ViewChange::Theme { theme: None };
+                return (self.aplicada(), vec![self.parche(vec![cambio])]);
+            }
+            _ => return (self.aplicada(), Vec::new()),
         }
-        self.mirando_tema = false;
-        let cambio = ViewChange::Theme { theme: None };
+        // Preview EN VIVO: moverse por la lista enseña el tema, no su nombre.
+        let bajo_el_cursor = sel.nombres.get(sel.cursor).cloned();
+        if let Some(nombre) = bajo_el_cursor {
+            self.aplicar_tema(&nombre);
+        }
+        let cambio = ViewChange::Theme {
+            theme: self.vista_tema(),
+        };
         (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Pone un tema por su nombre: el del host, y el de quien lo hospeda.
+    ///
+    /// Los dos, y por eso está aquí en vez de en dos sitios: el host guarda
+    /// los colores para su propia pantalla de tema, y quien hospeda tiene que
+    /// volver a resolver lo suyo —las variables CSS de la webview— porque las
+    /// resolvió una vez al arrancar. Un nombre que no existe deja el tema como
+    /// estaba en vez de dejar la pantalla sin colores.
+    fn aplicar_tema(&mut self, nombre: &str) {
+        let Ok(Some(tema)) = norte_theme::Theme::preset(nombre) else {
+            return;
+        };
+        self.tema = crate::pickers::HostTheme::de(nombre, &tema);
+        self.nativo(crate::dto::NativeEffect::ThemeChanged {
+            name: nombre.to_owned(),
+        });
+    }
+
+    /// Guarda el tema elegido en la capa que toca, FUERA del actor.
+    ///
+    /// El actor es el único escritor del estado y esto es I/O con un lock
+    /// entre procesos detrás (`persist_ui_theme_to` bloquea mientras otro
+    /// norte escribe): hacerlo aquí congelaría la ventana entera. Vuelve por
+    /// el buzón como todo lo demás.
+    fn persistir_tema(&mut self, nombre: &str, buzon: &mpsc::Sender<Mensaje>) {
+        let Some(dir) = self.dir_de_escritura() else {
+            self.status.message = Some(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "host-no-config-dir",
+            )));
+            return;
+        };
+        let nombre = nombre.to_owned();
+        let buzon = buzon.clone();
+        tokio::task::spawn_blocking(move || {
+            let clave = match norte_config::persist_ui_theme_to(&dir, &nombre) {
+                Ok(_) => None,
+                // El error NO viaja: puede llevar la ruta del fichero, y lo
+                // que la barra dice sale del catálogo (#73). La categoría
+                // basta para saber qué pasó.
+                Err(e) => Some(clave_de_io(&e)),
+            };
+            let _ = buzon.blocking_send(Mensaje::TemaPersistido(clave));
+        });
+    }
+
+    /// Dónde escribe esta ventana su configuración.
+    ///
+    /// La capa MÁS ALTA de las que se pueden editar: el perfil activo si lo
+    /// hay, y la del usuario si no. Nunca la del sistema (no es de quien está
+    /// delante) ni la del proyecto (es del directorio, no de la persona).
+    ///
+    /// Sale de las capas que quien arrancó el host resolvió, no de volver a
+    /// mirar el entorno: la ventana escribe donde de verdad leyó (ADR 0066
+    /// D14).
+    fn dir_de_escritura(&self) -> Option<std::path::PathBuf> {
+        use crate::settings::ConfigLayer;
+        self.paths
+            .config_layers
+            .iter()
+            .rfind(|(capa, _)| matches!(capa, ConfigLayer::Profile | ConfigLayer::User))
+            .map(|(_, p)| p.path.clone())
     }
 
     /// Las teclas mientras un selector está abierto.

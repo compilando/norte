@@ -14,6 +14,13 @@ pub const EVENT_UPDATE: &str = "norte://update";
 /// El evento que dice «te has quedado atrás, pide una foto».
 pub const EVENT_LAGGED: &str = "norte://lagged";
 
+/// El evento que dice «el catálogo cambió, vuelve a pedirlo».
+///
+/// Hoy solo lo mueve el TEMA. Va como aviso y no con el catálogo dentro
+/// porque el catálogo ya tiene su comando, y mandarlo por dos caminos sería
+/// dos formas de tener una versión distinta de la misma cosa.
+pub const EVENT_CATALOG: &str = "norte://catalog";
+
 /// A dónde van las actualizaciones.
 pub trait UpdateSink: Send + 'static {
     /// Manda una actualización. Un fallo PARA el bombeo: si la ventana ya no

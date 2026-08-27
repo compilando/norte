@@ -881,6 +881,16 @@ pub struct ThemeView {
     ///
     /// Cada clave con su bandera: salen del fichero de tema (#266).
     pub unsupported_effects: Vec<ThemeEffectView>,
+    /// Entre qué temas se puede elegir, en orden.
+    ///
+    /// Esta pantalla ELIGE desde que el catálogo puede volver a cruzar: antes
+    /// solo enseñaba, porque lo que hospeda resolvía el tema una vez al
+    /// arrancar y no había forma de decirle que había cambiado.
+    pub choices: Vec<String>,
+    /// Cuál está bajo el cursor. Mover el cursor previsualiza EN VIVO, igual
+    /// que en el terminal: un selector de tema que no enseña el tema obliga a
+    /// elegir a ciegas.
+    pub cursor: u64,
 }
 
 /// Un efecto que el tema declara y que este renderer no pinta.
@@ -2399,6 +2409,22 @@ pub enum NativeEffect {
     OpenTerminal {
         /// Dónde se sienta.
         dir: norte_proto::VPath,
+    },
+    /// El tema activo es ahora este: vuelve a resolver lo que salga de él.
+    ///
+    /// Va por ESTE canal y no por el de la vista porque el tema no cruza al
+    /// renderer como datos: cruza convertido en lo que ese renderer sepa
+    /// pintar —variables CSS en la webview, otra cosa en el siguiente— y esa
+    /// conversión es de quien hospeda, no del host. El host dice qué tema
+    /// hay; cómo se ve es de la casa.
+    ///
+    /// Existe porque lo que hospeda resuelve el tema UNA vez al arrancar. Sin
+    /// esto, la ventana no podía cambiar de tema en marcha: ni desde su propio
+    /// selector, ni al cambiar de perfil — que es la mitad de para lo que
+    /// existe un perfil.
+    ThemeChanged {
+        /// Cómo se llama el tema que hay que resolver.
+        name: String,
     },
 }
 

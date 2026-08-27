@@ -1626,6 +1626,10 @@ host-name-too-long = that name is too long
 host-name-not-editable = that name does not fit on screen: it cannot be edited here without truncating it
 host-cannot-transfer-root = a root cannot be copied or moved
 host-no-other-slot = there is no other panel
+# No configuration layer to write to: neither a profile nor the user's own
+# directory. Said out loud rather than swallowed — it is what separates
+# "chosen" from "saved".
+host-no-config-dir = there is nowhere to save the configuration
 notify-approval-title = norte: an agent is asking
 notify-approval-body = { $op } — { $who }
 notify-task-done = norte: finished

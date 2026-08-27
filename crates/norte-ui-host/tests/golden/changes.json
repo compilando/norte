@@ -832,6 +832,11 @@
   "theme": {
     "change": "theme",
     "theme": {
+      "choices": [
+        "default",
+        "tokyonight"
+      ],
+      "cursor": 1,
       "name": "tokyonight",
       "roles": [
         {

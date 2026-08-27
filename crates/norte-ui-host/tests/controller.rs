@@ -15032,6 +15032,63 @@ async fn los_huecos_auxiliares_se_abren_y_se_cierran() {
     }
 }
 
+/// La pantalla del tema ELIGE, y lo elegido se ve.
+///
+/// Antes solo enseñaba: quien hospeda esta ventana resuelve el tema una vez al
+/// arrancar, así que un tema elegido no tenía forma de llegar a la pantalla.
+/// Con `NativeEffect::ThemeChanged` la tiene, y este selector es el del
+/// terminal — presets, cursor en el que está puesto, y preview EN VIVO.
+#[tokio::test]
+async fn el_selector_de_tema_elige_y_avisa_a_quien_hospeda() {
+    use norte_ui_host::dto::NativeEffect;
+    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let mut nativos = h.native_effects();
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "app.theme").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let abierta = siguiente_foto(&mut sub).await;
+    let tema = abierta.theme.expect("la pantalla del tema está abierta");
+    assert!(
+        tema.choices.len() > 1,
+        "hay entre qué elegir: {:?}",
+        tema.choices
+    );
+
+    // Bajar previsualiza: el efecto sale ANTES de confirmar nada, que es lo
+    // que hace que el lector vea el tema en vez de leer su nombre.
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+        .await
+        .expect("sale el aviso de tema")
+        .expect("canal vivo");
+    let NativeEffect::ThemeChanged { name } = efecto else {
+        panic!("el aviso es el del tema: {efecto:?}");
+    };
+    assert_eq!(
+        name, tema.choices[1],
+        "el que quedó bajo el cursor, no otro"
+    );
+
+    // Y `Escape` VUELVE al que había: un selector con preview en vivo que se
+    // cierra dejando lo último que rozó el cursor es una forma de cambiar de
+    // tema sin querer.
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    let vuelta = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+        .await
+        .expect("sale el aviso de vuelta")
+        .expect("canal vivo");
+    let NativeEffect::ThemeChanged { name } = vuelta else {
+        panic!("el aviso es el del tema: {vuelta:?}");
+    };
+    assert_eq!(name, tema.name, "se vuelve al que estaba puesto");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    assert!(
+        siguiente_foto(&mut sub).await.theme.is_none(),
+        "y la pantalla se cierra"
+    );
+}
+
 /// La barra de menús: se despliega, se recorre y lo que se elige CORRE.
 ///
 /// Los menús y sus entradas son `norte_frontend::menu`, el mismo modelo que

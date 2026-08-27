@@ -25,6 +25,10 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **42**: la pantalla del tema ELIGE: lleva la lista de temas y el cursor,
+///   y moverse por ella previsualiza en vivo. Antes solo enseñaba el que
+///   había, porque quien hospeda resolvía el tema una vez al arrancar; ahora
+///   el host se lo dice por el canal nativo y el catálogo vuelve a cruzar.
 /// - **41**: la pantalla lleva la BARRA DE MENÚS —los títulos, el menú
 ///   desplegado y sus entradas con su atajo— y el renderer puede desplegar,
 ///   señalar, ejecutar y cerrar. Los menús son `norte_frontend::menu`, el
@@ -137,7 +141,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 41;
+pub const BRIDGE_VERSION: u32 = 42;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

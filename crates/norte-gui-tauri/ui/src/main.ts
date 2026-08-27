@@ -183,6 +183,19 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     }
   });
   await port.onLagged(resync);
+  // El catálogo cambió: hoy solo lo mueve el TEMA, y lo que hay que rehacer
+  // son sus variables CSS. Los textos no se re-aplican porque no se mueven —
+  // el idioma se fija una vez por proceso— y `Screen` se quedó con los suyos.
+  await port.onCatalog(() => {
+    void port
+      .catalog()
+      .then((cat) => {
+        applyTheme(doc, cat.theme);
+      })
+      .catch((e: unknown) => {
+        console.error("no se pudo releer el catálogo:", e);
+      });
+  });
 
   // El snapshot inicial viene en el MISMO sobre que el resto: una sola forma
   // en el cable es una sola forma que mantener.

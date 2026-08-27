@@ -28,6 +28,13 @@ norte-config.workspace = true
 norte-help.workspace = true
 norte-i18n.workspace = true
 norte-proto.workspace = true
+# El TEMA. El host ya modelaba uno (`pickers::HostTheme`) con los colores que
+# le pasaban al arrancar; desde que su selector ELIGE, tiene que resolver por
+# nombre el que el lector señala, y eso es este crate. Es una hoja de datos
+# —colores y roles, sin toolkit y sin core— que ya estaba en el grafo por el
+# TUI y por la ventana: no entra nada nuevo a compilar, y la frontera que el
+# ADR 0066 dibuja (ni core ni toolkit) queda donde estaba.
+norte-theme.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

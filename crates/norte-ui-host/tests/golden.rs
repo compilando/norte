@@ -920,6 +920,8 @@ fn tema_de_referencia() -> norte_ui_host::dto::ThemeView {
             key: "crt".to_owned(),
             hostile: false,
         }],
+        choices: vec!["default".to_owned(), "tokyonight".to_owned()],
+        cursor: 1,
     }
 }
 

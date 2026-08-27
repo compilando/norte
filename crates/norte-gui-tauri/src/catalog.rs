@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use norte_i18n::Lang;
-use norte_theme::{Role, Theme};
+use norte_theme::Theme;
 use norte_ui_host::{BRIDGE_VERSION, InstanceId};
 use serde::{Deserialize, Serialize};
 
@@ -71,40 +71,16 @@ pub fn catalogo(instance: &InstanceId, lang: Lang, theme: &Theme) -> HostCatalog
 
 /// Los roles del tema, como variables CSS.
 ///
-/// La correspondencia es EXPLÍCITA y no automática: una variable de la hoja de
-/// estilos que nadie alimenta se ve (queda el valor por defecto), pero un
-/// volcado automático de `Role` a CSS convertiría cada rol nuevo en una
-/// variable que nadie usa y cada rename en un color que desaparece sin ruido.
+/// La correspondencia vive en el HOST (`pickers::roles_de_tema`) desde que su
+/// selector de tema elige: entonces el host tiene que resolver por nombre un
+/// tema que nadie le pasó, y dos listas —una para pintar y otra para
+/// enseñar— acabarían diciendo cosas distintas del mismo tema. Aquí solo se
+/// le da la forma que la webview espera.
 #[must_use]
 pub fn variables(theme: &Theme) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    let mut poner = |nombre: &str, role: Role, fondo: bool| {
-        let style = theme.style(role);
-        let color = if fondo { style.bg } else { style.fg };
-        if let Some(c) = color {
-            out.insert(nombre.to_owned(), c.to_hex());
-        }
-    };
-    poner("bg", Role::Background, true);
-    poner("fg", Role::Regular, false);
-    poner("panel-bg", Role::PaneBackground, true);
-    poner("panel-focus-bg", Role::PaneFocusBackground, true);
-    poner("border", Role::BorderUnfocused, false);
-    poner("border-focus", Role::BorderFocus, false);
-    poner("selection-bg", Role::Selection, true);
-    poner("selection-fg", Role::Selection, false);
-    poner("mark-bg", Role::Mark, true);
-    poner("hostile-fg", Role::HostileBadge, false);
-    poner("status-bg", Role::StatusBar, true);
-    poner("title-fg", Role::Title, false);
-    poner("error-fg", Role::Error, false);
-    // Los dos roles que una DECORACIÓN de plugin puede pedir además de
-    // `error`. Sin ellos, una insignia `warning` caía al color del título y
-    // era indistinguible de una `info`: el rol es vocabulario cerrado
-    // justamente para que signifique algo en pantalla.
-    poner("warning-fg", Role::Warning, false);
-    poner("info-fg", Role::Info, false);
-    out
+    norte_ui_host::pickers::roles_de_tema(theme)
+        .into_iter()
+        .collect()
 }
 
 #[cfg(test)]

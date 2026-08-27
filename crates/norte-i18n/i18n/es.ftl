@@ -1654,6 +1654,10 @@ host-name-too-long = ese nombre es demasiado largo
 host-name-not-editable = ese nombre no cabe en pantalla: aquí no se puede editar sin recortarlo
 host-cannot-transfer-root = una raíz no se copia ni se mueve
 host-no-other-slot = no hay otro panel
+# No hay capa de configuración donde escribir: ni perfil ni directorio del
+# usuario. Se dice en vez de tragarse el guardado, que es lo que separa
+# «elegido» de «guardado».
+host-no-config-dir = no hay dónde guardar la configuración
 notify-approval-title = norte: un agente pide permiso
 notify-approval-body = { $op } — { $who }
 notify-task-done = norte: terminado

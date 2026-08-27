@@ -1359,6 +1359,29 @@ export class Screen {
     titulo.textContent = `${this.t("theme-title")} · ${theme.name}`;
     caja.append(titulo);
 
+    // La lista de temas, con el cursor. Moverse por ella previsualiza EN
+    // VIVO: los colores de la ventana entera ya han cambiado cuando esto se
+    // pinta, así que lo que hay debajo es el tema señalado.
+    if (theme.choices.length > 0) {
+      const elegir = document.createElement("ul");
+      elegir.className = "theme-choices";
+      elegir.setAttribute("role", "listbox");
+      for (const [i, nombre] of theme.choices.entries()) {
+        const fila = document.createElement("li");
+        fila.className = "theme-choice";
+        fila.id = `theme-choice-${String(i)}`;
+        fila.setAttribute("role", "option");
+        fila.setAttribute("aria-selected", String(theme.cursor === i));
+        fila.textContent = nombre;
+        elegir.append(fila);
+      }
+      elegir.setAttribute(
+        "aria-activedescendant",
+        `theme-choice-${String(theme.cursor)}`,
+      );
+      caja.append(elegir);
+    }
+
     if (theme.unsupported_effects.length > 0) {
       // Se NOMBRAN. Un tema retro que se ve idéntico a los demás se lee como
       // roto, y el usuario va a buscar el bug donde no está.

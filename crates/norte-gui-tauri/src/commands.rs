@@ -20,13 +20,25 @@ pub struct Bridge {
     host: Arc<UiHost>,
     /// La foto de arranque, en su sobre (secuencia 0).
     inicial: BridgeEnvelope<UiUpdate>,
-    catalog: Arc<HostCatalog>,
+    /// Textos y colores. REEMPLAZABLE: los colores salen del tema, y el tema
+    /// se puede cambiar con la ventana abierta (desde su selector, y desde un
+    /// perfil). Los textos no se mueven —el idioma se fija una vez por
+    /// proceso— pero el catálogo viaja entero porque es lo que el renderer
+    /// pide entero.
+    catalog: std::sync::RwLock<Arc<HostCatalog>>,
+    /// El idioma con el que se construyó, para poder reconstruirlo igual.
+    lang: norte_i18n::Lang,
 }
 
 impl Bridge {
     /// Monta el puente sobre un host ya arrancado.
     #[must_use]
-    pub fn new(host: UiHost, snapshot: norte_ui_host::ViewSnapshot, catalog: HostCatalog) -> Self {
+    pub fn new(
+        host: UiHost,
+        snapshot: norte_ui_host::ViewSnapshot,
+        catalog: HostCatalog,
+        lang: norte_i18n::Lang,
+    ) -> Self {
         let inicial = BridgeEnvelope::new(
             host.instance().clone(),
             0,
@@ -35,8 +47,29 @@ impl Bridge {
         Self {
             host: Arc::new(host),
             inicial,
-            catalog: Arc::new(catalog),
+            catalog: std::sync::RwLock::new(Arc::new(catalog)),
+            lang,
         }
+    }
+
+    /// Rehace el catálogo con el tema que ahora hay puesto.
+    ///
+    /// Un nombre que no resuelve NO deja la ventana sin colores: se queda el
+    /// catálogo que había. Devuelve si cambió algo, para que quien avisa al
+    /// renderer no le mande a repintar por nada.
+    pub fn cambiar_tema(&self, nombre: &str) -> bool {
+        let Ok(Some(tema)) = norte_theme::Theme::preset(nombre) else {
+            return false;
+        };
+        let nuevo = crate::catalog::catalogo(self.host.instance(), self.lang, &tema);
+        // Un lock envenenado significa que otro hilo panicó CON el catálogo en
+        // la mano. Se sigue: lo que hay dentro es un `Arc` entero y válido, y
+        // dejar la ventana sin poder cambiar de tema por eso sería peor.
+        match self.catalog.write() {
+            Ok(mut guard) => *guard = Arc::new(nuevo),
+            Err(env) => *env.into_inner() = Arc::new(nuevo),
+        }
+        true
     }
 
     /// El host que hay debajo (para el bombeo y el apagado).
@@ -79,7 +112,12 @@ impl Bridge {
     /// Textos y colores, ya resueltos en Rust.
     #[must_use]
     pub fn catalog(&self) -> Arc<HostCatalog> {
-        Arc::clone(&self.catalog)
+        match self.catalog.read() {
+            Ok(guard) => Arc::clone(&guard),
+            // Ver `cambiar_tema`: lo de dentro sigue siendo un catálogo
+            // entero, y quedarse sin textos es peor que seguir.
+            Err(env) => Arc::clone(&env.into_inner()),
+        }
     }
 
     /// Los bytes de la imagen que el visor tiene abierta, si los hay.
@@ -235,7 +273,7 @@ mod tests {
             norte_i18n::Lang::Es,
             &norte_theme::Theme::preset_default(),
         );
-        let b = Bridge::new(host, snap, cat);
+        let b = Bridge::new(host, snap, cat, norte_i18n::Lang::Es);
         let env = b.initial_snapshot();
         assert_eq!(env.sequence, 0);
         assert!(env.is_supported(), "el sobre es de la versión que hablamos");
@@ -251,7 +289,7 @@ mod tests {
             norte_i18n::Lang::Es,
             &norte_theme::Theme::preset_default(),
         );
-        let b = Bridge::new(host, snap, cat);
+        let b = Bridge::new(host, snap, cat, norte_i18n::Lang::Es);
         let ack = b
             .dispatch(UiAction::MoveCursor {
                 slot_id: 1,

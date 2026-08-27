@@ -3,7 +3,7 @@
 use std::process::ExitCode;
 
 use norte_gui_tauri::commands::{AppState, Bridge};
-use norte_gui_tauri::sink::{EVENT_LAGGED, EVENT_UPDATE, SinkError, UpdateSink};
+use norte_gui_tauri::sink::{EVENT_CATALOG, EVENT_LAGGED, EVENT_UPDATE, SinkError, UpdateSink};
 use norte_gui_tauri::startup::{self, USAGE};
 use norte_ui_host::{BridgeEnvelope, UiAction, dto::UiUpdate};
 use tauri::{Emitter, Manager};
@@ -164,7 +164,12 @@ fn main() -> ExitCode {
         Ok(boot) => {
             let cat =
                 norte_gui_tauri::catalog::catalogo(boot.host.instance(), boot.lang, &boot.theme);
-            AppState::Ready(Box::new(Bridge::new(boot.host, boot.snapshot, cat)))
+            AppState::Ready(Box::new(Bridge::new(
+                boot.host,
+                boot.snapshot,
+                cat,
+                boot.lang,
+            )))
         }
         // Sin daemon no hay pantalla, pero SÍ hay ventana: un binario que
         // muere en el terminal no le dice nada a quien lo abrió desde un
@@ -193,12 +198,25 @@ fn main() -> ExitCode {
                 // nada— sino por este proceso, con una puerta estrecha por
                 // cosa (ADR 0066 D11).
                 let nativos = bridge.host().native_effects();
+                // El TEMA vuelve a resolverse en ESTE proceso: los colores
+                // cruzan convertidos en variables CSS, y esa conversión no es
+                // del host. Se rehace el catálogo y se le dice al renderer que
+                // vuelva a pedirlo; si el nombre no resuelve, no se le dice
+                // nada — repintar por nada es peor que no repintar.
+                let mando = app.handle().clone();
+                let aplicar_tema = move |nombre: &str| {
+                    let estado: tauri::State<'_, AppState> = mando.state();
+                    if estado.bridge().is_ok_and(|b| b.cambiar_tema(nombre)) {
+                        let _ = mando.emit(EVENT_CATALOG, ());
+                    }
+                };
                 // El host va también, y no solo el canal: el selector de
                 // carpeta le CONTESTA (#284), y esa respuesta entra por
                 // `dispatch` como cualquier otra acción.
                 tauri::async_runtime::spawn(norte_gui_tauri::nativo::bombear(
                     nativos,
                     bridge.host_compartido(),
+                    aplicar_tema,
                 ));
             }
             Ok(())

@@ -1829,6 +1829,8 @@ describe("el tema y el selector", () => {
         { key: "crt", hostile: false },
         { key: "scanlines", hostile: false },
       ],
+      choices: ["default", "retro"],
+      cursor: 1,
     };
     screen.paint(v);
     const filas = [...document.querySelectorAll(".theme-role")];
@@ -1851,9 +1853,29 @@ describe("el tema y el selector", () => {
       name: "default",
       roles: [{ role: "fg", color: "#d4d8de" }],
       unsupported_effects: [],
+      choices: ["default"],
+      cursor: 0,
     };
     screen.paint(v);
     expect(document.querySelector(".theme-effects")).toBeNull();
+  });
+
+  it("la lista de temas marca el que está bajo el cursor", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.theme = {
+      name: "retro",
+      roles: [{ role: "fg", color: "#d4d8de" }],
+      unsupported_effects: [],
+      choices: ["default", "retro", "nord"],
+      cursor: 1,
+    };
+    screen.paint(v);
+    const lista = document.querySelector(".theme-choices") as HTMLElement;
+    expect(lista.getAttribute("aria-activedescendant")).toBe("theme-choice-1");
+    const marcada = document.querySelectorAll('.theme-choice[aria-selected="true"]');
+    expect(marcada).toHaveLength(1);
+    expect(marcada[0]?.textContent).toBe("retro");
   });
 
   it("el selector marca un montaje hostil y dice por qué está vacío", () => {

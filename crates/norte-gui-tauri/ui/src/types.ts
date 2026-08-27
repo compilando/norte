@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 41;
+export const BRIDGE_VERSION = 42;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -638,6 +638,10 @@ export interface ThemeView {
   name: string;
   roles: ThemeRoleView[];
   unsupported_effects: ThemeEffectView[];
+  /** Entre qué temas se puede elegir. */
+  choices: string[];
+  /** Cuál está señalado. Moverse previsualiza en vivo. */
+  cursor: number;
 }
 
 /** Un efecto declarado que este renderer no pinta. La clave sale del fichero
