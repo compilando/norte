@@ -9,6 +9,22 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window has a menu bar** (bridge 41). It was the most visible gap next
+  to the terminal: `app.menu` resolved to "not here", and the parity list said
+  so in writing — so the window's commands were reachable only by knowing a
+  name in the palette or a chord by heart. The menus and their entries are
+  `norte_frontend::menu`, the same model the TUI paints, so what is in each
+  menu and in what order is not decided twice; the window adds the projection
+  (titles and short labels already translated, each entry's real chord in the
+  active preset, and whether this window can run it). An entry the window
+  cannot run still appears, dimmed: the menu is where you see what exists, and
+  hiding what this frontend does not do turns a limitation into a mystery.
+  Keyboard and mouse both: arrows walk it, Enter runs, Esc closes, clicking
+  opens/points/runs and clicking outside closes. The bar reserves its row
+  rather than floating over it — the host lays out against the height the
+  renderer declares, so a floating bar would hide the listing's first row — and
+  with `[ui] menu_bar` off it reserves nothing while the key still opens the
+  menu.
 - **Configuration profiles: the mechanism** (ADR 0079). A fourth configuration
   layer the reader picks by name — `profiles/<name>/`, with the shape of any
   other layer — sitting between the user's own configuration and a trusted
@@ -357,6 +373,21 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The window's keyboard ring stopped where no key gets out.** It walks the
+  shared focus order, and that order carries everything FOCUSABLE — which is
+  not the same as everything that TAKES KEYS. The details panel is the first
+  and not the second (it follows the listing's cursor, and with the keyboard
+  inside it would follow nothing, which is half of #243), so tabbing stopped
+  there, the arrows stopped moving the listing, and nothing on screen said
+  why. The ring now skips what takes no keys, with the same predicate from the
+  shared registry that the TUI uses.
+- **The window's task board was a history.** A finished task stayed until
+  another one pushed it out by the row cap, so what it showed at a glance was
+  the session's past. Ten seconds now, the same as the TUI: two frontends that
+  expire differently are two answers to "is this still running?". The clock is
+  armed on the transition to terminal rather than on every progress, because
+  the daemon replays the last one on reconnect and re-arming would pin the row
+  there for good.
 - **The places sidebar was only ever filled by its own key.** One arm of the
   dispatcher copied the favourites into it, so everything else that touches
   that list — starting up with a layout that already brings the panel (`full`,
