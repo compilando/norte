@@ -186,30 +186,36 @@ impl App {
     /// Los sitios del anillo del teclado, en el orden en que están en
     /// pantalla.
     ///
-    /// Un LISTADO por cada `browser` visible y un panel lateral por cada uno
-    /// que sepa quedarse el teclado. Los metadatos NO entran: no tienen
-    /// [`KeyOwner`], así que pararse ahí sería un sitio del que ninguna tecla
-    /// saca — el anillo solo puede visitar lo que también puede soltar.
+    /// Quién entra lo dice el REGISTRO de kinds, no una lista escrita aquí:
+    /// `takes_keys` es exactamente la pregunta —¿este panel consume teclas
+    /// propias?— y ya está contestada en un sitio que los dos frontends
+    /// comparten. Por eso los metadatos quedan fuera: se ENFOCAN (el reparto
+    /// los cuenta) pero no toman teclas, así que pararse ahí sería un sitio
+    /// del que ninguna tecla saca.
     ///
     /// El orden es el del ÁRBOL, que es el de la pantalla: ciclar tiene que
     /// seguir la vista, no el orden en que se abrieron los paneles.
+    ///
+    /// Un kind que toma teclas y que esta pantalla no sabe enfocar —`compare`,
+    /// `sync`, que en el TUI son overlays y no huecos— se salta: no tiene
+    /// [`KeyOwner`] al que pasarle nada.
     #[must_use]
     fn focus_ring(&self) -> Vec<FocusStop> {
+        let kinds = norte_frontend::layout::KindRegistry::builtin();
         self.layout
             .visible_slot_ids()
             .into_iter()
             .filter_map(|id| {
-                match self
-                    .layout
-                    .kind_of(id)
-                    .map(|k| k.as_str().to_owned())?
-                    .as_str()
-                {
+                let kind = self.layout.kind_of(id)?;
+                if !kinds.get(kind).is_some_and(|d| d.takes_keys) {
+                    return None;
+                }
+                match kind.as_str() {
                     "browser" => (0..self.panes.len())
                         .find(|i| self.panes.slot_of(*i) == id)
                         .map(FocusStop::Pane),
                     "places" => Some(FocusStop::Side(KeyOwner::Places)),
-                    "viewer" => Some(FocusStop::Side(KeyOwner::Preview)),
+                    crate::preview::KIND => Some(FocusStop::Side(KeyOwner::Preview)),
                     crate::processes::KIND => Some(FocusStop::Side(KeyOwner::Processes)),
                     crate::tree::KIND => Some(FocusStop::Side(KeyOwner::Tree)),
                     _ => None,
