@@ -155,11 +155,134 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
     })
 }
 
+/// [`load`] con un perfil de por medio, con la regla de tres respuestas de D7
+/// aplicada a la CAPA ENTERA y no solo a su `norte.toml`.
+///
+/// **Ésta es la que llama un frontend**, y la de `norte-config` la que llama
+/// el core. La diferencia no es de comodidad: aquella decide sobre
+/// `norte.toml`, y un perfil trae además `keymap.toml` y `openers.toml`, que
+/// son fatales para cualquier capa que no sea de proyecto. Pasando por la de
+/// abajo, un perfil con una errata en un atajo se declaraba sano y reventaba
+/// después — con `ProfileSource::Sticky` eso es exactamente el desenlace que
+/// D7 existe para impedir, porque el lector se queda fuera del programa y sin
+/// manera de elegir otro perfil (#305).
+///
+/// La regla no se duplica: [`norte_config::load_with`] la tiene, y esto le
+/// pasa el cargador de este crate.
+///
+/// # Errors
+///
+/// [`norte_config::ProfileError`] según la procedencia del nombre, igual que
+/// [`norte_config::load_with_profile`].
+pub fn load_with_profile(
+    layers_for: &impl Fn(Option<&std::ffi::OsStr>) -> Layers,
+    name: Option<&std::ffi::OsStr>,
+    source: norte_config::ProfileSource,
+) -> Result<norte_config::Loaded<FrontendConfig>, norte_config::ProfileError> {
+    norte_config::load_with(layers_for, name, source, &load)
+}
+
 #[cfg(test)]
 mod tests {
     use norte_config::{Layer, Layers};
 
     use super::*;
+
+    /// Un árbol con capa de usuario y un perfil `work` cuyo contenido se da.
+    fn arbol_con_perfil(
+        ficheros: &[(&str, &str)],
+    ) -> (
+        impl Fn(Option<&std::ffi::OsStr>) -> Layers + use<>,
+        tempfile::TempDir,
+    ) {
+        let usuario = tempfile::tempdir().expect("tempdir");
+        let dir = usuario.path().join("profiles").join("work");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        for (nombre, contenido) in ficheros {
+            std::fs::write(dir.join(nombre), contenido).expect("write");
+        }
+        let raiz = usuario.path().to_path_buf();
+        let f = move |n: Option<&std::ffi::OsStr>| Layers {
+            dirs: match n {
+                None => vec![(raiz.clone(), Layer::User)],
+                Some(n) => vec![
+                    (raiz.clone(), Layer::User),
+                    (raiz.join("profiles").join(n), Layer::Profile),
+                ],
+            },
+        };
+        (f, usuario)
+    }
+
+    /// D7 es una regla sobre la CAPA, no sobre `norte.toml`.
+    ///
+    /// Un `keymap.toml` roto en el perfil PEGAJOSO tiene que degradar igual:
+    /// `load_keymap_layer` es fatal para toda capa que no sea de proyecto, así
+    /// que pasando solo por el cargador de `norte.toml` un perfil con una
+    /// errata en un atajo se declaraba sano y reventaba después — dejando al
+    /// lector fuera del programa y sin manera de elegir otro, que es justo lo
+    /// que D7 existe para impedir (#305).
+    #[test]
+    fn un_keymap_roto_en_el_perfil_pegajoso_degrada() {
+        // `keymap` (la lista ENTERA) es clave solo de preset: en una capa es
+        // un error que nombra el fichero culpable.
+        let (layers_for, _g) = arbol_con_perfil(&[
+            ("norte.toml", "[ui]\ntheme = \"nord\"\n"),
+            (
+                "keymap.toml",
+                "[pane]\nkeymap = [{ on = [\"f5\"], run = \"pane.copy\" }]\n",
+            ),
+        ]);
+        let work = std::ffi::OsStr::new("work");
+
+        let r = load_with_profile(&layers_for, Some(work), norte_config::ProfileSource::Sticky)
+            .expect("arranca igual");
+        assert_eq!(r.active, None, "sin capa de perfil");
+        assert!(r.degraded.is_some(), "y no en silencio");
+
+        assert!(
+            load_with_profile(
+                &layers_for,
+                Some(work),
+                norte_config::ProfileSource::Explicit
+            )
+            .is_err(),
+            "con --profile es fatal: el lector nombró ese perfil"
+        );
+    }
+
+    /// Lo mismo con `openers.toml`, que es la otra mitad de la capa y también
+    /// es fatal fuera de proyecto.
+    #[test]
+    fn un_openers_roto_en_el_perfil_pegajoso_degrada() {
+        let (layers_for, _g) = arbol_con_perfil(&[("openers.toml", "[[opener]]\nmime = 3\n")]);
+        let r = load_with_profile(
+            &layers_for,
+            Some(std::ffi::OsStr::new("work")),
+            norte_config::ProfileSource::Sticky,
+        )
+        .expect("arranca igual");
+        assert_eq!(r.active, None);
+        assert!(r.degraded.is_some());
+    }
+
+    /// El camino feliz trae el keymap DEL PERFIL, y su kind viaja para que
+    /// `split_at` pueda cortar por él (D10).
+    #[test]
+    fn un_perfil_sano_aporta_su_capa_de_keymap() {
+        let (layers_for, _g) = arbol_con_perfil(&[(
+            "keymap.toml",
+            "[pane]\nprepend_keymap = [{ on = [\"f5\"], run = \"pane.move\" }]\n",
+        )]);
+        let r = load_with_profile(
+            &layers_for,
+            Some(std::ffi::OsStr::new("work")),
+            norte_config::ProfileSource::Explicit,
+        )
+        .expect("carga");
+        assert_eq!(r.active.as_deref(), Some(std::ffi::OsStr::new("work")));
+        assert_eq!(r.config.keymap_layer_kinds, vec![Layer::Profile]);
+    }
 
     /// #28 seguridad: un `openers.toml` en la capa de PROYECTO (`./.norte`) se
     /// IGNORA fail-closed — un repo hostil no puede inyectar un binario que se
