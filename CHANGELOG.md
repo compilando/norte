@@ -26,6 +26,19 @@ independently through `PROTOCOL_VERSION`.
   keyed by profile finally has more than one key. **There is no user interface
   for any of this yet** — the layer and the state land first so the surfaces
   are built on something already tested.
+- **Profiles in the terminal** (ADR 0079). `profile.pick` opens a picker that
+  marks the one you are in, shows each profile's title beside its directory
+  name, and says out loud what would otherwise bite later: which one will not
+  load and why, which name cannot remember your panels, and which name also
+  belongs to a layout or a keymap preset — picking the profile `far` binds not
+  one key of the preset `far`. `profile.next`/`profile.prev` cycle without
+  opening anything. All of them ship unbound: choosing which key means "profile"
+  on top of keys that mean something else in the manager you came from is not a
+  decision norte makes for you. `--profile <name>` starts in one for a single
+  run and, being known before anything connects, applies even the language;
+  otherwise norte returns to the profile you were last in and switches to it
+  live, announcing the one thing a live switch cannot do. A switch that fails
+  leaves you exactly where you were.
 
 - **A copy can say which directory the human was looking at** (#295, protocol
   **0.54.0**, ADR 0073). `fs.list` now returns a `dir_anchor` — the opaque
