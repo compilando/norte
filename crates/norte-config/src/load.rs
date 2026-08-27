@@ -1360,6 +1360,13 @@ pub struct CommonConfig {
     /// `[ui]` scalars above: capturing (or not capturing) the pointer
     /// cannot launch, write, or redirect anything.
     pub ui_mouse: Option<bool>,
+    /// `[ui] menu_bar` (last-wins; None = FIJADA). Presentación-solo, todas
+    /// las capas: una barra de menú no lanza, escribe ni redirige nada.
+    ///
+    /// Encendida por defecto porque el menú era la única puerta a varios
+    /// comandos y no había nada en pantalla diciendo que existía: quien no se
+    /// sabe `Alt+M` no puede encontrar lo que no ve.
+    pub ui_menu_bar: Option<bool>,
     /// `[daemon] mode` (last-wins; None = embedded; never from Project —
     /// fail-closed, review MAJOR-1). Startup only.
     pub daemon_mode: Option<crate::schema::DaemonMode>,
@@ -1590,11 +1597,13 @@ fn merge_ui_fonts(
 fn merge_ui_flags(
     ui_show_hidden: &mut Option<bool>,
     ui_mouse: &mut Option<bool>,
+    ui_menu_bar: &mut Option<bool>,
     ui_layout: &mut Option<String>,
     ui: &crate::schema::UiSection,
 ) {
     *ui_show_hidden = ui.show_hidden.or(*ui_show_hidden);
     *ui_mouse = ui.mouse.or(*ui_mouse);
+    *ui_menu_bar = ui.menu_bar.or(*ui_menu_bar);
     *ui_layout = ui.layout.clone().or(ui_layout.take());
 }
 
@@ -2011,7 +2020,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_font_size: Option<f32> = None;
     let mut ui_reduce_motion: Option<bool> = None;
     let mut ui_confirm_quit = ConfirmQuit::default();
-    let (mut ui_show_hidden, mut ui_mouse) = (None, None);
+    let (mut ui_show_hidden, mut ui_mouse, mut ui_menu_bar) = (None, None, None);
     let mut ui_layout: Option<String> = None;
     let mut ui_columns = ColumnsConfig::default();
     let mut daemon_mode: Option<DaemonMode> = None;
@@ -2057,6 +2066,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             merge_ui_flags(
                 &mut ui_show_hidden,
                 &mut ui_mouse,
+                &mut ui_menu_bar,
                 &mut ui_layout,
                 &parsed.ui,
             );
@@ -2161,6 +2171,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_show_hidden,
         ui_layout,
         ui_mouse,
+        ui_menu_bar,
         ui_columns,
         daemon_mode,
         daemon_socket,

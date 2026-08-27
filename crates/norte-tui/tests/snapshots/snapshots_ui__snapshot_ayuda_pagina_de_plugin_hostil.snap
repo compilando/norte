@@ -1,10 +1,10 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-expression: texto
+expression: text
 ---
-"┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│N┌ Ayuda ───────────────────────────────────────────────────────────────────┐a│"
-"│ │  Dentro de un archivo comp…║ Aprobar extensiones                         │ │"
+" Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
+"┌⟨┌ Ayuda ───────────────────────────────────────────────────────────────────┐─┐"
+"│N│  Dentro de un archivo comp…║ Aprobar extensiones                         │a│"
 "│ │                            ║ ─────────────────────────────────────────── │ │"
 "│ │Agentes y política          ║ de una extensión                            │ │"
 "│ │  Cuando pregunta un agente ║                                             │ │"

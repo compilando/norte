@@ -2,6 +2,7 @@
 source: crates/norte-tui/tests/places.rs
 expression: terminal.backend().to_string()
 ---
+" Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                                             "
 "┌ Sitios ──────┐┌⟨file⟩/casa─────────────────────────────┐┌⟨file⟩/casa─────────────────────────────┐"
 "│▾ Unidades    ││Nombre▲                 Tamaño     Fecha││Nombre▲                 Tamaño     Fecha│"
 "│ /       38G  ││   f00                     1 B          ││   f00                     1 B          │"
@@ -9,7 +10,6 @@ expression: terminal.backend().to_string()
 "│▾ Favoritos   ││   f02                     1 B          ││   f02                     1 B          │"
 "│ trabajo      ││                                        ││                                        │"
 "│ roto      !  ││                                        ││                                        │"
-"│              ││                                        ││                                        │"
 "│              ││                                        ││                                        │"
 "│              ││                                        ││                                        │"
 "│              ││                                        ││                                        │"

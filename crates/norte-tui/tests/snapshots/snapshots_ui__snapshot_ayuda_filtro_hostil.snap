@@ -1,10 +1,10 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-expression: texto
+expression: text
 ---
-"┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│N┌ Ayuda ───────────────────────────────────────────────────────────────────┐a│"
-"│ │                              Esto es norte                              █│ │"
+" Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
+"┌⟨┌ Ayuda ───────────────────────────────────────────────────────────────────┐─┐"
+"│N│                              Esto es norte                              █│a│"
 "│ │                              ───────────────────────────────────────────║│ │"
 "│ │                                                                         ║│ │"
 "│ │                              norte es un gestor de ficheros ortodoxo.   ║│ │"

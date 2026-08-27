@@ -1,15 +1,15 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-expression: texto
+expression: text
 ---
+" Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
 "│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
 "│  /docs                               ││   cosa                  1 B          │"
 "│  /src                                ││                                      │"
-"│  @enlace                             ││                                      │"
-"│   nota┌ Disposición ────────────────────────────────────────────────┐        │"
-"│ ! �.da│ orthodox · de fábrica·······································│        │"
-"│       │ simple · de fábrica  ·bbbbbbbbbbbbbbbbb··bbbbbbbbbbbbbbbbbb·│        │"
+"│  @enla┌ Disposición ────────────────────────────────────────────────┐        │"
+"│   nota│ orthodox · de fábrica·······································│        │"
+"│ ! �.da│ simple · de fábrica  ·bbbbbbbbbbbbbbbbb··bbbbbbbbbbbbbbbbbb·│        │"
 "│       │ krusader · de fábrica·bbbbbbbbbbbbbbbbb··bbbbbbbbbbbbbbbbbb·│        │"
 "│       │ explorer · de fábrica·bbbbbbbbbbbbbbbbb··bbbbbbbbbbbbbbbbbb·│        │"
 "│       │ full · de fábrica    ·bbbbbbbbbbbbbbbbb··bbbbbbbbbbbbbbbbbb·│        │"

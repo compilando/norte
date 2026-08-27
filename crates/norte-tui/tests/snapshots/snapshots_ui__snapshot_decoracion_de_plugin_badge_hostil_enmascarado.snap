@@ -2,6 +2,7 @@
 source: crates/norte-tui/tests/snapshots_ui.rs
 expression: render(&app)
 ---
+" Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
 "│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
 "│  /docs M                             ││   cosa                  1 B          │"
@@ -9,7 +10,6 @@ expression: render(&app)
 "│  @enlace                             ││                                      │"
 "│   notas.txt           420 B          ││                                      │"
 "│ ! �.dat                 7 B          ││                                      │"
-"│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"

@@ -20,10 +20,15 @@ use norte_i18n::{t, ta};
 /// Viewer a pantalla completa: contenido + status propia (encoding, EOL,
 /// pérdidas, truncado — el usuario SIEMPRE sabe qué mira, spec §6).
 pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer, app: &App) {
+    // Sobre el área del CUERPO, no la del frame: el visor se pinta a pantalla
+    // completa y no pasa por el reparto de huecos, así que con la barra de
+    // menú fijada se metía debajo de ella y la barra le tapaba la primera
+    // fila. La misma resta que hace el reparto, en el único otro sitio que
+    // pinta a pantalla completa.
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(frame.area());
+        .split(super::geometry::body_area(app, frame.area()));
     let (title, hostile) =
         norte_frontend::path_display_with(&viewer.path, app.focused().name_encoding());
     let title = if hostile {

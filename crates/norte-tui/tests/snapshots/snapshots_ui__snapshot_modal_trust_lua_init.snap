@@ -2,10 +2,10 @@
 source: crates/norte-tui/tests/snapshots_ui.rs
 expression: render(&app)
 ---
+" Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
 "│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
 "│  /docs                               ││   cosa                  1 B          │"
-"│  /src                                ││                                      │"
 "│ ┌¿Ejecutar el init.lua del proyecto?───────────────────────────────────────┐ │"
 "│ │repo/.norte/init.lua (sha256 ab12cd34ef56ab78ab12cd34ef56ab78) se         │ │"
 "│ │ejecutará CON TUS PERMISOS. El script de un repo clonado puede hacer todo │ │"

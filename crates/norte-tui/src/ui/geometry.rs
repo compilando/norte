@@ -116,7 +116,36 @@ pub fn before_frame(app: &mut App, area: Rect) {
 /// sin closures en su firma.
 pub(crate) fn resolved_frame(app: &App, area: Rect) -> norte_frontend::layout::Resolved {
     let tree = app.layout.substitute_auto(&|id| natural(app, id));
-    norte_frontend::layout::resolve(crate::panel::from_ratatui(area), &tree, &app.kinds)
+    norte_frontend::layout::resolve(
+        crate::panel::from_ratatui(body_area(app, area)),
+        &tree,
+        &app.kinds,
+    )
+}
+
+/// El área que le queda al CUERPO: la del frame menos la barra de menú, si
+/// está fijada.
+///
+/// La resta se hace AQUÍ y en ningún otro sitio. Este es el único punto por el
+/// que pasan el pintado, el mapeo de clics del ratón y las decisiones de «qué
+/// hueco se colocó» del bucle de eventos, así que restando una vez las tres
+/// cuadran solas — y restando en el pintor, el ratón habría seguido creyendo
+/// que la fila 0 es del panel de arriba y cada clic habría caído una fila más
+/// abajo de donde el lector lo dio.
+///
+/// Un terminal de una sola fila se queda sin cuerpo antes que sin barra, y por
+/// eso la resta es saturante: es preferible una pantalla degradada a un
+/// reparto sobre un rectángulo de altura negativa.
+#[must_use]
+pub(crate) fn body_area(app: &App, area: Rect) -> Rect {
+    if !app.menu_bar || area.height == 0 {
+        return area;
+    }
+    Rect {
+        y: area.y.saturating_add(1),
+        height: area.height.saturating_sub(1),
+        ..area
+    }
 }
 
 /// El reparto de este frame, para quien no pinta.

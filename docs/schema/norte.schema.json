@@ -471,6 +471,14 @@
             "null"
           ]
         },
+        "menu_bar": {
+          "default": null,
+          "description": "Whether the menu bar is pinned to the top row. Absent = `true`.\n\nOn by default because the menu was the only way to reach several\ncommands and there was nothing on screen saying it existed: a reader\nwho does not already know `Alt+M` cannot find what they cannot see.\nIt costs one row, and `menu_bar = false` gives it back — the menu still\nopens with its key, drawn over the top row as it always was.\n\nThe GUI has its own chrome and ignores this key.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "mono_font": {
           "default": null,
           "description": "Monospace font family for listings/viewer (GP spec, same design doc).\nWhen absent, use the bundled monospace font.",

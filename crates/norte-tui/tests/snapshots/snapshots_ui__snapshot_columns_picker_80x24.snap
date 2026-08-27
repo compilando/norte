@@ -1,7 +1,8 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-expression: texto
+expression: text
 ---
+" Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
 "│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
 "│  /docs                               ││   cosa                  1 B          │"
@@ -9,7 +10,6 @@ expression: texto
 "│  @enlace                             ││                                      │"
 "│   notas.txt           420 B          ││                                      │"
 "│ ! �.dat                 7 B          ││                                      │"
-"│                                      ││                                      │"
 "┌ Columnas — todos los schemes ───────────────────────────────────────────────┐│"
 "│ [x] Nombre ▲                                                                ││"
 "│ [x] Tamaño · iec                                                            ││"

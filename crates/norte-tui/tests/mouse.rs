@@ -24,9 +24,16 @@ const W: u16 = 60;
 const H: u16 = 12;
 
 /// Primera fila de listado de un pane en este layout.
-const FILA0: u16 = 2;
-/// Cuántas filas de listado caben.
-const FILAS: u16 = 8;
+///
+/// TRES desde que la barra de menú va fijada (`[ui] menu_bar`, encendida por
+/// defecto): fila 0 la barra, 1 el borde superior, 2 la cabecera de columnas.
+/// Que cambiar esta constante ARREGLE todos los tests de este fichero es la
+/// demostración de que el mapeo de clics siguió a la geometría solo — la resta
+/// de la fila se hace en el reparto del frame, no en el pintor, y el ratón lee
+/// ese mismo reparto.
+const FILA0: u16 = 3;
+/// Cuántas filas de listado caben. Una menos: la barra se la ha comido.
+const FILAS: u16 = 7;
 
 fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("wire válido")
@@ -145,10 +152,14 @@ fn el_layout_de_estos_tests_es_el_que_se_pinta() {
     let lines = pintar(&mut app);
     let geom = app.mouse.geometry().expect("hay geometría");
     let (left, right) = (geom[0], geom[1]);
-    assert_eq!((left.x, left.y, left.width, left.height), (0, 0, 30, 11));
+    // `y = 1` y una fila menos de alto: la barra de menú fijada se queda la
+    // fila 0. Que la GEOMETRÍA lo diga —y no solo el pintor— es el punto: el
+    // ratón lee estos rectángulos, así que un clic sigue cayendo donde el
+    // lector lo dio.
+    assert_eq!((left.x, left.y, left.width, left.height), (0, 1, 30, 10));
     assert_eq!(
         (right.x, right.y, right.width, right.height),
-        (30, 0, 30, 11)
+        (30, 1, 30, 10)
     );
     assert_eq!(left.first_list_row, FILA0, "borde superior + cabecera");
     assert_eq!(left.list_rows, FILAS, "interior menos la cabecera");
@@ -156,10 +167,19 @@ fn el_layout_de_estos_tests_es_el_que_se_pinta() {
     // Y lo que de verdad hay PINTADO en esas filas. El indicador de orden
     // (`▲`) en vez del rótulo de la columna: el rótulo está traducido y
     // estos tests no fijan idioma.
+    let cabecera = usize::from(FILA0) - 1;
     assert!(
-        lines[1].contains('▲'),
-        "fila 1 = cabecera de columnas: {}",
-        lines[1]
+        lines[cabecera].contains('▲'),
+        "fila {cabecera} = cabecera de columnas: {}",
+        lines[cabecera]
+    );
+    // Y la fila 0 es la barra de menú, que es lo que empujó a la cabecera
+    // hasta ahí. Se comprueba por su FORMA y no por un rótulo: estos tests no
+    // fijan idioma, y «Archivo» solo aparece en uno de los dos.
+    assert!(
+        !lines[0].trim().is_empty() && !lines[0].contains('│'),
+        "fila 0 = barra de menú (texto, sin bordes de panel): {}",
+        lines[0]
     );
     assert_fila(&lines, &app, FILA0, 0);
 }
@@ -185,7 +205,10 @@ fn un_click_en_la_ultima_entrada_resuelve_esa_y_no_otra() {
 #[test]
 fn la_cabecera_de_columnas_no_es_ninguna_fila() {
     let app = app_pintada(5);
-    let hit = mouse::hit_test(&app, 5, 1).expect("sigue siendo el pane");
+    // Relativa a `FILA0` y no un número suelto: la cabecera es la fila justo
+    // encima de la primera del listado, y atarla a la constante hace que
+    // mover el cromo mueva este test con él en vez de romperlo.
+    let hit = mouse::hit_test(&app, 5, FILA0 - 1).expect("sigue siendo el pane");
     assert_eq!(hit.pane, 0);
     assert_eq!(hit.index, None);
 }
@@ -195,7 +218,14 @@ fn la_cabecera_de_columnas_no_es_ninguna_fila() {
 #[test]
 fn los_bordes_del_pane_no_son_filas() {
     let app = app_pintada(5);
-    for row in [0, FILA0 + FILAS] {
+    // La fila 0 ya no es el borde del pane: es la BARRA DE MENÚ, y no
+    // pertenece a ningún panel — igual que la barra de estado de abajo. Un
+    // clic ahí no puede resolver a una entrada ni a un pane.
+    assert!(
+        mouse::hit_test(&app, 5, 0).is_none(),
+        "la fila 0 es la barra de menú, no un pane"
+    );
+    for row in [FILA0 - 2, FILA0 + FILAS] {
         let hit = mouse::hit_test(&app, 5, row).expect("dentro del bloque");
         assert_eq!(hit.index, None, "fila {row} es borde");
     }
@@ -457,7 +487,10 @@ fn mayus_al_soltar_decide_copiar_o_mover() {
 fn un_arrastre_promovido_lleva_su_fila_y_devuelve_lo_que_barrio() {
     let mut app = app_pintada(10);
     // Una marca previa, ajena al gesto.
-    let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 7, KeyModifiers::CONTROL));
+    let _ = mouse::handle(
+        &mut app,
+        ev_con(ABAJO, 5, FILA0 + FILAS - 1, KeyModifiers::CONTROL),
+    );
     assert_eq!(app.panes[0].marks_len(), 1);
 
     // Press en una fila SIN marcar, barrido de camino, y cruce al otro panel.
@@ -725,13 +758,13 @@ fn un_release_que_se_comio_otro_pump_no_deja_el_gesto_armado() {
     let _ = pintar(&mut app);
 
     let after = app.panes[0].marks_len();
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 7));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + FILAS - 1));
     assert_eq!(
         app.panes[0].marks_len(),
         after,
         "la motion no continúa un barrido que ya no existe"
     );
-    let _ = mouse::handle(&mut app, ev(ARRIBA, 5, FILA0 + 7));
+    let _ = mouse::handle(&mut app, ev(ARRIBA, 5, FILA0 + FILAS - 1));
     assert_eq!(app.panes[0].marks_len(), after, "ni el release tardío");
 }
 
@@ -781,7 +814,7 @@ fn un_modal_abierto_a_mitad_de_un_arrastre_se_lleva_el_gesto() {
     app.modal = None;
     let _ = pintar(&mut app);
 
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 7));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + FILAS - 1));
     assert_eq!(app.panes[0].marks_len(), marks, "gesto muerto");
 }
 
@@ -824,7 +857,7 @@ fn un_intercambio_de_panes_a_mitad_de_un_arrastre_se_lleva_el_gesto() {
     // Las marcas del barrido viajaron con su pane al lado 1; el pane 0 es
     // ahora el otro listado, y el gesto armado sigue nombrando `pane: 0`.
     let before = app.panes[0].marks_len();
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 7));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + FILAS - 1));
     assert_eq!(
         app.panes[0].marks_len(),
         before,

@@ -217,6 +217,10 @@ mod tests {
             hotlist: _,
             // — El bucle de eventos lo re-aplica justo detrás de la recarga.
             ui_mouse: _,
+            // — Se aplica en caliente: el reparto de cada frame lee la config
+            //   vigente, así que la barra aparece o desaparece en el
+            //   siguiente pintado sin nada más.
+            ui_menu_bar: _,
             // — Llegan por los pasos 4 y 5 (disposición y siembra de huecos).
             ui_layout: _,
             ui_show_hidden: _,

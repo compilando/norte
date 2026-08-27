@@ -242,6 +242,17 @@ pub struct UiSection {
     /// share the pointer with.
     #[serde(default)]
     pub mouse: Option<bool>,
+    /// Whether the menu bar is pinned to the top row. Absent = `true`.
+    ///
+    /// On by default because the menu was the only way to reach several
+    /// commands and there was nothing on screen saying it existed: a reader
+    /// who does not already know `Alt+M` cannot find what they cannot see.
+    /// It costs one row, and `menu_bar = false` gives it back — the menu still
+    /// opens with its key, drawn over the top row as it always was.
+    ///
+    /// The GUI has its own chrome and ignores this key.
+    #[serde(default)]
+    pub menu_bar: Option<bool>,
     /// `[ui.columns]` (#108 block 4): column selection and sort order.
     #[serde(default)]
     pub columns: Option<UiColumnsSection>,

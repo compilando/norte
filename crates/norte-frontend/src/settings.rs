@@ -150,6 +150,16 @@ const CATALOG: &[SettingDef] = &[
         applies_live: true,
     },
     SettingDef {
+        // La barra de menú fijada. Está en el catálogo por lo mismo que
+        // `ui.mouse`: es la clave que alguien va a buscar en cuanto quiera
+        // recuperar esa fila, y un ajuste del que solo te enteras leyendo un
+        // fichero de config que no sabías que existía no es descubrible.
+        id: "ui.menu-bar",
+        section: Section::General,
+        kind: SettingKind::Bool,
+        applies_live: true,
+    },
+    SettingDef {
         id: "ui.confirm-quit",
         section: Section::General,
         kind: SettingKind::Enum(&["auto", "always", "never"]),

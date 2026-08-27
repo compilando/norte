@@ -287,6 +287,12 @@ pub struct SessionUi {
 pub const PAGE: usize = 10;
 
 /// Estado completo del TUI: los paneles y el foco.
+// `struct_excessive_bools`: el lint busca APIs cuyos parámetros booleanos se
+// confunden entre sí en la llamada. Esto no es una API: es el estado completo
+// de la TUI, y sus banderas son independientes entre sí, se leen por nombre y
+// jamás viajan juntas como argumentos. Agruparlas en sub-structs por contar
+// bools escondería qué mira cada pintor a cambio de nada.
+#[allow(clippy::struct_excessive_bools, reason = "estado del TUI, no una API")]
 pub struct App {
     /// Los dos paneles (izquierda, derecha), guardados por hueco.
     pub panes: crate::panel::PaneSlots,
@@ -410,6 +416,16 @@ pub struct App {
     /// patrón que el de disposición, y por el mismo motivo: el modelo vive en
     /// norte-frontend (regla 7) y aquí solo se guarda.
     pub profile_picker: Option<norte_frontend::profile_picker::ProfilePicker>,
+    /// Si la barra de menú está FIJADA en la fila de arriba (`[ui] menu_bar`).
+    ///
+    /// Fijada le quita una fila al cuerpo, y esa resta se hace en el reparto
+    /// del frame —el único sitio por el que pasan el pintado, el mapeo de
+    /// clics y las decisiones de «qué hueco se colocó» del bucle—, así que
+    /// las tres cosas cuadran solas.
+    ///
+    /// Suelta, el menú sigue abriéndose con su tecla y pintándose ENCIMA de
+    /// la primera fila, como siempre.
+    pub menu_bar: bool,
     /// El perfil activo, o `None` si no hay ninguno.
     ///
     /// Espejo en memoria de `SessionBody.active`. Se guarda como `OsString`
@@ -760,6 +776,7 @@ impl App {
             theme_picker: None,
             layout_picker: None,
             profile_picker: None,
+            menu_bar: true,
             active_profile: None,
             pending_profile: None,
             connections_picker: None,

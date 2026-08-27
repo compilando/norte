@@ -2,9 +2,9 @@
 source: crates/norte-tui/tests/snapshots_ui.rs
 expression: text
 ---
-"┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│N┌ Ayuda ───────────────────────────────────────────────────────────────────┐a│"
-"│ │  Esto es norte             █ siempre, con las mismas colisiones y el    ║│ │"
+" Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
+"┌⟨┌ Ayuda ───────────────────────────────────────────────────────────────────┐─┐"
+"│N│  Esto es norte             █ siempre, con las mismas colisiones y el    ║│a│"
 "│ │  Dos paneles, un destino   █ mismo undo.                                ║│ │"
 "│ │  Pestañas en un panel      █                                            ║│ │"
 "│ │  Marcar sobre qué se actúa █ Un destino jamás se adivina. Copiar hacia  ║│ │"

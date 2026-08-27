@@ -1,7 +1,8 @@
 ---
 source: crates/norte-tui/tests/layout_anchor.rs
-expression: "lineas.join(\"\\n\")"
+expression: "lines.join(\"\\n\")"
 ---
+ Archivo  Marcar  Paneles  Pestañas     
 ┌ Sitios ──────┐┌⟨file⟩/cas┐┌ Vista ───┐
 │▾ Unidades    ││Nombre▲   ││          │
 │▾ Favoritos   ││   f00    ││          │
@@ -9,6 +10,5 @@ expression: "lineas.join(\"\\n\")"
 │              ││   f02    ││          │
 │              ││   f03    ││          │
 │              ││   f04    ││          │
-│              ││   f05    ││          │
 └──────────────┘└──────────┘└──────────┘
  ⟨file⟩/casa  1/60

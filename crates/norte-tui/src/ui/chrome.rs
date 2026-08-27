@@ -71,8 +71,13 @@ pub(crate) struct MenuGeom {
 pub(crate) const DROP_MAX: u16 = 44;
 
 /// Calcula la geometría del menú abierto, o `None` si no hay ninguno.
-pub(crate) fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
-    let st = app.menu.as_ref()?;
+/// Los títulos de la barra y dónde cae cada uno, ABIERTO O NO.
+///
+/// Separado de [`menu_geom`] porque aquello sale por `?` en cuanto el menú
+/// está cerrado —tiene que hacerlo: sin menú abierto no hay desplegable que
+/// medir— y con la barra fijada eso dejaba la fila en blanco. Los títulos no
+/// dependen de que haya nada abierto; el desplegable sí.
+pub(crate) fn menu_titles(area: Rect) -> Vec<(String, u16, u16)> {
     let mut titles = Vec::new();
     let mut x = area.x;
     for m in norte_frontend::menu::MENUS {
@@ -82,6 +87,12 @@ pub(crate) fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
         titles.push((label, x, x1));
         x = x.saturating_add(w);
     }
+    titles
+}
+
+pub(crate) fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
+    let titles = menu_titles(area);
+    let st = app.menu.as_ref()?;
     let m = norte_frontend::menu::MENUS.get(st.menu())?;
     let items: Vec<(String, String)> = m
         .items
@@ -169,20 +180,23 @@ pub fn menu_zones(app: &App, area: Rect) -> Vec<MenuZone> {
 /// Pinta la barra de menús y su desplegable.
 pub(crate) fn draw_menu(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
-    let Some(g) = menu_geom(app, area) else {
-        return;
-    };
-    let Some(st) = app.menu.as_ref() else {
-        return;
-    };
+    // La BARRA se pinta con el menú abierto o cerrado: fijada, su trabajo es
+    // decir que el menú existe. El desplegable, obviamente, solo abierto — y
+    // por eso los títulos se miden aparte, sin pasar por `menu_geom`.
+    let abierto = app.menu.as_ref();
+    let titles = menu_titles(area);
     let bar = Rect { height: 1, ..area };
     clear_themed(frame, bar, &app.theme);
-    let spans: Vec<ratatui::text::Span<'static>> = g
-        .titles
+    // Un título que no cabe ENTERO no se pinta a medias: en cuarenta columnas
+    // la barra acababa en «Bus», que no es un menú, es un ruido. Se cae el
+    // último que sobra y ya está — lo que la barra tiene que decir es que HAY
+    // menú, y para eso los primeros bastan.
+    let spans: Vec<ratatui::text::Span<'static>> = titles
         .iter()
+        .filter(|(_, _, x1)| *x1 < area.x.saturating_add(area.width))
         .enumerate()
         .map(|(i, (label, _, _))| {
-            let style = if i == st.menu() {
+            let style = if abierto.is_some_and(|st| i == st.menu()) {
                 app.theme.role(Role::Selection)
             } else {
                 app.theme.role(Role::Title)
@@ -192,6 +206,9 @@ pub(crate) fn draw_menu(frame: &mut Frame<'_>, app: &App) {
         .collect();
     frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), bar);
 
+    let (Some(st), Some(g)) = (abierto, menu_geom(app, area)) else {
+        return;
+    };
     clear_themed(frame, g.drop, &app.theme);
     let inner = Block::default().borders(Borders::ALL).inner(g.drop);
     frame.render_widget(

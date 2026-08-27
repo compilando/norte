@@ -252,7 +252,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     } else {
         draw_body(frame, app);
     }
-    if app.menu.is_some() {
+    // La barra se pinta si está FIJADA (aunque el menú esté cerrado: para eso
+    // está, para que se vea que hay un menú) o si el menú está abierto.
+    if app.menu_bar || app.menu.is_some() {
         draw_menu(frame, app);
     }
     if let Some(help) = &app.help {

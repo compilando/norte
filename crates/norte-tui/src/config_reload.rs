@@ -75,6 +75,10 @@ pub async fn reload_config(
                 // La copia de hotlist también (un popup abierto conserva su
                 // snapshot hasta reabrirse — items congelados a propósito).
                 app.hotlist.clone_from(&cfg.common.hotlist);
+                // `[ui] menu_bar` en caliente: el reparto de cada frame lo
+                // lee, así que la barra aparece o desaparece en el siguiente
+                // pintado —y el ratón la sigue, porque lee ese mismo reparto—.
+                app.menu_bar = cfg.common.ui_menu_bar.unwrap_or(true);
                 // Openers (#28): recargados con el resto de la config.
                 app.openers = cfg.openers.clone();
                 // #108 7a: `[ui.columns]` editado fuera también refresca la
