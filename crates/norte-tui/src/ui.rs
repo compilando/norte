@@ -118,11 +118,7 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
     // #108 L5: `now` de las celdas de tiempo relativo — UNA lectura por
     // frame; los tests lo fijan (`App::render_now_ms`) para snapshots
     // estables.
-    let now_ms = app.render_now_ms.unwrap_or_else(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-    });
+    let now_ms = app.now_ms();
 
     // El panel de diferencias ocupa el sitio de los DOS panes: una fila
     // tiene dos caras y un veredicto en medio, así que no cabe en media

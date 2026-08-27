@@ -37,6 +37,17 @@ pub struct TaskRow {
     pub retry: Option<RetrySpec>,
     /// Objetivo de un delete a papelera (ver [`Finished::trash_target`]).
     pub trash_target: Option<VPath>,
+    /// Sobre QUÉ actúa la task: el último `current` que llegó a verse.
+    ///
+    /// PEGAJOSO a propósito. `TaskProgress::current` es «la entrada en curso»,
+    /// así que una task terminada suele publicarlo vacío — y una fila que dice
+    /// «copy ✓» sin decir qué se copió no informa de nada, que es la queja que
+    /// trajo esto. Guardando el último visto, la fila sigue nombrando su
+    /// operando después de acabar.
+    pub operand: Option<VPath>,
+    /// Cuándo se vio terminal por primera vez, en el reloj INYECTADO del
+    /// pintado ([`crate::app::App::now_ms`]). `None` mientras siga viva.
+    terminal_at_ms: Option<i64>,
     /// Ya se emitió su evento terminal.
     reported: bool,
 }
@@ -66,6 +77,17 @@ pub struct Finished {
 /// handles siguen en marcha), así que con más de `MAX_ROWS` tasks vivas el panel
 /// crece — deliberado: cortar sería mentir sobre trabajo en curso.
 const MAX_ROWS: usize = 6;
+
+/// Cuánto sigue en el panel una task ya terminada.
+///
+/// El panel se quedaba con el histórico entero hasta que otra task lo empujaba
+/// fuera por [`MAX_ROWS`], así que lo que enseñaba de un vistazo era trabajo de
+/// hace media hora. Diez segundos bastan para leer el `✓` o el error, y por
+/// debajo el panel vuelve a decir lo que pasa AHORA.
+///
+/// El reloj es el que inyecta el pintado, no `SystemTime`: los tests fijan
+/// `App::render_now_ms` y esto no les añade una espera.
+const TERMINAL_TTL_MS: i64 = 10_000;
 
 /// Las tasks visibles en el panel.
 #[derive(Default)]
@@ -119,12 +141,15 @@ impl TaskBoard {
         }
         let rx = task.progress();
         let last = rx.borrow().clone();
+        let operand = last.current.clone();
         self.rows.push(TaskRow {
             task,
             rx,
             last,
             retry,
             trash_target,
+            operand,
+            terminal_at_ms: None,
             reported: false,
         });
         // Hueco: caen primero las terminales más viejas — solo las YA
@@ -148,6 +173,11 @@ impl TaskBoard {
         let mut out = Vec::new();
         for row in &mut self.rows {
             row.last = row.rx.borrow().clone();
+            // El operando NO se borra cuando el snapshot deja de traerlo: ver
+            // la nota de `TaskRow::operand`.
+            if row.last.current.is_some() {
+                row.operand = row.last.current.clone();
+            }
             if row.last.state.is_terminal() && !row.reported {
                 row.reported = true;
                 out.push(Finished {
@@ -159,6 +189,28 @@ impl TaskBoard {
             }
         }
         out
+    }
+
+    /// Sella la hora de las filas que acaban de terminar y tira las que
+    /// llevan terminadas más de diez segundos (`TERMINAL_TTL_MS`, privado).
+    ///
+    /// Se llama DESPUÉS de [`Self::tick`] y con el mismo reloj del pintado.
+    /// Solo mira filas ya REPORTADAS: una terminal sin reportar todavía tiene
+    /// que emitir su `Finished`, y tirarla antes se comería el refresco de
+    /// panes que esa mutación pide.
+    pub fn prune_terminal(&mut self, now_ms: i64) {
+        for row in &mut self.rows {
+            if row.reported && row.last.state.is_terminal() && row.terminal_at_ms.is_none() {
+                row.terminal_at_ms = Some(now_ms);
+            }
+        }
+        self.rows.retain(|row| match row.terminal_at_ms {
+            // `saturating_sub` y no `-`: el reloj lo inyecta quien pinta y un
+            // test puede fijarlo hacia atrás; desbordar aquí tiraría filas
+            // vivas.
+            Some(t) => now_ms.saturating_sub(t) < TERMINAL_TTL_MS,
+            None => true,
+        });
     }
 
     /// Cancela la task en marcha más RECIENTE. `false` si no hay ninguna.
@@ -213,7 +265,7 @@ impl TaskBoard {
 #[cfg(test)]
 mod has_active_tests {
     use norte_core::backend::TaskRef;
-    use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};
+    use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState, VPath};
 
     use super::TaskBoard;
 
@@ -281,5 +333,83 @@ mod has_active_tests {
         // puede llegar además por broadcast).
         board.push_observed(task.observer(), None);
         assert_eq!(board.rows().len(), 1);
+    }
+
+    /// Una terminada se va sola a los diez segundos, y una viva NO se va por
+    /// mucho que pase el tiempo: cortar trabajo en curso sería mentir, que es
+    /// la misma razón por la que `MAX_ROWS` tampoco las tira.
+    #[test]
+    fn una_terminada_caduca_y_una_viva_no() {
+        let mut board = TaskBoard::default();
+        board.push(&task_ref(1, TaskState::Completed), None);
+        board.push(&task_ref(2, TaskState::Running), None);
+        // Sin `tick` no hay `reported`, así que el sello no se pone: una
+        // terminal que todavía debe su `Finished` no se puede tirar.
+        board.prune_terminal(0);
+        assert_eq!(board.rows().len(), 2);
+
+        assert_eq!(board.tick().len(), 1, "la terminal emite su Finished");
+        board.prune_terminal(0);
+        assert_eq!(board.rows().len(), 2, "recién terminada, todavía se ve");
+
+        board.prune_terminal(9_999);
+        assert_eq!(board.rows().len(), 2, "justo por debajo del TTL");
+
+        board.prune_terminal(10_000);
+        assert_eq!(board.rows().len(), 1, "la terminada se fue");
+        assert!(board.has_active(), "la que quedó es la viva");
+    }
+
+    /// El sello es el del PRIMER pase que la ve terminal, no el del último:
+    /// si se refrescara en cada pintada, una fila terminada no caducaría
+    /// nunca mientras la pantalla siguiera pintándose.
+    #[test]
+    fn el_sello_no_se_refresca_en_cada_pase() {
+        let mut board = TaskBoard::default();
+        board.push(&task_ref(1, TaskState::Completed), None);
+        board.tick();
+        for t in 0..10 {
+            board.prune_terminal(t * 1_000);
+        }
+        assert_eq!(board.rows().len(), 1);
+        board.prune_terminal(10_000);
+        assert!(board.rows().is_empty(), "caducó desde que se vio terminal");
+    }
+
+    /// El operando es PEGAJOSO: `current` viene vacío en el snapshot terminal
+    /// de casi todas las tasks, y una fila que dice «copy ✓» sin decir sobre
+    /// qué no informa de nada.
+    #[test]
+    fn el_operando_sobrevive_al_snapshot_terminal() {
+        let progress = |state: TaskState, current: Option<VPath>| TaskProgress {
+            task_id: TaskId::new(7),
+            kind: TaskKind::Copy,
+            state,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: 0,
+            entries_total: None,
+            current,
+            unreadable: None,
+        };
+        let (tx, rx) = tokio::sync::watch::channel(progress(
+            TaskState::Running,
+            Some(VPath::parse("mem:///a").unwrap()),
+        ));
+        let mut board = TaskBoard::default();
+        board.push(&TaskRef::synthetic_for_tests(TaskId::new(7), rx), None);
+        board.tick();
+        assert_eq!(
+            board.rows()[0].operand.as_ref().map(VPath::to_wire),
+            Some("mem:///a".to_owned())
+        );
+
+        tx.send(progress(TaskState::Completed, None)).unwrap();
+        board.tick();
+        assert_eq!(
+            board.rows()[0].operand.as_ref().map(VPath::to_wire),
+            Some("mem:///a".to_owned()),
+            "el terminal llegó sin `current` y la fila sigue sabiendo sobre qué actuó"
+        );
     }
 }

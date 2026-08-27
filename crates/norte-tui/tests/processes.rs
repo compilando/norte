@@ -7,6 +7,10 @@
 //!
 //! Aquí la tecla entra por donde entra de verdad: preset → `Effective` de la
 //! pantalla `dialog` → `Resolver` → comando → despacho del panel.
+//!
+//! Y lo que el panel DICE, que es la otra mitad: una fila que solo lleva la
+//! clase y un número de task no informa de nada, y una terminada que se queda
+//! para siempre convierte el panel en un histórico.
 
 use norte_frontend::keymap::{CATALOGUE, Chord, Effective, Resolution, Resolver, Screen, presets};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
@@ -205,4 +209,114 @@ fn el_preset_que_ate_layout_processes_lo_ata_en_las_dos_pantallas() {
             "{nombre} ata layout.processes en una pantalla y no en la otra"
         );
     }
+}
+
+/// Una task viva en el tablero, con su operando.
+fn tarea(id: u64, kind: norte_proto::TaskKind, current: &str) -> norte_core::backend::TaskRef {
+    let progress = norte_proto::TaskProgress {
+        task_id: norte_proto::TaskId::new(id),
+        kind,
+        state: norte_proto::TaskState::Running,
+        bytes_done: 1,
+        bytes_total: Some(4),
+        entries_done: 0,
+        entries_total: None,
+        current: Some(vp(current)),
+        unreadable: None,
+    };
+    // El emisor se suelta: `watch` conserva el último valor publicado, que es
+    // lo único que este test mira.
+    let (_tx, rx) = tokio::sync::watch::channel(progress);
+    norte_core::backend::TaskRef::synthetic_for_tests(norte_proto::TaskId::new(id), rx)
+}
+
+fn pintar(app: &App, ancho: u16, alto: u16) -> String {
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(ancho, alto))
+        .expect("terminal de test");
+    terminal
+        .draw(|f| norte_tui::ui::draw(f, app))
+        .expect("draw");
+    terminal.backend().to_string()
+}
+
+/// La fila dice QUÉ clase de trabajo y SOBRE QUÉ. El id de task no se pinta:
+/// dieciocho dígitos no identifican nada para quien mira y se comen el ancho
+/// que necesita el nombre.
+///
+/// Las dos superficies a la vez —el panel y la franja de abajo— porque pintan
+/// el mismo tablero y ya divergieron una vez con el porcentaje.
+#[test]
+fn la_fila_dice_la_clase_y_sobre_que_actua_sin_el_id() {
+    let mut app = app_de_prueba();
+    app.board.push(
+        &tarea(
+            7_318_349_021,
+            norte_proto::TaskKind::Copy,
+            "file:///casa/foto.jpg",
+        ),
+        None,
+    );
+    app.toggle_processes();
+    let pantalla = pintar(&app, 80, 24);
+
+    assert!(pantalla.contains("copy"), "la clase: {pantalla}");
+    assert!(pantalla.contains("foto.jpg"), "el operando: {pantalla}");
+    assert!(
+        !pantalla.contains("7318349021"),
+        "el id de task no se pinta: {pantalla}"
+    );
+}
+
+/// La franja de abajo (el «log») pinta lo mismo aunque el panel esté cerrado:
+/// es la superficie que se ve SIEMPRE, y era la que solo decía «copy» y un
+/// número.
+#[test]
+fn la_franja_nombra_el_operando_con_el_panel_cerrado() {
+    let mut app = app_de_prueba();
+    app.board.push(
+        &tarea(42, norte_proto::TaskKind::Delete, "file:///casa/borrame"),
+        None,
+    );
+    let pantalla = pintar(&app, 80, 24);
+    assert!(pantalla.contains("delete"), "la clase: {pantalla}");
+    assert!(pantalla.contains("borrame"), "el operando: {pantalla}");
+}
+
+/// Un operando que no cabe se recorta por el MEDIO —la cola es lo que
+/// identifica un fichero— y lo que va DETRÁS sigue estando: `ratatui` recorta
+/// la línea al ancho sin decir nada, así que una fila que se pasa de una
+/// celda pierde su estado por el borde y nadie se entera. Pasó: el `✓` se lo
+/// comió el marco.
+#[test]
+fn una_ruta_larga_no_desborda_la_fila() {
+    let mut app = app_de_prueba();
+    let largo = "file:///casa/".to_owned() + &"tramo/".repeat(30) + "final.txt";
+    app.board
+        .push(&tarea(3, norte_proto::TaskKind::Copy, &largo), None);
+    app.toggle_processes();
+    let pantalla = pintar(&app, 60, 20);
+    for linea in pantalla.lines() {
+        // `TestBackend::to_string` entrecomilla cada fila; el ancho es lo de
+        // dentro.
+        let fila = linea.trim_matches('"');
+        assert!(
+            fila.chars().count() <= 60,
+            "una fila desbordó el ancho: {fila:?}"
+        );
+    }
+    assert!(pantalla.contains('…'), "recortada: {pantalla}");
+    // La fila de la task: la cola del nombre, la barra Y el estado, en ese
+    // orden y dentro del ancho.
+    let fila = pantalla
+        .lines()
+        .find(|l| l.contains("final.txt"))
+        .unwrap_or_else(|| panic!("ninguna fila nombra el operando: {pantalla}"));
+    assert!(
+        fila.contains("25%"),
+        "el estado no se lo comió el borde: {fila:?}"
+    );
+    assert!(
+        pantalla.contains("final.txt"),
+        "la cola sobrevive: {pantalla}"
+    );
 }

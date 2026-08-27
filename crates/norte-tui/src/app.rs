@@ -823,6 +823,23 @@ impl App {
         }
     }
 
+    /// El reloj de la interfaz, en milisegundos de época.
+    ///
+    /// UNA sola fuente: [`Self::render_now_ms`] cuando está fijada (los tests
+    /// la fijan para que un snapshot no dependa de la hora), y el reloj real
+    /// si no. Lo usan las celdas de tiempo relativo y la caducidad de las
+    /// filas terminales del tablero de tasks — dos sitios que tienen que
+    /// coincidir, porque un test que fija el reloj para el primero y no para
+    /// el segundo tendría un panel que cambia solo.
+    #[must_use]
+    pub fn now_ms(&self) -> i64 {
+        self.render_now_ms.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        })
+    }
+
     /// Publishes a resolver's in-flight state to the screen: the status-bar
     /// segment ([`Self::pending`]) and the which-key panel
     /// ([`Self::which_key`]), which must never disagree about it.

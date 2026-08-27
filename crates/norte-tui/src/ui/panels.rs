@@ -405,6 +405,67 @@ pub(crate) fn progress_pct(p: &norte_proto::TaskProgress) -> u64 {
     norte_frontend::tasks::progress_pct(p).map_or(0, u64::from)
 }
 
+/// La etiqueta de una clase de task, por CATEGORÍA (nunca el `Debug`).
+///
+/// Una sola copia porque son dos las superficies que la pintan —la franja de
+/// abajo y el panel de procesos— y una etiqueta que sale distinta en cada una
+/// para la misma task es un bug que nadie reporta: se lee como si fueran dos
+/// cosas diferentes.
+pub(crate) fn kind_label(kind: norte_proto::TaskKind) -> &'static str {
+    match kind {
+        norte_proto::TaskKind::Copy => "copy",
+        norte_proto::TaskKind::Move => "move",
+        norte_proto::TaskKind::Delete => "delete",
+        norte_proto::TaskKind::Undo => "undo",
+        // Etiqueta mínima; el diálogo/pane virtual de Alt+F7 llega en
+        // T6 de liveSearch — aquí solo evita el `match` no exhaustivo.
+        norte_proto::TaskKind::Search => "search",
+        norte_proto::TaskKind::Index => "index",
+        norte_proto::TaskKind::Mkdir => "mkdir",
+        norte_proto::TaskKind::Create => "create",
+        norte_proto::TaskKind::Embed => "embed",
+        norte_proto::TaskKind::RenameBatch => "rename",
+        // Contar no muta nada, pero SALE en la franja como todo lo demás, y
+        // caía al brazo genérico: «task 82 %» no dice que se está midiendo un
+        // directorio.
+        norte_proto::TaskKind::DirSize => "dir-size",
+        // Etiqueta mínima, como la de `Search` en su día: el pane de
+        // comparación llega en C7 de este mismo plan; esto solo evita
+        // que una Task de `fs.compare` se pinte como genérica.
+        norte_proto::TaskKind::Compare => "compare",
+        // `Unknown` es la clase de un daemon N+1 que este proto YA
+        // conocía como desconocida (vía `serde(other)`); el `_` es
+        // `#[non_exhaustive]` (#126) — una variante de un norte-proto
+        // más nuevo que este BINARIO no reconoce en absoluto. Mismo
+        // caso de cara al usuario, misma etiqueta genérica.
+        norte_proto::TaskKind::Unknown | _ => "task",
+    }
+}
+
+/// Sobre QUÉ actúa una fila del tablero, recortada a `max` celdas.
+///
+/// La ruta se recorta por el MEDIO porque lo que identifica un fichero es su
+/// nombre, o sea la cola — el mismo criterio que el título del visor acoplado.
+/// Vacío cuando la task no publicó ninguna entrada (una búsqueda que todavía
+/// no ha tocado nada), y entonces la fila se queda con su clase y su estado,
+/// que es lo que se sabe.
+///
+/// La reinterpretación de nombres es la del pane con el FOCO. No es exacta —el
+/// operando puede venir del otro pane— pero un nombre hostil pintado como
+/// bytes crudos no se lee, y el badge de al lado dice que hubo reinterpretación.
+fn operand_text(row: &crate::tasks::TaskRow, app: &App, max: usize) -> String {
+    let Some(p) = row.operand.as_ref() else {
+        return String::new();
+    };
+    let (texto, hostil) = norte_frontend::path_display_with(p, app.focused().name_encoding());
+    let texto = if hostil {
+        format!("{HOSTILE_BADGE} {texto}")
+    } else {
+        texto
+    };
+    norte_frontend::middle_ellipsis(&texto, max)
+}
+
 /// El panel de procesos (fase A): una fila por tarea, con barra y estado.
 ///
 /// Las filas salen del `TaskBoard` que ya pinta la franja — este panel no
@@ -545,11 +606,28 @@ pub(crate) fn draw_processes(
                 norte_proto::TaskState::Failed { .. } => (t("task-failed"), Some(Role::Error)),
                 _ => (format!("{pct}%"), None),
             };
-            let header = format!(
-                "{} #{} {bar} ",
-                if i == cursor { '▶' } else { ' ' },
-                p.task_id.get()
-            );
+            // El número de task NO se pinta: dieciocho dígitos no le dicen
+            // nada a nadie y se comen el ancho que necesita el nombre. Lo que
+            // faltaba era el par «qué clase de trabajo» + «sobre qué», que ya
+            // viaja entero en el progreso.
+            let kind = kind_label(p.kind);
+            // Ancho fijo de la fila: la marca, la clase, la barra, el estado y
+            // los CUATRO espacios que los separan. Lo que sobra es del
+            // operando, y si no sobra nada se queda vacío en vez de empujar
+            // nada fuera.
+            //
+            // El `ratatui` recorta la línea al ancho sin decir nada, así que
+            // pasarse de uno no rompe el pinta: se come el `✓` del final, que
+            // es justo el dato que la fila existe para dar.
+            let fijo = 1 + 4 + kind.chars().count() + 10 + state_txt.chars().count();
+            let hueco = usize::from(inner.width).saturating_sub(fijo);
+            let operando = operand_text(row, app, hueco);
+            let marca = if i == cursor { '▶' } else { ' ' };
+            let header = if operando.is_empty() {
+                format!("{marca} {kind} {bar} ")
+            } else {
+                format!("{marca} {kind} {operando} {bar} ")
+            };
             let tail = match role {
                 Some(r) => Span::styled(state_txt, theme.role(r)),
                 None => Span::raw(state_txt),
@@ -686,31 +764,18 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 }
                 _ => (format!("{pct}%"), None),
             };
-            let kind = match p.kind {
-                norte_proto::TaskKind::Copy => "copy",
-                norte_proto::TaskKind::Move => "move",
-                norte_proto::TaskKind::Delete => "delete",
-                norte_proto::TaskKind::Undo => "undo",
-                // Etiqueta mínima; el diálogo/pane virtual de Alt+F7 llega en
-                // T6 de liveSearch — aquí solo evita el `match` no exhaustivo.
-                norte_proto::TaskKind::Search => "search",
-                norte_proto::TaskKind::Index => "index",
-                norte_proto::TaskKind::Mkdir => "mkdir",
-                norte_proto::TaskKind::Create => "create",
-                norte_proto::TaskKind::Embed => "embed",
-                norte_proto::TaskKind::RenameBatch => "rename",
-                // Etiqueta mínima, como la de `Search` en su día: el pane de
-                // comparación llega en C7 de este mismo plan; esto solo evita
-                // que una Task de `fs.compare` se pinte como genérica.
-                norte_proto::TaskKind::Compare => "compare",
-                // `Unknown` es la clase de un daemon N+1 que este proto YA
-                // conocía como desconocida (vía `serde(other)`); el `_` es
-                // `#[non_exhaustive]` (#126) — una variante de un norte-proto
-                // más nuevo que este BINARIO no reconoce en absoluto. Mismo
-                // caso de cara al usuario, misma etiqueta genérica.
-                norte_proto::TaskKind::Unknown | _ => "task",
+            let kind = kind_label(p.kind);
+            // Igual que el panel: la clase y el operando, no el id. La franja
+            // decía « copy #7318349021 45 % », que es la misma línea para
+            // cualquier copia de cualquier cosa.
+            let fijo = 1 + kind.chars().count() + 2 + state.chars().count();
+            let hueco = usize::from(area.width).saturating_sub(fijo);
+            let operando = operand_text(row, app, hueco);
+            let head = if operando.is_empty() {
+                Span::raw(format!(" {kind} "))
+            } else {
+                Span::raw(format!(" {kind} {operando} "))
             };
-            let head = Span::raw(format!(" {kind} #{} ", p.task_id.get()));
             let tail = match role {
                 Some(r) => Span::styled(state, app.theme.role(r)),
                 None => Span::raw(state),

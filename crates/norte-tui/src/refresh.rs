@@ -35,6 +35,10 @@ use crate::probes::Probed;
 /// re-listado duplicaría entradas si siguiera vivo.
 pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) -> [bool; 2] {
     let finished = app.board.tick();
+    // Cada tick, no solo cuando algo acaba: la fila que caduca terminó en un
+    // tick ANTERIOR, así que colgar la limpieza de `finished` la dejaría en
+    // pantalla hasta que otra task cualquiera volviera a pasar por aquí.
+    app.board.prune_terminal(app.now_ms());
     if finished.is_empty() {
         app.open_next_pending();
         return [false; 2];
