@@ -65,13 +65,26 @@ async fn main() -> Result<()> {
     // pregunta. `load_async` ya nombra el fichero culpable.
     let layers = match &cli_profile {
         Some(name) => {
-            let l = config::standard_layers_with_profile(Some(name));
+            // El nombre tiene que estar en el LISTADO, byte a byte. Mirar solo
+            // si el resolutor produjo una capa NO basta: `splice` la añade en
+            // cuanto el nombre es legal y hay dir de usuario, exista o no el
+            // directorio — y entonces `load` la trata como una capa ausente,
+            // que no es un error, y `--profile fantasma` arrancaba como si
+            // nada. Que es justo lo que D7 declara fatal para un perfil que el
+            // lector nombró.
+            let dir = norte_config::profiles_dir_from(&|k| std::env::var_os(k))
+                .context("no hay directorio de configuración donde colgar un perfil")?;
+            let hay = norte_config::list_profiles(&dir)
+                .unwrap_or_default()
+                .iter()
+                .any(|n| n == name);
             anyhow::ensure!(
-                l.dirs.iter().any(|(_, k)| *k == config::Layer::Profile),
-                "no hay ningún perfil que se llame «{}»",
-                name.to_string_lossy()
+                hay,
+                "no hay ningún perfil que se llame «{}» en {}",
+                name.to_string_lossy(),
+                dir.display()
             );
-            l
+            config::standard_layers_with_profile(Some(name))
         }
         None => config::standard_layers(),
     };
@@ -441,7 +454,7 @@ fn arm_mouse(cfg: &config::LoadedConfig, app: &mut App, out: &mut tty::TtyOut) -
 /// Flags booleanos del TUI.
 const BOOL_FLAGS: &[&str] = &["--daemon", "--pick"];
 /// Flags con valor del TUI.
-const VALUE_FLAGS: &[&str] = &["--preset", "--layout", "--socket", "--cd-file"];
+const VALUE_FLAGS: &[&str] = &["--preset", "--layout", "--profile", "--socket", "--cd-file"];
 
 /// Texto de `--help`. En INGLÉS y sin Fluent a propósito: se imprime ANTES
 /// de negociar el idioma (que sale de la config, que aún no se ha leído).
@@ -457,6 +470,9 @@ Options:
       --preset <NAME>    Keymap preset (orthodox|vim|cua); overrides norte.toml
       --layout <NAME>    Layout for this run (orthodox|simple|krusader|explorer|full,
                          or one of your own under `layouts/`); overrides norte.toml
+      --profile <NAME>   Start in this profile — a directory under `profiles/`
+                         in your config dir. Overrides the one you were last
+                         in; refuses to start if it cannot be used
       --daemon           Talk to the daemon instead of the embedded core
       --socket <PATH>    Daemon socket (default: $XDG_RUNTIME_DIR/norte/daemon.sock)
       --pick             print the selection, NUL-terminated, and exit
@@ -632,5 +648,53 @@ async fn make_backend(
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("no se pudo hablar con el daemon")?;
         Ok(Backend::Remote(remote))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BOOL_FLAGS, USAGE, VALUE_FLAGS};
+
+    /// Cada flag que este binario LEE está registrado, y sale en `--help`.
+    ///
+    /// Las tres listas son una sola cosa escrita tres veces —la tabla del
+    /// parser, la lectura en `main`, y el texto de ayuda— y nada las ata.
+    /// `--profile` se añadió leyéndolo en `main` y sin registrarlo, así que el
+    /// parser lo rechazaba como desconocido: la bandera existía, el código que
+    /// la usa existía, y `ntc --profile trabajo` contestaba «unknown flag».
+    /// Ninguna suite lo vio; lo vio ejecutarlo.
+    #[test]
+    fn todo_flag_registrado_sale_en_la_ayuda() {
+        for f in BOOL_FLAGS.iter().chain(VALUE_FLAGS.iter()) {
+            assert!(USAGE.contains(f), "{f} está registrado y no sale en --help");
+        }
+    }
+
+    /// Y al revés: cada flag largo que la ayuda promete está registrado, o el
+    /// parser lo rechazará por desconocido justo cuando alguien lo copie de
+    /// ahí.
+    #[test]
+    fn todo_flag_de_la_ayuda_esta_registrado() {
+        let registrados: Vec<&str> = BOOL_FLAGS
+            .iter()
+            .chain(VALUE_FLAGS.iter())
+            .copied()
+            .collect();
+        for linea in USAGE.lines() {
+            for palabra in linea.split_whitespace() {
+                let limpio = palabra.trim_end_matches(',');
+                // `--help`/`--version` los sirve el propio parser, no estas
+                // tablas.
+                if limpio.starts_with("--")
+                    && limpio.len() > 2
+                    && !matches!(limpio, "--help" | "--version")
+                {
+                    assert!(
+                        registrados.contains(&limpio),
+                        "--help promete {limpio} y el parser no lo conoce"
+                    );
+                }
+            }
+        }
     }
 }

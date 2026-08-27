@@ -271,6 +271,55 @@ link dir="debug":
     done
     echo "recuerda: el symlink apunta a ESTE árbol; un 'just prune-all' lo deja colgando"
 
+# Como `just link`, pero `ntc`/`norte` RECOMPILAN antes de arrancar.
+#
+# El symlink de `just link` apunta al binario que produjo la última
+# compilación, no al código que hay ahora: si editas y ejecutas sin haber
+# corrido los tests, estás usando lo de antes sin que nada te avise. Esto lo
+# cierra poniendo un envoltorio en el PATH que compila y luego ejecuta.
+#
+# Tres decisiones dentro del envoltorio, y las tres importan:
+#
+# - Compila con las MISMAS `features` que el gate. Sin ellas cargo keya los
+#   artefactos por otro conjunto y fabrica un universo COMPLETO y separado de
+#   norte-tui y de todo lo que cuelga (~30 G) que ninguna otra receta reusa.
+#   Es la trampa del presupuesto de disco, y a mano es facilísimo pisarla.
+# - Si la compilación FALLA, arranca el binario anterior con un aviso en vez de
+#   dejarte sin gestor de ficheros. Un árbol a medio editar no debe costarte la
+#   herramienta.
+# - Si otra sesión está compilando, cargo espera al lock de `target/`. El
+#   envoltorio lo DICE antes de bloquearse, porque un arranque mudo de diez
+#   segundos parece colgado.
+#
+# `just link` sigue ahí para cuando quieras coste cero de arranque.
+link-fresh:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p ~/.local/bin
+    for b in ntc norte; do
+        {
+            echo '#!/usr/bin/env bash'
+            echo "# Generado por 'just link-fresh' en $PWD. No editar a mano."
+            echo 'set -uo pipefail'
+            echo "tree=\"$PWD\""
+            echo "bin=\"\$tree/target/debug/$b\""
+            echo 'if [ -e "$tree/target/.cargo-lock" ]; then'
+            echo "  printf 'norte: otra compilación tiene el lock de target/, esperando…\\n' >&2"
+            echo 'fi'
+            echo "if ! cargo build --quiet --manifest-path \"\$tree/Cargo.toml\" -p norte-tui -p norte-cli {{features}}; then"
+            echo '  if [ -x "$bin" ]; then'
+            echo "    printf 'norte: el árbol no compila; arranco la última build buena\\n' >&2"
+            echo '  else'
+            echo "    printf 'norte: el árbol no compila y no hay build previa\\n' >&2"
+            echo '    exit 1'
+            echo '  fi'
+            echo 'fi'
+            echo 'exec "$bin" "$@"'
+        } > ~/.local/bin/$b
+        chmod +x ~/.local/bin/$b
+        printf '%-6s → envoltorio que recompila antes de arrancar\n' "$b"
+    done
+
 # El CLI de humo (paths NATIVOS): `just cli ls /tmp`, `just cli cp a b`…
 # Con `{{features}}` como todo lo que compila el core: sin ellas se fabricaba
 # su propio universo de artefactos que ninguna otra receta reusaba.
