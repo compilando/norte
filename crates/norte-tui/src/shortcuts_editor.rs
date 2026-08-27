@@ -123,6 +123,45 @@ pub fn shortcut_rows(maps: &Maps<'_>) -> Vec<norte_frontend::shortcuts::Shortcut
 /// lo rehiciera a mano es justo el lector que su documentación avisa que se va
 /// a equivocar en silencio. Aquí solo queda lo que sí es de la TUI: de dónde
 /// sale el nombre del preset y qué comandos valida cada pantalla.
+/// Dónde cae la escritura de un atajo.
+///
+/// Del MISMO corte que decide el destino, y no de `user_config_dir()` por
+/// separado: D10 movió el destino al `keymap.toml` del perfil activo y este
+/// escritor seguía resolviendo el directorio del usuario por su cuenta, así
+/// que la puerta planificaba sobre un fichero y la escritura caía en otro,
+/// donde el perfil la tapaba — «visiblemente guardado, y sin hacer nada»
+/// (#305).
+///
+/// Cuando el corte no apunta a ninguna capa la escritura CREA un fichero, y
+/// entonces se crea en el del perfil activo si lo hay: rebindear una tecla
+/// dentro de un espacio de trabajo significa esa tecla en ese espacio, la
+/// traiga ya el perfil o no.
+fn rebind_dir(
+    app: &App,
+    cfg: &config::LoadedConfig,
+    cli_preset: Option<&str>,
+    screen: Screen,
+) -> Option<std::path::PathBuf> {
+    let preset_name = cli_preset.unwrap_or(&cfg.common.preset);
+    let known = known_commands(screen);
+    let idx = norte_frontend::shortcuts::rebind_target_index(
+        preset_name,
+        &cfg.keymap_layer_kinds,
+        &cfg.keymap_layers,
+        &known,
+        screen,
+    );
+    if let Some(i) = idx
+        && let Some(dir) = cfg.keymap_layer_dirs.get(i)
+    {
+        return Some(dir.clone());
+    }
+    match &app.active_profile {
+        Some(name) => norte_config::profile_dir_from(&|k| std::env::var_os(k), name),
+        None => config::user_config_dir(),
+    }
+}
+
 fn plan_rebind(
     cfg: &config::LoadedConfig,
     cli_preset: Option<&str>,
@@ -342,7 +381,7 @@ async fn confirm_shortcut(app: &mut App, cfg: &config::LoadedConfig, cli_preset:
         }
         return;
     };
-    let Some(dir) = config::user_config_dir() else {
+    let Some(dir) = rebind_dir(app, cfg, cli_preset, screen) else {
         app.message = Some(t("msg-settings-no-config-dir"));
         return;
     };
@@ -440,7 +479,7 @@ async fn unbind_shortcut(app: &mut App, cfg: &config::LoadedConfig, cli_preset: 
         app.message = Some(t("msg-shortcut-nothing-to-unbind"));
         return;
     }
-    let Some(dir) = config::user_config_dir() else {
+    let Some(dir) = rebind_dir(app, cfg, cli_preset, screen) else {
         app.message = Some(t("msg-settings-no-config-dir"));
         return;
     };
@@ -565,6 +604,61 @@ mod shortcuts_editor_tests {
 
     fn maps(cfg: &config::LoadedConfig) -> (Effective, Effective, Effective) {
         build_keymaps(cfg, None).expect("los tres mapas del preset activo")
+    }
+
+    /// Con un perfil activo que trae `keymap.toml`, el atajo se escribe en el
+    /// fichero DEL PERFIL.
+    ///
+    /// D10 movió el destino ahí y este escritor seguía resolviendo el
+    /// directorio del usuario por su cuenta: la puerta planificaba sobre el
+    /// fichero del perfil y la escritura caía en el del usuario, donde el
+    /// perfil la tapa — «visiblemente guardado, y sin hacer nada» (#305).
+    #[test]
+    fn con_perfil_activo_el_atajo_se_escribe_en_el_fichero_del_perfil() {
+        let usuario = tempfile::tempdir().expect("tempdir");
+        let perfil = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            perfil.path().join("keymap.toml"),
+            "[pane]\nprepend_keymap = [{ on = [\"ctrl+j\"], run = \"cursor.top\" }]\n",
+        )
+        .expect("write");
+        let layers = Layers {
+            dirs: vec![
+                (usuario.path().to_path_buf(), Layer::User),
+                (perfil.path().to_path_buf(), Layer::Profile),
+            ],
+        };
+        let cfg = config::load(&layers).expect("carga");
+        let mut app = app_vacia();
+        app.active_profile = Some(std::ffi::OsString::from("work"));
+
+        assert_eq!(
+            super::rebind_dir(&app, &cfg, None, Screen::Browse).as_deref(),
+            Some(perfil.path()),
+            "el destino sale del CORTE, no de user_config_dir()"
+        );
+    }
+
+    /// Sin perfil, sigue yendo al del usuario: esto no puede cambiar lo que ya
+    /// funcionaba.
+    #[test]
+    fn sin_perfil_el_atajo_sigue_yendo_al_del_usuario() {
+        let usuario = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            usuario.path().join("keymap.toml"),
+            "[pane]\nprepend_keymap = [{ on = [\"ctrl+j\"], run = \"cursor.top\" }]\n",
+        )
+        .expect("write");
+        let layers = Layers {
+            dirs: vec![(usuario.path().to_path_buf(), Layer::User)],
+        };
+        let cfg = config::load(&layers).expect("carga");
+        let app = app_vacia();
+
+        assert_eq!(
+            super::rebind_dir(&app, &cfg, None, Screen::Browse).as_deref(),
+            Some(usuario.path())
+        );
     }
 
     fn chord(s: &str) -> crate::keymap::Chord {

@@ -682,6 +682,28 @@ pub fn plan_rebind(
     Ok(rebind_dry_run(&split.sources(), seq, command)?)
 }
 
+/// A qué capa apuntaría el rebind, por su índice en `kinds`/`layers`.
+///
+/// El destino y el DIRECTORIO donde se escribe tienen que salir del mismo
+/// sitio. D10 movió el destino al `keymap.toml` del perfil activo y el escritor
+/// seguía resolviendo el directorio del usuario por su cuenta: la puerta
+/// planificaba sobre un fichero y la escritura caía en otro, donde el perfil la
+/// tapaba (#305).
+///
+/// `None` = la escritura crea un fichero que no existía, y entonces el llamante
+/// elige dónde (el directorio del perfil activo si lo hay, o el del usuario).
+#[must_use]
+pub fn rebind_target_index(
+    preset_name: &str,
+    kinds: &[norte_config::Layer],
+    layers: &[KeymapFile],
+    known_commands: &[&str],
+    screen: Screen,
+) -> Option<usize> {
+    let preset = presets::source(preset_name).and_then(|src| parse_keymap(src).ok())?;
+    RebindSources::split_at(&preset, kinds, layers, known_commands, screen).target_index()
+}
+
 /// Why a plan did not become a write, in the reader's language.
 #[must_use]
 pub fn plan_error_message(e: &PlanError, lang: Lang) -> String {

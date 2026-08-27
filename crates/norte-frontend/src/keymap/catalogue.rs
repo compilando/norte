@@ -151,6 +151,17 @@ pub const CATALOGUE: &[CommandDef] = &[
     // porque el nombre de una disposición NO es el de un preset de teclas
     // aunque coincida: el diálogo lo dice en su pie.
     live("layout.pick", false),
+    // Los perfiles (ADR 0079). Sin acorde por el mismo #228 —atar cuatro
+    // teclas nuevas en siete presets sin que nadie lo haya pedido es el error
+    // contrario al que #228 arregló— y llegando por la paleta y el menú.
+    //
+    // El selector avisa además de que un nombre de perfil que coincide con
+    // una disposición o con un preset de teclas NO es esa otra cosa: son tres
+    // ajustes distintos que pueden compartir nombre.
+    live("profile.pick", false),
+    live("profile.next", false),
+    live("profile.prev", false),
+    planned("profile.save-as", "cmd-planned-profile-save-as", 306),
     live("pane.mirror", false),
     live("pane.pull", false),
     live("pane.swap", false),

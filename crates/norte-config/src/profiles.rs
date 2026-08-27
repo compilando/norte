@@ -255,16 +255,27 @@ pub enum ProfileError {
 }
 
 /// The result of a load that had a profile in it, and what it had to give up.
+///
+/// Generic over what "the configuration" means, because D7 is a rule about a
+/// LAYER and a layer is more than its `norte.toml`: a frontend also reads
+/// `keymap.toml` and `openers.toml` from the same directory, and both are
+/// fatal outside the project layer. Answering the three-way question over
+/// `norte.toml` alone declared a profile with a typo'd shortcut healthy and
+/// let it blow up afterwards (#305).
 #[derive(Debug)]
-pub struct ProfileLoad {
+pub struct Loaded<T> {
     /// The resulting configuration.
-    pub config: crate::load::CommonConfig,
+    pub config: T,
     /// The profile that ended up active. `None` = started with NO profile
     /// layer.
     pub active: Option<OsString>,
     /// Why the profile that was asked for could not be used. `None` = it was.
     pub degraded: Option<String>,
 }
+
+/// [`Loaded`] over the scalars this crate merges. What
+/// [`load_with_profile`] returns.
+pub type ProfileLoad = Loaded<crate::load::CommonConfig>;
 
 /// Loads with a profile in the layers, answering a broken one according to who
 /// asked for it (spec 2026-08-26, D7).
@@ -297,9 +308,37 @@ pub fn load_with_profile(
     name: Option<&OsStr>,
     source: ProfileSource,
 ) -> Result<ProfileLoad, ProfileError> {
+    load_with(layers_for, name, source, &crate::load::load)
+}
+
+/// [`load_with_profile`], but over whatever a caller means by "loading these
+/// layers".
+///
+/// The rule of D7 lives HERE and in exactly one place. A frontend's layer is
+/// its `norte.toml` plus its `keymap.toml` plus its `openers.toml`, and the
+/// last two are fatal for any layer that is not the project's — so a frontend
+/// that went through [`load_with_profile`] got "this profile is fine" for a
+/// profile that was about to abort the program. Passing the loader in, instead
+/// of duplicating the three-way answer upstairs, is what keeps the two from
+/// drifting (#305).
+///
+/// `load` must fail with [`crate::schema::ConfigError`], which both
+/// [`crate::load::load`] and `norte_frontend::config::load` already do.
+///
+/// # Errors
+///
+/// The same as [`load_with_profile`]: [`ProfileError`] when the profile cannot
+/// be used and the source is not [`ProfileSource::Sticky`], or when any other
+/// layer fails to load.
+pub fn load_with<T>(
+    layers_for: &impl Fn(Option<&OsStr>) -> Layers,
+    name: Option<&OsStr>,
+    source: ProfileSource,
+    load: &impl Fn(&Layers) -> Result<T, crate::schema::ConfigError>,
+) -> Result<Loaded<T>, ProfileError> {
     let Some(name) = name else {
-        return Ok(ProfileLoad {
-            config: crate::load::load(&layers_for(None))?,
+        return Ok(Loaded {
+            config: load(&layers_for(None))?,
             active: None,
             degraded: None,
         });
@@ -323,9 +362,9 @@ pub fn load_with_profile(
                 name: name.to_owned(),
                 dir,
             }),
-            Some(_) => match crate::load::load(&layers) {
+            Some(_) => match load(&layers) {
                 Ok(config) => {
-                    return Ok(ProfileLoad {
+                    return Ok(Loaded {
                         config,
                         active: Some(name.to_owned()),
                         degraded: None,
@@ -341,8 +380,8 @@ pub fn load_with_profile(
     };
 
     let Some(problema) = problema else {
-        return Ok(ProfileLoad {
-            config: crate::load::load(&layers)?,
+        return Ok(Loaded {
+            config: load(&layers)?,
             active: None,
             degraded: None,
         });
@@ -351,9 +390,9 @@ pub fn load_with_profile(
     // Before blaming the profile, load without it. If THAT fails too, the real
     // fault is in a layer the reader owns outright, and reporting the profile
     // would send them to fix the wrong file.
-    let sin_perfil = crate::load::load(&layers_for(None))?;
+    let sin_perfil = load(&layers_for(None))?;
     match source {
-        ProfileSource::Sticky => Ok(ProfileLoad {
+        ProfileSource::Sticky => Ok(Loaded {
             config: sin_perfil,
             active: None,
             degraded: Some(problema.to_string()),

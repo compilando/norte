@@ -7,6 +7,35 @@ use super::pane::Pane;
 use norte_i18n::{t, ta};
 
 impl App {
+    /// Bajo qué clave de `layouts` va la pantalla de este proceso.
+    ///
+    /// El nombre del perfil activo, o `default` si no hay ninguno — que es la
+    /// clave que usaba todo el mundo antes de que hubiera perfiles, así que un
+    /// lector que nunca elija uno lee y escribe exactamente donde ya escribía.
+    ///
+    /// La conversión a texto es la única de D4: `layouts` es un objeto JSON.
+    /// Un perfil cuyo directorio no sea UTF-8 cae a `default`, que es la
+    /// consecuencia que el selector avisa por adelantado con su
+    /// `carries_state`.
+    fn session_key(&self) -> String {
+        let activo = self.session_key_active();
+        if activo.is_empty() {
+            "default".to_owned()
+        } else {
+            activo
+        }
+    }
+
+    /// El nombre del perfil activo para el campo `active` del cuerpo: vacío
+    /// cuando no hay ninguno, o cuando el que hay no puede ser una clave.
+    fn session_key_active(&self) -> String {
+        self.active_profile
+            .as_ref()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_owned()
+    }
+
     /// La pantalla de AHORA como cuerpo de sesión (L2).
     ///
     /// Lleva la disposición y, por hueco de listado, dónde está, cómo mira y
@@ -20,12 +49,14 @@ impl App {
     pub fn session_body(&self) -> norte_frontend::session::SessionBody {
         use norte_frontend::session::{SessionBody, SlotState};
 
+        // La disposición de ESTE perfil va bajo su nombre; las de los demás
+        // vuelven tal cual. Escribir solo la del activo borraría del documento
+        // el sitio donde los otros perfiles dejaron sus paneles.
+        let mut layouts = self.session.other_layouts.clone();
+        layouts.insert(self.session_key(), self.layout.clone());
         let mut body = SessionBody {
-            // La TUI todavía no elige perfil (eso es P3): escribe el cuerpo v2
-            // diciendo la verdad, que es «ninguno», y la clave sigue siendo
-            // `default`.
-            active: String::new(),
-            layouts: std::iter::once(("default".to_owned(), self.layout.clone())).collect(),
+            active: self.session_key_active(),
+            layouts,
             slots: self.session.orphans.clone(),
         };
         for id in self.layout.slot_ids() {
@@ -68,9 +99,18 @@ impl App {
         &mut self,
         body: &norte_frontend::session::SessionBody,
     ) -> Vec<norte_frontend::layout::SlotId> {
-        if let Some(tree) = body.layouts.get("default") {
+        let clave = self.session_key();
+        if let Some(tree) = body.layouts.get(&clave) {
             self.set_layout(tree.clone());
         }
+        // Lo de los OTROS perfiles se guarda entero para volver a escribirlo:
+        // este proceso mira un perfil y el documento es de todos.
+        self.session.other_layouts = body
+            .layouts
+            .iter()
+            .filter(|(k, _)| **k != clave)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         let mut ask = Vec::new();
         self.session.orphans.clear();
         for (raw, estado) in &body.slots {
@@ -145,6 +185,19 @@ impl App {
     pub fn apply_session_value(&mut self, version: u32, v: &serde_json::Value) {
         match norte_frontend::session::SessionBody::from_value(version, v) {
             Ok(body) => {
+                // El perfil PEGAJOSO llega AQUÍ y no antes: vive en la sesión,
+                // y la sesión la tiene el daemon, al que se llega con la
+                // configuración que ya está cargada. Así que se pide el cambio
+                // y lo hace el bucle por el mismo camino que cualquier otro
+                // (ADR 0079, D8) — con la única baja que ese camino tiene:
+                // `[ui] lang` no se puede reaplicar, y se anuncia.
+                //
+                // Un `--profile` explícito ya dejó `active_profile` puesto
+                // antes de llegar aquí, y entonces el pegajoso NO manda: el
+                // lector nombró uno para esta vez.
+                if self.active_profile.is_none() && !body.active.is_empty() {
+                    self.pending_profile = Some(std::ffi::OsString::from(&body.active));
+                }
                 self.apply_session(&body);
             }
             // Un cuerpo de una versión MÁS NUEVA no se lee y tampoco se pisa:

@@ -32,8 +32,8 @@ use crate::overlays::{close_stale_overlays, help_owns_keys, modal_wins, palette_
 use crate::refresh::{after_panes_refresh, reap_search_run, refresh_panes};
 use crate::screens::{
     HelpDispatch, on_columns_key, on_connections_picker_key, on_extensions_key, on_help_key,
-    on_layout_picker_key, on_nav_popup_key, on_places_key, on_processes_key, on_settings_key,
-    on_theme_picker_key, on_tree_key, run_plugin_command,
+    on_layout_picker_key, on_nav_popup_key, on_places_key, on_processes_key, on_profile_picker_key,
+    on_settings_key, on_theme_picker_key, on_tree_key, run_plugin_command,
 };
 use crate::shortcuts_editor::{Maps, on_shortcuts_key};
 use crate::trail::{nav_enter_target, nav_stalled};
@@ -177,6 +177,11 @@ pub async fn on_key(
         // allowlist que el selector de tema: los dos
         // son una lista con cursor que no muta datos.
         on_layout_picker_key(app, dialog_resolver, key.modifiers, key.code);
+    } else if app.profile_picker.is_some() && !modal_wins(app) {
+        // El de perfiles, en el mismo puesto de la cadena y con el mismo
+        // allowlist: es otra lista con cursor que no muta datos. Confirmar
+        // deja el cambio PEDIDO y lo hace el bucle.
+        on_profile_picker_key(app, dialog_resolver, key.modifiers, key.code);
     } else if app.columns_picker.is_some() && !modal_wins(app) {
         // Picker de columnas (#108 7a): mismo puesto en la
         // cadena que el selector de tema (overlay antes que

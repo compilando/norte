@@ -30,6 +30,14 @@ use crate::shortcuts_editor::{Maps, build_keymaps, shortcut_rows};
 /// Hot-reload (ADR 0007): relee TODAS las capas; ante CUALQUIER error se
 /// conserva la config vigente y se avisa por la barra — jamás romper una
 /// sesión en marcha por un TOML a medio guardar.
+///
+/// Devuelve si la recarga se APLICÓ. El watcher se conforma con el aviso de la
+/// barra, pero el cambio de PERFIL (ADR 0079, D8) no: su paso 2 es esta misma
+/// recarga con otras capas, y lo que venga detrás —montar la disposición del
+/// perfil nuevo, sembrar sus huecos, darlo por activo— solo puede pasar si
+/// esto aplicó. Un perfil a medio aplicar no es un estado que ese diseño
+/// admita, y el «todo o nada» que esta función ya tenía es justo la semántica
+/// que hace falta.
 #[allow(clippy::too_many_arguments)] // wiring del hot-reload, no API
 pub async fn reload_config(
     app: &mut App,
@@ -52,7 +60,7 @@ pub async fn reload_config(
     // si TODO el reload aplicó (mismo criterio que el resto de esta
     // función); un reload fallido deja la config VIGENTE, jamás a medias.
     cfg_out: &mut config::LoadedConfig,
-) {
+) -> bool {
     match config::load_async(layers.clone()).await {
         Ok(cfg) => match build_keymaps(&cfg, cli_preset) {
             Ok((browse, viewer, dialog)) => {
@@ -152,12 +160,14 @@ pub async fn reload_config(
                     settings.refresh(crate::settings::build_rows(&cfg, &summaries));
                 }
                 *cfg_out = cfg;
+                true
             }
             Err(e) => {
                 app.message = Some(ta(
                     "msg-config-not-applied",
                     &[("error", &keymaps_error_category(&e))],
                 ));
+                false
             }
         },
         Err(e) => {
@@ -165,6 +175,7 @@ pub async fn reload_config(
                 "msg-config-not-applied",
                 &[("error", &config_error_category(&e))],
             ));
+            false
         }
     }
 }

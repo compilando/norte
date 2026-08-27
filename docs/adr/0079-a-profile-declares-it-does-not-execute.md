@@ -154,12 +154,23 @@ each tree separately and the body is opaque to the core — so pruning must
 delete against what survives rather than against the tree it just removed.
 Otherwise dropping a stale profile takes the *active* one's panels with it.
 
-**Two consequences are deferred to P3 and recorded as #305**: D7's three-way
-rule covers `norte.toml` only, while a profile's `keymap.toml` and
-`openers.toml` are still fatal for any non-project layer; and the shortcut
-editor still resolves its write target from the user config directory, so it
-would write where an active profile shadows it. Neither can fire until
-something knows which profile is active, which is P3's work.
+**#305 is closed by P3, and both halves confirmed the shape of the problem.**
+D7 turned out to be a rule about a *layer*, not about `norte.toml`: a profile
+also carries `keymap.toml` and `openers.toml`, both fatal outside the project
+layer, so answering the three-way question over the scalars alone declared a
+profile with a typo'd shortcut healthy and let it abort the program afterwards.
+The rule is now generic over what loading a layer means, so it still lives in
+one place. And the shortcut editor's write target now comes from the same cut
+that decides it, rather than from a separately resolved user config directory —
+which, after D10 moved the target, would have written where the active profile
+shadows it.
+
+**The three sources of D7 do not share one path**, and P3 is where that
+surfaced. An explicit `--profile` is known before anything connects, so it
+enters the first configuration load and applies everything, `ui.lang` included;
+the sticky profile arrives with the session and can only switch hot. The
+design's single "what could not be applied" list belongs to the sticky path
+alone, and it has exactly one entry.
 
 ## Alternatives considered
 

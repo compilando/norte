@@ -35,6 +35,21 @@ impl App {
         self.layout_picker = Some(norte_frontend::layout_picker::LayoutPicker::open(user));
     }
 
+    /// Abre el selector de PERFILES con lo que haya en `profiles/`.
+    ///
+    /// Igual que el de disposición: el listado —y la lectura del `norte.toml`
+    /// de cada uno, que es lo que da el título y el motivo de una fila rota—
+    /// lo hace el llamante fuera del runtime (regla 2, #244).
+    pub fn open_profile_picker(
+        &mut self,
+        perfiles: Vec<norte_frontend::profile_picker::UserProfile>,
+    ) {
+        self.profile_picker = Some(norte_frontend::profile_picker::ProfilePicker::open(
+            perfiles,
+            self.active_profile.as_deref(),
+        ));
+    }
+
     /// Abre el selector de conexiones (#140) con lo que haya en
     /// `connections.toml`. Leerlo es del frontend: este tipo no toca disco.
     pub fn open_connections_picker(&mut self, filas: Vec<norte_frontend::connections_picker::Row>) {
@@ -68,6 +83,43 @@ impl App {
                 self.connections_picker = None;
                 None
             }
+        }
+    }
+
+    /// Teclas del selector de PERFILES.
+    ///
+    /// Confirmar no cambia nada aquí: deja el nombre PEDIDO y cierra. El
+    /// cambio lo hace el bucle, que es quien tiene las capas y los resolvers —
+    /// y hacerlo aquí sería recargar configuración desde dentro del manejador
+    /// de una tecla, que es la regla 2 otra vez.
+    ///
+    /// Elegir el perfil que YA está activo no pide nada: un cambio que no
+    /// cambia nada tiraría y recargaría la pantalla para dejarla igual.
+    pub fn profile_picker_input(&mut self, action: PickerAction) {
+        match action {
+            PickerAction::Up => {
+                if let Some(p) = &mut self.profile_picker {
+                    p.up();
+                }
+            }
+            PickerAction::Down => {
+                if let Some(p) = &mut self.profile_picker {
+                    p.down();
+                }
+            }
+            PickerAction::Confirm => {
+                let Some(row) = self
+                    .profile_picker
+                    .take()
+                    .and_then(|p| p.current().cloned())
+                else {
+                    return;
+                };
+                if !row.active {
+                    self.pending_profile = Some(row.name);
+                }
+            }
+            PickerAction::Cancel => self.profile_picker = None,
         }
     }
 

@@ -49,7 +49,9 @@ use pane::draw_pane;
 use panels::{
     draw_metadata, draw_places, draw_preview, draw_processes, draw_tasks, draw_tree, draw_viewer,
 };
-use pickers::{draw_columns_picker, draw_connections_picker, draw_layout_picker};
+use pickers::{
+    draw_columns_picker, draw_connections_picker, draw_layout_picker, draw_profile_picker,
+};
 use status::draw_status;
 use sync::draw_sync;
 
@@ -264,6 +266,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     }
     // Fase A: el selector de disposiciones, con el mismo allowlist de teclas
     // que el de temas (`ALLOW_PICKER`) y por eso el mismo hint.
+    if let Some(p) = &app.profile_picker {
+        draw_profile_picker(frame, p, &app.theme, &app.dialog_hints.picker);
+    }
     if let Some(p) = &app.layout_picker {
         draw_layout_picker(frame, p, &app.theme, &app.dialog_hints.picker);
     }

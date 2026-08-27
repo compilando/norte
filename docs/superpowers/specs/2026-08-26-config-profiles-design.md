@@ -318,12 +318,36 @@ The sequence, in this order:
 6. Emit **one line** naming what could not be applied without a restart.
 
 That last line is not decoration. Some settings are established once per
-process — `ui.lang` initialises Fluent, and the window's font handling may or
-may not be re-applicable — and a switch that silently leaves them behind is a
-switch that lies. **Which settings are on that list is measured, not assumed**:
-determining it is a task in the plan, and its output is a table in this
-crate's documentation plus a test that fails when a new `[ui]` scalar is added
-without being classified.
+process and a switch that silently leaves them behind is a switch that lies.
+**Which settings are on that list is measured, not assumed.**
+
+**Measured in P3, and the answer was already written down.** The TUI's watcher
+hot-reload (`norte-tui/src/config_reload.rs`) already re-applies the theme, the
+whole keymap, the columns with their re-sort, the favourites, the openers, the
+quick-search mode and the quit confirmation — and its own rustdoc had recorded,
+before profiles existed, that `[ui] lang` is session-fixed because
+`norte_i18n::force` runs once per process. **`ui.lang` is the whole list**, and
+the switch reuses that reload rather than reimplementing it — its
+all-or-nothing behaviour turns out to be exactly what D7 asks of a switch.
+Fonts and `reduce_motion` are not on the list at all: a terminal never applies
+them, and saying "could not be applied" about something this frontend never
+does would be noise. The classification is pinned by destructuring
+`CommonConfig` with no `..`, so a new scalar does not compile until someone
+puts it in a group.
+
+**And the three sources of D7 do not share one path.** This corrects the
+paragraph above, which assumed they did:
+
+- **`--profile <name>` is known before anything connects**, so it goes into the
+  *first* configuration load. Everything applies, `ui.lang` included, and a
+  profile that cannot be used aborts naming the file — which is what D7 asked
+  for and what a hot switch could never have delivered.
+- **The sticky profile cannot do that**: it lives in the session, the session
+  belongs to the daemon, and the daemon is reached with the configuration being
+  loaded. It arrives with the session and switches hot, paying the `ui.lang`
+  announcement.
+- **An explicit profile beats the sticky one.** The reader named one for this
+  run.
 
 Reading `profiles/` is I/O and happens **off the event loop**. #244 is the
 precedent: `apply_layout` doing blocking I/O on the event loop was a bug with

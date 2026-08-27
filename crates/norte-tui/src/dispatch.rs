@@ -202,6 +202,42 @@ pub async fn dispatch(
             };
             app.open_layout_picker(mine);
         }
+        // Los perfiles. Listar el directorio Y leer el `norte.toml` de cada
+        // uno —de ahí salen el título de la fila y el motivo de una rota— las
+        // dos cosas FUERA del runtime, por lo mismo que las disposiciones
+        // (regla 2, #244). Sin directorio de config no hay perfiles: lista
+        // vacía, y nunca `PathBuf::default()`, que es leer `./profiles/` del
+        // directorio actual (#244 m3).
+        Command::ProfilePick => {
+            let perfiles = match config::user_config_dir() {
+                Some(dir) => {
+                    tokio::task::spawn_blocking(move || crate::app::profile::lee_todos(&dir))
+                        .await
+                        .unwrap_or_default()
+                }
+                None => Vec::new(),
+            };
+            app.open_profile_picker(perfiles);
+        }
+        // `profile.next`/`profile.prev` giran por la lista SIN abrir el
+        // selector, que es lo que quiere quien tiene dos perfiles y alterna.
+        // El cambio en sí lo hace el run loop (tarea 4): aquí solo se dice
+        // cuál toca.
+        Command::ProfileNext | Command::ProfilePrev => {
+            let perfiles = match config::user_config_dir() {
+                Some(dir) => {
+                    tokio::task::spawn_blocking(move || crate::app::profile::lee_todos(&dir))
+                        .await
+                        .unwrap_or_default()
+                }
+                None => Vec::new(),
+            };
+            app.pending_profile = crate::app::profile::siguiente(
+                &perfiles,
+                app.active_profile.as_deref(),
+                matches!(cmd, Command::ProfileNext),
+            );
+        }
         // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
         Command::PaneMirror => {
             let plan = mirror_plan(app);

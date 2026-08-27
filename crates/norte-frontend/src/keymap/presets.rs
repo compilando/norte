@@ -326,6 +326,42 @@ mod k2b_gate_tests {
         }
     }
 
+    /// Los cuatro comandos de perfil existen en el catálogo compartido y
+    /// NINGÚN preset los ata.
+    ///
+    /// #228 fue el hueco contrario —presets que dejaban comandos del núcleo
+    /// sin ninguna tecla— y la lección de aquello no es «ata todo»: atar
+    /// cuatro teclas nuevas en siete presets sin que nadie lo haya pedido
+    /// decide por el lector qué tecla es un perfil, encima de teclas que en
+    /// su gestor de toda la vida significan otra cosa. Se llega por la
+    /// paleta y por el menú, y quien quiera un acorde se lo ata él.
+    #[test]
+    fn los_comandos_de_perfil_existen_y_no_los_ata_ningun_preset() {
+        let perfil = [
+            "profile.pick",
+            "profile.next",
+            "profile.prev",
+            "profile.save-as",
+        ];
+        for cmd in perfil {
+            assert!(
+                crate::keymap::catalogue::lookup(cmd).is_some(),
+                "{cmd} no está en el catálogo compartido"
+            );
+        }
+        for name in NAMES {
+            let src = source(name).expect("NAMES resuelve");
+            let kf =
+                crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {name}: {e}"));
+            for run in preset_runs(&kf) {
+                assert!(
+                    !perfil.contains(&run),
+                    "preset {name} ata {run:?}: los perfiles llegan sin acorde"
+                );
+            }
+        }
+    }
+
     /// Check 7, scoped to the FOUR imported presets (spec "K2b — the four
     /// presets": "Each file records the program, its version, the source,
     /// and the date it was transcribed, so that when it ages the staleness

@@ -227,6 +227,146 @@ pub(crate) fn draw_connections_picker(
     frame.render_widget(Paragraph::new(lines), inside);
 }
 
+/// El selector de PERFILES (ADR 0079).
+///
+/// Sin vista previa, a diferencia del de disposiciones: la pantalla de un
+/// perfil depende de lo que el lector dejó guardado, no solo de un fichero, así
+/// que una miniatura dibujada de su `[ui] layout` mentiría justo en el caso
+/// normal — el de un perfil que ya tiene estado.
+///
+/// Lo que sí lleva cada fila son los avisos que la spec pide por su nombre: cuál
+/// es el activo, cuál no puede guardar estado (D4) y cuál comparte nombre con
+/// otra cosa. La nota de debajo habla de la fila BAJO EL CURSOR, que es lo que
+/// el lector está a punto de elegir.
+pub(crate) fn draw_profile_picker(
+    frame: &mut Frame<'_>,
+    p: &norte_frontend::profile_picker::ProfilePicker,
+    theme: &TuiTheme,
+    hint: &str,
+) {
+    use norte_frontend::profile_picker::NameClash;
+
+    let rows: Vec<String> = p
+        .rows()
+        .iter()
+        .map(|r| {
+            // El nombre es un DIRECTORIO y puede no ser texto: lossy MARCADO
+            // con su badge y hazards enmascarados, como cualquier otro nombre
+            // de la pantalla (#246 m2/m3).
+            let (name, hostile) = norte_frontend::display_os_name(&r.name);
+            let name = norte_encoding::mask_terminal_hazards(&name);
+            let badge = if hostile { " ⚠" } else { "" };
+            let marca = if r.active { "▸" } else { " " };
+            // El título acompaña al nombre, JAMÁS lo sustituye: la identidad
+            // del perfil es su directorio, y dos perfiles pueden compartir
+            // título y seguir siendo dos (D3).
+            let titulo = r
+                .title
+                .as_deref()
+                .map(|t| format!(" · {}", norte_encoding::mask_terminal_hazards(t)))
+                .unwrap_or_default();
+            let roto = if r.problem.is_some() {
+                format!(" · {}", t("profile-picker-broken"))
+            } else {
+                String::new()
+            };
+            format!(" {marca} {name}{badge}{titulo}{roto}")
+        })
+        .collect();
+
+    // La nota: primero por qué esta fila no se puede usar, después por qué no
+    // guarda estado, y por último la coincidencia de nombre. En ese orden
+    // porque es el de lo que más le importa a quien está a punto de elegirla.
+    let nota = p.current().and_then(|r| {
+        r.problem
+            .as_ref()
+            .map(|e| format!(" {}", norte_encoding::mask_terminal_hazards(e)))
+            .or_else(|| (!r.carries_state).then(|| format!(" {}", t("profile-picker-no-state"))))
+            .or_else(|| match r.clash {
+                NameClash::None => None,
+                NameClash::Layout => Some(format!(" {}", t("profile-picker-clash-layout"))),
+                NameClash::Keymap => Some(format!(" {}", t("profile-picker-clash-keymap"))),
+                NameClash::Both => Some(format!(" {}", t("profile-picker-clash-both"))),
+            })
+    });
+    let footer = format!(" {hint} ");
+
+    // El alto y el ancho de la caja se reservan SIEMPRE que alguna fila pueda
+    // pedir la nota, no solo cuando la pide la de ahora: si no, la caja se
+    // encoge y se ensancha mientras el cursor recorre las filas. Misma regla
+    // que el selector de disposiciones, y por el mismo motivo.
+    // DOS líneas, y envuelve: el motivo de una fila rota lo escribe el parser
+    // de TOML y puede ser tan largo como quiera («unknown field `x`, expected
+    // one of …»). Reservar su ancho ensancharía la caja hasta lo absurdo, y
+    // dejarlo en una línea lo corta a media palabra — que es lo que el
+    // selector de disposiciones ya argumentó que es peor que no darlo.
+    let alguna_nota = p
+        .rows()
+        .iter()
+        .any(|r| r.problem.is_some() || !r.carries_state || r.clash != NameClash::None);
+    let note_height = if alguna_nota { 2 } else { 0 };
+
+    let list_w = rows
+        .iter()
+        .map(|f| Line::raw(f.as_str()).width())
+        .max()
+        .unwrap_or(0);
+    let width = u16::try_from(list_w)
+        .unwrap_or(u16::MAX)
+        .max(u16::try_from(Line::raw(footer.as_str()).width()).unwrap_or(u16::MAX))
+        .max(24)
+        .saturating_add(2)
+        .min(frame.area().width);
+    let height = u16::try_from(rows.len())
+        .unwrap_or(u16::MAX)
+        .max(1)
+        .saturating_add(2)
+        .saturating_add(note_height)
+        .min(frame.area().height.max(3));
+    let area = centered(frame.area(), width, height);
+    clear_themed(frame, area, theme);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("profile-picker-title")))
+        .title_style(theme.role(Role::Title))
+        .title_bottom(Line::raw(footer))
+        .border_style(theme.role(Role::ModalBorder));
+    let inside_area = block.inner(area);
+    frame.render_widget(block, area);
+
+    let bands = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(note_height)])
+        .split(inside_area);
+    if let Some(nota) = &nota
+        && bands[1].height > 0
+    {
+        frame.render_widget(
+            Paragraph::new(Line::raw(nota.as_str()))
+                .wrap(ratatui::widgets::Wrap { trim: true })
+                .style(theme.role(Role::Info)),
+            bands[1],
+        );
+    }
+
+    // Una lista VACÍA no es un error: es que todavía no has creado ninguno, y
+    // se dice en vez de dejar una caja en blanco.
+    if rows.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::raw(format!(" {}", t("profile-picker-empty"))))
+                .style(theme.role(Role::Info)),
+            bands[0],
+        );
+        return;
+    }
+    let items: Vec<ListItem<'_>> = rows.into_iter().map(ListItem::new).collect();
+    let list = List::new(items).highlight_style(theme.role(Role::Selection));
+    let mut state = ListState::default();
+    state.select(Some(p.cursor()));
+    frame.render_stateful_widget(list, bands[0], &mut state);
+}
+
 pub(crate) fn draw_layout_picker(
     frame: &mut Frame<'_>,
     p: &norte_frontend::layout_picker::LayoutPicker,

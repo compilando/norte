@@ -469,8 +469,10 @@ impl<'a> RebindSources<'a> {
         let mut below_end = cut;
         let mut target = KeymapFile::default();
         let mut above_from = cut;
+        let mut target_index = None;
         if above_from < n && kinds[above_from] == Layer::User {
             target = layers[above_from].clone();
+            target_index = Some(above_from);
             above_from += 1;
         }
         if above_from < n && kinds[above_from] == Layer::Profile {
@@ -478,6 +480,7 @@ impl<'a> RebindSources<'a> {
             // profile outranks it, exactly as the loader merges them.
             below_end = above_from;
             target = layers[above_from].clone();
+            target_index = Some(above_from);
             above_from += 1;
         }
         // Everything left above the write must be `Project` and nothing else.
@@ -491,6 +494,9 @@ impl<'a> RebindSources<'a> {
             below_end = 0;
             target = KeymapFile::default();
             above_from = 0;
+            // Y sin destino: degradar a `above` es rehusar la escritura, así
+            // que apuntar a un fichero sería contradecir el propio corte.
+            target_index = None;
         }
         RebindSplit {
             preset,
@@ -499,6 +505,7 @@ impl<'a> RebindSources<'a> {
             above: &layers[above_from..],
             known_commands,
             screen,
+            target_index,
         }
     }
 }
@@ -516,9 +523,30 @@ pub struct RebindSplit<'a> {
     above: &'a [KeymapFile],
     known_commands: &'a [&'a str],
     screen: Screen,
+    /// Index into the `layers`/`kinds` the cut was made over, or `None` when
+    /// the write creates a file that does not exist yet.
+    target_index: Option<usize>,
 }
 
 impl RebindSplit<'_> {
+    /// A qué capa apunta la escritura, por su índice en los `layers`/`kinds`
+    /// con los que se hizo el corte. `None` = la escritura CREA un fichero que
+    /// no existía.
+    ///
+    /// Existe porque el destino y el directorio donde se escribe tienen que
+    /// salir del MISMO sitio. D10 movió el destino al `keymap.toml` del perfil
+    /// y el escritor del editor de atajos seguía resolviendo el directorio del
+    /// usuario por su cuenta, así que la puerta planificaba sobre un fichero y
+    /// la escritura caía en otro, donde el perfil la tapaba: «visiblemente
+    /// guardado, y sin hacer nada» (#305).
+    ///
+    /// `None` NO es «el índice 0»: con solo una capa de sistema, apuntar al 0
+    /// mandaría la escritura del lector al fichero del sistema.
+    #[must_use]
+    pub const fn target_index(&self) -> Option<usize> {
+        self.target_index
+    }
+
     /// The borrowed view [`rebind_dry_run`] takes.
     #[must_use]
     pub fn sources(&self) -> RebindSources<'_> {
@@ -1352,6 +1380,53 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
             vec!["ctrl+j".to_owned()],
             "la capa destino está vacía: se escribe la grafía de `Display`"
         );
+    }
+
+    /// D10 movió el DESTINO del rebind al `keymap.toml` del perfil, y el
+    /// escritor seguía resolviendo el directorio del usuario por su cuenta.
+    ///
+    /// Resultado: la puerta planifica sobre el fichero del perfil y la
+    /// escritura cae en el del usuario, donde el perfil la TAPA — «visiblemente
+    /// guardado, y sin hacer nada», que es la frase con la que D10 describe el
+    /// bug que existe para prevenir. Y era peor que antes del corte ensanchado:
+    /// antes, un orden inesperado se rechazaba (#305).
+    ///
+    /// El arreglo es que el destino salga del MISMO sitio que el corte, así que
+    /// el corte tiene que DECIR a qué capa apuntó.
+    #[test]
+    fn el_corte_dice_a_que_capa_apunta() {
+        let preset = parse_keymap(BROWSE).expect("preset");
+        let user = crate::keymap::parse_keymap_layer(
+            "[pane]\nprepend_keymap = [{ on = [\"mod+k\"], run = \"cursor.top\" }]\n",
+        )
+        .expect("user layer");
+        let profile = crate::keymap::parse_keymap_layer(
+            "[pane]\nprepend_keymap = [{ on = [\"ctrl+j\"], run = \"cursor.top\" }]\n",
+        )
+        .expect("profile layer");
+
+        // Con perfil: apunta al índice del PERFIL, no al del usuario.
+        let layers = [user.clone(), profile];
+        let kinds = [Layer::User, Layer::Profile];
+        let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
+        assert_eq!(split.target_index(), Some(1), "el perfil es el destino");
+
+        // Sin perfil: al del usuario.
+        let layers = [user];
+        let kinds = [Layer::User];
+        let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
+        assert_eq!(split.target_index(), Some(0));
+
+        // Y sin ninguna capa que sea destino, la escritura CREA un fichero que
+        // no existe: no hay índice al que apuntar, y decir `Some(0)` mandaría
+        // la escritura al fichero del sistema.
+        let layers = [
+            crate::keymap::parse_keymap_layer("[pane]\nprepend_keymap = []\n")
+                .expect("system layer"),
+        ];
+        let kinds = [Layer::System];
+        let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
+        assert_eq!(split.target_index(), None);
     }
 
     /// D10: with a profile active, the shortcut is written INTO the profile.

@@ -34,6 +34,83 @@ fn capturar_y_aplicar_es_la_identidad() {
     assert_eq!(other.session_body(), before);
 }
 
+/// Este proceso mira UN perfil y el documento es de todos: lo de los demás
+/// viaja de vuelta intacto.
+///
+/// Escribir solo el activo borraría del cuerpo el sitio donde los otros
+/// perfiles dejaron sus paneles, y el lector lo descubriría al volver a uno y
+/// encontrárselo en blanco (ADR 0079, D5).
+#[test]
+fn las_disposiciones_de_otros_perfiles_vuelven_intactas() {
+    let ajena = norte_frontend::layout::presets::tree("krusader").expect("preset");
+    let mut body = norte_frontend::session::SessionBody::default();
+    body.layouts.insert("photos".to_owned(), ajena.clone());
+
+    let mut app = app_basica();
+    app.active_profile = Some(std::ffi::OsString::from("work"));
+    app.apply_session(&body);
+    let vuelta = app.session_body();
+
+    assert_eq!(
+        vuelta.layouts.get("photos"),
+        Some(&ajena),
+        "la de «photos» no se toca"
+    );
+    assert!(
+        vuelta.layouts.contains_key("work"),
+        "y la de este proceso va bajo SU nombre, no bajo `default`: {:?}",
+        vuelta.layouts.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(vuelta.active, "work");
+}
+
+/// El perfil PEGAJOSO llega con la sesión y pide el cambio.
+///
+/// No puede aplicarse antes: vive en la sesión, la sesión la tiene el daemon, y
+/// al daemon se llega con la configuración que ya está cargada. Así que se pide
+/// y lo hace el bucle por el mismo camino que cualquier otro cambio.
+#[test]
+fn el_perfil_pegajoso_pide_el_cambio() {
+    let body = norte_frontend::session::SessionBody {
+        active: "work".to_owned(),
+        ..norte_frontend::session::SessionBody::default()
+    };
+    let mut app = app_basica();
+    app.apply_session_value(norte_frontend::session::SCHEMA_VERSION, &body.to_value());
+    assert_eq!(
+        app.pending_profile.as_deref(),
+        Some(std::ffi::OsStr::new("work"))
+    );
+}
+
+/// Y `--profile` lo GANA: el lector nombró uno para esta vez, así que el que
+/// venía de la sesión no lo pisa.
+#[test]
+fn un_perfil_explicito_gana_al_pegajoso() {
+    let body = norte_frontend::session::SessionBody {
+        active: "photos".to_owned(),
+        ..norte_frontend::session::SessionBody::default()
+    };
+    let mut app = app_basica();
+    app.active_profile = Some(std::ffi::OsString::from("work"));
+    app.apply_session_value(norte_frontend::session::SCHEMA_VERSION, &body.to_value());
+    assert_eq!(app.pending_profile, None, "no se pide ningún cambio");
+    assert_eq!(
+        app.active_profile.as_deref(),
+        Some(std::ffi::OsStr::new("work"))
+    );
+}
+
+/// Sin perfil, la clave sigue siendo `default`: quien nunca elija uno lee y
+/// escribe exactamente donde ya escribía.
+#[test]
+fn sin_perfil_la_clave_sigue_siendo_default() {
+    let app = app_basica();
+    let body = app.session_body();
+    assert!(body.layouts.contains_key("default"));
+    assert_eq!(body.active, "");
+}
+
 /// El historial viaja: `nav.back` sigue funcionando tras un reinicio.
 #[test]
 fn el_rastro_de_vuelta_sobrevive() {

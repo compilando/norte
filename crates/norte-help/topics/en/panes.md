@@ -39,6 +39,10 @@ commands = [
     "layout.metadata",
     "layout.pick",
 
+    "profile.pick",
+    "profile.next",
+    "profile.prev",
+
     "pane.tree",]
 context = ["browse"]
 +++
@@ -324,6 +328,37 @@ that the coincidence is a convenience and not a trap.
 A file of yours wins over the factory layout of the same name: `layouts/simple.toml`
 is what `simple` loads. Delete the file to get the original back. `--layout <name>`
 picks one for a single run without touching your config.
+
+# Profiles
+
+A layout arranges the screen. A **profile** is the whole workspace: its layout,
+its keymap, its theme, its columns, its favourites, and where every panel was
+standing when you left it. `photos` and `servers` and the tree you are working
+in want different answers to all of those, and a profile is how you keep them
+apart instead of rearranging the same screen by hand every time you change
+task.
+
+A profile is a directory inside `profiles/` in your config directory, with the
+same shape as your configuration itself — a `norte.toml`, and optionally its
+own `keymap.toml`, `openers.toml` and `layouts/`. Copying a profile between
+machines is copying a directory.
+
+{{cmd:profile.pick}} lists them and marks the one you are in.
+{{cmd:profile.next}} and {{cmd:profile.prev}} cycle without opening anything,
+which is what you want when you keep two. `--profile <name>` starts in one for
+a single run. Otherwise norte remembers the one you were last in.
+
+What a profile sets overrides your own configuration — that is what choosing it
+is for — and a project's `.norte` still overrides the profile. What a profile
+**cannot** do is change where the daemon listens, turn the AI on, decide where
+logs are written, raise the archive limits, or run an `init.lua`: a profile
+declares, it does not execute. Anything of that kind inside one is ignored and
+said out loud rather than quietly honoured.
+
+If a profile you named does not load, norte says which file and refuses to
+start — you asked for that one. If it was merely the profile you were last in,
+it starts without it and tells you, so you are never locked out of the program
+by a typo in a directory you were only trying out.
 
 # The directory tree
 

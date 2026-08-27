@@ -38,18 +38,43 @@ async fn main() -> Result<()> {
     let Some(args) = args_or_exit(parsed)? else {
         return Ok(()); // `--help`/`--version`: ya impreso.
     };
-    let (cli_preset, cli_layout, cli_daemon, cli_socket, cli_pick, cli_cd_file) = (
+    let (cli_preset, cli_layout, cli_profile, cli_daemon, cli_socket, cli_pick, cli_cd_file) = (
         args.text("--preset"),
         // `--layout` NO es texto por contrato: acaba siendo un nombre de
         // fichero, y por `to_string_lossy` dos bytes inválidos distintos
         // abrían el mismo `\u{FFFD}.toml` (#246 M1).
         args.os_text("--layout").map(std::ffi::OsString::from),
+        // `--profile` tampoco es texto por contrato: acaba siendo
+        // `profiles/<nombre>/`, que es un DIRECTORIO. Mismo motivo y mismo
+        // #246 que `--layout`.
+        args.os_text("--profile").map(std::ffi::OsString::from),
         args.has("--daemon"),
         args.path("--socket"),
         args.has("--pick"),
         args.path("--cd-file"),
     );
-    let layers = config::standard_layers();
+    // Un `--profile` EXPLÍCITO se conoce antes de conectar con nada, así que
+    // entra en la PRIMERA carga y no por el cambio en caliente: así aplica
+    // hasta `[ui] lang`, que es lo único que un cambio en marcha no puede
+    // (`norte_i18n::force` corre una vez). El perfil PEGAJOSO no puede hacer
+    // esto —vive en la sesión, y la sesión la tiene el daemon, al que se llega
+    // con la config que estamos cargando— y por eso llega por el otro camino.
+    //
+    // Y si el que has nombrado no se puede usar, esto ABORTA (ADR 0079, D7):
+    // pediste ese perfil, y arrancar como otra cosa sería contestar otra
+    // pregunta. `load_async` ya nombra el fichero culpable.
+    let layers = match &cli_profile {
+        Some(name) => {
+            let l = config::standard_layers_with_profile(Some(name));
+            anyhow::ensure!(
+                l.dirs.iter().any(|(_, k)| *k == config::Layer::Profile),
+                "no hay ningún perfil que se llame «{}»",
+                name.to_string_lossy()
+            );
+            l
+        }
+        None => config::standard_layers(),
+    };
     let cfg = config::load_async(layers.clone())
         .await
         .context("config inválida")?;
@@ -104,6 +129,11 @@ async fn main() -> Result<()> {
     let left = initial_pane(&backend, &start, &start_attrs).await?;
     let right = initial_pane(&backend, &start, &start_attrs).await?;
     let mut app = App::new(left, right);
+    // Un `--profile` explícito ya está APLICADO (entró en las capas de la
+    // primera carga), así que se declara activo aquí y no por el camino del
+    // cambio en caliente. De paso es lo que hace que el perfil pegajoso de la
+    // sesión no lo pise: el lector nombró uno para esta vez.
+    app.active_profile.clone_from(&cli_profile);
     app.pick = cli_pick; // `--pick` (S2): see the field's rustdoc (`app.rs`).
     app.columns = columns;
     // Sincronizar necesita journal Y spool (regla dura 4: `sync.apply` abre un
