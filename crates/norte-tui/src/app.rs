@@ -258,6 +258,14 @@ pub struct SessionUi {
     /// [`norte_frontend::session::SessionBody::prune`], que es quien sabe
     /// cuántos huérfanos caben.
     orphans: std::collections::BTreeMap<u32, norte_frontend::session::SlotState>,
+    /// Las disposiciones de los OTROS perfiles, tal y como vinieron.
+    ///
+    /// Mismo trato que los huérfanos y por el mismo motivo: esta sesión es la
+    /// pantalla de VARIOS perfiles y este proceso solo mira uno, así que lo de
+    /// los demás viaja de vuelta intacto. Escribir solo el activo borraría del
+    /// documento el sitio donde los otros habían dejado sus paneles (ADR
+    /// 0079, D5).
+    other_layouts: std::collections::BTreeMap<String, norte_frontend::layout::Node>,
     /// Cuándo se tocó cada hueco por última vez (epoch ms), para la barrida
     /// por edad. Se guarda en vez de sellarse al capturar porque capturar no
     /// es tocar: dos capturas seguidas de la misma pantalla tienen que dar el

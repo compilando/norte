@@ -85,6 +85,35 @@ pub fn siguiente(
     Some(perfiles[i].name.clone())
 }
 
+/// Qué NO se puede aplicar sin reiniciar, de este perfil, en ESTA terminal.
+///
+/// Medido, no supuesto (D8). Lo que sí se aplica lo aplica
+/// [`crate::config_reload::reload_config`], que es el paso 2 del cambio: tema
+/// (ADR 0020), keymap entero, columnas con su re-orden, favoritos, openers, el
+/// modo de quick search y la confirmación de salida; el ratón lo re-aplica el
+/// bucle justo detrás, y la disposición y los ocultos llegan por los pasos 4
+/// y 5. La lista de abajo es el resto.
+///
+/// **`[ui] lang` es lo único que queda**, y no por descuido: `norte_i18n::force`
+/// corre UNA vez por proceso, y el hot-reload del watcher ya lleva esa misma
+/// limitación escrita en su firma desde antes de que hubiera perfiles. Un
+/// cambio que se callara esto sería un cambio que miente.
+///
+/// Las fuentes y `reduce_motion` no salen aquí porque en una terminal no
+/// aplican en absoluto: son de la ventana, y decir «no se pudo aplicar» de algo
+/// que este frontend nunca aplica sería ruido.
+#[must_use]
+pub fn no_aplicable_en_caliente(
+    antes: &norte_config::CommonConfig,
+    despues: &norte_config::CommonConfig,
+) -> Vec<&'static str> {
+    let mut fuera = Vec::new();
+    if antes.ui_lang != despues.ui_lang {
+        fuera.push("ui.lang");
+    }
+    fuera
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,5 +174,77 @@ mod tests {
     #[test]
     fn sin_perfiles_no_hay_nada() {
         assert_eq!(siguiente(&[], None, true), None);
+    }
+
+    /// Cambiar el idioma se ANUNCIA; cambiar el tema no, porque el tema sí se
+    /// aplica en caliente.
+    #[test]
+    fn solo_el_idioma_se_anuncia() {
+        let base = norte_config::load(&norte_config::Layers { dirs: Vec::new() }).expect("vacía");
+        let mut otro = base.clone();
+        otro.ui_theme = Some("nord".to_owned());
+        assert!(
+            no_aplicable_en_caliente(&base, &otro).is_empty(),
+            "el tema es hot-reloadable (ADR 0020)"
+        );
+
+        let mut con_idioma = base.clone();
+        con_idioma.ui_lang = Some("es".to_owned());
+        assert_eq!(
+            no_aplicable_en_caliente(&base, &con_idioma),
+            vec!["ui.lang"]
+        );
+    }
+
+    /// Cada campo de `CommonConfig` está CLASIFICADO: o se aplica en caliente,
+    /// o se anuncia, o no es de este frontend.
+    ///
+    /// El destructuring va sin `..` a propósito. Un campo nuevo hace que este
+    /// test no COMPILE, que es más fuerte que un assert que falle: obliga a
+    /// decidir en qué grupo cae justo cuando alguien lo está añadiendo, y es
+    /// la única manera de que la línea que el cambio de perfil le dice al
+    /// lector siga siendo verdad dentro de un año.
+    #[test]
+    fn todo_campo_de_common_config_esta_clasificado() {
+        let c = norte_config::load(&norte_config::Layers { dirs: Vec::new() }).expect("vacía");
+        let norte_config::CommonConfig {
+            // — Se aplican en caliente: `reload_config` (paso 2 del cambio).
+            preset: _,
+            ui_theme: _,
+            quick_search: _,
+            ui_confirm_quit: _,
+            ui_columns: _,
+            hotlist: _,
+            // — El bucle de eventos lo re-aplica justo detrás de la recarga.
+            ui_mouse: _,
+            // — Llegan por los pasos 4 y 5 (disposición y siembra de huecos).
+            ui_layout: _,
+            ui_show_hidden: _,
+            profile_start: _,
+            // — SE ANUNCIA: `norte_i18n::force` corre una vez por proceso.
+            ui_lang: _,
+            // — De la VENTANA: una terminal no los aplica nunca, así que
+            //   decir «no se pudo» sería ruido.
+            ui_font: _,
+            ui_mono_font: _,
+            ui_font_size: _,
+            ui_reduce_motion: _,
+            // — Un perfil NO puede fijarlos (ADR 0079, D2), así que un cambio
+            //   de perfil no los mueve por construcción.
+            daemon_mode: _,
+            daemon_socket: _,
+            archive_max_entries: _,
+            archive_max_decompressed_bytes: _,
+            archive_max_nesting: _,
+            archive_rar_delegate: _,
+            log_dir: _,
+            log_retain: _,
+            ai: _,
+            // — Diagnóstico de la carga, no ajustes.
+            sources: _,
+            project_warnings: _,
+            profile_warnings: _,
+            profile_title: _,
+        } = c;
     }
 }
