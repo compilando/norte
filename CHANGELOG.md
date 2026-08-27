@@ -357,6 +357,23 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The processes panel said what kind of work and nothing else.** A row read
+  `copy #7318349021 45%` — the same line for any copy of anything — and a
+  finished task stayed there until another one pushed it out, so what the panel
+  showed at a glance was the session's history rather than what is happening.
+  Rows now name the entry the task is acting on and drop the task id: eighteen
+  digits identify nothing to the reader and eat the width the name needs, and
+  both the class and the path were already travelling in `TaskProgress`, so
+  nothing on the wire changed. The operand is kept per row rather than read from
+  the latest snapshot, because `current` is *the entry in progress* and the
+  terminal snapshot of most tasks arrives without one — a row that says
+  `copy ✓` without saying what it copied is the complaint, not the fix. A
+  terminal row now disappears ten seconds after it finishes, on the clock the
+  render already injects; live rows are never dropped, for the same reason the
+  row cap never drops them. The class label became one shared function: the
+  bottom strip and the panel each had their own `match`, and the same task
+  labelled two ways reads as two different things — `fs.dir_size` was falling
+  through to the generic label in both.
 - **`far` gets a rename key and `norton` a search key, and every other gap in
   those two presets is now a written decision** (#228). Six core commands were
   unbound across the seven bundled presets, and the two that were plain
