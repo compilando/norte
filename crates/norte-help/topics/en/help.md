@@ -49,5 +49,9 @@ for want of width.
 {{cmd:app.menu}} opens a menu bar with the same commands arranged by topic. It
 adds nothing the keyboard cannot do; it adds a way to FIND it — the palette
 asks you to know the name of what you want and this help asks you to read,
-while a menu can be walked. Arrows move, `Enter` runs, `Esc` closes, and with
-the mouse you just click.
+while a menu can be walked. Left and right move between menus, up and down
+walk one menu's commands, `Enter` runs and `Esc` closes.
+
+The bar stays pinned to the top row unless you turn it off (`[ui] menu_bar`),
+and it says on its right which key opens it. With the bar in view, clicking a
+title opens that menu directly, without going through the key.

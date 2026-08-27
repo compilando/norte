@@ -56,8 +56,6 @@ pub struct MenuZone {
 /// barra de pestañas: medirlo dos veces es cómo un click abre el menú de al
 /// lado.
 pub(crate) struct MenuGeom {
-    /// `(label, x0, x1)` de cada título.
-    titles: Vec<(String, u16, u16)>,
     /// La caja del desplegable.
     drop: Rect,
     /// `(label, chord)` de cada elemento del menú abierto.
@@ -130,7 +128,6 @@ pub(crate) fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
         .map_or(area.x, |(_, x0, _)| *x0)
         .min(area.x.saturating_add(area.width).saturating_sub(w));
     Some(MenuGeom {
-        titles,
         drop: Rect {
             x: x0,
             y: area.y.saturating_add(1),
@@ -144,20 +141,29 @@ pub(crate) fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
 /// Las zonas pulsables de la barra de menús.
 #[must_use]
 pub fn menu_zones(app: &App, area: Rect) -> Vec<MenuZone> {
-    let Some(g) = menu_geom(app, area) else {
-        return Vec::new();
+    // Los TÍTULOS son pulsables siempre que la barra esté en pantalla, esté
+    // el menú abierto o no. Salían de `menu_geom`, que devuelve `None` con el
+    // menú cerrado —tiene que hacerlo, sin nada abierto no hay desplegable que
+    // medir— así que con la barra fijada se veía y no se podía pulsar: una
+    // barra que existe para que encuentres el menú y en la que el clic no
+    // hace nada.
+    let mut out: Vec<MenuZone> = if app.menu_bar || app.menu.is_some() {
+        menu_titles(area)
+            .iter()
+            .enumerate()
+            .map(|(i, (_, x0, x1))| MenuZone {
+                row: area.y,
+                x0: *x0,
+                x1: *x1,
+                hit: MenuHit::Title(i),
+            })
+            .collect()
+    } else {
+        Vec::new()
     };
-    let mut out: Vec<MenuZone> = g
-        .titles
-        .iter()
-        .enumerate()
-        .map(|(i, (_, x0, x1))| MenuZone {
-            row: area.y,
-            x0: *x0,
-            x1: *x1,
-            hit: MenuHit::Title(i),
-        })
-        .collect();
+    let Some(g) = menu_geom(app, area) else {
+        return out;
+    };
     for (i, _) in g.items.iter().enumerate() {
         let row = g
             .drop
@@ -205,6 +211,47 @@ pub(crate) fn draw_menu(frame: &mut Frame<'_>, app: &App) {
         })
         .collect();
     frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), bar);
+
+    // Y la tecla que lo abre, a la derecha, SACADA DEL KEYMAP VIVO.
+    //
+    // Una barra que enseña siete títulos y no dice cómo se entra en ellos deja
+    // al lector con el ratón como única puerta. La tecla no se escribe a mano
+    // —es `alt+m` en unos presets y otra cosa en los que alguien reate— así
+    // que sale de donde salen las de los items del desplegable.
+    //
+    // Solo con el menú CERRADO: abierto, la tecla ya no hace falta y ese hueco
+    // lo quiere el título más a la derecha.
+    if abierto.is_none()
+        && let Some(chord) = app
+            .palette_rows
+            .iter()
+            .find(|r| r.key == "app.menu")
+            .map(|r| r.chord.clone())
+    {
+        let texto = format!("{chord} ");
+        let w = u16::try_from(UnicodeWidthStr::width(texto.as_str())).unwrap_or(0);
+        let usado = titles
+            .iter()
+            .filter(|(_, _, x1)| *x1 < area.x.saturating_add(area.width))
+            .map(|(l, _, _)| u16::try_from(UnicodeWidthStr::width(l.as_str())).unwrap_or(0))
+            .sum::<u16>();
+        // Solo si cabe SIN pisar los títulos: el nombre de un menú vale más
+        // que su atajo, y medio atajo no vale nada.
+        if bar.width > usado.saturating_add(w) {
+            let hint = Rect {
+                x: bar.x.saturating_add(bar.width).saturating_sub(w),
+                width: w,
+                ..bar
+            };
+            frame.render_widget(
+                Paragraph::new(ratatui::text::Line::styled(
+                    texto,
+                    app.theme.role(Role::Info),
+                )),
+                hint,
+            );
+        }
+    }
 
     let (Some(st), Some(g)) = (abierto, menu_geom(app, area)) else {
         return;

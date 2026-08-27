@@ -415,8 +415,15 @@ fn menu_click(app: &mut App, col: u16, row: u16) -> After {
         .copied();
     match zone.map(|z| z.hit) {
         Some(crate::ui::MenuHit::Title(i)) => {
+            // Con el menú CERRADO esto lo abre: es el clic que hace usable la
+            // barra fijada. Antes solo movía el menú ya abierto de un título a
+            // otro, así que la barra se veía y no se podía pulsar.
             if let Some(m) = &mut app.menu {
                 m.open(i);
+            } else {
+                let mut m = norte_frontend::menu::MenuState::new();
+                m.open(i);
+                app.menu = Some(m);
             }
             After::Nothing
         }
@@ -481,6 +488,13 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
             return menu_click(app, ev.column, ev.row);
         }
         return After::Nothing;
+    }
+    // Con el menú CERRADO pero la barra fijada, un clic en la fila de la barra
+    // la abre. Va aquí y no más abajo porque esa fila no pertenece a ningún
+    // panel: sin este brazo el clic caía en el hit-test de los listados, que
+    // devuelve `None` para ella, y no pasaba nada.
+    if app.menu_bar && ev.row == 0 && matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) {
+        return menu_click(app, ev.column, ev.row);
     }
     if overlay_open(app) {
         return After::Nothing;

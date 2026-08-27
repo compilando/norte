@@ -235,6 +235,34 @@ fn los_bordes_del_pane_no_son_filas() {
     }
 }
 
+/// Un clic en la barra de menú fijada la ABRE.
+///
+/// Es lo que hace usable la barra: antes solo se atendían clics del menú si YA
+/// estaba abierto, así que con la barra fijada y cerrada pulsar «Archivo» no
+/// hacía nada — una barra que existe para que encuentres el menú y en la que
+/// el clic es inerte.
+#[test]
+fn un_click_en_la_barra_de_menu_la_abre() {
+    let mut app = app_pintada(5);
+    assert!(app.menu.is_none(), "arranca cerrado");
+    let _ = mouse::handle(&mut app, ev(ABAJO, 2, 0));
+    assert!(
+        app.menu.is_some(),
+        "el clic en el primer título abre el menú"
+    );
+}
+
+/// Y con la barra apagada, la fila 0 vuelve a ser del panel: no hay barra que
+/// pulsar, así que el clic no puede abrir nada.
+#[test]
+fn sin_barra_fijada_un_click_arriba_no_abre_el_menu() {
+    let mut app = app_pintada(5);
+    app.menu_bar = false;
+    let _ = pintar(&mut app);
+    let _ = mouse::handle(&mut app, ev(ABAJO, 2, 0));
+    assert!(app.menu.is_none());
+}
+
 /// La barra de estado no pertenece a ningún pane: fuera del hit test
 /// entero, no «la última fila del pane de abajo».
 #[test]

@@ -52,5 +52,10 @@ overlays se dejan fuera por falta de ancho.
 {{cmd:app.menu}} abre una barra de menús con las mismas órdenes ordenadas por
 tema. No añade nada que el teclado no pueda: añade una forma de ENCONTRARLO —
 la paleta pide saber el nombre de lo que buscas y esta ayuda pide leer,
-mientras que un menú se recorre. Las flechas se mueven, `Enter` ejecuta, `Esc`
-cierra, y con el ratón se pulsa directamente.
+mientras que un menú se recorre. Izquierda y derecha pasan de un menú a otro,
+arriba y abajo recorren sus órdenes, `Enter` ejecuta y `Esc` cierra.
+
+La barra se queda fijada en la fila de arriba salvo que la apagues
+(`[ui] menu_bar`), y ahí dice a su derecha con qué tecla se abre. Con la barra
+a la vista, pulsar un título con el ratón abre ese menú directamente, sin
+pasar por la tecla.
