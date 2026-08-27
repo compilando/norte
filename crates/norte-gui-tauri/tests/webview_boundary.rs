@@ -316,6 +316,39 @@ fn el_renderer_solo_invoca_comandos_conocidos() {
     }
 }
 
+/// El ORDEN de los anclajes del documento decide quién tapa a quién.
+///
+/// Esta pantalla no usa `z-index` en ninguna parte: entre elementos
+/// posicionados manda el orden del documento. Así que el orden ES la
+/// decisión, y hasta ahora solo estaba escrita en comentarios de la hoja de
+/// estilos y del propio HTML.
+///
+/// El menú lo destapó: declarado ANTES que `#screen`, su desplegable quedaba
+/// por debajo de los paneles —que son absolutos y vienen después— y se abría
+/// invisible. Se ve al pulsarlo y no se ve en ningún test de comportamiento,
+/// porque `jsdom` no reparte pantalla.
+#[test]
+fn el_orden_de_los_anclajes_es_el_de_quien_tapa_a_quien() {
+    let html = std::fs::read_to_string(raiz().join("ui/index.html")).expect("el index está");
+    let pos = |id: &str| {
+        html.find(&format!("id=\"{id}\""))
+            .unwrap_or_else(|| panic!("falta el anclaje #{id}"))
+    };
+    assert!(
+        pos("screen") < pos("menu"),
+        "el menú va DESPUÉS de la pantalla: su desplegable cuelga sobre los \
+         paneles, y quien va antes queda debajo"
+    );
+    // Y las superficies que se quedan el teclado van después del menú: un
+    // diálogo o la ayuda mandan sobre una barra de menús, nunca al revés.
+    for encima in ["palette", "dialogs", "help", "profiles"] {
+        assert!(
+            pos("menu") < pos(encima),
+            "#{encima} tiene que taparlo al menú, así que va después"
+        );
+    }
+}
+
 /// La ventana YA muta, y sigue siendo una barrera que se clava aquí.
 ///
 /// El interruptor lo levantó la tarea 5.4 (la revisión de seguridad de las

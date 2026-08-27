@@ -42,24 +42,33 @@ body {
   width: 100vw;
   /* La barra de menús RESERVA su fila, no la tapa: el reparto que el host
      calcula cuenta con la altura que este elemento diga, así que una barra
-     flotante escondería la primera fila del listado. Con `[ui] menu_bar`
-     apagada el renderer pone la variable a cero y no se pierde nada. */
+     flotante encima escondería la primera fila del listado. Se aparta con un
+     MARGEN porque la barra está `fixed` —tiene que ir después en el
+     documento para pintar por encima de los paneles— y por tanto no ocupa
+     sitio en el flujo. Con `[ui] menu_bar` apagada la variable es cero y no
+     se pierde nada. */
   height: calc(100vh - var(--menubar-h, 0px));
+  margin-top: var(--menubar-h, 0px);
 }
 
-#menu[data-open="false"],
-#menu[data-open="true"] {
-  position: relative;
-}
+/* `#menu` no se posiciona: sus tres hijos son `fixed` y se colocan contra la
+   ventana. Es un ancla en el documento, y lo único que aporta es su SITIO —
+   después de la pantalla y antes de los overlays. */
 
 .menubar {
-  /* POSICIONADA, y no por gusto: el velo que cierra al pulsar fuera es
-     `fixed`, o sea posicionado, y un elemento posicionado se pinta por encima
-     de los que no lo están sea cual sea el orden del documento. Sin esto el
-     velo tapaba la propia barra y pulsar otro título con un menú abierto
-     cerraba en vez de cambiar de menú. Aquí no hay `z-index` en ninguna
-     parte: manda el orden, y para eso los dos tienen que estar posicionados. */
-  position: relative;
+  /* FIJA arriba, por dos razones que apuntan al mismo sitio. El contenedor va
+     DESPUÉS de `#screen` en el documento —que es lo que hace que el
+     desplegable se pinte sobre los paneles en vez de debajo— así que en el
+     flujo caería al fondo de la pantalla. Y `fixed` es posicionado, que es lo
+     que la deja por encima del velo que cierra al pulsar fuera: el velo
+     también lo es, y entre posicionados manda el orden del documento — sin
+     esto el velo tapaba la propia barra y pulsar otro título con un menú
+     abierto cerraba en vez de cambiar de menú. Aquí no hay `z-index` en
+     ninguna parte, y esto es lo que lo sustituye. */
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
   display: flex;
   height: var(--cell-h);
   align-items: center;
@@ -91,7 +100,11 @@ body {
 }
 
 .menu-items {
-  position: absolute;
+  /* Contra la VENTANA y no contra `#menu`: el ancla vive al final del flujo
+     (ver arriba), así que un `absolute` colgaría el desplegable del pie de la
+     página. Justo debajo de la barra, que es de donde cuelga de verdad. */
+  position: fixed;
+  top: var(--menubar-h, 0px);
   /* Colgando de SU título: un desplegable que se abre siempre a la izquierda
      no dice de qué menú es. La cuenta es aproximada —los títulos no miden lo
      mismo— y por eso se acota para que no se salga por la derecha. */

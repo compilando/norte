@@ -7,13 +7,17 @@
     <link rel="stylesheet" href="./src/style.css" />
   </head>
   <body>
-    <!-- La barra de menús va ANTES de la pantalla: es una fila fija arriba
-         y el resto se coloca debajo, no encima. Su desplegable sí flota, y
-         por eso el contenedor entero está en el flujo del documento antes
-         que todo lo demás: lo que se abre después lo tapa, que es lo
-         correcto — un diálogo o la ayuda mandan sobre un menú. -->
-    <div id="menu" data-open="false"></div>
     <main id="screen" role="application" aria-label="norte"></main>
+    <!-- La barra de menús va DESPUÉS de la pantalla, y no es estética: aquí
+         no hay `z-index` en ninguna parte, así que entre elementos
+         posicionados manda el orden del documento. Declarada antes, su
+         desplegable quedaba por DEBAJO de los paneles —que son absolutos y
+         vienen después— y el menú se abría invisible. La barra en sí es
+         `fixed` arriba y `#screen` se aparta con un margen, así que la fila
+         sigue reservada: el reparto que el host calcula cuenta con ella.
+         Todo lo que se declara más abajo la tapa, que es lo correcto — un
+         diálogo o la ayuda mandan sobre un menú. -->
+    <div id="menu" data-open="false"></div>
     <div id="palette" data-open="false"></div>
     <div id="whichkey" data-open="false"></div>
     <div id="viewer" data-open="false"></div>
