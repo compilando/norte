@@ -2346,11 +2346,78 @@ header = "Size"
         let dir = crate::policy::local_root_vpath(&raiz.path().join("sub")).unwrap();
 
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
-        let sesion = mint.mint_for(&dir, Some(".git"), true).expect("acuña");
+        // Se llama a la SUBIDA directamente, y no solo a `mint_for`, para que
+        // un fallo nombre el ancestro culpable. Con el prefijo a secas, este
+        // test decía «se subió» y no a dónde, que es la mitad del dato
+        // (#308): dos días de intermitencia sin saber qué directorio tenía el
+        // marcador.
+        let (raiz_hallada, prefix, _) =
+            mint.climb_to_marker(&dir, &raiz.path().join("sub"), ".git");
         assert!(
-            sesion.as_ref().prefix.is_empty(),
-            "no se subió: la raíz es el directorio visible, no el ancestro"
+            prefix.is_empty(),
+            "no se subió: la raíz es el directorio visible, no el ancestro. \
+             Subió hasta {} (partiendo de {})",
+            raiz_hallada.display(),
+            raiz.path().join("sub").display()
         );
+        let sesion = mint.mint_for(&dir, Some(".git"), true).expect("acuña");
+        assert!(sesion.as_ref().prefix.is_empty());
+    }
+
+    /// Un marcador en un directorio QUE ESCRIBE CUALQUIERA no abre nada (#308).
+    ///
+    /// #241 cerró el caso del symlink y dejó abierto el que menos trabajo da:
+    /// `mkdir /tmp/.git`. El sticky bit de `/tmp` impide BORRAR nombres
+    /// ajenos, no impide CREAR el tuyo, y un `.git` que es un directorio de
+    /// verdad pasaba la comprobación —está escrita para rechazar enlaces, y un
+    /// directorio no es un enlace—. A partir de ahí, cualquier panel bajo
+    /// `/tmp` le entregaba al plugin `/tmp` ENTERO: los ficheros temporales de
+    /// todos los usuarios de la máquina.
+    ///
+    /// Se descubrió porque este test es intermitente en máquinas donde alguien
+    /// ha dejado un `/tmp/.git`. No era un test frágil: era el test viendo el
+    /// agujero cada vez que la condición existía.
+    #[test]
+    fn un_marcador_en_un_directorio_que_escribe_cualquiera_no_abre_nada() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let raiz = tempfile::tempdir().unwrap();
+        // Un `.git` de VERDAD, no un enlace: es lo que la comprobación anterior
+        // aceptaba.
+        std::fs::create_dir(raiz.path().join(".git")).unwrap();
+        std::fs::create_dir(raiz.path().join("sub")).unwrap();
+        // 1777, como `/tmp`: escribible por todos, con sticky bit.
+        std::fs::set_permissions(raiz.path(), std::fs::Permissions::from_mode(0o1777)).unwrap();
+
+        let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
+        let (hallada, prefix, _) = mint.climb_to_marker(
+            &crate::policy::local_root_vpath(&raiz.path().join("sub")).unwrap(),
+            &raiz.path().join("sub"),
+            ".git",
+        );
+        assert!(
+            prefix.is_empty(),
+            "un directorio que escribe cualquiera no es la raíz de un proyecto: \
+             subió hasta {}",
+            hallada.display()
+        );
+    }
+
+    /// Y un repositorio NORMAL sigue abriéndose: el arreglo no puede costar el
+    /// caso de uso entero.
+    #[test]
+    fn un_repositorio_con_permisos_normales_sigue_abriendo() {
+        let raiz = tempfile::tempdir().unwrap();
+        std::fs::create_dir(raiz.path().join(".git")).unwrap();
+        std::fs::create_dir(raiz.path().join("sub")).unwrap();
+
+        let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
+        let (_, prefix, _) = mint.climb_to_marker(
+            &crate::policy::local_root_vpath(&raiz.path().join("sub")).unwrap(),
+            &raiz.path().join("sub"),
+            ".git",
+        );
+        assert_eq!(prefix, b"sub", "un repo de verdad sí abre su raíz");
     }
 
     /// Y el fichero `gitdir:` de un worktree SÍ cuenta: es un `.git` de verdad,
@@ -2795,6 +2862,39 @@ fn home_del_entorno() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
+/// Si `p` lo puede escribir CUALQUIER usuario de la máquina.
+///
+/// Un marcador de raíz de proyecto dentro de un directorio así no significa
+/// nada: lo pone quien quiera. #241 cerró el caso del enlace —`ln -s /nada
+/// /tmp/.git`— y dejó abierto el que menos trabajo cuesta, `mkdir /tmp/.git`,
+/// porque la comprobación estaba escrita para rechazar ENLACES y un
+/// directorio de verdad no lo es. El sticky bit de `/tmp` impide borrar
+/// nombres ajenos; no impide crear el tuyo. Con el marcador plantado, todo
+/// panel bajo `/tmp` le entregaba al plugin `/tmp` entero: los temporales de
+/// todos los usuarios.
+///
+/// Se mira el bit `o+w` del DIRECTORIO que tiene el marcador, no el del
+/// marcador: lo que decide quién puede plantarlo es el permiso del contenedor.
+/// Un repositorio normal es 0755 y no se ve afectado.
+///
+/// Un `stat` que falla dice `true` —fail-closed—: si no se puede saber quién
+/// escribe ahí, no se entrega esa raíz.
+#[cfg(unix)]
+fn lo_escribe_cualquiera(p: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    // Escrito en negativo a propósito: es «true salvo que se DEMUESTRE que no».
+    // Un `is_ok_and(… != 0)` diría `false` cuando el stat falla, o sea abriría
+    // la raíz precisamente cuando no se sabe de quién es.
+    !std::fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o002 == 0)
+}
+
+/// En sistemas sin bits POSIX esta comprobación no aplica: Windows tiene su
+/// propia historia de ACL y el confinamiento allí lo lleva #217.
+#[cfg(not(unix))]
+fn lo_escribe_cualquiera(_p: &std::path::Path) -> bool {
+    false
+}
+
 /// `(dev, ino)` de una ruta, o `None` si no se pudo mirar.
 ///
 /// `None` no relaja nada por su cuenta: quien lo recibe abre sin verificar,
@@ -2960,6 +3060,7 @@ impl LocationMint {
                 .join(marker)
                 .symlink_metadata()
                 .is_ok_and(|m| !m.file_type().is_symlink())
+                && !lo_escribe_cualquiera(&actual_n)
             {
                 // El nodo que se MIRÓ, para exigirlo al abrir: entre esta
                 // decisión y el `open` la ruta se resuelve otra vez desde `/`,
