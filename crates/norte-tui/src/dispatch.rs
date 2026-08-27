@@ -206,7 +206,7 @@ pub async fn dispatch(
         Command::ProfilePick => {
             let perfiles = match config::user_config_dir() {
                 Some(dir) => {
-                    tokio::task::spawn_blocking(move || crate::app::profile::lee_todos(&dir))
+                    tokio::task::spawn_blocking(move || norte_frontend::config::read_profiles(&dir))
                         .await
                         .unwrap_or_default()
                 }
@@ -221,13 +221,13 @@ pub async fn dispatch(
         Command::ProfileNext | Command::ProfilePrev => {
             let perfiles = match config::user_config_dir() {
                 Some(dir) => {
-                    tokio::task::spawn_blocking(move || crate::app::profile::lee_todos(&dir))
+                    tokio::task::spawn_blocking(move || norte_frontend::config::read_profiles(&dir))
                         .await
                         .unwrap_or_default()
                 }
                 None => Vec::new(),
             };
-            app.pending_profile = crate::app::profile::siguiente(
+            app.pending_profile = norte_frontend::profile_picker::next_profile(
                 &perfiles,
                 app.active_profile.as_deref(),
                 matches!(cmd, Command::ProfileNext),

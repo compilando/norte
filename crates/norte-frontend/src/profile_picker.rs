@@ -88,6 +88,45 @@ pub struct ProfilePicker {
     cursor: usize,
 }
 
+/// El perfil que sigue (o precede) al activo, girando por el final.
+///
+/// `None` cuando no hay a dónde ir: ni perfiles, o solo el que ya está activo
+/// — girar sobre uno solo es un cambio que no cambia nada, y hacerlo pasar por
+/// la secuencia entera tiraría y recargaría la pantalla para dejarla igual.
+///
+/// Sin perfil activo, `next` es el primero y `prev` el último: entrar por
+/// cualquiera de los dos extremos es lo que espera quien todavía no ha elegido
+/// ninguno.
+///
+/// Compartido a propósito: `profile.next` tiene que significar lo mismo en la
+/// ventana y en el terminal, y dos copias de un giro con módulo son dos
+/// órdenes distintas esperando a divergir (ADR 0077).
+#[must_use]
+pub fn next_profile(
+    perfiles: &[UserProfile],
+    activo: Option<&OsStr>,
+    hacia_delante: bool,
+) -> Option<OsString> {
+    if perfiles.is_empty() {
+        return None;
+    }
+    let Some(activo) = activo else {
+        let i = if hacia_delante { 0 } else { perfiles.len() - 1 };
+        return Some(perfiles[i].name.clone());
+    };
+    let actual = perfiles.iter().position(|p| p.name == activo)?;
+    if perfiles.len() == 1 {
+        return None;
+    }
+    let n = perfiles.len();
+    let i = if hacia_delante {
+        (actual + 1) % n
+    } else {
+        (actual + n - 1) % n
+    };
+    Some(perfiles[i].name.clone())
+}
+
 impl ProfilePicker {
     /// Abre el selector con los perfiles que se le pasen, ya leídos, y el
     /// nombre del que está activo.
@@ -166,6 +205,63 @@ mod tests {
             title: None,
             problem: None,
         }
+    }
+
+    fn perfiles(nombres: &[&str]) -> Vec<UserProfile> {
+        nombres.iter().map(|n| perfil(n)).collect()
+    }
+
+    #[test]
+    fn gira_por_el_final_en_los_dos_sentidos() {
+        let p = perfiles(&["a", "b", "c"]);
+        assert_eq!(
+            next_profile(&p, Some(OsStr::new("c")), true).as_deref(),
+            Some(OsStr::new("a")),
+            "del último al primero"
+        );
+        assert_eq!(
+            next_profile(&p, Some(OsStr::new("a")), false).as_deref(),
+            Some(OsStr::new("c")),
+            "y del primero al último"
+        );
+    }
+
+    /// Girar sobre UN solo perfil no es un cambio: hacerlo pasar por la
+    /// secuencia entera tiraría y recargaría la pantalla para dejarla igual.
+    #[test]
+    fn con_un_solo_perfil_activo_no_hay_a_donde_ir() {
+        let p = perfiles(&["a"]);
+        assert_eq!(next_profile(&p, Some(OsStr::new("a")), true), None);
+        assert_eq!(next_profile(&p, Some(OsStr::new("a")), false), None);
+    }
+
+    /// Sin perfil activo se entra por el extremo que corresponda al sentido.
+    #[test]
+    fn sin_activo_se_entra_por_un_extremo() {
+        let p = perfiles(&["a", "b", "c"]);
+        assert_eq!(
+            next_profile(&p, None, true).as_deref(),
+            Some(OsStr::new("a"))
+        );
+        assert_eq!(
+            next_profile(&p, None, false).as_deref(),
+            Some(OsStr::new("c"))
+        );
+    }
+
+    /// Un activo que ya no está en la lista —lo borraron con el programa
+    /// abierto— no elige ninguno a ciegas: girar desde un sitio que no existe
+    /// no tiene respuesta buena, y saltar al primero movería al lector a un
+    /// perfil que no pidió.
+    #[test]
+    fn un_activo_que_ya_no_existe_no_elige_a_ciegas() {
+        let p = perfiles(&["a", "b"]);
+        assert_eq!(next_profile(&p, Some(OsStr::new("fantasma")), true), None);
+    }
+
+    #[test]
+    fn sin_perfiles_no_hay_nada() {
+        assert_eq!(next_profile(&[], None, true), None);
     }
 
     /// La fila del perfil ACTIVO se marca. Sin eso, el selector es una lista

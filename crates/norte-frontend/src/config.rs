@@ -197,6 +197,52 @@ pub fn load_with_profile(
     norte_config::load_with(layers_for, name, source, &load)
 }
 
+/// Lee todos los perfiles de `<dir>/profiles/`, con su título y su motivo si
+/// no cargan.
+///
+/// **Bloquea**: lista un directorio y abre un fichero por perfil. Quien la
+/// llame desde un bucle de eventos pasa por `spawn_blocking` (regla 2), y
+/// #244 es por qué.
+///
+/// Un perfil que no parsea NO desaparece: vuelve con su `problem` puesto, para
+/// que el selector lo enseñe roto en vez de esconder un directorio que el
+/// lector creó.
+///
+/// Vive en este módulo y no en [`crate::profile_picker`] porque abre
+/// ficheros, y aquel es puro por contrato. Y vive en este CRATE y no en un
+/// frontend porque los dos lo necesitan igual: la ventana y el terminal
+/// enseñan la misma lista, y dos lectores del mismo directorio acaban
+/// discrepando en qué es un perfil roto.
+#[must_use]
+pub fn read_profiles(dir: &Path) -> Vec<crate::profile_picker::UserProfile> {
+    let raiz = dir.join("profiles");
+    norte_config::list_profiles(&raiz)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|name| {
+            let toml = raiz.join(&name).join("norte.toml");
+            let (title, problem) = match std::fs::read_to_string(&toml) {
+                // Un perfil sin `norte.toml` es legítimo: puede traer solo su
+                // `layouts/` o su `keymap.toml`.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, None),
+                Err(e) => (None, Some(e.kind().to_string())),
+                Ok(raw) => match toml::from_str::<norte_config::NorteToml>(&raw) {
+                    Ok(p) => (p.profile.title, None),
+                    // El diagnóstico NO cita el contenido del fichero: la
+                    // barra de mensajes tiene un tope y una config puede
+                    // llevar rutas (#73).
+                    Err(e) => (None, Some(e.message().to_owned())),
+                },
+            };
+            crate::profile_picker::UserProfile {
+                name,
+                title,
+                problem,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use norte_config::{Layer, Layers};
