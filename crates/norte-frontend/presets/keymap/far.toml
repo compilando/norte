@@ -102,6 +102,10 @@ keymap = [
     # (libre en Far).
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
+    # El tema, en `alt+9`. F9 está libre aquí pero es el MENÚ en FAR, y
+    # robársela pelearía con la memoria muscular de quien eligió este preset.
+    # Ver la nota larga en krusader.toml.
+    { on = ["alt+9"], run = "app.theme" },
     { on = ["ctrl+p"], run = "app.palette" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },

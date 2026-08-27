@@ -326,6 +326,45 @@ mod k2b_gate_tests {
         }
     }
 
+    /// Las superficies PROPIAS de norte están atadas en los SIETE presets.
+    ///
+    /// Son las que ningún gestor de referencia tenía, así que no hay nada que
+    /// transcribir y hay que elegirles tecla a mano — y por eso se olvidan.
+    /// `app.theme` se quedó sin atar en los cuatro presets importados: el
+    /// ÚNICO de la familia que se cayó, y en los cuatro a la vez. Al tema solo
+    /// se llegaba por menú o paleta.
+    ///
+    /// Es la forma de #228 —presets que dejan comandos del núcleo sin tecla—
+    /// aplicada a la familia entera en vez de a un comando suelto.
+    #[test]
+    fn las_superficies_propias_estan_atadas_en_los_siete_presets() {
+        let propias = [
+            "app.theme",
+            "app.settings",
+            "app.extensions",
+            "app.palette",
+            "app.menu",
+        ];
+        let mut faltan: Vec<String> = Vec::new();
+        for nombre in NAMES {
+            let src = source(nombre).expect("NAMES resuelve");
+            let kf =
+                crate::keymap::parse_keymap(src).unwrap_or_else(|e| panic!("preset {nombre}: {e}"));
+            let atados = preset_runs(&kf);
+            for cmd in propias {
+                if !atados.contains(&cmd) {
+                    faltan.push(format!("{nombre}: {cmd}"));
+                }
+            }
+        }
+        assert!(
+            faltan.is_empty(),
+            "superficies de norte sin tecla — solo se llega a ellas por menú o \
+             paleta:\n  {}",
+            faltan.join("\n  ")
+        );
+    }
+
     /// Ningún preset ata un acorde que un terminal NO PUEDE entregar.
     ///
     /// `ctrl+<letra mayúscula>` es esa forma. [`crate::keymap::parse_chord`]

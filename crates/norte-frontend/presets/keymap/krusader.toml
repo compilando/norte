@@ -78,6 +78,13 @@ keymap = [
     # es `pane.split-file` en Krusader. Hay test.
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
+    # El tema. `alt+9` y no `f9` porque F9 aquí es abrir terminal, que es lo
+    # que F9 hace en Krusader; en FAR y en Norton es el menú del programa.
+    # Los tres presets nativos lo tienen en F9, así que el 9 hace eco de ellos
+    # sin robarle a nadie una tecla que ya significa algo. Estaba SIN ATAR en
+    # los cuatro presets importados —el único de las superficies propias de
+    # norte que se quedó fuera— y hay test.
+    { on = ["alt+9"], run = "app.theme" },
     { on = ["alt+p"], run = "app.palette" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },

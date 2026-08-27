@@ -57,6 +57,9 @@ keymap = [
     # (Ctrl+P es `pane.copy-path` en Total Commander).
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
+    # El tema, en `alt+9`, el mismo que los otros tres presets importados.
+    # Ver la nota larga en krusader.toml.
+    { on = ["alt+9"], run = "app.theme" },
     # `alt+p` y no `ctrl+P`: la mayúscula es el shift en la gramática y NO en
     # el cable — mismo byte que `ctrl+p`, que aquí es `pane.copy-path`. Ver la
     # nota larga en krusader.toml. Hay test.
