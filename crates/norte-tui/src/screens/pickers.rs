@@ -211,6 +211,43 @@ pub fn on_layout_picker_key(
     app.layout_picker_input(action);
 }
 
+/// Teclas del selector de PERFILES (ADR 0079). Misma disciplina que el de
+/// disposiciones: resuelve por keymap en la pantalla `dialog` y filtra por el
+/// mismo allowlist, con `ctrl+c` conservando su salida global antes de nada.
+pub fn on_profile_picker_key(
+    app: &mut App,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
+    code: KeyCode,
+) {
+    if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.quit = true;
+        return;
+    }
+    let Some(chord) = chord_from_crossterm(mods, code) else {
+        return; // tecla no modelada por el keymap: ignorar
+    };
+    let cmd = match resolver.push(chord) {
+        Resolution::Run { command: cmd, .. } => cmd,
+        Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
+            resolver.reset();
+            return;
+        }
+        Resolution::Reset => return,
+    };
+    if !ALLOW_PICKER.contains(&cmd.as_str()) {
+        return; // fuera del allowlist de este overlay: inerte
+    }
+    let action = match cmd.as_str() {
+        "dialog.up" => PickerAction::Up,
+        "dialog.down" => PickerAction::Down,
+        "dialog.confirm" => PickerAction::Confirm,
+        "dialog.cancel" => PickerAction::Cancel,
+        _ => return,
+    };
+    app.profile_picker_input(action);
+}
+
 /// Teclas del picker de columnas (#108 7a): resuelve por keymap (pantalla
 /// `dialog`) y filtra por [`ALLOW_COLUMNS`] — misma disciplina única-fuente
 /// que el resto de overlays (#24). `ctrl+c` conserva su salida global,

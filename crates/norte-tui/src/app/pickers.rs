@@ -86,6 +86,43 @@ impl App {
         }
     }
 
+    /// Teclas del selector de PERFILES.
+    ///
+    /// Confirmar no cambia nada aquí: deja el nombre PEDIDO y cierra. El
+    /// cambio lo hace el bucle, que es quien tiene las capas y los resolvers —
+    /// y hacerlo aquí sería recargar configuración desde dentro del manejador
+    /// de una tecla, que es la regla 2 otra vez.
+    ///
+    /// Elegir el perfil que YA está activo no pide nada: un cambio que no
+    /// cambia nada tiraría y recargaría la pantalla para dejarla igual.
+    pub fn profile_picker_input(&mut self, action: PickerAction) {
+        match action {
+            PickerAction::Up => {
+                if let Some(p) = &mut self.profile_picker {
+                    p.up();
+                }
+            }
+            PickerAction::Down => {
+                if let Some(p) = &mut self.profile_picker {
+                    p.down();
+                }
+            }
+            PickerAction::Confirm => {
+                let Some(row) = self
+                    .profile_picker
+                    .take()
+                    .and_then(|p| p.current().cloned())
+                else {
+                    return;
+                };
+                if !row.active {
+                    self.pending_profile = Some(row.name);
+                }
+            }
+            PickerAction::Cancel => self.profile_picker = None,
+        }
+    }
+
     /// Procesa una acción del usuario sobre el selector de disposición.
     ///
     /// A diferencia del selector de tema NO hay preview en vivo: aplicar un

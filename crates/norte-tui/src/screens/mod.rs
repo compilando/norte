@@ -18,7 +18,7 @@ pub use extensions::on_extensions_key;
 pub use help::{HelpDispatch, on_help_key, run_plugin_command};
 pub use pickers::{
     apply_theme, on_columns_key, on_connections_picker_key, on_layout_picker_key,
-    on_theme_picker_key, pane_attr_ids,
+    on_profile_picker_key, on_theme_picker_key, pane_attr_ids,
 };
 pub use settings::{on_settings_key, persist_setting, plugin_config_summaries};
 pub use side_nav::{
