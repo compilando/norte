@@ -39,6 +39,17 @@ pub struct FrontendConfig {
     /// [`RebindSources::split_at`](crate::keymap::RebindSources::split_at),
     /// which is the only supported way to make that cut.
     pub keymap_layer_kinds: Vec<Layer>,
+    /// El DIRECTORIO del que salió cada entrada de [`Self::keymap_layers`] —
+    /// misma longitud, mismo orden, índice a índice que
+    /// [`Self::keymap_layer_kinds`].
+    ///
+    /// Los tres vectores son UNA tabla. Este existe porque el destino de una
+    /// escritura de atajo y el directorio donde cae tienen que salir del mismo
+    /// sitio: `split_at` dice a qué capa apunta y esto dice dónde vive, así que
+    /// el escritor ya no resuelve un directorio por su cuenta. Con un perfil
+    /// activo eso mandaba la escritura al fichero del usuario, donde el perfil
+    /// la tapaba (#305).
+    pub keymap_layer_dirs: Vec<std::path::PathBuf>,
     /// Quick-search mode mapped onto the navigation enum.
     pub quick_search_mode: nav::Mode,
     /// Merged declarative openers (#28): System/User only, fail-closed.
@@ -128,6 +139,7 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
     let mut common = norte_config::load(layers)?;
     let mut keymap_layers = Vec::new();
     let mut keymap_layer_kinds = Vec::new();
+    let mut keymap_layer_dirs = Vec::new();
     let mut openers = OpenersConfig::empty();
     for (dir, kind) in &layers.dirs {
         if let Some(parsed) = load_keymap_layer(dir, *kind, &mut common.sources)? {
@@ -135,8 +147,10 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
             // In lockstep with the push above and never apart from it: the
             // two vectors are one table, and a layer whose kind was dropped
             // cannot be recovered by position (a dir with no `keymap.toml`
-            // leaves no gap here).
+            // leaves no gap here). Tres desde #305: el directorio también, por
+            // lo mismo.
             keymap_layer_kinds.push(*kind);
+            keymap_layer_dirs.push(dir.clone());
         }
         if let Some(parsed) = load_openers(dir, *kind, &mut common.sources)? {
             openers.extend_front(parsed);
@@ -150,6 +164,7 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
         common,
         keymap_layers,
         keymap_layer_kinds,
+        keymap_layer_dirs,
         quick_search_mode,
         openers,
     })
