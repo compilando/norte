@@ -1332,6 +1332,69 @@ async fn la_task_aparece_y_su_desenlace_no_se_pierde() {
     assert_eq!(tasks[0].percent, Some(100));
 }
 
+/// Una task TERMINADA se va sola del tablero a los diez segundos.
+///
+/// Antes se quedaba hasta que otra la empujaba fuera por el tope de filas, así
+/// que el panel enseñaba el historial de la sesión en vez de lo que está
+/// pasando. Es el mismo plazo que el TUI: dos frontends que caducan distinto
+/// son dos respuestas a «¿sigue esto en marcha?».
+///
+/// Reloj VIRTUAL (`start_paused`): el test no espera diez segundos, los salta
+/// — cuando nadie tiene trabajo, tokio adelanta al siguiente temporizador.
+#[tokio::test(start_paused = true)]
+async fn una_task_terminada_se_va_del_tablero_sola() {
+    let backend = arbol();
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F8")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    assert_eq!(siguientes_tasks(&mut sub).await.len(), 1);
+
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    let tasks = siguientes_tasks(&mut sub).await;
+    assert_eq!(
+        tasks[0].state,
+        norte_ui_host::dto::TaskStateView::Done,
+        "primero se VE terminada: el ✓ no puede pasar de largo"
+    );
+
+    // Se adelanta el reloj A MANO en vez de dejar que tokio salte solo: los
+    // helpers de este fichero esperan con un plazo de 500 ms, y el salto
+    // automático va al temporizador MÁS CERCANO — o sea a ese plazo, no al
+    // TTL, y el test moriría por «cuelgue» sin que nada estuviera mal.
+    tokio::time::advance(std::time::Duration::from_secs(11)).await;
+    // El `spawn` del TTL despierta y manda su mensaje; el ceder deja que lo
+    // haga ANTES de que el `Resync` entre en el mismo buzón, que se atiende
+    // en orden.
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+    // Hasta que el tablero quede vacío: entre el desenlace y la caducidad hay
+    // otros cambios de tablero (el relistado del directorio que el borrado
+    // dejó viejo publica el suyo), y afirmar sobre «el siguiente» sería
+    // afirmar sobre el que pase primero.
+    let mut vacio = false;
+    for _ in 0..5 {
+        if siguientes_tasks(&mut sub).await.is_empty() {
+            vacio = true;
+            break;
+        }
+    }
+    assert!(vacio, "la terminada caducó y se fue del tablero");
+}
+
 /// Cancelar es idempotente: pedirlo dos veces no es un error.
 #[tokio::test]
 async fn cancelar_es_idempotente() {
@@ -14965,6 +15028,56 @@ async fn los_huecos_auxiliares_se_abren_y_se_cierran() {
         assert!(
             !presente(&siguiente_foto(&mut sub).await),
             "{cmd} otra vez lo cierra"
+        );
+    }
+}
+
+/// El anillo del teclado NO para en la hoja de atributos.
+///
+/// El recorrido compartido (`focus_order`) lleva todo lo ENFOCABLE, y la hoja
+/// lo es: el reparto la cuenta. Pero no toma teclas —sigue al cursor del
+/// listado, y con el teclado dentro dejaría de seguir a nada, que es la mitad
+/// de #243— así que pararse ahí es una parada de la que ninguna tecla saca:
+/// las flechas no mueven nada y no hay nada en pantalla que lo explique.
+///
+/// El TUI recorre el anillo con la misma regla (`takes_keys` del registro
+/// compartido), y una decisión duplicada entre frontends diverge en silencio
+/// (ADR 0077).
+#[tokio::test]
+async fn el_anillo_no_se_para_en_la_hoja_de_atributos() {
+    use norte_ui_host::dto::SlotRole;
+    // Dos listados, para que el anillo tenga a dónde ir cuando salte la hoja:
+    // con uno solo la respuesta correcta es «no hay otro hueco».
+    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "layout.metadata").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let abierto = siguiente_foto(&mut sub).await;
+    let hoja = abierto
+        .slots
+        .iter()
+        .find_map(|v| match v {
+            SlotView::Metadata(m) => Some(m.slot_id),
+            _ => None,
+        })
+        .expect("la hoja está en pantalla");
+
+    // Una vuelta entera al anillo: la hoja no puede tener el foco en ningún
+    // momento de ella.
+    for _ in 0..6 {
+        ejecutar_por_paleta(&h, &mut sub, "layout.focus-next").await;
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let foto = siguiente_foto(&mut sub).await;
+        let activo = foto
+            .layout
+            .placements
+            .iter()
+            .find(|p| p.role == Some(SlotRole::Active))
+            .map(|p| p.slot_id);
+        assert_ne!(
+            activo,
+            Some(hoja),
+            "el anillo se paró en la hoja de atributos, que no toma teclas"
         );
     }
 }

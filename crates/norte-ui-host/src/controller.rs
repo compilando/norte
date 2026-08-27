@@ -195,6 +195,16 @@ const PLAZO_COMANDO: std::time::Duration = std::time::Duration::from_mins(1);
 /// reclamado y una página en blanco para siempre.
 const PLAZO_PLUGINS: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Cuánto sigue en el tablero una task ya TERMINADA.
+///
+/// Sin esto una terminal se quedaba hasta que otra la empujaba fuera por el
+/// tope de filas, así que lo que el panel enseñaba de un vistazo era el
+/// historial de la sesión y no lo que está pasando. Diez segundos bastan para
+/// leer el `✓` o el error, y por debajo el tablero vuelve a hablar del
+/// presente. El mismo número que el TUI, a propósito: dos frontends que
+/// caducan distinto son dos respuestas a «¿sigue esto en marcha?».
+const TTL_TASK_TERMINAL: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Plazo de una petición de plan a un modelo.
 ///
 /// Generoso: pensar es lo que hace. Es el tope de ARRIBA, para que una
@@ -404,6 +414,12 @@ enum Mensaje {
     Aprobacion(Box<norte_proto::methods::PolicyApprovalRequired>),
     /// A esta aprobación se le acabó el TTL: el daemon ya no la acepta.
     AprobacionCaducada(u64),
+    /// A esta task TERMINADA se le acabó su rato en el tablero
+    /// ([`TTL_TASK_TERMINAL`]). Lleva la ÉPOCA de conexión en la que se
+    /// registró: tras un relevo del daemon los ids vuelven a empezar en 1, y
+    /// caducar por número desalojaría a una task viva que solo comparte el
+    /// número con la que se fue.
+    TaskCaducada(u64, u64),
     /// El `policy.decide` que APROBABA no llegó al daemon.
     /// Un `policy.decide` que no salió bien: qué aprobación y con qué clave
     /// se cuenta (#279).
@@ -947,6 +963,11 @@ async fn actor(
             }
             Mensaje::Progreso(p) => {
                 for u in estado.progreso(&p, &backend, &buzon) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::TaskCaducada(id, epoca) => {
+                for u in estado.caducar_task(id, epoca) {
                     let _ = updates.send(u);
                 }
             }
@@ -12955,6 +12976,43 @@ impl Estado {
     /// de journal—, y en un lote grande con colisiones son justo las que se
     /// acumulan. Una VIVA no se toca: tiene progreso que bombear y, quizá, un
     /// directorio que relistar.
+    /// Le pone reloj a una task recién terminada: a los [`TTL_TASK_TERMINAL`]
+    /// se va del tablero.
+    ///
+    /// Mismo patrón que el TTL de una aprobación: un `spawn` que duerme y
+    /// manda un mensaje al actor, porque el estado lo toca un solo escritor.
+    fn programar_caducidad(id: u64, epoca: u64, buzon: &mpsc::Sender<Mensaje>) {
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(TTL_TASK_TERMINAL).await;
+            let _ = buzon.send(Mensaje::TaskCaducada(id, epoca)).await;
+        });
+    }
+
+    /// Se acabó el rato de una task terminada: fuera del tablero.
+    ///
+    /// Tres cosas se comprueban antes, y ninguna es paranoia:
+    ///
+    /// - la ÉPOCA, porque tras un relevo del daemon los ids empiezan de nuevo
+    ///   y este reloj lleva diez segundos volando;
+    /// - que siga TERMINAL, porque un id reanunciado puede volver a estar en
+    ///   marcha;
+    /// - que no deba un refresco (`afectados`), que es el invariante que el
+    ///   desalojo por tope ya afirma: tirar la fila se llevaría por delante la
+    ///   relectura del directorio que esa mutación cambió.
+    fn caducar_task(&mut self, id: u64, epoca: u64) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let quitar = self.tasks.get(&id).is_some_and(|t| {
+            t.epoca == epoca && Self::terminal(t.vista.state) && t.afectados.is_empty()
+        });
+        if !quitar {
+            return Vec::new();
+        }
+        self.tasks.remove(&id);
+        vec![self.parche(vec![ViewChange::Tasks {
+            tasks: self.vistas_de_tasks(),
+        }])]
+    }
+
     fn desalojar_del_tablero(&mut self) {
         if self.tasks.len() < MAX_TASKS {
             return;
@@ -13186,26 +13244,44 @@ impl Estado {
         if apaga_el_aviso {
             cambios.push(self.cambio_de_banners());
         }
-        if let Some(estado) = self
+        cambios.extend(self.nacio_terminal(id, &nacio, backend, buzon));
+        vec![self.parche(cambios)]
+    }
+
+    /// Lo que hay que atender cuando una task llega al tablero YA terminada.
+    ///
+    /// Todo esto lo haría `progreso`, y `progreso` no se va a llamar ni una
+    /// vez: `rx.changed()` no dispara para un canal que nació con su valor
+    /// final. Sin ello, una copia rapidísima dejaba el destino sin relistar
+    /// para siempre — la carrera que la tarea 5.1 nombra literalmente.
+    fn nacio_terminal(
+        &mut self,
+        id: u64,
+        nacio: &norte_proto::TaskProgress,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<ViewChange> {
+        let Some(estado) = self
             .tasks
             .get(&id)
             .map(|t| t.vista.state)
             .filter(|e| Self::terminal(*e))
-        {
-            // Nace TERMINAL: su desenlace entra en la cuenta del lote aquí,
-            // porque `progreso` no se llamará nunca para ella.
-            if self.anota_desenlace_de_lote(id, estado) {
-                cambios.push(self.cambio_de_banners());
-            }
-            cambios.extend(self.refrescar_afectados(id, backend, buzon));
-            // Y su informe, por el mismo motivo que el relistado: si nació
-            // terminal, `progreso` no se llama NUNCA, y el informe es la
-            // única señal de que el directorio se quedó a medias. Un lote
-            // rapidísimo se quedaba sin ella justo cuando el desenlace de la
-            // Task más parece que todo fue bien.
-            self.pedir_informe_de_lote(&nacio, backend, buzon);
+        else {
+            return Vec::new();
+        };
+        // Su rato en el tablero se cuenta desde aquí, por lo mismo.
+        Self::programar_caducidad(id, self.epoca_conexion, buzon);
+        let mut cambios = Vec::new();
+        if self.anota_desenlace_de_lote(id, estado) {
+            cambios.push(self.cambio_de_banners());
         }
-        vec![self.parche(cambios)]
+        cambios.extend(self.refrescar_afectados(id, backend, buzon));
+        // Y su informe, por el mismo motivo que el relistado: es la única
+        // señal de que el directorio se quedó a medias, y un lote rapidísimo
+        // se quedaba sin ella justo cuando el desenlace de la Task más parece
+        // que todo fue bien.
+        self.pedir_informe_de_lote(nacio, backend, buzon);
+        cambios
     }
 
     /// Vuelve a listar los huecos que esta task dejó desactualizados, y
@@ -13671,6 +13747,8 @@ impl Estado {
             return Vec::new();
         };
         let ajena = viva.vista.foreign;
+        let era_terminal = Self::terminal(viva.vista.state);
+        let epoca = viva.epoca;
         viva.vista = Self::vista_de(p);
         // De quién es la task no lo dice el progreso: lo dice de dónde vino.
         viva.vista.foreign = ajena;
@@ -13679,6 +13757,13 @@ impl Estado {
         // en cada tick de progreso de cada task del lote.
         let acabo = Self::terminal(viva.vista.state);
         let estado_final = viva.vista.state;
+        // Acaba de terminar: empieza su rato en el tablero. Solo en la
+        // TRANSICIÓN — el daemon repite el último progreso al reconectar, y
+        // rearmar el reloj en cada repetición dejaría la fila ahí para
+        // siempre, que es justo lo contrario de lo que se pide.
+        if acabo && !era_terminal {
+            Self::programar_caducidad(p.task_id.get(), epoca, buzon);
+        }
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
         }];
@@ -16074,12 +16159,15 @@ impl Estado {
         // que no se ve y lo que no se enfoca (una barra de estado no
         // recibe el foco), así que aquí no hay una segunda regla que
         // pueda divergir de la del TUI.
+        //
+        // Con una salvedad, y es la que este anillo tiene que aplicar: lo
+        // ENFOCABLE no es lo que TOMA TECLAS. La hoja de atributos es lo
+        // primero y no lo segundo —sigue al cursor del listado, y con el
+        // teclado dentro dejaría de seguir a nada—, así que pararse ahí es
+        // una parada de la que ninguna tecla saca. Se salta, y la vuelta se
+        // da igual porque el recorrido cicla.
         let actual = SlotId(self.enfocado());
-        let siguiente = if atras {
-            norte_frontend::layout::focus_prev(&self.reparto, actual)
-        } else {
-            norte_frontend::layout::focus_next(&self.reparto, actual)
-        };
+        let siguiente = self.siguiente_que_toma_teclas(actual, atras);
         let Some(SlotId(id)) = siguiente else {
             // Un solo hueco: no hay a dónde ir, y decirlo es más
             // honesto que fingir que pasó algo.
@@ -16094,6 +16182,33 @@ impl Estado {
         self.reconcilia_roles();
         let cambio = ViewChange::Layout(self.disposicion());
         (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// El siguiente hueco del recorrido compartido que además TOMA TECLAS.
+    ///
+    /// Da como mucho una vuelta entera: si ninguno la toma —una pantalla que
+    /// solo tenga hoja de atributos, que el reparto permite— devuelve `None`
+    /// en vez de girar para siempre.
+    fn siguiente_que_toma_teclas(&self, desde: SlotId, atras: bool) -> Option<SlotId> {
+        let mut actual = desde;
+        for _ in 0..self.reparto.focus_order.len() {
+            let siguiente = if atras {
+                norte_frontend::layout::focus_prev(&self.reparto, actual)?
+            } else {
+                norte_frontend::layout::focus_next(&self.reparto, actual)?
+            };
+            if siguiente == desde {
+                return None; // dio la vuelta sin encontrar ninguno
+            }
+            if kind_de(&self.arbol, siguiente)
+                .and_then(|k| self.kinds.get(&k))
+                .is_some_and(|d| d.takes_keys)
+            {
+                return Some(siguiente);
+            }
+            actual = siguiente;
+        }
+        None
     }
 
     /// Designa OTRO hueco visible como destino de la siguiente operación.

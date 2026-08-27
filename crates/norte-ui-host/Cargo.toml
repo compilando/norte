@@ -47,7 +47,17 @@ tempfile.workspace = true
 # Una disposición de TRES listados, que ningún preset de fábrica trae: el
 # destino solo se puede adivinar mal cuando hay más de un candidato.
 toml.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+# test-util: `start_paused` para el TTL del tablero de tasks — el test salta
+# los diez segundos en vez de esperarlos, que es la diferencia entre un test
+# determinista y uno que dura lo que dura el plazo. Mismo motivo por el que ya
+# está en norte-tui, norte-core y norte-frontend.
+tokio = { workspace = true, features = [
+    "macros",
+    "rt-multi-thread",
+    "sync",
+    "time",
+    "test-util",
+] }
 
 [lints]
 workspace = true
