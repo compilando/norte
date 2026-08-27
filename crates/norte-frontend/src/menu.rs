@@ -104,6 +104,7 @@ pub const MENUS: &[Menu] = &[
             "layout.processes",
             "layout.metadata",
             "layout.pick",
+            "profile.pick",
             "pane.toggle-hidden",
             "pane.columns",
             // #138: el orden es de la VISTA, y aquí es donde se cambia lo que

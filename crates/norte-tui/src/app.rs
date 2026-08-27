@@ -27,6 +27,7 @@ mod palette;
 mod pane;
 mod pickers;
 mod plugins;
+pub mod profile;
 mod prompts;
 mod session;
 mod trail;
@@ -397,6 +398,24 @@ pub struct App {
     /// Selector de disposición abierto (F9 → `layout.pick`): None = cerrado.
     /// El modelo vive en norte-frontend (regla 7); aquí solo se guarda.
     pub layout_picker: Option<norte_frontend::layout_picker::LayoutPicker>,
+    /// Selector de PERFIL abierto (`profile.pick`): None = cerrado. Mismo
+    /// patrón que el de disposición, y por el mismo motivo: el modelo vive en
+    /// norte-frontend (regla 7) y aquí solo se guarda.
+    pub profile_picker: Option<norte_frontend::profile_picker::ProfilePicker>,
+    /// El perfil activo, o `None` si no hay ninguno.
+    ///
+    /// Espejo en memoria de `SessionBody.active`. Se guarda como `OsString`
+    /// —no como el `String` del cuerpo— porque es lo que se le pasa al
+    /// resolutor de capas, y ahí es un nombre de directorio (D4).
+    pub active_profile: Option<std::ffi::OsString>,
+    /// Un cambio de perfil pedido y todavía sin hacer.
+    ///
+    /// Lo pone `dispatch` y lo drena el run loop, como el resto de lo que un
+    /// comando pide y no puede ejecutar él mismo: cambiar de perfil recarga
+    /// capas y relista paneles, que es I/O, y `dispatch` ya devuelve un
+    /// [`crate::navigate::Cd`] — meter un segundo canal de salida en su firma
+    /// tocaría a todos sus llamantes para servir a tres brazos.
+    pub pending_profile: Option<std::ffi::OsString>,
     /// El selector de conexiones (#140), si está abierto.
     pub connections_picker: Option<norte_frontend::connections_picker::ConnectionsPicker>,
     /// Overlay del picker de columnas (#108 7a): mismo patrón que
@@ -732,6 +751,9 @@ impl App {
             theme: crate::theme::TuiTheme::default(),
             theme_picker: None,
             layout_picker: None,
+            profile_picker: None,
+            active_profile: None,
+            pending_profile: None,
             connections_picker: None,
             columns_picker: None,
             extensions: None,

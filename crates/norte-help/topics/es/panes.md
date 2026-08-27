@@ -39,6 +39,10 @@ commands = [
     "layout.metadata",
     "layout.pick",
 
+    "profile.pick",
+    "profile.next",
+    "profile.prev",
+
     "pane.tree",]
 context = ["browse"]
 +++
@@ -330,6 +334,37 @@ su pie, para que la coincidencia sea una comodidad y no una trampa.
 Un fichero tuyo gana al de fábrica con el mismo nombre: `layouts/simple.toml`
 es lo que carga `simple`. Borra el fichero y vuelve el original. `--layout
 <nombre>` elige una para un solo arranque, sin tocar tu configuración.
+
+# Perfiles
+
+Una disposición reparte la pantalla. Un **perfil** es el espacio de trabajo
+entero: su disposición, su teclado, su tema, sus columnas, sus favoritos y
+dónde dejaste cada panel. `fotos`, `servidores` y el árbol en el que estás
+programando quieren respuestas distintas a todo eso, y un perfil es cómo se
+mantienen separadas en vez de recolocar la misma pantalla a mano cada vez que
+cambias de tarea.
+
+Un perfil es un directorio dentro de `profiles/`, en tu directorio de
+configuración, con la misma forma que tu configuración: un `norte.toml` y, si
+quieres, su propio `keymap.toml`, su `openers.toml` y sus `layouts/`. Copiar un
+perfil de una máquina a otra es copiar un directorio.
+
+{{cmd:profile.pick}} los lista y marca en cuál estás. {{cmd:profile.next}} y
+{{cmd:profile.prev}} giran sin abrir nada, que es lo que quieres cuando tienes
+dos. `--profile <nombre>` arranca en uno para una sola vez. Si no dices nada,
+norte vuelve al último en el que estuviste.
+
+Lo que un perfil fija pisa a tu propia configuración —para eso lo eliges— y el
+`.norte` de un proyecto sigue pisando al perfil. Lo que un perfil **no** puede
+es cambiar dónde escucha el daemon, encender la IA, decidir dónde se escriben
+los logs, subir los límites de los contenedores ni ejecutar un `init.lua`: un
+perfil declara, no ejecuta. Lo que aparezca de eso dentro de uno se ignora y se
+dice en voz alta, en vez de aplicarse en silencio.
+
+Si el perfil que nombraste no carga, norte dice qué fichero y no arranca: tú
+pediste ése. Si solo era el perfil en el que estabas la última vez, arranca sin
+él y te lo dice, para que una errata en un directorio que estabas probando no
+te deje nunca fuera del programa.
 
 # El árbol de directorios
 

@@ -35,6 +35,21 @@ impl App {
         self.layout_picker = Some(norte_frontend::layout_picker::LayoutPicker::open(user));
     }
 
+    /// Abre el selector de PERFILES con lo que haya en `profiles/`.
+    ///
+    /// Igual que el de disposición: el listado —y la lectura del `norte.toml`
+    /// de cada uno, que es lo que da el título y el motivo de una fila rota—
+    /// lo hace el llamante fuera del runtime (regla 2, #244).
+    pub fn open_profile_picker(
+        &mut self,
+        perfiles: Vec<norte_frontend::profile_picker::UserProfile>,
+    ) {
+        self.profile_picker = Some(norte_frontend::profile_picker::ProfilePicker::open(
+            perfiles,
+            self.active_profile.as_deref(),
+        ));
+    }
+
     /// Abre el selector de conexiones (#140) con lo que haya en
     /// `connections.toml`. Leerlo es del frontend: este tipo no toca disco.
     pub fn open_connections_picker(&mut self, filas: Vec<norte_frontend::connections_picker::Row>) {
