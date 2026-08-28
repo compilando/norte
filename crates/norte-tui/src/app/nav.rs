@@ -136,13 +136,29 @@ impl App {
         }
     }
 
-    /// Abre el input de nombre del popup de hotlist (`a`), prellenado
-    /// vacío. En el popup de historial es no-op (no hay nada que nombrar).
+    /// Abre el input de nombre del popup de hotlist (`a`), prellenado con lo
+    /// que [`norte_frontend::places::suggested_hotlist_name`] propone para el
+    /// dir del pane con foco —el mismo que se va a guardar— ya libre de los
+    /// nombres que la hotlist tiene puestos. En el popup de historial es no-op
+    /// (no hay nada que nombrar).
+    ///
+    /// Prellenado y EDITABLE, el mismo molde que el nombre del destino de una
+    /// copia: el campo en blanco pedía teclear a mano lo que el path ya
+    /// intuía. Vacío sigue queriendo decir cancelar (`main.rs`), así que
+    /// borrarlo entero sigue siendo la salida.
     pub fn nav_popup_open_name_input(&mut self) {
-        if let Some(p) = &mut self.nav_popup
-            && p.kind == NavPopupKind::Hotlist
+        if self
+            .nav_popup
+            .as_ref()
+            .is_none_or(|p| p.kind != NavPopupKind::Hotlist)
         {
-            p.name_input = Some(String::new());
+            return;
+        }
+        let ocupados: Vec<&str> = self.hotlist.iter().map(|h| h.name.as_str()).collect();
+        let sugerido =
+            norte_frontend::places::suggested_hotlist_name(self.focused().dir(), &ocupados);
+        if let Some(p) = &mut self.nav_popup {
+            p.name_input = Some(sugerido);
         }
     }
 
@@ -290,8 +306,8 @@ mod tests {
         app.nav_popup_open_name_input();
         assert_eq!(
             app.nav_popup.as_ref().unwrap().name_input.as_deref(),
-            Some(""),
-            "`a` abre el input prellenado vacío"
+            Some("/"),
+            "`a` abre el input prellenado con el nombre sugerido"
         );
         app.nav_popup_input(PickerAction::Cancel);
         let p = app.nav_popup.as_ref().unwrap();
@@ -336,6 +352,33 @@ mod tests {
             app.nav_popup_selected_hotlist_name().as_deref(),
             Some("uno"),
             "la clave es la CONGELADA del popup, no App.hotlist[cursor]"
+        );
+    }
+
+    /// `a` no abre un campo en blanco: el path ya lo intuye del panel, así que
+    /// el nombre también. Y la sugerencia esquiva los nombres que la hotlist ya
+    /// tiene puestos —`persist_hotlist_add` REEMPLAZA por nombre, y aceptar sin
+    /// leer pisaría un favorito que apuntaba a otro sitio.
+    #[test]
+    fn el_input_de_nombre_se_prellena_con_el_dir_del_panel() {
+        let mut app = crate::app::testutil::app_en("mem:///home/o/norte/src", "mem:///otro");
+        app.open_nav_popup(NavPopupKind::Hotlist);
+        app.nav_popup_open_name_input();
+        assert_eq!(
+            app.nav_popup.as_ref().unwrap().name_input.as_deref(),
+            Some("src")
+        );
+
+        app.nav_popup_input(PickerAction::Cancel);
+        app.hotlist = vec![crate::config::HotlistItem {
+            name: "src".into(),
+            target: Ok(vp("mem:///otro/src")),
+        }];
+        app.nav_popup_open_name_input();
+        assert_eq!(
+            app.nav_popup.as_ref().unwrap().name_input.as_deref(),
+            Some("norte/src"),
+            "ocupado: se cualifica con el padre en vez de pisar"
         );
     }
 

@@ -291,6 +291,66 @@ impl PlacesState {
     }
 }
 
+/// La etiqueta con la que se PRESENTA un directorio: su último segmento
+/// saneado, y en la raíz el host (o la barra, si el scheme no nombra ninguno).
+fn dir_label(dir: &VPath) -> String {
+    dir.file_name().map_or_else(
+        || {
+            dir.authority()
+                .map_or_else(|| "/".to_owned(), |a| crate::display_name(a.as_bytes()).0)
+        },
+        |seg| crate::display_name(seg.as_bytes()).0,
+    )
+}
+
+/// El nombre que se PROPONE para un favorito nuevo sobre `dir`, ya libre de
+/// los `taken` que la hotlist tiene puestos.
+///
+/// El nombre de un favorito es una ETIQUETA, no una ruta —el destino viaja
+/// aparte, en `path`—, así que se sugiere SANEADO ([`crate::display_name`]):
+/// un nombre no-UTF8 o con hazards de terminal no entra crudo en el
+/// `norte.toml` del usuario.
+///
+/// # Por qué esquiva los nombres ocupados
+///
+/// `persist_hotlist_add` REEMPLAZA la entrada cuyo nombre ya existe. Con el
+/// campo prellenado, el reflejo de aceptar sin leer pisaría en silencio un
+/// favorito que apuntaba a otro sitio, y `src` o `docs` chocan constantemente.
+/// Así que la sugerencia se cualifica con el directorio padre —que además dice
+/// más que un número— y solo numera cuando eso tampoco basta. Un nombre
+/// TECLEADO que colisione sigue reemplazando: eso es lo que el humano pidió.
+///
+/// ```
+/// use norte_frontend::places::suggested_hotlist_name;
+/// use norte_proto::VPath;
+///
+/// let dir = VPath::parse("file:///home/o/norte/src").expect("wire");
+/// assert_eq!(suggested_hotlist_name(&dir, &[]), "src");
+/// assert_eq!(suggested_hotlist_name(&dir, &["src"]), "norte/src");
+/// ```
+#[must_use]
+pub fn suggested_hotlist_name(dir: &VPath, taken: &[&str]) -> String {
+    let base = dir_label(dir);
+    if !taken.contains(&base.as_str()) {
+        return base;
+    }
+    if let Some(padre) = dir.parent().and_then(|p| p.file_name().cloned()) {
+        let cualificado = format!("{}/{base}", crate::display_name(padre.as_bytes()).0);
+        if !taken.contains(&cualificado.as_str()) {
+            return cualificado;
+        }
+    }
+    // Termina: `taken` es finito, así que algún `n` queda libre.
+    let mut n = 2u32;
+    loop {
+        let candidato = format!("{base} ({n})");
+        if !taken.contains(&candidato.as_str()) {
+            return candidato;
+        }
+        n += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,5 +494,76 @@ mod tests {
             panic!("volumen")
         };
         assert_eq!(*mount, vp("file:///mnt"));
+    }
+
+    #[test]
+    fn la_sugerencia_es_el_ultimo_segmento() {
+        assert_eq!(
+            suggested_hotlist_name(&vp("file:///home/o/work"), &[]),
+            "work"
+        );
+    }
+
+    /// La raíz local no tiene último segmento, y `file` no nombra un sitio:
+    /// el nombre que un humano reconoce ahí es la barra.
+    #[test]
+    fn la_raiz_local_se_sugiere_como_barra() {
+        assert_eq!(suggested_hotlist_name(&vp("file:///"), &[]), "/");
+    }
+
+    /// En la raíz de un remoto sí hay algo que nombra el sitio: el host.
+    #[test]
+    fn la_raiz_remota_se_sugiere_con_su_authority() {
+        assert_eq!(suggested_hotlist_name(&vp("sftp://host/"), &[]), "host");
+    }
+
+    /// El nombre es una ETIQUETA (el destino viaja aparte, en `path`), así que
+    /// se sugiere SANEADO: los bytes no-UTF8 salen lossy y los hazards de
+    /// terminal enmascarados, y no entran crudos en el `norte.toml`.
+    #[test]
+    fn la_sugerencia_va_saneada_como_cualquier_nombre_pintado() {
+        assert_eq!(
+            suggested_hotlist_name(&vp("file:///home/%FFdir"), &[]),
+            "\u{FFFD}dir"
+        );
+        assert_eq!(
+            suggested_hotlist_name(&vp("file:///home/%E2%80%AEdir"), &[]),
+            "\u{FFFD}dir"
+        );
+    }
+
+    /// `persist_hotlist_add` REEMPLAZA si el nombre ya existe: una sugerencia
+    /// que colisiona convierte el reflejo `a`+Enter en pisar un favorito que
+    /// apuntaba a otro sitio. La sugerencia se cualifica con el padre, que
+    /// además dice más que un número.
+    #[test]
+    fn una_sugerencia_ocupada_se_cualifica_con_el_padre() {
+        assert_eq!(
+            suggested_hotlist_name(&vp("file:///home/o/norte/src"), &["src"]),
+            "norte/src"
+        );
+    }
+
+    /// Si el padre tampoco basta, se numera. Y el número sube hasta encontrar
+    /// hueco: parar en el primero ocupado sería colisionar otra vez.
+    #[test]
+    fn si_el_padre_tampoco_basta_se_numera_hasta_encontrar_hueco() {
+        assert_eq!(
+            suggested_hotlist_name(&vp("file:///home/o/norte/src"), &["src", "norte/src"]),
+            "src (2)"
+        );
+        assert_eq!(
+            suggested_hotlist_name(
+                &vp("file:///home/o/norte/src"),
+                &["src", "norte/src", "src (2)"]
+            ),
+            "src (3)"
+        );
+    }
+
+    /// Sin padre que cualificar (la raíz), se numera directamente.
+    #[test]
+    fn la_raiz_ocupada_se_numera_sin_padre() {
+        assert_eq!(suggested_hotlist_name(&vp("file:///"), &["/"]), "/ (2)");
     }
 }

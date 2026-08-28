@@ -389,6 +389,22 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **Adding a favourite proposes its name.** The path was already inferred from
+  the pane; the name asked you to type by hand what the path already knew. The
+  field now opens with the directory's own name — the host at the root of a
+  remote, `/` at a local one — sanitised the way every painted name is, because
+  a favourite's name is a LABEL and the destination travels separately. It is
+  prefilled and editable, the same mould as the destination name of a copy, and
+  an emptied field still means cancel. The suggestion also DODGES the names the
+  hotlist already holds: `persist_hotlist_add` replaces the entry whose name
+  matches, and `src` or `docs` collide constantly, so a prefilled field plus the
+  reflex to accept without reading would silently overwrite a favourite that
+  pointed somewhere else. It qualifies with the parent directory first
+  (`norte/src`, which says more than a number) and only then numbers. A name you
+  TYPE that collides still replaces: that is what you asked for. The rule lives
+  in `norte-frontend` rather than in the TUI, so the window uses the same one
+  the day it grows an add.
+
 - **A columns plugin now survives from one page to the next** (#224). A
   twenty-row page over a two-thousand-entry git index cost **167 ms**, with the
   WASM component instantiated and `.git/index` parsed from scratch every time —
