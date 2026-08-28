@@ -1487,6 +1487,14 @@ setting-ui-menu-bar-name = Menu bar
 setting-ui-menu-bar-desc = Whether the menu bar stays pinned to the top row. On by default: several commands are only reachable through the menu, and nothing on screen said it was there. Turning it off gives the row back — the menu still opens with its key. Ignored by the GUI.
 setting-ui-mouse-name = Mouse
 setting-ui-mouse-desc = Whether the TUI captures the mouse (click, wheel, drag to mark). While it is captured the terminal cannot select text with the mouse; hold Shift to select anyway, or turn this off. Ignored by the GUI.
+setting-ui-parent-entry-name = Row to go up
+setting-ui-parent-entry-desc = Whether every listing carries a `..` row at the top, which goes up to the parent directory. On by default: it is what a reader coming from any manager in the family expects. It is never an operand — with the cursor on it nothing is selected, so a copy or a delete has nothing to act on.
+setting-ui-show-hidden-name = Show hidden at startup
+setting-ui-show-hidden-desc = What norte opens with: whether names starting with a dot are visible from the first listing. The key that toggles them changes the session and writes nothing, so this is where the default is decided.
+setting-ui-editor-name = Editor
+setting-ui-editor-desc = The program the edit key opens, as a command line with the field codes of `openers.toml`: `%f` the file, `%d` the pane's directory. Example: `zed %f`. Empty = the one in `$VISUAL`, in `$EDITOR`, or the POSIX fallback. Not read from the project layer: it names a program to execute.
+setting-ui-editor-detached-name = The editor opens a window
+setting-ui-editor-detached-desc = Whether that editor opens a window of its own instead of taking over the terminal. A terminal editor needs norte to step aside and wait for it; a windowed one hands control straight back, and waiting for it would leave the terminal blank until you close something on another screen.
 setting-ui-confirm-quit-name = Confirm before quitting
 setting-ui-confirm-quit-desc = When quitting asks for confirmation: only with pending work (auto), always, or never. An emergency-exit shortcut, where bound (e.g. the TUI's Ctrl+C), always bypasses this.
 setting-keymap-preset-name = Keymap preset

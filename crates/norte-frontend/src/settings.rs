@@ -42,6 +42,15 @@ pub enum SettingKind {
     Enum(&'static [&'static str]),
     /// Free text.
     Text,
+    /// Una LÍNEA DE ÓRDENES: se teclea como texto y se guarda como ARRAY de
+    /// tokens (`zed %f` → `["zed", "%f"]`).
+    ///
+    /// Existe porque `[ui] editor` no es una cadena en el fichero: es un argv,
+    /// y guardarlo como cadena haría que la siguiente carga lo rechazara. El
+    /// troceo es por espacios ASCII, la misma convención con la que `$EDITOR`
+    /// admite `code -w` — el precio es un programa cuyo binario lleve un
+    /// espacio, que hay que escribir en el fichero a mano.
+    Args,
     /// A NUMBER in `[min, max]` — despite the name, the buffer parses as
     /// `f64` and accepts a fractional part (revisión S, M4): `ui.font-size`
     /// is the only entry using this kind, and its underlying config field
@@ -160,6 +169,43 @@ const CATALOG: &[SettingDef] = &[
         applies_live: true,
     },
     SettingDef {
+        // La fila `..`. Mismo criterio que `ui.mouse` y `ui.menu-bar`: no
+        // tiene comando ni tecla, así que el fichero era el ÚNICO sitio desde
+        // el que se podía apagar o encender.
+        id: "ui.parent-entry",
+        section: Section::General,
+        kind: SettingKind::Bool,
+        applies_live: true,
+    },
+    SettingDef {
+        // El default de arranque de los ocultos. `pane.toggle-hidden` alterna
+        // la SESIÓN y no persiste nada, así que sin esta fila el valor con el
+        // que norte abre solo se podía cambiar escribiendo el fichero.
+        id: "ui.show-hidden",
+        section: Section::General,
+        kind: SettingKind::Bool,
+        applies_live: true,
+    },
+    SettingDef {
+        // El editor de `pane.edit`. Va aquí y no solo en el fichero por lo
+        // mismo que el resto: es lo primero que alguien quiere cambiar, y
+        // hasta ahora se elegía por variable de entorno, que es el sitio donde
+        // menos se busca la configuración de un programa.
+        id: "ui.editor",
+        section: Section::General,
+        kind: SettingKind::Args,
+        applies_live: true,
+    },
+    SettingDef {
+        // Y si ese editor abre ventana propia. Sin esta fila, poner un editor
+        // gráfico deja la terminal en blanco y no hay nada en pantalla que
+        // explique por qué.
+        id: "ui.editor-detached",
+        section: Section::General,
+        kind: SettingKind::Bool,
+        applies_live: true,
+    },
+    SettingDef {
         id: "ui.confirm-quit",
         section: Section::General,
         kind: SettingKind::Enum(&["auto", "always", "never"]),
@@ -257,6 +303,15 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         // Absent = captured: the row shows `true`, which is what the TUI
         // actually does, rather than an empty cell for a real behavior.
         "ui.mouse" => cfg.common.ui_mouse.unwrap_or(true).to_string(),
+        // Ausente = FIJADA, igual que `ui.mouse`: la fila enseña lo que el
+        // frontend hace de verdad. Faltaba, y la consecuencia no era cosmética
+        // — con la celda vacía, alternar leía «no es true» y escribía `true`
+        // siempre, así que la barra no se podía apagar desde aquí.
+        "ui.menu-bar" => cfg.common.ui_menu_bar.unwrap_or(true).to_string(),
+        "ui.parent-entry" => cfg.common.ui_parent_entry.unwrap_or(true).to_string(),
+        "ui.show-hidden" => cfg.common.ui_show_hidden.unwrap_or(false).to_string(),
+        "ui.editor" => cfg.common.ui_editor.clone().unwrap_or_default().join(" "),
+        "ui.editor-detached" => cfg.common.ui_editor_detached.unwrap_or(false).to_string(),
         "ui.confirm-quit" => cfg.common.ui_confirm_quit.as_str().to_owned(),
         "keymap.preset" => cfg.common.preset.clone(),
         // Unreachable for anything in `CATALOG` (pinned by the coverage
@@ -716,7 +771,7 @@ impl SettingsState {
                 let value = toml_edit::Value::from(next.as_str());
                 Some(self.commit_row(real, def, next, value))
             }
-            SettingKind::Text | SettingKind::Int { .. } => {
+            SettingKind::Text | SettingKind::Int { .. } | SettingKind::Args => {
                 self.edit = Some(current);
                 None
             }
@@ -772,8 +827,21 @@ impl SettingsState {
                 toml_edit::Value::from(n)
             };
             self.commit_row(real, def, n.to_string(), value)
+        } else if matches!(def.kind, SettingKind::Args) {
+            // Una línea de órdenes se GUARDA como array: `zed %f` viaja como
+            // `["zed", "%f"]`, que es lo que el fichero declara. Escribirla
+            // como cadena haría que la siguiente carga la rechazara.
+            //
+            // Vacío = un array vacío, que la configuración lee como «ninguno»
+            // y devuelve el mando a `$VISUAL`/`$EDITOR`.
+            let mut arr = toml_edit::Array::new();
+            for tok in buf.split_ascii_whitespace() {
+                arr.push(tok);
+            }
+            let display = buf.split_ascii_whitespace().collect::<Vec<_>>().join(" ");
+            self.commit_row(real, def, display, toml_edit::Value::Array(arr))
         } else {
-            // By construction, only `Text`/`Int` open `self.edit`
+            // By construction, only `Text`/`Int`/`Args` open `self.edit`
             // (`Self::activate`) — this is the `Text` arm.
             self.commit_row(real, def, buf.clone(), toml_edit::Value::from(buf.as_str()))
         };
@@ -936,6 +1004,71 @@ mod tests {
                 def.id
             );
         }
+    }
+
+    /// Una fila de las que se ALTERNAN tiene que enseñar un valor legible, y
+    /// no la cadena vacía.
+    ///
+    /// El test de arriba no bastaba —una celda vacía no es el id, así que
+    /// pasaba— y el agujero no era cosmético: `activate` decide el siguiente
+    /// valor leyendo el que se PINTA, así que con la celda vacía un `Bool`
+    /// leía «no es true» y escribía `true` siempre. `ui.menu-bar` estuvo así:
+    /// en el catálogo, sin brazo en `current_value`, y por tanto imposible de
+    /// apagar desde esta pantalla.
+    #[test]
+    fn una_fila_que_se_alterna_nunca_ensena_una_celda_vacia() {
+        let cfg = crate::config::load(&Layers { dirs: vec![] }).expect("config vacía carga");
+        for def in catalog() {
+            let value = current_value(def, &cfg);
+            match def.kind {
+                SettingKind::Bool => assert!(
+                    value == "true" || value == "false",
+                    "{} pinta {value:?}, que no es un booleano",
+                    def.id
+                ),
+                // Los `Enum` quedan FUERA a sabiendas: `ui.lang` sin valor
+                // pinta `auto`, que no es uno de los suyos —es lo que norte
+                // hace, negociar con el entorno— y la primera pulsación cae en
+                // el primero de la lista igualmente. Lo que aquí se protege es
+                // el caso en el que el valor pintado DECIDE el siguiente y una
+                // celda vacía lo decide mal.
+                //
+                // Los de texto libre SÍ pueden estar vacíos: «sin fuente
+                // elegida» y «sin editor elegido» son respuestas válidas.
+                SettingKind::Enum(_)
+                | SettingKind::Text
+                | SettingKind::Args
+                | SettingKind::Int { .. }
+                | SettingKind::ThemeName
+                | SettingKind::PresetName => {}
+            }
+        }
+    }
+
+    /// Teclear una línea de órdenes guarda un ARRAY, que es lo que el fichero
+    /// declara: una cadena haría que la siguiente carga la rechazara.
+    #[test]
+    fn una_fila_de_ordenes_se_guarda_como_array() {
+        let cfg = crate::config::load(&Layers { dirs: vec![] }).expect("config vacía carga");
+        let mut st = SettingsState::new(build_rows(&cfg, &[]));
+        let fila = st
+            .rows()
+            .iter()
+            .position(|r| r.def_index.map(|i| catalog()[i].id) == Some("ui.editor"))
+            .expect("ui.editor está en el catálogo");
+        st.set_cursor(fila);
+        assert!(
+            st.activate(&[], &[]).is_none(),
+            "una línea de órdenes se edita, no se alterna"
+        );
+        for c in "zed %f".chars() {
+            st.edit_push_char(c);
+        }
+        let write = st.edit_commit().expect("texto libre no falla");
+        assert_eq!(write.section, "ui");
+        assert_eq!(write.key, "editor");
+        assert_eq!(write.value.to_string().trim(), r#"["zed", "%f"]"#);
+        assert_eq!(write.display, "zed %f");
     }
 
     /// `ui.confirm-quit`'s default value round-trips through `current_value`

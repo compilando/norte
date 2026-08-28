@@ -1495,6 +1495,14 @@ setting-ui-menu-bar-name = Barra de menú
 setting-ui-menu-bar-desc = Si la barra de menú se queda fijada en la fila de arriba. Encendida por defecto: hay comandos a los que solo se llega por el menú, y nada en pantalla decía que estaba ahí. Apagarla devuelve la fila — el menú sigue abriéndose con su tecla. La GUI lo ignora.
 setting-ui-mouse-name = Ratón
 setting-ui-mouse-desc = Si la TUI captura el ratón (click, rueda, arrastre para marcar). Mientras está capturado el terminal no puede seleccionar texto con el ratón; mantén Mayús para seleccionar igualmente, o desactiva esto. La GUI lo ignora.
+setting-ui-parent-entry-name = Fila para subir
+setting-ui-parent-entry-desc = Si cada listado lleva arriba la fila `..`, que sube al directorio padre. Encendida por defecto: es lo que espera quien viene de cualquier gestor de la familia. Nunca es un operando — con el cursor encima no hay nada señalado, así que una copia o un borrado no tienen sobre qué actuar.
+setting-ui-show-hidden-name = Ver ocultos al arrancar
+setting-ui-show-hidden-desc = Con qué valor abre norte: si los nombres que empiezan por punto se ven desde el primer listado. La tecla que los alterna cambia la sesión y no escribe nada, así que este es el sitio donde se decide el default.
+setting-ui-editor-name = Editor
+setting-ui-editor-desc = El programa que abre la tecla de editar, como línea de órdenes con los códigos de campo de `openers.toml`: `%f` el fichero, `%d` el directorio del panel. Ejemplo: `zed %f`. Vacío = el de `$VISUAL`, el de `$EDITOR`, o el que exija POSIX. No se lee de la capa de proyecto: nombra un programa que se ejecuta.
+setting-ui-editor-detached-name = El editor abre ventana
+setting-ui-editor-detached-desc = Si ese editor abre una ventana propia en vez de ocupar el terminal. Uno de terminal necesita que norte se aparte y lo espere; uno de ventana devuelve el control al instante, y esperarlo dejaría el terminal en blanco hasta que cierres algo que está en otra pantalla.
 setting-ui-confirm-quit-name = Confirmar antes de salir
 setting-ui-confirm-quit-desc = Al salir pide confirmación: solo con trabajo pendiente (auto), siempre, o nunca. Un atajo de salida de emergencia, donde esté ligado (p. ej. Ctrl+C en la TUI), siempre lo evita.
 setting-keymap-preset-name = Preset de keymap

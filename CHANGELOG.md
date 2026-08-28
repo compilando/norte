@@ -389,6 +389,19 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The settings screen was missing four keys, and one of the ones it had
+  could not be turned off.** `[ui] editor` and `editor_detached` are now rows
+  of their own (a command line is typed as text and stored as the ARRAY the
+  file declares — writing it as a string would make the next load reject it),
+  and so are `parent_entry` and `show_hidden`: neither has a command or a key,
+  so the file was the only place they could be changed — `pane.toggle-hidden`
+  moves the session and persists nothing. And `ui.menu-bar` was in the catalog
+  with no arm in `current_value`, so its cell rendered EMPTY: not cosmetic,
+  because toggling reads the painted value, so it read "not true" and wrote
+  `true` every time — the menu bar could not be switched off from the screen it
+  is offered on. The test that should have caught it accepted an empty cell;
+  now a toggle row must paint a real boolean.
+
 - **Enter on a file opens it, instead of doing nothing at all.** `nav.enter`
   only ever answered for directories, symlinks and archives — over a plain
   file, binary or not, the key did nothing and said nothing. It now hands the
