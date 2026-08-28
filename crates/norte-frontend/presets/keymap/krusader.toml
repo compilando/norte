@@ -128,6 +128,10 @@ keymap = [
     { on = ["ctrl+pgup"], run = "nav.parent" },
     { on = ["ctrl+="], run = "pane.pull" },
     { on = ["f2"], run = "pane.rename" },
+    # `Shift+F2` es Krename, el renombrado en lote de la fuente. Estaba entre
+    # las omisiones («the Multi-Rename tool (Shift+F2, Krename…)») porque norte
+    # no tenía a qué atarlo; con #310 sí, y la tecla atestiguada vuelve.
+    { on = ["shift+f2"], run = "pane.rename-batch" },
     { on = ["f3"], run = "pane.view" },
     { on = ["f4"], run = "pane.edit" },
     { on = ["f5"], run = "pane.copy" },

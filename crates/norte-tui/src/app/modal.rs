@@ -344,6 +344,16 @@ pub enum Modal {
         /// Diagnóstico del último intento inválido, bajo el campo.
         error: Option<String>,
     },
+    /// Prompt de la PLANTILLA del renombrado en lote (#310). Texto libre,
+    /// molde [`Modal::AiRenameInstruction`] — y hermano suyo por diseño: los
+    /// dos producen el MISMO plan revisable, y lo único que cambia es quién
+    /// propone los nombres, un modelo o una plantilla que escribe el humano.
+    RenameBatchPattern {
+        /// La plantilla tecleada hasta ahora (`[N]`, `[E]`, `[C]`).
+        pattern: String,
+        /// Diagnóstico del último intento inválido, bajo el campo.
+        error: Option<String>,
+    },
     /// Prompt de instrucción del rename IA (M4-IA). Texto libre, molde
     /// [`Modal::Mkdir`]: la instrucción CRUDA del usuario, enmascarada al
     /// pintarla (una instrucción llega por paste con bidi/invisibles tan
@@ -354,8 +364,13 @@ pub enum Modal {
         /// Diagnóstico del último intento fallido, bajo el campo.
         error: Option<String>,
     },
-    /// Plan de rename IA revisable (M4-IA): superficie de DECISIÓN. Confirmar
-    /// aplica (contenido revisado por el humano); Esc/cancel descarta.
+    /// Plan de rename revisable: superficie de DECISIÓN. Confirmar aplica
+    /// (contenido revisado por el humano); Esc/cancel descarta.
+    ///
+    /// El nombre dice `Ai` por su origen (M4-IA) y ya no es solo suyo: desde
+    /// #310 lo comparte el lote por PLANTILLA, que produce el mismo plan por
+    /// el mismo camino. Lo que hace segura la operación no es de dónde
+    /// salieron los nombres, así que la revisión es una y no dos.
     AiRenamePlan {
         /// Dir sobre el que se aplican los renames.
         dir: VPath,
@@ -507,6 +522,8 @@ pub enum PromptKind {
     CommandLine,
     /// [`Modal::AiRenameInstruction`].
     AiRename,
+    /// [`Modal::RenameBatchPattern`].
+    RenameBatch,
     /// [`Modal::SemanticQuery`].
     Semantic,
 }
@@ -622,6 +639,7 @@ impl Modal {
             Self::EditNew { .. } => PromptKind::EditNew,
             Self::CommandLine { .. } => PromptKind::CommandLine,
             Self::AiRenameInstruction { .. } => PromptKind::AiRename,
+            Self::RenameBatchPattern { .. } => PromptKind::RenameBatch,
             Self::SemanticQuery { .. } => PromptKind::Semantic,
             _ => return None,
         })
@@ -635,7 +653,10 @@ impl Modal {
     /// retroceso y si hay un `touched` que fijar.
     pub fn text_prompt(&mut self) -> Option<TextPrompt<'_>> {
         let (text, error, touched, limit, over_limit, pop) = match self {
-            Self::MarkPattern { pattern, error, .. } => (
+            // La plantilla del lote comparte molde con el patrón de marcado:
+            // texto libre, mismo tope y mismo borrado.
+            Self::MarkPattern { pattern, error, .. }
+            | Self::RenameBatchPattern { pattern, error } => (
                 pattern,
                 error,
                 None,

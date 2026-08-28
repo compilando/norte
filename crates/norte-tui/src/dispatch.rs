@@ -394,6 +394,17 @@ pub async fn dispatch(
         // editable). Correcto también en el pane virtual: el destino sale
         // del propio path del hit, no del dir del pane.
         Command::PaneRename => app.open_rename(),
+        // #310: el renombrado en lote sin IA. Abre la PLANTILLA; el plan lo
+        // pide el run loop al confirmar, y lo revisa el mismo modal que ya
+        // revisa el de la IA — lo que hace segura la operación no es de dónde
+        // salieron los nombres.
+        Command::PaneRenameBatch => {
+            if app.rename_batch_names().is_empty() {
+                app.message = Some(t("msg-rename-batch-nothing"));
+            } else {
+                app.open_rename_batch();
+            }
+        }
         // #106: Ctrl+R — recarga manual. Reusa el refresh post-mutación
         // (cancelable regla 3; marcas sobreviven vía refill con poda
         // VISIBLE, cursor por índice; el pane virtual de búsqueda se salta

@@ -7,6 +7,7 @@ commands = [
     "pane.copy",
     "pane.move",
     "pane.rename",
+    "pane.rename-batch",
     "pane.mkdir",
     "pane.delete",
     "pane.delete-permanent",
@@ -49,6 +50,18 @@ is not a second feature — it is this field.
 {{cmd:pane.rename}} opens that same prompt with both ends in the current
 directory, which is what renaming is: a move that does not go anywhere. Within
 one backend it costs nothing, whatever the size.
+
+{{cmd:pane.rename-batch}} renames MANY at once from a template: `[N]` is the
+name without its extension, `[E]` the extension, `[C]` a counter — `[C3]` pads
+it with zeros — and everything else is literal text. It acts on what is marked,
+or on the entry under the cursor when nothing is, which is the usual operand.
+
+What comes out is not applied: it is a **plan** — old name and new name, pair
+by pair — with the collisions already flagged, and nothing is touched until you
+accept it. It is the same review, the same journal and the same undo as the AI
+rename, because what makes the operation safe is not where the names came from.
+A template that leaves everything unchanged says so rather than showing you an
+empty list.
 
 {{cmd:pane.mkdir}} asks for a name and creates a directory in the focused
 pane. It is the one thing on this page that creates rather than moves, and it

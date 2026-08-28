@@ -47,6 +47,12 @@ const APLAZADOS: &[(&str, u32)] = &[
     // sabe PINTAR un hueco de preview —caería a «kind no soportado», en
     // gris—, y abrir un hueco que solo se pinta apagado no es abrirlo.
     ("layout.preview", 291),
+    // El renombrado en lote por plantilla (#310) nace en la TUI: el generador
+    // y la validación viven en el crate COMPARTIDO, así que lo que le falta a
+    // la ventana es la superficie —un prompt de plantilla— y no la lógica. La
+    // revisión del plan sí la tiene ya, porque es la misma que la del rename
+    // con IA.
+    ("pane.rename-batch", 310),
     // Los perfiles (ADR 0079) ya están en las dos: el selector, girar por la
     // lista y el cambio en caliente. Lo que la ventana todavía no hace es
     // acordarse de dónde dejaste cada panel DENTRO de cada perfil — la

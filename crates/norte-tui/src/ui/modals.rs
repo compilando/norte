@@ -272,6 +272,14 @@ pub(crate) fn modal_title_body(
             instruction,
             error.as_deref(),
         ),
+        // #310: la plantilla del lote. Mismo molde de texto libre y el mismo
+        // enmascarado: lo tecleado puede llegar por paste con bidi dentro.
+        Modal::RenameBatchPattern { pattern, error } => free_text_modal_text(
+            "modal-rename-batch",
+            "modal-rename-batch-hint",
+            pattern,
+            error.as_deref(),
+        ),
         // M4-IA: dir objetivo + ventana de parejas from→to del plan
         // revisable (enmascarado defensivo, ver `ai_rename_plan_modal_text`).
         Modal::AiRenamePlan {
@@ -360,6 +368,7 @@ pub(crate) fn modal_height(modal: &crate::app::Modal) -> u16 {
         | Modal::TransferDest { error: Some(_), .. }
         | Modal::CommandLine { error: Some(_), .. }
         | Modal::AiRenameInstruction { error: Some(_), .. }
+        | Modal::RenameBatchPattern { error: Some(_), .. }
         | Modal::SemanticQuery { error: Some(_), .. } => 7,
         // M4-IA: la línea del dir (audit MAJOR-1) + el veredicto del LOTE
         // (§17) + dos por pareja de la VENTANA + el indicador (si el plan no

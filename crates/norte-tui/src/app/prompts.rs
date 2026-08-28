@@ -753,6 +753,84 @@ impl App {
         self.prompt_submitted(PromptKind::CommandLine);
     }
 
+    /// Abre el prompt de la PLANTILLA del renombrado en lote (#310),
+    /// prellenado con `[N].[E]` — el nombre tal y como está.
+    ///
+    /// Prellenar con la identidad y no en blanco: así lo primero que se ve es
+    /// la forma que tiene una plantilla, y editarla es más corto que
+    /// escribirla entera. Un plan de identidad no renombra nada (los pares que
+    /// no cambian se descartan), así que confirmar sin tocar nada es inocuo.
+    pub fn open_rename_batch(&mut self) {
+        self.modal = Some(Modal::RenameBatchPattern {
+            pattern: "[N].[E]".to_owned(),
+            error: None,
+        });
+    }
+
+    /// Valida la plantilla contra los nombres que va a tocar y la devuelve;
+    /// NO cierra el modal — el caller cierra con
+    /// [`Self::rename_batch_submitted`] tras spawnear la petición de plan,
+    /// misma disciplina que [`Self::ai_rename_confirm`].
+    ///
+    /// Una plantilla que no sirve deja su diagnóstico aquí mismo, bajo el
+    /// campo, y devuelve `None`: se explica con el humano delante y antes de
+    /// pedirle nada al core.
+    pub fn rename_batch_confirm(&mut self) -> Option<String> {
+        let names = self.rename_batch_names();
+        if let Some(Modal::RenameBatchPattern { pattern, error }) = &mut self.modal {
+            let texto = pattern.trim().to_owned();
+            return match norte_frontend::rename_pattern::check(&texto, &names) {
+                Ok(()) => Some(texto),
+                Err(e) => {
+                    *error = Some(t(norte_frontend::rename_pattern::error_key(e)));
+                    None
+                }
+            };
+        }
+        None
+    }
+
+    /// Los nombres sobre los que actúa el lote: los MARCADOS, y si no hay
+    /// ninguno el del cursor — el mismo operando que cualquier otra operación
+    /// (`marked_paths`), y por eso no hay una regla nueva que aprender.
+    ///
+    /// Solo los que son texto: un par del plan viaja UTF-8 por protocolo, así
+    /// que un nombre que no lo sea no puede entrar en un lote (tampoco por el
+    /// camino de la IA). Se apartan aquí y el caller lo dice, en vez de
+    /// mandarlos y que el plan salga inválido sin explicar cuál sobraba.
+    #[must_use]
+    pub fn rename_batch_names(&self) -> Vec<String> {
+        self.focused()
+            .marked_paths()
+            .iter()
+            .filter_map(|p| {
+                p.file_name()
+                    .and_then(|s| std::str::from_utf8(s.as_bytes()).ok())
+                    .map(std::borrow::ToOwned::to_owned)
+            })
+            .collect()
+    }
+
+    /// Cierra el prompt de la plantilla tras spawnear la petición de plan.
+    pub fn rename_batch_submitted(&mut self) {
+        self.prompt_submitted(PromptKind::RenameBatch);
+    }
+
+    /// Añade un carácter a la plantilla. No-op sin su modal.
+    pub fn rename_batch_push(&mut self, c: char) {
+        self.prompt_push(PromptKind::RenameBatch, c);
+    }
+
+    /// Borra el último carácter de la plantilla. No-op sin su modal.
+    pub fn rename_batch_pop(&mut self) {
+        self.prompt_pop(PromptKind::RenameBatch);
+    }
+
+    /// Cancela el prompt de la plantilla sin lanzar nada.
+    pub fn cancel_rename_batch(&mut self) {
+        self.cancel_prompt(PromptKind::RenameBatch);
+    }
+
     /// Abre el prompt de instrucción del rename IA (M4-IA).
     pub fn open_ai_rename(&mut self) {
         self.modal = Some(Modal::AiRenameInstruction {

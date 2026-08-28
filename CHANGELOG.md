@@ -506,6 +506,21 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Batch rename WITHOUT a language model** (#310). The batch machinery has
+  been there since ADR 0042 — reviewable plan, `plan_hash`, collisions,
+  journal, undo — and the only thing that knew how to produce a plan was
+  `ai.rename_plan`, so renaming twenty files needed an LLM. `pane.rename-batch`
+  asks for a TEMPLATE instead: `[N]` the name without its extension, `[E]` the
+  extension, `[C]` a counter (`[C3]` zero-padded), everything else literal. It
+  acts on what is marked, or on the entry under the cursor, and it produces the
+  same reviewable plan through the same path — what makes the operation safe is
+  not where the names came from. A template that changes nothing says so; one
+  that would leave a name empty or with a `/` in it is refused in the dialog,
+  with the reader there, rather than three steps later by the daemon. The keys
+  are the attested ones where they exist: `ctrl+m` in `total-commander` (its
+  Multi-Rename Tool) and `shift+f2` in `krusader` (Krename), both of which had
+  been sitting in those files' omission lists for want of a command to bind.
+
 - **The editor is configurable in norte, and it can be a window.** `[ui]
   editor` takes an argv template with the same field codes as `openers.toml`
   (`%f` the file, `%d` the pane's directory) and overrides `$VISUAL`/`$EDITOR`,

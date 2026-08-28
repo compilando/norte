@@ -218,6 +218,7 @@ commands! {
     "pane.combine-files" => PaneCombineFiles,
     "pane.mkdir" => PaneMkdir,
     "pane.rename" => PaneRename,
+    "pane.rename-batch" => PaneRenameBatch,
     "pane.refresh" => PaneRefresh,
     "pane.copy-path" => PaneCopyPath,
     "mark.toggle" => MarkToggle,

@@ -172,6 +172,7 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("pane.delete-permanent", false),
     live("pane.mkdir", false),
     live("pane.rename", false),
+    live("pane.rename-batch", false),
     live("pane.refresh", false),
     live("pane.view", false),
     live("pane.open", false),

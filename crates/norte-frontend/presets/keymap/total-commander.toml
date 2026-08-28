@@ -103,6 +103,11 @@ keymap = [
     { on = ["f6"], run = "pane.move" },
     { on = ["f7"], run = "pane.mkdir" },
     { on = ["shift+f6"], run = "pane.rename" },
+    # `Ctrl+M` es el Multi-Rename Tool de la fuente, que hasta ahora estaba en
+    # la lista de omisiones de arriba por no haber a qué atarlo: norte no tenía
+    # renombrado en lote por plantilla. Ahora sí (#310), así que la tecla
+    # atestiguada vuelve a su comando.
+    { on = ["ctrl+m"], run = "pane.rename-batch" },
     { on = ["f8"], run = "pane.delete" },
     { on = ["shift+f8"], run = "pane.delete-permanent" },
     { on = ["f2"], run = "pane.refresh" },

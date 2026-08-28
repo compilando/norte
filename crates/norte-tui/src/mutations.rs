@@ -174,6 +174,7 @@ pub async fn confirm_modal(
         | Modal::EditNew { .. }
         | Modal::CommandLine { .. }
         | Modal::AiRenameInstruction { .. }
+        | Modal::RenameBatchPattern { .. }
         | Modal::SemanticQuery { .. }
         | Modal::TransferDest { .. }
         | Modal::Pack { .. }

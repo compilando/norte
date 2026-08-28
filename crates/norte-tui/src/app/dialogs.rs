@@ -370,6 +370,7 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         | Modal::EditNew { .. }
         | Modal::CommandLine { .. }
         | Modal::AiRenameInstruction { .. }
+        | Modal::RenameBatchPattern { .. }
         | Modal::SemanticQuery { .. }
         | Modal::TransferDest { .. }
         // #132: los dos de escribir archivos, por lo mismo.

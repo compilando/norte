@@ -17,8 +17,8 @@ use crate::dispatch::dispatch;
 use crate::event_loop::{launch_pending_open, run_command};
 use crate::gestures::{keyboard_owner, submit_command_line};
 use crate::jobs::{
-    AiRenameRun, InFlight, SemanticRun, launch_search, on_compare_key, on_search_dialog_key,
-    on_search_enter, on_search_escape, on_sync_key,
+    AiRenameRun, InFlight, RenameBatchRun, SemanticRun, launch_search, on_compare_key,
+    on_search_dialog_key, on_search_enter, on_search_escape, on_sync_key,
 };
 use crate::keymap::{
     Command, Count, Resolution, Resolver, chord_from_crossterm, count_ignored_message,
@@ -652,6 +652,54 @@ pub async fn on_key(
                             work.pending_ai_plan = None;
                             app.message = Some(t("msg-ai-rename-running"));
                             app.ai_rename_submitted();
+                        }
+                    }
+                    // #310: la plantilla ya validada produce los pares AQUÍ
+                    // —sin salir a preguntarle a nadie— y a partir de ahí el
+                    // camino es el MISMO que el del plan de la IA: se pide
+                    // `fs.rename_batch_plan`, se abre el modal en `Pending` y
+                    // el harvest lo rellena.
+                    PromptKind::RenameBatch => {
+                        if let Some(pattern) = app.rename_batch_confirm() {
+                            let names = app.rename_batch_names();
+                            let dir = app.focused().dir().clone();
+                            let entries: Vec<norte_proto::methods::AiRenameEntry> =
+                                norte_frontend::rename_pattern::plan(&pattern, &names, 1)
+                                    .into_iter()
+                                    .map(|(from, to)| norte_proto::methods::AiRenameEntry {
+                                        from,
+                                        to,
+                                    })
+                                    .collect();
+                            app.rename_batch_submitted();
+                            if entries.is_empty() {
+                                // Una plantilla que deja todo igual no es un
+                                // error: no hay nada que renombrar y se dice.
+                                app.message = Some(t("msg-rename-batch-no-changes"));
+                            } else if let Some(pairs) = norte_frontend::rename_pairs(&entries) {
+                                let b = backend.clone();
+                                let d = dir.clone();
+                                let handle =
+                                    tokio::spawn(
+                                        async move { b.rename_batch_plan(&d, &pairs).await },
+                                    );
+                                if let Some(old) =
+                                    work.rename_batch.replace(RenameBatchRun { handle })
+                                {
+                                    old.handle.abort();
+                                }
+                                app.modal = Some(Modal::AiRenamePlan {
+                                    dir,
+                                    entries,
+                                    offset: 0,
+                                    plan: norte_frontend::BatchPlan::Pending,
+                                });
+                            } else {
+                                // Un par que no es un `Segment` es un bug
+                                // NUESTRO —la plantilla los fabricó— y no una
+                                // respuesta hostil: se dice y no se pide plan.
+                                app.message = Some(t("msg-rename-pattern-bad-result"));
+                            }
                         }
                     }
                     PromptKind::Semantic => {

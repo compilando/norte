@@ -85,6 +85,9 @@ fn modal_context(modal: &Modal) -> &'static str {
         Modal::TransferDest { .. } => "dialog.transfer-dest",
         Modal::CommandLine { .. } => "dialog.command-line",
         Modal::AiRenameInstruction { .. } | Modal::AiRenamePlan { .. } => "dialog.ai-rename",
+        // La plantilla del lote comparte página con renombrar, que es donde
+        // se cuenta qué es un plan revisable y qué se puede deshacer.
+        Modal::RenameBatchPattern { .. } => "dialog.rename",
         Modal::SemanticQuery { .. } | Modal::SemanticHits { .. } => "dialog.semantic-search",
         Modal::Properties { .. } => "dialog.properties",
         // #132: los dos diálogos de escribir archivos comparten página — se
@@ -134,6 +137,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::TransferDest { .. }
         | Modal::CommandLine { .. }
         | Modal::AiRenameInstruction { .. }
+        | Modal::RenameBatchPattern { .. }
         | Modal::SemanticQuery { .. }
         | Modal::TransferName { .. }
         // #132: los dos de escribir archivos son editores de texto libre, y el

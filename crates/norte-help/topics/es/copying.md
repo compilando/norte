@@ -7,6 +7,7 @@ commands = [
     "pane.copy",
     "pane.move",
     "pane.rename",
+    "pane.rename-batch",
     "pane.mkdir",
     "pane.delete",
     "pane.delete-permanent",
@@ -49,6 +50,19 @@ nombre no es una segunda función: es este campo.
 {{cmd:pane.rename}} abre ese mismo diálogo con los dos extremos en el
 directorio actual, que es lo que renombrar es: un movimiento que no va a ningún
 sitio. Dentro de un mismo backend no cuesta nada, ocupe lo que ocupe.
+
+{{cmd:pane.rename-batch}} renombra MUCHOS de una vez con una plantilla: `[N]`
+es el nombre sin extensión, `[E]` la extensión, `[C]` un contador —`[C3]` lo
+acolcha con ceros— y lo demás es texto tal cual. Actúa sobre lo marcado, o
+sobre lo que hay bajo el cursor si no hay nada marcado, que es el operando de
+siempre.
+
+Lo que sale no se aplica: sale un **plan** —el nombre viejo y el nuevo, par a
+par— con las colisiones ya señaladas, y no se toca nada hasta que lo aceptas.
+Es exactamente la misma revisión, el mismo diario y el mismo deshacer que el
+renombrado con IA, porque lo que hace segura la operación no es de dónde
+salieron los nombres. Una plantilla que deja todo igual lo dice en vez de
+enseñarte una lista vacía.
 
 {{cmd:pane.mkdir}} pide un nombre y crea un directorio en el panel con el foco.
 Es lo único de esta página que crea en vez de mover, y está aquí porque todo lo

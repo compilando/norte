@@ -67,6 +67,10 @@ keymap = [
     { on = ["f6"], run = "pane.move" },
     { on = ["f7"], run = "pane.mkdir" },
     { on = ["shift+f6"], run = "pane.rename" },
+    # El lote por plantilla (#310). Sin tecla atestiguada aquí —TC lo pone
+    # en `ctrl+m` y Krusader en `shift+f2`, y los dos presets la llevan—,
+    # así que se elige: `alt+r` de «rename», libre en los siete.
+    { on = ["alt+r"], run = "pane.rename-batch" },
     { on = ["f8"], run = "pane.delete" },
     { on = ["shift+f8"], run = "pane.delete-permanent" },
     { on = ["ctrl+k"], run = "task.cancel" },
