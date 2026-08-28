@@ -9,6 +9,26 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Every listing carries a `..` row** (`[ui] parent_entry`, on by default).
+  The row an orthodox reader expects: the cursor lands on it and Enter goes up.
+  It is never an OPERAND — `selected()` answers `None` over it, so the
+  eighty-seven callers that ask "what is selected" in order to copy, move,
+  rename or delete get "nothing" rather than the parent directory — and it
+  cannot be marked by any of the six paths that mark, because marking it would
+  put the PARENT into the list of what gets copied or deleted. It is painted
+  `..` and not the parent's name, it never appears in a root, and it stays
+  first through sorting, hidden-file filtering and paginated fills.
+- **Panel borders can be dragged with the mouse**, in both frontends, and the
+  size is remembered — it lives in the arrangement tree, which the session
+  already saves per profile. The drag primitive is absolute rather than a step
+  (a key wants two cells per press; a pointer says WHERE the border goes), the
+  pair's total is conserved so the rest of the row is untouched, and weights
+  are renormalised so a drag can land somewhere other than the exact middle. In
+  the window the renderer sends the pointer position in layout cells and the
+  host decides what that means, which is the same split of responsibility as
+  every other pointer gesture.
+- **The menu reopens where it was**, in both frontends, instead of always
+  starting at the first one.
 - **Profiles reach the window** (ADR 0079, bridge 43). `profile.pick`,
   `profile.next` and `profile.prev` used to answer "not here"; now the window
   lists them, cycles through them and switches live. The picker is the shared
@@ -400,6 +420,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The processes panel swallowed the key that gets out of it.** Its handler
+  answered "applied" to ANY effect while the task board was empty — which is
+  almost always — because the "no rows" check came before deciding which keys
+  are its own. So you tabbed into it and the ring ended there: the very Tab
+  that leaves was eaten by the panel, and without a mouse there was no way
+  back. The places sidebar had the same hole for the same reason; it never
+  showed because it always has headers.
 - **The window's keyboard ring stopped where no key gets out.** It walks the
   shared focus order, and that order carries everything FOCUSABLE — which is
   not the same as everything that TAKES KEYS. The details panel is the first
