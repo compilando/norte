@@ -175,6 +175,60 @@ mod k2b_gate_tests {
         }
     }
 
+    /// Un acorde no puede nombrar DOS comandos en la misma pantalla.
+    ///
+    /// El fichero lo permite —son dos líneas de una lista— y el efectivo se
+    /// queda con uno: el otro pierde su tecla sin que nada lo diga, y
+    /// reaparece como `—` en la paleta, en el menú y en la hoja de atajos.
+    /// `orthodox` tenía `alt+n` en `[pane]` atado a `pane.disconnect` y a
+    /// `pane.tab-next`, así que «pestaña siguiente» salía sin tecla en el
+    /// menú y la tecla hacía lo otro.
+    ///
+    /// Se mira contra el EFECTIVO y no contra el fichero porque es lo que
+    /// corre: cubre además lo que `[global]` mezcla en cada pantalla, que es
+    /// donde una colisión es más fácil de escribir sin verla.
+    #[test]
+    fn ningun_preset_ata_un_acorde_a_dos_comandos_en_la_misma_pantalla() {
+        for name in NAMES {
+            let kf = crate::keymap::parse_keymap(source(name).expect("NAMES resuelve"))
+                .unwrap_or_else(|e| panic!("preset {name}: {e}"));
+            // Sección a sección, y sobre el FICHERO: al construir el efectivo
+            // el segundo ya ha pisado al primero, así que ahí la colisión es
+            // invisible — que es justo lo que la hace difícil de ver.
+            for (seccion, raw) in [
+                ("global", &kf.global),
+                ("pane", &kf.pane),
+                ("viewer", &kf.viewer),
+                ("dialog", &kf.dialog),
+            ] {
+                let mut por_acorde: std::collections::BTreeMap<
+                    String,
+                    std::collections::BTreeSet<&str>,
+                > = std::collections::BTreeMap::new();
+                for b in raw
+                    .keymap
+                    .iter()
+                    .chain(&raw.prepend_keymap)
+                    .chain(&raw.append_keymap)
+                {
+                    por_acorde
+                        .entry(b.on.join(" "))
+                        .or_default()
+                        .insert(b.run.as_str());
+                }
+                for (seq, cmds) in por_acorde {
+                    assert!(
+                        cmds.len() < 2,
+                        "preset {name}, sección [{seccion}]: `{seq}` ata {} comandos ({}), \
+                         así que todos menos uno se quedan sin tecla",
+                        cmds.len(),
+                        cmds.into_iter().collect::<Vec<_>>().join(", ")
+                    );
+                }
+            }
+        }
+    }
+
     /// Check 3: `viewer.close` and the six movers (rule 7 — "F3 is never a
     /// room with no door") are bound and RUNNABLE in `[viewer]`, for every
     /// bundled preset.

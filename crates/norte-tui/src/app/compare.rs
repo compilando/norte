@@ -82,7 +82,7 @@ impl App {
     /// y aquí solo se le da lo que esta TUI sabe.
     #[must_use]
     fn sync_roots(&self) -> SyncRoots {
-        let other = &self.panes[self.focus() ^ 1];
+        let other = &self.panes[self.target_index().unwrap_or_else(|| self.focus())];
         norte_frontend::sync::sync_roots(
             self.sync_source_view(),
             &norte_frontend::sync::Panes {

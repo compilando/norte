@@ -245,7 +245,8 @@ pub async fn dispatch(
         // pane y viaja el del foco.
         Command::PanePull => {
             let plan = pull_plan(app);
-            let origin = app.focus() ^ 1;
+            // El origen es el MISMO «otro panel» que resolvió el plan.
+            let origin = app.target_index().unwrap_or_else(|| app.focus());
             cd_outcome = run_pane_gesture(app, backend, events, plan, origin).await;
         }
         // `pane.swap`: NO toca disco — los dos listados ya existían y solo

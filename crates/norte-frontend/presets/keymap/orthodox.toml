@@ -78,7 +78,12 @@ keymap = [
     # Krusader; el cierre no tiene chord común entre managers, así que va con
     # el mismo modificador que el resto de esta familia.
     { on = ["ctrl+n"], run = "pane.connect" },
-    { on = ["alt+n"], run = "pane.disconnect" },
+    # `alt+d`, y no `alt+n`: ese ya era de `pane.tab-next` unas líneas más
+    # abajo, y un acorde atado dos veces en la misma sección no da dos
+    # comandos — da uno, y el otro se queda SIN TECLA sin decirlo (salía como
+    # `—` en el menú, en la paleta y en la hoja de atajos). `alt+d` estaba
+    # libre aquí y es el que `krusader` ya usa para desconectar. Hay test.
+    { on = ["alt+d"], run = "pane.disconnect" },
     { on = ["/"], run = "pane.quick-search" },
     { on = ["alt+down"], run = "pane.history" },
     { on = ["alt+f7"], run = "pane.search" },

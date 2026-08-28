@@ -468,7 +468,12 @@ pub struct PaneMove {
 #[must_use]
 pub fn mirror_plan(app: &App) -> Option<PaneMove> {
     let from = app.focus();
-    let to = from ^ 1;
+    // Quién es «el otro» lo dice el ROL compartido, jamás `focus ^ 1`: ese es
+    // una cuenta de dos paneles, y desde que se puede partir hay tres o
+    // cuatro. Con tres, `^ 1` desde el último se acota al PROPIO panel
+    // (`slot_of` clampa), así que el gesto se comparaba consigo mismo y no
+    // hacía nada, en silencio — «traer solo funciona de izquierda a derecha».
+    let to = app.target_index()?;
     if app.panes[from].virtual_search {
         return None;
     }
@@ -540,7 +545,7 @@ pub fn enter_action(app: &App) -> EnterAction {
 #[must_use]
 pub fn mirror_target_plan(app: &App) -> Option<PaneMove> {
     let from = app.focus();
-    let to = from ^ 1;
+    let to = app.target_index()?;
     if app.panes[from].virtual_search {
         return None;
     }
@@ -555,7 +560,7 @@ pub fn mirror_target_plan(app: &App) -> Option<PaneMove> {
 #[must_use]
 pub fn pull_plan(app: &App) -> Option<PaneMove> {
     let to = app.focus();
-    let from = to ^ 1;
+    let from = app.target_index()?;
     if app.panes[from].virtual_search {
         return None;
     }
@@ -585,6 +590,11 @@ pub async fn run_pane_gesture(
     let Some(m) = plan else {
         if app.panes[origin].virtual_search {
             app.message = Some(t("msg-pane-not-a-location"));
+        } else if app.target_index().is_none() {
+            // Con tres o más paneles y ninguno designado, el gesto no puede
+            // adivinar cuál es «el otro» (ADR 0058 D7). Y callarse es una
+            // tecla muerta: es exactamente como se veía desde el último panel.
+            app.message = Some(t("msg-no-target-designated"));
         }
         return Cd::Cancelled;
     };
@@ -799,6 +809,43 @@ mod pane_gestures_tests {
         // cursor esté sobre una carpeta.
         app.panes[0].set_cursor(0);
         assert_eq!(mirror_plan(&app).expect("plan").dir, vp("mem:///a"));
+    }
+
+    /// Con TRES paneles, «el otro» no se adivina: el gesto pide que designes
+    /// un destino, y con uno designado va a ése.
+    ///
+    /// Antes se calculaba `focus ^ 1`, que es una cuenta de dos: desde el
+    /// tercer panel se acotaba al PROPIO —`slot_of` clampa— así que el plan se
+    /// comparaba consigo mismo y salía `None`. En pantalla: la tecla no hacía
+    /// nada desde el último panel, que es «traer solo funciona de izquierda a
+    /// derecha».
+    #[test]
+    fn con_tres_paneles_el_gesto_pide_un_destino_designado() {
+        let mut app = app_en("mem:///a", "mem:///b");
+        app.set_focus(1);
+        app.layout_split(norte_frontend::layout::Dir::Horizontal);
+        assert_eq!(app.panes.len(), 3, "tres paneles");
+
+        assert!(
+            mirror_plan(&app).is_none(),
+            "sin destino designado no se adivina"
+        );
+        assert!(pull_plan(&app).is_none());
+
+        // Designado el destino, el gesto vuelve a tener a dónde ir — y no es
+        // el propio panel. `layout_set_target` CICLA por los que no tienen el
+        // foco, así que se cicla hasta el de `mem:///a`, que es el único cuyo
+        // directorio difiere del que viaja (los otros dos salieron de partir).
+        for _ in 0..3 {
+            app.layout_set_target();
+            if app.target_index() == Some(0) {
+                break;
+            }
+        }
+        assert_eq!(app.target_index(), Some(0), "el destino designado es el 0");
+        let plan = mirror_plan(&app).expect("con destino designado hay plan");
+        assert_eq!(plan.pane, 0, "viaja el DESIGNADO, no el del foco");
+        assert_eq!(plan.dir, vp("mem:///b"), "la ubicación sale del foco");
     }
 
     /// Traer: el pane CON foco se va a donde está el otro.

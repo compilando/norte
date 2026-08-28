@@ -132,7 +132,11 @@ impl App {
             viewable: sel.is_some_and(|e| matches!(e.kind, EntryKind::File | EntryKind::Symlink)),
             rename_single: true,
             source_read_only: self.pane_read_only(self.focus),
-            dest_read_only: self.pane_read_only(self.focus ^ 1),
+            // El destino es el del ROL, como en todo lo demás. Sin ninguno
+            // designado (tres o más paneles) se contesta por el propio: es un
+            // AVISO, y decir «solo lectura» de más no bloquea nada.
+            dest_read_only: self
+                .pane_read_only(self.target_index().unwrap_or_else(|| self.focus())),
             degraded: self.degraded_for(pane.dir().scheme()).is_some(),
             journalled: self.backend_journalled,
         }

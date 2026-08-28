@@ -389,6 +389,27 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A panel gesture from the third panel did nothing, silently.** `pane.pull`,
+  `pane.mirror` and `pane.mirror-target` worked out "the other panel" as
+  `focus ^ 1`, which is a count of TWO — and panels have been splittable for a
+  while. With three, from the last one that lands on the panel ITSELF (the
+  lookup clamps), so the gesture compared a location with itself and returned
+  "nothing to do" without a word: from the outside, pulling only worked left to
+  right. They now ask the same thing every other destination asks — the panel
+  holding the Target ROLE (ADR 0058 D7) — and when three or more panels are
+  open with none designated they SAY so instead of going quiet. The comparison,
+  the sync roots and the read-only gate for the destination were computing the
+  same wrong "other" and now share that one answer.
+- **`orthodox` bound `alt+n` twice**, to `pane.disconnect` and to
+  `pane.tab-next`. A chord in one screen names one command: the second silently
+  won, so "next tab" lost its key and showed as `—` in the menu, the palette
+  and the reference sheet — which is what "the keys in the menu are wrong"
+  turned out to be. Disconnect moves to `alt+d` (free here, and what `krusader`
+  already uses); next tab keeps `alt+n` and its pair with `alt+p`. A test now
+  fails the build if any preset binds one chord to two commands in the same
+  section — the effective map cannot see it, because by then one has already
+  replaced the other.
+
 - **The settings screen was missing four keys, and one of the ones it had
   could not be turned off.** `[ui] editor` and `editor_detached` are now rows
   of their own (a command line is typed as text and stored as the ARRAY the
