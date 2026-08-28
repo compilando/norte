@@ -105,8 +105,30 @@ impl App {
     /// que una pestaña nueva: es lo mismo que se está mirando, así que aparece
     /// lleno en vez de parpadear vacío mientras alguien relee lo mismo. Y se
     /// queda con el FOCO, que es lo que uno acaba de pedir.
+    ///
+    /// Se NIEGA cuando el hueco enfocado ya no da para dos, y lo dice en la
+    /// barra. Sin eso, la tecla creaba un panel que el reparto escondía en el
+    /// mismo frame —el `Split` no cabe, se degrada a pestañas y la pantalla
+    /// vuelve a enseñar uno, con el árbol guardando el nuevo igualmente—, así
+    /// que desde fuera unas veces partía, otras no hacía nada y otras parecía
+    /// deshacer lo anterior. La cuenta la hace el mismo sitio que decide el
+    /// colapso ([`norte_frontend::layout::has_room_to_split`]) sobre el
+    /// rectángulo del ÚLTIMO frame: el tamaño de un hueco no lo sabe el árbol,
+    /// lo sabe la pantalla. Sin frame todavía no se niega nada — no saber no
+    /// es lo mismo que saber que no.
     pub fn layout_split(&mut self, dir: norte_frontend::layout::Dir) {
         let focus = self.focused_slot();
+        if let Some(rect) = self.mouse.slot_rect(focus)
+            && !norte_frontend::layout::has_room_to_split(
+                rect,
+                dir,
+                &norte_frontend::layout::KindId::browser(),
+                &self.kinds,
+            )
+        {
+            self.message = Some(t("msg-layout-split-no-room"));
+            return;
+        }
         let id = self.mint_slot();
         let nuevo = self.fork_pane(self.focus);
         self.panes.insert_browser(id, nuevo);

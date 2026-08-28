@@ -284,6 +284,29 @@ impl MouseState {
         self.geometry.as_deref()
     }
 
+    /// El rectángulo con el que se pintó el hueco `id` en el último frame, si
+    /// se pintó.
+    ///
+    /// No es solo del ratón: lo pregunta también quien va a PARTIR un hueco,
+    /// que necesita saber si lo que hay ahí da para dos. El tamaño de verdad
+    /// solo lo sabe el frame —el reparto depende del terminal, del cromo y de
+    /// los pesos—, y este es el sitio donde el frame lo dejó dicho.
+    #[must_use]
+    pub fn slot_rect(
+        &self,
+        id: norte_frontend::layout::SlotId,
+    ) -> Option<norte_frontend::layout::Rect> {
+        self.slots
+            .iter()
+            .find(|s| s.slot == id)
+            .map(|s| norte_frontend::layout::Rect {
+                x: s.x,
+                y: s.y,
+                width: s.width,
+                height: s.height,
+            })
+    }
+
     /// Suelta el gesto armado y el click a medio emparejar.
     ///
     /// Las marcas que un barrido ya aplicó SE QUEDAN: soltar el gesto no es

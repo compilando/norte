@@ -14972,6 +14972,40 @@ async fn partir_abre_otro_listado_y_le_da_el_foco() {
     );
 }
 
+/// Partir un hueco que ya no da para dos se REHÚSA, y se dice.
+///
+/// La misma regla que la TUI y por el mismo sitio (ADR 0077): sin ella el
+/// árbol se quedaba un hueco que el reparto escondía en el mismo frame — el
+/// `Split` no cabe, se degrada a pestañas y la pantalla sigue enseñando uno.
+#[tokio::test]
+async fn partir_sin_sitio_se_rehusa_y_se_dice() {
+    // 24 filas de alto para el cuerpo entero: dan para un listado y no para
+    // dos (el mínimo del `browser` son 5, y el cromo se lleva lo suyo).
+    let (h, snap) = host_con_layout(arbol(), "orthodox", (100, 9)).await;
+    let mut sub = h.subscribe();
+    let antes = snap
+        .slots
+        .iter()
+        .filter(|s| matches!(s, SlotView::Browser(_)))
+        .count();
+    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "layout.split-v").await;
+    assert_eq!(
+        ack,
+        ActionAck::Unavailable {
+            reason_key: "msg-layout-split-no-room".to_owned()
+        },
+        "{ack:?}"
+    );
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let listados = foto
+        .slots
+        .iter()
+        .filter(|s| matches!(s, SlotView::Browser(_)))
+        .count();
+    assert_eq!(listados, antes, "el árbol no se quedó un hueco invisible");
+}
+
 /// Cerrar el ÚLTIMO listado se rehúsa y se dice.
 ///
 /// Una pantalla sin un listado usable no es una pantalla, es un cuelgue con
@@ -15104,8 +15138,14 @@ async fn el_selector_de_perfiles_enseña_y_lo_elegido_se_aplica() {
     ejecutar_por_paleta(&h, &mut sub, "profile.pick").await;
     // La lista llega de una tarea de fondo: la foto que la trae es la que
     // hay que esperar, no la siguiente que pase.
+    //
+    // Cien vueltas y no seis: seis es un plazo, no una espera. La tarea de
+    // fondo compite con el resto de la suite por el runtime, y bajo carga
+    // —la máquina compilando al lado— se pasaba de largo y el test se ponía
+    // rojo sin que nada estuviera roto. Cien es del orden de las esperas
+    // vecinas de este fichero.
     let mut selector = None;
-    for _ in 0..6 {
+    for _ in 0..100 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         if let Some(p) = siguiente_foto(&mut sub).await.profiles {
             selector = Some(p);

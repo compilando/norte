@@ -5067,12 +5067,34 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         use norte_frontend::layout::{Dir, KindId};
-        let id = self.nuevo_slot();
         let dir = if vertical {
             Dir::Vertical
         } else {
             Dir::Horizontal
         };
+        // Que quepan DOS, y con la misma cuenta que decide el colapso del
+        // reparto: partir un hueco que ya no da para dos crea un panel que el
+        // propio reparto esconde en el mismo frame —el `Split` se degrada a
+        // pestañas— con el árbol guardándolo igualmente. La TUI se niega por
+        // este mismo sitio (ADR 0077: una decisión duplicada entre frontends
+        // diverge en silencio).
+        let sitio = self
+            .reparto
+            .placements
+            .iter()
+            .find(|(s, _)| s.0 == self.enfocado())
+            .is_none_or(|(_, re)| {
+                norte_frontend::layout::has_room_to_split(*re, dir, &KindId::browser(), &self.kinds)
+            });
+        if !sitio {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-layout-split-no-room".to_owned(),
+                },
+                self.decir("msg-layout-split-no-room"),
+            );
+        }
+        let id = self.nuevo_slot();
         let nuevo = self.arbol.split_slot(
             SlotId(self.enfocado()),
             dir,

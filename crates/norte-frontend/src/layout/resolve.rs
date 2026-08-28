@@ -117,6 +117,26 @@ fn minimo_visible(decls: &KindRegistry, kind: &super::KindId) -> (u16, u16) {
     (mw.min(CONTENIDO.0), mh.min(CONTENIDO.1))
 }
 
+/// ¿Cabrían DOS huecos de `kind` si se parte `rect` a lo largo de `dir`?
+///
+/// Lo pregunta quien va a partir, ANTES de tocar el árbol. Sin esto, partir un
+/// hueco que ya no da para dos crea un panel que el reparto esconde en el
+/// mismo frame: el `Split` no cabe, se degrada a pestañas y la pantalla vuelve
+/// a enseñar uno — con el árbol guardando el nuevo igualmente. Lo que el
+/// lector ve es una tecla que no hace nada, o peor, que deshace lo anterior.
+///
+/// La cuenta es la MISMA que decide el colapso —el mínimo declarado del kind,
+/// no el de contenido—, y por eso vive aquí al lado: dos criterios para la
+/// misma pregunta se separan en cuanto alguien toque uno.
+#[must_use]
+pub fn has_room_to_split(rect: Rect, dir: Dir, kind: &super::KindId, decls: &KindRegistry) -> bool {
+    let (mw, mh) = decls.min_of(kind);
+    match dir {
+        Dir::Horizontal => rect.width / 2 >= mw && rect.height >= mh,
+        Dir::Vertical => rect.height / 2 >= mh && rect.width >= mw,
+    }
+}
+
 /// ¿Hay en `out` un hueco que pueda tomar el rol `active` y con sitio para
 /// enseñar algo?
 fn listado_usable(out: &Resolved, tree: &Node, decls: &KindRegistry) -> bool {
@@ -578,6 +598,65 @@ mod tests {
             vec![SlotId(2)],
             "no se tabula a lo que no se ve"
         );
+    }
+
+    /// Preguntar ANTES de partir: en 30 columnas no caben dos browsers de
+    /// mínimo 20, así que partir ahí solo produce un panel que el reparto
+    /// esconde en el mismo frame.
+    ///
+    /// La misma cuenta que hace el colapso —el mínimo del KIND, no el de
+    /// contenido—, para que la respuesta de los dos no pueda separarse.
+    #[test]
+    fn has_room_to_split_dice_que_no_cuando_el_reparto_colapsaria() {
+        let k = KindId::browser();
+        assert!(has_room_to_split(
+            r(0, 0, 40, 30),
+            Dir::Horizontal,
+            &k,
+            &reg()
+        ));
+        assert!(!has_room_to_split(
+            r(0, 0, 30, 30),
+            Dir::Horizontal,
+            &k,
+            &reg()
+        ));
+        // El eje que se parte es el que cuenta: 30 columnas no dan para dos
+        // a lo ancho y las mismas 30 filas sí dan para dos a lo alto.
+        assert!(has_room_to_split(
+            r(0, 0, 30, 30),
+            Dir::Vertical,
+            &k,
+            &reg()
+        ));
+        assert!(!has_room_to_split(
+            r(0, 0, 30, 9),
+            Dir::Vertical,
+            &k,
+            &reg()
+        ));
+    }
+
+    /// Y lo que dice cuadra con lo que hace el reparto: si dice que sí, los
+    /// dos huecos se colocan; si dice que no, el `Split` colapsa.
+    #[test]
+    fn has_room_to_split_cuadra_con_el_colapso() {
+        let k = KindId::browser();
+        for (w, h, dir) in [
+            (40, 30, Dir::Horizontal),
+            (30, 30, Dir::Horizontal),
+            (30, 30, Dir::Vertical),
+            (30, 9, Dir::Vertical),
+        ] {
+            let area = r(0, 0, w, h);
+            let arbol = dos(browser(1), browser(2), dir);
+            let colocados = resolve(area, &arbol, &reg()).placements.len();
+            assert_eq!(
+                has_room_to_split(area, dir, &k, &reg()),
+                colocados == 2,
+                "{w}x{h} {dir:?}: colocados {colocados}"
+            );
+        }
     }
 
     /// El colapso: dos browsers de mínimo 20 no caben en 30 columnas, así que

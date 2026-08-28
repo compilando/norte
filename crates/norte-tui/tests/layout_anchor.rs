@@ -830,3 +830,56 @@ fn un_destino_que_no_es_una_direccion_deja_el_prompt_abierto() {
     assert_eq!(input, "/home/yo", "lo tecleado sobrevive");
     assert!(error.is_some(), "y dice por qué");
 }
+
+/// Partir un hueco que ya no da para dos se NIEGA, y lo dice.
+///
+/// Sin esto la tecla creaba un panel que el reparto escondía en el mismo
+/// frame: el `Split` no cabía, se degradaba a pestañas y la pantalla volvía a
+/// enseñar uno — con el árbol guardando el nuevo igualmente. Desde fuera, una
+/// tecla que unas veces parte, otras no hace nada, y otras deshace lo
+/// anterior.
+#[test]
+fn partir_sin_sitio_se_niega_y_lo_dice() {
+    use norte_frontend::layout::Dir;
+
+    // 30 filas de alto: cabe partir en dos a lo alto, y a la tercera ya no.
+    let mut app = app_de_prueba_con(3);
+    let _ = pintar(&mut app);
+    let huecos_antes = app.layout.slot_ids().len();
+
+    app.layout_split(Dir::Vertical);
+    let _ = pintar(&mut app);
+    assert_eq!(
+        app.layout.slot_ids().len(),
+        huecos_antes + 1,
+        "la primera cabe"
+    );
+
+    // Se parte hasta que la respuesta sea que no, y entonces NADA cambia.
+    let mut mensajes = 0;
+    for _ in 0..6 {
+        let antes = app.layout.clone();
+        app.message = None;
+        app.layout_split(Dir::Vertical);
+        let _ = pintar(&mut app);
+        if app.layout == antes {
+            mensajes += 1;
+            assert!(
+                app.message.is_some(),
+                "negarse en silencio es una tecla rota"
+            );
+        }
+    }
+    assert!(mensajes > 0, "en 30 filas hay un tope y se alcanza");
+
+    // Y lo que quedó en pantalla es lo que dice el modelo: ningún listado
+    // escondido por el reparto (el árbol lleva además el cromo, que no es un
+    // pane).
+    let area = ratatui::layout::Rect::new(0, 0, W, H);
+    let colocados = ui::pane_geometry(&app, area).expect("geometría").len();
+    assert_eq!(
+        colocados,
+        app.panes.len(),
+        "todos los listados del modelo se ven"
+    );
+}

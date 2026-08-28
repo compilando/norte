@@ -389,6 +389,22 @@ impl Node {
     /// Los dos quedan con el mismo peso. Si `id` está dentro de una `Tabs`, el
     /// corte va DENTRO de esa pestaña y no alrededor del grupo: partir una
     /// pestaña es partir lo que estás mirando, no reorganizar sus hermanas.
+    ///
+    /// # Partir otra vez en el mismo eje APLANA
+    ///
+    /// Si el hueco ya vive en un `Split` que corre en `dir`, el nuevo entra
+    /// como hermano suyo en vez de envolverlo en otro `Split`. Anidando, cada
+    /// partición se llevaba la mitad de la mitad: tres paneles quedaban en
+    /// 1/2, 1/4 y 1/4 en vez de tercios, y a la siguiente el hijo más profundo
+    /// bajaba del mínimo de su kind y el reparto lo degradaba a pestañas — el
+    /// panel recién pedido desaparecía de la pantalla sin decir nada, con el
+    /// árbol guardándolo igualmente.
+    ///
+    /// Solo si el hueco es PONDERADO. Uno de tamaño fijo es cromo acoplado:
+    /// meter otro hijo en su fila le robaría el sitio a lo que tiene al lado,
+    /// así que ese se parte por dentro, como siempre. El nuevo nace con el
+    /// mismo peso que aquel del que sale, que sobre el reparto por defecto
+    /// —todos a uno— es exactamente repartir a partes iguales.
     #[must_use]
     pub fn split_slot(&self, id: SlotId, dir: Dir, nuevo: &Self) -> Self {
         match self {
@@ -400,14 +416,33 @@ impl Node {
                 dir: d,
                 children,
                 sizes,
-            } => Self::Split {
-                dir: *d,
-                sizes: sizes.clone(),
-                children: children
-                    .iter()
-                    .map(|c| c.split_slot(id, dir, nuevo))
-                    .collect(),
-            },
+            } => {
+                if *d == dir
+                    && let Some(i) = children
+                        .iter()
+                        .position(|c| matches!(c, Self::Slot { id: s, .. } if *s == id))
+                    && let Size::Weight(peso) = sizes.get(i).copied().unwrap_or(Size::Weight(1))
+                {
+                    let mut hijos = children.clone();
+                    let mut tam = sizes.clone();
+                    tam.resize(hijos.len(), Size::Weight(1));
+                    hijos.insert(i + 1, nuevo.clone());
+                    tam.insert(i + 1, Size::Weight(peso));
+                    return Self::Split {
+                        dir: *d,
+                        children: hijos,
+                        sizes: tam,
+                    };
+                }
+                Self::Split {
+                    dir: *d,
+                    sizes: sizes.clone(),
+                    children: children
+                        .iter()
+                        .map(|c| c.split_slot(id, dir, nuevo))
+                        .collect(),
+                }
+            }
             Self::Tabs { children, active } => Self::Tabs {
                 active: *active,
                 children: children
@@ -1521,6 +1556,74 @@ mod tests {
         };
         assert_eq!(*dir, Dir::Vertical);
         assert_eq!(*sizes, vec![Size::Weight(1), Size::Weight(1)]);
+    }
+
+    /// Partir OTRA VEZ en el mismo eje da TERCIOS, no un cuarto.
+    ///
+    /// El corte se une al `Split` que ya corre en ese eje en vez de envolver
+    /// el hueco en uno nuevo. Anidando, cada partición se llevaba la mitad de
+    /// la mitad: tres paneles quedaban en 1/2, 1/4 y 1/4, y a la cuarta el
+    /// hijo más profundo bajaba del mínimo del kind y el reparto lo degradaba
+    /// a pestañas — el panel recién pedido desaparecía sin decir nada.
+    #[test]
+    fn partir_en_el_mismo_eje_reparte_a_partes_iguales() {
+        let arbol = b(1).split_slot(SlotId(1), Dir::Vertical, &b(2));
+        let tres = arbol.split_slot(SlotId(2), Dir::Vertical, &b(3));
+        let Node::Split {
+            children, sizes, ..
+        } = &tres
+        else {
+            panic!("split")
+        };
+        assert_eq!(children.len(), 3, "un solo Split con tres hijos");
+        assert_eq!(
+            *sizes,
+            vec![Size::Weight(1), Size::Weight(1), Size::Weight(1)]
+        );
+        assert_eq!(
+            tres.slot_ids(),
+            vec![SlotId(1), SlotId(2), SlotId(3)],
+            "y el nuevo entra JUNTO al que se partió, no al final"
+        );
+    }
+
+    /// En el OTRO eje sigue envolviendo: un corte perpendicular no puede
+    /// entrar en la fila de sus hermanos.
+    #[test]
+    fn partir_en_el_otro_eje_sigue_anidando() {
+        let arbol = b(1).split_slot(SlotId(1), Dir::Vertical, &b(2));
+        let cruz = arbol.split_slot(SlotId(2), Dir::Horizontal, &b(3));
+        let Node::Split { children, dir, .. } = &cruz else {
+            panic!("split")
+        };
+        assert_eq!(*dir, Dir::Vertical);
+        assert_eq!(children.len(), 2, "el de fuera sigue teniendo dos hijos");
+        assert!(
+            matches!(&children[1], Node::Split { dir, .. } if *dir == Dir::Horizontal),
+            "y el corte nuevo va DENTRO del que se partió"
+        );
+    }
+
+    /// Un hueco de tamaño FIJO se parte por dentro, no se une a sus hermanos:
+    /// su tamaño es cromo acoplado, y meter otro hijo en esa fila le robaría
+    /// el sitio a lo que hay al lado.
+    #[test]
+    fn partir_un_hueco_fijo_no_se_une_a_sus_hermanos() {
+        let arbol = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(8)],
+            children: vec![b(1), b(2)],
+        };
+        let partido = arbol.split_slot(SlotId(2), Dir::Vertical, &b(3));
+        let Node::Split {
+            children, sizes, ..
+        } = &partido
+        else {
+            panic!("split")
+        };
+        assert_eq!(children.len(), 2, "sigue habiendo dos hijos arriba");
+        assert_eq!(sizes[1], Size::Fixed(8), "y el fijo conserva su tamaño");
+        assert_eq!(children[1].slot_ids(), vec![SlotId(2), SlotId(3)]);
     }
 
     /// Partir una PESTAÑA parte lo que estás mirando, no reorganiza sus

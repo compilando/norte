@@ -824,6 +824,9 @@ help-cmd-profile-prev = previous profile
 help-cmd-profile-save-as = save this workspace as a profile
 cmd-planned-profile-save-as = writing a profile from what is on screen comes with the rest of config editing
 msg-layout-last-panel = cannot close the last panel
+# Splitting a slot that no longer fits two: the key refuses instead of making a
+# panel the layout hides in the same frame.
+msg-layout-split-no-room = no room for another panel here
 msg-transfer-dest-invalid = that is not an address: {$err}
 msg-transfer-dest-same = that is where they already are: type another destination
 msg-layout-load-failed = could not load layout "{$name}": {$err}

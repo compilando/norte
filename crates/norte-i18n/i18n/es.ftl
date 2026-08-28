@@ -820,6 +820,9 @@ help-cmd-profile-prev = perfil anterior
 help-cmd-profile-save-as = guarda este espacio de trabajo como perfil
 cmd-planned-profile-save-as = escribir un perfil desde lo que hay en pantalla llega con el resto de la edición de config
 msg-layout-last-panel = no se puede cerrar el último panel
+# Partir un hueco que ya no da para dos: la tecla se niega en vez de crear un
+# panel que el reparto esconde en el mismo frame.
+msg-layout-split-no-room = no cabe otro panel aquí
 msg-transfer-dest-invalid = eso no es una dirección: {$err}
 msg-transfer-dest-same = ahí es donde ya están: teclea otro destino
 msg-layout-load-failed = no se pudo cargar el layout «{$name}»: {$err}

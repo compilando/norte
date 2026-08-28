@@ -389,6 +389,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Splitting the same way twice divides evenly, and a split that will not fit
+  says so.** `alt+v` three times used to leave 1/2, 1/4 and 1/4 rather than
+  thirds: each split wrapped the slot in a NEW split instead of joining the one
+  already running that way, so every press took half of a half. Press it once
+  more and the deepest child fell under its kind's minimum, the layout degraded
+  that split to tabs for the frame, and the panel just asked for **vanished
+  with no message** — the tree kept it, so what you saw and what existed
+  disagreed. From outside, one key that sometimes split, sometimes did nothing,
+  and sometimes looked like it undid the last one. Splitting along an axis that
+  is already running now joins that split, so N panels are N equal shares
+  (a FIXED-size slot still splits inside itself: its size is docked chrome, and
+  a new sibling in that row would steal room from what sits beside it). And
+  splitting refuses when the focused slot no longer fits two, saying "no room
+  for another panel here" — the same arithmetic that decides the collapse,
+  asked before the tree is touched, against the rectangle the LAST frame
+  painted. Both frontends: the rule and the refusal are shared, so they cannot
+  drift apart (ADR 0077).
+
 - **Splitting a panel no longer smuggles the parent directory into the
   listing.** Splitting a panel, and opening a tab, inherit the neighbour's
   listing so the new panel appears filled instead of blinking empty — but what
