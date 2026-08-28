@@ -15,6 +15,7 @@ commands = [
     "nav.parent",
     "pane.refresh",
     "pane.mirror",
+    "pane.mirror-target",
     "pane.pull",
     "pane.swap",
     "nav.back",
@@ -96,6 +97,13 @@ pregunta hacia dónde, así que preparar una transferencia *es* poner el otro
 panel en su sitio, y esto lo pone sin que tengas que abandonar el origen.
 {{cmd:pane.pull}} es el mismo gesto al revés: el panel con el foco se va a
 donde está el otro.
+
+{{cmd:pane.mirror-target}} manda lo que está **bajo el cursor**: si es una
+carpeta, el otro panel entra en ella; si no lo es, la ubicación de este panel,
+que es lo mismo que {{cmd:pane.mirror}}. Sirve para mirar dentro de un
+directorio sin salir de donde estás, y es el gesto que un usuario de Krusader
+espera de las flechas con Ctrl. Sobre la fila `..` manda esta ubicación, no la
+del padre: esa fila no es el operando de nada.
 
 Ninguno de los dos dice nada cuando los dos paneles ya están en el mismo sitio.
 No ha fallado nada que hubieras pedido, y relistar un panel para nada le

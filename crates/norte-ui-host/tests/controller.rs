@@ -15909,6 +15909,39 @@ async fn el_espejo_manda_la_ubicacion_al_destino() {
     assert_eq!(f.focus, Some(1), "el espejo no mueve el foco");
 }
 
+/// `pane.mirror-target` manda la CARPETA BAJO EL CURSOR, no la ubicación:
+/// `Ctrl+←`/`Ctrl+→` de Krusader, y la misma respuesta que da la TUI porque
+/// quien la decide es `PaneState::target_dir` (ADR 0077).
+#[tokio::test]
+async fn el_espejo_del_objetivo_manda_la_carpeta_del_cursor() {
+    let (h, _snap) = crate::dos_paneles_con_destino_aparte(arbol()).await;
+    let mut sub = h.subscribe();
+
+    // Los dos en `/casa` para empezar: así lo que se mide después es el
+    // OBJETIVO del cursor y no el arrastre del escenario.
+    ejecutar_por_paleta(&h, &mut sub, "pane.mirror").await;
+    esperar_foto(&h, &mut sub, "los dos en /casa", |f| {
+        listado_de(f, 2).path_display.ends_with("/casa")
+    })
+    .await;
+
+    // El cursor a la fila 0, que aquí es el directorio `docs`: estos ajustes
+    // traen la fila `..` APAGADA (`ui_parent_entry = false`), y el escenario
+    // deja el cursor donde lo dejó su propia navegación.
+    ejecutar_por_paleta(&h, &mut sub, "cursor.top").await;
+    ejecutar_por_paleta(&h, &mut sub, "pane.mirror-target").await;
+    let f = esperar_foto(&h, &mut sub, "el destino entre en la carpeta", |f| {
+        listado_de(f, 2).path_display.ends_with("/casa/docs")
+    })
+    .await;
+    assert!(
+        listado_de(&f, 1).path_display.ends_with("/casa"),
+        "el panel del foco no se mueve: {}",
+        listado_de(&f, 1).path_display
+    );
+    assert_eq!(f.focus, Some(1), "ni el foco");
+}
+
 /// `pane.pull` es el mismo gesto al revés: la ubicación sale del destino y
 /// viaja el panel con el foco.
 #[tokio::test]

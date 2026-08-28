@@ -15,6 +15,7 @@ commands = [
     "nav.parent",
     "pane.refresh",
     "pane.mirror",
+    "pane.mirror-target",
     "pane.pull",
     "pane.swap",
     "nav.back",
@@ -95,6 +96,13 @@ never asks where to, so preparing a transfer *is* pointing the other pane
 somewhere — and this points it without you having to leave the source.
 {{cmd:pane.pull}} is the same gesture the other way round: the focused pane
 goes where the other one is.
+
+{{cmd:pane.mirror-target}} sends what is **under the cursor**: a folder, and
+the other pane opens it; anything else, and it sends this pane's location,
+which is what {{cmd:pane.mirror}} does. It is for looking inside a directory
+without leaving where you are, and it is what a Krusader reader expects from
+the arrows with Ctrl. On the `..` row it sends this location, not the parent's:
+that row is the operand of nothing.
 
 Neither of them says anything when both panes are already in the same place.
 Nothing was asked for that failed, and re-listing a pane for no reason would

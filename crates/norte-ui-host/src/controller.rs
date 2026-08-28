@@ -9351,7 +9351,7 @@ impl Estado {
             Efecto::Refrescar => self.refrescar_visibles(backend, buzon),
             Efecto::AlternarOcultos => self.alternar_ocultos(),
             Efecto::CiclarEncoding => self.ciclar_encoding(),
-            Efecto::Espejo | Efecto::Traer | Efecto::Intercambiar => {
+            Efecto::Espejo | Efecto::EspejoObjetivo | Efecto::Traer | Efecto::Intercambiar => {
                 self.gesto_de_panel(efecto, backend, buzon)
             }
             Efecto::VolumenesDeLado { derecha } => {
@@ -14320,13 +14320,13 @@ impl Estado {
             // enseña: durante una navegación `pane.dir()` responde todavía
             // por el directorio que se abandona, y espejar eso mandaría al
             // otro panel al sitio del que el lector acaba de salir.
-            Efecto::Espejo | Efecto::Traer => {
-                let (origen, llega) = if matches!(efecto, Efecto::Espejo) {
-                    (activo, otro)
-                } else {
+            Efecto::Espejo | Efecto::EspejoObjetivo | Efecto::Traer => {
+                let (origen, llega) = if matches!(efecto, Efecto::Traer) {
                     (otro, activo)
+                } else {
+                    (activo, otro)
                 };
-                let Some(destino) = self.dir_en_curso(origen) else {
+                let Some(destino) = self.destino_del_gesto(efecto, origen) else {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 };
                 if self.dir_en_curso(llega).as_ref() == Some(&destino) {
@@ -14348,6 +14348,21 @@ impl Estado {
             // El `match` de arriba no manda aquí nada más.
             _ => Self::no_muta(),
         }
+    }
+
+    /// La ubicación que VIAJA en un gesto de panel, leída del hueco `origen`.
+    ///
+    /// Para espejo y traer es [`Self::dir_en_curso`]. Para
+    /// [`Efecto::EspejoObjetivo`] es la carpeta bajo el cursor si lo es
+    /// (`PaneState::target_dir`, la misma respuesta que da el TUI) — salvo con
+    /// una navegación EN VUELO, donde el cursor sigue siendo el del listado
+    /// que se abandona y lo que vale es a dónde va el hueco.
+    fn destino_del_gesto(&self, efecto: Efecto, origen: u32) -> Option<VPath> {
+        let hueco = self.huecos.get(&origen)?;
+        if matches!(efecto, Efecto::EspejoObjetivo) && hueco.dir_pedido.is_none() {
+            return Some(hueco.pane.target_dir().clone());
+        }
+        self.dir_en_curso(origen)
     }
 
     /// A dónde va un hueco: el directorio pedido si hay una navegación en

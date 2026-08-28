@@ -893,6 +893,7 @@ help-cmd-nav-parent = subir al directorio padre
 help-cmd-nav-back = volver al directorio anterior
 help-cmd-nav-forward = avanzar otra vez
 help-cmd-pane-mirror = mandar esta ubicación al otro pane
+help-cmd-pane-mirror-target = mandar al otro pane la carpeta bajo el cursor
 help-cmd-pane-pull = ir a donde está el otro pane
 help-cmd-pane-swap = intercambiar los dos panes
 help-cmd-pane-copy = copiar la selección al otro pane

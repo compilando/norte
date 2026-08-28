@@ -19,8 +19,8 @@ use crate::app::{
 };
 use crate::config;
 use crate::gestures::{
-    disconnect, edit_under_cursor, mirror_plan, pull_plan, resolve_opener, run_pane_gesture,
-    shell_cwd,
+    disconnect, edit_under_cursor, mirror_plan, mirror_target_plan, pull_plan, resolve_opener,
+    run_pane_gesture, shell_cwd,
 };
 use crate::keymap::Command;
 use crate::mutations::{combine_pieces, launch_size_count, test_archive, unpack};
@@ -231,6 +231,13 @@ pub async fn dispatch(
         // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
         Command::PaneMirror => {
             let plan = mirror_plan(app);
+            let origin = app.focus();
+            cd_outcome = run_pane_gesture(app, backend, events, plan, origin).await;
+        }
+        // `pane.mirror-target`: el mismo gesto, pero lo que viaja es el
+        // OBJETIVO DEL CURSOR (la carpeta bajo él, si lo es).
+        Command::PaneMirrorTarget => {
+            let plan = mirror_target_plan(app);
             let origin = app.focus();
             cd_outcome = run_pane_gesture(app, backend, events, plan, origin).await;
         }

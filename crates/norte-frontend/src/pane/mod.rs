@@ -867,6 +867,28 @@ impl PaneState {
         &self.entries
     }
 
+    /// A dónde apunta un gesto que adopta el OBJETIVO DEL CURSOR: la carpeta
+    /// bajo el cursor si lo es, y si no el directorio de este pane.
+    ///
+    /// Es la regla de `Ctrl+←`/`Ctrl+→` de Krusader, literal: «on a folder:
+    /// refreshes the other panel with the contents of the folder; on a file:
+    /// the other panel gets the same path». Vive aquí, y no en cada frontend,
+    /// porque una decisión duplicada entre los dos diverge en silencio
+    /// (ADR 0077).
+    ///
+    /// Sobre la fila `..` devuelve el directorio de este pane, no el padre:
+    /// [`Self::selected`] responde `None` ahí —es el embudo que impide que esa
+    /// fila sea el operando de nada— y este gesto no es la excepción. Un
+    /// enlace a un directorio tampoco cuenta: en M0 un symlink no se sigue, y
+    /// mandar al otro panel a donde apunta sería seguirlo.
+    #[must_use]
+    pub fn target_dir(&self) -> &VPath {
+        match self.selected() {
+            Some(e) if e.kind == EntryKind::Dir => &e.path,
+            _ => &self.dir,
+        }
+    }
+
     /// Las entradas de VERDAD: [`Self::entries`] sin la fila `..`.
     ///
     /// Lo que hay que copiar cuando un pane nace del listado de otro —partir
@@ -1245,6 +1267,42 @@ mod tests {
             raiz.real_entries().len(),
             raiz.entries().len(),
             "en una raíz no hay fila que quitar"
+        );
+    }
+
+    /// El objetivo del cursor: la carpeta si lo es, y si no este directorio.
+    /// Sobre `..`, este directorio — jamás el padre.
+    #[test]
+    fn target_dir_es_la_carpeta_bajo_el_cursor_y_si_no_la_propia() {
+        let casa = VPath::parse("mem:///casa").unwrap();
+        let mut p = PaneState::new(
+            casa.clone(),
+            vec![
+                e("mem:///casa/dir", EntryKind::Dir),
+                e("mem:///casa/f.txt", EntryKind::File),
+                e("mem:///casa/enlace", EntryKind::Symlink),
+            ],
+        );
+        p.set_parent_row(true);
+
+        assert!(p.is_parent_row(p.cursor()), "el cursor nace sobre `..`");
+        assert_eq!(p.target_dir(), &casa, "sobre `..`, esta ruta, no el padre");
+
+        p.cursor_down();
+        assert_eq!(
+            p.target_dir(),
+            &VPath::parse("mem:///casa/dir").unwrap(),
+            "sobre una carpeta, esa carpeta"
+        );
+
+        p.cursor_down();
+        assert_eq!(p.target_dir(), &casa, "sobre un fichero, esta ruta");
+
+        p.cursor_down();
+        assert_eq!(
+            p.target_dir(),
+            &casa,
+            "un enlace no se sigue (M0): esta ruta"
         );
     }
 

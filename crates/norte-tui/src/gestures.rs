@@ -443,6 +443,32 @@ pub fn mirror_plan(app: &App) -> Option<PaneMove> {
         .then_some(PaneMove { pane: to, dir })
 }
 
+/// `pane.mirror-target`: like [`mirror_plan`], but what travels is the
+/// CURSOR's target — the folder under the cursor when it is one, and this
+/// pane's own location otherwise.
+///
+/// It is Krusader's `Ctrl+←`/`Ctrl+→`, and the reason it is a separate verb
+/// rather than a smarter `pane.mirror` is that `pane.mirror` is bound in four
+/// presets as "send this location": teaching it to prefer the cursor would
+/// change, in silence, what a key those readers already use does.
+///
+/// Which directory that is gets decided ONCE, in
+/// [`norte_frontend::PaneState::target_dir`], so the window cannot answer it
+/// differently (ADR 0077). The two refusals are [`mirror_plan`]'s, unchanged:
+/// a virtual search listing has no location to send, and a destination that is
+/// already there is left alone.
+#[must_use]
+pub fn mirror_target_plan(app: &App) -> Option<PaneMove> {
+    let from = app.focus();
+    let to = from ^ 1;
+    if app.panes[from].virtual_search {
+        return None;
+    }
+    let dir = app.panes[from].target_dir().clone();
+    (app.panes[to].dir() != &dir || app.panes[to].virtual_search)
+        .then_some(PaneMove { pane: to, dir })
+}
+
 /// `pane.pull`: the FOCUSED pane goes where the other one is — the same
 /// gesture as [`mirror_plan`] the other way round, with the same two reasons
 /// to decline and the same reading of a virtual DESTINATION.
@@ -545,7 +571,7 @@ pub fn keyboard_owner(app: &App) -> u16 {
 
 #[cfg(test)]
 mod pane_gestures_tests {
-    use super::{App, Cd, Trail, keyboard_owner, mirror_plan, pull_plan};
+    use super::{App, Cd, Trail, keyboard_owner, mirror_plan, mirror_target_plan, pull_plan};
     use crate::app::{Modal, Palette, Pane, TrailStep};
     use crate::jobs::on_search_dialog_key;
     use crate::keymap::Command;
@@ -592,6 +618,49 @@ mod pane_gestures_tests {
         let plan = mirror_plan(&app).expect("plan");
         assert_eq!(plan.pane, 0);
         assert_eq!(plan.dir, vp("mem:///b"));
+    }
+
+    /// El espejo del OBJETIVO manda la carpeta bajo el cursor, y sobre
+    /// cualquier otra cosa —un fichero, la fila `..`— manda esta ubicación,
+    /// que es lo que hace el espejo de siempre.
+    #[test]
+    fn el_espejo_del_objetivo_manda_la_carpeta_bajo_el_cursor() {
+        use norte_proto::{Entry, EntryKind};
+        let entrada = |wire: &str, kind| Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: vp(wire),
+            kind,
+            size: None,
+            mtime_ms: None,
+        };
+        let mut app = App::new(
+            Pane::new(
+                vp("mem:///a"),
+                vec![
+                    entrada("mem:///a/dentro", EntryKind::Dir),
+                    entrada("mem:///a/f.txt", EntryKind::File),
+                ],
+            ),
+            Pane::new(vp("mem:///b"), Vec::new()),
+        );
+        app.set_focus(0);
+
+        let plan = mirror_target_plan(&app).expect("plan");
+        assert_eq!(plan.pane, 1, "viaja el OTRO pane, como el espejo");
+        assert_eq!(plan.dir, vp("mem:///a/dentro"), "la carpeta del cursor");
+
+        app.panes[0].set_cursor(1);
+        let plan = mirror_target_plan(&app).expect("plan");
+        assert_eq!(
+            plan.dir,
+            vp("mem:///a"),
+            "sobre un fichero, esta ubicación — como `pane.mirror`"
+        );
+
+        // Y `pane.mirror` NO cambia: sigue mandando la ubicación aunque el
+        // cursor esté sobre una carpeta.
+        app.panes[0].set_cursor(0);
+        assert_eq!(mirror_plan(&app).expect("plan").dir, vp("mem:///a"));
     }
 
     /// Traer: el pane CON foco se va a donde está el otro.

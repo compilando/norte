@@ -446,6 +446,26 @@ independently through `PROTOCOL_VERSION`.
   — three copies are three places to forget the fourth. It is the same lesson
   that already brought `layout.places` and `pane.switch` into those lists.
 
+### Added
+
+- **`pane.mirror-target`: send the folder under the cursor across.** Krusader
+  binds `Ctrl+←`/`Ctrl+→` to it — "on a folder: refreshes the [other] panel
+  with the contents of the folder; on a file: the [other] panel gets the same
+  path" — and the krusader preset had left both keys unbound, because norte had
+  the second half only: `pane.mirror` sends this LOCATION and knows nothing
+  about the cursor. It is a new verb rather than a smarter `pane.mirror`
+  because four presets bind that one as "send this location", and teaching it
+  to prefer the cursor would change, in silence, a key those readers already
+  use. Which directory it aims at is decided once, in `PaneState::target_dir`,
+  so both frontends answer the same (ADR 0077); over the `..` row it sends this
+  location, never the parent's, because that row is the operand of nothing.
+- **The krusader preset gets its own drive key.** `Ctrl+Shift+←`/`Ctrl+Shift+→`
+  are the per-side media list, and they were omitted at transcription time as
+  part of MountMan, reasoning that Linux has no drive letters. The media list
+  is not MountMan, and norte grew exactly that picker in #131 — the same
+  `pane.select-drive-left`/`-right` the other three imported presets bind at
+  `Alt+F1`/`Alt+F2`.
+
 ### Changed
 
 - **Adding a favourite proposes its name.** The path was already inferred from

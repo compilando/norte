@@ -145,6 +145,7 @@ commands! {
     "profile.next" => ProfileNext,
     "profile.prev" => ProfilePrev,
     "pane.mirror" => PaneMirror,
+    "pane.mirror-target" => PaneMirrorTarget,
     "pane.pull" => PanePull,
     "pane.swap" => PaneSwap,
     "cursor.up" => CursorUp,

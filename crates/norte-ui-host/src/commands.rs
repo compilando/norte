@@ -184,6 +184,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.split-file",
     "pane.combine-files",
     "pane.mirror",
+    "pane.mirror-target",
     "pane.pull",
     "pane.swap",
     "pane.history",
@@ -580,6 +581,11 @@ pub enum Efecto {
     CiclarEncoding,
     /// La ubicación del hueco ACTIVO viaja al hueco DESTINO.
     Espejo,
+    /// Como [`Efecto::Espejo`], pero lo que viaja es el OBJETIVO DEL CURSOR:
+    /// la carpeta bajo él si lo es, y si no la ubicación del hueco activo
+    /// (`Ctrl+←`/`Ctrl+→` de Krusader). Qué directorio es eso lo decide
+    /// `PaneState::target_dir`, uno solo para los dos frontends (ADR 0077).
+    EspejoObjetivo,
     /// La ubicación del hueco DESTINO viaja al ACTIVO: el espejo al revés.
     Traer,
     /// Los dos huecos —activo y destino— cambian de sitio.
@@ -616,6 +622,11 @@ pub enum Efecto {
 /// `None` = el host no lo implementa. No es un descarte silencioso: quien
 /// llama lo convierte en un `Unavailable` que el usuario ve.
 #[must_use]
+// Una TABLA: un brazo por comando del catálogo, y cada brazo es un nombre.
+// Larga por número de comandos, no por lógica — partirla en dos mitades
+// arbitrarias solo escondería la mitad, y lo que hace legible una tabla es
+// verla entera. Mismo criterio que el reparto de mensajes del actor.
+#[allow(clippy::too_many_lines)]
 pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
     let n = i64::from(veces.max(1).min(u32::from(u16::MAX)));
     Some(match command {
@@ -730,6 +741,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.toggle-hidden" => Efecto::AlternarOcultos,
         "pane.names-encoding" => Efecto::CiclarEncoding,
         "pane.mirror" => Efecto::Espejo,
+        "pane.mirror-target" => Efecto::EspejoObjetivo,
         "pane.pull" => Efecto::Traer,
         "pane.swap" => Efecto::Intercambiar,
         "pane.history" => Efecto::Historial,

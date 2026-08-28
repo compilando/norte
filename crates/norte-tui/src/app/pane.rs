@@ -133,6 +133,14 @@ impl Pane {
         self.state.real_entries()
     }
 
+    /// A dónde apunta el cursor para un gesto de panel: la carpeta bajo él si
+    /// lo es, y si no este directorio
+    /// ([`norte_frontend::PaneState::target_dir`]).
+    #[must_use]
+    pub fn target_dir(&self) -> &VPath {
+        self.state.target_dir()
+    }
+
     /// Índice bajo el cursor real (0 incluso con lista vacía).
     #[must_use]
     pub fn cursor(&self) -> usize {

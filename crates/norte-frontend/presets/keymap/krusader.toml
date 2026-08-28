@@ -14,16 +14,18 @@
 #
 # Omitted families (norte has no concept): Alt+F1..F12 and Ctrl+F1..F12 /
 # Ctrl+Shift+F1..F12 are explicitly "Standard (Plasma) key-bindings" per the
-# source itself, not Krusader's — never Krusader's to bind (this is also why
-# there is no drive-select binding: Linux has no drive letters, and MountMan,
-# the closest concept, is its own omitted feature below); the menu/context
+# source itself, not Krusader's — never Krusader's to bind (drive selection
+# does have a key here, and it is Krusader's own: the per-side media list at
+# Ctrl+Shift+Left/Right, bound below; MountMan, a different feature, stays
+# omitted); the menu/context
 # menu (Esc-loses-menu-focus, Menu key); view-mode switches (Alt+Shift+B/D
 # "Brief/Detailed View", Shift+F10/F12); What's-this help (Shift+F1); the
 # Multi-Rename tool (Shift+F2, Krename — a batch feature, see TC's Ctrl+M);
 # viewing an entered URL (Shift+F3); queued copy/move (Shift+F5/F6); root-mode
 # relaunch (Alt+Shift+K); panel profiles (Alt+Shift+L); the Queue Manager
-# (Alt+Shift+Q); MountMan and the media list (Alt+/, Ctrl+M, Ctrl+Shift+
-# Left/Right); the User Menu (Alt+`); jumping to $HOME (Alt+Home); the
+# (Alt+Shift+Q); MountMan itself, the mount manager (Alt+/, Ctrl+M) — its
+# per-side media LIST is bound below, at Ctrl+Shift+Left/Right, because norte
+# grew that picker in #131; the User Menu (Alt+`); jumping to $HOME (Alt+Home); the
 # Sidebar (Alt+Down); per-panel bookmark menus, distinct from the Ctrl+D
 # hotlist (Alt+Left/Right); privileged edit-as-root (Ctrl+E, both listings);
 # the QuickFilter/Quickselect bars, distinct from the Ctrl+F quicksearch bar
@@ -32,9 +34,8 @@
 # have no faithful key here); the Location Toolbar/address bar (Ctrl+L, a
 # breadcrumb-bar concept); a folder-open file-picker dialog (Ctrl+O); Popular
 # URLs (Ctrl+Z); an ambiguous "move to the lower part of the folder" distinct
-# from End (Ctrl+PgDn); jumping to the filesystem root (Ctrl+Backspace);
-# adopting the other panel's cursor target (Ctrl+Left/Right); the media
-# mount/unmount menu (Ctrl+Return); moving a tab to the other panel or
+# from End (Ctrl+PgDn); jumping to the filesystem root (Ctrl+Backspace); the
+# media mount/unmount menu (Ctrl+Return); moving a tab to the other panel or
 # reordering it, distinct from switching to it (Ctrl+Shift+O, Ctrl+Shift+
 # PgUp/PgDn); swap-with-all-tabs, a variant of the plain swap already bound
 # (Ctrl+Shift+U); an external "Locate" GUI launcher (Ctrl+Shift+L);
@@ -148,6 +149,25 @@ keymap = [
     # ("Synchronize Folders"). Mapping both to pane.sync-dirs would say
     # the Equals Button opens a folder-tree diff, which it does not.
     { on = ["alt+O"], run = "pane.mirror" },
+    # Ctrl+Left/Right: "on a folder: refreshes the [other] panel with the
+    # contents of the folder; on a file: the [other] panel gets the same path".
+    # BOTH arrows run the same verb because norte's gesture names the OTHER
+    # pane, never a side — the source's own row covers the two together, and
+    # from the left panel the only pane that can receive is the right one.
+    #
+    # This was omitted at transcription time ("adopting the other panel's
+    # cursor target") because norte had no command for it: `pane.mirror` sends
+    # this LOCATION and knows nothing about the cursor. Now it has one, and
+    # `pane.mirror` keeps its meaning for the four presets that bind it.
+    { on = ["ctrl+left"], run = "pane.mirror-target" },
+    { on = ["ctrl+right"], run = "pane.mirror-target" },
+    # Ctrl+Shift+Left/Right: "Open left/right media list". Omitted at
+    # transcription time as part of MountMan, reasoning that Linux has no drive
+    # letters — but the media list is not MountMan, it is the per-side volume
+    # picker, and norte grew exactly that in #131 (the same command the other
+    # three imported presets bind at Alt+F1/F2).
+    { on = ["ctrl+shift+left"], run = "pane.select-drive-left" },
+    { on = ["ctrl+shift+right"], run = "pane.select-drive-right" },
     { on = ["ctrl+y"], run = "pane.sync-dirs" },
     { on = ["alt+P"], run = "pane.pack" },
     { on = ["alt+S"], run = "pane.dir-size" },
