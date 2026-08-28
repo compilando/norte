@@ -15212,6 +15212,53 @@ async fn con_la_fila_de_subir_el_listado_la_lleva_primera() {
     );
 }
 
+/// Arrastrar el borde reparte la pareja, y lo que uno gana lo pierde el otro.
+///
+/// El renderer manda dónde está el PUNTERO, en celdas. Qué pareja se reparte
+/// y cuánto le toca a cada uno lo decide el host, que es quien tiene el
+/// reparto y los mínimos de cada kind.
+#[tokio::test]
+async fn arrastrar_el_borde_reparte_los_dos_huecos() {
+    let (h, snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let ancho = |s: &norte_ui_host::ViewSnapshot, id: u32| {
+        s.layout
+            .placements
+            .iter()
+            .find(|p| p.slot_id == id)
+            .map(|p| p.width)
+            .expect("el hueco está colocado")
+    };
+    let izq = snap.layout.placements[0].slot_id;
+    let der = snap.layout.placements[1].slot_id;
+    let (a0, b0) = (ancho(&snap, izq), ancho(&snap, der));
+    assert_eq!(a0 + b0, 120, "los dos se reparten la pantalla");
+
+    let mut sub = h.subscribe();
+    // El puntero a un tercio del ancho.
+    h.dispatch(UiAction::ResizeSlot {
+        slot_id: izq,
+        cells: 40,
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let despues = siguiente_foto(&mut sub).await;
+    // Con UNA celda de margen: la pareja se renormaliza a pesos entre 1 y 100
+    // y el reparto vuelve a repartir en enteros, así que un tercio de 120
+    // aterriza en 39 o en 40 según por dónde caiga el redondeo. Exigir la
+    // celda exacta sería exigir que el arrastre no pase por pesos.
+    let ancho_izq = ancho(&despues, izq);
+    assert!(
+        ancho_izq.abs_diff(40) <= 1,
+        "el borde va donde dice el puntero: {ancho_izq}"
+    );
+    assert_eq!(
+        ancho(&despues, izq) + ancho(&despues, der),
+        a0 + b0,
+        "la pareja ocupa lo mismo: arrastrar un borde no toca al resto"
+    );
+}
+
 /// La pantalla del tema ELIGE, y lo elegido se ve.
 ///
 /// Antes solo enseñaba: quien hospeda esta ventana resuelve el tema una vez al

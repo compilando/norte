@@ -25,6 +25,10 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **44**: el renderer puede ARRASTRAR el borde entre dos huecos. Manda
+///   dónde está el puntero en celdas de layout; qué pareja se reparte y
+///   cuánto le toca a cada uno lo decide el host, que es quien tiene el
+///   reparto y los mínimos.
 /// - **43**: la pantalla puede llevar el selector de PERFILES (ADR 0079), con
 ///   el activo marcado, lo que no carga dicho por su motivo, y los dos avisos
 ///   que la spec pide por su nombre: qué otra cosa se llama igual y qué perfil
@@ -145,7 +149,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 43;
+pub const BRIDGE_VERSION: u32 = 44;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

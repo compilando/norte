@@ -2931,6 +2931,9 @@ impl Estado {
             UiAction::MenuPointRow { row } => self.apuntar_en_menu(*row),
             UiAction::MenuActivateRow { row } => self.activar_del_menu(*row, backend, buzon),
             UiAction::MenuClose => self.cerrar_menu(),
+            UiAction::ResizeSlot { slot_id, cells } => {
+                self.arrastrar_borde(*slot_id, *cells, backend, buzon)
+            }
             UiAction::ProfileActivateRow { row, generation } => {
                 self.activar_perfil_de_fila(*row, *generation, backend, buzon)
             }
@@ -17085,6 +17088,60 @@ impl Estado {
         self.reconcilia_roles();
         let cambio = ViewChange::Layout(self.disposicion());
         (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Arrastra el borde entre `slot` y el hueco de al lado hasta `cells`.
+    ///
+    /// `cells` es dónde está el PUNTERO, y todo lo demás se resuelve aquí: qué
+    /// pareja forma ese borde, cuánto ocupan juntos y en qué dirección
+    /// reparten. El renderer solo convierte píxeles a celdas, que es lo que ya
+    /// hace para declarar su viewport.
+    ///
+    /// Se busca el vecino en el REPARTO y no en el árbol: lo que el lector ha
+    /// agarrado es un borde de la pantalla, y dos huecos son vecinos cuando
+    /// uno empieza donde acaba el otro. Sin vecino no hay borde, y entonces
+    /// esto no es un arrastre sino una carrera con un reparto anterior.
+    fn arrastrar_borde(
+        &mut self,
+        slot: u32,
+        cells: u16,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some((_, ra)) = self
+            .reparto
+            .placements
+            .iter()
+            .find(|(SlotId(id), _)| *id == slot)
+            .copied()
+        else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        // El vecino: el que empieza justo donde este acaba, en uno de los dos
+        // ejes.
+        let derecha = self.reparto.placements.iter().find(|(_, r)| {
+            r.x == ra.x + ra.width && r.y < ra.y + ra.height && ra.y < r.y + r.height
+        });
+        let abajo = self.reparto.placements.iter().find(|(_, r)| {
+            r.y == ra.y + ra.height && r.x < ra.x + ra.width && ra.x < r.x + r.width
+        });
+        let (inicio, largo) = match (derecha, abajo) {
+            (Some((_, rb)), _) => (ra.x, ra.width + rb.width),
+            (None, Some((_, rb))) => (ra.y, ra.height + rb.height),
+            (None, None) => return (Self::obsoleta(StaleAction::Generation), Vec::new()),
+        };
+        if largo == 0 {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let frac = f32::from(cells.saturating_sub(inicio)) / f32::from(largo);
+        let arbol = self.arbol.drag_border(SlotId(slot), frac, largo);
+        if arbol == self.arbol {
+            // El borde no se movió: ni foto ni parche. Un arrastre emite un
+            // evento por píxel, y repintar la pantalla entera por cada uno
+            // sería pagar una foto por temblor de mano.
+            return (self.aplicada(), Vec::new());
+        }
+        self.aplicar_disposicion(arbol, backend, buzon)
     }
 
     /// El siguiente hueco del recorrido compartido que además TOMA TECLAS.

@@ -2407,9 +2407,75 @@ export class Screen {
     return el;
   }
 
+  /**
+   * Los TIRADORES de los bordes entre huecos vecinos.
+   *
+   * Se rehacen con el reparto, no con cada frame: mientras el reparto no
+   * cambie, el borde está donde estaba. Y salen del MISMO `placements` que
+   * coloca los huecos — dos cálculos de dónde está un borde son un borde que
+   * se agarra en un sitio y se mueve desde otro.
+   *
+   * Lo que se manda es la posición del PUNTERO en celdas, no un tamaño: qué
+   * pareja se reparte y cuánto le toca a cada uno lo decide el host, que es
+   * quien tiene el reparto y los mínimos (ADR 0069).
+   */
+  private buildHandles(view: ViewSnapshot, cell: { w: number; h: number }): void {
+    /** Lo que se deja agarrar a cada lado del borde, en píxeles. */
+    const AGARRE = 6;
+    for (const a of view.layout.placements) {
+      for (const b of view.layout.placements) {
+        const vertical =
+          b.x === a.x + a.width && b.y < a.y + a.height && a.y < b.y + b.height;
+        const horizontal =
+          b.y === a.y + a.height && b.x < a.x + a.width && a.x < b.x + b.width;
+        if (!vertical && !horizontal) {
+          continue;
+        }
+        const el = document.createElement("div");
+        el.className = vertical ? "resize-handle col" : "resize-handle row";
+        if (vertical) {
+          el.style.setProperty("left", `${(a.x + a.width) * cell.w - AGARRE / 2}px`);
+          el.style.setProperty("top", `${Math.max(a.y, b.y) * cell.h}px`);
+          el.style.setProperty("width", `${AGARRE}px`);
+          el.style.setProperty(
+            "height",
+            `${(Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)) * cell.h}px`,
+          );
+        } else {
+          el.style.setProperty("top", `${(a.y + a.height) * cell.h - AGARRE / 2}px`);
+          el.style.setProperty("left", `${Math.max(a.x, b.x) * cell.w}px`);
+          el.style.setProperty("height", `${AGARRE}px`);
+          el.style.setProperty(
+            "width",
+            `${(Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) * cell.w}px`,
+          );
+        }
+        const slot = a.slot_id;
+        el.addEventListener("pointerdown", (e: PointerEvent) => {
+          // La captura es lo que hace que el arrastre siga al puntero cuando
+          // se sale del tirador — que es lo que pasa siempre, porque el
+          // tirador mide seis píxeles.
+          el.setPointerCapture(e.pointerId);
+          e.preventDefault();
+        });
+        el.addEventListener("pointermove", (e: PointerEvent) => {
+          if (!el.hasPointerCapture(e.pointerId)) {
+            return;
+          }
+          const cells = vertical
+            ? Math.round(e.clientX / cell.w)
+            : Math.round(e.clientY / cell.h);
+          this.send({ action: "resize_slot", slot_id: slot, cells });
+        });
+        this.root.append(el);
+      }
+    }
+  }
+
   private rebuild(view: ViewSnapshot, cell: { w: number; h: number }): void {
     this.root.replaceChildren();
     this.slots.clear();
+    this.buildHandles(view, cell);
     for (const p of view.layout.placements) {
       const el = document.createElement("section");
       el.className = "slot";

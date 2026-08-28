@@ -398,6 +398,20 @@ pub enum UiAction {
     },
     /// Cierra el menú desplegado sin ejecutar nada (un click fuera).
     MenuClose,
+    /// Arrastra el borde que hay entre `slot_id` y el hueco de al lado.
+    ///
+    /// `cells` es DÓNDE está el puntero en el eje del reparto, en celdas de
+    /// layout — no un tamaño ni un delta. El renderer sabe convertir píxeles a
+    /// celdas porque ya lo hace para declarar su viewport; lo que significa
+    /// esa posición —qué pareja se reparte, cuánto le toca a cada uno, qué
+    /// mínimos hay— lo decide el host con el reparto que él mismo calculó
+    /// (ADR 0069).
+    ResizeSlot {
+        /// El hueco de la IZQUIERDA del borde (o el de ARRIBA).
+        slot_id: u32,
+        /// La posición del puntero en el eje del reparto, en celdas.
+        cells: u16,
+    },
     /// Elige una fila del selector de PERFILES y la activa (un click).
     ///
     /// Selecciona y activa a la vez, como la barra lateral: un selector de

@@ -1501,6 +1501,24 @@ body {
   unicode-bidi: isolate;
 }
 
+/* El tirador del borde entre dos huecos. Seis píxeles y transparente: lo que
+   se ve es el borde de los paneles, y esto solo es dónde se puede agarrar —
+   un borde que se pinta el doble de grueso para poder cogerlo cambia la
+   pantalla para resolver un problema del ratón. */
+.resize-handle {
+  position: absolute;
+  background: transparent;
+  touch-action: none;
+}
+
+.resize-handle.col {
+  cursor: col-resize;
+}
+
+.resize-handle.row {
+  cursor: row-resize;
+}
+
 #profiles[data-open="true"] {
   position: fixed;
   inset: 0;

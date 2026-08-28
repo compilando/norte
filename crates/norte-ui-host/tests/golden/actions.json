@@ -135,6 +135,11 @@
     "generation": 3,
     "row": 1
   },
+  "resize_slot": {
+    "action": "resize_slot",
+    "cells": 42,
+    "slot_id": 1
+  },
   "resync": {
     "action": "resync"
   },
