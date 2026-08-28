@@ -429,7 +429,7 @@ fn pulsar_una_fila_del_sidebar_la_selecciona_y_repulsarla_la_activa() {
         norte_tui::ui::menu_zones(&app, area),
         norte_tui::ui::places_zones(&app, area),
     );
-    norte_tui::mouse::after_frame(&mut app, geo, tabs, menus, sitios);
+    norte_tui::mouse::after_frame(&mut app, geo, tabs, menus, sitios, Vec::new());
     let zonas = norte_tui::ui::places_zones(&app, area);
     assert!(!zonas.is_empty(), "el sidebar tiene filas pulsables");
     // La primera unidad: la fila 0 es la cabecera de la sección.
@@ -473,7 +473,7 @@ fn pulsar_una_cabecera_pliega_su_seccion() {
         norte_tui::ui::menu_zones(&app, area),
         norte_tui::ui::places_zones(&app, area),
     );
-    norte_tui::mouse::after_frame(&mut app, geo, tabs, menus, sitios);
+    norte_tui::mouse::after_frame(&mut app, geo, tabs, menus, sitios, Vec::new());
     let zonas = norte_tui::ui::places_zones(&app, area);
     let header = zonas
         .iter()

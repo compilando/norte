@@ -30,7 +30,9 @@ mod text;
 // que es la API de este modulo y no baja a `pub(crate)`.
 pub use chrome::{MenuHit, MenuZone, TabAction, TabZone, menu_zones, tab_zones};
 pub use compare::draw_compare;
-pub use geometry::{before_frame, pane_geometry, pane_list_rows, resolved_for, tab_strip_for};
+pub use geometry::{
+    before_frame, pane_geometry, pane_list_rows, resize_borders, resolved_for, tab_strip_for,
+};
 pub use help::{draw_help, help_body_size, help_group_is_painted, help_layout, help_sidebar_width};
 pub use overlays::{draw_shortcuts, draw_which_key, plugin_description_line};
 pub use pane::painted_len_and_selection;

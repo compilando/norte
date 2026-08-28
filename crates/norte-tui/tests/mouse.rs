@@ -89,6 +89,7 @@ fn pintar(app: &mut App) -> Vec<String> {
         ui::tab_zones(app, frame.area),
         ui::menu_zones(app, frame.area),
         ui::places_zones(app, frame.area),
+        ui::resize_borders(app, frame.area),
     );
     terminal
         .backend()
@@ -984,7 +985,14 @@ fn con_mouse_false_no_hay_captura_ni_manejo() {
     assert!(out.is_empty(), "nada escrito al terminal");
 
     let mut app = app_pintada(5);
-    mouse::after_frame(&mut app, None, Vec::new(), Vec::new(), Vec::new());
+    mouse::after_frame(
+        &mut app,
+        None,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
     let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 3));
     assert_eq!(
         app.panes[0].cursor(),
@@ -1071,4 +1079,59 @@ fn subir_desde_el_final_acaba_arrastrando_la_ventana() {
         0,
         "el cursor arriba del todo tiene que verse"
     );
+}
+
+/// El borde entre los dos panes se ARRASTRA, y lo que uno gana lo pierde el
+/// otro.
+///
+/// El arrastre escribe en el ÁRBOL, que es lo que la sesión guarda: por eso un
+/// borde movido sigue donde se dejó al volver a abrir, sin nada más.
+#[test]
+fn arrastrar_el_borde_mueve_la_frontera_entre_los_panes() {
+    let mut app = app_pintada(5);
+    let _ = pintar(&mut app);
+    let antes = app.mouse.geometry().expect("geometría").to_vec();
+    let (izq_antes, der_antes) = (antes[0].width, antes[1].width);
+    let borde = antes[0].x + antes[0].width;
+
+    // Agarrar el borde y llevarlo seis celdas a la izquierda. Seis y no
+    // veinte: un `browser` declara veinte columnas de mínimo, y por debajo el
+    // reparto COLAPSA su split — el pane no encoge, desaparece. Lo que este
+    // test mide es el arrastre, no el colapso.
+    let destino = borde - 6;
+    let _ = mouse::handle(&mut app, ev(ABAJO, borde, FILA0));
+    let _ = mouse::handle(&mut app, ev(ARRASTRE, destino, FILA0));
+    let _ = mouse::handle(&mut app, ev(ARRIBA, destino, FILA0));
+    let _ = pintar(&mut app);
+
+    let ahora = app.mouse.geometry().expect("geometría").to_vec();
+    assert!(
+        ahora[0].width < izq_antes,
+        "el de la izquierda encoge: {izq_antes} -> {}",
+        ahora[0].width
+    );
+    assert!(
+        ahora[1].width > der_antes,
+        "y lo que pierde lo gana el otro: {der_antes} -> {}",
+        ahora[1].width
+    );
+    assert_eq!(
+        ahora[0].width + ahora[1].width,
+        izq_antes + der_antes,
+        "la pareja ocupa lo mismo: arrastrar un borde no toca al resto"
+    );
+}
+
+/// Y agarrar el borde no señala ni marca nada: agarrar no es elegir.
+#[test]
+fn agarrar_el_borde_no_selecciona_una_fila() {
+    let mut app = app_pintada(5);
+    let _ = pintar(&mut app);
+    let cursor = app.panes[0].cursor();
+    let geom = app.mouse.geometry().expect("geometría").to_vec();
+    let borde = geom[0].x + geom[0].width;
+    let _ = mouse::handle(&mut app, ev(ABAJO, borde, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(ARRIBA, borde, FILA0 + 1));
+    assert_eq!(app.panes[0].cursor(), cursor, "el cursor no se movió");
+    assert_eq!(app.panes[0].marks_len(), 0, "y no se marcó nada");
 }

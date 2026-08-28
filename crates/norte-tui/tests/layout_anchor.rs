@@ -95,6 +95,7 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
         ui::tab_zones(app, area),
         ui::menu_zones(app, area),
         ui::places_zones(app, area),
+        ui::resize_borders(app, area),
     );
     // `TestBackend::to_string()` envuelve CADA fila entre comillas. Sin
     // quitarlas, todo recorte por columna va desplazado una celda — y un

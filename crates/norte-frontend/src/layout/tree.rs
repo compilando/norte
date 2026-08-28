@@ -582,6 +582,92 @@ impl Node {
         })
     }
 
+    /// Pone el borde ENTRE `id` y su hermano de la derecha (o de abajo) en la
+    /// fracción `frac` del espacio que ocupan los dos juntos.
+    ///
+    /// Es la primitiva del ARRASTRE, y por eso es absoluta y no un paso:
+    /// [`Self::resize`] mueve dos celdas por pulsación, que es lo que quiere
+    /// una tecla; un ratón dice DÓNDE va el borde, y convertir eso en una
+    /// ristra de pasos daría un borde que no llega a donde está el puntero.
+    ///
+    /// La suma de los dos tamaños se CONSERVA: lo que uno gana lo pierde el
+    /// otro, y el resto de la fila no se entera. Un `Split` de cinco huecos
+    /// donde arrastrar un borde recolocara los cinco sería un gesto que toca
+    /// lo que nadie ha agarrado.
+    ///
+    /// Con pesos se renormaliza la pareja a cien (`PESO_FINO`) para que el
+    /// arrastre tenga grano: dos huecos por defecto son `Weight(1)` y
+    /// `Weight(1)`, y sobre esa pareja solo existiría la mitad exacta.
+    ///
+    /// `frac` se acota para que ninguno de los dos desaparezca: un hueco a
+    /// cero se lleva con él la forma de devolverlo.
+    ///
+    /// [`Size::Auto`] no se toca, por lo mismo que en [`Self::resize`]: lo
+    /// sustituye el reparto y un número guardado aquí lo pisaría el siguiente
+    /// frame.
+    /// `celdas_del_par` es lo que los dos ocupan juntos, en celdas de reparto.
+    /// Lo sabe quien pinta, no el árbol: un [`Size::Fixed`] se mide en celdas
+    /// y una fracción sola no basta para escribirlo.
+    #[must_use]
+    pub fn drag_border(&self, id: SlotId, frac: f32, celdas_del_par: u16) -> Self {
+        /// Peso total al que se renormaliza una pareja arrastrada.
+        const PESO_FINO: u16 = 100;
+        /// Lo mínimo que le queda a cada lado, en tanto por uno.
+        const MARGEN: f32 = 0.05;
+        let frac = frac.clamp(MARGEN, 1.0 - MARGEN);
+        self.map_split_of(id, &|sizes, pos| {
+            let mut ns = sizes.to_vec();
+            let Some(siguiente) = ns.get(pos + 1).copied() else {
+                // El último no tiene borde a su derecha: el que se arrastra
+                // es el suyo con el anterior, y quien llama nombra el hueco
+                // de la IZQUIERDA del borde.
+                return ns;
+            };
+            // En celdas, y acotado a que a cada lado le quede una: el reparto
+            // ya sabe colapsar lo que no cabe, pero un cero escrito en el
+            // árbol se queda escrito.
+            let celdas = f32::from(celdas_del_par);
+            // El redondeo y el corte, en UN sitio: `f32` a `u16` trunca y no
+            // tiene signo, así que el clamp va antes de convertir y no
+            // después — un `as` sobre un negativo o sobre 70000 no avisa.
+            let entero = |v: f32| -> u16 {
+                let v = v.round().clamp(1.0, f32::from(u16::MAX));
+                // Ya está entre 1 y `u16::MAX` y sin parte fraccionaria: la
+                // conversión no puede perder nada.
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "el clamp de la línea de arriba deja el valor dentro de u16 y entero"
+                )]
+                let v = v as u16;
+                v
+            };
+            let izq_celdas = (celdas * frac).round().clamp(1.0, (celdas - 1.0).max(1.0));
+            match (ns[pos], siguiente) {
+                (Size::Fixed(_), Size::Fixed(_)) => {
+                    ns[pos] = Size::Fixed(entero(izq_celdas));
+                    ns[pos + 1] = Size::Fixed(entero(celdas - izq_celdas));
+                }
+                // Un fijo contra un ponderado: se escribe el FIJO y el otro se
+                // queda con lo que sobre, que es lo que el reparto ya hacía.
+                // Escribir los dos convertiría un ponderado en fijo por
+                // arrastrar su borde, y con eso dejaría de estirarse al
+                // cambiar el tamaño de la ventana.
+                (Size::Fixed(_), _) => ns[pos] = Size::Fixed(entero(izq_celdas)),
+                (_, Size::Fixed(_)) => {
+                    ns[pos + 1] = Size::Fixed(entero(celdas - izq_celdas));
+                }
+                (Size::Weight(_), Size::Weight(_)) => {
+                    let izq = (f32::from(PESO_FINO) * frac).round().max(1.0);
+                    ns[pos] = Size::Weight(entero(izq));
+                    ns[pos + 1] = Size::Weight(entero(f32::from(PESO_FINO) - izq));
+                }
+                _ => {}
+            }
+            ns
+        })
+    }
+
     /// Deja a todos los hermanos ponderados del hueco `id` con el mismo peso.
     #[must_use]
     pub fn equalize(&self, id: SlotId) -> Self {
@@ -1080,6 +1166,74 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Arrastrar el borde pone el hueco donde dice el puntero, y lo que uno
+    /// gana lo pierde su vecino.
+    ///
+    /// Con pesos se renormaliza la pareja: dos huecos por defecto son
+    /// `Weight(1)` y `Weight(1)`, y sobre esa pareja el único borde posible
+    /// sería la mitad exacta — un arrastre que solo puede aterrizar en el
+    /// centro no es un arrastre.
+    #[test]
+    fn arrastrar_el_borde_reparte_la_pareja() {
+        let arbol = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        let movido = arbol.drag_border(SlotId(1), 0.25, 80);
+        let (sizes, pos) = movido.sizes_of(SlotId(1)).expect("está en un split");
+        assert_eq!(pos, 0);
+        assert_eq!(
+            (sizes[0], sizes[1]),
+            (Size::Weight(25), Size::Weight(75)),
+            "un cuarto para el de la izquierda, y el resto para el otro"
+        );
+    }
+
+    /// Ni el uno ni el otro pueden desaparecer: un hueco a cero se lleva con
+    /// él la forma de devolverlo.
+    #[test]
+    fn arrastrar_hasta_el_extremo_deja_hueco_a_los_dos() {
+        let arbol = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        for frac in [-3.0, 0.0, 1.0, 4.0] {
+            let movido = arbol.drag_border(SlotId(1), frac, 80);
+            let (sizes, _) = movido.sizes_of(SlotId(1)).expect("split");
+            for s in &sizes[..2] {
+                assert!(
+                    matches!(s, Size::Weight(w) if *w >= 1),
+                    "con frac={frac} alguien se quedó sin sitio: {sizes:?}"
+                );
+            }
+        }
+    }
+
+    /// Un FIJO se escribe en celdas —es lo que significa— y su vecino
+    /// ponderado no se convierte en fijo: si lo hiciera, dejaría de estirarse
+    /// al cambiar el tamaño de la ventana.
+    #[test]
+    fn arrastrar_el_borde_de_un_fijo_lo_escribe_en_celdas() {
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            children: vec![
+                Node::slot(SlotId(1), KindId::new("places")),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+            sizes: vec![Size::Fixed(16), Size::Weight(1)],
+        };
+        let movido = arbol.drag_border(SlotId(1), 0.5, 100);
+        let (sizes, _) = movido.sizes_of(SlotId(1)).expect("split");
+        assert_eq!(sizes[0], Size::Fixed(50), "la mitad de cien celdas");
+        assert_eq!(sizes[1], Size::Weight(1), "el ponderado sigue ponderado");
+    }
 
     /// Las disposiciones de fábrica usan 1..=8, TODAS. Sin rebase, dos perfiles
     /// comparten el hueco 1 y se pisan el directorio y el historial — que es

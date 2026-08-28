@@ -114,6 +114,76 @@ pub fn before_frame(app: &mut App, area: Rect) {
 /// El árbol guardado (`app.layout`) conserva sus `Auto`; el del frame no.
 /// Sustituir aquí y no dentro de `resolve` es lo que mantiene al motor puro y
 /// sin closures en su firma.
+/// Los BORDES que se pueden arrastrar en el frame de `area`.
+///
+/// Un borde es el hueco entre dos huecos ADYACENTES del reparto: el de la
+/// izquierda (o el de arriba) es quien lo lleva, porque es el que
+/// `Node::drag_border` sabe nombrar. Lo que se guarda es dónde empieza la
+/// pareja y cuánto ocupa junta, que es lo que convierte una columna del
+/// puntero en una fracción.
+///
+/// Sale del MISMO reparto que pinta, no de una segunda cuenta: dos cálculos
+/// de dónde está un borde son un borde que se agarra en un sitio y se mueve
+/// desde otro.
+#[must_use]
+pub fn resize_borders(app: &App, area: Rect) -> Vec<crate::mouse::ResizeBorder> {
+    use norte_frontend::layout::Dir;
+    let res = resolved_frame(app, area);
+    // Solo entre PANELES. La barra de estado y la franja de tareas también
+    // son huecos del reparto y también tienen bordes, pero miden una fila fija
+    // y arrastrarlas no significa nada — y ofrecerlas se comía la última fila
+    // del panel de encima, que sí es suya. «Panel» es lo que el registro
+    // compartido llama enfocable.
+    let panel = |id| {
+        app.layout
+            .kind_of(id)
+            .and_then(|k| app.kinds.get(k))
+            .is_some_and(|d| d.focusable)
+    };
+    let mut out = Vec::new();
+    for (a, ra) in &res.placements {
+        if !panel(*a) {
+            continue;
+        }
+        for (b, rb) in &res.placements {
+            if !panel(*b) {
+                continue;
+            }
+            // Vertical: `b` empieza justo donde acaba `a`, y se solapan en
+            // filas. El `+ 1` es la columna del borde, que en el TUI es el
+            // marco que los dos pintan.
+            if rb.x == ra.x + ra.width && solapan(ra.y, ra.height, rb.y, rb.height) {
+                out.push(crate::mouse::ResizeBorder {
+                    slot: *a,
+                    dir: Dir::Horizontal,
+                    linea: ra.x + ra.width,
+                    desde: ra.y.max(rb.y),
+                    hasta: (ra.y + ra.height).min(rb.y + rb.height),
+                    inicio: ra.x,
+                    largo: ra.width + rb.width,
+                });
+            }
+            if rb.y == ra.y + ra.height && solapan(ra.x, ra.width, rb.x, rb.width) {
+                out.push(crate::mouse::ResizeBorder {
+                    slot: *a,
+                    dir: Dir::Vertical,
+                    linea: ra.y + ra.height,
+                    desde: ra.x.max(rb.x),
+                    hasta: (ra.x + ra.width).min(rb.x + rb.width),
+                    inicio: ra.y,
+                    largo: ra.height + rb.height,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// ¿Se solapan dos tramos `[a, a+la)` y `[b, b+lb)`?
+const fn solapan(a: u16, la: u16, b: u16, lb: u16) -> bool {
+    a < b + lb && b < a + la
+}
+
 pub(crate) fn resolved_frame(app: &App, area: Rect) -> norte_frontend::layout::Resolved {
     let tree = app.layout.substitute_auto(&|id| natural(app, id));
     norte_frontend::layout::resolve(

@@ -48,15 +48,55 @@ const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// listado largo y una página entera pierde el sitio.
 const WHEEL_ROWS: usize = 3;
 
+/// Un borde arrastrable entre dos huecos del reparto.
+///
+/// Lo lleva el hueco de la IZQUIERDA (o el de ARRIBA), que es el que
+/// `Node::drag_border` sabe nombrar: el borde es «el suyo con el siguiente».
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResizeBorder {
+    /// El hueco de la izquierda o de arriba.
+    pub slot: norte_frontend::layout::SlotId,
+    /// En qué dirección reparte el `Split` que los contiene.
+    pub dir: norte_frontend::layout::Dir,
+    /// La columna (o fila) del borde.
+    pub linea: u16,
+    /// Desde dónde hasta dónde llega el borde, en el otro eje.
+    pub desde: u16,
+    /// Fin (exclusivo) del tramo del borde.
+    pub hasta: u16,
+    /// Dónde empieza la PAREJA en el eje del reparto.
+    pub inicio: u16,
+    /// Cuánto ocupan los dos juntos. Es lo que convierte una columna del
+    /// puntero en una fracción.
+    pub largo: u16,
+}
+
+impl ResizeBorder {
+    /// ¿Cae `(col, row)` sobre este borde?
+    ///
+    /// El borde son DOS columnas y no una: en el TUI cada hueco pinta su
+    /// propio marco, así que entre dos vecinos hay la derecha de uno y la
+    /// izquierda del otro. Agarrar solo una de las dos deja media línea
+    /// muerta, y la que se muere es la que el ojo ve primero.
+    #[must_use]
+    pub const fn hit(&self, col: u16, row: u16) -> bool {
+        let (eje, otro) = match self.dir {
+            norte_frontend::layout::Dir::Horizontal => (col, row),
+            norte_frontend::layout::Dir::Vertical => (row, col),
+        };
+        (eje + 1 == self.linea || eje == self.linea) && otro >= self.desde && otro < self.hasta
+    }
+}
+
 /// La geometría PINTADA de un pane, en celdas de la terminal.
 ///
-/// La rellena [`crate::ui::pane_geometry`] después de cada frame y la
-/// guarda el modelo (#124): el hit test resuelve contra la última pantalla
-/// que el usuario vio de verdad, no contra un layout recalculado a mano que
-/// puede haber cambiado ya.
+/// La rellena [`crate::ui::pane_geometry`] después de cada frame y la guarda
+/// el modelo (#124): el hit test resuelve contra la última pantalla que el
+/// usuario vio de verdad, no contra un layout recalculado a mano que puede
+/// haber cambiado ya.
 ///
-/// Deliberadamente SIN tipos de ratatui: es estado del modelo, y el modelo
-/// no conoce el motor de render.
+/// Deliberadamente SIN tipos de ratatui: es estado del modelo, y el modelo no
+/// conoce el motor de render.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PaneGeometry {
     /// Columna izquierda del bloque (borde incluido).
@@ -173,6 +213,15 @@ pub struct MouseState {
     /// Las filas pulsables del sidebar de sitios del último frame (#226).
     /// Vacío = sidebar cerrado, o sin sitio donde pintarlo.
     places_zones: Vec<crate::ui::PlaceZone>,
+    /// Los bordes arrastrables del último frame.
+    borders: Vec<ResizeBorder>,
+    /// El borde que se está arrastrando AHORA, si hay alguno.
+    ///
+    /// Se congela al agarrarlo y no se vuelve a buscar mientras dure el
+    /// gesto: el reparto cambia bajo el puntero en cada movimiento —para eso
+    /// es un arrastre— y volver a preguntar «qué borde hay aquí» acabaría
+    /// agarrando el de al lado en cuanto uno pasara por encima del otro.
+    resizing: Option<ResizeBorder>,
     /// La máquina de gestos compartida (`norte-frontend`).
     drag: Drag,
     /// `(cuándo, dónde)` del último click izquierdo, para el doble.
@@ -231,6 +280,7 @@ pub fn after_frame(
     tab_zones: Vec<crate::ui::TabZone>,
     menu_zones: Vec<crate::ui::MenuZone>,
     places_zones: Vec<crate::ui::PlaceZone>,
+    borders: Vec<ResizeBorder>,
 ) {
     let validity = Validity {
         epochs: app
@@ -250,6 +300,7 @@ pub fn after_frame(
     app.mouse.tab_zones = tab_zones;
     app.mouse.menu_zones = menu_zones;
     app.mouse.places_zones = places_zones;
+    app.mouse.borders = borders;
 }
 
 /// Qué debe hacer el run loop tras un evento de ratón. Todo lo que se puede
@@ -471,6 +522,53 @@ fn apply_tab_zone(app: &mut App, z: crate::ui::TabZone) {
     }
 }
 
+/// El gesto de redimensionar: agarrar un borde, moverlo y soltarlo.
+///
+/// `None` = este evento no es del gesto y sigue su camino. Los tres tiempos
+/// están aquí juntos a propósito: un arrastre es una máquina de tres estados,
+/// y repartirla por el despachador es como se acaba arrastrando con el botón
+/// levantado.
+///
+/// El tamaño se escribe en el ÁRBOL, que es lo que la sesión guarda: por eso
+/// un borde movido sigue donde se dejó al volver a abrir, sin nada más.
+fn resize_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
+    match ev.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            let borde = *app
+                .mouse
+                .borders
+                .iter()
+                .find(|b| b.hit(ev.column, ev.row))?;
+            // Agarrar un borde no es un click en nada: se cancela lo que
+            // hubiera armado, o al soltar se leería como una selección.
+            app.mouse.drag.cancel();
+            app.mouse.last_click = None;
+            app.mouse.resizing = Some(borde);
+            Some(After::Nothing)
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            let borde = app.mouse.resizing?;
+            let eje = match borde.dir {
+                norte_frontend::layout::Dir::Horizontal => ev.column,
+                norte_frontend::layout::Dir::Vertical => ev.row,
+            };
+            if borde.largo == 0 {
+                return Some(After::Nothing);
+            }
+            let dentro = f32::from(eje.saturating_sub(borde.inicio));
+            let frac = dentro / f32::from(borde.largo);
+            app.layout = app.layout.drag_border(borde.slot, frac, borde.largo);
+            Some(After::Nothing)
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            // Solo se come el evento si de verdad había un arrastre: un `Up`
+            // cualquiera tiene sus propios dueños más abajo.
+            app.mouse.resizing.take().map(|_| After::Nothing)
+        }
+        _ => None,
+    }
+}
+
 /// Un evento de ratón de crossterm, con el reloj real.
 pub fn handle(app: &mut App, ev: MouseEvent) -> After {
     handle_at(app, ev, Instant::now())
@@ -498,6 +596,12 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     }
     if overlay_open(app) {
         return After::Nothing;
+    }
+    // El ARRASTRE de un borde va antes que todo lo del listado, y en los tres
+    // tiempos del gesto: mientras dura, el puntero se sale del borde y no por
+    // eso deja de arrastrarlo.
+    if let Some(after) = resize_gesture(app, ev) {
+        return after;
     }
     // Las barras de pestañas se atienden ANTES: sus celdas son cromo para el
     // hit test del listado, así que un click ahí caería en «este panel,
