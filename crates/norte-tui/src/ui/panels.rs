@@ -368,6 +368,63 @@ pub fn places_zones(app: &App, area: Rect) -> Vec<PlaceZone> {
         .collect()
 }
 
+/// Una fila pulsable del árbol, en el frame de `area` (#136).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreeZone {
+    /// Fila de la pantalla.
+    pub row: u16,
+    /// Primera columna, inclusive.
+    pub x0: u16,
+    /// Última columna, inclusive.
+    pub x1: u16,
+    /// La columna de la MARCA (`▾`/`▸`/`·`) de esta fila, que pliega y
+    /// despliega. Sangrada por profundidad, igual que la pinta `draw_tree`.
+    pub mark_x: u16,
+    /// Índice dentro de [`norte_frontend::tree::Tree::rows`].
+    pub index: usize,
+}
+
+/// Las filas pulsables del árbol, en el frame de `area`.
+///
+/// Vive junto al pintado y comparte con él el reparto y el desplazamiento, lo
+/// mismo que [`places_zones`] y por lo mismo: medir por un lado y pintar por
+/// otro es cómo un click acaba abriendo la rama de al lado.
+#[must_use]
+pub fn tree_zones(app: &App, area: Rect) -> Vec<TreeZone> {
+    let res = resolved_for(app, area);
+    let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::tree::KIND) else {
+        return Vec::new();
+    };
+    let Some(tree) = app.panes.tree(id) else {
+        return Vec::new();
+    };
+    let inner = Block::default().borders(Borders::ALL).inner(rect);
+    if inner.width == 0 || inner.height == 0 {
+        return Vec::new();
+    }
+    let rows = tree.rows();
+    // El árbol pinta SIEMPRE su cursor, tenga el teclado o no (a diferencia
+    // del sidebar), así que su desplazamiento no depende de quién teclea.
+    let offset = places_offset(tree.cursor(), inner.height as usize);
+    (0..inner.height as usize)
+        .filter_map(|row| {
+            let index = offset.checked_add(row)?;
+            let fila = rows.get(index)?;
+            // `  ` por nivel, y luego la marca: el mismo molde que `draw_tree`.
+            let sangria = u16::try_from(fila.depth.saturating_mul(2)).unwrap_or(u16::MAX);
+            Some(TreeZone {
+                row: inner
+                    .y
+                    .saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
+                x0: inner.x,
+                x1: inner.x.saturating_add(inner.width).saturating_sub(1),
+                mark_x: inner.x.saturating_add(sangria),
+                index,
+            })
+        })
+        .collect()
+}
+
 /// Cómo se llama un punto de montaje en catorce celdas.
 ///
 /// Sin el prefijo `⟨file⟩` de [`norte_frontend::path_display`] cuando el
@@ -538,7 +595,15 @@ pub(crate) fn draw_tree(
             ListItem::new(Line::raw(text))
         })
         .collect();
-    let mut list_state = ListState::default();
+    // El desplazamiento se calcula AQUÍ y no lo decide el widget, para que
+    // `tree_zones` pueda decir con qué fila del modelo se corresponde cada fila
+    // de la pantalla. Es el mismo número que ratatui elegía por su cuenta
+    // —desplazamiento mínimo para que el cursor se vea, partiendo de cero en
+    // cada frame—, así que la pantalla no cambia; lo que cambia es que ahora
+    // hay UNA fuente y el ratón la puede leer (mismo arreglo que #226 en el
+    // sidebar).
+    let mut list_state =
+        ListState::default().with_offset(places_offset(cursor, inner.height as usize));
     list_state.select(Some(cursor));
     let list = List::new(items).highlight_style(theme.role(Role::Selection));
     frame.render_stateful_widget(list, inner, &mut list_state);

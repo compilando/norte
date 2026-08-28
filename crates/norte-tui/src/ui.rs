@@ -37,7 +37,7 @@ pub use geometry::{
 pub use help::{draw_help, help_body_size, help_group_is_painted, help_layout, help_sidebar_width};
 pub use overlays::{draw_shortcuts, draw_which_key, plugin_description_line};
 pub use pane::painted_len_and_selection;
-pub use panels::{PlaceZone, places_zones};
+pub use panels::{PlaceZone, TreeZone, places_zones, tree_zones};
 pub use pickers::draw_theme_picker;
 pub use text::fit_hint_groups;
 

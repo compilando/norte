@@ -153,6 +153,11 @@ pub const ALLOW_PLACES: &[&str] = &[
     "layout.processes",
     "layout.metadata",
     "pane.tree",
+    // Y el cromo de la APLICACIÓN, que no es de los listados: con el teclado
+    // dentro del sidebar o del árbol, `alt+m` no abría la barra de menús y no
+    // había forma de saber por qué — el panel se comía la tecla. Lo despacha
+    // `App::panel_chrome_command`, uno para los tres.
+    "app.menu",
 ];
 
 /// ALLOWLIST del panel de procesos (`on_processes_key` en main.rs).
@@ -189,6 +194,8 @@ pub const ALLOW_PROCESSES: &[&str] = &[
     "layout.preview",
     "layout.metadata",
     "pane.tree",
+    // Y el cromo de la aplicación, por lo mismo que en el sidebar.
+    "app.menu",
 ];
 
 /// ALLOWLIST de DESPACHO del popup de navegación (`on_nav_popup_key`,

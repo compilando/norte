@@ -92,11 +92,14 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
     norte_tui::mouse::after_frame(
         app,
         ui::pane_geometry(app, area),
-        ui::tab_zones(app, area),
-        ui::menu_zones(app, area),
-        ui::places_zones(app, area),
-        ui::resize_borders(app, area),
-        ui::panel_slots(app, area),
+        norte_tui::mouse::FrameZones {
+            tabs: ui::tab_zones(app, area),
+            menus: ui::menu_zones(app, area),
+            places: ui::places_zones(app, area),
+            tree: ui::tree_zones(app, area),
+            borders: ui::resize_borders(app, area),
+            slots: ui::panel_slots(app, area),
+        },
     );
     // `TestBackend::to_string()` envuelve CADA fila entre comillas. Sin
     // quitarlas, todo recorte por columna va desplazado una celda — y un

@@ -387,6 +387,28 @@ independently through `PROTOCOL_VERSION`.
   and simply never asks; the reverse pairing does not exist, because a
   from-the-future client is refused outright at `initialize`.
 
+### Fixed
+
+- **The directory tree answers the mouse.** Its cells belong to no listing, so
+  a click on them landed in "outside the panes" and did nothing: a panel that
+  was painted and could not be touched — the same hole the places sidebar had
+  in #226, and the fix is the same one. A click on a row selects it and brings
+  the keyboard; a second click on the same row activates it, which is what
+  `Enter` does — expand the branch and send the focused listing there, through
+  the ordinary `cd` flow. A click on the MARK (`▾`/`▸`/`·`) folds or unfolds
+  that branch in a single press: it is what the arrow already says, and it is
+  the one thing the mouse could not otherwise do, since `Enter` expands and
+  navigates but never folds. The tree's scroll offset is now computed beside
+  the painting instead of left to the widget, so the hit test reads the same
+  number the frame drew.
+- **The menu bar survives a side panel.** With the keyboard inside the tree,
+  the places sidebar or the process panel, `alt+m` did nothing: `app.menu` was
+  in none of their allowlists, so the panel ate the key and the screen stayed
+  put. The menu bar is application chrome, not the listings', so it is now
+  dispatched by one funnel the three panels share rather than by a copy in each
+  — three copies are three places to forget the fourth. It is the same lesson
+  that already brought `layout.places` and `pane.switch` into those lists.
+
 ### Changed
 
 - **Adding a favourite proposes its name.** The path was already inferred from

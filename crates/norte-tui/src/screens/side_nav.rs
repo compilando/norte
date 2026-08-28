@@ -80,6 +80,11 @@ pub async fn on_tree_key(
     if !ALLOW_PLACES.contains(&cmd.as_str()) {
         return Cd::Cancelled;
     }
+    // El cromo de la aplicación antes que nada: no es de este panel, y por eso
+    // no lo decide este panel (`App::panel_chrome_command`, uno para los tres).
+    if app.panel_chrome_command(&cmd) {
+        return Cd::Cancelled;
+    }
     match cmd.as_str() {
         "dialog.up" => {
             if let Some(t) = app.tree_mut() {
@@ -192,6 +197,11 @@ pub async fn on_places_key(
     };
     if !ALLOW_PLACES.contains(&cmd.as_str()) {
         return Cd::Cancelled; // fuera del allowlist de este panel: inerte
+    }
+    // El cromo de la aplicación, antes que lo de este panel: mismo embudo que
+    // el árbol y el panel de procesos.
+    if app.panel_chrome_command(&cmd) {
+        return Cd::Cancelled;
     }
     match cmd.as_str() {
         "dialog.up" => app.places_up(),

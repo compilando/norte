@@ -2,7 +2,7 @@
 //! los huecos laterales (places, preview, tree, procesos, metadatos),
 //! redimensionar y mover el foco de hueco en hueco.
 
-use super::{ALLOW_PROCESSES, App, KeyOwner, PlacesClick};
+use super::{ALLOW_PROCESSES, App, KeyOwner, PlacesClick, TreeClick, TreeSpot};
 use norte_i18n::t;
 use norte_proto::VPath;
 
@@ -484,6 +484,59 @@ impl App {
         self.panes.tree(id)
     }
 
+    /// Un CLICK sobre la fila `index` del árbol (#136).
+    ///
+    /// La decisión vive aquí y no en el módulo del ratón, por lo mismo que la
+    /// del sidebar: se prueba sin terminal, y es la misma que toma el teclado
+    /// con otras teclas — el ratón no puede tener su propia idea de qué hace
+    /// activar una fila. Tres desenlaces:
+    ///
+    /// - sobre la MARCA, la rama se pliega o se despliega de una sola
+    ///   pulsación: es lo que dice la flecha que ya se pinta, y es lo único
+    ///   que el ratón no podría hacer de otra forma —`Enter` despliega y
+    ///   navega, nunca pliega;
+    /// - una fila que NO está seleccionada se selecciona, y el teclado se
+    ///   viene al árbol: el click dice «me interesa esto», no «vete ahí»;
+    /// - la fila que YA estaba seleccionada se activa, que es lo mismo que
+    ///   `Enter`. Sin ventana de tiempo, igual que el sidebar.
+    pub fn tree_click(&mut self, index: usize, spot: TreeSpot) -> TreeClick {
+        let Some(id) = self.tree_slot() else {
+            return TreeClick::Focused;
+        };
+        let ya_estaba = self.key_owner == KeyOwner::Tree
+            && self.panes.tree(id).is_some_and(|t| t.cursor() == index);
+        let Some(t) = self.panes.tree_mut(id) else {
+            return TreeClick::Focused;
+        };
+        if index >= t.rows().len() {
+            return TreeClick::Focused;
+        }
+        t.set_cursor(index);
+        self.key_owner = KeyOwner::Tree;
+        if spot == TreeSpot::Mark {
+            if let Some(t) = self.panes.tree_mut(id) {
+                t.toggle();
+            }
+            return TreeClick::Focused;
+        }
+        if ya_estaba {
+            TreeClick::Activate
+        } else {
+            TreeClick::Focused
+        }
+    }
+
+    /// El directorio al que activar una fila del árbol lleva el listado.
+    ///
+    /// Despliega Y devuelve el destino, que es lo que hace `Enter` dentro del
+    /// árbol: quien lo activa quiere ver qué hay dentro, y verlo en el listado
+    /// es la respuesta completa.
+    pub fn tree_activate(&mut self) -> Option<VPath> {
+        let t = self.tree_mut()?;
+        t.expand();
+        t.selected()
+    }
+
     /// El hueco del panel de procesos, si está abierto.
     #[must_use]
     pub fn processes_slot(&self) -> Option<norte_frontend::layout::SlotId> {
@@ -580,6 +633,11 @@ impl App {
     pub fn processes_command(&mut self, cmd: &str) -> Option<String> {
         if !ALLOW_PROCESSES.contains(&cmd) {
             return None; // fuera del allowlist de este panel: inerte
+        }
+        // El cromo de la aplicación, antes que lo de este panel: mismo embudo
+        // que el sidebar y el árbol.
+        if self.panel_chrome_command(cmd) {
+            return None;
         }
         match cmd {
             "dialog.up" => self.processes_up(),

@@ -131,17 +131,10 @@ pub async fn dispatch(
         Command::TabGoto7 => app.tab_goto(7),
         Command::TabGoto8 => app.tab_goto(8),
         Command::TabGoto9 => app.tab_goto(9),
-        Command::AppMenu => {
-            // Alternar: la misma tecla lo abre y lo cierra, como los demás
-            // overlays.
-            if app.menu.is_some() {
-                app.close_menu();
-            } else {
-                // Se reabre por donde iba: empezar siempre por el primero
-                // obliga a recorrer la barra entera en cada gesto.
-                app.menu = Some(norte_frontend::menu::MenuState::reopen_at(app.menu_ultimo));
-            }
-        }
+        // Alternar, y por el MISMO sitio que los paneles laterales: la barra
+        // es cromo de la aplicación, así que abrirla no puede querer decir dos
+        // cosas según desde dónde se pida.
+        Command::AppMenu => app.toggle_menu(),
         Command::LayoutSplitH => app.layout_split(norte_frontend::layout::Dir::Horizontal),
         Command::LayoutSplitV => app.layout_split(norte_frontend::layout::Dir::Vertical),
         Command::LayoutFocusNext => app.layout_focus(1),

@@ -229,6 +229,28 @@ pub enum PlacesClick {
     Activate,
 }
 
+/// Dónde cayó un click dentro de una fila del árbol (#136).
+///
+/// La MARCA y el resto de la fila no hacen lo mismo, y el nombre lo dice: un
+/// `bool` en la llamada se lee «true» en el sitio donde importa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeSpot {
+    /// Sobre el `▾`/`▸`/`·`: pliega o despliega esa rama.
+    Mark,
+    /// En cualquier otra celda de la fila.
+    Row,
+}
+
+/// Lo que hace un click sobre una fila del árbol (#136).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeClick {
+    /// Se movió el cursor (o se plegó la rama) y el teclado se vino al árbol.
+    /// Nada más que hacer.
+    Focused,
+    /// Hay que llevar el listado a donde diga [`App::tree_activate`].
+    Activate,
+}
+
 /// Lo que este proceso sabe de la sesión guardada (L2).
 ///
 /// Junto y no cinco campos sueltos en [`App`]: son una sola cosa —la pantalla
@@ -889,6 +911,37 @@ impl App {
             self.menu_ultimo = m.menu();
         }
         self.menu = None;
+    }
+
+    /// Abre la barra de menús, o la cierra si ya estaba: la misma tecla hace
+    /// las dos cosas, como el resto de los overlays.
+    ///
+    /// Se reabre por donde iba —empezar siempre por el primero obliga a
+    /// recorrer la barra entera en cada gesto— y por eso pasa por
+    /// [`Self::close_menu`], que es quien lo apunta.
+    pub fn toggle_menu(&mut self) {
+        if self.menu.is_some() {
+            self.close_menu();
+        } else {
+            self.menu = Some(norte_frontend::menu::MenuState::reopen_at(self.menu_ultimo));
+        }
+    }
+
+    /// Lo que un panel lateral con teclado NO decide: el cromo de la
+    /// aplicación. `true` = atendido aquí y el panel no tiene que mirarlo.
+    ///
+    /// La barra de menús no es de los listados, es de la aplicación entera, y
+    /// estando dentro del árbol, del sidebar o del panel de procesos su tecla
+    /// se moría: no figuraba en el allowlist de ninguno, así que el panel se la
+    /// comía y la pantalla se quedaba igual. Es la misma lección que ya trajo
+    /// `layout.places` a esos allowlists, y por eso vive en UN sitio: tres
+    /// paneles con su propia copia son tres sitios donde olvidarse del cuarto.
+    pub fn panel_chrome_command(&mut self, cmd: &str) -> bool {
+        if cmd == "app.menu" {
+            self.toggle_menu();
+            return true;
+        }
+        false
     }
 
     /// El reloj de la interfaz, en milisegundos de época.

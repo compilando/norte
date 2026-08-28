@@ -324,11 +324,14 @@ pub async fn after_frame(
     mouse::after_frame(
         app,
         ui::pane_geometry(app, painted),
-        ui::tab_zones(app, painted),
-        ui::menu_zones(app, painted),
-        ui::places_zones(app, painted),
-        ui::resize_borders(app, painted),
-        ui::panel_slots(app, painted),
+        mouse::FrameZones {
+            tabs: ui::tab_zones(app, painted),
+            menus: ui::menu_zones(app, painted),
+            places: ui::places_zones(app, painted),
+            tree: ui::tree_zones(app, painted),
+            borders: ui::resize_borders(app, painted),
+            slots: ui::panel_slots(app, painted),
+        },
     );
     // L3: el visor acoplado sigue al cursor del listado activo. Lo que se
     // pide sale de `preview::want`, que devuelve `None` cuando el hueco no

@@ -243,6 +243,9 @@ pub struct MouseState {
     /// Las filas pulsables del sidebar de sitios del último frame (#226).
     /// Vacío = sidebar cerrado, o sin sitio donde pintarlo.
     places_zones: Vec<crate::ui::PlaceZone>,
+    /// Las filas pulsables del árbol del último frame, por lo mismo.
+    /// Vacío = árbol cerrado, o sin sitio donde pintarlo.
+    tree_zones: Vec<crate::ui::TreeZone>,
     /// Los bordes arrastrables del último frame.
     borders: Vec<ResizeBorder>,
     /// Los huecos que se colocaron en el último frame, para saber qué panel
@@ -291,6 +294,28 @@ impl MouseState {
     }
 }
 
+/// Todo lo PULSABLE que el frame recién pintado dejó en la pantalla.
+///
+/// Una struct y no seis argumentos sueltos: cinco de los seis campos son un
+/// `Vec` y una llamada que los cruzara compilaría — el ratón resolvería las
+/// pestañas contra las filas del sidebar sin decir nada. Es la misma razón por
+/// la que [`Press`] es una struct.
+#[derive(Debug, Default)]
+pub struct FrameZones {
+    /// Las zonas de las barras de pestañas.
+    pub tabs: Vec<crate::ui::TabZone>,
+    /// Las zonas de la barra de menús.
+    pub menus: Vec<crate::ui::MenuZone>,
+    /// Las filas del sidebar de sitios (#226).
+    pub places: Vec<crate::ui::PlaceZone>,
+    /// Las filas del árbol (#136).
+    pub tree: Vec<crate::ui::TreeZone>,
+    /// Los bordes arrastrables.
+    pub borders: Vec<ResizeBorder>,
+    /// Los huecos colocados, para saber qué panel hay bajo un click.
+    pub slots: Vec<PanelSlot>,
+}
+
 /// Cierra el frame: devuelve al modelo la geometría recién pintada (#124) y
 /// suelta el gesto en vuelo si ha dejado de significar algo.
 ///
@@ -307,15 +332,15 @@ impl MouseState {
 /// serán cinco mañana, y el quinto no tiene por qué acordarse. Lo que sí es
 /// invariante es que un gesto vive de índices y los índices los mueve el
 /// listado: comprobarlo aquí cubre los cuatro, y al quinto gratis.
-pub fn after_frame(
-    app: &mut App,
-    geometry: Option<Vec<PaneGeometry>>,
-    tab_zones: Vec<crate::ui::TabZone>,
-    menu_zones: Vec<crate::ui::MenuZone>,
-    places_zones: Vec<crate::ui::PlaceZone>,
-    borders: Vec<ResizeBorder>,
-    slots: Vec<PanelSlot>,
-) {
+pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: FrameZones) {
+    let FrameZones {
+        tabs: tab_zones,
+        menus: menu_zones,
+        places: places_zones,
+        tree: tree_zones,
+        borders,
+        slots,
+    } = zones;
     let validity = Validity {
         epochs: app
             .panes
@@ -334,6 +359,7 @@ pub fn after_frame(
     app.mouse.tab_zones = tab_zones;
     app.mouse.menu_zones = menu_zones;
     app.mouse.places_zones = places_zones;
+    app.mouse.tree_zones = tree_zones;
     app.mouse.borders = borders;
     app.mouse.slots = slots;
 }
@@ -361,6 +387,9 @@ pub enum After {
     /// Se activó una fila del sidebar: hay que llevar el listado a donde
     /// diga `App::places_activate`, por el flujo de `cd` de siempre.
     PlacesActivate,
+    /// Se activó una rama del árbol (#136): mismo trato que la fila del
+    /// sidebar, y el destino lo dice `App::tree_activate`.
+    TreeActivate,
 }
 
 /// El índice ABSOLUTO en `entries` de una posición PINTADA del pane.
@@ -544,6 +573,15 @@ fn place_zone_at(app: &App, col: u16, row: u16) -> Option<crate::ui::PlaceZone> 
         .copied()
 }
 
+/// La fila del árbol bajo `(col, row)`, si la hay (#136).
+fn tree_zone_at(app: &App, col: u16, row: u16) -> Option<crate::ui::TreeZone> {
+    app.mouse
+        .tree_zones
+        .iter()
+        .find(|z| z.row == row && col >= z.x0 && col <= z.x1)
+        .copied()
+}
+
 /// Aplica lo que hace pulsar una zona de la barra de pestañas.
 fn apply_tab_zone(app: &mut App, z: crate::ui::TabZone) {
     // El panel de la barra pulsada pasa a tener el foco: pulsar una pestaña
@@ -668,6 +706,25 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
             crate::app::PlacesClick::Focused => After::Nothing,
             crate::app::PlacesClick::Folded => After::PlacesFolded,
             crate::app::PlacesClick::Activate => After::PlacesActivate,
+        };
+    }
+    // Y el árbol, por lo mismo: sus celdas tampoco son de ningún listado, así
+    // que el click caía en «fuera de los panes» y el panel se pintaba sin
+    // poder tocarse (#136). Pulsar la MARCA pliega o despliega; el resto de la
+    // fila selecciona, y la segunda pulsación activa.
+    if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left))
+        && let Some(z) = tree_zone_at(app, ev.column, ev.row)
+    {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        let spot = if ev.column == z.mark_x {
+            crate::app::TreeSpot::Mark
+        } else {
+            crate::app::TreeSpot::Row
+        };
+        return match app.tree_click(z.index, spot) {
+            crate::app::TreeClick::Focused => After::Nothing,
+            crate::app::TreeClick::Activate => After::TreeActivate,
         };
     }
     let hit = hit_test(app, ev.column, ev.row);
@@ -1138,6 +1195,23 @@ pub async fn on_mouse(
         self::After::PlacesActivate => {
             app.abandon_pending(resolver);
             if let Some(path) = app.places_activate() {
+                let pane = app.focus();
+                let outcome = cd_in(app, backend, events, pane, path, Trail::Record).await;
+                apply_cd(
+                    &app.panes,
+                    &mut work.fill,
+                    &mut work.decorate,
+                    &mut work.probed,
+                    &mut work.search,
+                    outcome,
+                );
+            }
+        }
+        // Y la rama del árbol, por el MISMO flujo de `cd` que su `Enter`
+        // (#136): el árbol despliega la rama y manda ahí el listado enfocado.
+        self::After::TreeActivate => {
+            app.abandon_pending(resolver);
+            if let Some(path) = app.tree_activate() {
                 let pane = app.focus();
                 let outcome = cd_in(app, backend, events, pane, path, Trail::Record).await;
                 apply_cd(
