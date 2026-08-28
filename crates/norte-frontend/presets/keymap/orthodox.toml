@@ -29,6 +29,31 @@ keymap = [
     # sitio que dice qué está copiando norte se llegaba solo por el menú.
     # `alt+j` de «jobs».
     { on = ["alt+j"], run = "layout.processes" },
+    # El resto de la familia `layout.*`, que estaba SIN TECLA en los siete
+    # presets: cerrar un hueco, cambiarle el ancho, igualarlos y designar el
+    # destino. Se llegaba solo por el menú o la paleta, y el menú los pintaba
+    # con `—`. Designar el destino además hacía falta para poder usar los
+    # gestos de panel con tres o más (ADR 0058 D7): la barra decía «designa
+    # antes un destino» y no había tecla con la que hacerlo.
+    #
+    # Ninguno de los siete gestores originales tenía estos conceptos, así que
+    # no hay nada que transcribir y la tecla se elige a mano — igual que
+    # `alt+j` de arriba. Van en `[global]` y no en `[pane]` a propósito: los
+    # paneles laterales los aceptan en su allowlist, y ahí solo llega lo que
+    # `[global]` mezcla en la pantalla de diálogo.
+    #
+    # `alt+x` cierra, los corchetes estrechan y ensanchan, `alt+=` iguala. Los
+    # cinco acordes están libres en los SIETE presets, así que la familia se
+    # escribe igual en todos: una tecla de disposición no debería cambiar
+    # porque cambies de preset.
+    { on = ["alt+x"], run = "layout.close-slot" },
+    { on = ["alt+["], run = "layout.shrink" },
+    { on = ["alt+]"], run = "layout.grow" },
+    { on = ["alt+="], run = "layout.equalize" },
+    # Y el destino. `alt+g` no tiene mnemónico y no lo finge: las letras con
+    # uno (`d` de destino, `t` de target) ya están cogidas en otros presets, y
+    # lo que importa es que sea la MISMA en los siete.
+    { on = ["alt+g"], run = "layout.set-target" },
 ]
 
 [pane]

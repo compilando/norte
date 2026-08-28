@@ -389,6 +389,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Five layout commands had no key in any preset.** Closing a slot, growing
+  and shrinking it, equalising the row and designating the destination were
+  reachable only from the menu or the palette — which is where "the keys in the
+  menu are wrong" started, since the menu honestly painted `—` for all five.
+  Designating mattered most: with three or more panels a gesture now says
+  "designate a destination first", and there was no key to do it with. They are
+  now `alt+x`, `alt+[`, `alt+]`, `alt+=` and `alt+g`, the SAME chords in all
+  seven presets — a layout key should not move because you changed preset — and
+  in `[global]`, which is what lets a side panel accept them too. No original
+  manager had these concepts, so the chords are chosen rather than transcribed,
+  and `alt+g` does not pretend to a mnemonic it lacks.
+
 - **A panel gesture from the third panel did nothing, silently.** `pane.pull`,
   `pane.mirror` and `pane.mirror-target` worked out "the other panel" as
   `focus ^ 1`, which is a count of TWO — and panels have been splittable for a

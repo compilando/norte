@@ -102,6 +102,17 @@ keymap = [
     # teclado. El anillo da la vuelta, así que hacia delante se llega igual.
     { on = ["alt+o"], run = "layout.focus-next" },
     { on = ["alt+j"], run = "layout.processes" },
+    # El resto de la familia `layout.*`, con los mismos acordes que en los
+    # otros seis presets: ver la nota larga en `orthodox.toml`. Krusader tiene
+    # lo suyo para el reparto (`Ctrl+Alt+R` orientación, `Ctrl+Alt+=` igualar),
+    # pero está entre lo omitido a sabiendas por ser de su ventana y no de un
+    # gestor ortodoxo, y una familia que cambia de tecla según el preset es
+    # justo lo que estas cinco vienen a evitar.
+    { on = ["alt+x"], run = "layout.close-slot" },
+    { on = ["alt+["], run = "layout.shrink" },
+    { on = ["alt+]"], run = "layout.grow" },
+    { on = ["alt+="], run = "layout.equalize" },
+    { on = ["alt+g"], run = "layout.set-target" },
 ]
 
 [pane]

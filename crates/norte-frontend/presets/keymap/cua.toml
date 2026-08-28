@@ -27,6 +27,13 @@ keymap = [
     { on = ["alt+o"], run = "layout.focus-next" },
     { on = ["alt+O"], run = "layout.focus-prev" },
     { on = ["alt+j"], run = "layout.processes" },
+    # El resto de la familia `layout.*`, con los mismos acordes que en los
+    # otros seis presets: ver la nota larga en `orthodox.toml`.
+    { on = ["alt+x"], run = "layout.close-slot" },
+    { on = ["alt+["], run = "layout.shrink" },
+    { on = ["alt+]"], run = "layout.grow" },
+    { on = ["alt+="], run = "layout.equalize" },
+    { on = ["alt+g"], run = "layout.set-target" },
 ]
 
 [pane]
