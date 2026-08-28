@@ -856,10 +856,34 @@ impl PaneState {
         &self.dir
     }
 
-    /// Entradas actuales (ordenadas por el caller).
+    /// Entradas actuales (ordenadas por el caller), **la fila `..` incluida**.
+    ///
+    /// Es la lista que se PINTA, y por eso la lleva: los índices de aquí son
+    /// los que responde [`Self::is_parent_row`] y los que usan el cursor, el
+    /// ratón y el marcado. Lo que se copia a OTRO pane es
+    /// [`Self::real_entries`].
     #[must_use]
     pub fn entries(&self) -> &[Entry] {
         &self.entries
+    }
+
+    /// Las entradas de VERDAD: [`Self::entries`] sin la fila `..`.
+    ///
+    /// Lo que hay que copiar cuando un pane nace del listado de otro —partir
+    /// un panel, abrir una pestaña—, porque el pane nuevo se pone la suya. Con
+    /// `entries()` la heredada se quedaba como entrada normal en medio del
+    /// listado, con el nombre del directorio padre y marcable: cada partición
+    /// añadía una, y marcar todo metía al PADRE en lo que se copia o se borra.
+    ///
+    /// Lo decide el campo, no la ruta, por lo mismo que [`Self::is_parent_row`]:
+    /// una entrada de verdad puede apuntar al mismo sitio que el padre.
+    #[must_use]
+    pub fn real_entries(&self) -> &[Entry] {
+        if self.tiene_padre() {
+            &self.entries[1..]
+        } else {
+            &self.entries
+        }
     }
 
     /// Índice bajo el cursor real (0 incluso con lista vacía).
@@ -1193,6 +1217,67 @@ mod tests {
         // Y lo demás sí se marca: la guarda protege una fila, no rompe el
         // marcado.
         assert_eq!(p.marks_len(), 2, "las dos entradas de verdad");
+    }
+
+    /// Lo que se COPIA a un pane nuevo no la lleva.
+    ///
+    /// `entries()` la incluye —es la lista que se pinta, y el índice 0 es lo
+    /// que `is_parent_row` responde—, así que copiarla a otro pane la
+    /// convertía en una entrada de verdad: el pane nuevo se ponía LA SUYA
+    /// encima y la heredada quedaba en medio del listado, con el nombre del
+    /// padre y marcable.
+    #[test]
+    fn real_entries_deja_fuera_la_fila_de_subir() {
+        let p = pane_hijo(&["a", "b"]);
+        assert_eq!(p.entries().len(), 3, "lo que se pinta lleva la de subir");
+        assert_eq!(p.real_entries().len(), 2, "lo que se copia, no");
+        assert!(
+            !p.real_entries()
+                .iter()
+                .any(|x| x.path == VPath::parse("mem:///").unwrap()),
+            "{:?}",
+            p.real_entries()
+        );
+
+        let mut raiz = pane(&["a"]);
+        raiz.set_parent_row(true);
+        assert_eq!(
+            raiz.real_entries().len(),
+            raiz.entries().len(),
+            "en una raíz no hay fila que quitar"
+        );
+    }
+
+    /// Y si una entrada con la ruta del padre se cuela igualmente, tampoco se
+    /// marca.
+    ///
+    /// Defensa en profundidad, y no la principal: la principal es no copiarla
+    /// ([`PaneState::real_entries`]). Esta es la red que convierte el próximo
+    /// escape en «no pasa nada» en vez de en un borrado del padre. Es seguro
+    /// mirar la RUTA aquí y no en `is_parent_row`: la ruta de una entrada de
+    /// este directorio es siempre `dir/nombre`, así que solo la fila sintética
+    /// —o una copia suya— puede ser exactamente el padre; un enlace al padre
+    /// tiene la suya propia.
+    #[test]
+    fn una_entrada_con_la_ruta_del_padre_no_se_marca() {
+        let padre = VPath::parse("mem:///").unwrap();
+        let mut p = PaneState::new(
+            VPath::parse("mem:///casa").unwrap(),
+            vec![
+                e("mem:///", EntryKind::Dir),
+                e("mem:///casa/a", EntryKind::File),
+            ],
+        );
+        p.set_parent_row(true);
+        p.mark_all();
+        p.mark_range(0, p.entries().len().saturating_sub(1));
+        p.invert_marks();
+        let _ = p.mark_glob("*", true);
+        assert!(
+            !p.marked_paths().contains(&padre),
+            "el padre no entra en lo marcado ni colado como entrada: {:?}",
+            p.marked_paths()
+        );
     }
 
     /// Reordenar no la mueve del sitio: va primera, no se ordena con las

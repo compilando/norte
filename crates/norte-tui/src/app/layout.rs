@@ -107,12 +107,8 @@ impl App {
     /// queda con el FOCO, que es lo que uno acaba de pedir.
     pub fn layout_split(&mut self, dir: norte_frontend::layout::Dir) {
         let focus = self.focused_slot();
-        let (d, entradas) = {
-            let p = &self.panes[self.focus];
-            (p.dir().clone(), p.entries().to_vec())
-        };
         let id = self.mint_slot();
-        let nuevo = self.nuevo_pane(d, entradas);
+        let nuevo = self.fork_pane(self.focus);
         self.panes.insert_browser(id, nuevo);
         self.layout = self.layout.split_slot(
             focus,

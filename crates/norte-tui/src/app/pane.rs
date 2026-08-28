@@ -119,10 +119,18 @@ impl Pane {
         self.state.dir()
     }
 
-    /// Entradas ordenadas ([`crate::app::sort_entries`]).
+    /// Entradas ordenadas ([`crate::app::sort_entries`]), la fila `..`
+    /// incluida: es la lista que se PINTA.
     #[must_use]
     pub fn entries(&self) -> &[Entry] {
         self.state.entries()
+    }
+
+    /// Las entradas de VERDAD, sin la fila `..`: lo que se copia cuando un
+    /// pane nace del listado de otro ([`crate::app::App::fork_pane`]).
+    #[must_use]
+    pub fn real_entries(&self) -> &[Entry] {
+        self.state.real_entries()
     }
 
     /// Índice bajo el cursor real (0 incluso con lista vacía).

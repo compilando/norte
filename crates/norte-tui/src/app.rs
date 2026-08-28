@@ -888,6 +888,25 @@ impl App {
         pane
     }
 
+    /// Un pane nuevo con el listado del pane `i`: lo que necesitan partir un
+    /// panel y abrir una pestaña.
+    ///
+    /// Hereda las entradas ya listadas en vez de pedir un listado —es el MISMO
+    /// directorio, así que el panel nuevo aparece lleno en el acto y no
+    /// parpadea vacío mientras alguien vuelve a leer lo mismo—, y hereda las de
+    /// VERDAD: [`norte_frontend::PaneState::real_entries`] deja fuera la fila
+    /// `..`, que el pane nuevo se pone él. Copiando `entries()` la heredada se
+    /// quedaba de entrada normal en medio del listado, con el nombre del
+    /// directorio padre y marcable — una más por cada partición.
+    ///
+    /// UNA puerta para los dos, y no tres líneas repetidas en cada uno: el
+    /// tercero que apareciera las repetiría mal.
+    #[must_use]
+    pub fn fork_pane(&self, i: usize) -> Pane {
+        let p = &self.panes[i];
+        self.nuevo_pane(p.dir().clone(), p.real_entries().to_vec())
+    }
+
     /// Enciende o apaga la fila `..` en TODOS los panes (`[ui] parent_entry`).
     ///
     /// En todos y no solo en los visibles: un pane detrás de una pestaña

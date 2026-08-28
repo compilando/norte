@@ -12,6 +12,29 @@ use super::{
 };
 
 impl PaneState {
+    /// La ÚNICA puerta por la que una ruta entra en el conjunto de marcas.
+    /// `true` = no estaba y ahora sí.
+    ///
+    /// Rechaza la ruta del directorio PADRE, y esa es la red bajo todo lo
+    /// demás: la defensa principal es que la fila `..` no sea marcable (por
+    /// `markable_indices`) y que no se copie a otro pane (por
+    /// [`PaneState::real_entries`]) — esta es la que convierte el próximo
+    /// escape en «no pasa nada» en vez de en un borrado del directorio de
+    /// arriba, que es lo que pasó cuando partir un panel la copiaba como
+    /// entrada normal.
+    ///
+    /// Mirar la RUTA es seguro AQUÍ y seguiría sin serlo en
+    /// [`PaneState::is_parent_row`]: la ruta de una entrada de este directorio
+    /// es siempre `dir/nombre`, así que solo la fila sintética —o una copia
+    /// suya— puede ser exactamente el padre; un enlace o un montaje que
+    /// APUNTEN al padre tienen la suya propia y se marcan como cualquiera.
+    fn marcar(&mut self, path: VPath) -> bool {
+        if self.parent_target() == Some(&path) {
+            return false;
+        }
+        self.marks.insert(path)
+    }
+
     /// Togglea la marca de la entrada seleccionada (respeta el filtro quick:
     /// marca la entrada VISIBLE bajo la selección). No-op si no hay selección.
     pub fn toggle_mark(&mut self) {
@@ -19,7 +42,7 @@ impl PaneState {
             return;
         };
         if !self.marks.remove(&path) {
-            self.marks.insert(path);
+            self.marcar(path);
         }
     }
 
@@ -130,7 +153,11 @@ impl PaneState {
         let mut perdidas = 0;
         for path in paths {
             if self.entries.iter().any(|e| &e.path == path) {
-                self.marks.insert(path.clone());
+                // Por el embudo: si lo que se restaura es el PADRE (una marca
+                // heredada de cuando la fila `..` se podía colar como entrada),
+                // se cae aquí en vez de reaparecer sobre la fila de subir tras
+                // cada refresco. No cuenta como perdida: nunca fue una entrada.
+                self.marcar(path.clone());
             } else {
                 perdidas += 1;
             }
@@ -163,7 +190,8 @@ impl PaneState {
                 continue;
             };
             if !self.marks.contains(path) {
-                self.marks.insert(path.clone());
+                let path = path.clone();
+                self.marcar(path);
             }
         }
     }
@@ -241,8 +269,9 @@ impl PaneState {
                 continue;
             }
             let path = entry.path.clone();
-            self.marks.insert(path);
-            changed += 1;
+            if self.marcar(path) {
+                changed += 1;
+            }
         }
         changed
     }
@@ -453,7 +482,7 @@ impl PaneState {
             return;
         };
         if marked {
-            self.marks.insert(path);
+            self.marcar(path);
         } else {
             self.marks.remove(&path);
         }
@@ -470,7 +499,7 @@ impl PaneState {
                 continue;
             };
             if !self.marks.remove(&path) {
-                self.marks.insert(path);
+                self.marcar(path);
             }
         }
     }
@@ -557,7 +586,7 @@ impl PaneState {
             }
             let path = entry.path.clone();
             let hit = if mark {
-                self.marks.insert(path)
+                self.marcar(path)
             } else {
                 self.marks.remove(&path)
             };

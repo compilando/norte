@@ -389,6 +389,25 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Splitting a panel no longer smuggles the parent directory into the
+  listing.** Splitting a panel, and opening a tab, inherit the neighbour's
+  listing so the new panel appears filled instead of blinking empty — but what
+  they copied was `entries()`, which carries the synthetic `..` row. The new
+  panel then added its own, and the inherited one stayed behind as an ordinary
+  entry: painted with the PARENT's name, sorted among the directories, and
+  markable. Each split added one more. `ctrl+a` in a panel split once therefore
+  marked six things where the neighbour marked five, and the sixth was the
+  directory above — which F5, F6 and F8 would then act on. The listing survives
+  a refresh keyed by path, so the mark came back on the `..` row itself even
+  after the ghost was gone. Copying now goes through `real_entries()`, and both
+  callers through one `App::fork_pane` rather than three lines repeated in
+  each; as a net underneath, the mark set refuses the parent's path at the one
+  door every marking path now shares. Checking the path is safe THERE and still
+  is not in `is_parent_row`: an entry of this directory is always `dir/name`,
+  so only the synthetic row can be exactly the parent, while a link or a mount
+  that points at it has a path of its own. The window was never affected — it
+  re-lists on split instead of copying.
+
 - **The directory tree answers the mouse.** Its cells belong to no listing, so
   a click on them landed in "outside the panes" and did nothing: a panel that
   was painted and could not be touched — the same hole the places sidebar had

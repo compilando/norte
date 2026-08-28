@@ -100,19 +100,12 @@ impl App {
         self.panes.slot_of(self.focus)
     }
 
-    /// Abre una pestaña nueva junto al pane enfocado, en el mismo directorio.
-    ///
-    /// Hereda las entradas ya listadas en vez de pedir un listado: es el MISMO
-    /// directorio que se está mirando, así que la pestaña aparece llena en el
-    /// acto y no parpadea vacía mientras alguien vuelve a leer lo mismo.
+    /// Abre una pestaña nueva junto al pane enfocado, en el mismo directorio,
+    /// con su listado ya heredado ([`App::fork_pane`]).
     pub fn tab_new(&mut self) {
         let focus = self.focused_slot();
-        let (dir, entradas) = {
-            let p = &self.panes[self.focus];
-            (p.dir().clone(), p.entries().to_vec())
-        };
         let id = self.mint_slot();
-        let nuevo = self.nuevo_pane(dir, entradas);
+        let nuevo = self.fork_pane(self.focus);
         self.panes.insert_browser(id, nuevo);
         self.layout = self.layout.add_tab(
             focus,
