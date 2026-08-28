@@ -161,6 +161,10 @@ mod tests {
             // — Se aplica en caliente: la recarga se la pasa a los dos panes
             //   y la fila aparece o desaparece en el siguiente pintado.
             ui_parent_entry: _,
+            // — Se aplican en caliente: `reload_config` vuelve a copiar el
+            //   editor a `App`, igual que hace con los openers.
+            ui_editor: _,
+            ui_editor_detached: _,
             // — Llegan por los pasos 4 y 5 (disposición y siembra de huecos).
             ui_layout: _,
             ui_show_hidden: _,

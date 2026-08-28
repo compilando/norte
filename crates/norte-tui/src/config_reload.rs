@@ -84,6 +84,16 @@ pub async fn reload_config(
                 app.set_parent_row(cfg.common.ui_parent_entry.unwrap_or(true));
                 // Openers (#28): recargados con el resto de la config.
                 app.openers = cfg.openers.clone();
+                // Y el editor de `[ui] editor`, por lo mismo: quien lo cambia
+                // en el fichero no tiene por qué reiniciar norte.
+                app.editor = cfg
+                    .common
+                    .ui_editor
+                    .clone()
+                    .map(|command| crate::app::EditorSpec {
+                        command,
+                        detached: cfg.common.ui_editor_detached.unwrap_or(false),
+                    });
                 // #108 7a: `[ui.columns]` editado fuera también refresca la
                 // sesión (antes solo arrancaba); el re-sort mantiene los
                 // panes coherentes con el fichero — el persist del picker

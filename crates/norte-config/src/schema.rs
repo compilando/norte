@@ -266,6 +266,28 @@ pub struct UiSection {
     /// each frontend.
     #[serde(default)]
     pub parent_entry: Option<bool>,
+    /// The editor `pane.edit` launches, as an argv TEMPLATE with the same
+    /// field codes as `openers.toml` (`%f` the file, `%d` the pane's
+    /// directory): `editor = ["zed", "%f"]`. Absent = `$VISUAL`, then
+    /// `$EDITOR`, then the POSIX fallback, which is what norte did before
+    /// this key existed.
+    ///
+    /// **Never honoured from the PROJECT layer**, and that is not a detail:
+    /// this key names a program to execute, so a cloned repository could
+    /// otherwise choose what runs when you press F4. Same fail-closed rule as
+    /// `openers.toml` and `[daemon]`.
+    #[serde(default)]
+    pub editor: Option<Vec<String>>,
+    /// Whether that editor opens a WINDOW of its own rather than taking over
+    /// the terminal. Absent = `false`.
+    ///
+    /// A terminal editor needs norte to step aside and wait for it; a windowed
+    /// one (Zed, VS Code without `--wait`) hands control straight back, and
+    /// suspending for it leaves the reader staring at a blank terminal until
+    /// they close a window somewhere else. Same fail-closed layering as
+    /// [`Self::editor`].
+    #[serde(default)]
+    pub editor_detached: Option<bool>,
     /// `[ui.columns]` (#108 block 4): column selection and sort order.
     #[serde(default)]
     pub columns: Option<UiColumnsSection>,

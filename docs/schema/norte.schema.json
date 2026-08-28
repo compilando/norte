@@ -438,6 +438,25 @@
             "null"
           ]
         },
+        "editor": {
+          "default": null,
+          "description": "The editor `pane.edit` launches, as an argv TEMPLATE with the same\nfield codes as `openers.toml` (`%f` the file, `%d` the pane's\ndirectory): `editor = [\"zed\", \"%f\"]`. Absent = `$VISUAL`, then\n`$EDITOR`, then the POSIX fallback, which is what norte did before\nthis key existed.\n\n**Never honoured from the PROJECT layer**, and that is not a detail:\nthis key names a program to execute, so a cloned repository could\notherwise choose what runs when you press F4. Same fail-closed rule as\n`openers.toml` and `[daemon]`.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "editor_detached": {
+          "default": null,
+          "description": "Whether that editor opens a WINDOW of its own rather than taking over\nthe terminal. Absent = `false`.\n\nA terminal editor needs norte to step aside and wait for it; a windowed\none (Zed, VS Code without `--wait`) hands control straight back, and\nsuspending for it leaves the reader staring at a blank terminal until\nthey close a window somewhere else. Same fail-closed layering as\n[`Self::editor`].",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "font": {
           "default": null,
           "description": "UI font family for GUI chrome (GP: `docs/superpowers/specs/2026-07-23-gui-visual-plugins-design.md`).\nWhen absent, use the platform default (bundled fallback).",

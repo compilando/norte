@@ -94,9 +94,30 @@ terminal en modo ratón. De eso va [[mouse]].
 # Editar
 
 {{cmd:pane.edit}} abre lo que hay bajo el cursor **en tu editor**: el de
-`$VISUAL`, o el de `$EDITOR`, o `vi` si no has puesto ninguno. norte no trae
-editor propio y no piensa traerlo — lo suyo es mover ficheros, y el que ya usas
-sabe más de editar que cualquier cosa que cupiera aquí.
+`[ui] editor` si lo has puesto, y si no el de `$VISUAL`, el de `$EDITOR`, o
+`vi`. norte no trae editor propio y no piensa traerlo — lo suyo es mover
+ficheros, y el que ya usas sabe más de editar que cualquier cosa que cupiera
+aquí.
+
+`[ui] editor` es una plantilla con los mismos códigos de campo que
+`openers.toml` (`%f` el fichero, `%d` el directorio del panel), y lleva al lado
+`editor_detached`, que dice si ese programa abre **ventana propia**:
+
+```toml
+[ui]
+editor = ["zed", "%f"]
+editor_detached = true
+```
+
+Esa marca no es cosmética. Un editor de terminal necesita que norte se aparte y
+lo espere; uno de ventana devuelve el control al instante, y esperarlo dejaría
+el terminal en blanco hasta que cierres algo que está en otra pantalla. Norte no
+puede adivinar cuál es cuál, así que lo dices tú. Las entradas de `openers.toml`
+llevan la misma marca, por lo mismo.
+
+Esta clave NO se lee de la capa de proyecto: nombra un programa que se ejecuta,
+y un repositorio que te clonas no elige qué corre cuando pulsas una tecla. Es la
+misma línea que dejan fuera `[daemon]` y el propio `openers.toml`.
 
 Mientras el editor está delante, norte se aparta: le devuelve la terminal
 entera, igual que con {{cmd:app.terminal}}. Al salir del editor vuelves a los

@@ -1650,7 +1650,6 @@ cmd-not-here = aquí no
 host-key-unmapped = esa tecla no está ligada
 host-cannot-view-dir = un directorio no se ve
 host-nothing-to-view = nada que ver
-host-open-file-not-implemented = abrir ficheros todavía no está hecho
 host-column-not-sortable = por esa columna no se ordena
 host-help-over-input = la ayuda no se abre sobre un campo de texto
 host-layout-broken = ese fichero de disposición no parsea

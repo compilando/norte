@@ -38,6 +38,15 @@ pub struct Opener {
     /// [`std::env::consts::OS`]); ausente = cualquiera.
     #[serde(default)]
     os: Option<String>,
+    /// ¿Abre VENTANA propia? Ausente = `false`.
+    ///
+    /// Un programa de terminal (`bat`, `vim`) necesita que el frontend se
+    /// aparte y lo espere; uno gráfico (`zed`, `loupe`) devuelve el control al
+    /// instante, y suspender la TUI por él deja al lector mirando un terminal
+    /// en blanco hasta que cierre una ventana que está en otro sitio. Norte no
+    /// puede adivinar cuál es cuál: lo dice quien escribe la regla.
+    #[serde(default)]
+    detached: Option<bool>,
     /// argv plantilla: `["bat", "--paging=always", "%f"]`. El primer token es
     /// el binario; los códigos de campo `%f`/`%F`/`%d` se sustituyen SOLO como
     /// tokens completos (nunca dentro de un literal — así una ruta no-UTF8
@@ -150,23 +159,46 @@ impl Opener {
     /// código de campo es un solo elemento del argv Y nunca empieza por `-`.
     #[must_use]
     pub fn argv(&self, files: &[&Path], dir: &Path) -> Vec<std::ffi::OsString> {
-        let mut out = Vec::with_capacity(self.command.len());
-        // El primer token (binario) NUNCA se interpola.
-        out.push(self.command[0].as_str().into());
-        for tok in &self.command[1..] {
-            match tok.as_str() {
-                "%f" => {
-                    if let Some(first) = files.first() {
-                        out.push(first.as_os_str().to_os_string());
-                    }
-                }
-                "%F" => out.extend(files.iter().map(|p| p.as_os_str().to_os_string())),
-                "%d" => out.push(dir.as_os_str().to_os_string()),
-                lit => out.push(OsStr::new(lit).to_os_string()),
-            }
-        }
-        out
+        expand_argv(&self.command, files, dir)
     }
+
+    /// ¿Abre ventana propia y por tanto NO se le espera? (`detached`).
+    #[must_use]
+    pub fn detached(&self) -> bool {
+        self.detached.unwrap_or(false)
+    }
+}
+
+/// Sustituye los códigos de campo de una plantilla de argv. `%f` → la PRIMERA
+/// ruta; `%F` → TODAS (un arg por ruta); `%d` → el directorio.
+///
+/// Suelta y pública porque `openers.toml` no es el único sitio donde el
+/// usuario escribe una plantilla: `[ui] editor` usa la misma gramática, y
+/// tener dos expansores sería tener dos reglas de citado sobre rutas que son
+/// BYTES (regla 1). Ver [`Opener::argv`] para el contrato completo, incluida
+/// la razón por la que un código de campo es siempre un elemento entero del
+/// argv y nunca se concatena con texto.
+#[must_use]
+pub fn expand_argv(command: &[String], files: &[&Path], dir: &Path) -> Vec<std::ffi::OsString> {
+    let mut out = Vec::with_capacity(command.len());
+    let Some((programa, resto)) = command.split_first() else {
+        return out;
+    };
+    // El primer token (binario) NUNCA se interpola.
+    out.push(programa.as_str().into());
+    for tok in resto {
+        match tok.as_str() {
+            "%f" => {
+                if let Some(first) = files.first() {
+                    out.push(first.as_os_str().to_os_string());
+                }
+            }
+            "%F" => out.extend(files.iter().map(|p| p.as_os_str().to_os_string())),
+            "%d" => out.push(dir.as_os_str().to_os_string()),
+            lit => out.push(OsStr::new(lit).to_os_string()),
+        }
+    }
+    out
 }
 
 /// `true` si `program` es un binario ejecutable localizable: ruta absoluta

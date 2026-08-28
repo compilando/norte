@@ -389,6 +389,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Enter on a file opens it, instead of doing nothing at all.** `nav.enter`
+  only ever answered for directories, symlinks and archives — over a plain
+  file, binary or not, the key did nothing and said nothing. It now hands the
+  file to the program its mimetype names in `openers.toml`, and to the
+  desktop's own launcher when no rule matches, which is what every manager in
+  this family does; `pane.view` keeps the internal viewer on its own key. On a
+  pane that is not on this disk there is no native path to hand over, so it
+  falls back to that internal viewer — the only thing that CAN be done there,
+  and better than the error it would otherwise be. The window did the same
+  nothing, only louder: it answered "opening files is not built yet", a note
+  from a task that never landed.
+
 - **Splitting the same way twice divides evenly, and a split that will not fit
   says so.** `alt+v` three times used to leave 1/2, 1/4 and 1/4 rather than
   thirds: each split wrapped the slot in a NEW split instead of joining the one
@@ -447,6 +459,20 @@ independently through `PROTOCOL_VERSION`.
   that already brought `layout.places` and `pane.switch` into those lists.
 
 ### Added
+
+- **The editor is configurable in norte, and it can be a window.** `[ui]
+  editor` takes an argv template with the same field codes as `openers.toml`
+  (`%f` the file, `%d` the pane's directory) and overrides `$VISUAL`/`$EDITOR`,
+  which until now were the only way to choose what `pane.edit` opened. Beside
+  it, `[ui] editor_detached` says the program opens a window of its own, so
+  norte hands it the file and stays put instead of suspending the terminal
+  until the reader closes something on another screen — norte cannot tell a
+  terminal editor from a windowed one, so the config says which it is. Opener
+  entries take the same `detached` flag, for the same reason: until now every
+  declared opener suspended the TUI. Neither key is read from the PROJECT
+  layer: they name a program to execute, and a repository you cloned does not
+  get to choose what runs when you press a key — the same fail-closed line that
+  already keeps `[daemon]` and `openers.toml` out.
 
 - **`pane.mirror-target`: send the folder under the cursor across.** Krusader
   binds `Ctrl+←`/`Ctrl+→` to it — "on a folder: refreshes the [other] panel

@@ -19,8 +19,8 @@ use crate::app::{
 };
 use crate::config;
 use crate::gestures::{
-    disconnect, edit_under_cursor, mirror_plan, mirror_target_plan, pull_plan, resolve_opener,
-    run_pane_gesture, shell_cwd,
+    EditLaunch, EnterAction, disconnect, edit_under_cursor, enter_action, mirror_plan,
+    mirror_target_plan, pull_plan, resolve_opener, run_pane_gesture, shell_cwd,
 };
 use crate::keymap::Command;
 use crate::mutations::{combine_pieces, launch_size_count, test_archive, unpack};
@@ -29,7 +29,7 @@ use crate::navigate::{Cd, cd};
 use crate::overlays::open_contextual_help;
 use crate::refresh::refresh_panes;
 use crate::screens::{open_drive_popup, plugin_config_summaries};
-use crate::trail::{nav_enter_target, walk_trail};
+use crate::trail::walk_trail;
 use crate::viewer_open::{open_viewer, viewer_do};
 use crossterm::event::EventStream;
 use norte_core::backend::Backend;
@@ -313,11 +313,16 @@ pub async fn dispatch(
         }
         Command::CursorTop => app.focused_mut().move_to_start(),
         Command::CursorBottom => app.focused_mut().move_to_end(),
-        Command::NavEnter => {
-            if let Some(dir) = nav_enter_target(app) {
-                cd_outcome = cd(app, backend, events, dir).await;
-            }
-        }
+        // Un directorio se navega; un FICHERO se abre —con su programa
+        // asociado si está en este disco, y con el visor interno si no—, que
+        // es lo que hace un gestor ortodoxo. Antes, sobre un fichero, esta
+        // tecla no hacía nada y tampoco lo decía.
+        Command::NavEnter => match enter_action(app) {
+            EnterAction::Cd(dir) => cd_outcome = cd(app, backend, events, dir).await,
+            EnterAction::OpenExternal => resolve_opener(app),
+            EnterAction::View(path) => open_viewer(app, backend, events, path).await,
+            EnterAction::Nothing => {}
+        },
         Command::NavParent => {
             // Salir de la raíz interior de un archivo = el dir que CONTIENE
             // al contenedor (el padre sintáctico sería un compuesto sin
@@ -507,7 +512,8 @@ pub async fn dispatch(
         // línea o ejecuta parte de sí mismo, y aquí los nombres son bytes
         // (regla 1).
         Command::PaneEdit => match edit_under_cursor(app) {
-            Ok(pendiente) => app.pending_shell = Some(pendiente),
+            Ok(EditLaunch::Shell(pendiente)) => app.pending_shell = Some(pendiente),
+            Ok(EditLaunch::Open(pendiente)) => app.pending_open = Some(pendiente),
             Err(msg) => app.message = Some(msg),
         },
         // Shift+F4: un fichero VACÍO en este directorio y el editor encima.

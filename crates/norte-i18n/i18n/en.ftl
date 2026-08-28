@@ -1622,7 +1622,6 @@ cmd-not-here = not available on this screen
 host-key-unmapped = that key is not bound
 host-cannot-view-dir = a directory has no viewer
 host-nothing-to-view = nothing to view
-host-open-file-not-implemented = opening files is not built yet
 host-column-not-sortable = that column does not sort
 host-help-over-input = help does not open over a text field
 host-layout-broken = that layout file does not parse

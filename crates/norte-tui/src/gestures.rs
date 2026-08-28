@@ -87,10 +87,14 @@ pub fn resolve_opener(app: &mut App) {
             .map(std::path::Path::to_path_buf)
             .unwrap_or_default()
     });
+    let detached = opener.detached();
     app.pending_open = Some(crate::app::PendingOpen {
         program,
         argv: opener.argv(&[&native], &dir),
-        detached: false,
+        // Un opener GRÁFICO no se espera: suspender la TUI por una ventana que
+        // se abre en otro sitio deja al lector mirando un terminal en blanco
+        // hasta que la cierre. Lo dice la regla, porque norte no puede saberlo.
+        detached,
         // El MISMO `dir` que alimenta `%d`: el hijo abre en el directorio que
         // el lector está mirando (#144).
         cwd: Some(dir),
@@ -284,7 +288,7 @@ pub async fn disconnect(app: &mut App, backend: &Backend) {
 /// la barra tal cual: no hay entrada bajo el cursor, es un directorio, o el pane
 /// es remoto (y entonces sale por [`shell_remote_message`], con la ubicación
 /// saneada).
-pub fn edit_under_cursor(app: &App) -> Result<crate::app::PendingShell, String> {
+pub fn edit_under_cursor(app: &App) -> Result<EditLaunch, String> {
     let Some(entry) = app.focused().selected() else {
         return Err(t("msg-edit-nothing"));
     };
@@ -297,16 +301,46 @@ pub fn edit_under_cursor(app: &App) -> Result<crate::app::PendingShell, String> 
     // El cwd del hijo es el directorio que se está mirando, como con el shell:
     // un `:w otro.txt` del editor cae donde el humano está, no donde arrancó
     // norte.
-    let cwd = norte_vfs_local::vpath_to_native(app.focused().dir())
-        .ok()
-        .and_then(|d| norte_frontend::shell::child_cwd(&d));
-    Ok(crate::app::PendingShell {
+    let dir = norte_vfs_local::vpath_to_native(app.focused().dir()).ok();
+    // `[ui] editor` manda sobre `$VISUAL`/`$EDITOR`: quien lo escribe en la
+    // configuración de norte está eligiendo el editor DE NORTE, y un entorno
+    // heredado no puede ganarle a lo que el usuario dijo aquí.
+    if let Some(spec) = app.editor.as_ref().filter(|s| !s.command.is_empty()) {
+        let base = dir.clone().unwrap_or_else(|| {
+            native
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_default()
+        });
+        return Ok(EditLaunch::Open(crate::app::PendingOpen {
+            program: spec.command[0].clone(),
+            argv: norte_frontend::openers::expand_argv(&spec.command, &[&native], &base),
+            detached: spec.detached,
+            cwd: Some(base),
+        }));
+    }
+    Ok(EditLaunch::Shell(crate::app::PendingShell {
         argv: norte_frontend::shell::editor_argv(&native),
-        cwd,
+        cwd: dir.and_then(|d| norte_frontend::shell::child_cwd(&d)),
         // Un editor de pantalla completa se despide él solo; esperar una tecla
         // después sería un paso de más entre guardar y volver a los paneles.
         wait_for_key: false,
-    })
+    }))
+}
+
+/// Cómo se lanza el editor: por el camino del shell (suspender la terminal y
+/// esperar) o por el de los openers (que sabe además NO esperar).
+///
+/// Dos caminos y no uno porque son dos contratos distintos: el editor de
+/// `$EDITOR` es un programa de terminal y siempre se le espera, mientras que
+/// el de `[ui] editor` puede ser una ventana —y entonces esperarla sería
+/// dejar la TUI en blanco hasta que el lector la cierre.
+#[derive(Debug)]
+pub enum EditLaunch {
+    /// Suspende la terminal y espera (`$VISUAL`/`$EDITOR`).
+    Shell(crate::app::PendingShell),
+    /// El camino de los openers, que honra `detached` (`[ui] editor`).
+    Open(crate::app::PendingOpen),
 }
 
 /// El editor sobre un fichero que el daemon ACABA de crear (#290).
@@ -441,6 +475,52 @@ pub fn mirror_plan(app: &App) -> Option<PaneMove> {
     let dir = app.panes[from].dir().clone();
     (app.panes[to].dir() != &dir || app.panes[to].virtual_search)
         .then_some(PaneMove { pane: to, dir })
+}
+
+/// Lo que hace `nav.enter` sobre lo que haya bajo el cursor.
+///
+/// Un enum y no tres `if` en el despachador porque la DECISIÓN se prueba sin
+/// backend y sin terminal, que es el reparto de todo este módulo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnterAction {
+    /// Un directorio (o un archivo comprimido, que se entra igual): navegar.
+    Cd(VPath),
+    /// Un fichero de ESTE disco: dárselo al programa asociado, el mismo
+    /// camino que `pane.open` ([`resolve_opener`]).
+    OpenExternal,
+    /// Un fichero que no está en este disco: el visor INTERNO, que es lo
+    /// único que se puede hacer con él aquí — a `xdg-open` no se le puede dar
+    /// un `sftp://`.
+    View(VPath),
+    /// Nada bajo el cursor, o algo que no es ni fichero ni directorio.
+    Nothing,
+}
+
+/// Qué hace `nav.enter` AHORA: navegar, abrir fuera, o ver.
+///
+/// Sobre un fichero no hacía NADA, en silencio: `trail::nav_enter_target` solo
+/// contesta por directorios, symlinks y archivos comprimidos, y el brazo del
+/// despachador con `None` se quedaba quieto. Un gestor ortodoxo abre el
+/// fichero con su programa asociado —Krusader, Total Commander y Norton hacen
+/// eso—, y el visor interno sigue estando en su tecla (`pane.view`).
+#[must_use]
+pub fn enter_action(app: &App) -> EnterAction {
+    if let Some(dir) = crate::trail::nav_enter_target(app) {
+        return EnterAction::Cd(dir);
+    }
+    let Some(path) = app
+        .focused()
+        .selected()
+        .filter(|e| matches!(e.kind, EntryKind::File | EntryKind::Symlink))
+        .map(|e| e.path.clone())
+    else {
+        return EnterAction::Nothing;
+    };
+    if norte_vfs_local::vpath_to_native(&path).is_ok() {
+        EnterAction::OpenExternal
+    } else {
+        EnterAction::View(path)
+    }
 }
 
 /// `pane.mirror-target`: like [`mirror_plan`], but what travels is the
@@ -618,6 +698,64 @@ mod pane_gestures_tests {
         let plan = mirror_plan(&app).expect("plan");
         assert_eq!(plan.pane, 0);
         assert_eq!(plan.dir, vp("mem:///b"));
+    }
+
+    /// `nav.enter` sobre un FICHERO abre, y no se queda quieto: con ruta
+    /// nativa, el programa asociado; sin ella —un panel remoto—, el visor
+    /// interno, que es lo único que se puede hacer ahí.
+    #[test]
+    fn enter_sobre_un_fichero_abre_en_vez_de_no_hacer_nada() {
+        use super::{EnterAction, enter_action};
+        use norte_proto::{Entry, EntryKind};
+        let entrada = |wire: &str, kind| Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: vp(wire),
+            kind,
+            size: None,
+            mtime_ms: None,
+        };
+
+        // Un fichero LOCAL: al programa asociado.
+        let mut app = App::new(
+            Pane::new(
+                vp("file:///casa"),
+                vec![
+                    entrada("file:///casa/dentro", EntryKind::Dir),
+                    entrada("file:///casa/bin.dat", EntryKind::File),
+                ],
+            ),
+            Pane::new(vp("file:///otro"), Vec::new()),
+        );
+        app.set_focus(0);
+        assert_eq!(
+            enter_action(&app),
+            EnterAction::Cd(vp("file:///casa/dentro")),
+            "sobre un directorio se sigue navegando"
+        );
+        app.panes[0].set_cursor(1);
+        assert_eq!(enter_action(&app), EnterAction::OpenExternal);
+
+        // El MISMO fichero en un pane que no está en este disco: visor.
+        let mut remoto = App::new(
+            Pane::new(
+                vp("mem:///casa"),
+                vec![entrada("mem:///casa/bin.dat", EntryKind::File)],
+            ),
+            Pane::new(vp("mem:///otro"), Vec::new()),
+        );
+        remoto.set_focus(0);
+        assert_eq!(
+            enter_action(&remoto),
+            EnterAction::View(vp("mem:///casa/bin.dat")),
+            "sin ruta nativa no hay programa asociado al que dárselo"
+        );
+
+        // Y sin nada bajo el cursor, nada.
+        let vacio = App::new(
+            Pane::new(vp("file:///casa"), Vec::new()),
+            Pane::new(vp("file:///otro"), Vec::new()),
+        );
+        assert_eq!(enter_action(&vacio), EnterAction::Nothing);
     }
 
     /// El espejo del OBJETIVO manda la carpeta bajo el cursor, y sobre
@@ -1564,7 +1702,10 @@ mod edit_tests {
             false,
             None,
         );
-        let pending = edit_under_cursor(&app).expect("local y fichero");
+        let super::EditLaunch::Shell(pending) = edit_under_cursor(&app).expect("local y fichero")
+        else {
+            panic!("sin `[ui] editor` manda el del entorno, por el camino del shell")
+        };
         assert_eq!(pending.argv.len(), 2, "programa y ruta, sin línea de shell");
         assert_eq!(
             pending.argv[1],
@@ -1572,5 +1713,55 @@ mod edit_tests {
             "la ruta va como su propio argumento"
         );
         assert!(!pending.wait_for_key, "un editor se despide solo");
+    }
+
+    /// `[ui] editor` manda sobre `$VISUAL`/`$EDITOR`, expande sus códigos de
+    /// campo y, si es una ventana, se lanza SIN suspender la terminal.
+    #[test]
+    fn el_editor_de_la_configuracion_manda_y_puede_no_suspender() {
+        let mut app = app_local();
+        app.panes[0].begin_listing(
+            VPath::parse("file:///tmp").expect("wire"),
+            vec![norte_proto::Entry {
+                path: VPath::parse("file:///tmp/a.txt").expect("wire"),
+                kind: norte_proto::EntryKind::File,
+                size: Some(1),
+                mtime_ms: None,
+                attrs: std::collections::BTreeMap::new(),
+            }],
+            false,
+            None,
+        );
+        app.editor = Some(crate::app::EditorSpec {
+            command: vec!["zed".to_owned(), "%d".to_owned(), "%f".to_owned()],
+            detached: true,
+        });
+
+        let super::EditLaunch::Open(pending) = edit_under_cursor(&app).expect("local y fichero")
+        else {
+            panic!("con `[ui] editor` va por el camino de los openers")
+        };
+        assert_eq!(pending.program, "zed");
+        assert_eq!(
+            pending.argv,
+            vec![
+                std::ffi::OsString::from("zed"),
+                std::ffi::OsString::from("/tmp"),
+                std::ffi::OsString::from("/tmp/a.txt"),
+            ],
+            "`%d` el directorio del pane, `%f` el fichero, cada uno su argumento"
+        );
+        assert!(pending.detached, "una ventana no suspende la terminal");
+
+        // Y sin la marca, se le espera como a cualquier programa de terminal.
+        app.editor = Some(crate::app::EditorSpec {
+            command: vec!["micro".to_owned(), "%f".to_owned()],
+            detached: false,
+        });
+        let super::EditLaunch::Open(pending) = edit_under_cursor(&app).expect("local y fichero")
+        else {
+            panic!("sigue siendo el editor de la configuración")
+        };
+        assert!(!pending.detached);
     }
 }

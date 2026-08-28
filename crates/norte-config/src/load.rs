@@ -1376,6 +1376,18 @@ pub struct CommonConfig {
     /// nada señalado, así que una copia o un borrado no tienen sobre qué
     /// actuar en vez de actuar sobre el directorio padre.
     pub ui_parent_entry: Option<bool>,
+    /// `[ui] editor` (last-wins; None = `$VISUAL`/`$EDITOR`/fallback POSIX).
+    ///
+    /// Plantilla de argv con los códigos de campo de `openers.toml` (`%f` el
+    /// fichero, `%d` el directorio del pane). **Jamás desde la capa de
+    /// proyecto**: nombra un programa que se ejecuta, así que un repo ajeno no
+    /// elige qué corre al pulsar F4 — misma regla fail-closed que `[daemon]` y
+    /// que `openers.toml`.
+    pub ui_editor: Option<Vec<String>>,
+    /// `[ui] editor_detached` (last-wins; None = `false`): ese editor abre
+    /// VENTANA propia, así que no se suspende el frontend esperándolo. Misma
+    /// capa fail-closed que [`Self::ui_editor`].
+    pub ui_editor_detached: Option<bool>,
     /// `[daemon] mode` (last-wins; None = embedded; never from Project —
     /// fail-closed, review MAJOR-1). Startup only.
     pub daemon_mode: Option<crate::schema::DaemonMode>,
@@ -2033,6 +2045,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_confirm_quit = ConfirmQuit::default();
     let (mut ui_show_hidden, mut ui_mouse, mut ui_menu_bar) = (None, None, None);
     let mut ui_parent_entry = None;
+    let mut ui_editor: Option<Vec<String>> = None;
+    let mut ui_editor_detached: Option<bool> = None;
     let mut ui_layout: Option<String> = None;
     let mut ui_columns = ColumnsConfig::default();
     let mut daemon_mode: Option<DaemonMode> = None;
@@ -2163,6 +2177,13 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 }
             }
             if manda_fuera_de_presentacion(*kind) {
+                // El EDITOR también, y por el mismo motivo que `[daemon]`:
+                // nombra un programa que se ejecuta, así que un repo ajeno no
+                // elige qué corre al pulsar F4. Es la misma línea que deja
+                // fuera a `keymap.preset` — elegir qué tecla borra no es
+                // presentación, y elegir qué binario se lanza, menos.
+                ui_editor = parsed.ui.editor.clone().or(ui_editor);
+                ui_editor_detached = parsed.ui.editor_detached.or(ui_editor_detached);
                 merge_archive_layer(&mut archive, &parsed.archive);
                 merge_daemon_layer(&mut daemon_mode, &mut daemon_socket, parsed.daemon);
                 merge_log_layer(&mut log_dir, &mut log_retain, parsed.log);
@@ -2186,6 +2207,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_mouse,
         ui_menu_bar,
         ui_parent_entry,
+        ui_editor,
+        ui_editor_detached,
         ui_columns,
         daemon_mode,
         daemon_socket,

@@ -15770,15 +15770,17 @@ impl Estado {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 };
                 if entrada.kind != EntryKind::Dir {
-                    // Abrir un FICHERO es otra cosa (visor, opener externo) y
-                    // llega con la tarea 2.6: decirlo es más honesto que
-                    // navegar a algo que no es un directorio.
-                    return (
-                        ActionAck::Unavailable {
-                            reason_key: "host-open-file-not-implemented".to_owned(),
-                        },
-                        Vec::new(),
-                    );
+                    // Un FICHERO se abre, que es lo que hace un gestor
+                    // ortodoxo: con el programa que el escritorio le asocie si
+                    // está en este disco, y con el visor INTERNO si no —a
+                    // `xdg-open` no se le puede dar un `sftp://`, y ahí el
+                    // visor es lo único que se puede hacer—. La misma decisión
+                    // que toma el TUI en `gestures::enter_action` (ADR 0077).
+                    return if norte_frontend::shell::is_local(&entrada.path) {
+                        self.abrir_externo()
+                    } else {
+                        self.pedir_visor(backend, buzon)
+                    };
                 }
                 let destino = entrada.path.clone();
                 (

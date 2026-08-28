@@ -229,6 +229,16 @@ async fn main() -> Result<()> {
     app.dialog_hints = DialogHints::build(&dialog_eff);
     // Openers declarativos (#28): fuente de `pane.open` (F4).
     app.openers = cfg.openers.clone();
+    // `[ui] editor` (#133): el editor de norte, si la configuración nombra
+    // uno. Sin él manda `$VISUAL`/`$EDITOR`, que es lo de siempre.
+    app.editor = cfg
+        .common
+        .ui_editor
+        .clone()
+        .map(|command| norte_tui::app::EditorSpec {
+            command,
+            detached: cfg.common.ui_editor_detached.unwrap_or(false),
+        });
     // Canales del modo daemon (None en embebido): tasks de otros frontends
     // y avisos de (re)conexión — se drenan en el loop principal.
     let foreign_tasks = backend.take_foreign_tasks();

@@ -84,6 +84,7 @@ pub use norte_frontend::{display_name, path_display, sort_entries};
 /// Comando externo que `pane.open` (F4) dejó resuelto y el run loop lanzará
 /// (#28). Se separa la resolución del lanzamiento porque el dueño de la
 /// terminal es el run loop, no el despacho.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingOpen {
     /// Binario a sondear en el `PATH` antes de lanzar nada.
     pub program: String,
@@ -227,6 +228,19 @@ pub enum PlacesClick {
     Folded,
     /// Hay que llevar el listado a donde diga [`App::places_activate`].
     Activate,
+}
+
+/// El editor que la configuración nombra (`[ui] editor`).
+///
+/// La plantilla TAL CUAL, con sus códigos de campo sin expandir: expandirlos
+/// necesita el fichero y el directorio, que solo se saben en el momento del
+/// gesto.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorSpec {
+    /// El argv plantilla (`["zed", "%f"]`). El primer token es el binario.
+    pub command: Vec<String>,
+    /// Abre ventana propia: no se suspende la terminal esperándolo.
+    pub detached: bool,
 }
 
 /// Dónde cayó un click dentro de una fila del árbol (#136).
@@ -678,6 +692,12 @@ pub struct App {
     /// Openers declarativos fusionados (#28): clonados en arranque y en cada
     /// hot-reload OK. Fuente de `pane.open` (F4). Vacío = sin openers.
     pub openers: norte_frontend::openers::OpenersConfig,
+    /// El editor de `[ui] editor`, si la configuración nombra uno.
+    ///
+    /// `None` = el de siempre: `$VISUAL`, `$EDITOR`, y el fallback POSIX. Se
+    /// copia aquí al arrancar y en cada recarga, igual que [`Self::openers`]:
+    /// un gesto no vuelve a leer configuración del disco.
+    pub editor: Option<EditorSpec>,
     /// Comando externo resuelto por `pane.open` y pendiente de lanzar (#28).
     /// `dispatch` lo fija tras validar; el run loop —dueño de la terminal—
     /// lo ejecuta.
@@ -859,6 +879,7 @@ impl App {
             // `main` lo enciende cuando el backend es remoto.
             backend_journalled: false,
             openers: norte_frontend::openers::OpenersConfig::empty(),
+            editor: None,
             pending_open: None,
             pending_shell: None,
             pending_osc52: None,

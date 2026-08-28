@@ -92,9 +92,30 @@ terminal left in mouse mode. See [[mouse]].
 # Editing
 
 {{cmd:pane.edit}} opens whatever is under the cursor **in your editor**: the one
-in `$VISUAL`, or in `$EDITOR`, or `vi` if you set neither. norte ships no editor
-of its own and does not intend to — its job is moving files around, and the one
-you already use knows more about editing than anything that would fit in here.
+in `[ui] editor` if you set it, otherwise the one in `$VISUAL`, in `$EDITOR`, or
+`vi`. norte ships no editor of its own and does not intend to — its job is
+moving files around, and the one you already use knows more about editing than
+anything that would fit in here.
+
+`[ui] editor` is a template with the same field codes as `openers.toml` (`%f`
+the file, `%d` the pane's directory), and beside it sits `editor_detached`,
+which says whether that program opens a **window of its own**:
+
+```toml
+[ui]
+editor = ["zed", "%f"]
+editor_detached = true
+```
+
+That flag is not cosmetic. A terminal editor needs norte to step aside and wait
+for it; a windowed one hands control straight back, and waiting for it would
+leave the terminal blank until you close something on another screen. norte
+cannot guess which is which, so you say it. Entries in `openers.toml` carry the
+same flag, for the same reason.
+
+This key is NOT read from the project layer: it names a program to execute, and
+a repository you cloned does not get to choose what runs when you press a key.
+It is the same line that keeps `[daemon]` and `openers.toml` out.
 
 While the editor is up, norte steps aside and hands it the whole terminal, just
 as {{cmd:app.terminal}} does. Leaving the editor brings the panels back and
