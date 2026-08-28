@@ -88,6 +88,36 @@ impl ResizeBorder {
     }
 }
 
+/// Un hueco del reparto y el rectángulo que ocupó, en celdas.
+///
+/// Sirve para una sola pregunta —¿qué panel hay bajo el puntero?— y por eso
+/// no guarda ni el kind ni quién tomaría el teclado: eso lo contesta
+/// [`App::focus_slot`] con el registro que los dos frontends comparten.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PanelSlot {
+    /// El hueco.
+    pub slot: norte_frontend::layout::SlotId,
+    /// Columna izquierda, borde incluido.
+    pub x: u16,
+    /// Fila superior, borde incluido.
+    pub y: u16,
+    /// Ancho, bordes incluidos.
+    pub width: u16,
+    /// Alto, bordes incluidos.
+    pub height: u16,
+}
+
+impl PanelSlot {
+    /// ¿Cae `(col, row)` dentro de este hueco?
+    #[must_use]
+    pub const fn contains(&self, col: u16, row: u16) -> bool {
+        col >= self.x
+            && col < self.x.saturating_add(self.width)
+            && row >= self.y
+            && row < self.y.saturating_add(self.height)
+    }
+}
+
 /// La geometría PINTADA de un pane, en celdas de la terminal.
 ///
 /// La rellena [`crate::ui::pane_geometry`] después de cada frame y la guarda
@@ -215,6 +245,9 @@ pub struct MouseState {
     places_zones: Vec<crate::ui::PlaceZone>,
     /// Los bordes arrastrables del último frame.
     borders: Vec<ResizeBorder>,
+    /// Los huecos que se colocaron en el último frame, para saber qué panel
+    /// hay bajo un click.
+    slots: Vec<PanelSlot>,
     /// El borde que se está arrastrando AHORA, si hay alguno.
     ///
     /// Se congela al agarrarlo y no se vuelve a buscar mientras dure el
@@ -281,6 +314,7 @@ pub fn after_frame(
     menu_zones: Vec<crate::ui::MenuZone>,
     places_zones: Vec<crate::ui::PlaceZone>,
     borders: Vec<ResizeBorder>,
+    slots: Vec<PanelSlot>,
 ) {
     let validity = Validity {
         epochs: app
@@ -301,6 +335,7 @@ pub fn after_frame(
     app.mouse.menu_zones = menu_zones;
     app.mouse.places_zones = places_zones;
     app.mouse.borders = borders;
+    app.mouse.slots = slots;
 }
 
 /// Qué debe hacer el run loop tras un evento de ratón. Todo lo que se puede
@@ -603,6 +638,14 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     if let Some(after) = resize_gesture(app, ev) {
         return after;
     }
+    // Pulsar un panel le da el TECLADO, y va ANTES que todos los caminos
+    // especializados de abajo: de quién es el teclado lo decide el hueco que
+    // hay bajo el puntero, no lo que cada camino sepa hacer después con el
+    // click. Puesto en cada camino, el panel al que ninguno atiende —el visor
+    // acoplado, la hoja, el árbol— se quedaría sin poder recibirlo.
+    if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) {
+        enfocar_lo_pulsado(app, ev.column, ev.row);
+    }
     // Las barras de pestañas se atienden ANTES: sus celdas son cromo para el
     // hit test del listado, así que un click ahí caería en «este panel,
     // ninguna fila» y el botón no haría nada.
@@ -656,6 +699,27 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
         _ => {}
     }
     After::Nothing
+}
+
+/// Le da el teclado al panel que hay bajo `(col, row)`.
+///
+/// Solo con el botón IZQUIERDO abajo: la rueda mueve el listado bajo el
+/// puntero sin robarle el foco a nadie (ver [`scroll`]), y un arrastre que
+/// cruza el panel de al lado no puede llevarse el teclado a media faena.
+///
+/// Un hueco que no toma teclas no cambia nada, y un click fuera de todo hueco
+/// —no hay ninguno: el reparto cubre la pantalla entera— tampoco.
+fn enfocar_lo_pulsado(app: &mut App, col: u16, row: u16) {
+    let Some(slot) = app
+        .mouse
+        .slots
+        .iter()
+        .find(|s| s.contains(col, row))
+        .map(|s| s.slot)
+    else {
+        return;
+    };
+    app.focus_slot(slot);
 }
 
 /// El `Spot` de un hit que cayó sobre una fila de verdad.

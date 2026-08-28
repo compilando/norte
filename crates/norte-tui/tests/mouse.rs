@@ -8,7 +8,7 @@
 
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
-use norte_tui::app::{App, Modal, Pane, TransferKind};
+use norte_tui::app::{App, KeyOwner, Modal, Pane, TransferKind};
 use norte_tui::mouse::{self, After};
 use norte_tui::ui;
 use ratatui::Terminal;
@@ -76,11 +76,17 @@ fn app_pintada(n: usize) -> App {
 /// exactamente el fallo que la geometría existe para no tener. Los tests que
 /// resuelven un índice lo CONTRASTAN contra el texto de esa fila.
 fn pintar(app: &mut App) -> Vec<String> {
-    let mut terminal = Terminal::new(TestBackend::new(W, H)).expect("terminal de test");
+    pintar_en(app, W, H)
+}
+
+/// Como [`pintar`] sobre un terminal de otro tamaño: con un panel lateral
+/// abierto, 60×12 no da para colocarlo y el reparto lo deja fuera.
+fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal de test");
     // El MISMO orden que el run loop: reconciliar la ventana, pintar,
     // devolver la geometría. Sin el primer paso se pintaría una ventana que
     // nadie reconcilió, o sea una pantalla que ningún usuario ve.
-    ui::before_frame(app, ratatui::layout::Rect::new(0, 0, W, H));
+    ui::before_frame(app, ratatui::layout::Rect::new(0, 0, w, h));
     let frame = terminal.draw(|f| ui::draw(f, app)).expect("draw");
     let geometria = ui::pane_geometry(app, frame.area);
     mouse::after_frame(
@@ -90,6 +96,7 @@ fn pintar(app: &mut App) -> Vec<String> {
         ui::menu_zones(app, frame.area),
         ui::places_zones(app, frame.area),
         ui::resize_borders(app, frame.area),
+        ui::panel_slots(app, frame.area),
     );
     terminal
         .backend()
@@ -992,6 +999,7 @@ fn con_mouse_false_no_hay_captura_ni_manejo() {
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        Vec::new(),
     );
     let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 3));
     assert_eq!(
@@ -1134,4 +1142,48 @@ fn agarrar_el_borde_no_selecciona_una_fila() {
     let _ = mouse::handle(&mut app, ev(ARRIBA, borde, FILA0 + 1));
     assert_eq!(app.panes[0].cursor(), cursor, "el cursor no se movió");
     assert_eq!(app.panes[0].marks_len(), 0, "y no se marcó nada");
+}
+
+/// Pulsar un listado le da también el TECLADO, no solo el foco.
+///
+/// Con el sidebar delante, un click en el listado movía su cursor y dejaba
+/// las flechas en el sidebar: el borde de foco decía una cosa y el teclado
+/// iba a otra. Señalar un panel con el ratón es decir «ahora trabajo aquí»,
+/// y eso incluye las teclas.
+#[test]
+fn un_click_en_un_listado_trae_el_teclado_desde_el_sidebar() {
+    let mut app = app_pintada(5);
+    app.toggle_places();
+    let _ = pintar_en(&mut app, 100, 30);
+    assert_eq!(app.key_owner(), KeyOwner::Places, "el sidebar lo tomó");
+
+    let g = app.mouse.geometry().expect("geometría")[0];
+    let after = mouse::handle(&mut app, ev(ABAJO, g.x + 2, g.first_list_row));
+    assert_eq!(after, After::Nothing);
+    assert_eq!(app.key_owner(), KeyOwner::Panes, "y el click lo trae");
+    assert_eq!(app.focus(), 0);
+}
+
+/// Y al revés: pulsar un panel LATERAL le da a él el teclado, aunque ahí no
+/// haya ninguna fila que resolver.
+///
+/// El mismo gesto para los dos lados, y por el mismo camino: quien decide de
+/// quién es el teclado es el hueco que hay bajo el puntero.
+#[test]
+fn un_click_en_un_panel_lateral_le_da_el_teclado() {
+    let mut app = app_pintada(5);
+    app.toggle_processes();
+    app.return_keys_to_panes();
+    let _ = pintar_en(&mut app, 100, 30);
+
+    let area = ratatui::layout::Rect::new(0, 0, 100, 30);
+    let id = app.processes_slot().expect("abierto");
+    let r = ui::resolved_for(&app, area)
+        .placements
+        .iter()
+        .find(|(s, _)| *s == id)
+        .map(|(_, r)| *r)
+        .expect("el panel se colocó");
+    let _ = mouse::handle(&mut app, ev(ABAJO, r.x + 1, r.y + 1));
+    assert_eq!(app.key_owner(), KeyOwner::Processes);
 }

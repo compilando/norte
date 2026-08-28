@@ -420,6 +420,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Clicking a panel did not give it the keyboard.** In the terminal the click
+  moved the listing's cursor and its focus border, while the arrow keys stayed
+  wherever they were — with the sidebar open you clicked a file, pressed Down,
+  and the sidebar's cursor moved. Pointing at a panel is saying "I work here
+  now", and that includes the keys. The slot under the pointer is what decides,
+  so it is one rule for every panel rather than one per click path: the panel
+  no click path attends — the docked viewer, the tree — can receive the
+  keyboard too, and a panel that takes no keys (the details sheet, the task
+  strip, the status bar) leaves it where it was. The window had the same gap in
+  a smaller form: only a row would focus a panel, so clicking its header or the
+  empty space under the last row did nothing.
 - **The processes panel swallowed the key that gets out of it.** Its handler
   answered "applied" to ANY effect while the task board was empty — which is
   almost always — because the "no rows" check came before deciding which keys

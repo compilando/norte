@@ -179,6 +179,30 @@ pub fn resize_borders(app: &App, area: Rect) -> Vec<crate::mouse::ResizeBorder> 
     out
 }
 
+/// Los HUECOS que se colocaron en el frame de `area`, con su rectángulo.
+///
+/// Es lo que convierte un click en «qué panel señaló el puntero». Sale del
+/// MISMO reparto que pinta, por lo mismo que los bordes: una segunda cuenta de
+/// dónde está cada panel es un click que enfoca el de al lado.
+///
+/// Van TODOS los huecos colocados, incluidos los que no toman teclas: quién
+/// escucha lo decide `App::focus_slot` con el registro compartido, y no una
+/// segunda tabla escrita aquí.
+#[must_use]
+pub fn panel_slots(app: &App, area: Rect) -> Vec<crate::mouse::PanelSlot> {
+    resolved_frame(app, area)
+        .placements
+        .into_iter()
+        .map(|(slot, r)| crate::mouse::PanelSlot {
+            slot,
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+        })
+        .collect()
+}
+
 /// ¿Se solapan dos tramos `[a, a+la)` y `[b, b+lb)`?
 const fn solapan(a: u16, la: u16, b: u16, lb: u16) -> bool {
     a < b + lb && b < a + la

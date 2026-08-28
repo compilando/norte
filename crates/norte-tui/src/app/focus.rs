@@ -202,27 +202,67 @@ impl App {
     /// [`KeyOwner`] al que pasarle nada.
     #[must_use]
     fn focus_ring(&self) -> Vec<FocusStop> {
-        let kinds = norte_frontend::layout::KindRegistry::builtin();
         self.layout
             .visible_slot_ids()
             .into_iter()
-            .filter_map(|id| {
-                let kind = self.layout.kind_of(id)?;
-                if !kinds.get(kind).is_some_and(|d| d.takes_keys) {
-                    return None;
-                }
-                match kind.as_str() {
-                    "browser" => (0..self.panes.len())
-                        .find(|i| self.panes.slot_of(*i) == id)
-                        .map(FocusStop::Pane),
-                    "places" => Some(FocusStop::Side(KeyOwner::Places)),
-                    crate::preview::KIND => Some(FocusStop::Side(KeyOwner::Preview)),
-                    crate::processes::KIND => Some(FocusStop::Side(KeyOwner::Processes)),
-                    crate::tree::KIND => Some(FocusStop::Side(KeyOwner::Tree)),
-                    _ => None,
-                }
-            })
+            .filter_map(|id| self.focus_stop(id))
             .collect()
+    }
+
+    /// El sitio del anillo que ocupa el hueco `id`, o `None` si ese hueco no
+    /// toma teclas.
+    ///
+    /// Es la ÚNICA traducción de «hueco» a «quién se queda el teclado», y la
+    /// comparten el anillo del `Tab` y el ratón: dos tablas de kinds a
+    /// [`KeyOwner`] son dos formas de llegar a un panel que un día divergen y
+    /// dejan un panel al que se llega con el ratón y no con el teclado.
+    #[must_use]
+    fn focus_stop(&self, id: norte_frontend::layout::SlotId) -> Option<FocusStop> {
+        let kinds = norte_frontend::layout::KindRegistry::builtin();
+        let kind = self.layout.kind_of(id)?;
+        if !kinds.get(kind).is_some_and(|d| d.takes_keys) {
+            return None;
+        }
+        match kind.as_str() {
+            "browser" => (0..self.panes.len())
+                .find(|i| self.panes.slot_of(*i) == id)
+                .map(FocusStop::Pane),
+            "places" => Some(FocusStop::Side(KeyOwner::Places)),
+            crate::preview::KIND => Some(FocusStop::Side(KeyOwner::Preview)),
+            crate::processes::KIND => Some(FocusStop::Side(KeyOwner::Processes)),
+            crate::tree::KIND => Some(FocusStop::Side(KeyOwner::Tree)),
+            _ => None,
+        }
+    }
+
+    /// Le da el teclado al hueco `id` —y el foco, si es un listado—, y dice
+    /// si lo aceptó.
+    ///
+    /// Lo llama el RATÓN: señalar un panel es decir «ahora trabajo aquí», y
+    /// eso incluye las teclas. Antes el click movía el cursor del listado y
+    /// dejaba las flechas donde estuvieran, así que el borde de foco decía
+    /// una cosa y el teclado iba a otra.
+    ///
+    /// Un hueco que no toma teclas —los metadatos, la franja de tareas, la
+    /// barra de estado— devuelve `false` y no cambia nada: pulsar algo que no
+    /// escucha no puede dejar al teclado sin dueño.
+    pub fn focus_slot(&mut self, id: norte_frontend::layout::SlotId) -> bool {
+        let Some(stop) = self.focus_stop(id) else {
+            return false;
+        };
+        self.aterrizar(stop);
+        true
+    }
+
+    /// Pone el teclado (y el foco) en un sitio del anillo.
+    fn aterrizar(&mut self, stop: FocusStop) {
+        match stop {
+            FocusStop::Pane(i) => {
+                self.return_keys_to_panes();
+                self.set_focus(i);
+            }
+            FocusStop::Side(owner) => self.key_owner = owner,
+        }
     }
 
     /// Pasa el teclado al siguiente panel del anillo, ciclando.
@@ -253,13 +293,7 @@ impl App {
         let n = isize::try_from(ring.len()).unwrap_or(1);
         let dest =
             usize::try_from((isize::try_from(i).unwrap_or(0) + delta).rem_euclid(n)).unwrap_or(0);
-        match ring[dest] {
-            FocusStop::Pane(i) => {
-                self.return_keys_to_panes();
-                self.set_focus(i);
-            }
-            FocusStop::Side(owner) => self.key_owner = owner,
-        }
+        self.aterrizar(ring[dest]);
     }
 }
 

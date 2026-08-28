@@ -2519,6 +2519,21 @@ export class Screen {
   }
 
   private wire(slotId: number, dom: SlotDom): void {
+    // Pulsar CUALQUIER parte de un panel lo enfoca: la cabecera, el hueco bajo
+    // la última fila, el borde. Estaba solo en las filas, así que un panel sin
+    // ninguna —o el clic en su título— se pintaba con el borde de otro.
+    //
+    // En CAPTURA para que el foco viaje antes que lo que haga el clic concreto
+    // (ordenar, seleccionar): es el orden que el host ya ve desde el teclado.
+    dom.root.addEventListener(
+      "mousedown",
+      () => {
+        if (dom.root.dataset["role"] !== "active") {
+          this.send({ action: "focus_slot", slot_id: slotId });
+        }
+      },
+      true,
+    );
     dom.header.addEventListener("mousedown", (e) => {
       const target = e.target;
       if (!(target instanceof Element)) {
@@ -2553,9 +2568,7 @@ export class Screen {
         return;
       }
       e.preventDefault();
-      if (dom.root.dataset["role"] !== "active") {
-        this.send({ action: "focus_slot", slot_id: slotId });
-      }
+      // El foco ya lo mandó el listener de captura del panel entero.
       if (e.shiftKey) {
         // El rango lo marca el HOST: qué entra y qué no —`..`, por ejemplo—
         // es una regla de selección compartida, no una del renderer.

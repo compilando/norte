@@ -328,6 +328,7 @@ pub async fn after_frame(
         ui::menu_zones(app, painted),
         ui::places_zones(app, painted),
         ui::resize_borders(app, painted),
+        ui::panel_slots(app, painted),
     );
     // L3: el visor acoplado sigue al cursor del listado activo. Lo que se
     // pide sale de `preview::want`, que devuelve `None` cuando el hueco no
