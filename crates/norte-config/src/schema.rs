@@ -253,6 +253,19 @@ pub struct UiSection {
     /// The GUI has its own chrome and ignores this key.
     #[serde(default)]
     pub menu_bar: Option<bool>,
+    /// Whether every listing carries a `..` row at the top. Absent = `true`.
+    ///
+    /// The row an orthodox reader expects: the cursor lands on it and Enter
+    /// goes up, which is muscle memory from every manager in the family.
+    /// `parent_entry = false` gives the row back to the listing — going up
+    /// is still Backspace, and its key never went anywhere.
+    ///
+    /// It is never an OPERAND: with the cursor on it nothing is selected, so
+    /// a copy or a delete has nothing to act on rather than acting on the
+    /// parent directory. That is enforced in the shared pane model, not in
+    /// each frontend.
+    #[serde(default)]
+    pub parent_entry: Option<bool>,
     /// `[ui.columns]` (#108 block 4): column selection and sort order.
     #[serde(default)]
     pub columns: Option<UiColumnsSection>,

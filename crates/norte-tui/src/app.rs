@@ -432,6 +432,12 @@ pub struct App {
     /// Suelta, el menú sigue abriéndose con su tecla y pintándose ENCIMA de
     /// la primera fila, como siempre.
     pub menu_bar: bool,
+    /// La fila `..` está encendida (`[ui] parent_entry`).
+    ///
+    /// Se guarda aquí además de en cada pane porque un pane NUEVO —una
+    /// pestaña, un hueco de una disposición— tiene que nacer con la misma
+    /// respuesta que los demás.
+    pub parent_row: bool,
     /// El perfil activo, o `None` si no hay ninguno.
     ///
     /// Espejo en memoria de `SessionBody.active`. Se guarda como `OsString`
@@ -796,6 +802,10 @@ impl App {
             layout_picker: None,
             profile_picker: None,
             menu_bar: true,
+            // Apagada hasta que el arranque diga: un `App` de test no lee
+            // configuración, y una fila que aparece sola cambiaría los
+            // índices de ochenta tests que no van de esto.
+            parent_row: false,
             active_profile: None,
             pending_profile: None,
             places_wants_drives: false,
@@ -840,6 +850,31 @@ impl App {
             swap_seq: 0,
             pick: false,
             picked: None,
+        }
+    }
+
+    /// Un listado nuevo, ya con la configuración de esta sesión puesta.
+    ///
+    /// Los huecos nacen en cuatro sitios —una pestaña, una partición, un
+    /// hueco de una disposición, una sesión restaurada— y el que se olvidara
+    /// de la fila `..` sería una mitad de la pantalla comportándose distinto
+    /// de la otra.
+    #[must_use]
+    pub fn nuevo_pane(&self, dir: VPath, entradas: Vec<norte_proto::Entry>) -> Pane {
+        let mut pane = Pane::new(dir, entradas);
+        pane.set_parent_row(self.parent_row);
+        pane
+    }
+
+    /// Enciende o apaga la fila `..` en TODOS los panes (`[ui] parent_entry`).
+    ///
+    /// En todos y no solo en los visibles: un pane detrás de una pestaña
+    /// vuelve a pintarse tal y como se dejó, y una mitad de la pantalla con la
+    /// fila y otra sin ella sería la misma configuración diciendo dos cosas.
+    pub fn set_parent_row(&mut self, on: bool) {
+        self.parent_row = on;
+        for pane in self.panes.browsers_mut() {
+            pane.set_parent_row(on);
         }
     }
 

@@ -240,8 +240,8 @@ pub(crate) fn draw_pane(
     let items: Vec<ListItem<'_>> = match pane.quick_visible() {
         Some(vis) => vis
             .iter()
-            .filter_map(|&i| pane.entries().get(i))
-            .map(|e| {
+            .filter_map(|&i| pane.entries().get(i).map(|e| (i, e)))
+            .map(|(i, e)| {
                 entry_item(
                     e,
                     theme,
@@ -251,13 +251,15 @@ pub(crate) fn draw_pane(
                     cols,
                     Some(pane),
                     now_ms,
+                    pane.is_parent_row(i),
                 )
             })
             .collect(),
         None => pane
             .entries()
             .iter()
-            .map(|e| {
+            .enumerate()
+            .map(|(i, e)| {
                 entry_item(
                     e,
                     theme,
@@ -267,6 +269,7 @@ pub(crate) fn draw_pane(
                     cols,
                     Some(pane),
                     now_ms,
+                    pane.is_parent_row(i),
                 )
             })
             .collect(),
@@ -317,12 +320,23 @@ pub(crate) fn entry_item<'a>(
     // sin columnas de plugin.
     plugin_cells: Option<&Pane>,
     now_ms: i64,
+    // La fila de SUBIR (`[ui] parent_entry`): se pinta `..` y no el nombre
+    // del directorio padre, que es lo que dice su ruta. El nombre del padre
+    // en la primera fila se lee como «hay aquí un directorio que se llama
+    // así», que es justo lo que no hay.
+    parent_row: bool,
 ) -> ListItem<'a> {
     let name = entry.path.file_name().map_or(&[][..], |n| n.as_bytes());
     // #57: con reinterpretación activa, los nombres no-UTF8 se decodifican
     // con el encoding elegido (display-only; el badge hostil se conserva —
     // el texto pintado difiere de los bytes reales).
-    let (text, hostile) = norte_frontend::display_name_with(name, reinterpret);
+    let (text, hostile) = if parent_row {
+        // Dos puntos y nada más: ni badge hostil —`..` son dos ASCII— ni
+        // reinterpretación, porque no es el nombre de nadie.
+        ("..".to_owned(), false)
+    } else {
+        norte_frontend::display_name_with(name, reinterpret)
+    };
     let kind_glyph = match entry.kind {
         EntryKind::Dir => "/",
         EntryKind::Symlink => "@",
@@ -506,7 +520,17 @@ mod entry_item_columns_tests {
             measured: 0,
             is_name: false,
         };
-        let item = entry_item(&entry, &theme, None, Some(&deco), false, &widths, None, 0);
+        let item = entry_item(
+            &entry,
+            &theme,
+            None,
+            Some(&deco),
+            false,
+            &widths,
+            None,
+            0,
+            false,
+        );
         // Renderiza a un buffer del ancho EXACTO del presupuesto: si la
         // fila desbordara, la celda de tamaño perdería su cola.
         let area = Rect::new(0, 0, 21, 1);
@@ -746,8 +770,8 @@ mod entry_item_tests {
     fn a_marked_row_starts_with_the_mark_gutter() {
         let entry = e("mem:///a", EntryKind::File);
         let theme = TuiTheme::default();
-        let marked = entry_item(&entry, &theme, None, None, true, &[], None, 0);
-        let plain = entry_item(&entry, &theme, None, None, false, &[], None, 0);
+        let marked = entry_item(&entry, &theme, None, None, true, &[], None, 0, false);
+        let plain = entry_item(&entry, &theme, None, None, false, &[], None, 0, false);
         assert_eq!(first_span_text(&marked), "*");
         assert_eq!(first_span_text(&plain), " ");
     }
@@ -758,7 +782,7 @@ mod entry_item_tests {
     fn the_gutter_precedes_the_hostile_badge() {
         let entry = e_hostile();
         let theme = TuiTheme::default();
-        let item = entry_item(&entry, &theme, None, None, true, &[], None, 0);
+        let item = entry_item(&entry, &theme, None, None, true, &[], None, 0, false);
         let texts = span_texts(&item);
         assert_eq!(texts[0], "*");
         assert_eq!(texts[1], HOSTILE_BADGE);

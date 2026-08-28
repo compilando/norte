@@ -3,7 +3,6 @@
 //! redimensionar y mover el foco de hueco en hueco.
 
 use super::{ALLOW_PROCESSES, App, KeyOwner, PlacesClick};
-use crate::app::pane::Pane;
 use norte_i18n::t;
 use norte_proto::VPath;
 
@@ -25,8 +24,8 @@ impl App {
             // navegación.
             match tree.kind_of(id).map(norte_frontend::layout::KindId::as_str) {
                 Some("browser") if self.panes.browser(id).is_none() => {
-                    self.panes
-                        .insert_browser(id, Pane::new(dir.clone(), Vec::new()));
+                    let nuevo = self.nuevo_pane(dir.clone(), Vec::new());
+                    self.panes.insert_browser(id, nuevo);
                 }
                 Some("places") if self.panes.places(id).is_none() => {
                     self.panes
@@ -113,7 +112,8 @@ impl App {
             (p.dir().clone(), p.entries().to_vec())
         };
         let id = self.mint_slot();
-        self.panes.insert_browser(id, Pane::new(d, entradas));
+        let nuevo = self.nuevo_pane(d, entradas);
+        self.panes.insert_browser(id, nuevo);
         self.layout = self.layout.split_slot(
             focus,
             dir,

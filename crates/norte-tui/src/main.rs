@@ -183,6 +183,7 @@ async fn main() -> Result<()> {
     // deliberado: el menú era la única puerta a varios comandos y no había
     // nada en pantalla diciendo que existía.
     app.menu_bar = cfg.common.ui_menu_bar.unwrap_or(true);
+    app.set_parent_row(cfg.common.ui_parent_entry.unwrap_or(true));
     // `[ui] layout`: una disposición guardada. Un layout que no carga NO deja
     // a norte sin pantalla — se avisa por la barra y se arranca con
     // `orthodox`, que es lo que el usuario tenía antes de escribir la clave.

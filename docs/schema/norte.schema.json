@@ -495,6 +495,14 @@
             "null"
           ]
         },
+        "parent_entry": {
+          "default": null,
+          "description": "Whether every listing carries a `..` row at the top. Absent = `true`.\n\nThe row an orthodox reader expects: the cursor lands on it and Enter\ngoes up, which is muscle memory from every manager in the family.\n`parent_entry = false` gives the row back to the listing — going up\nis still Backspace, and its key never went anywhere.\n\nIt is never an OPERAND: with the cursor on it nothing is selected, so\na copy or a delete has nothing to act on rather than acting on the\nparent directory. That is enforced in the shared pane model, not in\neach frontend.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "quick_search": {
           "default": null,
           "description": "Quick-search mode for `/`: `\"filter\"` narrows the listing (the default),\nwhile `\"jump\"` moves the cursor without changing the listing.\n\n[`crate::load::load`] rejects other values so its diagnostic can\ninclude the source configuration path. Invalid values never silently\nfall back.",

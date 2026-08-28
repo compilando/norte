@@ -204,8 +204,14 @@ pub async fn walk_trail(
 /// means.
 #[must_use]
 pub fn nav_enter_target(app: &App) -> Option<VPath> {
-    app.focused()
-        .selected()
+    // La fila `..` no es un operando —`selected()` contesta `None` sobre
+    // ella, que es lo que la hace inofensiva— así que subir se pregunta
+    // aparte. Es lo único que esa fila sabe hacer.
+    let pane = app.focused();
+    if pane.is_parent_row(pane.cursor()) {
+        return pane.parent_target().cloned();
+    }
+    pane.selected()
         .filter(|e| matches!(e.kind, EntryKind::Dir | EntryKind::Symlink))
         .map(|e| e.path.clone())
         .or_else(|| app.focused().selected().and_then(nav::archive_root_for))

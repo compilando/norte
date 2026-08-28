@@ -158,6 +158,9 @@ mod tests {
             //   vigente, así que la barra aparece o desaparece en el
             //   siguiente pintado sin nada más.
             ui_menu_bar: _,
+            // — Se aplica en caliente: la recarga se la pasa a los dos panes
+            //   y la fila aparece o desaparece en el siguiente pintado.
+            ui_parent_entry: _,
             // — Llegan por los pasos 4 y 5 (disposición y siembra de huecos).
             ui_layout: _,
             ui_show_hidden: _,

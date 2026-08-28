@@ -305,6 +305,19 @@ impl PaneSlots {
             .filter_map(|(_, p)| p.as_browser_mut())
     }
 
+    /// TODOS los listados, visibles o no, para mutarlos.
+    ///
+    /// Al contrario que [`Self::iter_mut`], y a propósito: esto es para
+    /// CONFIGURACIÓN, no para trabajo. Una pestaña que nadie mira no debe
+    /// costar una petición, pero sí tiene que volver a pintarse como el resto
+    /// cuando se la mira — una mitad de la pantalla con la fila `..` y otra
+    /// sin ella sería la misma configuración diciendo dos cosas.
+    pub fn browsers_mut(&mut self) -> impl Iterator<Item = &mut Pane> {
+        self.store
+            .iter_mut()
+            .filter_map(|(_, p)| p.as_browser_mut())
+    }
+
     /// Intercambia el contenido de los dos lados, dejando los ids quietos.
     pub fn swap(&mut self, a: usize, b: usize) {
         let (sa, sb) = (self.slot_of(a), self.slot_of(b));

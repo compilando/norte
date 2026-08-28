@@ -79,6 +79,9 @@ pub async fn reload_config(
                 // lee, así que la barra aparece o desaparece en el siguiente
                 // pintado —y el ratón la sigue, porque lee ese mismo reparto—.
                 app.menu_bar = cfg.common.ui_menu_bar.unwrap_or(true);
+                // La fila `..`, también en caliente: es presentación, y el
+                // pane la pone o la quita sin tocar el listado.
+                app.set_parent_row(cfg.common.ui_parent_entry.unwrap_or(true));
                 // Openers (#28): recargados con el resto de la config.
                 app.openers = cfg.openers.clone();
                 // #108 7a: `[ui.columns]` editado fuera también refresca la

@@ -604,6 +604,24 @@ impl Pane {
         self.state.set_sort(spec);
     }
 
+    /// Enciende o apaga la fila `..` (`[ui] parent_entry`). Delegado puro.
+    pub fn set_parent_row(&mut self, on: bool) {
+        self.state.set_parent_row(on);
+    }
+
+    /// ¿La fila `i` es la de subir? Delegado puro: lo pregunta el pintado
+    /// —para escribir `..` en vez del nombre del padre— y la navegación.
+    #[must_use]
+    pub fn is_parent_row(&self, i: usize) -> bool {
+        self.state.is_parent_row(i)
+    }
+
+    /// A dónde lleva la fila de subir, si la hay. Delegado puro.
+    #[must_use]
+    pub fn parent_target(&self) -> Option<&VPath> {
+        self.state.parent_target()
+    }
+
     /// Instala el lote de decoraciones resuelto (G3b) — ver
     /// `PaneState::set_decorations`.
     pub fn set_decorations(

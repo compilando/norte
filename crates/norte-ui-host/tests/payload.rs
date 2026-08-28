@@ -41,7 +41,14 @@ async fn host_de(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot) {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (200, 60),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        // La fila `..` apagada: estos tests razonan sobre índices de
+        // listado, y una fila más al principio los desplazaría todos sin
+        // decir nada de lo que prueban.
+        settings: {
+            let mut cfg = norte_ui_host::ajustes_por_defecto();
+            cfg.common.ui_parent_entry = Some(false);
+            cfg
+        },
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),

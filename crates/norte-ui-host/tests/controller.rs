@@ -29,6 +29,19 @@ fn dir() -> VPath {
     VPath::parse("mem:///casa").expect("vpath de test")
 }
 
+/// La configuración de un host de prueba: la de fábrica, con la fila `..`
+/// APAGADA.
+///
+/// Apagada a propósito y no por descuido. Estos tests razonan sobre índices
+/// de listado —la fila 0 es la primera entrada— y una fila más al principio
+/// los desplazaría todos sin decir nada de lo que cada uno prueba. La fila
+/// tiene sus propios tests, y son los que la encienden.
+fn ajustes_de_prueba() -> norte_frontend::config::FrontendConfig {
+    let mut cfg = norte_ui_host::ajustes_por_defecto();
+    cfg.common.ui_parent_entry = Some(false);
+    cfg
+}
+
 async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapshot) {
     UiHost::start(UiHostOptions {
         backend: Falso::con(&nombres),
@@ -39,7 +52,7 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -259,7 +272,7 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -621,7 +634,7 @@ async fn el_contador_lo_resuelve_el_host() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -736,7 +749,7 @@ async fn host_con_layout(
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree(layout).expect("layout"),
         viewport,
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -1814,7 +1827,7 @@ async fn el_catalogo_da_sentido_a_un_attr() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -2522,7 +2535,7 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (200, 60),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -2768,7 +2781,7 @@ async fn host_solo_lectura(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewS
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -3187,7 +3200,7 @@ async fn dos_columnas_que_se_enmascaran_igual_siguen_siendo_dos() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -3291,7 +3304,7 @@ async fn una_disposicion_sin_listado_no_arranca() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: arbol_sin_listado,
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -3339,7 +3352,7 @@ async fn las_columnas_de_otro_esquema_no_estan_muertas() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -3417,7 +3430,7 @@ prepend_keymap = [
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -4505,7 +4518,7 @@ async fn host_con_rutas(paths: norte_ui_host::settings::HostPaths) -> UiHost {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths,
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -5085,7 +5098,7 @@ async fn host_con_tema(theme: norte_ui_host::pickers::HostTheme) -> UiHost {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme,
         user_layouts: Vec::new(),
@@ -5281,7 +5294,7 @@ async fn host_full(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot)
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("full").expect("layout"),
         viewport: (200, 60),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -5559,7 +5572,7 @@ async fn la_barra_de_sitios_navega_el_listado_y_no_se_lo_queda() {
 /// un acuse `Applied`. Es la carrera que el ADR 0068 existe para cerrar.
 #[tokio::test]
 async fn un_click_en_la_barra_no_navega_a_otro_sitio_si_la_lista_cambio() {
-    let mut cfg = norte_ui_host::ajustes_por_defecto();
+    let mut cfg = ajustes_de_prueba();
     cfg.common.hotlist = vec![norte_config::HotlistItem {
         name: "proyectos".to_owned(),
         target: norte_proto::VPath::parse("mem:///proyectos").map_err(|_| "err".to_owned()),
@@ -5667,7 +5680,7 @@ async fn un_click_en_la_barra_no_navega_a_otro_sitio_si_la_lista_cambio() {
 /// desaparece en silencio es un fallo de configuración que nadie puede ver.
 #[tokio::test]
 async fn un_favorito_roto_se_ve_y_dice_por_que() {
-    let mut cfg = norte_ui_host::ajustes_por_defecto();
+    let mut cfg = ajustes_de_prueba();
     cfg.common.hotlist = vec![
         norte_config::HotlistItem {
             name: "casa".to_owned(),
@@ -5894,7 +5907,7 @@ async fn una_disposicion_rota_se_ve_y_no_se_aplica() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: vec![norte_frontend::layout_picker::UserLayout {
@@ -5970,7 +5983,7 @@ async fn una_disposicion_que_esconde_el_listado_deja_el_hueco_vivo() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: vec![norte_frontend::layout_picker::UserLayout {
@@ -6526,7 +6539,7 @@ async fn ninguna_superficie_enmascara_en_silencio() {
 
         // 1. El nombre de un FAVORITO: lo escribe el usuario, y la capa de
         //    proyecto es «he abierto este repo», no «doy fe de esta cadena».
-        let mut cfg = norte_ui_host::ajustes_por_defecto();
+        let mut cfg = ajustes_de_prueba();
         cfg.common.hotlist = vec![norte_config::HotlistItem {
             name: texto.clone(),
             target: norte_proto::VPath::parse("mem:///casa").map_err(|_| "err".to_owned()),
@@ -6690,7 +6703,7 @@ async fn a_los_plugins_solo_se_les_pregunta_por_la_ventana() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -6757,7 +6770,7 @@ async fn la_insignia_de_un_plugin_llega_a_la_fila() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -6962,7 +6975,7 @@ async fn encender_una_columna_attr_vuelve_a_listar() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -8778,7 +8791,7 @@ kind = "status"
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: arbol_layout,
         viewport: (200, 60),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -11674,7 +11687,7 @@ async fn en_solo_lectura_no_se_para_la_task_de_otro() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -11841,7 +11854,7 @@ async fn un_kind_desconocido_con_nombre_alterado_va_marcado() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: disposicion,
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -12009,7 +12022,7 @@ async fn en_solo_lectura_no_hay_busqueda_semantica() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -13824,7 +13837,7 @@ async fn las_teclas_de_un_dialogo_las_pone_el_preset() {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("vim").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -13956,7 +13969,7 @@ async fn host_en(backend: Arc<Falso>, inicio: &str) -> (UiHost, norte_ui_host::V
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -14722,7 +14735,7 @@ async fn una_tecla_reatada_contesta_el_dialogo() {
         keymap_dialog: dialogo,
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -15047,7 +15060,7 @@ async fn host_con_capas(dir_usuario: &std::path::Path) -> (UiHost, norte_ui_host
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: ajustes_de_prueba(),
         paths: HostPaths {
             config_layers: vec![(
                 ConfigLayer::User,
@@ -15144,6 +15157,59 @@ async fn un_perfil_que_no_carga_deja_todo_como_estaba() {
         }
     }
     assert!(dicho, "sin otro perfil se dice, no se calla");
+}
+
+/// Con `[ui] parent_entry`, el listado lleva su fila `..` — y no es un
+/// operando.
+///
+/// La fila que espera quien viene de cualquier gestor de la familia: el
+/// cursor cae en ella y Enter sube. Lo que la hace segura es que sobre ella
+/// no hay nada señalado, así que una copia o un borrado no tienen sobre qué
+/// actuar en vez de actuar sobre el directorio padre.
+#[tokio::test]
+async fn con_la_fila_de_subir_el_listado_la_lleva_primera() {
+    let mut cfg = norte_ui_host::ajustes_por_defecto();
+    cfg.common.ui_parent_entry = Some(true);
+    let (_h, snap) = UiHost::start(UiHostOptions {
+        backend: arbol(),
+        // Un SUBdirectorio: en una raíz no hay a dónde subir y la fila no
+        // aparece por mucho que la configuración la encienda.
+        initial_dir: norte_proto::VPath::parse("mem:///casa").expect("wire"),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: cfg,
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+    })
+    .await
+    .expect("arranca");
+
+    let filas = snap
+        .slots
+        .iter()
+        .find_map(|v| match v {
+            SlotView::Browser(b) => Some(b.rows.clone()),
+            _ => None,
+        })
+        .expect("hay listado");
+    assert_eq!(
+        filas.first().map(|r| r.display_name.as_str()),
+        Some(".."),
+        "la primera fila es la de subir, pintada `..` y no con el nombre del \
+         padre: {filas:?}"
+    );
+    assert_eq!(
+        filas[0].kind,
+        norte_ui_host::dto::RowKind::Dir,
+        "y es un directorio: Enter sube por el mismo camino que cualquier otro"
+    );
 }
 
 /// La pantalla del tema ELIGE, y lo elegido se ve.
@@ -16100,7 +16166,7 @@ async fn el_historial_es_el_rastro_compartido() {
 /// favorito que desaparece en silencio es un fallo que nadie puede ver.
 #[tokio::test]
 async fn un_favorito_invalido_se_queda_y_se_dice() {
-    let mut ajustes = norte_ui_host::ajustes_por_defecto();
+    let mut ajustes = ajustes_de_prueba();
     ajustes.common.hotlist = vec![
         norte_config::HotlistItem {
             name: "casa".to_owned(),
@@ -16298,7 +16364,7 @@ async fn la_config_siembra_la_ocultacion() {
         "mem:///casa",
         vec![(b".oculto".to_vec(), false), (b"notas.txt".to_vec(), false)],
     );
-    let mut ajustes = norte_ui_host::ajustes_por_defecto();
+    let mut ajustes = ajustes_de_prueba();
     ajustes.common.ui_show_hidden = Some(false);
     let (_h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(f),

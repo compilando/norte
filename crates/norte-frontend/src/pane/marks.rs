@@ -144,10 +144,15 @@ impl PaneState {
     /// has been drained so far; the pane already marks an in-progress listing
     /// (the title in the TUI, a status line in the GUI), so the partial reach
     /// is never silent.
+    /// La fila `..` NUNCA entra: no es una entrada de este directorio, y una
+    /// marca sobre ella pondría el PADRE en la lista de lo que se copia o se
+    /// borra. Aquí y no en cada llamante, porque este es el sitio por el que
+    /// pasan todos los marcados en bloque.
     pub(super) fn markable_indices(&self) -> Vec<usize> {
+        let desde = usize::from(self.is_parent_row(0));
         match self.quick_visible() {
-            Some(vis) => vis.to_vec(),
-            None => (0..self.entries.len()).collect(),
+            Some(vis) => vis.iter().copied().filter(|i| *i >= desde).collect(),
+            None => (desde..self.entries.len()).collect(),
         }
     }
 
@@ -405,6 +410,13 @@ impl PaneState {
     /// under an active [`Mode::Filter`] quick search, any listed index
     /// otherwise — `markable_indices` without materialising it.
     pub(super) fn is_markable(&self, index: usize) -> bool {
+        // La fila `..` no se marca nunca: marcarla pondría el PADRE en lo que
+        // se copia o se borra. Es la misma regla que `markable_indices`, y
+        // está en los dos porque son los dos embudos por los que se marca —
+        // uno para los bloques, otro para una fila suelta.
+        if self.is_parent_row(index) {
+            return false;
+        }
         match self.quick_visible() {
             // `vis` viene en orden ASCENDENTE (`nav::matches_folded`
             // enumera `entries` en orden y filtra), invariante clavada por

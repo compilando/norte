@@ -133,6 +133,23 @@ fn is_hidden_entry(e: &Entry) -> bool {
         .is_some_and(|n| n.as_bytes().first() == Some(&b'.'))
 }
 
+/// En qué estado está la fila `..` de un listado.
+///
+/// Un enum y no dos `bool` porque el cuarto estado que dos booleanos
+/// permitirían —«no pedida pero puesta»— no existe, y porque la diferencia
+/// entre los dos que sí existen es justo la que se olvida: en una RAÍZ está
+/// pedida y no puesta, y confundirlas haría que la primera entrada de verdad
+/// del listado se comportara como la fila de subir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilaDeSubir {
+    /// La configuración no la quiere.
+    Apagada,
+    /// La quiere, pero aquí no la hay: este directorio no tiene padre.
+    Pedida,
+    /// Está en `entries[0]`.
+    Puesta,
+}
+
 /// Estado no-render de un pane: directorio, entradas (normalizadas
 /// internamente — ya no exige orden previo del caller, ver [`PaneState::new`]),
 /// cursor y quick search.
@@ -145,6 +162,8 @@ fn is_hidden_entry(e: &Entry) -> bool {
 pub struct PaneState {
     dir: VPath,
     entries: Vec<Entry>,
+    /// En qué estado está la fila `..` (`[ui] parent_entry`).
+    fila_de_subir: FilaDeSubir,
     /// Claves de orden persistidas, índice-paralelas a `entries` (#54): el
     /// fill mergea lotes O(n+m) sin recomputar la clave NFC de lo ya listado.
     sort_keys: Vec<SortKey>,
@@ -325,7 +344,108 @@ impl PaneState {
             plugin_columns: HashMap::new(),
             viewport_rows: None,
             viewport_offset: 0,
+            fila_de_subir: FilaDeSubir::Apagada,
         }
+    }
+
+    /// Enciende o apaga la fila `..` de este listado (`[ui] parent_entry`).
+    ///
+    /// Se pide una vez, al montar el pane, y se conserva por listado: es
+    /// configuración, no estado de navegación.
+    pub fn set_parent_row(&mut self, on: bool) {
+        if on != matches!(self.fila_de_subir, FilaDeSubir::Apagada) {
+            return;
+        }
+        self.quitar_padre();
+        self.fila_de_subir = if on {
+            FilaDeSubir::Pedida
+        } else {
+            FilaDeSubir::Apagada
+        };
+        self.poner_padre();
+    }
+
+    /// ¿La fila `i` es la de `..`?
+    ///
+    /// Lo preguntan los dos renderers —para pintar `..` en vez del nombre del
+    /// directorio padre— y la navegación. Nadie más debería necesitarlo: lo
+    /// que evita que esa fila sea el OPERANDO de una operación es que
+    /// [`Self::selected`] devuelve `None` sobre ella, no que cada sitio se
+    /// acuerde de preguntar.
+    #[must_use]
+    pub fn is_parent_row(&self, i: usize) -> bool {
+        self.tiene_padre() && i == 0
+    }
+
+    /// A dónde lleva la fila `..`, si la hay: el directorio padre.
+    #[must_use]
+    pub fn parent_target(&self) -> Option<&VPath> {
+        self.tiene_padre().then(|| &self.entries[0].path)
+    }
+
+    /// ¿Hay fila de padre AHORA MISMO en `entries`?
+    ///
+    /// Es un campo y no una comparación de rutas: una entrada de verdad puede
+    /// apuntar al mismo sitio que el padre —un enlace, un montaje— y
+    /// preguntarlo por la ruta convertiría esa entrada en «la fila de subir».
+    /// El campo dice lo que de verdad se metió.
+    const fn tiene_padre(&self) -> bool {
+        matches!(self.fila_de_subir, FilaDeSubir::Puesta)
+    }
+
+    /// Da por NO puesta la fila, sin tocar `entries`: para cuando el listado
+    /// se reemplaza entero y lo que hubiera se fue con él.
+    const fn olvidar_padre(&mut self) {
+        if let FilaDeSubir::Puesta = self.fila_de_subir {
+            self.fila_de_subir = FilaDeSubir::Pedida;
+        }
+    }
+
+    /// Mete la fila `..` al principio, si toca y no está ya.
+    ///
+    /// Se llama al FINAL de todo lo que reconstruye `entries`. Su pareja
+    /// [`Self::quitar_padre`] va al principio, y las dos juntas son lo que
+    /// permite que ordenar, filtrar y rellenar sigan trabajando sobre un
+    /// listado de entradas REALES — una fila sintética metida en un merge por
+    /// clave de orden es una fila que se duplica o se pierde.
+    ///
+    /// En una raíz no aparece por mucho que la configuración la encienda: no
+    /// hay a dónde subir, y una fila que no lleva a ningún sitio es peor que
+    /// no tenerla.
+    fn poner_padre(&mut self) {
+        if !matches!(self.fila_de_subir, FilaDeSubir::Pedida) {
+            return;
+        }
+        let Some(padre) = self.dir.parent() else {
+            return;
+        };
+        let fila = Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: padre,
+            kind: norte_proto::EntryKind::Dir,
+            // Ni tamaño ni fecha: no son de este directorio, y ponerlos sería
+            // contestar por el padre sin haberlo mirado.
+            size: None,
+            mtime_ms: None,
+        };
+        // La clave se computa de SU entrada, que es el invariante que el
+        // orden exige: una clave ajena compara mal en cuanto haya un empate.
+        self.sort_keys.insert(0, crate::sort::sort_key(&fila));
+        self.entries.insert(0, fila);
+        self.fila_de_subir = FilaDeSubir::Puesta;
+    }
+
+    /// Saca la fila `..` si está puesta.
+    ///
+    /// Al PRINCIPIO de lo que reconstruye el listado, para que lo que ordena
+    /// y mergea solo vea entradas de verdad.
+    fn quitar_padre(&mut self) {
+        if !self.tiene_padre() {
+            return;
+        }
+        self.entries.remove(0);
+        self.sort_keys.remove(0);
+        self.fila_de_subir = FilaDeSubir::Pedida;
     }
 
     /// ¿Se muestran las entradas ocultas? (#107)
@@ -360,6 +480,9 @@ impl PaneState {
             self.extend(stash);
             return;
         }
+        // La fila `..` sale ANTES de particionar y vuelve después: no es una
+        // entrada del listado, así que ni se oculta ni se guarda en el stash.
+        self.quitar_padre();
         let anchor = self.entries.get(self.cursor).map(|e| e.path.clone());
         let quick_prev = self.quick_selected_path();
         let mut kept = Vec::with_capacity(self.entries.len());
@@ -379,6 +502,7 @@ impl PaneState {
         }
         self.entries = kept;
         self.sort_keys = kept_keys;
+        self.poner_padre();
         self.listing_moved();
         self.cursor = anchor
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
@@ -407,6 +531,10 @@ impl PaneState {
             return;
         }
         self.sort = spec;
+        // La fila `..` sale ANTES de reordenar y vuelve después: no participa
+        // del orden, va siempre primera. Ordenarla con las demás la mandaría
+        // al medio del listado en cuanto alguien ordene por tamaño.
+        self.quitar_padre();
         let anchor = self.entries.get(self.cursor).map(|e| e.path.clone());
         let quick_prev = self.quick_selected_path();
         // Mismo guard anti-truncado que merge_keyed_spec (review m1): un
@@ -422,6 +550,7 @@ impl PaneState {
             .collect();
         pares.sort_by(|a, b| crate::sort::cmp_keyed_with((&a.1, &a.0), (&b.1, &b.0), self.sort));
         (self.entries, self.sort_keys) = pares.into_iter().unzip();
+        self.poner_padre();
         self.listing_moved();
         self.cursor = anchor
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
@@ -524,6 +653,9 @@ impl PaneState {
         self.dir = dir;
         self.entries = entries;
         self.sort_keys = sort_keys;
+        // El dir cambió: la fila `..` de antes apuntaba a otro padre.
+        self.olvidar_padre();
+        self.poner_padre();
         self.listing_moved();
         self.cursor = 0;
         self.loading = false;
@@ -579,6 +711,8 @@ impl PaneState {
         self.dir = dir;
         self.entries = Vec::new();
         self.sort_keys = Vec::new();
+        self.olvidar_padre();
+        self.poner_padre();
         self.listing_moved();
         self.cursor = 0;
         self.loading = true;
@@ -699,6 +833,19 @@ impl PaneState {
             && q.mode() == Mode::Filter
         {
             return self.entries.get(q.selected_entry_index()?);
+        }
+        // La fila `..` NO es un operando, y este es EL sitio donde se decide.
+        //
+        // Ochenta y siete llamadas preguntan por «lo señalado» para copiarlo,
+        // borrarlo, renombrarlo o mirarlo dentro, y ninguna tiene por qué
+        // saber que existe una fila que no es un fichero. Contestando `None`
+        // —que todas ya saben tratar: es «no hay nada señalado»— la fila deja
+        // de ser peligrosa por construcción, en vez de por acordarse.
+        //
+        // Subir con ella no pasa por aquí: eso es `parent_target`, y lo mira
+        // quien navega.
+        if self.is_parent_row(self.cursor) {
+            return None;
         }
         self.entries.get(self.cursor)
     }
@@ -843,6 +990,10 @@ impl PaneState {
         let anchor = (self.cursor > 0)
             .then(|| self.entries.get(self.cursor).map(|e| e.path.clone()))
             .flatten();
+        // La fila `..` sale antes del MERGE: el merge empareja por clave de
+        // orden, y una fila sintética metida ahí se duplicaría o acabaría en
+        // medio del listado.
+        self.quitar_padre();
         let (batch, batch_keys) = crate::sort::sort_with_keys_spec(batch, self.sort);
         crate::sort::merge_keyed_spec(
             &mut self.entries,
@@ -851,6 +1002,7 @@ impl PaneState {
             batch_keys,
             self.sort,
         );
+        self.poner_padre();
         // Una página de un relleno paginado también MUEVE índices: el
         // merge inserta en su sitio ordenado, no al final.
         self.listing_moved();
@@ -882,9 +1034,14 @@ impl PaneState {
         self.hidden_stash.clear();
         let entries = self.stash_hidden(entries);
         let (entries, sort_keys) = crate::sort::sort_with_keys_spec(entries, self.sort);
-        self.cursor = self.cursor.min(entries.len().saturating_sub(1));
         self.entries = entries;
         self.sort_keys = sort_keys;
+        // El listado se rehízo entero: la fila vuelve, y el cursor se acota
+        // DESPUÉS de ponerla —si no, con un listado que encoge se quedaría
+        // una fila más arriba de lo que hay.
+        self.olvidar_padre();
+        self.poner_padre();
+        self.cursor = self.cursor.min(self.entries.len().saturating_sub(1));
         self.listing_moved();
         self.sweep_baseline = None;
         self.sweep_extent = None;
@@ -966,6 +1123,120 @@ mod tests {
             .map(|n| e(&format!("mem:///{n}"), EntryKind::File))
             .collect();
         PaneState::new(VPath::parse("mem:///").unwrap(), es)
+    }
+
+    /// Un pane sobre un subdirectorio, que es donde la fila `..` aparece.
+    fn pane_hijo(names: &[&str]) -> PaneState {
+        let es = names
+            .iter()
+            .map(|n| e(&format!("mem:///casa/{n}"), EntryKind::File))
+            .collect();
+        let mut p = PaneState::new(VPath::parse("mem:///casa").unwrap(), es);
+        p.set_parent_row(true);
+        p
+    }
+
+    /// La fila `..` es la PRIMERA, y en una raíz no aparece: no hay a dónde
+    /// subir, y una fila que no lleva a ningún sitio es peor que no tenerla.
+    #[test]
+    fn la_fila_de_subir_va_primera_y_no_esta_en_la_raiz() {
+        let p = pane_hijo(&["a", "b"]);
+        assert_eq!(p.entries().len(), 3, "las dos entradas y la de subir");
+        assert!(p.is_parent_row(0));
+        assert!(!p.is_parent_row(1));
+        assert_eq!(p.parent_target(), Some(&VPath::parse("mem:///").unwrap()));
+
+        let mut raiz = pane(&["a"]);
+        raiz.set_parent_row(true);
+        assert_eq!(raiz.entries().len(), 1, "en la raíz no hay fila de subir");
+        assert!(!raiz.is_parent_row(0));
+        assert_eq!(raiz.parent_target(), None);
+    }
+
+    /// Y NO es un operando. Este es el invariante que hace segura la fila:
+    /// ochenta y siete sitios preguntan «qué hay señalado» para copiarlo o
+    /// borrarlo, y sobre ella la respuesta es «nada».
+    #[test]
+    fn la_fila_de_subir_no_es_un_operando() {
+        let mut p = pane_hijo(&["a"]);
+        assert_eq!(p.cursor(), 0, "el cursor nace encima de ella");
+        assert!(
+            p.selected().is_none(),
+            "sobre `..` no hay nada señalado: si hubiera, F8 borraría el padre"
+        );
+        p.cursor_down();
+        assert!(p.selected().is_some(), "y sobre una entrada de verdad, sí");
+    }
+
+    /// Ni se puede marcar, POR NINGUNO de los caminos que marcan.
+    ///
+    /// Marcarla metería el directorio PADRE en la lista de lo que se copia o
+    /// se borra, que es la peor forma de este bug. El test recorre todas las
+    /// puertas: la del cursor, la de bloque, la de rango, la de una fila
+    /// suelta, el invertir y el patrón.
+    #[test]
+    fn la_fila_de_subir_no_se_marca_por_ningun_camino() {
+        let padre = VPath::parse("mem:///").unwrap();
+        let mut p = pane_hijo(&["a", "b"]);
+
+        p.toggle_mark(); // el cursor está sobre `..`
+        p.mark_all();
+        p.mark_range(0, 2);
+        p.set_mark(0, true);
+        p.invert_marks();
+        let _ = p.mark_glob("*", true);
+        assert!(
+            !p.marked_paths().contains(&padre),
+            "el padre JAMÁS entra en lo marcado: {:?}",
+            p.marked_paths()
+        );
+        // Y lo demás sí se marca: la guarda protege una fila, no rompe el
+        // marcado.
+        assert_eq!(p.marks_len(), 2, "las dos entradas de verdad");
+    }
+
+    /// Reordenar no la mueve del sitio: va primera, no se ordena con las
+    /// demás. Ordenar por tamaño la mandaría al medio del listado.
+    #[test]
+    fn la_fila_de_subir_sigue_primera_tras_reordenar() {
+        use crate::sort::{SortColumn, SortDir, SortSpec};
+        let mut p = pane_hijo(&["a", "b", "c"]);
+        p.set_sort(SortSpec {
+            column: SortColumn::Size,
+            dir: SortDir::Desc,
+            dirs_first: false,
+        });
+        assert!(p.is_parent_row(0), "sigue la primera");
+        assert_eq!(p.entries().len(), 4);
+    }
+
+    /// Y un relleno paginado no la duplica ni la pierde: sale del merge y
+    /// vuelve después, porque el merge empareja por clave de orden.
+    #[test]
+    fn un_relleno_no_duplica_la_fila_de_subir() {
+        let mut p = pane_hijo(&["b"]);
+        p.extend(vec![e("mem:///casa/a", EntryKind::File)]);
+        p.extend(vec![e("mem:///casa/c", EntryKind::File)]);
+        let subir = p
+            .entries()
+            .iter()
+            .filter(|x| x.path == VPath::parse("mem:///").unwrap())
+            .count();
+        assert_eq!(subir, 1, "una sola fila de subir: {:?}", p.entries());
+        assert!(p.is_parent_row(0));
+        assert_eq!(p.entries().len(), 4);
+    }
+
+    /// Apagarla la quita, y encenderla la trae, sin tocar el listado.
+    #[test]
+    fn se_puede_apagar_y_encender() {
+        let mut p = pane_hijo(&["a"]);
+        assert_eq!(p.entries().len(), 2);
+        p.set_parent_row(false);
+        assert_eq!(p.entries().len(), 1, "solo la entrada de verdad");
+        assert!(!p.is_parent_row(0));
+        p.set_parent_row(true);
+        assert!(p.is_parent_row(0));
     }
 
     #[test]

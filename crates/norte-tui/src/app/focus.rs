@@ -112,7 +112,8 @@ impl App {
             (p.dir().clone(), p.entries().to_vec())
         };
         let id = self.mint_slot();
-        self.panes.insert_browser(id, Pane::new(dir, entradas));
+        let nuevo = self.nuevo_pane(dir, entradas);
+        self.panes.insert_browser(id, nuevo);
         self.layout = self.layout.add_tab(
             focus,
             &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),

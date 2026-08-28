@@ -2284,11 +2284,20 @@ impl Hueco {
     /// todo: sin esto, una ventana con `show_hidden = false` en su config
     /// arrancaba enseñando los dotfiles igual, y `pane.toggle-hidden` los
     /// apartaba «por primera vez» en cada arranque.
-    fn vacio(dir: VPath, ocultos: bool, orden: norte_frontend::SortSpec) -> Self {
+    fn vacio(
+        dir: VPath,
+        ocultos: bool,
+        orden: norte_frontend::SortSpec,
+        fila_de_subir: bool,
+    ) -> Self {
         let esquema = dir.scheme().to_owned();
         let mut pane = PaneState::new(dir, Vec::new());
         pane.set_show_hidden(ocultos);
         pane.set_sort(orden);
+        // `[ui] parent_entry`: la fila `..` nace con el hueco y no se le pone
+        // después — un hueco que se estrena sin ella y la gana en el siguiente
+        // listado enseñaría dos pantallas distintas para la misma config.
+        pane.set_parent_row(fila_de_subir);
         Self {
             pane,
             pliegue: None,
@@ -2344,11 +2353,12 @@ impl Estado {
         columnas: &norte_frontend::columns::ColumnsSettings,
     ) -> std::collections::BTreeMap<u32, Hueco> {
         let ocultos = settings.common.ui_show_hidden.unwrap_or(true);
+        let subir = settings.common.ui_parent_entry.unwrap_or(true);
         let orden = columnas.sort_for(dir.scheme());
         let mut huecos = std::collections::BTreeMap::new();
         for SlotId(id) in arbol.slot_ids() {
             if es_listado(arbol, SlotId(id), kinds) {
-                huecos.insert(id, Hueco::vacio(dir.clone(), ocultos, orden));
+                huecos.insert(id, Hueco::vacio(dir.clone(), ocultos, orden, subir));
             }
         }
         huecos
@@ -4611,6 +4621,7 @@ impl Estado {
                     dir.clone(),
                     ocultos,
                     self.columnas.sort_for(dir.scheme()),
+                    self.config.common.ui_parent_entry.unwrap_or(true),
                 ));
             }
         }
@@ -16287,7 +16298,15 @@ impl Estado {
         // que es un comando que solo se puede leer como roto. Lo que se
         // reinterpreta es el PINTADO; los bytes no se tocan, y la fila sigue
         // marcada como hostil (regla 1).
-        let (texto, hostil) = norte_frontend::display_name_with(bytes, hueco.pane.name_encoding());
+        // La fila de SUBIR se pinta `..` y no el nombre del directorio padre,
+        // que es lo que dice su ruta: el nombre del padre en la primera fila
+        // se lee como «hay aquí un directorio que se llama así». Ni badge
+        // hostil ni reinterpretación — dos ASCII no son el nombre de nadie.
+        let (texto, hostil) = if hueco.pane.is_parent_row(i) {
+            ("..".to_owned(), false)
+        } else {
+            norte_frontend::display_name_with(bytes, hueco.pane.name_encoding())
+        };
         // Lo sirve el PANE, que re-enmascara al servir: el host acumula pero
         // no es quien decide qué se pinta.
         let adorno = hueco.pane.decoration_for(&e.path);
