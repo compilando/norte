@@ -206,6 +206,22 @@ const CATALOG: &[SettingDef] = &[
         applies_live: true,
     },
     SettingDef {
+        // El comparador de `pane.compare-files` (#312), por lo mismo que el
+        // editor: sin fila, el que compara dos ficheros solo se elige
+        // escribiendo el fichero de configuración.
+        id: "ui.diff",
+        section: Section::General,
+        kind: SettingKind::Args,
+        applies_live: true,
+    },
+    SettingDef {
+        // Y si ese comparador abre ventana propia (Meld, Kompare).
+        id: "ui.diff-detached",
+        section: Section::General,
+        kind: SettingKind::Bool,
+        applies_live: true,
+    },
+    SettingDef {
         id: "ui.confirm-quit",
         section: Section::General,
         kind: SettingKind::Enum(&["auto", "always", "never"]),
@@ -312,6 +328,15 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         "ui.show-hidden" => cfg.common.ui_show_hidden.unwrap_or(false).to_string(),
         "ui.editor" => cfg.common.ui_editor.clone().unwrap_or_default().join(" "),
         "ui.editor-detached" => cfg.common.ui_editor_detached.unwrap_or(false).to_string(),
+        // Ausente = `diff -u`, y la fila lo enseña: es lo que norte hace de
+        // verdad, no una celda vacía sobre un comportamiento que existe.
+        "ui.diff" => cfg
+            .common
+            .ui_diff
+            .clone()
+            .unwrap_or_else(|| vec!["diff".to_owned(), "-u".to_owned(), "%F".to_owned()])
+            .join(" "),
+        "ui.diff-detached" => cfg.common.ui_diff_detached.unwrap_or(false).to_string(),
         "ui.confirm-quit" => cfg.common.ui_confirm_quit.as_str().to_owned(),
         "keymap.preset" => cfg.common.preset.clone(),
         // Unreachable for anything in `CATALOG` (pinned by the coverage

@@ -195,6 +195,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     // instead of an issue number nobody can close. Neither takes a count: two
     // whole trees are a task, not a clamped mover (ADR 0044).
     live("pane.compare-dirs", false),
+    // #312: la PAREJA, que es otra pregunta que comparar dos árboles. Se
+    // delega en el programa de `[ui] diff`, así que lo que norte decide es el
+    // operando —dos ficheros, o lo dice— y no el formato de la diferencia.
+    live("pane.compare-files", false),
     live("pane.sync-dirs", false),
     live("pane.search", false),
     live("pane.names-encoding", false),

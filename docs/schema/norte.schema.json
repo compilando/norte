@@ -438,6 +438,25 @@
             "null"
           ]
         },
+        "diff": {
+          "default": null,
+          "description": "`[ui] diff` (#312): the program that compares TWO files, as an argv\ntemplate with the same field codes as `openers.toml` — `%F` expands to\nboth paths, `%d` to the pane's directory: `diff = [\"meld\", \"%F\"]`.\nAbsent = `diff -u`, which POSIX guarantees is there and whose output\nnorte holds on screen until a key is pressed.\n\n**Never honoured from the PROJECT layer**, same fail-closed rule as\n[`Self::editor`] and for the same reason: it names a program to run.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "diff_detached": {
+          "default": null,
+          "description": "Whether that comparison tool opens a WINDOW of its own. Absent =\n`false`. Same meaning and same layering as [`Self::editor_detached`] —\na graphical differ (Meld, Kompare) hands control straight back.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "editor": {
           "default": null,
           "description": "The editor `pane.edit` launches, as an argv TEMPLATE with the same\nfield codes as `openers.toml` (`%f` the file, `%d` the pane's\ndirectory): `editor = [\"zed\", \"%f\"]`. Absent = `$VISUAL`, then\n`$EDITOR`, then the POSIX fallback, which is what norte did before\nthis key existed.\n\n**Never honoured from the PROJECT layer**, and that is not a detail:\nthis key names a program to execute, so a cloned repository could\notherwise choose what runs when you press F4. Same fail-closed rule as\n`openers.toml` and `[daemon]`.",

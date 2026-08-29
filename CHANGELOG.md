@@ -525,6 +525,29 @@ independently through `PROTOCOL_VERSION`.
   the bytes, so this subsumes the `fs.compare` hash oracle and exceeds it, and
   an agent denied that one only had to call here.
 
+- **Compare two FILES** (#312). Comparing two trees has been there since the
+  directory-comparison spec; the pair — which Total Commander and Krusader both
+  have — was missing. `pane.compare-files` takes two marked in the focused pane,
+  or the one under the cursor here and the one under the cursor in the target
+  pane, and hands them to the program named in `[ui] diff` (`%F` is both files,
+  `%d` the pane's directory). With nothing configured it is `diff -u`, which
+  POSIX guarantees, and its output is held on screen until a key is pressed —
+  the honest equivalent of what `xdg-open` does for `pane.open`. `[ui]
+  diff_detached` says the tool opens a window of its own, and neither key is
+  read from the PROJECT layer, for the same reason as `[ui] editor`: they name a
+  program to execute.
+
+  It is TWO files or nothing. Three marked, one, the same file on both sides, or
+  a folder among them, and the command says so instead of comparing something
+  nobody chose — a diff of a file against itself reads as "they are identical"
+  when what happened is that only one thing was selected. Both must be on this
+  system: an external differ cannot be handed an `sftp://`. The operand rule
+  lives in the shared frontend crate, so the window inherits it when it grows
+  the surface. `alt+C` in the three native presets; deliberately unbound in the
+  four imported ones, whose sources give the feature no chord — the same
+  fidelity rule that already leaves `pane.compare-dirs` unbound in `far` and
+  `norton`.
+
 - **Checksums in the terminal** (#311). `pane.checksum` sums what is marked —
   or the entry under the cursor, the usual operand — and shows the list;
   confirming copies it in `sha256sum` format, which is what goes into a

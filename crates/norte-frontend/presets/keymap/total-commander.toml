@@ -41,6 +41,12 @@
 # (Ctrl+Left/Right); per-letter quicksearch (AltGr+Letter / Ctrl+Alt+Letter
 # — not one chord, cannot be expressed).
 
+# `pane.compare-files` (#312) se queda SIN ATAR aquí. Total Commander tiene la
+# función («Compare files by content»), pero `tc-11.58-KEYBOARD.TXT` —la fuente
+# de este fichero— no le da acorde, y este preset solo transcribe lo que la
+# fuente dice. Ver la nota equivalente en `krusader.toml`; los tres presets
+# nativos lo llevan en `alt+C`.
+
 dialog_from = "orthodox"
 
 [global]

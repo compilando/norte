@@ -45,6 +45,11 @@
 # variants beyond the plain Gray +/-/* already bound (undocumented at this
 # level of certainty).
 
+# `pane.compare-files` (#312) se queda SIN ATAR aquí, por la misma regla que
+# deja fuera a `pane.compare-dirs`: la fuente de este preset no le atribuye
+# acorde, y un preset cuyo objetivo es la fidelidad no inventa uno. Los tres
+# presets nativos lo llevan en `alt+C`.
+
 dialog_from = "orthodox"
 
 [global]

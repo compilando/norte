@@ -81,6 +81,21 @@ impl PaneState {
         self.marks.len()
     }
 
+    /// Las entradas MARCADAS, sin caer al cursor cuando no hay ninguna.
+    ///
+    /// Es lo que necesita quien tiene que distinguir «no hay marcas» de «hay
+    /// una»: [`Self::marked_paths`] devuelve el cursor en el primer caso, que
+    /// es lo correcto para copiar y lo equivocado para una regla que exige
+    /// exactamente dos (#312). Entradas y no rutas porque esa regla mira
+    /// además el `kind`.
+    #[must_use]
+    pub fn marked_entries(&self) -> Vec<&Entry> {
+        self.entries
+            .iter()
+            .filter(|e| self.marks.contains(&e.path))
+            .collect()
+    }
+
     /// Los `VPath` sobre los que opera la acción: las marcas (en el ORDEN de
     /// `entries`, determinista), o la selección (respeta el filtro quick) si
     /// no hay marcas (vacío si tampoco hay selección). Fuente única de "sobre

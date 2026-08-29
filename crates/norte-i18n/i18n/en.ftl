@@ -1011,6 +1011,9 @@ menu-item-pane-edit = Edit
 menu-item-pane-edit-new = Edit new
 msg-edit-nothing = there is nothing under the cursor to edit
 msg-edit-not-a-file = that is a folder: press ⏎ to enter it, it is not edited
+# Comparing two files (#312): two, and it is not guessed.
+msg-compare-files-need-two = mark TWO files, or put one under the cursor in each panel
+msg-compare-files-not-files = that is a folder: two folders are compared with "compare directories"
 props-kind = kind
 props-kind-dir = folder
 props-kind-file = file
@@ -1038,6 +1041,7 @@ help-cmd-viewer-encoding-auto = back to auto-detection
 help-cmd-viewer-hex = toggle hex view
 help-cmd-pane-search = search by name/content (Alt+F7)
 help-cmd-pane-compare-dirs = compare the two panes and open the diff pane
+help-cmd-pane-compare-files = compare TWO files with the program in `[ui] diff`
 help-cmd-pane-sync-dirs = plan a one-way synchronisation from this pane to the other
 help-cmd-pane-copy-path = copy the path of the selection to the clipboard
 search-title = Search
@@ -1536,6 +1540,10 @@ setting-ui-editor-name = Editor
 setting-ui-editor-desc = The program the edit key opens, as a command line with the field codes of `openers.toml`: `%f` the file, `%d` the pane's directory. Example: `zed %f`. Empty = the one in `$VISUAL`, in `$EDITOR`, or the POSIX fallback. Not read from the project layer: it names a program to execute.
 setting-ui-editor-detached-name = The editor opens a window
 setting-ui-editor-detached-desc = Whether that editor opens a window of its own instead of taking over the terminal. A terminal editor needs norte to step aside and wait for it; a windowed one hands control straight back, and waiting for it would leave the terminal blank until you close something on another screen.
+setting-ui-diff-name = Compare files
+setting-ui-diff-desc = The program that compares TWO files, as a command line with the field codes of `openers.toml`: `%F` is both files, `%d` the pane's directory. Example: `meld %F`. Empty = `diff -u`, whose output stays on screen until you press a key. Not read from the project layer: it names a program to execute.
+setting-ui-diff-detached-name = The comparison tool opens a window
+setting-ui-diff-detached-desc = Whether that comparison tool opens a window of its own (Meld, Kompare) instead of taking over the terminal. Same deal as the editor, for the same reason.
 setting-ui-confirm-quit-name = Confirm before quitting
 setting-ui-confirm-quit-desc = When quitting asks for confirmation: only with pending work (auto), always, or never. An emergency-exit shortcut, where bound (e.g. the TUI's Ctrl+C), always bypasses this.
 setting-keymap-preset-name = Keymap preset

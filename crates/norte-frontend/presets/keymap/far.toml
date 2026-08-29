@@ -86,6 +86,11 @@
 # operations behind one menu, not a single action; save configuration
 # (Shift+F9).
 
+# `pane.compare-files` (#312) se queda SIN ATAR aquí, por la misma regla que
+# deja fuera a `pane.compare-dirs`: la fuente de este preset no le atribuye
+# acorde, y un preset cuyo objetivo es la fidelidad no inventa uno. Los tres
+# presets nativos lo llevan en `alt+C`.
+
 dialog_from = "orthodox"
 
 [global]

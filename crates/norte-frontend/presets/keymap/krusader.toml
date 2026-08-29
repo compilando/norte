@@ -55,6 +55,14 @@
 # mod), so `pane.sort-*` has no key at all in this preset; and the Plasma
 # global "bring window to top" (Meta+K).
 
+# `pane.compare-files` (#312) se queda SIN ATAR aquí, y en los otros tres
+# presets importados, por la misma regla que ya deja fuera a `pane.compare-dirs`
+# en `far.toml` y en `norton.toml`: Krusader tiene la función —«Compare by
+# Content», en su menú File— y la fuente de la que se transcribió este fichero
+# no le atribuye acorde. Inventarle uno a una transcripción es peor que una
+# hoja de referencia que imprime `—`, que al menos dice la verdad. Los tres
+# presets nativos sí lo llevan, en `alt+C`.
+
 dialog_from = "orthodox"
 
 [global]

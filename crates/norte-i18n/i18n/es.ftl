@@ -1009,6 +1009,9 @@ menu-item-pane-edit = Editar
 menu-item-pane-edit-new = Editar uno nuevo
 msg-edit-nothing = no hay nada bajo el cursor que editar
 msg-edit-not-a-file = eso es una carpeta: se entra con ⏎, no se edita
+# Comparar dos ficheros (#312): dos, y no se adivina cuáles.
+msg-compare-files-need-two = marca DOS ficheros, o pon uno bajo el cursor en cada panel
+msg-compare-files-not-files = eso es una carpeta: dos carpetas se comparan con «comparar directorios»
 props-kind = clase
 props-kind-dir = carpeta
 props-kind-file = fichero
@@ -1036,6 +1039,7 @@ help-cmd-viewer-encoding-auto = volver a la detección automática
 help-cmd-viewer-hex = alternar vista hexadecimal
 help-cmd-pane-search = buscar por nombre/contenido (Alt+F7)
 help-cmd-pane-compare-dirs = compara los dos paneles y abre el panel de diferencias
+help-cmd-pane-compare-files = compara DOS ficheros con el programa de `[ui] diff`
 help-cmd-pane-sync-dirs = planifica una sincronización de un sentido de este panel al otro
 help-cmd-pane-copy-path = copia la ruta de la selección al portapapeles
 search-title = Búsqueda
@@ -1544,6 +1548,10 @@ setting-ui-editor-name = Editor
 setting-ui-editor-desc = El programa que abre la tecla de editar, como línea de órdenes con los códigos de campo de `openers.toml`: `%f` el fichero, `%d` el directorio del panel. Ejemplo: `zed %f`. Vacío = el de `$VISUAL`, el de `$EDITOR`, o el que exija POSIX. No se lee de la capa de proyecto: nombra un programa que se ejecuta.
 setting-ui-editor-detached-name = El editor abre ventana
 setting-ui-editor-detached-desc = Si ese editor abre una ventana propia en vez de ocupar el terminal. Uno de terminal necesita que norte se aparte y lo espere; uno de ventana devuelve el control al instante, y esperarlo dejaría el terminal en blanco hasta que cierres algo que está en otra pantalla.
+setting-ui-diff-name = Comparar ficheros
+setting-ui-diff-desc = El programa que compara DOS ficheros, como línea de órdenes con los códigos de campo de `openers.toml`: `%F` son los dos ficheros, `%d` el directorio del panel. Ejemplo: `meld %F`. Vacío = `diff -u`, cuya salida se queda en pantalla hasta que pulsas una tecla. No se lee de la capa de proyecto: nombra un programa que se ejecuta.
+setting-ui-diff-detached-name = El comparador abre ventana
+setting-ui-diff-detached-desc = Si ese comparador abre una ventana propia (Meld, Kompare) en vez de ocupar el terminal. Mismo trato que el editor, y por lo mismo.
 setting-ui-confirm-quit-name = Confirmar antes de salir
 setting-ui-confirm-quit-desc = Al salir pide confirmación: solo con trabajo pendiente (auto), siempre, o nunca. Un atajo de salida de emergencia, donde esté ligado (p. ej. Ctrl+C en la TUI), siempre lo evita.
 setting-keymap-preset-name = Preset de keymap

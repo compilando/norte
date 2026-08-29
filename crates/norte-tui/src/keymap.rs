@@ -194,6 +194,7 @@ commands! {
     "pane.select-drive-left" => PaneSelectDriveLeft,
     "pane.select-drive-right" => PaneSelectDriveRight,
     "pane.compare-dirs" => PaneCompareDirs,
+    "pane.compare-files" => PaneCompareFiles,
     "pane.sync-dirs" => PaneSyncDirs,
     "pane.search" => PaneSearch,
     "pane.names-encoding" => PaneNamesEncoding,

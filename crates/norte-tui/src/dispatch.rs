@@ -528,6 +528,15 @@ pub async fn dispatch(
             Ok(EditLaunch::Open(pendiente)) => app.pending_open = Some(pendiente),
             Err(msg) => app.message = Some(msg),
         },
+        // #312: comparar DOS ficheros. Mismo reparto que editar —el run loop
+        // es quien tiene la terminal— y el mismo tipo de resultado, porque el
+        // trato es el mismo: `[ui] diff` puede ser una ventana, y el `diff -u`
+        // por defecto es un programa de terminal cuya salida hay que sostener.
+        Command::PaneCompareFiles => match crate::gestures::compare_files(app) {
+            Ok(EditLaunch::Shell(pendiente)) => app.pending_shell = Some(pendiente),
+            Ok(EditLaunch::Open(pendiente)) => app.pending_open = Some(pendiente),
+            Err(msg) => app.message = Some(msg),
+        },
         // Shift+F4: un fichero VACÍO en este directorio y el editor encima.
         //
         // El nombre se pide AQUÍ y el fichero lo crea el daemon (`fs.create`,

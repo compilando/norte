@@ -38,6 +38,7 @@ pub mod config;
 pub mod confine;
 pub mod connections_picker;
 mod decoration;
+pub mod diffpair;
 pub mod display;
 pub mod error;
 mod format;

@@ -94,6 +94,15 @@ pub async fn reload_config(
                         command,
                         detached: cfg.common.ui_editor_detached.unwrap_or(false),
                     });
+                // Y el comparador de `[ui] diff` (#312), por lo mismo.
+                app.diff = cfg
+                    .common
+                    .ui_diff
+                    .clone()
+                    .map(|command| crate::app::EditorSpec {
+                        command,
+                        detached: cfg.common.ui_diff_detached.unwrap_or(false),
+                    });
                 // #108 7a: `[ui.columns]` editado fuera también refresca la
                 // sesión (antes solo arrancaba); el re-sort mantiene los
                 // panes coherentes con el fichero — el persist del picker

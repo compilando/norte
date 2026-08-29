@@ -288,6 +288,21 @@ pub struct UiSection {
     /// [`Self::editor`].
     #[serde(default)]
     pub editor_detached: Option<bool>,
+    /// `[ui] diff` (#312): the program that compares TWO files, as an argv
+    /// template with the same field codes as `openers.toml` — `%F` expands to
+    /// both paths, `%d` to the pane's directory: `diff = ["meld", "%F"]`.
+    /// Absent = `diff -u`, which POSIX guarantees is there and whose output
+    /// norte holds on screen until a key is pressed.
+    ///
+    /// **Never honoured from the PROJECT layer**, same fail-closed rule as
+    /// [`Self::editor`] and for the same reason: it names a program to run.
+    #[serde(default)]
+    pub diff: Option<Vec<String>>,
+    /// Whether that comparison tool opens a WINDOW of its own. Absent =
+    /// `false`. Same meaning and same layering as [`Self::editor_detached`] —
+    /// a graphical differ (Meld, Kompare) hands control straight back.
+    #[serde(default)]
+    pub diff_detached: Option<bool>,
     /// `[ui.columns]` (#108 block 4): column selection and sort order.
     #[serde(default)]
     pub columns: Option<UiColumnsSection>,

@@ -24,6 +24,7 @@ commands = [
     "pane.select-drive-left",
     "pane.select-drive-right",
     "pane.compare-dirs",
+    "pane.compare-files",
     "pane.sync-dirs",
     "layout.split-h",
     "layout.split-v",
@@ -220,6 +221,20 @@ diff and takes you to where the selected row really lives, which is how you
 open a directory that exists on one side only: the walk reports it as one row
 rather than enumerating a subtree it already knows the answer for. `Esc`
 cancels a comparison that is still running, and closes the pane once it is not.
+
+# Comparing two FILES
+
+{{cmd:pane.compare-files}} is the other question: **how do these two files
+differ?** It acts on two marked in the focused pane, or on the one under the
+cursor here and the one under the cursor over there. Two, and it is not
+guessed: with three marked, with one, or with a folder among them, it SAYS so
+rather than comparing something you did not choose.
+
+Another program shows the difference — the one you name in `[ui] diff`
+(`meld %F`, `vimdiff %F`, whatever you use). With nothing configured it is
+`diff -u`, and its output stays on screen until you press a key. Both files
+must be on this system: an external program cannot be handed an `sftp://`, and
+that is said out loud, as it is for opening and editing.
 
 # Synchronising the two panes
 

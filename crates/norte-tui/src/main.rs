@@ -239,6 +239,15 @@ async fn main() -> Result<()> {
             command,
             detached: cfg.common.ui_editor_detached.unwrap_or(false),
         });
+    // `[ui] diff` (#312): el comparador de dos ficheros. Sin él, `diff -u`.
+    app.diff = cfg
+        .common
+        .ui_diff
+        .clone()
+        .map(|command| norte_tui::app::EditorSpec {
+            command,
+            detached: cfg.common.ui_diff_detached.unwrap_or(false),
+        });
     // Canales del modo daemon (None en embebido): tasks de otros frontends
     // y avisos de (re)conexión — se drenan en el loop principal.
     let foreign_tasks = backend.take_foreign_tasks();

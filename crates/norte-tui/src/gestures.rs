@@ -328,6 +328,70 @@ pub fn edit_under_cursor(app: &App) -> Result<EditLaunch, String> {
     }))
 }
 
+/// El argv por defecto para comparar dos ficheros: `diff -u`.
+///
+/// POSIX lo garantiza en cualquier sistema donde norte corra en un terminal, y
+/// su salida es texto que se queda en pantalla hasta que el lector pulsa una
+/// tecla. Es el equivalente honesto de lo que `xdg-open` hace por
+/// `pane.open`: algo que funciona sin haber escrito configuración. Quien
+/// quiera `meld`, `delta` o `vimdiff` lo dice en `[ui] diff`.
+const DIFF_POR_DEFECTO: [&str; 3] = ["diff", "-u", "%F"];
+
+/// Comparar DOS ficheros (#312), delegando en el programa de `[ui] diff`.
+///
+/// El operando lo decide el crate compartido ([`norte_frontend::diffpair`]):
+/// dos marcados en el panel con el foco, o uno aquí y otro en el panel
+/// DESTINO. Cualquier otra cosa se dice en vez de adivinarse.
+///
+/// Los dos tienen que tener ruta nativa: a un `diff` externo no se le puede
+/// dar un `sftp://`, y bajarlos para compararlos es otra feature. Es el mismo
+/// guard —y el mismo mensaje— que el editor y el shell.
+///
+/// # Errors
+///
+/// El mensaje YA LOCALIZADO de por qué no se compara nada: no son dos, alguno
+/// no es un fichero, o alguno no está en este sistema.
+pub fn compare_files(app: &App) -> Result<EditLaunch, String> {
+    let marcadas: Vec<&norte_proto::Entry> = app.focused().marked_entries();
+    let aqui = app.focused().selected();
+    let alli = app
+        .target_index()
+        .and_then(|i| app.panes.get(i))
+        .and_then(crate::app::Pane::selected);
+    let (a, b) =
+        norte_frontend::diffpair::pair(&marcadas, aqui, alli).map_err(|e| t(e.message_key()))?;
+    let (Ok(na), Ok(nb)) = (
+        norte_vfs_local::vpath_to_native(&a),
+        norte_vfs_local::vpath_to_native(&b),
+    ) else {
+        return Err(shell_remote_message(app));
+    };
+    let dir = norte_vfs_local::vpath_to_native(app.focused().dir()).unwrap_or_else(|_| {
+        na.parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default()
+    });
+    // `[ui] diff` manda, y va por el camino de los openers porque puede ser
+    // una ventana (`detached`). Sin él, `diff -u` por el camino del shell,
+    // que es el único que sabe ESPERAR UNA TECLA: la salida de `diff` son
+    // unas líneas que terminan al instante, y sin esa espera el lector ve un
+    // parpadeo y vuelve a los paneles sin haber leído nada.
+    if let Some(spec) = app.diff.as_ref().filter(|s| !s.command.is_empty()) {
+        return Ok(EditLaunch::Open(crate::app::PendingOpen {
+            program: spec.command[0].clone(),
+            argv: norte_frontend::openers::expand_argv(&spec.command, &[&na, &nb], &dir),
+            detached: spec.detached,
+            cwd: Some(dir),
+        }));
+    }
+    let plantilla: Vec<String> = DIFF_POR_DEFECTO.iter().map(|s| (*s).to_owned()).collect();
+    Ok(EditLaunch::Shell(crate::app::PendingShell {
+        argv: norte_frontend::openers::expand_argv(&plantilla, &[&na, &nb], &dir),
+        cwd: norte_frontend::shell::child_cwd(&dir),
+        wait_for_key: true,
+    }))
+}
+
 /// Cómo se lanza el editor: por el camino del shell (suspender la terminal y
 /// esperar) o por el de los openers (que sabe además NO esperar).
 ///
@@ -1810,5 +1874,147 @@ mod edit_tests {
             panic!("sigue siendo el editor de la configuración")
         };
         assert!(!pending.detached);
+    }
+}
+
+#[cfg(test)]
+mod compare_files_tests {
+    use super::{App, EditLaunch, compare_files};
+    use crate::app::Pane;
+    use norte_proto::{Entry, EntryKind, Segment, VPath};
+
+    fn entrada(dir: &VPath, nombre: &str, kind: EntryKind) -> Entry {
+        Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: dir.join(Segment::new(nombre.as_bytes().to_vec()).expect("segmento")),
+            kind,
+            size: Some(1),
+            mtime_ms: None,
+        }
+    }
+
+    fn app_local() -> App {
+        let dir = VPath::parse("file:///d").expect("wire");
+        App::new(
+            Pane::new(
+                dir.clone(),
+                vec![
+                    entrada(&dir, "a.txt", EntryKind::File),
+                    entrada(&dir, "b.txt", EntryKind::File),
+                ],
+            ),
+            Pane::new(dir.clone(), vec![entrada(&dir, "c.txt", EntryKind::File)]),
+        )
+    }
+
+    /// Marca la entrada cuyo nombre base es `nombre`, sea cual sea su índice
+    /// tras ordenar (los directorios van primero, y la fila `..` delante).
+    fn marcar(app: &mut App, pane: usize, nombre: &str) {
+        let i = app.panes[pane]
+            .entries()
+            .iter()
+            .position(|e| {
+                e.path
+                    .file_name()
+                    .is_some_and(|s| s.as_bytes() == nombre.as_bytes())
+            })
+            .expect("la entrada está en el listado");
+        app.panes[pane].set_mark(i, true);
+    }
+
+    /// Sin `[ui] diff`, el que compara es `diff -u`, va por el camino del
+    /// shell y **espera una tecla**: su salida son unas líneas que terminan al
+    /// instante, y sin la espera el lector vería un parpadeo.
+    #[test]
+    fn sin_configurar_nada_es_diff_menos_u_y_espera_una_tecla() {
+        let app = app_local();
+        let EditLaunch::Shell(pendiente) = compare_files(&app).expect("uno de cada panel") else {
+            panic!("sin `[ui] diff` va por el shell");
+        };
+        assert!(pendiente.wait_for_key, "la salida se sostiene en pantalla");
+        assert_eq!(
+            pendiente.argv,
+            vec![
+                std::ffi::OsString::from("diff"),
+                std::ffi::OsString::from("-u"),
+                std::ffi::OsString::from("/d/a.txt"),
+                std::ffi::OsString::from("/d/c.txt"),
+            ],
+            "`%F` son los DOS ficheros, cada uno su argumento"
+        );
+    }
+
+    /// `[ui] diff` manda, y puede ser una ventana — entonces no se suspende.
+    #[test]
+    fn el_comparador_de_la_configuracion_manda_y_puede_ser_una_ventana() {
+        let mut app = app_local();
+        app.diff = Some(crate::app::EditorSpec {
+            command: vec!["meld".to_owned(), "%F".to_owned()],
+            detached: true,
+        });
+        let EditLaunch::Open(pendiente) = compare_files(&app).expect("dos ficheros") else {
+            panic!("con `[ui] diff` va por el camino de los openers");
+        };
+        assert!(pendiente.detached, "una ventana no suspende la terminal");
+        assert_eq!(pendiente.program, "meld");
+        assert_eq!(pendiente.argv.len(), 3, "binario + los dos ficheros");
+    }
+
+    /// Dos MARCADOS en el panel con el foco ganan al cursor del otro: es el
+    /// operando de siempre.
+    #[test]
+    fn dos_marcados_ganan_al_cursor_del_otro_panel() {
+        let mut app = app_local();
+        let dir = VPath::parse("file:///d").expect("wire");
+        let _ = &dir;
+        marcar(&mut app, 0, "a.txt");
+        marcar(&mut app, 0, "b.txt");
+        let EditLaunch::Shell(pendiente) = compare_files(&app).expect("dos marcados") else {
+            panic!("sin `[ui] diff` va por el shell");
+        };
+        assert_eq!(
+            pendiente.argv[3],
+            std::ffi::OsString::from("/d/b.txt"),
+            "el segundo es el otro MARCADO, no el del panel de enfrente"
+        );
+    }
+
+    /// Una carpeta manda a comparar directorios, y se dice en vez de comparar
+    /// lo que nadie eligió.
+    #[test]
+    fn una_carpeta_no_se_compara_como_fichero() {
+        let dir = VPath::parse("file:///d").expect("wire");
+        let mut app = App::new(
+            Pane::new(
+                dir.clone(),
+                vec![
+                    entrada(&dir, "a.txt", EntryKind::File),
+                    entrada(&dir, "sub", EntryKind::Dir),
+                ],
+            ),
+            Pane::new(dir.clone(), vec![entrada(&dir, "c.txt", EntryKind::File)]),
+        );
+        marcar(&mut app, 0, "a.txt");
+        marcar(&mut app, 0, "sub");
+        assert!(compare_files(&app).is_err());
+    }
+
+    /// A un `diff` externo no se le puede dar un `sftp://`: se dice, como en
+    /// abrir y en editar.
+    #[test]
+    fn un_pane_remoto_lo_dice_en_vez_de_intentarlo() {
+        let remoto = VPath::parse("sftp://srv/d").expect("wire");
+        let local = VPath::parse("file:///d").expect("wire");
+        let app = App::new(
+            Pane::new(
+                remoto.clone(),
+                vec![entrada(&remoto, "a.txt", EntryKind::File)],
+            ),
+            Pane::new(
+                local.clone(),
+                vec![entrada(&local, "c.txt", EntryKind::File)],
+            ),
+        );
+        assert!(compare_files(&app).is_err());
     }
 }

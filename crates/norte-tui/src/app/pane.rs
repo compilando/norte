@@ -579,6 +579,12 @@ impl Pane {
         self.state.marked_paths()
     }
 
+    /// Las entradas MARCADAS, sin caer al cursor. Delegado puro (#312).
+    #[must_use]
+    pub fn marked_entries(&self) -> Vec<&Entry> {
+        self.state.marked_entries()
+    }
+
     /// Toggle de ocultos (#107); devuelve el estado nuevo. En el pane
     /// virtual actúa sobre los RESULTADOS sin tocar la preferencia — al
     /// volver a un listado real manda `show_hidden_pref`.

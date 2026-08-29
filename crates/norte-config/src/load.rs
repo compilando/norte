@@ -1388,6 +1388,15 @@ pub struct CommonConfig {
     /// VENTANA propia, así que no se suspende el frontend esperándolo. Misma
     /// capa fail-closed que [`Self::ui_editor`].
     pub ui_editor_detached: Option<bool>,
+    /// `[ui] diff` (last-wins; None = `diff -u`, esperando una tecla).
+    ///
+    /// Plantilla de argv con los códigos de campo de `openers.toml` — `%F` son
+    /// LOS DOS ficheros, `%d` el directorio del pane. Misma capa fail-closed
+    /// que [`Self::ui_editor`]: nombra un programa que se ejecuta.
+    pub ui_diff: Option<Vec<String>>,
+    /// `[ui] diff_detached` (last-wins; None = `false`): ese comparador abre
+    /// VENTANA propia. Misma capa fail-closed que [`Self::ui_diff`].
+    pub ui_diff_detached: Option<bool>,
     /// `[daemon] mode` (last-wins; None = embedded; never from Project —
     /// fail-closed, review MAJOR-1). Startup only.
     pub daemon_mode: Option<crate::schema::DaemonMode>,
@@ -2047,6 +2056,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_parent_entry = None;
     let mut ui_editor: Option<Vec<String>> = None;
     let mut ui_editor_detached: Option<bool> = None;
+    let mut ui_diff: Option<Vec<String>> = None;
+    let mut ui_diff_detached: Option<bool> = None;
     let mut ui_layout: Option<String> = None;
     let mut ui_columns = ColumnsConfig::default();
     let mut daemon_mode: Option<DaemonMode> = None;
@@ -2184,6 +2195,10 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 // presentación, y elegir qué binario se lanza, menos.
                 ui_editor = parsed.ui.editor.clone().or(ui_editor);
                 ui_editor_detached = parsed.ui.editor_detached.or(ui_editor_detached);
+                // El COMPARADOR (#312) entra por la misma puerta que el
+                // editor: es otro programa que se ejecuta.
+                ui_diff = parsed.ui.diff.clone().or(ui_diff);
+                ui_diff_detached = parsed.ui.diff_detached.or(ui_diff_detached);
                 merge_archive_layer(&mut archive, &parsed.archive);
                 merge_daemon_layer(&mut daemon_mode, &mut daemon_socket, parsed.daemon);
                 merge_log_layer(&mut log_dir, &mut log_retain, parsed.log);
@@ -2209,6 +2224,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_parent_entry,
         ui_editor,
         ui_editor_detached,
+        ui_diff,
+        ui_diff_detached,
         ui_columns,
         daemon_mode,
         daemon_socket,

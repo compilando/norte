@@ -702,6 +702,12 @@ pub struct App {
     /// copia aquí al arrancar y en cada recarga, igual que [`Self::openers`]:
     /// un gesto no vuelve a leer configuración del disco.
     pub editor: Option<EditorSpec>,
+    /// El comparador de `[ui] diff` (#312), si lo hay.
+    ///
+    /// `None` = `diff -u`, que POSIX garantiza. Misma forma que
+    /// [`Self::editor`] —un argv plantilla y si abre ventana— porque es el
+    /// mismo trato: norte elige el operando, el programa elige el formato.
+    pub diff: Option<EditorSpec>,
     /// Comando externo resuelto por `pane.open` y pendiente de lanzar (#28).
     /// `dispatch` lo fija tras validar; el run loop —dueño de la terminal—
     /// lo ejecuta.
@@ -885,6 +891,7 @@ impl App {
             backend_journalled: false,
             openers: norte_frontend::openers::OpenersConfig::empty(),
             editor: None,
+            diff: None,
             pending_open: None,
             pending_shell: None,
             pending_osc52: None,

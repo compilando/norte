@@ -24,6 +24,7 @@ commands = [
     "pane.select-drive-left",
     "pane.select-drive-right",
     "pane.compare-dirs",
+    "pane.compare-files",
     "pane.sync-dirs",
     "layout.split-h",
     "layout.split-v",
@@ -227,6 +228,20 @@ de verdad, que es como se abre un directorio que solo existe en un lado: el
 recorrido lo cuenta como UNA fila en vez de enumerar un subárbol cuya respuesta
 ya conoce. `Esc` cancela una comparación que sigue en marcha, y cierra el panel
 cuando ya no lo está.
+
+# Comparar dos FICHEROS
+
+{{cmd:pane.compare-files}} es la otra pregunta: **¿en qué se diferencian estos
+dos ficheros?** Actúa sobre dos marcados en el panel con el foco, o sobre el
+que hay bajo el cursor aquí y el que hay bajo el cursor en el otro. Dos, y no
+se adivina: con tres marcados, con uno solo o con una carpeta de por medio, lo
+dice en vez de comparar lo que no elegiste.
+
+La diferencia la enseña otro programa, el que digas en `[ui] diff` —`meld %F`,
+`vimdiff %F`, lo que uses—. Sin configurar nada es `diff -u`, y su salida se
+queda en pantalla hasta que pulses una tecla. Los dos ficheros tienen que estar
+en este sistema: a un programa externo no se le puede dar un `sftp://`, y eso
+se dice, como en abrir y en editar.
 
 # Sincronizar los dos paneles
 

@@ -59,6 +59,13 @@ const APLAZADOS: &[(&str, u32)] = &[
     // gesto de copiarla al portapapeles.
     ("pane.checksum", 311),
     ("pane.checksum-verify", 311),
+    // Comparar dos ficheros (#312) delega en un programa externo, y esta
+    // ventana todavía no sabe lanzar uno esperándolo: el camino nativo que
+    // tiene —`shell::open`— es el de «entrégaselo al escritorio y vuelve»,
+    // que para un `diff -u` de terminal es un parpadeo. La regla del operando
+    // sí es compartida (`norte_frontend::diffpair`), así que lo que falta es
+    // el lanzamiento, no la decisión.
+    ("pane.compare-files", 312),
     // Los perfiles (ADR 0079) ya están en las dos: el selector, girar por la
     // lista y el cambio en caliente. Lo que la ventana todavía no hace es
     // acordarse de dónde dejaste cada panel DENTRO de cada perfil — la

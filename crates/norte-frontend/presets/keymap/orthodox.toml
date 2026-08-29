@@ -124,6 +124,12 @@ keymap = [
     # feature a chord at all. Deliberately NOT a modified function key: under
     # tmux none of them reaches the app (#159), and this repo has already
     # shipped one documented dead shortcut.
+    # #312: comparar DOS FICHEROS, que es otra pregunta que comparar dos
+    # árboles. `alt+C` porque `alt+c` ya es el diálogo de columnas y la
+    # mayúscula es la variante, como en las sumas. NO es una tecla de
+    # función con modificador, por lo mismo que `ctrl+y`: bajo tmux no
+    # llegan (#159).
+    { on = ["alt+C"], run = "pane.compare-files" },
     { on = ["ctrl+y"], run = "pane.sync-dirs" },
     { on = ["alt+e"], run = "pane.names-encoding" },
     { on = ["ctrl+r"], run = "pane.refresh" },

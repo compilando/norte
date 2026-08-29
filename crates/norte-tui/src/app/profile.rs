@@ -165,6 +165,10 @@ mod tests {
             //   editor a `App`, igual que hace con los openers.
             ui_editor: _,
             ui_editor_detached: _,
+            // — Igual que el editor: `reload_config` los vuelve a copiar, y el
+            //   siguiente `pane.compare-files` ya usa el comparador nuevo.
+            ui_diff: _,
+            ui_diff_detached: _,
             // — Llegan por los pasos 4 y 5 (disposición y siembra de huecos).
             ui_layout: _,
             ui_show_hidden: _,
