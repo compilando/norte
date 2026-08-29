@@ -152,6 +152,17 @@ pub enum TaskKind {
     /// [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual que
     /// `Search`/`Index`/`Embed`/`RenameBatch`/`Compare`/`DirSize`.
     Checksum,
+    /// Cambio de permisos POSIX de un lote de rutas
+    /// (`fs.set_mode`/[`FS_SET_MODE`](crate::methods::FS_SET_MODE), 0.60.0,
+    /// #314). MUTA: journal con reversa y gate de política (regla 4).
+    ///
+    /// El progreso cuenta ENTRADAS y no bytes: un `chmod` no mueve ninguno, y
+    /// una barra de bytes aquí se quedaría en cero para siempre. El total se
+    /// sabe desde el principio, porque son las rutas que se mandaron.
+    ///
+    /// Entra CON el método, y un cliente N-1 (0.59.x) la degrada a
+    /// [`TaskKind::Unknown`] por el `serde(other)` de abajo.
+    SetMode,
     /// Fabricar un archivo
     /// (`archive.pack`/[`ARCHIVE_PACK`](crate::methods::ARCHIVE_PACK), 0.50.0,
     /// #132). MUTA: journal como UNA creación, y deshacerlo es borrar el

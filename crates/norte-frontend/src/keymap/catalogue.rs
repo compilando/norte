@@ -339,6 +339,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     // #139: las propiedades salen del listado; el tamaño de una carpeta se
     // CUENTA, y por eso es una Task cancelable y no un campo del diálogo.
     live("pane.properties", false),
+    // #314: la única categoría en la que los tres gestores de referencia TOCAN
+    // y norte solo miraba. Es una mutación entera —journal con reversa,
+    // política— y por eso vive aquí y no dentro del cuadro de propiedades.
+    live("pane.chmod", false),
     live("pane.dir-size", false),
     live("pane.checksum", false),
     live("pane.checksum-verify", false),

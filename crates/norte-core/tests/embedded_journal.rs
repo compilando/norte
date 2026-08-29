@@ -927,6 +927,18 @@ async fn toda_mutacion_pasa_por_el_gate_del_journal() {
             "undo_session",
             engine.undo_session(Actor::User).await.map(|_| ()),
         ),
+        // #314: la novena. El pin existe justo para que la que llega no se
+        // olvide, y esta llegó — así que aquí está.
+        (
+            "set_mode",
+            engine
+                .set_mode(norte_proto::methods::FsSetModeParams {
+                    paths: vec![vp("mem:///d/a.txt")],
+                    mode: 0o600,
+                })
+                .await
+                .map(|_| ()),
+        ),
     ];
     for (nombre, r) in rehusado {
         assert!(
@@ -1431,6 +1443,22 @@ async fn toda_task_que_muta_fija_su_veredicto() {
     let h = engine.mkdir(&vp("mem:///nuevo")).await.expect("mkdir");
     assert_eq!(h.join().await, TaskState::Completed);
     assert_eq!(filas(&lazy).await, 0, "mkdir fija su veredicto");
+
+    // #314: un lote de permisos son VARIAS mutaciones seguidas, que es el caso
+    // que este test existe para cubrir — el observador se fija una vez, antes
+    // de la primera, y no se vuelve a preguntar por el camino.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (engine, lazy, mem) = escenario_que_suelta(dir.path()).await;
+    arbolito(&mem, "mem:///d").await;
+    let h = engine
+        .set_mode(norte_proto::methods::FsSetModeParams {
+            paths: vec![vp("mem:///d/f0.txt"), vp("mem:///d/f1.txt")],
+            mode: 0o600,
+        })
+        .await
+        .expect("set_mode");
+    assert_eq!(h.join().await, TaskState::Completed);
+    assert_eq!(filas(&lazy).await, 0, "set_mode fija su veredicto");
 }
 
 /// El provider de [`toda_task_que_muta_fija_su_veredicto`]: suelta el journal
@@ -1502,5 +1530,23 @@ impl Provider for SueltaAlMutar {
         self.inner.rename(from, to).await?;
         self.quizas_soltar().await;
         Ok(())
+    }
+    // #314: cambiar permisos es una mutación más, y sin reenviarla este doble
+    // respondía `Unsupported` por el default del trait — la Task terminaba
+    // «bien» sin haber mutado nada y sin soltar el journal, que es justo lo
+    // contrario de lo que este test comprueba.
+    async fn set_mode(&self, p: &VPath, mode: u32) -> Result<(), norte_proto::Error> {
+        self.inner.set_mode(p, mode).await?;
+        self.quizas_soltar().await;
+        Ok(())
+    }
+    // Para que el modo ANTERIOR se pueda leer: el default del trait tira las
+    // opciones y con ellas el `posix.mode` que la reversa necesita.
+    async fn stat_with(
+        &self,
+        p: &VPath,
+        opt: &norte_vfs::ListOptions,
+    ) -> Result<norte_proto::Entry, norte_proto::Error> {
+        self.inner.stat_with(p, opt).await
     }
 }

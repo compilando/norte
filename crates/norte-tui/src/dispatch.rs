@@ -707,6 +707,31 @@ pub async fn dispatch(
                 launch_size_count(app, backend, vec![dir], true).await;
             }
         }
+        // #314: cambiar los permisos. El operando es el de siempre —lo
+        // marcado, o el cursor—, y el campo se prellena con el modo de la
+        // entrada bajo el cursor: teclear sobre un campo vacío es cómo se le
+        // quita el bit de ejecución a algo que lo tenía.
+        //
+        // El `stat` con `posix.mode` se pide AQUÍ y no se saca del listado:
+        // los listados de norte son perezosos (#52) y el modo no viaja en
+        // ellos salvo que alguien lo pida.
+        Command::PaneChmod => {
+            let targets = app.focused().marked_paths();
+            if targets.is_empty() {
+                app.message = Some(t("msg-nothing-selected"));
+            } else {
+                let cursor = app.focused().selected().map(|e| e.path.clone());
+                let modo = match cursor {
+                    Some(p) => backend
+                        .stat_attrs(&p, &["posix.mode".to_owned()])
+                        .await
+                        .ok()
+                        .and_then(|e| norte_frontend::chmod::mode_of(&e)),
+                    None => None,
+                };
+                app.open_chmod(targets, modo);
+            }
+        }
         // Y contar a mano, sobre lo MARCADO (o el cursor si no hay marcas):
         // «¿cuánto ocupa todo esto?» es una pregunta sobre la selección.
         Command::PaneDirSize => {

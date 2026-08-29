@@ -38,7 +38,10 @@ pub enum RuleAction {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
-    /// `copy|move|delete|mkdir`; ausente = cualquiera.
+    /// `copy|move|delete|mkdir|create|set-mode`; **ausente = cualquiera**, y
+    /// eso incluye las que lleguen después: una regla sin `op` empezó a
+    /// conceder `create` (0.57.0) y `set-mode` (0.60.0) el día que existieron.
+    /// Quien quiera acotar, que lo diga.
     #[serde(default)]
     pub op: Option<String>,
     /// Prefijo por SUBTREE (contención de segmentos, byte-exacta vía

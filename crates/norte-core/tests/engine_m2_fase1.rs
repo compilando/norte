@@ -85,6 +85,13 @@ impl MutationObserver for RecordingObserver {
             Mutation::Renamed { from, to, .. } => {
                 format!("renamed:{}>{}", from.display_lossy(), to.display_lossy())
             }
+            // #314: con el modo ANTERIOR dentro, que es lo que la reversa
+            // necesita y lo único que un observador no puede reconstruir.
+            Mutation::ModeChanged { path, from, to } => format!(
+                "mode:{}:{}>{to:o}",
+                path.display_lossy(),
+                from.map_or_else(|| "?".to_owned(), |m| format!("{m:o}")),
+            ),
         };
         self.events.lock().expect("events lock sano").push(repr);
         Ok(())

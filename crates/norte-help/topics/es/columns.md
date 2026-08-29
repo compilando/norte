@@ -12,6 +12,7 @@ commands = [
     "pane.sort-time",
     "pane.sort-menu",
     "pane.properties",
+    "pane.chmod",
     "pane.dir-size",
     "dialog.toggle-enabled",
     "dialog.move-up",
@@ -111,3 +112,28 @@ Contar es una tarea como cualquier otra: sale en el panel de tareas y se puede
 cancelar. Lo que no se pueda leer no la tumba —una carpeta prohibida en medio de
 un árbol de tres horas no puede costarte el recuento entero—, así que el número
 es el de lo que se pudo leer.
+
+# Cambiar los permisos
+
+{{cmd:pane.chmod}} es la otra mitad: lo que las propiedades ENSEÑAN, esto lo
+cambia. Pide el modo en octal —`755`, `0644`, `4755`— con el campo prellenado
+con el que ya tiene lo que hay bajo el cursor, y actúa sobre lo marcado, o sobre
+esa misma entrada si no marcaste nada. El título dice sobre cuántas va, porque
+teclear un modo creyendo que va sobre una y que vaya sobre cincuenta es el error
+que este diálogo tiene que ponerte difícil.
+
+En octal y no con casillas porque es lo que teclea quien sabe lo que quiere, y
+es la forma que el propio listado enseña. Los dígitos son del 0 al 7 y como
+mucho cuatro: los bits de más arriba dicen de qué CLASE es el nodo, y eso no se
+cambia, se es.
+
+Es una mutación como copiar o borrar, con todo lo que eso arrastra: pasa por la
+política, deja entrada en el diario y **se puede deshacer** — la reversa son los
+permisos que tenía, leídos antes de escribir los nuevos. Cuando no se pueden
+leer, el cambio se hace igual y el diario lo apunta como lo que es: algo sin
+vuelta atrás.
+
+Solo donde hay permisos POSIX: en un directorio local o en un host SSH sí, en un
+bucket de objetos o dentro de un `.zip` no hay nada que cambiar, y se dice. No
+es recursivo: cambia exactamente las entradas que le des, y una carpeta cambia
+la suya, no la de lo que tiene dentro.

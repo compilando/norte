@@ -230,6 +230,9 @@ pub async fn confirm_modal(
         | Modal::TransferDest { .. }
         | Modal::Pack { .. }
         | Modal::Split { .. }
+        // #314: texto libre igual que los de arriba — el Enter lo atiende el
+        // run loop por `PromptKind::Chmod`, no este embudo.
+        | Modal::Chmod { .. }
         | Modal::TransferName { .. } => {}
         // `AiRenamePlan` (M4-IA) SÍ es una superficie de decisión:
         // confirmar aplica el plan REVISADO por el ejecutor

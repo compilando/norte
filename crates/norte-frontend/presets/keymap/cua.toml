@@ -84,6 +84,10 @@ keymap = [
     { on = ["insert"], run = "mark.toggle" },
     { on = ["space"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },
+    # #314: cambiar los permisos POSIX. `alt+A` porque `ctrl+a` es marcar
+    # todo en este preset y la mayúscula queda para la variante, como en
+    # las sumas; en FAR sí hay acorde atestiguado y allí es el suyo.
+    { on = ["alt+A"], run = "pane.chmod" },
     # `alt+a`: `ctrl+A` no llega (mismo byte que `ctrl+a`). Ver orthodox.
     { on = ["alt+a"], run = "mark.clear" },
     { on = ["*"], run = "mark.invert" },

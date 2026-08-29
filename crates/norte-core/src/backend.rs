@@ -874,6 +874,26 @@ impl Backend {
         }
     }
 
+    /// Cambia los permisos POSIX de un lote de rutas como Task (#314).
+    ///
+    /// Muta: journal con reversa —el modo anterior— y gate de política. Una
+    /// ubicación sin permisos POSIX responde `Unsupported` y no cambia nada.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo: [`Error::InvalidPath`] sin rutas, por encima
+    /// del tope o con bits que no son de permiso; [`Error::PolicyDenied`];
+    /// [`Error::Unsupported`].
+    pub async fn set_mode(
+        &self,
+        params: norte_proto::methods::FsSetModeParams,
+    ) -> Result<TaskRef, Error> {
+        match self {
+            Self::Embedded(engine) => Ok(TaskRef::from_handle(&engine.set_mode(params).await?)),
+            #[cfg(unix)]
+            Self::Remote(r) => r.set_mode(params).await.map(TaskRef::from),
+        }
+    }
+
     /// El plan REVISABLE de un lote de renames dentro de `dir` (spec §17, ADR
     /// 0042). NO muta nada: ni Task, ni journal.
     ///

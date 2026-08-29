@@ -861,7 +861,37 @@ use crate::{
 /// es una Task ajena de [`TaskKind::Checksum`](crate::TaskKind) en `task.list`,
 /// que degrada a `Unknown` por su `serde(other)` — la ve correr y no sabe
 /// nombrarla, que es exactamente lo que ya le pasa con `Compare` o `DirSize`.
-pub const PROTOCOL_VERSION: &str = "0.59.0";
+/// `0.60.0` (#314): método nuevo [`FS_SET_MODE`] ([`FsSetModeParams`] →
+/// [`FsTaskResult`]), [`TaskKind::SetMode`](crate::TaskKind) y la capability
+/// [`CapabilityFlags::POSIX_MODE`](crate::CapabilityFlags).
+///
+/// Es la única categoría en la que los tres gestores de referencia TOCAN y
+/// norte solo MIRABA: las propiedades enseñaban los permisos y no había forma
+/// de cambiarlos, porque el protocolo no tenía por dónde. Krusader los edita
+/// desde su diálogo de propiedades (con permisos numéricos incluidos).
+///
+/// **Es una MUTACIÓN entera**, no un ajuste: pasa por la política, deja entrada
+/// de journal con su reversa —el modo ANTERIOR, que se lee antes de escribir el
+/// nuevo— y es una Task cancelable, porque un lote de mil ficheros lo es.
+///
+/// Solo permisos POSIX, y a propósito. Las fechas y el propietario son otras
+/// dos preguntas: `mtime` es fácil de prometer y difícil de deshacer bien, y
+/// cambiar de dueño exige privilegios que norte no pide. Cada una llegará con
+/// su método y su permiso, no como un campo opcional de este.
+///
+/// Ventana N=0.60.x / N-1=0.59.x. Aditivo, y la pérdida se cuenta en la
+/// dirección que el handshake permite —**cliente 0.59 contra daemon 0.60**—:
+/// ese cliente no conoce el método y no lo llama, así que se queda sin poder
+/// cambiar permisos y con la misma superficie de solo lectura que tenía. De la
+/// capability nueva no ve nada: los flags desconocidos se ignoran al parsear
+/// (ADR 0004), así que un provider que anuncie `POSIX_MODE` se le lee como si
+/// no lo anunciara, que es exactamente lo que le conviene creer.
+///
+/// Lo tercero que sí le llega: una Task ajena de
+/// [`TaskKind::SetMode`](crate::TaskKind) en `task.list`, que degrada a
+/// `Unknown` por su `serde(other)` — la ve correr y no sabe nombrarla, como ya
+/// le pasa con `Compare`, `DirSize` o `Checksum`.
+pub const PROTOCOL_VERSION: &str = "0.60.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -1090,6 +1120,39 @@ pub const FS_MKDIR: &str = "fs.mkdir";
 /// programa que lo abra después. Journal `Created` con undo (regla 4); gateado
 /// por `PolicyOp::Create`.
 pub const FS_CREATE: &str = "fs.create";
+/// `fs.set_mode` — cambia los permisos POSIX de N rutas como Task (0.60.0,
+/// #314, ADR 0081).
+///
+/// Los doce bits de siempre —`rwx` por dueño, grupo y otros, más setuid,
+/// setgid y sticky—, tal cual los toma `chmod(2)`. Nada más: el resto de
+/// `st_mode` dice de qué CLASE es el nodo, y eso no se cambia, se es.
+///
+/// **Es una mutación**, con todo lo que eso arrastra (regla 4): journal con su
+/// reversa —el modo anterior, leído ANTES de escribir el nuevo— y gate de
+/// política propio, `PolicyOp::SetMode`. Aparte de `Create` y de `Mkdir` por lo
+/// mismo que ellos entre sí: dejar que algo cree ficheros no es dejar que
+/// cambie quién puede leerlos.
+///
+/// **Sin recursión en esta vuelta.** Aplicar a un árbol es otra pregunta —qué
+/// modo le toca a un directorio cuando el que pediste es de fichero, y qué se
+/// hace con lo que falle a mitad— y contestarla a medias sería peor que no
+/// contestarla. Las rutas que se manden son las que se cambian.
+///
+/// Un provider que no tenga permisos POSIX responde `Unsupported` y no cambia
+/// nada: dentro de un `.zip` no hay nada que cambiar, y un bucket S3 no tiene
+/// modo. Se anuncia con [`CapabilityFlags::POSIX_MODE`](crate::CapabilityFlags),
+/// para que un frontend pueda apagar el gesto en vez de ofrecerlo y fallar.
+///
+/// Tope: [`FS_SET_MODE_MAX_PATHS`] rutas, y se RECHAZA en vez de recortar, por
+/// lo mismo que sus hermanos — un lote a medias sobre PERMISOS deja media
+/// selección con los de antes y ni siquiera dice cuál.
+pub const FS_SET_MODE: &str = "fs.set_mode";
+/// Tope de rutas de un [`FS_SET_MODE`]: por encima se RECHAZA (`InvalidPath`),
+/// no se recorta.
+///
+/// El mismo número que los otros lotes, y por el mismo motivo: lo que se
+/// recorta en silencio se lee como hecho.
+pub const FS_SET_MODE_MAX_PATHS: usize = 4096;
 /// `fs.search` — búsqueda viva bajo un subtree (spec §17.1a): nombre por
 /// glob O regex, contenido por literal O regex. Devuelve una Task
 /// (`TaskKind::Search`); los hits llegan por la notificación
@@ -2721,6 +2784,36 @@ pub enum ChecksumAlgo {
     #[default]
     Sha256,
 }
+
+/// Params de [`FS_SET_MODE`] (0.60.0, #314).
+///
+/// ```
+/// use norte_proto::methods::FsSetModeParams;
+/// let p: FsSetModeParams =
+///     serde_json::from_str(r#"{"paths":["file:///a.sh"],"mode":493}"#).expect("params");
+/// assert_eq!(p.mode, 0o755);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsSetModeParams {
+    /// Las rutas a las que se les cambia el modo, tal cual se pidieron.
+    ///
+    /// Sin recursión: son EXACTAMENTE estas. Un directorio cambia el suyo y no
+    /// el de lo que tiene dentro.
+    pub paths: Vec<VPath>,
+    /// Los doce bits de permiso, como los toma `chmod(2)`.
+    ///
+    /// Va como número y no como `rwxr-xr-x` porque el wire no es una interfaz:
+    /// el texto es cosa de quien lo pinta, y dos escrituras del mismo permiso
+    /// que comparasen distinto serían un bug esperando. Los bits por encima de
+    /// `0o7777` son de CLASE de nodo y este método no los toca: se rechazan
+    /// (`InvalidPath`), en vez de recortarse en silencio y cambiar el permiso
+    /// a algo que nadie pidió.
+    pub mode: u32,
+}
+
+/// Los bits que [`FS_SET_MODE`] acepta: los doce de permiso de `chmod(2)`.
+pub const MODE_PERMISSION_BITS: u32 = 0o7777;
 
 /// Params de [`FS_CHECKSUM`] (0.59.0, #311).
 ///

@@ -266,6 +266,70 @@ async fn una_unidad_denegada_no_para_el_undo_de_las_demas() {
     assert!(mem.stat(&vp("mem:///movido.txt")).await.is_err());
 }
 
+/// **El undo de un cambio de permisos pide `set-mode`, no `delete`** (#314).
+///
+/// `set-mode` y `delete` son permisos INDEPENDIENTES, así que preguntar por el
+/// segundo tenía las dos caras malas: un actor con `delete` deshacía un chmod
+/// que la política no le concede, y uno con `set-mode` no podía deshacer el
+/// suyo — y con el LIFO estricto eso bloquea la sesión entera detrás. Es el
+/// mismo bug que este fichero ya arregló una vez para `move`.
+#[tokio::test]
+async fn el_undo_de_un_chmod_pide_permiso_de_chmod() {
+    // DOS engines sobre el MISMO journal y el mismo provider: en el primero el
+    // agente puede cambiar permisos, en el segundo ya no. Es la forma de
+    // separar lo que la política concede HACIA DELANTE de lo que concede al
+    // deshacer, que es justo la distinción que este test mide — un permiso
+    // caducado o revocado entre una cosa y la otra.
+    let journal = Arc::new(SqliteJournal::new(
+        Journal::open_in_memory().await.expect("j"),
+    ));
+    let mem = Arc::new(MemProvider::new());
+    let permite = PolicyConfig::parse("[[rule]]\nop=\"set-mode\"\naction=\"allow\"").expect("cfg");
+    // Todo permitido MENOS `set-mode`: si la reversa preguntara por `delete`
+    // —que aquí sí está— pasaría, y este test no vería el bug.
+    let deniega = PolicyConfig::parse(
+        "[[rule]]\nop=\"delete\"\naction=\"allow\"\n\
+         [[rule]]\nop=\"move\"\naction=\"allow\"\n\
+         [[rule]]\nop=\"copy\"\naction=\"allow\"\n\
+         [[rule]]\nop=\"mkdir\"\naction=\"allow\"\n\
+         [[rule]]\nop=\"create\"\naction=\"allow\"\n\
+         [[rule]]\nop=\"set-mode\"\naction=\"deny\"",
+    )
+    .expect("cfg");
+    let motor = |cfg: PolicyConfig| {
+        let e = Engine::with_journal(Arc::clone(&journal)).with_policy(
+            Arc::new(ScopedPolicy::new(full_scope(), cfg)),
+            Arc::new(DenyAll) as Arc<dyn ApprovalResolver>,
+        );
+        e.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+        e
+    };
+
+    let antes = motor(permite);
+    write_file(&mem, "mem:///a.sh", b"x").await;
+    let h = antes
+        .set_mode_as(
+            norte_proto::methods::FsSetModeParams {
+                paths: vec![vp("mem:///a.sh")],
+                mode: 0o700,
+            },
+            agent(),
+        )
+        .await
+        .expect("con `set-mode` concedido, el agente cambia permisos");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let despues = motor(deniega);
+    let (uh, report) = despues.undo_session(agent()).await.expect("undo submit");
+    assert_eq!(uh.join().await, TaskState::Completed);
+    let r = report.lock().expect("lock").clone();
+    assert_eq!(
+        r.denied_total, 1,
+        "la reversa de un chmod se pregunta por `set-mode`, y aquí está denegada: {r:?}"
+    );
+    assert_eq!(r.undone, 0, "y por tanto no se deshizo nada");
+}
+
 /// El ejemplo commiteado de policy (`docs/policy-example.toml`) parsea SIEMPRE
 /// (M3-4 T4): si la sintaxis de reglas cambia, este test lo delata — el
 /// ejemplo jamás se pudre.

@@ -59,6 +59,13 @@ pub enum PolicyOp {
     /// que algo cree carpetas no es dejar que cree ficheros, y una regla que
     /// dijera «mkdir» y concediera las dos cosas sería una que nadie escribió.
     Create,
+    /// Cambio de PERMISOS POSIX (#314).
+    ///
+    /// Aparte de [`PolicyOp::Create`] por lo mismo que ella lo está de
+    /// [`PolicyOp::Mkdir`]: dejar que algo cree ficheros no es dejar que
+    /// cambie quién puede leerlos, y una regla que concediera las dos cosas a
+    /// la vez sería una que nadie escribió.
+    SetMode,
 }
 
 impl PolicyOp {
@@ -72,6 +79,7 @@ impl PolicyOp {
             PolicyOp::Delete { .. } => "delete",
             PolicyOp::Mkdir => "mkdir",
             PolicyOp::Create => "create",
+            PolicyOp::SetMode => "set-mode",
         }
     }
 }
@@ -87,7 +95,7 @@ impl OpSet {
     #[must_use]
     pub fn all() -> Self {
         Self {
-            kinds: ["copy", "move", "delete", "mkdir", "create"]
+            kinds: ["copy", "move", "delete", "mkdir", "create", "set-mode"]
                 .into_iter()
                 .collect(),
         }
@@ -656,6 +664,7 @@ mod tests {
             },
             PolicyOp::Mkdir,
             PolicyOp::Create,
+            PolicyOp::SetMode,
         ];
         for op in todos {
             let nombre = op.kind();

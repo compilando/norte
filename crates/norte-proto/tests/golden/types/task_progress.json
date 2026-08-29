@@ -146,6 +146,18 @@
     },
     "task_id": 13
   },
+  "running_set_mode": {
+    "bytes_done": 0,
+    "bytes_total": null,
+    "current": "file:///casa/b%FF.bin",
+    "entries_done": 1,
+    "entries_total": 2,
+    "kind": "set_mode",
+    "state": {
+      "kind": "running"
+    },
+    "task_id": 58
+  },
   "running_split": {
     "bytes_done": 1048576,
     "bytes_total": 3145728,

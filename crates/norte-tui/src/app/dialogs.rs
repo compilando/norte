@@ -384,6 +384,8 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         // #132: los dos de escribir archivos, por lo mismo.
         | Modal::Pack { .. }
         | Modal::Split { .. }
+        // #314: el de permisos también es texto libre — se teclea un modo.
+        | Modal::Chmod { .. }
         | Modal::TransferName { .. } => None,
     }
 }

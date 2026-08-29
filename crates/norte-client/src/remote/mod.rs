@@ -1263,6 +1263,24 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::Create))
     }
 
+    /// `fs.set_mode`: los permisos POSIX de un lote, como Task (#314).
+    ///
+    /// Muta, así que el daemon la registra en el journal con su reversa —el
+    /// modo anterior— y la pasa por la política. Una ubicación sin permisos
+    /// POSIX responde `Unsupported` sin cambiar nada.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon al encolar.
+    pub async fn set_mode(
+        &self,
+        params: norte_proto::methods::FsSetModeParams,
+    ) -> Result<RemoteTask, Error> {
+        let result: FsTaskResult = self
+            .call_timed_guarded(methods::FS_SET_MODE, &params)
+            .await?;
+        Ok(self.own_task(result.task_id, TaskKind::SetMode))
+    }
+
     /// `fs.mkdir`, como Task (la mutación pasa por journal y policy igual).
     ///
     /// # Errors

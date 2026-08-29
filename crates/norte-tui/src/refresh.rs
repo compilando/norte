@@ -106,7 +106,18 @@ pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream)
             TaskState::Completed if habla_por_su_informe(fin.progress.kind) => {}
             TaskState::Completed => {
                 refresh = true;
-                app.message = Some(t("msg-done"));
+                // #314: un lote de permisos que termina «bien» puede no haber
+                // cambiado la mitad —un enlace, un fichero de otro dueño—, y
+                // `done` a secas se lee como que sí. El número está en el
+                // progreso; lo que faltaba era decirlo.
+                let sin_hacer = fin.progress.unreadable.unwrap_or(0);
+                app.message = Some(
+                    if fin.progress.kind == norte_proto::TaskKind::SetMode && sin_hacer > 0 {
+                        ta("msg-chmod-partial", &[("n", &sin_hacer.to_string())])
+                    } else {
+                        t("msg-done")
+                    },
+                );
                 // #290: el fichero que `pane.edit-new` mandó crear YA existe;
                 // el editor se abre ahora y sobre la ruta que se pidió, no
                 // sobre lo que haya bajo el cursor.

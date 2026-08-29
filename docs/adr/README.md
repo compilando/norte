@@ -86,3 +86,4 @@ edits.
 | [0078](0078-a-name-that-travels-intact-and-still-means-something-else.md) | A name that travels intact and still means something else | accepted |
 | [0079](0079-a-profile-declares-it-does-not-execute.md) | A profile declares, it does not execute | accepted |
 | [0080](0080-a-digest-is-a-read-that-nobody-can-take-back.md) | A digest is a read that nobody can take back | accepted |
+| [0081](0081-permissions-are-a-mutation-and-carry-their-way-back.md) | Permissions are a mutation, and they carry their way back | accepted |

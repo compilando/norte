@@ -140,6 +140,10 @@ keymap = [
     { on = ["insert"], run = "mark.toggle" },
     { on = ["space"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },
+    # #314: cambiar los permisos POSIX. `alt+A` porque `ctrl+a` es marcar
+    # todo en este preset y la mayúscula queda para la variante, como en
+    # las sumas; en FAR sí hay acorde atestiguado y allí es el suyo.
+    { on = ["alt+A"], run = "pane.chmod" },
     # `alt+a` y no `ctrl+A`: la mayúscula ES el shift en la gramática de
     # acordes, pero un terminal manda el MISMO byte para Ctrl+A y Ctrl+Shift+A,
     # así que el binding existía y la tecla no hacía nada. Hay test.

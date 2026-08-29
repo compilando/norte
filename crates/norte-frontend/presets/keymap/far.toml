@@ -15,8 +15,10 @@
 # selection-scope nuance `pane.delete` does not model, not three different
 # commands. Alt+Del ("Wipe" — overwrite-then-rename secure erase) is the key
 # that matches `pane.delete-permanent`'s semantics, not Shift+F8. Ctrl+A is
-# Far's own "Set file attributes" dialog, which lands on `pane.properties`
-# (Planned); Far has no documented select-all key in these two sources, so
+# Far's own "Set file attributes" dialog, and since #314 it binds `pane.chmod`,
+# which is what that dialog DOES; it used to land on `pane.properties` because
+# norte could only look. Far has no documented select-all key in these two
+# sources, so
 # `mark.all`/`mark.clear` are simply unbound here rather than approximated
 # onto Ctrl+A. Shift+F5 ("Copy" the file under the cursor,
 # ignoring the selection) is the same in-place variant TC and Krusader both
@@ -170,7 +172,15 @@ keymap = [
     { on = ["shift+f1"], run = "pane.pack" },
     { on = ["shift+f2"], run = "pane.unpack" },
     { on = ["shift+f4"], run = "pane.edit-new" },
-    { on = ["ctrl+a"], run = "pane.properties" },
+    # #314: `Ctrl+A` es «Set file attributes» en far-panelcmd.txt, y ahora hay
+    # un comando que hace ESO. Aterrizaba en `pane.properties` porque norte
+    # solo sabía mirar; enseñar los permisos donde la fuente dice «cambiarlos»
+    # era la aproximación que este preset tenía y que ya no hace falta.
+    { on = ["ctrl+a"], run = "pane.chmod" },
+    # Y `pane.properties` se queda SIN ATAR aquí: FAR no tiene un cuadro de
+    # «propiedades» aparte del de atributos, así que darle una tecla sería
+    # inventarle una función a un preset que existe para no inventar. La hoja
+    # de referencia imprime `—`, que es la verdad.
     { on = ["ctrl+u"], run = "pane.swap" },
     { on = ["ctrl+r"], run = "pane.refresh" },
     { on = ["ctrl+t"], run = "pane.tree" },

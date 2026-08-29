@@ -525,6 +525,52 @@ independently through `PROTOCOL_VERSION`.
   the bytes, so this subsumes the `fs.compare` hash oracle and exceeds it, and
   an agent denied that one only had to call here.
 
+- **Permissions can be changed** (#314, protocol **0.60.0**, ADR 0081). It was
+  the one category where all three reference managers touch and norte only
+  looked: the properties dialog showed the POSIX mode and nothing could change
+  it, because the protocol had no method. `fs.set_mode` sets the twelve
+  `chmod(2)` bits of N paths as a cancellable task, and `pane.chmod` is its
+  surface — an octal field prefilled with the mode of the entry under the
+  cursor, over the usual operand, with the COUNT in the title, because typing a
+  mode believing it applies to one entry and having it apply to fifty is the
+  mistake the dialog exists to make hard.
+
+  It is a MUTATION, with everything that drags along: its own policy op (letting
+  something create files is not letting it change who can read them), and a
+  journal entry whose **reversal is the previous mode**, read immediately before
+  the new one is written — so undo works. When that previous mode cannot be read
+  the change still happens and the entry says it is irreversible, rather than
+  storing a mode nobody had for a later undo to apply. One entry per path, so a
+  batch that stops halfway leaves undone exactly what it did.
+
+  Permissions only, and not "attributes": timestamps and ownership are different
+  questions with different privileges and different reversals, and each will
+  arrive with its own method or not at all. Bits above the permission mask are
+  rejected rather than masked — masking would quietly apply a permission nobody
+  asked for. Not recursive: it changes the entries you give it. Where there are
+  no POSIX permissions — inside a `.zip`, an object bucket, Windows — the new
+  `POSIX_MODE` capability is absent and the call answers `Unsupported` instead of
+  pretending. Far's `Ctrl+A` now binds what its own source calls it, "Set file
+  attributes"; it used to land on properties because looking was all norte could
+  do.
+
+  Three things the review pass changed, and they are the interesting ones. A
+  **symlink is skipped** rather than changed: `chmod(2)` follows the link while
+  the stat that reads the reversal does not, so the "previous mode" would have
+  been the link's `0777` and an undo would have left the TARGET world-readable —
+  and the target can sit outside the subtree somebody approved. The **undo asks
+  for `set-mode`**, not `delete`: the first version let it fall into the delete
+  bucket, which meant an actor holding `delete` could undo a chmod the policy
+  does not grant it, and one holding `set-mode` could not undo its own. And
+  **setuid/setgid are refused to agents**, not because those bits are the danger
+  but because the approval request carries the op and the paths and NOT the
+  mode, so nobody could see which they were consenting to; a human sets them
+  from a dialog that shows them.
+
+  Note for anyone with a `policy.toml`: a rule with no `op` is a wildcard, so an
+  existing "allow everything under this prefix" rule now also allows permission
+  changes there. Rules that name their `op` are unaffected.
+
 - **Three more ways to mark** (#313), the gaps Total Commander's Gray family
   has and norte did not — and which our own transcription of its keyboard file
   listed among the omissions, for want of a command to bind. `mark.extension-add`

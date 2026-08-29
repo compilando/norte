@@ -253,6 +253,26 @@ pub(crate) fn modal_title_body(
         Modal::Split { size, error } => {
             free_text_modal_text("modal-split", "modal-split-hint", size, error.as_deref())
         }
+        // #314: el modo en octal, con CUÁNTAS entradas va a cambiar en el
+        // título. El número importa: teclear un modo con cincuenta ficheros
+        // marcados y creyendo que va sobre uno es el error que este diálogo
+        // tiene que hacer difícil.
+        Modal::Chmod {
+            mode,
+            targets,
+            error,
+        } => {
+            let (_, cuerpo) =
+                free_text_modal_text("modal-chmod", "modal-chmod-hint", mode, error.as_deref());
+            // El singular tiene su propio id: los args de i18n son cadenas, y
+            // un selector de plural sobre una cadena no elige nunca.
+            let titulo = if targets.len() == 1 {
+                t("modal-chmod-one")
+            } else {
+                norte_i18n::ta("modal-chmod", &[("n", &targets.len().to_string())])
+            };
+            (titulo, cuerpo)
+        }
         // Mismo enmascarado: la dirección tecleada y su diagnóstico son texto
         // de usuario, y una dirección llega por paste tan fácil como un nombre.
         Modal::TransferDest { kind, input, error } => free_text_modal_text(

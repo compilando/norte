@@ -487,6 +487,13 @@
     "case_sensitive": false,
     "root": "file:///home/user"
   },
+  "fs_set_mode_params": {
+    "mode": 493,
+    "paths": [
+      "file:///casa/a.sh",
+      "file:///casa/b%FF.bin"
+    ]
+  },
   "fs_stat_params": {
     "path": "file:///home/user/doc.txt"
   },

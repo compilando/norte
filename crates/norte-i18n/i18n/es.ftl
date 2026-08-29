@@ -877,6 +877,20 @@ modal-pack-hint-unknown = extensión desconocida — usa .zip, .tar, .tar.gz o .
 modal-split = Partir en trozos de
 modal-split-title = Partir
 modal-split-hint = 4096, 10M, 700M · los trozos van al otro panel · Enter parte · Esc cancela
+# Permisos POSIX (#314). El título dice sobre CUÁNTAS entradas va.
+#
+# DOS ids y no un selector de plural: los args de este crate viajan como
+# CADENA, así que Fluent no puede aplicar reglas de plural —ni con `[one]`, que
+# nunca casa, ni con `[1]`, que compara un número contra un texto—, y el
+# singular se leía «1 entradas». Quien elige es el código, que sí sabe cuántas
+# son.
+modal-chmod-one = Permisos de 1 entrada
+modal-chmod = Permisos de { $n } entradas
+modal-chmod-hint = en octal (755, 0644, 4755) · Enter aplica · Esc cancela
+msg-chmod-not-octal = eso no es un modo en octal: tres o cuatro dígitos del 0 al 7
+msg-chmod-too-big = ese número se sale de los permisos: como mucho 7777
+msg-chmod-started = cambiando los permisos de { $n }…
+msg-chmod-partial = { $n } no se pudieron cambiar (un enlace, o no es tuyo)
 msg-pack-read-only = ese panel es de solo lectura: ahí no se puede escribir
 msg-pack-nothing = no hay nada marcado ni bajo el cursor
 msg-pack-unknown-format = norte escribe .zip, .tar y .tar.gz; el .rar lo lee pero no lo escribe
@@ -990,6 +1004,7 @@ help-cmd-pane-sort-size = ordenar por tamaño
 help-cmd-pane-sort-time = ordenar por fecha
 help-cmd-pane-sort-menu = elegir el orden (abre el diálogo de columnas)
 help-cmd-pane-properties = propiedades de la entrada
+help-cmd-pane-chmod = cambiar los permisos POSIX
 help-cmd-pane-checksum = calcular la suma sha256 de lo marcado
 help-cmd-pane-checksum-verify = comprobar un fichero de sumas contra lo que lista
 help-cmd-pane-dir-size = contar cuánto ocupa
@@ -1432,6 +1447,8 @@ gui-task-kind-rename-batch = rename
 gui-task-kind-unknown = task
 gui-task-kind-compare = comparar
 gui-task-kind-dir-size = tamaño
+gui-task-kind-checksum = sumas
+gui-task-kind-set-mode = permisos
 gui-task-kind-pack = empaquetar
 gui-task-kind-test-archive = probar
 gui-task-kind-split = partir

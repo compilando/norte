@@ -2304,6 +2304,29 @@
       ],
       "type": "object"
     },
+    "FsSetModeParams": {
+      "description": "Params de [`FS_SET_MODE`] (0.60.0, #314).\n\n```\nuse norte_proto::methods::FsSetModeParams;\nlet p: FsSetModeParams =\n    serde_json::from_str(r#\"{\"paths\":[\"file:///a.sh\"],\"mode\":493}\"#).expect(\"params\");\nassert_eq!(p.mode, 0o755);\n```",
+      "properties": {
+        "mode": {
+          "description": "Los doce bits de permiso, como los toma `chmod(2)`.\n\nVa como número y no como `rwxr-xr-x` porque el wire no es una interfaz:\nel texto es cosa de quien lo pinta, y dos escrituras del mismo permiso\nque comparasen distinto serían un bug esperando. Los bits por encima de\n`0o7777` son de CLASE de nodo y este método no los toca: se rechazan\n(`InvalidPath`), en vez de recortarse en silencio y cambiar el permiso\na algo que nadie pidió.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "paths": {
+          "description": "Las rutas a las que se les cambia el modo, tal cual se pidieron.\n\nSin recursión: son EXACTAMENTE estas. Un directorio cambia el suyo y no\nel de lo que tiene dentro.",
+          "items": {
+            "$ref": "#/$defs/VPath"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "paths",
+        "mode"
+      ],
+      "type": "object"
+    },
     "FsStatParams": {
       "description": "Params de [`FS_STAT`].",
       "properties": {
@@ -4857,6 +4880,11 @@
           "type": "string"
         },
         {
+          "const": "set_mode",
+          "description": "Cambio de permisos POSIX de un lote de rutas\n(`fs.set_mode`/[`FS_SET_MODE`](crate::methods::FS_SET_MODE), 0.60.0,\n#314). MUTA: journal con reversa y gate de política (regla 4).\n\nEl progreso cuenta ENTRADAS y no bytes: un `chmod` no mueve ninguno, y\nuna barra de bytes aquí se quedaría en cero para siempre. El total se\nsabe desde el principio, porque son las rutas que se mandaron.\n\nEntra CON el método, y un cliente N-1 (0.59.x) la degrada a\n[`TaskKind::Unknown`] por el `serde(other)` de abajo.",
+          "type": "string"
+        },
+        {
           "const": "pack",
           "description": "Fabricar un archivo\n(`archive.pack`/[`ARCHIVE_PACK`](crate::methods::ARCHIVE_PACK), 0.50.0,\n#132). MUTA: journal como UNA creación, y deshacerlo es borrar el\narchivo.\n\nEntra CON el método, y los cuatro de este bump se degradan igual: un\ncliente N-1 (0.49.x) los convierte en [`TaskKind::Unknown`] por el\n`serde(other)` de abajo, como `Search`/`Index`/`Embed`/`RenameBatch`/\n`Compare`/`DirSize` antes que ellos.\n\nEl progreso cuenta bytes LEÍDOS del origen y entradas empaquetadas; los\nbytes escritos no se pueden saber por adelantado —el compresor decide—\ny prometer un total que va a fallar es peor que no darlo.",
           "type": "string"
@@ -5434,6 +5462,9 @@
     "fs_search_params": {
       "$ref": "#/$defs/FsSearchParams"
     },
+    "fs_set_mode_params": {
+      "$ref": "#/$defs/FsSetModeParams"
+    },
     "fs_stat_params": {
       "$ref": "#/$defs/FsStatParams"
     },
@@ -5822,6 +5853,7 @@
     "fs_list_result",
     "fs_mkdir_params",
     "fs_create_params",
+    "fs_set_mode_params",
     "fs_move_params",
     "fs_read_params",
     "fs_read_result",

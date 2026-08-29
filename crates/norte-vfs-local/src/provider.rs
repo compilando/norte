@@ -957,6 +957,10 @@ fn default_capabilities() -> Capabilities {
     if cfg!(unix) {
         // Crear symlinks en Windows exige privilegio: no se declara en M0.
         flags |= CapabilityFlags::SYMLINKS;
+        // Permisos POSIX (#314): en Windows no los hay —`set_permissions` solo
+        // sabe del bit de solo lectura—, y anunciarlos ahí sería prometer que
+        // `fs.set_mode` hace algo que no hace.
+        flags |= CapabilityFlags::POSIX_MODE;
     }
     if cfg!(all(unix, not(target_os = "macos"))) {
         flags |= CapabilityFlags::CASE_SENSITIVE;
@@ -1917,6 +1921,35 @@ impl Provider for LocalProvider {
             })
         })
         .await
+    }
+
+    /// #314: `chmod(2)`, en `spawn_blocking` como todo lo demás de este
+    /// provider (regla 2).
+    ///
+    /// Solo en unix. En Windows `set_permissions` únicamente sabe del bit de
+    /// solo lectura, así que fingir un modo POSIX ahí sería escribir algo que
+    /// no es lo que se pidió: se responde `Unsupported`, que es lo mismo que
+    /// dice la capability.
+    #[cfg(unix)]
+    async fn set_mode(&self, p: &VPath, mode: u32) -> Result<(), Error> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        self.ensure_caps().await;
+        let native = self.native(p)?;
+        blocking(move || {
+            // `set_permissions` SIGUE el enlace, que es lo que hace `chmod(2)`
+            // y lo que espera quien lo pide desde un listado: los permisos de
+            // un symlink no significan nada en Linux.
+            std::fs::set_permissions(&native, std::fs::Permissions::from_mode(mode))
+                .map_err(|e| map_io(&e))
+        })
+        .await
+    }
+
+    #[cfg(not(unix))]
+    async fn set_mode(&self, p: &VPath, mode: u32) -> Result<(), Error> {
+        let _ = (p, mode);
+        Err(Error::Unsupported)
     }
 
     async fn remove(&self, p: &VPath) -> Result<(), Error> {

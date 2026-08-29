@@ -2220,6 +2220,9 @@ async fn handle_value(
                     | methods::FS_DELETE
                     | methods::FS_MKDIR
                     | methods::FS_CREATE
+                    // #314: gatea el lote ENTERO antes de tocar nada, así que
+                    // puede quedarse suspendido en un Ask igual que un mkdir.
+                    | methods::FS_SET_MODE
                     | methods::AI_RENAME_PLAN
                     | methods::INDEX_SEARCH_SEMANTIC
                     // 0.36.0: `fs.rename_batch` gatea el lote ENTERO antes de
@@ -5104,6 +5107,31 @@ async fn dispatch_fs_task(
             let handle = shared
                 .engine
                 .create_file_as(&p.path, p.dest_anchor, actor.clone())
+                .await
+                .map_err(RpcError::from)?;
+            register_task(shared, handle, actor)
+        }
+        // #314: cambiar permisos. El gate de POLÍTICA lo hace el engine sobre
+        // la lista entera y antes del primer efecto (`PolicyOp::SetMode`);
+        // aquí va el de LECTURA por ruta, por lo mismo que en `fs.dir_size` —
+        // sin él, un actor fuera de scope enumeraría un árbol ajeno a través
+        // de los errores de esta llamada.
+        methods::FS_SET_MODE => {
+            let p: methods::FsSetModeParams = parse_params(req.params)?;
+            // El TOPE antes del bucle de gates, como en `fs.checksum`: es una
+            // constante pública y el emisor sabe cuántas rutas mandó, así que
+            // comprobarlo primero no filtra nada. Al revés sí costaba — un
+            // lote de un millón de rutas tomaba el mutex del registro de
+            // scopes una vez por ruta antes de que nadie mirase el tope.
+            if p.paths.len() > methods::FS_SET_MODE_MAX_PATHS {
+                return Err(RpcError::from(norte_proto::Error::InvalidPath));
+            }
+            for path in &p.paths {
+                read_gate(&actor, path, shared)?;
+            }
+            let handle = shared
+                .engine
+                .set_mode_as(p, actor.clone())
                 .await
                 .map_err(RpcError::from)?;
             register_task(shared, handle, actor)

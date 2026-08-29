@@ -51,6 +51,21 @@ pub enum Mutation<'a> {
         /// motivo para sobrescribir nada.
         batch: Option<i64>,
     },
+    /// Permisos POSIX cambiados (#314).
+    ModeChanged {
+        /// El nodo cuyo modo cambió.
+        path: &'a VPath,
+        /// El modo que TENÍA, leído antes de escribir el nuevo. Es la reversa
+        /// entera: sin él no hay undo que ofrecer.
+        ///
+        /// `None` cuando no se pudo leer —un provider que no publica
+        /// `posix.mode`, o un `stat` que falló—, y entonces la entrada se
+        /// clasifica `Irreversible` con ese motivo (regla 4). Prometer un undo
+        /// que devolvería un modo inventado es peor que no ofrecer ninguno.
+        from: Option<u32>,
+        /// El modo que se puso.
+        to: u32,
+    },
 }
 
 /// Receptor de mutaciones. M3 lo implementa el journal (con undo); hasta

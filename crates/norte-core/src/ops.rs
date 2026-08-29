@@ -2507,6 +2507,96 @@ pub(crate) async fn create_task(
     Ok(())
 }
 
+/// Cambia los permisos POSIX de un lote de rutas (#314).
+///
+/// **Una entrada de journal POR RUTA**, con el modo anterior como reversa, y
+/// se registra ANTES de pasar a la siguiente: un lote a medias tiene que dejar
+/// deshecho lo que ya hizo, y una entrada por lote no diría cuáles.
+///
+/// El modo anterior se LEE antes de escribir el nuevo. Si no se puede leer, la
+/// mutación se registra igual y como irreversible: cambiar los permisos sin
+/// poder decir cuáles eran es lo que pasa de verdad, y callarlo o abortar
+/// serían las dos formas de mentir sobre ello.
+///
+/// **Una ruta que falla no tumba el lote**: se cuenta como ilegible en el
+/// progreso y las demás se cambian. El caso típico es una selección con un
+/// fichero de otro dueño dentro, y perder las otras cincuenta por ella sería
+/// castigar al que marcó bien.
+///
+/// La cancelación se mira por RUTA (regla 3): un `chmod` no se puede partir.
+pub(crate) async fn set_mode(
+    paths: Vec<(Arc<dyn Provider>, VPath)>,
+    mode: u32,
+    observer: Arc<dyn MutationObserver>,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    let observer = crate::observer::pin_for_task(observer).await?;
+    let total = u64::try_from(paths.len()).unwrap_or(u64::MAX);
+    ctx.progress.update(|p| {
+        p.entries_total = Some(total);
+        p.entries_done = 0;
+    });
+    let mut hechos: u64 = 0;
+    let mut fallidas: u64 = 0;
+    for (provider, path) in paths {
+        if ctx.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        ctx.progress.update(|p| p.current = Some(path.clone()));
+        // Un SYMLINK no se toca, y esto no es remilgo: `chmod(2)` SIGUE el
+        // enlace mientras que el `stat` de esta misma función NO lo sigue
+        // (lstat, contrato del trait). O sea que el modo que se guardaría como
+        // reversa sería el del ENLACE —`0o777` siempre en Linux— y deshacer
+        // dejaría el DESTINO abierto a todo el mundo. Y hay algo peor que la
+        // reversa: el destino puede estar fuera del scope que alguien aprobó,
+        // así que un chmod sobre un enlace es una escritura que se sale de su
+        // raíz. Se cuenta como fallida, y el frontend lo dice.
+        let entrada = provider.stat(&path).await;
+        if matches!(&entrada, Ok(e) if e.kind == EntryKind::Symlink) {
+            fallidas = fallidas.saturating_add(1);
+            hechos = hechos.saturating_add(1);
+            ctx.progress.update(|p| {
+                p.entries_done = hechos;
+                p.unreadable = Some(fallidas);
+            });
+            continue;
+        }
+        let anterior = crate::undo::modo_actual(provider.as_ref(), &path).await;
+        match provider.set_mode(&path, mode).await {
+            Ok(()) => {
+                // El modo que QUEDÓ, releído: `chmod(2)` limpia setgid en
+                // silencio cuando quien llama no pertenece al grupo del
+                // fichero, y un diario que dijera `2755` sobre un `755` real
+                // mentiría en la dirección peligrosa. Si no se puede releer,
+                // se apunta el que se pidió, que es lo único que se sabe.
+                let quedo = crate::undo::modo_actual(provider.as_ref(), &path)
+                    .await
+                    .unwrap_or(mode);
+                observer
+                    .on_mutation(
+                        &Mutation::ModeChanged {
+                            path: &path,
+                            from: anterior,
+                            to: quedo,
+                        },
+                        &ctx.actor,
+                    )
+                    .await?;
+            }
+            Err(Error::Cancelled) => return Err(Error::Cancelled),
+            Err(_) => fallidas = fallidas.saturating_add(1),
+        }
+        hechos = hechos.saturating_add(1);
+        ctx.progress.update(|p| {
+            p.entries_done = hechos;
+            // #251: un `Completed` sobre un lote donde la mitad no se pudo
+            // cambiar se lee como un total confiado si el progreso no lo dice.
+            p.unreadable = Some(fallidas);
+        });
+    }
+    Ok(())
+}
+
 /// Cuánto ocupan `roots`, contando lo que se pueda leer (#139).
 ///
 /// El total NO se devuelve: viaja en el progreso (`bytes_done`/`entries_done`),

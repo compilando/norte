@@ -57,6 +57,14 @@ bitflags::bitflags! {
         /// dice— pero significa que un symlink en un componente INTERMEDIO
         /// puede redirigir la escritura fuera de su raíz.
         const CONFINED_WRITES = 1 << 10;
+        /// Los nodos de esta ubicación tienen permisos POSIX y se pueden
+        /// CAMBIAR (0.60.0, #314): `fs.set_mode` funciona aquí.
+        ///
+        /// Lo declara quien puede hacer las dos cosas, leerlos y escribirlos.
+        /// Un `.zip` no tiene nada que cambiar y un bucket de objetos no tiene
+        /// modo; sin este flag, el frontend apaga el gesto con su motivo en
+        /// vez de ofrecerlo para que falle con `Unsupported`.
+        const POSIX_MODE = 1 << 11;
     }
 }
 

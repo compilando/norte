@@ -346,6 +346,21 @@ fn confined_writes_round_trips_on_the_wire() {
 }
 
 #[test]
+fn posix_mode_round_trips_on_the_wire() {
+    // #314: el nombre de este flag ES el wire, y renombrarlo falla EN
+    // SILENCIO —un peer viejo ignora los nombres que no conoce (ADR 0004)—,
+    // que es peor que renombrar un método. Por eso se congela aquí, como
+    // `FULL_FOLD` y `CONFINED_WRITES`.
+    let c = Capabilities {
+        flags: CapabilityFlags::POSIX_MODE,
+        max_path: None,
+    };
+    let json = serde_json::to_value(c).expect("serializa");
+    assert_eq!(json["flags"], "POSIX_MODE");
+    assert_eq!(roundtrip(&c), c);
+}
+
+#[test]
 fn capabilities_hex_bits_rejected() {
     // Bits sin nombre NO viajan: bitflags::parser::from_str los retendría en
     // silencio vía hex; el wire los rechaza siempre.
@@ -442,6 +457,8 @@ fn task_kind_wire_strings() {
         // 0.59.0 (#311). El schema también lo congela, pero ese rojo se
         // arregla regenerando; este obliga a tocar dos sitios a mano.
         (TaskKind::Checksum, "\"checksum\""),
+        // 0.60.0 (#314).
+        (TaskKind::SetMode, "\"set_mode\""),
     ] {
         assert_eq!(serde_json::to_string(&kind).unwrap(), wire);
     }
@@ -1221,10 +1238,17 @@ fn version_ventana_actual() {
     // comprobación entera, que es lo que desplaza la ventana. Lo único que ve
     // del bump es una Task ajena que no sabe nombrar, como ya le pasa con
     // `Compare` o `DirSize`.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.59.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.58.0"), "N-1");
+    //
+    // 0.60.0 (#314): `fs.set_mode`, su `TaskKind` y la capability `POSIX_MODE`.
+    // Un cliente 0.59 no llama al método, así que se queda sin poder cambiar
+    // permisos —la superficie que tenía era de solo mirar, y sigue siéndolo—; y
+    // del flag nuevo no ve nada, porque los nombres desconocidos se ignoran al
+    // parsear (ADR 0004). Que no se rompa nada es justo lo que la ventana N/N-1
+    // permite, y N-2 no.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.60.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.59.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.57.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.58.9"),
         "N-2 fuera de la ventana"
     );
 }

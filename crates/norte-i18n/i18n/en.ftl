@@ -881,6 +881,19 @@ modal-pack-hint-unknown = unknown extension — use .zip, .tar, .tar.gz or .tgz
 modal-split = Split into pieces of
 modal-split-title = Split
 modal-split-hint = 4096, 10M, 700M · pieces land in the other panel · Enter splits · Esc cancels
+# POSIX permissions (#314). The title says HOW MANY entries it will change.
+#
+# TWO ids rather than a plural selector: this crate's args travel as STRINGS,
+# so Fluent cannot apply plural rules — neither `[one]`, which never matches,
+# nor `[1]`, which compares a number against a text — and the singular read
+# "1 entries". The code picks, because the code knows how many there are.
+modal-chmod-one = Permissions of 1 entry
+modal-chmod = Permissions of { $n } entries
+modal-chmod-hint = in octal (755, 0644, 4755) · Enter applies · Esc cancels
+msg-chmod-not-octal = that is not an octal mode: three or four digits from 0 to 7
+msg-chmod-too-big = that number is beyond the permission bits: 7777 at most
+msg-chmod-started = changing the permissions of { $n }…
+msg-chmod-partial = { $n } could not be changed (a symlink, or not yours)
 msg-pack-read-only = that panel is read-only: nothing can be written there
 msg-pack-nothing = nothing marked and nothing under the cursor
 msg-pack-unknown-format = norte writes .zip, .tar and .tar.gz; it reads .rar but cannot write it
@@ -992,6 +1005,7 @@ help-cmd-pane-sort-size = sort by size
 help-cmd-pane-sort-time = sort by date
 help-cmd-pane-sort-menu = choose the sort order (opens the columns dialog)
 help-cmd-pane-properties = properties of the entry
+help-cmd-pane-chmod = change the POSIX permissions
 help-cmd-pane-checksum = compute the sha256 sum of what is marked
 help-cmd-pane-checksum-verify = check a sums file against what it lists
 help-cmd-pane-dir-size = count how much space it takes
@@ -1429,6 +1443,8 @@ gui-task-kind-rename-batch = rename
 gui-task-kind-unknown = task
 gui-task-kind-compare = compare
 gui-task-kind-dir-size = size
+gui-task-kind-checksum = sums
+gui-task-kind-set-mode = permissions
 gui-task-kind-pack = pack
 gui-task-kind-test-archive = test
 gui-task-kind-split = split

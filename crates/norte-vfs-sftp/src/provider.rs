@@ -324,7 +324,12 @@ impl Provider for SftpProvider {
             // El remoto se asume POSIX (case-sensitive): declararla evita
             // que el engine invente colisiones de caja que un servidor
             // Linux no tiene (bytes exactos = conservador correcto).
-            | CapabilityFlags::CASE_SENSITIVE;
+            | CapabilityFlags::CASE_SENSITIVE
+            // Permisos POSIX (#314): `SSH_FXP_SETSTAT` con el campo de
+            // permisos, que es lo que hace `chmod` sobre sftp. El remoto se
+            // asume POSIX igual que arriba; si no lo fuera, el servidor
+            // rechaza y eso llega como el error que es.
+            | CapabilityFlags::POSIX_MODE;
         if self.logical_trash {
             flags |= CapabilityFlags::TRASH;
         }
@@ -554,6 +559,24 @@ impl Provider for SftpProvider {
         }
         self.session
             .create_dir(remote)
+            .await
+            .map_err(|e| map_err(&e))
+    }
+
+    /// #314: `SSH_FXP_SETSTAT` con SOLO el campo de permisos.
+    ///
+    /// Los demás campos del atributo van a `None` a propósito: `setstat` fija
+    /// lo que se le manda, así que rellenar tamaño o fechas con lo que se
+    /// hubiera leído antes convertiría un `chmod` en un `touch` con una
+    /// carrera dentro.
+    async fn set_mode(&self, p: &VPath, mode: u32) -> Result<(), Error> {
+        let remote = self.remote(p)?;
+        let attrs = russh_sftp::protocol::FileAttributes {
+            permissions: Some(mode),
+            ..Default::default()
+        };
+        self.session
+            .set_metadata(remote, attrs)
             .await
             .map_err(|e| map_err(&e))
     }

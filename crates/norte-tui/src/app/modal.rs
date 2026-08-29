@@ -300,6 +300,23 @@ pub enum Modal {
         /// Diagnóstico del último intento inválido.
         error: Option<String>,
     },
+    /// Cambiar los PERMISOS POSIX (#314). Texto libre: el modo en octal,
+    /// prellenado con el que tiene lo que hay bajo el cursor.
+    ///
+    /// En octal y no con casillas `rwx` porque es lo que teclea quien sabe lo
+    /// que quiere —`755`, `600`— y porque es la forma que el propio listado
+    /// enseña. Un editor de casillas es otra superficie, y esta no la impide.
+    Chmod {
+        /// Lo tecleado hasta ahora.
+        mode: String,
+        /// Sobre qué se va a aplicar, resuelto al ABRIR: lo marcado, o lo que
+        /// hay bajo el cursor. Se congela aquí porque entre abrir el diálogo y
+        /// confirmarlo el listado puede refrescarse, y entonces «lo marcado»
+        /// sería otra cosa.
+        targets: Vec<VPath>,
+        /// Diagnóstico del último intento inválido, bajo el campo.
+        error: Option<String>,
+    },
     /// Partir un fichero (#132). Texto libre: el tamaño de cada trozo, con
     /// sufijo (`10M`, `700M`, `4096`).
     Split {
@@ -564,6 +581,8 @@ pub enum PromptKind {
     Pack,
     /// [`Modal::Split`].
     Split,
+    /// [`Modal::Chmod`].
+    Chmod,
     /// [`Modal::Mkdir`].
     Mkdir,
     /// [`Modal::EditNew`].
@@ -685,6 +704,7 @@ impl Modal {
             Self::TransferDest { .. } => PromptKind::TransferDest,
             Self::Pack { .. } => PromptKind::Pack,
             Self::Split { .. } => PromptKind::Split,
+            Self::Chmod { .. } => PromptKind::Chmod,
             Self::Mkdir { .. } => PromptKind::Mkdir,
             Self::EditNew { .. } => PromptKind::EditNew,
             Self::CommandLine { .. } => PromptKind::CommandLine,
@@ -753,6 +773,16 @@ impl Modal {
                 OverLimit::Silent,
                 PopMode::Char,
             ),
+            // #314: cuatro dígitos octales y ni uno más. El tope frena y
+            // calla, que es lo que un campo lleno ya dice por sí solo.
+            Self::Chmod { mode, error, .. } => (
+                mode,
+                error,
+                None,
+                CHMOD_MAX_CHARS,
+                OverLimit::Silent,
+                PopMode::Char,
+            ),
             Self::CommandLine { command, error } => (
                 command,
                 error,
@@ -793,6 +823,10 @@ impl Modal {
 /// Tope de caracteres del tamaño de trozo de [`Modal::Split`]: corto a
 /// propósito, porque lo que cabe ahí es `700M`, no una frase.
 pub const SPLIT_SIZE_MAX_CHARS: usize = 32;
+
+/// Tope del campo de [`Modal::Chmod`] (#314): cuatro dígitos octales — los
+/// tres de siempre más el de setuid/setgid/sticky.
+pub const CHMOD_MAX_CHARS: usize = 4;
 
 #[cfg(test)]
 mod tests {
@@ -843,6 +877,14 @@ mod tests {
                 PromptKind::Split,
                 Modal::Split {
                     size: String::new(),
+                    error: None,
+                },
+            ),
+            (
+                PromptKind::Chmod,
+                Modal::Chmod {
+                    mode: String::new(),
+                    targets: Vec::new(),
                     error: None,
                 },
             ),

@@ -77,6 +77,7 @@ struct ProtocolSchema {
     fs_list_result: FsListResult,
     fs_mkdir_params: FsMkdirParams,
     fs_create_params: FsCreateParams,
+    fs_set_mode_params: FsSetModeParams,
     fs_move_params: FsMoveParams,
     fs_read_params: FsReadParams,
     fs_read_result: FsReadResult,

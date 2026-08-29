@@ -485,6 +485,35 @@ pub trait Provider: Send + Sync {
         let _ = (from, to);
         None
     }
+
+    /// Fija los permisos POSIX de `p` (#314, 0.60.0).
+    ///
+    /// `mode` son los doce bits de `chmod(2)` y NADA más: los de arriba dicen
+    /// de qué clase es el nodo, y eso no se cambia. El caller ya los ha
+    /// validado, pero un provider que reciba otros debe seguir rechazándolos
+    /// en vez de recortarlos — recortar cambia el permiso a uno que nadie
+    /// pidió.
+    ///
+    /// Sobre un SYMLINK actúa sobre lo que el enlace apunta, que es lo que
+    /// hace `chmod(2)` y lo que espera quien lo pide desde un listado; un
+    /// provider sin esa distinción no tiene nada que decidir.
+    ///
+    /// El default es `Unsupported`, y esa es la respuesta correcta para casi
+    /// todos: dentro de un `.zip` no hay permisos que cambiar y un bucket de
+    /// objetos no tiene modo. Quien lo implemente declara además
+    /// [`CapabilityFlags::POSIX_MODE`](norte_proto::CapabilityFlags), que es
+    /// lo que un frontend mira para apagar el gesto en vez de ofrecerlo y
+    /// fallar.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] si esta ubicación no tiene permisos POSIX;
+    /// [`Error::NotFound`] si la ruta no está; el error del backend si no se
+    /// pudo (permiso denegado, sistema de solo lectura).
+    async fn set_mode(&self, p: &VPath, mode: u32) -> Result<(), Error> {
+        let _ = (p, mode);
+        Err(Error::Unsupported)
+    }
 }
 
 /// Tipo del symlink a crear: Windows distingue archivo/directorio en la

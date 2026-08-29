@@ -1185,6 +1185,10 @@ fn clase_de_task(kind: norte_proto::TaskKind) -> &'static str {
         K::Combine => "combine",
         K::SyncPlan => "sync-plan",
         K::Sync => "sync",
+        // #311 y #314: caían en `unknown`, o sea que una comprobación de sumas
+        // y un cambio de permisos se leían «tarea» en la franja.
+        K::Checksum => "checksum",
+        K::SetMode => "set-mode",
         // `Unknown` y lo que traiga un daemon más nuevo, juntos: ver el doc
         // de arriba. `unknown` es una clave de verdad, no un identificador
         // pintado crudo.
@@ -15575,7 +15579,16 @@ impl Estado {
     fn muta(clase: &str) -> bool {
         matches!(
             clase,
-            "copy" | "move" | "delete" | "mkdir" | "rename-batch" | "undo" | "pack" | "sync"
+            "copy"
+                | "move"
+                | "delete"
+                | "mkdir"
+                | "rename-batch"
+                | "undo"
+                | "pack"
+                | "sync"
+                // #314: cambiar permisos MUTA, con journal y reversa.
+                | "set-mode"
         )
     }
 

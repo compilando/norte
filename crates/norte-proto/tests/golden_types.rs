@@ -553,6 +553,25 @@ fn golden_task_progress() {
                 },
             ),
             (
+                // 0.60.0 (#314): TaskKind::SetMode. Su progreso cuenta
+                // ENTRADAS y NO bytes —un `chmod` no mueve ninguno—, y el
+                // total se sabe desde el principio porque son las rutas que se
+                // mandaron. Congelar esa forma es lo que impide que alguien
+                // pinte una barra de bytes que se quedaría en cero.
+                "running_set_mode",
+                TaskProgress {
+                    task_id: TaskId::new(58),
+                    kind: TaskKind::SetMode,
+                    state: TaskState::Running,
+                    bytes_done: 0,
+                    bytes_total: None,
+                    entries_done: 1,
+                    entries_total: Some(2),
+                    current: Some(vpath("file:///casa/b%FF.bin")),
+                    unreadable: None,
+                },
+            ),
+            (
                 // 0.59.0 (#311): TaskKind::Checksum, y la FORMA de su progreso,
                 // que la rustdoc promete y hasta ahora no congelaba nada: hay
                 // total de entradas desde el principio —se sabe cuántas rutas
@@ -1096,7 +1115,9 @@ fn golden_methods() {
     // misma, porque van en la misma lista. Y una ruta que NO es UTF-8 entre
     // ellas: el informe tiene que poder nombrar el fichero que no se pudo leer
     // aunque su nombre no sea texto (regla 1).
-    assert_eq!(fixtures.len(), 172, "[methods.json] fixtures sin caso Rust");
+    // 172 → 173 en 0.60.0 (#314): + fs_set_mode_params, con el modo en su
+    // forma NUMÉRICA y una ruta que no es UTF-8.
+    assert_eq!(fixtures.len(), 173, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
@@ -1201,6 +1222,7 @@ fn check_methods_archive_write(fixtures: &BTreeMap<String, Value>) {
     );
     check_methods_archive_pack_report(fixtures);
     check_methods_fs_checksum(fixtures);
+    check_methods_fs_set_mode(fixtures);
     check_one(
         fixtures,
         "file_split_params",
@@ -1216,6 +1238,25 @@ fn check_methods_archive_write(fixtures: &BTreeMap<String, Value>) {
         &FileCombineParams {
             first: vpath("file:///g.iso.001"),
             dest: vpath("file:///g.iso"),
+        },
+    );
+}
+
+/// `fs.set_mode` (0.60.0, #314): los permisos POSIX de un lote.
+///
+/// Con una ruta que NO es UTF-8, porque cambiarle los permisos a un fichero
+/// cuyo nombre no es texto tiene que poder pedirse igual (regla 1), y con el
+/// modo en su forma numérica: `0o755` viaja como 493, y congelarlo aquí es lo
+/// que impide que alguien lo convierta a `"rwxr-xr-x"` sin darse cuenta de que
+/// eso es un cambio de wire.
+fn check_methods_fs_set_mode(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::FsSetModeParams;
+    check_one(
+        fixtures,
+        "fs_set_mode_params",
+        &FsSetModeParams {
+            paths: vec![vpath("file:///casa/a.sh"), vpath("file:///casa/b%FF.bin")],
+            mode: 0o755,
         },
     );
 }
@@ -3771,6 +3812,14 @@ fn method_names_frozen() {
     assert_eq!(methods::FS_CHECKSUM, "fs.checksum");
     assert_eq!(methods::FS_CHECKSUM_REPORT, "fs.checksum_report");
     assert_eq!(methods::FS_CHECKSUM_MAX_PATHS, 4096);
+    // 0.60.0 (#314). El golden del payload se indexa por el nombre de la
+    // FIXTURA, no por esta constante, así que sin estas dos líneas renombrar
+    // el método pasaba la suite entera — que es justo lo que este test existe
+    // para impedir. `MODE_PERMISSION_BITS` es contrato de validación citado en
+    // la rustdoc del campo: un cliente dimensiona contra él.
+    assert_eq!(methods::FS_SET_MODE, "fs.set_mode");
+    assert_eq!(methods::FS_SET_MODE_MAX_PATHS, 4096);
+    assert_eq!(methods::MODE_PERMISSION_BITS, 0o7777);
     assert_eq!(methods::CONNECTION_CLOSE, "connection.close");
     // 0.50.0: escribir archivos (#132). Cuatro métodos y cuatro kinds nuevos,
     // aditivos por la misma razón que los de arriba. Ninguno escribe DENTRO de
@@ -3836,7 +3885,11 @@ fn method_names_frozen() {
     // cliente viejo no llama y un kind que degrada a `Unknown`— y aquí no hay
     // degradación parcial ninguna: contra un daemon 0.58 no se puede
     // comprobar una suma en absoluto, que es lo que desplaza la ventana.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.59.0");
+    // 0.60.0 (#314): `fs.set_mode`, con su kind y la capability `POSIX_MODE`.
+    // Aditivo, y la ventana se desplaza porque contra un daemon 0.59 no se
+    // pueden cambiar permisos: la superficie de propiedades sigue siendo de
+    // solo mirar, que es lo que era antes de esta versión.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.60.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

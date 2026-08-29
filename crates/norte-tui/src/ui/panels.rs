@@ -493,6 +493,8 @@ pub(crate) fn kind_label(kind: norte_proto::TaskKind) -> &'static str {
         // #311: mismo caso que `DirSize`. «task 40 %» no dice que lo que está
         // corriendo es el sha256 de lo que marcaste.
         norte_proto::TaskKind::Checksum => "checksum",
+        // #314: y esta MUTA, así que menos todavía puede salir sin nombre.
+        norte_proto::TaskKind::SetMode => "set-mode",
         // `Unknown` es la clase de un daemon N+1 que este proto YA
         // conocía como desconocida (vía `serde(other)`); el `_` es
         // `#[non_exhaustive]` (#126) — una variante de un norte-proto

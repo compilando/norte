@@ -12,6 +12,7 @@ commands = [
     "pane.sort-time",
     "pane.sort-menu",
     "pane.properties",
+    "pane.chmod",
     "pane.dir-size",
     "dialog.toggle-enabled",
     "dialog.move-up",
@@ -109,3 +110,28 @@ Counting is a task like any other: it shows in the task panel and it can be
 cancelled. What cannot be read does not sink it — one forbidden folder in the
 middle of a three-hour tree cannot cost you the whole count — so the number is
 for what could be read.
+
+# Changing the permissions
+
+{{cmd:pane.chmod}} is the other half: what properties SHOW, this changes. It
+asks for the mode in octal — `755`, `0644`, `4755` — with the field prefilled
+with the one the entry under the cursor already has, and it acts on what is
+marked, or on that same entry when nothing is. The title says how many it will
+change, because typing a mode believing it goes to one and having it go to fifty
+is the mistake this dialog has to make hard.
+
+Octal rather than checkboxes because it is what someone who knows what they want
+types, and it is the form the listing itself shows. Digits are 0 to 7 and four
+at most: the bits above that say what CLASS the node is, and that is not
+changed, it is what it is.
+
+It is a mutation like copying or deleting, with everything that drags along: it
+goes through the policy, it lands in the journal, and it **can be undone** — the
+reversal is the permissions it had, read before the new ones were written. When
+those cannot be read the change is made anyway and the journal records it for
+what it is: something with no way back.
+
+Only where POSIX permissions exist: a local directory or an SSH host, yes; an
+object bucket or the inside of a `.zip` has nothing to change, and it says so.
+It is not recursive: it changes exactly the entries you give it, and a folder
+changes its own, not that of what is inside it.

@@ -216,6 +216,13 @@ pub enum Reversal {
     RestoreTrash,
     /// No hay vuelta atrás (borrado permanente).
     Irreversible,
+    /// Devolver los permisos POSIX que tenía (#314).
+    ///
+    /// El modo ANTERIOR viaja en `reversal_ref`, que para esta op no es una
+    /// ruta sino el número en ASCII decimal. Es la única columna que existe
+    /// para «lo que la reversa necesita», y añadir otra al esquema por doce
+    /// bits sería peor que decir aquí lo que hay dentro.
+    SetModeBack,
 }
 
 impl Reversal {
@@ -227,6 +234,7 @@ impl Reversal {
             Reversal::RenameBack => "rename_back",
             Reversal::RestoreTrash => "restore_trash",
             Reversal::Irreversible => "irreversible",
+            Reversal::SetModeBack => "set_mode_back",
         }
     }
 }
@@ -1747,6 +1755,24 @@ impl crate::observer::MutationObserver for SqliteJournal {
                 Reversal::RenameBack,
                 None,
                 *batch,
+            ),
+            // #314: la reversa ES el modo anterior, y va en `reversal_ref` en
+            // ASCII decimal. Sin él no hay vuelta atrás que prometer, y la
+            // entrada lo dice —`Irreversible` con su motivo— en vez de ofrecer
+            // un undo que pondría un modo que nadie tuvo. El modo NUEVO va en
+            // `path_to` para que el diario se pueda leer sin adivinar qué se
+            // puso.
+            Mutation::ModeChanged { path, from, to } => (
+                "mode_changed",
+                path.to_wire().into_bytes(),
+                Some(to.to_string().into_bytes()),
+                if from.is_some() {
+                    Reversal::SetModeBack
+                } else {
+                    Reversal::Irreversible
+                },
+                from.map(|m| m.to_string().into_bytes()),
+                None,
             ),
         };
         // El error se PROPAGA (regla 4): la op no se considera completa si su

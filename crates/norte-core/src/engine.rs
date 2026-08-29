@@ -579,7 +579,7 @@ impl Engine {
     /// quitárselo al daemon.
     ///
     /// Que la comprobación viva AQUÍ y no en cada llamador es lo que la hace
-    /// completa: los ocho puntos de mutación del engine pasan por esta función,
+    /// completa: los nueve puntos de mutación del engine pasan por esta función,
     /// y añadir el noveno no requiere acordarse de nada. Lo pinea
     /// `toda_mutacion_pasa_por_el_gate_del_journal` en
     /// `tests/embedded_journal.rs`, que es lo que impide que el noveno se
@@ -3268,6 +3268,91 @@ impl Engine {
         ))
     }
 
+    /// Cambia los permisos POSIX de un lote de rutas (#314, ADR 0081).
+    ///
+    /// # Errors
+    /// [`Error::InvalidPath`] sin rutas, por encima del tope, o con bits que
+    /// no son de permiso; [`Error::PolicyDenied`] si la política deniega;
+    /// [`Error::Unsupported`] si algún scheme no tiene provider.
+    pub async fn set_mode(
+        &self,
+        params: norte_proto::methods::FsSetModeParams,
+    ) -> Result<TaskHandle, Error> {
+        self.set_mode_as(params, crate::journal::Actor::User).await
+    }
+
+    /// [`Self::set_mode`] con ACTOR explícito: gateado por
+    /// [`crate::policy::PolicyOp::SetMode`] PRE-efecto, sobre TODAS las rutas.
+    ///
+    /// El gate va sobre la lista entera y antes de la primera escritura: un
+    /// lote que empezara a cambiar permisos y se topara con la política a
+    /// mitad dejaría media selección cambiada por una petición que estaba
+    /// denegada.
+    ///
+    /// # Errors
+    /// Los de [`Self::set_mode`].
+    #[tracing::instrument(skip(self, params, actor), fields(n = params.paths.len()))]
+    pub async fn set_mode_as(
+        &self,
+        params: norte_proto::methods::FsSetModeParams,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        let Some(primera) = params.paths.first() else {
+            tracing::debug!("fs.set_mode sin rutas");
+            return Err(Error::InvalidPath);
+        };
+        if params.paths.len() > norte_proto::methods::FS_SET_MODE_MAX_PATHS {
+            tracing::debug!(n = params.paths.len(), "fs.set_mode por encima del tope");
+            return Err(Error::InvalidPath);
+        }
+        // Los bits de arriba dicen de qué CLASE es el nodo. Recortarlos en
+        // silencio dejaría un permiso que nadie pidió; se rechaza.
+        if params.mode & !norte_proto::methods::MODE_PERMISSION_BITS != 0 {
+            tracing::debug!(
+                mode = params.mode,
+                "fs.set_mode con bits que no son permiso"
+            );
+            return Err(Error::InvalidPath);
+        }
+        // setuid y setgid, solo a mano (ADR 0081). No porque esos bits sean el
+        // peligro —un `chmod 0777` sobre `~/.ssh` hace mucho más daño y no
+        // lleva ninguno—, sino porque son los que quien aprueba NO PUEDE VER:
+        // la petición de aprobación lleva la op y las rutas, y no el modo, así
+        // que un humano diría que sí a «set-mode sobre 12 rutas» sin saber si
+        // era `0600` o `4777`. Mientras el modo no viaje en esa pregunta, un
+        // agente no los fija; el humano sí, desde un diálogo que sí los enseña.
+        const ESPECIALES: u32 = 0o6000;
+        if params.mode & ESPECIALES != 0 && !matches!(actor, crate::journal::Actor::User) {
+            tracing::warn!(
+                mode = params.mode,
+                "fs.set_mode con setuid/setgid de un actor que no es el humano: denegado"
+            );
+            return Err(Error::PolicyDenied {
+                rule: "set-mode.special-bits".to_owned(),
+            });
+        }
+        let refs: Vec<&VPath> = params.paths.iter().collect();
+        self.gate(&actor, crate::policy::PolicyOp::SetMode, &refs)
+            .await?;
+        let key = primera.scheme().to_owned();
+        let mut rutas = Vec::with_capacity(params.paths.len());
+        for p in &params.paths {
+            let provider = self.provider_for(p).await?;
+            rutas.push((provider, p.clone()));
+        }
+        let observer = Arc::clone(&self.observer);
+        let mode = params.mode;
+        Ok(self.sched.submit(
+            &key,
+            TaskKind::SetMode,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move { ops::set_mode(rutas, mode, observer, &ctx).await })
+            }),
+        ))
+    }
+
     /// Capabilities de LA UBICACIÓN `p` (para que el frontend decida, p. ej.,
     /// si el F8 va a papelera o avisa de permanente).
     ///
@@ -4035,6 +4120,7 @@ fn undo_gate_targets(unit: &[crate::journal::JournalEntry]) -> Result<Option<Und
     let mut anchor: Option<VPath> = None;
     let mut moves: Vec<VPath> = Vec::new();
     let mut deletes: Vec<VPath> = Vec::new();
+    let mut set_modes: Vec<VPath> = Vec::new();
     for e in unit {
         let path = wire_engine(&e.path)?;
         if anchor.is_none() {
@@ -4060,6 +4146,14 @@ fn undo_gate_targets(unit: &[crate::journal::JournalEntry]) -> Result<Option<Und
                     moves.push(wire_engine(from)?);
                 }
             }
+            // #314: la reversa de un cambio de permisos es OTRO cambio de
+            // permisos, y `set-mode` es un permiso INDEPENDIENTE. Caía en el
+            // comodín de abajo, y eso reproducía exactamente el bug que el
+            // rustdoc de arriba cuenta para `delete`/`move`: un actor con
+            // `delete` deshacía un chmod que la política no le concede, y uno
+            // con `set-mode` no podía deshacer el suyo — y con el LIFO
+            // estricto, eso bloquea la sesión entera detrás.
+            "set_mode_back" => set_modes.push(path),
             // `delete`, y cualquier etiqueta que este core no conozca: la
             // desconocida no llega a actuar (`revert_entry` la bloquea), pero
             // se pregunta igual por la clase que MÁS quita.
@@ -4069,7 +4163,10 @@ fn undo_gate_targets(unit: &[crate::journal::JournalEntry]) -> Result<Option<Und
     if anchor.is_none() {
         return Ok(None);
     }
-    let mut gates: Vec<(crate::policy::PolicyOp, Vec<VPath>)> = Vec::with_capacity(2);
+    let mut gates: Vec<(crate::policy::PolicyOp, Vec<VPath>)> = Vec::with_capacity(3);
+    if !set_modes.is_empty() {
+        gates.push((crate::policy::PolicyOp::SetMode, set_modes));
+    }
     if !deletes.is_empty() {
         gates.push((
             crate::policy::PolicyOp::Delete {

@@ -206,6 +206,7 @@ commands! {
     "pane.sort-time" => PaneSortTime,
     "pane.sort-menu" => PaneSortMenu,
     "pane.properties" => PaneProperties,
+    "pane.chmod" => PaneChmod,
     "pane.edit" => PaneEdit,
     "pane.tree" => PaneTree,
     "pane.connect" => PaneConnect,

@@ -19,6 +19,10 @@ use crate::faults::{Faults, SegPath, seg_path};
 /// los consumidores a manejar multi-chunk incluso con contenidos de test).
 const READ_CHUNK: usize = 1024;
 
+/// Los permisos que este provider dice tener antes de que nadie los cambie
+/// (#314): `0o644`, lo que deja un fichero recién creado con `umask` 022.
+const MODE_POR_DEFECTO: u32 = 0o644;
+
 #[derive(Debug, Clone)]
 enum Node {
     File {
@@ -56,6 +60,9 @@ struct Tree {
     /// `keep` que un `open_resumable` posterior reanuda. Se limpia en
     /// commit/abort.
     partials: BTreeMap<SegPath, Vec<u8>>,
+    /// Permisos POSIX por ruta (#314). Ausente = el default de abajo, que es
+    /// lo que un fichero recién creado tendría con `umask` 022.
+    modes: BTreeMap<SegPath, u32>,
     /// Reloj lógico: avanza 1 por mutación → mtimes deterministas.
     clock: i64,
     /// Siguiente identidad de nodo (0 es la raíz implícita).
@@ -67,6 +74,7 @@ impl Default for Tree {
         Self {
             nodes: BTreeMap::new(),
             partials: BTreeMap::new(),
+            modes: BTreeMap::new(),
             clock: 0,
             next_id: 1,
         }
@@ -182,7 +190,10 @@ impl MemProvider {
                 | CapabilityFlags::CASE_SENSITIVE
                 | CapabilityFlags::CASE_PRESERVING
                 | CapabilityFlags::SYMLINKS
-                | CapabilityFlags::TRASH,
+                | CapabilityFlags::TRASH
+                // #314: tiene permisos POSIX y se pueden cambiar. Con esto la
+                // Task de `fs.set_mode` y su undo se prueban sin tocar disco.
+                | CapabilityFlags::POSIX_MODE,
         )
     }
 
@@ -200,7 +211,15 @@ impl MemProvider {
             node_ids: true,
             list_skipped: None,
             logical_trash: false,
-            attr_defs: Vec::new(),
+            // #314: `posix.mode` va SIEMPRE, porque este provider lo emite
+            // de verdad (no es sintético) y declara `POSIX_MODE`. Los `mem.*`
+            // los añade `with_synthetic_attrs` a quien los quiera.
+            attr_defs: vec![norte_proto::AttrInfo {
+                id: "posix.mode".to_owned(),
+                label: "Mode".to_owned(),
+                ty: norte_proto::AttrType::Uint,
+                hint: norte_proto::AttrHint::Mode,
+            }],
             caps_at: Arc::new(Mutex::new(BTreeMap::new())),
             caps_at_asked: Arc::new(Mutex::new(Vec::new())),
             tree: Arc::new(Mutex::new(Tree::default())),
@@ -267,13 +286,16 @@ impl MemProvider {
             ty,
             hint,
         };
-        self.attr_defs = vec![
+        // Se AÑADEN a lo que ya hay (`posix.mode`, #314), no lo reemplazan:
+        // este provider sigue emitiendo el modo con o sin attrs sintéticos, y
+        // dejar de anunciarlo lo pondría a emitir lo que no declara.
+        self.attr_defs.extend([
             mk("mem.owner", "Owner", AttrType::Bytes, AttrHint::Identity),
             mk("mem.note", "Note", AttrType::Text, AttrHint::Opaque),
             mk("mem.mode", "Mode", AttrType::Uint, AttrHint::Mode),
             mk("mem.stamp", "Stamp", AttrType::TimeMs, AttrHint::Timestamp),
             mk("mem.wide", "Wide", AttrType::Text, AttrHint::Opaque),
-        ];
+        ]);
         self
     }
 
@@ -358,7 +380,19 @@ impl MemProvider {
         }
         let real = resolve_traversing(&tree, lk, &key).ok_or(Error::NotFound)?;
         let node = tree.nodes.get(&real).ok_or(Error::NotFound)?;
-        Ok(entry_for(p, &real, node, &self.attr_defs, req))
+        let mut entry = entry_for(p, &real, node, &self.attr_defs, req);
+        // #314: los permisos POSIX, que este provider SÍ tiene desde que
+        // declara `POSIX_MODE`. Van fuera de `synthetic_attrs` porque no son
+        // sintéticos: es estado de verdad que `set_mode` escribe, y el undo de
+        // un cambio de permisos se prueba leyéndolo.
+        if req.wants("posix.mode") {
+            let mode = tree.modes.get(&real).copied().unwrap_or(MODE_POR_DEFECTO);
+            entry.attrs.insert(
+                "posix.mode".to_owned(),
+                norte_proto::AttrValue::Uint(u64::from(mode)),
+            );
+        }
+        Ok(entry)
     }
 
     /// Cuerpo compartido de `list`/`list_with` (#108 bloque 2).
@@ -782,6 +816,10 @@ impl Provider for MemProvider {
         self.list_inner(p, &opt.attrs).await
     }
 
+    /// El catálogo incluye SIEMPRE `posix.mode` (#314): este provider lo emite
+    /// y declara `POSIX_MODE`, y el contrato compartido exige que lo que se
+    /// emite esté anunciado — un doble que incumpliera el acuerdo que
+    /// verifica no serviría para verificar nada.
     fn attrs(&self) -> &[norte_proto::AttrInfo] {
         &self.attr_defs
     }
@@ -943,6 +981,22 @@ impl Provider for MemProvider {
         ))
     }
 
+    /// #314: escribe el modo en el mapa lateral. Es estado de verdad, no una
+    /// simulación: el undo de un cambio de permisos se comprueba leyéndolo por
+    /// `posix.mode`.
+    async fn set_mode(&self, p: &VPath, mode: u32) -> Result<(), Error> {
+        self.faults.op_gate().await?;
+        let key = seg_path(p);
+        let lk = self.lookup();
+        let mut tree = self.lock();
+        let real = resolve_traversing(&tree, lk, &key).ok_or(Error::NotFound)?;
+        if !tree.nodes.contains_key(&real) {
+            return Err(Error::NotFound);
+        }
+        tree.modes.insert(real, mode);
+        Ok(())
+    }
+
     async fn mkdir(&self, p: &VPath) -> Result<(), Error> {
         self.faults.op_gate().await?;
         let key = seg_path(p);
@@ -987,6 +1041,10 @@ impl Provider for MemProvider {
             }
         }
         tree.nodes.remove(&real);
+        // #314: y su modo. Dejarlo haría que un fichero creado después con ese
+        // mismo nombre heredara los permisos del que ya no está, y un test de
+        // undo afirmaría un modo que este provider se inventó.
+        tree.modes.remove(&real);
         tree.tick();
         drop(tree);
         self.ambiguous_gate()
@@ -1051,6 +1109,11 @@ impl Provider for MemProvider {
             | Node::File { mtime: m, .. }
             | Node::Symlink { mtime: m, .. }) = &mut node;
             *m = mtime;
+            // #314: el modo viaja con el nodo, como el id — un rename cambia
+            // el nombre, no los permisos.
+            if let Some(m) = tree.modes.remove(&k) {
+                tree.modes.insert(new_key.clone(), m);
+            }
             // El id viaja DENTRO del nodo: rename preserva identidad.
             tree.nodes.insert(new_key, node);
         }

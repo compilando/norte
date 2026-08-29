@@ -152,6 +152,29 @@ const OCCUPIED: Error = Error::Conflict {
     conflict: ConflictKind::Exists,
 };
 
+/// Los permisos POSIX que `p` tiene AHORA, o `None` si no se pueden leer
+/// (#314).
+///
+/// `None` no es un fallo del que actúa: hay providers que no publican
+/// `posix.mode`, y entonces lo honesto es registrar la mutación como
+/// irreversible y decirlo, en vez de guardar un modo inventado que un undo
+/// aplicaría después como si fuera el de antes.
+///
+/// Los doce bits de permiso, sin los de clase de nodo: es lo único que
+/// `set_mode` acepta, y devolver `st_mode` entero haría que la reversa
+/// intentara cambiar de qué clase es el nodo.
+pub(crate) async fn modo_actual(provider: &dyn Provider, p: &VPath) -> Option<u32> {
+    let req = norte_vfs::AttrRequest::sanitized(vec!["posix.mode".to_owned()]);
+    let opt = norte_vfs::ListOptions { attrs: req };
+    let entry = provider.stat_with(p, &opt).await.ok()?;
+    match entry.attrs.get("posix.mode")? {
+        norte_proto::AttrValue::Uint(m) => u32::try_from(*m)
+            .ok()
+            .map(|m| m & norte_proto::methods::MODE_PERMISSION_BITS),
+        _ => None,
+    }
+}
+
 /// ¿Tiene `dir` algún hijo?
 ///
 /// Mira SOLO el primer ítem del listado: la pregunta es «¿está vacío?», y un
@@ -426,6 +449,68 @@ pub(crate) async fn revert_entry(
                     path_to: Some(&entry.path),
                     reversal: Reversal::RenameBack,
                     reversal_ref: None,
+                    actor,
+                    undoes_seq: Some(entry.seq),
+                    batch_id: batch,
+                })
+                .await
+                .map_err(Error::from)?;
+            Ok(Reverted::Done)
+        }
+
+        // Undo de un ModeChanged (#314): devolver los permisos que tenía.
+        //
+        // El modo anterior viene en `reversal_ref`, en ASCII decimal (ver
+        // `Reversal::SetModeBack`). Sin él —o ilegible— la entrada estaría
+        // clasificada `Irreversible` y no llegaría aquí; que llegue igual es
+        // un journal corrupto, y entonces se BLOQUEA en vez de inventarse un
+        // modo. No hay comprobación de «está libre» que hacer: esto no crea ni
+        // mueve nada, solo devuelve doce bits a lo que haya en esa ruta.
+        //
+        // «Lo que haya», y no «el nodo que cambió»: el journal no guarda la
+        // identidad del nodo —el mismo hueco que el brazo de `delete` razona
+        // más arriba—, así que si aquello se borró y alguien creó otra cosa
+        // con ese nombre, esta reversa le pone los permisos del anterior. El
+        // techo del daño es más bajo que el de un borrado, pero conviene no
+        // fingir una garantía que no se comprueba.
+        "set_mode_back" => {
+            let Some(anterior) = entry
+                .reversal_ref
+                .as_deref()
+                .and_then(|b| std::str::from_utf8(b).ok())
+                .and_then(|s| s.parse::<u32>().ok())
+            else {
+                return Ok(Reverted::blocked(entry.seq, Error::InvalidPath));
+            };
+            // Un modo corrupto en el journal no se le pasa al provider: los
+            // bits de clase de nodo no son un permiso, y el trait manda
+            // rechazarlos en vez de recortarlos.
+            if anterior & !norte_proto::methods::MODE_PERMISSION_BITS != 0 {
+                return Ok(Reverted::blocked(entry.seq, Error::InvalidPath));
+            }
+            // El modo de AHORA, para que la compensación diga la verdad sobre
+            // lo que deshizo. Si no se puede leer NO se inventa: la
+            // compensación queda irreversible, que es lo mismo que hace la
+            // mutación original cuando no pudo leer el suyo. Caer al `path_to`
+            // —el modo que se PIDIÓ— prometería un rehacer hacia un valor que
+            // nadie llegó a observar, y `chmod(2)` puede haberlo cambiado por
+            // el camino (limpia setgid en silencio).
+            let actual = modo_actual(provider, &path).await;
+            if let Err(e) = provider.set_mode(&path, anterior).await {
+                return Ok(Reverted::blocked(entry.seq, e));
+            }
+            journal
+                .journal()
+                .record_entry(&NewEntry {
+                    op: "mode_changed",
+                    path: &entry.path,
+                    path_to: Some(anterior.to_string().as_bytes()),
+                    reversal: if actual.is_some() {
+                        Reversal::SetModeBack
+                    } else {
+                        Reversal::Irreversible
+                    },
+                    reversal_ref: actual.map(|m| m.to_string().into_bytes()).as_deref(),
                     actor,
                     undoes_seq: Some(entry.seq),
                     batch_id: batch,

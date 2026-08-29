@@ -615,6 +615,23 @@ pub async fn on_key(
                             }
                         }
                     }
+                    // #314: los permisos. Mismo molde que partir: se resuelven
+                    // los params, se manda, y un fallo del submit CONSERVA lo
+                    // tecleado con su diagnóstico debajo.
+                    PromptKind::Chmod => {
+                        if let Some(params) = app.chmod_confirm() {
+                            let n = params.paths.len();
+                            match backend.set_mode(params).await {
+                                Ok(task) => {
+                                    app.board.push(&task, None);
+                                    app.chmod_submitted();
+                                    app.message =
+                                        Some(ta("msg-chmod-started", &[("n", &n.to_string())]));
+                                }
+                                Err(e) => app.chmod_set_error(error_message(&e)),
+                            }
+                        }
+                    }
                     PromptKind::TransferDest => {
                         let _ = app.transfer_dest_confirm();
                     }

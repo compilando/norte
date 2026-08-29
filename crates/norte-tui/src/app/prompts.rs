@@ -470,6 +470,53 @@ impl App {
         })
     }
 
+    /// Abre el diálogo de PERMISOS (#314) sobre `targets`, con el campo
+    /// prellenado con `mode` si se pudo leer el de la entrada bajo el cursor.
+    ///
+    /// Prellenar no es un adorno: teclear `755` sobre un campo vacío es fácil,
+    /// y quitarle el bit de ejecución a un fichero que ya lo tenía —porque no
+    /// se veía cuál era— es la clase de error que este diálogo tiene que hacer
+    /// difícil.
+    pub fn open_chmod(&mut self, targets: Vec<VPath>, mode: Option<u32>) {
+        if targets.is_empty() {
+            return;
+        }
+        self.modal = Some(Modal::Chmod {
+            mode: mode
+                .map(norte_frontend::chmod::format_mode)
+                .unwrap_or_default(),
+            targets,
+            error: None,
+        });
+    }
+
+    /// Lo que hay que mandar al confirmar el diálogo de permisos: las rutas y
+    /// el modo ya leído. `None` si lo tecleado no es un modo — el diálogo se
+    /// queda abierto con su diagnóstico.
+    pub fn chmod_confirm(&mut self) -> Option<norte_proto::methods::FsSetModeParams> {
+        let Some(Modal::Chmod { mode, targets, .. }) = &self.modal else {
+            return None;
+        };
+        let (texto, paths) = (mode.clone(), targets.clone());
+        match norte_frontend::chmod::parse_mode(&texto) {
+            Ok(mode) => Some(norte_proto::methods::FsSetModeParams { paths, mode }),
+            Err(e) => {
+                self.chmod_set_error(norte_i18n::t(e.message_key()));
+                None
+            }
+        }
+    }
+
+    /// El diálogo se cerró porque la task encoló.
+    pub fn chmod_submitted(&mut self) {
+        self.prompt_submitted(PromptKind::Chmod);
+    }
+
+    /// Deja el diagnóstico y conserva lo tecleado.
+    pub fn chmod_set_error(&mut self, msg: String) {
+        self.prompt_set_error(PromptKind::Chmod, msg);
+    }
+
     /// El diálogo se cerró porque la task encoló.
     pub fn split_submitted(&mut self) {
         self.prompt_submitted(PromptKind::Split);
