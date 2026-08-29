@@ -284,12 +284,13 @@ verified with `addr2line`, which is the check to repeat if anyone touches
 deliberate: a wrongly-swept executable costs a relink (seconds under lld), a
 wrongly-swept `.rlib` costs a full compile.
 
-**First time on a machine: `just setup`.** It builds and puts `ntc`, `norte`
-and `ntc-gui` in `~/.local/bin`, warns if that directory is not on PATH, and
-treats the window as optional so a box without WebKitGTK/npm still gets `ntc`.
-`just unlink` removes the links again, and only the ones pointing at this tree.
-It is `just link` + `just link-gui` with the first-run checks; those two stay
-for when you want one of them alone.
+**First time on a machine: `make setup` then `make link-all`.** The first
+bootstraps the toolchain (rustup, just, nextest); the second builds and puts
+`ntc`, `norte` and `ntc-gui` in `~/.local/bin`, warns if that directory is not
+on PATH, and treats the window as optional so a box without WebKitGTK/npm
+still gets `ntc`. `just unlink` removes the links again, and only the ones
+pointing at this tree. `link-all` is `just link` + `just link-gui` with the
+first-run checks; those two stay for when you want one of them alone.
 
 **To run the dev build: `just link`, not `just install`.** It symlinks `ntc` and
 `norte` from `~/.local/bin` (which precedes cargo's bin on PATH) to this tree's

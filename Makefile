@@ -10,7 +10,7 @@
 CARGO_HOME ?= $(HOME)/.cargo
 export PATH := $(CARGO_HOME)/bin:$(PATH)
 
-.PHONY: all setup run dev gui gui-demo cli test t ci fmt lint cov docs watch help install uninstall
+.PHONY: all setup link link-gui link-all unlink run dev gui cli test t ci fmt lint cov docs watch help install uninstall
 
 all: help
 
@@ -26,17 +26,41 @@ _need_just:
 setup:
 	bash scripts/setup.sh
 
+# Deja `ntc`, `norte` y `ntc-gui` en el PATH apuntando a ESTE árbol. Es lo que
+# se corre UNA vez tras `make setup`; a partir de ahí cualquier build los
+# actualiza sola, porque son symlinks al `target/` de aquí y no copias.
+#
+# `make setup` prepara el TOOLCHAIN; esto prepara los COMANDOS. Son dos pasos
+# distintos y en ese orden.
+link-all: _need_just
+	just link-all
+
+# Las dos mitades sueltas, por si sólo quieres una: `link` es ntc + norte (sin
+# tocar WebKitGTK ni npm), `link-gui` es la ventana.
+link: _need_just
+	just link
+
+link-gui: _need_just
+	just link-gui
+
+# La vuelta de `make link-all`. Sólo quita los enlaces que apuntan a este
+# árbol; los de otro worktree se quedan.
+unlink: _need_just
+	just unlink
+
 help:
 	@echo "norte — atajos (delegan en just):"
-	@echo "  make setup  - preparar el equipo (rustup, just, nextest, deny…)"
-	@echo "  make run    - TUI en release"
-	@echo "  make dev    - TUI en debug (iterar)"
-	@echo "  make gui    - GUI GPUI (excluida del workspace; exige 'norte daemon run')"
-	@echo "  make test   - suite completa (nextest + doctests)"
-	@echo "  make ci     - lo mismo que CI: lint + test + cobertura + docs"
-	@echo "  make fmt    - formatear"
-	@echo "  make watch  - tests en cada guardado (exige cargo-watch)"
-	@echo "  make install   - instala norte-tui y norte (CLI) en \$$CARGO_HOME/bin"
+	@echo "  make setup    - preparar el equipo (rustup, just, nextest, deny…)"
+	@echo "  make link-all - dejar ntc, norte y ntc-gui en el PATH (tras setup)"
+	@echo "  make unlink   - quitarlos"
+	@echo "  make run      - TUI en release"
+	@echo "  make dev      - TUI en debug (iterar)"
+	@echo "  make gui      - ventana Tauri (exige 'norte daemon run')"
+	@echo "  make test     - suite completa (nextest + doctests)"
+	@echo "  make ci       - lo mismo que CI: lint + test + cobertura + docs"
+	@echo "  make fmt      - formatear"
+	@echo "  make watch    - tests en cada guardado (exige cargo-watch)"
+	@echo "  make install  - instala norte-tui y norte (CLI) en \$$CARGO_HOME/bin"
 	@echo "  make uninstall - los desinstala"
 	@echo "  just cli ls /tmp          - CLI de humo (args libres via just)"
 
@@ -47,10 +71,7 @@ dev: _need_just
 	just dev
 
 gui: _need_just
-	just gui
-
-gui-demo: _need_just
-	just gui-demo
+	just gui-run
 
 test: _need_just
 	just test

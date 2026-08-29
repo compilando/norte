@@ -295,6 +295,10 @@ dev:
 # enlaces son symlinks al `target/` de aquí, así que a partir de ese momento
 # cualquier build (tuya o del gate) actualiza los tres comandos sola.
 #
+# No se llama `setup` porque `make setup` ya es otra cosa — el bootstrap del
+# toolchain (rustup, just, nextest) — y dos `setup` que hacen cosas distintas
+# es exactamente el tipo de detalle que se teclea mal a las dos de la mañana.
+#
 # Tres cosas que esta receta hace y `just link` + `just link-gui` sueltas no:
 #
 # - Comprueba que `~/.local/bin` está en el PATH y, si no, dice cómo meterlo
@@ -305,8 +309,8 @@ dev:
 #   mismo motivo por el que `core_pkgs` deja la GUI fuera del gate.
 # - `--gui`/`--no-gui` fuerza la decisión cuando no quieras que la adivine.
 #
-# `dir` elige perfil igual que en `just link`: `just setup release`.
-setup dir="debug" gui="auto":
+# `dir` elige perfil igual que en `just link`: `just link-all release`.
+link-all dir="debug" gui="auto":
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p ~/.local/bin
@@ -324,7 +328,7 @@ setup dir="debug" gui="auto":
             quiero_gui=yes
         else
             quiero_gui=no
-            echo "aviso: sin npm o sin WebKitGTK 4.1; me salto ntc-gui ('just gui-deps' y 'just setup {{dir}} yes' cuando los tengas)" >&2
+            echo "aviso: sin npm o sin WebKitGTK 4.1; me salto ntc-gui ('just gui-deps' y 'just link-all {{dir}} yes' cuando los tengas)" >&2
         fi
     fi
     if [ "$quiero_gui" = "yes" ]; then
@@ -343,7 +347,7 @@ setup dir="debug" gui="auto":
         fi
     done
 
-# Quita del PATH los enlaces que puso `just setup`. No toca lo que instaló
+# Quita del PATH los enlaces que puso `just link-all`. No toca lo que instaló
 # `cargo install` (para eso está `just uninstall`) ni borra nada del árbol:
 # sólo desenlaza, y sólo si el enlace apunta a ESTE árbol — así una sesión en
 # un worktree no se lleva por delante los enlaces de otro.
