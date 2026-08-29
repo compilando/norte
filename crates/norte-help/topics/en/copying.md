@@ -8,6 +8,8 @@ commands = [
     "pane.move",
     "pane.rename",
     "pane.rename-batch",
+    "pane.checksum",
+    "pane.checksum-verify",
     "pane.mkdir",
     "pane.delete",
     "pane.delete-permanent",
@@ -130,3 +132,36 @@ same collisions and the same undo.
 
 A destination is never guessed. Copying into a panel you did not have in mind
 is silent data loss, and one prompt is cheaper than finding out afterwards.
+
+# Checking it arrived whole
+
+A copy that ends without an error says the bytes went out and came in. It does
+not say they are the same bytes: a disk that lies, a network that patches badly,
+an object store that reassembles a multipart. That is what checksums are for.
+
+{{cmd:pane.checksum}} computes the sha256 of what is marked — or of what is
+under the cursor, the usual operand — and shows the list. It is a task like any
+other: it reports progress, {{cmd:task.cancel}} stops it, and the panel stays
+usable while it works. Confirming copies the list to the clipboard in
+`sha256sum` format — `digest␣␣name`, one line per file — which is what goes into
+a `SHA256SUMS` and what every other tool understands.
+
+{{cmd:pane.checksum-verify}} walks it back: over a sums file — the one under the
+cursor — it reads the lines, computes what is really on disk and shows a verdict
+per line: **ok**, **mismatch**, **missing**, **not a file** or **unnameable
+here**. Five and not two because they are fixed in different ways. Names are
+resolved against the directory of the SUMS FILE, not the panel's: a `SHA256SUMS`
+speaks about what sits beside it.
+
+What is not understood is COUNTED. A broken line does not take the others down,
+but one single line falling out is enough for the summary to stop saying "all
+ok": the one that fell out is precisely the one with the strange name. And a
+batch cancelled halfway is compared against nothing — saying "mismatch" about a
+file nobody read would be worse than saying nothing.
+
+A directory has no sum, and asking for one does not fail the operation: that
+entry comes back with no digest and says so. Summing "a tree" is a different
+question — a manifest, with its format and its order — and answering it halfway
+would produce a number that checks nothing.
+
+> ⚠ A batch above 4096 paths is REJECTED rather than truncated. A silently truncated list reads as "all checked" over files nobody looked at, and checking is exactly what this exists for.

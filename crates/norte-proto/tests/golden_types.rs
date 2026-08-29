@@ -553,6 +553,26 @@ fn golden_task_progress() {
                 },
             ),
             (
+                // 0.59.0 (#311): TaskKind::Checksum, y la FORMA de su progreso,
+                // que la rustdoc promete y hasta ahora no congelaba nada: hay
+                // total de entradas desde el principio —se sabe cuántas rutas
+                // se pidieron— y `bytes_total` es `None`, porque cuánto ocupan
+                // no se sabe sin haberlas leído. `unreadable` cuenta las que se
+                // quedaron sin digest (#251).
+                "running_checksum",
+                TaskProgress {
+                    task_id: TaskId::new(57),
+                    kind: TaskKind::Checksum,
+                    state: TaskState::Running,
+                    bytes_done: 4096,
+                    bytes_total: None,
+                    entries_done: 2,
+                    entries_total: Some(4),
+                    current: Some(vpath("file:///casa/b%FF.bin")),
+                    unreadable: Some(1),
+                },
+            ),
+            (
                 // 0.49.0 (#139): TaskKind::DirSize, y la fixture que no se
                 // escribió cuando entró el método (hallazgo de
                 // `protocol-guardian`). Su progreso es el ÚNICO cuyo
@@ -1251,6 +1271,10 @@ fn check_methods_fs_checksum(fixtures: &BTreeMap<String, Value>) {
                     miss: Some(ChecksumMiss::NotAFile),
                 },
             ],
+            algo: ChecksumAlgo::Sha256,
+            // A medias A PROPÓSITO: `pending > 0` es lo que un informe de una
+            // Task cancelada deja escrito, y congelarlo aquí es lo que impide
+            // que alguien lo ponga a cero «por limpieza».
             pending: 2,
         },
     );

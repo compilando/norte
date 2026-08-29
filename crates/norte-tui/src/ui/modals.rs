@@ -208,6 +208,14 @@ pub(crate) fn modal_title_body(
             t("modal-confirm-quit-title"),
             format!("{}\n{}", t("modal-confirm-quit-body"), hints.confirm),
         ),
+        // #311: una línea por fichero, con su suma y —al comprobar— su
+        // veredicto. El nombre va por el saneado de siempre: un fichero de
+        // sumas nombra ficheros, y un nombre puede traer bidi dentro.
+        Modal::Checksums {
+            title_key,
+            rows,
+            offset,
+        } => checksums_modal_text(title_key, rows, *offset),
         // #103 T9: ver `mark_pattern_modal_text` (enmascarado, no un texto
         // fijo — el patrón/error son de usuario).
         Modal::MarkPattern {
@@ -386,6 +394,16 @@ pub(crate) fn modal_height(modal: &crate::app::Modal) -> u16 {
                 + usize::from(entry.kind == norte_proto::EntryKind::Dir || size.is_some());
             u16::try_from(lines).unwrap_or(u16::MAX).saturating_add(3)
         }
+        // #311: una línea por fila de la ventana + el indicador de que hay más
+        // + el hint.
+        Modal::Checksums { rows, offset, .. } => {
+            // Con la ventana desplazada, «hay más» puede ser falso aunque la
+            // lista sea larga: la caja se mide con lo que se va a PINTAR.
+            let visibles = rows.len().saturating_sub(*offset).min(AI_RENAME_PAIR_LIMIT);
+            let hay_mas = rows.len().saturating_sub(offset + AI_RENAME_PAIR_LIMIT) > 0;
+            let lines = visibles + usize::from(hay_mas) + 1;
+            u16::try_from(lines).unwrap_or(u16::MAX).saturating_add(3)
+        }
         Modal::AiRenamePlan { entries, plan, .. } => {
             let lines = 2
                 + 2 * entries.len().min(AI_RENAME_PAIR_LIMIT)
@@ -542,6 +560,61 @@ pub(crate) fn approval_modal_text(
 /// El nombre y los valores de atributo son datos de FICHERO, así que van
 /// enmascarados con el mismo `display_name` que el listado: un nombre con bidi
 /// o invisibles no reordena este diálogo.
+/// El cuerpo del modal de sumas (#311): una línea por fichero.
+///
+/// El nombre pasa por [`display_name`] como cualquier otro que se pinte —un
+/// fichero de sumas es texto de FUERA y puede nombrar cosas con bidi dentro— y
+/// el digest se recorta a doce caracteres: lo que cabe en una caja modal no es
+/// una línea de 64, y quien quiera el hash entero lo copia con `Enter`.
+pub(crate) fn checksums_modal_text(
+    title_key: &str,
+    rows: &[crate::app::ChecksumRow],
+    offset: usize,
+) -> (String, String) {
+    /// Lo que cabe de un nombre en la caja. El modal no envuelve, así que sin
+    /// esto `ratatui` recorta por la derecha SIN MARCA: dos nombres largos con
+    /// el mismo principio se pintan idénticos, y la fila que estás leyendo
+    /// para decidir si un ISO es el bueno no dice cuál es.
+    const NOMBRE_MAX: usize = 44;
+
+    let mut lines = Vec::with_capacity(rows.len().min(AI_RENAME_PAIR_LIMIT) + 2);
+    for row in rows.iter().skip(offset).take(AI_RENAME_PAIR_LIMIT) {
+        let (name, hostile) = display_name(&row.name);
+        let name = norte_frontend::middle_ellipsis(&name, NOMBRE_MAX);
+        let name = if hostile {
+            format!("{HOSTILE_BADGE} {name}")
+        } else {
+            name
+        };
+        let estado = match (row.verdict, &row.digest) {
+            (Some(v), _) => t(v.label_key()),
+            (None, Some(d)) => d.chars().take(12).collect::<String>(),
+            (None, None) => t("checksum-unreadable"),
+        };
+        lines.push(format!("{estado}  {name}"));
+    }
+    // Lo que queda POR DEBAJO de la ventana, que con `offset` no es lo mismo
+    // que «las que no caben»: bajando, este número tiene que bajar con él.
+    let restantes = rows.len().saturating_sub(offset + AI_RENAME_PAIR_LIMIT);
+    if restantes > 0 {
+        lines.push(norte_i18n::ta(
+            "modal-checksums-more",
+            &[("n", &restantes.to_string())],
+        ));
+    }
+    // Copiar solo se ofrece si hay algo que copiar: una comprobación trae
+    // veredictos y ningún digest, y el `sha256sum -c` que saldría de ahí sería
+    // un fichero vacío. Prometer la tecla igualmente acababa en «nada que
+    // copiar», que es un diálogo enseñando una tecla que no hace nada.
+    let copiable = rows.iter().any(|r| r.digest.is_some());
+    lines.push(t(if copiable {
+        "modal-checksums-hint"
+    } else {
+        "modal-checksums-hint-verify"
+    }));
+    (t(title_key), lines.join("\n"))
+}
+
 pub(crate) fn properties_modal_text(
     entry: &norte_proto::Entry,
     size: Option<(u64, u64)>,

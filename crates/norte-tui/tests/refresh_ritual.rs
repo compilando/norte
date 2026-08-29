@@ -81,3 +81,30 @@ fn un_refresh_bajo_la_ayuda_abierta_recongela_los_hechos() {
         "el listado cambió: los hechos tienen que volver a congelarse"
     );
 }
+
+/// #311: una task cuyo resultado ES un informe no puede dejar que el `done`
+/// genérico del tick le pise el mensaje. Las sumas son el caso: el veredicto
+/// («1 no coincide») lo pone la cosecha del informe, y la barra lo perdía —
+/// visto en tmux, donde el pie decía `done` sobre un modal con un MISMATCH
+/// dentro.
+#[test]
+fn una_task_que_habla_por_su_informe_no_dice_done() {
+    use norte_proto::TaskKind;
+    use norte_tui::refresh::habla_por_su_informe;
+
+    assert!(
+        habla_por_su_informe(TaskKind::Checksum),
+        "las sumas contestan con su informe, no con su estado"
+    );
+    for otra in [
+        TaskKind::Copy,
+        TaskKind::Move,
+        TaskKind::Delete,
+        TaskKind::Pack,
+    ] {
+        assert!(
+            !habla_por_su_informe(otra),
+            "una mutación sí termina con un `done`: {otra:?}"
+        );
+    }
+}

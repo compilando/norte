@@ -161,6 +161,68 @@ async fn por_encima_del_tope_se_rechaza() {
     assert!(matches!(err, ProtoError::InvalidPath), "{err:?}");
 }
 
+/// Regla 3: el lote se cancela limpiamente, el estado lo dice, y el informe
+/// **se queda a medias diciéndolo**.
+///
+/// `pending > 0` con la Task ya terminal es la señal de que lo que hay no es
+/// todo. Sin ella, un frontend que compare contra un fichero de sumas acusaría
+/// —«no cuadra o falta»— a ficheros que nadie llegó a leer, que es el peor
+/// error posible en la única herramienta cuyo trabajo es comprobar.
+#[tokio::test]
+async fn cancelar_deja_el_informe_marcado_como_incompleto() {
+    let (engine, mem) = setup();
+    let mut rutas = Vec::new();
+    for i in 0..400 {
+        let wire = format!("mem:///f{i}");
+        write_file(&mem, &wire, b"contenido").await;
+        rutas.push(vp(&wire));
+    }
+    let handle = engine
+        .checksum_as(
+            FsChecksumParams {
+                paths: rutas,
+                algo: ChecksumAlgo::Sha256,
+            },
+            Actor::User,
+        )
+        .await
+        .expect("lanza");
+    let id = handle.id();
+    handle.cancel();
+    assert_eq!(handle.join().await, TaskState::Cancelled);
+
+    let (_actor, informe) = engine.checksum_report(id).expect("hay informe");
+    assert!(
+        informe.pending > 0,
+        "cancelado a mitad: lo que falta tiene que seguir contándose, \
+         no ponerse a cero como si el lote hubiera acabado"
+    );
+    assert!(
+        informe.entries.len() < 400,
+        "si estuvieran las 400 no se canceló nada y el test no prueba nada"
+    );
+}
+
+/// El informe dice CON QUÉ se calculó. Se puede pedir sin haber mandado la
+/// petición —`task.list` enseña las tasks de otros—, así que asumir sha256 por
+/// omisión sería pintar digests de otra cosa el día que haya un segundo
+/// algoritmo.
+#[tokio::test]
+async fn el_informe_nombra_su_algoritmo() {
+    let (engine, mem) = setup();
+    write_file(&mem, "mem:///x", b"abc").await;
+    let handle = engine
+        .checksum_as(params(&["mem:///x"]), Actor::User)
+        .await
+        .expect("lanza");
+    let id = handle.id();
+    assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(
+        engine.checksum_report(id).expect("informe").1.algo,
+        ChecksumAlgo::Sha256
+    );
+}
+
 /// Un id que nunca fue un lote de sumas no tiene informe — y eso es lo que el
 /// daemon convierte en `NotFound` para quien pregunta por el de otro.
 #[tokio::test]

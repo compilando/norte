@@ -1714,6 +1714,10 @@
     "FsChecksumReportResult": {
       "description": "Result de [`FS_CHECKSUM_REPORT`] (0.59.0, #311): lo calculado hasta ahora.\n\nEl orden es el de la PETICIÓN, no el de terminación: un informe que se\nreordena solo no se puede comparar con la lista que uno mandó.",
       "properties": {
+        "algo": {
+          "$ref": "#/$defs/ChecksumAlgo",
+          "description": "Con qué función se calcularon estos digests.\n\nVa en el INFORME y no solo en los params porque el informe se puede\npedir sin haber mandado la petición: `task.list` enseña las Tasks de\notros. El día que exista `sha512`, un lector que asumiera sha256 por\nomisión pintaría digests de otra cosa sin decirlo — la respuesta\nequivocada de la única herramienta cuyo trabajo es comprobar."
+        },
         "entries": {
           "description": "Una entrada por ruta ya resuelta, en el orden en que se pidieron.",
           "items": {
@@ -1722,7 +1726,7 @@
           "type": "array"
         },
         "pending": {
-          "description": "Cuántas rutas quedan por resolver. Cero con la Task terminal; mayor que\ncero antes, y eso es lo que distingue «esto es todo» de «esto es lo que\nllevo» sin tener que mirar el estado de la Task por otro sitio.",
+          "description": "Cuántas rutas quedan por resolver.\n\nBaja hasta cero conforme el lote avanza, y con la Task `Completed` es\ncero. **No** es cero en una Task terminal que se CANCELÓ o que falló:\nahí se queda en lo que faltaba, y esa es justo la señal de que el\ninforme está a medias. Un lector que trate `pending > 0` como «todavía\nno» y siga sondeando no pararía nunca; lo que distingue «esto es todo»\nde «esto es lo que llevo» son las dos cosas juntas, el estado de la Task\ny este número.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -1730,6 +1734,7 @@
       },
       "required": [
         "entries",
+        "algo",
         "pending"
       ],
       "type": "object"

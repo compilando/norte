@@ -148,6 +148,12 @@ keymap = [
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
     { on = ["*"], run = "mark.invert" },
+    # Las sumas (#311). Krusader las tiene en su menú File y ninguno de los
+    # cuatro importados les da acorde, así que la tecla se ELIGE: `alt+k`
+    # calcula y `alt+K` comprueba — libre en los siete, y la mayúscula
+    # para la variante, como `alt+o`/`alt+O` en el anillo de paneles.
+    { on = ["alt+k"], run = "pane.checksum" },
+    { on = ["alt+K"], run = "pane.checksum-verify" },
     { on = ["alt+h"], run = "layout.split-h" },
     { on = ["alt+v"], run = "layout.split-v" },
 ]

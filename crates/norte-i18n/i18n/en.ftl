@@ -67,6 +67,34 @@ modal-command-line-hint = runs in the active pane's directory
 modal-command-line-empty = type a command first
 modal-command-line-too-long = the command line is full ({ $max } characters); the rest was not typed
 # Batch rename WITHOUT AI (#310): a template and the same reviewable plan.
+# Checksums (#311).
+modal-checksums-create = sha256 sums
+modal-checksums-verify = Checksum verification
+modal-checksums-hint = Enter: copy the list · Esc: close
+# A verification has no digests to copy: its footer does not offer the key.
+modal-checksums-hint-verify = Esc: close
+checksum-not-a-file = not a file
+checksum-unnameable = unnameable here
+modal-checksums-more = … and { $n } more
+checksum-ok = ok
+checksum-mismatch = MISMATCH
+checksum-missing = missing
+checksum-unreadable = unreadable
+msg-checksum-started = computing sums…
+msg-checksum-all-ok = { $n } checked, all ok
+msg-checksum-bad = { $n } do not match or are missing
+msg-checksum-copied = sums copied to the clipboard
+msg-checksum-nothing-to-copy = there is no sum to copy
+msg-checksum-not-a-sums-file = this does not look like a sums file
+msg-checksum-done-hidden = sums computed (close the dialog to see them)
+msg-checksum-copied-osc52 = sums copied (through the terminal; it may not honour it)
+# What could not be read is NOT swallowed: checking 37 of 40 lines and saying
+# "40 ok" is the wrong answer.
+msg-checksum-unreadable-lines = { $n } checked; { $refused } lines could not be read
+msg-checksum-sums-too-big = the sums file is too big to check in full
+msg-checksum-sums-utf16 = the sums file is UTF-16; save it as UTF-8
+msg-checksum-partial = the batch did not finish: what was computed is partial and is not compared
+msg-checksum-failed = computing the sums failed
 modal-rename-batch = Rename in batch — template
 modal-rename-batch-hint = `[N]` name · `[E]` extension · `[C]` counter (`[C3]` zero-padded) · Enter: ask for a plan
 msg-rename-pattern-empty = the template is empty
@@ -955,6 +983,8 @@ help-cmd-pane-sort-size = sort by size
 help-cmd-pane-sort-time = sort by date
 help-cmd-pane-sort-menu = choose the sort order (opens the columns dialog)
 help-cmd-pane-properties = properties of the entry
+help-cmd-pane-checksum = compute the sha256 sum of what is marked
+help-cmd-pane-checksum-verify = check a sums file against what it lists
 help-cmd-pane-dir-size = count how much space it takes
 help-cmd-pane-pack = pack into an archive
 help-cmd-pane-unpack = unpack into the other panel

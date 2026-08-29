@@ -681,6 +681,23 @@ pub async fn dispatch(
             let targets = app.focused().marked_paths();
             launch_size_count(app, backend, targets, false).await;
         }
+        // #311: las sumas. Calcular es sobre lo marcado (el operando de
+        // siempre); comprobar es sobre el fichero de sumas bajo el cursor, y
+        // resuelve los nombres contra SU directorio.
+        Command::PaneChecksum => {
+            let paths = app.focused().marked_paths();
+            if paths.is_empty() {
+                app.message = Some(t("msg-nothing-selected"));
+            } else {
+                app.pending_checksum = Some(crate::app::ChecksumRequest::Compute { paths });
+            }
+        }
+        Command::PaneChecksumVerify => match app.focused().selected().map(|e| e.path.clone()) {
+            Some(sums) => {
+                app.pending_checksum = Some(crate::app::ChecksumRequest::Verify { sums });
+            }
+            None => app.message = Some(t("msg-nothing-selected")),
+        },
         // #132: escribir archivos. Los cinco comandos que los cuatro presets
         // atan y norte no tenía.
         Command::PanePack => app.open_pack(),

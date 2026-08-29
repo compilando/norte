@@ -68,6 +68,34 @@ modal-command-line-hint = se ejecuta en el directorio del pane activo
 modal-command-line-empty = escribe un comando primero
 modal-command-line-too-long = la línea de comandos está llena ({ $max } caracteres); el resto no se escribió
 # El renombrado en lote SIN IA (#310): una plantilla y el mismo plan revisable.
+# Las sumas de comprobación (#311).
+modal-checksums-create = Sumas sha256
+modal-checksums-verify = Comprobación de sumas
+modal-checksums-hint = Enter: copiar la lista · Esc: cerrar
+# Una comprobación no tiene digests que copiar: su pie no ofrece la tecla.
+modal-checksums-hint-verify = Esc: cerrar
+checksum-not-a-file = no es un fichero
+checksum-unnameable = nombre imposible aquí
+modal-checksums-more = … y { $n } más
+checksum-ok = correcto
+checksum-mismatch = NO CUADRA
+checksum-missing = falta
+checksum-unreadable = ilegible
+msg-checksum-started = calculando sumas…
+msg-checksum-all-ok = { $n } comprobados, todos correctos
+msg-checksum-bad = { $n } no cuadran o faltan
+msg-checksum-copied = sumas copiadas al portapapeles
+msg-checksum-nothing-to-copy = no hay ninguna suma que copiar
+msg-checksum-not-a-sums-file = esto no parece un fichero de sumas
+msg-checksum-done-hidden = sumas calculadas (cierra el diálogo para verlas)
+msg-checksum-copied-osc52 = sumas copiadas (por el terminal; puede no honrarlo)
+# Lo que no se pudo entender NO se calla: comprobar 37 de 40 líneas y decir
+# «40 correctos» es la respuesta equivocada.
+msg-checksum-unreadable-lines = { $n } comprobados; { $refused } líneas no se pudieron leer
+msg-checksum-sums-too-big = el fichero de sumas es demasiado grande para comprobarlo entero
+msg-checksum-sums-utf16 = el fichero de sumas está en UTF-16; guárdalo en UTF-8
+msg-checksum-partial = el lote no terminó: lo calculado está a medias y no se compara
+msg-checksum-failed = el cálculo de sumas falló
 modal-rename-batch = Renombrar en lote — plantilla
 modal-rename-batch-hint = `[N]` nombre · `[E]` extensión · `[C]` contador (`[C3]` con ceros) · Enter: pedir plan
 msg-rename-pattern-empty = la plantilla está vacía
@@ -953,6 +981,8 @@ help-cmd-pane-sort-size = ordenar por tamaño
 help-cmd-pane-sort-time = ordenar por fecha
 help-cmd-pane-sort-menu = elegir el orden (abre el diálogo de columnas)
 help-cmd-pane-properties = propiedades de la entrada
+help-cmd-pane-checksum = calcular la suma sha256 de lo marcado
+help-cmd-pane-checksum-verify = comprobar un fichero de sumas contra lo que lista
 help-cmd-pane-dir-size = contar cuánto ocupa
 help-cmd-pane-pack = empaquetar en un archivo
 help-cmd-pane-unpack = desempaquetar en el otro panel

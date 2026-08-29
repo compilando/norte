@@ -85,3 +85,4 @@ edits.
 | [0077](0077-the-same-command-means-the-same-thing-in-both-frontends.md) | The same command means the same thing in both frontends | accepted |
 | [0078](0078-a-name-that-travels-intact-and-still-means-something-else.md) | A name that travels intact and still means something else | accepted |
 | [0079](0079-a-profile-declares-it-does-not-execute.md) | A profile declares, it does not execute | accepted |
+| [0080](0080-a-digest-is-a-read-that-nobody-can-take-back.md) | A digest is a read that nobody can take back | accepted |

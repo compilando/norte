@@ -18,6 +18,128 @@ use crate::jobs::{InFlight, PendingAiPlan, RenameBatchRun};
 /// el del `join` por fuera (aborto por Esc, o pánico del future).
 type Harvested<T> = Result<Result<T, Error>, tokio::task::JoinError>;
 
+/// El informe de un lote de sumas (#311): abre el modal con lo calculado, y con
+/// el VEREDICTO si esto era una comprobación.
+///
+/// Un informe que no llega —la Task falló, o el anillo ya lo desalojó— sale por
+/// la barra y no abre nada: un modal vacío haría creer que se comprobó algo.
+pub fn harvest_checksum(
+    app: &mut App,
+    work: &mut InFlight,
+    res: Result<
+        (
+            norte_proto::TaskState,
+            Result<norte_proto::methods::FsChecksumReportResult, Error>,
+        ),
+        tokio::task::JoinError,
+    >,
+) {
+    use norte_frontend::checksums;
+
+    let Some(run) = work.checksum.take() else {
+        return;
+    };
+    let (estado, informe) = match res {
+        Ok(par) => par,
+        // El aborto de un relevo NO llega aquí: al relevar, el handle viejo se
+        // aborta Y se dropea, y el brazo del `select!` ya solo poll-ea el
+        // nuevo. Lo que sí llega es un pánico del future, y ahí no hay nadie
+        // que haya puesto mensaje: sin esto la barra se quedaba en «calculando
+        // sumas…» para siempre y no se abría nada.
+        Err(join) => {
+            if join.is_panic() {
+                app.message = Some(t("msg-checksum-failed"));
+            }
+            return;
+        }
+    };
+    let informe = match informe {
+        Ok(r) => r,
+        Err(e) => {
+            app.message = Some(crate::app::error_message(&e));
+            return;
+        }
+    };
+    // Un informe de una Task que se CANCELÓ o que falló está a medias, y
+    // `pending > 0` lo dice. Pintar veredictos sobre él acusaría —«no cuadra o
+    // falta»— a ficheros que nadie llegó a leer, que es el peor error posible
+    // en la única herramienta cuyo trabajo es comprobar. El estado de la Task
+    // ya se dijo por la barra (cancelado / el error), así que aquí basta con
+    // no inventarse una conclusión.
+    if estado != norte_proto::TaskState::Completed || informe.pending > 0 {
+        app.message = Some(t("msg-checksum-partial"));
+        return;
+    }
+    // El digest y el motivo de cada ruta, EN EL ORDEN PEDIDO, que es como el
+    // informe los devuelve y como se emparejan.
+    let calculado: Vec<checksums::Computed> = informe
+        .entries
+        .iter()
+        .map(|e| (e.digest.clone(), e.miss))
+        .collect();
+    // Comprobar: la lista es la del FICHERO DE SUMAS —en su orden y con todas
+    // sus líneas, incluidas las que no se pudieron ni pedir— y el veredicto
+    // sale del embudo COMPARTIDO, que es donde vive la regla de qué significa
+    // cada motivo. Calcular: la lista es lo que se pidió, con su digest.
+    let (title_key, rows) = if let Some(publicado) = run.publicado {
+        let veredictos = checksums::judge(&publicado.lines, &publicado.asked, &calculado);
+        app.message = Some(match checksums::summarize(&veredictos, publicado.refused) {
+            // No se puede decir «todos correctos» sobre 37 de 40 líneas: las
+            // tres que se cayeron son justo las de los nombres raros.
+            checksums::Summary::Unreadable { n, refused } => ta(
+                "msg-checksum-unreadable-lines",
+                &[("n", &n.to_string()), ("refused", &refused.to_string())],
+            ),
+            checksums::Summary::AllOk { n } => ta("msg-checksum-all-ok", &[("n", &n.to_string())]),
+            checksums::Summary::Bad { n } => ta("msg-checksum-bad", &[("n", &n.to_string())]),
+        });
+        let rows: Vec<crate::app::ChecksumRow> = publicado
+            .lines
+            .into_iter()
+            .zip(veredictos)
+            .map(|(linea, verdict)| crate::app::ChecksumRow {
+                name: linea.name,
+                digest: None,
+                verdict: Some(verdict),
+            })
+            .collect();
+        ("modal-checksums-verify", rows)
+    } else {
+        // Calcular: el nombre lo pone la ruta pedida, en bytes (regla 1).
+        let rows: Vec<crate::app::ChecksumRow> = informe
+            .entries
+            .iter()
+            .map(|e| crate::app::ChecksumRow {
+                name: e
+                    .path
+                    .file_name()
+                    .map(|s| s.as_bytes().to_vec())
+                    .unwrap_or_default(),
+                digest: e.digest.clone(),
+                verdict: e.miss.map(|m| match m {
+                    norte_proto::methods::ChecksumMiss::NotAFile => checksums::Verdict::NotAFile,
+                    _ => checksums::Verdict::Missing,
+                }),
+            })
+            .collect();
+        app.message = None;
+        ("modal-checksums-create", rows)
+    };
+    if app.modal.is_none() {
+        app.modal = Some(Modal::Checksums {
+            title_key,
+            rows,
+            offset: 0,
+        });
+    } else {
+        // Con otro modal abierto no se pisa nada: las filas se RETIENEN y
+        // abren solas al cerrarse el de delante. Tirarlas era peor que no
+        // decir nada, porque la barra prometía enseñarlas después.
+        work.pending_checksums = Some((title_key, rows));
+        app.message = Some(t("msg-checksum-done-hidden"));
+    }
+}
+
 /// El plan del modelo (M4-IA): abre el modal, o lo RETIENE si hay otro
 /// abierto, y de paso pide el plan del LOTE (§17) en el mismo viaje — el
 /// modal necesita su `plan_hash` para que confirmar haga algo, y un plan

@@ -37,6 +37,19 @@
     },
     "task_id": 1
   },
+  "running_checksum": {
+    "bytes_done": 4096,
+    "bytes_total": null,
+    "current": "file:///casa/b%FF.bin",
+    "entries_done": 2,
+    "entries_total": 4,
+    "kind": "checksum",
+    "state": {
+      "kind": "running"
+    },
+    "task_id": 57,
+    "unreadable": 1
+  },
   "running_combine": {
     "bytes_done": 2097152,
     "bytes_total": 3145728,

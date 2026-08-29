@@ -221,6 +221,13 @@ pub fn modal_scroll(app: &mut App, cmd: &str) -> bool {
             app.semantic_cursor(down);
             true
         }
+        // #311: sin esto, un lote de cuarenta ficheros con el que NO cuadra en
+        // la fila doce enseñaba cinco «correcto» y «… y 35 más», y no había
+        // tecla que llegara al malo.
+        Some(Modal::Checksums { .. }) => {
+            app.checksums_scroll(down);
+            true
+        }
         _ => false,
     }
 }

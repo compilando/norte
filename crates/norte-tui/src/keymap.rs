@@ -211,6 +211,8 @@ commands! {
     "pane.disconnect" => PaneDisconnect,
     "pane.edit-new" => PaneEditNew,
     "pane.dir-size" => PaneDirSize,
+    "pane.checksum" => PaneChecksum,
+    "pane.checksum-verify" => PaneChecksumVerify,
     "pane.pack" => PanePack,
     "pane.unpack" => PaneUnpack,
     "pane.test-archive" => PaneTestArchive,

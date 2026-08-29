@@ -65,6 +65,11 @@ pub async fn drain_pending(
     if let Some(params) = app.pending_compare.take() {
         launch_compare(app, backend, &mut work.compare, params).await;
     }
+    // #311: el despacho resolvió QUÉ resumir; leer el fichero de sumas y
+    // esperar el informe es I/O, y eso es del run loop. Mismo reparto.
+    if let Some(req) = app.pending_checksum.take() {
+        crate::mutations::checksum_start(app, backend, work, req).await;
+    }
     // #149 y #164: ¿cabe en el destino, y sabe el destino sujetar lo que se
     // escriba en él? Las dos son I/O, así que el modal se abre SIN los
     // avisos y esta vuelta los rellena. El reparto es el de
@@ -228,6 +233,17 @@ pub fn open_retained_modals(app: &mut App, work: &mut InFlight) {
             entries: pendiente.entries,
             offset: 0,
             plan: pendiente.plan,
+        });
+    }
+    // Sumas retenidas (#311): misma disciplina. La barra ya prometió que se
+    // verían al cerrar el diálogo de delante, y esto es lo que lo cumple.
+    if app.modal.is_none()
+        && let Some((title_key, rows)) = work.pending_checksums.take()
+    {
+        app.modal = Some(Modal::Checksums {
+            title_key,
+            rows,
+            offset: 0,
         });
     }
     // Hits semánticos retenidos (M4-IA-2): misma disciplina. Si el plan

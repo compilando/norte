@@ -439,6 +439,9 @@ fn task_kind_wire_strings() {
         (TaskKind::Search, "\"search\""),
         (TaskKind::Index, "\"index\""),
         (TaskKind::RenameBatch, "\"rename_batch\""),
+        // 0.59.0 (#311). El schema también lo congela, pero ese rojo se
+        // arregla regenerando; este obliga a tocar dos sitios a mano.
+        (TaskKind::Checksum, "\"checksum\""),
     ] {
         assert_eq!(serde_json::to_string(&kind).unwrap(), wire);
     }

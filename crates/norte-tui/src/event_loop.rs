@@ -24,7 +24,7 @@ use crate::fill::{Fill, apply_fill_msg};
 use crate::gestures::launch_opener;
 use crate::jobs::{
     InFlight, SearchRun, SyncTick, drain_compare, drain_search, drain_sync_plan, harvest_ai_rename,
-    harvest_rename_batch, harvest_semantic, harvest_sync_apply,
+    harvest_checksum, harvest_rename_batch, harvest_semantic, harvest_sync_apply,
 };
 use crate::keymap::{Command, Resolver};
 use crate::keys::on_key;
@@ -678,6 +678,17 @@ pub async fn run(
                 }
             } => {
                 harvest_semantic(app, &mut work, res);
+            }
+            res = async {
+                // El informe de un lote de sumas (#311): mismo molde. La espera
+                // del estado terminal vive DENTRO del spawn, así que aquí no
+                // hay más que cosechar.
+                match &mut work.checksum {
+                    Some(r) => (&mut r.handle).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                harvest_checksum(app, &mut work, res);
             }
             outcome = async {
                 match &mut work.lua {

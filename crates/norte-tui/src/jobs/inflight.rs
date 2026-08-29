@@ -77,6 +77,44 @@ pub struct SemanticRun {
     pub handle: tokio::task::JoinHandle<Result<Vec<norte_proto::methods::SemanticHit>, Error>>,
 }
 
+/// Un lote de sumas EN VUELO (#311).
+///
+/// La Task ya está lanzada y en el tablero; lo que se espera aquí es el
+/// INFORME, que solo tiene sentido pedir cuando la Task termina — los digests
+/// no caben en el progreso. `publicado` distingue las dos caras del mismo
+/// lote: `None` es «calcula y enséñame», `Some` es «compara contra esto».
+pub struct ChecksumRun {
+    /// La espera del informe, spawneada. Devuelve el ESTADO final de la Task
+    /// junto al informe: un informe de una Task cancelada está a medias, y
+    /// pintarlo como definitivo acusaría a ficheros que nadie llegó a leer.
+    pub handle: tokio::task::JoinHandle<(
+        norte_proto::TaskState,
+        Result<norte_proto::methods::FsChecksumReportResult, Error>,
+    )>,
+    /// La Task, para poder CANCELARLA si otro lote la releva. Abortar solo la
+    /// espera dejaría al core hasheando gigabytes sin nadie que los recoja.
+    pub task: norte_core::backend::TaskObserver,
+    /// Lo que el fichero de sumas publicaba, si esto es una verificación.
+    pub publicado: Option<Publicado>,
+}
+
+/// El fichero de sumas leído, tal como hace falta para juzgarlo (#311).
+pub struct Publicado {
+    /// Las líneas entendidas, en el orden del fichero.
+    pub lines: Vec<norte_frontend::checksums::SumLine>,
+    /// Para cada línea, en qué posición de la PETICIÓN quedó su ruta, o `None`
+    /// si su nombre no se puede escribir en este sistema —y eso no es que
+    /// falte: es que aquí no se puede nombrar, y se arregla de otra forma—.
+    ///
+    /// Por índice y no por nombre: el informe conserva el orden pedido, y
+    /// emparejar por nombre base daba «falta» sobre un `sub/dentro.txt` que
+    /// estaba ahí.
+    pub asked: Vec<Option<usize>>,
+    /// Cuántas líneas parecían sumas y no se entendieron. Con esto mayor que
+    /// cero, «todos correctos» no se puede decir.
+    pub refused: usize,
+}
+
 /// Todo lo que el bucle pidió y aún no ha cosechado.
 #[derive(Default)]
 pub struct InFlight {
@@ -109,6 +147,15 @@ pub struct InFlight {
     /// Búsqueda semántica en vuelo (M4-IA-2): mismo molde que
     /// [`Self::ai_rename`].
     pub semantic: Option<SemanticRun>,
+    /// Lote de sumas en vuelo (#311): a lo sumo uno — el modal de resultados
+    /// es uno, y lanzar otro CANCELA la Task del anterior además de abortar
+    /// su espera.
+    pub checksum: Option<ChecksumRun>,
+    /// Sumas listas llegadas con OTRO modal abierto: se RETIENEN aquí y se
+    /// abren en cuanto no haya modal (disciplina [`Self::pending_ai_plan`]).
+    /// Antes se tiraban, y la barra prometía «cierra el diálogo para verlas»
+    /// sobre unas filas que ya no existían.
+    pub pending_checksums: Option<(&'static str, Vec<crate::app::ChecksumRow>)>,
     /// Hits listos llegados con OTRO modal abierto: se RETIENEN aquí y se
     /// abren en cuanto no haya modal (disciplina [`Self::pending_ai_plan`]).
     pub pending_semantic: Option<Vec<norte_proto::methods::SemanticHit>>,

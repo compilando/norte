@@ -518,8 +518,50 @@ independently through `PROTOCOL_VERSION`.
   REASON instead of killing the batch, a directory is flagged rather than walked
   (hashing a tree is a different question, with its own format), and the report
   keeps the order you asked in — one that reordered itself could not be compared
-  against the list you sent. The frontends' surface follows; this is the wire
-  and the core.
+  against the list you sent, and it names the algorithm it used because a report
+  can be fetched without having sent the request. A batch is capped at **4096
+  paths** and is REJECTED above it rather than truncated. It goes through the
+  NARROW gate — content, not just read (ADR 0080): a digest is a fingerprint of
+  the bytes, so this subsumes the `fs.compare` hash oracle and exceeds it, and
+  an agent denied that one only had to call here.
+
+- **Checksums in the terminal** (#311). `pane.checksum` sums what is marked —
+  or the entry under the cursor, the usual operand — and shows the list;
+  confirming copies it in `sha256sum` format, which is what goes into a
+  `SHA256SUMS` and what every other tool reads (verified round-tripping through
+  GNU `sha256sum -c`). `pane.checksum-verify` walks it back over the sums file
+  under the cursor: it parses the lines as BYTES, resolves each name against the
+  directory of THAT FILE rather than the panel's — a `SHA256SUMS` speaks about
+  what sits beside it — and shows ok / MISMATCH / missing per line, with the
+  count in the status bar. The parser lives in the shared frontend crate, so the
+  window inherits it when it grows the surface (#311 stays open for that).
+  Waiting for the report is spawned rather than awaited in place: a hundred
+  large files would otherwise leave the terminal undrawn and uncancellable,
+  which is exactly when somebody cancels. A task whose answer IS its report no
+  longer gets the tick's generic "done" on top of its verdict, and the modal
+  offers the copy key only when there are digests to copy. The keys are chosen
+  rather than transcribed — `alt+k` and `alt+K`, free in all seven presets —
+  because none of the four imported managers gives checksums a chord.
+
+  Everything a checksum surface can get wrong, it gets wrong QUIETLY, so the
+  review pass on this one is worth listing: a **cancelled** batch used to be
+  compared anyway and reported "N do not match or are missing" about files
+  nobody had read — now a partial report is named as partial and compared
+  against nothing. Lines the parser did not understand are **counted**, and any
+  number above zero forbids saying "all ok" (37 checked out of 40 is not 40
+  ok). Three kinds of line it did not understand it now reads: coreutils' own
+  `\`-escaped form for names with a backslash or a newline, the BSD `--tag`
+  form, and a leading UTF-8 BOM — and a UTF-16 sums file is named as such. The
+  sums file is refused above 1 MiB instead of being read halfway. What goes to
+  the clipboard is BYTES with that same escaping, so a non-UTF-8 name is copied
+  as itself rather than as replacement characters, two different names cannot
+  collapse into one line, and a name with a newline cannot inject a forged
+  entry. Names with a directory in them (`sha256sum -r`) resolve segment by
+  segment instead of being dropped. "Missing" split into four verdicts, because
+  not-there, not-allowed, it-is-a-directory and this-system-cannot-spell-that
+  are fixed in four different ways. And the list scrolls, which it did not:
+  forty files with the bad one at row twelve showed five "ok" and no way to
+  reach it.
 
 - **Batch rename WITHOUT a language model** (#310). The batch machinery has
   been there since ADR 0042 — reviewable plan, `plan_hash`, collisions,

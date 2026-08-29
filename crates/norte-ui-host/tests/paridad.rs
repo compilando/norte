@@ -53,6 +53,12 @@ const APLAZADOS: &[(&str, u32)] = &[
     // revisión del plan sí la tiene ya, porque es la misma que la del rename
     // con IA.
     ("pane.rename-batch", 310),
+    // Las sumas (#311) nacen igual: el protocolo, el core y el parser del
+    // fichero de sumas son compartidos, y lo que la ventana no tiene todavía
+    // es dónde ENSEÑAR la lista —una tabla con su veredicto por fila— ni el
+    // gesto de copiarla al portapapeles.
+    ("pane.checksum", 311),
+    ("pane.checksum-verify", 311),
     // Los perfiles (ADR 0079) ya están en las dos: el selector, girar por la
     // lista y el cambio en caliente. Lo que la ventana todavía no hace es
     // acordarse de dónde dejaste cada panel DENTRO de cada perfil — la

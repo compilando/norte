@@ -1404,8 +1404,14 @@ impl Engine {
             let provider = self.provider_for(&p).await?;
             rutas.push((provider, p));
         }
+        // El informe nace sabiendo con QUÉ se está calculando: se puede pedir
+        // sin haber mandado la petición (`task.list` enseña las de otros), y un
+        // lector que asumiera sha256 por omisión pintaría digests de otra cosa.
         let informe = Arc::new(std::sync::Mutex::new(
-            norte_proto::methods::FsChecksumReportResult::default(),
+            norte_proto::methods::FsChecksumReportResult {
+                algo: params.algo,
+                ..Default::default()
+            },
         ));
         let owner = actor.clone();
         let vivo = Arc::clone(&informe);
@@ -3939,17 +3945,28 @@ fn evict_pack_reports(ring: &mut std::collections::VecDeque<PackReportEntry>) {
     );
 }
 
+/// Tope del anillo de `fs.checksum`. Mismo número que sus gemelos y con
+/// nombre propio: atarlo al de `archive.pack` haría que tocar el tope de
+/// empaquetar moviera este sin que nadie lo pidiera.
+pub(crate) const CHECKSUM_REPORTS_MAX: usize = TEST_REPORTS_MAX;
+
+/// Sub-tope por clase del anillo de `fs.checksum`.
+pub(crate) const CHECKSUM_REPORTS_AGENTS_MAX: usize = TEST_REPORTS_AGENTS_MAX;
+
 /// Desalojo del anillo de `fs.checksum` (#311), con la misma regla que sus
 /// gemelos: primero cae lo que no cuenta nada.
 ///
 /// Aquí «cuenta algo» es un informe con alguna ruta SIN digest: el que dice que
 /// todo se pudo leer se reconstruye volviendo a pedirlo, y el que dice que uno
-/// no se pudo leer es el que alguien está buscando.
+/// no se pudo leer es el que alguien está buscando. Es la inversión respecto a
+/// sus gemelos —allí «ruidoso» es un fallo, aquí también, pero el informe
+/// limpio es el que carga los digests que costaron horas de I/O— y se conserva
+/// porque el que falta se recalcula y el motivo del fallo no se recuerda solo.
 fn evict_checksum_reports(ring: &mut std::collections::VecDeque<ChecksumReportEntry>) {
     evict_reports(
         ring,
-        PACK_REPORTS_MAX,
-        PACK_REPORTS_AGENTS_MAX,
+        CHECKSUM_REPORTS_MAX,
+        CHECKSUM_REPORTS_AGENTS_MAX,
         |r: &norte_proto::methods::FsChecksumReportResult| {
             r.entries.iter().any(|e| e.digest.is_none())
         },

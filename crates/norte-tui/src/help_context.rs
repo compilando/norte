@@ -89,7 +89,9 @@ fn modal_context(modal: &Modal) -> &'static str {
         // se cuenta qué es un plan revisable y qué se puede deshacer.
         Modal::RenameBatchPattern { .. } => "dialog.rename",
         Modal::SemanticQuery { .. } | Modal::SemanticHits { .. } => "dialog.semantic-search",
-        Modal::Properties { .. } => "dialog.properties",
+        // Las sumas comparten página con las propiedades: las dos son cuadros
+        // de LECTURA sobre lo que hay bajo el cursor.
+        Modal::Properties { .. } | Modal::Checksums { .. } => "dialog.properties",
         // #132: los dos diálogos de escribir archivos comparten página — se
         // teclea una cosa y se confirma, y lo que hay que contar (qué formato
         // sale del nombre, qué sufijos entiende el tamaño) es lo mismo.
@@ -155,6 +157,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::AiRenamePlan { .. }
         // #139: se lee, no se escribe — F1 encima no le roba una tecla a nadie.
         | Modal::Properties { .. }
+        | Modal::Checksums { .. }
         | Modal::SemanticHits { .. } => true,
     }
 }

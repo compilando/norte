@@ -8,6 +8,8 @@ commands = [
     "pane.move",
     "pane.rename",
     "pane.rename-batch",
+    "pane.checksum",
+    "pane.checksum-verify",
     "pane.mkdir",
     "pane.delete",
     "pane.delete-permanent",
@@ -132,3 +134,37 @@ colisiones y el mismo undo.
 Un destino jamás se adivina. Copiar hacia un panel que no tenías en la cabeza
 es pérdida de datos silenciosa, y preguntar una vez cuesta menos que
 descubrirlo después.
+
+# Comprobar que llegó entero
+
+Una copia que termina sin error dice que los bytes salieron y entraron. No dice
+que sean los mismos: un disco que miente, una red que remienda mal, un
+almacenamiento de objetos que reensambla un multipart. Para eso están las sumas.
+
+{{cmd:pane.checksum}} calcula el sha256 de lo marcado —o de lo que hay bajo el
+cursor, el operando de siempre— y enseña la lista. Es una tarea como cualquier
+otra: informa del progreso, se cancela con {{cmd:task.cancel}} y no bloquea el
+panel mientras trabaja. Al confirmar, la lista se copia al portapapeles en el
+formato de `sha256sum` —`digest␣␣nombre`, una línea por fichero—, que es lo que
+se pega en un `SHA256SUMS` y lo que entiende cualquier otra herramienta.
+
+{{cmd:pane.checksum-verify}} hace el camino de vuelta: sobre un fichero de sumas
+—el que esté bajo el cursor— lee sus líneas, calcula lo que hay de verdad en el
+disco y enseña un veredicto por línea: **correcto**, **no cuadra**, **falta**,
+**no es un fichero** o **nombre imposible aquí**. Son cinco y no dos porque se
+arreglan de formas distintas. Los nombres se resuelven contra el directorio del
+FICHERO DE SUMAS, no contra el del panel: un `SHA256SUMS` habla de lo que tiene
+al lado.
+
+Lo que no se entiende **se cuenta**. Una línea rota no tumba las demás, pero con
+una sola que se caiga el resumen ya no puede decir «todos correctos»: la que se
+cayó es justo la del nombre raro. Y un lote que se cancela a medias no se compara
+con nada — decir «no cuadra» de un fichero que nadie llegó a leer sería peor que
+no decir nada.
+
+Un directorio no tiene suma, y pedirla no falla la operación: esa entrada sale
+sin digest y lo dice. Sumar «un árbol» sería otra pregunta —un manifiesto, con
+su formato y su orden— y contestarla a medias daría un número que no significa
+nada comprobable.
+
+> ⚠ Un lote se RECHAZA por encima de 4096 rutas en vez de recortarse. Una lista recortada en silencio se lee como «todo comprobado» sobre ficheros que nadie miró, y comprobar es justo para lo que esto existe.

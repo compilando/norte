@@ -166,6 +166,57 @@ pub async fn confirm_modal(
         // entiende cancelar, así que un «confirmar» no llega aquí —
         // nombrarlas es lo que hace que añadir uno sea un error de
         // compilación y no un Enter que hace algo a escondidas.
+        // #311: confirmar COPIA las sumas al portapapeles, que es lo único
+        // que se puede hacer con ellas — no hay fichero que escribir mientras
+        // el protocolo no sepa escribir contenido (#132). Lo que se copia es
+        // el formato que `sha256sum -c` lee.
+        Modal::Checksums {
+            title_key,
+            rows,
+            offset,
+        } => {
+            let entries: Vec<(Vec<u8>, Option<String>)> = rows
+                .iter()
+                .map(|r| (r.name.clone(), r.digest.clone()))
+                .collect();
+            // En BYTES: un nombre no tiene por qué ser texto, y una lista con
+            // `U+FFFD` dentro no comprueba el fichero que nombra (regla 1).
+            let bytes = norte_frontend::checksums::to_sums_bytes(&entries);
+            if bytes.is_empty() {
+                app.message = Some(t("msg-checksum-nothing-to-copy"));
+            } else {
+                // El helper escribe por un pipe y el payload puede ser de
+                // cientos de kilobytes: en el hilo del bucle eso es la TUI
+                // parada a mitad de una escritura.
+                let outcome = tokio::task::spawn_blocking({
+                    let bytes = bytes.clone();
+                    move || norte_frontend::shell::copy_to_clipboard(&bytes)
+                })
+                .await
+                .unwrap_or(norte_frontend::shell::ClipboardOutcome::Failed);
+                app.message = Some(match outcome {
+                    norte_frontend::shell::ClipboardOutcome::Done(_) => t("msg-checksum-copied"),
+                    // Se distingue del anterior porque la secuencia de escape
+                    // no contesta: si el terminal no la honra, no hay nada que
+                    // avise, y quien lo lea tiene que saber por qué camino fue.
+                    norte_frontend::shell::ClipboardOutcome::NoHelper => {
+                        app.pending_osc52 = Some(norte_frontend::shell::osc52(&bytes));
+                        t("msg-checksum-copied-osc52")
+                    }
+                    // La copia falló: el modal VUELVE. Cerrarlo se llevaría por
+                    // delante la única copia de unos digests que pueden haber
+                    // costado horas de lectura.
+                    norte_frontend::shell::ClipboardOutcome::Failed => {
+                        app.modal = Some(Modal::Checksums {
+                            title_key,
+                            rows,
+                            offset,
+                        });
+                        t("msg-clipboard-failed")
+                    }
+                });
+            }
+        }
         Modal::Properties { .. }
         | Modal::Collision { .. }
         | Modal::TrustLuaInit { .. }
@@ -388,6 +439,194 @@ pub async fn test_archive(app: &mut App, backend: &Backend) {
         Ok(task) => {
             app.message = Some(t("msg-test-archive-started"));
             app.board.push(&task, None);
+        }
+        Err(e) => app.message = Some(error_message(&e)),
+    }
+}
+
+/// Tope de bytes que se leen de un fichero de SUMAS (#311).
+///
+/// Un `SHA256SUMS` de un proyecto grande son unos cientos de kilobytes; un
+/// megabyte deja margen de sobra y evita que apuntar esta tecla a un ISO
+/// intente meterlo entero en memoria para no encontrar ni una línea válida.
+const SUMS_MAX_BYTES: u64 = 1024 * 1024;
+
+/// `pane.checksum` (#311): calcula el sha256 de lo marcado —o de lo que hay
+/// bajo el cursor— y enseña la lista.
+///
+/// El operando es el de siempre (`marked_paths`), así que no hay una regla
+/// nueva que aprender. La Task va al tablero como cualquier otra: lo que este
+/// gesto añade es esperar su INFORME, que es donde viajan los digests.
+pub async fn checksum_start(
+    app: &mut App,
+    backend: &Backend,
+    work: &mut crate::jobs::InFlight,
+    req: crate::app::ChecksumRequest,
+) {
+    match req {
+        crate::app::ChecksumRequest::Compute { paths } => {
+            lanzar_sumas(app, backend, work, paths, None).await;
+        }
+        crate::app::ChecksumRequest::Verify { sums } => {
+            checksum_verify(app, backend, work, &sums).await;
+        }
+    }
+}
+
+/// `pane.checksum-verify` (#311): comprueba los ficheros que lista el fichero
+/// de sumas bajo el cursor.
+///
+/// Los nombres del fichero se resuelven contra SU directorio —no contra el del
+/// pane—: un `SHA256SUMS` habla de lo que tiene al lado, y resolverlo contra
+/// otro sitio comprobaría ficheros distintos con los mismos nombres.
+async fn checksum_verify(
+    app: &mut App,
+    backend: &Backend,
+    work: &mut crate::jobs::InFlight,
+    sums: &norte_proto::VPath,
+) {
+    // Se pide UN BYTE MÁS que el tope para poder distinguir «cabe» de «no
+    // cabe». Un fichero de sumas recortado en silencio comprueba media lista y
+    // el resumen se lee como «todo correcto» — y el corte cae en un byte
+    // cualquiera, así que la última línea puede quedar con medio nombre y
+    // acusar de «falta» a un fichero que está. Es el mismo criterio que el tope
+    // del otro extremo: RECHAZAR, no recortar.
+    let bytes = match backend
+        .read(
+            sums,
+            Some(norte_proto::ByteRange {
+                offset: 0,
+                len: Some(SUMS_MAX_BYTES + 1),
+            }),
+        )
+        .await
+    {
+        Ok(b) => b,
+        Err(e) => {
+            app.message = Some(error_message(&e));
+            return;
+        }
+    };
+    if bytes.len() as u64 > SUMS_MAX_BYTES {
+        app.message = Some(t("msg-checksum-sums-too-big"));
+        return;
+    }
+    let publicado = norte_frontend::checksums::parse_sums(&bytes);
+    if publicado.lines.is_empty() {
+        // Decir POR QUÉ cuando se sabe: un `SHA256SUMS` de PowerShell es un
+        // fichero de sumas perfectamente válido en otra codificación, y
+        // mandar a quien lo lee a dudar del fichero es mandarlo al sitio
+        // equivocado.
+        app.message = Some(t(if norte_frontend::checksums::looks_utf16(&bytes) {
+            "msg-checksum-sums-utf16"
+        } else {
+            "msg-checksum-not-a-sums-file"
+        }));
+        return;
+    }
+    // El directorio del FICHERO DE SUMAS, y no el del pane.
+    let Some(base) = sums.parent() else {
+        app.message = Some(t("msg-checksum-not-a-sums-file"));
+        return;
+    };
+    // Un nombre con `/` dentro es lo que escriben `sha256sum -r` y un
+    // `find -exec`, y son ficheros de sumas de todos los días: se parte por
+    // segmentos en vez de tirar la línea. El confinamiento sale gratis y hay
+    // que decirlo — `Segment::new` rechaza `.`, `..`, el vacío y el NUL, así
+    // que un fichero de sumas hostil no puede salir de este directorio; en
+    // Windows rechaza además `\` y `:`.
+    let mut paths: Vec<norte_proto::VPath> = Vec::with_capacity(publicado.lines.len());
+    let mut asked = Vec::with_capacity(publicado.lines.len());
+    for linea in &publicado.lines {
+        let mut ruta = base.clone();
+        let mut vale = !linea.name.is_empty();
+        for parte in linea.name.split(|b| *b == b'/') {
+            // `a//b` y una barra final: un separador repetido no nombra nada.
+            if parte.is_empty() {
+                continue;
+            }
+            let Ok(seg) = norte_proto::Segment::new(parte.to_vec()) else {
+                vale = false;
+                break;
+            };
+            ruta = ruta.join(seg);
+        }
+        if vale {
+            asked.push(Some(paths.len()));
+            paths.push(ruta);
+        } else {
+            asked.push(None);
+        }
+    }
+    if paths.is_empty() {
+        app.message = Some(t("msg-checksum-not-a-sums-file"));
+        return;
+    }
+    let publicado = crate::jobs::Publicado {
+        lines: publicado.lines,
+        asked,
+        refused: publicado.refused,
+    };
+    lanzar_sumas(app, backend, work, paths, Some(publicado)).await;
+}
+
+/// Lanza la Task de sumas y deja esperando su informe.
+///
+/// La espera va SPAWNEADA y se cosecha en el bucle (regla 3): un lote de cien
+/// ficheros grandes tarda, y esperarlo aquí dejaría la TUI sin dibujar, sin
+/// teclas y sin poder cancelar — que es justo cuando alguien cancela.
+async fn lanzar_sumas(
+    app: &mut App,
+    backend: &Backend,
+    work: &mut crate::jobs::InFlight,
+    paths: Vec<norte_proto::VPath>,
+    publicado: Option<crate::jobs::Publicado>,
+) {
+    let params = norte_proto::methods::FsChecksumParams {
+        paths,
+        algo: norte_proto::methods::ChecksumAlgo::Sha256,
+    };
+    match backend.checksum(params).await {
+        Ok(task) => {
+            app.message = Some(t("msg-checksum-started"));
+            app.board.push(&task, None);
+            let id = task.id();
+            let observador = task.observer();
+            let mut prog = task.progress();
+            let b = backend.clone();
+            let handle = tokio::spawn(async move {
+                // El informe solo es DEFINITIVO cuando la Task es terminal;
+                // pedirlo antes daría media lista sin decir que lo es.
+                while !prog.borrow().state.is_terminal() {
+                    if prog.changed().await.is_err() {
+                        break;
+                    }
+                }
+                // El estado viaja CON el informe: `Cancelled` o `Failed`
+                // significan que lo que hay está a medias, y un `changed()`
+                // que muere sin llegar a terminal —el daemon se cayó— no es
+                // ninguna de las dos. Mismo criterio que `TaskRef::join`.
+                let estado = prog.borrow().state.clone();
+                if !estado.is_terminal() {
+                    return (
+                        estado,
+                        Err(norte_proto::Error::ProviderUnavailable { retryable: true }),
+                    );
+                }
+                (estado, b.checksum_report(id).await)
+            });
+            if let Some(old) = work.checksum.replace(crate::jobs::ChecksumRun {
+                handle,
+                task: observador,
+                publicado,
+            }) {
+                // Cancelar la TASK, no solo la espera: abortar el `JoinHandle`
+                // dejaba al core hasheando un ISO entero sin nadie que lo
+                // recogiera y —desde que las sumas no dicen «done»— sin decir
+                // siquiera que terminó.
+                old.task.cancel();
+                old.handle.abort();
+            }
         }
         Err(e) => app.message = Some(error_message(&e)),
     }

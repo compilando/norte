@@ -2962,6 +2962,12 @@ async fn is_descendant_folded(child: &VPath, ancestor: &VPath, dst: &dyn Provide
 /// corre ve lo que lleva, que es lo que hace útil comprobar cien ficheros sin
 /// esperar a los cien. `pending` es lo que falta, y llega a cero con el último.
 ///
+/// **Cancelar deja `pending > 0` en una Task ya terminal**, y eso no es un
+/// descuido: es la señal de que el informe está a medias. Quien lo lea tiene
+/// que mirar el estado de la Task además del número — un lector que solo
+/// sondease `pending == 0` no pararía nunca, y uno que tratase el informe
+/// truncado como definitivo diría «falta» de ficheros que nadie llegó a mirar.
+///
 /// **Un fichero ilegible no mata el lote**, igual que en [`dir_size`]: sale con
 /// su motivo y los demás se calculan. Un DIRECTORIO no se recorre — sale
 /// marcado, porque hashear un árbol es otra pregunta con su propio formato.
@@ -2993,6 +2999,7 @@ pub(crate) async fn checksum(
     });
     let mut bytes: u64 = 0;
     let mut hechos: u64 = 0;
+    let mut ilegibles: u64 = 0;
     for (provider, path) in paths {
         if ctx.cancel.is_cancelled() {
             return Err(Error::Cancelled);
@@ -3030,6 +3037,9 @@ pub(crate) async fn checksum(
             },
         };
         hechos = hechos.saturating_add(1);
+        if entrada.digest.is_none() {
+            ilegibles = ilegibles.saturating_add(1);
+        }
         {
             let mut r = informe
                 .lock()
@@ -3040,6 +3050,10 @@ pub(crate) async fn checksum(
         ctx.progress.update(|p| {
             p.entries_done = hechos;
             p.bytes_done = bytes;
+            // #251: un `Completed` con la mitad del lote sin digest se lee como
+            // un total confiado si el progreso no lo dice. El informe lo dice
+            // entero, pero quien solo mira el tablero ve esto.
+            p.unreadable = Some(ilegibles);
         });
     }
     Ok(())

@@ -232,6 +232,7 @@
         "miss": "not_a_file"
       }
     ],
+    "algo": "sha256",
     "pending": 2
   },
   "fs_compare_params": {

@@ -641,6 +641,10 @@ pub struct App {
     /// [`Self::pending_shell`]: `dispatch` decide QUÉ, el run loop —dueño del
     /// canal y de la Task— lo hace.
     pub pending_compare: Option<norte_proto::methods::FsCompareParams>,
+    /// Lote de sumas que el despacho resolvió y el run loop aún no ha lanzado
+    /// (#311). Mismo reparto que [`Self::pending_compare`]: leer el fichero de
+    /// sumas y esperar el informe es I/O, y eso es del run loop.
+    pub pending_checksum: Option<ChecksumRequest>,
     /// Panel de sincronización abierto (`Ctrl+Y`, o `s`/`m` dentro del panel
     /// de diferencias): `None` = cerrado. Se pinta POR ENCIMA del de
     /// diferencias, que sigue vivo detrás con sus marcas.
@@ -867,6 +871,7 @@ impl App {
             compare_size_probed: std::collections::HashSet::new(),
             compare_generation: 0,
             pending_compare: None,
+            pending_checksum: None,
             pending_dest_check: None,
             sync: None,
             pending_sync: None,

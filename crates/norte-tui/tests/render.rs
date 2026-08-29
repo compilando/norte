@@ -1114,3 +1114,160 @@ fn pane_list_rows_cuenta_las_filas_que_de_verdad_se_pintan() {
         0
     );
 }
+
+/// #311: la lista se recorre ENTERA. Cuarenta ficheros con el que no cuadra en
+/// la fila doce enseñaban cinco «correcto» y «… y 35 más», sin tecla que
+/// llegara al malo: el `offset` estaba en el modal y no lo movía nadie.
+#[test]
+fn la_ventana_del_modal_de_sumas_se_desplaza() {
+    let dir = vp("file:///casa");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    let rows: Vec<norte_tui::app::ChecksumRow> = (0..40)
+        .map(|i| norte_tui::app::ChecksumRow {
+            name: format!("f{i:02}.bin").into_bytes(),
+            digest: Some("cc".repeat(32)),
+            verdict: None,
+        })
+        .collect();
+    app.modal = Some(norte_tui::app::Modal::Checksums {
+        title_key: "modal-checksums-create",
+        rows,
+        offset: 0,
+    });
+    let pinta = |app: &App| {
+        let mut t = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        t.draw(|f| ui::draw(f, app)).expect("draw");
+        t.backend().to_string()
+    };
+    let antes = pinta(&app);
+    assert!(antes.contains("f00.bin"), "arriba del todo:\n{antes}");
+
+    for _ in 0..12 {
+        app.checksums_scroll(true);
+    }
+    let despues = pinta(&app);
+    assert!(
+        despues.contains("f12.bin") && !despues.contains("f00.bin"),
+        "bajando doce se llega a la fila doce:\n{despues}"
+    );
+
+    // Y el clamp: bajar mil veces no pasa del final ni deja la caja vacía.
+    for _ in 0..1000 {
+        app.checksums_scroll(true);
+    }
+    let fondo = pinta(&app);
+    assert!(fondo.contains("f39.bin"), "el final se alcanza:\n{fondo}");
+}
+
+/// #311: el modal de sumas nombra ficheros que vienen de un fichero de FUERA.
+/// Ni un hazard llega crudo al buffer, el nombre hostil va con su badge, y un
+/// nombre demasiado largo se corta MARCADO — dos nombres largos con el mismo
+/// principio pintados idénticos son la fila que no dice cuál es cuál.
+#[test]
+fn el_modal_de_sumas_enmascara_y_marca_el_corte() {
+    let hostiles = norte_testkit::corpus::hostile_names();
+    let toma = |id: &str| -> Vec<u8> {
+        hostiles
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("fixture {id} del corpus"))
+            .bytes
+            .clone()
+    };
+    let rows: Vec<norte_tui::app::ChecksumRow> = ["rtl_override", "control_escape", "zwsp_twin"]
+        .into_iter()
+        .map(|id| norte_tui::app::ChecksumRow {
+            name: toma(id),
+            digest: Some("aa".repeat(32)),
+            verdict: None,
+        })
+        .chain(std::iter::once(norte_tui::app::ChecksumRow {
+            name: vec![b'x'; 200],
+            digest: Some("bb".repeat(32)),
+            verdict: None,
+        }))
+        .collect();
+
+    let dir = vp("file:///casa");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    app.modal = Some(norte_tui::app::Modal::Checksums {
+        title_key: "modal-checksums-create",
+        rows,
+        offset: 0,
+    });
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let painted = terminal.backend().to_string();
+
+    assert!(
+        !painted.contains('\u{202E}') && !painted.contains('\u{1B}'),
+        "ningún hazard crudo en el buffer:\n{painted}"
+    );
+    assert!(
+        painted.contains('\u{FFFD}'),
+        "un nombre hostil se pinta enmascarado:\n{painted}"
+    );
+    assert!(
+        painted.contains('…'),
+        "el nombre de 200 bytes se corta y el corte va MARCADO:\n{painted}"
+    );
+}
+
+/// #311: el pie del modal de sumas ofrece COPIAR solo cuando hay algo que
+/// copiar. Una comprobación trae veredictos y ningún digest, así que
+/// prometerle «Enter: copiar la lista» acababa en «nada que copiar»: el
+/// diálogo ofrecía una tecla que no hacía nada.
+#[test]
+fn el_pie_de_las_sumas_solo_ofrece_copiar_cuando_hay_digests() {
+    fn pinta(rows: Vec<norte_tui::app::ChecksumRow>) -> String {
+        let dir = vp("file:///casa");
+        let mut app = App::new(
+            Pane::new(dir.clone(), Vec::new()),
+            Pane::new(dir, Vec::new()),
+        );
+        app.modal = Some(norte_tui::app::Modal::Checksums {
+            title_key: "modal-checksums-verify",
+            rows,
+            offset: 0,
+        });
+        let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+        terminal.backend().to_string()
+    }
+
+    let copiar = norte_i18n::t("modal-checksums-hint");
+    let solo_cerrar = norte_i18n::t("modal-checksums-hint-verify");
+    // Las dos primeras palabras bastan: el pie va recortado al ancho del
+    // modal, así que comparar la frase entera pinearía el ancho, no el texto.
+    let trozo = |s: &str| s.chars().take(12).collect::<String>();
+
+    let calculado = pinta(vec![norte_tui::app::ChecksumRow {
+        name: b"a.txt".to_vec(),
+        digest: Some("aa".repeat(32)),
+        verdict: None,
+    }]);
+    assert!(
+        calculado.contains(&trozo(&copiar)),
+        "con digests, copiar se ofrece:\n{calculado}"
+    );
+
+    let comprobado = pinta(vec![norte_tui::app::ChecksumRow {
+        name: b"a.txt".to_vec(),
+        digest: None,
+        verdict: Some(norte_frontend::checksums::Verdict::Mismatch),
+    }]);
+    assert!(
+        comprobado.contains(&trozo(&solo_cerrar)),
+        "sin digests, el pie solo cierra:\n{comprobado}"
+    );
+    assert!(
+        !comprobado.contains(&trozo(&copiar)),
+        "sin digests no puede prometer una copia:\n{comprobado}"
+    );
+}

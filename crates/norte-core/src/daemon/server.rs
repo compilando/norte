@@ -4022,11 +4022,24 @@ async fn handle_fs_dir_size(
 
 /// `fs.checksum` (0.59.0, #311): el digest del contenido de un lote, como Task.
 ///
-/// Gate de LECTURA sobre CADA ruta, y antes de validar nada más, igual que en
-/// `fs.dir_size` — y aquí la razón pesa MÁS: esto no lee la forma del árbol
-/// sino el CONTENIDO de cada fichero, y un digest es una huella de ese
-/// contenido. Sin el gate, un actor fuera de scope podría confirmar que un
-/// fichero ajeno es exactamente el que él sospecha.
+/// Gate de LECTURA **y de CONTENIDO** sobre CADA ruta (ADR 0080).
+///
+/// El de lectura por lo mismo que en `fs.dir_size`. El de contenido porque
+/// esto no lee la forma del árbol sino los BYTES de cada fichero, y un digest
+/// es una huella de ellos: `fs.checksum` subsume —y supera— el oráculo que
+/// `fs.compare` con el peldaño de hash ya gatea por la puerta estrecha. Aquel
+/// contesta «¿son iguales?» y obliga a COLOCAR el candidato; este devuelve el
+/// sha256, que se compara luego contra un diccionario sin colocar nada. Sin
+/// esto, a un agente al que se le deniega `fs.compare` con `criteria.hash` le
+/// bastaba con llamar aquí.
+///
+/// `policy.rs` lo dice como regla: se prefiere la puerta estrecha en lo NUEVO,
+/// porque aflojarla después es aditivo y apretarla no lo es.
+///
+/// El TOPE se comprueba ANTES que los gates, y no filtra nada: es una
+/// constante pública y el emisor sabe cuántas rutas mandó. Al revés sí costaba
+/// — un lote de un millón de rutas tomaba el mutex del registro de scopes una
+/// vez por ruta antes de que nadie mirase el tope.
 #[tracing::instrument(skip_all, fields(actor = ?actor))]
 async fn handle_fs_checksum(
     params: Option<serde_json::Value>,
@@ -4034,20 +4047,22 @@ async fn handle_fs_checksum(
     shared: &Arc<Shared>,
 ) -> Result<serde_json::Value, RpcError> {
     let p: methods::FsChecksumParams = parse_params(params)?;
-    for path in &p.paths {
-        read_gate(actor, path, shared)?;
-    }
     if p.paths.is_empty() {
         return Err(RpcError::protocol(
             codes::INVALID_PARAMS,
             "fs.checksum: paths must not be empty",
         ));
     }
+    // `InvalidPath` y no un `-32602` pelado: ese no lleva categoría en `data`,
+    // así que el Backend remoto lo entregaría como `Internal` mientras el
+    // embebido dice `InvalidPath` — dos respuestas distintas al mismo suceso
+    // según por dónde se entre. Es la lección de `check_pairs_cap`.
     if p.paths.len() > methods::FS_CHECKSUM_MAX_PATHS {
-        return Err(RpcError::protocol(
-            codes::INVALID_PARAMS,
-            "fs.checksum: too many paths",
-        ));
+        return Err(RpcError::from(norte_proto::Error::InvalidPath));
+    }
+    for path in &p.paths {
+        read_gate(actor, path, shared)?;
+        content_gate(actor, path, shared)?;
     }
     let handle = shared
         .engine

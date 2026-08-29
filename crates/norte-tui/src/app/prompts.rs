@@ -912,6 +912,21 @@ impl App {
         }
     }
 
+    /// Desplaza la ventana del modal de sumas (#311), con el mismo clamp que
+    /// el del plan IA y por la misma razón: la lista se recorre ENTERA, y el
+    /// veredicto que importa —el que no cuadra— puede estar en cualquier
+    /// fila. No-op sin su modal.
+    pub fn checksums_scroll(&mut self, down: bool) {
+        if let Some(Modal::Checksums { rows, offset, .. }) = &mut self.modal {
+            let max = rows.len().saturating_sub(AI_RENAME_PAIR_LIMIT);
+            *offset = if down {
+                (*offset + 1).min(max)
+            } else {
+                offset.saturating_sub(1)
+            };
+        }
+    }
+
     /// Deja el plan del LOTE (§17) en el modal del plan IA que lo estaba
     /// esperando. Devuelve `false` si no había ninguno —el humano ya cerró el
     /// modal, o el plan está RETENIDO tras otro modal y lo rellena el run

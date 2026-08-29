@@ -14,6 +14,38 @@ pub enum TransferKind {
     Move,
 }
 
+/// Qué lote de sumas pidió el despacho (#311).
+///
+/// Dos formas y no un `bool`: calcular parte de una SELECCIÓN y comprobar parte
+/// de UN fichero — y ese hay que leerlo antes de poder pedir nada.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChecksumRequest {
+    /// Calcular el digest de estas rutas y enseñarlo.
+    Compute {
+        /// Lo marcado, o el cursor: el operando de siempre.
+        paths: Vec<VPath>,
+    },
+    /// Leer este fichero de sumas y comprobar lo que lista.
+    Verify {
+        /// El fichero de sumas. Los nombres se resuelven contra SU directorio.
+        sums: VPath,
+    },
+}
+
+/// Una fila del modal de sumas (#311).
+///
+/// El nombre va en BYTES: un fichero de sumas nombra ficheros, y un nombre no
+/// tiene por qué ser texto (regla 1). Lo pinta el saneado de siempre.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChecksumRow {
+    /// El nombre, tal como está en el disco.
+    pub name: Vec<u8>,
+    /// Su digest, o `None` si no se pudo calcular.
+    pub digest: Option<String>,
+    /// El veredicto contra lo publicado. `None` cuando solo se calculó.
+    pub verdict: Option<norte_frontend::checksums::Verdict>,
+}
+
 /// Diálogo modal activo. Sus teclas resuelven contra el contexto `dialog`
 /// del keymap (H1, issue #24 — CERRADO): el run loop pasa la tecla por el
 /// [`Resolver`](crate::keymap::Resolver) del efectivo `dialog` y el comando
@@ -343,6 +375,24 @@ pub enum Modal {
         command: String,
         /// Diagnóstico del último intento inválido, bajo el campo.
         error: Option<String>,
+    },
+    /// Las sumas de un lote, ya calculadas (#311): superficie de LECTURA.
+    ///
+    /// Dos caras del mismo modal, y por eso no son dos: calcular enseña la
+    /// suma de cada fichero, y comprobar enseña además el veredicto contra lo
+    /// que el fichero de sumas publicaba. La lista es la misma cosa.
+    ///
+    /// Confirmar COPIA las líneas al portapapeles en el formato que
+    /// `sha256sum -c` lee; cancelar cierra. No hay nada que aplicar: aquí no
+    /// se muta nada.
+    Checksums {
+        /// Qué se hizo: calcular o comprobar (clave Fluent del título).
+        title_key: &'static str,
+        /// Una fila por ruta, en el orden en que se pidieron.
+        rows: Vec<ChecksumRow>,
+        /// Primera fila visible: la lista se recorre entera, y sin esto la
+        /// cola de un lote grande no se podría ver.
+        offset: usize,
     },
     /// Prompt de la PLANTILLA del renombrado en lote (#310). Texto libre,
     /// molde [`Modal::AiRenameInstruction`] — y hermano suyo por diseño: los

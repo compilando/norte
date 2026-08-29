@@ -1323,8 +1323,11 @@ pub const FS_DIR_SIZE: &str = "fs.dir_size";
 /// atascado de [`FS_RENAME_BATCH_REPORT`], y el progreso solo sabe contar.
 ///
 /// NO muta: sin journal, sin undo, ni un byte escrito (la regla 4 no aplica).
-/// Lee el CONTENIDO —no la forma, como `fs.dir_size`—, así que va sujeto al
-/// mismo gate que una lectura de fichero sobre cada ruta.
+/// Lee el CONTENIDO —no la forma, como `fs.dir_size`—, así que el daemon lo
+/// gatea por la puerta ESTRECHA, la de contenido, además de la de lectura
+/// (ADR 0080): esto subsume el oráculo de `fs.compare` con el peldaño de hash,
+/// y con más alcance, porque un digest se compara luego contra un diccionario
+/// sin tener que colocar el candidato en ninguna parte.
 ///
 /// **Un fichero ilegible no mata el lote.** Sale en el informe con su motivo y
 /// sin digest, y los demás se calculan igual: comprobar cien ficheros no puede
@@ -2801,9 +2804,23 @@ pub struct FsChecksumReportParams {
 pub struct FsChecksumReportResult {
     /// Una entrada por ruta ya resuelta, en el orden en que se pidieron.
     pub entries: Vec<ChecksumEntry>,
-    /// Cuántas rutas quedan por resolver. Cero con la Task terminal; mayor que
-    /// cero antes, y eso es lo que distingue «esto es todo» de «esto es lo que
-    /// llevo» sin tener que mirar el estado de la Task por otro sitio.
+    /// Con qué función se calcularon estos digests.
+    ///
+    /// Va en el INFORME y no solo en los params porque el informe se puede
+    /// pedir sin haber mandado la petición: `task.list` enseña las Tasks de
+    /// otros. El día que exista `sha512`, un lector que asumiera sha256 por
+    /// omisión pintaría digests de otra cosa sin decirlo — la respuesta
+    /// equivocada de la única herramienta cuyo trabajo es comprobar.
+    pub algo: ChecksumAlgo,
+    /// Cuántas rutas quedan por resolver.
+    ///
+    /// Baja hasta cero conforme el lote avanza, y con la Task `Completed` es
+    /// cero. **No** es cero en una Task terminal que se CANCELÓ o que falló:
+    /// ahí se queda en lo que faltaba, y esa es justo la señal de que el
+    /// informe está a medias. Un lector que trate `pending > 0` como «todavía
+    /// no» y siga sondeando no pararía nunca; lo que distingue «esto es todo»
+    /// de «esto es lo que llevo» son las dos cosas juntas, el estado de la Task
+    /// y este número.
     pub pending: u64,
 }
 

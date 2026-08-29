@@ -24,6 +24,24 @@ use crate::jobs::SearchRun;
 use crate::navigate::listing;
 use crate::probes::Probed;
 
+/// Si el resultado de esta clase de task es un INFORME que alguien cosecha
+/// aparte, y por tanto su final no se anuncia con el `done` genérico.
+///
+/// Solo las sumas (#311), y por dos razones que van juntas: no mutan nada —así
+/// que no hay panes que re-listar— y su respuesta es el veredicto de la
+/// cosecha, que un `done` posterior taparía. Una copia o un borrado son lo
+/// contrario en las dos cosas.
+///
+/// ```
+/// use norte_proto::TaskKind;
+/// assert!(norte_tui::refresh::habla_por_su_informe(TaskKind::Checksum));
+/// assert!(!norte_tui::refresh::habla_por_su_informe(TaskKind::Copy));
+/// ```
+#[must_use]
+pub fn habla_por_su_informe(kind: norte_proto::TaskKind) -> bool {
+    matches!(kind, norte_proto::TaskKind::Checksum)
+}
+
 /// Tick: refresca snapshots del panel y reacciona a las tasks que ACABAN
 /// de terminar — colisión con contexto → a la COLA de diálogos (jamás se
 /// pisa un modal abierto, hallazgo B1); el resto → mensaje por categoría +
@@ -82,6 +100,10 @@ pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream)
                     });
                 }
             }
+            // #311: la que contesta con un INFORME ya dijo lo suyo, y no mutó
+            // nada que haya que re-listar. Un `done` genérico aquí pisaría el
+            // veredicto, que es la única respuesta que el gesto tenía que dar.
+            TaskState::Completed if habla_por_su_informe(fin.progress.kind) => {}
             TaskState::Completed => {
                 refresh = true;
                 app.message = Some(t("msg-done"));
@@ -109,7 +131,8 @@ pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream)
                 }
             }
             TaskState::Cancelled => {
-                refresh = true;
+                // Una que no muta no tiene panes que re-listar, ni cancelada.
+                refresh = refresh || !habla_por_su_informe(fin.progress.kind);
                 app.message = Some(t("msg-cancelled"));
                 // Sin fichero no hay nada que editar: la intención se suelta
                 // para que el SIGUIENTE `edit-new` no abra el fichero de este.
@@ -146,7 +169,7 @@ pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream)
                     // Render por CATEGORÍA localizado (spec §17.7, #20):
                     // jamás el Display inglés ni strings del OS.
                     app.message = Some(error_message(&error));
-                    refresh = true;
+                    refresh = refresh || !habla_por_su_informe(fin.progress.kind);
                 }
             }
             _ => {}

@@ -326,6 +326,8 @@ pub const CATALOGUE: &[CommandDef] = &[
     // CUENTA, y por eso es una Task cancelable y no un campo del diálogo.
     live("pane.properties", false),
     live("pane.dir-size", false),
+    live("pane.checksum", false),
+    live("pane.checksum-verify", false),
     // #140: abrir es elegir de `connections.toml`; desconectar SUELTA la
     // sesión de verdad, no solo se va del panel.
     live("pane.connect", false),
