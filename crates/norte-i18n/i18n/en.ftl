@@ -1686,6 +1686,16 @@ gui-msg-shortcut-saved-not-applied = saved, but this window kept the previous ke
 dialog-body-truncated = … showing { $shown } of { $total }
 dialog-destination = Destination:
 dialog-confirm = Confirm
+# Checksums in the window (#311). The dialog is read-only: copying is the only
+# thing you can do with a list of digests, and a verification has none.
+dialog-copy = Copy
+dialog-close = Close
+modal-checksums-title = sha256 sums
+err-checksum-not-a-sums-file = this does not look like a sums file
+err-checksum-sums-too-big = the sums file is too big to check in full
+err-checksum-sums-utf16 = the sums file is UTF-16; save it as UTF-8
+err-checksum-partial = the batch did not finish: what was computed is partial and is not compared
+err-checksum-failed = computing the sums failed
 dialog-cancel = Cancel
 dialog-approve = Approve
 dialog-deny = Deny
@@ -1694,6 +1704,10 @@ dialog-newer = Only if newer
 dialog-rename = Rename automatically
 dialog-skip = Skip
 modal-mkdir-title = New directory
+# Permissions in the window (#314). The body says how many it covers: in
+# the terminal that fits in the title, here it cannot — the title is a key.
+modal-chmod-title = Change permissions
+modal-chmod-count = { $n } entries
 modal-new-file-title = New file
 modal-rename-title = Rename
 modal-delete-title = Move to trash?

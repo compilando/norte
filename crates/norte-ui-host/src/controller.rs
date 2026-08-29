@@ -615,6 +615,16 @@ enum Fondo {
     ),
     /// El daemon rechazó el plan: no habrá Task ni panel.
     PlanDeSyncFallido(u64),
+    /// Los bytes del fichero de sumas que se va a comprobar (#311).
+    FicheroDeSumas(Box<VPath>, Box<Result<Vec<u8>, Error>>),
+    /// Los digests que calculó esa Task, con el ESTADO con el que terminó
+    /// (#311): un informe de una Task cancelada está a medias, y compararlo
+    /// acusaría a ficheros que nadie llegó a leer.
+    InformeDeSumas(
+        norte_proto::TaskId,
+        norte_proto::TaskState,
+        Box<Result<norte_proto::methods::FsChecksumReportResult, Error>>,
+    ),
     /// Un evento del plan: un lote de pasos, o su cierre.
     EventoDeSync(u64, Box<norte_client::SyncPlanEvent>),
     /// Un lote de filas comparadas.
@@ -1524,6 +1534,24 @@ enum Pendiente {
         /// Qué se mete, en orden de listado.
         sources: Vec<VPath>,
     },
+    /// Copiar al portapapeles la lista de sumas que el diálogo enseña (#311).
+    ///
+    /// Los BYTES ya montados —con el escapado de coreutils— y no las filas:
+    /// lo que se pinta va saneado, y copiar eso daría un `SHA256SUMS` que no
+    /// comprueba los ficheros que nombra.
+    CopiarSumas {
+        /// Lo que va al portapapeles, tal cual.
+        bytes: Vec<u8>,
+    },
+    /// Cambiar los PERMISOS de estas entradas al modo que se teclee (#314).
+    ///
+    /// Las rutas se congelan al ABRIR el diálogo, como en el resto de los que
+    /// llevan operando: entre la pregunta y el sí el listado puede refrescarse,
+    /// y entonces «lo marcado» sería otra cosa.
+    Permisos {
+        /// Sobre qué, en orden de listado.
+        targets: Vec<VPath>,
+    },
     /// Deshacer TODO lo que hizo una sesión de agente (#276).
     DeshacerSesion {
         /// La clave OPACA con la que el core la resuelve, cruda.
@@ -1737,6 +1765,54 @@ struct SyncPedida {
 /// pasos hay, qué lo bloquea, si se puede aprobar y en qué estado va la Task.
 /// Aquí no se decide ni un paso ni un veredicto; el plan lo produce el core y
 /// solo él puede canjearlo.
+/// Tope de lo que se lee de un fichero de sumas (#311): 1 MiB.
+///
+/// Por encima se RECHAZA en vez de comprobar media lista — el mismo criterio
+/// que la terminal, y el mismo que el tope del otro extremo.
+const SUMS_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Un lote de sumas en vuelo (#311).
+///
+/// La Task ya está en el tablero; lo que se espera aquí es su INFORME, que es
+/// donde viajan los digests — no caben en el desenlace de una Task ni en su
+/// progreso.
+struct SumasEnVuelo {
+    /// La Task cuyo informe se espera.
+    task: norte_proto::TaskId,
+    /// En qué época de CONEXIÓN vive esa Task: tras un relevo los ids del
+    /// daemon vuelven a empezar en 1, y un informe de otra tarea con el mismo
+    /// número contaría la comprobación de otra cosa.
+    epoca_conexion: u64,
+    /// Su informe ya se pidió: pedirlo es una RPC y una reconexión reanuncia
+    /// el desenlace.
+    informe_pedido: bool,
+    /// Lo que el fichero de sumas publicaba, si esto es una COMPROBACIÓN.
+    /// `None` = solo calcular.
+    publicado: Option<Publicado>,
+}
+
+/// Un lote de sumas ENCOLADO y todavía sin id (#311).
+///
+/// Existe entre que el `checksum` se manda y el buzón devuelve la Task. Es un
+/// tipo y no un `Option<Option<_>>` porque «no hay lote» y «hay uno que no
+/// compara contra nada» son dos cosas distintas, y anidar dos opciones para
+/// decirlo se lee mal en el sitio donde importa.
+struct SumasEncoladas {
+    /// Lo que el fichero de sumas publicaba, si esto es una comprobación.
+    publicado: Option<Publicado>,
+}
+
+/// El fichero de sumas leído, tal como hace falta para juzgarlo (#311).
+///
+/// Gemelo del de la terminal, y con los mismos tres campos por el mismo
+/// motivo: las líneas en su orden, dónde quedó cada una en la petición, y
+/// cuántas no se entendieron —que es lo que prohíbe decir «todas correctas».
+struct Publicado {
+    lines: Vec<norte_frontend::checksums::SumLine>,
+    asked: Vec<Option<usize>>,
+    refused: usize,
+}
+
 struct Sincronizacion {
     /// Cuál de todos los planes de esta ventana es.
     epoca: u64,
@@ -2212,6 +2288,11 @@ struct Estado {
     comparacion: Option<Comparacion>,
     /// El plan de sincronización abierto, si lo hay.
     sincronizacion: Option<Sincronizacion>,
+    /// El lote de sumas en vuelo, si lo hay (#311). A lo sumo UNO: el diálogo
+    /// de resultados es uno, y lanzar otro releva al anterior.
+    sumas: Option<SumasEnVuelo>,
+    /// El lote de sumas ENCOLADO y todavía sin id (#311). `None` = ninguno.
+    sumas_pendientes: Option<SumasEncoladas>,
     /// Un plan PEDIDO cuya Task todavía no ha contestado.
     sync_pedida: Option<SyncPedida>,
     /// La consulta semántica en vuelo, para poder ABORTARLA.
@@ -2509,6 +2590,8 @@ impl Estado {
             semantica_en_vuelo: None,
             comparacion: None,
             sincronizacion: None,
+            sumas: None,
+            sumas_pendientes: None,
             sync_pedida: None,
             aviso_de_daemon: None,
             journal_rehusado: false,
@@ -7265,6 +7348,14 @@ impl Estado {
             Fondo::Perfiles(perfiles, vecino) => self.con_los_perfiles(perfiles, vecino, buzon),
             Fondo::PerfilCargado(nombre, res) => self.aplicar_perfil(&nombre, *res, backend, buzon),
             Fondo::PlanIa(epoca, res) => self.aplicar_plan_ia(epoca, *res, backend, buzon),
+            // #311: las dos mitades de comprobar unas sumas — el fichero que
+            // se lee antes de lanzar nada, y el informe que llega después.
+            Fondo::FicheroDeSumas(sums, bytes) => {
+                self.fichero_de_sumas(&sums, *bytes, backend, buzon)
+            }
+            Fondo::InformeDeSumas(task, estado, informe) => {
+                self.informe_de_sumas(task, &estado, *informe)
+            }
             Fondo::PlanDeLote(epoca, res) => self.aplicar_plan_de_lote(epoca, *res),
             Fondo::PluginsDeAyuda(res) => self.aplicar_catalogo_de_plugins(res, backend, buzon),
             Fondo::PaginaDePlugin(id, res) => self
@@ -8520,6 +8611,9 @@ impl Estado {
                 // son el diálogo que pide que teclees algo, y el corpus tiene
                 // UNA que habla de eso.
                 Some(Pendiente::InstruccionIa { .. }) => "dialog.ai-rename",
+                // #311: el diálogo de sumas es un cuadro de LECTURA sobre lo
+                // que hay bajo el cursor, como las propiedades.
+                Some(Pendiente::CopiarSumas { .. }) => "dialog.properties",
                 Some(
                     Pendiente::CrearDirectorio { .. }
                     | Pendiente::CrearFichero { .. }
@@ -8537,7 +8631,12 @@ impl Estado {
                     | Pendiente::Empaquetar { .. }
                     // Partir pide un TAMAÑO, pero es el mismo diálogo de un
                     // campo de texto y una confirmación.
-                    | Pendiente::Partir { .. },
+                    | Pendiente::Partir { .. }
+                    // Y los permisos piden un MODO, con la misma forma (#314).
+                    // El corpus los documenta en la página de las propiedades,
+                    // pero el CONTEXTO de teclas es este: un campo y dos
+                    // botones.
+                    | Pendiente::Permisos { .. },
                 ) => "dialog.mkdir",
                 None => "browse",
             };
@@ -9373,6 +9472,9 @@ impl Estado {
             | Efecto::Transferir { .. }
             | Efecto::Renombrar
             | Efecto::RenameIa
+            // #314: cambiar permisos escribe, así que una ventana de solo
+            // lectura tampoco lo hace.
+            | Efecto::Permisos
             | Efecto::BuscarSemantica
             | Efecto::Sincronizar
             // Los dos que LANZAN un proceso: lo que ese proceso haga con los
@@ -9386,6 +9488,7 @@ impl Estado {
             // Copiar la ruta no toca nada y va en los dos modos: poner texto
             // en el portapapeles es tan de solo mirar como leer un nombre.
             Efecto::CopiarRuta => self.copiar_rutas(),
+            Efecto::Sumas { verificar } => self.lanzar_sumas(verificar, backend, buzon),
             Efecto::MarcarPatron { marcar } => self.pedir_patron(marcar),
             Efecto::AbrirExterno => self.abrir_externo(),
             Efecto::Terminal => self.abrir_terminal(),
@@ -9423,6 +9526,7 @@ impl Estado {
             | Efecto::Transferir { .. }
             | Efecto::Renombrar
             | Efecto::RenameIa
+            | Efecto::Permisos
             | Efecto::BuscarSemantica => self.efecto_que_muta(efecto),
         }
     }
@@ -9665,6 +9769,7 @@ impl Estado {
             Efecto::Transferir { mover } => self.pedir_transferencia(mover),
             Efecto::Renombrar => self.pedir_rename(),
             Efecto::RenameIa => self.pedir_instruccion_ia(),
+            Efecto::Permisos => self.pedir_permisos(),
             Efecto::BuscarSemantica => self.pedir_consulta_semantica(),
             // Los demás no llegan aquí: el `match` de arriba los reparte.
             _ => Self::no_muta(),
@@ -9726,6 +9831,212 @@ impl Estado {
                 ))))
                 .await;
         });
+    }
+
+    /// La Task de sumas terminó: se pide su informe (#311).
+    ///
+    /// Los mismos guards que el de sync, y por lo mismo: la CLASE, la ÉPOCA de
+    /// conexión y la idempotencia —una reconexión reanuncia el terminal, y
+    /// esto es una RPC.
+    fn pedir_informe_de_sumas(
+        &mut self,
+        p: &norte_proto::TaskProgress,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let Some(s) = self.sumas.as_ref() else {
+            return;
+        };
+        if s.task != p.task_id
+            || s.epoca_conexion != self.epoca_conexion
+            || !matches!(p.kind, norte_proto::TaskKind::Checksum)
+            || s.informe_pedido
+        {
+            return;
+        }
+        if let Some(s) = self.sumas.as_mut() {
+            s.informe_pedido = true;
+        }
+        let estado = p.state.clone();
+        let id = p.task_id;
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let informe = backend.checksum_report(id).await;
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::InformeDeSumas(
+                    id,
+                    estado,
+                    Box::new(informe),
+                ))))
+                .await;
+        });
+    }
+
+    /// El informe de sumas llegó: se juzga y se abre el diálogo (#311).
+    ///
+    /// **Un informe PARCIAL no se compara con nada.** Cancelar deja `pending`
+    /// por encima de cero con la Task ya terminal, y juzgar eso acusaría —«no
+    /// cuadra o falta»— a ficheros que nadie llegó a leer, que es el peor
+    /// error posible en la única herramienta cuyo trabajo es comprobar.
+    fn informe_de_sumas(
+        &mut self,
+        task: norte_proto::TaskId,
+        estado: &norte_proto::TaskState,
+        informe: Result<norte_proto::methods::FsChecksumReportResult, Error>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        use norte_frontend::checksums;
+
+        let Some(sumas) = self.sumas.take().filter(|s| s.task == task) else {
+            return Vec::new();
+        };
+        let Ok(informe) = informe else {
+            return self.decir("err-checksum-failed");
+        };
+        if *estado != norte_proto::TaskState::Completed || informe.pending > 0 {
+            return self.decir("err-checksum-partial");
+        }
+        let calculado: Vec<checksums::Computed> = informe
+            .entries
+            .iter()
+            .map(|e| (e.digest.clone(), e.miss))
+            .collect();
+        let (lineas, copiable, mensaje) = if let Some(publicado) = sumas.publicado {
+            let veredictos = checksums::judge(&publicado.lines, &publicado.asked, &calculado);
+            let filas: Vec<crate::dto::DialogLine> = publicado
+                .lines
+                .iter()
+                .zip(&veredictos)
+                .map(|(linea, v)| self.fila_de_suma(&linea.name, None, Some(*v)))
+                .collect();
+            let mensaje = match checksums::summarize(&veredictos, publicado.refused) {
+                checksums::Summary::Unreadable { n, refused } => self.decir_con(
+                    "msg-checksum-unreadable-lines",
+                    &[("n", &n.to_string()), ("refused", &refused.to_string())],
+                ),
+                checksums::Summary::AllOk { n } => {
+                    self.decir_con("msg-checksum-all-ok", &[("n", &n.to_string())])
+                }
+                checksums::Summary::Bad { n } => {
+                    self.decir_con("msg-checksum-bad", &[("n", &n.to_string())])
+                }
+            };
+            // Una comprobación no trae digests: no hay lista que copiar.
+            (filas, Vec::new(), mensaje)
+        } else {
+            let filas: Vec<crate::dto::DialogLine> = informe
+                .entries
+                .iter()
+                .map(|e| {
+                    let nombre = e
+                        .path
+                        .file_name()
+                        .map(|s| s.as_bytes().to_vec())
+                        .unwrap_or_default();
+                    let veredicto = e.miss.map(|m| match m {
+                        norte_proto::methods::ChecksumMiss::NotAFile => {
+                            checksums::Verdict::NotAFile
+                        }
+                        _ => checksums::Verdict::Missing,
+                    });
+                    self.fila_de_suma(&nombre, e.digest.as_deref(), veredicto)
+                })
+                .collect();
+            let copiable: Vec<checksums::Computed> = calculado.clone();
+            (filas, copiable, Vec::new())
+        };
+        // Lo que se copiaría, en BYTES y con el escapado de coreutils: un
+        // nombre no tiene por qué ser texto (regla 1).
+        let para_copiar: Vec<(Vec<u8>, Option<String>)> = informe
+            .entries
+            .iter()
+            .zip(copiable)
+            .map(|(e, (digest, _))| {
+                (
+                    e.path
+                        .file_name()
+                        .map(|s| s.as_bytes().to_vec())
+                        .unwrap_or_default(),
+                    digest,
+                )
+            })
+            .collect();
+        let bytes = checksums::to_sums_bytes(&para_copiar);
+        let mut fuera = mensaje;
+        fuera.extend(self.abrir_sumas(lineas, bytes));
+        fuera
+    }
+
+    /// Una fila del diálogo de sumas: el veredicto —o el digest recortado— y
+    /// el nombre, saneado como cualquier otro que pinte esta ventana.
+    fn fila_de_suma(
+        &self,
+        nombre: &[u8],
+        digest: Option<&str>,
+        veredicto: Option<norte_frontend::checksums::Verdict>,
+    ) -> crate::dto::DialogLine {
+        let (texto, hostil) = norte_frontend::display::display_name(nombre);
+        let estado = match (veredicto, digest) {
+            (Some(v), _) => norte_i18n::t_in(self.lang, v.label_key()),
+            (None, Some(d)) => d.chars().take(12).collect::<String>(),
+            (None, None) => norte_i18n::t_in(self.lang, "checksum-unreadable"),
+        };
+        crate::dto::DialogLine {
+            text: clamp_display(format!("{estado}  {texto}")),
+            hostile: hostil,
+        }
+    }
+
+    /// Abre el diálogo con las sumas ya juzgadas (#311).
+    ///
+    /// Confirmar COPIA la lista al portapapeles cuando hay digests que copiar,
+    /// y cuando no —una comprobación no los trae— el diálogo solo se cierra.
+    fn abrir_sumas(
+        &mut self,
+        body: Vec<crate::dto::DialogLine>,
+        bytes: Vec<u8>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let copiable = !bytes.is_empty();
+        let mut choices = Vec::new();
+        if copiable {
+            choices.push(DialogChoice {
+                id: "confirm".to_owned(),
+                label_key: "dialog-copy".to_owned(),
+                destructive: false,
+            });
+        }
+        choices.push(DialogChoice {
+            id: "cancel".to_owned(),
+            label_key: "dialog-close".to_owned(),
+            destructive: false,
+        });
+        let vista = DialogView {
+            id,
+            title_key: "modal-checksums-title".to_owned(),
+            destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
+            deadline_at_ms: None,
+            body,
+            overflow_note: String::new(),
+            choices,
+            input: None,
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista: vista.clone(),
+            input_crudo: String::new(),
+            reconocido: true,
+            al_confirmar: copiable.then_some(Pendiente::CopiarSumas { bytes }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        vec![self.parche(vec![cambio])]
     }
 
     /// El informe llegó: entra en el modelo, que decide qué frase sale.
@@ -13051,6 +13362,261 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
+    /// Calcula las sumas de lo marcado, o comprueba el fichero de sumas bajo
+    /// el cursor (#311, ADR 0080).
+    ///
+    /// Comprobar lee el fichero ANTES de lanzar nada: sin sus líneas no hay
+    /// rutas que pedir. Ese `read` va spawneado, como todo lo que habla con el
+    /// backend desde aquí, y vuelve por el buzón.
+    fn lanzar_sumas(
+        &mut self,
+        verificar: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if verificar {
+            let Some(sums) = self.hueco().pane.selected().map(|e| e.path.clone()) else {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: "host-nothing-selected".to_owned(),
+                    },
+                    self.decir("host-nothing-selected"),
+                );
+            };
+            let backend2 = Arc::clone(backend);
+            let buzon2 = buzon.clone();
+            tokio::spawn(async move {
+                // Un byte MÁS que el tope, para poder distinguir «cabe» de «no
+                // cabe»: un fichero de sumas recortado en silencio comprueba
+                // media lista y se lee como «todo correcto».
+                let bytes = backend2
+                    .read(
+                        sums.clone(),
+                        Some(norte_proto::ByteRange {
+                            offset: 0,
+                            len: Some(SUMS_MAX_BYTES + 1),
+                        }),
+                    )
+                    .await;
+                let _ = buzon2
+                    .send(Mensaje::Fondo(Box::new(Fondo::FicheroDeSumas(
+                        Box::new(sums),
+                        Box::new(bytes),
+                    ))))
+                    .await;
+            });
+            return (self.aplicada(), Vec::new());
+        }
+        let paths = self.hueco().pane.marked_paths();
+        if paths.is_empty() {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-nothing-selected".to_owned(),
+                },
+                self.decir("host-nothing-selected"),
+            );
+        }
+        let fuera = self.encolar_sumas(paths, None, backend, buzon);
+        (self.aplicada(), fuera)
+    }
+
+    /// El fichero de sumas llegó: se lee y se lanza la Task (#311).
+    fn fichero_de_sumas(
+        &mut self,
+        sums: &VPath,
+        bytes: Result<Vec<u8>, Error>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Ok(bytes) = bytes else {
+            return self.decir("err-checksum-not-a-sums-file");
+        };
+        if bytes.len() as u64 > SUMS_MAX_BYTES {
+            return self.decir("err-checksum-sums-too-big");
+        }
+        let leido = norte_frontend::checksums::parse_sums(&bytes);
+        if leido.lines.is_empty() {
+            // Decir POR QUÉ cuando se sabe: un fichero de PowerShell es un
+            // fichero de sumas perfectamente válido en otra codificación.
+            return self.decir(if norte_frontend::checksums::looks_utf16(&bytes) {
+                "err-checksum-sums-utf16"
+            } else {
+                "err-checksum-not-a-sums-file"
+            });
+        }
+        // Contra el directorio del FICHERO DE SUMAS, no contra el del panel:
+        // un `SHA256SUMS` habla de lo que tiene al lado.
+        let Some(base) = sums.parent() else {
+            return self.decir("err-checksum-not-a-sums-file");
+        };
+        let (paths, asked) = norte_frontend::checksums::resolve_targets(&base, &leido.lines);
+        if paths.is_empty() {
+            return self.decir("err-checksum-not-a-sums-file");
+        }
+        let publicado = Publicado {
+            lines: leido.lines,
+            asked,
+            refused: leido.refused,
+        };
+        self.encolar_sumas(paths, Some(publicado), backend, buzon)
+    }
+
+    /// Encola la Task de sumas y apunta qué informe hay que esperar.
+    fn encolar_sumas(
+        &mut self,
+        paths: Vec<VPath>,
+        publicado: Option<Publicado>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let params = norte_proto::methods::FsChecksumParams {
+            paths,
+            algo: norte_proto::methods::ChecksumAlgo::Sha256,
+        };
+        let backend2 = Arc::clone(backend);
+        let buzon2 = buzon.clone();
+        tokio::spawn(async move {
+            match backend2.checksum(params).await {
+                Ok(task) => {
+                    let _ = buzon2
+                        .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
+                        .await;
+                }
+                Err(e) => {
+                    let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
+                }
+            }
+        });
+        // La Task todavía no tiene id: lo que se apunta aquí es la INTENCIÓN,
+        // y `apuntar_sumas` la casa con el id cuando la task nace.
+        self.sumas_pendientes = Some(SumasEncoladas { publicado });
+        self.decir("msg-checksum-started")
+    }
+
+    /// Pide el MODO en octal para lo marcado (#314, ADR 0081).
+    ///
+    /// El campo viene prellenado con los permisos de la entrada bajo el cursor
+    /// **si el listado los trae** —los trae cuando el esquema de columnas pide
+    /// `posix.mode`—, y vacío si no. Prellenar no es adorno: quitarle el bit de
+    /// ejecución a algo que lo tenía, porque no se veía cuál era, es justo el
+    /// error que un campo en blanco invita a cometer.
+    ///
+    /// El cuerpo dice sobre CUÁNTAS entradas va, por lo mismo que en la
+    /// terminal: teclear un modo creyendo que va sobre una y que vaya sobre
+    /// cincuenta es lo que este diálogo tiene que hacer difícil.
+    fn pedir_permisos(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let targets = self.hueco().pane.marked_paths();
+        if targets.is_empty() {
+            let fuera = self.decir("host-nothing-selected");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-nothing-selected".to_owned(),
+                },
+                fuera,
+            );
+        }
+        let modo = self
+            .hueco()
+            .pane
+            .selected()
+            .and_then(norte_frontend::chmod::mode_of)
+            .map(norte_frontend::chmod::format_mode)
+            .unwrap_or_default();
+        let cuantas = norte_i18n::ta_in(
+            self.lang,
+            "modal-chmod-count",
+            &[("n", &targets.len().to_string())],
+        );
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: "modal-chmod-title".to_owned(),
+            destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
+            deadline_at_ms: None,
+            body: vec![crate::dto::DialogLine {
+                text: clamp_display(cuantas),
+                hostile: false,
+            }],
+            overflow_note: String::new(),
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: Some(modo.clone()),
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista: vista.clone(),
+            input_crudo: modo,
+            reconocido: true,
+            al_confirmar: Some(Pendiente::Permisos { targets }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Manda el cambio de permisos que el diálogo confirmó (#314).
+    ///
+    /// Lo tecleado se lee con el MISMO parser que la terminal
+    /// ([`norte_frontend::chmod::parse_mode`]): un modo que no vale se dice y
+    /// el diálogo se queda abierto con lo escrito, que es lo que hacen aquí
+    /// todos los prompts.
+    fn cambiar_permisos(
+        &mut self,
+        targets: Vec<VPath>,
+        tecleado: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
+        let mode = match norte_frontend::chmod::parse_mode(tecleado) {
+            Ok(m) => m,
+            Err(e) => {
+                let clave = e.message_key();
+                return (Some(clave), self.decir(clave));
+            }
+        };
+        // Los directorios a refrescar: los PADRES de lo que cambia, porque lo
+        // que se ve distinto tras un chmod es la columna de permisos de sus
+        // filas.
+        let mut refrescar: Vec<VPath> = targets.iter().filter_map(VPath::parent).collect();
+        refrescar.sort();
+        refrescar.dedup();
+        let params = norte_proto::methods::FsSetModeParams {
+            paths: targets,
+            mode,
+        };
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            match backend.set_mode(params).await {
+                Ok(task) => {
+                    let _ = buzon
+                        .send(Mensaje::TaskNueva(Box::new((task, refrescar, None))))
+                        .await;
+                }
+                Err(e) => {
+                    let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
+                }
+            }
+        });
+        (None, Vec::new())
+    }
+
     /// Pide el nombre de un fichero NUEVO para editarlo (#290).
     ///
     /// Solo en un panel local: lo que se abre después es la aplicación del
@@ -13342,6 +13908,29 @@ impl Estado {
             Some(p @ (Pendiente::Partir { .. } | Pendiente::Empaquetar { .. })) => {
                 let (motivo, partes) =
                     self.ejecutar_de_archivo(p, &dialogo.input_crudo, backend, buzon);
+                rehusado = motivo;
+                salidas.extend(partes);
+            }
+            // #311: copiar la lista de sumas. Los bytes se montaron al abrir
+            // el diálogo, con el escapado de coreutils: lo que se pinta va
+            // saneado, y copiar ESO daría un `SHA256SUMS` que no comprueba los
+            // ficheros que nombra.
+            Some(Pendiente::CopiarSumas { bytes }) => {
+                // Cuántas LÍNEAS lleva: es el número que el mensaje enseña, y
+                // el payload termina siempre en salto.
+                let count = bytes.split(|b| *b == b'\n').count().saturating_sub(1);
+                if self.nativo(crate::dto::NativeEffect::CopyBytes { bytes, count }) {
+                    salidas.extend(self.decir("msg-checksum-copied"));
+                } else {
+                    // Nadie escucha el canal nativo: no hay portapapeles al
+                    // que copiar, y decirlo es mejor que un botón que no hace
+                    // nada.
+                    rehusado = Some("host-no-desktop");
+                }
+            }
+            Some(Pendiente::Permisos { targets }) => {
+                let tecleado = dialogo.input_crudo.clone();
+                let (motivo, partes) = self.cambiar_permisos(targets, &tecleado, backend, buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }
@@ -13958,6 +14547,21 @@ impl Estado {
         let mut rx = task.progress.clone();
         let nacio = rx.borrow().clone();
         self.atar_la_creacion(id, ajena, nacio.kind);
+        // #311: la Task de sumas ya tiene id, así que la intención apuntada al
+        // encolarla se convierte en el lote que espera su informe. Solo la
+        // PROPIA: una task ajena del mismo kind es la comprobación de otra
+        // ventana, y colgarle este informe le daría los digests de otro.
+        if !ajena
+            && nacio.kind == norte_proto::TaskKind::Checksum
+            && let Some(encolada) = self.sumas_pendientes.take()
+        {
+            self.sumas = Some(SumasEnVuelo {
+                task: task.id,
+                epoca_conexion: self.epoca_conexion,
+                informe_pedido: false,
+                publicado: encolada.publicado,
+            });
+        }
         let mut vista = Self::vista_de(&nacio);
         vista.foreign = ajena;
         // Un REANUNCIO —el SDK vuelve a ofrecer las tasks al reconectar— trae
@@ -14096,6 +14700,10 @@ impl Estado {
         // se quedaba sin ella justo cuando el desenlace de la Task más parece
         // que todo fue bien.
         self.pedir_informe_de_lote(nacio, backend, buzon);
+        // #311: y el de las sumas, por lo mismo. Un lote de tres ficheros
+        // pequeños nace terminal casi siempre, así que sin esto el camino
+        // rápido —el que más se usa— no enseñaba nada.
+        self.pedir_informe_de_sumas(nacio, backend, buzon);
         cambios
     }
 
@@ -14637,6 +15245,8 @@ impl Estado {
             cambios.extend(self.cerrar_comparacion(p));
             cambios.extend(self.cerrar_sincronizacion(p));
             self.pedir_informe_de_sync(p, backend, buzon);
+            // #311: y el de las sumas, que es donde viajan los digests.
+            self.pedir_informe_de_sumas(p, backend, buzon);
             cambios.extend(self.decir_el_recuento(p));
             cambios.extend(self.ofrecer_reintento(p));
             self.abrir_lo_creado(p);

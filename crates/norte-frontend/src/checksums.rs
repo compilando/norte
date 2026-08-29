@@ -282,6 +282,68 @@ pub fn verify(publicado: &[SumLine], calculado: &[(Vec<u8>, Option<String>)]) ->
 }
 
 /// Una ruta del informe, reducida a lo que el veredicto necesita: su nombre
+/// Convierte los nombres de un fichero de sumas en RUTAS del directorio que lo
+/// contiene, y dice en qué posición de la petición quedó cada uno.
+///
+/// Devuelve `(rutas a pedir, por línea su posición en esa lista)`. Un `None`
+/// es un nombre que este sistema no puede escribir —con un componente vacío,
+/// o con `\`/`:` en Windows—: no se pide, y su veredicto será
+/// [`Verdict::Unnameable`], que no es lo mismo que «falta».
+///
+/// **Los nombres con directorio se parten por segmentos** en vez de tirarse:
+/// `sub/dentro.txt` es lo que escriben `sha256sum -r` y un `find -exec`, y son
+/// ficheros de sumas de todos los días. El confinamiento sale gratis y hay que
+/// decirlo — `Segment::new` rechaza `.`, `..`, el vacío y el NUL, así que un
+/// fichero de sumas hostil no puede salir de su directorio.
+///
+/// Vive aquí y no en un frontend porque es la misma decisión en la terminal y
+/// en la ventana (ADR 0077).
+///
+/// ```
+/// use norte_frontend::checksums::{parse_sums, resolve_targets};
+/// # let vacio = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+/// let base = norte_proto::VPath::parse("file:///d").unwrap();
+/// let lineas = parse_sums(format!("{vacio}  sub/x\n{vacio}  ..\n").as_bytes()).lines;
+/// let (rutas, asked) = resolve_targets(&base, &lineas);
+/// assert_eq!(rutas.len(), 1, "`..` no se pide");
+/// assert_eq!(asked, vec![Some(0), None]);
+/// ```
+#[must_use]
+pub fn resolve_targets(
+    base: &norte_proto::VPath,
+    lines: &[SumLine],
+) -> (Vec<norte_proto::VPath>, Vec<Option<usize>>) {
+    let mut paths: Vec<norte_proto::VPath> = Vec::with_capacity(lines.len());
+    let mut asked = Vec::with_capacity(lines.len());
+    for linea in lines {
+        let mut ruta = base.clone();
+        let mut vale = !linea.name.is_empty();
+        for parte in linea.name.split(|b| *b == b'/') {
+            // `a//b` y una barra final: un separador repetido no nombra nada.
+            if parte.is_empty() {
+                continue;
+            }
+            let Ok(seg) = norte_proto::Segment::new(parte.to_vec()) else {
+                vale = false;
+                break;
+            };
+            ruta = ruta.join(seg);
+        }
+        // Un nombre que se queda en el propio directorio (`.`, o todo
+        // separadores) tampoco nombra un fichero de dentro.
+        if vale && ruta == *base {
+            vale = false;
+        }
+        if vale {
+            asked.push(Some(paths.len()));
+            paths.push(ruta);
+        } else {
+            asked.push(None);
+        }
+    }
+    (paths, asked)
+}
+
 /// Una entrada del informe: su digest y —si no lo hay— el motivo que dio el
 /// core, **en el orden en que se pidieron las rutas**.
 pub type Computed = (Option<String>, Option<norte_proto::methods::ChecksumMiss>);

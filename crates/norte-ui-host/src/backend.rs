@@ -99,6 +99,35 @@ pub trait HostBackend: Send + Sync + 'static {
     /// nombre inocente.
     fn create_file(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>>;
 
+    /// Calcula el sha256 del CONTENIDO de un lote, como Task (#311).
+    ///
+    /// Los digests NO vuelven aquí: no caben en el desenlace de una Task ni en
+    /// su progreso. Se recogen con [`Self::checksum_report`] cuando termina.
+    fn checksum(
+        &self,
+        params: norte_proto::methods::FsChecksumParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
+
+    /// Los digests que calculó esa Task (#311).
+    ///
+    /// Solo es DEFINITIVO con la Task `Completed` y `pending == 0`: uno de una
+    /// Task cancelada está a medias, y compararlo contra un fichero de sumas
+    /// acusaría a ficheros que nadie llegó a leer.
+    fn checksum_report(
+        &self,
+        task: norte_proto::TaskId,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::FsChecksumReportResult, Error>>;
+
+    /// Cambia los PERMISOS POSIX de un lote, como Task (#314).
+    ///
+    /// Muta: el core la registra en el journal con su reversa —el modo
+    /// anterior— y la pasa por la política. Una ubicación sin permisos POSIX
+    /// responde `Unsupported` sin cambiar nada.
+    fn set_mode(
+        &self,
+        params: norte_proto::methods::FsSetModeParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>>;
+
     /// Los datos de UNA entrada.
     ///
     /// Un listado puede venir PEREZOSO —el provider local devuelve `size` y
@@ -659,6 +688,48 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<(), Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.policy_decide(approval_id, approve).await })
+    }
+
+    fn checksum(
+        &self,
+        params: norte_proto::methods::FsChecksumParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.checksum(params).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
+        })
+    }
+
+    fn checksum_report(
+        &self,
+        task: norte_proto::TaskId,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::FsChecksumReportResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.checksum_report(task).await })
+    }
+
+    fn set_mode(
+        &self,
+        params: norte_proto::methods::FsSetModeParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            let task = backend.set_mode(params).await?;
+            let canceller = task.canceller();
+            Ok(HostTask {
+                id: task.id(),
+                progress: task.progress(),
+                cancel: Arc::new(move || canceller.cancel()),
+                foreign: false,
+            })
+        })
     }
 
     fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>> {

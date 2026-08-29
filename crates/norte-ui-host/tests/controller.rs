@@ -16988,3 +16988,174 @@ async fn dos_gemelos_de_caja_hacia_un_destino_sensible_si_se_encolan() {
         "un ext4 distingue la caja: son dos ficheros y el lote es legítimo: {ack:?}"
     );
 }
+
+/// #311: calcular sumas en la ventana. La Task se encola con lo marcado, y
+/// cuando su INFORME llega se abre un diálogo con una fila por fichero y la
+/// opción de copiar la lista.
+#[tokio::test]
+async fn calcular_sumas_abre_el_dialogo_con_sus_filas() {
+    let backend = arbol();
+    // El informe que el falso daemon devolverá: un digest para `notas.txt`.
+    *backend.sumas_informe.lock().expect("informe") =
+        norte_proto::methods::FsChecksumReportResult {
+            entries: vec![norte_proto::methods::ChecksumEntry {
+                path: norte_proto::VPath::parse("mem:///casa/notas.txt").expect("wire"),
+                digest: Some("ab".repeat(32)),
+                miss: None,
+            }],
+            algo: norte_proto::methods::ChecksumAlgo::Sha256,
+            pending: 0,
+        };
+    let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = host.subscribe();
+
+    host.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "k".to_owned(),
+        ctrl: false,
+        alt: true,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogos.len(), 1, "se abre UN diálogo con las sumas");
+    assert_eq!(dialogos[0].body.len(), 1, "una fila por fichero");
+    assert!(
+        dialogos[0].body[0].text.contains("ababab"),
+        "con su digest recortado: {:?}",
+        dialogos[0].body[0].text
+    );
+    assert!(
+        dialogos[0].choices.iter().any(|c| c.id == "confirm"),
+        "y con la opción de COPIAR, que es lo único que se hace con una lista de digests"
+    );
+    assert_eq!(
+        backend.sumas_pedidas.lock().expect("sumas").len(),
+        1,
+        "se pidió UN lote"
+    );
+}
+
+/// Un informe PARCIAL —una Task cancelada deja `pending` por encima de cero—
+/// no se compara con nada: acusar a ficheros que nadie llegó a leer es el peor
+/// error posible en la herramienta que existe para comprobar.
+#[tokio::test]
+async fn un_informe_a_medias_no_abre_veredicto() {
+    let backend = arbol();
+    *backend.sumas_informe.lock().expect("informe") =
+        norte_proto::methods::FsChecksumReportResult {
+            entries: Vec::new(),
+            algo: norte_proto::methods::ChecksumAlgo::Sha256,
+            // Lo que deja una cancelación: la Task terminó y queda trabajo.
+            pending: 3,
+        };
+    let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = host.subscribe();
+
+    host.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "k".to_owned(),
+        ctrl: false,
+        alt: true,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    let f = foto(&host, &mut sub).await;
+    assert!(
+        f.dialogs.is_empty(),
+        "un informe a medias no abre ningún veredicto: {:?}",
+        f.dialogs
+    );
+}
+
+/// `alt+A`, el acorde que los tres presets nativos dan a `pane.chmod`.
+fn alt_a() -> UiAction {
+    UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "A".to_owned(),
+        ctrl: false,
+        alt: true,
+        shift: false,
+        meta: false,
+    })
+}
+
+/// #314: la ventana cambia permisos. El diálogo lleva campo de texto —el modo
+/// en octal—, dice sobre cuántas entradas va, y confirmar encola la Task con
+/// el modo que se tecleó.
+///
+/// La regla de qué es un modo válido es la COMPARTIDA
+/// (`norte_frontend::chmod::parse_mode`), la misma que usa la terminal: dos
+/// lecturas distintas de `755` en dos frontends serían dos permisos distintos.
+#[tokio::test]
+async fn cambiar_permisos_teclea_y_encola() {
+    let backend = arbol();
+    let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = host.subscribe();
+
+    host.dispatch(alt_a()).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let id = dialogos[0].id;
+    assert!(
+        dialogos[0].input.is_some(),
+        "el diálogo de permisos dice que aquí se teclea"
+    );
+
+    host.dispatch(UiAction::DialogInput {
+        id,
+        text: "0750".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let _ = siguientes_dialogos(&mut sub).await;
+    host.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let lotes = backend.permisos.lock().expect("permisos").clone();
+    assert_eq!(lotes.len(), 1, "se encoló UN lote");
+    assert_eq!(lotes[0].1, 0o750, "en OCTAL: 750, no 750 decimal");
+    assert_eq!(lotes[0].0.len(), 1, "sobre lo que hay bajo el cursor");
+}
+
+/// Un modo que no vale no encola nada, y se dice.
+#[tokio::test]
+async fn un_modo_invalido_no_cambia_nada() {
+    let backend = arbol();
+    let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = host.subscribe();
+
+    host.dispatch(alt_a()).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let id = dialogos[0].id;
+    host.dispatch(UiAction::DialogInput {
+        id,
+        text: "899".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let _ = siguientes_dialogos(&mut sub).await;
+    let ack = host
+        .dispatch(UiAction::Dialog {
+            id,
+            choice: "confirm".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { .. }),
+        "un 899 no es octal y se dice: {ack:?}"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        backend.permisos.lock().expect("permisos").is_empty(),
+        "y no se encoló nada"
+    );
+}

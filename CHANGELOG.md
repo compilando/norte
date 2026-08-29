@@ -525,6 +525,22 @@ independently through `PROTOCOL_VERSION`.
   the bytes, so this subsumes the `fs.compare` hash oracle and exceeds it, and
   an agent denied that one only had to call here.
 
+- **Checksums and permissions reach the window** (#311, #314). Both were
+  classified as deferred in the parity test with the same reason — the protocol,
+  the core and the rules were shared, what was missing was the surface — and now
+  neither is. `pane.chmod` opens a dialog with the octal field prefilled from the
+  entry under the cursor and the count of what it will change; `pane.checksum`
+  and `pane.checksum-verify` launch the task, wait for its REPORT and show a row
+  per file, with copying the list as the only thing a list of digests is for.
+
+  The rules stayed where they were: the same `parse_mode`, the same verdicts, and
+  the resolution of a sums file's names against its own directory moved into the
+  shared crate so the two frontends cannot drift on what `sub/dentro.txt` means.
+  A partial report is not compared in the window either — a cancelled batch would
+  otherwise accuse files nobody read. And the report is requested both when the
+  task ends AND when it is born already finished, which for three small files is
+  the common case: without that, the fast path showed nothing.
+
 - **Permissions can be changed** (#314, protocol **0.60.0**, ADR 0081). It was
   the one category where all three reference managers touch and norte only
   looked: the properties dialog showed the POSIX mode and nothing could change

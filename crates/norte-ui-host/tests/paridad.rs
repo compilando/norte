@@ -53,12 +53,6 @@ const APLAZADOS: &[(&str, u32)] = &[
     // revisión del plan sí la tiene ya, porque es la misma que la del rename
     // con IA.
     ("pane.rename-batch", 310),
-    // Las sumas (#311) nacen igual: el protocolo, el core y el parser del
-    // fichero de sumas son compartidos, y lo que la ventana no tiene todavía
-    // es dónde ENSEÑAR la lista —una tabla con su veredicto por fila— ni el
-    // gesto de copiarla al portapapeles.
-    ("pane.checksum", 311),
-    ("pane.checksum-verify", 311),
     // Comparar dos ficheros (#312) delega en un programa externo, y esta
     // ventana todavía no sabe lanzar uno esperándolo: el camino nativo que
     // tiene —`shell::open`— es el de «entrégaselo al escritorio y vuelve»,
@@ -66,11 +60,6 @@ const APLAZADOS: &[(&str, u32)] = &[
     // sí es compartida (`norte_frontend::diffpair`), así que lo que falta es
     // el lanzamiento, no la decisión.
     ("pane.compare-files", 312),
-    // Cambiar permisos (#314) nace en la TUI. El protocolo, el journal con su
-    // reversa y la lectura del modo son compartidos; lo que le falta a la
-    // ventana es el diálogo —un campo de cuatro dígitos octales con la cuenta
-    // de sobre cuántas entradas va— y no la decisión.
-    ("pane.chmod", 314),
     // Los perfiles (ADR 0079) ya están en las dos: el selector, girar por la
     // lista y el cambio en caliente. Lo que la ventana todavía no hace es
     // acordarse de dónde dejaste cada panel DENTRO de cada perfil — la

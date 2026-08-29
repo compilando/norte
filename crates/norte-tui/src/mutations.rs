@@ -532,35 +532,10 @@ async fn checksum_verify(
         app.message = Some(t("msg-checksum-not-a-sums-file"));
         return;
     };
-    // Un nombre con `/` dentro es lo que escriben `sha256sum -r` y un
-    // `find -exec`, y son ficheros de sumas de todos los días: se parte por
-    // segmentos en vez de tirar la línea. El confinamiento sale gratis y hay
-    // que decirlo — `Segment::new` rechaza `.`, `..`, el vacío y el NUL, así
-    // que un fichero de sumas hostil no puede salir de este directorio; en
-    // Windows rechaza además `\` y `:`.
-    let mut paths: Vec<norte_proto::VPath> = Vec::with_capacity(publicado.lines.len());
-    let mut asked = Vec::with_capacity(publicado.lines.len());
-    for linea in &publicado.lines {
-        let mut ruta = base.clone();
-        let mut vale = !linea.name.is_empty();
-        for parte in linea.name.split(|b| *b == b'/') {
-            // `a//b` y una barra final: un separador repetido no nombra nada.
-            if parte.is_empty() {
-                continue;
-            }
-            let Ok(seg) = norte_proto::Segment::new(parte.to_vec()) else {
-                vale = false;
-                break;
-            };
-            ruta = ruta.join(seg);
-        }
-        if vale {
-            asked.push(Some(paths.len()));
-            paths.push(ruta);
-        } else {
-            asked.push(None);
-        }
-    }
+    // La resolución vive en el crate COMPARTIDO: la ventana comprueba los
+    // mismos ficheros de sumas, y dos lecturas de `sub/dentro.txt` en dos
+    // frontends serían dos comprobaciones distintas (ADR 0077).
+    let (paths, asked) = norte_frontend::checksums::resolve_targets(&base, &publicado.lines);
     if paths.is_empty() {
         app.message = Some(t("msg-checksum-not-a-sums-file"));
         return;

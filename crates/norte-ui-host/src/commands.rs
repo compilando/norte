@@ -56,6 +56,12 @@ pub const MUTAN: &[&str] = &[
     "pane.copy",
     "pane.move",
     "pane.rename",
+    // #314: cambiar permisos MUTA, con journal y reversa.
+    "pane.chmod",
+    // #311: no escriben, pero LEEN CONTENIDO y lo enseñan — una ventana de
+    // solo mirar tampoco calcula la huella de unos ficheros ajenos.
+    "pane.checksum",
+    "pane.checksum-verify",
     "pane.ai-rename",
     "pane.semantic-search",
     "pane.sync-dirs",
@@ -166,6 +172,9 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.copy",
     "pane.move",
     "pane.rename",
+    "pane.chmod",
+    "pane.checksum",
+    "pane.checksum-verify",
     "pane.ai-rename",
     "pane.semantic-search",
     "pane.compare-dirs",
@@ -439,6 +448,14 @@ pub enum Efecto {
     },
     /// Devuelve la selección anterior al último gesto en bloque (#313).
     RestaurarMarcas,
+    /// Cambia los PERMISOS POSIX de lo marcado (#314): pide el modo en octal.
+    Permisos,
+    /// Calcula las sumas de lo marcado, o COMPRUEBA el fichero de sumas bajo
+    /// el cursor (#311).
+    Sumas {
+        /// `true` comprueba contra un fichero de sumas; `false` calcula.
+        verificar: bool,
+    },
     /// Marca —o desmarca— por PATRÓN: abre el prompt del glob.
     MarcarPatron {
         /// `true` añade marcas, `false` las quita.
@@ -743,6 +760,9 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.copy" => Efecto::Transferir { mover: false },
         "pane.move" => Efecto::Transferir { mover: true },
         "pane.rename" => Efecto::Renombrar,
+        "pane.chmod" => Efecto::Permisos,
+        "pane.checksum" => Efecto::Sumas { verificar: false },
+        "pane.checksum-verify" => Efecto::Sumas { verificar: true },
         "pane.ai-rename" => Efecto::RenameIa,
         "pane.semantic-search" => Efecto::BuscarSemantica,
         "pane.compare-dirs" => Efecto::Comparar,

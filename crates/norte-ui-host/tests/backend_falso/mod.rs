@@ -292,6 +292,13 @@ pub struct Falso {
     >,
     /// Los directorios que se pidió crear.
     pub creados: std::sync::Mutex<Vec<VPath>>,
+    /// Los lotes de permisos que se pidieron: rutas y modo (#314).
+    pub permisos: std::sync::Mutex<Vec<(Vec<VPath>, u32)>>,
+    /// Las rutas de cada lote de sumas que se pidió (#311).
+    pub sumas_pedidas: std::sync::Mutex<Vec<Vec<VPath>>>,
+    /// El informe que devuelve `checksum_report`. Por defecto, vacío y
+    /// completo — un test que quiera digests lo pone.
+    pub sumas_informe: std::sync::Mutex<norte_proto::methods::FsChecksumReportResult>,
     /// El catálogo de atributos que devuelve el falso daemon.
     pub catalogo: std::sync::Mutex<norte_proto::AttrCatalog>,
     /// Con qué error falla `policy.decide`. `None` = la decisión llega.
@@ -1133,6 +1140,79 @@ impl HostBackend for Falso {
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>>
     {
         self.degradadas.lock().expect("degradadas").take()
+    }
+
+    /// #311: apunta el lote de sumas y devuelve una Task ya terminada. El
+    /// informe lo sirve `checksum_report` con lo que diga `sumas_informe`.
+    fn checksum(
+        &self,
+        params: norte_proto::methods::FsChecksumParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.sumas_pedidas
+            .lock()
+            .expect("sumas")
+            .push(params.paths.clone());
+        let progreso = norte_proto::TaskProgress {
+            task_id: norte_proto::TaskId::new(10),
+            kind: norte_proto::TaskKind::Checksum,
+            state: norte_proto::TaskState::Completed,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: params.paths.len() as u64,
+            entries_total: Some(params.paths.len() as u64),
+            current: None,
+            unreadable: None,
+        };
+        let (_tx, rx) = tokio::sync::watch::channel(progreso);
+        Box::pin(async move {
+            Ok(HostTask {
+                id: norte_proto::TaskId::new(10),
+                progress: rx,
+                cancel: Arc::new(|| {}),
+                foreign: false,
+            })
+        })
+    }
+
+    fn checksum_report(
+        &self,
+        _task: norte_proto::TaskId,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::FsChecksumReportResult, Error>> {
+        let informe = self.sumas_informe.lock().expect("informe").clone();
+        Box::pin(async move { Ok(informe) })
+    }
+
+    /// #314: apunta el lote de permisos que se pidió, para que un test pueda
+    /// afirmar QUÉ rutas y con QUÉ modo — que es lo único que el host decide;
+    /// el resto lo decide el core.
+    fn set_mode(
+        &self,
+        params: norte_proto::methods::FsSetModeParams,
+    ) -> BoxFuture<'static, Result<HostTask, Error>> {
+        self.permisos
+            .lock()
+            .expect("permisos")
+            .push((params.paths.clone(), params.mode));
+        let progreso = norte_proto::TaskProgress {
+            task_id: norte_proto::TaskId::new(9),
+            kind: norte_proto::TaskKind::SetMode,
+            state: norte_proto::TaskState::Completed,
+            bytes_done: 0,
+            bytes_total: None,
+            entries_done: params.paths.len() as u64,
+            entries_total: Some(params.paths.len() as u64),
+            current: None,
+            unreadable: Some(0),
+        };
+        let (_tx, rx) = tokio::sync::watch::channel(progreso);
+        Box::pin(async move {
+            Ok(HostTask {
+                id: norte_proto::TaskId::new(9),
+                progress: rx,
+                cancel: Arc::new(|| {}),
+                foreign: false,
+            })
+        })
     }
 
     fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>> {

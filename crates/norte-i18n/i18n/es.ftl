@@ -1715,6 +1715,16 @@ metadata-kind-other = otro
 dialog-body-truncated = … se enseñan { $shown } de { $total }
 dialog-destination = Destino:
 dialog-confirm = Confirmar
+# Sumas en la ventana (#311). El diálogo es de LECTURA: copiar es lo único que
+# se puede hacer con una lista de digests, y una comprobación no los trae.
+dialog-copy = Copiar
+dialog-close = Cerrar
+modal-checksums-title = Sumas sha256
+err-checksum-not-a-sums-file = esto no parece un fichero de sumas
+err-checksum-sums-too-big = el fichero de sumas es demasiado grande para comprobarlo entero
+err-checksum-sums-utf16 = el fichero de sumas está en UTF-16; guárdalo en UTF-8
+err-checksum-partial = el lote no terminó: lo calculado está a medias y no se compara
+err-checksum-failed = el cálculo de sumas falló
 dialog-cancel = Cancelar
 dialog-approve = Aprobar
 dialog-deny = Denegar
@@ -1723,6 +1733,10 @@ dialog-newer = Solo si es más nuevo
 dialog-rename = Renombrar automáticamente
 dialog-skip = Saltar
 modal-mkdir-title = Nuevo directorio
+# Permisos en la ventana (#314). El cuerpo dice sobre cuántas va: en la
+# terminal eso cabe en el título y aquí no, porque el título es una clave.
+modal-chmod-title = Cambiar permisos
+modal-chmod-count = { $n } entradas
 modal-new-file-title = Fichero nuevo
 modal-rename-title = Renombrar
 modal-delete-title = ¿Mover a la papelera?
