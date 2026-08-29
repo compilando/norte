@@ -1381,6 +1381,35 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::DirSize))
     }
 
+    /// `fs.checksum` (0.59.0, #311): lanza la Task de sumas y devuelve su
+    /// referencia. Los digests se recogen con [`Self::checksum_report`], que es
+    /// el único camino: no caben en el desenlace de una Task.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon; [`Error::Unsupported`] contra uno 0.58, que
+    /// no conoce el método.
+    pub async fn checksum(&self, params: methods::FsChecksumParams) -> Result<RemoteTask, Error> {
+        let result: FsTaskResult = self
+            .call_maybe_unknown(methods::FS_CHECKSUM, &params)
+            .await?;
+        Ok(self.own_task(result.task_id, TaskKind::Checksum))
+    }
+
+    /// `fs.checksum_report` (0.59.0, #311): los digests calculados hasta ahora.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon; [`Error::Unsupported`] contra uno 0.58.
+    pub async fn checksum_report(
+        &self,
+        task_id: TaskId,
+    ) -> Result<methods::FsChecksumReportResult, Error> {
+        self.call_maybe_unknown(
+            methods::FS_CHECKSUM_REPORT,
+            &methods::FsChecksumReportParams { task_id },
+        )
+        .await
+    }
+
     /// `archive.pack` (0.50.0, #132).
     ///
     /// # Errors

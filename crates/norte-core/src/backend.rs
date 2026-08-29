@@ -1446,6 +1446,57 @@ impl Backend {
         }
     }
 
+    /// El digest del contenido de un lote de ficheros (`fs.checksum`, 0.59.0,
+    /// #311): devuelve la Task, y los digests se recogen con
+    /// [`Self::checksum_report`].
+    ///
+    /// **No muta nada**: leer no es escribir (regla dura 4 no aplica).
+    ///
+    /// # Errors
+    /// [`Error::InvalidPath`] con la lista vacía; la taxonomía del protocolo
+    /// para el resto.
+    pub async fn checksum(
+        &self,
+        params: norte_proto::methods::FsChecksumParams,
+    ) -> Result<TaskRef, Error> {
+        if params.paths.is_empty() {
+            return Err(Error::InvalidPath);
+        }
+        match self {
+            Self::Embedded(engine) => {
+                let handle = engine
+                    .checksum_as(params, crate::journal::Actor::User)
+                    .await?;
+                Ok(TaskRef::from_handle(&handle))
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.checksum(params).await.map(TaskRef::from),
+        }
+    }
+
+    /// Los digests que lleva calculados esa Task (`fs.checksum_report`,
+    /// 0.59.0, #311). SNAPSHOT: parcial mientras corre, definitivo cuando la
+    /// Task es terminal.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] si ese id nunca fue un lote de sumas de esta
+    /// instancia o si el anillo ya lo desalojó.
+    pub async fn checksum_report(
+        &self,
+        task_id: TaskId,
+    ) -> Result<norte_proto::methods::FsChecksumReportResult, Error> {
+        match self {
+            // Embebido no hay actor que comprobar: este `Backend` ES el humano
+            // en proceso (mismo criterio que `rename_batch_report`).
+            Self::Embedded(engine) => engine
+                .checksum_report(task_id)
+                .map(|(_owner, r)| r)
+                .ok_or(Error::NotFound),
+            #[cfg(unix)]
+            Self::Remote(r) => r.checksum_report(task_id).await,
+        }
+    }
+
     /// Comparación de dos árboles (`fs.compare`, 0.39.0, ADR 0048): devuelve
     /// la Task ([`TaskRef`], cancelable) y el STREAM de lotes de filas
     /// ([`norte_proto::methods::CompareRowsBatch`]).

@@ -169,6 +169,13 @@ pub struct Engine {
     /// dentro de una carpeta `a`. Un `Completed` es verdad y no lo cubre
     /// (#250).
     pack_reports: std::sync::Mutex<std::collections::VecDeque<PackReportEntry>>,
+    /// Anillo ACOTADO de informes de `fs.checksum`, por `task_id`
+    /// ([`Self::checksum_report`]).
+    ///
+    /// Gemelo de `pack_reports` y por el mismo motivo: hay dos consumidores —el
+    /// socket (`fs.checksum_report`) y el `Backend` embebido— y dos anillos
+    /// serían dos políticas de retención que se contradicen a la primera.
+    checksum_reports: std::sync::Mutex<std::collections::VecDeque<ChecksumReportEntry>>,
 }
 
 /// La puerta de policy, capturable (#171).
@@ -279,6 +286,7 @@ impl Engine {
             sync_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             test_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             pack_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            checksum_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -1346,6 +1354,114 @@ impl Engine {
             Box::new(move |ctx| Box::pin(async move { crate::ops::dir_size(roots, &ctx).await })),
         );
         Ok(handle)
+    }
+
+    /// El digest del contenido de un lote de ficheros, como Task cancelable
+    /// (`fs.checksum`, 0.59.0, #311).
+    ///
+    /// **No muta nada**: leer no es escribir, así que la regla 4 no aplica —
+    /// sin journal y sin undo. El gate de LECTURA vive en el daemon, que es
+    /// quien ata una conexión a un actor, igual que en `fs.dir_size`.
+    ///
+    /// Los digests NO viajan en el retorno: se recogen con
+    /// [`Self::checksum_report`], que es el único camino de lectura y el mismo
+    /// reparto que `archive.pack`. Devolver además el `Arc` sería filtrar un
+    /// asa a la API pública para comodidad de un test.
+    ///
+    /// # Errors
+    /// [`Error::InvalidPath`] con la lista vacía —resumir la nada no es una
+    /// petición— o por encima de
+    /// [`FS_CHECKSUM_MAX_PATHS`](norte_proto::methods::FS_CHECKSUM_MAX_PATHS),
+    /// que se RECHAZA en vez de recortar: un informe recortado en silencio se
+    /// lee como «todo comprobado» sobre ficheros que nadie miró.
+    /// [`Error::Unsupported`] si algún scheme no tiene provider.
+    ///
+    /// # Panics
+    /// Si el lock del anillo de informes está envenenado, que es un pánico
+    /// previo de este mismo proceso — mismo criterio que `archive.pack`: el
+    /// camino de ESCRITURA del anillo no sigue con un estado del que no se sabe
+    /// nada. El de lectura ([`Self::checksum_report`]) sí lo tolera.
+    pub async fn checksum_as(
+        &self,
+        params: norte_proto::methods::FsChecksumParams,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        // ANTES de crear Task alguna: es un rechazo del REQUEST, no el fallo de
+        // una Task ya lanzada (mismo criterio que `dir_size_as`).
+        let Some(primera) = params.paths.first() else {
+            tracing::debug!("fs.checksum sin rutas");
+            return Err(Error::InvalidPath);
+        };
+        if params.paths.len() > norte_proto::methods::FS_CHECKSUM_MAX_PATHS {
+            tracing::debug!(n = params.paths.len(), "fs.checksum por encima del tope");
+            return Err(Error::InvalidPath);
+        }
+        // La cola del scheduler es la de la PRIMERA ruta, como en `dir_size_as`:
+        // una selección de varios providers tiene que encolarse en algún sitio.
+        let key = primera.scheme().to_owned();
+        let mut rutas = Vec::with_capacity(params.paths.len());
+        for p in params.paths {
+            let provider = self.provider_for(&p).await?;
+            rutas.push((provider, p));
+        }
+        let informe = Arc::new(std::sync::Mutex::new(
+            norte_proto::methods::FsChecksumReportResult::default(),
+        ));
+        let owner = actor.clone();
+        let vivo = Arc::clone(&informe);
+        let handle = self.sched.submit(
+            &key,
+            TaskKind::Checksum,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move { crate::ops::checksum(rutas, vivo, &ctx).await })
+            }),
+        );
+        {
+            let mut ring = self
+                .checksum_reports
+                .lock()
+                .expect("checksum_reports lock sano");
+            ring.push_back((handle.id(), owner, informe));
+            evict_checksum_reports(&mut ring);
+        }
+        Ok(handle)
+    }
+
+    /// Informe de un `fs.checksum` ya lanzado, por `task_id`, más el ACTOR que
+    /// lo pidió (#311). `None` si ese id nunca fue un lote de sumas de esta
+    /// instancia o si el anillo ya lo desalojó.
+    ///
+    /// Es un SNAPSHOT: definitivo cuando la Task es terminal, parcial antes —
+    /// que es justo lo que hace útil pedirlo mientras corre. El actor sale con
+    /// él porque quien sirve esto por el wire tiene que decidir si el que
+    /// pregunta podía ver esa task.
+    ///
+    /// Este camino NO panica ante un lock envenenado: es de LECTURA, igual que
+    /// sus gemelos.
+    #[must_use]
+    pub fn checksum_report(
+        &self,
+        task_id: TaskId,
+    ) -> Option<(
+        crate::journal::Actor,
+        norte_proto::methods::FsChecksumReportResult,
+    )> {
+        let ring = self
+            .checksum_reports
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        ring.iter()
+            .find(|(id, _, _)| *id == task_id)
+            .map(|(_, owner, r)| {
+                (
+                    owner.clone(),
+                    r.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone(),
+                )
+            })
     }
 
     /// Planifica una sincronización de UN sentido como Task cancelable
@@ -3648,6 +3764,9 @@ type TestReportEntry = ReportEntry<norte_proto::methods::ArchiveTestResult>;
 /// El anillo de informes de `archive.pack` ([`Engine::archive_pack_report`]).
 type PackReportEntry = ReportEntry<norte_proto::methods::ArchivePackReportResult>;
 
+/// El anillo de informes de `fs.checksum` ([`Engine::checksum_report`]).
+type ChecksumReportEntry = ReportEntry<norte_proto::methods::FsChecksumReportResult>;
+
 /// Poda el anillo de informes de lote hasta sus topes, sacrificando SIEMPRE lo
 /// que menos hace falta.
 ///
@@ -3817,6 +3936,23 @@ fn evict_pack_reports(ring: &mut std::collections::VecDeque<PackReportEntry>) {
         PACK_REPORTS_MAX,
         PACK_REPORTS_AGENTS_MAX,
         |r: &norte_proto::methods::ArchivePackReportResult| !r.risky.is_empty() || r.truncated,
+    );
+}
+
+/// Desalojo del anillo de `fs.checksum` (#311), con la misma regla que sus
+/// gemelos: primero cae lo que no cuenta nada.
+///
+/// Aquí «cuenta algo» es un informe con alguna ruta SIN digest: el que dice que
+/// todo se pudo leer se reconstruye volviendo a pedirlo, y el que dice que uno
+/// no se pudo leer es el que alguien está buscando.
+fn evict_checksum_reports(ring: &mut std::collections::VecDeque<ChecksumReportEntry>) {
+    evict_reports(
+        ring,
+        PACK_REPORTS_MAX,
+        PACK_REPORTS_AGENTS_MAX,
+        |r: &norte_proto::methods::FsChecksumReportResult| {
+            r.entries.iter().any(|e| e.digest.is_none())
+        },
     );
 }
 

@@ -1070,7 +1070,13 @@ fn golden_methods() {
     // la forma LIMPIA va aparte porque significa algo por sí sola: «se
     // comprobaron doce entradas y no había nada», que no es lo mismo que un
     // daemon que no comprueba.
-    assert_eq!(fixtures.len(), 169, "[methods.json] fixtures sin caso Rust");
+    // 169 → 172 en 0.59.0 (#311): + fs_checksum_params y las dos formas del
+    // informe. Los tokens de `miss` (`unreadable`/`not_a_file`) son vocabulario
+    // del wire y esta fixtura es lo único que los congela — los dos en la
+    // misma, porque van en la misma lista. Y una ruta que NO es UTF-8 entre
+    // ellas: el informe tiene que poder nombrar el fichero que no se pudo leer
+    // aunque su nombre no sea texto (regla 1).
+    assert_eq!(fixtures.len(), 172, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
@@ -1174,6 +1180,7 @@ fn check_methods_archive_write(fixtures: &BTreeMap<String, Value>) {
         },
     );
     check_methods_archive_pack_report(fixtures);
+    check_methods_fs_checksum(fixtures);
     check_one(
         fixtures,
         "file_split_params",
@@ -1189,6 +1196,62 @@ fn check_methods_archive_write(fixtures: &BTreeMap<String, Value>) {
         &FileCombineParams {
             first: vpath("file:///g.iso.001"),
             dest: vpath("file:///g.iso"),
+        },
+    );
+}
+
+/// `fs.checksum` y su informe (0.59.0, #311): comprobar que un fichero es el
+/// que alguien publicó.
+///
+/// La fixtura del informe lleva los DOS motivos de `miss` —lo único que congela
+/// esos tokens del wire— y una ruta que NO es UTF-8: el informe tiene que poder
+/// nombrar el fichero que no se pudo leer aunque su nombre no sea texto.
+fn check_methods_fs_checksum(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        ChecksumAlgo, ChecksumEntry, ChecksumMiss, FsChecksumParams, FsChecksumReportParams,
+        FsChecksumReportResult,
+    };
+    let vp = |w: &str| norte_proto::VPath::parse(w).expect("wire");
+    check_one(
+        fixtures,
+        "fs_checksum_params",
+        &FsChecksumParams {
+            paths: vec![vp("file:///casa/a.txt"), vp("file:///casa/b%FF.bin")],
+            algo: ChecksumAlgo::Sha256,
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_checksum_report_params",
+        &FsChecksumReportParams {
+            task_id: norte_proto::TaskId::new(9),
+        },
+    );
+    check_one(
+        fixtures,
+        "fs_checksum_report_result",
+        &FsChecksumReportResult {
+            entries: vec![
+                ChecksumEntry {
+                    path: vp("file:///casa/a.txt"),
+                    digest: Some(
+                        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                            .to_owned(),
+                    ),
+                    miss: None,
+                },
+                ChecksumEntry {
+                    path: vp("file:///casa/b%FF.bin"),
+                    digest: None,
+                    miss: Some(ChecksumMiss::Unreadable),
+                },
+                ChecksumEntry {
+                    path: vp("file:///casa/sub"),
+                    digest: None,
+                    miss: Some(ChecksumMiss::NotAFile),
+                },
+            ],
+            pending: 2,
         },
     );
 }
@@ -3445,6 +3508,11 @@ fn rpc_codes_y_limites_congelados() {
 }
 
 #[test]
+// Una LISTA: un `assert_eq!` por nombre del wire, y crece con el vocabulario.
+// Partirla en dos mitades arbitrarias escondería la mitad, y lo que hace útil
+// una lista congelada es verla entera — mismo criterio que la tabla de
+// `efecto_de` en la ventana.
+#[allow(clippy::too_many_lines)]
 fn method_names_frozen() {
     use norte_proto::methods;
     assert_eq!(methods::FS_LIST, "fs.list");
@@ -3676,6 +3744,9 @@ fn method_names_frozen() {
     // ventana se mueve una vez por release del wire, y esta rama no ha salido.
     // MINOR.
     assert_eq!(methods::FS_DIR_SIZE, "fs.dir_size");
+    assert_eq!(methods::FS_CHECKSUM, "fs.checksum");
+    assert_eq!(methods::FS_CHECKSUM_REPORT, "fs.checksum_report");
+    assert_eq!(methods::FS_CHECKSUM_MAX_PATHS, 4096);
     assert_eq!(methods::CONNECTION_CLOSE, "connection.close");
     // 0.50.0: escribir archivos (#132). Cuatro métodos y cuatro kinds nuevos,
     // aditivos por la misma razón que los de arriba. Ninguno escribe DENTRO de
@@ -3737,7 +3808,11 @@ fn method_names_frozen() {
     // 0.57 contra un daemon 0.58 empaqueta igual y se queda sin el aviso. (Las
     // colisiones por plegado no entran en este informe: esas se RECHAZAN al
     // empaquetar, porque ahí sí desaparece un fichero al extraer.)
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.58.0");
+    // 0.59.0 (#311): `fs.checksum` y su informe. Aditivo —dos métodos que un
+    // cliente viejo no llama y un kind que degrada a `Unknown`— y aquí no hay
+    // degradación parcial ninguna: contra un daemon 0.58 no se puede
+    // comprobar una suma en absoluto, que es lo que desplaza la ventana.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.59.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

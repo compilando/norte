@@ -207,6 +207,33 @@
       "max_path": null
     }
   },
+  "fs_checksum_params": {
+    "paths": [
+      "file:///casa/a.txt",
+      "file:///casa/b%FF.bin"
+    ],
+    "algo": "sha256"
+  },
+  "fs_checksum_report_params": {
+    "task_id": 9
+  },
+  "fs_checksum_report_result": {
+    "entries": [
+      {
+        "path": "file:///casa/a.txt",
+        "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "file:///casa/b%FF.bin",
+        "miss": "unreadable"
+      },
+      {
+        "path": "file:///casa/sub",
+        "miss": "not_a_file"
+      }
+    ],
+    "pending": 2
+  },
   "fs_compare_params": {
     "criteria": {
       "hash": true,
@@ -255,6 +282,13 @@
     "symlinks": "skip",
     "to": "file:///dst/a.txt",
     "verify": "hash"
+  },
+  "fs_create_params": {
+    "path": "file:///tmp/borrador-%FF%FE.txt"
+  },
+  "fs_create_params_anchored": {
+    "dest_anchor": "3f2a91c40b7d6e58aa10c4d9f8e37b62",
+    "path": "file:///tmp/borrador-%FF%FE.txt"
   },
   "fs_delete_params": {
     "mode": "trash",
@@ -334,13 +368,6 @@
       }
     ],
     "next_cursor": "3"
-  },
-  "fs_create_params": {
-    "path": "file:///tmp/borrador-%FF%FE.txt"
-  },
-  "fs_create_params_anchored": {
-    "dest_anchor": "3f2a91c40b7d6e58aa10c4d9f8e37b62",
-    "path": "file:///tmp/borrador-%FF%FE.txt"
   },
   "fs_mkdir_params": {
     "path": "file:///tmp/nueva-carpeta"

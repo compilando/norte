@@ -4020,6 +4020,73 @@ async fn handle_fs_dir_size(
     to_value(&methods::FsTaskResult { task_id })
 }
 
+/// `fs.checksum` (0.59.0, #311): el digest del contenido de un lote, como Task.
+///
+/// Gate de LECTURA sobre CADA ruta, y antes de validar nada más, igual que en
+/// `fs.dir_size` — y aquí la razón pesa MÁS: esto no lee la forma del árbol
+/// sino el CONTENIDO de cada fichero, y un digest es una huella de ese
+/// contenido. Sin el gate, un actor fuera de scope podría confirmar que un
+/// fichero ajeno es exactamente el que él sospecha.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+async fn handle_fs_checksum(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::FsChecksumParams = parse_params(params)?;
+    for path in &p.paths {
+        read_gate(actor, path, shared)?;
+    }
+    if p.paths.is_empty() {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "fs.checksum: paths must not be empty",
+        ));
+    }
+    if p.paths.len() > methods::FS_CHECKSUM_MAX_PATHS {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "fs.checksum: too many paths",
+        ));
+    }
+    let handle = shared
+        .engine
+        .checksum_as(p, actor.clone())
+        .await
+        .map_err(RpcError::from)?;
+    // INVARIANTE (#64): CERO `.await` entre el submit del engine y este
+    // register — la Task jamás corre FUERA de `shared.tasks`.
+    let task_id = register_task_id(shared, handle, actor.clone())?;
+    to_value(&methods::FsTaskResult { task_id })
+}
+
+/// `fs.checksum_report` (0.59.0, #311): los digests que calculó esa Task.
+///
+/// Misma visibilidad que el informe de un lote de renames, y por lo mismo: una
+/// sola respuesta —`NotFound`— para las tres situaciones (desalojado, nunca
+/// fue un lote de sumas, es de otro actor), porque separar la tercera
+/// confirmaría que la task de otro existió.
+#[tracing::instrument(skip_all, fields(actor = ?actor))]
+fn handle_fs_checksum_report(
+    actor: &Actor,
+    p: &methods::FsChecksumReportParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let unknown = || RpcError::from(norte_proto::Error::NotFound);
+    let (owner, report) = shared
+        .engine
+        .checksum_report(p.task_id)
+        .ok_or_else(unknown)?;
+    if !may_observe(actor, &owner) {
+        tracing::warn!(
+            actor = ?actor,
+            "informe de sumas de otro actor: denegado (respuesta = id desconocido)"
+        );
+        return Err(unknown());
+    }
+    to_value(&report)
+}
+
 /// `archive.pack` (0.50.0, #132): fabrica un archivo como Task.
 ///
 /// El gate de MUTACIÓN lo hace el engine (misma op que una copia: se leen las
@@ -4739,6 +4806,13 @@ async fn dispatch_fs_task(
         // fs.dir_size (0.49.0, #139): sin conn_id — no enruta nada, el total
         // viaja en el progreso que ya escucha todo el mundo.
         methods::FS_DIR_SIZE => handle_fs_dir_size(req.params, &actor, shared).await,
+        // fs.checksum (0.59.0, #311): el digest del contenido, como Task, y su
+        // informe — los digests no caben en el desenlace de una Task.
+        methods::FS_CHECKSUM => handle_fs_checksum(req.params, &actor, shared).await,
+        methods::FS_CHECKSUM_REPORT => {
+            let p: methods::FsChecksumReportParams = parse_params(req.params)?;
+            handle_fs_checksum_report(&actor, &p, shared)
+        }
         // 0.50.0 (#132): escribir archivos. Ninguno escribe DENTRO de un
         // contenedor — el provider de archivos sigue `READ_ONLY` (ADR 0018).
         methods::ARCHIVE_PACK => handle_archive_pack(req.params, &actor, shared).await,

@@ -436,6 +436,67 @@
       "description": "Capability flags as a `NAME | NAME` string (e.g. `RENAME_ATOMIC | CASE_SENSITIVE`). Unknown well-formed names are ignored for forward-compat.",
       "type": "string"
     },
+    "ChecksumAlgo": {
+      "description": "Qué función de digest se pide (0.59.0, #311).\n\nHoy una sola, y el enum existe igualmente: un campo con un solo valor\ndeclara que la respuesta depende de él, y añadir `sha512` o `md5` después es\nentonces aditivo. Sin el campo, la primera función nueva obligaría a\nadivinar con qué se calculó un digest que ya estaba en pantalla.\n\n**Estricto a propósito**: no lleva `serde(other)`. Un algoritmo que este\ndaemon no conoce es un error de params, jamás un digest calculado con otra\ncosa — que es exactamente la respuesta que haría inútil comprobar nada.",
+      "oneOf": [
+        {
+          "const": "sha256",
+          "description": "SHA-256, en hex minúscula. El de `sha256sum`, que es el formato que se\nencuentra uno por ahí.",
+          "type": "string"
+        }
+      ]
+    },
+    "ChecksumEntry": {
+      "description": "Una ruta del lote y lo que salió de ella (0.59.0, #311).\n\n`digest` y `miss` son excluyentes: o hay suma, o hay motivo. Se modelan como\ndos campos opcionales y no como un enum de wire para que un cliente N-1 que\nsolo mire `digest` siga leyendo el informe sin entender los motivos.",
+      "properties": {
+        "digest": {
+          "description": "El digest en hex MINÚSCULA, o ausente si no lo hay. Minúscula siempre,\npor lo mismo que [`PlanHash`]: dos escrituras del mismo hash que\ncomparan distinto son un bug esperando.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "miss": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChecksumMiss"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Por qué no hay digest. Ausente cuando sí lo hay."
+        },
+        "path": {
+          "$ref": "#/$defs/VPath",
+          "description": "La ruta, tal cual se pidió."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "ChecksumMiss": {
+      "description": "Por qué una ruta del lote no tiene digest (0.59.0, #311).\n\nDos motivos y no uno: «no se pudo leer» y «no era un fichero» se arreglan de\nformas distintas —el primero puede ser un permiso o un fichero que se\nmovió, el segundo es que marcaste una carpeta— y un informe que los\nmezclara obligaría al lector a ir a mirar.",
+      "oneOf": [
+        {
+          "const": "unreadable",
+          "description": "El provider no pudo abrirlo o no pudo terminar de leerlo.",
+          "type": "string"
+        },
+        {
+          "const": "not_a_file",
+          "description": "No es un fichero (un directorio, o lo que el provider diga que no lee).",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Un motivo que este cliente no conoce todavía.",
+          "type": "string"
+        }
+      ]
+    },
     "ClientInfo": {
       "description": "Identidad de un cliente (va en [`InitializeParams`]).",
       "properties": {
@@ -1615,6 +1676,61 @@
       },
       "required": [
         "capabilities"
+      ],
+      "type": "object"
+    },
+    "FsChecksumParams": {
+      "description": "Params de [`FS_CHECKSUM`] (0.59.0, #311).\n\n```\nuse norte_proto::methods::{ChecksumAlgo, FsChecksumParams};\nlet p: FsChecksumParams =\n    serde_json::from_str(r#\"{\"paths\":[\"file:///a.txt\"]}\"#).expect(\"params\");\nassert_eq!(p.paths.len(), 1);\n// El algoritmo se puede omitir: sha256 es el que lee todo el mundo.\nassert_eq!(p.algo, ChecksumAlgo::Sha256);\n```",
+      "properties": {
+        "algo": {
+          "$ref": "#/$defs/ChecksumAlgo",
+          "default": "sha256",
+          "description": "Con qué función. Ausente = [`ChecksumAlgo::Sha256`]."
+        },
+        "paths": {
+          "default": [],
+          "description": "Los ficheros que hay que resumir. VACÍO es `-32602`: resumir la nada no\nes una petición, mismo criterio que [`FsDirSizeParams`].\n\nUn DIRECTORIO aquí no se recorre: sale en el informe como omitido. Ver\n[`FS_CHECKSUM`] para por qué hashear un árbol es otra pregunta.",
+          "items": {
+            "$ref": "#/$defs/VPath"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "FsChecksumReportParams": {
+      "description": "Params de [`FS_CHECKSUM_REPORT`] (0.59.0, #311).",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId",
+          "description": "La Task cuyo informe se pide (la de [`FsTaskResult::task_id`] que\ndevolvió [`FS_CHECKSUM`])."
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "FsChecksumReportResult": {
+      "description": "Result de [`FS_CHECKSUM_REPORT`] (0.59.0, #311): lo calculado hasta ahora.\n\nEl orden es el de la PETICIÓN, no el de terminación: un informe que se\nreordena solo no se puede comparar con la lista que uno mandó.",
+      "properties": {
+        "entries": {
+          "description": "Una entrada por ruta ya resuelta, en el orden en que se pidieron.",
+          "items": {
+            "$ref": "#/$defs/ChecksumEntry"
+          },
+          "type": "array"
+        },
+        "pending": {
+          "description": "Cuántas rutas quedan por resolver. Cero con la Task terminal; mayor que\ncero antes, y eso es lo que distingue «esto es todo» de «esto es lo que\nllevo» sin tener que mirar el estado de la Task por otro sitio.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entries",
+        "pending"
       ],
       "type": "object"
     },
@@ -4731,6 +4847,11 @@
           "type": "string"
         },
         {
+          "const": "checksum",
+          "description": "El digest del contenido de un lote de ficheros\n(`fs.checksum`/[`FS_CHECKSUM`](crate::methods::FS_CHECKSUM), 0.59.0,\n#311). Lectura pura (regla 4 no aplica): sin journal, sin undo, ni un\nbyte escrito.\n\nEl progreso cuenta bytes y entradas, y aquí SÍ hay totales desde el\nprincipio: se sabe cuántas rutas se pidieron. Lo que no cabe en el\nprogreso son los digests, y por eso el método tiene informe\n([`FS_CHECKSUM_REPORT`](crate::methods::FS_CHECKSUM_REPORT)).\n\nEntra CON el método. Un cliente N-1 (0.58.x) la degrada a\n[`TaskKind::Unknown`] por el `serde(other)` de abajo, igual que\n`Search`/`Index`/`Embed`/`RenameBatch`/`Compare`/`DirSize`.",
+          "type": "string"
+        },
+        {
           "const": "pack",
           "description": "Fabricar un archivo\n(`archive.pack`/[`ARCHIVE_PACK`](crate::methods::ARCHIVE_PACK), 0.50.0,\n#132). MUTA: journal como UNA creación, y deshacerlo es borrar el\narchivo.\n\nEntra CON el método, y los cuatro de este bump se degradan igual: un\ncliente N-1 (0.49.x) los convierte en [`TaskKind::Unknown`] por el\n`serde(other)` de abajo, como `Search`/`Index`/`Embed`/`RenameBatch`/\n`Compare`/`DirSize` antes que ellos.\n\nEl progreso cuenta bytes LEÍDOS del origen y entradas empaquetadas; los\nbytes escritos no se pueden saber por adelantado —el compresor decide—\ny prometer un total que va a fallar es peor que no darlo.",
           "type": "string"
@@ -5146,6 +5267,15 @@
     "capability_flags": {
       "$ref": "#/$defs/CapabilityFlags"
     },
+    "checksum_algo": {
+      "$ref": "#/$defs/ChecksumAlgo"
+    },
+    "checksum_entry": {
+      "$ref": "#/$defs/ChecksumEntry"
+    },
+    "checksum_miss": {
+      "$ref": "#/$defs/ChecksumMiss"
+    },
     "client_info": {
       "$ref": "#/$defs/ClientInfo"
     },
@@ -5238,6 +5368,15 @@
     },
     "fs_capabilities_result": {
       "$ref": "#/$defs/FsCapabilitiesResult"
+    },
+    "fs_checksum_params": {
+      "$ref": "#/$defs/FsChecksumParams"
+    },
+    "fs_checksum_report_params": {
+      "$ref": "#/$defs/FsChecksumReportParams"
+    },
+    "fs_checksum_report_result": {
+      "$ref": "#/$defs/FsChecksumReportResult"
     },
     "fs_compare_params": {
       "$ref": "#/$defs/FsCompareParams"
@@ -5668,6 +5807,12 @@
     "fs_copy_params",
     "fs_delete_params",
     "fs_dir_size_params",
+    "fs_checksum_params",
+    "fs_checksum_report_params",
+    "fs_checksum_report_result",
+    "checksum_entry",
+    "checksum_algo",
+    "checksum_miss",
     "fs_list_params",
     "fs_list_result",
     "fs_mkdir_params",

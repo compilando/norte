@@ -836,7 +836,32 @@ use crate::{
 /// aviso, no el archivo**: el `.zip` se escribe igual, con las mismas entradas
 /// y los mismos bytes, y quien lo extraiga en Windows se encontrará las
 /// entradas colocadas donde no las dejó sin que nadie se lo haya dicho.
-pub const PROTOCOL_VERSION: &str = "0.58.0";
+/// `0.59.0` (#311): métodos nuevos [`FS_CHECKSUM`] ([`FsChecksumParams`] →
+/// [`FsTaskResult`]) y [`FS_CHECKSUM_REPORT`] ([`FsChecksumReportParams`] →
+/// [`FsChecksumReportResult`]), más [`TaskKind::Checksum`](crate::TaskKind).
+///
+/// Comprobar un fichero contra la suma que alguien publicó es la única forma
+/// que hay de saber que lo que se descargó es lo que se ofrecía, y norte no la
+/// tenía: los tres gestores de referencia sí (Krusader lo pone en su menú
+/// File). Lee CONTENIDO y no muta nada.
+///
+/// **Por qué dos métodos y no uno.** El resultado son N digests, y eso no cabe
+/// en el desenlace de una Task ni en su progreso, que solo sabe contar. Es el
+/// mismo reparto —y por la misma razón— que [`FS_RENAME_BATCH_REPORT`] y
+/// [`ARCHIVE_PACK_REPORT`]: la Task hace el trabajo y el informe dice qué salió.
+///
+/// Ventana N=0.59.x / N-1=0.58.x. Aditivo, y la pérdida se cuenta en la
+/// dirección que el handshake PERMITE, que es una sola: **cliente 0.58 contra
+/// daemon 0.59**. Al revés no ocurre — un cliente del futuro se rechaza entero
+/// en `initialize` (ver [`version_compatible`]).
+///
+/// Ese cliente 0.58 no conoce los métodos y no los llama, así que **lo que
+/// pierde es la comprobación entera**: no hay degradación parcial que contar,
+/// ni un campo que se ignore en silencio. Lo único que puede verle a este bump
+/// es una Task ajena de [`TaskKind::Checksum`](crate::TaskKind) en `task.list`,
+/// que degrada a `Unknown` por su `serde(other)` — la ve correr y no sabe
+/// nombrarla, que es exactamente lo que ya le pasa con `Compare` o `DirSize`.
+pub const PROTOCOL_VERSION: &str = "0.59.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -1194,6 +1219,14 @@ pub const FS_RENAME_BATCH_REPORT: &str = "fs.rename_batch_report";
 /// `as usize` en el daemon, en el engine y en el planificador.
 pub const FS_RENAME_BATCH_MAX_PAIRS: usize = 4096;
 
+/// Tope de rutas de UNA petición de [`FS_CHECKSUM`] (0.59.0, #311).
+///
+/// El mismo número y el mismo criterio que [`FS_RENAME_BATCH_MAX_PAIRS`]: se
+/// RECHAZA por encima, no se recorta. Un informe de sumas recortado en silencio
+/// es peor que ninguno — se lee como «todo comprobado» sobre ficheros que nadie
+/// miró, y comprobar es justo para lo que existe el método.
+pub const FS_CHECKSUM_MAX_PATHS: usize = 4096;
+
 /// Longitud EXACTA de `plan_hash` (0.36.0): sha256 en hex minúscula, 64
 /// caracteres. Un hash con otra forma es un error de PARAMS (`-32602`), jamás
 /// [`Error::PlanStale`](crate::Error::PlanStale) — decirle «el directorio
@@ -1280,6 +1313,42 @@ pub const FS_COMPARE: &str = "fs.compare";
 /// nombres del mismo inodo cuentan dos veces. Para «¿cabe esto en el
 /// destino?» —que es la pregunta— pasarse es el lado seguro.
 pub const FS_DIR_SIZE: &str = "fs.dir_size";
+/// `fs.checksum` — el digest del CONTENIDO de cada ruta que se le pase
+/// (0.59.0, #311).
+///
+/// Devuelve una Task ([`FsTaskResult`], [`TaskKind::Checksum`](crate::TaskKind))
+/// cancelable, y los digests se recogen después con [`FS_CHECKSUM_REPORT`]. Ese
+/// reparto no es ceremonia: **N digests no caben en el desenlace de una Task**,
+/// igual que no cabían los nombres de [`ARCHIVE_PACK_REPORT`] ni el rename
+/// atascado de [`FS_RENAME_BATCH_REPORT`], y el progreso solo sabe contar.
+///
+/// NO muta: sin journal, sin undo, ni un byte escrito (la regla 4 no aplica).
+/// Lee el CONTENIDO —no la forma, como `fs.dir_size`—, así que va sujeto al
+/// mismo gate que una lectura de fichero sobre cada ruta.
+///
+/// **Un fichero ilegible no mata el lote.** Sale en el informe con su motivo y
+/// sin digest, y los demás se calculan igual: comprobar cien ficheros no puede
+/// morirse en el que alguien acaba de mover. La cancelación sí para: es una
+/// orden, no un tropiezo.
+///
+/// **Un DIRECTORIO no se recorre**: sale marcado como omitido. Hashear un árbol
+/// es otra pregunta —un manifiesto, con su formato y su orden— y contestarla
+/// aquí a medias daría un digest que no significa nada comprobable.
+///
+/// Tope: [`FS_CHECKSUM_MAX_PATHS`] rutas, y se RECHAZA en vez de recortar
+/// (mismo criterio que [`FS_RENAME_BATCH_MAX_PAIRS`]): un informe recortado en
+/// silencio se lee como «todo bien» sobre lo que nadie miró.
+pub const FS_CHECKSUM: &str = "fs.checksum";
+/// `fs.checksum_report` — los digests que calculó una Task de
+/// [`FS_CHECKSUM`] (0.59.0, #311).
+///
+/// Gemelo de [`FS_RENAME_BATCH_REPORT`] y [`ARCHIVE_PACK_REPORT`], y por el
+/// mismo motivo que ellos: hay una cosa cierta sobre lo que se acaba de leer
+/// que no cabe en el desenlace de la Task.
+///
+/// Es un SNAPSHOT: definitivo cuando la Task es terminal, parcial antes — que
+/// es justo lo que hace útil pedirlo mientras corre.
+pub const FS_CHECKSUM_REPORT: &str = "fs.checksum_report";
 /// `archive.pack` — fabrica un archivo NUEVO a partir de un conjunto de rutas
 /// (0.50.0, #132).
 ///
@@ -2628,6 +2697,114 @@ pub struct RenameStuckStep {
     pub journalled: bool,
     /// Cuántos pasos de ese lote siguen aplicados, este incluido.
     pub still_applied: u64,
+}
+
+/// Qué función de digest se pide (0.59.0, #311).
+///
+/// Hoy una sola, y el enum existe igualmente: un campo con un solo valor
+/// declara que la respuesta depende de él, y añadir `sha512` o `md5` después es
+/// entonces aditivo. Sin el campo, la primera función nueva obligaría a
+/// adivinar con qué se calculó un digest que ya estaba en pantalla.
+///
+/// **Estricto a propósito**: no lleva `serde(other)`. Un algoritmo que este
+/// daemon no conoce es un error de params, jamás un digest calculado con otra
+/// cosa — que es exactamente la respuesta que haría inútil comprobar nada.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChecksumAlgo {
+    /// SHA-256, en hex minúscula. El de `sha256sum`, que es el formato que se
+    /// encuentra uno por ahí.
+    #[default]
+    Sha256,
+}
+
+/// Params de [`FS_CHECKSUM`] (0.59.0, #311).
+///
+/// ```
+/// use norte_proto::methods::{ChecksumAlgo, FsChecksumParams};
+/// let p: FsChecksumParams =
+///     serde_json::from_str(r#"{"paths":["file:///a.txt"]}"#).expect("params");
+/// assert_eq!(p.paths.len(), 1);
+/// // El algoritmo se puede omitir: sha256 es el que lee todo el mundo.
+/// assert_eq!(p.algo, ChecksumAlgo::Sha256);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FsChecksumParams {
+    /// Los ficheros que hay que resumir. VACÍO es `-32602`: resumir la nada no
+    /// es una petición, mismo criterio que [`FsDirSizeParams`].
+    ///
+    /// Un DIRECTORIO aquí no se recorre: sale en el informe como omitido. Ver
+    /// [`FS_CHECKSUM`] para por qué hashear un árbol es otra pregunta.
+    pub paths: Vec<VPath>,
+    /// Con qué función. Ausente = [`ChecksumAlgo::Sha256`].
+    pub algo: ChecksumAlgo,
+}
+
+/// Por qué una ruta del lote no tiene digest (0.59.0, #311).
+///
+/// Dos motivos y no uno: «no se pudo leer» y «no era un fichero» se arreglan de
+/// formas distintas —el primero puede ser un permiso o un fichero que se
+/// movió, el segundo es que marcaste una carpeta— y un informe que los
+/// mezclara obligaría al lector a ir a mirar.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ChecksumMiss {
+    /// El provider no pudo abrirlo o no pudo terminar de leerlo.
+    Unreadable,
+    /// No es un fichero (un directorio, o lo que el provider diga que no lee).
+    NotAFile,
+    /// Un motivo que este cliente no conoce todavía.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Una ruta del lote y lo que salió de ella (0.59.0, #311).
+///
+/// `digest` y `miss` son excluyentes: o hay suma, o hay motivo. Se modelan como
+/// dos campos opcionales y no como un enum de wire para que un cliente N-1 que
+/// solo mire `digest` siga leyendo el informe sin entender los motivos.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChecksumEntry {
+    /// La ruta, tal cual se pidió.
+    pub path: VPath,
+    /// El digest en hex MINÚSCULA, o ausente si no lo hay. Minúscula siempre,
+    /// por lo mismo que [`PlanHash`]: dos escrituras del mismo hash que
+    /// comparan distinto son un bug esperando.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+    /// Por qué no hay digest. Ausente cuando sí lo hay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub miss: Option<ChecksumMiss>,
+}
+
+/// Params de [`FS_CHECKSUM_REPORT`] (0.59.0, #311).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsChecksumReportParams {
+    /// La Task cuyo informe se pide (la de [`FsTaskResult::task_id`] que
+    /// devolvió [`FS_CHECKSUM`]).
+    pub task_id: TaskId,
+}
+
+/// Result de [`FS_CHECKSUM_REPORT`] (0.59.0, #311): lo calculado hasta ahora.
+///
+/// El orden es el de la PETICIÓN, no el de terminación: un informe que se
+/// reordena solo no se puede comparar con la lista que uno mandó.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsChecksumReportResult {
+    /// Una entrada por ruta ya resuelta, en el orden en que se pidieron.
+    pub entries: Vec<ChecksumEntry>,
+    /// Cuántas rutas quedan por resolver. Cero con la Task terminal; mayor que
+    /// cero antes, y eso es lo que distingue «esto es todo» de «esto es lo que
+    /// llevo» sin tener que mirar el estado de la Task por otro sitio.
+    pub pending: u64,
 }
 
 /// Params de [`FS_RENAME_BATCH_REPORT`] (0.36.0).

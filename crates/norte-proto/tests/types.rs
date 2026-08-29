@@ -1211,10 +1211,17 @@ fn version_ventana_actual() {
     // Lo que este informe NO lleva son las colisiones por plegado: esas no se
     // empaquetan (`archive.pack` falla con `Exists` antes de escribir un byte),
     // porque ahí sí DESAPARECE un fichero al extraer.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.58.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.57.0"), "N-1");
+    // 0.59.0 (#311): `fs.checksum` y `fs.checksum_report`. Dos métodos nuevos
+    // que un cliente viejo no llama, más un `TaskKind` que degrada a `Unknown`.
+    // Aquí no hay degradación PARCIAL que contar —ni un campo que se ignore en
+    // silencio—: un cliente 0.58 contra un daemon 0.59 se queda sin la
+    // comprobación entera, que es lo que desplaza la ventana. Lo único que ve
+    // del bump es una Task ajena que no sabe nombrar, como ya le pasa con
+    // `Compare` o `DirSize`.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.59.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.58.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.56.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.57.9"),
         "N-2 fuera de la ventana"
     );
 }

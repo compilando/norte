@@ -138,6 +138,20 @@ pub enum TaskKind {
     /// [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual que
     /// `Search`/`Index`/`Embed`/`RenameBatch`/`Compare`.
     DirSize,
+    /// El digest del contenido de un lote de ficheros
+    /// (`fs.checksum`/[`FS_CHECKSUM`](crate::methods::FS_CHECKSUM), 0.59.0,
+    /// #311). Lectura pura (regla 4 no aplica): sin journal, sin undo, ni un
+    /// byte escrito.
+    ///
+    /// El progreso cuenta bytes y entradas, y aquí SÍ hay totales desde el
+    /// principio: se sabe cuántas rutas se pidieron. Lo que no cabe en el
+    /// progreso son los digests, y por eso el método tiene informe
+    /// ([`FS_CHECKSUM_REPORT`](crate::methods::FS_CHECKSUM_REPORT)).
+    ///
+    /// Entra CON el método. Un cliente N-1 (0.58.x) la degrada a
+    /// [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual que
+    /// `Search`/`Index`/`Embed`/`RenameBatch`/`Compare`/`DirSize`.
+    Checksum,
     /// Fabricar un archivo
     /// (`archive.pack`/[`ARCHIVE_PACK`](crate::methods::ARCHIVE_PACK), 0.50.0,
     /// #132). MUTA: journal como UNA creación, y deshacerlo es borrar el

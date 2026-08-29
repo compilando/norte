@@ -506,6 +506,21 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Checksums over the wire** (#311, protocol **0.59.0**): `fs.checksum`
+  computes the sha256 of the CONTENT of a batch of files as a cancellable task,
+  and `fs.checksum_report` hands back the digests. Checking a download against
+  the sum somebody published is the only way to know it is what was offered, and
+  norte had no way to do it; Krusader puts it in its File menu. Two methods and
+  not one because N digests fit neither in a task's outcome nor in its progress,
+  which only counts — the same split, for the same reason, as
+  `fs.rename_batch_report` and `archive.pack_report`. It reads and writes
+  nothing: no journal, no undo. A file that cannot be read comes back with its
+  REASON instead of killing the batch, a directory is flagged rather than walked
+  (hashing a tree is a different question, with its own format), and the report
+  keeps the order you asked in — one that reordered itself could not be compared
+  against the list you sent. The frontends' surface follows; this is the wire
+  and the core.
+
 - **Batch rename WITHOUT a language model** (#310). The batch machinery has
   been there since ADR 0042 — reviewable plan, `plan_hash`, collisions,
   journal, undo — and the only thing that knew how to produce a plan was

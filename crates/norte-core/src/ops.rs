@@ -2955,6 +2955,123 @@ async fn is_descendant_folded(child: &VPath, ancestor: &VPath, dst: &dyn Provide
     })
 }
 
+/// El digest del CONTENIDO de cada ruta, en el orden en que se pidieron
+/// (`fs.checksum`, 0.59.0, #311).
+///
+/// El informe se rellena SEGÚN se calcula, no al final: quien lo pide mientras
+/// corre ve lo que lleva, que es lo que hace útil comprobar cien ficheros sin
+/// esperar a los cien. `pending` es lo que falta, y llega a cero con el último.
+///
+/// **Un fichero ilegible no mata el lote**, igual que en [`dir_size`]: sale con
+/// su motivo y los demás se calculan. Un DIRECTORIO no se recorre — sale
+/// marcado, porque hashear un árbol es otra pregunta con su propio formato.
+///
+/// **La cancelación se mira por TROZO**, no por fichero (regla 3): mirarla por
+/// fichero dejaría que cancelar en mitad de uno de 40 GB esperase a terminar de
+/// leerlo, que es justo cuando alguien cancela.
+///
+/// No materializa el contenido: se lee en los trozos que dé el provider y solo
+/// vive uno a la vez, así que un fichero de 40 GB cuesta 40 GB de lectura y no
+/// de memoria.
+pub(crate) async fn checksum(
+    paths: Vec<(std::sync::Arc<dyn Provider>, VPath)>,
+    informe: std::sync::Arc<std::sync::Mutex<norte_proto::methods::FsChecksumReportResult>>,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    use norte_proto::methods::{ChecksumEntry, ChecksumMiss};
+
+    let total = u64::try_from(paths.len()).unwrap_or(u64::MAX);
+    {
+        let mut r = informe
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        r.pending = total;
+    }
+    ctx.progress.update(|p| {
+        p.entries_total = Some(total);
+        p.entries_done = 0;
+    });
+    let mut bytes: u64 = 0;
+    let mut hechos: u64 = 0;
+    for (provider, path) in paths {
+        if ctx.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        ctx.progress.update(|p| p.current = Some(path.clone()));
+        // Lo que no es un fichero no se lee: un directorio aquí es una
+        // selección que incluía una carpeta, no un error de quien pidió.
+        let entrada = match provider.stat(&path).await {
+            Ok(e) if e.kind == EntryKind::Dir => ChecksumEntry {
+                path: path.clone(),
+                digest: None,
+                miss: Some(ChecksumMiss::NotAFile),
+            },
+            Ok(_) => match digest_de(provider.as_ref(), &path, &ctx.cancel).await {
+                Ok(d) => {
+                    bytes = bytes.saturating_add(d.1);
+                    ChecksumEntry {
+                        path: path.clone(),
+                        digest: Some(d.0),
+                        miss: None,
+                    }
+                }
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(_) => ChecksumEntry {
+                    path: path.clone(),
+                    digest: None,
+                    miss: Some(ChecksumMiss::Unreadable),
+                },
+            },
+            Err(Error::Cancelled) => return Err(Error::Cancelled),
+            Err(_) => ChecksumEntry {
+                path: path.clone(),
+                digest: None,
+                miss: Some(ChecksumMiss::Unreadable),
+            },
+        };
+        hechos = hechos.saturating_add(1);
+        {
+            let mut r = informe
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            r.entries.push(entrada);
+            r.pending = total.saturating_sub(hechos);
+        }
+        ctx.progress.update(|p| {
+            p.entries_done = hechos;
+            p.bytes_done = bytes;
+        });
+    }
+    Ok(())
+}
+
+/// El sha256 de `path` en hex minúscula, y cuántos bytes se leyeron.
+///
+/// El hex en MINÚSCULA siempre, como el resto de digests del protocolo: dos
+/// escrituras del mismo hash que comparan distinto son un bug esperando.
+async fn digest_de(
+    provider: &dyn Provider,
+    path: &VPath,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<(String, u64), Error> {
+    use futures::StreamExt as _;
+    use sha2::{Digest as _, Sha256};
+
+    let mut stream = provider.read(path, None).await?;
+    let mut hasher = Sha256::new();
+    let mut leidos: u64 = 0;
+    while let Some(trozo) = stream.next().await {
+        // Por TROZO y no por fichero (regla 3).
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let trozo = trozo?;
+        leidos = leidos.saturating_add(trozo.len() as u64);
+        hasher.update(&trozo);
+    }
+    Ok((norte_proto::hashing::hex_lower(&hasher.finalize()), leidos))
+}
+
 /// Cómo pliega nombres el volumen que contiene `at`, preguntado al provider
 /// DESTINO. `capabilities_at` responde por el MOUNT (#215): un pincho FAT bajo
 /// un `/home` sensible a la caja no hereda la respuesta de `/home`.
