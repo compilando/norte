@@ -284,11 +284,18 @@ verified with `addr2line`, which is the check to repeat if anyone touches
 deliberate: a wrongly-swept executable costs a relink (seconds under lld), a
 wrongly-swept `.rlib` costs a full compile.
 
+**First time on a machine: `just setup`.** It builds and puts `ntc`, `norte`
+and `ntc-gui` in `~/.local/bin`, warns if that directory is not on PATH, and
+treats the window as optional so a box without WebKitGTK/npm still gets `ntc`.
+`just unlink` removes the links again, and only the ones pointing at this tree.
+It is `just link` + `just link-gui` with the first-run checks; those two stay
+for when you want one of them alone.
+
 **To run the dev build: `just link`, not `just install`.** It symlinks `ntc` and
 `norte` from `~/.local/bin` (which precedes cargo's bin on PATH) to this tree's
 `target/debug`, so the binary is whatever the last build produced — cost zero,
 and never stale while you run tests. **`just link-gui` does the same for
-`norte-gui`**, and is a separate recipe for the same reason `core_pkgs` keeps
+`ntc-gui` (plus the `norte-gui` alias)**, and is a separate recipe for the same reason `core_pkgs` keeps
 the window out of the gate: building it drags in WebKitGTK, GTK3, libsoup3 and
 npm, and folding it into `link` would leave any machine without them unable to
 get `ntc`. It rebuilds the webview bundle first, and that is not optional —

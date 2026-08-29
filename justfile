@@ -290,6 +290,75 @@ run:
 dev:
     cargo run -p norte-tui {{features}}
 
+# La receta de PRIMERA VEZ en una máquina: deja `ntc`, `norte` y `ntc-gui` en
+# el PATH apuntando a este árbol, y no hay nada más que hacer después. Los
+# enlaces son symlinks al `target/` de aquí, así que a partir de ese momento
+# cualquier build (tuya o del gate) actualiza los tres comandos sola.
+#
+# Tres cosas que esta receta hace y `just link` + `just link-gui` sueltas no:
+#
+# - Comprueba que `~/.local/bin` está en el PATH y, si no, dice cómo meterlo
+#   en fish. Enlazar en un directorio que nadie mira es el fallo silencioso
+#   clásico: la receta dice "hecho" y el comando no existe.
+# - La ventana es OPCIONAL. Si falta WebKitGTK/GTK3/libsoup3/npm, la parte
+#   gráfica avisa y sigue, en vez de dejar la máquina sin `ntc` — que es el
+#   mismo motivo por el que `core_pkgs` deja la GUI fuera del gate.
+# - `--gui`/`--no-gui` fuerza la decisión cuando no quieras que la adivine.
+#
+# `dir` elige perfil igual que en `just link`: `just setup release`.
+setup dir="debug" gui="auto":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p ~/.local/bin
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *)
+            echo "aviso: ~/.local/bin no está en el PATH. En fish:" >&2
+            echo "  fish_add_path ~/.local/bin" >&2
+            ;;
+    esac
+    just link {{dir}}
+    quiero_gui={{gui}}
+    if [ "$quiero_gui" = "auto" ]; then
+        if command -v npm >/dev/null && pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+            quiero_gui=yes
+        else
+            quiero_gui=no
+            echo "aviso: sin npm o sin WebKitGTK 4.1; me salto ntc-gui ('just gui-deps' y 'just setup {{dir}} yes' cuando los tengas)" >&2
+        fi
+    fi
+    if [ "$quiero_gui" = "yes" ]; then
+        if [ ! -d {{gui_dir}}/ui/node_modules ]; then
+            just gui-deps
+        fi
+        if ! just link-gui {{dir}}; then
+            echo "aviso: la ventana no se pudo enlazar; ntc y norte sí están" >&2
+        fi
+    fi
+    echo
+    echo "en el PATH ahora:"
+    for b in ntc norte ntc-gui; do
+        if [ -L ~/.local/bin/$b ]; then
+            printf '  %-8s → %s\n' "$b" "$(readlink ~/.local/bin/$b)"
+        fi
+    done
+
+# Quita del PATH los enlaces que puso `just setup`. No toca lo que instaló
+# `cargo install` (para eso está `just uninstall`) ni borra nada del árbol:
+# sólo desenlaza, y sólo si el enlace apunta a ESTE árbol — así una sesión en
+# un worktree no se lleva por delante los enlaces de otro.
+unlink:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for b in ntc norte ntc-gui norte-gui; do
+        dest=$(readlink ~/.local/bin/$b 2>/dev/null || true)
+        case "$dest" in
+            "$PWD"/*) rm -f ~/.local/bin/$b; echo "quitado: $b" ;;
+            "") ;;
+            *) echo "intacto: $b (apunta a $dest, otro árbol)" ;;
+        esac
+    done
+
 # Pone `ntc` en el PATH apuntando al binario de ESTE árbol. `~/.local/bin` va
 # antes que el bin de cargo en el PATH, así que gana al `cargo install`.
 #
@@ -667,8 +736,13 @@ gui-run *args: gui-build
 gui-run-release *args: gui-build
     cargo run --release -p norte-gui-tauri --bin norte-gui -- {{args}}
 
-# Pone `norte-gui` en el PATH apuntando al binario de ESTE árbol, igual que
-# `just link` hace con `ntc` y `norte`.
+# Pone `ntc-gui` (y su alias histórico `norte-gui`) en el PATH apuntando al
+# binario de ESTE árbol, igual que `just link` hace con `ntc` y `norte`.
+#
+# Dos nombres para un solo binario a propósito: `ntc-gui` es el que se teclea,
+# y hace pareja con `ntc`; `norte-gui` es como se llama el ejecutable dentro
+# del crate y como lo nombran los paquetes, así que quitarlo rompería los
+# scripts que ya lo usan.
 #
 # Depende de `gui-build` y no es opcional: `frontendDist` es `ui/dist`, o sea
 # que Tauri EMBEBE la webview en el binario al compilar. Sin reconstruir el
@@ -678,19 +752,37 @@ gui-run-release *args: gui-build
 # Que esté embebida es también lo que hace que el symlink funcione: el binario
 # es autocontenido y no busca `ui/dist` en el cwd.
 #
+# Monta también los `externalBin` (`binaries/norte-<triple>`, `ntc-<triple>`)
+# y eso NO es cosa del empaquetado: el build script de Tauri los exige para
+# CUALQUIER compilación del crate, así que en un árbol limpio esta receta
+# moría con «resource path `binaries/norte-x86_64-…` doesn't exist» y sólo
+# funcionaba si alguien había corrido `just gui-package` antes.
+#
+# Se COPIAN, no se enlazan: `just gui-package` hace `cp` encima con los
+# binarios de release, y un `cp` sobre un symlink escribe A TRAVÉS de él —
+# o sea que un enlace aquí dejaría el binario de release dentro de
+# `target/debug/`, sin que nada lo dijera.
+#
 # Separada de `just link` a propósito: ver el comentario de aquella receta.
 link-gui dir="debug":
     #!/usr/bin/env bash
     set -euo pipefail
     just gui-build
-    if [ "{{dir}}" = "release" ]; then
-        cargo build --release -p norte-gui-tauri --bin norte-gui {{gui_features}}
-    else
-        cargo build -p norte-gui-tauri --bin norte-gui {{gui_features}}
-    fi
+    perfil=()
+    if [ "{{dir}}" = "release" ]; then perfil=(--release); fi
+    triple=$(rustc -vV | sed -n 's/^host: //p')
+    cargo build "${perfil[@]}" -p norte-cli -p norte-tui {{features}}
+    mkdir -p {{gui_dir}}/binaries
+    for b in norte ntc; do
+        rm -f "{{gui_dir}}/binaries/$b-$triple"
+        cp "target/{{dir}}/$b" "{{gui_dir}}/binaries/$b-$triple"
+    done
+    cargo build "${perfil[@]}" -p norte-gui-tauri --bin norte-gui {{gui_features}}
     mkdir -p ~/.local/bin
-    ln -sfn "$PWD/target/{{dir}}/norte-gui" ~/.local/bin/norte-gui
-    printf '%-9s → %s\n' norte-gui "$(readlink ~/.local/bin/norte-gui)"
+    for b in ntc-gui norte-gui; do
+        ln -sfn "$PWD/target/{{dir}}/norte-gui" ~/.local/bin/$b
+        printf '%-9s → %s\n' "$b" "$(readlink ~/.local/bin/$b)"
+    done
     echo "recuerda: el symlink apunta a ESTE árbol; un 'just prune-all' lo deja colgando"
 
 # La build de PRODUCCIÓN, sin empaquetar. Necesita la CLI de Tauri del
@@ -736,7 +828,8 @@ gui-package: gui-build
     cargo build --release -p norte-cli -p norte-tui {{features}}
     mkdir -p {{gui_dir}}/binaries
     for b in norte ntc; do
-        cp -f "target/release/$b" "{{gui_dir}}/binaries/$b-$triple"
+        rm -f "{{gui_dir}}/binaries/$b-$triple"
+        cp "target/release/$b" "{{gui_dir}}/binaries/$b-$triple"
     done
     cd {{gui_dir}} && NO_STRIP=1 ./ui/node_modules/.bin/tauri build
 
