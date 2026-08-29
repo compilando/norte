@@ -171,6 +171,15 @@ pub struct PaneState {
     loading: bool,
     quick: Option<QuickSearch>,
     marks: HashSet<VPath>,
+    /// La selección de ANTES del último gesto en bloque, para `mark.restore`
+    /// (#313). UNA foto por panel, ni un historial ni algo que se persista:
+    /// es la red del que pulsa «desmarcar todo» sin querer, y con dos fotos ya
+    /// nadie sabría a cuál vuelve.
+    ///
+    /// `None` = no ha habido ningún gesto en bloque desde que este panel
+    /// existe (o desde el último `cd`, que la tira: las rutas de otro
+    /// directorio no nombran nada de este listado).
+    marks_previous: Option<HashSet<VPath>>,
     /// Snapshot of `marks` from before the pointer sweep in progress, so
     /// that [`Self::apply_sweep`] can RESTORE it and re-mark, making a drag
     /// that retreats give back the rows it pulled off. `None` = no sweep, or
@@ -328,6 +337,7 @@ impl PaneState {
             loading: false,
             quick: None,
             marks: HashSet::new(),
+            marks_previous: None,
             sweep_baseline: None,
             sweep_extent: None,
             listing_epoch: 0,
@@ -661,6 +671,10 @@ impl PaneState {
         self.loading = false;
         self.quick = None;
         self.marks.clear();
+        // Y la foto de `mark.restore` (#313): sus rutas son del directorio
+        // ANTERIOR, y restaurarlas aquí no marcaría nada o —peor— marcaría lo
+        // que casualmente se llame igual.
+        self.marks_previous = None;
         self.sweep_baseline = None;
         self.sweep_extent = None;
         self.pruned_marks = 0;
@@ -718,6 +732,10 @@ impl PaneState {
         self.loading = true;
         self.quick = None;
         self.marks.clear();
+        // Y la foto de `mark.restore` (#313): sus rutas son del directorio
+        // ANTERIOR, y restaurarlas aquí no marcaría nada o —peor— marcaría lo
+        // que casualmente se llame igual.
+        self.marks_previous = None;
         self.sweep_baseline = None;
         self.sweep_extent = None;
         self.pruned_marks = 0;
@@ -3272,6 +3290,133 @@ mod tests {
         p.apply_sweep(0, 2);
         p.apply_sweep(0, 0);
         assert_eq!(p.marks_len(), 2, "queda 'a' (barrido) y 'd' (previa)");
+    }
+
+    // --- #313: extensión, clase, y restaurar ------------------------------
+
+    /// La extensión de la entrada bajo el cursor marca a sus iguales, y la
+    /// gemela las desmarca. Es el `Alt+Gray+`/`Alt+Gray-` de Total Commander.
+    #[test]
+    fn la_extension_del_cursor_marca_a_sus_iguales() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a.rs", EntryKind::File),
+                e("mem:///b.rs", EntryKind::File),
+                e("mem:///c.txt", EntryKind::File),
+            ],
+        );
+        assert_eq!(p.mark_same_extension(true), 2, "las dos `.rs`");
+        assert_eq!(p.marks_len(), 2);
+        assert_eq!(p.mark_same_extension(false), 2, "y la gemela las suelta");
+        assert_eq!(p.marks_len(), 0);
+    }
+
+    /// Un fichero oculto NO tiene extensión, tiene nombre: `.bashrc` no marca
+    /// a todos los `bashrc` del mundo, ni a los demás ocultos. Misma regla que
+    /// el renombrado por plantilla, y a propósito — dos definiciones de «la
+    /// extensión» marcarían un conjunto y renombrarían otro.
+    #[test]
+    fn un_nombre_que_empieza_por_punto_no_tiene_extension() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///.bashrc", EntryKind::File),
+                e("mem:///.vimrc", EntryKind::File),
+            ],
+        );
+        assert_eq!(p.mark_same_extension(true), 0);
+        assert_eq!(p.marks_len(), 0);
+    }
+
+    /// Los nombres son BYTES: dos que colapsarían al mismo carácter de
+    /// reemplazo al pasarlos por `String` siguen teniendo extensiones
+    /// distintas.
+    #[test]
+    fn la_extension_se_compara_en_bytes() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a.%FF", EntryKind::File),
+                e("mem:///b.%FE", EntryKind::File),
+                e("mem:///c.%FF", EntryKind::File),
+            ],
+        );
+        assert_eq!(
+            p.mark_same_extension(true),
+            2,
+            "solo las dos que comparten los MISMOS bytes de extensión"
+        );
+    }
+
+    /// Ficheros o directorios, y un enlace cuenta como fichero — es lo que
+    /// hace con él cualquier operación de este panel.
+    #[test]
+    fn marcar_solo_ficheros_o_solo_carpetas() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a.txt", EntryKind::File),
+                e("mem:///sub", EntryKind::Dir),
+                e("mem:///enlace", EntryKind::Symlink),
+            ],
+        );
+        assert_eq!(p.mark_kind(false), 2, "el fichero y el enlace");
+        p.clear_marks();
+        assert_eq!(p.mark_kind(true), 1, "solo el directorio");
+    }
+
+    /// La red del que pulsó «desmarcar todo» sin querer, y la del que pulsó
+    /// «restaurar» sin querer: va y vuelve.
+    #[test]
+    fn restaurar_devuelve_la_seleccion_anterior_y_se_deshace() {
+        let mut p = PaneState::new(
+            VPath::parse("mem:///").unwrap(),
+            vec![
+                e("mem:///a", EntryKind::File),
+                e("mem:///b", EntryKind::File),
+            ],
+        );
+        assert_eq!(p.restore_previous_marks(), None, "sin foto, nada");
+        p.mark_all();
+        p.clear_marks();
+        assert_eq!(p.restore_previous_marks(), Some(2));
+        assert_eq!(p.restore_previous_marks(), Some(0), "y vuelve a irse");
+    }
+
+    /// Una entrada que ya no está no se resucita, y un `cd` tira la foto: sus
+    /// rutas son de otro directorio.
+    #[test]
+    fn la_foto_no_sobrevive_a_un_cd_ni_resucita_lo_borrado() {
+        let dir = VPath::parse("mem:///d").unwrap();
+        let mut p = PaneState::new(
+            dir.clone(),
+            vec![
+                e("mem:///d/a", EntryKind::File),
+                e("mem:///d/b", EntryKind::File),
+            ],
+        );
+        p.mark_all();
+        p.clear_marks();
+        // `b` desaparece del listado sin cambiar de directorio.
+        p.refill(vec![e("mem:///d/a", EntryKind::File)]);
+        assert_eq!(
+            p.restore_previous_marks(),
+            Some(1),
+            "vuelve solo lo que sigue estando"
+        );
+
+        p.mark_all();
+        p.clear_marks();
+        p.set_listing(
+            VPath::parse("mem:///otro").unwrap(),
+            vec![e("mem:///otro/a", EntryKind::File)],
+        );
+        assert_eq!(
+            p.restore_previous_marks(),
+            None,
+            "un cd tira la foto: sus rutas no nombran nada de aquí"
+        );
     }
 
     // --- #103: mark/unmark by glob ---------------------------------------

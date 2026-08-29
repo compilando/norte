@@ -9323,6 +9323,9 @@ impl Estado {
             | Efecto::Marcar
             | Efecto::MarcarTodo
             | Efecto::InvertirMarcas
+            | Efecto::MarcarExtension { .. }
+            | Efecto::MarcarClase { .. }
+            | Efecto::RestaurarMarcas
             | Efecto::DesmarcarTodo => self.efecto_de_listado(efecto, slot, backend, buzon),
             Efecto::Foco { atras } => self.mover_foco(atras),
             Efecto::Destino => self.designar_destino(),
@@ -9496,6 +9499,21 @@ impl Estado {
             }
             Efecto::InvertirMarcas => {
                 self.hueco_mut().pane.invert_marks();
+                (self.aplicada(), vec![self.parche_filas()])
+            }
+            // #313: la regla de qué es «la misma extensión», de qué cuenta
+            // como fichero y de qué se restaura vive en `PaneState`, así que
+            // aquí no se decide nada — es el mismo modelo que la terminal.
+            Efecto::MarcarExtension { marcar } => {
+                self.hueco_mut().pane.mark_same_extension(marcar);
+                (self.aplicada(), vec![self.parche_filas()])
+            }
+            Efecto::MarcarClase { dirs } => {
+                self.hueco_mut().pane.mark_kind(dirs);
+                (self.aplicada(), vec![self.parche_filas()])
+            }
+            Efecto::RestaurarMarcas => {
+                self.hueco_mut().pane.restore_previous_marks();
                 (self.aplicada(), vec![self.parche_filas()])
             }
             // Los demás no llegan aquí: el `match` de arriba los reparte.

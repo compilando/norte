@@ -11,6 +11,25 @@ use super::{
     unicode_glob_regex,
 };
 
+/// La extensión de un nombre BASE, en bytes y sin el punto; `None` si no
+/// tiene.
+///
+/// Misma regla que [`crate::rename_pattern::split_name`], y a propósito: el
+/// punto que separa es el ÚLTIMO, y un nombre que empieza por punto y no tiene
+/// otro —`.bashrc`— no tiene extensión, tiene nombre. Dos definiciones de «la
+/// extensión» en el mismo programa acabarían marcando un conjunto y
+/// renombrando otro.
+///
+/// En bytes porque un nombre no tiene por qué ser texto (regla 1): pasarlo por
+/// `String` haría que dos nombres distintos que colapsan al mismo carácter de
+/// reemplazo se marcaran juntos.
+fn extension_de(name: &[u8]) -> Option<&[u8]> {
+    match name.iter().rposition(|b| *b == b'.') {
+        Some(0) | None => None,
+        Some(i) => Some(&name[i + 1..]),
+    }
+}
+
 impl PaneState {
     /// La ÚNICA puerta por la que una ruta entra en el conjunto de marcas.
     /// `true` = no estaba y ahora sí.
@@ -116,9 +135,133 @@ impl PaneState {
             .collect()
     }
 
+    /// Guarda la selección de AHORA como la que `mark.restore` devuelve.
+    ///
+    /// Lo llama todo gesto EN BLOQUE, y solo ellos: marcar o desmarcar una
+    /// fila a mano no pierde nada que haya que rescatar, y guardar una foto
+    /// por pulsación dejaría «restaurar» significando «deshaz la última tecla»,
+    /// que es otra función y no la que TC tiene.
+    fn fotografiar_marcas(&mut self) {
+        self.marks_previous = Some(self.marks.clone());
+    }
+
+    /// Devuelve la selección anterior a la última operación en bloque (#313),
+    /// y deja la de ahora como la nueva «anterior».
+    ///
+    /// Devuelve cuántas entradas quedan marcadas, o `None` si no hay foto —
+    /// nada que restaurar, y el llamante lo dice en vez de dejar el panel sin
+    /// marcas fingiendo que eso era lo de antes.
+    ///
+    /// Va y VUELVE a propósito: lo que rescata a quien pulsó «desmarcar todo»
+    /// sin querer tiene que rescatar también a quien pulsó «restaurar» sin
+    /// querer. Solo se conservan las rutas que sigan en el listado, con la
+    /// misma identidad byte a byte de siempre.
+    ///
+    /// ```
+    /// use norte_frontend::PaneState;
+    /// # use norte_proto::{Entry, EntryKind, VPath};
+    /// # let dir = VPath::parse("mem:///d").unwrap();
+    /// # fn e(dir: &VPath, n: &str) -> Entry {
+    /// #     Entry { path: dir.join(norte_proto::Segment::new(n.as_bytes().to_vec()).unwrap()),
+    /// #             kind: EntryKind::File, size: None, mtime_ms: None, attrs: Default::default() }
+    /// # }
+    /// let mut p = PaneState::new(dir.clone(), vec![e(&dir, "a"), e(&dir, "b")]);
+    /// assert_eq!(p.restore_previous_marks(), None, "todavía no hay nada que restaurar");
+    /// p.mark_all();
+    /// p.clear_marks();
+    /// assert_eq!(p.marks_len(), 0);
+    /// assert_eq!(p.restore_previous_marks(), Some(2), "vuelven las dos");
+    /// assert_eq!(p.restore_previous_marks(), Some(0), "y restaurar se deshace");
+    /// ```
+    pub fn restore_previous_marks(&mut self) -> Option<usize> {
+        let anterior = self.marks_previous.take()?;
+        let actual = std::mem::take(&mut self.marks);
+        self.marks_previous = Some(actual);
+        for path in anterior {
+            // Por el embudo, que es lo que deja fuera la fila `..`, y solo lo
+            // que siga existiendo: una entrada borrada entre medias no vuelve.
+            if self.entries.iter().any(|e| e.path == path) {
+                self.marcar(path);
+            }
+        }
+        Some(self.marks.len())
+    }
+
     /// Limpia todas las marcas.
     pub fn clear_marks(&mut self) {
+        self.fotografiar_marcas();
         self.marks.clear();
+    }
+
+    /// Marca (o desmarca) las entradas visibles con la MISMA extensión que la
+    /// que está bajo el cursor (#313). Devuelve cuántas marcas cambió.
+    ///
+    /// La extensión es la cola tras el ÚLTIMO punto del nombre base, en bytes
+    /// y sin pasar por `String` (regla 1), y un punto inicial no la abre:
+    /// `.bashrc` no tiene extensión, tiene nombre. Sin nada bajo el cursor, o
+    /// sobre algo sin extensión, no hace nada y devuelve 0 — marcar «todo lo
+    /// que tampoco tiene extensión» es una regla distinta que nadie pidió.
+    ///
+    /// La comparación es EXACTA en bytes, no plegada: `.TXT` y `.txt` son la
+    /// misma extensión en Windows y dos distintas en Linux, y el listado que
+    /// se está mirando ya sabe cuál de los dos es — pero esa decisión es del
+    /// volumen y no de esta función, así que aquí manda lo que hay escrito.
+    pub fn mark_same_extension(&mut self, mark: bool) -> usize {
+        let Some(ext) = self.selected().and_then(|e| {
+            e.path
+                .file_name()
+                .and_then(|n| extension_de(n.as_bytes()).map(<[u8]>::to_vec))
+        }) else {
+            return 0;
+        };
+        self.fotografiar_marcas();
+        let mut changed = 0usize;
+        for i in self.markable_indices() {
+            let Some(entry) = self.entries.get(i) else {
+                continue;
+            };
+            let suya = entry
+                .path
+                .file_name()
+                .and_then(|n| extension_de(n.as_bytes()));
+            if suya != Some(ext.as_slice()) {
+                continue;
+            }
+            let path = entry.path.clone();
+            let hit = if mark {
+                self.marcar(path)
+            } else {
+                self.marks.remove(&path)
+            };
+            if hit {
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// Marca las entradas visibles que son FICHEROS (`dirs = false`) o las que
+    /// son DIRECTORIOS (`dirs = true`) (#313). Devuelve cuántas añadió.
+    ///
+    /// ADITIVO, como `mark.pattern-add`: extiende lo que ya hubiera marcado en
+    /// vez de reemplazarlo. Un enlace cuenta como fichero — es lo que hace con
+    /// él cualquier operación de este panel.
+    pub fn mark_kind(&mut self, dirs: bool) -> usize {
+        self.fotografiar_marcas();
+        let mut changed = 0usize;
+        for i in self.markable_indices() {
+            let Some(entry) = self.entries.get(i) else {
+                continue;
+            };
+            if (entry.kind == EntryKind::Dir) != dirs {
+                continue;
+            }
+            let path = entry.path.clone();
+            if self.marcar(path) {
+                changed += 1;
+            }
+        }
+        changed
     }
 
     /// Vuelve a marcar, POR RUTA, lo que siga estando en el listado.
@@ -200,6 +343,7 @@ impl PaneState {
 
     /// Marks every entry of the visible set (see `markable_indices`).
     pub fn mark_all(&mut self) {
+        self.fotografiar_marcas();
         for i in self.markable_indices() {
             let Some(path) = self.entries.get(i).map(|e| &e.path) else {
                 continue;
@@ -509,6 +653,7 @@ impl PaneState {
     /// complement" — under a filter, [`Self::marked_paths`] can therefore
     /// still return entries the user is not looking at.
     pub fn invert_marks(&mut self) {
+        self.fotografiar_marcas();
         for i in self.markable_indices() {
             let Some(path) = self.entries.get(i).map(|e| e.path.clone()) else {
                 continue;
@@ -559,6 +704,7 @@ impl PaneState {
     /// [`PatternError::Glob`] if the pattern does not compile. Nothing is
     /// marked in that case.
     pub fn mark_glob(&mut self, pattern: &str, mark: bool) -> Result<usize, PatternError> {
+        self.fotografiar_marcas();
         // El patrón se pliega con el MISMO pipeline que el nombre (#103): el
         // fold es Unicode, `case_insensitive` de globset es solo-ASCII
         // (emite `(?-u)`), así que sin plegar la aguja un patrón NFD o una

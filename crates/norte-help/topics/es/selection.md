@@ -10,6 +10,11 @@ commands = [
     "mark.clear",
     "mark.pattern-add",
     "mark.pattern-remove",
+    "mark.extension-add",
+    "mark.extension-remove",
+    "mark.files",
+    "mark.dirs",
+    "mark.restore",
     "app.pick-accept",
 ]
 context = ["dialog.mark-pattern"]
@@ -23,6 +28,19 @@ uno no necesita tecla propia.
 - {{cmd:mark.invert}} invierte las marcas de lo que se ve y deja el resto como estaba
 - {{cmd:mark.clear}} las quita todas
 - {{cmd:mark.pattern-add}} marca por glob y {{cmd:mark.pattern-remove}} desmarca por glob
+- {{cmd:mark.extension-add}} marca las que comparten extensión con la de debajo del cursor, y {{cmd:mark.extension-remove}} las desmarca
+- {{cmd:mark.files}} marca los ficheros y {{cmd:mark.dirs}} las carpetas, sumándose a lo que ya hubiera marcado
+- {{cmd:mark.restore}} devuelve la selección de ANTES del último gesto en bloque
+
+La extensión es la cola tras el último punto, así que un `.bashrc` no tiene
+extensión: tiene nombre, y marcarlo no marca a los demás ocultos. Es la misma
+regla que usa el renombrado por plantilla, y no por casualidad — dos
+definiciones distintas marcarían un conjunto y renombrarían otro.
+
+Restaurar guarda UNA foto por panel, la de antes del último gesto en bloque, y
+va y vuelve: lo que rescata a quien pulsó «quitar todas» sin querer tiene que
+rescatar también a quien pulsó «restaurar» sin querer. Un cambio de directorio
+se la lleva, porque esas rutas ya no nombran nada de lo que estás viendo.
 
 # Qué es «lo que el listado muestra»
 

@@ -154,6 +154,15 @@ keymap = [
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
     { on = ["*"], run = "mark.invert" },
+    # #313: `Alt+NUM+`/`Alt+NUM-` de la fuente —la selección por EXTENSIÓN—,
+    # que estaban en la lista de omisiones de arriba por no haber comando al
+    # que atarlas. Ahora lo hay. `NUM/` («restore selection») es `/`: el
+    # teclado numérico no se distingue en esta gramática, y `/` está libre en
+    # este preset porque TC manda una letra suelta a la línea de comandos y no
+    # a un quick search.
+    { on = ["alt+plus"], run = "mark.extension-add" },
+    { on = ["alt+-"], run = "mark.extension-remove" },
+    { on = ["/"], run = "mark.restore" },
     # Las sumas (#311). Krusader las tiene en su menú File y ninguno de los
     # cuatro importados les da acorde, así que la tecla se ELIGE: `alt+k`
     # calcula y `alt+K` comprueba — libre en los siete, y la mayúscula

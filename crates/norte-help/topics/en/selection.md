@@ -10,6 +10,11 @@ commands = [
     "mark.clear",
     "mark.pattern-add",
     "mark.pattern-remove",
+    "mark.extension-add",
+    "mark.extension-remove",
+    "mark.files",
+    "mark.dirs",
+    "mark.restore",
     "app.pick-accept",
 ]
 context = ["dialog.mark-pattern"]
@@ -23,6 +28,20 @@ no special key.
 - {{cmd:mark.invert}} flips the marks of what is showing, and leaves the rest alone
 - {{cmd:mark.clear}} drops them all
 - {{cmd:mark.pattern-add}} marks by glob, and {{cmd:mark.pattern-remove}} unmarks by glob
+- {{cmd:mark.extension-add}} marks the ones sharing the extension of the entry under the cursor, and {{cmd:mark.extension-remove}} unmarks them
+- {{cmd:mark.files}} marks the files and {{cmd:mark.dirs}} the folders, adding to whatever was already marked
+- {{cmd:mark.restore}} brings back the selection from BEFORE the last bulk gesture
+
+The extension is the tail after the last dot, so a `.bashrc` has none: it has a
+name, and marking it does not mark every other hidden file. That is the same
+rule the template rename uses, and not by accident — two different definitions
+would mark one set and rename another.
+
+Restoring keeps ONE snapshot per pane, the one from before the last bulk
+gesture, and it goes both ways: whatever rescues someone who pressed "drop them
+all" by mistake has to rescue someone who pressed "restore" by mistake too.
+Changing directory drops it, because those paths no longer name anything you
+are looking at.
 
 # What the listing is showing
 

@@ -433,6 +433,29 @@ pub async fn dispatch(
         // corre al confirmar (`mark_pattern_confirm`), no aquí.
         Command::MarkPatternAdd => app.open_mark_pattern(true),
         Command::MarkPatternRemove => app.open_mark_pattern(false),
+        // #313: la extensión de la entrada BAJO EL CURSOR. Sin nada bajo el
+        // cursor, o sobre algo sin extensión, no marca nada y lo dice: marcar
+        // «todo lo que tampoco tiene extensión» es otra regla que nadie pidió.
+        Command::MarkExtensionAdd | Command::MarkExtensionRemove => {
+            let añadir = cmd == Command::MarkExtensionAdd;
+            let n = app.focused_mut().mark_same_extension(añadir);
+            if n == 0 {
+                app.message = Some(t("msg-mark-no-extension"));
+            }
+        }
+        Command::MarkFiles => {
+            app.focused_mut().mark_kind(false);
+        }
+        Command::MarkDirs => {
+            app.focused_mut().mark_kind(true);
+        }
+        // La red del que pulsó «desmarcar todo» sin querer. Sin foto —ningún
+        // gesto en bloque todavía, o un `cd` que se la llevó— se dice, en vez
+        // de dejar el panel sin marcas fingiendo que eso era lo de antes.
+        Command::MarkRestore => match app.focused_mut().restore_previous_marks() {
+            Some(n) => app.message = Some(ta("msg-marks-restored", &[("n", &n.to_string())])),
+            None => app.message = Some(t("msg-marks-nothing-to-restore")),
+        },
         // #104: F7 — crear directorio en el pane con foco. En el pane
         // VIRTUAL de búsqueda no hay directorio destino visible (review
         // MINOR-2: `dir()` es la raíz del walk, no lo que se pinta).

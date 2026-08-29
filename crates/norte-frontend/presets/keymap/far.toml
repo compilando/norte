@@ -184,6 +184,13 @@ keymap = [
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
     { on = ["*"], run = "mark.invert" },
+    # #313: `Ctrl+M` es «restore previous selection» en far-panelcmd.txt, y
+    # estaba en la lista de omisiones de arriba por no haber comando al que
+    # atarlo. Las variantes por extensión y por nombre (`Ctrl+Gray+/-`,
+    # `Alt+Gray+/-`) siguen omitidas: la fuente las agrupa en una línea y no
+    # dice cuál de los dos modificadores es la EXTENSIÓN, y elegir uno a ojo
+    # marcaría un conjunto distinto del que el lector espera.
+    { on = ["ctrl+m"], run = "mark.restore" },
     { on = ["alt+shift+insert"], run = "pane.copy-path" },
     # `alt+t`/`alt+w` y no `ctrl+T`/`ctrl+W`: la mayúscula es el shift en la
     # gramática y NO en el cable — un terminal manda el mismo byte que para la

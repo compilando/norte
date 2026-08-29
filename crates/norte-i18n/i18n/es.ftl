@@ -961,6 +961,15 @@ help-cmd-mark-invert = invertir las marcas
 help-cmd-mark-clear = quitar todas las marcas
 help-cmd-mark-pattern-add = marcar por patrón
 help-cmd-mark-pattern-remove = desmarcar por patrón
+help-cmd-mark-extension-add = marcar las de la misma extensión que el cursor
+help-cmd-mark-extension-remove = desmarcar las de la misma extensión que el cursor
+help-cmd-mark-files = marcar los ficheros (no las carpetas)
+help-cmd-mark-dirs = marcar las carpetas (no los ficheros)
+help-cmd-mark-restore = devolver la selección anterior
+# Marcar por extensión y por clase (#313).
+msg-mark-no-extension = lo que hay bajo el cursor no tiene extensión que marcar
+msg-marks-restored = selección anterior devuelta: { $n } marcadas
+msg-marks-nothing-to-restore = no hay ninguna selección anterior que devolver
 help-cmd-task-next = resaltar la siguiente task
 help-cmd-task-prev = resaltar la task anterior
 help-cmd-task-dismiss = descartar las tasks terminadas de la franja

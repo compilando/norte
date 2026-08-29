@@ -230,6 +230,11 @@ commands! {
     "mark.clear" => MarkClear,
     "mark.pattern-add" => MarkPatternAdd,
     "mark.pattern-remove" => MarkPatternRemove,
+    "mark.extension-add" => MarkExtensionAdd,
+    "mark.extension-remove" => MarkExtensionRemove,
+    "mark.files" => MarkFiles,
+    "mark.dirs" => MarkDirs,
+    "mark.restore" => MarkRestore,
 }
 
 /// Los comandos del contexto `dialog` (H1, issue #24) — la lista CERRADA

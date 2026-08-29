@@ -477,6 +477,24 @@ impl Pane {
         self.state.mark_all();
     }
 
+    /// Marca (o desmarca) las que comparten extensión con la del cursor.
+    /// Delegado puro (#313).
+    pub fn mark_same_extension(&mut self, mark: bool) -> usize {
+        self.state.mark_same_extension(mark)
+    }
+
+    /// Marca las visibles que son directorios (`dirs`) o las que no lo son.
+    /// Delegado puro (#313).
+    pub fn mark_kind(&mut self, dirs: bool) -> usize {
+        self.state.mark_kind(dirs)
+    }
+
+    /// Devuelve la selección anterior al último gesto en bloque. Delegado
+    /// puro (#313).
+    pub fn restore_previous_marks(&mut self) -> Option<usize> {
+        self.state.restore_previous_marks()
+    }
+
     /// Cuántas veces ha MOVIDO índices el listado de este pane — delegado
     /// puro a [`norte_frontend::PaneState::listing_epoch`]. Lo lee el ratón
     /// para soltar un gesto cuyos índices ya no nombran lo que se pintó.

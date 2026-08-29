@@ -103,6 +103,11 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "mark.invert",
     "mark.pattern-add",
     "mark.pattern-remove",
+    "mark.extension-add",
+    "mark.extension-remove",
+    "mark.files",
+    "mark.dirs",
+    "mark.restore",
     "pane.switch",
     "layout.focus-next",
     "layout.focus-prev",
@@ -422,6 +427,18 @@ pub enum Efecto {
     MarcarTodo,
     /// Invierte las marcas del panel activo.
     InvertirMarcas,
+    /// Marca —o desmarca— las de la MISMA extensión que la del cursor (#313).
+    MarcarExtension {
+        /// `true` añade marcas, `false` las quita.
+        marcar: bool,
+    },
+    /// Marca las entradas de una CLASE: carpetas o ficheros (#313).
+    MarcarClase {
+        /// `true` marca carpetas, `false` ficheros.
+        dirs: bool,
+    },
+    /// Devuelve la selección anterior al último gesto en bloque (#313).
+    RestaurarMarcas,
     /// Marca —o desmarca— por PATRÓN: abre el prompt del glob.
     MarcarPatron {
         /// `true` añade marcas, `false` las quita.
@@ -649,6 +666,11 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "mark.invert" => Efecto::InvertirMarcas,
         "mark.pattern-add" => Efecto::MarcarPatron { marcar: true },
         "mark.pattern-remove" => Efecto::MarcarPatron { marcar: false },
+        "mark.extension-add" => Efecto::MarcarExtension { marcar: true },
+        "mark.extension-remove" => Efecto::MarcarExtension { marcar: false },
+        "mark.files" => Efecto::MarcarClase { dirs: false },
+        "mark.dirs" => Efecto::MarcarClase { dirs: true },
+        "mark.restore" => Efecto::RestaurarMarcas,
         // `pane.switch` es el cambio clásico entre dos paneles; con más de
         // dos, lo honesto es seguir el mismo recorrido que el tabulador en
         // vez de inventar un segundo orden.

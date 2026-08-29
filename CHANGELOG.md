@@ -525,6 +525,28 @@ independently through `PROTOCOL_VERSION`.
   the bytes, so this subsumes the `fs.compare` hash oracle and exceeds it, and
   an agent denied that one only had to call here.
 
+- **Three more ways to mark** (#313), the gaps Total Commander's Gray family
+  has and norte did not — and which our own transcription of its keyboard file
+  listed among the omissions, for want of a command to bind. `mark.extension-add`
+  marks everything sharing the extension of the entry under the cursor, and
+  `mark.extension-remove` unmarks it; `mark.files` and `mark.dirs` mark by kind,
+  additively, like `mark.pattern-add`; and `mark.restore` brings back the
+  selection from BEFORE the last bulk gesture — the net for whoever pressed
+  "clear all" by mistake.
+
+  The extension is the tail after the LAST dot, in bytes: `.bashrc` has none —
+  it has a name — and two names that would collapse to the same replacement
+  character keep different extensions. That is the same rule the template rename
+  already uses, deliberately: two definitions of "the extension" would mark one
+  set and rename another. Restore keeps ONE snapshot per pane, taken by every
+  bulk mutator, and it goes both ways, because whatever rescues a mistaken
+  "clear all" has to rescue a mistaken "restore" too; a `cd` drops it, since
+  those paths no longer name anything in the listing. All five land in the
+  window as well as the terminal — the rule lives in `PaneState`, so neither
+  frontend decides anything. `alt+plus`/`alt+-` are the chords Total Commander
+  attests for the extension pair, and `/` its "restore selection"; Far's own
+  `Ctrl+M` restores there. The three native presets take all five.
+
 - **Compare two FILES** (#312). Comparing two trees has been there since the
   directory-comparison spec; the pair — which Total Commander and Krusader both
   have — was missing. `pane.compare-files` takes two marked in the focused pane,

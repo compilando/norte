@@ -226,6 +226,16 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("mark.clear", false),
     live("mark.pattern-add", false),
     live("mark.pattern-remove", false),
+    // #313: los tres huecos que Total Commander tiene en su familia Gray y
+    // norte no tenía. `extension-*` actúa sobre la extensión de la entrada
+    // BAJO EL CURSOR; `files`/`dirs` son aditivos como `pattern-add`; y
+    // `restore` devuelve la selección de antes del último gesto en bloque,
+    // que es la red del que pulsó «desmarcar todo» sin querer.
+    live("mark.extension-add", false),
+    live("mark.extension-remove", false),
+    live("mark.files", false),
+    live("mark.dirs", false),
+    live("mark.restore", false),
     // --- task ---
     live("task.cancel", false),
     // Los tres de RECORRER el tablero estuvieron un rato en `Planned`: la

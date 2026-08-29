@@ -87,6 +87,16 @@ keymap = [
     # `alt+a`: `ctrl+A` no llega (mismo byte que `ctrl+a`). Ver orthodox.
     { on = ["alt+a"], run = "mark.clear" },
     { on = ["*"], run = "mark.invert" },
+    # #313: los tres huecos de la familia Gray de Total Commander, que norte
+    # no tenía. `alt+plus`/`alt+-` son los acordes que TC atestigua para la
+    # selección por EXTENSIÓN; ficheros/carpetas y restaurar son mayúsculas
+    # de su inicial, porque las de TC (`Shift+Gray+`, `NUM/`) no se pueden
+    # escribir en esta gramática o ya significan otra cosa aquí.
+    { on = ["alt+plus"], run = "mark.extension-add" },
+    { on = ["alt+-"], run = "mark.extension-remove" },
+    { on = ["alt+F"], run = "mark.files" },
+    { on = ["alt+D"], run = "mark.dirs" },
+    { on = ["alt+R"], run = "mark.restore" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
     { on = ["ctrl+t"], run = "pane.tab-new" },
