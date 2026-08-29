@@ -77,6 +77,10 @@ struct PendingEntry {
     /// notificación: un frontend que reconecta no puede ver una lista recortada
     /// creyendo que está entera.
     paths_total: u64,
+    /// Lo que la op AÑADE a la pregunta (#314): hoy, el modo de un `set-mode`.
+    /// Se retiene por lo mismo que `paths_total` — el resync tiene que decir
+    /// lo mismo que dijo la notificación.
+    detail: norte_proto::methods::ApprovalDetail,
     decide: oneshot::Sender<bool>,
 }
 
@@ -214,6 +218,7 @@ impl DaemonApprovalResolver {
                 op: e.op.clone(),
                 paths: e.paths.clone(),
                 paths_total: e.paths_total,
+                detail: e.detail.clone(),
             })
             .collect();
         out.sort_by_key(|p| p.approval_id);
@@ -268,6 +273,15 @@ impl ApprovalResolver for DaemonApprovalResolver {
             Actor::Plugin { id } => Some(id.clone()),
         };
         let op = req.op.kind().to_owned();
+        // #314: lo que la op añade a la pregunta. Para todas menos una, nada:
+        // la op y las rutas SON la decisión. Un `set-mode` no, porque dos con
+        // las mismas rutas y modos distintos significan cosas opuestas.
+        let detail = match &req.op {
+            crate::policy::PolicyOp::SetMode { mode } => {
+                norte_proto::methods::ApprovalDetail { mode: Some(*mode) }
+            }
+            _ => norte_proto::methods::ApprovalDetail::default(),
+        };
         let (tx, rx) = oneshot::channel();
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
         {
@@ -287,6 +301,7 @@ impl ApprovalResolver for DaemonApprovalResolver {
                     op: op.clone(),
                     paths: req.paths.clone(),
                     paths_total: req.paths_total,
+                    detail: detail.clone(),
                     decide: tx,
                 },
             );
@@ -314,6 +329,7 @@ impl ApprovalResolver for DaemonApprovalResolver {
                 paths: req.paths,
                 paths_total: req.paths_total,
                 ttl_ms: u64::try_from(self.ttl.as_millis()).unwrap_or(u64::MAX),
+                detail,
             });
         }
         match tokio::time::timeout(self.ttl, rx).await {

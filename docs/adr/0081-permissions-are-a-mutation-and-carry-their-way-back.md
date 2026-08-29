@@ -111,15 +111,22 @@ mean nothing on Linux to begin with. What this does NOT close is a symlinked
 INTERMEDIATE component; that is the general problem `CONFINED_WRITES` and the
 `openat` walk exist for, and this method does not use them yet.
 
-### setuid and setgid, by hand only
+### The mode travels in the approval — and setuid stays out of an agent's reach
 
-Not because those bits are the danger — `chmod 0777` on `~/.ssh` does far more
-harm and carries none of them — but because they are the ones the person
-approving CANNOT SEE. The approval request carries the op and the paths, not
-the mode, so a human would be answering "set-mode on 12 paths" without knowing
-whether it is `0600` or `4777`. Until the mode travels in that question, an
-agent cannot set them; the human can, from a dialog that does show them. Sticky
-is not in that set: it grants nobody's privilege.
+The approval request carried the op and the paths, and for every other op that
+IS the decision: approving "copy these twelve" is approving copying those
+twelve. `set-mode` is the first op where two requests with the SAME op and the
+SAME paths mean opposite things — `0600` and `4777` — so the human was not
+consenting to what they thought. `ApprovalDetail` (protocol 0.61.0) carries the
+mode, both frontends show it, and the argument is exactly the one
+`paths_total` already makes for the count.
+
+setuid and setgid still cannot be set by an agent. Not because those bits are
+the danger — `chmod 0777` on `~/.ssh` does far more harm and carries none of
+them — but because the question that would authorise them is only asked when a
+rule says `ask`: a rule that plainly `allow`s `set-mode` never shows a human
+anything. So the human sets them, from a dialog that does show them, and an
+agent does not. Sticky is not in that set: it grants nobody's privilege.
 
 There is a case this method does not defend against and that must be written
 down rather than discovered: **a daemon running as root**. Then `set-mode` on a

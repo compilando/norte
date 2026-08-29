@@ -1733,6 +1733,7 @@ async fn una_aprobacion_abre_su_dialogo() {
         paths: vec!["mem:///casa/borra\u{202E}me".to_owned()],
         paths_total: 40,
         ttl_ms: 30_000,
+        detail: norte_proto::methods::ApprovalDetail::default(),
     })
     .expect("el host escucha");
 
@@ -1787,6 +1788,7 @@ async fn cualquier_respuesta_que_no_sea_aprobar_deniega() {
         paths: vec!["mem:///casa/x".to_owned()],
         paths_total: 1,
         ttl_ms: 30_000,
+        detail: norte_proto::methods::ApprovalDetail::default(),
     })
     .expect("el host escucha");
     let id = siguientes_dialogos(&mut sub).await[0].id;
@@ -10958,6 +10960,7 @@ async fn una_aprobacion_repetida_no_abre_dos_dialogos() {
         paths: vec!["mem:///casa/x".to_owned()],
         paths_total: 1,
         ttl_ms: ttl,
+        detail: norte_proto::methods::ApprovalDetail::default(),
     };
     tx.send(peticion(30_000)).expect("el host escucha");
     assert_eq!(siguientes_dialogos(&mut sub).await.len(), 1);
@@ -10993,6 +10996,7 @@ async fn una_aprobacion_caduca_y_su_dialogo_se_cierra() {
         paths: vec!["mem:///casa/x".to_owned()],
         paths_total: 1,
         ttl_ms: 60,
+        detail: norte_proto::methods::ApprovalDetail::default(),
     })
     .expect("el host escucha");
     let abiertos = siguientes_dialogos(&mut sub).await;
@@ -11332,6 +11336,7 @@ async fn una_aprobacion_que_no_llega_al_daemon_se_dice() {
         paths: vec!["mem:///casa/x".to_owned()],
         paths_total: 1,
         ttl_ms: 30_000,
+        detail: norte_proto::methods::ApprovalDetail::default(),
     })
     .expect("el host escucha");
     let id = siguientes_dialogos(&mut sub).await[0].id;
@@ -11469,6 +11474,7 @@ async fn un_clic_sobre_una_aprobacion_recien_abierta_no_la_aprueba() {
         paths: vec!["mem:///casa/x".to_owned()],
         paths_total: 1,
         ttl_ms: 30_000,
+        detail: norte_proto::methods::ApprovalDetail::default(),
     })
     .expect("el host escucha");
     let id = siguientes_dialogos(&mut sub).await[0].id;
@@ -11522,6 +11528,7 @@ async fn una_ruta_ya_redactada_por_el_daemon_va_marcada() {
         paths: vec!["mem:///casa/factura\u{FFFD}.pdf".to_owned()],
         paths_total: 1,
         ttl_ms: 30_000,
+        detail: norte_proto::methods::ApprovalDetail::default(),
     })
     .expect("el host escucha");
 
@@ -11735,6 +11742,7 @@ async fn una_aprobacion_dice_que_pide_quien_y_hasta_cuando() {
         paths: vec!["mem:///casa/x".to_owned(), "mem:///casa/y".to_owned()],
         paths_total: 2,
         ttl_ms: 30_000,
+        detail: norte_proto::methods::ApprovalDetail::default(),
     })
     .expect("el host escucha");
 
@@ -11781,6 +11789,7 @@ async fn una_aprobacion_sin_ttl_dice_que_no_sabe_el_plazo() {
         paths: vec!["mem:///casa/x".to_owned()],
         paths_total: 1,
         ttl_ms: 0,
+        detail: norte_proto::methods::ApprovalDetail::default(),
     })
     .expect("el host escucha");
 
@@ -13577,6 +13586,7 @@ async fn el_panel_de_agentes_deshace_la_sesion_elegida() {
             paths: vec!["mem:///casa/x".to_owned()],
             paths_total: 1,
             ttl_ms: 30_000,
+            detail: norte_proto::methods::ApprovalDetail::default(),
         })
         .expect("el host escucha");
         let dialogos = siguientes_dialogos(&mut sub).await;
@@ -13686,6 +13696,7 @@ async fn una_peticion_nueva_repinta_el_panel_y_no_mueve_la_seleccion() {
         paths: vec!["mem:///casa/x".to_owned()],
         paths_total: 1,
         ttl_ms: 30_000,
+        detail: norte_proto::methods::ApprovalDetail::default(),
     };
     for (id, aid) in [("agente-A", 21_u64), ("agente-B", 22)] {
         tx.send(pedir(id, aid)).expect("el host escucha");
@@ -16732,6 +16743,7 @@ async fn el_corpus_hostil_cruza_el_dialogo_de_aprobacion() {
             paths: vec![redactada.clone()],
             paths_total: 1,
             ttl_ms: 30_000,
+            detail: norte_proto::methods::ApprovalDetail::default(),
         })
         .expect("el host escucha");
 

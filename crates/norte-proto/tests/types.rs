@@ -1102,6 +1102,7 @@ fn policy_types_roundtrip() {
         paths: vec!["file:///work/x".into()],
         paths_total: 9,
         ttl_ms: 30_000,
+        detail: norte_proto::methods::ApprovalDetail { mode: Some(0o755) },
     };
     let back: PolicyApprovalRequired =
         serde_json::from_str(&serde_json::to_string(&ar).unwrap()).unwrap();
@@ -1245,10 +1246,15 @@ fn version_ventana_actual() {
     // del flag nuevo no ve nada, porque los nombres desconocidos se ignoran al
     // parsear (ADR 0004). Que no se rompa nada es justo lo que la ventana N/N-1
     // permite, y N-2 no.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.60.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.59.0"), "N-1");
+    //
+    // 0.61.0 (#314): el `detail` de una aprobación. Aditivo —se omite cuando no
+    // dice nada, así que el JSON de las demás ops no cambia—, y la ventana se
+    // desplaza porque contra un daemon 0.60 la pregunta de un `set-mode` no
+    // puede decir QUÉ modo se va a fijar, que es la mitad de esa decisión.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.61.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.60.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.58.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.59.9"),
         "N-2 fuera de la ventana"
     );
 }

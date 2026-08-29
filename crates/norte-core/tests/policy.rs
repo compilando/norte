@@ -330,6 +330,55 @@ async fn el_undo_de_un_chmod_pide_permiso_de_chmod() {
     assert_eq!(r.undone, 0, "y por tanto no se deshizo nada");
 }
 
+/// **La pregunta que se le hace al humano dice QUÉ modo** (#314, 0.61.0).
+///
+/// `set-mode` es la primera op donde dos peticiones con la misma op y las
+/// mismas rutas significan cosas opuestas —`0600` y `4777`—, así que sin el
+/// modo el humano no está consintiendo lo que cree. Es el mismo argumento que
+/// `paths_total` hace para el recuento.
+#[tokio::test]
+async fn la_aprobacion_de_un_chmod_dice_el_modo() {
+    use norte_core::approval::{ApprovalOutcome, ApprovalRequest, ApprovalResolver};
+
+    /// Un resolver que se queda con lo que le preguntaron y deniega.
+    struct Fisgon(std::sync::Mutex<Vec<norte_core::PolicyOp>>);
+    #[async_trait::async_trait]
+    impl ApprovalResolver for Fisgon {
+        async fn request(&self, req: ApprovalRequest) -> ApprovalOutcome {
+            self.0.lock().expect("lock").push(req.op);
+            ApprovalOutcome::Denied
+        }
+    }
+
+    let cfg = PolicyConfig::parse("[[rule]]\nop=\"set-mode\"\naction=\"ask\"").expect("cfg");
+    let fisgon = Arc::new(Fisgon(std::sync::Mutex::new(Vec::new())));
+    let (engine, mem, _j) = engine_with_policy(
+        cfg,
+        full_scope(),
+        Arc::clone(&fisgon) as Arc<dyn ApprovalResolver>,
+    )
+    .await;
+    write_file(&mem, "mem:///a.sh", b"x").await;
+
+    let _ = engine
+        .set_mode_as(
+            norte_proto::methods::FsSetModeParams {
+                paths: vec![vp("mem:///a.sh")],
+                mode: 0o750,
+            },
+            agent(),
+        )
+        .await;
+
+    let preguntas = fisgon.0.lock().expect("lock").clone();
+    assert_eq!(preguntas.len(), 1, "se preguntó una vez: {preguntas:?}");
+    assert!(
+        matches!(preguntas[0], norte_core::PolicyOp::SetMode { mode } if mode == 0o750),
+        "y la pregunta lleva el MODO, no solo la op: {:?}",
+        preguntas[0]
+    );
+}
+
 /// El ejemplo commiteado de policy (`docs/policy-example.toml`) parsea SIEMPRE
 /// (M3-4 T4): si la sintaxis de reglas cambia, este test lo delata — el
 /// ejemplo jamás se pudre.

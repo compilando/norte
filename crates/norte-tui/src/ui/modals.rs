@@ -526,6 +526,16 @@ pub(crate) fn approval_modal_text(
         "modal-approval-body",
         &[("session", &session), ("op", &op)],
     )];
+    // #314: lo que la op AÑADE a la pregunta. Para todas menos una no hay
+    // nada: la op y las rutas son la decisión. Un `set-mode` sí, porque dos
+    // con las mismas rutas y modos distintos significan cosas opuestas, y sin
+    // esta línea el humano no sabía si decía que sí a `0600` o a `4777`.
+    if let Some(mode) = req.detail.mode {
+        lines.push(ta(
+            "modal-approval-mode",
+            &[("mode", &norte_frontend::chmod::format_mode(mode))],
+        ));
+    }
     let limit = norte_frontend::MODAL_ITEM_LIMIT;
     for (i, p) in req.paths.iter().take(limit).enumerate() {
         let (text, hostile) = display_name(p.as_bytes());
@@ -2007,6 +2017,7 @@ mod approval_modal_tests {
             paths_total: paths.len() as u64,
             paths,
             ttl_ms: 60_000,
+            detail: norte_proto::methods::ApprovalDetail::default(),
         }
     }
 

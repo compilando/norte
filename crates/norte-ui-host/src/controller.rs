@@ -12791,6 +12791,27 @@ impl Estado {
         });
     }
 
+    /// Qué se está pidiendo, en una línea (#314).
+    ///
+    /// Para todas las ops menos una es el nombre de la op: aprobar «copiar
+    /// estas doce» ES la decisión. Un `set-mode` no, porque dos con las mismas
+    /// rutas y modos distintos significan cosas opuestas, así que el modo va
+    /// AQUÍ, con el sujeto — entre líneas de rutas, una ruta puede suplantar
+    /// cualquier otra línea, y esta es la mitad de la decisión.
+    fn sujeto_de_aprobacion(&self, req: &norte_proto::methods::PolicyApprovalRequired) -> String {
+        match req.detail.mode {
+            Some(mode) => norte_i18n::ta_in(
+                self.lang,
+                "modal-approval-op-mode",
+                &[
+                    ("op", &req.op),
+                    ("mode", &norte_frontend::chmod::format_mode(mode)),
+                ],
+            ),
+            None => req.op.clone(),
+        }
+    }
+
     /// Abre el diálogo de una op de agente que espera decisión.
     ///
     /// Las rutas vienen REDACTADAS del servidor y son solo display: jamás se
@@ -12866,7 +12887,7 @@ impl Estado {
             .take(Self::MAX_LINEAS_DIALOGO)
             .map(|p| linea(p))
             .collect();
-        let sujeto = linea(&req.op);
+        let sujeto = linea(&self.sujeto_de_aprobacion(req));
         // Quién pide es lo PRIMERO que hace falta para decidir, y se
         // descartaba: el título dice «aprobación de agente» y sin esto no se
         // sabe de qué agente.

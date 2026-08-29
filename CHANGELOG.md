@@ -525,6 +525,23 @@ independently through `PROTOCOL_VERSION`.
   the bytes, so this subsumes the `fs.compare` hash oracle and exceeds it, and
   an agent denied that one only had to call here.
 
+- **An approval says WHAT is being asked, not just which op** (#314, protocol
+  **0.61.0**). The request a human answers carried the op and the paths, and for
+  every op but one that is the whole decision: approving "copy these twelve" is
+  approving copying those twelve. Changing permissions is the first where two
+  requests with the same op and the same paths mean opposite things — `0600` and
+  `4777` — so the human was answering without the half that decides the harm.
+  `ApprovalDetail` carries the mode, and both frontends show it: the terminal on
+  its own line, the window beside the op.
+
+  Additive: the field is omitted when it says nothing, so the JSON of every
+  other op does not change a byte, and it rides in BOTH shapes — the
+  notification and the `policy.pending` resync — because a pending rebuilt after
+  a reconnect showing less than the notification that announced it is how a
+  human ends up deciding with less. Setuid and setgid stay out of an agent's
+  reach anyway: the question that would authorise them is only asked when a rule
+  says `ask`, and a rule that plainly allows `set-mode` shows nobody anything.
+
 - **Checksums and permissions reach the window** (#311, #314). Both were
   classified as deferred in the parity test with the same reason — the protocol,
   the core and the rules were shared, what was missing was the surface — and now

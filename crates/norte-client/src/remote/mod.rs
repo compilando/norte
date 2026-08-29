@@ -553,6 +553,11 @@ impl RemoteBackend {
                         // El TTL restante no viaja en `policy.pending`:
                         // 0 = desconocido (documentado en proto).
                         ttl_ms: 0,
+                        // #314: el detalle SÍ viaja en el resync, y por eso
+                        // está en las dos formas — una pendiente reconstruida
+                        // que enseñara menos que la notificación que la
+                        // anunció dejaría al humano decidiendo con menos.
+                        detail: p.detail,
                     });
                 }
             }

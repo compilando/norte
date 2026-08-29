@@ -388,6 +388,7 @@ fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
             ],
             paths_total: 0,
             ttl_ms: 30_000,
+            detail: norte_proto::methods::ApprovalDetail::default(),
         },
     });
     let mut terminal = Terminal::new(TestBackend::new(60, 14)).expect("terminal");
@@ -448,6 +449,7 @@ fn el_pie_del_modal_de_aprobacion_se_pinta_con_un_lote_gigante() {
             paths: (1..=400).map(|i| format!("mem:///proj/f{i}.txt")).collect(),
             paths_total: 0,
             ttl_ms: 60_000,
+            detail: norte_proto::methods::ApprovalDetail::default(),
         },
     });
 
@@ -631,6 +633,7 @@ fn footer_de_aprobacion_enmascara_chord_hostil_de_una_capa() {
                 paths: vec!["mem:///proj/src.txt".into(), "mem:///proj/dst.txt".into()],
                 paths_total: 0,
                 ttl_ms: 30_000,
+                detail: norte_proto::methods::ApprovalDetail::default(),
             },
         });
 
@@ -1269,5 +1272,35 @@ fn el_pie_de_las_sumas_solo_ofrece_copiar_cuando_hay_digests() {
     assert!(
         !comprobado.contains(&trozo(&copiar)),
         "sin digests no puede prometer una copia:\n{comprobado}"
+    );
+}
+
+/// #314: la pregunta de una op de agente dice QUÉ modo, cuando la op es
+/// cambiar permisos. Con la op y las rutas a secas, `0600` y `4777` son la
+/// misma pregunta y decisiones opuestas.
+#[test]
+fn la_aprobacion_de_un_chmod_pinta_el_modo() {
+    let dir = vp("file:///casa");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    app.modal = Some(norte_tui::app::Modal::ApproveAgentOp {
+        req: norte_proto::methods::PolicyApprovalRequired {
+            approval_id: 7,
+            session: Some("s1".into()),
+            op: "set-mode".into(),
+            paths: vec!["file:///casa/a.sh".into()],
+            paths_total: 1,
+            ttl_ms: 60_000,
+            detail: norte_proto::methods::ApprovalDetail { mode: Some(0o4755) },
+        },
+    });
+    let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let pintado = terminal.backend().to_string();
+    assert!(
+        pintado.contains("4755"),
+        "el modo va en la pregunta, no solo la op:\n{pintado}"
     );
 }

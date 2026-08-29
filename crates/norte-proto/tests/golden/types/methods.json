@@ -952,6 +952,9 @@
   "plugin_set_enabled_result": {},
   "policy_approval_required": {
     "approval_id": 7,
+    "detail": {
+      "mode": 493
+    },
     "op": "delete",
     "paths": [
       "file:///work/x"

@@ -27,6 +27,9 @@ msg-approval-already-decided = approval { $id } had already been decided by some
 msg-approval-unknown = approval { $id } is not from this daemon (did it restart?)
 msg-dialog-dropped = too many open dialogs: the oldest one was dropped
 modal-approval-body = agent "{ $session }" requests { $op }:
+modal-approval-mode = permissions: { $mode }
+# The window joins it with the op: its dialog has ONE subject field.
+modal-approval-op-mode = { $op } { $mode }
 modal-approval-path = { $badge }path { $n }: { $path }
 # H3c: the footer of a modal a help page is covering. While that help is open
 # it owns the keys, so the modal's verbs do nothing — a footer that kept

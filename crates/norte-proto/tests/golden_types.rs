@@ -2524,6 +2524,11 @@ fn check_methods_policy(fixtures: &BTreeMap<String, Value>) {
             // frontend tiene que avisar al humano.
             paths_total: 9,
             ttl_ms: 30_000,
+            // 0.61.0 (#314): la op que NO se contesta con la op y las rutas.
+            // Se congela la forma CON modo: es lo que hace falta que viaje, y
+            // la de sin él la cubren las dos fixturas de `pending_approval`,
+            // donde el campo se omite entero.
+            detail: norte_proto::methods::ApprovalDetail { mode: Some(0o755) },
         },
     );
     check_one(
@@ -2544,6 +2549,10 @@ fn check_methods_policy(fixtures: &BTreeMap<String, Value>) {
             op: "delete".into(),
             paths: vec!["file:///work/x".into()],
             paths_total: 9,
+            // Sin detalle: un `delete` se contesta con la op y las rutas, y el
+            // campo se OMITE del JSON entero — que es lo que hace que el bump
+            // sea aditivo para todas las demás ops.
+            detail: norte_proto::methods::ApprovalDetail::default(),
         },
     );
     check_one(
@@ -2556,6 +2565,7 @@ fn check_methods_policy(fixtures: &BTreeMap<String, Value>) {
                 op: "delete".into(),
                 paths: vec!["file:///work/x".into()],
                 paths_total: 9,
+                detail: norte_proto::methods::ApprovalDetail::default(),
             }],
         },
     );
@@ -3889,7 +3899,11 @@ fn method_names_frozen() {
     // Aditivo, y la ventana se desplaza porque contra un daemon 0.59 no se
     // pueden cambiar permisos: la superficie de propiedades sigue siendo de
     // solo mirar, que es lo que era antes de esta versión.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.60.0");
+    // 0.61.0 (#314): `ApprovalDetail`, y con él el `detail` de las dos formas
+    // de una aprobación. Aditivo —se omite cuando no dice nada— y la ventana se
+    // desplaza porque contra un daemon 0.60 la pregunta de un `set-mode` no
+    // puede decir QUÉ modo, que es la mitad de esa decisión.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.61.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

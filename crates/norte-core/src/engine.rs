@@ -3332,8 +3332,12 @@ impl Engine {
             });
         }
         let refs: Vec<&VPath> = params.paths.iter().collect();
-        self.gate(&actor, crate::policy::PolicyOp::SetMode, &refs)
-            .await?;
+        self.gate(
+            &actor,
+            crate::policy::PolicyOp::SetMode { mode: params.mode },
+            &refs,
+        )
+        .await?;
         let key = primera.scheme().to_owned();
         let mut rutas = Vec::with_capacity(params.paths.len());
         for p in &params.paths {
@@ -4120,7 +4124,8 @@ fn undo_gate_targets(unit: &[crate::journal::JournalEntry]) -> Result<Option<Und
     let mut anchor: Option<VPath> = None;
     let mut moves: Vec<VPath> = Vec::new();
     let mut deletes: Vec<VPath> = Vec::new();
-    let mut set_modes: Vec<VPath> = Vec::new();
+    let mut set_modes: std::collections::BTreeMap<u32, Vec<VPath>> =
+        std::collections::BTreeMap::new();
     for e in unit {
         let path = wire_engine(&e.path)?;
         if anchor.is_none() {
@@ -4153,7 +4158,19 @@ fn undo_gate_targets(unit: &[crate::journal::JournalEntry]) -> Result<Option<Und
             // `delete` deshacía un chmod que la política no le concede, y uno
             // con `set-mode` no podía deshacer el suyo — y con el LIFO
             // estricto, eso bloquea la sesión entera detrás.
-            "set_mode_back" => set_modes.push(path),
+            // #314: el modo que la reversa VA A PONER viaja en `reversal_ref`,
+            // y se agrupa por él: la pregunta que se le hace al humano dice
+            // cuál es, así que una unidad que restaure dos modos distintos
+            // tiene que preguntar dos veces en vez de enseñar uno por los dos.
+            "set_mode_back" => {
+                let modo = e
+                    .reversal_ref
+                    .as_deref()
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(0);
+                set_modes.entry(modo).or_default().push(path);
+            }
             // `delete`, y cualquier etiqueta que este core no conozca: la
             // desconocida no llega a actuar (`revert_entry` la bloquea), pero
             // se pregunta igual por la clase que MÁS quita.
@@ -4164,8 +4181,8 @@ fn undo_gate_targets(unit: &[crate::journal::JournalEntry]) -> Result<Option<Und
         return Ok(None);
     }
     let mut gates: Vec<(crate::policy::PolicyOp, Vec<VPath>)> = Vec::with_capacity(3);
-    if !set_modes.is_empty() {
-        gates.push((crate::policy::PolicyOp::SetMode, set_modes));
+    for (mode, paths) in set_modes {
+        gates.push((crate::policy::PolicyOp::SetMode { mode }, paths));
     }
     if !deletes.is_empty() {
         gates.push((

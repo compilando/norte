@@ -815,6 +815,7 @@ fn el_pie_del_modal_no_ofrece_verbos_inertes_bajo_la_ayuda() {
             paths: vec!["mem:///a".into()],
             paths_total: 0,
             ttl_ms: 60_000,
+            detail: norte_proto::methods::ApprovalDetail::default(),
         },
     });
     open_help_over_modal(&mut app);

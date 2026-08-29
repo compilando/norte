@@ -53,6 +53,7 @@ fn approval() -> Modal {
             paths: vec!["mem:///proj/a".into(), "mem:///proj/b".into()],
             paths_total: 0,
             ttl_ms: 60_000,
+            detail: norte_proto::methods::ApprovalDetail::default(),
         },
     }
 }

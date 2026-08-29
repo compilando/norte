@@ -27,6 +27,9 @@ msg-approval-already-decided = la aprobación { $id } ya la había decidido algu
 msg-approval-unknown = la aprobación { $id } no es de este daemon (¿se reinició?)
 msg-dialog-dropped = demasiados diálogos abiertos: se cerró el más viejo
 modal-approval-body = el agente "{ $session }" pide { $op }:
+modal-approval-mode = permisos: { $mode }
+# La ventana lo junta con la op, porque su diálogo tiene UN campo de sujeto.
+modal-approval-op-mode = { $op } { $mode }
 modal-approval-path = { $badge }ruta { $n }: { $path }
 # H3c: el pie de un modal al que una página de ayuda está tapando. Mientras
 # esa ayuda esté abierta se queda las teclas, así que los verbos del modal no

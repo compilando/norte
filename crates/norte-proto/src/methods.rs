@@ -891,7 +891,23 @@ use crate::{
 /// [`TaskKind::SetMode`](crate::TaskKind) en `task.list`, que degrada a
 /// `Unknown` por su `serde(other)` — la ve correr y no sabe nombrarla, como ya
 /// le pasa con `Compare`, `DirSize` o `Checksum`.
-pub const PROTOCOL_VERSION: &str = "0.60.0";
+/// `0.61.0` (#314): [`ApprovalDetail`], y con él el campo `detail` de
+/// [`PolicyApprovalRequired`] y de [`PendingApproval`].
+///
+/// La aprobación llevaba la op y las rutas, y para todas las ops menos una eso
+/// ES la decisión. `set-mode` es la primera donde dos peticiones con la MISMA
+/// op y las MISMAS rutas significan cosas opuestas —`0600` y `4777`—, así que
+/// el humano no podía ver a qué estaba diciendo que sí. Es el mismo argumento
+/// que [`PolicyApprovalRequired::paths_total`] hace para el recuento, y por
+/// eso el campo va en las dos formas: la notificación y el resync de
+/// `policy.pending`.
+///
+/// Ventana N=0.61.x / N-1=0.60.x. Aditivo: el campo se omite cuando no dice
+/// nada, así que el JSON de las demás ops no cambia ni un byte, y un cliente
+/// 0.60 lo ignora. **Lo que pierde es exactamente lo que el campo añade**: ante
+/// un `set-mode` de un agente, un frontend 0.60 sigue preguntando «set-mode
+/// sobre 12 rutas» sin poder decir cuál era el modo.
+pub const PROTOCOL_VERSION: &str = "0.61.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -6507,6 +6523,41 @@ pub struct PolicyApprovalRequired {
     /// pendiente reconstruida del resync de `policy.pending`, que no
     /// transporta el TTL restante): el frontend no pinta cuenta atrás.
     pub ttl_ms: u64,
+    /// Lo que esta op añade a la pregunta (0.61.0, #314). Ausente = la op y
+    /// las rutas la contestan enteras, que es el caso de todas las demás.
+    #[serde(default, skip_serializing_if = "ApprovalDetail::is_empty")]
+    pub detail: ApprovalDetail,
+}
+
+/// Lo que la op AÑADE a la pregunta, cuando la op y las rutas no la contestan
+/// (0.61.0, #314).
+///
+/// La aprobación llevaba la op y las rutas, y para todas las demás eso ES la
+/// decisión: aprobar «copiar estas doce» es aprobar copiar esas doce. Cambiar
+/// permisos es la primera op donde dos peticiones con la MISMA op y las MISMAS
+/// rutas significan cosas opuestas —`0600` y `4777`—, así que sin este campo el
+/// humano no estaba consintiendo lo que cree. Es el mismo argumento que
+/// [`PolicyApprovalRequired::paths_total`] hace para el recuento.
+///
+/// Un struct de campos opcionales y no un enum: así una op futura añade el suyo
+/// sin tocar lo que ya viaja, y un peer que no lo conozca lo ignora (ADR 0004).
+/// Todos los campos son OPCIONALES y solo de DISPLAY: la operación de verdad
+/// vive server-side ligada al `approval_id`, y nada de esto se reparsa.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalDetail {
+    /// Los permisos que se van a fijar, en los doce bits de `chmod(2)`
+    /// ([`MODE_PERMISSION_BITS`]). Solo en un `set-mode`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<u32>,
+}
+
+impl ApprovalDetail {
+    /// Si no dice nada: un frontend no pinta una línea vacía por él.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.mode.is_none()
+    }
 }
 
 /// Params de [`POLICY_DECIDE`] (un humano aprueba/deniega).
@@ -6544,6 +6595,11 @@ pub struct PendingApproval {
     /// [`PolicyApprovalRequired::paths_total`], incluido `0` = desconocido.
     #[serde(default)]
     pub paths_total: u64,
+    /// Lo que la op añade a la pregunta (0.61.0, #314). Mismo contrato que
+    /// [`PolicyApprovalRequired::detail`]: sin él, una pendiente reconstruida
+    /// del resync enseñaría menos que la notificación que la anunció.
+    #[serde(default, skip_serializing_if = "ApprovalDetail::is_empty")]
+    pub detail: ApprovalDetail,
 }
 
 /// Result de [`POLICY_PENDING`] (resync de aprobaciones pendientes).

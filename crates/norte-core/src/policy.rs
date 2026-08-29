@@ -65,7 +65,15 @@ pub enum PolicyOp {
     /// [`PolicyOp::Mkdir`]: dejar que algo cree ficheros no es dejar que
     /// cambie quién puede leerlos, y una regla que concediera las dos cosas a
     /// la vez sería una que nadie escribió.
-    SetMode,
+    SetMode {
+        /// El modo que se va a fijar.
+        ///
+        /// Va DENTRO de la op y no al lado porque es lo que la hace distinta
+        /// de sí misma: dos `set-mode` sobre las mismas rutas con `0600` y con
+        /// `4777` son la misma op y decisiones opuestas, y quien le pregunta
+        /// al humano necesita poder decirlo (0.61.0).
+        mode: u32,
+    },
 }
 
 impl PolicyOp {
@@ -79,7 +87,7 @@ impl PolicyOp {
             PolicyOp::Delete { .. } => "delete",
             PolicyOp::Mkdir => "mkdir",
             PolicyOp::Create => "create",
-            PolicyOp::SetMode => "set-mode",
+            PolicyOp::SetMode { .. } => "set-mode",
         }
     }
 }
@@ -664,7 +672,7 @@ mod tests {
             },
             PolicyOp::Mkdir,
             PolicyOp::Create,
-            PolicyOp::SetMode,
+            PolicyOp::SetMode { mode: 0o755 },
         ];
         for op in todos {
             let nombre = op.kind();

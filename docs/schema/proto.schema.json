@@ -52,6 +52,21 @@
       ],
       "type": "object"
     },
+    "ApprovalDetail": {
+      "description": "Lo que la op AÑADE a la pregunta, cuando la op y las rutas no la contestan\n(0.61.0, #314).\n\nLa aprobación llevaba la op y las rutas, y para todas las demás eso ES la\ndecisión: aprobar «copiar estas doce» es aprobar copiar esas doce. Cambiar\npermisos es la primera op donde dos peticiones con la MISMA op y las MISMAS\nrutas significan cosas opuestas —`0600` y `4777`—, así que sin este campo el\nhumano no estaba consintiendo lo que cree. Es el mismo argumento que\n[`PolicyApprovalRequired::paths_total`] hace para el recuento.\n\nUn struct de campos opcionales y no un enum: así una op futura añade el suyo\nsin tocar lo que ya viaja, y un peer que no lo conozca lo ignora (ADR 0004).\nTodos los campos son OPCIONALES y solo de DISPLAY: la operación de verdad\nvive server-side ligada al `approval_id`, y nada de esto se reparsa.",
+      "properties": {
+        "mode": {
+          "description": "Los permisos que se van a fijar, en los doce bits de `chmod(2)`\n([`MODE_PERMISSION_BITS`]). Solo en un `set-mode`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ArchiveFormat": {
       "description": "Formato de archivo que se sabe ESCRIBIR (0.50.0, #132).\n\nMenos que los que se saben leer, a propósito: `rar` se delega a un programa\nexterno y solo para lectura (ADR 0056), y 7z no se lee siquiera. Un enum y\nno un string libre: el conjunto es cerrado y el servidor no tiene que\nvalidar vocabulario.",
       "oneOf": [
@@ -2749,6 +2764,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "detail": {
+          "$ref": "#/$defs/ApprovalDetail",
+          "description": "Lo que la op añade a la pregunta (0.61.0, #314). Mismo contrato que\n[`PolicyApprovalRequired::detail`]: sin él, una pendiente reconstruida\ndel resync enseñaría menos que la notificación que la anunció."
+        },
         "op": {
           "description": "Op-kind.",
           "type": "string"
@@ -3448,6 +3467,10 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "detail": {
+          "$ref": "#/$defs/ApprovalDetail",
+          "description": "Lo que esta op añade a la pregunta (0.61.0, #314). Ausente = la op y\nlas rutas la contestan enteras, que es el caso de todas las demás."
         },
         "op": {
           "description": "Op-kind (`copy|move|delete|mkdir|create`).\n\nSOLO display: un cliente que no reconozca el valor lo pinta tal cual y\nsigue pudiendo aprobar o denegar, que es lo que la aprobación necesita.",
