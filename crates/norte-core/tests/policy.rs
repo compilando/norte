@@ -312,6 +312,8 @@ async fn el_undo_de_un_chmod_pide_permiso_de_chmod() {
             norte_proto::methods::FsSetModeParams {
                 paths: vec![vp("mem:///a.sh")],
                 mode: 0o700,
+                recursive: false,
+                dir_mode: None,
             },
             agent(),
         )
@@ -365,6 +367,8 @@ async fn la_aprobacion_de_un_chmod_dice_el_modo() {
             norte_proto::methods::FsSetModeParams {
                 paths: vec![vp("mem:///a.sh")],
                 mode: 0o750,
+                recursive: false,
+                dir_mode: None,
             },
             agent(),
         )
@@ -373,7 +377,7 @@ async fn la_aprobacion_de_un_chmod_dice_el_modo() {
     let preguntas = fisgon.0.lock().expect("lock").clone();
     assert_eq!(preguntas.len(), 1, "se preguntó una vez: {preguntas:?}");
     assert!(
-        matches!(preguntas[0], norte_core::PolicyOp::SetMode { mode } if mode == 0o750),
+        matches!(preguntas[0], norte_core::PolicyOp::SetMode { mode, .. } if mode == 0o750),
         "y la pregunta lleva el MODO, no solo la op: {:?}",
         preguntas[0]
     );

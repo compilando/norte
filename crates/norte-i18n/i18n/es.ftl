@@ -28,6 +28,10 @@ msg-approval-unknown = la aprobación { $id } no es de este daemon (¿se reinici
 msg-dialog-dropped = demasiados diálogos abiertos: se cerró el más viejo
 modal-approval-body = el agente "{ $session }" pide { $op }:
 modal-approval-mode = permisos: { $mode }
+# #315: el ALCANCE. Sin estas dos líneas, un recursivo sobre una raíz se
+# preguntaba como «1 ruta» y lo que se aprobaba era el árbol entero.
+modal-approval-recursive = ¡y TODO lo que hay dentro!
+modal-approval-recursive-dirs = ¡y TODO lo que hay dentro! (carpetas: { $mode })
 # La ventana lo junta con la op, porque su diálogo tiene UN campo de sujeto.
 modal-approval-op-mode = { $op } { $mode }
 modal-approval-path = { $badge }ruta { $n }: { $path }
@@ -502,9 +506,22 @@ msg-shell-failed = no se pudo ejecutar { $program }: { $error }
 # Quitarlo abriría el hijo en otro sitio sin decirlo.
 msg-shell-cwd-unsupported = { $path } no puede ser el directorio de trabajo de un programa en este sistema
 # Se imprime en la terminal ANFITRIONA tras una suspensión que espera
-# (`Ctrl+O`, y después de una línea de comandos): los paneles ya no están y
-# esto es lo único que le dice al lector que norte sigue ahí.
+# (después de una línea de comandos): los paneles ya no están y esto es lo
+# único que le dice al lector que norte sigue ahí.
 msg-shell-press-key = [norte] pulsa una tecla para volver
+# `app.toggle-panels` le cede la terminal a un shell VIVO (#142), y la tecla
+# que recupera los paneles es la misma que se los llevó. Un preset que ate el
+# comando a una SECUENCIA no deja tal tecla —su primer acorde es del shell,
+# que es donde el lector está tecleando—, así que no se cede la terminal en vez
+# de cederla sin salida.
+msg-subshell-no-key = ata app.toggle-panels a una tecla suelta para usar el shell: una secuencia no puede devolver los paneles
+# El subshell es POSIX: un pty, un `cd` y los ganchos de prompt de bash/zsh/
+# fish. En Windows se declina en vez de dejarlo a medias.
+msg-subshell-not-here = el shell vivo detrás de los paneles no está disponible en este sistema
+# El shell dijo dónde está y norte no ha podido ir. La ruta NO se interpola: es
+# lo que el shell imprimió, y un seguimiento que a veces no pasa sin decir nada
+# es indistinguible de uno roto.
+msg-subshell-bad-cwd = el shell dice estar en un directorio que norte no puede abrir; el panel se queda donde estaba
 # El `app.terminal` de la GUI (§E): nada respondió en este escritorio, así que
 # se dice qué se intentó en vez de no hacer nada.
 # `$configured` es el $TERMINAL del usuario y `$tried` la lista cerrada de
@@ -898,9 +915,16 @@ modal-split-hint = 4096, 10M, 700M · los trozos van al otro panel · Enter part
 # son.
 modal-chmod-one = Permisos de 1 entrada
 modal-chmod = Permisos de { $n } entradas
-modal-chmod-hint = en octal (755, 0644, 4755) · Enter aplica · Esc cancela
+modal-chmod-hint = en octal (755) · «-R 755» baja por el árbol · «-R 644,755» pone otro a las carpetas · Enter aplica
 msg-chmod-not-octal = eso no es un modo en octal: tres o cuatro dígitos del 0 al 7
 msg-chmod-too-big = ese número se sale de los permisos: como mucho 7777
+# #315: dos modos sin `-R` no significan nada — sin bajar por el árbol no hay
+# carpetas a las que aplicárselo.
+msg-chmod-dir-mode-needs-recursive = el modo de las carpetas solo vale con «-R»
+# #121: si todo lo marcado son nombres que no son texto, la lista de nombres
+# viajaría vacía — y vacía significa «el directorio entero», justo lo contrario
+# de lo que se pidió.
+msg-ai-rename-marks-not-text = lo que has marcado no son nombres de texto: el plan no se pide sobre eso
 msg-chmod-started = cambiando los permisos de { $n }…
 msg-chmod-partial = { $n } no se pudieron cambiar (un enlace, o no es tuyo)
 msg-pack-read-only = ese panel es de solo lectura: ahí no se puede escribir

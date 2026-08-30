@@ -468,6 +468,7 @@ mod compare_tests {
             entries_total: None,
             current: None,
             unreadable: None,
+            unvisited: None,
         });
         (
             CompareRun {

@@ -1031,6 +1031,108 @@ fn is_sync_unit(unit: &[JournalEntry]) -> bool {
         })
 }
 
+/// ¿Es esta unidad un lote de PERMISOS (#315)?
+///
+/// Un `fs.set_mode` recursivo agrupa sus n nodos bajo un lote para que una
+/// auditoría pueda leer UNA acción donde el humano hizo una. Pero no es un
+/// lote de renombrados —no hay permutación que deshacer entera ni temporales
+/// que atravesar— ni uno de sincronización: cada entrada lleva su propio modo
+/// anterior y se deshace sola.
+fn is_mode_unit(unit: &[JournalEntry]) -> bool {
+    !unit.is_empty()
+        && unit
+            .iter()
+            .all(|e| e.batch_id.is_some() && e.op == "mode_changed")
+}
+
+/// Deshace un lote de permisos: entrada a entrada, en LIFO, y lo que no se
+/// pueda se DICE (#315).
+///
+/// Al revés que un lote de renombrados, aquí «entero o nada» sería peor: los
+/// modos son independientes —ninguno depende de que otro haya vuelto ya— y un
+/// árbol de cien mil ficheros donde uno solo no se puede tocar volvería entero
+/// menos ése, que es exactamente lo que el lector quiere. El `Blocked` de un
+/// nodo detiene la SESIÓN igual que en cualquier otra unidad; lo que no hace es
+/// tirar los que ya volvieron.
+async fn revert_mode_batch(
+    provider: &dyn Provider,
+    journal: &Arc<SqliteJournal>,
+    unit: &[JournalEntry],
+    actor: &Actor,
+    cancel: &CancellationToken,
+    report: &Mutex<UndoReport>,
+) -> Result<Reverted, Error> {
+    // TODAS las entradas del lote tienen que vivir en el mismo provider, y se
+    // comprueba antes de tocar nada. Sin esto, un `batch_id` con rutas de dos
+    // hosts —que `fs.set_mode` acepta, porque resuelve un provider POR RUTA—
+    // hace que el llamante resuelva UN provider a partir de la primera entrada
+    // y ejecute las demás contra él: la política evaluó una máquina y el efecto
+    // cae en otra. Es la misma guarda que `revert_sync_batch` tiene y por el
+    // mismo motivo.
+    let Some(primera) = unit.first() else {
+        return Ok(Reverted::Accounted);
+    };
+    // Y NO `one_provider`, aunque la pregunta sea la misma: aquella mira
+    // también `reversal_ref` como si fuera una ruta, y en un `mode_changed` ese
+    // campo es el MODO anterior en ASCII decimal (`journal.rs`). Pasarlo por
+    // `wire` bloquearía cada lote de permisos con un `InvalidPath` que no
+    // significa nada.
+    let origen = match wire(&primera.path) {
+        Ok(p) => p,
+        Err(e) => return Ok(Reverted::blocked(primera.seq, e)),
+    };
+    for e in unit {
+        match wire(&e.path) {
+            Ok(p) if p.scheme() == origen.scheme() && p.authority() == origen.authority() => {}
+            Ok(_) => {
+                // Un lote con rutas de dos máquinas: el llamante resuelve UN
+                // provider a partir de la primera entrada, así que ejecutar
+                // aplicaría las demás contra otro host. La política evaluó una
+                // máquina y el efecto caería en otra.
+                return Ok(Reverted::blocked(e.seq, Error::InvalidPath));
+            }
+            Err(err) => return Ok(Reverted::blocked(e.seq, err)),
+        }
+    }
+    // El lote de la COMPENSACIÓN es propio: las entradas que este undo escribe
+    // son otra acción, y mezclarlas con el lote original haría que un segundo
+    // undo creyera que forman parte de él.
+    let batch = journal.journal().alloc_batch().await.ok();
+    // De la HOJA a la raíz: el recorrido de ida fue de arriba abajo, así que
+    // devolver primero el directorio podría dejarlo sin bit de ejecución con
+    // sus hijos todavía por revertir — y entonces no se llega a ellos. El
+    // orden no se hereda del `ORDER BY` de la consulta: se pone aquí, como
+    // hace `revert_sync_batch`.
+    let mut orden: Vec<&JournalEntry> = unit.iter().collect();
+    orden.sort_by_key(|e| std::cmp::Reverse(e.seq));
+    let mut hechas: u64 = 0;
+    let mut bloqueada: Option<Reverted> = None;
+    for entry in orden {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        match revert_entry(provider, journal, entry, actor, batch, cancel).await? {
+            Reverted::Done => hechas += 1,
+            // **NO es entero-o-nada**, al revés que un lote de renombrados: los
+            // modos son independientes —ninguno depende de que otro haya vuelto
+            // ya—, así que un árbol de cien mil ficheros donde uno no se puede
+            // tocar vuelve entero menos ése, que es lo que el lector quiere.
+            // Media permutación deshecha sí sería un estado inválido; media
+            // reversión de permisos no lo es.
+            otro => {
+                note_unreverted(report, &entry.path);
+                if bloqueada.is_none() {
+                    bloqueada = Some(otro);
+                }
+            }
+        }
+    }
+    // El recuento lo lleva ESTA función y no el llamante, que sumaría los
+    // miembros de la unidad entera: aquí cada nodo puede volver o no.
+    report.lock().expect("report lock sano").undone += hechas;
+    Ok(bloqueada.unwrap_or(Reverted::Accounted))
+}
+
 /// Revierte UNA unidad de undo, sea de la clase que sea.
 ///
 /// El único sitio donde se decide qué undo le toca a una unidad, y vive aquí
@@ -1054,6 +1156,9 @@ pub(crate) async fn revert_unit(
 ) -> Result<Reverted, Error> {
     if is_sync_unit(unit) {
         return revert_sync_batch(provider, journal, unit, actor, cancel, task_id, report).await;
+    }
+    if is_mode_unit(unit) {
+        return revert_mode_batch(provider, journal, unit, actor, cancel, report).await;
     }
     match unit.split_first() {
         // Unidad de una: el camino de siempre, intacto.

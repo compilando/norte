@@ -227,6 +227,10 @@ async fn main() -> Result<()> {
     // efectivo `dialog` ANTES de que se mueva al `Resolver` de abajo — igual
     // que `help_lines`, se reconstruyen en cada hot-reload OK.
     app.dialog_hints = DialogHints::build(&dialog_eff);
+    // #142: el acorde que devuelve los paneles, del MISMO efectivo y en el
+    // mismo momento que lo de arriba. Si un rebind no llegara aquí, la tecla
+    // que abre el subshell y la que lo cierra serían distintas.
+    app.subshell_chord = norte_frontend::subshell::detach_chord(&browse_eff);
     // Openers declarativos (#28): fuente de `pane.open` (F4).
     app.openers = cfg.openers.clone();
     // `[ui] editor` (#133): el editor de norte, si la configuración nombra

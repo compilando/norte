@@ -317,6 +317,10 @@ pub async fn run(
             // «no guardes lo que estoy decidiendo», y aquí ya no se está
             // decidiendo nada — se está saliendo, y lo que hay que guardar es
             // dónde se estaba.
+            // El subshell muere CON norte (#142), y lo hace por el `Drop` de
+            // `Subshell` y no aquí: el bucle también sale por `RunError`, y un
+            // cierre que solo cubriera esta rama dejaría un shell huérfano
+            // justo cuando la terminal se rompió.
             drain_notices(app, &mut session_push);
             let last = (!app.session.detached)
                 .then(|| capture_session(app, &mut session_push))

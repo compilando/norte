@@ -95,6 +95,26 @@
     "why": "ESC embebido en nombre UTF-8 válido: inyección ANSI en cualquier frontend que imprima sin enmascarar (ls del CLI, logs, títulos de terminal) — el display debe enmascarar Cc, jamás pasarlo crudo"
   },
   {
+    "id": "readline_kill_line",
+    "hex": "1569642023",
+    "why": "0x15 es `unix-line-discard` de readline: un nombre que solo se ENTRECOMILLA vacía igualmente la línea en la que se le metió, y lo que venga detrás pasa a ser una orden. El byte jamás llega al parser del shell, así que la comilla no lo puede defender — hay que codificarlo (#142)"
+  },
+  {
+    "id": "readline_beginning_of_line",
+    "hex": "0169642023",
+    "why": "0x01 es `beginning-of-line`: el resto del nombre se inserta DELANTE de la orden que norte tecleó, no dentro de sus comillas (#142)"
+  },
+  {
+    "id": "readline_backspace_run",
+    "hex": "7f7f7f7f7f7f7f6964",
+    "why": "0x7f es `backward-delete-char`: una tirada de ellos borra hacia atrás el `cd -- '` que abría el entrecomillado (#142)"
+  },
+  {
+    "id": "control_bel",
+    "hex": "610762",
+    "why": "BEL es legal en un nombre y es el terminador que norte eligió para su propio marcador de cwd: cualquier protocolo que lleve una ruta cruda hasta un BEL trunca este nombre a 'a' (#142). El display además debe enmascararlo como cualquier Cc"
+  },
+  {
     "id": "arrow_join_spoof",
     "hex": "6120e28692206d656d5f622e747874",
     "why": "'a → mem_b.txt': contiene el joiner visual '→' (U+2192, legítimo, no enmascarable) — un nombre simula DOS rutas en cualquier UI que concatene con separador in-band; etiquetar fuera de banda (posición/estilo), jamás por joiner"

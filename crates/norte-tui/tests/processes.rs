@@ -223,6 +223,7 @@ fn tarea(id: u64, kind: norte_proto::TaskKind, current: &str) -> norte_core::bac
         entries_total: None,
         current: Some(vp(current)),
         unreadable: None,
+        unvisited: None,
     };
     // El emisor se suelta: `watch` conserva el último valor publicado, que es
     // lo único que este test mira.

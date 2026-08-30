@@ -544,6 +544,19 @@ pub(crate) fn approval_modal_text(
             &[("mode", &norte_frontend::chmod::format_mode(mode))],
         ));
     }
+    // #315: y el ALCANCE, que sin esta línea el humano tampoco veía. Un
+    // recursivo sobre una raíz se preguntaba como «1 ruta», y lo que se
+    // aprobaba eran todos sus descendientes — el mismo agujero que el modo
+    // vino a cerrar, una talla más grande.
+    if req.detail.recursive {
+        lines.push(match req.detail.dir_mode {
+            Some(dir) => ta(
+                "modal-approval-recursive-dirs",
+                &[("mode", &norte_frontend::chmod::format_mode(dir))],
+            ),
+            None => t("modal-approval-recursive"),
+        });
+    }
     let limit = norte_frontend::MODAL_ITEM_LIMIT;
     for (i, p) in req.paths.iter().take(limit).enumerate() {
         let (text, hostile) = display_name(p.as_bytes());

@@ -494,10 +494,16 @@ pub enum Modal {
     },
 }
 
-/// Tope de caracteres del patrón de [`Modal::MarkPattern`] (#103 T9 review
-/// MINOR): en `chars()`, no bytes — igual criterio que [`crate::app::DETAIL_MAX_CHARS`],
-/// un carácter multibyte cuenta una vez.
-pub const MARK_PATTERN_MAX_CHARS: usize = 256;
+/// Tope de caracteres de un campo de TEXTO de esta pantalla: el patrón de
+/// [`Modal::MarkPattern`], un nombre, una instrucción, una plantilla.
+///
+/// En `chars()`, no bytes — igual criterio que
+/// [`crate::app::DETAIL_MAX_CHARS`], un carácter multibyte cuenta una vez.
+///
+/// Se llamaba `TEXT_FIELD_MAX_CHARS` porque nació con el patrón de marcado
+/// (#103), y para cuando lo compartían nueve modales el nombre decía de dónde
+/// venía en vez de qué mide (#121).
+pub const TEXT_FIELD_MAX_CHARS: usize = 256;
 
 /// Borra el último CARÁCTER de un texto en forma WIRE.
 ///
@@ -540,7 +546,7 @@ pub(crate) fn pop_wire_char(s: &mut String) {
 
 /// Tope de caracteres del destino de [`Modal::TransferDest`].
 ///
-/// APARTE de [`MARK_PATTERN_MAX_CHARS`] y mucho mayor, porque lo que se mide
+/// APARTE de [`TEXT_FIELD_MAX_CHARS`] y mucho mayor, porque lo que se mide
 /// aquí NO es un patrón sino una dirección en forma WIRE, que va
 /// porcentualmente codificada: un byte inválido cuesta tres caracteres, así
 /// que la fixture `name_max_255_invalid_tail` ocupa 765 en UN solo segmento y
@@ -746,7 +752,7 @@ impl Modal {
                 pattern,
                 error,
                 None,
-                MARK_PATTERN_MAX_CHARS,
+                TEXT_FIELD_MAX_CHARS,
                 OverLimit::Silent,
                 PopMode::Char,
             ),
@@ -759,7 +765,7 @@ impl Modal {
                 name,
                 error,
                 Some(touched),
-                MARK_PATTERN_MAX_CHARS,
+                TEXT_FIELD_MAX_CHARS,
                 OverLimit::Silent,
                 PopMode::Char,
             ),
@@ -778,7 +784,7 @@ impl Modal {
                 name,
                 error,
                 None,
-                MARK_PATTERN_MAX_CHARS,
+                TEXT_FIELD_MAX_CHARS,
                 OverLimit::Silent,
                 PopMode::Char,
             ),
@@ -804,7 +810,7 @@ impl Modal {
                 command,
                 error,
                 None,
-                MARK_PATTERN_MAX_CHARS,
+                TEXT_FIELD_MAX_CHARS,
                 OverLimit::Say,
                 PopMode::Char,
             ),
@@ -812,7 +818,7 @@ impl Modal {
                 instruction,
                 error,
                 None,
-                MARK_PATTERN_MAX_CHARS,
+                TEXT_FIELD_MAX_CHARS,
                 OverLimit::Silent,
                 PopMode::Char,
             ),
@@ -820,7 +826,7 @@ impl Modal {
                 query,
                 error,
                 None,
-                MARK_PATTERN_MAX_CHARS,
+                TEXT_FIELD_MAX_CHARS,
                 OverLimit::Silent,
                 PopMode::Char,
             ),
@@ -981,12 +987,12 @@ mod tests {
     #[test]
     fn el_tope_de_la_linea_de_comandos_se_dice() {
         let mut m = Modal::CommandLine {
-            command: "x".repeat(MARK_PATTERN_MAX_CHARS),
+            command: "x".repeat(TEXT_FIELD_MAX_CHARS),
             error: None,
         };
         m.text_prompt().expect("campo").push('y');
         let tp = m.text_prompt().expect("campo");
-        assert_eq!(tp.text().chars().count(), MARK_PATTERN_MAX_CHARS);
+        assert_eq!(tp.text().chars().count(), TEXT_FIELD_MAX_CHARS);
         assert!(tp.error().is_some(), "el tope de la línea se dice");
     }
 

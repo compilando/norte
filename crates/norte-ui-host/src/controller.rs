@@ -11787,12 +11787,26 @@ impl Estado {
         if consulta.trim().is_empty() {
             // Una consulta vacía no sale del proceso: no significa nada, y
             // lo que sale va a un proveedor externo.
+            //
+            // El mensaje es el MISMO que el de la terminal (#122). Antes era
+            // `err-empty-pattern`, que es el de buscar por nombre y dice «uno
+            // vacío casa el árbol entero» — falso aquí: una consulta semántica
+            // vacía no casa nada, no hay con qué comparar. Dos frontends
+            // negando lo mismo por dos motivos distintos, y uno de ellos
+            // inventado.
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
-                "err-empty-pattern",
+                "modal-semantic-empty-query",
             )));
+            // Y el campo VUELVE, que es la otra mitad de la paridad: la
+            // terminal deja el modal abierto con el error debajo, así que un
+            // mensaje pidiendo escribir una consulta sobre una pantalla sin
+            // dónde escribirla no era una negativa, era un callejón. El campo
+            // estaba vacío, así que no se pierde nada al rehacerlo.
+            let (_, mut fuera) = self.pedir_consulta_semantica();
             let cambio = ViewChange::Status(self.status.clone());
-            return vec![self.parche(vec![cambio])];
+            fuera.push(self.parche(vec![cambio]));
+            return fuera;
         }
         self.epoca_busqueda += 1;
         let epoca = self.epoca_busqueda;
@@ -11974,11 +11988,31 @@ impl Estado {
             .filter_map(|e| e.path.file_name().map(|s| s.as_bytes().to_vec()))
             .collect();
         self.ia_en_vuelo = Some((epoca, dir.clone(), nombres));
+        // Lo MARCADO, si hay marcas (#121): un plan sobre cinco ficheros no
+        // puede mandar los mil del directorio al proveedor. Los nombres que no
+        // son UTF-8 se quedan fuera —el wire los lleva como texto y el engine
+        // los rechaza fail-loud antes de enviar nada—, así que marcarlos y
+        // pedir un plan es pedirlo sobre los demás, no sobre el directorio
+        // entero.
+        // `marked_entries` y NO `marked_paths`: el segundo cae al cursor
+        // cuando no hay marcas, y aquí eso convertiría «sin marcar nada» —que
+        // significa el directorio entero— en «este fichero suelto».
+        let marcados: Vec<String> = self
+            .hueco()
+            .pane
+            .marked_entries()
+            .iter()
+            .filter_map(|e| e.path.file_name())
+            .filter_map(|s| String::from_utf8(s.as_bytes().to_vec()).ok())
+            .collect();
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let res = (tokio::time::timeout(PLAZO_IA, backend.ai_rename_plan(dir, instruccion))
-                .await)
+            let res = (tokio::time::timeout(
+                PLAZO_IA,
+                backend.ai_rename_plan(dir, instruccion, marcados),
+            )
+            .await)
                 .unwrap_or(Err(Error::ProviderUnavailable { retryable: true }));
             let _ = buzon
                 .send(Mensaje::Fondo(Box::new(Fondo::PlanIa(
@@ -13101,7 +13135,7 @@ impl Estado {
     /// AQUÍ, con el sujeto — entre líneas de rutas, una ruta puede suplantar
     /// cualquier otra línea, y esta es la mitad de la decisión.
     fn sujeto_de_aprobacion(&self, req: &norte_proto::methods::PolicyApprovalRequired) -> String {
-        match req.detail.mode {
+        let base = match req.detail.mode {
             Some(mode) => norte_i18n::ta_in(
                 self.lang,
                 "modal-approval-op-mode",
@@ -13111,7 +13145,22 @@ impl Estado {
                 ],
             ),
             None => req.op.clone(),
+        };
+        // #315: y el ALCANCE. Un recursivo sobre una raíz llega con
+        // `paths_total = 1`, así que sin esto la pregunta decía «set-mode
+        // sobre 1 ruta» y lo aprobado era el árbol entero.
+        if !req.detail.recursive {
+            return base;
         }
+        let cola = match req.detail.dir_mode {
+            Some(dir) => norte_i18n::ta_in(
+                self.lang,
+                "modal-approval-recursive-dirs",
+                &[("mode", &norte_frontend::chmod::format_mode(dir))],
+            ),
+            None => norte_i18n::t_in(self.lang, "modal-approval-recursive"),
+        };
+        format!("{base} {cola}")
     }
 
     /// Abre el diálogo de una op de agente que espera decisión.
@@ -13922,6 +13971,12 @@ impl Estado {
         let params = norte_proto::methods::FsSetModeParams {
             paths: targets,
             mode,
+            // La ventana todavía no ofrece el recursivo (#315): su diálogo es
+            // un campo de texto y esto es una casilla. Va a `false` explícito
+            // y no por defecto para que el día que aparezca la casilla no haya
+            // que buscar dónde se decidía.
+            recursive: false,
+            dir_mode: None,
         };
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();

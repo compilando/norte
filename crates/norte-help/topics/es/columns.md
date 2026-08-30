@@ -134,6 +134,18 @@ leer, el cambio se hace igual y el diario lo apunta como lo que es: algo sin
 vuelta atrás.
 
 Solo donde hay permisos POSIX: en un directorio local o en un host SSH sí, en un
-bucket de objetos o dentro de un `.zip` no hay nada que cambiar, y se dice. No
-es recursivo: cambia exactamente las entradas que le des, y una carpeta cambia
-la suya, no la de lo que tiene dentro.
+bucket de objetos o dentro de un `.zip` no hay nada que cambiar, y se dice.
+
+Por defecto cambia exactamente las entradas que le des: una carpeta cambia la
+suya, no la de lo que tiene dentro. Con **`-R`** delante del modo baja por el
+árbol, como el `chmod` de siempre. Y como el `chmod` de siempre tiene el mismo
+pie de bala: `-R 644` le quita el bit de ejecución a las carpetas, y en una
+carpeta sin ese bit no se puede ni entrar. Por eso puedes dar **dos modos**,
+`-R 644,755`: el primero para los ficheros y el segundo para las carpetas. Un
+segundo modo sin `-R` no significa nada y se te dice.
+
+Un árbol muy grande se corta en un tope y norte dice cuántos nodos no llegó a
+visitar, en vez de cambiar la mitad sin avisar. Los enlaces no se tocan tampoco
+aquí dentro: `chmod` seguiría el enlace, y lo que se cambiaría es un fichero que
+puede estar en cualquier otro sitio. Todo lo que sí cambia entra en el diario
+como UNA acción, así que deshacer devuelve el árbol entero.

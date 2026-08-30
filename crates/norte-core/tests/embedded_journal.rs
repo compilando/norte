@@ -935,6 +935,8 @@ async fn toda_mutacion_pasa_por_el_gate_del_journal() {
                 .set_mode(norte_proto::methods::FsSetModeParams {
                     paths: vec![vp("mem:///d/a.txt")],
                     mode: 0o600,
+                    recursive: false,
+                    dir_mode: None,
                 })
                 .await
                 .map(|_| ()),
@@ -1454,6 +1456,8 @@ async fn toda_task_que_muta_fija_su_veredicto() {
         .set_mode(norte_proto::methods::FsSetModeParams {
             paths: vec![vp("mem:///d/f0.txt"), vp("mem:///d/f1.txt")],
             mode: 0o600,
+            recursive: false,
+            dir_mode: None,
         })
         .await
         .expect("set_mode");

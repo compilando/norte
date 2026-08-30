@@ -38,6 +38,7 @@ impl ProgressReporter {
             entries_total: None,
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (tx, rx) = watch::channel(initial.clone());
         (

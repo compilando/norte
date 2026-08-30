@@ -56,17 +56,36 @@ pub(crate) fn is_text_candidate(path: &VPath, size: Option<u64>) -> bool {
 /// el resultado no es finito (cinturón: un `NaN` serializado por `serde_json`
 /// se vuelve `null` y envenena la respuesta entera en el cliente — el score
 /// del wire es SIEMPRE finito).
+///
+/// Sin llamantes fuera de los tests desde #122 —la búsqueda pasa la norma ya
+/// hecha—, y se queda porque es la DEFINICIÓN contra la que se comprueba que
+/// el atajo no cambió ningún score.
+#[cfg(test)]
 pub(crate) fn cosine(a: &[f32], b: &[f32]) -> Option<f32> {
+    let na: f32 = a.iter().map(|x| x * x).sum();
+    cosine_prenormed(a, na.sqrt(), b)
+}
+
+/// [`cosine`] con la norma de `a` YA calculada (#122).
+///
+/// La búsqueda semántica puntúa la MISMA query contra cada vector guardado, y
+/// recalcular su norma por fila era un tercio de las multiplicaciones del
+/// barrido entero. El llamante ya la tiene: la calcula antes, para rechazar un
+/// vector de query de norma cero.
+///
+/// `norm_a` se pasa como raíz, no como cuadrado, porque es lo que entra en el
+/// denominador — que una de las dos raíces esté hecha y la otra no es la mitad
+/// del ahorro y toda la confusión.
+pub(crate) fn cosine_prenormed(a: &[f32], norm_a: f32, b: &[f32]) -> Option<f32> {
     if a.len() != b.len() || a.is_empty() {
         return None;
     }
-    let (mut dot, mut na, mut nb) = (0.0f32, 0.0f32, 0.0f32);
+    let (mut dot, mut nb) = (0.0f32, 0.0f32);
     for (x, y) in a.iter().zip(b) {
         dot += x * y;
-        na += x * x;
         nb += y * y;
     }
-    let denom = na.sqrt() * nb.sqrt();
+    let denom = norm_a * nb.sqrt();
     // `>` es falso para 0.0 y para NaN: ambos casos ⇒ None.
     if denom > 0.0 {
         let s = dot / denom;
@@ -74,6 +93,82 @@ pub(crate) fn cosine(a: &[f32], b: &[f32]) -> Option<f32> {
     } else {
         None
     }
+}
+
+/// Un hit con su puntuación, ordenable, para el montículo acotado de la
+/// búsqueda semántica (#122).
+///
+/// `Ord` ES el orden del RESULTADO —score descendente y, a igualdad, path
+/// ascendente—, o sea que «mejor» es `Less`. Justo por eso `BinaryHeap`, que
+/// es un max-heap y saca el MAYOR, saca el PEOR de los `k` guardados: el único
+/// contra el que hay que comparar cada candidato nuevo. No hace falta
+/// invertir nada, y hacerlo —como estaba— pone el mejor en la cima y va
+/// tirando los buenos uno a uno.
+///
+/// El desempate por path no es cosmético: sin él, dos ficheros con el mismo
+/// score salían en el orden en que `SQLite` los devolviera, y una búsqueda
+/// repetida podía contestar dos listas distintas.
+#[derive(Debug, Clone)]
+pub(crate) struct Puntuado {
+    pub score: f64,
+    pub path: norte_proto::VPath,
+}
+
+impl Puntuado {
+    /// El orden del RESULTADO: mejor primero.
+    fn mejor_primero(&self, otro: &Self) -> std::cmp::Ordering {
+        otro.score
+            .total_cmp(&self.score)
+            .then_with(|| self.path.cmp(&otro.path))
+    }
+}
+
+impl PartialEq for Puntuado {
+    fn eq(&self, otro: &Self) -> bool {
+        self.mejor_primero(otro) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for Puntuado {}
+
+impl Ord for Puntuado {
+    fn cmp(&self, otro: &Self) -> std::cmp::Ordering {
+        // Sin invertir: ver la nota del tipo.
+        self.mejor_primero(otro)
+    }
+}
+
+impl PartialOrd for Puntuado {
+    fn partial_cmp(&self, otro: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(otro))
+    }
+}
+
+/// Los `k` mejores de `candidatos`, en orden de resultado, en memoria O(k).
+///
+/// Antes se puntuaba todo a un `Vec` del largo del índice, se ordenaba entero
+/// y se truncaba a `k <= 100`. El montículo hace la misma cuenta guardando
+/// como mucho `k`, que es lo que se va a devolver.
+pub(crate) fn mejores_k(
+    candidatos: impl Iterator<Item = Puntuado>,
+    k: usize,
+) -> Vec<(norte_proto::VPath, f64)> {
+    let mut monton: std::collections::BinaryHeap<Puntuado> =
+        std::collections::BinaryHeap::with_capacity(k);
+    for c in candidatos {
+        if monton.len() < k {
+            monton.push(c);
+        } else if let Some(peor) = monton.peek()
+            && c.mejor_primero(peor) == std::cmp::Ordering::Less
+        {
+            // `Less` en el orden del resultado = MEJOR que el peor guardado.
+            monton.pop();
+            monton.push(c);
+        }
+    }
+    let mut fuera = monton.into_vec();
+    fuera.sort_unstable_by(Puntuado::mejor_primero);
+    fuera.into_iter().map(|p| (p.path, p.score)).collect()
 }
 
 /// Recorta `k` al rango del wire `[1, INDEX_SEMANTIC_MAX_K]`
@@ -182,6 +277,18 @@ async fn flush_batch(
             expected = batch.len(),
             got = vectors.len(),
             "index.embed: el proveedor devolvió un número de vectores inesperado"
+        );
+        return Err(Error::ProviderUnavailable { retryable: false });
+    }
+    // Misma clase de mentira que la de arriba, y por eso la misma taxonomía
+    // (#122): un vector de dimensión 0 no puntúa contra nada, pero guardado
+    // deja el fichero MARCADO como embebido —su hash coincide— y ningún
+    // `index.embed` posterior lo reintenta. `upsert_embedding` lo rechaza
+    // también, por si algún día alguien escribe por otro camino.
+    if let Some(i) = vectors.iter().position(Vec::is_empty) {
+        tracing::warn!(
+            file_id = batch.get(i).map(|(id, _, _)| *id),
+            "index.embed: el proveedor devolvió un vector de dimensión 0"
         );
         return Err(Error::ProviderUnavailable { retryable: false });
     }
@@ -354,6 +461,76 @@ mod tests {
         assert!(cosine(&q, &[0.0, 0.0]).is_none());
         // no finito ⇒ None (cinturón: jamás un score NaN en el wire)
         assert!(cosine(&q, &[f32::NAN, 0.0]).is_none());
+    }
+
+    /// La norma prehecha da EXACTAMENTE lo mismo que calcularla dentro: si no,
+    /// el ahorro habría cambiado los scores del wire.
+    #[test]
+    fn la_norma_prehecha_no_cambia_el_score() {
+        let q = [0.3f32, -1.7, 2.0];
+        let n = q.iter().map(|x| x * x).sum::<f32>().sqrt();
+        for v in [
+            &[1.0f32, 0.0, 0.0][..],
+            &[0.0, 1.0, 0.0][..],
+            &[-2.0, 4.0, 0.5][..],
+        ] {
+            assert_eq!(cosine(&q, v), cosine_prenormed(&q, n, v), "{v:?}");
+        }
+        // Y los rechazos siguen siendo rechazos.
+        assert!(cosine_prenormed(&q, n, &[1.0, 0.0]).is_none());
+        assert!(cosine_prenormed(&q, n, &[0.0, 0.0, 0.0]).is_none());
+        assert!(cosine_prenormed(&q, n, &[f32::NAN, 0.0, 0.0]).is_none());
+    }
+
+    fn puntuado(path: &str, score: f64) -> Puntuado {
+        Puntuado {
+            score,
+            path: vp(path),
+        }
+    }
+
+    /// El montículo devuelve lo mismo que ordenar entero y truncar, que es lo
+    /// que hacía antes: la memoria baja, el resultado no se mueve.
+    #[test]
+    fn el_monticulo_da_los_mismos_k_que_ordenar_entero() {
+        let todos = vec![
+            puntuado("mem:///c.txt", 0.10),
+            puntuado("mem:///a.txt", 0.90),
+            puntuado("mem:///d.txt", 0.50),
+            puntuado("mem:///b.txt", 0.99),
+            puntuado("mem:///e.txt", -0.20),
+        ];
+        let salida = mejores_k(todos.iter().cloned(), 3);
+        assert_eq!(
+            salida.iter().map(|(p, _)| p.to_wire()).collect::<Vec<_>>(),
+            ["mem:///b.txt", "mem:///a.txt", "mem:///d.txt"]
+        );
+        // Pedir más de los que hay devuelve todos, ordenados igual.
+        assert_eq!(mejores_k(todos.into_iter(), 100).len(), 5);
+    }
+
+    /// A igualdad de score manda el PATH, y por eso la respuesta no depende
+    /// del orden en que `SQLite` devuelva las filas.
+    #[test]
+    fn a_igual_score_el_orden_es_estable() {
+        let a = vec![
+            puntuado("mem:///z.txt", 0.5),
+            puntuado("mem:///a.txt", 0.5),
+            puntuado("mem:///m.txt", 0.5),
+        ];
+        let mut al_reves = a.clone();
+        al_reves.reverse();
+        let uno = mejores_k(a.into_iter(), 2);
+        let otro = mejores_k(al_reves.into_iter(), 2);
+        assert_eq!(uno, otro);
+        assert_eq!(uno[0].0.to_wire(), "mem:///a.txt");
+    }
+
+    /// `k = 0` no puede llegar aquí (`clamp_k` lo sube a 1), pero el
+    /// montículo no debe explotar si algún día llega.
+    #[test]
+    fn k_cero_no_devuelve_nada() {
+        assert!(mejores_k([puntuado("mem:///a.txt", 1.0)].into_iter(), 0).is_empty());
     }
 
     #[test]

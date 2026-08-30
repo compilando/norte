@@ -210,6 +210,10 @@ pub struct Falso {
     pub retraso_ia_ms: u64,
     /// Las instrucciones que se pidieron, en orden.
     pub instrucciones: std::sync::Mutex<Vec<String>>,
+    /// Los NOMBRES que viajaron con cada plan (#121): vacío = el directorio
+    /// entero. Es lo que permite comprobar que marcar cinco ficheros no manda
+    /// los mil del directorio al proveedor.
+    pub nombres_ia: std::sync::Mutex<Vec<Vec<String>>>,
     /// El veredicto que contesta `fs.rename_batch_plan`. `None` = falla.
     pub veredicto: Option<norte_proto::methods::FsRenameBatchPlanResult>,
     /// Las parejas con las que se pidió el veredicto, en orden.
@@ -382,6 +386,7 @@ impl Falso {
             entries_total: None,
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx);
@@ -431,6 +436,7 @@ impl Falso {
             entries_total: Some(1),
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -616,6 +622,7 @@ impl HostBackend for Falso {
                 entries_total: None,
                 current: None,
                 unreadable: None,
+                unvisited: None,
             });
             tokio::spawn(async move {
                 let entradas: Vec<norte_proto::Entry> = hallazgos
@@ -653,6 +660,7 @@ impl HostBackend for Falso {
                     entries_total: Some(1),
                     current: None,
                     unreadable: None,
+                    unvisited: None,
                 });
                 // El emisor vive lo que la task: soltarlo cierra el canal y
                 // eso ES el final de la búsqueda.
@@ -763,6 +771,7 @@ impl HostBackend for Falso {
             entries_total: None,
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         self.progresos
@@ -1000,6 +1009,7 @@ impl HostBackend for Falso {
             entries_total: None,
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -1060,6 +1070,7 @@ impl HostBackend for Falso {
             entries_total: None,
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -1126,6 +1137,7 @@ impl HostBackend for Falso {
             entries_total: None,
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -1196,6 +1208,7 @@ impl HostBackend for Falso {
             entries_total: Some(params.paths.len() as u64),
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (_tx, rx) = tokio::sync::watch::channel(progreso);
         Box::pin(async move {
@@ -1237,6 +1250,7 @@ impl HostBackend for Falso {
             entries_total: Some(params.paths.len() as u64),
             current: None,
             unreadable: Some(0),
+            unvisited: None,
         };
         let (_tx, rx) = tokio::sync::watch::channel(progreso);
         Box::pin(async move {
@@ -1261,6 +1275,7 @@ impl HostBackend for Falso {
             entries_total: Some(1),
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (_tx, rx) = tokio::sync::watch::channel(progreso);
         Box::pin(async move {
@@ -1294,6 +1309,7 @@ impl HostBackend for Falso {
             entries_total: Some(1),
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(vivo.clone());
         tokio::spawn(async move {
@@ -1451,11 +1467,15 @@ impl HostBackend for Falso {
         &self,
         _dir: VPath,
         instruction: String,
+        names: Vec<String>,
     ) -> BoxFuture<'static, Result<norte_proto::methods::AiRenamePlanResult, Error>> {
         self.instrucciones
             .lock()
             .expect("instrucciones")
             .push(instruction);
+        // Los nombres que viajaron (#121): es lo que permite ver que un plan
+        // pedido sobre cinco ficheros no manda los mil del directorio.
+        self.nombres_ia.lock().expect("nombres_ia").push(names);
         let plan = self.plan_ia.clone();
         let retraso = self.retraso_ia_ms;
         Box::pin(async move {
@@ -1509,6 +1529,7 @@ impl HostBackend for Falso {
             entries_total: Some(1),
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx.clone());
@@ -1598,6 +1619,7 @@ impl HostBackend for Falso {
             entries_total: Some(1),
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx);
@@ -1681,6 +1703,7 @@ impl HostBackend for Falso {
             entries_total: None,
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progreso);
         *self.progreso.lock().expect("progreso") = Some(tx);

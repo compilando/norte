@@ -201,11 +201,20 @@ pub async fn resolve_and_build(
     config_dir: std::path::PathBuf,
 ) -> Result<norte_ai::SharedAiProvider, String> {
     let key = format!("ai:{}", cfg.name);
+    // Un FALLO al resolver el secreto no es «no hay secreto» (#122, INFO de la
+    // revisión de seguridad de IA-2). Tragárselo construía un proveedor SIN
+    // credencial y la petición salía igual: contra un endpoint que no exige
+    // autenticación —un proxy interno, un `openai-compat` mal configurado— eso
+    // manda los nombres del directorio del lector a un sitio al que nadie
+    // autorizó a hablar. Y contra uno que sí la exige, el error que el lector
+    // ve es un 401 del proveedor en vez del keyring bloqueado que lo causó.
+    //
+    // `Ok(None)` sí es «no hay secreto», y eso es legítimo: ollama y cualquier
+    // modelo local no piden ninguno.
     let secret = norte_connect::SecretResolver::new(config_dir)
         .resolve(&key, &key)
         .await
-        .ok()
-        .flatten();
+        .map_err(|e| format!("no se pudo resolver el secreto de «{}»: {e}", cfg.name))?;
     build_provider(cfg, secret)
 }
 
@@ -221,10 +230,19 @@ pub async fn resolve_and_build(
 /// inexistente en `[ai.providers]` (distinto de "sin configurar", que es
 /// silencio — los embeddings son opt-in). `None` = instalado o no
 /// configurado.
+//
+// Instrumentada (#122, convención del repo para funciones efectivas del core):
+// instala estado global del engine y toca el keyring, y sin traza el arranque
+// no dice por qué la búsqueda semántica no responde. El nombre del proveedor
+// es configuración del usuario, no bytes suyos, así que va en el span; el
+// secreto JAMÁS (regla 10).
+#[tracing::instrument(skip_all, fields(provider))]
 pub async fn install_embed_provider(engine: &crate::Engine, config: &AiConfig) -> Option<String> {
     if let Some(pcfg) = config.embed_provider_config().cloned() {
+        tracing::Span::current().record("provider", pcfg.name.as_str());
         match resolve_and_build(&pcfg, crate::connect::config_dir()).await {
             Ok(p) => {
+                tracing::info!("proveedor de embeddings instalado");
                 engine.set_ai_embed_provider(p);
                 None
             }

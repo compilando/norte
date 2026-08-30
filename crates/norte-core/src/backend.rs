@@ -201,6 +201,7 @@ impl TaskRef {
 ///     entries_done: 0,
 ///     entries_total: None,
 ///     unreadable: None,
+///     unvisited: None,
 ///     current: None,
 /// });
 /// let task = TaskRef::synthetic_for_tests(TaskId::new(7), rx);
@@ -1187,21 +1188,28 @@ impl Backend {
     /// del gate de IA (off, local-only, denied prefix);
     /// [`Error::ProviderUnavailable`] (retryable) al agotar el timeout;
     /// taxonomía del protocolo para fallos del proveedor.
+    /// `names` son los basenames MARCADOS (#121). Vacío = el directorio
+    /// entero, que es lo que este método hacía: con la selección de primera
+    /// clase, pedir un plan sobre cinco ficheros mandaba los mil del
+    /// directorio al proveedor.
     pub async fn ai_rename_plan(
         &self,
         dir: &VPath,
         instruction: &str,
+        names: &[String],
     ) -> Result<norte_proto::methods::AiRenamePlanResult, Error> {
         match self {
             Self::Embedded(engine) => {
-                let plan =
-                    tokio::time::timeout(AI_CALL_TIMEOUT, engine.ai_rename_plan(dir, instruction))
-                        .await
-                        .map_err(|_| Error::ProviderUnavailable { retryable: true })??;
+                let plan = tokio::time::timeout(
+                    AI_CALL_TIMEOUT,
+                    engine.ai_rename_plan_for(dir, instruction, names),
+                )
+                .await
+                .map_err(|_| Error::ProviderUnavailable { retryable: true })??;
                 Ok(crate::ai::ai_plan_to_proto(plan))
             }
             #[cfg(unix)]
-            Self::Remote(r) => r.ai_rename_plan(dir, instruction).await,
+            Self::Remote(r) => r.ai_rename_plan(dir, instruction, names).await,
         }
     }
 
@@ -2796,6 +2804,7 @@ mod observer_tests {
             entries_total: None,
             current: None,
             unreadable: None,
+            unvisited: None,
         });
         // El emisor se devuelve para que el test lo retenga vivo: un `watch`
         // sin emisor no es lo que este test observa.
@@ -2834,6 +2843,7 @@ mod observer_tests {
             entries_total: None,
             current: None,
             unreadable: None,
+            unvisited: None,
         });
         let task = TaskRef::synthetic_for_tests(TaskId::new(9), rx);
         let observador = task.observer();

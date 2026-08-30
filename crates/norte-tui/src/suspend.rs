@@ -178,6 +178,163 @@ pub async fn run_suspended(
     suspension_outcome(child, waited, restored)
 }
 
+/// Le CEDE la terminal al subshell persistente hasta que el lector la pida de
+/// vuelta con el mismo acorde (#142).
+///
+/// Devuelve el directorio en el que el shell quedó, si lo anunció y es otro:
+/// el panel lo sigue, que es la mitad de por qué un subshell no es un
+/// scrollback.
+///
+/// # Cómo se reparten las teclas
+///
+/// Hay UN solo lector de la terminal —el de crossterm, el que la TUI ya usa— y
+/// las teclas se TRADUCEN a los bytes que un shell espera
+/// ([`crate::subshell::tecla_a_bytes`]). Un hilo leyendo `/dev/tty` en crudo
+/// habría sido más fiel y habría dejado ese hilo bloqueado dentro de un `read`
+/// al soltar el shell, comiéndose la siguiente tecla del lector: la que ya era
+/// para los paneles.
+///
+/// El raw mode se queda PUESTO mientras dura: sin él la línea la cocina el
+/// terminal y el shell no ve una tecla hasta el Enter — ni edición de línea,
+/// ni Ctrl+C, ni historial.
+///
+/// # Bloquea
+///
+/// SÍNCRONA a propósito, y hay que llamarla desde
+/// [`tokio::task::block_in_place`]: el bucle de abajo se queda dentro toda la
+/// sesión de shell —minutos, si el lector dejó un `make` corriendo— haciendo
+/// I/O bloqueante sobre la terminal. Un `async fn` que nunca cede sería la
+/// regla 2 con otra firma, y sin `block_in_place` se llevaría por delante el
+/// hilo del executor: las tasks de fondo (los drenadores paginados, el
+/// watcher) dejarían de avanzar mientras el shell está delante.
+///
+/// # Errors
+/// Lo que falle al ceder o recuperar la terminal, o al escribir la salida del
+/// shell.
+// POSIX, como el módulo `subshell` entero (ver `lib.rs`).
+#[cfg(unix)]
+pub fn attach_subshell(
+    terminal: &mut tty::Tui,
+    capture: &mut mouse::Capture,
+    sub: &mut crate::subshell::Subshell,
+    dir: &std::path::Path,
+    acorde: norte_frontend::keymap::Chord,
+) -> std::io::Result<Option<std::path::PathBuf>> {
+    use crossterm::event::{Event, poll, read};
+    use std::io::Write as _;
+
+    let mouse_on = capture.active();
+    // El handle a la terminal de control se abre ANTES de ceder nada
+    // (`run_suspended` hace lo mismo, y por lo mismo): entre `suspend_terminal`
+    // y `resume_terminal` no puede salirse, y un `?` aquí dejaba la pantalla
+    // alternativa cerrada, el ratón suelto y el raw mode puesto, con el bucle
+    // repintando encima del scrollback del lector.
+    let mut salida = tty::open_controlling_terminal()?;
+    if let Err(e) = suspend_terminal(terminal, capture) {
+        let _ = resume_terminal(terminal, capture, mouse_on);
+        return Err(e);
+    }
+    // Raw mode OTRA VEZ, que `suspend_terminal` lo quita: aquí no se lanza un
+    // programa que se quede la terminal, se le pasan las teclas a mano.
+    let raw = crossterm::terminal::enable_raw_mode();
+    // El tamaño puede haber cambiado con los paneles delante, y el shell no se
+    // enteró: sus programas a pantalla completa pintarían sobre una geometría
+    // que ya no existe hasta que alguien redimensionara ESTANDO dentro.
+    if let Ok(tam) = crossterm::terminal::size() {
+        sub.redimensionar(tam);
+    }
+    // El punto de partida es dónde ESTÁ EL PANEL, no dónde estaba el shell: al
+    // entrar se le manda ahí, así que comparar con su posición anterior daba
+    // «cambió» —y un relistado del panel a donde ya estaba— en cada Ctrl+O.
+    let antes = Some(dir.to_path_buf());
+    // El shell SIGUE al panel al entrar. Es la otra mitad del seguimiento —la
+    // de vuelta la hace quien llama con lo que esto devuelve. Puede NEGARSE
+    // (una línea a medias, un `vim` delante): ver `Subshell::ir_a`.
+    let _ = sub.ir_a(dir);
+    let resultado = (|| -> std::io::Result<()> {
+        loop {
+            // El plazo corto es lo que hace que la salida del shell aparezca
+            // mientras nadie teclea: sin él, un `make` no se vería avanzar
+            // hasta la siguiente tecla.
+            if poll(std::time::Duration::from_millis(20))? {
+                match read()? {
+                    // El acorde se compara CANÓNICO (`Chord`), no como evento
+                    // crudo: el que ata `app.toggle-panels` sale del keymap, y
+                    // dos eventos crossterm distintos —`KeyEventKind`, el
+                    // `shift` que un `Char` ya lleva dentro— son el mismo
+                    // acorde. Comparando eventos, la tecla de salir dependía
+                    // de si el terminal manda repeticiones.
+                    Event::Key(k)
+                        if k.kind == crossterm::event::KeyEventKind::Press
+                            && crate::keymap::chord_from_crossterm(k.modifiers, k.code)
+                                == Some(acorde) =>
+                    {
+                        return Ok(());
+                    }
+                    Event::Key(k) => {
+                        if k.kind == crossterm::event::KeyEventKind::Press
+                            && let Some(bytes) = crate::subshell::tecla_a_bytes(&k)
+                        {
+                            let _ = sub.escribir(&bytes);
+                        }
+                    }
+                    // El shell tiene que saber el tamaño nuevo o pinta sobre
+                    // una pantalla que no existe.
+                    Event::Resize(w, h) => sub.redimensionar((w, h)),
+                    // Un pegado SÍ llega, aunque el ratón no: el argumento de
+                    // «un shell no lo pide» se cae en cuanto el shell tiene un
+                    // `vim` delante, que sí lo pidió — y el pegado se perdía
+                    // entero, sin error y sin dejar la mitad.
+                    Event::Paste(texto) => {
+                        let _ = sub.escribir(texto.as_bytes());
+                    }
+                    _ => {}
+                }
+            }
+            let pendiente = sub.drenar();
+            if !pendiente.is_empty() {
+                salida.write_all(&pendiente)?;
+                salida.flush()?;
+            }
+            if sub.muerto() {
+                return Ok(());
+            }
+        }
+    })();
+    // La restauración pasa SIEMPRE, como en `run_suspended`: el error del
+    // bucle se propaga detrás.
+    if raw.is_ok() {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+    let vuelta = resume_terminal(terminal, capture, mouse_on);
+    resultado?;
+    vuelta?;
+    // Solo si CAMBIÓ: devolver el mismo directorio haría que cada Ctrl+O
+    // relistara el panel para nada.
+    //
+    // La comparación NORMALIZA, aunque lo que se devuelve son los bytes de
+    // verdad (pitfall de macOS, CLAUDE.md). `$PWD` es la cadena que el shell
+    // recibió en el `cd`, no una re-lectura del disco: en macOS un lector que
+    // teclea `cd ~/Documentos/café` deja un `$PWD` en NFC mientras el `VPath`
+    // que norte sacó del `readdir` de ese mismo directorio está en NFD. Byte a
+    // byte no coinciden nunca, así que cada Ctrl+O relistaba —y dejaba el
+    // panel con un `VPath` que ni el historial, ni los favoritos, ni las
+    // marcas reconocen como el de antes.
+    let ahora = sub.cwd();
+    let clave = |p: &Option<std::path::PathBuf>| {
+        use std::os::unix::ffi::OsStrExt as _;
+        p.as_ref().map(|p| {
+            norte_encoding::name_key(p.as_os_str().as_bytes(), norte_encoding::FoldMode::None)
+                .into_owned()
+        })
+    };
+    Ok(if clave(&ahora) == clave(&antes) {
+        None
+    } else {
+        ahora
+    })
+}
+
 /// Cede la terminal: suelta el ratón, el bracketed paste, sale del raw mode y
 /// de la pantalla alternativa, en ese orden.
 ///
@@ -190,6 +347,7 @@ pub async fn run_suspended(
 /// síncrona a la terminal de control (`terminal.backend_mut()`, nunca
 /// stdout — ver `tty.rs`), misma exención puntual de la regla 2 que el resto
 /// de la suspensión.
+///
 /// # Errors
 ///
 /// Lo que devuelva crossterm al soltar la captura, al salir del raw mode o al
@@ -207,6 +365,13 @@ pub fn suspend_terminal(
     crossterm::execute!(
         terminal.backend_mut(),
         DisableBracketedPaste,
+        // El CURSOR también se devuelve, y no estaba (#142): `ratatui` lo
+        // esconde en cada frame que no fija una posición, y esta TUI no fija
+        // ninguna. La pantalla alternativa NO guarda ese estado, así que el
+        // programa de detrás heredaba un cursor invisible. Con el scrollback
+        // de antes no se notaba; en un shell donde se TECLEA es lo primero
+        // que se nota. El siguiente `draw` lo vuelve a esconder solo.
+        crossterm::cursor::Show,
         LeaveAlternateScreen
     )?;
     Ok(())

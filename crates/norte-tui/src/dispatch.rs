@@ -603,18 +603,15 @@ pub async fn dispatch(
             }
             Err(msg) => app.message = Some(msg),
         },
-        // Funciona en un pane remoto: no lanza nada ni mira el directorio —
-        // solo enseña la terminal anfitriona hasta la siguiente tecla. Eso es
-        // el SCROLLBACK, no el subshell vivo de mc: sin proceso persistente
-        // detrás no hay nada en lo que escribir (issue #142).
-        Command::AppTogglePanels => {
-            app.pending_shell = Some(crate::app::PendingShell {
-                argv: Vec::new(),
-                cwd: None,
-                wait_for_key: true,
-                check_regular: None,
-            });
-        }
+        // #142: el SUBSHELL de mc, no el scrollback. Aquí solo se PIDE; lo
+        // arranca —perezosamente, la primera vez— y le cede la pantalla el run
+        // loop, que es el dueño de la terminal. Mismo reparto que los tres de
+        // arriba y por la misma razón.
+        //
+        // A diferencia de `app.terminal`, el directorio NO se resuelve aquí:
+        // el shell ya existe entre una pulsación y la siguiente, y a dónde va
+        // se decide al cederle la terminal.
+        Command::AppTogglePanels => app.pending_subshell = true,
         // Solo abre el prompt; el `$SHELL -c` lo deja pendiente su Enter, en
         // el run loop (que es quien lee las teclas crudas de un modal de
         // texto libre). El guard de localidad se repite ahí — el directorio

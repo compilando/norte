@@ -486,6 +486,7 @@ fn task_progress_roundtrip() {
         entries_total: Some(3),
         current: Some(vpath("file:///a/b")),
         unreadable: None,
+        unvisited: None,
     };
     assert_eq!(roundtrip(&p), p);
 }
@@ -503,6 +504,7 @@ fn task_progress_unknown_totals() {
         entries_total: None,
         current: None,
         unreadable: None,
+        unvisited: None,
     };
     assert_eq!(roundtrip(&p), p);
 }
@@ -1102,7 +1104,11 @@ fn policy_types_roundtrip() {
         paths: vec!["file:///work/x".into()],
         paths_total: 9,
         ttl_ms: 30_000,
-        detail: norte_proto::methods::ApprovalDetail { mode: Some(0o755) },
+        detail: norte_proto::methods::ApprovalDetail {
+            mode: Some(0o755),
+            recursive: false,
+            dir_mode: None,
+        },
     };
     let back: PolicyApprovalRequired =
         serde_json::from_str(&serde_json::to_string(&ar).unwrap()).unwrap();
@@ -1251,10 +1257,17 @@ fn version_ventana_actual() {
     // dice nada, así que el JSON de las demás ops no cambia—, y la ventana se
     // desplaza porque contra un daemon 0.60 la pregunta de un `set-mode` no
     // puede decir QUÉ modo se va a fijar, que es la mitad de esa decisión.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.61.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.60.0"), "N-1");
+    // 0.62.0 (#315, #121): `recursive`/`dir_mode` en `fs.set_mode` y `names`
+    // en `ai.rename_plan`. Los tres son ALCANCE, no comprobaciones: un cliente
+    // 0.61 no los manda, así que cambia permisos sobre las rutas exactas —lo
+    // que ya esperaba— y pide el plan del directorio entero. Nada deja de
+    // comprobarse; lo que no se estrecha es el alcance, y la ventana se
+    // desplaza igual porque ese cliente no puede pedir ninguna de las dos
+    // cosas.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.62.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.61.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.59.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.60.9"),
         "N-2 fuera de la ventana"
     );
 }

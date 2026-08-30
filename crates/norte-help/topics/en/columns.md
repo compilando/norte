@@ -133,5 +133,16 @@ what it is: something with no way back.
 
 Only where POSIX permissions exist: a local directory or an SSH host, yes; an
 object bucket or the inside of a `.zip` has nothing to change, and it says so.
-It is not recursive: it changes exactly the entries you give it, and a folder
-changes its own, not that of what is inside it.
+By default it changes exactly the entries you give it: a folder changes its
+own, not that of what is inside it. Put **`-R`** in front of the mode and it
+walks the tree, like `chmod` always did. And like `chmod` always did, it carries
+the same foot-gun: `-R 644` takes the execute bit off folders, and a folder
+without that bit cannot even be entered. So you can give **two modes**,
+`-R 644,755`: the first for files, the second for folders. A second mode
+without `-R` means nothing, and it says so.
+
+A very large tree stops at a cap and norte says how many nodes it never
+reached, rather than changing half of it without a word. Symlinks are not
+touched in here either: `chmod` would follow the link, and what would change is
+a file that may be anywhere else. Everything that does change goes into the
+journal as ONE action, so undoing puts the whole tree back.

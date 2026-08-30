@@ -277,9 +277,19 @@ impl ApprovalResolver for DaemonApprovalResolver {
         // la op y las rutas SON la decisión. Un `set-mode` no, porque dos con
         // las mismas rutas y modos distintos significan cosas opuestas.
         let detail = match &req.op {
-            crate::policy::PolicyOp::SetMode { mode } => {
-                norte_proto::methods::ApprovalDetail { mode: Some(*mode) }
-            }
+            // #315: y con el ALCANCE, no solo el modo. Un recursivo sobre una
+            // raíz se preguntaba como «set-mode sobre 1 ruta» y lo que se
+            // aprobaba eran cien mil nodos: el mismo agujero que el modo vino
+            // a cerrar en 0.61, una talla más grande.
+            crate::policy::PolicyOp::SetMode {
+                mode,
+                recursive,
+                dir_mode,
+            } => norte_proto::methods::ApprovalDetail {
+                mode: Some(*mode),
+                recursive: *recursive,
+                dir_mode: *dir_mode,
+            },
             _ => norte_proto::methods::ApprovalDetail::default(),
         };
         let (tx, rx) = oneshot::channel();

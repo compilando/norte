@@ -10,9 +10,10 @@ A file manager you cannot leave is a file manager you stop using. Three
 commands hand the terminal back to you and take it again afterwards. The
 default keymaps bind none of them — the imported Krusader, Norton and Far
 presets do, and otherwise you reach them from the command palette or bind them
-yourself. All three work the same way: norte steps out of the way — alternate screen, raw mode and
-mouse capture all released — the program you asked for gets the whole
-terminal, and the panels come back when it is done.
+yourself. All three start the same way: norte steps out of the way — alternate screen, raw mode and
+mouse capture all released — and the program you asked for gets the whole
+terminal. What differs is how you come back: two of them wait for the program
+to finish; the third leaves a LIVE shell you return to with the same key.
 
 {{cmd:app.terminal}} opens your shell (`$SHELL`, or `/bin/sh` if that says
 nothing) in the **active pane's directory**. Quit the shell and you are back in
@@ -24,16 +25,41 @@ mean what they always mean; norte does not parse it. When the command
 finishes, its output stays on screen until you press a key, because output that
 vanishes under a redrawn listing may as well not have been printed.
 
-{{cmd:app.toggle-panels}} hides the panels and shows the terminal underneath
-until you press a key. It launches nothing, so it is the one of the three that
-works on a remote pane too.
+{{cmd:app.toggle-panels}} hides the panels and hands the terminal to a shell
+that **stays alive** behind them. Press it again and you are back in the
+listing; press it a third time and you are back in the same shell, with the
+history, the variables and the half-typed line you left there. It is the one of
+the three you can leave a `make` running in.
+
+The panel and that shell follow each other. Going in, the shell is sent to the
+active pane's directory; coming back, if you moved with `cd`, the panel goes
+where you ended up. The shell announces where it is by printing a marker in its
+prompt, which norte installs by typing it into the shell — no file of yours is
+touched, and the arrangement disappears with the shell. bash, zsh and fish are
+the three it knows how to set up; under any other shell the key still gives you
+the shell, but nothing follows anything.
+
+The shell is only sent somewhere when it is **idle at its prompt**. Leave a
+half-typed line, or a `make` running, or `vim` open, and norte types nothing —
+your line is still yours. That is why the shell sometimes does not follow the
+panel, and it is the safe direction: the alternative is norte appending a `cd`
+to a command you had decided not to run.
+
+It starts on the first press, not at launch: never press the key and no shell
+is ever forked. Type `exit` and the next press starts a fresh one. It dies when
+norte does.
+
+The key that brings the panels back is **the same one that gave them away**,
+which is why a preset has to bind {{cmd:app.toggle-panels}} to a single key. A
+key sequence cannot serve: its first chord belongs to the shell you are typing
+in. Bound to a sequence, the command says so and hands over nothing, rather
+than handing over the terminal with no way back.
 
 # What it is not
 
-{{cmd:app.toggle-panels}} shows the terminal's **scrollback**, not a live
-shell. mc keeps a subshell alive behind its panels and types into it; norte
-does not. What you see is what was already there. Issue #142 tracks the real
-thing.
+The shell is a shell, not a norte pane. It knows nothing about marks, and
+{{cmd:app.terminal}} is still the one to reach for when you want a shell that
+ends when you leave it.
 
 Suspension also hands over the whole terminal, and norte can only put back
 what it took: the alternate screen, raw mode and the mouse capture. A program
@@ -57,7 +83,7 @@ cleanly, so avoid it.
 
 # Not every pane has a shell
 
-{{cmd:app.terminal}} and {{cmd:pane.command-line}} need a real directory on
+All three need a real directory on
 this machine, so they decline on an SFTP host, an S3 bucket or the inside of an
 archive, and say which pane they are talking about. A shell opened "there"
 would silently be somewhere else — your home directory, most likely — and that

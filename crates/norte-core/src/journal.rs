@@ -1762,7 +1762,12 @@ impl crate::observer::MutationObserver for SqliteJournal {
             // un undo que pondría un modo que nadie tuvo. El modo NUEVO va en
             // `path_to` para que el diario se pueda leer sin adivinar qué se
             // puso.
-            Mutation::ModeChanged { path, from, to } => (
+            Mutation::ModeChanged {
+                path,
+                from,
+                to,
+                batch,
+            } => (
                 "mode_changed",
                 path.to_wire().into_bytes(),
                 Some(to.to_string().into_bytes()),
@@ -1772,7 +1777,9 @@ impl crate::observer::MutationObserver for SqliteJournal {
                     Reversal::Irreversible
                 },
                 from.map(|m| m.to_string().into_bytes()),
-                None,
+                // El lote de un recursivo (#315): n entradas que fueron UNA
+                // acción del humano.
+                *batch,
             ),
         };
         // El error se PROPAGA (regla 4): la op no se considera completa si su

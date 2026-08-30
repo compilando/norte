@@ -498,8 +498,16 @@ impl App {
             return None;
         };
         let (texto, paths) = (mode.clone(), targets.clone());
-        match norte_frontend::chmod::parse_mode(&texto) {
-            Ok(mode) => Some(norte_proto::methods::FsSetModeParams { paths, mode }),
+        // El campo admite la forma de `chmod` (#315): `755`, `-R 755` o
+        // `-R 644,755` —ficheros y directorios—, en vez de una tecla aparte
+        // dentro de un campo donde todas las teclas son texto.
+        match norte_frontend::chmod::parse_request(&texto) {
+            Ok(req) => Some(norte_proto::methods::FsSetModeParams {
+                paths,
+                mode: req.mode,
+                recursive: req.recursive,
+                dir_mode: req.dir_mode,
+            }),
             Err(e) => {
                 self.chmod_set_error(norte_i18n::t(e.message_key()));
                 None

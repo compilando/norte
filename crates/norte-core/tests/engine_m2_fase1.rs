@@ -87,7 +87,10 @@ impl MutationObserver for RecordingObserver {
             }
             // #314: con el modo ANTERIOR dentro, que es lo que la reversa
             // necesita y lo único que un observador no puede reconstruir.
-            Mutation::ModeChanged { path, from, to } => format!(
+            // El lote (#315) NO entra en la representación: lo que estos
+            // tests miran es qué mutación se emitió, y meter el id haría que
+            // cada expectativa dependiera de cuántos lotes hubo antes.
+            Mutation::ModeChanged { path, from, to, .. } => format!(
                 "mode:{}:{}>{to:o}",
                 path.display_lossy(),
                 from.map_or_else(|| "?".to_owned(), |m| format!("{m:o}")),

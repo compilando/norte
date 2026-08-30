@@ -614,9 +614,18 @@ body {
   unicode-bidi: isolate;
 }
 
+/* Un nombre largo se PARTE, no se corta (#122). La terminal recorta con
+   elipsis MEDIA (46/46/44) para que la cola sobreviva; aquí no había recorte
+   ninguno, así que el div cortaba por la derecha y sin marca: dos nombres que
+   comparten un prefijo largo se pintaban idénticos en la única pantalla donde
+   el lector decide si aprueba el renombrado. `anywhere` porque un nombre de
+   fichero no tiene puntos de corte de palabra, y `pre-wrap` para que una
+   tirada de espacios —que es parte del nombre— siga viéndose. */
 .ai-rename-from,
 .ai-rename-to {
   unicode-bidi: isolate;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 /* El destino, en su propia línea y con su propio color: separarlo del origen

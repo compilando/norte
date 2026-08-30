@@ -28,6 +28,10 @@ msg-approval-unknown = approval { $id } is not from this daemon (did it restart?
 msg-dialog-dropped = too many open dialogs: the oldest one was dropped
 modal-approval-body = agent "{ $session }" requests { $op }:
 modal-approval-mode = permissions: { $mode }
+# #315: the SCOPE. Without these two lines a recursive change over a root was
+# asked as "1 path" and what got approved was the whole tree.
+modal-approval-recursive = and EVERYTHING inside it!
+modal-approval-recursive-dirs = and EVERYTHING inside it! (folders: { $mode })
 # The window joins it with the op: its dialog has ONE subject field.
 modal-approval-op-mode = { $op } { $mode }
 modal-approval-path = { $badge }path { $n }: { $path }
@@ -497,10 +501,23 @@ msg-shell-failed = could not run { $program }: { $error }
 # over 260 characters) — and `CreateProcessW` does not accept that namespace.
 # Stripping it would silently open the child somewhere else.
 msg-shell-cwd-unsupported = { $path } cannot be a program's working directory on this system
-# Printed on the HOST terminal after a suspension that waits (`Ctrl+O`, and
-# after a command line runs): the panels are gone and this is the only thing
-# telling the reader norte is still there.
+# Printed on the HOST terminal after a suspension that waits (after a command
+# line runs): the panels are gone and this is the only thing telling the reader
+# norte is still there.
 msg-shell-press-key = [norte] press any key to return
+# `app.toggle-panels` hands the terminal to a LIVE shell (#142), and the key
+# that takes the panels back is the same one that gave them away. A preset that
+# binds the command to a SEQUENCE leaves no such key — its first chord belongs
+# to the shell, where the reader is typing — so the terminal is not handed over
+# at all rather than handed over with no way back.
+msg-subshell-no-key = bind app.toggle-panels to a single key to use the shell: a key sequence cannot bring the panels back
+# The subshell is POSIX: a pty, a `cd`, and prompt hooks for bash/zsh/fish.
+# Windows gets a refusal rather than a half-working feature.
+msg-subshell-not-here = the live shell behind the panels is not available on this system
+# The shell said where it is and norte could not go there. The path is NOT
+# interpolated: it is what the shell printed, and a follow that sometimes does
+# not happen without saying so is indistinguishable from one that is broken.
+msg-subshell-bad-cwd = the shell reported a directory norte cannot open; the panel stayed where it was
 # The GUI's `app.terminal` (§E): nothing on this desktop answered, so say what
 # was tried instead of doing nothing.
 # `$configured` is the user's own $TERMINAL and `$tried` is norte's own
@@ -901,9 +918,16 @@ modal-split-hint = 4096, 10M, 700M · pieces land in the other panel · Enter sp
 # "1 entries". The code picks, because the code knows how many there are.
 modal-chmod-one = Permissions of 1 entry
 modal-chmod = Permissions of { $n } entries
-modal-chmod-hint = in octal (755, 0644, 4755) · Enter applies · Esc cancels
+modal-chmod-hint = in octal (755) · "-R 755" walks the tree · "-R 644,755" gives folders their own · Enter applies
 msg-chmod-not-octal = that is not an octal mode: three or four digits from 0 to 7
 msg-chmod-too-big = that number is beyond the permission bits: 7777 at most
+# #315: two modes without `-R` mean nothing — without walking the tree there
+# are no folders to apply the second one to.
+msg-chmod-dir-mode-needs-recursive = the folder mode only means something with "-R"
+# #121: if everything marked has a name that is not text, the list of names
+# would travel empty — and empty means "the whole directory", the opposite of
+# what was asked.
+msg-ai-rename-marks-not-text = what you marked are not text names: the plan is not asked about that
 msg-chmod-started = changing the permissions of { $n }…
 msg-chmod-partial = { $n } could not be changed (a symlink, or not yours)
 msg-pack-read-only = that panel is read-only: nothing can be written there

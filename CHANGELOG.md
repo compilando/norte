@@ -9,6 +9,36 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A real subshell behind the panels** (#142, ADR 0084). `app.toggle-panels`
+  used to release the terminal and show whatever the host's scrollback already
+  held; the help topic had a section called "What it is not" pointing at this
+  issue. Now the key hands the terminal to a shell that STAYS ALIVE behind the
+  panels: press it again to come back, a third time to return to the same
+  shell, with its history, its variables and the half-typed line still there.
+  It is the one of the three shell commands you can leave a `make` running in.
+  The panel and the shell follow each other — going in, the shell is sent to
+  the active pane's directory; coming back, a `cd` moves the panel. The shell
+  says where it is by printing a private OSC marker in its prompt, which norte
+  installs by TYPING it into the shell (bash, zsh and fish): no file of yours
+  is touched, a `PROMPT_COMMAND` already there is kept — array or string, which
+  bash 5.1 made a real distinction — and the lines are hidden from your
+  history. The marker carries a per-session secret, so a file whose *contents*
+  contain that escape sequence cannot steer your panel by being `cat`-ed. The
+  path travels as bytes end to end, so a directory whose name is not UTF-8, or
+  contains a BEL, or is called `; rm -rf ~`, is a directory: what norte types
+  into the shell is only ever digits and quotes, because a pty is read by a
+  line editor, where a byte like `0x15` is not text but "erase this line" — an
+  ordinary directory name could otherwise have run a command. The `cd` is typed
+  only when the shell is idle at its prompt, so a half-written line, a running
+  build or an open editor is left alone rather than having a `cd` appended to
+  it. The shell starts on the first press and never before, is replaced rather
+  than resurrected once you `exit` it, and dies with norte however norte
+  leaves. The key that brings the panels back is the one that gave them away,
+  read from the keymap: a preset that binds the command to a key SEQUENCE gets
+  a refusal instead, because the first chord of a sequence belongs to the shell
+  you are typing in. One change of behaviour: it now declines on a remote pane,
+  which the scrollback version did not have to, and on Windows, where there is
+  no pty to hand over.
 - **Every listing carries a `..` row** (`[ui] parent_entry`, on by default).
   The row an orthodox reader expects: the cursor lands on it and Enter goes up.
   It is never an OPERAND — `selected()` answers `None` over it, so the
@@ -387,8 +417,46 @@ independently through `PROTOCOL_VERSION`.
   and simply never asks; the reverse pairing does not exist, because a
   from-the-future client is refused outright at `initialize`.
 
+- **Permissions can be changed down a tree** (protocol 0.62.0, ADR 0083, #315).
+  `fs.set_mode` changed exactly the paths it was given: a folder changed its own
+  mode and not that of what it contains, which is the hole ADR 0081 left open on
+  purpose. The terminal's field now takes `chmod`'s own grammar — `755`,
+  `-R 755`, or `-R 644,755` — and the second mode is the one folders get,
+  because `chmod -R 644` over a tree makes it unusable: without the execute bit
+  you cannot even enter a directory. Absent, everything gets the same mode,
+  which is what `chmod -R` does and what breaks trees. The walk stops at a cap
+  and SAYS how many nodes it never reached rather than truncating in silence,
+  and the entries it writes share a batch id — a hundred thousand journal
+  entries nobody can join back together read as a hundred thousand actions where
+  the human did one. Undoing that batch is not all-or-nothing, unlike a rename
+  batch: modes are independent, so a tree where one file cannot be touched goes
+  back except that one. The approval an agent's `set-mode` raises now carries
+  the SCOPE as well as the mode: a recursive change over one root arrived as
+  "set-mode over 1 path" while what was being approved was every descendant —
+  the same hole `ApprovalDetail::mode` closed in 0.61, one size larger. Both
+  frontends say it in the loudest form their surface has.
+- **The AI rename plan is asked about what you MARKED** (protocol 0.62.0,
+  #121). With first-class selection, marking five files and asking for a plan
+  sent the directory's thousand names to the provider — more than the human
+  pointed at, and the AI gate exists precisely to bound what leaves the machine.
+  Marking nothing still means the whole directory. A marked name that is no
+  longer in the listing is ignored rather than refusing the plan: between
+  marking and asking, a file can be gone.
+
 ### Fixed
 
+- **Semantic search stopped materialising the whole index to answer** (#122).
+  It scored every stored vector into a second full-length list, sorted all of
+  it, and threw away everything past the hundred asked for; now a bounded heap
+  keeps only those, and the query's own norm is computed once instead of once
+  per file. Ties break by path, so the same question gets the same answer twice
+  instead of whatever order SQLite happened to return. `index.embed`'s
+  pre-check asks "is there anything to embed?" rather than building the entire
+  candidate list to look at its length, and a provider that returns a
+  zero-dimension vector is refused instead of stored — stored, it marked the
+  file as embedded and no later run would retry it. An impossible negative size
+  now reads as "unknown" on both read paths rather than "empty file" on one of
+  them.
 - **A rename that only changes the spelling was refused — and with
   `Overwrite` it destroyed the file** (#274). On a folding volume (APFS, NTFS,
   exFAT, an ext4 `+F`) `Foo.txt` and `foo.txt` are the same node, and norte

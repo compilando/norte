@@ -65,6 +65,17 @@ pub enum Mutation<'a> {
         from: Option<u32>,
         /// El modo que se puso.
         to: u32,
+        /// Lote al que pertenece este cambio (#315): la etiqueta que agrupa
+        /// los n nodos de UN `fs.set_mode` recursivo. `None` para un cambio
+        /// suelto — que es todo lo que hay sin recursión.
+        ///
+        /// Existe por lo mismo que en [`Self::Renamed`]: sin ella, un chmod
+        /// sobre un árbol de cien mil ficheros deja cien mil entradas que
+        /// nadie puede volver a juntar, y una auditoría que las lea vería cien
+        /// mil acciones donde el humano hizo una. El undo funciona igual —es
+        /// LIFO y cada entrada lleva su reversa—; lo que el lote compra es
+        /// poder DECIR que fueron una.
+        batch: Option<i64>,
     },
 }
 

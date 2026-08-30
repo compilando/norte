@@ -2700,18 +2700,125 @@ pub(crate) async fn create_task(
 /// castigar al que marcó bien.
 ///
 /// La cancelación se mira por RUTA (regla 3): un `chmod` no se puede partir.
+/// Expande las raíces de un `set_mode` recursivo a la lista de nodos que se
+/// van a tocar, y dice cuántos quedaron SIN VISITAR por el tope (#315).
+///
+/// El orden es de arriba abajo —la raíz antes que su contenido— y eso importa:
+/// quitarle a un directorio el bit de ejecución antes de recorrerlo dejaría el
+/// resto del árbol inalcanzable a mitad de la operación. Con `dir_mode` a
+/// `755` no pasa; con el mismo modo para todo, sí, y es el pie de bala que la
+/// documentación nombra. Aun así se recorre entero ANTES de tocar nada, así
+/// que ese árbol se cambia completo y lo que queda inalcanzable es lo de
+/// después, no lo de este lote.
+///
+/// Un SYMLINK no se sigue: se añade como nodo y `set_mode` lo salta con su
+/// motivo. Seguirlo saldría del árbol que el humano señaló, que es lo que la
+/// ADR 0072 lleva entera diciendo.
+///
+/// Un directorio que no se puede listar no mata la operación: se cuenta como
+/// no visitado, como hace `dir_size`. Morirse en el `EACCES` de la hoja 40 000
+/// devolvería nada a cambio de todo el trabajo hecho.
+async fn expandir_arbol(
+    raices: Vec<(Arc<dyn Provider>, VPath)>,
+    ctx: &TaskCtx,
+) -> Result<(Vec<(Arc<dyn Provider>, VPath)>, u64), Error> {
+    let tope = usize::try_from(norte_proto::methods::SET_MODE_RECURSIVE_MAX).unwrap_or(usize::MAX);
+    let mut salida: Vec<(Arc<dyn Provider>, VPath)> = Vec::new();
+    let mut sin_visitar: u64 = 0;
+    let mut pendientes: std::collections::VecDeque<(Arc<dyn Provider>, VPath)> =
+        raices.into_iter().collect();
+    while let Some((provider, path)) = pendientes.pop_front() {
+        if ctx.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        if salida.len() >= tope {
+            // Lo que queda en la cola, DE UNA VEZ, y se corta. Contarlos uno a
+            // uno sacándolos daba la profundidad de la cola en el momento del
+            // corte y no lo que falta del árbol; y seguir sacando para contar
+            // recorre una lista que ya no se va a expandir.
+            sin_visitar = sin_visitar.saturating_add(
+                u64::try_from(pendientes.len().saturating_add(1)).unwrap_or(u64::MAX),
+            );
+            break;
+        }
+        // Un `stat` que falla NO se toca a ciegas (#315): sin él no se sabe si
+        // es un enlace, y `chmod(2)` sigue los enlaces — se cambiaría un
+        // fichero que puede estar fuera del árbol que el humano señaló. Se
+        // cuenta como no visitado y se sigue.
+        let Ok(entrada) = with_retry(&ctx.cancel, || provider.stat(&path).boxed()).await else {
+            sin_visitar = sin_visitar.saturating_add(1);
+            continue;
+        };
+        let dir = entrada.kind == EntryKind::Dir;
+        salida.push((Arc::clone(&provider), path.clone()));
+        if !dir {
+            continue;
+        }
+        match provider.list(&path).await {
+            Ok(mut stream) => {
+                while let Some(item) = stream.next().await {
+                    match item {
+                        Ok(e) => pendientes.push_back((Arc::clone(&provider), e.path)),
+                        // Una entrada ilegible del listado no tumba el
+                        // recorrido; se cuenta y se sigue.
+                        Err(_) => sin_visitar = sin_visitar.saturating_add(1),
+                    }
+                }
+            }
+            Err(Error::Cancelled) => return Err(Error::Cancelled),
+            Err(_) => sin_visitar = sin_visitar.saturating_add(1),
+        }
+    }
+    Ok((salida, sin_visitar))
+}
+
+pub(crate) struct SetModeOptions {
+    /// Los doce bits para lo que no es un directorio.
+    pub(crate) mode: u32,
+    /// Bajar por los directorios de lo pedido (#315).
+    pub(crate) recursive: bool,
+    /// El modo de los DIRECTORIOS. `None` = el mismo que el de los ficheros,
+    /// que es lo que hace `chmod -R` y lo que deja un árbol sin bit de
+    /// ejecución donde hacía falta.
+    pub(crate) dir_mode: Option<u32>,
+    /// El lote bajo el que se agrupan las entradas del diario cuando esto es
+    /// recursivo (#315). `None` = un cambio suelto, o un journal que no puede
+    /// dar ids de lote.
+    pub(crate) batch: Option<i64>,
+}
+
 pub(crate) async fn set_mode(
     paths: Vec<(Arc<dyn Provider>, VPath)>,
-    mode: u32,
+    opts: SetModeOptions,
     observer: Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
     let observer = crate::observer::pin_for_task(observer).await?;
+    // Con recursivo, lo pedido es la RAÍZ y no la lista: se expande antes de
+    // empezar para que el progreso diga cuántos son de verdad. Expandir sobre
+    // la marcha dejaría un total que sube mientras el lector lo mira, y el
+    // corte por tope no se podría decir hasta el final.
+    let (paths, sin_visitar) = if opts.recursive {
+        expandir_arbol(paths, ctx).await?
+    } else {
+        (paths, 0)
+    };
     let total = u64::try_from(paths.len()).unwrap_or(u64::MAX);
     ctx.progress.update(|p| {
         p.entries_total = Some(total);
         p.entries_done = 0;
     });
+    if sin_visitar > 0 {
+        // El tope se dice ANTES de tocar nada, y por su PROPIO campo: mezclarlo
+        // con `unreadable` hacía que el frontend dijera «no se pudieron
+        // cambiar (un enlace, o no es tuyo)» sobre nodos que ni se miraron.
+        ctx.progress.update(|p| p.unvisited = Some(sin_visitar));
+        tracing::warn!(
+            sin_visitar,
+            tope = norte_proto::methods::SET_MODE_RECURSIVE_MAX,
+            "fs.set_mode recursivo: el árbol se pasa del tope de nodos"
+        );
+    }
     let mut hechos: u64 = 0;
     let mut fallidas: u64 = 0;
     for (provider, path) in paths {
@@ -2737,6 +2844,15 @@ pub(crate) async fn set_mode(
             });
             continue;
         }
+        // El modo de un DIRECTORIO puede ser otro (#315): `chmod -R 644` sobre
+        // un árbol lo deja inutilizable —sin bit de ejecución no se entra— y
+        // `dir_mode` es la salida explícita a eso. Sin él, el mismo para todo.
+        let es_dir = matches!(&entrada, Ok(e) if e.kind == EntryKind::Dir);
+        let mode = if es_dir {
+            opts.dir_mode.unwrap_or(opts.mode)
+        } else {
+            opts.mode
+        };
         let anterior = crate::undo::modo_actual(provider.as_ref(), &path).await;
         match provider.set_mode(&path, mode).await {
             Ok(()) => {
@@ -2754,6 +2870,7 @@ pub(crate) async fn set_mode(
                             path: &path,
                             from: anterior,
                             to: quedo,
+                            batch: opts.batch,
                         },
                         &ctx.actor,
                     )

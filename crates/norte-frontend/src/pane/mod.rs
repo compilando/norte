@@ -1914,6 +1914,42 @@ mod tests {
         );
     }
 
+    /// El ancla es BYTE a BYTE, y con los dos gemelos de normalización
+    /// delante se ve por qué importa (#122).
+    ///
+    /// `é` en NFC (`c3a9`) y `é` en NFD (`65cc81`) se pintan igual y son dos
+    /// ficheros distintos. Un hit semántico —o cualquier otro `pending_focus`—
+    /// sobre el NFD tiene que aterrizar en el NFD. El día que alguien meta un
+    /// `nfc()` «de ayuda» en esta comparación, el cursor caerá en el otro
+    /// fichero: en macOS y en SMB, donde los dos conviven de verdad, eso es
+    /// abrir, copiar o borrar el que no era.
+    #[test]
+    fn el_ancla_distingue_los_gemelos_de_normalizacion() {
+        let nfc = "mem:///caf\u{e9}.txt";
+        let nfd = "mem:///cafe\u{301}.txt";
+        assert_ne!(
+            VPath::parse(nfc).unwrap().to_wire(),
+            VPath::parse(nfd).unwrap().to_wire(),
+            "los gemelos son DOS rutas: si esto falla, el test de abajo no prueba nada"
+        );
+        for buscado in [nfd, nfc] {
+            let mut p = pane(&["otro"]);
+            p.set_pending_focus(VPath::parse(buscado).unwrap());
+            p.set_listing(
+                VPath::parse("mem:///").unwrap(),
+                vec![e(nfc, EntryKind::File), e(nfd, EntryKind::File)],
+            );
+            // Por la RUTA de la fila y no por un índice: `set_listing`
+            // reordena, y un índice escrito a mano prueba el orden del
+            // sort, no el ancla.
+            assert_eq!(
+                p.entries()[p.cursor()].path.to_wire(),
+                VPath::parse(buscado).unwrap().to_wire(),
+                "el ancla de {buscado} cayó en el gemelo equivocado"
+            );
+        }
+    }
+
     /// `set_pending_focus` gana sobre la memoria y se consume una sola vez.
     #[test]
     fn pending_focus_gana_sobre_memoria_y_se_consume_una_vez() {

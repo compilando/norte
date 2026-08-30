@@ -298,6 +298,7 @@ impl TaskState {
 ///     // `None` = esta task no cuenta ilegibles; `Some(0)` sería «los cuenta
 ///     // y no hubo». Ver el campo.
 ///     unreadable: None,
+///     unvisited: None,
 /// };
 /// let json = serde_json::to_string(&p).unwrap();
 /// assert_eq!(serde_json::from_str::<TaskProgress>(&json).unwrap(), p);
@@ -350,4 +351,20 @@ pub struct TaskProgress {
     /// por segundo y por task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unreadable: Option<u64>,
+    /// Nodos que la task NO llegó a visitar porque el recorrido topó con su
+    /// tope (0.62.0, #315).
+    ///
+    /// Aparte de [`Self::unreadable`] y no sumado a él, aunque las dos cosas
+    /// signifiquen «esto no se hizo»: un ilegible es un permiso o un fichero
+    /// que se movió —cosas que el lector arregla— y esto es norte diciendo que
+    /// el árbol es más grande de lo que va a recorrer de una vez. Mezclarlos
+    /// hacía que un `set_mode` recursivo sobre un árbol enorme dijera «40 000
+    /// no se pudieron cambiar (un enlace, o no es tuyo)», que no es lo que
+    /// pasó, y `unreadable` lleva su propio contrato desde 0.53: un contador
+    /// que significara dos cosas según la task no lo podría leer nadie.
+    ///
+    /// Se omite cuando es `None`, que es el valor de toda task que no recorre
+    /// árboles con tope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unvisited: Option<u64>,
 }

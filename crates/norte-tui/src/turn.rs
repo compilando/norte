@@ -150,6 +150,27 @@ pub async fn drain_pending(
         }
     }
     if let Some(pending) = app.take_pending_shell() {
+        atender_suspension(app, backend, terminal, capture, events, work, pending).await;
+    }
+    if std::mem::take(&mut app.pending_subshell) {
+        atender_subshell(app, backend, terminal, capture, events, work).await;
+    }
+}
+
+/// Suspende la TUI para el programa que el despacho dejó pedido (#135).
+///
+/// Sale de [`drain_pending`] por tamaño, no por concepto: sigue siendo un
+/// drenaje de cabecera de vuelta y no debe llamarse desde ningún otro sitio.
+async fn atender_suspension(
+    app: &mut App,
+    backend: &Backend,
+    terminal: &mut tty::Tui,
+    capture: &mut mouse::Capture,
+    events: &mut EventStream,
+    work: &mut InFlight,
+    pending: crate::app::PendingShell,
+) {
+    {
         let crate::app::PendingShell {
             argv,
             cwd,
@@ -220,6 +241,145 @@ pub async fn drain_pending(
                 &mut work.search,
             );
         }
+    }
+}
+
+/// Le cede la terminal al subshell persistente (#142), arrancándolo si es la
+/// primera vez.
+///
+/// El shell se crea PEREZOSAMENTE y muere con la sesión: quien nunca pulsa la
+/// tecla no paga un `fork`, y quien la pulsa dos veces vuelve al mismo shell
+/// —con su historial y sus variables— que es la diferencia entera entre esto y
+/// el scrollback de antes.
+///
+/// POSIX (ADR 0084): en Windows no hay pty que ceder, así que la tecla
+/// DECLINA con el mismo mensaje que `app.terminal` sobre un pane remoto — que
+/// es la verdad, y era lo que la ADR prometía sin que nada lo cumpliera.
+#[cfg(not(unix))]
+#[allow(clippy::unused_async)] // misma firma que la de Unix: el llamante no bifurca.
+async fn atender_subshell(
+    app: &mut App,
+    _backend: &Backend,
+    _terminal: &mut tty::Tui,
+    _capture: &mut mouse::Capture,
+    _events: &mut EventStream,
+    _work: &mut InFlight,
+) {
+    app.message = Some(t("msg-subshell-not-here"));
+}
+
+#[cfg(unix)]
+async fn atender_subshell(
+    app: &mut App,
+    backend: &Backend,
+    terminal: &mut tty::Tui,
+    capture: &mut mouse::Capture,
+    events: &mut EventStream,
+    work: &mut InFlight,
+) {
+    // Sin acorde suelto no se cede la terminal: el lector no tendría con qué
+    // volver. Ver `detach_chord`.
+    let Some(acorde) = app.subshell_chord else {
+        app.message = Some(t("msg-subshell-no-key"));
+        return;
+    };
+    // Un pane REMOTO no tiene directorio local, y un shell local ahí sería un
+    // shell en otro sitio del que el panel enseña. Mismo veredicto y mismo
+    // mensaje que `app.terminal`.
+    let dir = match crate::gestures::shell_cwd(app) {
+        Ok(dir) => dir,
+        Err(msg) => {
+            app.message = Some(msg);
+            return;
+        }
+    };
+    // Un shell que MURIÓ (el lector escribió `exit`) se sustituye, no se
+    // resucita: el pty de un hijo muerto no acepta escrituras y la tecla
+    // habría dejado de funcionar para el resto de la sesión.
+    if work
+        .subshell
+        .as_mut()
+        .is_some_and(crate::subshell::Subshell::muerto)
+    {
+        work.subshell = None;
+    }
+    if work.subshell.is_none() {
+        let size = terminal.size().map_or((80, 24), |s| (s.width, s.height));
+        match crate::subshell::Subshell::arrancar(&dir, size) {
+            Ok(sub) => work.subshell = Some(sub),
+            Err(e) => {
+                app.message = Some(ta(
+                    "msg-shell-failed",
+                    &[
+                        ("program", "$SHELL"),
+                        ("error", &crate::app::detail_for_bar(&e.to_string())),
+                    ],
+                ));
+                return;
+            }
+        }
+    }
+    let Some(sub) = work.subshell.as_mut() else {
+        return;
+    };
+    // Auditoría: mismo criterio que la suspensión de arriba (design §D del
+    // #135). El journal no ve nada de esto a propósito, y la línea que el
+    // lector teclee no acaba en ningún fichero.
+    tracing::info!("TUI handed the terminal to its persistent subshell (not journalled)");
+    // `block_in_place` y no un `await`: ceder la terminal es I/O bloqueante que
+    // dura lo que dure la sesión de shell. Ver `attach_subshell`.
+    let cedida = tokio::task::block_in_place(|| {
+        crate::suspend::attach_subshell(terminal, capture, sub, &dir, acorde)
+    });
+    let destino = match cedida {
+        Ok(destino) => destino,
+        Err(e) => {
+            app.message = Some(ta(
+                "msg-shell-failed",
+                &[
+                    ("program", "$SHELL"),
+                    ("error", &crate::app::detail_for_bar(&e.to_string())),
+                ],
+            ));
+            None
+        }
+    };
+    // El panel SIGUE al shell: si el lector hizo `cd` ahí dentro, volver deja
+    // el panel donde él quedó. Es la otra mitad del seguimiento, y va por el
+    // cd de siempre (cancelable, con rastro), jamás por un `set_listing`.
+    if let Some(destino) = destino
+        && watch_refresh_allowed(app)
+    {
+        // Un fallo aquí NO se traga: el shell dijo dónde está y norte no ha
+        // podido ir, y un seguimiento que a veces no pasa sin decir nada es
+        // indistinguible de uno roto.
+        let Ok(vpath) = norte_vfs_local::vpath_from_native(&destino) else {
+            app.message = Some(t("msg-subshell-bad-cwd"));
+            return;
+        };
+        let outcome = cd(app, backend, events, vpath).await;
+        apply_cd(
+            &app.panes,
+            &mut work.fill,
+            &mut work.decorate,
+            &mut work.probed,
+            &mut work.search,
+            outcome,
+        );
+        return;
+    }
+    // Y si no se movió, lo que el shell haya tocado en disco se ve igual: por
+    // el mismo refresh cancelable que la suspensión, y con el mismo gate (un
+    // modal delante se comería la respuesta del lector).
+    if watch_refresh_allowed(app) {
+        let refreshed = refresh_panes(app, backend, events).await;
+        after_panes_refresh(
+            app,
+            refreshed,
+            &mut work.fill,
+            &mut work.probed,
+            &mut work.search,
+        );
     }
 }
 

@@ -737,6 +737,22 @@ pub struct App {
     /// antes del draw) para que ningún `continue` de los que responde teclas
     /// pueda dejarla encallada.
     pub pending_shell: Option<PendingShell>,
+    /// `app.toggle-panels` pidió el SUBSHELL (#142).
+    ///
+    /// Mismo reparto que [`Self::pending_shell`] y por lo mismo: el dueño de
+    /// la terminal —y del shell de larga vida— es el run loop, no el despacho.
+    /// Va aparte porque no es una suspensión: no se lanza nada, se le cede la
+    /// terminal a un proceso que YA existe y que sigue vivo al volver.
+    pub pending_subshell: bool,
+    /// El acorde que RECUPERA los paneles del subshell, PRECOMPUTADO del
+    /// keymap efectivo — mismo criterio que [`Self::dialog_hints`] y
+    /// `palette_rows`, y por lo mismo: el efectivo se muda al `Resolver`
+    /// compartido, así que lo que se derive de él se saca antes.
+    ///
+    /// `None` = el preset no ata `app.toggle-panels` a un acorde suelto, y
+    /// entonces no se cede la terminal: ver
+    /// [`norte_frontend::subshell::detach_chord`].
+    pub subshell_chord: Option<norte_frontend::keymap::Chord>,
     /// Bytes que hay que escribirle al EMULADOR de terminal, si los hay.
     ///
     /// Mismo reparto que [`Self::pending_shell`]: `dispatch` decide QUÉ y el
@@ -912,6 +928,8 @@ impl App {
             diff: None,
             pending_open: None,
             pending_shell: None,
+            pending_subshell: false,
+            subshell_chord: None,
             pending_osc52: None,
             dialog_hints: crate::hints::DialogHints::default(),
             help_chords: default_help_chords(),

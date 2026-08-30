@@ -280,6 +280,7 @@ mod has_active_tests {
             entries_total: None,
             current: None,
             unreadable: None,
+            unvisited: None,
         };
         let (_tx, rx) = tokio::sync::watch::channel(progress);
         TaskRef::synthetic_for_tests(TaskId::new(id), rx)
@@ -391,6 +392,7 @@ mod has_active_tests {
             entries_total: None,
             current,
             unreadable: None,
+            unvisited: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(progress(
             TaskState::Running,

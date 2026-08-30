@@ -28,6 +28,13 @@
         "instruction": {
           "description": "Instrucción del usuario.",
           "type": "string"
+        },
+        "names": {
+          "description": "Los basenames sobre los que se pide el plan, dentro de [`Self::dir`]\n(0.62.0, #121).\n\nVACÍO —y ausente— es el directorio entero, que es lo que hacía 0.61.\nCon la selección de primera clase (#103), marcar cinco ficheros y pedir\nun plan mandaba los mil del directorio al proveedor: más de lo que el\nhumano señaló, y el gate de IA existe justamente para acotar lo que\nsale de la máquina.\n\nSon NOMBRES BASE y no rutas: el plan es de un directorio, y una ruta\naquí abriría la puerta a pedir un plan sobre lo que está en otro. Un\nnombre que no esté en el listado se ignora — el listado manda, y\nrechazar el plan entero por una entrada que se borró entre marcar y\npedir sería castigar al lector por una carrera.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -55,6 +62,15 @@
     "ApprovalDetail": {
       "description": "Lo que la op AÑADE a la pregunta, cuando la op y las rutas no la contestan\n(0.61.0, #314).\n\nLa aprobación llevaba la op y las rutas, y para todas las demás eso ES la\ndecisión: aprobar «copiar estas doce» es aprobar copiar esas doce. Cambiar\npermisos es la primera op donde dos peticiones con la MISMA op y las MISMAS\nrutas significan cosas opuestas —`0600` y `4777`—, así que sin este campo el\nhumano no estaba consintiendo lo que cree. Es el mismo argumento que\n[`PolicyApprovalRequired::paths_total`] hace para el recuento.\n\nUn struct de campos opcionales y no un enum: así una op futura añade el suyo\nsin tocar lo que ya viaja, y un peer que no lo conozca lo ignora (ADR 0004).\nTodos los campos son OPCIONALES y solo de DISPLAY: la operación de verdad\nvive server-side ligada al `approval_id`, y nada de esto se reparsa.",
       "properties": {
+        "dir_mode": {
+          "description": "El modo que llevarán los DIRECTORIOS, si es otro (0.62.0, #315).\n\nVa aparte de [`Self::mode`] porque es otro permiso y sobre otras cosas:\naprobar `0644` sin ver que las carpetas se quedan en `0777` es aprobar\nla mitad de la pregunta.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "mode": {
           "description": "Los permisos que se van a fijar, en los doce bits de `chmod(2)`\n([`MODE_PERMISSION_BITS`]). Solo en un `set-mode`.",
           "format": "uint32",
@@ -63,6 +79,10 @@
             "integer",
             "null"
           ]
+        },
+        "recursive": {
+          "description": "El cambio baja por el ÁRBOL (0.62.0, #315). Solo en un `set-mode`.\n\nSin esto, `paths_total` miente por omisión: un recursivo sobre una raíz\nse preguntaba como «set-mode sobre 1 ruta», y lo que se aprobaba eran\ncien mil nodos. Es el mismo agujero que el campo [`Self::mode`] vino a\ncerrar en 0.61 — un humano que aprueba sin ver el alcance no está\nconsintiendo lo que cree.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2322,6 +2342,15 @@
     "FsSetModeParams": {
       "description": "Params de [`FS_SET_MODE`] (0.60.0, #314).\n\n```\nuse norte_proto::methods::FsSetModeParams;\nlet p: FsSetModeParams =\n    serde_json::from_str(r#\"{\"paths\":[\"file:///a.sh\"],\"mode\":493}\"#).expect(\"params\");\nassert_eq!(p.mode, 0o755);\n```",
       "properties": {
+        "dir_mode": {
+          "description": "El modo de los DIRECTORIOS, cuando difiere del de los ficheros\n(0.62.0, #315).\n\nExiste porque `chmod -R 644` sobre un árbol lo deja inutilizable: sin\nbit de ejecución, en un directorio no se puede ni entrar. Es la salida\nque toma el diálogo de KDE que Krusader usa — dos modos, explícitos, en\nvez de la `X` de `chmod`, que pide modos SIMBÓLICOS y este protocolo\nmanda el modo como número.\n\nAusente = el mismo [`Self::mode`] para todo, que es lo que hace\n`chmod -R` y lo que rompe árboles: se documenta el pie de bala en vez\nde inventar un modo que nadie pidió.\n\nSin [`Self::recursive`] no significa nada y se ignora: las rutas\npedidas llevan el modo que se pidió, sean lo que sean.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "mode": {
           "description": "Los doce bits de permiso, como los toma `chmod(2)`.\n\nVa como número y no como `rwxr-xr-x` porque el wire no es una interfaz:\nel texto es cosa de quien lo pinta, y dos escrituras del mismo permiso\nque comparasen distinto serían un bug esperando. Los bits por encima de\n`0o7777` son de CLASE de nodo y este método no los toca: se rechazan\n(`InvalidPath`), en vez de recortarse en silencio y cambiar el permiso\na algo que nadie pidió.",
           "format": "uint32",
@@ -2329,11 +2358,15 @@
           "type": "integer"
         },
         "paths": {
-          "description": "Las rutas a las que se les cambia el modo, tal cual se pidieron.\n\nSin recursión: son EXACTAMENTE estas. Un directorio cambia el suyo y no\nel de lo que tiene dentro.",
+          "description": "Las rutas a las que se les cambia el modo, tal cual se pidieron.\n\nSin [`Self::recursive`], son EXACTAMENTE estas: un directorio cambia el\nsuyo y no el de lo que tiene dentro.",
           "items": {
             "$ref": "#/$defs/VPath"
           },
           "type": "array"
+        },
+        "recursive": {
+          "description": "Bajar por los directorios de [`Self::paths`] y cambiar también lo que\nhay dentro (0.62.0, #315).\n\nAusente = `false`, que es lo que hacía 0.60: exactamente las rutas\npedidas. Un cliente que no lo manda obtiene el comportamiento que ya\nesperaba.\n\nEl recorrido tiene TOPE ([`SET_MODE_RECURSIVE_MAX`]) y lo que quede sin\nvisitar se DICE en el progreso, en vez de recortar en silencio: media\nselección cambiada sin avisar es lo que #311 y #314 rechazan en todas\npartes. Un symlink no se sigue ni se toca, dentro del árbol igual que\nfuera — `chmod(2)` sí lo seguiría, y el modo que se guardaría como\nreversa sería el del enlace.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -4965,7 +4998,7 @@
       "type": "object"
     },
     "TaskProgress": {
-      "description": "Snapshot de progreso de una Task (payload de la notificación `task.progress`).\n\nTotales `None` = aún desconocidos (walk en curso), jamás un 0 fingido.\nEl emisor coalesce; el último snapshot de una Task siempre lleva estado\nterminal y totales finales.\n\n```\nuse norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};\nlet p = TaskProgress {\n    task_id: TaskId::new(7),\n    kind: TaskKind::Copy,\n    state: TaskState::Running,\n    bytes_done: 512,\n    bytes_total: Some(4096),\n    entries_done: 0,\n    entries_total: Some(2),\n    current: None,\n    // `None` = esta task no cuenta ilegibles; `Some(0)` sería «los cuenta\n    // y no hubo». Ver el campo.\n    unreadable: None,\n};\nlet json = serde_json::to_string(&p).unwrap();\nassert_eq!(serde_json::from_str::<TaskProgress>(&json).unwrap(), p);\n```",
+      "description": "Snapshot de progreso de una Task (payload de la notificación `task.progress`).\n\nTotales `None` = aún desconocidos (walk en curso), jamás un 0 fingido.\nEl emisor coalesce; el último snapshot de una Task siempre lleva estado\nterminal y totales finales.\n\n```\nuse norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};\nlet p = TaskProgress {\n    task_id: TaskId::new(7),\n    kind: TaskKind::Copy,\n    state: TaskState::Running,\n    bytes_done: 512,\n    bytes_total: Some(4096),\n    entries_done: 0,\n    entries_total: Some(2),\n    current: None,\n    // `None` = esta task no cuenta ilegibles; `Some(0)` sería «los cuenta\n    // y no hubo». Ver el campo.\n    unreadable: None,\n    unvisited: None,\n};\nlet json = serde_json::to_string(&p).unwrap();\nassert_eq!(serde_json::from_str::<TaskProgress>(&json).unwrap(), p);\n```",
       "properties": {
         "bytes_done": {
           "description": "Bytes ya procesados.",
@@ -5025,6 +5058,15 @@
         },
         "unreadable": {
           "description": "Subárboles o entradas que la task NO pudo leer (0.53.0, #251).\n\n`None` = **quien lo emite no cuenta esto**, y `Some(0)` = lo cuenta y\nno hubo ninguno. La distinción no es cosmética y es la misma regla que\n[`crate::methods::Volume::total_bytes`] escribe para su caso: un cero\nque hace de desconocido se lee como una respuesta, y aquí la respuesta\nque fabricaría es la peligrosa. Un daemon 0.52 no emite el campo; si\nesto fuera `u64`, un cliente 0.53 leería `0` y pintaría un total\n«seguro» que no lo es.\n\nLo que lo hace necesario es `fs.dir_size`: contaba los subárboles\nilegibles en un contador LOCAL, emitía un `tracing::info!` y nada más,\nasí que un árbol del que la mitad daba `EACCES` reportaba `Completed`\ncon un total confiado y equivocado — y el método existe para contestar\n«¿cabe esto en el destino?», donde un número silenciosamente pequeño\nes la dirección peligrosa.\n\nCon esto, un cliente pinta «al menos X» en vez de «X». Es el gemelo\ndel `confidence` que `fs.compare` le da a cada fila, y por el mismo\nmotivo: un recuento sin él no puede decir que es una cota inferior.\n\nSe omite cuando es `None`, que es el valor de toda task que no cuenta\nilegibles — o sea casi todas, y un `task.progress` viaja muchas veces\npor segundo y por task.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "unvisited": {
+          "description": "Nodos que la task NO llegó a visitar porque el recorrido topó con su\ntope (0.62.0, #315).\n\nAparte de [`Self::unreadable`] y no sumado a él, aunque las dos cosas\nsignifiquen «esto no se hizo»: un ilegible es un permiso o un fichero\nque se movió —cosas que el lector arregla— y esto es norte diciendo que\nel árbol es más grande de lo que va a recorrer de una vez. Mezclarlos\nhacía que un `set_mode` recursivo sobre un árbol enorme dijera «40 000\nno se pudieron cambiar (un enlace, o no es tuyo)», que no es lo que\npasó, y `unreadable` lleva su propio contrato desde 0.53: un contador\nque significara dos cosas según la task no lo podría leer nadie.\n\nSe omite cuando es `None`, que es el valor de toda task que no recorre\nárboles con tope.",
           "format": "uint64",
           "minimum": 0,
           "type": [

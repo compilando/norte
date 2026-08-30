@@ -68,6 +68,27 @@ toml_edit.workspace = true
 # derecha comiéndose la cola. `unicode-width` es la herramienta estándar (la
 # usa la propia ratatui, misma versión ya en el árbol), MIT/Apache, mantenida.
 unicode-width = "0.2"
+# El SUBSHELL persistente de #142 necesita un pty de verdad: un shell
+# interactivo detrás de los paneles no puede vivir en una tubería —sin tty no
+# hay job control, ni prompt, ni line editing, y `bash` se pone en modo no
+# interactivo—. norte-tui no puede abrirlo a mano: `openpty`/`forkpty` son
+# `unsafe`, y la regla 5 reserva el `unsafe` para `norte-vfs-local`.
+#
+# `portable-pty` (wezterm, MIT) es la envoltura segura estándar: la usa el
+# propio wezterm, está mantenida, y `default-features = false` deja fuera
+# serde. Alternativas descartadas: `pty-process` (menos usada, y su API async
+# no compra nada aquí porque el bucle de adjuntar es de bloqueo por diseño) y
+# `nix` a pelo (volvería a poner `unsafe` en un frontend).
+#
+# Lo que ARRASTRA, que es la mitad de la regla 8 y no estaba dicho: `nix 0.28`
+# (un SEGUNDO `nix` en el árbol), `bitflags 1.3` (una segunda rama mayor),
+# `cfg_aliases`, `downcast-rs`, `shell-words`, `winreg 0.10` (solo Windows) y
+# `serial2` — sí, soporte de puerto serie en un gestor de ficheros:
+# `default-features = false` NO lo quita, es incondicional en portable-pty.
+# Siete cajas por un `openpty` seguro es caro y se acepta a sabiendas: la
+# alternativa era `unsafe` en un frontend, que la regla 5 prohíbe. Si algún día
+# el pty se comparte con la ventana, este es el sitio donde reconsiderarlo.
+portable-pty = { version = "0.9.0", default-features = false }
 
 [dev-dependencies]
 bytes.workspace = true

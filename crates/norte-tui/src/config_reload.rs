@@ -142,6 +142,11 @@ pub async fn reload_config(
                 // efectivo `dialog` VIGENTE, ANTES de que se mueva al
                 // resolver de abajo — mismo criterio que help_lines.
                 app.dialog_hints = DialogHints::build(&dialog);
+                // #142: el acorde de vuelta del subshell, del efectivo
+                // `browse` VIGENTE y antes de que se mude al resolver —
+                // mismo criterio. Un rebind que no llegara aquí dejaría al
+                // lector dentro del shell pulsando la tecla nueva.
+                app.subshell_chord = norte_frontend::subshell::detach_chord(&browse);
                 // K3c: el editor de atajos, si está abierto, se REFRESCA (no
                 // se cierra como `help`/`palette`): esta recarga suele ser su
                 // propia escritura volviendo por el watcher, y un editor que se

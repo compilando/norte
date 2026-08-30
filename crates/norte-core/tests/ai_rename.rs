@@ -21,6 +21,11 @@ struct FakeAi {
     reply: String,
     local: bool,
     called: Arc<std::sync::atomic::AtomicBool>,
+    /// Lo que se le MANDÓ, entero. Es lo único que permite comprobar que un
+    /// plan sobre lo marcado no lleva los nombres de los demás (#121): el
+    /// gate de IA existe para acotar lo que sale de la máquina, y sin mirar el
+    /// prompt un test solo comprueba lo que vuelve.
+    prompt: Arc<std::sync::Mutex<String>>,
 }
 
 #[async_trait]
@@ -37,6 +42,7 @@ impl AiProvider for FakeAi {
     }
     async fn chat(&self, _req: ChatRequest) -> Result<ChatStream, AiError> {
         self.called.store(true, std::sync::atomic::Ordering::SeqCst);
+        *self.prompt.lock().expect("prompt") = format!("{_req:?}");
         // Entrega en DOS deltas para ejercitar el drenado del stream.
         let (a, b) = self.reply.split_at(self.reply.len() / 2);
         let items = vec![Ok(a.to_owned()), Ok(b.to_owned())];
@@ -78,9 +84,29 @@ fn engine_with(
         reply: reply.to_owned(),
         local,
         called: Arc::clone(&called),
+        prompt: Arc::new(std::sync::Mutex::new(String::new())),
     }));
     engine.set_ai_config(config);
     (engine, mem, called)
+}
+
+/// El mismo montaje, devolviendo además LO QUE SE LE MANDÓ al proveedor.
+fn engine_espiando(
+    reply: &str,
+    config: AiConfig,
+) -> (Engine, Arc<MemProvider>, Arc<std::sync::Mutex<String>>) {
+    let engine = Engine::new();
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let prompt = Arc::new(std::sync::Mutex::new(String::new()));
+    engine.set_ai_provider(Arc::new(FakeAi {
+        reply: reply.to_owned(),
+        local: true,
+        called: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        prompt: Arc::clone(&prompt),
+    }));
+    engine.set_ai_config(config);
+    (engine, mem, prompt)
 }
 
 fn enabled() -> AiConfig {
@@ -197,7 +223,7 @@ async fn backend_embebido_devuelve_el_plan_en_tipos_proto() {
     write_file(&mem, "mem:///d/a.txt").await;
     let backend = norte_core::backend::Backend::Embedded(std::sync::Arc::new(engine));
     let plan = backend
-        .ai_rename_plan(&vp("mem:///d"), "renombra")
+        .ai_rename_plan(&vp("mem:///d"), "renombra", &[])
         .await
         .expect("plan");
     assert_eq!(plan.entries.len(), 1);
@@ -212,7 +238,7 @@ async fn backend_embebido_propaga_unsupported_sin_proveedor() {
     let engine = Engine::new(); // sin set_ai_provider
     let backend = norte_core::backend::Backend::Embedded(Arc::new(engine));
     let err = backend
-        .ai_rename_plan(&vp("mem:///"), "x")
+        .ai_rename_plan(&vp("mem:///"), "x", &[])
         .await
         .expect_err("sin proveedor");
     assert!(matches!(err, Error::Unsupported), "fue {err:?}");
@@ -280,5 +306,76 @@ async fn child_bajo_denied_prefix_no_sale() {
     assert!(
         !prompt.contains("secret"),
         "el dir denegado NO debe salir: {prompt}"
+    );
+}
+
+/// **Un plan sobre lo MARCADO no manda los demás nombres** (#121).
+///
+/// Con la selección de primera clase, marcar cinco ficheros y pedir un plan
+/// mandaba los mil del directorio al proveedor: más de lo que el humano
+/// señaló, y el gate de IA existe justamente para acotar lo que sale de la
+/// máquina.
+#[tokio::test]
+async fn un_plan_sobre_lo_marcado_no_manda_el_resto() {
+    let (engine, mem, prompt) = engine_espiando("[]", enabled());
+    mkdirp(&mem, "mem:///d").await;
+    for n in ["marcado.txt", "otro.txt", "tercero.txt"] {
+        write_file(&mem, &format!("mem:///d/{n}")).await;
+    }
+
+    engine
+        .ai_rename_plan_for(&vp("mem:///d"), "x", &["marcado.txt".to_owned()])
+        .await
+        .expect("plan");
+
+    let visto = prompt.lock().expect("prompt").clone();
+    assert!(visto.contains("marcado.txt"), "{visto}");
+    assert!(
+        !visto.contains("otro.txt"),
+        "lo no marcado no sale: {visto}"
+    );
+    assert!(!visto.contains("tercero.txt"), "{visto}");
+}
+
+/// Sin nombres, el directorio ENTERO: es lo que hacía antes del campo, y lo
+/// que un cliente que no lo manda espera.
+#[tokio::test]
+async fn sin_nombres_el_plan_sigue_siendo_del_directorio_entero() {
+    let (engine, mem, prompt) = engine_espiando("[]", enabled());
+    mkdirp(&mem, "mem:///d").await;
+    for n in ["a.txt", "b.txt"] {
+        write_file(&mem, &format!("mem:///d/{n}")).await;
+    }
+
+    engine
+        .ai_rename_plan_for(&vp("mem:///d"), "x", &[])
+        .await
+        .expect("plan");
+
+    let visto = prompt.lock().expect("prompt").clone();
+    assert!(
+        visto.contains("a.txt") && visto.contains("b.txt"),
+        "{visto}"
+    );
+}
+
+/// Y si lo marcado ya no está, no se llama al proveedor: un plan sobre nada no
+/// es una pregunta, y mandar la instrucción con una lista vacía gasta cuota
+/// para que conteste lo mismo.
+#[tokio::test]
+async fn si_lo_marcado_ya_no_esta_no_se_pregunta() {
+    let (engine, mem, prompt) = engine_espiando("[]", enabled());
+    mkdirp(&mem, "mem:///d").await;
+    write_file(&mem, "mem:///d/a.txt").await;
+
+    let plan = engine
+        .ai_rename_plan_for(&vp("mem:///d"), "x", &["se-fue.txt".to_owned()])
+        .await
+        .expect("plan vacío");
+
+    assert!(plan.entries.is_empty());
+    assert!(
+        prompt.lock().expect("prompt").is_empty(),
+        "no se llamó al proveedor"
     );
 }

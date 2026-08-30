@@ -488,6 +488,7 @@ fn golden_task_progress() {
                     entries_total: Some(12),
                     current: None,
                     unreadable: Some(3),
+                    unvisited: None,
                 },
             ),
             (
@@ -502,6 +503,7 @@ fn golden_task_progress() {
                     entries_total: Some(12),
                     current: None,
                     unreadable: Some(0),
+                    unvisited: None,
                 },
             ),
             (
@@ -516,6 +518,7 @@ fn golden_task_progress() {
                     entries_total: Some(3),
                     current: Some(vpath("file:///src/informe%FF%FE.dat")),
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -531,6 +534,7 @@ fn golden_task_progress() {
                     entries_total: Some(10),
                     current: Some(vpath("file:///home/user/doc.txt")),
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -550,6 +554,7 @@ fn golden_task_progress() {
                     entries_total: Some(3),
                     current: Some(vpath("file:///home/user/fotos/informe%FF%FE.dat")),
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -569,6 +574,7 @@ fn golden_task_progress() {
                     entries_total: Some(2),
                     current: Some(vpath("file:///casa/b%FF.bin")),
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -589,6 +595,7 @@ fn golden_task_progress() {
                     entries_total: Some(4),
                     current: Some(vpath("file:///casa/b%FF.bin")),
                     unreadable: Some(1),
+                    unvisited: None,
                 },
             ),
             (
@@ -609,6 +616,7 @@ fn golden_task_progress() {
                     entries_total: None,
                     current: Some(vpath("file:///home/user/proj/src")),
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -628,6 +636,7 @@ fn golden_task_progress() {
                     entries_total: Some(5),
                     current: Some(vpath("file:///proj/src/main.rs")),
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -646,6 +655,7 @@ fn golden_task_progress() {
                     entries_total: Some(9),
                     current: Some(vpath("file:///a.zip")),
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -664,6 +674,7 @@ fn golden_task_progress() {
                     entries_total: Some(3),
                     current: Some(vpath("file:///trozos/g.iso.002")),
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -682,6 +693,7 @@ fn golden_task_progress() {
                     entries_total: Some(3),
                     current: Some(vpath("file:///g.iso")),
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -702,6 +714,7 @@ fn golden_task_progress() {
                     entries_total: None,
                     current: Some(vpath("file:///home/user/origen/fotos")),
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -721,6 +734,7 @@ fn golden_task_progress() {
                     entries_total: None,
                     current: Some(vpath("file:///home/user/origen/fotos")),
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -742,6 +756,7 @@ fn golden_task_progress() {
                     entries_total: Some(40),
                     current: Some(vpath("file:///home/user/copia/informe%FF%FE.dat")),
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -757,6 +772,7 @@ fn golden_task_progress() {
                     entries_total: Some(1),
                     current: Some(vpath("file:///tmp/nueva-carpeta")),
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -771,6 +787,7 @@ fn golden_task_progress() {
                     entries_total: None,
                     current: None,
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
             (
@@ -785,6 +802,7 @@ fn golden_task_progress() {
                     entries_total: Some(2),
                     current: None,
                     unreadable: None,
+                    unvisited: None,
                 },
             ),
         ],
@@ -1117,7 +1135,13 @@ fn golden_methods() {
     // aunque su nombre no sea texto (regla 1).
     // 172 → 173 en 0.60.0 (#314): + fs_set_mode_params, con el modo en su
     // forma NUMÉRICA y una ruta que no es UTF-8.
-    assert_eq!(fixtures.len(), 173, "[methods.json] fixtures sin caso Rust");
+    // 173 → 175 en 0.62.0 (#315, #121): + fs_set_mode_params_recursivo y
+    // ai_rename_plan_params_seleccion. Las dos son fixturas APARTE y no un
+    // campo más en las que ya había, porque los tres campos nuevos se OMITEN
+    // cuando están vacíos: con una sola fixtura por método, el día que dejaran
+    // de omitirse —o que el default de `recursive` cambiara— el wire cambiaría
+    // sin que nada se pusiera rojo.
+    assert_eq!(fixtures.len(), 176, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
@@ -1257,6 +1281,35 @@ fn check_methods_fs_set_mode(fixtures: &BTreeMap<String, Value>) {
         &FsSetModeParams {
             paths: vec![vpath("file:///casa/a.sh"), vpath("file:///casa/b%FF.bin")],
             mode: 0o755,
+            recursive: false,
+            dir_mode: None,
+        },
+    );
+    // Y la forma RECURSIVA (0.62.0, #315), que es otra petición: los dos
+    // campos presentes a la vez, porque `dir_mode` sin `recursive` no
+    // significa nada. Una sola fixtura dejaría que el default de `recursive`
+    // cambiara sin que nada se pusiera rojo.
+    check_one(
+        fixtures,
+        "fs_set_mode_params_recursivo",
+        &FsSetModeParams {
+            paths: vec![vpath("file:///casa/arbol")],
+            mode: 0o644,
+            recursive: true,
+            dir_mode: Some(0o755),
+        },
+    );
+    // Y la TERCERA forma, que es la que rompe árboles: recursivo con el MISMO
+    // modo para todo (`dir_mode` ausente). Es una petición distinta de las
+    // otras dos y la que `chmod -R` hace, así que su wire se congela aparte.
+    check_one(
+        fixtures,
+        "fs_set_mode_params_recursivo_un_modo",
+        &FsSetModeParams {
+            paths: vec![vpath("file:///casa/arbol")],
+            mode: 0o600,
+            recursive: true,
+            dir_mode: None,
         },
     );
 }
@@ -1573,6 +1626,20 @@ fn check_methods_ai(fixtures: &BTreeMap<String, Value>) {
         &AiRenamePlanParams {
             dir: VPath::parse("file:///home/user/fotos-a%FF%FE").unwrap(),
             instruction: "kebab-case, date first".into(),
+            names: Vec::new(),
+        },
+    );
+    // El plan sobre la SELECCIÓN (0.62.0, #121): los nombres viajan y el
+    // directorio sigue siendo el mismo. Fixtura aparte porque el campo se
+    // OMITE cuando está vacío — con una sola, el día que deje de omitirse
+    // nadie se entera.
+    check_one(
+        fixtures,
+        "ai_rename_plan_params_seleccion",
+        &AiRenamePlanParams {
+            dir: VPath::parse("file:///home/user/fotos").unwrap(),
+            instruction: "kebab-case".into(),
+            names: vec!["IMG 001.jpg".into(), "IMG 002.jpg".into()],
         },
     );
     check_one(
@@ -2528,7 +2595,11 @@ fn check_methods_policy(fixtures: &BTreeMap<String, Value>) {
             // Se congela la forma CON modo: es lo que hace falta que viaje, y
             // la de sin él la cubren las dos fixturas de `pending_approval`,
             // donde el campo se omite entero.
-            detail: norte_proto::methods::ApprovalDetail { mode: Some(0o755) },
+            detail: norte_proto::methods::ApprovalDetail {
+                mode: Some(0o755),
+                recursive: false,
+                dir_mode: None,
+            },
         },
     );
     check_one(
@@ -3413,6 +3484,7 @@ fn check_methods_v05(fixtures: &BTreeMap<String, Value>) {
                 entries_total: Some(3),
                 current: Some(vpath("file:///src/a.txt")),
                 unreadable: None,
+                unvisited: None,
             }],
         },
     );
@@ -3456,6 +3528,15 @@ fn check_methods_v05(fixtures: &BTreeMap<String, Value>) {
         "task_list_result_vacio",
         &TaskListResult { tasks: vec![] },
     );
+    check_methods_v05_capabilities(fixtures);
+}
+
+/// La segunda mitad de [`check_methods_v05`]: `fs.capabilities` y su catálogo
+/// de atributos.
+///
+/// Partida en dos porque la primera pasó de cien líneas al ganar `unvisited`
+/// (0.62.0), no porque sean dos familias: son la misma versión del wire.
+fn check_methods_v05_capabilities(fixtures: &BTreeMap<String, Value>) {
     check_one(
         fixtures,
         "fs_capabilities_params",
@@ -3830,6 +3911,12 @@ fn method_names_frozen() {
     assert_eq!(methods::FS_SET_MODE, "fs.set_mode");
     assert_eq!(methods::FS_SET_MODE_MAX_PATHS, 4096);
     assert_eq!(methods::MODE_PERMISSION_BITS, 0o7777);
+    // 0.62.0 (#315, #121). Los dos topes son contrato como los de arriba, y el
+    // primero además es de otra clase: los demás RECHAZAN por encima de su
+    // número y éste TRUNCA, así que lo que el cliente necesita para no leerlo
+    // mal es la señal (`TaskProgress::unvisited`), no el número.
+    assert_eq!(methods::SET_MODE_RECURSIVE_MAX, 100_000);
+    assert_eq!(methods::AI_RENAME_NAMES_MAX, 4096);
     assert_eq!(methods::CONNECTION_CLOSE, "connection.close");
     // 0.50.0: escribir archivos (#132). Cuatro métodos y cuatro kinds nuevos,
     // aditivos por la misma razón que los de arriba. Ninguno escribe DENTRO de
@@ -3903,7 +3990,14 @@ fn method_names_frozen() {
     // de una aprobación. Aditivo —se omite cuando no dice nada— y la ventana se
     // desplaza porque contra un daemon 0.60 la pregunta de un `set-mode` no
     // puede decir QUÉ modo, que es la mitad de esa decisión.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.61.0");
+    // 0.62.0 (#315, #121): `recursive`/`dir_mode` en `fs.set_mode` y `names`
+    // en `ai.rename_plan`. Los tres campos son ALCANCE —sobre qué actúa una
+    // petición— y los tres se omiten cuando no dicen nada, así que el JSON de
+    // un cliente que no los manda no cambia ni un byte. La ventana se desplaza
+    // porque contra un daemon 0.61 no se puede pedir ninguna de las dos cosas:
+    // los permisos se cambian ruta a ruta y el plan de la IA es del directorio
+    // entero.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.62.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

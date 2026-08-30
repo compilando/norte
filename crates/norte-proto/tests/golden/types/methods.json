@@ -3,6 +3,14 @@
     "dir": "file:///home/user/fotos-a%FF%FE",
     "instruction": "kebab-case, date first"
   },
+  "ai_rename_plan_params_seleccion": {
+    "dir": "file:///home/user/fotos",
+    "instruction": "kebab-case",
+    "names": [
+      "IMG 001.jpg",
+      "IMG 002.jpg"
+    ]
+  },
   "ai_rename_plan_result": {
     "entries": [
       {
@@ -493,6 +501,21 @@
       "file:///casa/a.sh",
       "file:///casa/b%FF.bin"
     ]
+  },
+  "fs_set_mode_params_recursivo_un_modo": {
+    "mode": 384,
+    "paths": [
+      "file:///casa/arbol"
+    ],
+    "recursive": true
+  },
+  "fs_set_mode_params_recursivo": {
+    "dir_mode": 493,
+    "mode": 420,
+    "paths": [
+      "file:///casa/arbol"
+    ],
+    "recursive": true
   },
   "fs_stat_params": {
     "path": "file:///home/user/doc.txt"

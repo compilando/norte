@@ -1649,6 +1649,7 @@ async fn una_task_ajena_se_ve_y_se_dice_ajena() {
         entries_total: None,
         current: None,
         unreadable: None,
+        unvisited: None,
     };
     let (_ptx, prx) = tokio::sync::watch::channel(progreso);
     tx.send(norte_ui_host::backend::HostTask {
@@ -10519,6 +10520,7 @@ fn inyectar_task(
         entries_total: None,
         current: None,
         unreadable: None,
+        unvisited: None,
     };
     let (ptx, prx) = tokio::sync::watch::channel(progreso);
     let canceladas = Arc::clone(canceladas);
@@ -10670,6 +10672,7 @@ fn inyectar_task_de(
         entries_total: None,
         current: None,
         unreadable: None,
+        unvisited: None,
     };
     let (ptx, prx) = tokio::sync::watch::channel(progreso);
     tx.send(norte_ui_host::backend::HostTask {
@@ -11537,6 +11540,7 @@ async fn un_lote_que_nace_terminal_pide_su_informe() {
         entries_total: Some(1),
         current: None,
         unreadable: None,
+        unvisited: None,
     };
     let (ptx, prx) = tokio::sync::watch::channel(progreso);
     drop(ptx);

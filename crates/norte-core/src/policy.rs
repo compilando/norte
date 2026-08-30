@@ -73,6 +73,14 @@ pub enum PolicyOp {
         /// `4777` son la misma op y decisiones opuestas, y quien le pregunta
         /// al humano necesita poder decirlo (0.61.0).
         mode: u32,
+        /// Baja por el ÁRBOL (0.62.0, #315).
+        ///
+        /// Por lo mismo que el modo: `set-mode` sobre una raíz y `set-mode`
+        /// sobre esa raíz y sus cien mil descendientes son la misma op y
+        /// decisiones muy distintas. Sin esto, la pregunta decía «1 ruta».
+        recursive: bool,
+        /// El modo de los DIRECTORIOS, si es otro (0.62.0, #315).
+        dir_mode: Option<u32>,
     },
 }
 
@@ -672,7 +680,11 @@ mod tests {
             },
             PolicyOp::Mkdir,
             PolicyOp::Create,
-            PolicyOp::SetMode { mode: 0o755 },
+            PolicyOp::SetMode {
+                mode: 0o755,
+                recursive: false,
+                dir_mode: None,
+            },
         ];
         for op in todos {
             let nombre = op.kind();

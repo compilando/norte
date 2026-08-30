@@ -87,3 +87,6 @@ edits.
 | [0079](0079-a-profile-declares-it-does-not-execute.md) | A profile declares, it does not execute | accepted |
 | [0080](0080-a-digest-is-a-read-that-nobody-can-take-back.md) | A digest is a read that nobody can take back | accepted |
 | [0081](0081-permissions-are-a-mutation-and-carry-their-way-back.md) | Permissions are a mutation, and they carry their way back | accepted |
+| [0082](0082-what-norte-hands-to-a-program-it-does-not-own.md) | What norte hands to a program it does not own | accepted |
+| [0083](0083-permissions-down-a-tree-are-two-modes-and-one-batch.md) | Permissions down a tree are two modes and one batch | accepted |
+| [0084](0084-the-shell-behind-the-panels-is-a-process-not-a-scrollback.md) | The shell behind the panels is a process, not a scrollback | accepted |

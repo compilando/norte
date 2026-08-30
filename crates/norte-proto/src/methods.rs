@@ -907,7 +907,33 @@ use crate::{
 /// 0.60 lo ignora. **Lo que pierde es exactamente lo que el campo añade**: ante
 /// un `set-mode` de un agente, un frontend 0.60 sigue preguntando «set-mode
 /// sobre 12 rutas» sin poder decir cuál era el modo.
-pub const PROTOCOL_VERSION: &str = "0.61.0";
+/// `0.62.0` (#315, #121): dos campos en `fs.set_mode` y uno en
+/// `ai.rename_plan`, y los tres son la misma clase de cosa — decirle al core
+/// SOBRE QUÉ actúa, en vez de que lo suponga.
+///
+/// [`FsSetModeParams`] gana `recursive` y `dir_mode`. Lo primero es el hueco
+/// que la ADR 0081 aplazó a propósito: cambiar permisos «de esta carpeta y de
+/// lo que tiene dentro» es lo que ofrecen los tres gestores de referencia, y
+/// hasta aquí `fs.set_mode` cambiaba EXACTAMENTE las rutas que se le daban.
+/// Lo segundo existe porque `chmod -R 644` sobre un árbol lo deja inutilizable
+/// —sin bit de ejecución en un directorio no se puede ni entrar—, así que el
+/// modo de los DIRECTORIOS va aparte; ausente, es el mismo para todo, que es
+/// lo que hace `chmod -R` y lo que rompe árboles.
+///
+/// [`AiRenamePlanParams`] gana `names`: los basenames sobre los que se pide el
+/// plan. Vacío = el directorio entero, que es lo que hacía. Con la selección
+/// de primera clase (#103) marcar cinco ficheros y pedir un plan mandaba los
+/// mil del directorio al proveedor — más de lo que el humano señaló, que es
+/// justo lo que el gate de IA existe para acotar.
+///
+/// Ventana N=0.62.x / N-1=0.61.x. Aditivo en las dos direcciones que el
+/// handshake permite, y la pérdida se cuenta para un **cliente 0.61 contra un
+/// daemon 0.62**: no conoce los campos, no los manda, y entonces `fs.set_mode`
+/// actúa sobre las rutas exactas —el comportamiento de 0.61, que es el que ese
+/// cliente ya espera— y `ai.rename_plan` sigue mandando el directorio entero.
+/// Ninguna de las dos cosas es una comprobación que deje de hacerse: son
+/// alcances que no se estrechan.
+pub const PROTOCOL_VERSION: &str = "0.62.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2300,7 +2326,32 @@ pub struct AiRenamePlanParams {
     pub dir: VPath,
     /// Instrucción del usuario.
     pub instruction: String,
+    /// Los basenames sobre los que se pide el plan, dentro de [`Self::dir`]
+    /// (0.62.0, #121).
+    ///
+    /// VACÍO —y ausente— es el directorio entero, que es lo que hacía 0.61.
+    /// Con la selección de primera clase (#103), marcar cinco ficheros y pedir
+    /// un plan mandaba los mil del directorio al proveedor: más de lo que el
+    /// humano señaló, y el gate de IA existe justamente para acotar lo que
+    /// sale de la máquina.
+    ///
+    /// Son NOMBRES BASE y no rutas: el plan es de un directorio, y una ruta
+    /// aquí abriría la puerta a pedir un plan sobre lo que está en otro. Un
+    /// nombre que no esté en el listado se ignora — el listado manda, y
+    /// rechazar el plan entero por una entrada que se borró entre marcar y
+    /// pedir sería castigar al lector por una carrera.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
 }
+
+/// Cuántos nombres admite [`AiRenamePlanParams::names`] (0.62.0, #121).
+///
+/// Una lista que llega de fuera y que el engine recorre por cada entrada del
+/// listado necesita tope, o un frame de 16 MiB de nombres de un byte convierte
+/// un plan en un bucle cuadrático. El número es el mismo que el de un lote de
+/// rutas ([`FS_SET_MODE_MAX_PATHS`]) porque mide lo mismo: cuántas cosas
+/// selecciona un humano de una vez.
+pub const AI_RENAME_NAMES_MAX: usize = 4096;
 
 /// Una pareja del plan de [`AI_RENAME_PLAN`]. Nombres BASE, UTF-8 garantizado:
 /// el engine rechaza nombres hostiles fail-loud ANTES de llamar al proveedor y
@@ -2814,8 +2865,8 @@ pub enum ChecksumAlgo {
 pub struct FsSetModeParams {
     /// Las rutas a las que se les cambia el modo, tal cual se pidieron.
     ///
-    /// Sin recursión: son EXACTAMENTE estas. Un directorio cambia el suyo y no
-    /// el de lo que tiene dentro.
+    /// Sin [`Self::recursive`], son EXACTAMENTE estas: un directorio cambia el
+    /// suyo y no el de lo que tiene dentro.
     pub paths: Vec<VPath>,
     /// Los doce bits de permiso, como los toma `chmod(2)`.
     ///
@@ -2826,7 +2877,49 @@ pub struct FsSetModeParams {
     /// (`InvalidPath`), en vez de recortarse en silencio y cambiar el permiso
     /// a algo que nadie pidió.
     pub mode: u32,
+    /// Bajar por los directorios de [`Self::paths`] y cambiar también lo que
+    /// hay dentro (0.62.0, #315).
+    ///
+    /// Ausente = `false`, que es lo que hacía 0.60: exactamente las rutas
+    /// pedidas. Un cliente que no lo manda obtiene el comportamiento que ya
+    /// esperaba.
+    ///
+    /// El recorrido tiene TOPE ([`SET_MODE_RECURSIVE_MAX`]) y lo que quede sin
+    /// visitar se DICE en el progreso, en vez de recortar en silencio: media
+    /// selección cambiada sin avisar es lo que #311 y #314 rechazan en todas
+    /// partes. Un symlink no se sigue ni se toca, dentro del árbol igual que
+    /// fuera — `chmod(2)` sí lo seguiría, y el modo que se guardaría como
+    /// reversa sería el del enlace.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recursive: bool,
+    /// El modo de los DIRECTORIOS, cuando difiere del de los ficheros
+    /// (0.62.0, #315).
+    ///
+    /// Existe porque `chmod -R 644` sobre un árbol lo deja inutilizable: sin
+    /// bit de ejecución, en un directorio no se puede ni entrar. Es la salida
+    /// que toma el diálogo de KDE que Krusader usa — dos modos, explícitos, en
+    /// vez de la `X` de `chmod`, que pide modos SIMBÓLICOS y este protocolo
+    /// manda el modo como número.
+    ///
+    /// Ausente = el mismo [`Self::mode`] para todo, que es lo que hace
+    /// `chmod -R` y lo que rompe árboles: se documenta el pie de bala en vez
+    /// de inventar un modo que nadie pidió.
+    ///
+    /// Sin [`Self::recursive`] no significa nada y se ignora: las rutas
+    /// pedidas llevan el modo que se pidió, sean lo que sean.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir_mode: Option<u32>,
 }
+
+/// Cuántos nodos visita como mucho un `fs.set_mode` recursivo (0.62.0, #315).
+///
+/// El tope de [`FsSetModeParams::paths`] (4096) es sobre lo PEDIDO; un árbol
+/// son millones. Contar antes para rechazar sería recorrerlo dos veces, y
+/// recortar en silencio deja media selección cambiada — así que se recorre
+/// hasta aquí y lo que queda sin tocar viaja en el progreso
+/// (`TaskProgress::unreadable` no: `entries_total` deja de ser el árbol entero
+/// y el frontend lo dice).
+pub const SET_MODE_RECURSIVE_MAX: u64 = 100_000;
 
 /// Los bits que [`FS_SET_MODE`] acepta: los doce de permiso de `chmod(2)`.
 pub const MODE_PERMISSION_BITS: u32 = 0o7777;
@@ -6550,13 +6643,29 @@ pub struct ApprovalDetail {
     /// ([`MODE_PERMISSION_BITS`]). Solo en un `set-mode`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<u32>,
+    /// El cambio baja por el ÁRBOL (0.62.0, #315). Solo en un `set-mode`.
+    ///
+    /// Sin esto, `paths_total` miente por omisión: un recursivo sobre una raíz
+    /// se preguntaba como «set-mode sobre 1 ruta», y lo que se aprobaba eran
+    /// cien mil nodos. Es el mismo agujero que el campo [`Self::mode`] vino a
+    /// cerrar en 0.61 — un humano que aprueba sin ver el alcance no está
+    /// consintiendo lo que cree.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recursive: bool,
+    /// El modo que llevarán los DIRECTORIOS, si es otro (0.62.0, #315).
+    ///
+    /// Va aparte de [`Self::mode`] porque es otro permiso y sobre otras cosas:
+    /// aprobar `0644` sin ver que las carpetas se quedan en `0777` es aprobar
+    /// la mitad de la pregunta.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir_mode: Option<u32>,
 }
 
 impl ApprovalDetail {
     /// Si no dice nada: un frontend no pinta una línea vacía por él.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.mode.is_none()
+        self.mode.is_none() && !self.recursive && self.dir_mode.is_none()
     }
 }
 

@@ -307,10 +307,15 @@ pub trait HostBackend: Send + Sync + 'static {
     /// todo el sistema: quien llama lo valida entero antes de enseñarlo
     /// (`norte_frontend::validate_ai_plan`), y una sola pareja inválida tumba
     /// el lote — jamás se aplica «lo que valga» de un plan adulterado.
+    ///
+    /// `names` son los basenames MARCADOS (#121). Vacío = el directorio
+    /// entero: pedir un plan sobre cinco ficheros no puede mandar los mil del
+    /// directorio al proveedor.
     fn ai_rename_plan(
         &self,
         dir: VPath,
         instruction: String,
+        names: Vec<String>,
     ) -> BoxFuture<'static, Result<methods::AiRenamePlanResult, Error>>;
 
     /// El plan REVISABLE de un lote de renombrados dentro de `dir`.
@@ -1141,9 +1146,10 @@ impl HostBackend for norte_client::RemoteBackend {
         &self,
         dir: VPath,
         instruction: String,
+        names: Vec<String>,
     ) -> BoxFuture<'static, Result<methods::AiRenamePlanResult, Error>> {
         let backend = self.clone();
-        Box::pin(async move { backend.ai_rename_plan(&dir, &instruction).await })
+        Box::pin(async move { backend.ai_rename_plan(&dir, &instruction, &names).await })
     }
 
     fn rename_batch_plan(

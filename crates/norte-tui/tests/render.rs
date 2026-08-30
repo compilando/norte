@@ -1293,7 +1293,11 @@ fn la_aprobacion_de_un_chmod_pinta_el_modo() {
             paths: vec!["file:///casa/a.sh".into()],
             paths_total: 1,
             ttl_ms: 60_000,
-            detail: norte_proto::methods::ApprovalDetail { mode: Some(0o4755) },
+            detail: norte_proto::methods::ApprovalDetail {
+                mode: Some(0o4755),
+                recursive: false,
+                dir_mode: None,
+            },
         },
     });
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");

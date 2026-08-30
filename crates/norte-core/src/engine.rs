@@ -1075,10 +1075,50 @@ impl Engine {
         dir: &VPath,
         instruction: &str,
     ) -> Result<crate::ai::RenamePlan, Error> {
+        self.ai_rename_plan_for(dir, instruction, &[]).await
+    }
+
+    /// [`Self::ai_rename_plan`] sobre un SUBCONJUNTO de `dir` (#121).
+    ///
+    /// `only` son nombres BASE. Vacío = el directorio entero, que es lo que
+    /// hacía antes de existir este parámetro.
+    ///
+    /// Lo que compra no es comodidad: con la selección de primera clase (#103),
+    /// marcar cinco ficheros y pedir un plan mandaba los mil del directorio al
+    /// proveedor. Eso es más de lo que el humano señaló, y el gate de IA existe
+    /// justamente para acotar lo que sale de la máquina.
+    ///
+    /// Un nombre que no está en el listado se IGNORA en vez de rechazar el
+    /// plan: entre marcar y pedir, un fichero puede haberse ido, y castigar al
+    /// lector por esa carrera no arregla nada. Si tras filtrar no queda
+    /// ninguno, no se llama al proveedor — un plan sobre nada no es una
+    /// pregunta.
+    ///
+    /// # Errors
+    /// Las de [`Self::ai_rename_plan`].
+    ///
+    /// # Panics
+    /// Solo por envenenamiento de un lock interno (irrecuperable).
+    pub async fn ai_rename_plan_for(
+        &self,
+        dir: &VPath,
+        instruction: &str,
+        only: &[String],
+    ) -> Result<crate::ai::RenamePlan, Error> {
         use futures::StreamExt;
 
         /// Tope del reply acumulado (#M4 security): ver el bucle de drenado.
         const MAX_REPLY_BYTES: usize = 512 * 1024;
+
+        // El tope se comprueba AQUÍ y no solo en el dispatch del daemon, como
+        // el de `fs.set_mode`: `ntc` corre embebido por defecto, así que un
+        // tope que solo vive en el wire no protege al camino que más se usa.
+        // Lo que acota es un filtro O(nombres × entradas) sobre una llamada
+        // DIRECTA —sin Task— que solo puede morir por timeout.
+        if only.len() > norte_proto::methods::AI_RENAME_NAMES_MAX {
+            tracing::debug!(n = only.len(), "ai.rename_plan por encima del tope");
+            return Err(Error::InvalidPath);
+        }
 
         let provider = self
             .ai_provider
@@ -1105,6 +1145,12 @@ impl Engine {
             let config = self.ai_config.read().expect("ai_config lock sano");
             config.denied_prefixes.clone()
         };
+        // El subconjunto, como CONJUNTO: el filtro de abajo corre por cada
+        // entrada del listado, y una búsqueda lineal sobre 4096 nombres en un
+        // directorio de un millón son minutos de CPU en una llamada que no es
+        // una Task y que solo puede morir por timeout.
+        let solo: std::collections::HashSet<&[u8]> =
+            only.iter().map(std::string::String::as_bytes).collect();
         let mut stream = self.list(dir).await?;
         let mut names = Vec::new();
         while let Some(item) = stream.next().await {
@@ -1116,8 +1162,21 @@ impl Engine {
                 continue;
             }
             if let Some(name) = entry.path.file_name() {
+                // El subconjunto se filtra CONTRA EL LISTADO y por bytes
+                // (#121): el nombre que el frontend marcó tiene que existir
+                // aquí, y compararlo como texto perdería los que no son UTF-8
+                // — que son justo los que más falta hace no confundir.
+                if !solo.is_empty() && !solo.contains(name.as_bytes()) {
+                    continue;
+                }
                 names.push(name.clone());
             }
+        }
+        if names.is_empty() && !only.is_empty() {
+            // Lo que se marcó ya no está. No se llama al proveedor: un plan
+            // sobre nada no es una pregunta, y mandar la instrucción con una
+            // lista vacía gasta cuota para que conteste lo mismo.
+            return Ok(crate::ai::RenamePlan::default());
         }
 
         let req = crate::ai::build_rename_prompt(&names, instruction)
@@ -2512,16 +2571,16 @@ impl Engine {
         // Pre-check fail-loud en la RESPUESTA: sin build previo no hay
         // universo que embeber — mejor `NotFound` inmediato que una Task que
         // falla al join.
-        let no_build = index
-            .files_for_embed(&root)
-            .await
-            .map_err(|e| {
-                tracing::warn!(error = %e, "index.embed: pre-check del índice falló");
-                Error::Io {
-                    retryable: e.is_retryable(),
-                }
-            })?
-            .is_empty();
+        // Por `has_files_for_embed` y no por `files_for_embed(...).is_empty()`
+        // (#122): la pregunta es «¿hay universo?», y contestarla materializando
+        // la lista entera de candidatos —con su `VPath::parse` por fila—
+        // barría el árbol dos veces por embed, una de ellas para tirarla.
+        let no_build = !index.has_files_for_embed(&root).await.map_err(|e| {
+            tracing::warn!(error = %e, "index.embed: pre-check del índice falló");
+            Error::Io {
+                retryable: e.is_retryable(),
+            }
+        })?;
         if no_build {
             return Err(Error::NotFound);
         }
@@ -2640,17 +2699,20 @@ impl Engine {
             .embeddings_for_root(root, &model)
             .await
             .map_err(|e| crate::index_embed::index_to_proto(&e))?;
-        let mut scored: Vec<(VPath, f64)> = vectors
-            .into_iter()
-            .filter_map(|(path, v)| {
-                crate::index_embed::cosine(&qvec, &v).map(|s| (path, f64::from(s)))
+        // Montículo acotado y norma de la query HOISTED (#122): la cuenta es
+        // la misma, la memoria es O(k) en vez de O(índice), y la query deja de
+        // renormalizarse una vez por fila. El orden final desempata por path,
+        // así que dos ficheros con el mismo score salen siempre igual.
+        let norm_q = norm2.sqrt();
+        let puntuados = vectors.into_iter().filter_map(|(path, v)| {
+            crate::index_embed::cosine_prenormed(&qvec, norm_q, &v).map(|s| {
+                crate::index_embed::Puntuado {
+                    score: f64::from(s),
+                    path,
+                }
             })
-            .collect();
-        // `total_cmp` es orden TOTAL: jamás el panic de `sort_by` con un
-        // comparador no total (Rust ≥1.81).
-        scored.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
-        scored.truncate(k);
-        Ok(scored)
+        });
+        Ok(crate::index_embed::mejores_k(puntuados, k))
     }
 
     /// Copia (recursiva si es dir) como Task, con las políticas por defecto
@@ -3405,10 +3467,38 @@ impl Engine {
                 rule: "set-mode.special-bits".to_owned(),
             });
         }
+        // `dir_mode` pasa por las MISMAS dos comprobaciones que `mode`, y ANTES
+        // del gate como ellas (#315): un modo que se va a rechazar no puede
+        // gastar antes la aprobación de un humano — que además la vería sin
+        // este valor dentro.
+        //
+        // Y solo significa algo con `recursive`: sin bajar por el árbol no hay
+        // directorios a los que aplicárselo, y aplicarlo a las rutas pedidas
+        // les daría un permiso que quien llamó no pidió. Se descarta aquí, que
+        // es donde el wire dice que se ignora.
+        let dir_mode = params.recursive.then_some(params.dir_mode).flatten();
+        if dir_mode.is_some_and(|m| m & !norte_proto::methods::MODE_PERMISSION_BITS != 0) {
+            tracing::debug!("fs.set_mode con un dir_mode que no son bits de permiso");
+            return Err(Error::InvalidPath);
+        }
+        if dir_mode.is_some_and(|m| m & ESPECIALES != 0)
+            && !matches!(actor, crate::journal::Actor::User)
+        {
+            tracing::warn!("fs.set_mode: dir_mode con setuid/setgid de un actor no humano");
+            return Err(Error::PolicyDenied {
+                rule: "set-mode.special-bits".to_owned(),
+            });
+        }
         let refs: Vec<&VPath> = params.paths.iter().collect();
+        // La pregunta lleva el ALCANCE, no solo el modo (#315): un recursivo
+        // sobre una raíz son cien mil nodos y `paths_total` dice 1.
         self.gate(
             &actor,
-            crate::policy::PolicyOp::SetMode { mode: params.mode },
+            crate::policy::PolicyOp::SetMode {
+                mode: params.mode,
+                recursive: params.recursive,
+                dir_mode,
+            },
             &refs,
         )
         .await?;
@@ -3419,14 +3509,31 @@ impl Engine {
             rutas.push((provider, p.clone()));
         }
         let observer = Arc::clone(&self.observer);
-        let mode = params.mode;
+        // Un recursivo son N entradas de diario que fueron UNA acción, así que
+        // van bajo un lote (#315) — como el ejecutor de renames. Sin journal no
+        // hay lote que pedir, y entonces las entradas van sueltas: lo que se
+        // pierde es poder decir que fueron una, no el undo.
+        let batch = if params.recursive {
+            match self.journal().await {
+                Some(j) => j.journal().alloc_batch().await.ok(),
+                None => None,
+            }
+        } else {
+            None
+        };
+        let opciones = ops::SetModeOptions {
+            mode: params.mode,
+            recursive: params.recursive,
+            dir_mode,
+            batch,
+        };
         Ok(self.sched.submit(
             &key,
             TaskKind::SetMode,
             Priority::Normal,
             actor,
             Box::new(move |ctx| {
-                Box::pin(async move { ops::set_mode(rutas, mode, observer, &ctx).await })
+                Box::pin(async move { ops::set_mode(rutas, opciones, observer, &ctx).await })
             }),
         ))
     }
@@ -4256,7 +4363,19 @@ fn undo_gate_targets(unit: &[crate::journal::JournalEntry]) -> Result<Option<Und
     }
     let mut gates: Vec<(crate::policy::PolicyOp, Vec<VPath>)> = Vec::with_capacity(3);
     for (mode, paths) in set_modes {
-        gates.push((crate::policy::PolicyOp::SetMode { mode }, paths));
+        gates.push((
+            // Deshacer NUNCA es recursivo, sea lo que fuera la ida: el diario
+            // guarda una entrada por NODO, así que las rutas de esta pregunta
+            // son exactamente las que se van a tocar. Poner `recursive: true`
+            // aquí diría «y todo lo que cuelgue», que es más de lo que este
+            // undo hace.
+            crate::policy::PolicyOp::SetMode {
+                mode,
+                recursive: false,
+                dir_mode: None,
+            },
+            paths,
+        ));
     }
     if !deletes.is_empty() {
         gates.push((

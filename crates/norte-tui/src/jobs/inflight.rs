@@ -180,4 +180,15 @@ pub struct InFlight {
     pub decorate: BySlot<DecorateFetch>,
     /// L3: una lectura de preview en vuelo por hueco, superseded al moverse.
     pub preview: BySlot<PreviewFetch>,
+    /// El subshell persistente (#142): UNO por sesión, arrancado perezosamente
+    /// la primera vez que se pide `app.toggle-panels` y vivo hasta salir.
+    ///
+    /// Vive aquí y no en `App` por lo mismo que el resto de esta estructura:
+    /// es un recurso del run loop —un proceso, un pty y un hilo lector—, y el
+    /// despacho de teclas no debe poder tocarlo. Que sea perezoso importa:
+    /// quien nunca pulsa la tecla no paga un `fork` ni un pty.
+    ///
+    /// POSIX: en Windows no hay subshell y `app.toggle-panels` declina.
+    #[cfg(unix)]
+    pub subshell: Option<crate::subshell::Subshell>,
 }

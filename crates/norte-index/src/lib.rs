@@ -26,6 +26,16 @@ pub enum IndexError {
     /// Fallo de I/O al pre-crear el fichero del índice con permisos 0600.
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    /// Se intentó guardar un embedding de dimensión 0 (#122).
+    ///
+    /// No es un error de almacenamiento sino de quien lo trae: una fila
+    /// `dim = 0` no puede puntuar contra nada —`cosine` la rechaza— así que
+    /// vive en la base ocupando sitio y haciendo que el fichero parezca
+    /// embebido cuando no lo está, y el siguiente `index.embed` no lo
+    /// reintenta porque el hash coincide. Se rechaza en la escritura, que es
+    /// el único sitio donde queda constancia de que el proveedor mintió.
+    #[error("embedding vacío: el proveedor devolvió un vector de dimensión 0")]
+    EmptyVector,
 }
 
 impl IndexError {
@@ -341,9 +351,15 @@ impl Index {
             hits.push(IndexHit {
                 path,
                 kind: kind_from_i64(r.get::<i64, _>("kind")),
+                // Un `size` negativo es una fila IMPOSIBLE (nada lo escribe
+                // así), y por eso importa que las dos lecturas la traten
+                // igual: hasta #122, `query` la devolvía como `Some(0)` —un
+                // fichero vacío, que es una afirmación— y `files_for_embed`
+                // como `None` —«no se sabe», que es la verdad—. Ahora las dos
+                // dicen `None`.
                 size: r
                     .get::<Option<i64>, _>("size")
-                    .map(|v| u64::try_from(v).unwrap_or(0)),
+                    .and_then(|v| u64::try_from(v).ok()),
                 mtime_ms: r.get("mtime_ms"),
             });
         }
@@ -392,6 +408,35 @@ impl Index {
                 })
             })
             .collect())
+    }
+
+    /// ¿Hay ALGO que embeber bajo `root`? (#122)
+    ///
+    /// Es la pregunta que hace el pre-check de `index.embed`, y la única que
+    /// hace: quería saber si el universo está vacío, y para eso materializaba
+    /// la lista ENTERA de candidatos —con su `VPath::parse` por fila— para
+    /// mirarle el `is_empty()` y tirarla. En un árbol grande eso es el barrido
+    /// completo dos veces por embed, una de ellas para nada.
+    ///
+    /// Mismo predicado que [`Self::files_for_embed`], a propósito: si los dos
+    /// divergieran, el pre-check diría «hay trabajo» sobre una lista que sale
+    /// vacía y la Task fallaría al arrancar, que es justo lo que el pre-check
+    /// existe para evitar. Una fila con el path corrupto sí cuenta aquí y no
+    /// allí, y esa asimetría es la buena: deja a la Task sin trabajo, no sin
+    /// universo, y `files_for_embed` ya registra por qué se la saltó.
+    ///
+    /// # Errors
+    /// [`IndexError::Sqlite`].
+    pub async fn has_files_for_embed(&self, root: &VPath) -> Result<bool, IndexError> {
+        let rid = root_id(root);
+        let hay: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM files WHERE root_id = ?1 AND kind = ?2)",
+        )
+        .bind(rid)
+        .bind(kind_to_i64(EntryKind::File))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(hay != 0)
     }
 
     /// Borra los embeddings de los ficheros de `root` cuyo `file_id` esté en
@@ -508,7 +553,8 @@ impl Index {
     /// re-embeber con otro modelo o hash SUSTITUYE al anterior).
     ///
     /// # Errors
-    /// [`IndexError::Sqlite`] (p. ej. `file_id` inexistente viola la FK).
+    /// [`IndexError::Sqlite`] (p. ej. `file_id` inexistente viola la FK);
+    /// [`IndexError::EmptyVector`] si `vec` está vacío.
     pub async fn upsert_embedding(
         &self,
         file_id: i64,
@@ -516,6 +562,9 @@ impl Index {
         vec: &[f32],
         text_hash: &[u8],
     ) -> Result<(), IndexError> {
+        if vec.is_empty() {
+            return Err(IndexError::EmptyVector);
+        }
         sqlx::query(
             "INSERT INTO embeddings (file_id, model, dim, vec, text_hash)
              VALUES (?1, ?2, ?3, ?4, ?5)

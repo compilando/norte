@@ -33,6 +33,7 @@ fn search_run(pane: usize) -> SearchRun {
         entries_total: None,
         current: None,
         unreadable: None,
+        unvisited: None,
     });
     SearchRun {
         task: TaskRef::synthetic_for_tests(id, prx),

@@ -1118,6 +1118,7 @@ impl RemoteBackend {
         &self,
         dir: &VPath,
         instruction: &str,
+        names: &[String],
     ) -> Result<methods::AiRenamePlanResult, Error> {
         self.call_timed_guarded_with(
             AI_CALL_TIMEOUT,
@@ -1125,6 +1126,9 @@ impl RemoteBackend {
             &methods::AiRenamePlanParams {
                 dir: dir.clone(),
                 instruction: instruction.to_string(),
+                // Los nombres MARCADOS, si los hay (#121): vacío es el
+                // directorio entero, que es lo que este método hacía.
+                names: names.to_vec(),
             },
         )
         .await
@@ -1706,6 +1710,7 @@ impl RemoteBackend {
                 entries_total: None,
                 current: None,
                 unreadable: None,
+                unvisited: None,
             };
             let (sender, rx) = watch::channel(initial);
             watches.insert(id.get(), sender);
@@ -2834,6 +2839,7 @@ mod tests {
             entries_total: None,
             current: None,
             unreadable: None,
+            unvisited: None,
         }
     }
 

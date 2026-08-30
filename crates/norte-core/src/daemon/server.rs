@@ -4905,10 +4905,20 @@ async fn dispatch_fs_task(
                     format!("instruction supera {MAX_AI_INSTRUCTION_BYTES} bytes"),
                 ));
             }
+            // El subconjunto tiene el MISMO tope que un lote de rutas (#121):
+            // `names` es una lista que llega de fuera, y una sin tope es un
+            // frame de 16 MiB de nombres cortos que el engine recorre por cada
+            // entrada del listado.
+            if p.names.len() > methods::AI_RENAME_NAMES_MAX {
+                return Err(RpcError::protocol(
+                    codes::INVALID_PARAMS,
+                    format!("names supera {}", methods::AI_RENAME_NAMES_MAX),
+                ));
+            }
             read_gate(&actor, &p.dir, shared)?; // #80
             let plan = shared
                 .engine
-                .ai_rename_plan(&p.dir, &p.instruction)
+                .ai_rename_plan_for(&p.dir, &p.instruction, &p.names)
                 .await
                 .map_err(RpcError::from)?;
             // Mapeo core→proto compartido con `Backend::Embedded`

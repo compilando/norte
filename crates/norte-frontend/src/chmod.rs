@@ -19,6 +19,10 @@ pub enum ModeError {
     NotOctal,
     /// Es octal y se sale de los doce bits.
     TooBig,
+    /// Se pidió un modo para los directorios sin pedir recursivo (#315): sin
+    /// bajar por el árbol no hay directorios a los que aplicárselo, así que
+    /// eso es una petición que no va a pasar y se dice en vez de ignorarse.
+    DirModeWithoutRecursive,
 }
 
 impl ModeError {
@@ -28,6 +32,7 @@ impl ModeError {
         match self {
             Self::NotOctal => "msg-chmod-not-octal",
             Self::TooBig => "msg-chmod-too-big",
+            Self::DirModeWithoutRecursive => "msg-chmod-dir-mode-needs-recursive",
         }
     }
 }
@@ -64,6 +69,67 @@ pub fn parse_mode(texto: &str) -> Result<u32, ModeError> {
     Ok(n)
 }
 
+/// Lo que un campo de permisos puede pedir (#315): el modo, si baja por el
+/// árbol, y el modo de los DIRECTORIOS cuando no es el mismo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModeRequest {
+    /// Los doce bits para lo que no es un directorio.
+    pub mode: u32,
+    /// Bajar por los directorios de lo seleccionado.
+    pub recursive: bool,
+    /// El modo de los directorios. `None` = el mismo [`Self::mode`].
+    pub dir_mode: Option<u32>,
+}
+
+/// Lee lo tecleado en el campo de permisos: `755`, `-R 755`, o `-R 644,755`.
+///
+/// La gramática es la de `chmod` y no una inventada: `-R` es la bandera que
+/// escribe quien ya sabe lo que quiere, y por eso no hace falta una tecla
+/// aparte dentro de un campo donde todas las teclas son texto.
+///
+/// El SEGUNDO modo es el de los directorios, y existe porque `chmod -R 644`
+/// sobre un árbol lo deja inutilizable: sin bit de ejecución, en un directorio
+/// no se puede ni entrar. Sin él, el mismo modo para todo — que es lo que hace
+/// `chmod -R` y lo que rompe árboles, así que el pie del diálogo lo dice.
+///
+/// Un modo de directorios SIN `-R` es un error y no un valor que se ignore:
+/// quien lo teclea está pidiendo algo que no va a pasar.
+///
+/// ```
+/// use norte_frontend::chmod::{parse_request, ModeError};
+/// let r = parse_request("755").expect("modo");
+/// assert_eq!((r.mode, r.recursive, r.dir_mode), (0o755, false, None));
+///
+/// let r = parse_request("-R 644,755").expect("modo");
+/// assert_eq!((r.mode, r.recursive, r.dir_mode), (0o644, true, Some(0o755)));
+///
+/// // Dos modos sin `-R` no significan nada.
+/// assert_eq!(parse_request("644,755"), Err(ModeError::DirModeWithoutRecursive));
+/// ```
+///
+/// # Errors
+///
+/// Las de [`parse_mode`], más [`ModeError::DirModeWithoutRecursive`].
+pub fn parse_request(texto: &str) -> Result<ModeRequest, ModeError> {
+    let t = texto.trim();
+    let (recursive, resto) = match t.strip_prefix("-R") {
+        Some(r) => (true, r.trim_start()),
+        None => (false, t),
+    };
+    let (modo, dir) = match resto.split_once(',') {
+        Some((a, b)) => (a, Some(b)),
+        None => (resto, None),
+    };
+    if dir.is_some() && !recursive {
+        return Err(ModeError::DirModeWithoutRecursive);
+    }
+    Ok(ModeRequest {
+        mode: parse_mode(modo)?,
+        recursive,
+        dir_mode: dir.map(parse_mode).transpose()?,
+    })
+}
+
 /// El modo en octal de cuatro dígitos, que es como se prellena el campo.
 ///
 /// ```
@@ -93,6 +159,53 @@ pub fn mode_of(entry: &norte_proto::Entry) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// La gramática del campo es la de `chmod` (#315), y estas son sus cuatro
+    /// formas: el modo suelto, el recursivo, el recursivo con modo de
+    /// carpetas, y el que no vale.
+    #[test]
+    fn el_campo_lee_las_formas_de_chmod() {
+        let solo = parse_request("755").expect("modo");
+        assert_eq!(
+            (solo.mode, solo.recursive, solo.dir_mode),
+            (0o755, false, None)
+        );
+
+        let rec = parse_request("-R 700").expect("modo");
+        assert_eq!((rec.mode, rec.recursive, rec.dir_mode), (0o700, true, None));
+
+        let dos = parse_request("-R 644,755").expect("modo");
+        assert_eq!(
+            (dos.mode, dos.recursive, dos.dir_mode),
+            (0o644, true, Some(0o755))
+        );
+
+        // Un modo de carpetas SIN `-R` es una petición que no va a pasar, y se
+        // dice en vez de ignorarse.
+        assert_eq!(
+            parse_request("644,755"),
+            Err(ModeError::DirModeWithoutRecursive)
+        );
+    }
+
+    /// Y los errores del modo siguen siendo los mismos en las dos posiciones:
+    /// un modo de carpetas ilegible no se traga.
+    #[test]
+    fn un_modo_de_carpetas_invalido_no_se_traga() {
+        assert_eq!(parse_request("-R 644,8"), Err(ModeError::NotOctal));
+        assert_eq!(parse_request("-R 644,77777"), Err(ModeError::TooBig));
+        assert_eq!(parse_request("-R"), Err(ModeError::NotOctal), "sin modo");
+    }
+
+    /// El espacio tras `-R` no es obligatorio ni tiene que ser uno: lo que se
+    /// teclea en un campo lleva los espacios que lleve.
+    #[test]
+    fn el_espacio_tras_la_bandera_da_igual() {
+        for texto in ["-R755", "-R 755", "-R   755", "  -R 755  "] {
+            let r = parse_request(texto).unwrap_or_else(|e| panic!("{texto}: {e:?}"));
+            assert_eq!((r.mode, r.recursive), (0o755, true), "{texto}");
+        }
+    }
 
     /// La trampa que justifica el octal: `755` leído en decimal es un modo
     /// legal y distinto, así que equivocarse aquí no daría un error — daría

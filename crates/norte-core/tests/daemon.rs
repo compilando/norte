@@ -6357,6 +6357,7 @@ async fn ai_rename_plan_responde_por_el_socket() {
             &methods::AiRenamePlanParams {
                 dir: vp("mem:///"),
                 instruction: "prefija informe-".into(),
+                names: Vec::new(),
             },
         )
         .await
@@ -6378,6 +6379,7 @@ async fn ai_rename_plan_sin_proveedor_es_unsupported() {
             &methods::AiRenamePlanParams {
                 dir: vp("mem:///"),
                 instruction: "x".into(),
+                names: Vec::new(),
             },
         )
         .await
@@ -6414,6 +6416,7 @@ async fn ai_rename_plan_le_dice_lo_mismo_a_todo_agente() {
             &methods::AiRenamePlanParams {
                 dir: vp("mem:///"),
                 instruction: "x".into(),
+                names: Vec::new(),
             },
         )
         .await
@@ -6428,6 +6431,7 @@ async fn ai_rename_plan_le_dice_lo_mismo_a_todo_agente() {
             &methods::AiRenamePlanParams {
                 dir: vp("mem:///proj"),
                 instruction: "x".into(),
+                names: Vec::new(),
             },
         )
         .await
@@ -6476,6 +6480,7 @@ async fn ai_rename_plan_no_distingue_params_malos_para_un_agente() {
             &methods::AiRenamePlanParams {
                 dir: vp("mem:///"),
                 instruction: "x".repeat(64 * 1024),
+                names: Vec::new(),
             },
         )
         .await
@@ -6507,6 +6512,7 @@ async fn agente_con_scope_tampoco_puede_ai_rename_plan() {
             &methods::AiRenamePlanParams {
                 dir: vp("mem:///proj"),
                 instruction: "x".into(),
+                names: Vec::new(),
             },
         )
         .await
@@ -6534,6 +6540,7 @@ async fn instruccion_desmesurada_es_invalid_params() {
             &methods::AiRenamePlanParams {
                 dir: vp("mem:///"),
                 instruction: "x".repeat(5 * 1024),
+                names: Vec::new(),
             },
         )
         .await
@@ -6542,6 +6549,60 @@ async fn instruccion_desmesurada_es_invalid_params() {
         ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
         other => panic!("esperaba Rpc, fue {other:?}"),
     }
+}
+
+/// Una lista de `names` desmesurada es `-32602`, como la instrucción y como
+/// un lote de rutas (#121): lo que acota es un filtro que corre por cada
+/// entrada del listado, en una llamada DIRECTA que solo puede morir por
+/// timeout.
+#[tokio::test]
+async fn names_por_encima_del_tope_es_invalid_params() {
+    let d = spawn_daemon_ai("[]").await;
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, methods::AiRenamePlanResult>(
+            methods::AI_RENAME_PLAN,
+            &methods::AiRenamePlanParams {
+                dir: vp("mem:///"),
+                instruction: "x".into(),
+                names: (0..=methods::AI_RENAME_NAMES_MAX)
+                    .map(|i| format!("f{i}.txt"))
+                    .collect(),
+            },
+        )
+        .await
+        .expect_err("por encima del tope");
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// **El daemon HONRA `names`**: sin este test, un handler que se comiera el
+/// campo pasaba la suite entera — que es exactamente lo que pasó mientras se
+/// escribía esto.
+#[tokio::test]
+async fn el_daemon_pide_el_plan_solo_sobre_los_nombres_pedidos() {
+    let d = spawn_daemon_ai(r#"[{"from":"marcado.txt","to":"nuevo.txt"}]"#).await;
+    let c = connected_client(&d).await;
+    let plan: methods::AiRenamePlanResult = c
+        .call(
+            methods::AI_RENAME_PLAN,
+            &methods::AiRenamePlanParams {
+                dir: vp("mem:///"),
+                instruction: "x".into(),
+                // Un nombre que NO está en el listado del daemon: si el campo
+                // se ignorara, el plan saldría del directorio entero y el
+                // proveedor contestaría su plan de siempre.
+                names: vec!["no-esta-en-el-listado.txt".into()],
+            },
+        )
+        .await
+        .expect("plan");
+    assert!(
+        plan.entries.is_empty(),
+        "sobre nada que exista no se pregunta: {plan:?}"
+    );
 }
 
 /// #72 sobre `ai.rename_plan`: la llamada al proveedor puede tardar — un
@@ -6563,6 +6624,7 @@ async fn rpc_cancel_aborta_ai_rename_plan_en_vuelo() {
                 &methods::AiRenamePlanParams {
                     dir: vp("mem:///"),
                     instruction: "x".into(),
+                    names: Vec::new(),
                 },
                 move |id| *slot.lock().expect("id lock") = Some(id),
             )
@@ -6766,6 +6828,71 @@ async fn semantic_por_el_socket_devuelve_hits() {
         top.score.is_finite(),
         "score finito por contrato del wire, fue {}",
         top.score
+    );
+}
+
+/// Y con un nombre HOSTIL, byte a byte por el socket (#122).
+///
+/// El test de arriba redondea `a.txt`, así que la ruta que vuelve cabe en
+/// ASCII y no dice nada del camino NDJSON. Aquí el fichero lleva bytes que no
+/// son UTF-8 (`%FF%FE` en el wire), que es lo que un `to_string_lossy` de más
+/// convertiría en `\u{FFFD}` — dando un hit que apunta a un fichero que no
+/// existe, y sobre el que un frontend haría `cd` sin encontrar nada.
+#[tokio::test]
+async fn semantic_por_el_socket_sobrevive_a_un_nombre_hostil() {
+    let d = spawn_daemon_embed(None).await;
+    d.mem.mkdir(&vp("mem:///r")).await.expect("mkdir r");
+    let hostil = "mem:///r/%FF%FE.txt";
+    write_file(&d.mem, hostil, b"contenido alfa").await;
+    let mut c = connected_client(&d).await;
+
+    let t: FsTaskResult = c
+        .call(
+            methods::INDEX_BUILD,
+            &methods::IndexBuildParams {
+                root: vp("mem:///r"),
+            },
+        )
+        .await
+        .expect("index.build");
+    let seen = drain_task(&mut c, t.task_id.get()).await;
+    assert_eq!(seen.last().expect("terminal").state, TaskState::Completed);
+
+    let t: FsTaskResult = c
+        .call(
+            methods::INDEX_EMBED,
+            &methods::IndexEmbedParams {
+                root: vp("mem:///r"),
+            },
+        )
+        .await
+        .expect("index.embed");
+    let seen = drain_task(&mut c, t.task_id.get()).await;
+    assert_eq!(seen.last().expect("terminal").state, TaskState::Completed);
+
+    let r: methods::IndexSearchSemanticResult = c
+        .call(
+            methods::INDEX_SEARCH_SEMANTIC,
+            &methods::IndexSearchSemanticParams {
+                root: Some(vp("mem:///r")),
+                query: "contenido alfa".into(),
+                k: 5,
+            },
+        )
+        .await
+        .expect("index.search_semantic");
+    let top = r.hits.first().expect("al menos un hit");
+    assert_eq!(
+        top.path,
+        vp(hostil),
+        "la ruta volvió del socket con otros bytes"
+    );
+    // Y los bytes son los de verdad, no un reemplazo: `\u{FFFD}` en UTF-8 es
+    // `efbfbd`, y comparar la ruta reconstruida no lo distinguiría si el
+    // parser hubiera aceptado el escape de otra cosa.
+    assert_eq!(
+        top.path.file_name().expect("nombre").as_bytes(),
+        b"\xff\xfe.txt"
     );
 }
 

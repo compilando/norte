@@ -652,10 +652,35 @@ pub async fn on_key(
                             let dir = app.focused().dir().clone();
                             let b = backend.clone();
                             let d = dir.clone();
-                            let handle =
-                                tokio::spawn(
-                                    async move { b.ai_rename_plan(&d, &instruction).await },
-                                );
+                            // Lo MARCADO, si hay marcas (#121): pedir un plan
+                            // sobre cinco ficheros mandaba los mil del
+                            // directorio al proveedor, que es más de lo que el
+                            // humano señaló. `marked_entries` y no
+                            // `marked_paths`: el segundo cae al cursor cuando
+                            // no hay marcas, y «sin marcar nada» significa el
+                            // directorio entero.
+                            let cuantas_marcas = app.focused().marked_entries().len();
+                            let marcados: Vec<String> = app
+                                .focused()
+                                .marked_entries()
+                                .iter()
+                                .filter_map(|e| e.path.file_name())
+                                .filter_map(|s| String::from_utf8(s.as_bytes().to_vec()).ok())
+                                .collect();
+                            // Si TODO lo marcado son nombres que no son texto,
+                            // la lista queda vacía — y vacía significa «el
+                            // directorio entero», o sea justo lo contrario de
+                            // lo que se pidió. Se rehúsa y se dice: ampliar el
+                            // alcance en silencio es lo que este campo existe
+                            // para no hacer.
+                            if cuantas_marcas > 0 && marcados.is_empty() {
+                                app.message = Some(t("msg-ai-rename-marks-not-text"));
+                                app.ai_rename_submitted();
+                                return;
+                            }
+                            let handle = tokio::spawn(async move {
+                                b.ai_rename_plan(&d, &instruction, &marcados).await
+                            });
                             // Relanzar con un run vivo lo ABORTA
                             // (dropear el handle solo desvincula):
                             // a lo sumo una petición en vuelo.

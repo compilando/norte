@@ -321,7 +321,8 @@ impl SessionBody {
     /// la TUI la tomaba en su escritor y la ventana no la tomaba en absoluto
     /// —cualquier error de `session_put` era «no llegó», sin degradar y sin
     /// avisar—, que es exactamente la divergencia silenciosa del ADR 0077.
-    /// [`Self::fit_to_envelope`] hace que esto casi nunca haga falta; casi.
+    /// La poda por bytes de [`Self::prune`] hace que esto casi nunca haga
+    /// falta; casi.
     pub fn degrade_for_size(&mut self) -> bool {
         let mut habia = false;
         for slot in self.slots.values_mut() {
