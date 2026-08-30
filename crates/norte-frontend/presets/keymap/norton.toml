@@ -119,6 +119,17 @@ keymap = [
     { on = ["insert"], run = "mark.toggle" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
+    # Marcar MOVIÉNDOSE. Norton Commander original no lo tiene —es anterior a
+    # la lista con selección extendida— pero tampoco itemiza el movimiento del
+    # cursor del panel, que este preset ya toma de orthodox por la misma
+    # regla. Dejarlo sin atar aquí, y solo aquí, sería un preset al que le
+    # faltan seis comandos sin una razón mejor que la fecha.
+    { on = ["shift+down"], run = "mark.toggle" },
+    { on = ["shift+up"], run = "mark.toggle-up" },
+    { on = ["shift+pgdn"], run = "mark.toggle-page-down" },
+    { on = ["shift+pgup"], run = "mark.toggle-page-up" },
+    { on = ["shift+home"], run = "mark.to-top" },
+    { on = ["shift+end"], run = "mark.to-bottom" },
     { on = ["*"], run = "mark.invert" },
     { on = ["ctrl+t"], run = "pane.tab-new" },
     { on = ["ctrl+w"], run = "pane.tab-close" },

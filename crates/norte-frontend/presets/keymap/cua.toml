@@ -103,6 +103,15 @@ keymap = [
     { on = ["alt+R"], run = "mark.restore" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
+    # Marcar MOVIÉNDOSE. En un entorno CUA esto es lo NATIVO: `Shift`+flechas
+    # extiende la selección en cualquier lista del escritorio, así que aquí no
+    # es una importación de un gestor ortodoxo sino lo que el lector ya espera.
+    { on = ["shift+down"], run = "mark.toggle" },
+    { on = ["shift+up"], run = "mark.toggle-up" },
+    { on = ["shift+pgdn"], run = "mark.toggle-page-down" },
+    { on = ["shift+pgup"], run = "mark.toggle-page-up" },
+    { on = ["shift+home"], run = "mark.to-top" },
+    { on = ["shift+end"], run = "mark.to-bottom" },
     { on = ["ctrl+t"], run = "pane.tab-new" },
     { on = ["ctrl+w"], run = "pane.tab-close" },
     { on = ["alt+n"], run = "pane.tab-next" },

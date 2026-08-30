@@ -114,6 +114,11 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "mark.files",
     "mark.dirs",
     "mark.restore",
+    "mark.toggle-up",
+    "mark.toggle-page-down",
+    "mark.toggle-page-up",
+    "mark.to-top",
+    "mark.to-bottom",
     "pane.switch",
     "layout.focus-next",
     "layout.focus-prev",
@@ -371,6 +376,19 @@ pub enum Efecto {
     },
     /// Marca o desmarca la fila del cursor.
     Marcar,
+    /// Marca o desmarca la fila del cursor y SUBE (`shift+↑`).
+    MarcarSubiendo,
+    /// Marca (o desmarca) el tramo de una página y se mueve allí.
+    MarcarPagina {
+        /// `true` = hacia abajo.
+        abajo: bool,
+    },
+    /// Marca del cursor a un extremo y DESMARCA el otro lado
+    /// (`shift+Inicio`/`shift+Fin` de Krusader).
+    MarcarHastaElBorde {
+        /// `true` = hacia arriba.
+        arriba: bool,
+    },
     /// Quita todas las marcas.
     DesmarcarTodo,
     /// Mueve el foco al siguiente hueco enfocable (o al anterior).
@@ -695,6 +713,11 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "mark.files" => Efecto::MarcarClase { dirs: false },
         "mark.dirs" => Efecto::MarcarClase { dirs: true },
         "mark.restore" => Efecto::RestaurarMarcas,
+        "mark.toggle-up" => Efecto::MarcarSubiendo,
+        "mark.toggle-page-down" => Efecto::MarcarPagina { abajo: true },
+        "mark.toggle-page-up" => Efecto::MarcarPagina { abajo: false },
+        "mark.to-top" => Efecto::MarcarHastaElBorde { arriba: true },
+        "mark.to-bottom" => Efecto::MarcarHastaElBorde { arriba: false },
         // `pane.switch` es el cambio clásico entre dos paneles; con más de
         // dos, lo honesto es seguir el mismo recorrido que el tabulador en
         // vez de inventar un segundo orden.

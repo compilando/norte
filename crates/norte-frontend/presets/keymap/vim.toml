@@ -120,6 +120,15 @@ keymap = [
     { on = ["alt+R"], run = "mark.restore" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
+    # Marcar MOVIÉNDOSE. `Shift`+flechas y no `V`+movimiento: el modo visual
+    # de vim es un estado con ancla, y norte no lo tiene — fingirlo con
+    # `v`/`V` daría una tecla que parece vim y se comporta de otra manera.
+    { on = ["shift+down"], run = "mark.toggle" },
+    { on = ["shift+up"], run = "mark.toggle-up" },
+    { on = ["shift+pgdn"], run = "mark.toggle-page-down" },
+    { on = ["shift+pgup"], run = "mark.toggle-page-up" },
+    { on = ["shift+home"], run = "mark.to-top" },
+    { on = ["shift+end"], run = "mark.to-bottom" },
     { on = ["ctrl+t"], run = "pane.tab-new" },
     { on = ["ctrl+w"], run = "pane.tab-close" },
     { on = ["alt+n"], run = "pane.tab-next" },

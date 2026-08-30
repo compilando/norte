@@ -1950,6 +1950,105 @@ mod tests {
         }
     }
 
+    /// Los nombres marcados, en orden, para leer un aserto de un vistazo.
+    fn marcados(p: &PaneState) -> Vec<String> {
+        p.marked_entries()
+            .iter()
+            .map(|e| String::from_utf8_lossy(e.path.file_name().unwrap().as_bytes()).into_owned())
+            .collect()
+    }
+
+    /// `shift+↑`: el espejo exacto de `space`. Marca la fila del cursor y
+    /// SUBE, sin envolver en la primera.
+    #[test]
+    fn toggle_mark_and_retreat_es_el_espejo_de_advance() {
+        let mut p = pane(&["a", "b", "c", "d"]);
+        p.set_cursor(2); // "c"
+        p.toggle_mark_and_retreat();
+        p.toggle_mark_and_retreat();
+        assert_eq!(marcados(&p), ["b", "c"]);
+        assert_eq!(p.cursor(), 0);
+        // En la primera fila no envuelve: marca y se queda.
+        p.toggle_mark_and_retreat();
+        assert_eq!(marcados(&p), ["a", "b", "c"]);
+        assert_eq!(p.cursor(), 0);
+    }
+
+    /// **El tramo lo decide la fila del CURSOR, no cada fila.**
+    ///
+    /// Es lo que hace el gesto reversible —repetirlo deshace lo que hizo— y
+    /// lo que da sentido a la frase de Far: «para deseleccionar, mantén Shift
+    /// y muévete en la dirección contraria». Si cada fila se toggleara por su
+    /// cuenta, un tramo a medio marcar quedaría alternado.
+    #[test]
+    fn una_pagina_marca_o_desmarca_segun_la_fila_del_cursor() {
+        let mut p = pane(&["a", "b", "c", "d", "e"]);
+        p.toggle_mark_page(3, true);
+        assert_eq!(marcados(&p), ["a", "b", "c", "d"]);
+        assert_eq!(p.cursor(), 3);
+
+        // El cursor está ahora sobre "d", que SÍ está marcada: el mismo gesto
+        // hacia arriba desmarca en vez de marcar.
+        p.toggle_mark_page(3, false);
+        assert_eq!(marcados(&p), Vec::<String>::new());
+        assert_eq!(p.cursor(), 0);
+    }
+
+    /// El tramo llega hasta donde llega el CURSOR, no hasta donde se pidió:
+    /// contra el tope, `n` filas son menos de `n`.
+    #[test]
+    fn una_pagina_contra_el_tope_marca_solo_lo_que_recorre() {
+        let mut p = pane(&["a", "b", "c"]);
+        p.set_cursor(1);
+        p.toggle_mark_page(10, true);
+        assert_eq!(marcados(&p), ["b", "c"], "nunca envuelve al principio");
+        assert_eq!(p.cursor(), 2);
+    }
+
+    /// **Krusader `Shift+Home`/`Shift+End`: marcan un lado y LIMPIAN el otro.**
+    ///
+    /// Literal de su documentación («selects everything above the cursor and
+    /// deselects everything below the cursor, if selected»), y es lo que los
+    /// distingue de «añade un tramo»: quien los usa para acotar una selección
+    /// cuenta con que lo de fuera se va.
+    #[test]
+    fn los_del_borde_limpian_el_otro_lado() {
+        let mut p = pane(&["a", "b", "c", "d", "e"]);
+        p.set_cursor(4);
+        p.toggle_mark(); // "e" marcada a mano, al otro lado del corte
+        p.set_cursor(1);
+
+        p.mark_to_top();
+        assert_eq!(marcados(&p), ["a", "b"], "«e» tenía que irse");
+        assert_eq!(p.cursor(), 1, "el borde NO mueve el cursor");
+
+        p.mark_to_bottom();
+        assert_eq!(marcados(&p), ["b", "c", "d", "e"], "y ahora se va «a»");
+    }
+
+    /// La fila `..` no se marca por ninguno de los caminos nuevos: es la
+    /// misma puerta (`markable_indices`/`marcar`) que ya la deja fuera.
+    #[test]
+    fn el_padre_no_entra_por_los_caminos_nuevos() {
+        let mut p = pane_hijo(&["a", "b"]);
+        p.set_parent_row(true);
+        p.set_cursor(0); // la fila `..`
+        p.mark_to_bottom();
+        assert!(
+            !marcados(&p).iter().any(|n| n == ".."),
+            "el padre jamás es un operando: {:?}",
+            marcados(&p)
+        );
+        p.set_cursor(2);
+        p.mark_to_top();
+        assert!(
+            p.marked_entries()
+                .iter()
+                .all(|e| Some(&e.path) != p.parent_target()),
+            "ni marcando hacia arriba desde abajo"
+        );
+    }
+
     /// `set_pending_focus` gana sobre la memoria y se consume una sola vez.
     #[test]
     fn pending_focus_gana_sobre_memoria_y_se_consume_una_vez() {

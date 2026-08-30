@@ -15,6 +15,11 @@ commands = [
     "mark.files",
     "mark.dirs",
     "mark.restore",
+    "mark.toggle-up",
+    "mark.toggle-page-down",
+    "mark.toggle-page-up",
+    "mark.to-top",
+    "mark.to-bottom",
     "app.pick-accept",
 ]
 context = ["dialog.mark-pattern"]
@@ -31,6 +36,27 @@ uno no necesita tecla propia.
 - {{cmd:mark.extension-add}} marca las que comparten extensión con la de debajo del cursor, y {{cmd:mark.extension-remove}} las desmarca
 - {{cmd:mark.files}} marca los ficheros y {{cmd:mark.dirs}} las carpetas, sumándose a lo que ya hubiera marcado
 - {{cmd:mark.restore}} devuelve la selección de ANTES del último gesto en bloque
+
+# Marcar moviéndote
+
+Marcar fila a fila y marcar un tramo son el mismo gesto a distinta velocidad,
+así que comparten la regla: **manda la fila del cursor**, que es la que decide
+si el gesto marca o desmarca, y esa decisión se aplica a todas las que toca.
+Es lo que hace que cada uno sea reversible —repítelo y lo deshaces— y lo que
+hace que «para desmarcar, mantén el modificador y muévete al revés» sea cierto
+en vez de aproximadamente cierto.
+
+- {{cmd:mark.toggle}} baja una fila, {{cmd:mark.toggle-up}} sube
+- {{cmd:mark.toggle-page-down}} y {{cmd:mark.toggle-page-up}} hacen lo mismo con una pantalla entera
+- {{cmd:mark.to-top}} marca todo desde el cursor hacia arriba **y desmarca todo lo que quede debajo**; {{cmd:mark.to-bottom}} es su espejo
+
+Esos dos últimos no son «añade un tramo», y la diferencia importa: son la
+forma de decir «estos y solo estos». Además dejan el cursor donde está, porque
+el cursor es el borde por el que acabas de cortar.
+
+Ninguno alcanza una fila que el filtro rápido esté escondiendo, y ninguno marca
+la fila `..`. Lo que no ves, no lo marcas; y el directorio padre no es un
+operando.
 
 La extensión es la cola tras el último punto, así que un `.bashrc` no tiene
 extensión: tiene nombre, y marcarlo no marca a los demás ocultos. Es la misma

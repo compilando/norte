@@ -153,6 +153,17 @@ keymap = [
     { on = ["ctrl+-"], run = "mark.clear" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
+    # Marcar MOVIÉNDOSE. `Shift`+flechas y `Shift`+página no están en
+    # KEYBOARD.TXT —la fuente documenta lo que TC AÑADE sobre el
+    # comportamiento de la lista de Windows, y esto es de la lista— así que se
+    # atan como los ata orthodox, la misma divergencia ya anotada arriba para
+    # las flechas, PgUp/PgDn e Inicio/Fin.
+    { on = ["shift+down"], run = "mark.toggle" },
+    { on = ["shift+up"], run = "mark.toggle-up" },
+    { on = ["shift+pgdn"], run = "mark.toggle-page-down" },
+    { on = ["shift+pgup"], run = "mark.toggle-page-up" },
+    { on = ["shift+home"], run = "mark.to-top" },
+    { on = ["shift+end"], run = "mark.to-bottom" },
     { on = ["*"], run = "mark.invert" },
     # #313: `Alt+NUM+`/`Alt+NUM-` de la fuente —la selección por EXTENSIÓN—,
     # que estaban en la lista de omisiones de arriba por no haber comando al

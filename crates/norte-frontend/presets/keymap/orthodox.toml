@@ -161,6 +161,17 @@ keymap = [
     { on = ["alt+R"], run = "mark.restore" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
+    # Marcar MOVIÉNDOSE: la otra mitad de la familia. `space`/`insert` marcan
+    # BAJANDO y no había nada para subir ni para un tramo. Los seis van aquí
+    # —el preset de la casa— y los cuatro importados los toman de aquí, que es
+    # la regla que ya siguen las flechas y PgUp/PgDn: sus fuentes no itemizan
+    # el movimiento del cursor del panel.
+    { on = ["shift+down"], run = "mark.toggle" },
+    { on = ["shift+up"], run = "mark.toggle-up" },
+    { on = ["shift+pgdn"], run = "mark.toggle-page-down" },
+    { on = ["shift+pgup"], run = "mark.toggle-page-up" },
+    { on = ["shift+home"], run = "mark.to-top" },
+    { on = ["shift+end"], run = "mark.to-bottom" },
     { on = ["ctrl+t"], run = "pane.tab-new" },
     { on = ["ctrl+w"], run = "pane.tab-close" },
     { on = ["alt+n"], run = "pane.tab-next" },

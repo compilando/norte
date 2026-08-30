@@ -2634,6 +2634,46 @@ keymap = [
         }
     }
 
+    /// **Marcar moviéndose está en los SIETE, o no está.**
+    ///
+    /// La familia entera (`shift`+flechas, `shift`+página, `shift`+extremos)
+    /// se añadió de una vez, y ese es justo el momento en que un preset se
+    /// queda atrás sin que nada lo diga: el catálogo anuncia el comando, la
+    /// hoja de referencia lo imprime, la paleta lo ofrece, y el teclado de
+    /// quien usa ese preset no hace nada. Ha pasado tres veces (#228, #250, y
+    /// los nueve `ctrl+<MAYÚSCULA>` que seis presets llevaban y ningún
+    /// terminal entrega).
+    ///
+    /// Va aparte de `todo_preset_alcanza_las_superficies_propias_de_norte`
+    /// porque el argumento es otro: aquello son pantallas que ningún original
+    /// tenía; esto es una familia que los originales SÍ tienen —Krusader la
+    /// documenta entera— y que ninguno de los siete puede permitirse a medias.
+    #[test]
+    fn los_siete_presets_marcan_moviendose() {
+        const FAMILIA: &[&str] = &[
+            "mark.toggle-up",
+            "mark.toggle-page-down",
+            "mark.toggle-page-up",
+            "mark.to-top",
+            "mark.to-bottom",
+        ];
+        let known = preset_commands(Screen::Browse);
+        let known: Vec<&str> = known.iter().map(String::as_str).collect();
+        for name in presets::NAMES {
+            let src = presets::source(name).expect("NAMES resuelve");
+            let kf = parse_keymap(src).expect("preset parsea");
+            let eff = Effective::build_for(&kf, &[], &known, Screen::Browse)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            for cmd in FAMILIA {
+                assert!(
+                    eff.bindings().iter().any(|(_, c)| c == cmd),
+                    "preset {name}: `{cmd}` no tiene tecla — la familia de marcar \
+                     moviéndose entra en los siete o en ninguno"
+                );
+            }
+        }
+    }
+
     /// **Un comando del núcleo sin tecla en un preset es una DECISIÓN o un
     /// descuido, y aquí se separan los dos** (#228).
     ///

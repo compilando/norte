@@ -9,6 +9,23 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Marking while you move**, in all seven presets and both frontends. Space
+  and Insert marked going DOWN and there was nothing for going up, nothing for
+  a range, and nothing for "these and only these" — so a reader who overshot by
+  one row had to go back, unmark by hand and come forward again. Now
+  `Shift`+Up/Down toggles a row and moves, `Shift`+PageUp/PageDown does the
+  same to a whole screenful, and `Shift`+Home/End marks everything to one edge
+  **and unmarks the other side**. That last pair is Krusader's, semantics
+  included: its documentation says "selects everything above the cursor and
+  deselects everything below the cursor, if selected", and that unmarking is
+  what makes it a way to say "these and only these" rather than a way to add a
+  range — so it is what norte does, and the cursor stays put, because the
+  cursor is the edge you just cut at. The row under the cursor decides whether
+  a gesture marks or unmarks and that decision applies to the whole span, which
+  is what makes each of them reversible and what makes "to unmark, hold the
+  modifier and move the other way" true rather than nearly true. None of them
+  reaches a row the quick filter is hiding, and none of them can mark the `..`
+  row.
 - **A real subshell behind the panels** (#142, ADR 0084). `app.toggle-panels`
   used to release the terminal and show whatever the host's scrollback already
   held; the help topic had a section called "What it is not" pointing at this

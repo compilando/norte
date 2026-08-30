@@ -237,6 +237,11 @@ commands! {
     "mark.files" => MarkFiles,
     "mark.dirs" => MarkDirs,
     "mark.restore" => MarkRestore,
+    "mark.toggle-up" => MarkToggleUp,
+    "mark.toggle-page-down" => MarkTogglePageDown,
+    "mark.toggle-page-up" => MarkTogglePageUp,
+    "mark.to-top" => MarkToTop,
+    "mark.to-bottom" => MarkToBottom,
 }
 
 /// Los comandos del contexto `dialog` (H1, issue #24) — la lista CERRADA

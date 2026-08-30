@@ -236,6 +236,19 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("mark.files", false),
     live("mark.dirs", false),
     live("mark.restore", false),
+    // Marcar MOVIÉNDOSE, que es la mitad de la familia que faltaba: `space` e
+    // `insert` marcan bajando y no había nada para subir ni para un tramo.
+    // `toggle-up` es el espejo exacto de `mark.toggle`; los dos `page-*`
+    // aplican a todo el tramo lo contrario de lo que tenga la fila del cursor,
+    // que es lo que hace el gesto reversible; y `to-top`/`to-bottom` son el
+    // `Shift+Home`/`Shift+End` de Krusader, que además DESMARCAN el otro lado
+    // — eso es literal de su documentación y es lo que los distingue de
+    // «añade un tramo».
+    live("mark.toggle-up", false),
+    live("mark.toggle-page-down", false),
+    live("mark.toggle-page-up", false),
+    live("mark.to-top", false),
+    live("mark.to-bottom", false),
     // --- task ---
     live("task.cancel", false),
     // Los tres de RECORRER el tablero estuvieron un rato en `Planned`: la

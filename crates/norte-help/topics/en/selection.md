@@ -15,6 +15,11 @@ commands = [
     "mark.files",
     "mark.dirs",
     "mark.restore",
+    "mark.toggle-up",
+    "mark.toggle-page-down",
+    "mark.toggle-page-up",
+    "mark.to-top",
+    "mark.to-bottom",
     "app.pick-accept",
 ]
 context = ["dialog.mark-pattern"]
@@ -31,6 +36,27 @@ no special key.
 - {{cmd:mark.extension-add}} marks the ones sharing the extension of the entry under the cursor, and {{cmd:mark.extension-remove}} unmarks them
 - {{cmd:mark.files}} marks the files and {{cmd:mark.dirs}} the folders, adding to whatever was already marked
 - {{cmd:mark.restore}} brings back the selection from BEFORE the last bulk gesture
+
+# Marking while you move
+
+Marking one row at a time and marking a range are the same gesture at
+different speeds, so they share the rule: **the row under the cursor decides**
+whether the gesture marks or unmarks, and then that decision applies to every
+row it touches. It is what makes each of these reversible — repeat it and you
+undo it — and it is why "to unmark, hold the modifier and move the other way"
+is true rather than approximately true.
+
+- {{cmd:mark.toggle}} goes down a row, {{cmd:mark.toggle-up}} goes up
+- {{cmd:mark.toggle-page-down}} and {{cmd:mark.toggle-page-up}} do the same to a whole screenful
+- {{cmd:mark.to-top}} marks everything from the cursor upwards **and unmarks everything below it**; {{cmd:mark.to-bottom}} is its mirror
+
+Those last two are not "add a range", and the difference matters: they are how
+you say "these and only these". They also leave the cursor where it is, because
+the cursor is the edge you just cut at.
+
+None of them ever reaches a row the quick filter is hiding, and none of them
+marks the `..` row. What you cannot see, you cannot mark; and the parent
+directory is not an operand.
 
 The extension is the tail after the last dot, so a `.bashrc` has none: it has a
 name, and marking it does not mark every other hidden file. That is the same

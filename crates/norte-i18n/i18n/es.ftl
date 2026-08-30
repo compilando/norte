@@ -1016,6 +1016,13 @@ help-cmd-mark-extension-remove = desmarcar las de la misma extensión que el cur
 help-cmd-mark-files = marcar los ficheros (no las carpetas)
 help-cmd-mark-dirs = marcar las carpetas (no los ficheros)
 help-cmd-mark-restore = devolver la selección anterior
+# Marcar MOVIÉNDOSE. `mark.toggle` es el que baja, así que estos dicen la
+# dirección: sin ella, dos filas de la hoja de referencia se leen igual.
+help-cmd-mark-toggle-up = marcar o desmarcar y subir
+help-cmd-mark-toggle-page-down = marcar (o desmarcar) una página hacia abajo
+help-cmd-mark-toggle-page-up = marcar (o desmarcar) una página hacia arriba
+help-cmd-mark-to-top = marcar hasta arriba y desmarcar el resto
+help-cmd-mark-to-bottom = marcar hasta abajo y desmarcar el resto
 # Marcar por extensión y por clase (#313).
 msg-mark-no-extension = lo que hay bajo el cursor no tiene extensión que marcar
 msg-marks-restored = selección anterior devuelta: { $n } marcadas

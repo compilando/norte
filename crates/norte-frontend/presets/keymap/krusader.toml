@@ -205,6 +205,20 @@ keymap = [
     { on = ["alt+*"], run = "mark.invert" },
     { on = ["ctrl+plus"], run = "mark.pattern-add" },
     { on = ["ctrl+-"], run = "mark.pattern-remove" },
+    # Marcar MOVIÉNDOSE. `Shift+Home`/`Shift+End` son literales de la fuente
+    # («Selecting», basic-functions): «selects everything above the cursor
+    # (and deselects everything below the cursor, if selected)» y su espejo —
+    # de ahí que `mark.to-top`/`mark.to-bottom` limpien el otro lado en vez de
+    # limitarse a añadir un tramo. `Shift`+flechas y `Shift`+página NO están
+    # itemizados en la fuente, igual que el movimiento del cursor del panel
+    # (ver las divergencias de la cabecera): se atan como los ata orthodox,
+    # que es la misma regla que ya se aplicó a las flechas y a PgUp/PgDn.
+    { on = ["shift+down"], run = "mark.toggle" },
+    { on = ["shift+up"], run = "mark.toggle-up" },
+    { on = ["shift+pgdn"], run = "mark.toggle-page-down" },
+    { on = ["shift+pgup"], run = "mark.toggle-page-up" },
+    { on = ["shift+home"], run = "mark.to-top" },
+    { on = ["shift+end"], run = "mark.to-bottom" },
     # Las sumas (#311). Krusader las tiene en su menú File y ninguno de los
     # cuatro importados les da acorde, así que la tecla se ELIGE: `alt+k`
     # calcula y `alt+K` comprueba — libre en los siete, y la mayúscula

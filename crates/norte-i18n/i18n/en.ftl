@@ -1017,6 +1017,13 @@ help-cmd-mark-extension-remove = unmark the ones with the cursor's extension
 help-cmd-mark-files = mark the files (not the folders)
 help-cmd-mark-dirs = mark the folders (not the files)
 help-cmd-mark-restore = bring back the previous selection
+# Marking while MOVING. `mark.toggle` is the one that goes down, so these say
+# the direction: without it, two rows of the reference sheet read the same.
+help-cmd-mark-toggle-up = toggle the mark and move up
+help-cmd-mark-toggle-page-down = mark (or unmark) a page downwards
+help-cmd-mark-toggle-page-up = mark (or unmark) a page upwards
+help-cmd-mark-to-top = mark up to the top, unmark the rest
+help-cmd-mark-to-bottom = mark down to the bottom, unmark the rest
 # Marking by extension and by kind (#313).
 msg-mark-no-extension = what is under the cursor has no extension to mark by
 msg-marks-restored = previous selection restored: { $n } marked

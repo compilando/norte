@@ -205,6 +205,36 @@ doc link: `cargo doc -p <crate> --no-deps`. Seconds each.
   `docs`, `cov`), and never through `| tail`: a killed pipe leaves
   nothing behind, so five minutes of compute reports nothing at all.
 
+### A key change is not done until EVERY preset is done
+
+**Anything that touches keys finishes in all seven presets, or it is not
+finished.** A command that only one preset binds is a command most readers do
+not have, and the reader never learns why: the catalogue announces it, the
+reference sheet prints it, the palette offers it, and their keyboard does
+nothing. That failure has landed three times — #228, #250, and the nine
+`ctrl+<MAYÚSCULA>` bindings that six presets carried and no terminal can
+deliver.
+
+So, for a new or moved binding:
+
+1. **Bind it in all seven** (`orthodox`, `vim`, `cua`, `krusader`, `far`,
+   `norton`, `total-commander`) — or write in that preset's header WHY not, in
+   the divergences/omissions block that is already there. "The source does not
+   attest it" is a good reason; forgetting is not, and silence is
+   indistinguishable from forgetting.
+2. **The imported four are TRANSCRIPTIONS.** Check the real manager's
+   documentation before inventing a chord. Where the source does not itemise
+   something norte still needs, say so in the header — those files already do
+   this for panel cursor movement.
+3. **Check the chord can actually be delivered.** `shift+<single char>` is a
+   dead key: the terminal sends the same byte with and without shift. Write the
+   shifted character (`V`, `ctrl+P`), never `shift+v`.
+4. **Check the SCREEN.** The same chord means different commands in `browse`
+   and in `dialog` (`tab` is `pane.switch` in one and `dialog.pane` in the
+   other). Binding in the wrong context is a no-op that tests do not catch.
+5. Catalogue entry, `help-cmd-*` in **both** locales, the help topic, and the
+   `norte-cli` golden (`NORTE_UPDATE_GOLDEN=1`).
+
 ### Tier work by reading the issue, never the title
 
 Three waves in a row lost issues at dispatch time because the title said

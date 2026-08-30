@@ -9731,6 +9731,9 @@ impl Estado {
             | Efecto::MarcarExtension { .. }
             | Efecto::MarcarClase { .. }
             | Efecto::RestaurarMarcas
+            | Efecto::MarcarSubiendo
+            | Efecto::MarcarPagina { .. }
+            | Efecto::MarcarHastaElBorde { .. }
             | Efecto::DesmarcarTodo => self.efecto_de_listado(efecto, slot, backend, buzon),
             Efecto::Foco { atras } => self.mover_foco(atras),
             Efecto::Destino => self.designar_destino(),
@@ -9924,6 +9927,28 @@ impl Estado {
             }
             Efecto::RestaurarMarcas => {
                 self.hueco_mut().pane.restore_previous_marks();
+                (self.aplicada(), vec![self.parche_filas()])
+            }
+            // Marcar MOVIÉNDOSE: la regla entera —a qué avanza, qué decide si
+            // el tramo se marca o se desmarca, y que los dos del borde limpien
+            // el otro lado— vive en `PaneState`, igual que en la terminal. La
+            // ventana repinta filas Y cursor porque estos SÍ lo mueven (menos
+            // los del borde, que a propósito no).
+            Efecto::MarcarSubiendo => {
+                self.hueco_mut().pane.toggle_mark_and_retreat();
+                (self.aplicada(), vec![self.parche_filas()])
+            }
+            Efecto::MarcarPagina { abajo } => {
+                let n = self.hueco().pane.page_step();
+                self.hueco_mut().pane.toggle_mark_page(n, abajo);
+                (self.aplicada(), vec![self.parche_filas()])
+            }
+            Efecto::MarcarHastaElBorde { arriba } => {
+                if arriba {
+                    self.hueco_mut().pane.mark_to_top();
+                } else {
+                    self.hueco_mut().pane.mark_to_bottom();
+                }
                 (self.aplicada(), vec![self.parche_filas()])
             }
             // Los demás no llegan aquí: el `match` de arriba los reparte.

@@ -88,6 +88,123 @@ impl PaneState {
         }
     }
 
+    /// El índice de la fila bajo el cursor EN `entries`, respetando el filtro.
+    ///
+    /// Es la coordenada en la que hablan `mark_range` y `set_mark`, y no es la
+    /// misma que `cursor()` cuando hay un filtro quick puesto.
+    fn indice_bajo_el_cursor(&self) -> Option<usize> {
+        if let Some(q) = &self.quick
+            && q.mode() == Mode::Filter
+        {
+            return q.selected_entry_index();
+        }
+        self.is_markable(self.cursor).then_some(self.cursor)
+    }
+
+    /// Toggle-and-move hacia ARRIBA: el espejo de
+    /// [`Self::toggle_mark_and_advance`] (`shift+↑` de Far y del resto).
+    ///
+    /// Existe porque la familia estaba a medias: `space`/`insert` marcan
+    /// bajando, y no había forma de marcar subiendo — el lector que se pasaba
+    /// una fila tenía que subir, desmarcar a mano y volver.
+    pub fn toggle_mark_and_retreat(&mut self) {
+        self.toggle_mark();
+        let filtering = self
+            .quick
+            .as_ref()
+            .is_some_and(|q| q.mode() == Mode::Filter);
+        if filtering {
+            self.quick_up();
+        } else {
+            self.page_up(1);
+        }
+    }
+
+    /// Aplica a TODO el tramo entre el cursor y `n` filas más abajo (o arriba,
+    /// con `hacia_abajo` en falso) lo contrario de lo que tenga la fila del
+    /// cursor, y deja el cursor al final del tramo.
+    ///
+    /// Lo decide la fila del CURSOR, no cada fila: así el gesto es reversible
+    /// —repetirlo deshace lo que hizo— y una selección a medias no se queda
+    /// alternando. Es la regla de `shift+PgDn`/`shift+PgUp` de Far y Total
+    /// Commander, y la misma que hace que «para deseleccionar, mueve en la
+    /// dirección contraria» tenga sentido.
+    ///
+    /// Con un filtro quick puesto no sale de lo VISIBLE: `mark_range` y
+    /// `set_mark` ya lo respetan, y el cursor se mueve por el camino filtrado.
+    pub fn toggle_mark_page(&mut self, n: usize, hacia_abajo: bool) {
+        let Some(desde) = self.indice_bajo_el_cursor() else {
+            return;
+        };
+        let marcar = !self.marks.contains(&self.entries[desde].path);
+        self.fotografiar_marcas();
+        // Mover PRIMERO y leer el destino después: cuánto avanza de verdad lo
+        // decide el pane (topes, filtro), y suponerlo aquí marcaría un tramo
+        // que el cursor no recorre.
+        let filtering = self
+            .quick
+            .as_ref()
+            .is_some_and(|q| q.mode() == Mode::Filter);
+        for _ in 0..n {
+            match (filtering, hacia_abajo) {
+                (true, true) => self.quick_down(),
+                (true, false) => self.quick_up(),
+                (false, true) => self.page_down(1),
+                (false, false) => self.page_up(1),
+            }
+        }
+        let hasta = self.indice_bajo_el_cursor().unwrap_or(desde);
+        if marcar {
+            self.mark_range(desde, hasta);
+        } else {
+            let (a, b) = if desde <= hasta {
+                (desde, hasta)
+            } else {
+                (hasta, desde)
+            };
+            for i in self.markable_indices() {
+                if (a..=b).contains(&i) {
+                    self.set_mark(i, false);
+                }
+            }
+        }
+    }
+
+    /// Krusader `Shift+Home`: marca todo lo que hay del cursor hacia ARRIBA y
+    /// DESMARCA lo que quede por debajo.
+    ///
+    /// La segunda mitad no es un extra: es lo que la documentación de Krusader
+    /// dice literalmente («selects everything above the cursor **and
+    /// deselects everything below the cursor, if selected**»), y es lo que
+    /// distingue este gesto de un «añade un tramo». Sin ella, el lector que lo
+    /// usa para acotar una selección se lleva por delante lo que creía haber
+    /// dejado fuera.
+    pub fn mark_to_top(&mut self) {
+        self.marcar_hasta_el_borde(true);
+    }
+
+    /// Krusader `Shift+End`: marca del cursor hacia ABAJO y desmarca lo de
+    /// arriba. El espejo de [`Self::mark_to_top`].
+    pub fn mark_to_bottom(&mut self) {
+        self.marcar_hasta_el_borde(false);
+    }
+
+    /// El cuerpo de los dos de arriba: `hacia_arriba` elige qué lado se marca.
+    ///
+    /// El cursor NO se mueve. Krusader tampoco lo mueve, y aquí importa más:
+    /// el tramo se define desde donde está, así que moverlo dejaría al lector
+    /// sin el punto desde el que acaba de acotar.
+    fn marcar_hasta_el_borde(&mut self, hacia_arriba: bool) {
+        let Some(desde) = self.indice_bajo_el_cursor() else {
+            return;
+        };
+        self.fotografiar_marcas();
+        for i in self.markable_indices() {
+            let dentro = if hacia_arriba { i <= desde } else { i >= desde };
+            self.set_mark(i, dentro);
+        }
+    }
+
     /// ¿Está marcada esta entrada? (por su `VPath` absoluto).
     #[must_use]
     pub fn is_marked(&self, entry: &Entry) -> bool {

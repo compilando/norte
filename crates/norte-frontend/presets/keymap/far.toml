@@ -193,6 +193,17 @@ keymap = [
     { on = ["insert"], run = "mark.toggle" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
+    # Marcar MOVIÉNDOSE. La fuente lo atestigua en prosa («para deseleccionar,
+    # mantén Shift y muévete en la dirección contraria») pero no lo itemiza en
+    # su tabla de teclas, igual que el movimiento del cursor del panel: se ata
+    # como lo ata orthodox. Que el tramo lo decida la fila del CURSOR es justo
+    # lo que hace cierta esa frase.
+    { on = ["shift+down"], run = "mark.toggle" },
+    { on = ["shift+up"], run = "mark.toggle-up" },
+    { on = ["shift+pgdn"], run = "mark.toggle-page-down" },
+    { on = ["shift+pgup"], run = "mark.toggle-page-up" },
+    { on = ["shift+home"], run = "mark.to-top" },
+    { on = ["shift+end"], run = "mark.to-bottom" },
     { on = ["*"], run = "mark.invert" },
     # #313: `Ctrl+M` es «restore previous selection» en far-panelcmd.txt, y
     # estaba en la lista de omisiones de arriba por no haber comando al que

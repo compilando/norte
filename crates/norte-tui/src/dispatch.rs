@@ -428,6 +428,18 @@ pub async fn dispatch(
         // según haya o no filtro, clampado sin envolver) vive en el modelo
         // compartido.
         Command::MarkToggle => app.focused_mut().toggle_mark_and_advance(),
+        // El resto de la familia «marcar moviéndose». El TAMAÑO de la página
+        // sale del último frame PINTADO, como el `pane.page-down` de al lado:
+        // una constante aquí marcaría un tramo distinto del que el cursor
+        // recorre en cuanto la ventana no midiera eso.
+        Command::MarkToggleUp => app.focused_mut().toggle_mark_and_retreat(),
+        Command::MarkTogglePageDown | Command::MarkTogglePageUp => {
+            let n = app.focused().page_step();
+            let abajo = cmd == Command::MarkTogglePageDown;
+            app.focused_mut().toggle_mark_page(n, abajo);
+        }
+        Command::MarkToTop => app.focused_mut().mark_to_top(),
+        Command::MarkToBottom => app.focused_mut().mark_to_bottom(),
         Command::MarkAll => app.focused_mut().mark_all(),
         Command::MarkInvert => app.focused_mut().invert_marks(),
         Command::MarkClear => app.focused_mut().clear_marks(),

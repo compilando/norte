@@ -472,6 +472,29 @@ impl Pane {
         self.state.toggle_mark_and_advance();
     }
 
+    /// El espejo del de arriba, hacia ARRIBA (`shift+↑`). Delegado puro.
+    pub fn toggle_mark_and_retreat(&mut self) {
+        self.state.toggle_mark_and_retreat();
+    }
+
+    /// Marca (o desmarca) el tramo de `n` filas desde el cursor y se mueve
+    /// allí (`shift+PgDn`/`shift+PgUp`). Delegado puro.
+    pub fn toggle_mark_page(&mut self, n: usize, hacia_abajo: bool) {
+        self.state.toggle_mark_page(n, hacia_abajo);
+    }
+
+    /// Krusader `Shift+Home`: marca del cursor hacia arriba y desmarca el
+    /// resto. Delegado puro.
+    pub fn mark_to_top(&mut self) {
+        self.state.mark_to_top();
+    }
+
+    /// Krusader `Shift+End`: marca del cursor hacia abajo y desmarca el
+    /// resto. Delegado puro.
+    pub fn mark_to_bottom(&mut self) {
+        self.state.mark_to_bottom();
+    }
+
     /// Marca todas las entradas visibles. Delegado puro (#103).
     pub fn mark_all(&mut self) {
         self.state.mark_all();
