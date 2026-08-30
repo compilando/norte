@@ -1042,6 +1042,10 @@ msg-edit-not-a-file = that is a folder: press ⏎ to enter it, it is not edited
 # gone): naming which one would confirm it to whoever planted the link.
 msg-edit-created-changed = the file was created, but it is no longer the one that was created: the editor did not open
 msg-edit-created-unnamable = the file was created, but its path cannot be given to an editor on this machine
+# And this one is different: it could not be ASKED. Calling a relieved daemon
+# tampering is a false accusation, and teaching people to ignore the message
+# above is what makes it useless the day it is true.
+msg-edit-created-unchecked = the file was created, but what is there could not be checked: the editor did not open
 # Comparing two files (#312): two, and it is not guessed.
 msg-compare-files-need-two = mark TWO files, or put one under the cursor in each panel
 msg-compare-files-not-files = that is a folder: two folders are compared with "compare directories"
@@ -1797,6 +1801,7 @@ host-no-desktop = this window has no desktop behind it: it cannot copy to the cl
 # #303: same wording as the TUI's msg-edit-created-changed, and for the same
 # reason: one message for all three causes (a link, a folder, gone).
 host-created-changed = the file was created, but it is no longer the one that was created: it was not opened
+host-created-unchecked = the file was created, but what is there could not be checked: it was not opened
 msg-paths-copied = { $n } path(s) on the clipboard
 msg-paths-copied-osc52 = { $n } path(s) sent to the terminal clipboard (OSC 52); check by pasting
 msg-clipboard-failed = the clipboard refused the paths

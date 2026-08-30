@@ -595,6 +595,7 @@ pub async fn dispatch(
                     // El shell ya es interactivo: al salir de él, volver a
                     // los paneles es exactamente lo que se quiere.
                     wait_for_key: false,
+                    check_regular: None,
                 });
             }
             Err(msg) => app.message = Some(msg),
@@ -608,6 +609,7 @@ pub async fn dispatch(
                 argv: Vec::new(),
                 cwd: None,
                 wait_for_key: true,
+                check_regular: None,
             });
         }
         // Solo abre el prompt; el `$SHELL -c` lo deja pendiente su Enter, en

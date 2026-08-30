@@ -31,6 +31,8 @@ pub async fn initial_pane(
     attrs: &[String],
 ) -> Result<Pane, Error> {
     let (entries, skipped) = backend.list_with_skipped_attrs(start, attrs).await?;
+    // El arranque de un panel es una pantalla: se retiene el ancla (#301).
+    backend.remember_listing_anchor(start).await;
     let mut pane = Pane::new(start.clone(), entries);
     // #93: las omitidas del contenedor también en el ARRANQUE — el badge no
     // debe nacer vacío teniendo el dato gratis (review #117 tarea 2).

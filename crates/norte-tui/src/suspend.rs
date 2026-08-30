@@ -133,7 +133,13 @@ pub async fn run_suspended(
             // exactamente el agujero. Un editor que no está instalado daba un
             // ENOENT de todas formas; lo que cambia es que ahora el mensaje
             // dice qué programa.
-            let programa = norte_frontend::openers::resolve_program(&argv[0]).ok_or_else(|| {
+            //
+            // `split_first` y no `argv[0]`: el `is_empty` de arriba lo cubre
+            // hoy, pero un índice es un panic y aquí ya hay un `io::Result`.
+            let (nombre, resto) = argv.split_first().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "argv vacío")
+            })?;
+            let programa = norte_frontend::openers::resolve_program(nombre).ok_or_else(|| {
                 // El programa ya lo NOMBRA `msg-shell-failed`, así que este
                 // detalle dice solo lo que el llamante no sabe: que no se
                 // encontró, y dónde se buscó.
@@ -143,7 +149,7 @@ pub async fn run_suspended(
                 )
             })?;
             let mut cmd = std::process::Command::new(&programa);
-            cmd.args(&argv[1..])
+            cmd.args(resto)
                 .env(norte_frontend::shell::LEVEL_VAR, level)
                 .stdin(stdio())
                 .stdout(stdio())

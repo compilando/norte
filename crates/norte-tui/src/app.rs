@@ -135,6 +135,18 @@ pub struct PendingShell {
     /// legible la salida de un comando: sin esto, el listado vuelve encima de
     /// lo que acaba de escribirse.
     pub wait_for_key: bool,
+    /// La ruta que tiene que seguir siendo un fichero REGULAR en el instante
+    /// del lanzamiento, o no se lanza nada (#303).
+    ///
+    /// La pone `pane.edit-new` y solo él: es el gesto en el que norte ANUNCIA
+    /// un nombre creándolo y después se lo entrega a otro programa. Viaja en la
+    /// suspensión —y no se comprueba donde se resuelve el gesto— porque entre
+    /// una cosa y otra corre el re-listado de los dos paneles: la comprobación
+    /// vale lo que vale el hueco que deja detrás, y aquí el hueco es el `exec`.
+    ///
+    /// `None` = nada que comprobar, que es lo que llevan el shell, la línea de
+    /// comandos y `app.toggle-panels`.
+    pub check_regular: Option<norte_proto::VPath>,
 }
 
 /// The key of the capability cache: the DIRECTORY, in wire form.

@@ -278,7 +278,12 @@ pub async fn listing(
     dir: &VPath,
     attrs: &[String],
 ) -> Result<(Vec<Entry>, Option<u64>), Error> {
-    backend.list_with_skipped_attrs(dir, attrs).await
+    let salida = backend.list_with_skipped_attrs(dir, attrs).await?;
+    // Esto SÍ es una pantalla (#301): el ancla de lo que el humano acaba de
+    // ver se retiene aquí y no en el embudo del backend, por donde también
+    // pasan el árbol lateral y el `fs.list` de un script.
+    backend.remember_listing_anchor(dir).await;
+    Ok(salida)
 }
 
 /// Cachea en `App` las DOS mitades de una respuesta de `fs.capabilities`
@@ -359,6 +364,8 @@ pub async fn first_page(
         None
     };
     let (mut stream, skipped) = backend.list_stream_with(dir, attrs).await?;
+    // El cd de un panel es una pantalla: se retiene el ancla (#301).
+    backend.remember_listing_anchor(dir).await;
     let mut first = Vec::with_capacity(FIRST_PAGE);
     while first.len() < FIRST_PAGE {
         match stream.next().await {

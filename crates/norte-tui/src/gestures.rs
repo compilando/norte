@@ -118,7 +118,7 @@ pub async fn launch_opener(
         detached,
         cwd,
     } = pending;
-    let prog = program.clone();
+    let prog = std::ffi::OsString::from(program.clone());
     let available =
         tokio::task::spawn_blocking(move || norte_frontend::openers::program_available(&prog))
             .await
@@ -179,7 +179,14 @@ async fn spawn_detached(
         // Ruta ABSOLUTA, resuelta con el cwd de norte y nunca con el del pane
         // (#302): ver el comentario largo en `suspend::run_suspended`, que es
         // el otro sitio donde un hijo se lanza con `current_dir` puesto.
-        let programa = norte_frontend::openers::resolve_program(&argv[0]).ok_or_else(|| {
+        //
+        // `split_first` y no `argv[0]`: el `debug_assert` de arriba no existe
+        // en release, y un índice sobre un argv vacío sería un panic donde ya
+        // hay un `io::Result` que decirlo.
+        let (nombre, resto) = argv
+            .split_first()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "argv vacío"))?;
+        let programa = norte_frontend::openers::resolve_program(nombre).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "not found in PATH (relative PATH entries are ignored)",
@@ -192,7 +199,7 @@ async fn spawn_detached(
         if let Some(dir) = &cwd {
             cmd.current_dir(dir);
         }
-        cmd.args(&argv[1..])
+        cmd.args(resto)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -230,6 +237,7 @@ pub fn submit_command_line(app: &mut App, cmd: &str) {
                 argv: norte_frontend::shell::shell_command_argv(&shell, cmd),
                 cwd: Some(dir),
                 wait_for_key: true,
+                check_regular: None,
             });
         }
         Err(msg) => app.message = Some(msg),
@@ -334,6 +342,11 @@ pub fn edit_under_cursor(app: &App) -> Result<EditLaunch, String> {
         // Un editor de pantalla completa se despide él solo; esperar una tecla
         // después sería un paso de más entre guardar y volver a los paneles.
         wait_for_key: false,
+        // F4 sobre una fila del listado NO comprueba: aquí el nombre lo eligió
+        // el humano de lo que vio, no lo anunció norte creándolo, y el `undo`
+        // por ruta de #303 no entra en juego. La ventana listado→tecla existe
+        // igual, y queda dicha en el ADR 0082 como decisión y no como olvido.
+        check_regular: None,
     }))
 }
 
@@ -398,6 +411,7 @@ pub fn compare_files(app: &App) -> Result<EditLaunch, String> {
         argv: norte_frontend::openers::expand_argv(&plantilla, &[&na, &nb], &dir),
         cwd: norte_frontend::shell::child_cwd(&dir),
         wait_for_key: true,
+        check_regular: None,
     }))
 }
 
@@ -433,53 +447,69 @@ pub enum EditLaunch {
 /// nombrar no es una alternativa. El llamante lo DICE: media mitad del gesto
 /// perdida en silencio es la clase de cosa que este comando vino a quitar.
 ///
-/// # El `stat` antes de lanzar (#303)
-///
-/// Entre crear el fichero y abrir el editor hay una ventana, y norte la abre
-/// él: ANUNCIA el nombre creándolo —no hay nada que adivinar— y quien pueda
-/// escribir en ese directorio lo ve aparecer (inotify), lo desenlaza y deja un
-/// symlink en su sitio. El humano teclearía entonces en un fichero que nadie
-/// le enseñó, y el `undo` de la entrada `Created` trabaja por RUTA y no por
-/// identidad: deshacer mandaría a la papelera lo que haya ahí AHORA.
-///
-/// Así que se pregunta antes de lanzar, y se rehúsa lo que no sea un fichero
-/// regular. La pregunta va por el BACKEND (`fs.stat`, que es `lstat` — describe
-/// el enlace y jamás su destino), no con un `std::fs` dentro del bucle: hacer
-/// I/O de disco en el executor es la regla 2, y el backend puede además ser el
-/// daemon.
-///
-/// **Esto ESTRECHA la ventana, no la cierra**, y conviene no confundirlo: entre
-/// el `stat` y el `exec` del editor sigue habiendo un hueco. Cerrarlo de verdad
-/// pide abrir el fichero una vez y entregarle el descriptor al hijo, y ninguna
-/// interfaz de editor de aquí lo acepta. Lo que compra es que la ventana pase
-/// de «todo un refresco de los dos paneles, segundos en un pane remoto» a un
-/// viaje de ida y vuelta al core.
+/// La suspensión que sale de aquí lleva la ruta creada en
+/// [`PendingShell::check_regular`](crate::app::PendingShell::check_regular):
+/// la comprobación de #303 la hace el run loop pegada al lanzamiento, con
+/// [`motivo_para_no_lanzar`], y no aquí.
 ///
 /// # Errors
 ///
-/// El mensaje LOCALIZADO, listo para la barra: la ruta no tiene forma nativa,
-/// o lo que hay bajo ella ya no es el fichero regular que se creó.
-pub async fn edit_created(
-    backend: &norte_core::backend::Backend,
-    path: &VPath,
-) -> Result<crate::app::PendingShell, String> {
+/// El mensaje LOCALIZADO, listo para la barra: la ruta no tiene forma nativa.
+pub fn edit_created(path: &VPath) -> Result<crate::app::PendingShell, String> {
     let Ok(native) = norte_vfs_local::vpath_to_native(path) else {
         return Err(t("msg-edit-created-unnamable"));
     };
-    match backend.stat(path).await {
-        Ok(entry) if entry.kind == norte_proto::EntryKind::File => {}
-        // Un symlink, un directorio, o lo que ya no está: en los tres casos lo
-        // que hay bajo esa ruta NO es lo que norte creó, y el editor no se
-        // abre. Un solo mensaje para los tres a propósito — decir cuál sería
-        // decirle al que puso el symlink que su symlink está puesto.
-        _ => return Err(t("msg-edit-created-changed")),
-    }
     let cwd = native.parent().and_then(norte_frontend::shell::child_cwd);
     Ok(crate::app::PendingShell {
         argv: norte_frontend::shell::editor_argv(&native),
         cwd,
         wait_for_key: false,
+        check_regular: Some(path.clone()),
     })
+}
+
+/// Por qué NO hay que lanzar esta suspensión, o `None` si adelante (#303).
+///
+/// Entre crear el fichero y abrir el editor hay una ventana, y norte la abre
+/// él: ANUNCIA el nombre creándolo —no hay nada que adivinar— y quien pueda
+/// escribir en ese directorio lo ve aparecer (inotify), lo desenlaza y deja un
+/// symlink en su sitio. El humano teclearía entonces en un fichero que nadie le
+/// enseñó, y el `undo` de la entrada `Created` trabaja por RUTA y no por
+/// identidad: deshacer mandaría a la papelera lo que haya ahí AHORA.
+///
+/// Así que se pregunta antes de lanzar, y se rehúsa lo que no sea un fichero
+/// regular. La pregunta va por el BACKEND (`fs.stat`, que es `lstat` — describe
+/// el enlace y jamás su destino), no con un `std::fs` en el bucle: hacer I/O de
+/// disco en el executor es la regla 2, y el backend puede además ser el daemon.
+///
+/// **La llama el RUN LOOP justo antes de ceder la terminal**, y ese sitio es la
+/// mitad del arreglo: preguntando donde se decide abrir el editor, entre la
+/// respuesta y el `exec` cabía un `refresh_panes` entero —los dos paneles,
+/// segundos en un pane remoto—, que es la ventana que esto viene a estrechar.
+///
+/// **Estrecha y no cierra**: entre el `stat` y el `exec` queda hueco. Cerrarlo
+/// pediría abrir el fichero una vez y darle el descriptor al hijo, y ninguna
+/// interfaz de editor de aquí lo acepta.
+///
+/// Las tres formas de «esto ya no es lo que se creó» —un enlace, un directorio,
+/// nada— dan el MISMO texto: decir cuál sería confirmarle al que puso el enlace
+/// que su enlace está puesto. Un fallo al PREGUNTAR (el daemon relevado, un
+/// timeout) tiene el suyo propio: llamarlo manipulación es una acusación falsa,
+/// y enseñar a ignorar ese mensaje es lo que lo inutiliza el día que sea cierto.
+pub async fn motivo_para_no_lanzar(
+    backend: &norte_core::backend::Backend,
+    path: Option<VPath>,
+) -> Option<String> {
+    let path = path?;
+    match backend.stat(&path).await {
+        Ok(entry) if entry.kind == norte_proto::EntryKind::File => None,
+        // `NotFound` va con los otros dos y no con el fallo: «ahí no hay nada»
+        // es una RESPUESTA, y es además la que da el desenlace más probable de
+        // un ataque —desenlazar y no reponer—. Lo que no puede colarse aquí es
+        // un `ProviderUnavailable` o un timeout.
+        Ok(_) | Err(norte_proto::Error::NotFound) => Some(t("msg-edit-created-changed")),
+        Err(_) => Some(t("msg-edit-created-unchecked")),
+    }
 }
 
 /// El directorio de trabajo que le toca a un hijo lanzado desde el pane con
@@ -1813,8 +1843,9 @@ mod edit_tests {
         assert!(edit_under_cursor(&app).is_err());
     }
 
-    /// Un backend embebido con el provider local: `edit_created` pregunta por
-    /// `fs.stat` (#303), así que sus tests necesitan disco de verdad.
+    /// Un backend embebido con el provider local: `motivo_para_no_lanzar`
+    /// pregunta por `fs.stat` (#303), así que sus tests necesitan disco de
+    /// verdad.
     fn backend_local() -> norte_core::backend::Backend {
         let engine = norte_core::Engine::new();
         engine.register_provider(std::sync::Arc::new(
@@ -1826,16 +1857,19 @@ mod edit_tests {
     /// #290: la otra mitad de `pane.edit-new` abre el editor sobre la ruta que
     /// se MANDÓ CREAR, no sobre lo que haya bajo el cursor: cuando la task
     /// termina, el listado puede no haberse refrescado todavía.
-    #[tokio::test]
-    async fn el_editor_del_fichero_creado_va_sobre_la_ruta_que_se_pidio() {
+    #[test]
+    fn el_editor_del_fichero_creado_va_sobre_la_ruta_que_se_pidio() {
         let dir = tempfile::tempdir().expect("tempdir");
         let fichero = dir.path().join("notas.txt");
         std::fs::write(&fichero, b"").expect("crea");
         let creado = norte_vfs::native::vpath_from_native(&fichero).expect("nativa");
 
-        let pending = edit_created(&backend_local(), &creado)
-            .await
-            .expect("local y regular");
+        let pending = edit_created(&creado).expect("local");
+        assert_eq!(
+            pending.check_regular.as_ref(),
+            Some(&creado),
+            "la suspensión se lleva la ruta que hay que comprobar al lanzar"
+        );
         assert_eq!(pending.argv.len(), 2, "programa y ruta, sin línea de shell");
         assert_eq!(
             pending.argv[1],
@@ -1855,22 +1889,23 @@ mod edit_tests {
     /// Y sobre algo que no tiene forma nativa no se abre nada: crear se rehúsa
     /// en un pane remoto, así que esto no debería pasar — y si pasa, un editor
     /// sobre lo que no se puede nombrar no es la salida.
-    #[tokio::test]
-    async fn sin_forma_nativa_no_se_abre_ningun_editor() {
+    #[test]
+    fn sin_forma_nativa_no_se_abre_ningun_editor() {
         let remoto = VPath::parse("sftp://srv/notas.txt").expect("wire");
-        assert!(edit_created(&backend_local(), &remoto).await.is_err());
+        assert!(edit_created(&remoto).is_err());
     }
 
     /// #303: entre crear el fichero y abrir el editor, alguien que puede
     /// escribir en ese directorio lo desenlaza y deja un SYMLINK con el mismo
-    /// nombre. El editor no se abre: `fs.stat` es `lstat` y describe el
-    /// enlace, no su destino, así que el enlace se ve como lo que es.
+    /// nombre. No se lanza nada: `fs.stat` es `lstat` y describe el enlace, no
+    /// su destino, así que el enlace se ve como lo que es.
     ///
-    /// Es la única defensa que hay aquí, y estrecha sin cerrar — pero la
-    /// ventana de antes era el refresco entero de los dos paneles.
+    /// Es la única defensa que hay aquí, y estrecha sin cerrar — por eso la
+    /// pregunta la hace el run loop pegada al `exec` y no donde se resuelve el
+    /// gesto, que era dejar un `refresh_panes` entero dentro de la ventana.
     #[cfg(unix)]
     #[tokio::test]
-    async fn un_symlink_puesto_entre_crear_y_abrir_no_se_edita() {
+    async fn un_symlink_puesto_entre_crear_y_lanzar_no_se_edita() {
         let dir = tempfile::tempdir().expect("tempdir");
         let secreto = dir.path().join("secreto");
         std::fs::write(&secreto, b"de otro").expect("crea");
@@ -1879,8 +1914,9 @@ mod edit_tests {
         std::os::unix::fs::symlink(&secreto, &creado_nativo).expect("symlink");
         let creado = norte_vfs::native::vpath_from_native(&creado_nativo).expect("nativa");
 
-        assert!(
-            edit_created(&backend_local(), &creado).await.is_err(),
+        assert_eq!(
+            motivo_para_no_lanzar(&backend_local(), Some(creado)).await,
+            Some(t("msg-edit-created-changed")),
             "un enlace no es el fichero que se creó"
         );
     }
@@ -1888,16 +1924,39 @@ mod edit_tests {
     /// Y lo mismo si en su sitio hay un DIRECTORIO, o si ya no hay nada: las
     /// tres causas dan la misma negativa, a propósito.
     #[tokio::test]
-    async fn ni_un_directorio_ni_un_hueco_se_editan() {
+    async fn ni_un_directorio_ni_un_hueco_se_lanzan() {
         let dir = tempfile::tempdir().expect("tempdir");
         let carpeta = dir.path().join("notas.txt");
         std::fs::create_dir(&carpeta).expect("mkdir");
         let como_dir = norte_vfs::native::vpath_from_native(&carpeta).expect("nativa");
-        assert!(edit_created(&backend_local(), &como_dir).await.is_err());
-
         let ausente =
             norte_vfs::native::vpath_from_native(&dir.path().join("no-esta")).expect("nativa");
-        assert!(edit_created(&backend_local(), &ausente).await.is_err());
+
+        let backend = backend_local();
+        assert_eq!(
+            motivo_para_no_lanzar(&backend, Some(como_dir)).await,
+            Some(t("msg-edit-created-changed"))
+        );
+        // Y el que ya no está NO se cuenta como «no se pudo preguntar»: el
+        // `NotFound` de un provider es una respuesta, no un fallo al preguntar.
+        assert_eq!(
+            motivo_para_no_lanzar(&backend, Some(ausente)).await,
+            Some(t("msg-edit-created-changed"))
+        );
+    }
+
+    /// El fichero que sigue estando se lanza, y una suspensión sin nada que
+    /// comprobar —el shell, la línea de comandos— ni pregunta.
+    #[tokio::test]
+    async fn lo_que_sigue_siendo_el_fichero_se_lanza_y_lo_que_no_pide_nada_tampoco() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fichero = dir.path().join("notas.txt");
+        std::fs::write(&fichero, b"").expect("crea");
+        let creado = norte_vfs::native::vpath_from_native(&fichero).expect("nativa");
+
+        let backend = backend_local();
+        assert_eq!(motivo_para_no_lanzar(&backend, Some(creado)).await, None);
+        assert_eq!(motivo_para_no_lanzar(&backend, None).await, None);
     }
 
     /// Y sobre un fichero local sale el argv del editor con la ruta APARTE.

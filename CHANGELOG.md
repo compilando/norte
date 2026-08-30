@@ -401,6 +401,11 @@ independently through `PROTOCOL_VERSION`.
   directory already changed, which is the hole itself. The `$SHELL` guard is
   deliberately not copied over: a relative `$EDITOR` is normal and a relative
   `$SHELL` is not, so the guard belongs at the launch and not at the variable.
+  The same rule now covers the RAR delegate, whose `PATH` walk took relative
+  entries and whose working directory was `norte-rar-<pid>` under the system
+  temp, created with `create_dir_all` — which succeeds on a directory that
+  already exists, whoever owns it. It is a randomly named, exclusively created
+  0700 directory now.
 - **The name norte creates was announced before the editor opened it** (ADR
   0082, #303). norte announces the name by creating it — nothing to guess — and
   anyone who can write in that directory could unlink it and leave a symlink
@@ -408,10 +413,14 @@ independently through `PROTOCOL_VERSION`.
   never shown; `undo` of the `Created` entry works by path, so undoing would
   send whatever is there NOW to the trash. Both frontends now ask what is at
   that path before launching (`fs.stat`, which is `lstat`: it describes the
-  link, never its target) and refuse anything that is not a regular file. This
-  NARROWS the window rather than closing it — between the `stat` and the `exec`
-  a gap remains — but in the TUI that window used to be a full re-listing of
-  both panels, seconds on a remote pane, and is now one round trip.
+  link, never its target) and refuse anything that is not a regular file. The
+  question is asked where the LAUNCH happens — the TUI carries the path on the
+  pending suspension and the run loop asks immediately before yielding the
+  terminal — because asking where the gesture is resolved leaves the panel
+  re-listing inside the window it was meant to remove. This NARROWS the window
+  rather than closing it: between the `stat` and the `exec` a gap remains.
+  Failing to ASK (a relieved daemon, a timeout) says so in its own words rather
+  than claiming the file was tampered with.
 - **The embedded backend sent no destination anchor** (ADR 0082, #301). The
   anchor of ADR 0073 was only ever filled by the SDK, over the wire — and `ntc`
   runs embedded by default, so every anchored operation from the TUI ran with
@@ -420,15 +429,27 @@ independently through `PROTOCOL_VERSION`.
   the anchor of each directory it lists and passes it to `create_file`, `copy`
   and `move`, so a destination replaced between the listing and the write is
   refused with `Conflict{EscapesRoot}` whether norte runs embedded or against a
-  daemon. A destination nobody listed still behaves as it did in 0.53.
+  daemon. A destination nobody listed still behaves as it did in 0.53. Only a
+  PANEL's listings are recorded: the tree sidebar and a script's `fs.list` would
+  otherwise re-bless the panel's anchor with whatever they saw, and an anchor
+  says who looked. Eviction is LRU in both the embedded cache and the SDK's,
+  which had the same bug: with FIFO, the directory you have open was evicted
+  once 64 different directories went past — an expanded tree does that alone —
+  and the check silently stopped happening.
 - **The orphan cap could overflow the session envelope on its own** (#304).
   `prune` trims by COUNTS and the real limit is BYTES: 128 orphan slots with
   full history serialised to ~1.18 MB against the 1 MiB `SESSION_BODY_MAX`, so
-  the core refused the `put` and left the stored session as it was — the reader
-  silently lost where they were, and the trimming that existed to prevent that
-  was what caused it. An orphan slot — one no arrangement mentions, which
-  nobody can press "back" inside without reopening it first — now keeps 8 steps
-  of history per direction instead of 64. A VISIBLE slot loses nothing.
+  the core refused the `put` and left the stored session as it was — the window
+  lost where the reader was without a word (the TUI at least truncates, retries
+  and warns). An orphan slot — one no arrangement mentions, which nobody can
+  press "back" inside without reopening it first — now keeps 8 steps of history
+  per direction instead of 64, and a VISIBLE slot loses nothing. Since no count
+  can promise a byte limit — the number of visible slots has no cap and the
+  reader picks the paths — `prune` now ends by measuring the serialised body and
+  degrading in a declared order until it fits: orphans whole, then visible
+  history halved, then the arrangements of non-active profiles. The active
+  profile, its arrangement and every visible slot's path and cursor are never
+  touched.
 
 - **Five layout commands had no key in any preset.** Closing a slot, growing
   and shrinking it, equalising the row and designating the destination were

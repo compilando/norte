@@ -502,8 +502,36 @@ enum Mensaje {
     /// escritorio de esta máquina, que no significa una cosa distinta según
     /// qué daemon conteste — al revés que los informes, cuyos ids de task
     /// vuelven a empezar en 1 tras un relevo.
-    CreadoComprobado(Box<(norte_proto::VPath, bool)>),
+    CreadoComprobado(Box<(norte_proto::VPath, Veredicto)>),
     Apagar(oneshot::Sender<ShutdownReport>),
+}
+
+/// Qué contestó el `fs.stat` que se hace entre crear un fichero y abrirlo
+/// (#303).
+///
+/// Tres valores y no un `bool` porque «no es el fichero» y «no se pudo
+/// preguntar» son cosas distintas y se dicen distinto: llamar manipulación a un
+/// daemon relevado es una acusación falsa, y enseñar al lector a ignorar ese
+/// mensaje es lo que lo inutiliza el día que sea verdad.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Veredicto {
+    /// Sigue siendo un fichero regular: adelante.
+    EsElFichero,
+    /// Un enlace, una carpeta o nada. Las tres se dicen igual: nombrar cuál
+    /// sería confirmarle el enlace a quien lo puso.
+    YaNoEsElFichero,
+    /// El `stat` falló. No se abre nada, y se dice que no se pudo comprobar.
+    NoSeSabe,
+}
+
+impl From<bool> for Veredicto {
+    fn from(regular: bool) -> Self {
+        if regular {
+            Self::EsElFichero
+        } else {
+            Self::YaNoEsElFichero
+        }
+    }
 }
 
 /// La respuesta de una petición de fondo, por superficie.
@@ -1029,8 +1057,8 @@ async fn actor(
                 }
             }
             Mensaje::CreadoComprobado(comprobado) => {
-                let (path, regular) = *comprobado;
-                for u in estado.abrir_lo_comprobado(path, regular) {
+                let (path, veredicto) = *comprobado;
+                for u in estado.abrir_lo_comprobado(path, veredicto) {
                     let _ = updates.send(u);
                 }
             }
@@ -13808,12 +13836,18 @@ impl Estado {
         tokio::spawn(async move {
             // Sin atributos: lo único que se pregunta es QUÉ es, y pedir
             // atributos sería trabajo del provider que nadie va a leer.
-            let regular = matches!(
-                backend.stat(path.clone(), Vec::new()).await,
-                Ok(e) if e.kind == norte_proto::EntryKind::File
-            );
+            let veredicto = match backend.stat(path.clone(), Vec::new()).await {
+                Ok(e) => Veredicto::from(e.kind == norte_proto::EntryKind::File),
+                // `NotFound` es una RESPUESTA —ahí no hay nada—, y además la
+                // del desenlace más probable de un ataque: desenlazar y no
+                // reponer. Lo demás no es lo mismo que un enlace: un daemon
+                // relevado o un timeout no son manipulación, y decir que sí es
+                // una acusación falsa que enseña a ignorar el mensaje bueno.
+                Err(Error::NotFound) => Veredicto::YaNoEsElFichero,
+                Err(_) => Veredicto::NoSeSabe,
+            };
             let _ = buzon
-                .send(Mensaje::CreadoComprobado(Box::new((path, regular))))
+                .send(Mensaje::CreadoComprobado(Box::new((path, veredicto))))
                 .await;
         });
     }
@@ -13821,16 +13855,19 @@ impl Estado {
     /// La respuesta del `fs.stat` de [`Self::abrir_lo_creado`]: abre, o dice
     /// por qué no.
     ///
-    /// Un solo mensaje para las tres causas (un enlace, una carpeta, ya no
-    /// está): decir cuál sería confirmarle al que puso el enlace que su enlace
-    /// está puesto.
+    /// Un solo mensaje para las tres causas que son la MISMA (un enlace, una
+    /// carpeta, ya no está): decir cuál sería confirmarle al que puso el enlace
+    /// que su enlace está puesto. No se pudo preguntar es otra cosa y lo dice
+    /// aparte.
     fn abrir_lo_comprobado(
         &mut self,
         path: norte_proto::VPath,
-        regular: bool,
+        veredicto: Veredicto,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if !regular {
-            return self.decir("host-created-changed");
+        match veredicto {
+            Veredicto::EsElFichero => {}
+            Veredicto::YaNoEsElFichero => return self.decir("host-created-changed"),
+            Veredicto::NoSeSabe => return self.decir("host-created-unchecked"),
         }
         if self.nativo(crate::dto::NativeEffect::OpenPath { path }) {
             return Vec::new();

@@ -1041,6 +1041,10 @@ msg-edit-not-a-file = eso es una carpeta: se entra con ⏎, no se edita
 # decir cuál sería confirmárselo a quien puso el enlace.
 msg-edit-created-changed = el fichero se creó, pero ya no es el que se creó: el editor no se ha abierto
 msg-edit-created-unnamable = el fichero se creó, pero su ruta no se puede dar a un editor de esta máquina
+# Y este es otro: no se pudo PREGUNTAR. Llamar manipulación a un daemon
+# relevado es una acusación falsa, y enseñar a ignorar el mensaje de arriba es
+# lo que lo inutiliza el día que sea verdad.
+msg-edit-created-unchecked = el fichero se creó, pero no se pudo comprobar qué hay ahí: el editor no se ha abierto
 # Comparar dos ficheros (#312): dos, y no se adivina cuáles.
 msg-compare-files-need-two = marca DOS ficheros, o pon uno bajo el cursor en cada panel
 msg-compare-files-not-files = eso es una carpeta: dos carpetas se comparan con «comparar directorios»
@@ -1826,6 +1830,7 @@ host-no-desktop = esta ventana no tiene escritorio detrás: no puede copiar al p
 # #303: el mismo texto que el msg-edit-created-changed de la TUI, y por lo
 # mismo: un solo mensaje para las tres causas (enlace, carpeta, ya no está).
 host-created-changed = el fichero se creó, pero ya no es el que se creó: no se ha abierto
+host-created-unchecked = el fichero se creó, pero no se pudo comprobar qué hay ahí: no se ha abierto
 msg-paths-copied = { $n } ruta(s) al portapapeles
 msg-paths-copied-osc52 = { $n } ruta(s) al portapapeles del terminal (OSC 52); comprueba pegando
 msg-clipboard-failed = el portapapeles no aceptó las rutas

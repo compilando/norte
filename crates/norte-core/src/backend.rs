@@ -632,23 +632,6 @@ impl Backend {
                     tracing::warn!(error = %e, "list_skipped falló; omitidas = desconocido");
                     None
                 });
-                // El ANCLA de lo que se acaba de listar (#301, ADR 0073), que
-                // es lo que el daemon pone en `fs.list` para que su cliente lo
-                // recuerde. Aquí no hay wire, así que el que recuerda es el
-                // engine — y sin esto `ntc`, que corre embebido por DEFECTO,
-                // hacía toda operación anclada SIN ancla: la comprobación que
-                // ADR 0076 pedía justo para `fs.create` no la tenía el único
-                // frontend que lanza un `$EDITOR` sobre lo creado.
-                //
-                // Best-effort por la misma razón que `skipped`: un provider
-                // que no sabe dar identidad de nodo (un bucket, un SFTP sin
-                // extensiones) no puede impedir un listado. Un fallo BORRA la
-                // que hubiera, que es lo que hace `remember` con `None`.
-                let ancla = engine.dir_anchor(dir).await.unwrap_or_else(|e| {
-                    tracing::debug!(error = %e, "dir_anchor falló; sin ancla para este listado");
-                    None
-                });
-                engine.remember_dir_anchor(dir, ancla);
                 Ok((stream, skipped))
             }
             #[cfg(unix)]
@@ -803,6 +786,47 @@ impl Backend {
             }
             #[cfg(unix)]
             Self::Remote(r) => r.stat(path, attrs.to_vec()).await,
+        }
+    }
+
+    /// Retiene el ancla de un directorio que un PANEL acaba de listar (#301,
+    /// ADR 0073), para que la escritura que venga después pueda decir «el
+    /// destino era ESE».
+    ///
+    /// Es lo que el daemon pone en la respuesta de `fs.list` y el SDK guarda
+    /// por su cuenta. Aquí no hay wire, así que lo guarda el engine — y sin
+    /// esto `ntc`, que corre embebido por DEFECTO, hacía toda operación
+    /// anclada SIN ancla: la comprobación que ADR 0076 pidió justo para
+    /// `fs.create` no la tenía el único frontend que lanza un `$EDITOR` sobre
+    /// lo creado.
+    ///
+    /// # Se llama a mano, y ese es el punto
+    ///
+    /// No lo hace `list_stream_with`, que es el embudo de TODOS los listados:
+    /// por ahí pasan el árbol lateral (una rama por vuelta del bucle) y el
+    /// `fs.list` de un script Lua, y como recordar SOBRESCRIBE, cualquiera de
+    /// ellos rebendecía el ancla del panel con el nodo que viera en ese
+    /// momento. El ancla dice **quién miró**; un listado que no es una
+    /// pantalla no ha mirado nadie.
+    ///
+    /// Contra el daemon no hace nada: allí el ancla la manda el listado en su
+    /// respuesta y la guarda el SDK, que es de quien listó de verdad.
+    ///
+    /// Best-effort: un provider que no sabe dar identidad de nodo (un bucket,
+    /// un SFTP sin extensiones) no puede impedir un listado, y un fallo BORRA
+    /// la que hubiera —mandar una vieja sería que la escritura se rechazara a
+    /// sí misma—, así que la escritura siguiente se comporta como en 0.53.
+    pub async fn remember_listing_anchor(&self, dir: &VPath) {
+        match self {
+            Self::Embedded(engine) => {
+                let ancla = engine.dir_anchor(dir).await.unwrap_or_else(|e| {
+                    tracing::debug!(error = %e, "dir_anchor falló; sin ancla para este listado");
+                    None
+                });
+                engine.remember_dir_anchor(dir, ancla);
+            }
+            #[cfg(unix)]
+            Self::Remote(_) => {}
         }
     }
 

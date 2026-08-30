@@ -204,9 +204,12 @@ pub fn expand_argv(command: &[String], files: &[&Path], dir: &Path) -> Vec<std::
 /// `true` si `program` es un binario ejecutable localizable: ruta absoluta
 /// existente, o un nombre presente en alguna entrada del `PATH`. Sondeo puro
 /// (stat), sin ejecutar nada — la base de la degradación limpia («instala X»).
+/// Toma `OsStr` por lo mismo que [`resolve_program`], de la que es la
+/// implementación: un programa es BYTES (regla 1), y una sonda que pidiera
+/// texto invitaría al siguiente llamante a escribir un `to_str()`.
 #[must_use]
-pub fn program_available(program: &str) -> bool {
-    resolve_program(std::ffi::OsStr::new(program)).is_some()
+pub fn program_available(program: &std::ffi::OsStr) -> bool {
+    resolve_program(program).is_some()
 }
 
 /// La ruta ABSOLUTA del binario que `program` nombra, o `None` si no se
@@ -244,6 +247,19 @@ pub fn resolve_program(program: &std::ffi::OsStr) -> Option<std::path::PathBuf> 
 /// y `std::env::set_var` es `unsafe` desde Rust 2024 (regla 5). Lo que este
 /// núcleo NO abstrae es el disco: el sondeo es un `stat` de verdad, así que
 /// sus tests montan un directorio temporal en vez de fingir uno.
+///
+/// ```
+/// use std::ffi::OsStr;
+/// use norte_frontend::openers::resolve_program_in;
+///
+/// // Una entrada RELATIVA del PATH no resuelve nada, ni la vacía —que
+/// // significa «el directorio actual»—, aunque el fichero esté ahí: el hijo
+/// // se lanza con el directorio NAVEGADO como cwd (#302).
+/// assert_eq!(resolve_program_in(OsStr::new("sh"), Some(OsStr::new("."))), None);
+/// assert_eq!(resolve_program_in(OsStr::new("sh"), Some(OsStr::new(""))), None);
+/// // Y sin PATH no hay dónde buscar.
+/// assert_eq!(resolve_program_in(OsStr::new("sh"), None), None);
+/// ```
 #[must_use]
 pub fn resolve_program_in(
     program: &std::ffi::OsStr,
@@ -251,18 +267,23 @@ pub fn resolve_program_in(
 ) -> Option<std::path::PathBuf> {
     let p = Path::new(program);
     if p.is_absolute() {
-        return is_executable(p).then(|| p.to_path_buf());
+        return con_extensiones(p).find(|c| is_executable(c));
     }
     // Un nombre con separador pero relativo (`./tool`) se resuelve contra el
     // cwd; uno simple (`bat`) se busca en el PATH. «Con separador» se pregunta
     // por el PADRE y no por el byte del separador: así vale igual en Windows,
     // donde los separadores son dos.
     if p.parent().is_some_and(|d| !d.as_os_str().is_empty()) {
-        if !is_executable(p) {
+        // Absoluto ANTES de que nadie cambie el cwd del hijo. El `join` va
+        // PRIMERO y el sondeo después, porque en Windows `C:tool` es relativo
+        // al directorio actual DE ESE DISCO y `join` lo reemplaza en vez de
+        // componerlo: sondear el relativo y devolver el compuesto diría que sí
+        // sobre un fichero y lanzaría otro.
+        let absoluto = std::env::current_dir().ok()?.join(p);
+        if !absoluto.is_absolute() {
             return None;
         }
-        // Absoluto ANTES de que nadie cambie el cwd del hijo.
-        return std::env::current_dir().ok().map(|c| c.join(p));
+        return con_extensiones(&absoluto).find(|c| is_executable(c));
     }
     let path = path_var?;
     std::env::split_paths(&path)
@@ -271,7 +292,35 @@ pub fn resolve_program_in(
         // para un hijo con `current_dir` puesto es el directorio navegado:
         // jamás se resuelve contra él, ni siquiera si existe.
         .filter(|c| c.is_absolute())
+        .flat_map(|c| con_extensiones(&c).collect::<Vec<_>>())
         .find(|c| is_executable(c))
+}
+
+/// El candidato tal cual. En unix un ejecutable no lleva extensión y la
+/// pregunta no existe.
+#[cfg(unix)]
+fn con_extensiones(p: &Path) -> impl Iterator<Item = std::path::PathBuf> {
+    std::iter::once(p.to_path_buf())
+}
+
+/// El candidato tal cual y con cada extensión de `PATHEXT` pegada.
+///
+/// En Windows la ejecutabilidad la decide la extensión, y el propio SO prueba
+/// `PATHEXT` cuando le das un nombre a secas. Como aquí «no resuelve» pasó a
+/// significar «no se lanza» (#302), sin esto un `[ui] editor = vim` escrito a
+/// mano dejaría de abrir nada — antes lo resolvía el SO.
+#[cfg(not(unix))]
+fn con_extensiones(p: &Path) -> impl Iterator<Item = std::path::PathBuf> {
+    let base = p.to_path_buf();
+    let exts = std::env::var_os("PATHEXT")
+        .unwrap_or_else(|| std::ffi::OsString::from(".COM;.EXE;.BAT;.CMD"));
+    let mut fuera = vec![base.clone()];
+    for ext in exts.to_string_lossy().split(';').filter(|e| !e.is_empty()) {
+        let mut con = base.clone().into_os_string();
+        con.push(ext);
+        fuera.push(std::path::PathBuf::from(con));
+    }
+    fuera.into_iter()
 }
 
 /// `true` si `p` existe y (en unix) tiene algún bit de ejecución.
@@ -573,8 +622,10 @@ command = ["open", "-t", "%f"]
     fn program_available_encuentra_binarios_del_path() {
         // `sh` existe en cualquier unix de CI; un nombre inventado no.
         #[cfg(unix)]
-        assert!(program_available("sh"));
-        assert!(!program_available("norte-binario-que-no-existe-xyz"));
+        assert!(program_available(OsStr::new("sh")));
+        assert!(!program_available(OsStr::new(
+            "norte-binario-que-no-existe-xyz"
+        )));
     }
 
     /// Una entrada RELATIVA del `PATH` —`.`, o la vacía que significa lo

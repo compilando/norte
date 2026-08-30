@@ -224,18 +224,26 @@ impl AnchorCache {
     /// trae ancla —porque el destino dejó de saber darla, o porque se reconectó
     /// contra un daemon 0.53— no puede dejar viva la de antes. Una copia que
     /// mandara un ancla vieja se rechazaría a sí misma sin motivo.
+    ///
+    /// El desalojo es **LRU y no FIFO** (#301): refrescar mueve el directorio
+    /// al final de la cola. Con FIFO, el directorio que el humano tiene abierto
+    /// se desalojaba en cuanto pasaban `ANCHORS_MAX` directorios DISTINTOS por
+    /// la conexión —el árbol lateral desplegado, una búsqueda— por mucho que se
+    /// estuviera relistando cada segundo, y la comprobación de la siguiente
+    /// copia desaparecía sin que nadie lo dijera.
     fn remember(&mut self, dir: &VPath, anchor: Option<norte_proto::DirAnchor>) {
         let Some(anchor) = anchor else {
             self.by_dir.remove(dir);
             self.order.retain(|d| d != dir);
             return;
         };
-        if self.by_dir.insert(dir.clone(), anchor).is_none() {
-            self.order.push_back(dir.clone());
-            while self.order.len() > ANCHORS_MAX {
-                if let Some(viejo) = self.order.pop_front() {
-                    self.by_dir.remove(&viejo);
-                }
+        if self.by_dir.insert(dir.clone(), anchor).is_some() {
+            self.order.retain(|d| d != dir);
+        }
+        self.order.push_back(dir.clone());
+        while self.order.len() > ANCHORS_MAX {
+            if let Some(viejo) = self.order.pop_front() {
+                self.by_dir.remove(&viejo);
             }
         }
     }
@@ -2565,6 +2573,32 @@ mod tests {
             inner.anchor_for(&vpd(&format!("file:///d{ultimo}"))),
             Some(norte_proto::DirAnchor::new(format!("{ultimo:032x}"))),
             "y el último sigue"
+        );
+    }
+
+    /// Y lo que se sigue MIRANDO no se desaloja: el desalojo es LRU (#301).
+    ///
+    /// Con FIFO —lo que había— el directorio del panel activo se iba en cuanto
+    /// pasaban `ANCHORS_MAX` directorios distintos por la conexión (un árbol
+    /// desplegado, una búsqueda), aunque se estuviera relistando cada segundo:
+    /// la comprobación de la siguiente copia desaparecía sin decir nada.
+    #[test]
+    fn refrescar_salva_del_desalojo() {
+        let inner = test_inner();
+        let panel = vpd("file:///panel");
+        let ancla = norte_proto::DirAnchor::new("a".repeat(32));
+        inner.remember_anchor(&panel, Some(ancla.clone()));
+        for i in 0..ANCHORS_MAX {
+            inner.remember_anchor(&panel, Some(ancla.clone()));
+            inner.remember_anchor(
+                &vpd(&format!("file:///d{i}")),
+                Some(norte_proto::DirAnchor::new(format!("{i:032x}"))),
+            );
+        }
+        assert_eq!(
+            inner.anchor_for(&panel),
+            Some(ancla),
+            "lo que se sigue mirando no se desaloja"
         );
     }
 

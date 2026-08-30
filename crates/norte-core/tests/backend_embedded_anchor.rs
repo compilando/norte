@@ -48,6 +48,17 @@ fn arbol() -> Arbol {
     }
 }
 
+/// Lo que hace un PANEL al abrir un directorio: listarlo y retener su ancla.
+///
+/// Las dos cosas, y por separado, porque el backend no ancla todo lo que lista:
+/// el árbol lateral y el `fs.list` de un script también pasan por `list`, y
+/// como recordar sobrescribe, cualquiera de ellos rebendeciría el ancla del
+/// panel con lo que viera en ese momento (#301).
+async fn listar_como_un_panel(backend: &Backend, dir: &str) {
+    backend.list(&vp(dir)).await.expect("lista");
+    backend.remember_listing_anchor(&vp(dir)).await;
+}
+
 /// Quitar el directorio de verdad y dejar un enlace a `fuera` con su nombre:
 /// el ataque entero, en dos syscalls.
 fn sustituir_por_enlace(a: &Arbol) {
@@ -81,7 +92,7 @@ async fn crear_en_un_destino_sustituido_por_un_enlace_se_rehusa() {
     let a = arbol();
     // Lo que hace un panel al abrir el directorio, y lo único que hace falta
     // para que el ancla exista: listarlo por el backend.
-    a.backend.list(&vp("file:///d/sub")).await.expect("lista");
+    listar_como_un_panel(&a.backend, "file:///d/sub").await;
 
     sustituir_por_enlace(&a);
 
@@ -101,7 +112,7 @@ async fn crear_en_un_destino_sustituido_por_un_enlace_se_rehusa() {
 #[tokio::test]
 async fn copiar_a_un_destino_sustituido_por_un_enlace_se_rehusa() {
     let a = arbol();
-    a.backend.list(&vp("file:///d/sub")).await.expect("lista");
+    listar_como_un_panel(&a.backend, "file:///d/sub").await;
 
     sustituir_por_enlace(&a);
 
@@ -116,6 +127,54 @@ async fn copiar_a_un_destino_sustituido_por_un_enlace_se_rehusa() {
         .expect("encola");
     rehusado(&task.join().await);
     assert!(!a.dir.path().join("fuera/botin.txt").exists());
+}
+
+/// Y moviendo, que es la otra escritura anclada.
+#[tokio::test]
+async fn mover_a_un_destino_sustituido_por_un_enlace_se_rehusa() {
+    let a = arbol();
+    listar_como_un_panel(&a.backend, "file:///d/sub").await;
+
+    sustituir_por_enlace(&a);
+
+    let task = a
+        .backend
+        .move_(
+            &vp("file:///origen.txt"),
+            &vp("file:///d/sub/botin.txt"),
+            TransferOptions::default(),
+        )
+        .await
+        .expect("encola");
+    rehusado(&task.join().await);
+    assert!(!a.dir.path().join("fuera/botin.txt").exists());
+    assert!(
+        a.dir.path().join("origen.txt").exists(),
+        "y el origen sigue donde estaba: un move rehusado no borra nada"
+    );
+}
+
+/// **Un listado que NO es una pantalla no rebendice el ancla** (#301).
+///
+/// El árbol lateral pide una rama por vuelta del bucle, y un script Lua puede
+/// llamar a `fs.list` cuando quiera. Si esos listados escribieran la caché,
+/// bastaría con que uno pasara por el destino DESPUÉS del cambiazo para que la
+/// copia del humano pasara la comprobación contra el nodo del atacante.
+#[tokio::test]
+async fn un_listado_que_no_es_de_panel_no_rebendice_el_ancla() {
+    let a = arbol();
+    listar_como_un_panel(&a.backend, "file:///d/sub").await;
+
+    sustituir_por_enlace(&a);
+    // El árbol lateral pasa por ahí y ve el enlace ya puesto.
+    a.backend.list(&vp("file:///d/sub")).await.expect("lista");
+
+    let task = a
+        .backend
+        .create_file(&vp("file:///d/sub/notas.txt"))
+        .await
+        .expect("encola");
+    rehusado(&task.join().await);
 }
 
 /// Sin haber listado el destino no hay ancla que mandar, y entonces esto se
@@ -140,7 +199,7 @@ async fn sin_listar_el_destino_no_hay_ancla_y_el_enlace_desvia() {
 #[tokio::test]
 async fn el_destino_que_sigue_siendo_el_mismo_deja_crear() {
     let a = arbol();
-    a.backend.list(&vp("file:///d/sub")).await.expect("lista");
+    listar_como_un_panel(&a.backend, "file:///d/sub").await;
 
     let task = a
         .backend

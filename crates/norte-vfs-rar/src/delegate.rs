@@ -97,14 +97,24 @@ pub const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 /// escribe aquí, donde no hay nada que pisar. Si no se puede crear, el hijo
 /// corre sin `current_dir` explícito antes que fallar la lectura entera; ese
 /// caso ya solo puede pasar con el temporal del sistema roto.
+///
+/// # Creado en EXCLUSIVA, y no con un nombre adivinable
+///
+/// Era `temp_dir().join(format!("norte-rar-{pid}"))` con `create_dir_all`, y
+/// eso son dos cosas malas juntas (revisión de seguridad del ADR 0082): el pid
+/// se adivina —o se precrea en lote—, y `create_dir_all` tiene ÉXITO si el
+/// directorio ya existe, sin mirar dueño ni modo. En un `/tmp` que escribe
+/// cualquiera, el cwd del delegado podía ser un directorio de otro con lo que
+/// ese otro quisiera dentro. `TempDir` crea con nombre aleatorio, en exclusiva
+/// y a 0700.
+///
+/// El `TempDir` se filtra a propósito dentro del `OnceLock`: vive lo que el
+/// proceso, y borrarlo mientras un hijo lo tiene de cwd sería peor que dejarlo.
 fn sandbox_dir() -> Option<&'static Path> {
-    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
-    DIR.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("norte-rar-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok()?;
-        Some(dir)
-    })
-    .as_deref()
+    static DIR: OnceLock<Option<tempfile::TempDir>> = OnceLock::new();
+    DIR.get_or_init(|| tempfile::Builder::new().prefix("norte-rar-").tempdir().ok())
+        .as_ref()
+        .map(tempfile::TempDir::path)
 }
 
 /// El programa externo que hace de lector de RAR.
@@ -139,6 +149,15 @@ impl Delegate {
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mut found = Vec::new();
         for dir in std::env::split_paths(&path) {
+            // Solo entradas ABSOLUTAS del `PATH`. Una relativa —o la vacía,
+            // que significa «el directorio actual»— resolvería el delegado
+            // contra un directorio que nadie ha avalado, y el hijo se lanza
+            // además con `current_dir` puesto: abrir un `.rar` ejecutaría el
+            // `7z` que hubiera ahí (revisión de seguridad del ADR 0082, misma
+            // regla que `openers::resolve_program`).
+            if !dir.is_absolute() {
+                continue;
+            }
             for exe in CANDIDATES {
                 let candidate = dir.join(exe);
                 if candidate.is_file() {
@@ -264,7 +283,19 @@ impl Delegate {
     /// - `kill_on_drop`: soltar el futuro mata al hijo, que es lo que hace
     ///   que cancelar signifique algo.
     fn command(&self, argv: &[OsString]) -> tokio::process::Command {
-        let mut cmd = tokio::process::Command::new(self.program());
+        // La ruta se hace ABSOLUTA aquí, con el cwd de norte todavía puesto.
+        // `discover` ya solo mira entradas absolutas del `PATH`, pero
+        // `[archive] rar_delegate` acepta lo que el lector escriba, y en unix
+        // `current_dir` se aplica ANTES de resolver el programa: un `7z`
+        // relativo lo resolvería el hijo contra el sandbox, no contra donde el
+        // lector creía (revisión de seguridad del ADR 0082).
+        let programa = if self.program().is_absolute() {
+            self.program().to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_or_else(|_| self.program().to_path_buf(), |c| c.join(self.program()))
+        };
+        let mut cmd = tokio::process::Command::new(&programa);
         cmd.args(argv)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

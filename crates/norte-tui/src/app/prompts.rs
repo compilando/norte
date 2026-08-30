@@ -1403,6 +1403,7 @@ mod tests {
             argv: vec![std::ffi::OsString::from("vi")],
             cwd: None,
             wait_for_key: false,
+            check_regular: None,
         });
         assert!(app.take_pending_shell().is_some(), "sin salir, se lanza");
 
@@ -1410,6 +1411,7 @@ mod tests {
             argv: vec![std::ffi::OsString::from("vi")],
             cwd: None,
             wait_for_key: false,
+            check_regular: None,
         });
         app.quit = true;
         assert!(app.take_pending_shell().is_none(), "al salir, no");

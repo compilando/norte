@@ -154,7 +154,20 @@ pub async fn drain_pending(
             argv,
             cwd,
             wait_for_key,
+            check_regular,
         } = pending;
+        // #303: la comprobación va PEGADA al lanzamiento, y por eso vive aquí
+        // y no donde se resolvió el gesto. Hacerla en `on_tick` —donde se
+        // decide abrir el editor— no compraba nada: entre aquello y esto corre
+        // `refresh_panes`, o sea el re-listado ENTERO de los dos paneles, que
+        // en un pane remoto son segundos. Es justo la ventana que este
+        // chequeo existe para estrechar.
+        //
+        // Sigue sin cerrarla: entre este `stat` y el `exec` queda hueco.
+        if let Some(motivo) = crate::gestures::motivo_para_no_lanzar(backend, check_regular).await {
+            app.message = Some(motivo);
+            return;
+        }
         // Auditoría (review de S4): el journal NO ve nada de esto a
         // propósito (design §D), así que el rastro de que aquí hubo un
         // shell vive en el log. Sin la línea de comandos —es del usuario

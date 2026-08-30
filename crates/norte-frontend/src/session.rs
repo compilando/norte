@@ -179,6 +179,14 @@ impl SessionBody {
     /// historial: lo que se ve en pantalla no se recicla.
     ///
     /// El perfil [`Self::active`] no lo barre nada, en ningún paso.
+    ///
+    /// Y al final, el tope que de verdad manda: se mide el cuerpo SERIALIZADO
+    /// y se sigue recortando hasta que quepa en
+    /// [`norte_proto::methods::SESSION_BODY_MAX`]. Todos los de arriba son de
+    /// CUENTAS y el del core es de BYTES, así que ninguna cuenta puede
+    /// prometer que el cuerpo entre; el orden en que se degrada está declarado
+    /// en `fit_to_envelope`, y lo que jamás se toca es el perfil activo, su
+    /// disposición, y la ruta y el cursor de cada hueco visible.
     pub fn prune(&mut self, now_ms: u64) {
         self.prune_profiles();
         let visibles: BTreeSet<u32> = self
@@ -205,30 +213,119 @@ impl SessionBody {
             .filter(|(id, _)| !visibles.contains(*id))
             .map(|(id, s)| (s.touched_ms, *id))
             .collect();
-        if huerfanos.len() <= ORPHAN_CAP {
+        if huerfanos.len() > ORPHAN_CAP {
+            // Por antigüedad de contacto: se van los de arriba, que son los
+            // que hace más que nadie mira.
+            huerfanos.sort_unstable();
+            let sobran = huerfanos.len() - ORPHAN_CAP;
+            for (_, id) in huerfanos.into_iter().take(sobran) {
+                self.slots.remove(&id);
+            }
+        }
+        self.fit_to_envelope(&visibles);
+    }
+
+    /// Recorta hasta que el cuerpo QUEPA de verdad, midiendo bytes.
+    ///
+    /// Todos los topes de [`Self::prune`] son de cuentas y el del core es de
+    /// bytes ([`norte_proto::methods::SESSION_BODY_MAX`]), así que ninguna
+    /// cuenta puede prometer que el cuerpo entre: las rutas las elige el
+    /// lector. Un nombre no-UTF-8 viaja percent-encoded y mide el triple; un
+    /// árbol profundo multiplica cada entrada del historial; y el número de
+    /// huecos VISIBLES no tiene tope ninguno — nada impide veinte pestañas por
+    /// perfil. Cuando el cuerpo se pasa, el core rehúsa el `put` ENTERO y la
+    /// sesión almacenada se queda como estaba.
+    ///
+    /// El orden en que se degrada es el orden en que duele menos, y se declara
+    /// aquí porque un recorte que el lector no puede predecir es peor que uno
+    /// que sí:
+    ///
+    /// 1. los huérfanos, ENTEROS y del que hace más que no se toca hacia
+    ///    delante — nadie los está mirando;
+    /// 2. el historial de los visibles, a la mitad cada vuelta hasta cero — se
+    ///    pierden pasos hacia atrás, no dónde estás;
+    /// 3. las disposiciones de los perfiles que no son el activo, con sus
+    ///    huecos, de la que hace más que nadie activa hacia delante.
+    ///
+    /// Lo que jamás se toca: el perfil [`Self::active`], su disposición, y la
+    /// RUTA y el cursor de cada hueco visible. Si ni así cabe —un cuerpo con
+    /// una sola disposición de rutas monstruosas— se manda lo que haya: el
+    /// rechazo del core es honesto y el frontend lo dice, mientras que
+    /// inventarse un recorte del árbol activo sería devolverle al lector una
+    /// pantalla que él no dejó.
+    fn fit_to_envelope(&mut self, visibles: &BTreeSet<u32>) {
+        if self.cabe() {
             return;
         }
-        // Por antigüedad de contacto: se van los de arriba, que son los que
-        // hace más que nadie mira.
+        let mut huerfanos: Vec<(u64, u32)> = self
+            .slots
+            .iter()
+            .filter(|(id, _)| !visibles.contains(*id))
+            .map(|(id, s)| (s.touched_ms, *id))
+            .collect();
         huerfanos.sort_unstable();
-        let sobran = huerfanos.len() - ORPHAN_CAP;
-        for (_, id) in huerfanos.into_iter().take(sobran) {
+        for (_, id) in huerfanos {
             self.slots.remove(&id);
+            if self.cabe() {
+                return;
+            }
+        }
+        let mut cap = HISTORY_CAP;
+        while cap > 0 {
+            cap /= 2;
+            for slot in self.slots.values_mut() {
+                recorta_historial(&mut slot.back, cap);
+                recorta_historial(&mut slot.forward, cap);
+            }
+            if self.cabe() {
+                return;
+            }
+        }
+        // Del que hace más que nadie activa hacia delante, y el ACTIVO no está
+        // en esta lista: es el único que no se puede tirar.
+        for nombre in self.profiles_by_last_touch() {
+            let Some(arbol) = self.layouts.remove(&nombre) else {
+                continue;
+            };
+            let vivos: BTreeSet<u32> = self
+                .layouts
+                .values()
+                .flat_map(Node::slot_ids)
+                .map(|SlotId(id)| id)
+                .collect();
+            for SlotId(id) in arbol.slot_ids() {
+                if !vivos.contains(&id) {
+                    self.slots.remove(&id);
+                }
+            }
+            if self.cabe() {
+                return;
+            }
         }
     }
 
-    /// Deja como mucho [`PROFILE_STATE_CAP`] perfiles con estado, tirando
-    /// enteros los que hace más que nadie activa.
+    /// ¿Cabe este cuerpo en el sobre que el core acepta?
+    ///
+    /// Se mide serializando, que es lo único que contesta la pregunta de
+    /// verdad — el core mide los bytes del `body`, no los elementos. Un fallo
+    /// al serializar cuenta como que SÍ cabe: no serializar es un problema
+    /// distinto, lo verá el `put`, y ponerse a recortar por ello tiraría estado
+    /// bueno por una razón que no es esa.
+    fn cabe(&self) -> bool {
+        serde_json::to_vec(&self.to_value())
+            .map_or(true, |b| b.len() <= norte_proto::methods::SESSION_BODY_MAX)
+    }
+
+    /// Los perfiles con estado que NO son el activo, del que hace más que nadie
+    /// activa al más reciente.
     ///
     /// «Hace más que nadie lo activa» se DERIVA y no se guarda: es el perfil
     /// cuyo hueco tocado más recientemente lo fue antes que el de los demás.
     /// Sin campo nuevo y sin reloj — la misma disciplina que el orden de
     /// huérfanos de `SlotStore`, donde un reloj haría los tests dependientes
-    /// del tiempo.
-    fn prune_profiles(&mut self) {
-        if self.layouts.len() <= PROFILE_STATE_CAP {
-            return;
-        }
+    /// del tiempo. A igualdad de toque, por nombre: la poda tiene que ser
+    /// determinista y no depender del orden del mapa.
+    fn profiles_by_last_touch(&self) -> Vec<String> {
         let ultimo_toque = |arbol: &Node| -> u64 {
             arbol
                 .slot_ids()
@@ -244,12 +341,26 @@ impl SessionBody {
             .filter(|(nombre, _)| **nombre != self.active)
             .map(|(nombre, arbol)| (ultimo_toque(arbol), nombre.clone()))
             .collect();
-        // Del más viejo al más reciente; a igualdad de toque, por nombre, para
-        // que la poda sea determinista y no dependa del orden del mapa.
         orden.sort_unstable();
+        orden.into_iter().map(|(_, nombre)| nombre).collect()
+    }
+
+    /// Deja como mucho [`PROFILE_STATE_CAP`] perfiles con estado, tirando
+    /// enteros los que hace más que nadie activa.
+    ///
+    /// «Hace más que nadie lo activa» se DERIVA y no se guarda: es el perfil
+    /// cuyo hueco tocado más recientemente lo fue antes que el de los demás.
+    /// Sin campo nuevo y sin reloj — la misma disciplina que el orden de
+    /// huérfanos de `SlotStore`, donde un reloj haría los tests dependientes
+    /// del tiempo.
+    fn prune_profiles(&mut self) {
+        if self.layouts.len() <= PROFILE_STATE_CAP {
+            return;
+        }
+        let orden = self.profiles_by_last_touch();
         let sobran = self.layouts.len() - PROFILE_STATE_CAP;
         let mut candidatos: BTreeSet<u32> = BTreeSet::new();
-        for (_, nombre) in orden.into_iter().take(sobran) {
+        for nombre in orden.into_iter().take(sobran) {
             if let Some(arbol) = self.layouts.remove(&nombre) {
                 candidatos.extend(arbol.slot_ids().into_iter().map(|SlotId(id)| id));
             }
@@ -774,6 +885,59 @@ mod tests {
             bytes.len(),
             norte_proto::methods::SESSION_BODY_MAX
         );
+    }
+
+    /// **Y un cuerpo que se pasa CABIENDO en todas las cuentas, también cabe**
+    /// al final: el tope de verdad es de bytes y ninguna cuenta puede
+    /// prometerlo (revisión de #304).
+    ///
+    /// Aquí no hay ni un huérfano y los cuatro perfiles son los que la cuenta
+    /// permite; lo que se pasa es el número de huecos VISIBLES, que no tiene
+    /// tope ninguno — nada impide veinte pestañas por perfil. Sin la poda por
+    /// bytes, el core rehusaba el `put` ENTERO.
+    ///
+    /// Lo que NO se puede perder está comprobado aparte: el perfil activo, su
+    /// disposición y la RUTA de cada hueco suyo. Lo que se paga son pasos de
+    /// historial, que es el orden declarado en `fit_to_envelope`.
+    #[test]
+    fn un_cuerpo_que_cabe_en_las_cuentas_y_no_en_los_bytes_se_recorta_igual() {
+        let mut b = SessionBody::default();
+        for p in 0..PROFILE_STATE_CAP {
+            let hijos: Vec<Node> = (1..=40u32)
+                .map(|i| Node::slot(SlotId(i), KindId::browser()))
+                .collect();
+            let arbol = crate::layout::Node::split(crate::layout::Dir::Horizontal, hijos);
+            let (arbol, _) = arbol.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
+            for SlotId(id) in arbol.slot_ids() {
+                b.slots.insert(id, slot_con_historial_lleno(id));
+            }
+            b.layouts.insert(format!("perfil{p}"), arbol);
+        }
+        b.active = "perfil0".to_owned();
+        let activo = b.layouts["perfil0"].clone();
+        let rutas_del_activo: Vec<(u32, VPath)> = activo
+            .slot_ids()
+            .into_iter()
+            .map(|SlotId(id)| (id, b.slots[&id].path.clone()))
+            .collect();
+
+        b.prune(0);
+
+        let bytes = serde_json::to_vec(&b.to_value()).expect("serializa");
+        assert!(
+            bytes.len() <= norte_proto::methods::SESSION_BODY_MAX,
+            "{} bytes contra un tope de {}",
+            bytes.len(),
+            norte_proto::methods::SESSION_BODY_MAX
+        );
+        assert_eq!(b.layouts.get("perfil0"), Some(&activo), "el activo entero");
+        for (id, path) in rutas_del_activo {
+            assert_eq!(
+                b.slots.get(&id).map(|s| &s.path),
+                Some(&path),
+                "el hueco {id} del perfil activo conserva DÓNDE está"
+            );
+        }
     }
 
     /// Y el tope de HUÉRFANOS lleno también cabe, que es lo que no pasaba

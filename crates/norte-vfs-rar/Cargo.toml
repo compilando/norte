@@ -25,6 +25,15 @@ tokio-util.workspace = true
 tokio-stream.workspace = true
 # warn! de entradas omitidas (mismo contrato de omitir-CON-señal que ADR 0018).
 tracing.workspace = true
+# El directorio de trabajo del hijo, creado en EXCLUSIVA (revisión del ADR
+# 0082): `create_dir_all` sobre un nombre derivado del pid tiene éxito si el
+# directorio ya existe, sin mirar dueño ni modo, y `/tmp` lo escribe cualquiera
+# — o sea que el cwd del delegado podía ser un directorio de otro. `tempfile`
+# crea con nombre aleatorio, `O_EXCL` y 0700, que es exactamente lo que hace
+# falta. Ya estaba aquí como dev-dependency y está en el grafo desde hace
+# tiempo (norte-config, norte-core y otros): no entra nada nuevo a compilar
+# (regla 8).
+tempfile.workspace = true
 
 [dev-dependencies]
 futures.workspace = true

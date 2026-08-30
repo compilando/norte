@@ -103,18 +103,27 @@ impl AnchorCache {
     /// trae ancla —porque el provider dejó de saber darla— no puede dejar viva
     /// la de antes. Una escritura que mandara un ancla vieja se rechazaría a sí
     /// misma sin motivo.
+    ///
+    /// El desalojo es **LRU y no FIFO**: refrescar mueve el directorio al final
+    /// de la cola. Con FIFO —que es lo que hacía, y lo que sigue haciendo el
+    /// SDK— el directorio del panel activo se desalojaba en cuanto pasaban 64
+    /// directorios DISTINTOS por el mismo backend, por mucho que se estuviera
+    /// relistando cada segundo; y entonces la comprobación de la siguiente
+    /// escritura desaparecía sin que nadie lo dijera, que es fallar abierto en
+    /// silencio.
     pub(crate) fn remember(&mut self, dir: &norte_proto::VPath, anchor: Option<DirAnchor>) {
         let Some(anchor) = anchor else {
             self.by_dir.remove(dir);
             self.order.retain(|d| d != dir);
             return;
         };
-        if self.by_dir.insert(dir.clone(), anchor).is_none() {
-            self.order.push_back(dir.clone());
-            while self.order.len() > ANCHORS_MAX {
-                if let Some(viejo) = self.order.pop_front() {
-                    self.by_dir.remove(&viejo);
-                }
+        if self.by_dir.insert(dir.clone(), anchor).is_some() {
+            self.order.retain(|d| d != dir);
+        }
+        self.order.push_back(dir.clone());
+        while self.order.len() > ANCHORS_MAX {
+            if let Some(viejo) = self.order.pop_front() {
+                self.by_dir.remove(&viejo);
             }
         }
     }
@@ -154,8 +163,7 @@ mod tests {
         assert_eq!(c.get(&dir), None);
     }
 
-    /// El tope se aplica por orden de LLEGADA, y refrescar no reordena: lo que
-    /// se va es lo que entró primero.
+    /// El tope echa al que hace más que no se toca.
     #[test]
     fn el_tope_echa_al_mas_viejo() {
         let mut c = AnchorCache::default();
@@ -167,6 +175,29 @@ mod tests {
         }
         assert_eq!(c.get(&vpd("file:///d0")), None, "el primero se fue");
         assert!(c.get(&vpd(&format!("file:///d{ANCHORS_MAX}"))).is_some());
+    }
+
+    /// Y refrescar lo SALVA: es LRU y no FIFO. Con FIFO, el directorio del
+    /// panel activo se desalojaba a los 64 directorios distintos aunque se
+    /// estuviera relistando todo el rato, y la comprobación de la siguiente
+    /// escritura desaparecía sin decir nada.
+    #[test]
+    fn refrescar_salva_del_desalojo() {
+        let mut c = AnchorCache::default();
+        let panel = vpd("file:///panel");
+        c.remember(&panel, Some(DirAnchor::new("a".repeat(32))));
+        for i in 0..ANCHORS_MAX {
+            // Cada vuelta relista el panel, como hace un refresco de verdad.
+            c.remember(&panel, Some(DirAnchor::new("a".repeat(32))));
+            c.remember(
+                &vpd(&format!("file:///d{i}")),
+                Some(DirAnchor::new(format!("{i:032x}"))),
+            );
+        }
+        assert!(
+            c.get(&panel).is_some(),
+            "lo que se sigue mirando no se desaloja"
+        );
     }
 
     #[test]

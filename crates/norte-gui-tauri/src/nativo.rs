@@ -109,7 +109,14 @@ fn avisar(titulo: &str, cuerpo: &str) -> Resultado {
         let Some((programa, args)) = argv.split_first() else {
             continue;
         };
-        let salida = std::process::Command::new(programa)
+        // Resuelto a ruta absoluta como todo lo demás que lanza norte (ADR
+        // 0082). Aquí no hay `current_dir`, así que el agujero de #302 no
+        // aplica; se hace igual porque el siguiente que copie este patrón lo
+        // copiará con un `cwd` puesto.
+        let Some(ruta) = norte_frontend::openers::resolve_program(programa) else {
+            continue;
+        };
+        let salida = std::process::Command::new(&ruta)
             .args(args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -151,7 +158,12 @@ fn elegir_directorio(desde: &norte_proto::VPath) -> Option<String> {
     });
     for argv in norte_frontend::shell::directory_picker_candidates(&nativo) {
         let (programa, args) = argv.split_first()?;
-        let salida = std::process::Command::new(programa)
+        // Ruta absoluta, como el resto (ADR 0082): un candidato que no se
+        // resuelve no se lanza, y se prueba el siguiente.
+        let Some(ruta) = norte_frontend::openers::resolve_program(programa) else {
+            continue;
+        };
+        let salida = std::process::Command::new(&ruta)
             .args(args)
             // Sin stdin: un selector no lee nada, y dejárselo abierto es una
             // puerta que no hace falta (misma regla 9 que el resto).

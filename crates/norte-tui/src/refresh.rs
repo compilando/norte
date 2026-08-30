@@ -122,10 +122,12 @@ pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream)
                 // el editor se abre ahora y sobre la ruta que se pidió, no
                 // sobre lo que haya bajo el cursor.
                 if let Some(pendiente) = tomar_creacion(app, fin.progress.task_id) {
-                    // El `stat` de #303 va AQUÍ y no dentro del `if let` de
-                    // arriba: es un viaje al core y hay que esperarlo antes de
-                    // dejar la suspensión pendiente.
-                    match crate::gestures::edit_created(backend, &pendiente).await {
+                    // La comprobación de #303 NO va aquí: entre este punto y
+                    // el lanzamiento corre `refresh_panes`, así que preguntar
+                    // ahora dejaría detrás justo la ventana que se quería
+                    // estrechar. La suspensión se lleva la ruta y el run loop
+                    // pregunta pegado al `exec`.
+                    match crate::gestures::edit_created(&pendiente) {
                         Ok(shell) => app.pending_shell = Some(shell),
                         // El fichero SE CREÓ y el editor no se puede abrir: se
                         // dice. Tragarse el `None` dejaba `msg-done` en la
