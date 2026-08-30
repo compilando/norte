@@ -514,6 +514,17 @@ enum Mensaje {
     /// qué daemon conteste — al revés que los informes, cuyos ids de task
     /// vuelven a empezar en 1 tras un relevo.
     CreadoComprobado(Box<(norte_proto::VPath, Veredicto)>),
+    /// Un favorito se guardó (#309): su nombre, a dónde apunta y, si falló, la
+    /// clave del motivo. La copia en memoria no se toca hasta que el disco
+    /// contesta.
+    ///
+    /// El destino viaja en el mensaje y no se relee al llegar: entre pedir el
+    /// nombre y guardar, el panel puede haber navegado, y reflejar «donde
+    /// estoy ahora» pondría en la lista un favorito distinto del que se acaba
+    /// de escribir en el fichero.
+    FavoritoPersistido(Box<(String, norte_proto::VPath, Option<&'static str>)>),
+    /// Un favorito se quitó, con la misma forma.
+    FavoritoQuitado(Box<(String, Option<&'static str>)>),
     Apagar(oneshot::Sender<ShutdownReport>),
 }
 
@@ -1070,6 +1081,18 @@ async fn actor(
             Mensaje::CreadoComprobado(comprobado) => {
                 let (path, veredicto) = *comprobado;
                 for u in estado.abrir_lo_comprobado(path, veredicto) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::FavoritoPersistido(hecho) => {
+                let (nombre, destino, fallo) = *hecho;
+                for u in estado.favorito_persistido(&nombre, Some(destino), fallo) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::FavoritoQuitado(hecho) => {
+                let (nombre, fallo) = *hecho;
+                for u in estado.favorito_persistido(&nombre, None, fallo) {
                     let _ = updates.send(u);
                 }
             }
@@ -1661,6 +1684,17 @@ enum Pendiente {
     CrearFichero {
         /// Dónde se crea. El nombre es lo que se teclea.
         dir: VPath,
+    },
+    /// Guardar un FAVORITO que apunta aquí (#309). El nombre es lo que se
+    /// teclea, y viene prellenado con la sugerencia compartida.
+    ///
+    /// Lleva el destino y no lo lee al confirmar: entre abrir el diálogo y
+    /// aceptar, el panel puede haber navegado, y guardar «donde estoy ahora»
+    /// haría un favorito que apunta a otro sitio que el que se estaba mirando
+    /// cuando se pidió.
+    GuardarFavorito {
+        /// A dónde apunta el favorito.
+        destino: VPath,
     },
     /// Crear un directorio dentro de este otro. El nombre lo teclea el
     /// usuario y se valida al confirmar, no al teclear: corregir un nombre a
@@ -6841,6 +6875,208 @@ impl Estado {
             .map(|(_, p)| p.path.clone())
     }
 
+    /// Pide el NOMBRE de un favorito nuevo que apunta al directorio del panel
+    /// (#309), con el campo ya prellenado.
+    ///
+    /// La sugerencia sale del modelo COMPARTIDO
+    /// (`norte_frontend::places::suggested_hotlist_name`), que es el que usa el
+    /// terminal: esquiva los nombres ocupados porque guardar REEMPLAZA el
+    /// favorito que ya se llame así, y con el campo prellenado el reflejo de
+    /// aceptar sin leer pisaría uno que apuntaba a otro sitio. Un nombre
+    /// TECLEADO que colisione sigue reemplazando — eso es lo que se pidió.
+    fn pedir_favorito(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let destino = self.hueco().pane.dir().clone();
+        let ocupados: Vec<&str> = self
+            .config
+            .common
+            .hotlist
+            .iter()
+            .map(|h| h.name.as_str())
+            .collect();
+        let sugerido = norte_frontend::places::suggested_hotlist_name(&destino, &ocupados);
+        let donde = Self::linea_de_ruta(&destino);
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: "modal-hotlist-name-title".to_owned(),
+            destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
+            deadline_at_ms: None,
+            body: vec![donde],
+            overflow_note: String::new(),
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: Some(clamp_display(sugerido.clone())),
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista,
+            input_crudo: sugerido,
+            reconocido: true,
+            al_confirmar: Some(Pendiente::GuardarFavorito { destino }),
+        });
+        // El selector se cierra: la pregunta la contesta el diálogo, y dejar
+        // la lista debajo daría dos cursores vivos a la vez.
+        self.selector = None;
+        let cambios = vec![
+            ViewChange::Picker { picker: None },
+            ViewChange::Dialogs {
+                dialogs: self.vistas_de_dialogos(),
+            },
+        ];
+        (self.aplicada(), vec![self.parche(cambios)])
+    }
+
+    /// Guarda el favorito `nombre` = `destino` en la capa de configuración que
+    /// esta ventana escribe (#309).
+    ///
+    /// Por `spawn_blocking` (regla 2): `persist_hotlist_add` escribe un fichero
+    /// con lock y tmp+rename. La copia en memoria solo se toca si el disco fue
+    /// bien — que es lo que hace el terminal, y por lo mismo: una lista que
+    /// dice tener un favorito que no está en el fichero miente hasta el
+    /// siguiente arranque.
+    fn guardar_favorito(
+        &mut self,
+        destino: &VPath,
+        nombre: &str,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
+        let nombre = nombre.trim().to_owned();
+        if nombre.is_empty() {
+            // Sin nombre no hay favorito: es lo que hace el terminal con el
+            // campo vacío, y es más honesto que guardar uno sin nombre.
+            return (Some("hotlist-name-empty"), self.decir("hotlist-name-empty"));
+        }
+        let Some(dir) = self.dir_de_escritura() else {
+            return (Some("host-no-config-dir"), self.decir("host-no-config-dir"));
+        };
+        let wire = destino.to_wire();
+        let a_donde = destino.clone();
+        let buzon = buzon.clone();
+        let n = nombre.clone();
+        tokio::task::spawn_blocking(move || {
+            let clave = match norte_config::persist_hotlist_add(&dir, &n, &wire) {
+                Ok(_) => None,
+                Err(e) => Some(clave_de_io(&e)),
+            };
+            let _ = buzon.blocking_send(Mensaje::FavoritoPersistido(Box::new((n, a_donde, clave))));
+        });
+        (None, Vec::new())
+    }
+
+    /// Quita el favorito que el cursor señala (#309).
+    ///
+    /// Sin confirmación, como en el terminal: un favorito es un atajo, no un
+    /// fichero, y volver a crearlo cuesta una tecla. El nombre sale CRUDO de
+    /// la fila y no de su etiqueta, que va saneada.
+    fn quitar_favorito(
+        &mut self,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(nombre) = self
+            .selector
+            .as_ref()
+            .and_then(|s| s.nombre_crudo())
+            .map(str::to_owned)
+        else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "picker-hotlist-empty".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        let Some(dir) = self.dir_de_escritura() else {
+            let fuera = self.decir("host-no-config-dir");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-no-config-dir".to_owned(),
+                },
+                fuera,
+            );
+        };
+        let buzon = buzon.clone();
+        let n = nombre;
+        tokio::task::spawn_blocking(move || {
+            let clave = match norte_config::persist_hotlist_remove(&dir, &n) {
+                Ok(_) => None,
+                Err(e) => Some(clave_de_io(&e)),
+            };
+            let _ = buzon.blocking_send(Mensaje::FavoritoQuitado(Box::new((n, clave))));
+        });
+        (self.aplicada(), Vec::new())
+    }
+
+    /// El disco contestó a un favorito guardado (#309): se refleja o se dice.
+    fn favorito_persistido(
+        &mut self,
+        nombre: &str,
+        destino: Option<VPath>,
+        fallo: Option<&'static str>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        if let Some(clave) = fallo {
+            return self.decir(clave);
+        }
+        match destino {
+            Some(destino) => {
+                // REEMPLAZA el que se llame igual, que es lo que hace el
+                // fichero: si la copia en memoria añadiera uno más, la lista
+                // enseñaría dos donde el disco tiene uno.
+                self.config.common.hotlist.retain(|h| h.name != nombre);
+                self.config.common.hotlist.push(norte_config::HotlistItem {
+                    name: nombre.to_owned(),
+                    target: Ok(destino),
+                });
+            }
+            None => self.config.common.hotlist.retain(|h| h.name != nombre),
+        }
+        // La barra lateral pinta los favoritos: se resiembra desde la copia
+        // que acaba de cambiar, y eso sube su generación. Sin ello la lista de
+        // sitios seguiría enseñando la de antes.
+        self.sembrar_sitios();
+        // Y el selector, si sigue abierto, se rehace con la lista nueva: es la
+        // superficie desde la que se acaba de editar, y dejarla igual sería
+        // contestar «hecho» sobre una lista que no lo enseña.
+        if self
+            .selector
+            .as_ref()
+            .is_some_and(crate::pickers::Selector::es_hotlist)
+        {
+            let slot = self.activo();
+            let favoritos: Vec<(String, Result<VPath, String>)> = self
+                .config
+                .common
+                .hotlist
+                .iter()
+                .map(|h| (h.name.clone(), h.target.clone()))
+                .collect();
+            self.selector = Some(crate::pickers::Selector::hotlist(
+                slot, &favoritos, self.lang,
+            ));
+            self.gen_selector += 1;
+        }
+        // Una FOTO entera, como cuando llegan los volúmenes y por lo mismo:
+        // esto cambia dos superficies a la vez —la barra y el selector— y las
+        // filas se numeran de nuevo, así que un parche por índice nombraría
+        // filas que ya no son las que eran.
+        let snap = self.snapshot();
+        vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))]
+    }
+
     /// Las teclas mientras un selector está abierto.
     fn tecla_en_selector(
         &mut self,
@@ -6879,6 +7115,13 @@ impl Estado {
                 Some("dialog.page-down") => s.mover(PAGINA),
                 Some("dialog.page-up") => s.mover(-PAGINA),
                 Some("dialog.confirm") => return self.elegir_del_selector(backend, buzon),
+                // Los favoritos son la única lista de esta ventana que se
+                // EDITA (#309), y son los dos verbos que el catálogo ya tenía
+                // para eso: en el terminal son la `a` y la `d` del mismo
+                // popup. Sobre cualquier otro selector no significan nada y se
+                // ignoran, como cualquier tecla que ese selector no ata.
+                Some("dialog.add") if s.es_hotlist() => return self.pedir_favorito(),
+                Some("dialog.remove") if s.es_hotlist() => return self.quitar_favorito(buzon),
                 _ => return (self.aplicada(), Vec::new()),
             }
         }
@@ -8692,7 +8935,10 @@ impl Estado {
                     // El corpus los documenta en la página de las propiedades,
                     // pero el CONTEXTO de teclas es este: un campo y dos
                     // botones.
-                    | Pendiente::Permisos { .. },
+                    | Pendiente::Permisos { .. }
+                    // Y el nombre de un favorito (#309): un campo prellenado
+                    // y dos botones, la misma forma que todos los de arriba.
+                    | Pendiente::GuardarFavorito { .. },
                 ) => "dialog.mkdir",
                 None => "browse",
             };
@@ -14038,6 +14284,13 @@ impl Estado {
                 } else {
                     self.crear_directorio(&dir, &dialogo.input_crudo, backend, buzon)
                 };
+                rehusado = motivo;
+                salidas.extend(partes);
+            }
+            // #309: el favorito. El destino lo capturó el diálogo al abrirse,
+            // no se relee aquí.
+            Some(Pendiente::GuardarFavorito { destino }) => {
+                let (motivo, partes) = self.guardar_favorito(&destino, &dialogo.input_crudo, buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }

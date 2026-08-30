@@ -38,11 +38,11 @@ const NO_APLICA: &[&str] = &[
 
 /// Comandos vivos APLAZADOS, con la issue que los cierra.
 const APLAZADOS: &[(&str, u32)] = &[
-    // El resto de `dialog.*` YA pasa por el resolutor compartido (#287). Este
-    // no: quitar una fila de una lista solo significa algo sobre una lista que
-    // se pueda EDITAR, y la única de esta ventana —los ajustes— es de solo
-    // lectura. Atarlo a algo ahora sería inventarle una superficie.
-    ("dialog.remove", 287),
+    // `dialog.remove` estuvo aquí con un motivo que era cierto: quitar una
+    // fila solo significa algo sobre una lista que se pueda EDITAR, y la única
+    // de esta ventana era de solo lectura. Desde #309 hay una que sí —los
+    // favoritos—, así que se fue de esta lista y entró en
+    // `IMPLEMENTADOS_DIALOGO`.
     // El único de los siete de la ADR 0058 que sigue fuera: esta ventana no
     // sabe PINTAR un hueco de preview —caería a «kind no soportado», en
     // gris—, y abrir un hueco que solo se pinta apagado no es abrirlo.

@@ -15259,7 +15259,24 @@ async fn los_huecos_auxiliares_se_abren_y_se_cierran() {
 /// Los perfiles viven en `profiles/` de la capa del usuario, y el host las
 /// recibe ya resueltas (ADR 0066 D14): sin dárselas, no hay dónde buscar.
 async fn host_con_capas(dir_usuario: &std::path::Path) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    host_con_capas_y_favoritos(dir_usuario, Vec::new()).await
+}
+
+/// El mismo, con favoritos YA cargados: la ventana los lee al arrancar, así
+/// que un test que solo escriba el `norte.toml` monta un host que no los ve.
+async fn host_con_capas_y_favoritos(
+    dir_usuario: &std::path::Path,
+    favoritos: Vec<(&str, &str)>,
+) -> (UiHost, norte_ui_host::ViewSnapshot) {
     use norte_ui_host::settings::{ConfigLayer, HostPath, HostPaths};
+    let mut ajustes = ajustes_de_prueba();
+    ajustes.common.hotlist = favoritos
+        .into_iter()
+        .map(|(nombre, destino)| norte_config::HotlistItem {
+            name: nombre.to_owned(),
+            target: VPath::parse(destino).map_err(|_| "hotlist-invalid".to_owned()),
+        })
+        .collect();
     UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
@@ -15269,7 +15286,7 @@ async fn host_con_capas(dir_usuario: &std::path::Path) -> (UiHost, norte_ui_host
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (120, 40),
-        settings: ajustes_de_prueba(),
+        settings: ajustes,
         paths: HostPaths {
             config_layers: vec![(
                 ConfigLayer::User,
@@ -15348,6 +15365,81 @@ async fn el_selector_de_perfiles_enseña_y_lo_elegido_se_aplica() {
         panic!("el aviso es el del tema: {efecto:?}");
     };
     assert_eq!(name, "nord", "el tema del PERFIL, no el de antes");
+}
+
+/// **La ventana AÑADE un favorito, no solo abre la lista** (#309).
+///
+/// Y el nombre viene sugerido por el modelo COMPARTIDO: guardar REEMPLAZA el
+/// favorito que ya se llame igual, así que con el campo prellenado el reflejo
+/// de aceptar sin leer pisaría uno que apuntaba a otro sitio.
+#[tokio::test]
+async fn la_ventana_guarda_un_favorito_con_el_nombre_sugerido() {
+    let raiz = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(raiz.path()).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.hotlist").await;
+    // `dialog.add` sobre la lista de favoritos: en el terminal es la `a` del
+    // mismo popup.
+    h.dispatch(tecla("a")).await.expect("host vivo");
+    let d = siguientes_dialogos(&mut sub).await;
+    assert_eq!(d[0].title_key, "modal-hotlist-name-title");
+    assert_eq!(
+        d[0].input.as_deref(),
+        Some("casa"),
+        "prellenado con la sugerencia compartida: {:?}",
+        d[0].input
+    );
+
+    h.dispatch(UiAction::Dialog {
+        id: d[0].id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+
+    let escrito = std::fs::read_to_string(raiz.path().join("norte.toml")).expect("norte.toml");
+    assert!(
+        escrito.contains("casa"),
+        "el favorito acabó en el fichero: {escrito}"
+    );
+}
+
+/// Y lo QUITA, que era la otra mitad que no había (#309).
+#[tokio::test]
+async fn la_ventana_quita_el_favorito_del_cursor() {
+    let raiz = tempfile::tempdir().expect("temp");
+    std::fs::write(
+        raiz.path().join("norte.toml"),
+        "[[hotlist]]\nname = \"casa\"\npath = \"mem:///casa\"\n",
+    )
+    .expect("escribe");
+    let (h, _snap) = host_con_capas_y_favoritos(raiz.path(), vec![("casa", "mem:///casa")]).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.hotlist").await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let foto = siguiente_foto(&mut sub).await;
+    let filas = foto.picker.as_ref().map(|p| p.rows.len()).unwrap_or(0);
+    assert_eq!(filas, 1, "la lista trae el favorito: {:?}", foto.picker);
+    // `dialog.remove`: la `d` del popup del terminal.
+    let ack = h.dispatch(tecla("d")).await.expect("host vivo");
+    assert!(
+        matches!(ack, norte_ui_host::ActionAck::Applied { .. }),
+        "la tecla la atiende el selector: {ack:?}"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let despues = siguiente_foto(&mut sub).await;
+
+    let escrito = std::fs::read_to_string(raiz.path().join("norte.toml")).expect("norte.toml");
+    assert!(
+        !escrito.contains("casa"),
+        "el favorito se fue del fichero: {escrito}; filas={:?} msg={:?}",
+        despues.picker.as_ref().map(|p| p.rows.len()),
+        despues.status.message
+    );
 }
 
 /// Un perfil que no existe no cambia nada, y se dice.

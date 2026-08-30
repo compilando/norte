@@ -1721,6 +1721,10 @@ modal-mkdir-title = New directory
 modal-chmod-title = Change permissions
 modal-chmod-count = { $n } entries
 modal-new-file-title = New file
+# #309: the window can now ADD a favourite, not just open the list. The name
+# comes suggested, and saving REPLACES the one that already has that name.
+modal-hotlist-name-title = Save as favourite
+hotlist-name-empty = a favourite with no name is not saved
 modal-rename-title = Rename
 modal-delete-title = Move to trash?
 # The three verdicts of the shared resolver, for a key that IS bound.

@@ -1750,6 +1750,10 @@ modal-mkdir-title = Nuevo directorio
 modal-chmod-title = Cambiar permisos
 modal-chmod-count = { $n } entradas
 modal-new-file-title = Fichero nuevo
+# #309: la ventana ya puede AÑADIR un favorito, no solo abrir la lista. El
+# nombre viene sugerido y guardarlo REEMPLAZA el que se llame igual.
+modal-hotlist-name-title = Guardar como favorito
+hotlist-name-empty = un favorito sin nombre no se guarda
 modal-rename-title = Renombrar
 modal-delete-title = ¿Mover a la papelera?
 # Los tres veredictos del resolver compartido, para una tecla que SÍ está ligada.

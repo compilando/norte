@@ -170,6 +170,12 @@ pub(crate) struct Selector {
     /// que mover el foco mientras la lista está puesta cambiara el panel que
     /// acaba montando el volumen.
     slot: u32,
+    /// Es el de FAVORITOS, la única lista de esta ventana que se EDITA (#309).
+    ///
+    /// Un bool y no un `kind` con cinco variantes: lo que se pregunta aquí no
+    /// es qué lista es sino si `dialog.add`/`dialog.remove` significan algo
+    /// sobre ella, y hoy solo hay una de la que sea cierto.
+    hotlist: bool,
 }
 
 /// Una fila con lo que hace falta para ACTUAR, además de para pintar.
@@ -177,6 +183,10 @@ struct Fila {
     vista: PickerRowView,
     /// A dónde navega.
     destino: Option<VPath>,
+    /// El nombre CRUDO, cuando la fila se puede editar (#309): es la clave con
+    /// la que un favorito se quita del `norte.toml`, y no puede salir de la
+    /// etiqueta, que va saneada y recortada para pintarse.
+    nombre: Option<String>,
 }
 
 impl Selector {
@@ -210,6 +220,7 @@ impl Selector {
             vacio: "picker-volumes-loading",
             titulo,
             slot,
+            hotlist: false,
         }
     }
 
@@ -226,6 +237,7 @@ impl Selector {
             vacio: "picker-connections-loading",
             titulo: "picker-connections-title",
             slot,
+            hotlist: false,
         }
     }
 
@@ -257,6 +269,7 @@ impl Selector {
                         detail: clamp_display(url),
                     },
                     destino: VPath::parse(&c.url).ok(),
+                    nombre: None,
                 }
             })
             .collect();
@@ -285,6 +298,7 @@ impl Selector {
                         detail: String::new(),
                     },
                     destino: Some(p.clone()),
+                    nombre: None,
                 }
             })
             .collect();
@@ -294,6 +308,7 @@ impl Selector {
             vacio: "picker-history-empty",
             titulo: "picker-history-title",
             slot,
+            hotlist: false,
         }
     }
 
@@ -328,6 +343,9 @@ impl Selector {
                         detail: clamp_display(detalle),
                     },
                     destino,
+                    // El nombre CRUDO viaja con la fila: es con lo que se
+                    // quita el favorito del `norte.toml` (#309).
+                    nombre: Some(nombre.clone()),
                 }
             })
             .collect();
@@ -337,12 +355,32 @@ impl Selector {
             vacio: "picker-hotlist-empty",
             titulo: "picker-hotlist-title",
             slot,
+            hotlist: true,
         }
     }
 
     /// A qué hueco navega lo que se elija aquí.
     pub(crate) fn slot(&self) -> u32 {
         self.slot
+    }
+
+    /// ¿Es el selector de FAVORITOS? (#309)
+    ///
+    /// Lo pregunta quien atiende `dialog.add`/`dialog.remove`: los favoritos
+    /// son la única lista de esta ventana que se edita —los volúmenes los
+    /// monta el sistema y las disposiciones se guardan por otro camino—, así
+    /// que esos dos verbos solo significan algo aquí.
+    pub(crate) fn es_hotlist(&self) -> bool {
+        self.hotlist
+    }
+
+    /// El NOMBRE de la fila del cursor, sin pintar.
+    ///
+    /// Crudo y no la etiqueta de la vista: lo que se pinta va saneado y
+    /// recortado, y quitar un favorito por su etiqueta borraría el que no era
+    /// —o ninguno— en cuanto el nombre llevara bidi o midiera de más.
+    pub(crate) fn nombre_crudo(&self) -> Option<&str> {
+        self.filas.get(self.cursor)?.nombre.as_deref()
     }
 
     /// Mete los volúmenes que contestó el host.
@@ -370,6 +408,7 @@ impl Selector {
                         detail: clamp_display(detail),
                     },
                     destino: Some(v.mount.clone()),
+                    nombre: None,
                 }
             })
             .collect();

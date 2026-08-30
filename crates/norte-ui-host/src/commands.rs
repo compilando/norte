@@ -250,6 +250,13 @@ pub const IMPLEMENTADOS_DIALOGO: &[&str] = &[
     "dialog.sort",
     "dialog.cycle-format",
     "dialog.add",
+    // `dialog.remove` estuvo APLAZADO (#287) con un motivo que era cierto:
+    // quitar una fila solo significa algo sobre una lista que se pueda
+    // EDITAR, y la única de esta ventana —los ajustes— es de solo lectura.
+    // Desde #309 hay una que sí: los favoritos. Y hasta que este nombre entró
+    // aquí, atarlo en el preset no hacía nada — el keymap efectivo lo filtra
+    // por esta lista, así que la tecla existía y no llegaba a ningún sitio.
+    "dialog.remove",
     // Cambiar de lado (comparar, ayuda), volver (ayuda) y filtrar (ayuda).
     "dialog.pane",
     "dialog.back",
