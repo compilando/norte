@@ -292,6 +292,16 @@ pub struct Falso {
     >,
     /// Los directorios que se pidió crear.
     pub creados: std::sync::Mutex<Vec<VPath>>,
+    /// Qué encuentra un `stat` sobre algo que este falso CREÓ (#303).
+    ///
+    /// `EntryKind::File` —el defecto— es la vida normal: el fichero que el
+    /// daemon acaba de poner sigue ahí y sigue siendo un fichero. Ponerlo a
+    /// `Symlink` es el ataque entero: entre crear el nombre y abrirlo, alguien
+    /// con permiso de escritura en ese directorio lo desenlaza y deja un
+    /// enlace con el mismo nombre. El árbol de `pon` no vale para esto: lo que
+    /// se crea no está en él, y quien lo comprueba pregunta por la ruta
+    /// creada.
+    pub creado_aparece_como: Option<EntryKind>,
     /// Los lotes de permisos que se pidieron: rutas y modo (#314).
     pub permisos: std::sync::Mutex<Vec<(Vec<VPath>, u32)>>,
     /// Las rutas de cada lote de sumas que se pidió (#311).
@@ -889,6 +899,23 @@ impl HostBackend for Falso {
                         mtime_ms: Some(1_700_000_000_000),
                         attrs: std::collections::BTreeMap::new(),
                     })
+            })
+        });
+        // Lo que este falso CREÓ existe, aunque no esté en el árbol de `pon`:
+        // el árbol es el listado de antes de crear nada (#303).
+        let entrada = entrada.or_else(|| {
+            let creado = self
+                .creados
+                .lock()
+                .expect("creados")
+                .iter()
+                .any(|c| c.to_wire() == path.to_wire());
+            creado.then(|| Entry {
+                path: path.clone(),
+                kind: self.creado_aparece_como.unwrap_or(EntryKind::File),
+                size: Some(0),
+                mtime_ms: Some(1_700_000_000_000),
+                attrs: std::collections::BTreeMap::new(),
             })
         });
         Box::pin(async move {

@@ -248,6 +248,19 @@ pub fn editor_argv(file: &std::path::Path) -> Vec<std::ffi::OsString> {
 /// [`login_shell_from`] treats them alike: `EDITOR=` is what a stripped
 /// environment leaves, and spawning `""` is a confusing failure several frames
 /// later rather than an error anyone can read.
+///
+/// # A relative `$EDITOR` is normal, and that is why the guard is elsewhere
+///
+/// [`login_shell_from`] refuses a relative `$SHELL` outright, and this
+/// function deliberately does NOT do the same (#302): `EDITOR=vim` or
+/// `EDITOR="code -w"` is what everybody's shell profile says, while a relative
+/// `$SHELL` is a misconfiguration. The hazard is the same either way — the
+/// child is spawned with the BROWSED directory as `current_dir`, which unix
+/// applies before resolving the program — so the guard sits at the launch
+/// instead: `argv[0]` is resolved to an absolute path with
+/// [`crate::openers::resolve_program`], which ignores the relative and empty
+/// `PATH` entries that make the attack possible, and the child is never given
+/// the bare name.
 #[must_use]
 pub fn editor_argv_from(
     visual: Option<&std::ffi::OsStr>,
@@ -1290,7 +1303,7 @@ pub fn copy_to_clipboard(bytes: &[u8]) -> ClipboardOutcome {
         let Some(programa) = argv.first() else {
             continue;
         };
-        let Some(ruta) = programa.to_str().and_then(crate::openers::resolve_program) else {
+        let Some(ruta) = crate::openers::resolve_program(programa) else {
             continue;
         };
         let hijo = std::process::Command::new(&ruta)

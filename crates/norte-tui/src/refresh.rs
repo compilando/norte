@@ -122,14 +122,17 @@ pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream)
                 // el editor se abre ahora y sobre la ruta que se pidió, no
                 // sobre lo que haya bajo el cursor.
                 if let Some(pendiente) = tomar_creacion(app, fin.progress.task_id) {
-                    match crate::gestures::edit_created(&pendiente) {
-                        Some(shell) => app.pending_shell = Some(shell),
+                    // El `stat` de #303 va AQUÍ y no dentro del `if let` de
+                    // arriba: es un viaje al core y hay que esperarlo antes de
+                    // dejar la suspensión pendiente.
+                    match crate::gestures::edit_created(backend, &pendiente).await {
+                        Ok(shell) => app.pending_shell = Some(shell),
                         // El fichero SE CREÓ y el editor no se puede abrir: se
                         // dice. Tragarse el `None` dejaba `msg-done` en la
                         // barra y media mitad del gesto perdida sin una
                         // palabra, que es la clase de silencio que este
                         // comando vino a quitar.
-                        None => app.message = Some(crate::gestures::shell_remote_message(app)),
+                        Err(msg) => app.message = Some(msg),
                     }
                 }
                 // #250: el archivo se escribió entero y aun así puede llevar

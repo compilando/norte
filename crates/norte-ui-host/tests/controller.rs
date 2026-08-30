@@ -13948,6 +13948,59 @@ async fn editar_uno_nuevo_crea_el_fichero_y_lo_abre() {
     }
 }
 
+/// **Y si entre crear el nombre y abrirlo alguien lo cambia, NO se abre**
+/// (#303).
+///
+/// norte anuncia el nombre creándolo —no hay nada que adivinar— y quien pueda
+/// escribir en ese directorio lo ve aparecer, lo desenlaza y deja un symlink.
+/// El humano acabaría escribiendo en un fichero que nadie le enseñó, y el
+/// `undo` de la entrada `Created` va por RUTA: deshacer mandaría a la papelera
+/// lo que haya ahí AHORA.
+///
+/// Estrecha la ventana y no la cierra —entre el `stat` y el `open` queda
+/// hueco—, y es la misma decisión que toma la TUI. El fichero SE CREÓ: eso no
+/// se deshace aquí, solo no se abre.
+#[tokio::test]
+async fn lo_creado_que_dejo_de_ser_un_fichero_no_se_abre() {
+    let mut falso = Falso {
+        creado_aparece_como: Some(norte_proto::EntryKind::Symlink),
+        ..Falso::default()
+    };
+    falso.pon("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_en(Arc::clone(&backend), "file:///casa").await;
+    let mut sub = h.subscribe();
+    let mut efectos = h.native_effects();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.edit-new").await;
+    let d = siguientes_dialogos(&mut sub).await;
+    let id = d[0].id;
+    h.dispatch(UiAction::DialogInput {
+        id,
+        text: "borrador.md".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+
+    {
+        let creados = backend.creados.lock().expect("creados");
+        assert_eq!(creados.len(), 1, "el fichero SÍ se creó: {creados:?}");
+    }
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(300), efectos.recv())
+            .await
+            .is_err(),
+        "no se le entrega al escritorio lo que ya no es el fichero creado"
+    );
+}
+
 /// Sobre un panel REMOTO no se ofrece, y se dice antes de teclear el nombre.
 ///
 /// Lo que se abre después es la aplicación del escritorio, y a `xdg-open` no

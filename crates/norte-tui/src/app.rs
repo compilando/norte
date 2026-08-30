@@ -113,9 +113,15 @@ pub struct PendingOpen {
 ///
 /// Mismo reparto que [`PendingOpen`] y por la misma razón: quien es dueño de
 /// la terminal es el run loop, no el despacho. Lo que cambia es que aquí no
-/// hay «programa» que sondear en el PATH — el argv sale de `$SHELL` o de una
-/// línea que el usuario escribió, y un `$SHELL` roto se dice con el error del
-/// spawn, no con una sonda que adivinaría lo mismo.
+/// hay sonda PREVIA que decir en la barra — el argv sale de `$SHELL`, de
+/// `$EDITOR` o de una línea que el usuario escribió, y que el programa no
+/// exista se dice con el error del lanzamiento, no con una sonda aparte que
+/// adivinaría lo mismo.
+///
+/// Lo que sí pasa en el lanzamiento es la RESOLUCIÓN del programa a ruta
+/// absoluta (#302): el hijo se lanza con [`Self::cwd`] puesto, y en unix
+/// `current_dir` se aplica antes de resolver el programa. Ver
+/// [`crate::suspend::run_suspended`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingShell {
     /// argv completo, con el binario en `[0]`. VACÍO es legítimo y significa

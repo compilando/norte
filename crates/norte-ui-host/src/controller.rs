@@ -495,6 +495,14 @@ enum Mensaje {
     /// sabe informar» son dos cosas distintas, y colapsarlas es justo lo que
     /// estos informes existen para no hacer.
     Informe(Box<(u64, u64, Informe)>),
+    /// El `fs.stat` que se hace entre crear un fichero y abrirlo (#303): la
+    /// ruta que se creó, y si lo que hay ahí sigue siendo un fichero regular.
+    ///
+    /// Sin época: lo que se decide con esto es abrir una ruta ABSOLUTA en el
+    /// escritorio de esta máquina, que no significa una cosa distinta según
+    /// qué daemon conteste — al revés que los informes, cuyos ids de task
+    /// vuelven a empezar en 1 tras un relevo.
+    CreadoComprobado(Box<(norte_proto::VPath, bool)>),
     Apagar(oneshot::Sender<ShutdownReport>),
 }
 
@@ -1017,6 +1025,12 @@ async fn actor(
             Mensaje::Informe(informe) => {
                 let (epoca, task_id, cual) = *informe;
                 for u in estado.informe(epoca, task_id, &cual) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::CreadoComprobado(comprobado) => {
+                let (path, regular) = *comprobado;
+                for u in estado.abrir_lo_comprobado(path, regular) {
                     let _ = updates.send(u);
                 }
             }
@@ -13739,12 +13753,37 @@ impl Estado {
         (None, Vec::new())
     }
 
-    /// El fichero recién creado existe: ábrelo con el escritorio.
+    /// El fichero recién creado existe: PREGUNTA si sigue siendo un fichero y,
+    /// si lo es, lo abre con el escritorio.
     ///
     /// Solo con un desenlace BUENO. Abrir tras un fallo lanzaría el editor
     /// sobre un fichero que no está, y lo que ese editor enseñe —un buffer
     /// vacío que al guardar crea el fichero— parecería que funcionó.
-    fn abrir_lo_creado(&mut self, p: &norte_proto::TaskProgress) {
+    ///
+    /// # Por qué hay un `fs.stat` en medio (#303)
+    ///
+    /// norte ANUNCIA el nombre creándolo, y entre eso y el `xdg-open` hay una
+    /// ventana en la que cualquiera que escriba en ese directorio puede
+    /// desenlazarlo y dejar un symlink: el humano acabaría escribiendo en un
+    /// fichero que nadie le enseñó, y el `undo` de la entrada `Created` va por
+    /// RUTA y no por identidad. `fs.stat` es `lstat` —describe el enlace, no
+    /// su destino—, así que la pregunta ve lo que hay de verdad.
+    ///
+    /// **Estrecha la ventana, no la cierra**: entre el `stat` y el `open`
+    /// queda hueco, y cerrarlo pediría entregarle un descriptor al programa
+    /// del escritorio, cosa que `xdg-open` no acepta. Es la MISMA decisión que
+    /// toma la TUI en `gestures::edit_created`, y está aquí por eso: una
+    /// decisión duplicada entre frontends diverge en silencio (ADR 0077).
+    ///
+    /// La respuesta vuelve por el buzón como un mensaje más
+    /// ([`Mensaje::CreadoComprobado`]): el estado lo toca un solo escritor, y
+    /// esperar aquí bloquearía el actor entero por un viaje al daemon.
+    fn abrir_lo_creado(
+        &mut self,
+        p: &norte_proto::TaskProgress,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
         // Por ID, no por kind. `task.progress` se difunde a TODA conexión
         // humana, así que un `fs.create` de la TUI —o de otra ventana sobre el
         // mismo daemon— llegaba aquí, se comía la intención y abría un fichero
@@ -13764,12 +13803,39 @@ impl Estado {
         if p.state != norte_proto::TaskState::Completed {
             return;
         }
-        if !self.nativo(crate::dto::NativeEffect::OpenPath { path }) {
-            self.status.message = Some(clamp_display(norte_i18n::t_in(
-                self.lang,
-                "host-no-desktop",
-            )));
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            // Sin atributos: lo único que se pregunta es QUÉ es, y pedir
+            // atributos sería trabajo del provider que nadie va a leer.
+            let regular = matches!(
+                backend.stat(path.clone(), Vec::new()).await,
+                Ok(e) if e.kind == norte_proto::EntryKind::File
+            );
+            let _ = buzon
+                .send(Mensaje::CreadoComprobado(Box::new((path, regular))))
+                .await;
+        });
+    }
+
+    /// La respuesta del `fs.stat` de [`Self::abrir_lo_creado`]: abre, o dice
+    /// por qué no.
+    ///
+    /// Un solo mensaje para las tres causas (un enlace, una carpeta, ya no
+    /// está): decir cuál sería confirmarle al que puso el enlace que su enlace
+    /// está puesto.
+    fn abrir_lo_comprobado(
+        &mut self,
+        path: norte_proto::VPath,
+        regular: bool,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        if !regular {
+            return self.decir("host-created-changed");
         }
+        if self.nativo(crate::dto::NativeEffect::OpenPath { path }) {
+            return Vec::new();
+        }
+        self.decir("host-no-desktop")
     }
 
     /// Teclea en el campo de un diálogo.
@@ -15270,7 +15336,7 @@ impl Estado {
             self.pedir_informe_de_sumas(p, backend, buzon);
             cambios.extend(self.decir_el_recuento(p));
             cambios.extend(self.ofrecer_reintento(p));
-            self.abrir_lo_creado(p);
+            self.abrir_lo_creado(p, backend, buzon);
             self.avisar_del_desenlace(p);
         }
         vec![self.parche(cambios)]

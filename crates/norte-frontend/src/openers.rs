@@ -206,7 +206,7 @@ pub fn expand_argv(command: &[String], files: &[&Path], dir: &Path) -> Vec<std::
 /// (stat), sin ejecutar nada — la base de la degradación limpia («instala X»).
 #[must_use]
 pub fn program_available(program: &str) -> bool {
-    resolve_program(program).is_some()
+    resolve_program(std::ffi::OsStr::new(program)).is_some()
 }
 
 /// La ruta ABSOLUTA del binario que `program` nombra, o `None` si no se
@@ -227,22 +227,44 @@ pub fn program_available(program: &str) -> bool {
 /// Un `program` que YA es absoluto se devuelve tal cual si existe. Uno
 /// relativo con separador (`./tool`) se resuelve contra el cwd actual y se
 /// canonicaliza a absoluto, por el mismo motivo.
+///
+/// Toma `OsStr` y no `&str` porque desde #302 también resuelve el editor, que
+/// sale de `$VISUAL`/`$EDITOR`: una variable de entorno es BYTES y un editor
+/// puede vivir bajo una ruta que no es UTF-8 como cualquier otra cosa
+/// (regla 1).
 #[must_use]
-pub fn resolve_program(program: &str) -> Option<std::path::PathBuf> {
+pub fn resolve_program(program: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
+    resolve_program_in(program, std::env::var_os("PATH").as_deref())
+}
+
+/// El núcleo probable de [`resolve_program`]: el `PATH` entra como ARGUMENTO.
+///
+/// Misma disciplina que los `*_from` de [`crate::shell`]: un test que tocara
+/// la variable del proceso competiría con todos los demás del mismo binario,
+/// y `std::env::set_var` es `unsafe` desde Rust 2024 (regla 5). Lo que este
+/// núcleo NO abstrae es el disco: el sondeo es un `stat` de verdad, así que
+/// sus tests montan un directorio temporal en vez de fingir uno.
+#[must_use]
+pub fn resolve_program_in(
+    program: &std::ffi::OsStr,
+    path_var: Option<&std::ffi::OsStr>,
+) -> Option<std::path::PathBuf> {
     let p = Path::new(program);
     if p.is_absolute() {
         return is_executable(p).then(|| p.to_path_buf());
     }
     // Un nombre con separador pero relativo (`./tool`) se resuelve contra el
-    // cwd; uno simple (`bat`) se busca en el PATH.
-    if program.contains(std::path::MAIN_SEPARATOR) {
+    // cwd; uno simple (`bat`) se busca en el PATH. «Con separador» se pregunta
+    // por el PADRE y no por el byte del separador: así vale igual en Windows,
+    // donde los separadores son dos.
+    if p.parent().is_some_and(|d| !d.as_os_str().is_empty()) {
         if !is_executable(p) {
             return None;
         }
         // Absoluto ANTES de que nadie cambie el cwd del hijo.
         return std::env::current_dir().ok().map(|c| c.join(p));
     }
-    let path = std::env::var_os("PATH")?;
+    let path = path_var?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(program))
         // Una entrada VACÍA del `PATH` significa «el directorio actual», que
@@ -553,5 +575,67 @@ command = ["open", "-t", "%f"]
         #[cfg(unix)]
         assert!(program_available("sh"));
         assert!(!program_available("norte-binario-que-no-existe-xyz"));
+    }
+
+    /// Una entrada RELATIVA del `PATH` —`.`, o la vacía que significa lo
+    /// mismo— no resuelve NADA (#302).
+    ///
+    /// Es la condición del agujero entera: el hijo se lanza con
+    /// `Command::current_dir` puesto en el directorio que el lector navega y,
+    /// en unix, `current_dir` se aplica ANTES de resolver el programa. Con un
+    /// `.` en el `PATH`, un fichero llamado `vim` dentro de un archivo recién
+    /// extraído se ejecutaría al pulsar F4. Aquí el sondeo mira desde el cwd
+    /// del test, donde el ejecutable SÍ está, y aun así dice que no.
+    #[cfg(unix)]
+    #[test]
+    fn una_entrada_relativa_del_path_no_resuelve_nada() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let malo = dir.path().join("editor-hostil");
+        std::fs::write(&malo, b"#!/bin/sh\n").expect("escribe");
+        std::fs::set_permissions(&malo, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let nombre = OsStr::new("editor-hostil");
+        // Absoluta: se encuentra, que es lo que hace honesto al caso de abajo.
+        assert_eq!(
+            resolve_program_in(nombre, Some(dir.path().as_os_str())).as_deref(),
+            Some(malo.as_path())
+        );
+        // Relativa y vacía: ni una ni otra, aunque el fichero esté ahí.
+        let relativo: std::path::PathBuf = dir
+            .path()
+            .file_name()
+            .map(|n| std::path::Path::new("..").join(n))
+            .expect("tiene nombre");
+        for path_var in [OsStr::new("."), OsStr::new(""), relativo.as_os_str()] {
+            assert_eq!(
+                resolve_program_in(nombre, Some(path_var)),
+                None,
+                "una entrada relativa del PATH no puede resolver un programa"
+            );
+        }
+        // Y sin `PATH` no hay dónde buscar.
+        assert_eq!(resolve_program_in(nombre, None), None);
+    }
+
+    /// El programa se toma como BYTES: un editor bajo una ruta que no es
+    /// UTF-8 se resuelve igual (regla 1).
+    #[cfg(unix)]
+    #[test]
+    fn un_programa_con_nombre_no_utf8_se_resuelve() {
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nombre = OsStr::from_bytes(b"ed\xffitor");
+        let ruta = dir.path().join(nombre);
+        std::fs::write(&ruta, b"#!/bin/sh\n").expect("escribe");
+        std::fs::set_permissions(&ruta, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        assert_eq!(
+            resolve_program_in(nombre, Some(dir.path().as_os_str())).as_deref(),
+            Some(ruta.as_path())
+        );
     }
 }

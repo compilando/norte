@@ -119,7 +119,30 @@ pub async fn run_suspended(
                 )
         };
         tokio::task::spawn_blocking(move || {
-            let mut cmd = std::process::Command::new(&argv[0]);
+            // El programa se resuelve a ruta ABSOLUTA aquí, con el cwd de
+            // norte todavía puesto, y jamás se le entrega el nombre crudo a
+            // `Command` (#302). En unix `current_dir` se aplica ANTES de
+            // resolver el programa, así que un `$EDITOR=vim` con un `.` (o un
+            // componente vacío) en el `PATH` ejecutaría un fichero llamado
+            // `vim` dentro del directorio que el lector está NAVEGANDO:
+            // extraer un archivo hostil, entrar y pulsar F4. `resolve_program`
+            // se salta las entradas relativas del `PATH` por eso mismo.
+            //
+            // Y si no se encuentra, NO se lanza: caer al nombre crudo sería
+            // devolverle la búsqueda a `execvp` con el cwd ya cambiado, que es
+            // exactamente el agujero. Un editor que no está instalado daba un
+            // ENOENT de todas formas; lo que cambia es que ahora el mensaje
+            // dice qué programa.
+            let programa = norte_frontend::openers::resolve_program(&argv[0]).ok_or_else(|| {
+                // El programa ya lo NOMBRA `msg-shell-failed`, así que este
+                // detalle dice solo lo que el llamante no sabe: que no se
+                // encontró, y dónde se buscó.
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "not found in PATH (relative PATH entries are ignored)",
+                )
+            })?;
+            let mut cmd = std::process::Command::new(&programa);
             cmd.args(&argv[1..])
                 .env(norte_frontend::shell::LEVEL_VAR, level)
                 .stdin(stdio())

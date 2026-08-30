@@ -82,6 +82,20 @@ pub struct Engine {
     /// todavía si LO TIENE: lo abre en la primera mutación. Preguntárselo es
     /// [`Self::journal`], que es `async` justo por eso.
     journal: JournalSource,
+    /// Las anclas de los directorios que el BACKEND EMBEBIDO ha listado (#301,
+    /// ADR 0073).
+    ///
+    /// Vive aquí y no en `Backend` porque `Backend::Embedded` es un `Arc` del
+    /// engine y nada más: dos clones suyos —el que lista un panel y el que
+    /// copia— no comparten ninguna otra cosa, y una memoria por clon no vería
+    /// nunca lo que listó el otro. Es el equivalente del `Inner` que el SDK
+    /// usa para el camino remoto.
+    ///
+    /// **El daemon no la escribe ni la lee**: sus clientes traen su propia
+    /// ancla en la petición (`dest_anchor`), que es de quien listó de verdad.
+    /// Solo la tocan los métodos de [`crate::backend::Backend`] del brazo
+    /// embebido.
+    anchors: std::sync::Mutex<crate::anchor::AnchorCache>,
     /// Gate de policy consultado PRE-efecto en cada mutación (M3-3). Default
     /// [`AllowAll`](crate::policy::AllowAll): el engine embebido/humano no se
     /// sandboxea salvo que se instale una policy con [`Self::with_policy`].
@@ -287,7 +301,26 @@ impl Engine {
             test_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             pack_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             checksum_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            anchors: std::sync::Mutex::new(crate::anchor::AnchorCache::default()),
         }
+    }
+
+    /// Retiene el ancla del directorio que el BACKEND EMBEBIDO acaba de listar
+    /// (#301).
+    ///
+    /// Un lock envenenado se traga sin ruido, y es la respuesta correcta: lo
+    /// que se pierde es la COMPROBACIÓN de una escritura, nunca la escritura.
+    /// Hacerlo panicar convertiría un fallo de otro hilo en la muerte del
+    /// listado.
+    pub(crate) fn remember_dir_anchor(&self, dir: &VPath, anchor: Option<norte_proto::DirAnchor>) {
+        if let Ok(mut cache) = self.anchors.lock() {
+            cache.remember(dir, anchor);
+        }
+    }
+
+    /// El ancla retenida de `dir`, si el backend embebido lo listó (#301).
+    pub(crate) fn remembered_dir_anchor(&self, dir: &VPath) -> Option<norte_proto::DirAnchor> {
+        self.anchors.lock().ok()?.get(dir)
     }
 
     /// Compone el provider de RAR para `aref`, o dice que no se puede.

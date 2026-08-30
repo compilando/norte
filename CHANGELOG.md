@@ -389,6 +389,47 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The editor was launched with an unresolved program name and the browsed
+  directory as its `cwd`** (ADR 0082, #302). On unix `current_dir` is applied
+  BEFORE the program is resolved, so `EDITOR=vim` with a `.` — or an empty
+  component — anywhere in `PATH` executed a file called `vim` out of the
+  directory the reader had just walked into: extract a hostile archive, enter
+  it, press F4. Every child the TUI launches with a `cwd` now gets the absolute
+  path that `openers::resolve_program` found (it skips relative and empty
+  `PATH` entries), and a program that cannot be resolved is NOT launched —
+  falling back to the bare name would hand the lookup back to `execvp` with the
+  directory already changed, which is the hole itself. The `$SHELL` guard is
+  deliberately not copied over: a relative `$EDITOR` is normal and a relative
+  `$SHELL` is not, so the guard belongs at the launch and not at the variable.
+- **The name norte creates was announced before the editor opened it** (ADR
+  0082, #303). norte announces the name by creating it — nothing to guess — and
+  anyone who can write in that directory could unlink it and leave a symlink
+  there before the editor started, so the reader typed into a file they were
+  never shown; `undo` of the `Created` entry works by path, so undoing would
+  send whatever is there NOW to the trash. Both frontends now ask what is at
+  that path before launching (`fs.stat`, which is `lstat`: it describes the
+  link, never its target) and refuse anything that is not a regular file. This
+  NARROWS the window rather than closing it — between the `stat` and the `exec`
+  a gap remains — but in the TUI that window used to be a full re-listing of
+  both panels, seconds on a remote pane, and is now one round trip.
+- **The embedded backend sent no destination anchor** (ADR 0082, #301). The
+  anchor of ADR 0073 was only ever filled by the SDK, over the wire — and `ntc`
+  runs embedded by default, so every anchored operation from the TUI ran with
+  no anchor, including the one ADR 0076 justified the anchor WITH: `fs.create`,
+  whose success hands a path to `$EDITOR`. `Backend::Embedded` now remembers
+  the anchor of each directory it lists and passes it to `create_file`, `copy`
+  and `move`, so a destination replaced between the listing and the write is
+  refused with `Conflict{EscapesRoot}` whether norte runs embedded or against a
+  daemon. A destination nobody listed still behaves as it did in 0.53.
+- **The orphan cap could overflow the session envelope on its own** (#304).
+  `prune` trims by COUNTS and the real limit is BYTES: 128 orphan slots with
+  full history serialised to ~1.18 MB against the 1 MiB `SESSION_BODY_MAX`, so
+  the core refused the `put` and left the stored session as it was — the reader
+  silently lost where they were, and the trimming that existed to prevent that
+  was what caused it. An orphan slot — one no arrangement mentions, which
+  nobody can press "back" inside without reopening it first — now keeps 8 steps
+  of history per direction instead of 64. A VISIBLE slot loses nothing.
+
 - **Five layout commands had no key in any preset.** Closing a slot, growing
   and shrinking it, equalising the row and designating the destination were
   reachable only from the menu or the palette — which is where "the keys in the

@@ -29,6 +29,24 @@ pub const HISTORY_CAP: usize = 64;
 /// Huecos huérfanos —los que ningún layout menciona— que se guardan.
 pub const ORPHAN_CAP: usize = 128;
 
+/// Entradas de historial que conserva un hueco HUÉRFANO, por sentido.
+///
+/// Un hueco que ninguna disposición menciona no está en pantalla: nadie puede
+/// pulsar «atrás» dentro de él sin volver a abrirlo antes, y volver a abrirlo
+/// es empezar a andar de nuevo. Los 64 pasos de [`HISTORY_CAP`] son para el
+/// hueco que se ve.
+///
+/// El número sale de una ARITMÉTICA, no del gusto (#304): [`ORPHAN_CAP`] es
+/// 128 y un hueco con el historial lleno mide ~9 240 bytes con rutas de este
+/// repositorio, así que 128 huérfanos por sí solos daban ~1 182 000 contra los
+/// 1 048 576 de [`norte_proto::methods::SESSION_BODY_MAX`] — un cuerpo que el
+/// core REHÚSA, dejando la sesión como estaba. `prune` recorta contra cuentas
+/// y el tope real es de bytes; bajar el historial del que nadie mira es lo que
+/// devuelve el sentido al tope por cuenta.
+/// `el_tope_de_huerfanos_lleno_tambien_cabe_en_el_sobre` mide las dos cotas a
+/// la vez; si se pone rojo, la cura es BAJAR este número.
+pub const ORPHAN_HISTORY_CAP: usize = 8;
+
 /// Cuántos PERFILES conservan estado a la vez (spec 2026-08-26, D6).
 ///
 /// El número sale de una MEDIDA, no del gusto:
@@ -147,24 +165,21 @@ impl SessionBody {
     /// Recorta la sesión a sus topes. Se llama al ESCRIBIR, que es donde
     /// crece.
     ///
-    /// En este orden: el historial de cada hueco se recorta por el extremo
-    /// VIEJO —lo que se tira es lo más lejano, no lo que acabas de andar—; los
-    /// huecos que alguna disposición menciona se marcan intocables; de los
-    /// demás se van primero los de más de [`MAX_AGE_MS`] y luego, si aún
-    /// sobran, los que hace más que no se tocan hasta caber en [`ORPHAN_CAP`].
+    /// En este orden: el tope de PERFILES con estado ([`PROFILE_STATE_CAP`],
+    /// spec 2026-08-26, D6) primero, para que todo lo demás vea ya el mapa más
+    /// pequeño; los huecos que alguna disposición menciona quedan marcados
+    /// intocables; el historial de cada hueco se recorta por el extremo VIEJO
+    /// —lo que se tira es lo más lejano, no lo que acabas de andar—, a
+    /// [`HISTORY_CAP`] si el hueco es visible y a [`ORPHAN_HISTORY_CAP`] si no;
+    /// y de los huérfanos se van primero los de más de [`MAX_AGE_MS`] y luego,
+    /// si aún sobran, los que hace más que no se tocan hasta caber en
+    /// [`ORPHAN_CAP`].
     ///
-    /// Un hueco VISIBLE no lo barre ni la edad ni el tope: lo que se ve en
-    /// pantalla no se recicla.
+    /// Un hueco VISIBLE no lo barre ni la edad ni el tope, ni pierde un paso de
+    /// historial: lo que se ve en pantalla no se recicla.
     ///
-    /// Entre el recorte del historial y el barrido de huérfanos va el tope de
-    /// PERFILES con estado ([`PROFILE_STATE_CAP`], spec 2026-08-26, D6): ahí y
-    /// no después, para que el barrido vea ya el mapa más pequeño. El perfil
-    /// [`Self::active`] no lo barre nada, en ningún paso.
+    /// El perfil [`Self::active`] no lo barre nada, en ningún paso.
     pub fn prune(&mut self, now_ms: u64) {
-        for slot in self.slots.values_mut() {
-            recorta_historial(&mut slot.back);
-            recorta_historial(&mut slot.forward);
-        }
         self.prune_profiles();
         let visibles: BTreeSet<u32> = self
             .layouts
@@ -172,6 +187,15 @@ impl SessionBody {
             .flat_map(Node::slot_ids)
             .map(|SlotId(id)| id)
             .collect();
+        for (id, slot) in &mut self.slots {
+            let cap = if visibles.contains(id) {
+                HISTORY_CAP
+            } else {
+                ORPHAN_HISTORY_CAP
+            };
+            recorta_historial(&mut slot.back, cap);
+            recorta_historial(&mut slot.forward, cap);
+        }
         self.slots.retain(|id, s| {
             visibles.contains(id) || now_ms.saturating_sub(s.touched_ms) <= MAX_AGE_MS
         });
@@ -501,10 +525,10 @@ fn diagnose(e: &serde_json::Error) -> String {
     format!("{que} en línea {} columna {}", e.line(), e.column())
 }
 
-/// Deja las [`HISTORY_CAP`] entradas más RECIENTES, que son las del final.
-fn recorta_historial(h: &mut Vec<VPath>) {
-    if h.len() > HISTORY_CAP {
-        h.drain(..h.len() - HISTORY_CAP);
+/// Deja las `cap` entradas más RECIENTES, que son las del final.
+fn recorta_historial(h: &mut Vec<VPath>, cap: usize) {
+    if h.len() > cap {
+        h.drain(..h.len() - cap);
     }
 }
 
@@ -703,12 +727,25 @@ mod tests {
     /// test se pone rojo, la cura es BAJAR [`PROFILE_STATE_CAP`], no subir el
     /// tope del protocolo: el core rehúsa un `put` que se pase y deja la sesión
     /// como estaba, así que pasarse es perder lo que estabas haciendo.
-    #[test]
-    fn un_cuerpo_realista_con_el_tope_lleno_cabe_en_el_sobre() {
-        // Ocho huecos por perfil, historial lleno en los dos sentidos, y rutas
-        // de este mismo repositorio: una ruta rellenada a mano mediría el
-        // relleno y no el caso.
-        let raiz = "file:///home/u/src/norte/crates/norte-frontend/src";
+    /// La raíz de las rutas de los tests del sobre: de este mismo repositorio,
+    /// porque una ruta rellenada a mano mediría el relleno y no el caso.
+    const RAIZ: &str = "file:///home/u/src/norte/crates/norte-frontend/src";
+
+    /// Un hueco con el historial lleno en los dos sentidos.
+    fn slot_con_historial_lleno(id: u32) -> SlotState {
+        let mut s = slot(&format!("{RAIZ}/modulo{id}"));
+        s.back = (0..HISTORY_CAP)
+            .map(|i| vp(&format!("{RAIZ}/modulo{id}/atras{i}")))
+            .collect();
+        s.forward = (0..HISTORY_CAP)
+            .map(|i| vp(&format!("{RAIZ}/modulo{id}/alante{i}")))
+            .collect();
+        s
+    }
+
+    /// [`PROFILE_STATE_CAP`] perfiles de ocho huecos, todos con el historial
+    /// lleno: el cuerpo VISIBLE al tope, sin un solo huérfano.
+    fn cuerpo_visible_al_tope() -> SessionBody {
         let mut b = SessionBody::default();
         for p in 0..PROFILE_STATE_CAP {
             let hijos: Vec<Node> = (1..=8u32)
@@ -717,20 +754,48 @@ mod tests {
             let arbol = crate::layout::Node::split(crate::layout::Dir::Horizontal, hijos);
             let (arbol, _) = arbol.rebase_slot_ids(b.next_slot_base().expect("hay sitio"));
             for SlotId(id) in arbol.slot_ids() {
-                let mut s = slot(&format!("{raiz}/modulo{id}"));
-                s.back = (0..HISTORY_CAP)
-                    .map(|i| vp(&format!("{raiz}/modulo{id}/atras{i}")))
-                    .collect();
-                s.forward = (0..HISTORY_CAP)
-                    .map(|i| vp(&format!("{raiz}/modulo{id}/alante{i}")))
-                    .collect();
-                b.slots.insert(id, s);
+                b.slots.insert(id, slot_con_historial_lleno(id));
             }
             b.layouts.insert(format!("perfil{p}"), arbol);
         }
         b.active = "perfil0".to_owned();
+        b
+    }
+
+    #[test]
+    fn un_cuerpo_realista_con_el_tope_lleno_cabe_en_el_sobre() {
+        let mut b = cuerpo_visible_al_tope();
         b.prune(0);
 
+        let bytes = serde_json::to_vec(&b.to_value()).expect("serializa");
+        assert!(
+            bytes.len() <= norte_proto::methods::SESSION_BODY_MAX,
+            "{} bytes contra un tope de {}",
+            bytes.len(),
+            norte_proto::methods::SESSION_BODY_MAX
+        );
+    }
+
+    /// Y el tope de HUÉRFANOS lleno también cabe, que es lo que no pasaba
+    /// (#304): [`ORPHAN_CAP`] huecos que nadie mira, cada uno con el historial
+    /// lleno, sobre el cuerpo visible al tope. Con [`HISTORY_CAP`] para todos
+    /// esto daba ~1 182 000 bytes contra los 1 048 576 del sobre, y el `put`
+    /// se rehusaba ENTERO: el recorte que existía para impedirlo lo causaba.
+    #[test]
+    fn el_tope_de_huerfanos_lleno_tambien_cabe_en_el_sobre() {
+        let mut b = cuerpo_visible_al_tope();
+        let base = b.next_slot_base().expect("hay sitio");
+        for k in 0..u32::try_from(ORPHAN_CAP).expect("cabe") {
+            let id = base + k;
+            b.slots.insert(id, slot_con_historial_lleno(id));
+        }
+        b.prune(0);
+
+        assert_eq!(
+            b.slots.len(),
+            8 * PROFILE_STATE_CAP + ORPHAN_CAP,
+            "ni uno se ha barrido: el tope se llena, no se pasa"
+        );
         let bytes = serde_json::to_vec(&b.to_value()).expect("serializa");
         assert!(
             bytes.len() <= norte_proto::methods::SESSION_BODY_MAX,
@@ -1012,12 +1077,39 @@ mod tests {
             .map(|i| vp(&format!("file:///d{i}")))
             .collect();
         b.slots.insert(1, s);
+        b.layouts
+            .insert("default".into(), Node::slot(SlotId(1), KindId::browser()));
         b.prune(0);
         let back = &b.slots[&1].back;
         assert_eq!(back.len(), HISTORY_CAP);
         assert_eq!(
             back.last().expect("último"),
             &vp(&format!("file:///d{}", HISTORY_CAP + 9))
+        );
+    }
+
+    /// Y el de un HUÉRFANO se recorta más (#304): nadie puede pulsar «atrás»
+    /// dentro de un hueco que ninguna disposición menciona sin volver a abrirlo
+    /// antes. Se tira por el mismo extremo, el viejo.
+    #[test]
+    fn el_historial_de_un_huerfano_se_recorta_mas() {
+        let mut b = SessionBody::default();
+        let mut s = slot("file:///casa");
+        s.back = (0..HISTORY_CAP)
+            .map(|i| vp(&format!("file:///d{i}")))
+            .collect();
+        s.forward = s.back.clone();
+        b.slots.insert(1, s);
+        b.layouts
+            .insert("default".into(), Node::slot(SlotId(2), KindId::browser()));
+        b.prune(0);
+        let s = &b.slots[&1];
+        assert_eq!(s.back.len(), ORPHAN_HISTORY_CAP);
+        assert_eq!(s.forward.len(), ORPHAN_HISTORY_CAP);
+        assert_eq!(
+            s.back.last().expect("último"),
+            &vp(&format!("file:///d{}", HISTORY_CAP - 1)),
+            "lo reciente se queda"
         );
     }
 

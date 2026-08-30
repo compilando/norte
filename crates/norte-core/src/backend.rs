@@ -632,6 +632,23 @@ impl Backend {
                     tracing::warn!(error = %e, "list_skipped falló; omitidas = desconocido");
                     None
                 });
+                // El ANCLA de lo que se acaba de listar (#301, ADR 0073), que
+                // es lo que el daemon pone en `fs.list` para que su cliente lo
+                // recuerde. Aquí no hay wire, así que el que recuerda es el
+                // engine — y sin esto `ntc`, que corre embebido por DEFECTO,
+                // hacía toda operación anclada SIN ancla: la comprobación que
+                // ADR 0076 pedía justo para `fs.create` no la tenía el único
+                // frontend que lanza un `$EDITOR` sobre lo creado.
+                //
+                // Best-effort por la misma razón que `skipped`: un provider
+                // que no sabe dar identidad de nodo (un bucket, un SFTP sin
+                // extensiones) no puede impedir un listado. Un fallo BORRA la
+                // que hubiera, que es lo que hace `remember` con `None`.
+                let ancla = engine.dir_anchor(dir).await.unwrap_or_else(|e| {
+                    tracing::debug!(error = %e, "dir_anchor falló; sin ancla para este listado");
+                    None
+                });
+                engine.remember_dir_anchor(dir, ancla);
                 Ok((stream, skipped))
             }
             #[cfg(unix)]
@@ -789,7 +806,26 @@ impl Backend {
         }
     }
 
+    /// El ancla retenida del directorio en el que `destino` va a escribirse
+    /// (#301).
+    ///
+    /// `destino` es la ruta EXACTA de lo que se escribe, así que lo que se
+    /// busca es su PADRE: es el directorio que el humano listó y aprobó. La
+    /// misma cuenta que hace el SDK en el camino remoto.
+    ///
+    /// `None` —nadie listó ese directorio en esta sesión, o su provider no
+    /// sabe dar identidad de nodo— se comporta exactamente como 0.53: se
+    /// confina igual y esa comprobación no ocurre.
+    fn ancla_del_destino(engine: &Engine, destino: &VPath) -> Option<norte_proto::DirAnchor> {
+        engine.remembered_dir_anchor(&destino.parent()?)
+    }
+
     /// Copia como task.
+    ///
+    /// El ancla del directorio DESTINO viaja con la operación cuando este
+    /// backend lo listó (#301, ADR 0073) — igual que la pone el SDK en el
+    /// camino remoto, y por el mismo motivo: entre listar y escribir, ese
+    /// directorio puede haber dejado de ser el nodo que el humano miraba.
     ///
     /// # Errors
     /// Taxonomía del protocolo.
@@ -801,7 +837,15 @@ impl Backend {
     ) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(engine) => Ok(TaskRef::from_handle(
-                &engine.copy_with(from, to, opts).await?,
+                &engine
+                    .copy_anchored(
+                        from,
+                        to,
+                        opts,
+                        crate::journal::Actor::User,
+                        Self::ancla_del_destino(engine, to),
+                    )
+                    .await?,
             )),
             #[cfg(unix)]
             Self::Remote(r) => r
@@ -811,7 +855,7 @@ impl Backend {
         }
     }
 
-    /// Move como task.
+    /// Move como task. Con el ancla del destino, como [`Self::copy`].
     ///
     /// # Errors
     /// Taxonomía del protocolo.
@@ -823,7 +867,15 @@ impl Backend {
     ) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(engine) => Ok(TaskRef::from_handle(
-                &engine.move_with(from, to, opts).await?,
+                &engine
+                    .move_anchored(
+                        from,
+                        to,
+                        opts,
+                        crate::journal::Actor::User,
+                        Self::ancla_del_destino(engine, to),
+                    )
+                    .await?,
             )),
             #[cfg(unix)]
             Self::Remote(r) => r
@@ -864,11 +916,24 @@ impl Backend {
     /// `Conflict{Exists}`; la exclusividad la aporta el provider (atómica en
     /// local y en objetos, con ventana en SFTP v3).
     ///
+    /// Con el ancla del directorio, como [`Self::copy`] — y aquí es donde más
+    /// falta hace (#301): `fs.create` es el único método cuyo éxito entrega
+    /// una ruta a un programa de FUERA de norte (`$EDITOR`), que es el motivo
+    /// con el que ADR 0076 justificó ponerle ancla.
+    ///
     /// # Errors
     /// Taxonomía del protocolo.
     pub async fn create_file(&self, path: &VPath) -> Result<TaskRef, Error> {
         match self {
-            Self::Embedded(engine) => Ok(TaskRef::from_handle(&engine.create_file(path).await?)),
+            Self::Embedded(engine) => Ok(TaskRef::from_handle(
+                &engine
+                    .create_file_as(
+                        path,
+                        Self::ancla_del_destino(engine, path),
+                        crate::journal::Actor::User,
+                    )
+                    .await?,
+            )),
             #[cfg(unix)]
             Self::Remote(r) => r.create_file(path).await.map(TaskRef::from),
         }

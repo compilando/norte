@@ -198,7 +198,8 @@ fn abrir(path: &norte_proto::VPath) -> Resultado {
         return Resultado::SinPrograma;
     };
     let (programa, argv) = norte_frontend::openers::system_opener(&nativa);
-    let Some(ruta) = norte_frontend::openers::resolve_program(&programa) else {
+    let Some(ruta) = norte_frontend::openers::resolve_program(std::ffi::OsStr::new(&programa))
+    else {
         return Resultado::SinPrograma;
     };
     lanzar(&ruta, &argv[1..], None)
@@ -210,7 +211,7 @@ fn terminal(dir: &norte_proto::VPath) -> Resultado {
         return Resultado::SinPrograma;
     };
     for argv in norte_frontend::shell::terminal_candidates(&nativa) {
-        let Some(programa) = argv.first().and_then(|p| p.to_str()) else {
+        let Some(programa) = argv.first() else {
             continue;
         };
         let Some(ruta) = norte_frontend::openers::resolve_program(programa) else {

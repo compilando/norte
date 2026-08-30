@@ -69,9 +69,105 @@ pub fn casa(esperada: &DirAnchor, id: NodeId) -> bool {
     de_nodo(id) == *esperada
 }
 
+/// Las anclas de los directorios que un cliente ha LISTADO, con tope y orden
+/// de llegada (#301).
+///
+/// El gemelo de la que `norte-client` guarda en su `Inner` para el camino
+/// remoto, y existe por lo mismo: quien lista es el panel y quien escribe
+/// después puede ser otro clon del mismo backend, así que la memoria vive
+/// junto al estado compartido y no en el frontend. En el camino EMBEBIDO ese
+/// estado compartido es el [`Engine`](crate::Engine), que es lo único que un
+/// `Backend::Embedded` clonado comparte.
+///
+/// Acotado y best-effort: son directorios que un humano tiene abiertos, o sea
+/// unidades. Perder uno cuesta la comprobación de esa escritura, jamás la
+/// escritura.
+///
+/// **Duplicada a propósito y no compartida con el SDK**: exportarla desde
+/// `norte-client` ataría el camino embebido —que existe para funcionar SIN
+/// daemon, y compila en plataformas donde el transporte del SDK no— a un
+/// crate que no necesita para nada. Son cuarenta líneas y un tope.
+#[derive(Debug, Default)]
+pub(crate) struct AnchorCache {
+    by_dir: std::collections::HashMap<norte_proto::VPath, DirAnchor>,
+    order: std::collections::VecDeque<norte_proto::VPath>,
+}
+
+/// Cuántos directorios se recuerdan a la vez. El mismo número que el SDK.
+const ANCHORS_MAX: usize = 64;
+
+impl AnchorCache {
+    /// Recuerda (o refresca) el ancla de `dir`.
+    ///
+    /// `None` BORRA la que hubiera, y eso es deliberado: un listado que ya no
+    /// trae ancla —porque el provider dejó de saber darla— no puede dejar viva
+    /// la de antes. Una escritura que mandara un ancla vieja se rechazaría a sí
+    /// misma sin motivo.
+    pub(crate) fn remember(&mut self, dir: &norte_proto::VPath, anchor: Option<DirAnchor>) {
+        let Some(anchor) = anchor else {
+            self.by_dir.remove(dir);
+            self.order.retain(|d| d != dir);
+            return;
+        };
+        if self.by_dir.insert(dir.clone(), anchor).is_none() {
+            self.order.push_back(dir.clone());
+            while self.order.len() > ANCHORS_MAX {
+                if let Some(viejo) = self.order.pop_front() {
+                    self.by_dir.remove(&viejo);
+                }
+            }
+        }
+    }
+
+    /// El ancla retenida de `dir`, si se listó.
+    pub(crate) fn get(&self, dir: &norte_proto::VPath) -> Option<DirAnchor> {
+        self.by_dir.get(dir).cloned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn vpd(wire: &str) -> norte_proto::VPath {
+        norte_proto::VPath::parse(wire).expect("wire de test")
+    }
+
+    #[test]
+    fn se_recuerda_lo_listado_y_solo_eso() {
+        let mut c = AnchorCache::default();
+        let dir = vpd("file:///casa");
+        let a = DirAnchor::new("a".repeat(32));
+        c.remember(&dir, Some(a.clone()));
+        assert_eq!(c.get(&dir), Some(a));
+        assert_eq!(c.get(&vpd("file:///otro")), None);
+    }
+
+    /// Un listado SIN ancla borra la de antes: mandar la vieja sería que la
+    /// escritura se rechazara a sí misma.
+    #[test]
+    fn un_listado_sin_ancla_borra_la_de_antes() {
+        let mut c = AnchorCache::default();
+        let dir = vpd("file:///casa");
+        c.remember(&dir, Some(DirAnchor::new("b".repeat(32))));
+        c.remember(&dir, None);
+        assert_eq!(c.get(&dir), None);
+    }
+
+    /// El tope se aplica por orden de LLEGADA, y refrescar no reordena: lo que
+    /// se va es lo que entró primero.
+    #[test]
+    fn el_tope_echa_al_mas_viejo() {
+        let mut c = AnchorCache::default();
+        for i in 0..=ANCHORS_MAX {
+            c.remember(
+                &vpd(&format!("file:///d{i}")),
+                Some(DirAnchor::new(format!("{i:032x}"))),
+            );
+        }
+        assert_eq!(c.get(&vpd("file:///d0")), None, "el primero se fue");
+        assert!(c.get(&vpd(&format!("file:///d{ANCHORS_MAX}"))).is_some());
+    }
 
     #[test]
     fn el_mismo_nodo_da_la_misma_ancla_y_otro_nodo_no() {

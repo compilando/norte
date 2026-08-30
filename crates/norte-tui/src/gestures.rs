@@ -176,7 +176,16 @@ async fn spawn_detached(
         "el argv del lanzador del sistema siempre trae el binario"
     );
     let mut child = tokio::task::spawn_blocking(move || {
-        let mut cmd = std::process::Command::new(&argv[0]);
+        // Ruta ABSOLUTA, resuelta con el cwd de norte y nunca con el del pane
+        // (#302): ver el comentario largo en `suspend::run_suspended`, que es
+        // el otro sitio donde un hijo se lanza con `current_dir` puesto.
+        let programa = norte_frontend::openers::resolve_program(&argv[0]).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found in PATH (relative PATH entries are ignored)",
+            )
+        })?;
+        let mut cmd = std::process::Command::new(&programa);
         // `current_dir` solo si hay: pasar el cwd heredado explícitamente no
         // es lo mismo que no tocarlo, y aquí no hay nada mejor que heredar
         // (#144).
@@ -418,16 +427,55 @@ pub enum EditLaunch {
 /// `:w otro.txt` del editor debe caer donde está el fichero que se acaba de
 /// crear — que es de lo que va el gesto — y no donde quedó el foco.
 ///
-/// `None` si esa ruta no tiene forma nativa: no debería pasar (crear se rehúsa
-/// sobre un pane remoto, al abrir el diálogo y otra vez al confirmarlo), pero
-/// abrir un editor sobre lo que no se puede nombrar no es una alternativa. El
-/// llamante lo DICE: media mitad del gesto perdida en silencio es la clase de
-/// cosa que este comando vino a quitar.
-#[must_use]
-pub fn edit_created(path: &VPath) -> Option<crate::app::PendingShell> {
-    let native = norte_vfs_local::vpath_to_native(path).ok()?;
+/// `Err` con el mensaje LOCALIZADO si esa ruta no tiene forma nativa: no
+/// debería pasar (crear se rehúsa sobre un pane remoto, al abrir el diálogo y
+/// otra vez al confirmarlo), pero abrir un editor sobre lo que no se puede
+/// nombrar no es una alternativa. El llamante lo DICE: media mitad del gesto
+/// perdida en silencio es la clase de cosa que este comando vino a quitar.
+///
+/// # El `stat` antes de lanzar (#303)
+///
+/// Entre crear el fichero y abrir el editor hay una ventana, y norte la abre
+/// él: ANUNCIA el nombre creándolo —no hay nada que adivinar— y quien pueda
+/// escribir en ese directorio lo ve aparecer (inotify), lo desenlaza y deja un
+/// symlink en su sitio. El humano teclearía entonces en un fichero que nadie
+/// le enseñó, y el `undo` de la entrada `Created` trabaja por RUTA y no por
+/// identidad: deshacer mandaría a la papelera lo que haya ahí AHORA.
+///
+/// Así que se pregunta antes de lanzar, y se rehúsa lo que no sea un fichero
+/// regular. La pregunta va por el BACKEND (`fs.stat`, que es `lstat` — describe
+/// el enlace y jamás su destino), no con un `std::fs` dentro del bucle: hacer
+/// I/O de disco en el executor es la regla 2, y el backend puede además ser el
+/// daemon.
+///
+/// **Esto ESTRECHA la ventana, no la cierra**, y conviene no confundirlo: entre
+/// el `stat` y el `exec` del editor sigue habiendo un hueco. Cerrarlo de verdad
+/// pide abrir el fichero una vez y entregarle el descriptor al hijo, y ninguna
+/// interfaz de editor de aquí lo acepta. Lo que compra es que la ventana pase
+/// de «todo un refresco de los dos paneles, segundos en un pane remoto» a un
+/// viaje de ida y vuelta al core.
+///
+/// # Errors
+///
+/// El mensaje LOCALIZADO, listo para la barra: la ruta no tiene forma nativa,
+/// o lo que hay bajo ella ya no es el fichero regular que se creó.
+pub async fn edit_created(
+    backend: &norte_core::backend::Backend,
+    path: &VPath,
+) -> Result<crate::app::PendingShell, String> {
+    let Ok(native) = norte_vfs_local::vpath_to_native(path) else {
+        return Err(t("msg-edit-created-unnamable"));
+    };
+    match backend.stat(path).await {
+        Ok(entry) if entry.kind == norte_proto::EntryKind::File => {}
+        // Un symlink, un directorio, o lo que ya no está: en los tres casos lo
+        // que hay bajo esa ruta NO es lo que norte creó, y el editor no se
+        // abre. Un solo mensaje para los tres a propósito — decir cuál sería
+        // decirle al que puso el symlink que su symlink está puesto.
+        _ => return Err(t("msg-edit-created-changed")),
+    }
     let cwd = native.parent().and_then(norte_frontend::shell::child_cwd);
-    Some(crate::app::PendingShell {
+    Ok(crate::app::PendingShell {
         argv: norte_frontend::shell::editor_argv(&native),
         cwd,
         wait_for_key: false,
@@ -1765,17 +1813,33 @@ mod edit_tests {
         assert!(edit_under_cursor(&app).is_err());
     }
 
+    /// Un backend embebido con el provider local: `edit_created` pregunta por
+    /// `fs.stat` (#303), así que sus tests necesitan disco de verdad.
+    fn backend_local() -> norte_core::backend::Backend {
+        let engine = norte_core::Engine::new();
+        engine.register_provider(std::sync::Arc::new(
+            norte_vfs_local::LocalProvider::os_root(),
+        ));
+        norte_core::backend::Backend::Embedded(std::sync::Arc::new(engine))
+    }
+
     /// #290: la otra mitad de `pane.edit-new` abre el editor sobre la ruta que
     /// se MANDÓ CREAR, no sobre lo que haya bajo el cursor: cuando la task
     /// termina, el listado puede no haberse refrescado todavía.
-    #[test]
-    fn el_editor_del_fichero_creado_va_sobre_la_ruta_que_se_pidio() {
-        let creado = VPath::parse("file:///tmp/notas.txt").expect("wire");
-        let pending = edit_created(&creado).expect("local");
+    #[tokio::test]
+    async fn el_editor_del_fichero_creado_va_sobre_la_ruta_que_se_pidio() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fichero = dir.path().join("notas.txt");
+        std::fs::write(&fichero, b"").expect("crea");
+        let creado = norte_vfs::native::vpath_from_native(&fichero).expect("nativa");
+
+        let pending = edit_created(&backend_local(), &creado)
+            .await
+            .expect("local y regular");
         assert_eq!(pending.argv.len(), 2, "programa y ruta, sin línea de shell");
         assert_eq!(
             pending.argv[1],
-            std::ffi::OsString::from("/tmp/notas.txt"),
+            fichero.clone().into_os_string(),
             "la ruta va como su propio argumento"
         );
         assert!(!pending.wait_for_key, "un editor se despide solo");
@@ -1783,7 +1847,7 @@ mod edit_tests {
         // submit y el desenlace el lector puede haberse ido a otro sitio.
         assert_eq!(
             pending.cwd.as_deref(),
-            Some(std::path::Path::new("/tmp")),
+            Some(dir.path()),
             "un `:w otro.txt` cae donde está el fichero recién creado"
         );
     }
@@ -1791,10 +1855,49 @@ mod edit_tests {
     /// Y sobre algo que no tiene forma nativa no se abre nada: crear se rehúsa
     /// en un pane remoto, así que esto no debería pasar — y si pasa, un editor
     /// sobre lo que no se puede nombrar no es la salida.
-    #[test]
-    fn sin_forma_nativa_no_se_abre_ningun_editor() {
+    #[tokio::test]
+    async fn sin_forma_nativa_no_se_abre_ningun_editor() {
         let remoto = VPath::parse("sftp://srv/notas.txt").expect("wire");
-        assert!(edit_created(&remoto).is_none());
+        assert!(edit_created(&backend_local(), &remoto).await.is_err());
+    }
+
+    /// #303: entre crear el fichero y abrir el editor, alguien que puede
+    /// escribir en ese directorio lo desenlaza y deja un SYMLINK con el mismo
+    /// nombre. El editor no se abre: `fs.stat` es `lstat` y describe el
+    /// enlace, no su destino, así que el enlace se ve como lo que es.
+    ///
+    /// Es la única defensa que hay aquí, y estrecha sin cerrar — pero la
+    /// ventana de antes era el refresco entero de los dos paneles.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn un_symlink_puesto_entre_crear_y_abrir_no_se_edita() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let secreto = dir.path().join("secreto");
+        std::fs::write(&secreto, b"de otro").expect("crea");
+        let creado_nativo = dir.path().join("notas.txt");
+        // Lo que norte creó, ya desenlazado y sustituido por el enlace.
+        std::os::unix::fs::symlink(&secreto, &creado_nativo).expect("symlink");
+        let creado = norte_vfs::native::vpath_from_native(&creado_nativo).expect("nativa");
+
+        assert!(
+            edit_created(&backend_local(), &creado).await.is_err(),
+            "un enlace no es el fichero que se creó"
+        );
+    }
+
+    /// Y lo mismo si en su sitio hay un DIRECTORIO, o si ya no hay nada: las
+    /// tres causas dan la misma negativa, a propósito.
+    #[tokio::test]
+    async fn ni_un_directorio_ni_un_hueco_se_editan() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let carpeta = dir.path().join("notas.txt");
+        std::fs::create_dir(&carpeta).expect("mkdir");
+        let como_dir = norte_vfs::native::vpath_from_native(&carpeta).expect("nativa");
+        assert!(edit_created(&backend_local(), &como_dir).await.is_err());
+
+        let ausente =
+            norte_vfs::native::vpath_from_native(&dir.path().join("no-esta")).expect("nativa");
+        assert!(edit_created(&backend_local(), &ausente).await.is_err());
     }
 
     /// Y sobre un fichero local sale el argv del editor con la ruta APARTE.
