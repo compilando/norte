@@ -180,6 +180,16 @@ pub fn spelling_twins() -> Vec<SpellingTwin> {
             right: "full_fold_armenian_plain",
             kind: TwinKind::CaseFoldFull,
         },
+        // nom­bre.txt / nombre.txt: el pliegue completo no solo EXPANDE, también
+        // DESCARTA (#214). Un guion suave es un Default_Ignorable, y el kernel
+        // genera sus tablas en la variante `nfdicf` — la `i` es «ignore default
+        // ignorables»—, así que en `+F` los dos son un fichero. Es el único par
+        // del corpus que el lector no puede distinguir mirándolo.
+        SpellingTwin {
+            left: "full_fold_soft_hyphen",
+            right: "full_fold_soft_hyphen_plain",
+            kind: TwinKind::CaseFoldFull,
+        },
         // U+212A KELVIN SIGN / K: el par que NO es la misma ortografía y
         // empareja igual, porque NFC tiene descomposiciones singleton (#152).
         // Los otros cinco pares de esta lista son un fichero escrito de dos

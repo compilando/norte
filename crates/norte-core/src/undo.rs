@@ -152,6 +152,52 @@ const OCCUPIED: Error = Error::Conflict {
     conflict: ConflictKind::Exists,
 };
 
+/// ¿`a` y `b` son el MISMO nodo? (#274)
+///
+/// Sin identidad —un provider que no la da— contesta `false`: lo que se decide
+/// con esto es si se puede renombrar sobre lo que ocupa el origen, y ante la
+/// duda no se toca nada.
+async fn mismo_nodo(provider: &dyn Provider, a: &VPath, b: &VPath) -> Result<bool, Error> {
+    let ida = provider.node_id(a, norte_vfs::FollowLinks::No).await?;
+    let vuelta = provider.node_id(b, norte_vfs::FollowLinks::No).await?;
+    Ok(matches!((ida, vuelta), (Some(x), Some(y)) if x == y))
+}
+
+/// Renombra `de` a `a` pasando por un nombre intermedio, para cuando las dos
+/// rutas son el mismo nodo y el rename del provider no puede pisar (#274).
+///
+/// El gemelo de `ops::rename_de_ortografia` para el camino del undo. Vive
+/// aparte y no comparte código con él porque aquí no hay `TaskCtx`, ni
+/// observer, ni reintentos: deshacer ya corre dentro de su propia task y lo
+/// que emite el journal es la compensación de arriba.
+async fn rename_por_rodeo(provider: &dyn Provider, de: &VPath, a: &VPath) -> Result<(), Error> {
+    for n in 0..1000u32 {
+        let mut name = crate::rename::naming::TEMP_PREFIX.to_vec();
+        name.extend_from_slice(format!("case-undo-{n}").as_bytes());
+        let seg = norte_proto::Segment::new(name).map_err(|_| Error::InvalidPath)?;
+        let paso = de.with_file_name(seg).ok_or(Error::InvalidPath)?;
+        if !is_free(provider, &paso).await? {
+            continue;
+        }
+        provider.rename(de, &paso).await?;
+        if let Err(e) = provider.rename(&paso, a).await {
+            // La vuelta atrás, o el fichero se queda con el nombre del rodeo y
+            // el lector no tiene dónde buscarlo.
+            if let Err(vuelta) = provider.rename(&paso, de).await {
+                tracing::error!(
+                    error = %e,
+                    vuelta = %vuelta,
+                    quedo = %crate::engine::span_path(&paso),
+                    "deshacer un cambio de ortografía no pudo terminar ni volver"
+                );
+            }
+            return Err(e);
+        }
+        return Ok(());
+    }
+    Err(OCCUPIED)
+}
+
 /// Los permisos POSIX que `p` tiene AHORA, o `None` si no se pueden leer
 /// (#314).
 ///
@@ -432,12 +478,32 @@ pub(crate) async fn revert_entry(
                 return Ok(Reverted::blocked(entry.seq, Error::InvalidPath));
             };
             let from = wire(from_bytes)?;
-            match is_free(provider, &from).await {
-                Ok(true) => {}
-                Ok(false) => return Ok(Reverted::blocked(entry.seq, OCCUPIED)),
+            // Deshacer un cambio de ORTOGRAFÍA (#274) no puede pedir que el
+            // origen esté libre: en el volumen que pliega —el único donde ese
+            // rename ocurre— `stat("Foo.txt")` encuentra el `foo.txt` que
+            // acabamos de crear, así que `is_free` dice «ocupado» SIEMPRE y el
+            // undo se bloqueaba de forma garantizada. Y un `Blocked` estrangula
+            // el LIFO: deja varado todo lo anterior de la sesión (#128).
+            //
+            // Lo que desempata es la identidad: si lo que ocupa el origen es el
+            // MISMO nodo que estamos devolviendo, no hay nada que respetar ahí
+            // — es él. Entonces se renombra por el rodeo, igual que se hizo a
+            // la ida, porque el rename del provider tampoco puede pisar.
+            let ocupa_el_mismo = match is_free(provider, &from).await {
+                Ok(true) => false,
+                Ok(false) => match mismo_nodo(provider, &path, &from).await {
+                    Ok(true) => true,
+                    Ok(false) => return Ok(Reverted::blocked(entry.seq, OCCUPIED)),
+                    Err(e) => return Ok(Reverted::blocked(entry.seq, e)),
+                },
                 Err(e) => return Ok(Reverted::blocked(entry.seq, e)),
-            }
-            if let Err(e) = provider.rename(&path, &from).await {
+            };
+            let vuelta = if ocupa_el_mismo {
+                rename_por_rodeo(provider, &path, &from).await
+            } else {
+                provider.rename(&path, &from).await
+            };
+            if let Err(e) = vuelta {
                 return Ok(Reverted::blocked(entry.seq, e));
             }
             // Compensación: renamed inverso (destino=origen, origen=destino).

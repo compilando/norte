@@ -51,10 +51,21 @@ pub enum FoldMode {
     None,
     /// SIMPLE case folding (APFS, HFS+, NTFS, case-insensitive SMB). `char ->
     /// char`: the key never grows.
+    ///
+    /// **Known gap: HFS+ also drops the default-ignorables** — its
+    /// `FastUnicodeCompare` (Apple TN1150) maps a set very close to
+    /// [`is_default_ignorable`] to zero — and this mode does not, because APFS
+    /// and NTFS do not. So on an HFS+ volume (old disks, disk images, Time
+    /// Machine) norte can still say "no collision" about two names that differ
+    /// only by an invisible. Same shape as the gap #214 closed for `+F`, one
+    /// filesystem over; it needs a mode of its own rather than bending this
+    /// one.
     Simple,
     /// FULL case folding (ext4/f2fs `+F`, whose kernel table is built from
     /// `CaseFolding.txt` status `C + F`). Can EXPAND a name (`ß` -> `ss`), so
-    /// the key can grow longer than the input.
+    /// the key can grow longer than the input — and DROPS the
+    /// default-ignorables (#214), so it can also shrink, down to an empty key
+    /// for a name made only of invisibles.
     Full,
 }
 
@@ -292,6 +303,7 @@ const FULL_FOLD_INERT: &[(char, &str)] = &[
 /// ordinary lowercase mapping, before [`fold_delta`]): `ẞ` (U+1E9E LATIN
 /// CAPITAL LETTER SHARP S) reaches `ß` via `to_lowercase` on its own, so it
 /// does not need its own entry here.
+///
 #[must_use]
 pub const fn full_fold_expansion(c: char) -> Option<&'static str> {
     match c {
@@ -357,6 +369,63 @@ pub const fn full_fold_expansion(c: char) -> Option<&'static str> {
     }
 }
 
+/// ¿Es `c` un **`Default_Ignorable_Code_Point`** de Unicode — de los que el
+/// pliegue COMPLETO tira antes de comparar (#214)?
+///
+/// Existe porque [`FoldMode::Full`] no es una opinión de norte: es lo que hace
+/// un directorio `+F` de ext4/f2fs, y el kernel genera sus tablas con
+/// `mkutf8data` en la variante **`nfdicf`** — NFD, **ignore default
+/// ignorables**, case fold. Esa `i` es esto. Sin descartarlos, `nombre.txt` y
+/// `nom<U+00AD>bre.txt` daban dos claves distintas y norte anunciaba «no
+/// colisionan» sobre el único sistema de ficheros del que #145 habla: un plan
+/// aprobado sin aviso que se muere a mitad del lote.
+///
+/// Y es trivialmente alcanzable: el corpus ya lleva un ZWJ (U+200D), que está
+/// en esta lista.
+///
+/// Solo en `Full`. Bajo `Simple` —APFS, NTFS— un guion suave es un carácter
+/// como otro cualquiera y dos nombres que solo se diferencien en él son dos
+/// ficheros; descartarlo ahí sería inventarse una colisión que el sistema de
+/// ficheros no ve.
+///
+/// # Una sola tabla, dos políticas
+///
+/// Los rangos son los de `DEFAULT_IGNORABLE`, la tabla derivada de la UCD que
+/// este mismo crate ya tenía para pintar invisibles, y esta función DELEGA en
+/// ella: dos copias de la misma propiedad son dos respuestas que divergen en
+/// silencio, que es justo lo que la ADR 0051 centralizó.
+///
+/// Lo que NO se comparte es la política. `is_terminal_hazard` exime a
+/// propósito el ZWJ y los selectores de variación (`IGNORABLES_PERMITIDOS`),
+/// porque componen emoji legítimos y enmascararlos rompería nombres reales.
+/// Aquí no hay exención posible: el sistema de ficheros los descarta, y una
+/// clave que los conservara diría «no colisionan» sobre dos nombres que el
+/// disco junta. Misma tabla, preguntas distintas.
+///
+/// Un matiz de versión: `U+180F` es `Default_Ignorable` desde Unicode 14 y las
+/// tablas `utf8data` del kernel son 12.1, así que ahí norte junta un par que
+/// ese kernel separa. Un code point, y del lado conservador (avisa de una
+/// colisión que no habrá) — que es el lado correcto para avisar.
+///
+/// ```
+/// use norte_encoding::{FoldMode, name_key};
+/// // Un guion suave no distingue dos nombres en un directorio `+F`.
+/// assert_eq!(
+///     name_key("nom\u{00AD}bre.txt".as_bytes(), FoldMode::Full),
+///     name_key("nombre.txt".as_bytes(), FoldMode::Full),
+/// );
+/// // Y sí los distingue en uno que pliega SIMPLE, que es lo que ese
+/// // filesystem hace.
+/// assert_ne!(
+///     name_key("nom\u{00AD}bre.txt".as_bytes(), FoldMode::Simple),
+///     name_key("nombre.txt".as_bytes(), FoldMode::Simple),
+/// );
+/// ```
+#[must_use]
+pub fn is_default_ignorable(c: char) -> bool {
+    crate::es_ignorable_por_defecto(c)
+}
+
 /// Does folding `s` under `mode` change anything? Without allocating: compares
 /// the folded-character iterator against the original. Covers expansions of
 /// more than one character (`İ` -> `i`+combining-dot, already handled by
@@ -376,6 +445,7 @@ fn folding_changes(s: &str, mode: FoldMode) -> bool {
     if matches!(mode, FoldMode::Full) {
         return !s
             .chars()
+            .filter(|c| !is_default_ignorable(*c))
             .flat_map(char::to_lowercase)
             .flat_map(|c| match full_fold_expansion(c) {
                 Some(expansion) => FoldedChars::Full(expansion.chars()),
@@ -418,6 +488,7 @@ fn fold_run(s: &str, mode: FoldMode) -> Cow<'_, str> {
         if matches!(mode, FoldMode::Full) {
             Cow::Owned(
                 s.chars()
+                    .filter(|c| !is_default_ignorable(*c))
                     .flat_map(char::to_lowercase)
                     .flat_map(|c| match full_fold_expansion(c) {
                         Some(expansion) => FoldedChars::Full(expansion.chars()),
@@ -875,6 +946,132 @@ mod tests {
             2,
             "one input character, two output bytes: char -> char cannot say that",
         );
+    }
+
+    /// Las DOS ligaduras st van a `st` bajo `Full`, y eso no lo decía nada
+    /// (#214): el par estaba pineado bajo `Simple`, y un cambio de modo que
+    /// perdiera una de las dos filas habría pasado la suite entera.
+    #[test]
+    fn las_dos_ligaduras_st_van_a_lo_mismo_bajo_full() {
+        let (largo, corto) = (corpus("ligature_long_st"), corpus("ligature_st"));
+        assert_eq!(
+            name_key(&largo, FoldMode::Full),
+            name_key(&corto, FoldMode::Full)
+        );
+        assert_eq!(full_fold_expansion('\u{FB05}'), Some("st"));
+        assert_eq!(full_fold_expansion('\u{FB06}'), Some("st"));
+    }
+
+    // ---- #214: los ignorables por defecto, que `+F` tampoco ve ----
+
+    /// Un guion suave no distingue dos nombres en `Full`, y sí en `Simple`.
+    ///
+    /// Es la mitad de `+F` que faltaba: la tabla del kernel se genera como
+    /// `nfdicf` —NFD, **i**gnore default ignorables, case fold—, así que sin
+    /// descartarlos norte contestaba «no colisionan» sobre el único sistema de
+    /// ficheros del que #145 habla.
+    #[test]
+    fn un_ignorable_no_distingue_dos_nombres_bajo_full() {
+        let (con, sin) = (
+            corpus("full_fold_soft_hyphen"),
+            corpus("full_fold_soft_hyphen_plain"),
+        );
+        assert_eq!(
+            name_key(&con, FoldMode::Full),
+            name_key(&sin, FoldMode::Full),
+            "en `+F` son un fichero"
+        );
+        assert_ne!(
+            name_key(&con, FoldMode::Simple),
+            name_key(&sin, FoldMode::Simple),
+            "en APFS/NTFS son dos, y decir lo contrario sería inventarse una colisión"
+        );
+    }
+
+    /// Y el ZWJ que ya estaba en el corpus también: es lo que hacía a esto
+    /// trivialmente alcanzable.
+    #[test]
+    fn el_zwj_tampoco_cuenta_bajo_full() {
+        assert_eq!(
+            name_key("a\u{200D}b".as_bytes(), FoldMode::Full),
+            name_key(b"ab", FoldMode::Full),
+        );
+    }
+
+    /// El único punto donde el ORDEN importa: descartar el ignorable y luego
+    /// componer NFC junta lo que el CGJ existía para separar.
+    ///
+    /// `a` + COMBINING GRAPHEME JOINER + acento agudo pliega a `á` bajo
+    /// `Full`, porque el ignorable se va antes de la pasada de NFC. Es lo que
+    /// hace el kernel (`nfdicf`: descompone, ignora, pliega), así que es la
+    /// respuesta correcta para un `+F` — y es la que alguien «arreglaría» sin
+    /// este test.
+    #[test]
+    fn componer_a_traves_de_un_ignorable_borrado_es_deliberado() {
+        assert_eq!(
+            name_key("a\u{034F}\u{0301}".as_bytes(), FoldMode::Full),
+            name_key("á".as_bytes(), FoldMode::Full),
+        );
+        assert_ne!(
+            name_key("a\u{034F}\u{0301}".as_bytes(), FoldMode::Simple),
+            name_key("á".as_bytes(), FoldMode::Simple),
+            "bajo pliegue simple el CGJ sigue separando, que es para lo que está"
+        );
+    }
+
+    /// Un nombre ENTERO de invisibles da una clave vacía bajo `Full`, y eso es
+    /// una salida nueva de `name_key` que conviene tener escrita: los
+    /// consumidores la usan como clave de mapa, y dos nombres así emparejan.
+    #[test]
+    fn un_nombre_todo_invisible_da_clave_vacia_bajo_full() {
+        let a = "\u{3164}\u{3164}".as_bytes();
+        let b = "\u{200B}".as_bytes();
+        assert!(name_key(a, FoldMode::Full).is_empty());
+        assert_eq!(name_key(a, FoldMode::Full), name_key(b, FoldMode::Full));
+        assert_ne!(
+            name_key(a, FoldMode::Simple),
+            name_key(b, FoldMode::Simple),
+            "y bajo simple siguen siendo dos nombres distintos"
+        );
+    }
+
+    /// La lista de ignorables cubre lo conocido y no se pasa: un `char`
+    /// corriente NO es ignorable, y descartarlo sería juntar dos ficheros que
+    /// el sistema de ficheros ve por separado.
+    #[test]
+    fn la_lista_de_ignorables_cubre_lo_conocido() {
+        for c in [
+            '\u{00AD}',
+            '\u{034F}',
+            '\u{061C}',
+            '\u{115F}',
+            '\u{1160}',
+            '\u{17B4}',
+            '\u{180E}',
+            '\u{200B}',
+            '\u{200D}',
+            '\u{200F}',
+            '\u{202E}',
+            '\u{2060}',
+            '\u{206F}',
+            '\u{3164}',
+            '\u{FE00}',
+            '\u{FE0F}',
+            '\u{FEFF}',
+            '\u{FFA0}',
+            '\u{FFF8}',
+            '\u{1BCA0}',
+            '\u{1D173}',
+            '\u{E0001}',
+            '\u{E0FFF}',
+        ] {
+            assert!(is_default_ignorable(c), "U+{:04X}", u32::from(c));
+        }
+        for c in [
+            'a', 'ß', '\u{0301}', '\u{200A}', '\u{2010}', '\u{FE10}', '\u{FDFF}', '☃',
+        ] {
+            assert!(!is_default_ignorable(c), "U+{:04X}", u32::from(c));
+        }
     }
 
     /// Simple mode never allocates more than the `fold_delta` remap needs —

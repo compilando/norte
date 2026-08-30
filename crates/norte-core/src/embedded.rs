@@ -1240,12 +1240,20 @@ pub async fn session_put(
     .unwrap_or(Err(norte_proto::Error::Internal { panic: true }))
 }
 
-/// El engine embebido de un frontend: journal perezoso sobre `state_dir`.
+/// El engine embebido de un frontend: journal perezoso sobre `state_dir`, y la
+/// memoria de anclas de UN cliente.
 ///
 /// Es lo que llaman `norte-tui` y `norte-cli` en vez de `Engine::new()`. No
 /// abre nada todavía (ver [`LazyJournal`]), así que da igual que el comando
 /// acabe mutando o no — que es lo que quitó de en medio la lista de subcomandos
 /// que había que mantener a mano (#177).
+///
+/// **Aquí, y solo aquí, se instala [`crate::Engine::with_client_anchors`]**
+/// (#317). El ancla de ADR 0073 dice quién MIRÓ, y eso solo significa algo en
+/// un proceso con un cliente: el de un frontend. El engine del daemon se
+/// construye por otro camino (`Engine::with_journal`) y por tanto no la tiene,
+/// que es lo que impide que el listado de un cliente autorice la escritura de
+/// otro.
 ///
 /// **Uno por proceso.** Cada llamada acuña un [`LazyJournal`] nuevo, o sea otro
 /// candidato a dueño del MISMO fichero: dos engines de este tipo vivos a la vez
@@ -1257,6 +1265,7 @@ pub async fn session_put(
 #[must_use]
 pub fn engine_in(state_dir: &Path) -> crate::Engine {
     crate::Engine::with_lazy_journal(Arc::new(LazyJournal::in_state_dir(state_dir)))
+        .with_client_anchors()
 }
 
 /// ¿Dicen estas dos transiciones LO MISMO para quien las pinta?

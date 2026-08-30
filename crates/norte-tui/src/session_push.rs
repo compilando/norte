@@ -356,7 +356,7 @@ async fn write_session(
             continue;
         }
         if truncating {
-            clear_history(&mut body);
+            body.degrade_for_size();
         }
         match backend
             .session_put(SCHEMA_VERSION, revision, body.to_value())
@@ -402,7 +402,9 @@ async fn write_session(
                     stopped = true;
                 } else {
                     truncating = true;
-                    clear_history(&mut body);
+                    // La decisión de QUÉ se tira es compartida (#316): la
+                    // ventana degrada con la misma, y antes no degradaba.
+                    body.degrade_for_size();
                     let _ = avisos.send(SessionNotice::TooLarge).await;
                     match backend
                         .session_put(SCHEMA_VERSION, revision, body.to_value())
@@ -454,15 +456,6 @@ fn foreign_orphans(
         .filter(|(id, _)| !local.slots.contains_key(*id))
         .map(|(id, s)| (*id, s.clone()))
         .collect()
-}
-
-/// Tira los dos rastros de cada hueco: es lo que más ocupa de una sesión y lo
-/// que menos duele perder.
-fn clear_history(body: &mut norte_frontend::session::SessionBody) {
-    for slot in body.slots.values_mut() {
-        slot.back.clear();
-        slot.forward.clear();
-    }
 }
 
 /// Manda la sesión a escribir si ha cambiado, y atiende lo que el escritor

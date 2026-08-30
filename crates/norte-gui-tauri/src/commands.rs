@@ -248,6 +248,7 @@ pub(crate) mod tests_soporte {
             paths: norte_ui_host::settings::HostPaths::default(),
             theme: norte_ui_host::pickers::HostTheme::default(),
             user_layouts: Vec::new(),
+            profile: None,
             columns: norte_ui_host::columnas_por_defecto(),
             effects: norte_ui_host::commands::Efectos::Completo,
         })

@@ -83,7 +83,7 @@ pub struct Engine {
     /// [`Self::journal`], que es `async` justo por eso.
     journal: JournalSource,
     /// Las anclas de los directorios que el BACKEND EMBEBIDO ha listado (#301,
-    /// ADR 0073).
+    /// ADR 0073), **si este engine es de un frontend** (#317).
     ///
     /// Vive aquí y no en `Backend` porque `Backend::Embedded` es un `Arc` del
     /// engine y nada más: dos clones suyos —el que lista un panel y el que
@@ -91,11 +91,24 @@ pub struct Engine {
     /// nunca lo que listó el otro. Es el equivalente del `Inner` que el SDK
     /// usa para el camino remoto.
     ///
-    /// **El daemon no la escribe ni la lee**: sus clientes traen su propia
-    /// ancla en la petición (`dest_anchor`), que es de quien listó de verdad.
-    /// Solo la tocan los métodos de [`crate::backend::Backend`] del brazo
-    /// embebido.
-    anchors: std::sync::Mutex<crate::anchor::AnchorCache>,
+    /// # `Option`, y ese es el punto
+    ///
+    /// Un ancla dice **quién miró**, o sea un humano delante de una pantalla.
+    /// Eso solo es cierto en un proceso con UN cliente: el de un frontend
+    /// embebido. En el daemon hay muchos, cada uno con su propia idea de qué
+    /// está mirando, y una caché compartida pasaría el listado del cliente A a
+    /// la escritura del cliente B — que es lo que el ADR 0082 rechaza en sus
+    /// alternativas.
+    ///
+    /// Era un campo siempre presente cuyo rustdoc decía «el daemon no lo
+    /// toca». Lo decía y era verdad, pero lo sostenía una promesa en prosa y
+    /// no el tipo: bastaba con que alguien montase un `Backend::Embedded` sobre
+    /// el engine del daemon —para un job interno, para plugins— y la promesa
+    /// caía sin que nada se pusiera rojo. Ahora la instala
+    /// [`Self::with_client_anchors`], y la llama exactamente
+    /// [`crate::embedded::engine_in`], que es la constructora de los engines de
+    /// frontend y la que el daemon no usa.
+    anchors: Option<std::sync::Mutex<crate::anchor::AnchorCache>>,
     /// Gate de policy consultado PRE-efecto en cada mutación (M3-3). Default
     /// [`AllowAll`](crate::policy::AllowAll): el engine embebido/humano no se
     /// sandboxea salvo que se instale una policy con [`Self::with_policy`].
@@ -301,26 +314,54 @@ impl Engine {
             test_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             pack_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             checksum_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
-            anchors: std::sync::Mutex::new(crate::anchor::AnchorCache::default()),
+            anchors: None,
         }
     }
 
+    /// Le da a este engine la memoria de anclas de UN cliente (#301, #317).
+    ///
+    /// Solo para un engine de frontend embebido, donde el único que lista es el
+    /// humano que mira. La llama [`crate::embedded::engine_in`]; un engine que
+    /// no pase por ahí —el del daemon— no la tiene, y entonces
+    /// `Backend::Embedded` sobre él no ancla nada y las escrituras se comportan
+    /// como en 0.53. Fallar así es lo correcto: perder la comprobación es
+    /// perder una comprobación, y compartirla entre clientes sería contestar
+    /// «quién miró» con el nombre de otro.
+    #[must_use]
+    pub fn with_client_anchors(mut self) -> Self {
+        self.anchors = Some(std::sync::Mutex::new(crate::anchor::AnchorCache::default()));
+        self
+    }
+
+    /// ¿Tiene este engine memoria de anclas de cliente ([`Self::with_client_anchors`])?
+    ///
+    /// Lo pregunta el test que fija que el engine del daemon NO la tiene: la
+    /// propiedad la sostiene el tipo, y esto es lo que la deja comprobar desde
+    /// fuera en vez de por lectura del código.
+    #[must_use]
+    pub fn has_client_anchors(&self) -> bool {
+        self.anchors.is_some()
+    }
+
     /// Retiene el ancla del directorio que el BACKEND EMBEBIDO acaba de listar
-    /// (#301).
+    /// (#301). Sin memoria de cliente instalada no hace nada.
     ///
     /// Un lock envenenado se traga sin ruido, y es la respuesta correcta: lo
     /// que se pierde es la COMPROBACIÓN de una escritura, nunca la escritura.
     /// Hacerlo panicar convertiría un fallo de otro hilo en la muerte del
     /// listado.
     pub(crate) fn remember_dir_anchor(&self, dir: &VPath, anchor: Option<norte_proto::DirAnchor>) {
-        if let Ok(mut cache) = self.anchors.lock() {
+        let Some(anchors) = self.anchors.as_ref() else {
+            return;
+        };
+        if let Ok(mut cache) = anchors.lock() {
             cache.remember(dir, anchor);
         }
     }
 
     /// El ancla retenida de `dir`, si el backend embebido lo listó (#301).
     pub(crate) fn remembered_dir_anchor(&self, dir: &VPath) -> Option<norte_proto::DirAnchor> {
-        self.anchors.lock().ok()?.get(dir)
+        self.anchors.as_ref()?.lock().ok()?.get(dir)
     }
 
     /// Compone el provider de RAR para `aref`, o dice que no se puede.

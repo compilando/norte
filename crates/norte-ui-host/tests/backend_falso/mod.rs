@@ -79,6 +79,13 @@ pub struct Falso {
     pub sesion: std::sync::Mutex<(norte_proto::methods::Session, bool)>,
     /// Lo ÚLTIMO que se escribió, para comprobar qué guarda el host.
     pub escrito: std::sync::Mutex<Option<serde_json::Value>>,
+    /// TODOS los cuerpos que se intentaron poner, en orden — rechazados
+    /// incluidos. Es lo que permite ver que un reintento manda algo DISTINTO
+    /// (#316), que es la diferencia entre degradar y repetir el mismo error.
+    pub puestas: std::sync::Mutex<Vec<serde_json::Value>>,
+    /// Cuántos `session_put` seguidos se rechazan por TAMAÑO antes de aceptar
+    /// uno. `0` (el defecto) = ninguno.
+    pub rechazos_por_tamano: std::sync::Mutex<u32>,
     /// La escritura falla con conflicto: otra ventana escribió en medio.
     pub conflicto: bool,
     /// El listado viene PEREZOSO, como el del provider local: sin tamaño ni
@@ -1411,6 +1418,22 @@ impl HostBackend for Falso {
                 })
             });
         }
+        // El core rehúsa el cuerpo ENTERO por tamaño (#316). El mando cuenta
+        // los rechazos que le quedan, así que un test puede pedir «el primero
+        // no, el segundo sí», que es la degradación con reintento.
+        {
+            let mut quedan = self.rechazos_por_tamano.lock().expect("rechazos");
+            if *quedan > 0 {
+                *quedan -= 1;
+                self.puestas.lock().expect("puestas").push(body);
+                return Box::pin(async {
+                    Err(Error::LimitExceeded {
+                        limit: Error::LIMIT_SESSION_BODY.to_owned(),
+                    })
+                });
+            }
+        }
+        self.puestas.lock().expect("puestas").push(body.clone());
         *self.escrito.lock().expect("escrito") = Some(body);
         Box::pin(async { Ok(9) })
     }

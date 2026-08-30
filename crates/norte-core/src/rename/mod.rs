@@ -3,7 +3,10 @@
 //! regex, case, cleanup) will feed it too — it only produces pairs.
 
 pub mod exec;
-mod naming;
+// `pub(crate)` y no privado desde #274: el cambio de ortografía de `ops` y su
+// undo necesitan el MISMO prefijo de temporal que el ejecutor de lotes. Dos
+// gramáticas de nombre de maquinaria son dos cosas que barrer.
+pub(crate) mod naming;
 pub mod plan;
 
 use norte_proto::{Error, Segment, methods};

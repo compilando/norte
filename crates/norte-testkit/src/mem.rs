@@ -133,6 +133,22 @@ pub struct MemProvider {
     /// archive que omitió entradas de su índice. `None` (default) = backend
     /// que lista todo lo que existe.
     list_skipped: Option<u64>,
+    /// El rename SIN pisar ve el pliegue del destino, como los sistemas de
+    /// ficheros de verdad (#274).
+    ///
+    /// Por defecto este provider PERMITE `a → A` cuando el destino resuelve al
+    /// propio origen: modela un `rename(2)` de APFS, que reemplaza y por tanto
+    /// cambia la ortografía sin quejarse. Pero norte no renombra con
+    /// `rename(2)`: renombra sin pisar —`renameat2(RENAME_NOREPLACE)` en
+    /// Linux, `renamex_np(RENAME_EXCL)` en macOS, `MoveFileExW` sin replace en
+    /// Windows— y ahí el destino que resuelve al mismo nodo **existe**, así
+    /// que el rename falla con `EEXIST`.
+    ///
+    /// Esa diferencia es la que dejaba #274 sin poder probarse: el camino que
+    /// la issue nombra no se reproducía porque el doble era más permisivo que
+    /// cualquier disco. Con este mando, `Foo.txt → foo.txt` contesta lo que
+    /// contestaría un ext4 `+F` o un APFS.
+    noreplace_ve_el_pliegue: bool,
     /// Papelera LÓGICA (#99, cierra deuda H2): con ella, `trash` mueve la
     /// víctima a `.norte-trash/<id>/payload` y devuelve `Some(payload)`
     /// (destino recuperable) en vez de la papelera "vanish" (`None`). Modela un
@@ -211,6 +227,7 @@ impl MemProvider {
             node_ids: true,
             list_skipped: None,
             logical_trash: false,
+            noreplace_ve_el_pliegue: false,
             // #314: `posix.mode` va SIEMPRE, porque este provider lo emite
             // de verdad (no es sintético) y declara `POSIX_MODE`. Los `mem.*`
             // los añade `with_synthetic_attrs` a quien los quiera.
@@ -305,6 +322,18 @@ impl MemProvider {
     #[must_use]
     pub fn with_logical_trash(mut self) -> Self {
         self.logical_trash = true;
+        self
+    }
+
+    /// El rename sin pisar ve el pliegue del destino (#274): `Foo.txt →
+    /// foo.txt` sobre un provider que no distingue caja contesta
+    /// `Conflict{Exists}`, que es lo que contesta un disco de verdad.
+    ///
+    /// Ver el campo `noreplace_ve_el_pliegue` para por qué el defecto es el
+    /// otro.
+    #[must_use]
+    pub fn with_folding_noreplace(mut self) -> Self {
+        self.noreplace_ve_el_pliegue = true;
         self
     }
 
@@ -1070,9 +1099,11 @@ impl Provider for MemProvider {
             return Err(Error::InvalidPath);
         }
         // El destino puede "existir" solo como el propio origen con otra caja
-        // (rename a→A en FS case-insensitive-preserving): permitido.
+        // (rename a→A en FS case-insensitive-preserving): permitido, salvo que
+        // este provider vea el pliegue al renombrar SIN pisar (#274), que es lo
+        // que hace un disco de verdad.
         if let Some(real_to) = resolve(&tree, lk, &canon_to)
-            && real_to != real_from
+            && (real_to != real_from || (self.noreplace_ve_el_pliegue && canon_to != real_from))
         {
             if !self.faults.renames_clobber() {
                 return Err(Error::Conflict {
@@ -1118,6 +1149,9 @@ impl Provider for MemProvider {
             tree.nodes.insert(new_key, node);
         }
         drop(tree);
+        // El efecto ya está aplicado: si el test pidió cancelar tras el
+        // n-ésimo rename, es AHORA (#274).
+        self.faults.tick_rename();
         self.ambiguous_gate()
     }
 

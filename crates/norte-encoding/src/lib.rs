@@ -9,7 +9,7 @@ mod fold;
 pub use encoding_rs::{Encoding, UTF_8};
 pub use fold::{
     FoldMode, fold_delta, full_fold_expansion, has_canonical_singleton, is_canonical_singleton,
-    name_key,
+    is_default_ignorable, name_key,
 };
 
 /// Muestra de cabecera para chardetng: 64 KiB (spec §6.2).
@@ -395,6 +395,18 @@ const IGNORABLES_PERMITIDOS: &[(char, char)] = &[
     ('\u{FE00}', '\u{FE0F}'),   // selectores de variación 1..16
     ('\u{E0100}', '\u{E01EF}'), // selectores de variación suplementarios
 ];
+
+/// ¿Es `c` `Default_Ignorable_Code_Point`, según la MISMA tabla que usa el
+/// pintado de invisibles?
+///
+/// Lo pregunta [`fold::is_default_ignorable`], que es la cara pública: el
+/// pliegue completo los descarta antes de comparar (#214). La tabla es una y
+/// las políticas son dos — `is_terminal_hazard` exime el ZWJ y los selectores
+/// de variación por fidelidad de emoji, y el pliegue no puede eximir nada
+/// porque el sistema de ficheros tampoco.
+pub(crate) fn es_ignorable_por_defecto(c: char) -> bool {
+    en_rangos(DEFAULT_IGNORABLE, c)
+}
 
 /// ¿Está `c` en alguno de los rangos ORDENADOS de `tabla`?
 fn en_rangos(tabla: &[(char, char)], c: char) -> bool {

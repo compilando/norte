@@ -916,6 +916,159 @@ pub(crate) async fn symlink_retrying(
     }
 }
 
+/// ¿`to` es el MISMO nodo que `from`, o sea el propio fichero con otra
+/// ortografía? (#274)
+///
+/// Identidad **y** ortografía, y hacen falta las dos.
+///
+/// La identidad sola no basta: `NodeId` es `(dispositivo, inodo)`, así que dos
+/// entradas de directorio DISTINTAS que sean hardlinks del mismo fichero dan el
+/// mismo id — y `mv a.txt b.txt` con `b.txt` enlazado a `a.txt` no es un cambio
+/// de ortografía, es una colisión de verdad a la que le toca su política.
+/// `rename_applied` ya documenta ese mismo agujero unas líneas más abajo.
+///
+/// La ortografía sola tampoco: compara claves plegadas, que es una heurística
+/// sobre NOMBRES, y lo que se decide aquí mueve un fichero por encima de otro.
+///
+/// Así que: mismo directorio, hojas que pliegan a la misma clave bajo el modo
+/// que ese directorio usa, y el mismo nodo. La comprobación barata va primero,
+/// que es lo que evita un `node_id` de más en cada colisión de un `move`
+/// masivo contra un sftp.
+///
+/// `from_id` viene capturado ANTES del primer intento, como manda #17.
+async fn es_la_misma_hoja_con_otra_ortografia(
+    src: &dyn Provider,
+    from: &VPath,
+    to: &VPath,
+    from_id: Option<norte_vfs::NodeId>,
+    cancel: &CancellationToken,
+) -> bool {
+    if from == to || from.parent() != to.parent() {
+        return false;
+    }
+    let (Some(a), Some(hoja_from), Some(hoja_to)) = (from_id, from.file_name(), to.file_name())
+    else {
+        return false;
+    };
+    let mode = fold_mode_at(to, src).await;
+    if mode == norte_encoding::FoldMode::None
+        || norte_encoding::name_key(hoja_from.as_bytes(), mode)
+            != norte_encoding::name_key(hoja_to.as_bytes(), mode)
+    {
+        return false;
+    }
+    matches!(
+        with_retry(cancel, || src.node_id(to, FollowLinks::No).boxed()).await,
+        Ok(Some(b)) if a == b
+    )
+}
+
+/// Cambia la ORTOGRAFÍA de un nombre: `Foo.txt → foo.txt` en un volumen que
+/// pliega, donde los dos nombres son el mismo nodo (#274).
+///
+/// En dos pasos y por un nombre intermedio, porque lo único que este provider
+/// sabe hacer es renombrar SIN PISAR y el destino «existe» —es el origen—:
+/// primero a un nombre que no colisiona con nadie, y de ahí al que se pidió,
+/// que para entonces ya está libre. Es lo que hace cualquiera que renombre
+/// `README` a `readme` en un Mac.
+///
+/// El nombre intermedio va por PREFIJO y no empotra la hoja
+/// (`.norte-rename-case-<n>`), como los del ejecutor de lotes
+/// ([`crate::rename::naming`]): un sufijo sobre una hoja de 250 bytes revienta
+/// el límite de 255 del componente —la fixture `name_max_255` del corpus
+/// existe por eso— y además le cambiaría la extensión al fichero mientras
+/// dura. `n` sube hasta encontrar uno libre, porque un fichero de verdad puede
+/// llamarse así.
+///
+/// # La ventana entre los dos pasos NO es cancelable, a propósito
+///
+/// Es la misma decisión que tomó `rename::exec`: la cancelación se comprueba
+/// ENTRE operaciones, jamás dentro de una. Con el token del task, cancelar
+/// entre el paso 1 y el 2 hacía que el paso 2 **y la vuelta atrás** salieran
+/// inmediatamente sin intentar nada, dejando el fichero con un nombre que
+/// nadie escribió y contestando `Cancelled` — y en este repositorio una task
+/// cancelada significa «el árbol está como estaba».
+///
+/// Si el segundo paso falla se vuelve al nombre de partida. Si ni eso se
+/// puede, el error va al log CON la ruta donde quedó el fichero: es lo único
+/// que le queda al lector para encontrarlo.
+///
+/// El journal ve UN `Renamed` de `from` a `to`, que es lo que pasó: el nombre
+/// intermedio no existió para nadie más que para estas dos llamadas, y meterlo
+/// en el diario haría que deshacer pasara por él. Su deshacer necesita el
+/// mismo rodeo, y lo tiene (`undo::rename_por_rodeo`): por identidad, porque
+/// en un volumen que pliega el nombre de partida «está ocupado» por el propio
+/// fichero.
+///
+/// El humano aprobó DOS nombres y existieron tres. El tercero cae en el mismo
+/// directorio que los otros dos —el gate de política se consultó sobre ese
+/// padre— y vive lo que tardan dos renames, pero conviene que esté dicho.
+async fn rename_de_ortografia(
+    src: &dyn Provider,
+    from: &VPath,
+    to: &VPath,
+    from_id: Option<norte_vfs::NodeId>,
+    observer: &Arc<dyn MutationObserver>,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    let paso = spelling_detour(src, from, &ctx.cancel).await?;
+    rename_retrying(src, from, &paso, from_id, &ctx.cancel).await?;
+    // De aquí al final, con un token LIMPIO: ver «la ventana no es cancelable».
+    let sin_cancelar = CancellationToken::new();
+    if let Err(e) = rename_retrying(src, &paso, to, from_id, &sin_cancelar).await {
+        if let Err(vuelta) = rename_retrying(src, &paso, from, from_id, &sin_cancelar).await {
+            tracing::error!(
+                error = %e,
+                vuelta = %vuelta,
+                quedo = %crate::engine::span_path(&paso),
+                "un cambio de ortografía no pudo terminar ni volver a su nombre"
+            );
+        }
+        return Err(e);
+    }
+    observer
+        .on_mutation(
+            &Mutation::Renamed {
+                from,
+                to,
+                batch: None,
+            },
+            &ctx.actor,
+        )
+        .await?;
+    Ok(())
+}
+
+/// El nombre intermedio LIBRE para un cambio de ortografía, en el directorio
+/// de `from`.
+///
+/// Sube `n` hasta que el nombre no exista: un fichero de verdad puede llamarse
+/// como un temporal nuestro, y renombrar encima sería borrarlo. El tope es
+/// generoso y su agotamiento es un error honesto, no un bucle.
+async fn spelling_detour(
+    src: &dyn Provider,
+    from: &VPath,
+    cancel: &CancellationToken,
+) -> Result<VPath, Error> {
+    for n in 0..1000u32 {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let mut name = crate::rename::naming::TEMP_PREFIX.to_vec();
+        name.extend_from_slice(format!("case-{n}").as_bytes());
+        let seg = Segment::new(name).map_err(|_| Error::InvalidPath)?;
+        let cand = from.with_file_name(seg).ok_or(Error::InvalidPath)?;
+        match with_retry(cancel, || src.stat(&cand).boxed()).await {
+            Err(Error::NotFound) => return Ok(cand),
+            Ok(_) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(Error::Conflict {
+        conflict: ConflictKind::Exists,
+    })
+}
+
 /// `rename` con reintentos y desambiguación (issue #17): tras un fallo
 /// transitorio, un `NotFound`/`Conflict` del reintento se verifica por
 /// IDENTIDAD (`from_id`, capturada por el caller ANTES del primer intento):
@@ -2068,6 +2221,29 @@ async fn rename_with_policy(
         Err(e @ Error::Conflict { .. }) => e,
         Err(e) => return Err(e),
     };
+    // ¿La «colisión» es el PROPIO fichero visto con otra ortografía? (#274)
+    //
+    // En un volumen que pliega —APFS, NTFS, exFAT, un ext4 `+F`— `Foo.txt` y
+    // `foo.txt` son el mismo nodo, y renombrar SIN PISAR (que es como norte
+    // renombra: `renameat2(RENAME_NOREPLACE)`, `renamex_np(RENAME_EXCL)`,
+    // `MoveFileExW` sin replace) contesta que el destino ya existe. Pero
+    // cambiar la ortografía es trabajo de VERDAD: los bytes del nombre
+    // cambian, el planificador de lotes ya lo trata así, y el lector no tiene
+    // otra manera de hacerlo.
+    //
+    // Y no era solo que se rehusara. Con `Overwrite`, el brazo de abajo
+    // borraba el destino antes de renombrar — o sea el propio fichero — y
+    // renombraba después algo que ya no estaba: un cambio de caja que se
+    // llevaba el fichero por delante.
+    //
+    // Se decide por IDENTIDAD y jamás por la heurística de nombres: lo que
+    // viene después mueve un fichero por encima de otro, y hacerlo sobre una
+    // suposición es exactamente cómo se pierde el que no era. Sin identidad
+    // (un provider que no la da) se cae al comportamiento de siempre.
+    if es_la_misma_hoja_con_otra_ortografia(src, from, to, from_id, &ctx.cancel).await {
+        rename_de_ortografia(src, from, to, from_id, observer, ctx).await?;
+        return Ok(RenameOutcome::Renamed);
+    }
     match opts.on_collision {
         CollisionPolicy::Fail | CollisionPolicy::Ask => Err(conflict),
         CollisionPolicy::Skip => Ok(RenameOutcome::SkippedByPolicy),

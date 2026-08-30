@@ -665,6 +665,13 @@ async fn dos_entradas_que_pliegan_al_mismo_nombre_no_se_empaquetan() {
         ("singleton_kelvin_sign", "ascii_capital_k"),
         ("micro_sign_mu", "greek_mu_twin"),
         ("ext4_full_fold_es_zett", "ext4_full_fold_ss"),
+        // Y el quinto pliegue, desde #214: un invisible. El pliegue completo
+        // DESCARTA los `Default_Ignorable`, como hace la tabla del kernel, así
+        // que dos nombres que solo se diferencian en un guion suave son uno al
+        // extraerlos en un `+F`. Este empaquetado se rechazaba con los cuatro
+        // de arriba y no con éste, y es el que un lector no puede ver venir:
+        // los dos nombres se pintan igual.
+        ("full_fold_soft_hyphen", "full_fold_soft_hyphen_plain"),
     ];
     for (a, b) in parejas {
         let (uno, otro) = (bytes_de(a), bytes_de(b));

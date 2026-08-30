@@ -27,6 +27,11 @@ proptest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["time"] }
+# `CancellationToken` para el mando `cancel_after_renames` (#274): cancelar
+# ENTRE dos renames es la única forma de fijar que un cambio de ortografía no
+# deja el fichero con el nombre del rodeo. Ya está en el grafo (norte-core,
+# norte-vfs y otros la usan); no entra nada nuevo a compilar (regla 8).
+tokio-util.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time", "test-util"] }

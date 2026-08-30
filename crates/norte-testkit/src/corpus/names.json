@@ -320,6 +320,16 @@
     "why": "մե.txt (U+0574 U+0565) — the twin of `full_fold_armenian_ligature`: the two letters its ligature expands to under FULL case folding. Non-ASCII on BOTH sides, unlike the ß and ﬁ pairs, which is what makes it the pair that catches an expansion table written as if only ASCII came out the other end"
   },
   {
+    "id": "full_fold_soft_hyphen",
+    "hex": "6e6f6dc2ad6272652e747874",
+    "why": "nom­bre.txt with U+00AD SOFT HYPHEN in the middle — a Default_Ignorable_Code_Point, which is the OTHER half of what a `+F` directory folds (#214). The kernel generates its tables with mkutf8data in the `nfdicf` variant — NFD, ignore default ignorables, case fold — so on ext4/f2fs `+F` this name and `full_fold_soft_hyphen_plain` are ONE file, and on APFS/NTFS they are two. The corpus already reached the ignorables (`zwsp_twin`, `hangul_filler_twin`, `tag_chars_smuggle`, …); what none of them had was a VISIBLE twin — the same name without the invisible — so none could enter `spelling_twins()`, and the pairing they cause was untestable"
+  },
+  {
+    "id": "full_fold_soft_hyphen_plain",
+    "hex": "6e6f6d6272652e747874",
+    "why": "nombre.txt — the twin of `full_fold_soft_hyphen` with the invisible character removed. The pair is the one shape a reader cannot see: two names that look identical on screen, are different bytes, and are the same file on the only filesystem #145 is about"
+  },
+  {
     "id": "ascii_case_twin_upper",
     "hex": "4f7274686f646f78",
     "why": "Orthodox: the plain-ASCII case pair the corpus lacked — its eight other case twins are all non-ASCII exotica, so a path that only breaks under ordinary ASCII case folding had no fixture at all (#245)"

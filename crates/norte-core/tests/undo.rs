@@ -38,6 +38,66 @@ async fn run_undo(engine: &Engine, actor: Actor) -> (TaskState, UndoReport) {
     (state, r)
 }
 
+/// **Deshacer un cambio de ORTOGRAFÍA vuelve al nombre de antes** (#274).
+///
+/// El origen «está ocupado» siempre: en el volumen que pliega —el único donde
+/// ese rename ocurre— `stat("Foo.txt")` encuentra el `foo.txt` que se acaba de
+/// crear, así que la comprobación de «libre» decía que no y el undo se
+/// bloqueaba de forma garantizada. Y un `Blocked` estrangula el LIFO: deja
+/// varado todo lo anterior de la sesión.
+///
+/// Lo que desempata es la identidad: lo que ocupa el origen ES el nodo que se
+/// está devolviendo.
+#[tokio::test]
+async fn deshacer_un_cambio_de_ortografia_vuelve_al_nombre_de_antes() {
+    let journal = Arc::new(SqliteJournal::new(
+        Journal::open_in_memory().await.expect("j"),
+    ));
+    let engine = Engine::with_journal(Arc::clone(&journal));
+    let mem = Arc::new(
+        MemProvider::with_flags(
+            norte_proto::CapabilityFlags::RENAME_ATOMIC
+                | norte_proto::CapabilityFlags::CASE_PRESERVING,
+        )
+        .with_folding_noreplace(),
+    );
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    write_file(&mem, "mem:///Foo.txt", b"hola").await;
+
+    let h = engine
+        .move_(&vp("mem:///Foo.txt"), &vp("mem:///foo.txt"))
+        .await
+        .expect("move");
+    assert_eq!(h.join().await, TaskState::Completed);
+
+    let (state, r) = run_undo(&engine, Actor::User).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(r.undone, 1, "y no BLOQUEADO: {r:?}");
+    assert!(
+        mem.stat(&vp("mem:///Foo.txt")).await.is_ok(),
+        "vuelve a llamarse como se llamaba"
+    );
+    let quedan: Vec<Vec<u8>> = {
+        let mut s = mem.list(&vp("mem:///")).await.expect("lista");
+        let mut out = Vec::new();
+        while let Some(e) = s.next().await {
+            out.push(
+                e.expect("entrada")
+                    .path
+                    .file_name()
+                    .expect("hoja")
+                    .as_bytes()
+                    .to_vec(),
+            );
+        }
+        out
+    };
+    assert!(
+        !quedan.iter().any(|n| n.starts_with(b".norte-rename-")),
+        "sin residuo del rodeo: {quedan:?}"
+    );
+}
+
 /// **`fs.create` crea un fichero VACÍO, y su deshacer lo borra** (#290).
 ///
 /// Es una mutación como cualquier otra: journal `Created` con su reversa. Lo

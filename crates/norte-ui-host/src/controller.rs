@@ -322,6 +322,17 @@ pub struct UiHostOptions {
     /// pedía nunca y no se pintaba nunca, porque los atributos que viajan en
     /// cada listado se habían congelado con los del esquema de arranque.
     pub columns: norte_frontend::columns::ColumnsSettings,
+    /// El perfil con el que se ARRANCÓ, si lo hubo (`--profile`, #307).
+    ///
+    /// Ya aplicado: sus capas entraron en la configuración que llega en
+    /// [`Self::settings`], porque un perfil nombrado en la línea de órdenes se
+    /// conoce antes de conectar con nada y así alcanza hasta `[ui] lang`. Lo
+    /// que el host necesita es SABERLO, para marcarlo activo en el selector y
+    /// para que la sesión lo recuerde; sin esto, arrancar con `--profile` daba
+    /// una ventana correcta cuyo selector decía que no había ninguno puesto.
+    ///
+    /// `OsString` porque es un nombre de directorio (#245).
+    pub profile: Option<std::ffi::OsString>,
 }
 
 /// Lo que un suscriptor recibe.
@@ -2538,6 +2549,7 @@ impl Estado {
             paths,
             theme,
             user_layouts,
+            profile: perfil_de_arranque,
         } = options;
         let dir = &initial_dir;
         let lang = Self::lang_de(&locale);
@@ -2564,7 +2576,9 @@ impl Estado {
             tema: theme,
             tema_elegido: None,
             menu_ultimo: 0,
-            perfil_activo: None,
+            // Lo que `--profile` nombró ya está APLICADO en `settings`; lo que
+            // falta es que el host lo sepa (#307).
+            perfil_activo: perfil_de_arranque,
             selector_perfil: None,
             gen_perfiles: 0,
             cursor_procesos: 0,
@@ -16721,6 +16735,37 @@ impl Estado {
                 json,
             )
             .await;
+        // Que el cuerpo se PASE de tamaño no es lo mismo que un conflicto, y
+        // tratarlo igual era perder la pantalla entera del lector sin decir
+        // nada (#316): el core rehúsa el `put` COMPLETO y deja almacenado lo
+        // que hubiera, o sea dónde estaba el lector hace días. La TUI ya
+        // degradaba; esta ventana no, que es la divergencia silenciosa del ADR
+        // 0077.
+        //
+        // Se tira lo mismo que tira la TUI, porque la decisión es compartida
+        // (`SessionBody::degrade_for_size`), y se reintenta UNA vez: si ni sin
+        // historial cabe, no hay nada más que degradar que no sea dónde está
+        // el lector, y eso es lo que había que salvar.
+        // El `degrade_for_size` va en el CUERPO del `if` y no en un guard de
+        // `match`: muta `body`, y un guard con efecto es una trampa para el
+        // siguiente que lo toque.
+        let mut puesta = puesta;
+        if matches!(puesta, Err(Error::LimitExceeded { .. })) && body.degrade_for_size() {
+            puesta = match serde_json::to_value(&body) {
+                Ok(json) => {
+                    backend
+                        .session_put(
+                            norte_frontend::session::SCHEMA_VERSION,
+                            self.sesion.revision,
+                            json,
+                        )
+                        .await
+                }
+                // Lo mismo que doce líneas más arriba: un cuerpo que no
+                // serializa es «no se escribió», no un pánico del core.
+                Err(_) => return ShutdownReport { incomplete: true },
+            };
+        }
         // Un conflicto es otra ventana que escribió en medio: lo suyo se
         // queda, y se dice que lo nuestro no llegó. Pisarlo sería perder la
         // sesión de alguien.

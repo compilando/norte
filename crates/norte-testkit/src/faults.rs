@@ -43,6 +43,11 @@ struct FaultState {
     /// llama, que sobre un provider que ya rechaza no se pueden distinguir del
     /// rechazo del provider.
     rename_clobbers: bool,
+    /// Cuántos renames quedan antes de cancelar [`FaultState::cancel_token`]
+    /// (#274): es lo que deja estar DENTRO de una secuencia de dos.
+    cancel_after_renames: Option<u64>,
+    /// El token que se cancela cuando la cuenta de arriba llega a cero.
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
     /// `Some(n)`: quedan `n` operaciones antes de la desconexión.
     disconnect_after: Option<u64>,
     /// Las próximas `n` operaciones fallan retryable (indisponibilidad
@@ -108,6 +113,35 @@ impl Faults {
     /// camino «la reversa tampoco pudo». Desármalo con [`Self::clear`].
     pub fn fail_rename_at(&self, path: &VPath) {
         self.lock().fail_rename_at = Some(seg_path(path));
+    }
+
+    /// Cancela `token` justo DESPUÉS del `n`-ésimo rename que se aplique.
+    ///
+    /// El único mando que permite estar DENTRO de una secuencia de renames y no
+    /// antes ni después: es donde vive el estado que un cambio de ortografía
+    /// (#274) no puede dejar visto — el fichero con el nombre del rodeo. Un
+    /// `sleep` daría con ello por casualidad; esto no depende del reloj.
+    pub fn cancel_after_renames(&self, n: u64, token: tokio_util::sync::CancellationToken) {
+        let mut s = self.lock();
+        s.cancel_after_renames = Some(n);
+        s.cancel_token = Some(token);
+    }
+
+    /// Lo consulta el provider tras aplicar un rename: descuenta, y al llegar a
+    /// cero cancela el token.
+    pub fn tick_rename(&self) {
+        let mut s = self.lock();
+        let Some(quedan) = s.cancel_after_renames else {
+            return;
+        };
+        if quedan <= 1 {
+            s.cancel_after_renames = None;
+            if let Some(t) = s.cancel_token.take() {
+                t.cancel();
+            }
+        } else {
+            s.cancel_after_renames = Some(quedan - 1);
+        }
     }
 
     /// `rename` deja de rechazar un destino ocupado y lo PISA, como hacen de

@@ -304,6 +304,34 @@ impl SessionBody {
         }
     }
 
+    /// Degrada el cuerpo para REINTENTAR un `put` que el core rehusó por
+    /// tamaño, y dice si quedaba algo que tirar (#316).
+    ///
+    /// Tira los dos rastros de cada hueco, que es lo que más ocupa de una
+    /// sesión y lo que menos duele perder: se pierden pasos hacia atrás, no
+    /// dónde estás. Lo que jamás toca son las rutas, el cursor ni las
+    /// disposiciones — un `put` rehusado deja la sesión ALMACENADA como estaba,
+    /// así que el lector pierde su pantalla entera, y volver con el historial
+    /// vacío es infinitamente mejor que volver a donde estaba hace una semana.
+    ///
+    /// `false` = ya no queda historial. Entonces reintentar es pedir el mismo
+    /// error otra vez, y lo honesto es decir que no se guardó.
+    ///
+    /// Vive aquí y no en cada frontend porque es una DECISIÓN y no fontanería:
+    /// la TUI la tomaba en su escritor y la ventana no la tomaba en absoluto
+    /// —cualquier error de `session_put` era «no llegó», sin degradar y sin
+    /// avisar—, que es exactamente la divergencia silenciosa del ADR 0077.
+    /// [`Self::fit_to_envelope`] hace que esto casi nunca haga falta; casi.
+    pub fn degrade_for_size(&mut self) -> bool {
+        let mut habia = false;
+        for slot in self.slots.values_mut() {
+            habia |= !slot.back.is_empty() || !slot.forward.is_empty();
+            slot.back.clear();
+            slot.forward.clear();
+        }
+        habia
+    }
+
     /// ¿Cabe este cuerpo en el sobre que el core acepta?
     ///
     /// Se mide serializando, que es lo único que contesta la pregunta de
@@ -938,6 +966,38 @@ mod tests {
                 "el hueco {id} del perfil activo conserva DÓNDE está"
             );
         }
+    }
+
+    /// Degradar tira el historial y NADA más: las rutas, el cursor y las
+    /// disposiciones se quedan, que es lo que había que salvar (#316).
+    ///
+    /// Y dice si quedaba algo que tirar, porque reintentar sin haber degradado
+    /// es pedir el mismo error otra vez.
+    #[test]
+    fn degradar_tira_el_historial_y_solo_el_historial() {
+        let mut b = cuerpo_visible_al_tope();
+        let antes = b.layouts.clone();
+        let rutas: BTreeMap<u32, VPath> = b
+            .slots
+            .iter()
+            .map(|(id, s)| (*id, s.path.clone()))
+            .collect();
+
+        assert!(b.degrade_for_size(), "había historial que tirar");
+        assert!(
+            b.slots
+                .values()
+                .all(|s| s.back.is_empty() && s.forward.is_empty()),
+            "no queda un solo paso"
+        );
+        assert_eq!(b.layouts, antes, "las disposiciones no se tocan");
+        for (id, path) in rutas {
+            assert_eq!(b.slots[&id].path, path, "el hueco {id} sigue donde estaba");
+        }
+        assert!(
+            !b.degrade_for_size(),
+            "y a la segunda no queda nada: reintentar sería el mismo error"
+        );
     }
 
     /// Y el tope de HUÉRFANOS lleno también cabe, que es lo que no pasaba

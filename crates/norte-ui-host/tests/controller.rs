@@ -56,6 +56,7 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -276,6 +277,7 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -638,6 +640,7 @@ async fn el_contador_lo_resuelve_el_host() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -753,6 +756,7 @@ async fn host_con_layout(
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -1160,6 +1164,88 @@ async fn un_conflicto_no_pisa_a_nadie_y_se_dice() {
     assert!(
         informe.incomplete,
         "lo nuestro no llegó, y apagar en silencio sería mentir"
+    );
+    assert!(backend.escrito.lock().expect("escrito").is_none());
+}
+
+/// **Un cuerpo que se pasa de tamaño se DEGRADA y se reintenta** (#316).
+///
+/// El core rehúsa el `put` entero y deja almacenado lo que hubiera, o sea
+/// dónde estaba el lector hace días. La TUI ya tiraba el historial y volvía a
+/// intentarlo; esta ventana trataba cualquier error igual —«no llegó»— y esa
+/// es la divergencia silenciosa del ADR 0077.
+///
+/// Lo que se comprueba es que el SEGUNDO intento manda algo distinto: sin
+/// degradar, reintentar es pedir el mismo error otra vez.
+#[tokio::test]
+async fn un_cuerpo_que_no_cabe_se_degrada_y_se_reintenta() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    // Con historial, que es lo único que la degradación tira.
+    let mut guardada = sesion_guardada(1, 7, 1, "mem:///casa");
+    let mut cuerpo: norte_frontend::session::SessionBody =
+        serde_json::from_value(guardada.body.clone()).expect("cuerpo");
+    for s in cuerpo.slots.values_mut() {
+        s.back = vec![VPath::parse("mem:///casa/atras").expect("vpath")];
+    }
+    guardada.body = serde_json::to_value(&cuerpo).expect("json");
+    *falso.sesion.lock().expect("sesión") = (guardada, true);
+    // El primero no cabe; el segundo sí.
+    *falso.rechazos_por_tamano.lock().expect("rechazos") = 1;
+    let backend = Arc::new(falso);
+
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let informe = h.shutdown().await.expect("apaga");
+
+    let puestas = backend.puestas.lock().expect("puestas");
+    assert_eq!(puestas.len(), 2, "se reintenta UNA vez: {puestas:?}");
+    let ultimo: norte_frontend::session::SessionBody =
+        serde_json::from_value(puestas[1].clone()).expect("cuerpo");
+    assert!(
+        ultimo
+            .slots
+            .values()
+            .all(|s| s.back.is_empty() && s.forward.is_empty()),
+        "el reintento va sin historial, que es lo que se degrada"
+    );
+    assert!(
+        !ultimo.slots.is_empty(),
+        "y CON los huecos: lo que había que salvar es dónde está el lector"
+    );
+    assert!(
+        !informe.incomplete,
+        "el segundo `put` entró, así que no queda nada sin escribir"
+    );
+}
+
+/// Y si ni sin historial cabe, se dice: reintentar otra vez sería pedir el
+/// mismo error, y apagar en silencio sería mentir.
+#[tokio::test]
+async fn un_cuerpo_que_no_cabe_ni_degradado_se_dice() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    // CON historial: sin él `degrade_for_size` no tiene nada que tirar,
+    // contesta `false`, y el reintento ni se intenta — el test pasaría sin
+    // ejercitar el camino que dice ejercitar.
+    let mut guardada = sesion_guardada(1, 7, 1, "mem:///casa");
+    let mut cuerpo: norte_frontend::session::SessionBody =
+        serde_json::from_value(guardada.body.clone()).expect("cuerpo");
+    for s in cuerpo.slots.values_mut() {
+        s.back = vec![VPath::parse("mem:///casa/atras").expect("vpath")];
+    }
+    guardada.body = serde_json::to_value(&cuerpo).expect("json");
+    *falso.sesion.lock().expect("sesión") = (guardada, true);
+    *falso.rechazos_por_tamano.lock().expect("rechazos") = 5;
+    let backend = Arc::new(falso);
+
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let informe = h.shutdown().await.expect("apaga");
+
+    assert!(informe.incomplete);
+    assert_eq!(
+        backend.puestas.lock().expect("puestas").len(),
+        2,
+        "un reintento, y solo uno: sin nada más que degradar, insistir es pedir el mismo error"
     );
     assert!(backend.escrito.lock().expect("escrito").is_none());
 }
@@ -1833,6 +1919,7 @@ async fn el_catalogo_da_sentido_a_un_attr() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: columnas_de(&["name", "attr:posix.mode"]),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -2541,6 +2628,7 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -2787,6 +2875,7 @@ async fn host_solo_lectura(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewS
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::SoloLectura,
     })
@@ -3206,6 +3295,7 @@ async fn dos_columnas_que_se_enmascaran_igual_siguen_siendo_dos() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         // Los dos ids se enmascaran a lo MISMO: U+200B y U+202E son los dos
         // peligros de terminal y `display_name` los sustituye por U+FFFD.
         // Van por `plugin:` y no por `attr:`: los `attr:` ya los filtra
@@ -3310,6 +3400,7 @@ async fn una_disposicion_sin_listado_no_arranca() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -3358,6 +3449,7 @@ async fn las_columnas_de_otro_esquema_no_estan_muertas() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_frontend::columns::ColumnsSettings::resolve(&cfg),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -3436,6 +3528,7 @@ prepend_keymap = [
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -4524,6 +4617,7 @@ async fn host_con_rutas(paths: norte_ui_host::settings::HostPaths) -> UiHost {
         paths,
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -5104,6 +5198,7 @@ async fn host_con_tema(theme: norte_ui_host::pickers::HostTheme) -> UiHost {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme,
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -5300,6 +5395,7 @@ async fn host_full(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot)
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -5604,6 +5700,7 @@ async fn un_click_en_la_barra_no_navega_a_otro_sitio_si_la_lista_cambio() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -5708,6 +5805,7 @@ async fn un_favorito_roto_se_ve_y_dice_por_que() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -5918,6 +6016,7 @@ async fn una_disposicion_rota_se_ve_y_no_se_aplica() {
         }],
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        profile: None,
     })
     .await
     .expect("arranca");
@@ -5994,6 +6093,7 @@ async fn una_disposicion_que_esconde_el_listado_deja_el_hueco_vivo() {
         }],
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        profile: None,
     })
     .await
     .expect("arranca");
@@ -6569,6 +6669,7 @@ async fn ninguna_superficie_enmascara_en_silencio() {
             paths: norte_ui_host::settings::HostPaths::default(),
             theme: norte_ui_host::pickers::HostTheme::default(),
             user_layouts: Vec::new(),
+            profile: None,
             columns: norte_ui_host::columnas_por_defecto(),
             effects: norte_ui_host::commands::Efectos::Completo,
         })
@@ -6709,6 +6810,7 @@ async fn a_los_plugins_solo_se_les_pregunta_por_la_ventana() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: columnas_de(&["name", "size", "plugin:acme.git/status"]),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -6776,6 +6878,7 @@ async fn la_insignia_de_un_plugin_llega_a_la_fila() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: columnas_de(&["name", "plugin:acme.git/status"]),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -6981,6 +7084,7 @@ async fn encender_una_columna_attr_vuelve_a_listar() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         // SIN la columna de modo: encenderla es lo que cambia la huella.
         columns: columnas_de(&["name", "size", "attr:posix.mode"]),
         effects: norte_ui_host::commands::Efectos::Completo,
@@ -8797,6 +8901,7 @@ kind = "status"
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -11698,6 +11803,7 @@ async fn en_solo_lectura_no_se_para_la_task_de_otro() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::SoloLectura,
     })
@@ -11867,6 +11973,7 @@ async fn un_kind_desconocido_con_nombre_alterado_va_marcado() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -12035,6 +12142,7 @@ async fn en_solo_lectura_no_hay_busqueda_semantica() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::SoloLectura,
     })
@@ -13852,6 +13960,7 @@ async fn las_teclas_de_un_dialogo_las_pone_el_preset() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -14037,6 +14146,7 @@ async fn host_en(backend: Arc<Falso>, inicio: &str) -> (UiHost, norte_ui_host::V
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -14803,6 +14913,7 @@ async fn una_tecla_reatada_contesta_el_dialogo() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -15171,6 +15282,7 @@ async fn host_con_capas(dir_usuario: &std::path::Path) -> (UiHost, norte_ui_host
         },
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -15251,16 +15363,23 @@ async fn un_perfil_que_no_carga_deja_todo_como_estaba() {
 
     // Sin perfiles, girar no tiene a dónde ir — y lo dice en vez de fingir.
     ejecutar_por_paleta(&h, &mut sub, "profile.next").await;
-    let mut dicho = false;
-    for _ in 0..6 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        if foto.status.message.is_some() {
-            dicho = true;
-            break;
+    // Por PLAZO y no por cuenta de vueltas: leer `profiles/` es una tarea de
+    // fondo, así que el aviso no llega en la foto siguiente sino cuando esa
+    // tarea contesta. Con seis resyncs seguidos, una máquina cargada los
+    // gastaba todos antes de que el hilo de fondo despertara y el test se
+    // ponía rojo sin que nada estuviera roto — que es como se aprende a
+    // ignorar un rojo.
+    let dicho = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            h.dispatch(UiAction::Resync).await.expect("host vivo");
+            if siguiente_foto(&mut sub).await.status.message.is_some() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-    }
-    assert!(dicho, "sin otro perfil se dice, no se calla");
+    })
+    .await;
+    assert!(dicho.is_ok(), "sin otro perfil se dice, no se calla");
 }
 
 /// Con `[ui] parent_entry`, el listado lleva su fila `..` — y no es un
@@ -15289,6 +15408,7 @@ async fn con_la_fila_de_subir_el_listado_la_lleva_primera() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -16374,6 +16494,7 @@ async fn un_favorito_invalido_se_queda_y_se_dice() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })
@@ -16563,6 +16684,7 @@ async fn la_config_siembra_la_ocultacion() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
+        profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
     })

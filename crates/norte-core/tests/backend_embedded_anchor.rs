@@ -38,7 +38,10 @@ fn arbol() -> Arbol {
     std::fs::create_dir(dir.path().join("d")).expect("destino");
     std::fs::create_dir(dir.path().join("d/sub")).expect("sub");
     std::fs::create_dir(dir.path().join("fuera")).expect("fuera");
-    let engine = Engine::new();
+    // Con la memoria de anclas de un cliente, que es lo que instala
+    // `embedded::engine_in` y por tanto lo que tiene el engine de un frontend
+    // (#317). Un engine sin ella no ancla nada — eso lo fija su propio test.
+    let engine = Engine::new().with_client_anchors();
     engine.register_provider(
         Arc::new(norte_vfs_local::LocalProvider::rooted(dir.path())) as Arc<dyn Provider>
     );
@@ -192,6 +195,66 @@ async fn sin_listar_el_destino_no_hay_ancla_y_el_enlace_desvia() {
         .expect("encola");
     assert_eq!(task.join().await, TaskState::Completed);
     assert!(a.dir.path().join("fuera/notas.txt").exists());
+}
+
+/// Y el del FRONTEND sí la tiene, que es la otra mitad y la que se puede
+/// borrar sin que nada se ponga rojo (#317).
+///
+/// `embedded::engine_in` es la única constructora que llama a
+/// `with_client_anchors`. Sin este test, quitarle esa llamada deja la TUI y la
+/// CLI sin comprobación de ancla en silencio.
+#[test]
+fn el_engine_de_un_frontend_si_ancla() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    assert!(norte_core::embedded::engine_in(dir.path()).has_client_anchors());
+    assert!(
+        !Engine::new().has_client_anchors(),
+        "y el que no pasa por ahí, no"
+    );
+}
+
+/// **El engine del DAEMON no puede anclar, monte quien monte un
+/// `Backend::Embedded` encima** (#317).
+///
+/// El ancla dice quién MIRÓ, y eso solo significa algo en un proceso con un
+/// cliente. En el daemon hay muchos, así que una caché compartida pasaría el
+/// listado del cliente A a la escritura del cliente B. La propiedad la sostiene
+/// el tipo —la memoria la instala `with_client_anchors`, y a esa solo la llama
+/// `embedded::engine_in`— y esto la fija desde fuera: mismo listado y mismo
+/// cambiazo, y aquí la escritura SE HACE, porque sin ancla se está en 0.53.
+#[tokio::test]
+async fn el_engine_del_daemon_no_ancla_aunque_le_monten_un_backend_embebido() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir(dir.path().join("d")).expect("destino");
+    std::fs::create_dir(dir.path().join("d/sub")).expect("sub");
+    std::fs::create_dir(dir.path().join("fuera")).expect("fuera");
+    // Como lo construye el daemon: sin pasar por `embedded::engine_in`.
+    let engine = Engine::new();
+    assert!(
+        !engine.has_client_anchors(),
+        "un engine que no es de frontend no tiene memoria de anclas"
+    );
+    engine.register_provider(
+        Arc::new(norte_vfs_local::LocalProvider::rooted(dir.path())) as Arc<dyn Provider>
+    );
+    let a = Arbol {
+        backend: Backend::Embedded(Arc::new(engine)),
+        dir,
+    };
+
+    listar_como_un_panel(&a.backend, "file:///d/sub").await;
+    sustituir_por_enlace(&a);
+
+    let task = a
+        .backend
+        .create_file(&vp("file:///d/sub/notas.txt"))
+        .await
+        .expect("encola");
+    assert_eq!(task.join().await, TaskState::Completed);
+    assert!(
+        a.dir.path().join("fuera/notas.txt").exists(),
+        "sin memoria de cliente no hay ancla, y sin ancla es el 0.53 de siempre"
+    );
 }
 
 /// El directorio de verdad, listado y sin tocar: el ancla no cuesta la

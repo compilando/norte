@@ -389,6 +389,35 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A rename that only changes the spelling was refused — and with
+  `Overwrite` it destroyed the file** (#274). On a folding volume (APFS, NTFS,
+  exFAT, an ext4 `+F`) `Foo.txt` and `foo.txt` are the same node, and norte
+  renames WITHOUT replacing, so the destination "already exists": the reader
+  got "there is already something there" about the file they were renaming, and
+  no way forward — the window has no collision-retry dialog. Worse, the
+  `Overwrite` arm then deleted the destination — which IS the file — and
+  renamed something that was no longer there. When the collision turns out to be
+  the same node under another spelling, norte now performs the rename through an
+  intermediate name instead of applying a collision policy. Identity is not
+  enough on its own to decide that: a hard link shares an inode, so the leaves
+  must also fold to the same key. The window between the two renames is
+  deliberately NOT cancellable — the repo reads a cancelled task as "the tree is
+  as it was" — and undoing such a rename needed the same detour, because the old
+  name "is occupied" by the file itself.
+- **Full case folding ignored the default-ignorables** (#214). `FoldMode::Full`
+  is meant to be what an ext4/f2fs `+F` directory does, and the kernel builds
+  its tables as `nfdicf` — NFD, **i**gnore default ignorables, case fold. norte
+  kept them, so `nombre.txt` and `nom<U+00AD>bre.txt` had different keys and
+  norte answered "these do not collide" about the one filesystem #145 is about:
+  a plan approved with no warning that dies mid-batch. The predicate now shares
+  the table the invisible-painting already used — one table, two policies:
+  painting exempts ZWJ and the variation selectors for emoji fidelity, folding
+  cannot exempt anything because the filesystem does not. **This widens what
+  `archive.pack` refuses**: it folds with the widest mode on purpose ("would
+  these collide on ANY machine?"), so two entries differing only by a variation
+  selector or a ZWJ are now one name and the archive is refused rather than
+  built. Simple folding (APFS, NTFS) is unchanged; HFS+, which also drops
+  ignorables, remains a documented gap.
 - **The editor was launched with an unresolved program name and the browsed
   directory as its `cwd`** (ADR 0082, #302). On unix `current_dir` is applied
   BEFORE the program is resolved, so `EDITOR=vim` with a `.` — or an empty
@@ -449,7 +478,15 @@ independently through `PROTOCOL_VERSION`.
   degrading in a declared order until it fits: orphans whole, then visible
   history halved, then the arrangements of non-active profiles. The active
   profile, its arrangement and every visible slot's path and cursor are never
-  touched.
+  touched. And the window now degrades and retries the way the TUI already did
+  (#316) — the decision of WHAT to drop is one shared function, because a
+  decision duplicated between frontends diverges in silence (ADR 0077).
+- **The anchor cache is no longer a field the daemon merely promises not to
+  touch** (#317). It is installed by `embedded::engine_in`, the constructor for
+  a frontend's engine, and the daemon builds its own by another route — so an
+  engine that serves many clients cannot pass one client's listing to another
+  client's write, whoever mounts a `Backend::Embedded` on it. The rustdoc said
+  so before; now the type does, and two tests pin both halves.
 
 - **Five layout commands had no key in any preset.** Closing a slot, growing
   and shrinking it, equalising the row and designating the destination were

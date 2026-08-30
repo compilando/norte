@@ -70,6 +70,7 @@ OPCIONES:
     --socket <RUTA>      Socket del daemon (por defecto, el del sistema)
     --layout <NOMBRE>    Disposición de arranque (por defecto, la de la config)
     --preset <NOMBRE>    Preset de teclado (por defecto, el de la config)
+    --profile <NOMBRE>   Perfil de configuración (por defecto, ninguno)
     -h, --help           Esta ayuda
     -V, --version        La versión
 ";
@@ -183,6 +184,11 @@ pub struct Cli {
     pub layout: Option<std::ffi::OsString>,
     /// Preset de teclado pedido para ESTE arranque.
     pub preset: Option<std::ffi::OsString>,
+    /// Perfil pedido para ESTE arranque (#307, ADR 0079).
+    ///
+    /// Bytes intactos por lo mismo que [`Self::layout`], y con más motivo: un
+    /// nombre de perfil acaba siendo un DIRECTORIO (`profiles/<nombre>/`).
+    pub profile: Option<std::ffi::OsString>,
     /// Se pidió la ayuda.
     pub help: bool,
     /// Se pidió la versión.
@@ -199,7 +205,11 @@ where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString>,
 {
-    let crudo = norte_frontend::cli::parse(args, &[], &["--socket", "--layout", "--preset"]);
+    let crudo = norte_frontend::cli::parse(
+        args,
+        &[],
+        &["--socket", "--layout", "--preset", "--profile"],
+    );
     if let Some(flag) = crudo.unknown {
         return Err(StartupError::UnknownFlag(flag));
     }
@@ -208,6 +218,7 @@ where
         socket: crudo.path("--socket"),
         layout: crudo.os_text("--layout").map(std::ffi::OsString::from),
         preset: crudo.os_text("--preset").map(std::ffi::OsString::from),
+        profile: crudo.os_text("--profile").map(std::ffi::OsString::from),
         help: crudo.help,
         version: crudo.version,
     })
@@ -459,14 +470,61 @@ fn otras_pantallas(
     Ok((visor, dialogo))
 }
 
+/// Las capas de configuración con el perfil que el lector NOMBRÓ metido
+/// dentro (#307, ADR 0079 D7).
+///
+/// Y si ese perfil no se puede usar, esto FALLA: pediste ese perfil, y
+/// arrancar como otra cosa sería contestar otra pregunta. El nombre tiene que
+/// estar en el LISTADO, byte a byte — mirar solo si el resolutor produjo una
+/// capa no basta, porque la añade en cuanto el nombre es legal y hay
+/// directorio de usuario, exista o no; entonces la carga la trata como una
+/// capa ausente, que no es un error, y `--profile fantasma` arrancaba como si
+/// nada. Es la misma comprobación, palabra por palabra, que hace el terminal.
+fn capas_con_perfil(nombre: &std::ffi::OsStr) -> Result<norte_config::Layers, StartupError> {
+    let dir = norte_config::profiles_dir_from(&|k| std::env::var_os(k)).ok_or_else(|| {
+        StartupError::Config("no hay directorio de configuración donde colgar un perfil".to_owned())
+    })?;
+    capas_con_perfil_en(&dir, nombre)
+}
+
+/// El núcleo probable de [`capas_con_perfil`]: el directorio de perfiles entra
+/// como ARGUMENTO, para que su test no dependa del `HOME` de quien lo corra.
+fn capas_con_perfil_en(
+    dir: &std::path::Path,
+    nombre: &std::ffi::OsStr,
+) -> Result<norte_config::Layers, StartupError> {
+    let hay = norte_config::list_profiles(dir)
+        .unwrap_or_default()
+        .iter()
+        .any(|n| n == nombre);
+    if !hay {
+        return Err(StartupError::Desconocido {
+            que: "--profile",
+            valor: nombre.to_string_lossy().into_owned(),
+        });
+    }
+    Ok(norte_config::standard_layers_with_profile(Some(nombre)))
+}
+
 /// Monta el host: configuración, socket, directorio, keymap y disposición.
 ///
 /// # Errors
 /// [`StartupError`] si la configuración no carga, el directorio no vale, o no
 /// hay daemon al otro lado.
 pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
-    // Las MISMAS capas que el TUI, leídas fuera del runtime (regla 2).
-    let capas = norte_config::standard_layers();
+    // Las MISMAS capas que el TUI, leídas fuera del runtime (regla 2) — y con
+    // el perfil que `--profile` nombre metido YA en ellas (#307, ADR 0079).
+    //
+    // En la PRIMERA carga y no por el cambio en caliente, igual que en el
+    // terminal: así aplica hasta `[ui] lang`, que es lo único que un cambio en
+    // marcha no puede deshacer (`norte_i18n::force` corre una vez). El perfil
+    // PEGAJOSO no puede hacer esto —vive en la sesión, y la sesión la tiene el
+    // daemon, al que se llega con la configuración que estamos cargando— y por
+    // eso llega por el otro camino.
+    let capas = match &cli.profile {
+        Some(nombre) => capas_con_perfil(nombre)?,
+        None => norte_config::standard_layers(),
+    };
     // Se guardan para la vista de «dónde vive cada cosa»: el host no descubre
     // ficheros, así que la lista de capas se la damos ya resuelta y es
     // exactamente la que se acaba de LEER, no una que se vuelva a calcular.
@@ -601,6 +659,9 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         paths,
         theme: tema_visto(tema_resuelto.as_deref(), &theme),
         user_layouts,
+        // Ya está APLICADO en `settings` (sus capas entraron arriba); esto es
+        // para que el host lo sepa y el selector lo marque puesto (#307).
+        profile: cli.profile.clone(),
     })
     .await?;
     let mut snapshot = snapshot;
@@ -700,6 +761,44 @@ mod tests {
         );
         assert_eq!(cli.layout.as_deref(), Some(std::ffi::OsStr::new("simple")));
         assert!(!cli.help);
+    }
+
+    /// `--profile` existe también en la ventana (#307), y con los BYTES
+    /// intactos: un nombre de perfil acaba siendo un directorio.
+    #[test]
+    fn el_perfil_se_lee_y_conserva_sus_bytes() {
+        let cli = parse(["--profile", "trabajo"]).expect("parsea");
+        assert_eq!(
+            cli.profile.as_deref(),
+            Some(std::ffi::OsStr::new("trabajo"))
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+            let crudo = std::ffi::OsStr::from_bytes(b"perf\xffil");
+            let cli = parse([std::ffi::OsString::from("--profile"), crudo.to_os_string()])
+                .expect("parsea");
+            assert_eq!(
+                cli.profile.as_deref(),
+                Some(crudo),
+                "sin pasar por texto: dos bytes inválidos distintos abrirían el mismo directorio"
+            );
+        }
+    }
+
+    /// Y un perfil que no está en el listado ABORTA (ADR 0079, D7): pediste
+    /// ese perfil, y arrancar como otra cosa sería contestar otra pregunta.
+    #[test]
+    fn un_perfil_que_no_existe_no_arranca() {
+        let dir = tempfile::tempdir().expect("temp");
+        // Sin `profiles/` dentro, así que el listado viene vacío.
+        let e =
+            capas_con_perfil_en(dir.path(), std::ffi::OsStr::new("fantasma")).expect_err("no vale");
+        assert!(
+            matches!(&e, StartupError::Desconocido { que, valor } if *que == "--profile" && valor == "fantasma"),
+            "{e}"
+        );
     }
 
     /// Un flag mal escrito NO se ignora: se dice. Ignorarlo es arrancar sin
