@@ -52,6 +52,10 @@ modal-mark-pattern-hint = glob, por ejemplo *.rs
 modal-mark-pattern-keys = [enter] confirmar · [esc] cancelar
 modal-mkdir = Crear directorio
 modal-mkdir-hint = nombre del directorio nuevo
+# #306: guardar el espacio de trabajo como perfil. El pie dice QUÉ se guarda,
+# que es la pregunta de quien abre este diálogo.
+modal-profile-save-as = Guardar como perfil
+modal-profile-save-as-hint = nombre del perfil; se guardan la disposición y dónde está cada panel
 modal-new-file = Crear fichero
 modal-new-file-hint = nombre del fichero nuevo
 modal-transfer-name-copy = Copiar a
@@ -229,6 +233,11 @@ msg-config-reloaded = config recargada
 msg-profile-switched = perfil: { $profile }
 msg-profile-switched-partial = perfil: { $profile } — hace falta reiniciar para aplicar: { $keys }
 msg-profile-not-applied = no se ha podido aplicar el perfil { $profile }
+# #306: guardar el espacio de trabajo como perfil.
+msg-profile-saved = perfil guardado: { $name }
+msg-profile-save-failed = no se pudo guardar el perfil: { $error }
+msg-profile-name-invalid = ese nombre no vale para un perfil: acaba siendo un directorio
+msg-no-config-dir = no hay directorio de configuración donde guardarlo
 msg-daemon-lost = conexión con el daemon perdida; reconectando…
 msg-daemon-restored = reconectado al daemon
 msg-daemon-handover = el daemon se releva; vuelve enseguida

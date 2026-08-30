@@ -38,6 +38,10 @@ const NO_APLICA: &[&str] = &[
 
 /// Comandos vivos APLAZADOS, con la issue que los cierra.
 const APLAZADOS: &[(&str, u32)] = &[
+    // `profile.save-as` (#306) nace en el terminal: el ESCRITOR es compartido
+    // (`norte_config::save_profile`), así que lo que le falta a la ventana es
+    // la superficie —un diálogo de un campo— y no la lógica.
+    ("profile.save-as", 318),
     // `dialog.remove` estuvo aquí con un motivo que era cierto: quitar una
     // fila solo significa algo sobre una lista que se pueda EDITAR, y la única
     // de esta ventana era de solo lectura. Desde #309 hay una que sí —los

@@ -44,6 +44,7 @@ commands = [
     "profile.pick",
     "profile.next",
     "profile.prev",
+    "profile.save-as",
 
     "pane.tree",]
 context = ["browse"]
@@ -370,6 +371,14 @@ machines is copying a directory.
 {{cmd:profile.next}} and {{cmd:profile.prev}} cycle without opening anything,
 which is what you want when you keep two. `--profile <name>` starts in one for
 a single run. Otherwise norte remembers the one you were last in.
+
+{{cmd:profile.save-as}} saves **what you are looking at** as a profile: the
+arrangement as it stands and each panel's directory, so that its first start
+puts you back where you left off. If you were in a profile, the new one takes
+its `keymap.toml` too — save-as produces something that behaves like what you
+had. The name becomes a directory, so it is checked before anything is written,
+and saving over an existing profile rewrites those pieces and leaves its other
+files alone.
 
 What a profile sets overrides your own configuration — that is what choosing it
 is for — and a project's `.norte` still overrides the profile. What a profile

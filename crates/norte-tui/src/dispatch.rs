@@ -209,6 +209,9 @@ pub async fn dispatch(
             };
             app.open_profile_picker(perfiles);
         }
+        // #306: guardar lo que hay en pantalla como un perfil. Aquí solo se
+        // abre el prompt; el disco lo toca el Enter, en el run loop.
+        Command::ProfileSaveAs => app.open_profile_save_as(),
         // `profile.next`/`profile.prev` giran por la lista SIN abrir el
         // selector, que es lo que quiere quien tiene dos perfiles y alterna.
         // El cambio en sí lo hace el run loop (tarea 4): aquí solo se dice

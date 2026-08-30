@@ -222,6 +222,7 @@ pub async fn confirm_modal(
         | Modal::TrustLuaInit { .. }
         | Modal::MarkPattern { .. }
         | Modal::Mkdir { .. }
+        | Modal::ProfileSaveAs { .. }
         | Modal::EditNew { .. }
         | Modal::CommandLine { .. }
         | Modal::AiRenameInstruction { .. }

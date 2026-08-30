@@ -445,6 +445,188 @@ pub fn list_profiles(dir: &Path) -> std::io::Result<Vec<OsString>> {
     Ok(out)
 }
 
+/// Lo que un perfil GUARDA de la pantalla actual (#306, ADR 0079).
+///
+/// Un tipo y no seis argumentos: son seis cosas que van juntas o no van, y la
+/// mitad son `Option`.
+#[derive(Debug, Default)]
+pub struct ProfileSnapshot {
+    /// El título a enseñar (`[profile] title`), si el lector puso uno.
+    pub title: Option<String>,
+    /// La disposición viva, ya en TOML — la serializa quien la tiene
+    /// (`norte_frontend::layout::config::to_toml`): este crate no conoce el
+    /// árbol de huecos y no debe.
+    pub layout_toml: Option<String>,
+    /// Los escalares de `[ui]` que DIFIEREN de lo que ya dice la capa del
+    /// usuario. Solo esos: copiar los que coinciden añade ruido que luego
+    /// nadie sabe si es deliberado.
+    pub ui: Vec<(String, toml_edit::Value)>,
+    /// `[profile.start]`: dónde abre cada hueco la primera vez, por id de
+    /// hueco en texto (TOML no tiene claves numéricas).
+    pub start: Vec<(String, String)>,
+    /// El `keymap.toml` a copiar tal cual, si el perfil de partida tenía uno.
+    ///
+    /// Se copia BYTE a BYTE y no se reescribe: es un fichero del lector, con
+    /// sus comentarios, y «guardar como» produce un perfil que se comporta
+    /// igual que el que tenías — si cambiaste atajos, el nuevo los lleva.
+    pub keymap: Option<Vec<u8>>,
+}
+
+/// El nombre del fichero de disposición que escribe [`save_profile`].
+///
+/// Fijo, y por eso no lo elige quien llama: el `norte.toml` del perfil apunta
+/// a él con `[ui] layout`, y dos nombres para lo mismo es una pareja que se
+/// puede desparejar.
+pub const PROFILE_LAYOUT_NAME: &str = "workspace";
+
+/// Escribe `profiles/<nombre>/` con lo que hay en pantalla (#306).
+///
+/// Devuelve el directorio del perfil.
+///
+/// **No comprueba si ya existe**: quien llama pregunta antes, porque la
+/// respuesta a «ya hay uno con ese nombre» es del humano y no de un escritor.
+/// Lo que sí hace es no tocar lo que no escribe: un perfil que ya tenía otros
+/// ficheros los conserva.
+///
+/// El `norte.toml` se compone con los mismos `persist_*` que el resto de la
+/// familia —lock, tmp+rename, comentarios preservados—, así que guardar sobre
+/// un perfil escrito a mano no se lleva por delante lo que hubiera.
+///
+/// # Errors
+/// Lo que falle al crear los directorios o al escribir cualquiera de los tres
+/// ficheros. Un nombre que [`valid_profile_name`] rechaza es
+/// [`std::io::ErrorKind::InvalidInput`]: un nombre de perfil acaba siendo un
+/// directorio, y componer la ruta con uno inválido es lo que este guard existe
+/// para impedir.
+pub fn save_profile(
+    profiles_dir: &Path,
+    name: &OsStr,
+    snap: &ProfileSnapshot,
+) -> std::io::Result<PathBuf> {
+    use std::io::{Error, ErrorKind};
+    if !valid_profile_name(name) {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "ese nombre no puede ser un directorio de perfil",
+        ));
+    }
+    let dir = profiles_dir.join(name);
+    std::fs::create_dir_all(&dir)?;
+    if let Some(toml) = &snap.layout_toml {
+        let layouts = dir.join("layouts");
+        std::fs::create_dir_all(&layouts)?;
+        std::fs::write(
+            layouts.join(format!("{PROFILE_LAYOUT_NAME}.toml")),
+            toml.as_bytes(),
+        )?;
+        crate::load::persist_set(
+            &dir,
+            "ui",
+            "layout",
+            toml_edit::Value::from(PROFILE_LAYOUT_NAME),
+        )?;
+    }
+    for (clave, valor) in &snap.ui {
+        crate::load::persist_set(&dir, "ui", clave, valor.clone())?;
+    }
+    if let Some(titulo) = &snap.title {
+        crate::load::persist_set(
+            &dir,
+            "profile",
+            "title",
+            toml_edit::Value::from(titulo.as_str()),
+        )?;
+    }
+    for (hueco, destino) in &snap.start {
+        crate::load::persist_set(
+            &dir,
+            "profile.start",
+            hueco,
+            toml_edit::Value::from(destino.as_str()),
+        )?;
+    }
+    if let Some(bytes) = &snap.keymap {
+        std::fs::write(dir.join("keymap.toml"), bytes)?;
+    }
+    Ok(dir)
+}
+
+#[cfg(test)]
+mod tests_guardar {
+    use super::*;
+
+    /// **Guardar un perfil escribe las tres piezas** (#306): la disposición
+    /// con su `[ui] layout` apuntándola, dónde abre cada hueco, y el keymap
+    /// que se lleva del perfil de partida.
+    #[test]
+    fn guardar_un_perfil_escribe_las_tres_piezas() {
+        let raiz = tempfile::tempdir().expect("tempdir");
+        let snap = ProfileSnapshot {
+            title: Some("Fotos".to_owned()),
+            layout_toml: Some("kind = \"slot\"\n".to_owned()),
+            ui: vec![("theme".to_owned(), toml_edit::Value::from("nord"))],
+            start: vec![("1".to_owned(), "file:///fotos".to_owned())],
+            keymap: Some(b"# mis teclas\n".to_vec()),
+        };
+        let dir = save_profile(raiz.path(), OsStr::new("fotos"), &snap).expect("guarda");
+
+        let toml = std::fs::read_to_string(dir.join("norte.toml")).expect("norte.toml");
+        assert!(toml.contains("layout = \"workspace\""), "{toml}");
+        assert!(toml.contains("theme = \"nord\""), "{toml}");
+        assert!(toml.contains("title = \"Fotos\""), "{toml}");
+        assert!(toml.contains("file:///fotos"), "{toml}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("layouts/workspace.toml")).expect("layout"),
+            "kind = \"slot\"\n"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("keymap.toml")).expect("keymap"),
+            b"# mis teclas\n"
+        );
+    }
+
+    /// Un nombre que no puede ser un directorio se rechaza ANTES de tocar
+    /// disco: componer la ruta con `..` es lo que este guard existe para
+    /// impedir.
+    #[test]
+    fn un_nombre_que_no_es_directorio_no_escribe_nada() {
+        let raiz = tempfile::tempdir().expect("tempdir");
+        for malo in ["..", "", "a/b", "."] {
+            let e = save_profile(raiz.path(), OsStr::new(malo), &ProfileSnapshot::default())
+                .expect_err("no vale");
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{malo}");
+        }
+        assert_eq!(
+            std::fs::read_dir(raiz.path()).expect("read_dir").count(),
+            0,
+            "y no se creó ni un directorio"
+        );
+    }
+
+    /// Guardar SOBRE uno que ya existe reescribe sus piezas y deja el resto de
+    /// sus ficheros como estaban: un perfil es del lector, no de este
+    /// escritor.
+    #[test]
+    fn guardar_encima_conserva_lo_que_no_escribe() {
+        let raiz = tempfile::tempdir().expect("tempdir");
+        let dir = raiz.path().join("fotos");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("openers.toml"), b"# los mios\n").expect("openers");
+
+        let snap = ProfileSnapshot {
+            layout_toml: Some("kind = \"slot\"\n".to_owned()),
+            ..ProfileSnapshot::default()
+        };
+        save_profile(raiz.path(), OsStr::new("fotos"), &snap).expect("guarda");
+
+        assert_eq!(
+            std::fs::read(dir.join("openers.toml")).expect("openers"),
+            b"# los mios\n",
+            "lo que no escribe, no lo toca"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -44,6 +44,7 @@ commands = [
     "profile.pick",
     "profile.next",
     "profile.prev",
+    "profile.save-as",
 
     "pane.tree",]
 context = ["browse"]
@@ -376,6 +377,14 @@ perfil de una máquina a otra es copiar un directorio.
 {{cmd:profile.prev}} giran sin abrir nada, que es lo que quieres cuando tienes
 dos. `--profile <nombre>` arranca en uno para una sola vez. Si no dices nada,
 norte vuelve al último en el que estuviste.
+
+{{cmd:profile.save-as}} guarda como perfil **lo que ves ahora**: la disposición
+tal cual está y el directorio de cada panel, para que su primer arranque te deje
+donde lo dejaste. Si estabas en un perfil, el nuevo se lleva también su
+`keymap.toml` — guardar como produce algo que se comporta como lo que tenías. El
+nombre acaba siendo un directorio, así que se comprueba antes de escribir nada, y
+guardar sobre uno que ya existe escribe encima de esas piezas y deja el resto de
+sus ficheros intactos.
 
 Lo que un perfil fija pisa a tu propia configuración —para eso lo eliges— y el
 `.norte` de un proyecto sigue pisando al perfil. Lo que un perfil **no** puede

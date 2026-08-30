@@ -589,6 +589,13 @@ pub async fn on_key(
                             }
                         }
                     }
+                    // #306: guardar el espacio de trabajo como perfil. Escribe
+                    // TRES ficheros con lock y tmp+rename, así que va por
+                    // `spawn_blocking` (regla 2) y el modal se cierra solo
+                    // cuando el disco contestó que sí.
+                    PromptKind::ProfileSaveAs => {
+                        crate::screens::profile_save_as(app).await;
+                    }
                     PromptKind::Pack => {
                         if let Some(params) = app.pack_confirm() {
                             match backend.pack(params).await {

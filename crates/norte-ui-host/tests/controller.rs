@@ -15421,7 +15421,7 @@ async fn la_ventana_quita_el_favorito_del_cursor() {
     ejecutar_por_paleta(&h, &mut sub, "pane.hotlist").await;
     h.dispatch(UiAction::Resync).await.expect("host vivo");
     let foto = siguiente_foto(&mut sub).await;
-    let filas = foto.picker.as_ref().map(|p| p.rows.len()).unwrap_or(0);
+    let filas = foto.picker.as_ref().map_or(0, |p| p.rows.len());
     assert_eq!(filas, 1, "la lista trae el favorito: {:?}", foto.picker);
     // `dialog.remove`: la `d` del popup del terminal.
     let ack = h.dispatch(tecla("d")).await.expect("host vivo");

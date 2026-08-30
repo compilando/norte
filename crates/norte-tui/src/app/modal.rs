@@ -335,6 +335,19 @@ pub enum Modal {
         /// pintado bajo el campo.
         error: Option<String>,
     },
+    /// Guardar lo que hay en pantalla como un PERFIL nuevo (#306, ADR 0079).
+    ///
+    /// Mismo molde que [`Modal::Mkdir`]: un campo y un diagnóstico. Lo que se
+    /// teclea es el nombre del perfil, que acaba siendo un DIRECTORIO
+    /// (`profiles/<nombre>/`), así que pasa por `valid_profile_name` antes de
+    /// tocar disco y el error se pinta bajo el campo en vez de rechazarse en
+    /// silencio.
+    ProfileSaveAs {
+        /// Lo tecleado hasta ahora.
+        name: String,
+        /// Diagnóstico del último intento inválido.
+        error: Option<String>,
+    },
     /// Crear un fichero VACÍO (Shift+F4, #290). Mismo molde que
     /// [`Modal::Mkdir`] con la otra clase de nodo, y por el mismo motivo: el
     /// fichero lo crea el DAEMON (`fs.create`) y no el editor, así que hace
@@ -587,6 +600,8 @@ pub enum PromptKind {
     Mkdir,
     /// [`Modal::EditNew`].
     EditNew,
+    /// [`Modal::ProfileSaveAs`].
+    ProfileSaveAs,
     /// [`Modal::CommandLine`].
     CommandLine,
     /// [`Modal::AiRenameInstruction`].
@@ -707,6 +722,7 @@ impl Modal {
             Self::Chmod { .. } => PromptKind::Chmod,
             Self::Mkdir { .. } => PromptKind::Mkdir,
             Self::EditNew { .. } => PromptKind::EditNew,
+            Self::ProfileSaveAs { .. } => PromptKind::ProfileSaveAs,
             Self::CommandLine { .. } => PromptKind::CommandLine,
             Self::AiRenameInstruction { .. } => PromptKind::AiRename,
             Self::RenameBatchPattern { .. } => PromptKind::RenameBatch,
@@ -757,6 +773,7 @@ impl Modal {
             ),
             Self::Pack { name, error }
             | Self::Mkdir { name, error }
+            | Self::ProfileSaveAs { name, error }
             | Self::EditNew { name, error, .. } => (
                 name,
                 error,

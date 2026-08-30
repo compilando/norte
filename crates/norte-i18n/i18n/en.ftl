@@ -51,6 +51,10 @@ modal-mark-pattern-hint = glob, for example *.rs
 modal-mark-pattern-keys = [enter] confirm · [esc] cancel
 modal-mkdir = Create directory
 modal-mkdir-hint = name of the new directory
+# #306: save the workspace as a profile. The footer says WHAT is saved, which
+# is the question of whoever opens this dialog.
+modal-profile-save-as = Save as profile
+modal-profile-save-as-hint = profile name; the arrangement and where each panel is are saved
 modal-new-file = Create file
 modal-new-file-hint = name of the new file
 modal-transfer-name-copy = Copy to
@@ -227,6 +231,11 @@ msg-config-reloaded = config reloaded
 msg-profile-switched = profile: { $profile }
 msg-profile-switched-partial = profile: { $profile } — needs a restart to apply: { $keys }
 msg-profile-not-applied = the profile { $profile } could not be applied
+# #306: saving the workspace as a profile.
+msg-profile-saved = profile saved: { $name }
+msg-profile-save-failed = the profile could not be saved: { $error }
+msg-profile-name-invalid = that name will not do for a profile: it becomes a directory
+msg-no-config-dir = there is no configuration directory to save it in
 msg-daemon-lost = daemon connection lost; reconnecting…
 msg-daemon-restored = reconnected to daemon
 msg-daemon-handover = the daemon is handing over; it will be back

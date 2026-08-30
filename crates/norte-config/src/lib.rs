@@ -36,9 +36,9 @@ pub use load::{
     persist_ui_theme, persist_ui_theme_to,
 };
 pub use profiles::{
-    Loaded, ProfileError, ProfileLoad, ProfileSource, list_profiles, load_with, load_with_profile,
-    profile_dir_from, profiles_dir_from, standard_layers_no_project_with_profile,
-    standard_layers_with_profile, valid_profile_name,
+    Loaded, PROFILE_LAYOUT_NAME, ProfileError, ProfileLoad, ProfileSnapshot, ProfileSource,
+    list_profiles, load_with, load_with_profile, profile_dir_from, profiles_dir_from, save_profile,
+    standard_layers_no_project_with_profile, standard_layers_with_profile, valid_profile_name,
 };
 pub use schema::{
     AiProviderEntry, AiSection, ArchiveSection, ConfigError, DEFAULT_PRESET, DaemonMode,

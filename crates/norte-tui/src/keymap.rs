@@ -142,6 +142,7 @@ commands! {
     "layout.metadata" => LayoutMetadata,
     "layout.pick" => LayoutPick,
     "profile.pick" => ProfilePick,
+    "profile.save-as" => ProfileSaveAs,
     "profile.next" => ProfileNext,
     "profile.prev" => ProfilePrev,
     "pane.mirror" => PaneMirror,

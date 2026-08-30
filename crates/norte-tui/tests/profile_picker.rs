@@ -27,6 +27,56 @@ fn perfil(name: &str) -> UserProfile {
     }
 }
 
+/// **Guardar como perfil se abre PRELLENADO con el perfil activo** (#306).
+///
+/// Lo normal es partir del que tienes puesto, así que «guardar como» sobre el
+/// mismo nombre es guardar encima — que es lo que hace cualquier programa. Sin
+/// perfil el campo nace vacío: no hay un nombre por defecto que no sea una
+/// invención.
+#[test]
+fn guardar_como_perfil_parte_del_activo() {
+    let mut app = app_de_prueba();
+    app.open_profile_save_as();
+    assert!(
+        matches!(&app.modal, Some(norte_tui::app::Modal::ProfileSaveAs { name, .. }) if name.is_empty()),
+        "sin perfil, vacío: {:?}",
+        app.modal
+    );
+
+    app.modal = None;
+    app.active_profile = Some(OsString::from("fotos"));
+    app.open_profile_save_as();
+    assert!(
+        matches!(&app.modal, Some(norte_tui::app::Modal::ProfileSaveAs { name, .. }) if name == "fotos"),
+        "con perfil, el suyo: {:?}",
+        app.modal
+    );
+}
+
+/// Y un nombre que no puede ser un directorio deja el modal abierto con su
+/// diagnóstico: lo tecleado sobrevive para corregirlo, que es la disciplina de
+/// los prompts de esta pantalla.
+#[tokio::test]
+async fn un_nombre_de_perfil_invalido_no_cierra_el_modal() {
+    let mut app = app_de_prueba();
+    app.open_profile_save_as();
+    let Some(norte_tui::app::Modal::ProfileSaveAs { name, .. }) = &mut app.modal else {
+        panic!("el modal está abierto");
+    };
+    name.push_str("../otro");
+
+    norte_tui::screens::profile_save_as(&mut app).await;
+
+    assert!(
+        matches!(
+            &app.modal,
+            Some(norte_tui::app::Modal::ProfileSaveAs { name, error: Some(_) }) if name == "../otro"
+        ),
+        "sigue abierto, con el nombre y el motivo: {:?}",
+        app.modal
+    );
+}
+
 /// Confirmar deja el cambio PEDIDO y cierra el selector. No lo hace aquí: el
 /// cambio recarga configuración, y hacerlo desde el manejador de una tecla es
 /// la regla 2 otra vez.

@@ -375,6 +375,7 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         Modal::TrustLuaInit { .. }
         | Modal::MarkPattern { .. }
         | Modal::Mkdir { .. }
+        | Modal::ProfileSaveAs { .. }
         | Modal::EditNew { .. }
         | Modal::CommandLine { .. }
         | Modal::AiRenameInstruction { .. }

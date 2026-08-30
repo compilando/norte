@@ -228,6 +228,14 @@ pub(crate) fn modal_title_body(
         Modal::Mkdir { name, error } => {
             free_text_modal_text("modal-mkdir", "modal-mkdir-hint", name, error.as_deref())
         }
+        // #306: el mismo molde para el nombre de un PERFIL. El pie dice que
+        // se guarda lo que se ve, que es la pregunta que tiene quien lo abre.
+        Modal::ProfileSaveAs { name, error } => free_text_modal_text(
+            "modal-profile-save-as",
+            "modal-profile-save-as-hint",
+            name,
+            error.as_deref(),
+        ),
         // #290: el mismo molde con la otra clase de nodo. El nombre se pide
         // porque lo crea el daemon, no el editor.
         Modal::EditNew { name, error, .. } => free_text_modal_text(

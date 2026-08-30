@@ -161,7 +161,7 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("profile.pick", false),
     live("profile.next", false),
     live("profile.prev", false),
-    planned("profile.save-as", "cmd-planned-profile-save-as", 306),
+    live("profile.save-as", false),
     live("pane.mirror", false),
     live("pane.mirror-target", false),
     live("pane.pull", false),

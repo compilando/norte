@@ -81,7 +81,9 @@ fn modal_context(modal: &Modal) -> &'static str {
         // Crear fichero comparte página con crear directorio, igual que en la
         // ventana: los dos son el diálogo que pide que teclees un nombre, y el
         // corpus tiene UNA que habla de eso.
-        Modal::Mkdir { .. } | Modal::EditNew { .. } => "dialog.mkdir",
+        // Guardar como perfil comparte página con crear: los dos son el
+        // diálogo que pide que teclees un nombre.
+        Modal::Mkdir { .. } | Modal::EditNew { .. } | Modal::ProfileSaveAs { .. } => "dialog.mkdir",
         Modal::TransferDest { .. } => "dialog.transfer-dest",
         Modal::CommandLine { .. } => "dialog.command-line",
         Modal::AiRenameInstruction { .. } | Modal::AiRenamePlan { .. } => "dialog.ai-rename",
@@ -140,6 +142,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         Modal::TrustLuaInit { .. }
         | Modal::MarkPattern { .. }
         | Modal::Mkdir { .. }
+        | Modal::ProfileSaveAs { .. }
         | Modal::EditNew { .. }
         | Modal::TransferDest { .. }
         | Modal::CommandLine { .. }

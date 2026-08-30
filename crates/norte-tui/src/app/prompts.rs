@@ -619,6 +619,31 @@ impl App {
         });
     }
 
+    /// Abre el modal de «guardar el espacio de trabajo como perfil» (#306).
+    ///
+    /// Prellenado con el perfil ACTIVO si lo hay: lo normal es partir del que
+    /// tienes puesto, y así «guardar como» sobre el mismo nombre es guardar
+    /// encima — que es lo que hace cualquier programa. Sin perfil, vacío: no
+    /// hay un nombre por defecto que no sea una invención.
+    pub fn open_profile_save_as(&mut self) {
+        let name = self
+            .active_profile
+            .as_ref()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.modal = Some(Modal::ProfileSaveAs { name, error: None });
+    }
+
+    /// Cierra el modal de perfil tras un guardado que SÍ escribió.
+    pub fn prompt_submitted_profile_save(&mut self) {
+        self.prompt_submitted(PromptKind::ProfileSaveAs);
+    }
+
+    /// Deja el diagnóstico bajo el campo; el nombre sobrevive.
+    pub fn prompt_error_profile_save(&mut self, msg: String) {
+        self.prompt_set_error(PromptKind::ProfileSaveAs, msg);
+    }
+
     /// Valida el nombre y devuelve el DESTINO completo. Mismo contrato que
     /// [`Self::mkdir_confirm`], incluido el de NO cerrar el modal: lo cierra
     /// [`Self::edit_new_submitted`] cuando la task ya encoló.
