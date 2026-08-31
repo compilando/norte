@@ -207,6 +207,19 @@ keyring = { version = "3", default-features = false }
 #
 # Tampoco hay atajo: `i18n-embed-fl` es dependencia REQUERIDA de age en 0.11 y
 # en 0.12, sin feature que la apague.
+#
+# INTENTADO Y REVERTIDO el 2026-08-31: además del precio de arriba, hoy age
+# 0.12 NO COMPILA en este árbol, y el motivo es un choque que no se puede
+# arreglar desde aquí. `age` 0.12 fija `ml-kem` 0.2.1, que en su Cargo.toml
+# pide `kem = "0.3.0-pre.0"` —una PRE-RELEASE— y no compila contra la 0.3.0
+# final (`kem` le cambió los traits: `Encapsulate`/`Decapsulate` perdieron sus
+# genéricos y su `type Error`). Y `russh` 0.62 arrastra `ml-kem` 0.3.x, que sí
+# quiere la 0.3.0 final. Solo puede haber UN `kem` en ese rango, así que
+# cualquiera de los dos `ml-kem` se queda roto: `cargo update -p kem --precise
+# 0.3.0-pre.0` lo dice con todas las letras.
+#
+# O sea que subir age no es hoy una decisión de criterio, es imposible sin que
+# se mueva age o russh. Volver a mirarlo cuando alguno de los dos publique.
 age = "0.11"
 zeroize = "1"
 # Solo dev (norte-connect): generación de claves ed25519 efímeras en tests

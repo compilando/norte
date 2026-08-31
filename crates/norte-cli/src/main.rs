@@ -707,7 +707,10 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         match norte_core::Index::open(&index_path).await {
             Ok(idx) => base.with_index(Arc::new(idx)),
             Err(e) => {
-                eprintln!("aviso: índice no disponible ({e}); index.* dará Unsupported");
+                eprintln!(
+                    "{}",
+                    norte_i18n::ta("cli-warn-no-index", &[("error", &e.to_string())])
+                );
                 base
             }
         }
@@ -739,8 +742,14 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
                 engine.set_ai_config(config);
             }
-            Ok(Err(e)) => eprintln!("aviso: [ai] inválido ({e})"),
-            Err(e) => eprintln!("aviso: carga de [ai] falló ({e})"),
+            Ok(Err(e)) => eprintln!(
+                "{}",
+                norte_i18n::ta("cli-warn-ai-invalid", &[("error", &e.to_string())])
+            ),
+            Err(e) => eprintln!(
+                "{}",
+                norte_i18n::ta("cli-warn-ai-load-failed", &[("error", &e.to_string())])
+            ),
         }
     }
 
@@ -1641,7 +1650,7 @@ async fn plugin_cmd(backend: &Backend, cmd: PluginCmd) -> anyhow::Result<ExitCod
                              manifiesto no lo habría notado"
                         );
                     }
-                    println!("queda SIN aprobar: apruébalo y actívalo en el gestor de extensiones");
+                    println!("{}", norte_i18n::t("cli-plugin-unapproved"));
                     Ok(ExitCode::SUCCESS)
                 }
                 Err(e) => {
@@ -1685,7 +1694,7 @@ async fn index_cmd(backend: &Backend, cmd: IndexCmd) -> anyhow::Result<ExitCode>
                 println!("{marker}\t{size}\t{}", h.path.display_lossy());
             }
             if hits.is_empty() {
-                eprintln!("(sin resultados)");
+                eprintln!("{}", norte_i18n::t("cli-no-results"));
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1714,7 +1723,7 @@ async fn index_cmd(backend: &Backend, cmd: IndexCmd) -> anyhow::Result<ExitCode>
                 println!("{:.2}\t{}{texto}", h.score, if hostil { "!" } else { "" });
             }
             if hits.is_empty() {
-                eprintln!("(sin resultados)");
+                eprintln!("{}", norte_i18n::t("cli-no-results"));
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1999,7 +2008,10 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
             match spool.sweep().await {
                 Ok(r) if r.removed == 0 && r.is_clean() => {}
                 Ok(r) if r.is_clean() => {
-                    eprintln!("barridos {} planes de sync huérfanos", r.removed);
+                    eprintln!(
+                        "{}",
+                        norte_i18n::ta("cli-spool-swept", &[("count", &r.removed.to_string())])
+                    );
                 }
                 Ok(r) => eprintln!(
                     "aviso: barridos {} planes de sync huérfanos y {} no se dejaron borrar en {}",
@@ -2007,7 +2019,16 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
                     r.failed,
                     spool.dir().display()
                 ),
-                Err(e) => eprintln!("aviso: no se pudo barrer {}: {e}", spool.dir().display()),
+                Err(e) => eprintln!(
+                    "{}",
+                    norte_i18n::ta(
+                        "cli-spool-sweep-failed",
+                        &[
+                            ("path", &spool.dir().display().to_string()),
+                            ("error", &e.to_string()),
+                        ]
+                    )
+                ),
             }
             // policy.toml: ausente = sin reglas = un agente DENTRO de scope
             // aún deniega (fail-closed, `no-rule`). docs/policy-example.toml
@@ -2028,7 +2049,10 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
             let engine = match norte_core::Index::open(&index_path).await {
                 Ok(idx) => engine.with_index(std::sync::Arc::new(idx)),
                 Err(e) => {
-                    eprintln!("aviso: índice no disponible ({e}); index.* dará Unsupported");
+                    eprintln!(
+                        "{}",
+                        norte_i18n::ta("cli-warn-no-index", &[("error", &e.to_string())])
+                    );
                     engine
                 }
             };
@@ -2066,8 +2090,14 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
                     }
                     engine.set_ai_config(config);
                 }
-                Ok(Err(e)) => eprintln!("aviso: [ai] inválido ({e}); ai.* dará Unsupported"),
-                Err(e) => eprintln!("aviso: carga de [ai] falló ({e}); ai.* dará Unsupported"),
+                Ok(Err(e)) => eprintln!(
+                    "{}",
+                    norte_i18n::ta("cli-warn-ai-invalid", &[("error", &e.to_string())])
+                ),
+                Err(e) => eprintln!(
+                    "{}",
+                    norte_i18n::ta("cli-warn-ai-load-failed", &[("error", &e.to_string())])
+                ),
             }
             let daemon = Daemon::bind_with_policy(
                 std::sync::Arc::new(engine),

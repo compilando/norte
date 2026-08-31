@@ -87,6 +87,88 @@ fn unrar_lista_lo_mismo_salvo_el_nombre_que_no_sabe_llevar() {
     );
 }
 
+/// El nombre OEM del caso real: `папка.txt` en CP866, que es lo que sale de una
+/// máquina DOS/Windows rusa — y lo que contiene una década de descargas.
+const OEM_CP866: &[u8] = b"\xaf\xa0\xaf\xaa\xa0.txt";
+
+/// Un **RAR4** con el nombre en una code page OEM (#223).
+fn forge_rar4(dir: &std::path::Path) -> std::path::PathBuf {
+    let bytes = RarSmith::new()
+        .file(b"hello.txt", b"hola norte\n")
+        .file(OEM_CP866, b"bytes oem\n")
+        .build_rar4();
+    let path = dir.join("t4.rar");
+    std::fs::write(&path, bytes).unwrap();
+    path
+}
+
+/// **El caso que RAR5 no puede escribir: un nombre en code page OEM** (#223).
+///
+/// RAR5 guarda los nombres en UTF-8 por formato, así que la forja de arriba no
+/// puede producir esto y el hueco llevaba abierto desde la ADR 0056. RAR4 sí:
+/// sin `LHD_UNICODE` el nombre son bytes crudos.
+///
+/// Lo que MIDE, que son las tres preguntas que la issue dejaba abiertas:
+/// `7z -slt` entrega los bytes OEM tal cual, y el nombre que imprime sirve
+/// para volver a seleccionar la entrada. Es lo que sostiene que 7z sea el
+/// delegado preferido — hasta ahora estaba medido solo sobre RAR5.
+#[test]
+fn siete_zeta_conserva_un_nombre_oem_de_un_rar4() {
+    let Some(sevenz) = norte_testkit::which_7z() else {
+        eprintln!("sin 7z instalado: test retirado");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let archive = forge_rar4(tmp.path());
+    let out = std::process::Command::new(&sevenz)
+        .args(["l", "-slt", "-p", "--"])
+        .arg(&archive)
+        .output()
+        .expect("7z arranca");
+    let listing = parse_7z_slt(&out.stdout);
+    let names: Vec<&[u8]> = listing.entries.iter().map(|e| e.name.as_slice()).collect();
+    assert!(
+        names.contains(&b"hello.txt".as_slice()),
+        "el RAR4 forjado se lee: {names:?}"
+    );
+    assert!(
+        names.contains(&OEM_CP866),
+        "7z entrega los bytes OEM CRUDOS, sin transcodificar: {names:?}"
+    );
+}
+
+/// Y el otro lado de la misma medida: **`unrar` NO conserva esos bytes.**
+///
+/// No los trunca —que es lo que hace con un RAR5 no-UTF8, fijado en el test de
+/// arriba— sino que los mapea a un rango de uso privado. Son dos averías
+/// distintas del mismo delegado, y las dos llevan al mismo sitio: sobre
+/// nombres que no son UTF-8, `unrar` no vale como fuente de verdad.
+#[test]
+fn unrar_no_conserva_un_nombre_oem_de_un_rar4() {
+    let Some(unrar) = which_unrar() else {
+        eprintln!("sin unrar instalado: test retirado");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let archive = forge_rar4(tmp.path());
+    let out = std::process::Command::new(unrar)
+        .args(["vt", "-p-", "--"])
+        .arg(&archive)
+        .output()
+        .expect("unrar arranca");
+    let listing = parse_unrar_vt(&out.stdout);
+    let names: Vec<&[u8]> = listing.entries.iter().map(|e| e.name.as_slice()).collect();
+    assert!(
+        names.contains(&b"hello.txt".as_slice()),
+        "el RAR4 forjado se lee también con unrar: {names:?}"
+    );
+    assert!(
+        !names.contains(&OEM_CP866),
+        "si unrar empezara a entregar los bytes crudos, el orden de \
+         preferencia de delegados se puede revisar: {names:?}"
+    );
+}
+
 fn which_unrar() -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)

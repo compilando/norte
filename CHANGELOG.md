@@ -468,6 +468,20 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The CLI answered in Spanish whatever your language was** (#319), for the
+  last twelve messages that still carried their text inside the code. They were
+  startup warnings and empty-result notes — each one arrived alone, in a change
+  about something else, which is why nobody caught the set. Seven keys cover
+  the twelve: three pairs said the same thing in the embedded CLI and in the
+  daemon and now share a key.
+- **A RAR4 archive with an OEM-code-page name can finally be tested** (#223).
+  Names in RAR5 are UTF-8 by format, so the existing forge could not write what
+  a decade of downloads actually contains, and nothing here could produce one.
+  It can now, and that measured something worth knowing: on such a name `7z`
+  hands the raw bytes back untouched, while `unrar` maps them into a
+  private-use range — a *different* failure from the truncation already known
+  for non-UTF-8 RAR5 names, and one more reason `7z` is the preferred delegate.
+  That preference had until now only been measured over RAR5.
 - **A git submodule was reported as deleted** (#225). Its index entry is a
   gitlink whose path is the DIRECTORY, so the exact lookup found it and the
   comparison then saw a directory where the index said file: `D`, on a

@@ -791,6 +791,108 @@ impl RarSmith {
         block.extend_from_slice(&e.content);
         block
     }
+
+    /// Los bytes de un **RAR4**, el formato viejo, con los nombres en BYTES
+    /// CRUDOS (#223).
+    ///
+    /// RAR5 guarda los nombres en UTF-8 por formato, así que con `build` no se
+    /// puede escribir el caso que de verdad hay ahí fuera: **un archivo hecho
+    /// en una máquina con code page OEM** (CP437, CP866, CP1251…), que es lo
+    /// que contiene una década de descargas. RAR4 sí lo permite: sin el flag
+    /// `LHD_UNICODE` (0x0200) el nombre viaja tal cual, y eso es lo que forja
+    /// esto.
+    ///
+    /// La issue daba por hecho que forjar RAR4 «empieza a parecerse a
+    /// reimplementar el formato que deliberadamente no implementamos», y por
+    /// eso proponía meter un binario de terceros en el repo. No hace falta: lo
+    /// que se forja aquí es el CONTENEDOR con una entrada ALMACENADA, igual
+    /// que en RAR5 — no se toca el algoritmo propietario, que es la parte que
+    /// norte no implementa ni implementará. Y sale mejor que un binario: es
+    /// determinista, no plantea preguntas de licencia ni de procedencia, y
+    /// puede llevar cualquier nombre del corpus hostil.
+    ///
+    /// **Verificado contra `unrar` 7.23 y `7z`**, que es lo que lo hace un
+    /// fixture y no una suposición. De paso contesta las tres preguntas que la
+    /// issue dejaba abiertas: `7z -slt` imprime los bytes OEM CRUDOS; `unrar`
+    /// NO —los mapea a un rango de uso privado (U+E0xx) precedido de U+FFFE—;
+    /// y ninguno de los dos TRUNCA el nombre, que era el fallo medido para los
+    /// RAR5 no-UTF8.
+    ///
+    /// Solo entradas de fichero: un RAR4 con directorios explícitos no aporta
+    /// nada que RAR5 no cubra ya.
+    ///
+    /// ```
+    /// // `папка.txt` en CP866, que es el nombre ruso clásico de una máquina DOS.
+    /// let nombre = b"\xaf\xa0\xaf\xaa\xa0.txt";
+    /// let bytes = norte_testkit::RarSmith::new()
+    ///     .file(nombre, b"hola")
+    ///     .build_rar4();
+    /// assert_eq!(&bytes[..7], b"Rar!\x1a\x07\x00");
+    /// // El nombre está DENTRO, byte a byte y sin transcodificar.
+    /// assert!(bytes.windows(nombre.len()).any(|w| w == nombre));
+    /// ```
+    #[must_use]
+    pub fn build_rar4(self) -> Vec<u8> {
+        // El marcador de RAR4 acaba en 0x00; el de RAR5, en 0x01 0x00. Es lo
+        // primero que mira cualquier lector para saber con qué habla.
+        let mut out = Vec::from(*b"Rar!\x1a\x07\x00");
+        out.extend_from_slice(&rar4_main_head());
+        for e in self.entries.iter().filter(|e| !e.is_dir) {
+            out.extend_from_slice(&rar4_file_head(&e.name, &e.content));
+        }
+        out
+    }
+}
+
+/// La cabecera principal de un RAR4 (`HEAD_TYPE` 0x73), de trece bytes.
+fn rar4_main_head() -> Vec<u8> {
+    let mut cuerpo = vec![0x73, 0x00, 0x00, 13, 0x00];
+    cuerpo.extend_from_slice(&[0u8; 6]); // RESERVED1(2) + RESERVED2(4)
+    rar4_con_crc(&cuerpo)
+}
+
+/// Una cabecera de fichero RAR4 (`HEAD_TYPE` 0x74) seguida de sus datos.
+///
+/// Método 0x30 = ALMACENADO, que es lo único que este árbol puede escribir. Sin
+/// `LHD_UNICODE` (0x0200) a propósito: el nombre son los bytes que se le pasen.
+fn rar4_file_head(nombre: &[u8], datos: &[u8]) -> Vec<u8> {
+    let tam = u16::try_from(32 + nombre.len()).unwrap_or(u16::MAX);
+    let n = u32::try_from(datos.len()).unwrap_or(u32::MAX);
+    let mut cuerpo = vec![0x74];
+    // LHD_LONG_BLOCK (0x8000): el bloque va seguido de sus datos.
+    cuerpo.extend_from_slice(&0x8000u16.to_le_bytes());
+    cuerpo.extend_from_slice(&tam.to_le_bytes());
+    cuerpo.extend_from_slice(&n.to_le_bytes()); // PACK_SIZE
+    cuerpo.extend_from_slice(&n.to_le_bytes()); // UNP_SIZE
+    // HOST_OS 0x02 = Win32, que es de donde salen las code pages OEM.
+    cuerpo.push(0x02);
+    cuerpo.extend_from_slice(&crc32(datos).to_le_bytes());
+    cuerpo.extend_from_slice(&0x5000_0000u32.to_le_bytes()); // FTIME, fijo
+    cuerpo.push(20); // UNP_VER 2.0
+    cuerpo.push(0x30); // METHOD: almacenado
+    cuerpo.extend_from_slice(
+        &u16::try_from(nombre.len())
+            .unwrap_or(u16::MAX)
+            .to_le_bytes(),
+    );
+    cuerpo.extend_from_slice(&0x20u32.to_le_bytes()); // ATTR
+    cuerpo.extend_from_slice(nombre);
+    let mut bloque = rar4_con_crc(&cuerpo);
+    bloque.extend_from_slice(datos);
+    bloque
+}
+
+/// Antepone el `HEAD_CRC` de RAR4: los DOS BYTES BAJOS del CRC32 de la
+/// cabecera, contando desde `HEAD_TYPE`.
+fn rar4_con_crc(cuerpo: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(cuerpo.len() + 2);
+    // El truncado es EL formato, no un descuido: RAR4 guarda dos bytes donde
+    // hay un CRC32, y son los bajos. `unrar` valida exactamente esos.
+    #[allow(clippy::cast_possible_truncation)]
+    let bajos = crc32(cuerpo) as u16;
+    out.extend_from_slice(&bajos.to_le_bytes());
+    out.extend_from_slice(cuerpo);
+    out
 }
 
 /// Un bloque RAR5: `crc32(len ++ inner) ++ len ++ inner`, donde `inner` es

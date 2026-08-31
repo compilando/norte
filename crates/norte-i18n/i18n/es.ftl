@@ -310,6 +310,20 @@ cli-sync-journal-unreadable = sin journal esta sincronización no se puede aplic
 cli-ai-rename-refused = estos renombrados NO se han hecho: el journal de esta sesión no se pudo abrir, así que nada quedaría registrado ni se podría deshacer
 cli-sync-noninteractive = no hay terminal a la que preguntar, y no se aplicó nada — usa --yes para aplicar sin pregunta
 cli-sync-blocked = el plan no se puede ejecutar, así que no se aplicó nada
+# Los últimos doce mensajes que el CLI seguía imprimiendo en español desde
+# dentro del código (#319). Son avisos de arranque y notas de «no hay nada»:
+# nadie los tradujo porque cada uno llegó solo, en un cambio que iba de otra
+# cosa. `$error` es el mensaje de la librería y se queda FUERA de la
+# traducción, como en todas partes.
+cli-warn-no-index = aviso: índice no disponible ({ $error }); index.* dará Unsupported
+cli-warn-ai-invalid = aviso: [ai] inválido ({ $error }); ai.* dará Unsupported
+cli-warn-ai-load-failed = aviso: carga de [ai] falló ({ $error }); ai.* dará Unsupported
+cli-no-results = (sin resultados)
+cli-spool-swept = barridos { $count } planes de sync huérfanos
+cli-spool-sweep-failed = aviso: no se pudo barrer { $path }: { $error }
+# Se imprime bajo un plugin instalado y NO aprobado: instalar no activa, y
+# decir solo «instalado» dejaría al lector esperando algo que no va a pasar.
+cli-plugin-unapproved = queda SIN aprobar: apruébalo y actívalo en el gestor de extensiones
 # Un bloqueo son DOS campos en DOS líneas, no uno unido por `: ` — el mismo
 # motivo que las filas de fallo de abajo (corpus `cause_join_spoof`).
 cli-sync-blocker = { $rel }

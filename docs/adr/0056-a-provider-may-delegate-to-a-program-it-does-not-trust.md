@@ -111,8 +111,19 @@ no existing message moves a byte.
   and pretending the file is empty would be worse than saying no.
 - Reading is O(one child process per read) and a range is served by discarding
   from the pipe, because a pipe has no seek.
-- **The gap this leaves, stated plainly:** the fixtures are RAR5, where names
-  are UTF-8 by format. A RAR4 archive with an OEM-code-page name is what a
-  decade of downloads actually contains, and nothing in this tree can produce
-  one to test against — the RAR5 writer in `norte-testkit` exists because the
-  container is documented, and RAR4's is not in the same way. Tracked as #223.
+- **That gap is closed** (#223, 2026-08-31). It used to read: the fixtures are
+  RAR5, where names are UTF-8 by format, and a RAR4 archive with an
+  OEM-code-page name — what a decade of downloads actually contains — could not
+  be produced here. It can: `RarSmith::build_rar4` forges the RAR4 container
+  with a STORED entry and the name in raw bytes (no `LHD_UNICODE`), which is
+  the same thing the RAR5 forge already did and touches no more of the
+  proprietary format than it did. No third-party binary in the repo, no licence
+  or provenance question, and it can carry any name from the hostile corpus.
+  Verified against real `unrar` 7.23 and `7z`.
+- **And it measured the delegates**, which is what the gap was really hiding.
+  On a RAR4 name in CP866, `7z -slt` hands back the OEM bytes UNTOUCHED and the
+  name it prints selects the entry again; `unrar` does not — it maps them into
+  a private-use range (U+E0xx behind U+FFFE). That is a *different* failure
+  from the truncation already measured for non-UTF-8 RAR5 names, and both point
+  the same way: on names that are not UTF-8, `unrar` is not a source of truth.
+  The preference for `7z` was until now measured only over RAR5.

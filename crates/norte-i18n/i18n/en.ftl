@@ -308,6 +308,21 @@ cli-sync-journal-unreadable = without a journal this sync cannot be applied — 
 cli-ai-rename-refused = these renames were NOT made: this session's journal could not be opened, so nothing would be recorded and nothing could be undone
 cli-sync-noninteractive = there is no terminal to ask, and nothing was applied — use --yes to apply without a question
 cli-sync-blocked = the plan cannot run, so nothing was applied
+# The last twelve messages the CLI still printed in Spanish from inside the
+# code (#319). They are startup warnings and empty-result notes: nobody had
+# translated them because each one arrived alone, in a change about something
+# else. `$error` is the library's own message and stays outside the
+# translation, like everywhere else.
+cli-warn-no-index = warning: index unavailable ({ $error }); index.* will answer Unsupported
+cli-warn-ai-invalid = warning: [ai] is not valid ({ $error }); ai.* will answer Unsupported
+cli-warn-ai-load-failed = warning: loading [ai] failed ({ $error }); ai.* will answer Unsupported
+cli-no-results = (no results)
+cli-spool-swept = swept { $count } orphaned sync plans
+cli-spool-sweep-failed = warning: could not sweep { $path }: { $error }
+# Printed under a plugin that is installed and NOT approved: installing does
+# not activate, and saying only "installed" would leave the reader waiting for
+# something that is not going to happen.
+cli-plugin-unapproved = still NOT approved: approve it and switch it on in the extension manager
 # A blocker is two fields on two lines, not one joined by `: ` — the same
 # reason as the failure rows below (corpus `cause_join_spoof`).
 cli-sync-blocker = { $rel }
