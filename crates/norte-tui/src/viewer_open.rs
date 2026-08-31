@@ -4,14 +4,14 @@
 //! ni los tests de integración ni el fetch de preview de fondo podían
 //! alcanzarlo sin que el bucle de eventos hiciera de intermediario.
 
-use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
-use futures::StreamExt as _;
 use norte_core::backend::Backend;
 use norte_i18n::ta;
 use norte_proto::{Error, VPath};
 
 use crate::app::{App, error_category};
+use crate::console::Waited;
 use crate::viewer::Viewer;
+use norte_frontend::busy::{Busy, BusyKind};
 
 /// Aplica `f` al visor que tiene el teclado.
 ///
@@ -83,37 +83,32 @@ pub async fn viewer_for(backend: &Backend, path: &VPath) -> Result<Viewer, Error
 
 /// Abre el viewer a pantalla completa leyendo la CABECERA vía el core (regla
 /// 7), cancelable como el cd (Esc abandona, Ctrl-C sale).
-pub async fn open_viewer(app: &mut App, backend: &Backend, events: &mut EventStream, path: VPath) {
-    let fut = viewer_for(backend, &path);
-    tokio::pin!(fut);
-    loop {
-        tokio::select! {
-            res = &mut fut => {
-                match res {
-                    Ok(viewer) => app.viewer = Some(viewer),
-                    Err(e) => app.message = Some(ta("msg-view-error", &[("error", &error_category(&e))])),
-                }
-                return;
-            }
-            maybe = events.next() => {
-                match maybe {
-                    Some(Ok(Event::Key(key)))
-                        if key.kind == crossterm::event::KeyEventKind::Press =>
-                    {
-                        match (key.code, key.modifiers) {
-                            (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
-                                app.quit = true;
-                                return;
-                            }
-                            (KeyCode::Esc, _) => return,
-                            _ => {}
-                        }
-                    }
-                    Some(Ok(_)) => {}
-                    Some(Err(_)) | None => return,
-                }
-            }
+pub async fn open_viewer(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut crate::console::Console<'_>,
+    path: VPath,
+) {
+    // #323: traer la cabecera de un fichero REMOTO es otra espera que se come
+    // el bucle. El panel no cambia mientras dura, así que sin indicador F3
+    // sobre un fichero de un bucket se veía exactamente igual que una tecla
+    // que no hizo nada.
+    let started = std::time::Instant::now();
+    app.busy = Some(Busy::new(
+        BusyKind::Opening,
+        Some(path.clone()),
+        Some(app.focus()),
+    ));
+    let esperado =
+        crate::console::wait_painting(events, app, started, viewer_for(backend, &path)).await;
+    app.busy = None;
+    match esperado {
+        Waited::Done(Ok(viewer)) => app.viewer = Some(viewer),
+        Waited::Done(Err(e)) => {
+            app.message = Some(ta("msg-view-error", &[("error", &error_category(&e))]));
         }
+        Waited::Cancelled => {}
+        Waited::Quit => app.quit = true,
     }
 }
 

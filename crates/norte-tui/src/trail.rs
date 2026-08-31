@@ -10,7 +10,6 @@
 //! Vivía en el root del binario `ntc`, un crate DISTINTO de esta lib, partido en
 //! dos por una función de propiedad del teclado que no tiene nada que ver.
 
-use crossterm::event::EventStream;
 use norte_core::backend::Backend;
 use norte_i18n::t;
 use norte_proto::{EntryKind, Error, VPath};
@@ -166,7 +165,7 @@ pub fn nav_stalled(cmd: Command, outcome: &Cd) -> bool {
 pub async fn walk_trail(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     step: TrailStep,
 ) -> Cd {
     let pane = app.focus();

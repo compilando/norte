@@ -12,7 +12,6 @@
 //! con el backend— y el bucle sí. Sacarlas del bucle es lo que deja `run`
 //! legible: lo que queda ahí es el ORDEN, que es su única responsabilidad.
 
-use crossterm::event::EventStream;
 use norte_core::backend::Backend;
 use norte_i18n::{t, ta};
 use norte_proto::VPath;
@@ -44,11 +43,21 @@ use crate::ui;
 pub async fn drain_pending(
     app: &mut App,
     backend: &Backend,
-    terminal: &mut tty::Tui,
     capture: &mut mouse::Capture,
-    events: &mut EventStream,
+    // Consola ATADA, y esto tuvo que corregirse: aquí abajo hay un `cd`
+    // —el de `pending_disconnect_dest`— y desconectar de un remoto suele
+    // volver por el rastro a OTRO remoto, o sea a otra conexión que tarda. Con
+    // una consola desligada eso era exactamente el congelado de #323, y encima
+    // con `app.busy` puesto: el estado decía «estoy enseñando un spinner» y no
+    // había nada en pantalla.
+    events: &mut crate::console::Console<'_>,
     work: &mut InFlight,
 ) {
+    // Ninguna espera sobrevive a una vuelta del bucle: la que hubiera se
+    // resolvió, se canceló o falló dentro de la vuelta anterior. Limpiar aquí
+    // hace que un `Busy` colgado sea estructuralmente imposible, pase lo que
+    // pase con los caminos de salida de quien espera — presentes y futuros.
+    app.busy = None;
     // #135: la suspensión se drena AQUÍ y en NINGÚN otro sitio. El opener
     // de #28 se lanza en tres puntos (el despacho de teclas, el de la
     // palette y el de la ayuda) porque cada uno tiene su propio
@@ -150,10 +159,10 @@ pub async fn drain_pending(
         }
     }
     if let Some(pending) = app.take_pending_shell() {
-        atender_suspension(app, backend, terminal, capture, events, work, pending).await;
+        atender_suspension(app, backend, capture, events, work, pending).await;
     }
     if std::mem::take(&mut app.pending_subshell) {
-        atender_subshell(app, backend, terminal, capture, events, work).await;
+        atender_subshell(app, backend, capture, events, work).await;
     }
 }
 
@@ -164,9 +173,8 @@ pub async fn drain_pending(
 async fn atender_suspension(
     app: &mut App,
     backend: &Backend,
-    terminal: &mut tty::Tui,
     capture: &mut mouse::Capture,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     work: &mut InFlight,
     pending: crate::app::PendingShell,
 ) {
@@ -204,6 +212,12 @@ async fn atender_suspension(
         // terminal anfitriona. Refrescar tras él costaría un re-listado
         // completo (remoto incluido) por una tecla que no toca el disco.
         let launched_something = !argv.is_empty();
+        // La terminal sale de la consola, que es su dueña desde que una espera
+        // larga necesitó repintarse. Sin terminal no hay nada que ceder: el
+        // caso solo existe en tests, y ahí suspenderse no significa nada.
+        let Some(terminal) = events.terminal() else {
+            return;
+        };
         if let Err(e) = run_suspended(terminal, capture, argv, cwd, wait_for_key).await {
             // `detail_for_bar`, jamás el `Display` crudo del OS (review
             // de S4, L1/m4): el sistema lo localiza por su cuenta, no
@@ -262,7 +276,7 @@ async fn atender_subshell(
     _backend: &Backend,
     _terminal: &mut tty::Tui,
     _capture: &mut mouse::Capture,
-    _events: &mut EventStream,
+    _events: &mut crate::console::Console<'_>,
     _work: &mut InFlight,
 ) {
     app.message = Some(t("msg-subshell-not-here"));
@@ -272,9 +286,8 @@ async fn atender_subshell(
 async fn atender_subshell(
     app: &mut App,
     backend: &Backend,
-    terminal: &mut tty::Tui,
     capture: &mut mouse::Capture,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     work: &mut InFlight,
 ) {
     // Sin acorde suelto no se cede la terminal: el lector no tendría con qué
@@ -304,7 +317,10 @@ async fn atender_subshell(
         work.subshell = None;
     }
     if work.subshell.is_none() {
-        let size = terminal.size().map_or((80, 24), |s| (s.width, s.height));
+        let size = events
+            .terminal()
+            .and_then(|t| t.size().ok())
+            .map_or((80, 24), |s| (s.width, s.height));
         match crate::subshell::Subshell::arrancar(&dir, size) {
             Ok(sub) => work.subshell = Some(sub),
             Err(e) => {
@@ -328,6 +344,11 @@ async fn atender_subshell(
     tracing::info!("TUI handed the terminal to its persistent subshell (not journalled)");
     // `block_in_place` y no un `await`: ceder la terminal es I/O bloqueante que
     // dura lo que dure la sesión de shell. Ver `attach_subshell`.
+    // La terminal sale de la consola (su dueña desde #323). Sin ella no hay
+    // nada que ceder: solo pasa en tests, y ahí el subshell no significa nada.
+    let Some(terminal) = events.terminal() else {
+        return;
+    };
     let cedida = tokio::task::block_in_place(|| {
         crate::suspend::attach_subshell(terminal, capture, sub, &dir, acorde)
     });

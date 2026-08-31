@@ -14,7 +14,7 @@
 use crate::app::{App, Modal, PAGE, Palette, PromptKind, error_message};
 use crate::config::{self};
 use crate::dispatch::dispatch;
-use crate::event_loop::{launch_pending_open, run_command};
+use crate::event_loop::{launch_pending, run_command};
 use crate::gestures::{keyboard_owner, submit_command_line};
 use crate::jobs::{
     AiRenameRun, InFlight, RenameBatchRun, SemanticRun, launch_search, on_compare_key,
@@ -38,7 +38,7 @@ use crate::screens::{
 use crate::shortcuts_editor::{Maps, on_shortcuts_key};
 use crate::trail::{nav_enter_target, nav_stalled};
 use crossterm::event::KeyEvent;
-use crossterm::event::{EventStream, KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::TransferOptions;
 use norte_core::backend::Backend;
 use norte_frontend::SEMANTIC_K;
@@ -50,9 +50,11 @@ use norte_proto::VPath;
 pub async fn on_key(
     app: &mut App,
     backend: &Backend,
-    terminal: &mut crate::tty::Tui,
     capture: &mut crate::mouse::Capture,
-    events: &mut EventStream,
+    // La terminal viaja DENTRO (`events.terminal()`): tenía que tener un solo
+    // dueño para que una espera larga pudiera repintarse, y ese dueño es la
+    // consola.
+    events: &mut crate::console::Console<'_>,
     resolver: &mut Resolver,
     viewer_resolver: &mut Resolver,
     dialog_resolver: &mut Resolver,
@@ -138,7 +140,7 @@ pub async fn on_key(
                         cmd,
                     )
                     .await;
-                    launch_pending_open(app, terminal, capture).await;
+                    launch_pending(app, events, capture).await;
                 }
             }
             _ => {}
@@ -427,7 +429,7 @@ pub async fn on_key(
                         cmd,
                     )
                     .await;
-                    launch_pending_open(app, terminal, capture).await;
+                    launch_pending(app, events, capture).await;
                 }
             }
             _ => {}
@@ -507,7 +509,7 @@ pub async fn on_key(
                     cmd,
                 )
                 .await;
-                launch_pending_open(app, terminal, capture).await;
+                launch_pending(app, events, capture).await;
             }
         }
     } else if app.modal.is_some() {
@@ -1138,7 +1140,7 @@ pub async fn on_key(
                         // externo resuelto — el run loop (dueño
                         // de la terminal) sondea el binario y
                         // lo lanza.
-                        launch_pending_open(app, terminal, capture).await;
+                        launch_pending(app, events, capture).await;
                         // Parar en seco si la app se va:
                         // `9999` seguido de una tecla de salida
                         // no puede encolar 9998 salidas más. El

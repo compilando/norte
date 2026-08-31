@@ -18,7 +18,6 @@
 //! dos doc-comments seguidos delante de una sola función. Vuelve al suyo sin
 //! tocar una palabra.
 
-use crossterm::event::EventStream;
 use norte_core::backend::Backend;
 use norte_i18n::{t, ta};
 use norte_proto::{EntryKind, VPath};
@@ -725,7 +724,7 @@ pub fn pull_plan(app: &App) -> Option<PaneMove> {
 pub async fn run_pane_gesture(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     plan: Option<PaneMove>,
     origin: usize,
 ) -> Cd {

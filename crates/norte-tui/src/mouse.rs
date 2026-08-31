@@ -21,7 +21,7 @@
 
 use crate::app::Trail;
 use crate::dispatch::dispatch;
-use crate::event_loop::{launch_pending_open, run_command};
+use crate::event_loop::run_command;
 use crate::keymap::Command;
 use crate::navigate::{apply_cd, cd_in};
 use crate::refresh::reap_search_run;
@@ -1121,9 +1121,10 @@ pub fn restore_after_suspend(
 pub async fn on_mouse(
     app: &mut crate::app::App,
     backend: &norte_core::backend::Backend,
-    terminal: &mut crate::tty::Tui,
     capture: &mut Capture,
-    events: &mut crossterm::event::EventStream,
+    // La terminal viaja dentro (`events.terminal()`): un clic también puede
+    // abrir una navegación larga, y la terminal tiene un solo dueño.
+    events: &mut crate::console::Console<'_>,
     resolver: &mut crate::keymap::Resolver,
     help_lines: &mut Vec<ratatui::text::Line<'static>>,
     lang: norte_i18n::Lang,
@@ -1171,7 +1172,7 @@ pub async fn on_mouse(
                     outcome,
                 );
                 reap_search_run(app, &mut work.search);
-                launch_pending_open(app, terminal, capture).await;
+                crate::event_loop::launch_pending(app, events, capture).await;
             }
         }
         // Doble click = `nav.enter`, por el MISMO `dispatch`

@@ -1593,6 +1593,12 @@ cli-doctor-footer-connections-not-probed = note: keyring/age are not probed (sid
 # file cannot be seen from a child process — same honesty limit as the two
 # footers above — so this names the instruction instead of a pass/fail.
 cli-doctor-footer-shell-init = cd-on-quit: run `eval "$(norte shell-init bash)"` (or zsh/fish) from your shell's rc file
+# Waiting indicator (#323). Verbs, not nouns: the line answers "what is it
+# doing", and it is only ever shown next to a spinner that is actually moving.
+busy-connecting = connecting…
+busy-listing = listing…
+busy-opening = opening…
+busy-cancel = Esc cancels
 cli-paths-missing = (not there)
 cli-paths-footer = note: nothing here is created by asking — a path marked "(not there)" is simply not in use yet. Layers are listed in ascending precedence: the last one wins. `norte doctor` says whether what IS there is valid.
 cli-doctor-detail-connections-parse = connections.toml does not parse (fix or remove it)

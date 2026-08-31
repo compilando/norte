@@ -520,6 +520,13 @@ pub struct App {
     pub places_wants_drives: bool,
     /// El selector de conexiones (#140), si está abierto.
     pub connections_picker: Option<norte_frontend::connections_picker::ConnectionsPicker>,
+    /// Lo que el lector está esperando ahora mismo, si algo (#323).
+    ///
+    /// Lo pone y lo quita quien espera, y solo dura la espera: un `Busy` que
+    /// sobrevive a su trabajo es exactamente el spinner que no avanza nunca.
+    /// No se pinta hasta cruzar el umbral de [`norte_frontend::busy`], así que
+    /// una navegación local —la inmensa mayoría— no llega a enseñar nada.
+    pub busy: Option<norte_frontend::busy::Busy>,
     /// Overlay del picker de columnas (#108 7a): mismo patrón que
     /// `theme_picker` — un Option en App, NO una variante de Modal (Modal es
     /// confirmación; esto es lista con cursor). El modelo vive en
@@ -862,6 +869,7 @@ impl App {
             kinds: norte_frontend::layout::KindRegistry::builtin(),
             roles: norte_frontend::layout::Roles::con_active(crate::panel::SLOT_LEFT),
             key_owner: KeyOwner::Panes,
+            busy: None,
             menu: None,
             menu_ultimo: 0,
             // Los cuatro primeros son los del preset `orthodox`.

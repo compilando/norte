@@ -147,27 +147,26 @@ pub(crate) fn styled_columns(
         .collect()
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "pintar un pane necesita su área, su modelo, el foco, el tema, el               reloj del frame, las columnas, el catálogo de atributos y sus               pestañas; agruparlos en una struct de un solo uso solo movería               la lista de sitio"
-)]
-pub(crate) fn draw_pane(
-    frame: &mut Frame<'_>,
-    area: Rect,
+/// El título del borde del pane: dónde está, qué le pasa y a dónde va.
+///
+/// Sale de [`draw_pane`] por tamaño —eran seis marcas encadenadas sobre la
+/// misma `String`— y se queda junto a él porque el ORDEN es la regla: los
+/// marcadores de estado (paginación, sin listar) cuelgan del nombre, el badge
+/// de destino lo antepone, y la espera reemplaza el nombre por el DESTINO.
+/// Cada marca va FUERA del nombre del directorio a propósito: un directorio
+/// llamado «→» no puede fingir que es el destino.
+///
+/// `ancho` es el del borde: el título de la espera SÍ se acota, porque es el
+/// primero que lleva a propósito un texto largo (un destino remoto con esquema
+/// y host) y ratatui recorta por la derecha SIN marcar el corte. Perder la cola
+/// de una ruta es perder qué carpeta es; perder la cabeza, dónde estás — así
+/// que se recorta por el medio, como hace la barra de estado.
+fn pane_title(
     pane: &Pane,
-    focused: bool,
-    theme: &TuiTheme,
-    now_ms: i64,
-    settings: &norte_frontend::columns::ColumnsSettings,
-    catalog: Option<&norte_proto::AttrCatalog>,
-    tabs: Option<&TabStrip>,
     is_dest: bool,
-) {
-    let border_style = if focused {
-        theme.role(Role::BorderFocus)
-    } else {
-        theme.role(Role::BorderUnfocused)
-    };
+    busy: Option<&norte_frontend::busy::Busy>,
+    ancho: u16,
+) -> String {
     let (title, title_hostile) =
         norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
     let mut title = if title_hostile {
@@ -196,12 +195,66 @@ pub(crate) fn draw_pane(
     // El DESTINO se marca en el cromo, y solo cuando hace falta: con dos
     // paneles el destino es el otro y nadie necesita que se lo digan, pero a
     // partir de tres una copia hacia un panel que el lector no tenía en la
-    // cabeza es pérdida de datos silenciosa (ADR 0058 D7). El marcador va en
-    // el título y FUERA del nombre del directorio, como el badge hostil: un
-    // directorio llamado «→» no puede fingirlo.
+    // cabeza es pérdida de datos silenciosa (ADR 0058 D7).
     if is_dest {
         title = format!("{TARGET_BADGE} {title}");
     }
+    // Esperando (#323): el spinner va DELANTE y el título pasa a ser el
+    // DESTINO, no el directorio actual. El cuerpo sigue enseñando el listado de
+    // antes —a propósito: si la conexión falla, el lector se queda donde
+    // estaba— y sin el destino en la cabecera esa mezcla no se podría leer
+    // («¿esto qué está haciendo?»). Con el spinner al lado se lee «yendo aquí».
+    if let Some(b) = busy {
+        let Some(destino) = b.target.as_ref() else {
+            return format!("{} {title}", b.frame());
+        };
+        // Por `path_display_with` con la codificación DEL PANEL, igual que
+        // arriba: es el mismo panel que va a aterrizar, su reinterpretación
+        // (#98/F2) es la que rige, y el badge de nombre alterado se conserva.
+        // Renderizarlo sin badge era pintar una ruta enmascarada sin la marca
+        // que dice que se enmascaró, justo donde además se ofrece cancelar.
+        let (destino, alterado) = norte_frontend::path_display_with(destino, pane.name_encoding());
+        // 2 celdas del spinner + el espacio, más el badge si lo lleva.
+        let gastado =
+            2 + usize::from(alterado) * (norte_frontend::display::cells(HOSTILE_BADGE) + 1);
+        let hueco = usize::from(ancho).saturating_sub(gastado);
+        let destino = norte_frontend::middle_ellipsis(&destino, hueco);
+        title = if alterado {
+            format!("{} {HOSTILE_BADGE} {destino}", b.frame())
+        } else {
+            format!("{} {destino}", b.frame())
+        };
+    }
+    title
+}
+
+// Once argumentos: es el cableado del render de un pane, no una API. Agruparlos
+// en un struct solo movería la lista a otro sitio y añadiría un tipo que nadie
+// usa dos veces.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_pane(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    pane: &Pane,
+    focused: bool,
+    theme: &TuiTheme,
+    now_ms: i64,
+    settings: &norte_frontend::columns::ColumnsSettings,
+    catalog: Option<&norte_proto::AttrCatalog>,
+    tabs: Option<&TabStrip>,
+    is_dest: bool,
+    // La espera que afecta a ESTE panel, si alguna y si ya pasa del umbral.
+    // El filtro lo hace el llamante, que es quien sabe qué índice es este.
+    busy: Option<&norte_frontend::busy::Busy>,
+) {
+    let border_style = if focused {
+        theme.role(Role::BorderFocus)
+    } else {
+        theme.role(Role::BorderUnfocused)
+    };
+    // El ancho del BORDE menos sus dos esquinas: es lo que ratatui deja para
+    // el título antes de recortar sin avisar.
+    let title = pane_title(pane, is_dest, busy, area.width.saturating_sub(2));
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
@@ -603,6 +656,7 @@ mod draw_pane_attr_tests {
                     None,
                     None,
                     false,
+                    None,
                 );
             })
             .expect("draw");
@@ -681,6 +735,7 @@ mod draw_pane_attr_tests {
                     None,
                     None,
                     false,
+                    None,
                 );
             })
             .expect("draw");
@@ -704,6 +759,174 @@ mod draw_pane_attr_tests {
             size_x("aaa"),
             size_x("bbb"),
             "la celda ancha desplazó la columna del tamaño"
+        );
+    }
+
+    /// #323: esperando, la cabecera dice A DÓNDE se va y gira; el cuerpo sigue
+    /// enseñando el listado de antes.
+    ///
+    /// Las dos mitades importan. Si la cabecera se quedara con el directorio
+    /// actual, un lector con dos paneles no sabría cuál de los dos está
+    /// esperando ni a qué; y si el cuerpo se vaciara, una conexión fallida le
+    /// habría costado el sitio donde estaba.
+    #[test]
+    fn esperando_la_cabecera_gira_y_dice_el_destino() {
+        use norte_frontend::busy::{Busy, BusyKind};
+        let settings = norte_frontend::columns::ColumnsSettings::resolve(
+            &norte_config::ColumnsConfig::default(),
+        );
+        let dir = VPath::parse("mem:///aqui").unwrap();
+        let pane = Pane::new(dir.clone(), vec![entry(&dir, "fichero-de-antes")]);
+        let theme = TuiTheme::default();
+
+        let pintar = |busy: Option<&Busy>| {
+            let mut terminal = Terminal::new(TestBackend::new(60, 6)).expect("terminal de test");
+            terminal
+                .draw(|f| {
+                    draw_pane(
+                        f,
+                        f.area(),
+                        &pane,
+                        true,
+                        &theme,
+                        0,
+                        &settings,
+                        None,
+                        None,
+                        false,
+                        busy,
+                    );
+                })
+                .expect("draw");
+            terminal.backend().to_string()
+        };
+
+        let destino = VPath::parse("mem:///alli").unwrap();
+        let mut busy = Busy::new(BusyKind::Connecting, Some(destino), Some(0));
+        busy.elapsed = norte_frontend::busy::THRESHOLD;
+        let esperando = pintar(Some(&busy));
+        assert!(
+            esperando.contains("alli"),
+            "la cabecera no dice el destino: {esperando}"
+        );
+        // El marcador de rol (`⟨scheme⟩/`) va delante SIEMPRE: es lo que impide
+        // que un directorio llamado «⠋ conectando…» se haga pasar por la
+        // cabecera de una espera.
+        assert!(
+            esperando.contains('⟨'),
+            "la cabecera perdió el marcador de esquema: {esperando}"
+        );
+        assert!(
+            esperando.contains(busy.frame()),
+            "la cabecera no lleva el spinner: {esperando}"
+        );
+        assert!(
+            esperando.contains("fichero-de-antes"),
+            "el cuerpo se vació mientras esperaba: {esperando}"
+        );
+
+        // Sin espera, la cabecera es la de siempre y no hay rastro de nada.
+        let quieto = pintar(None);
+        assert!(!quieto.contains("alli"), "{quieto}");
+        assert!(!quieto.contains(busy.frame()), "{quieto}");
+    }
+
+    /// #323, hallazgo BLOCKER de la auditoría de codificación: el destino de una
+    /// espera lleva el MISMO badge de nombre alterado que llevará cuando el
+    /// panel aterrice.
+    ///
+    /// Sin esto, el lector veía la ruta enmascarada sin la marca que dice que
+    /// se enmascaró —y precisamente mientras se le ofrece cancelar—, y si la
+    /// conexión fallaba el panel no aterrizaba nunca, así que el badge no
+    /// llegaba a pintarse jamás. La regla del repositorio no admite matices:
+    /// el texto que se pinta es siempre lossy y MARCADO.
+    #[test]
+    fn el_destino_alterado_lleva_su_badge_mientras_se_espera() {
+        use norte_frontend::busy::{Busy, BusyKind};
+        let settings = norte_frontend::columns::ColumnsSettings::resolve(
+            &norte_config::ColumnsConfig::default(),
+        );
+        let aqui = VPath::parse("mem:///aqui").unwrap();
+        let pane = Pane::new(aqui.clone(), vec![entry(&aqui, "x")]);
+        let theme = TuiTheme::default();
+        // `rtl_override` del corpus hostil: `abc<U+202E>gpj.exe`.
+        let hostil = VPath::parse("mem:///abc%E2%80%AEgpj.exe").unwrap();
+
+        let mut busy = Busy::new(BusyKind::Connecting, Some(hostil), Some(0));
+        busy.elapsed = norte_frontend::busy::THRESHOLD;
+        let mut terminal = Terminal::new(TestBackend::new(60, 6)).expect("terminal de test");
+        terminal
+            .draw(|f| {
+                draw_pane(
+                    f,
+                    f.area(),
+                    &pane,
+                    true,
+                    &theme,
+                    0,
+                    &settings,
+                    None,
+                    None,
+                    false,
+                    Some(&busy),
+                );
+            })
+            .expect("draw");
+        let pintado = terminal.backend().to_string();
+        assert!(
+            pintado.contains(HOSTILE_BADGE),
+            "el destino alterado se pintó SIN badge: {pintado}"
+        );
+        assert!(
+            !pintado.contains('\u{202e}'),
+            "el override bidi llegó crudo a la terminal: {pintado}"
+        );
+    }
+
+    /// El destino se acota al ancho del borde: ratatui recorta por la derecha
+    /// y NO marca el corte, así que sin presupuesto una ruta larga pierde el
+    /// final —qué carpeta es— en silencio. Con dos hosts que comparten los
+    /// primeros 40 caracteres, eso son dos destinos distintos pintados igual.
+    #[test]
+    fn un_destino_largo_se_recorta_por_el_medio_y_lo_dice() {
+        use norte_frontend::busy::{Busy, BusyKind};
+        let settings = norte_frontend::columns::ColumnsSettings::resolve(
+            &norte_config::ColumnsConfig::default(),
+        );
+        let aqui = VPath::parse("mem:///aqui").unwrap();
+        let pane = Pane::new(aqui.clone(), vec![entry(&aqui, "x")]);
+        let theme = TuiTheme::default();
+        let largo =
+            VPath::parse("mem:///produccion/equipo/almacen/interno/example/org/carpeta").unwrap();
+
+        let mut busy = Busy::new(BusyKind::Connecting, Some(largo), Some(0));
+        busy.elapsed = norte_frontend::busy::THRESHOLD;
+        let mut terminal = Terminal::new(TestBackend::new(40, 6)).expect("terminal de test");
+        terminal
+            .draw(|f| {
+                draw_pane(
+                    f,
+                    f.area(),
+                    &pane,
+                    true,
+                    &theme,
+                    0,
+                    &settings,
+                    None,
+                    None,
+                    false,
+                    Some(&busy),
+                );
+            })
+            .expect("draw");
+        let pintado = terminal.backend().to_string();
+        assert!(
+            pintado.contains('…'),
+            "se recortó sin marcar el corte: {pintado}"
+        );
+        assert!(
+            pintado.contains("carpeta"),
+            "se perdió la COLA, que es qué carpeta es: {pintado}"
         );
     }
 }

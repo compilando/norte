@@ -29,6 +29,7 @@
 pub mod ansi;
 pub mod availability;
 pub mod banners;
+pub mod busy;
 pub mod checksums;
 pub mod chmod;
 pub mod cli;

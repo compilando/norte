@@ -4,7 +4,7 @@
 //! salir de él (un `cd`) suelta la búsqueda y cancela la Task, que es por qué
 //! [`super::super::navigate`] tiene que conocer [`SearchRun`].
 
-use crossterm::event::{EventStream, KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::backend::{Backend, TaskRef};
 use norte_frontend::layout::BySlot;
 use norte_i18n::{t, ta};
@@ -239,7 +239,7 @@ pub fn finalize_search_state(s: &SearchRun) -> SearchState {
 pub async fn on_search_escape(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     fill: &mut BySlot<Fill>,
     decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
@@ -271,7 +271,7 @@ pub async fn on_search_escape(
 pub async fn on_search_enter(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     fill: &mut BySlot<Fill>,
     decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,

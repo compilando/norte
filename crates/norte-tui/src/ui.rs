@@ -158,6 +158,10 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
                 // Solo a partir de TRES paneles: con dos, el destino es el
                 // otro y el marcador sería ruido en el caso de siempre.
                 app.panes.len() > 2 && app.target_index() == Some(i),
+                // La espera, solo si es de ESTE panel y ya pasa del umbral: un
+                // trabajo de sesión no puede poner a girar una cabecera a la
+                // que no le está pasando nada.
+                app.busy.as_ref().filter(|b| b.visible() && b.affects(i)),
             );
         }
     }

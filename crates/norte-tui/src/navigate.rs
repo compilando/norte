@@ -15,13 +15,14 @@
 //! ahora en `main.rs`: prueban el ritual completo, así que nombran también las
 //! tareas de búsqueda y el refresco de panes, que todavía no han salido.
 
-use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
 use futures::StreamExt as _;
 use norte_core::backend::{Backend, EntryStream};
+use norte_frontend::busy::{Busy, BusyKind};
 use norte_frontend::layout::{BySlot, SlotId};
 use norte_proto::{Entry, Error, VPath};
 
 use crate::app::{App, Modal, Trail, error_message};
+use crate::console::{Console, Waited};
 use crate::fill::{Fill, release_refreshed_fill, spawn_fill};
 use crate::jobs::SearchRun;
 use crate::nav;
@@ -324,6 +325,18 @@ pub fn needs_capabilities(app: &App, dir: &VPath) -> bool {
     app.attr_catalog(dir.scheme()).is_none() || app.caps(dir).is_none()
 }
 
+/// Lo que trae [`first_page`]: las entradas, el stream con el resto, las
+/// omitidas del contenedor y las capacidades.
+///
+/// Tiene nombre desde que la espera es compartida: quien aterriza el resultado
+/// lo recibe por parámetro, y una tupla de cuatro en una firma no se lee.
+pub type PrimeraPagina = (
+    Vec<Entry>,
+    Option<EntryStream>,
+    Option<u64>,
+    Option<(norte_proto::Capabilities, norte_proto::AttrCatalog)>,
+);
+
 /// Primera página de `dir` (hasta [`FIRST_PAGE`]) más el stream con el RESTO
 /// (o `None` si el dir cabía en la primera página) y las omitidas del
 /// contenedor (#93). El primer render no espera al listado entero (ADR 0017).
@@ -346,15 +359,7 @@ pub async fn first_page(
     dir: &VPath,
     attrs: &[String],
     fetch_caps: bool,
-) -> Result<
-    (
-        Vec<Entry>,
-        Option<EntryStream>,
-        Option<u64>,
-        Option<(norte_proto::Capabilities, norte_proto::AttrCatalog)>,
-    ),
-    Error,
-> {
+) -> Result<PrimeraPagina, Error> {
     // Las capacidades ANTES del stream (misma conexión, y solo cuando falta
     // algo por cachear — `needs_capabilities`); un fallo NO tumba el cd: sin
     // hints se pinta Opaque y el solo-lectura cae al criterio sintáctico.
@@ -383,7 +388,7 @@ pub async fn first_page(
 /// emergencia y no deben ser remapeables a algo que no exista). Soltar el
 /// future del listado detiene al productor del provider (testeado en
 /// vfs-local). El resto de teclas se descartan mientras dura el cd.
-pub async fn cd(app: &mut App, backend: &Backend, events: &mut EventStream, dir: VPath) -> Cd {
+pub async fn cd(app: &mut App, backend: &Backend, events: &mut Console<'_>, dir: VPath) -> Cd {
     cd_in(app, backend, events, app.focus(), dir, Trail::Record).await
 }
 
@@ -419,7 +424,7 @@ pub fn record_step(h: &mut nav::History, prev: &VPath, dir: &VPath, trail: Trail
 pub async fn cd_in(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut Console<'_>,
     pane: usize,
     dir: VPath,
     trail: Trail,
@@ -436,92 +441,129 @@ pub async fn cd_in(
     // caps una vez por CONEXIÓN (ver `needs_capabilities`).
     let attrs = app.columns.attr_ids_for(dir.scheme());
     let fetch_caps = needs_capabilities(app, &dir);
-    let fut = first_page(backend, &dir, &attrs, fetch_caps);
-    tokio::pin!(fut);
-    loop {
-        tokio::select! {
-            res = &mut fut => {
-                match res {
-                    Ok((first, stream, skipped, catalog)) => {
-                        // #117: el catálogo recién llegado se cachea por
-                        // scheme — los frames siguientes ya pintan con hints.
-                        // H3d: y las caps de la MISMA respuesta, que es lo
-                        // que responde «¿este pane es de solo lectura?» sin
-                        // otra ronda (`App::pane_read_only`).
-                        if let Some(both) = catalog {
-                            cache_capabilities(app, &dir, both);
-                        }
-                        // #54: NO ordenamos aquí — `begin_listing` ->
-                        // `PaneState::set_listing` normaliza internamente.
-                        let more = stream.is_some();
-                        app.panes[pane].begin_listing(dir.clone(), first, more, skipped);
-                        record_step(&mut app.history[pane], &prev, &dir, trail);
-                        // Si queda stream, un drenador lo rellena en background.
-                        return match stream {
-                            Some(s) => Cd::Filling {
-                                pane,
-                                fill: spawn_fill(s),
-                            },
-                            None => Cd::Replaced(pane),
-                        };
-                    }
-                    // Primer contacto TOFU (#45): en vez de una línea de
-                    // error con la huella, abre el modal de confianza — `y`
-                    // confía y REINTENTA esta misma navegación.
-                    Err(Error::HostKeyUnknown {
-                        host,
-                        port,
-                        algo,
-                        fingerprint,
-                    }) => {
-                        // El modal CARGA `pane` y `trail`: el reintento debe
-                        // reanudar ESTA navegación (este pane, este modo de
-                        // rastro), no una nueva contra el foco de entonces.
-                        app.modal = Some(Modal::TrustHostKey {
-                            host,
-                            port,
-                            algo,
-                            fingerprint,
-                            dir: dir.clone(),
-                            pane,
-                            trail,
-                        });
-                        // El pane NO se tocó (solo se abrió el modal): como
-                        // `Cancelled`, conserva un relleno en vuelo del listado
-                        // anterior, que sigue siendo válido (MINOR del
-                        // rust-reviewer). Pero SUSPENDED y no `Cancelled`: esta
-                        // navegación va a CONTINUAR en el retry del modal, y
-                        // quien recorre el rastro tiene que distinguirla de un
-                        // cd abandonado, que no vuelve.
-                        return Cd::Suspended;
-                    }
-                    // Un error de listado NO tumba el TUI: el pane se queda,
-                    // pero un relleno previo de ESTE pane ya no aplica. El
-                    // error se PORTA en el desenlace (popup de historial).
-                    Err(e) => {
-                        app.message = Some(error_message(&e));
-                        return Cd::Failed(e);
-                    }
-                }
+    // Lo que se está esperando, para que las superficies puedan DECIRLO. Un
+    // destino remoto es `Connecting` y uno local `Listing`: el verbo del
+    // primer contacto con un bucket no es «listando», y el lector que ve
+    // «conectando…» sabe que lo que puede tardar es la red y no su disco.
+    // `Busy` no se pinta hasta cruzar su umbral, así que un cd local —el 99 %—
+    // no llega a enseñar nada (`norte_frontend::busy`).
+    let started = std::time::Instant::now();
+    app.busy = Some(Busy::new(
+        if is_local(&dir) {
+            BusyKind::Listing
+        } else {
+            BusyKind::Connecting
+        },
+        // El VPath CRUDO: el badge de nombre alterado, la reinterpretación de
+        // codificación del panel y el ancho disponible solo los sabe quien
+        // pinta, y renderizar aquí los perdía los tres a la vez.
+        Some(dir.clone()),
+        Some(pane),
+    ));
+    let out = match crate::console::wait_painting(
+        events,
+        app,
+        started,
+        first_page(backend, &dir, &attrs, fetch_caps),
+    )
+    .await
+    {
+        Waited::Done(res) => aterrizar(app, pane, dir, trail, &prev, res),
+        Waited::Cancelled => Cd::Cancelled,
+        Waited::Quit => {
+            app.quit = true;
+            Cd::Cancelled
+        }
+    };
+    // La espera acabó, salga como salga: cancelada, fallida o buena. Dejar el
+    // indicador puesto sería el spinner que no avanza nunca. Y por si algún
+    // camino futuro se saltara esta línea, `turn::drain_pending` lo limpia
+    // también en la cabecera de cada vuelta: ninguna espera sobrevive a una.
+    app.busy = None;
+    out
+}
+
+/// Lo que NO es local es algo con lo que hay que CONECTAR.
+///
+/// La authority y no el scheme: `file://` sin authority es el disco de aquí, y
+/// también lo es un archivo abierto sobre él (`tar+file://…`). Decir
+/// «conectando…» al abrir un zip local sería justo la deshonestidad que este
+/// indicador promete no cometer.
+fn is_local(dir: &VPath) -> bool {
+    dir.authority().is_none()
+}
+
+/// Qué hacer con lo que llegó: reemplazar el pane, abrir el modal TOFU, o
+/// dejar el error en la barra.
+///
+/// Sale del `select!` porque ya no hay `select!`: la espera es
+/// [`crate::console::wait_painting`], compartida con las otras dos esperas
+/// largas del TUI, y esto es lo único que era propio de una navegación.
+fn aterrizar(
+    app: &mut App,
+    pane: usize,
+    dir: VPath,
+    trail: Trail,
+    prev: &VPath,
+    res: Result<PrimeraPagina, Error>,
+) -> Cd {
+    match res {
+        Ok((first, stream, skipped, catalog)) => {
+            // #117: el catálogo recién llegado se cachea por scheme — los
+            // frames siguientes ya pintan con hints. H3d: y las caps de la
+            // MISMA respuesta, que es lo que responde «¿este pane es de solo
+            // lectura?» sin otra ronda (`App::pane_read_only`).
+            if let Some(both) = catalog {
+                cache_capabilities(app, &dir, both);
             }
-            maybe = events.next() => {
-                match maybe {
-                    Some(Ok(Event::Key(key)))
-                        if key.kind == crossterm::event::KeyEventKind::Press =>
-                    {
-                        match (key.code, key.modifiers) {
-                        (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
-                            app.quit = true;
-                            return Cd::Cancelled;
-                        }
-                            (KeyCode::Esc, _) => return Cd::Cancelled,
-                            _ => {}
-                        }
-                    }
-                    Some(Ok(_)) => {}
-                    Some(Err(_)) | None => return Cd::Cancelled,
-                }
+            // #54: NO ordenamos aquí — `begin_listing` -> `set_listing`
+            // normaliza internamente.
+            let more = stream.is_some();
+            app.panes[pane].begin_listing(dir.clone(), first, more, skipped);
+            record_step(&mut app.history[pane], prev, &dir, trail);
+            // Si queda stream, un drenador lo rellena en background.
+            match stream {
+                Some(s) => Cd::Filling {
+                    pane,
+                    fill: spawn_fill(s),
+                },
+                None => Cd::Replaced(pane),
             }
+        }
+        // Primer contacto TOFU (#45): en vez de una línea de error con la
+        // huella, abre el modal de confianza — `y` confía y REINTENTA esta
+        // misma navegación.
+        Err(Error::HostKeyUnknown {
+            host,
+            port,
+            algo,
+            fingerprint,
+        }) => {
+            // El modal CARGA `pane` y `trail`: el reintento debe reanudar ESTA
+            // navegación (este pane, este modo de rastro), no una nueva contra
+            // el foco de entonces.
+            app.modal = Some(Modal::TrustHostKey {
+                host,
+                port,
+                algo,
+                fingerprint,
+                dir,
+                pane,
+                trail,
+            });
+            // El pane NO se tocó (solo se abrió el modal): como `Cancelled`,
+            // conserva un relleno en vuelo del listado anterior, que sigue
+            // siendo válido. Pero SUSPENDED y no `Cancelled`: esta navegación
+            // va a CONTINUAR en el retry del modal, y quien recorre el rastro
+            // tiene que distinguirla de un cd abandonado, que no vuelve.
+            Cd::Suspended
+        }
+        // Un error de listado NO tumba el TUI: el pane se queda, pero un
+        // relleno previo de ESTE pane ya no aplica. El error se PORTA en el
+        // desenlace (popup de historial).
+        Err(e) => {
+            app.message = Some(error_message(&e));
+            Cd::Failed(e)
         }
     }
 }
@@ -537,7 +579,7 @@ pub async fn cd_in(
 pub async fn trust_host_retry(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut Console<'_>,
     modal: Modal,
 ) -> Option<Cd> {
     let Modal::TrustHostKey {
@@ -596,7 +638,7 @@ pub async fn trust_host_retry(
 pub async fn semantic_hit_cd(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut Console<'_>,
     hits: &[norte_proto::methods::SemanticHit],
     cursor: usize,
 ) -> Cd {

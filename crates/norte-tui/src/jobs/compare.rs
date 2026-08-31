@@ -1,6 +1,6 @@
 //! Comparar dos directorios, y el panel que enseña las filas mientras llegan.
 
-use crossterm::event::{EventStream, KeyCode};
+use crossterm::event::KeyCode;
 use norte_core::backend::{Backend, TaskRef};
 use norte_frontend::layout::BySlot;
 use norte_i18n::ta;
@@ -263,7 +263,7 @@ pub fn compare_key(
 pub async fn on_compare_key(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     fill: &mut BySlot<Fill>,
     decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
@@ -361,7 +361,7 @@ pub async fn on_compare_key(
 pub async fn on_compare_enter(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     fill: &mut BySlot<Fill>,
     decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,

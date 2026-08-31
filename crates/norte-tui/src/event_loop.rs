@@ -19,6 +19,7 @@
 use crate::app::{App, CompareState, SearchState, detail_for_bar, error_category};
 use crate::config::{self, Layers};
 use crate::config_reload::reload_config;
+use crate::console::Console;
 use crate::dispatch::dispatch;
 use crate::fill::{Fill, apply_fill_msg};
 use crate::gestures::launch_opener;
@@ -101,7 +102,7 @@ fn journal_warning_i18n(why: &norte_core::embedded::NoJournal) -> String {
 pub(crate) async fn run_command(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     help_lines: &mut Vec<ratatui::text::Line<'static>>,
     lang: norte_i18n::Lang,
     quick_mode: nav::Mode,
@@ -139,12 +140,21 @@ pub(crate) async fn run_command(
 
 /// Lanza el comando externo que `pane.open` (#28) dejara resuelto. Vive en el
 /// run loop porque es quien tiene la terminal: abrir un opener la suspende.
-pub(crate) async fn launch_pending_open(
+/// Lanza lo que el despacho dejó pedido, con la terminal que tiene la consola
+/// —que es quien la tiene desde que una espera larga necesitó repintarse.
+///
+/// Sin terminal (consola desligada) no se lanza nada Y SE DESCARTA lo
+/// pendiente: dejarlo puesto lo dispararía en el siguiente sitio que sí tenga
+/// terminal, mucho después de la tecla que lo pidió.
+pub(crate) async fn launch_pending(
     app: &mut App,
-    terminal: &mut tty::Tui,
+    console: &mut crate::console::Console<'_>,
     capture: &mut mouse::Capture,
 ) {
-    if let Some(pending) = app.pending_open.take() {
+    let Some(pending) = app.pending_open.take() else {
+        return;
+    };
+    if let Some(terminal) = console.terminal() {
         app.message = Some(launch_opener(terminal, capture, pending).await);
     }
 }
@@ -298,7 +308,14 @@ pub async fn run(
         if dir_watch.take_degraded_notice() {
             app.message = Some(t("status-watch-degraded"));
         }
-        turn::drain_pending(app, backend, terminal, capture, &mut events, &mut work).await;
+        turn::drain_pending(
+            app,
+            backend,
+            capture,
+            &mut Console::new(&mut events, terminal),
+            &mut work,
+        )
+        .await;
         turn::open_retained_modals(app, &mut work);
         turn::prepare_frame(app, backend, terminal, lua_host.as_ref()).await?;
         // Exención puntual de la regla 2: el draw escribe la terminal de
@@ -353,7 +370,7 @@ pub async fn run(
                 // Mutación terminada → refresh de panes; el ritual completo
                 // (drenador/sonda #52/búsqueda) vive en `after_panes_refresh`
                 // — ÚNICO para los tres disparadores del refresh (#117).
-                let refreshed = on_tick(app, backend, &mut events).await;
+                let refreshed = on_tick(app, backend, &mut Console::new(&mut events, terminal)).await;
                 after_panes_refresh(app, refreshed, &mut work.fill, &mut work.probed, &mut work.search);
             }
             ev = dir_watch.rx.recv(), if dir_watch_alive && watch_refresh_allowed(app) => {
@@ -365,7 +382,8 @@ pub async fn run(
                 // precondición deja el evento ENCOLADO (canal de capacidad
                 // 1) y dispara al cerrarse el overlay.
                 if let Some(()) = ev {
-                    let refreshed = refresh_panes(app, backend, &mut events).await;
+                    let refreshed =
+                        refresh_panes(app, backend, &mut Console::new(&mut events, terminal)).await;
                     after_panes_refresh(
                         app,
                         refreshed,
@@ -784,7 +802,8 @@ pub async fn run(
                     app.message = Some(t("msg-mouse-capture-failed"));
                 }
                 if pane_attr_ids(app) != attrs_before {
-                    let refreshed = refresh_panes(app, backend, &mut events).await;
+                    let refreshed =
+                        refresh_panes(app, backend, &mut Console::new(&mut events, terminal)).await;
                     after_panes_refresh(
                         app,
                         refreshed,
@@ -818,9 +837,8 @@ pub async fn run(
                     mouse::on_mouse(
                         app,
                         backend,
-                        terminal,
                         capture,
-                        &mut events,
+                        &mut Console::new(&mut events, terminal),
                         resolver,
                         help_lines,
                         lang,
@@ -837,9 +855,11 @@ pub async fn run(
                     on_key(
                         app,
                         backend,
-                        terminal,
                         capture,
-                        &mut events,
+                        // La consola CON terminal: este es el camino por el que
+                        // se llega a una navegación larga, y es el único que
+                        // necesita poder repintarse mientras espera.
+                        &mut Console::new(&mut events, terminal),
                         resolver,
                         viewer_resolver,
                         dialog_resolver,
@@ -875,7 +895,7 @@ pub async fn run(
                 &nombre,
                 app,
                 backend,
-                &mut events,
+                &mut Console::new(&mut events, terminal),
                 resolver,
                 viewer_resolver,
                 dialog_resolver,
@@ -921,7 +941,7 @@ async fn cambia_de_perfil(
     nombre: &std::ffi::OsStr,
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     resolver: &mut Resolver,
     viewer_resolver: &mut Resolver,
     dialog_resolver: &mut Resolver,

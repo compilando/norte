@@ -6,6 +6,7 @@
 pub mod app;
 pub mod config;
 pub mod config_reload;
+pub mod console;
 pub mod dispatch;
 pub mod event_loop;
 pub mod fill;

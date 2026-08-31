@@ -1601,6 +1601,12 @@ cli-doctor-footer-connections-not-probed = nota: el keyring/`age` no se prueban 
 # dos notas de arriba —, así que esto nombra la instrucción en vez de un
 # veredicto ok/mal.
 cli-doctor-footer-shell-init = cd-on-quit: añade `eval "$(norte shell-init bash)"` (o zsh/fish) al rc de tu shell
+# Indicador de espera (#323). Verbos, no sustantivos: la línea contesta «qué
+# está haciendo», y solo se enseña al lado de un spinner que se mueve de verdad.
+busy-connecting = conectando…
+busy-listing = listando…
+busy-opening = abriendo…
+busy-cancel = Esc cancela
 cli-paths-missing = (no está)
 cli-paths-footer = nota: preguntar no crea nada — una ruta marcada «(no está)» sencillamente no se usa todavía. Las capas van en precedencia ASCENDENTE: manda la última. Si lo que SÍ está es válido lo dice `norte doctor`.
 cli-doctor-detail-connections-parse = connections.toml no parsea (corrígelo o bórralo)

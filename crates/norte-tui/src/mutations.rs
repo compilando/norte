@@ -9,7 +9,7 @@
 //! el único test que podía escribirse era el de la función pura que reparte
 //! destinos ([`transfer_dests`]).
 
-use crossterm::event::{EventStream, KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::TransferOptions;
 use norte_core::backend::Backend;
 use norte_i18n::{t, ta};
@@ -37,7 +37,7 @@ use crate::tasks::RetrySpec;
 pub async fn on_dialog_key(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     resolver: &mut Resolver,
     mods: KeyModifiers,
     code: KeyCode,
@@ -131,7 +131,7 @@ pub async fn on_dialog_key(
 pub async fn confirm_modal(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     modal: Modal,
 ) -> Option<Cd> {
     app.modal = None;

@@ -16,7 +16,7 @@
 //! documentación de las otras dos. Aquí vuelve cada bloque a su función, sin
 //! tocar una palabra.
 
-use crossterm::event::{EventStream, KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::backend::Backend;
 use norte_i18n::ta;
 use norte_proto::Error;
@@ -57,7 +57,7 @@ pub async fn open_drive_popup(app: &mut App, backend: &Backend, pane: usize, inc
 pub async fn on_tree_key(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     resolver: &mut Resolver,
     mods: KeyModifiers,
     code: KeyCode,
@@ -175,7 +175,7 @@ pub fn on_processes_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifie
 pub async fn on_places_key(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     resolver: &mut Resolver,
     mods: KeyModifiers,
     code: KeyCode,
@@ -327,7 +327,7 @@ pub async fn refresh_places_drives(app: &mut App, backend: &Backend) {
 pub async fn on_nav_popup_key(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     resolver: &mut Resolver,
     mods: KeyModifiers,
     code: KeyCode,

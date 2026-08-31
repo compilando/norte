@@ -31,7 +31,6 @@ use crate::refresh::refresh_panes;
 use crate::screens::{open_drive_popup, plugin_config_summaries};
 use crate::trail::walk_trail;
 use crate::viewer_open::{open_viewer, viewer_do};
-use crossterm::event::EventStream;
 use norte_core::backend::Backend;
 use norte_i18n::{t, ta};
 use norte_proto::EntryKind;
@@ -43,7 +42,7 @@ use norte_proto::EntryKind;
 pub async fn dispatch(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
     help_lines: &[ratatui::text::Line<'static>],
     // H3b: the negotiated language `Command::AppHelp` opens the corpus in.
     // See the same parameter on `run`.

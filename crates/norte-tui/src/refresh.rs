@@ -11,18 +11,18 @@
 //! por el MISMO embudo, [`after_panes_refresh`]: es lo que garantiza que un
 //! drenador paginado viejo no duplique entradas de un pane re-listado.
 
-use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
-use futures::StreamExt as _;
 use norte_core::backend::Backend;
 use norte_frontend::layout::BySlot;
 use norte_i18n::{t, ta};
 use norte_proto::Error;
 
 use crate::app::{App, Modal, error_category, error_message};
+use crate::console::Waited;
 use crate::fill::{Fill, release_refreshed_fill};
 use crate::jobs::SearchRun;
 use crate::navigate::listing;
 use crate::probes::Probed;
+use norte_frontend::busy::{Busy, BusyKind};
 
 /// Si el resultado de esta clase de task es un INFORME que alguien cosecha
 /// aparte, y por tanto su final no se anuncia con el `done` genérico.
@@ -51,7 +51,11 @@ pub fn habla_por_su_informe(kind: norte_proto::TaskKind) -> bool {
 /// reescribió con el listado completo): el run loop aplica entonces el
 /// ritual de [`after_panes_refresh`] — un drenador viejo de un pane
 /// re-listado duplicaría entradas si siguiera vivo.
-pub async fn on_tick(app: &mut App, backend: &Backend, events: &mut EventStream) -> [bool; 2] {
+pub async fn on_tick(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut crate::console::Console<'_>,
+) -> [bool; 2] {
     let finished = app.board.tick();
     // Cada tick, no solo cuando algo acaba: la fila que caduca terminó en un
     // tick ANTERIOR, así que colgar la limpieza de `finished` la dejaría en
@@ -263,7 +267,7 @@ fn tomar_creacion(app: &mut App, terminada: norte_proto::TaskId) -> Option<norte
 pub async fn refresh_panes(
     app: &mut App,
     backend: &Backend,
-    events: &mut EventStream,
+    events: &mut crate::console::Console<'_>,
 ) -> [bool; 2] {
     let mut refreshed = [false; 2];
     for i in 0..app.panes.len() {
@@ -278,47 +282,40 @@ pub async fn refresh_panes(
         // #117: mismos attrs que un cd a este dir — el refresh no puede
         // dejar las celdas attr en blanco (valores solo si se piden).
         let attrs = app.columns.attr_ids_for(dir.scheme());
-        let fut = listing(backend, &dir, &attrs);
-        tokio::pin!(fut);
-        loop {
-            tokio::select! {
-                res = &mut fut => {
-                    match res {
-                        // El listado es COMPLETO: si venía de un cd paginado a
-                        // medio rellenar, ya no está cargando (el run loop
-                        // suelta el drenador tras este refresh). Un quick
-                        // search vivo se re-aplica dentro (índices nuevos).
-                        Ok((entries, skipped)) => {
-                            app.panes[i].refresh_listing(entries);
-                            // #96: el refresh trae las omitidas FRESCAS — sin
-                            // esto, el badge conservaba el valor del listado
-                            // anterior (rancio) tras una mutación.
-                            app.panes[i].set_skipped(skipped);
-                            refreshed[i] = true;
-                        }
-                        // Sin silencio: el dir pudo desaparecer (issue #20).
-                        Err(e) => app.message = Some(ta("msg-refresh-error", &[("error", &error_category(&e))])),
-                    }
-                    break;
-                }
-                maybe = events.next() => {
-                    match maybe {
-                        Some(Ok(Event::Key(key)))
-                            if key.kind == crossterm::event::KeyEventKind::Press =>
-                        {
-                            match (key.code, key.modifiers) {
-                                (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
-                                    app.quit = true;
-                                    return refreshed;
-                                }
-                                (KeyCode::Esc, _) => return refreshed,
-                                _ => {}
-                            }
-                        }
-                        Some(Ok(_)) => {}
-                        Some(Err(_)) | None => return refreshed,
-                    }
-                }
+        // #323: esto también es una espera que se come el bucle, y también
+        // congelaba la pantalla — peor que la navegación, porque el lector no
+        // la pidió: salta al acabar una task y en cada aviso del watcher, y
+        // aquí se espera al listado COMPLETO, no a la primera página. Un
+        // directorio remoto con muchas entradas dejaba la TUI muda un buen
+        // rato sin que nadie hubiera tocado una tecla.
+        let started = std::time::Instant::now();
+        app.busy = Some(Busy::new(BusyKind::Listing, Some(dir.clone()), Some(i)));
+        let esperado =
+            crate::console::wait_painting(events, app, started, listing(backend, &dir, &attrs))
+                .await;
+        app.busy = None;
+        match esperado {
+            // El listado es COMPLETO: si venía de un cd paginado a medio
+            // rellenar, ya no está cargando (el run loop suelta el drenador
+            // tras este refresh). Un quick search vivo se re-aplica dentro
+            // (índices nuevos).
+            Waited::Done(Ok((entries, skipped))) => {
+                app.panes[i].refresh_listing(entries);
+                // #96: el refresh trae las omitidas FRESCAS — sin esto, el
+                // badge conservaba el valor del listado anterior (rancio) tras
+                // una mutación.
+                app.panes[i].set_skipped(skipped);
+                refreshed[i] = true;
+            }
+            // Sin silencio: el dir pudo desaparecer (issue #20).
+            Waited::Done(Err(e)) => {
+                app.message = Some(ta("msg-refresh-error", &[("error", &error_category(&e))]));
+            }
+            // Un Esc a medias abandona el RESTO de panes, igual que antes.
+            Waited::Cancelled => return refreshed,
+            Waited::Quit => {
+                app.quit = true;
+                return refreshed;
             }
         }
     }

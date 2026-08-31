@@ -9,6 +9,22 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The terminal frontend says when it is waiting** (#323). Opening a remote
+  connection froze the screen, and the cause was not a missing spinner: a slow
+  navigation ran its own event loop that read keys — so `Esc` always
+  worked — and never repainted, so the terminal kept the last frame for several
+  seconds, which looks exactly like a hang. Now the pane that is waiting shows
+  a spinner and the destination it is going to, the status line says what is
+  happening and that `Esc` cancels, and the pane keeps its previous listing
+  underneath: if the connection fails you are still where you were. Nothing
+  appears below 250 ms, because a flicker on every local `cd` is how an
+  indicator stops being read, and nothing pretends to know a percentage it
+  cannot have. The same treatment covers the two sibling waits that had the
+  identical defect and nobody had noticed — refreshing panes after a task, and
+  opening a remote file in the viewer — because the wait itself is now one
+  shared piece of code rather than a pattern copied per site; the fourth one
+  inherits the spinner for free. The state lives in the shared frontend crate,
+  so the window can paint the same thing rather than deciding it again.
 - **`norte paths` says where everything lives.** `norte doctor` already knew
   about the four config surfaces, the plugin directory, the secret store and
   the log — it validated them — and printed the path of exactly one. Everything

@@ -9,7 +9,7 @@ use ratatui::widgets::Paragraph;
 use super::HOSTILE_BADGE;
 use super::text::cells;
 use crate::app::{App, Pane};
-use norte_i18n::ta;
+use norte_i18n::{t, ta};
 
 /// Segmentos `(marked, pruned)` de la status bar sobre las marcas (#103).
 /// Extraído de `draw_status` (que ya rozaba `too_many_lines`) — pura
@@ -88,7 +88,21 @@ pub(crate) fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     // el gesto pide la decisión (copiar o mover) ANTES de que el botón suba:
     // sin este renglón el usuario suelta a ciegas. Dura lo que dura el botón
     // pulsado y no consume nada — el mensaje que tape sigue ahí al soltar.
-    let text = if let Some(drag) = crate::mouse::drop_hint(app) {
+    // Una espera EN CURSO manda sobre todo lo demás: mientras dura, cualquier
+    // otra cosa de esta línea —el mensaje de la operación anterior, el
+    // contador— describe un estado que ya no es el actual, y el lector la está
+    // mirando justo porque quiere saber si el programa sigue vivo. Se va sola
+    // al acabar la espera (`App::busy` lo limpia quien esperó), así que no
+    // consume ni tapa nada de forma permanente. Antes del umbral no entra
+    // aquí: `visible()` decide por todas las superficies.
+    let text = if let Some(busy) = app.busy.as_ref().filter(|b| b.visible()) {
+        format!(
+            " {} {}  {}",
+            busy.frame(),
+            t(busy.kind.key()),
+            t("busy-cancel")
+        )
+    } else if let Some(drag) = crate::mouse::drop_hint(app) {
         format!(" {drag}")
     } else if let Some(msg) = &app.message {
         format!(" {msg}")
@@ -203,4 +217,63 @@ pub(crate) fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Paragraph::new(text).style(app.theme.role(Role::StatusBar)),
         area,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::draw_status;
+    use crate::app::testutil::app_dos_panes;
+    use norte_frontend::busy::{Busy, BusyKind, THRESHOLD};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn barra(app: &crate::app::App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(70, 1)).expect("terminal de test");
+        terminal
+            .draw(|f| draw_status(f, f.area(), app))
+            .expect("draw");
+        terminal.backend().to_string()
+    }
+
+    /// #323: mientras se espera, la barra dice QUÉ se espera y que Esc cancela,
+    /// y eso GANA al mensaje anterior.
+    ///
+    /// El orden es la mitad del arreglo. El mensaje de la operación de antes
+    /// describe un estado que ya no es el actual, y el lector está mirando esa
+    /// línea justo porque quiere saber si el programa sigue vivo: dejar el
+    /// texto viejo encima contesta a otra pregunta.
+    #[test]
+    fn la_espera_manda_sobre_el_mensaje_anterior() {
+        let mut app = app_dos_panes();
+        app.message = Some("copiado 1 fichero".to_string());
+        assert!(barra(&app).contains("copiado 1 fichero"));
+
+        let mut busy = Busy::new(BusyKind::Connecting, None, Some(0));
+        busy.elapsed = THRESHOLD;
+        let frame = busy.frame();
+        app.busy = Some(busy);
+        let linea = barra(&app);
+        assert!(linea.contains(frame), "sin spinner: {linea}");
+        assert!(
+            !linea.contains("copiado 1 fichero"),
+            "el mensaje viejo tapa la espera: {linea}"
+        );
+    }
+
+    /// Por debajo del umbral la barra no cambia: un destello en cada `cd`
+    /// local es exactamente el ruido que hace que nadie mire el indicador.
+    #[test]
+    fn antes_del_umbral_la_barra_no_se_entera() {
+        let mut app = app_dos_panes();
+        app.message = Some("copiado 1 fichero".to_string());
+        let mut busy = Busy::new(BusyKind::Connecting, None, Some(0));
+        busy.elapsed = THRESHOLD
+            .checked_sub(std::time::Duration::from_millis(1))
+            .expect("el umbral es mayor que 1 ms");
+        let frame = busy.frame();
+        app.busy = Some(busy);
+        let linea = barra(&app);
+        assert!(!linea.contains(frame), "spinner antes de tiempo: {linea}");
+        assert!(linea.contains("copiado 1 fichero"), "{linea}");
+    }
 }
