@@ -1423,6 +1423,24 @@ fn doctor_finding_line(f: &doctor::Finding) -> String {
     match f.code {
         "connections-parse" => norte_i18n::t("cli-doctor-detail-connections-parse"),
         "connections-none" => norte_i18n::t("cli-doctor-detail-connections-none"),
+        // #320: `detail` sigue siendo el valor MÁQUINA (`conn: VAR`); las
+        // frases que distinguen los tres estados de la variable viven aquí,
+        // como las de arriba. Las tres, y no solo la nueva: dos avisos
+        // adyacentes de la misma sección leídos en registros distintos —uno
+        // narrado y otro en crudo— se comparan peor que si ninguno lo
+        // estuviera.
+        "conn-secret-env-empty" => norte_i18n::ta(
+            "cli-doctor-detail-conn-secret-env-empty",
+            &[("detail", &f.detail)],
+        ),
+        "conn-secret-env-not-utf8" => norte_i18n::ta(
+            "cli-doctor-detail-conn-secret-env-not-utf8",
+            &[("detail", &f.detail)],
+        ),
+        "conn-secret-env-absent" => norte_i18n::ta(
+            "cli-doctor-detail-conn-secret-env-absent",
+            &[("detail", &f.detail)],
+        ),
         "plugin-digest-stale" => norte_i18n::ta(
             "cli-doctor-detail-plugin-digest-stale",
             &[("id", &f.detail)],

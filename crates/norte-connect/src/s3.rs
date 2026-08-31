@@ -56,6 +56,24 @@ impl S3Connector {
 
         let mut builder = opendal::services::S3::default().bucket(bucket);
 
+        // Un campo VACÍO no es un campo puesto (#320, revisión seguridad
+        // MINOR-3). Todos los setters de opendal descartan la cadena vacía en
+        // silencio (`if !v.is_empty()`), y el resultado no es un fallo sino un
+        // destino DISTINTO del que el usuario escribió: con `endpoint = ""`
+        // nuestro código toma la rama «endpoint propio» —path-style, sin el
+        // aviso de `http://`— y opendal se va luego al endpoint de AWS, con lo
+        // que el bucket, el access-key-id y la firma acaban en Amazon mientras
+        // el usuario cree estar hablando con su MinIO. Con `region = ""` la
+        // región de firma sale de `AWS_REGION` del entorno, y ESE fallback no
+        // lo gatea `disable_config_load`. Se rechazan antes de tocar nada.
+        for (campo, valor) in [("region", &spec.region), ("endpoint", &spec.endpoint)] {
+            if valor.as_deref().is_some_and(str::is_empty) {
+                return Err(ConnectError::Config(format!(
+                    "`{campo}` está presente y VACÍO en la conexión s3: dale un valor o quita la clave"
+                )));
+            }
+        }
+
         // Región: obligatoria contra AWS; con endpoint custom (MinIO) se asume
         // us-east-1 si falta (convención; el servidor la ignora).
         match (&spec.region, &spec.endpoint) {
@@ -95,20 +113,40 @@ impl S3Connector {
         // Credenciales.
         match spec.auth {
             AuthMethod::AccessKey => {
-                let key_id = spec.access_key_id.as_deref().ok_or_else(|| {
-                    ConnectError::Config(
-                        "auth = \"access-key\" exige `access_key_id` en connections.toml"
-                            .to_string(),
-                    )
-                })?;
-                let sk = secret.ok_or_else(|| ConnectError::Secret {
-                    conn: bucket.clone(),
+                // Vacío es tan inválido como ausente, y en las DOS mitades: el
+                // proveedor estático se gatea con `(access_key_id,
+                // secret_access_key)` y opendal descarta la cadena vacía en
+                // cada setter, así que un `access_key_id = ""` reproduce #320
+                // entero aunque el secreto esté bien. Se comprueba AQUÍ, en la
+                // capa que tiene el peligro, y no solo en el resolver: este
+                // conector es API pública y el resolver no es su único llamante
+                // posible. Ver ADR 0015 (enmienda 2026-08-31) y #321.
+                let key_id = spec
+                    .access_key_id
+                    .as_deref()
+                    .filter(|k| !k.is_empty())
+                    .ok_or_else(|| {
+                        ConnectError::Config(
+                            "auth = \"access-key\" exige un `access_key_id` NO VACÍO en \
+                             connections.toml"
+                                .to_string(),
+                        )
+                    })?;
+                let sk = secret.filter(|s| !s.expose().is_empty()).ok_or_else(|| {
+                    ConnectError::Secret {
+                        conn: bucket.clone(),
+                    }
                 })?;
                 builder = builder
                     .access_key_id(key_id)
                     .secret_access_key(sk.expose())
-                    // Determinismo: con credenciales explícitas NO se mezcla la
-                    // cadena ambiente (ni perfil ni IMDS podrían suplantarlas).
+                    // Determinismo, y NO por estos dos flags: en opendal 0.58
+                    // solo apagan env, perfil e IMDS — SSO, web-identity,
+                    // process y ECS siguen en la cadena (#321). Lo que lo
+                    // sostiene es que el proveedor estático entra por delante
+                    // y gana; a la cadena solo se llega si no hay credenciales
+                    // explícitas, que es justo lo que las guardas de arriba
+                    // impiden.
                     .disable_config_load()
                     .disable_ec2_metadata();
             }

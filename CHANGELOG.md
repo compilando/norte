@@ -468,6 +468,39 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **An empty secret quietly borrowed someone else's credentials** (#320). Set
+  `NORTE_SECRET_<CONN>` to the empty string — a mistyped `read`, an unset
+  variable exported anyway — and the connection did not fail: opendal discards
+  an empty `secret_access_key` without a word, so no static credential was
+  registered and S3 authenticated with whatever the ambient chain offered.
+  On the machine where this was found that was an expired SSO profile and the
+  error blamed the provider; on a machine with a working role it would have
+  connected as the wrong identity and said nothing at all. The resolver now
+  rejects an empty secret and names both the connection and the step that held
+  it (env, keyring or `secrets.age`), and the S3 connector repeats the check
+  where the hazard actually is — because the empty-drop is not specific to the
+  secret. `access_key_id = ""` gates the same static provider and reproduces
+  the bug on its own with a perfectly good secret; `endpoint = ""` and
+  `region = ""` are discarded the same way and silently retarget the request at
+  AWS, so a user who believes they configured an internal MinIO ships the
+  bucket name, the key id and a signature to Amazon. All four are refused now.
+  A whitespace-only secret still goes through: that one reaches the server and
+  comes back as a credential rejection, which is an answer. `auth = "key"` is
+  deliberately exempt — there the secret is a key passphrase, empty means the
+  same as absent, and there is no ambient credential behind it to substitute.
+  `norte doctor` gained the matching distinction and grades it `Error`, not
+  `Warn`: a variable that is set but empty was reported as `Ok`, which is the
+  same lie in the one place meant to catch it, and a preflight that exits 0 on
+  a connection that cannot work is worth nothing. The same check now covers a
+  variable holding bytes that are not UTF-8 — the doctor read those with
+  `var_os` and called them present while the resolver, reading with `var`,
+  never saw them at all. The neighbouring overclaim is recorded in ADR 0015 and
+  tracked as #321: `disable_config_load` is `no_env()` + `no_profile()` in
+  opendal 0.58, so SSO, web-identity, process and ECS stay in the chain; what
+  keeps explicit credentials deterministic is that the static provider is
+  pushed to the front of it. What the failure says still does not reach a
+  frontend — every credential failure collapses into `PermissionDenied` and
+  nothing fills the RPC `message` — which is #322.
 - **The CLI answered in Spanish whatever your language was** (#319), for the
   last twelve messages that still carried their text inside the code. They were
   startup warnings and empty-result notes — each one arrived alone, in a change

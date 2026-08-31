@@ -15,7 +15,7 @@ mod secret;
 mod spec;
 mod ssh;
 
-pub use error::ConnectError;
+pub use error::{ConnectError, SecretOrigin};
 pub use ftp::{FtpConnectOutcome, FtpConnector};
 pub use known_hosts::KnownHostsStore;
 pub use s3::S3Connector;

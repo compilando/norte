@@ -6,6 +6,32 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+/// De cuál de los tres escalones del resolver salió un secreto (ADR 0015 C).
+///
+/// Vocabulario CERRADO a propósito: es lo único que le dice al usuario DÓNDE
+/// está el hueco, y con `&'static str` sueltos un intercambio entre dos sitios
+/// de llamada apuntaría al escalón equivocado sin que ningún test se pusiera
+/// rojo (revisión rust MINOR-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretOrigin {
+    /// `NORTE_SECRET_<CONN>`.
+    Env,
+    /// Keyring del OS.
+    Keyring,
+    /// Fichero `secrets.age`.
+    AgeFile,
+}
+
+impl std::fmt::Display for SecretOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Env => "variable de entorno",
+            Self::Keyring => "keyring",
+            Self::AgeFile => "secrets.age",
+        })
+    }
+}
+
 /// Error al resolver una conexión o su secreto.
 ///
 /// Se proyecta a la taxonomía del protocolo con `norte_proto::Error::from`:
@@ -25,6 +51,41 @@ pub enum ConnectError {
     Secret {
         /// Nombre de la conexión (nunca el secreto).
         conn: String,
+    },
+    /// El secreto de una conexión se resolvió, pero es la cadena VACÍA (#320).
+    /// Se rechaza en vez de pasarlo: opendal descarta un `secret_access_key`
+    /// vacío (`if !v.is_empty()`), no registra el proveedor estático y la
+    /// conexión acabaría autenticando con la cadena ambiente (perfil, SSO,
+    /// IMDS) — una identidad que nadie pidió. Lleva el nombre de la conexión y
+    /// el ORIGEN del hueco, jamás el secreto (regla 10).
+    ///
+    /// NO aplica a `auth = "key"`: ahí el secreto es la passphrase de la clave,
+    /// donde vacío y ausente son lo mismo y no hay nada que suplantar. Lo
+    /// filtra `establish` en el core.
+    #[error(
+        "el secreto de la conexión «{conn}» está definido pero VACÍO ({origin}): dale un valor real o quítalo"
+    )]
+    SecretEmpty {
+        /// Nombre de la conexión (nunca el secreto).
+        conn: String,
+        /// En qué escalón del resolver apareció el vacío.
+        origin: SecretOrigin,
+    },
+    /// La env var del secreto existe pero sus bytes NO son UTF-8 válido.
+    ///
+    /// Antes se trataba como «no está» (`env::var(..).ok()`) y la resolución
+    /// seguía al keyring: una contraseña en Latin-1 desaparecía en silencio y
+    /// `norte doctor` la daba por presente (revisión rust MAJOR-4). Un secreto
+    /// viaja como `String`, así que aquí no hay nada que preservar: lo honesto
+    /// es decirlo. Lleva solo el nombre de la conexión (regla 10).
+    #[error(
+        "el secreto de la conexión «{conn}» ({origin}) no es UTF-8 válido: reescríbelo, o guárdalo en el keyring o en secrets.age"
+    )]
+    SecretNotUtf8 {
+        /// Nombre de la conexión (nunca el secreto).
+        conn: String,
+        /// En qué escalón del resolver apareció (hoy solo el entorno).
+        origin: SecretOrigin,
     },
     /// Causa estructural del store de secretos (`secrets.age`). El mensaje es
     /// ESTÁTICO por construcción: garantiza por tipo que jamás se interpola el
@@ -170,6 +231,8 @@ impl From<ConnectError> for norte_proto::Error {
             // inutilizable: el usuario no puede autenticarse.
             ConnectError::AuthFailed { .. }
             | ConnectError::Secret { .. }
+            | ConnectError::SecretEmpty { .. }
+            | ConnectError::SecretNotUtf8 { .. }
             | ConnectError::KeyUnsupported { .. }
             | ConnectError::KeyLoad { .. } => Self::PermissionDenied,
             // La URL/config de la conexión no es válida.

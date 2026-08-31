@@ -230,13 +230,28 @@ impl ConnectionManager {
         // El secreto solo se resuelve si el método de auth lo puede usar
         // (password/access-key siempre; key para la passphrase). Agent no
         // lleva secreto (en s3, agent = cadena ambiente de opendal).
+        let conn_name = name.unwrap_or(&ep.host);
         let secret: Option<Secret> = match spec.auth {
             AuthMethod::Agent => None,
-            AuthMethod::Password | AuthMethod::Key | AuthMethod::AccessKey => self
+            AuthMethod::Password | AuthMethod::AccessKey => self
                 .secrets
-                .resolve(name.unwrap_or(&ep.host), &spec.url)
+                .resolve(conn_name, &spec.url)
                 .await
                 .map_err(log_and_map)?,
+            // `key`: el secreto es la PASSPHRASE de la clave, y ahí vacío y
+            // ausente son lo mismo — una clave sin cifrar no lleva passphrase, y
+            // `load_secret_key` trata `Some("")` igual que `None`. Detrás no hay
+            // ninguna credencial ambiente que pueda suplantar a otra, que es lo
+            // único que hacía peligroso el vacío en #320, así que el rechazo del
+            // resolver se deshace AQUÍ: aplicarlo también a `key` convertiría un
+            // `NORTE_SECRET_*=""` exportado a lo bruto (un `$(cat …)` que no
+            // encontró fichero) en una clave que deja de funcionar, sin ganar
+            // nada a cambio.
+            AuthMethod::Key => match self.secrets.resolve(conn_name, &spec.url).await {
+                Ok(s) => s,
+                Err(norte_connect::ConnectError::SecretEmpty { .. }) => None,
+                Err(e) => return Err(log_and_map(e)),
+            },
         };
         match ep.scheme.as_str() {
             "sftp" => {

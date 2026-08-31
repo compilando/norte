@@ -772,9 +772,15 @@ pub fn check_logs(dir: Option<&Path>) -> Vec<Finding> {
 /// `password_inline_en_url_rechazado_sin_eco`/`scheme_invalido_con_password_inline_no_eco`
 /// tests pin that); `Agent`/`Key` auth need no secret and are
 /// [`Severity::Ok`]; `Password`/`AccessKey` (secret-bearing, decision 2) are
-/// checked for [`norte_connect::env_key`]'s var via `env` — present is
-/// [`Severity::Ok`], absent is [`Severity::Warn`] NAMING THE VAR (never a
-/// value). The "keyring/age not probed" note is NOT a finding — it is a
+/// checked for [`norte_connect::env_key`]'s var via `env`, which has FOUR
+/// outcomes, all naming the var and never a value: usable is
+/// [`Severity::Ok`]; absent is [`Severity::Warn`], because the keyring or
+/// `secrets.age` may still supply it; and set-but-empty or set-but-not-UTF-8
+/// are [`Severity::Error`] — after #320 neither can resolve and no later step
+/// can rescue them, which is the same class as `connection-endpoint-invalid`:
+/// knowably unable to connect, decided without probing. Grading those `Warn`
+/// would let a `norte doctor` preflight exit 0 on a connection that cannot
+/// work. The "keyring/age not probed" note is NOT a finding — it is a
 /// constant caveat about THIS FUNCTION, not a fact about the config it read,
 /// so it is printed once by the text renderer instead (review MINOR-3);
 /// `--json` consumers don't need it repeated per run.
@@ -835,11 +841,31 @@ pub fn check_connections(
                 AuthMethod::Agent | AuthMethod::Key => {}
                 AuthMethod::Password | AuthMethod::AccessKey => {
                     let var = norte_connect::env_key(name);
-                    if env(&var).is_some() {
+                    // Set-but-unusable is its OWN diagnosis (#320), never
+                    // `present`: saying `Ok` about a variable that cannot
+                    // authenticate is the lie that cost a debugging session,
+                    // told by the one tool meant to catch it. The value is
+                    // inspected inside this expression and dropped there — an
+                    // `OsString` cannot be zeroized, so it must not outlive the
+                    // question being asked of it.
+                    let estado = env(&var).map(|v| {
+                        if v.is_empty() {
+                            (Severity::Error, "conn-secret-env-empty")
+                        } else if v.to_str().is_none() {
+                            // `resolve` reads with `var_os` + `into_string`, so
+                            // bytes that do not decode are a hard failure there.
+                            // Reading with a different policy here is how this
+                            // check certified a variable the resolver ignored.
+                            (Severity::Error, "conn-secret-env-not-utf8")
+                        } else {
+                            (Severity::Ok, "conn-secret-env-present")
+                        }
+                    });
+                    if let Some((severity, code)) = estado {
                         findings.push(Finding {
                             section: "connections",
-                            severity: Severity::Ok,
-                            code: "conn-secret-env-present",
+                            severity,
+                            code,
                             detail: format!("{name}: {var}"),
                         });
                     } else {
@@ -1773,6 +1799,67 @@ max = 10
             .find(|f| f.code == "conn-secret-env-present")
             .unwrap_or_else(|| panic!("expected an env-present finding: {findings2:?}"));
         assert_eq!(ok.severity, Severity::Ok);
+    }
+
+    /// TDD (#320): the var set but EMPTY is neither present nor absent — it is
+    /// the failure that cost a real debugging session, because `is_some()`
+    /// reported it as `Ok` while the connection silently degraded to the
+    /// ambient credential chain. `Error`, not `Warn`: after #320 the resolver
+    /// rejects it and no later step can rescue it, so a `norte doctor`
+    /// preflight must not exit 0 on it.
+    #[test]
+    fn conexiones_secreto_env_vacio_no_cuenta_como_presente() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("connections.toml"),
+            "[connections.backup]\nurl = \"ftp://backup@ftp.example.com\"\nauth = \"password\"\n",
+        )
+        .unwrap();
+
+        let findings = check_connections(dir.path(), &env(&[("NORTE_SECRET_BACKUP", "")]));
+        assert!(
+            !findings.iter().any(|f| f.code == "conn-secret-env-present"),
+            "un valor vacío no es un secreto presente: {findings:?}"
+        );
+        let f = findings
+            .iter()
+            .find(|f| f.code == "conn-secret-env-empty")
+            .unwrap_or_else(|| panic!("expected an env-empty finding: {findings:?}"));
+        assert_eq!(f.severity, Severity::Error);
+        assert!(f.detail.contains("NORTE_SECRET_BACKUP"), "{}", f.detail);
+    }
+
+    /// TDD (#320, rust review MAJOR-4): the doctor reads the env with `var_os`
+    /// and the resolver with `var_os` + `into_string`. Before this, the doctor
+    /// used the presence of the raw `OsString` alone and reported a non-UTF-8
+    /// password as `Ok` while the resolver skipped it entirely and went on to
+    /// the keyring — set-but-unusable, certified fine. Two readers, one byte
+    /// policy.
+    #[cfg(unix)]
+    #[test]
+    fn conexiones_secreto_env_no_utf8_no_cuenta_como_presente() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("connections.toml"),
+            "[connections.backup]\nurl = \"ftp://backup@ftp.example.com\"\nauth = \"password\"\n",
+        )
+        .unwrap();
+
+        // 0xFF nunca es UTF-8 válido, en ninguna posición.
+        let crudo = OsString::from(std::ffi::OsStr::from_bytes(b"clave\xffrota"));
+        let entorno = |k: &str| (k == "NORTE_SECRET_BACKUP").then(|| crudo.clone());
+        let findings = check_connections(dir.path(), &entorno);
+        assert!(
+            !findings.iter().any(|f| f.code == "conn-secret-env-present"),
+            "unos bytes que el resolver no puede leer no son un secreto presente: {findings:?}"
+        );
+        let f = findings
+            .iter()
+            .find(|f| f.code == "conn-secret-env-not-utf8")
+            .unwrap_or_else(|| panic!("expected an env-not-utf8 finding: {findings:?}"));
+        assert_eq!(f.severity, Severity::Error);
+        assert!(f.detail.contains("NORTE_SECRET_BACKUP"), "{}", f.detail);
     }
 
     /// TDD: absent `connections.toml` → a single `Ok`-empty finding, never an

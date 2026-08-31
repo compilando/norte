@@ -112,6 +112,70 @@ async fn access_key_sin_secret_es_error_local() {
     assert!(matches!(err, norte_connect::ConnectError::Secret { .. }));
 }
 
+/// #320 en la capa que TENÍA el fallo: con `auth = "access-key"`, un secreto
+/// vacío o un `access_key_id` vacío deben morir aquí, antes de tocar la red.
+///
+/// El resolver también los rechaza, pero esta es la única prueba que corre
+/// contra el conector — API pública de la que el resolver no es el único
+/// llamante posible. Si alguien mañana alimenta credenciales desde otro sitio
+/// (un flag, un plugin) y esta guarda no está, el fallo vuelve intacto: opendal
+/// descarta la cadena vacía en los dos setters, el proveedor estático no se
+/// registra y la conexión autentica con lo que ofrezca el entorno.
+#[tokio::test]
+async fn access_key_o_secret_vacios_son_error_local() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let addr = start_s3s(dir.path()).await;
+
+    let vacio = Secret::new(String::new());
+    let err = S3Connector::new()
+        .connect(&spec_access_key(addr), Some(&vacio))
+        .await
+        .expect_err("un secret vacío no puede conectar");
+    assert!(
+        matches!(err, norte_connect::ConnectError::Secret { .. }),
+        "fue {err:?}"
+    );
+
+    let mut spec = spec_access_key(addr);
+    spec.access_key_id = Some(String::new());
+    let secret = Secret::new(SK.to_string());
+    let err = S3Connector::new()
+        .connect(&spec, Some(&secret))
+        .await
+        .expect_err("un access_key_id vacío no puede conectar");
+    assert!(
+        matches!(err, norte_connect::ConnectError::Config(_)),
+        "fue {err:?}"
+    );
+}
+
+/// #320: `endpoint`/`region` presentes y vacíos no son «sin poner» — opendal
+/// los descarta y el destino REAL pasa a ser AWS (y la región, la del entorno).
+/// El usuario cree estar hablando con su `MinIO`. Se rechazan al construir.
+#[tokio::test]
+async fn endpoint_o_region_vacios_son_error_local() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let addr = start_s3s(dir.path()).await;
+    let secret = Secret::new(SK.to_string());
+
+    for tocar in [0, 1] {
+        let mut spec = spec_access_key(addr);
+        if tocar == 0 {
+            spec.endpoint = Some(String::new());
+        } else {
+            spec.region = Some(String::new());
+        }
+        let err = S3Connector::new()
+            .connect(&spec, Some(&secret))
+            .await
+            .expect_err("campo vacío");
+        assert!(
+            matches!(err, norte_connect::ConnectError::Config(_)),
+            "fue {err:?}"
+        );
+    }
+}
+
 /// Regla 10: el secret-access-key JAMÁS aparece en el error (ni en el
 /// `ConnectError` ni en su proyección al protocolo), aunque el probe falle.
 /// Red que detecta una regresión futura de `map_opendal` (p. ej. a
