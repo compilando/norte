@@ -236,6 +236,7 @@ pub struct MouseState {
     geometry: Option<Vec<PaneGeometry>>,
     /// Las zonas pulsables de la barra de menús del último frame.
     menu_zones: Vec<crate::ui::MenuZone>,
+    panel_zones: Vec<crate::ui::PanelZone>,
     /// Las zonas pulsables de las barras de pestañas del último frame.
     ///
     /// Vacío = ningún panel tiene pestañas, que es el caso de siempre.
@@ -329,6 +330,8 @@ pub struct FrameZones {
     pub tabs: Vec<crate::ui::TabZone>,
     /// Las zonas de la barra de menús.
     pub menus: Vec<crate::ui::MenuZone>,
+    /// Las casillas de la barra de paneles (#324).
+    pub panels: Vec<crate::ui::PanelZone>,
     /// Las filas del sidebar de sitios (#226).
     pub places: Vec<crate::ui::PlaceZone>,
     /// Las filas del árbol (#136).
@@ -359,6 +362,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
     let FrameZones {
         tabs: tab_zones,
         menus: menu_zones,
+        panels: panel_zones,
         places: places_zones,
         tree: tree_zones,
         borders,
@@ -381,6 +385,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
     app.mouse.geometry = geometry;
     app.mouse.tab_zones = tab_zones;
     app.mouse.menu_zones = menu_zones;
+    app.mouse.panel_zones = panel_zones;
     app.mouse.places_zones = places_zones;
     app.mouse.tree_zones = tree_zones;
     app.mouse.borders = borders;
@@ -395,6 +400,11 @@ pub enum After {
     /// Nada: el evento se resolvió entero aquí.
     #[default]
     Nothing,
+    /// Se pulsó un botón de la barra de paneles (#324): el run loop despacha
+    /// `App::pending_panel_command` por el MISMO camino que su atajo. Igual
+    /// que el menú, y por lo mismo: despachar es asíncrono y este módulo no
+    /// tiene el backend.
+    PanelBar,
     /// Se pulsó un elemento del menú: el run loop debe ejecutarlo, por el
     /// mismo camino que `Enter`. Este módulo no puede: despachar es asíncrono
     /// y necesita el backend.
@@ -511,7 +521,7 @@ fn mods(m: KeyModifiers) -> Mods {
 /// listado que el usuario no está mirando, bajo un modal que le está
 /// preguntando algo. El teclado ya se enruta así (`modal_wins` y la cadena
 /// de overlays del run loop); el ratón hace lo mismo, de una pieza.
-fn overlay_open(app: &App) -> bool {
+pub(crate) fn overlay_open(app: &App) -> bool {
     app.modal.is_some()
         || app.viewer.is_some()
         || app.help.is_some()
@@ -690,8 +700,39 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     if app.menu_bar && ev.row == 0 && matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) {
         return menu_click(app, ev.column, ev.row);
     }
+    // #324: la barra de paneles, por el mismo motivo. Los paneles laterales
+    // nacieron mudos al ratón una vez (#290) y no se repite: una fila de
+    // botones que no se pueden pulsar no es una fila de botones.
     if overlay_open(app) {
         return After::Nothing;
+    }
+    // #324: la barra de paneles, por el mismo motivo que la de menús — esa
+    // fila no pertenece a ningún panel, así que sin este brazo el clic caía en
+    // el hit-test de los listados y no pasaba nada. Los paneles laterales
+    // nacieron mudos al ratón una vez (#290) y no se repite.
+    //
+    // DEBAJO del `overlay_open`, y eso fue un BLOCKER de revisión: la barra se
+    // pinta antes que los overlays, así que con la ayuda abierta un clic en su
+    // barra de título —fila 1— caía en un botón y abría o cerraba un panel que
+    // el lector no estaba viendo. Ahora las zonas también se vacían con un
+    // overlay delante (`panel_bar_visible`), así que esto es el segundo
+    // cinturón del mismo invariante: pintada y pulsable son lo mismo.
+    if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left))
+        && let Some(cmd) = app
+            .mouse
+            .panel_zones
+            .iter()
+            .find(|z| z.row == ev.row && ev.column >= z.x0 && ev.column <= z.x1)
+            .map(|z| z.command.clone())
+    {
+        // Y se suelta el gesto en vuelo, como hacen el sidebar y el árbol: sin
+        // esto, un clic en una fila, otro en la barra y otro en la misma fila
+        // dentro de la ventana del doble clic se leían como un doble clic, y
+        // norte entraba en un directorio que el lector solo había señalado.
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        app.pending_panel_command = Some(cmd);
+        return After::PanelBar;
     }
     // El ARRASTRE de un borde va antes que todo lo del listado, y en los tres
     // tiempos del gesto: mientras dura, el puntero se sale del borde y no por
@@ -1107,6 +1148,51 @@ pub fn restore_after_suspend(
     cap.set(was, out)
 }
 
+/// Despacha por nombre el comando que un CLIC eligió, por el mismo camino que
+/// su tecla.
+///
+/// Uno para el menú y para la barra de paneles (#324): los dos hacen lo mismo
+/// con distinto origen, y tenerlo dos veces es cómo el menú y la barra acaban
+/// abriendo un panel de dos maneras que se separan en cuanto una crece un
+/// detalle. Es la lección de ADR 0077 aplicada dentro de un solo frontend.
+#[allow(clippy::too_many_arguments)] // wiring del bucle, no API
+async fn despachar_clic(
+    app: &mut crate::app::App,
+    backend: &norte_core::backend::Backend,
+    events: &mut crate::console::Console<'_>,
+    help_lines: &mut Vec<ratatui::text::Line<'static>>,
+    lang: norte_i18n::Lang,
+    quick_mode: crate::nav::Mode,
+    confirm_quit: crate::config::ConfirmQuit,
+    cfg: &crate::config::LoadedConfig,
+    work: &mut crate::jobs::InFlight,
+    id: &str,
+) {
+    let Some(cmd) = Command::parse(id) else {
+        return;
+    };
+    let outcome = dispatch(
+        app,
+        backend,
+        events,
+        help_lines,
+        lang,
+        quick_mode,
+        confirm_quit,
+        cfg,
+        cmd,
+    )
+    .await;
+    apply_cd(
+        &app.panes,
+        &mut work.fill,
+        &mut work.decorate,
+        &mut work.probed,
+        &mut work.search,
+        outcome,
+    );
+}
+
 /// Aplica un evento de ratón y remata lo que el gesto deje pedido.
 ///
 /// La semántica del gesto —qué marca, qué barre, qué transfiere— vive en
@@ -1136,6 +1222,27 @@ pub async fn on_mouse(
 ) {
     match self::handle(app, me) {
         self::After::Nothing => {}
+        // #324: un botón de la barra de paneles va por el MISMO despacho que
+        // su atajo. Dos caminos para abrir el mismo panel divergen en cuanto
+        // uno de los dos crece un detalle — es la lección de ADR 0077 aplicada
+        // dentro de un solo frontend.
+        self::After::PanelBar => {
+            if let Some(id) = app.pending_panel_command.take() {
+                despachar_clic(
+                    app,
+                    backend,
+                    events,
+                    help_lines,
+                    lang,
+                    quick_mode,
+                    confirm_quit,
+                    cfg,
+                    work,
+                    &id,
+                )
+                .await;
+            }
+        }
         // Pulsar un elemento del menú: el ratón ya
         // dejó el cursor encima; ejecutarlo es
         // asíncrono y necesita el backend, así que se
@@ -1146,12 +1253,11 @@ pub async fn on_mouse(
             let chosen = app
                 .menu
                 .as_ref()
-                .and_then(norte_frontend::menu::MenuState::selected);
+                .and_then(norte_frontend::menu::MenuState::selected)
+                .map(str::to_string);
             app.close_menu();
-            if let Some(id) = chosen
-                && let Some(cmd) = Command::parse(id)
-            {
-                let outcome = dispatch(
+            if let Some(id) = chosen {
+                despachar_clic(
                     app,
                     backend,
                     events,
@@ -1160,17 +1266,10 @@ pub async fn on_mouse(
                     quick_mode,
                     confirm_quit,
                     cfg,
-                    cmd,
+                    work,
+                    &id,
                 )
                 .await;
-                apply_cd(
-                    &app.panes,
-                    &mut work.fill,
-                    &mut work.decorate,
-                    &mut work.probed,
-                    &mut work.search,
-                    outcome,
-                );
                 reap_search_run(app, &mut work.search);
                 crate::event_loop::launch_pending(app, events, capture).await;
             }

@@ -1367,6 +1367,13 @@ pub struct CommonConfig {
     /// comandos y no había nada en pantalla diciendo que existía: quien no se
     /// sabe `Alt+M` no puede encontrar lo que no ve.
     pub ui_menu_bar: Option<bool>,
+    /// `[ui] panel_bar` (last-wins; None = FIJADA). Presentación-solo, todas
+    /// las capas, mismo criterio que la de menús.
+    ///
+    /// Encendida por defecto por lo mismo: los paneles laterales se abrían por
+    /// atajo, por menú o por paleta, y los tres exigen SABER que el panel
+    /// existe. Un panel aportado por un plugin, además, no lo descubría nadie.
+    pub ui_panel_bar: Option<bool>,
     /// `[ui] parent_entry` (last-wins; None = ENCENDIDA). Presentación-solo,
     /// todas las capas: una fila que sube un directorio no lanza, escribe ni
     /// redirige nada.
@@ -1628,6 +1635,7 @@ fn merge_ui_flags(
     ui_show_hidden: &mut Option<bool>,
     ui_mouse: &mut Option<bool>,
     ui_menu_bar: &mut Option<bool>,
+    ui_panel_bar: &mut Option<bool>,
     ui_parent_entry: &mut Option<bool>,
     ui_layout: &mut Option<String>,
     ui: &crate::schema::UiSection,
@@ -1635,6 +1643,7 @@ fn merge_ui_flags(
     *ui_show_hidden = ui.show_hidden.or(*ui_show_hidden);
     *ui_mouse = ui.mouse.or(*ui_mouse);
     *ui_menu_bar = ui.menu_bar.or(*ui_menu_bar);
+    *ui_panel_bar = ui.panel_bar.or(*ui_panel_bar);
     *ui_parent_entry = ui.parent_entry.or(*ui_parent_entry);
     *ui_layout = ui.layout.clone().or(ui_layout.take());
 }
@@ -2052,7 +2061,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_font_size: Option<f32> = None;
     let mut ui_reduce_motion: Option<bool> = None;
     let mut ui_confirm_quit = ConfirmQuit::default();
-    let (mut ui_show_hidden, mut ui_mouse, mut ui_menu_bar) = (None, None, None);
+    let (mut ui_show_hidden, mut ui_mouse, mut ui_menu_bar, mut ui_panel_bar) =
+        (None, None, None, None);
     let mut ui_parent_entry = None;
     let mut ui_editor: Option<Vec<String>> = None;
     let mut ui_editor_detached: Option<bool> = None;
@@ -2104,6 +2114,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 &mut ui_show_hidden,
                 &mut ui_mouse,
                 &mut ui_menu_bar,
+                &mut ui_panel_bar,
                 &mut ui_parent_entry,
                 &mut ui_layout,
                 &parsed.ui,
@@ -2221,6 +2232,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_layout,
         ui_mouse,
         ui_menu_bar,
+        ui_panel_bar,
         ui_parent_entry,
         ui_editor,
         ui_editor_detached,

@@ -241,14 +241,59 @@ pub(crate) fn resolved_frame(app: &App, area: Rect) -> norte_frontend::layout::R
 /// reparto sobre un rectángulo de altura negativa.
 #[must_use]
 pub(crate) fn body_area(app: &App, area: Rect) -> Rect {
-    if !app.menu_bar || area.height == 0 {
+    // Dos filas de cromo posibles arriba, cada una opcional por su cuenta: la
+    // de menús y la de paneles (#324). Se restan las que estén, y saturando —
+    // es preferible una pantalla degradada a un reparto sobre altura negativa.
+    let filas = u16::from(app.menu_bar) + u16::from(app.panel_bar);
+    if filas == 0 || area.height == 0 {
         return area;
     }
     Rect {
-        y: area.y.saturating_add(1),
-        height: area.height.saturating_sub(1),
+        y: area.y.saturating_add(filas),
+        height: area.height.saturating_sub(filas),
         ..area
     }
+}
+
+/// La fila donde va la barra de paneles, si está.
+///
+/// Debajo de la de menús cuando las dos están: el menú nombra lo que se puede
+/// hacer y la barra enseña dónde está, así que el orden de arriba abajo es de
+/// lo general a lo concreto.
+#[must_use]
+pub(crate) fn panel_bar_area(app: &App, area: Rect) -> Option<Rect> {
+    // `<=` y no `== 0`: con las dos barras encendidas en un terminal de una
+    // fila, la de paneles caería FUERA del búfer. Ratatui recorta y no
+    // revienta, pero las zonas pulsables se publicarían sobre una fila que no
+    // existe.
+    if !app.panel_bar || area.height <= u16::from(app.menu_bar) {
+        return None;
+    }
+    Some(Rect {
+        y: area.y.saturating_add(u16::from(app.menu_bar)),
+        height: 1,
+        ..area
+    })
+}
+
+/// ¿Se ve la barra de paneles AHORA?
+///
+/// Distinto de [`panel_bar_area`], que es geometría: el hueco de la fila se
+/// resta del cuerpo esté quien esté encima —si no, abrir un modal recolocaría
+/// toda la pantalla detrás—, pero con un overlay delante la barra ni se pinta
+/// ni se puede pulsar.
+///
+/// Existe porque no tenerlo fue un BLOCKER: la barra se pintaba antes que los
+/// overlays y sus zonas seguían activas debajo, así que con la ayuda abierta un
+/// clic en la barra de título de la ayuda —fila 1— caía en un botón y abría o
+/// cerraba un panel invisible. Pintada y pulsable tienen que ser lo mismo, y la
+/// forma de garantizarlo es que las dos pregunten aquí.
+#[must_use]
+pub(crate) fn panel_bar_visible(app: &App, area: Rect) -> Option<Rect> {
+    if crate::mouse::overlay_open(app) || app.menu.is_some() {
+        return None;
+    }
+    panel_bar_area(app, area)
 }
 
 /// El reparto de este frame, para quien no pinta.

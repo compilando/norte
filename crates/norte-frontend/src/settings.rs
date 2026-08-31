@@ -169,6 +169,16 @@ const CATALOG: &[SettingDef] = &[
         applies_live: true,
     },
     SettingDef {
+        // La barra de paneles (#324), y aquí el argumento es el de la propia
+        // feature: existe porque un panel que no se ve no lo encuentra nadie.
+        // Dejar su interruptor solo en un fichero de config sería cometer el
+        // mismo error una capa más arriba.
+        id: "ui.panel-bar",
+        section: Section::General,
+        kind: SettingKind::Bool,
+        applies_live: true,
+    },
+    SettingDef {
         // La fila `..`. Mismo criterio que `ui.mouse` y `ui.menu-bar`: no
         // tiene comando ni tecla, así que el fichero era el ÚNICO sitio desde
         // el que se podía apagar o encender.
@@ -324,6 +334,7 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         // — con la celda vacía, alternar leía «no es true» y escribía `true`
         // siempre, así que la barra no se podía apagar desde aquí.
         "ui.menu-bar" => cfg.common.ui_menu_bar.unwrap_or(true).to_string(),
+        "ui.panel-bar" => cfg.common.ui_panel_bar.unwrap_or(true).to_string(),
         "ui.parent-entry" => cfg.common.ui_parent_entry.unwrap_or(true).to_string(),
         "ui.show-hidden" => cfg.common.ui_show_hidden.unwrap_or(false).to_string(),
         "ui.editor" => cfg.common.ui_editor.clone().unwrap_or_default().join(" "),

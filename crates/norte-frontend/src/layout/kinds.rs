@@ -105,6 +105,17 @@ impl KindRegistry {
         }
     }
 
+    /// Todas las declaraciones, EN ORDEN DE REGISTRO: primero las de serie,
+    /// luego lo que se haya añadido.
+    ///
+    /// El orden es parte del contrato y no un detalle: la barra de paneles
+    /// (#324) lo usa para pintar los de siempre en el mismo sitio y lo aportado
+    /// detrás, que es lo que permite aprender la posición con el dedo.
+    #[must_use]
+    pub fn decls(&self) -> &[KindDecl] {
+        &self.decls
+    }
+
     /// La declaración de `id`, o `None` si este binario no conoce ese kind.
     #[must_use]
     pub fn get(&self, id: &KindId) -> Option<&KindDecl> {

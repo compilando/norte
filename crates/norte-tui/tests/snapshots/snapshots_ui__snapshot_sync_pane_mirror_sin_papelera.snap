@@ -3,6 +3,7 @@ source: crates/norte-tui/tests/snapshots_ui.rs
 expression: render_80x24(&app)
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
+" S  V  P  D  Á  R                                                               "
 "┌ sincronizar (espejo) — ⟨file⟩/casa → ⟨file⟩/otro ────────────────────────────┐"
 "│nada de esto lo puede deshacer norte                                          │"
 "│el destino no tiene papelera: lo que esto sustituya o borre no se guarda en   │"
@@ -17,7 +18,6 @@ expression: render_80x24(&app)
 "│# ! ! a.txt 4.0 KiB                                                           │"
 "│- ! ! arbol-sobrante (destino)                                                │"
 "│- ! ! sobra.txt (destino)                                                     │"
-"│                                                                              │"
 "│                                                                              │"
 "│se van a borrar 2 árboles del destino y NO se van a poder restaurar. Un árbol │"
 "│se vuelve a comprobar en el directorio, no por dentro: algo añadido más abajo │"

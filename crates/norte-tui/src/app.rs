@@ -488,6 +488,20 @@ pub struct App {
     /// Suelta, el menú sigue abriéndose con su tecla y pintándose ENCIMA de
     /// la primera fila, como siempre.
     pub menu_bar: bool,
+    /// El comando que dejó pedido un clic en la barra de paneles (#324).
+    ///
+    /// Se despacha por el MISMO camino que su atajo, y no por uno propio: dos
+    /// caminos para abrir el mismo panel divergen en cuanto uno de los dos
+    /// crece un detalle.
+    pub pending_panel_command: Option<String>,
+    /// La barra de paneles está fijada (`[ui] panel_bar`, #324).
+    ///
+    /// Los paneles laterales se abrían por atajo, por el menú o por la paleta,
+    /// y los tres exigen SABER que el panel existe: no había ninguna superficie
+    /// que los enseñara. Una fila permanente cuesta una celda de alto, así que
+    /// se elige — pero por defecto va puesta, porque el que no sabe que el
+    /// panel existe tampoco sabe que existe la opción de enseñarlo.
+    pub panel_bar: bool,
     /// La fila `..` está encendida (`[ui] parent_entry`).
     ///
     /// Se guarda aquí además de en cada pane porque un pane NUEVO —una
@@ -916,6 +930,8 @@ impl App {
             layout_picker: None,
             profile_picker: None,
             menu_bar: true,
+            panel_bar: true,
+            pending_panel_command: None,
             // Apagada hasta que el arranque diga: un `App` de test no lee
             // configuración, y una fila que aparece sola cambiaría los
             // índices de ochenta tests que no van de esto.

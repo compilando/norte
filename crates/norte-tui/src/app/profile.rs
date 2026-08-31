@@ -158,6 +158,8 @@ mod tests {
             //   vigente, así que la barra aparece o desaparece en el
             //   siguiente pintado sin nada más.
             ui_menu_bar: _,
+            // — Igual que la de menús, y por lo mismo (#324).
+            ui_panel_bar: _,
             // — Se aplica en caliente: la recarga se la pasa a los dos panes
             //   y la fila aparece o desaparece en el siguiente pintado.
             ui_parent_entry: _,

@@ -9,6 +9,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A bar that shows the panels exist** (#324): one row under the menu bar,
+  one letter per panel — Places, Tree, Viewer, Jobs, Details, Log. They were
+  reachable by shortcut, by menu and by the palette, and all three require
+  already knowing the panel is there; nothing on screen said so. That also
+  meant a panel contributed by a plugin was invisible to anyone who did not go
+  looking, which is most people, and the panel registry is open precisely so
+  plugins can contribute one. The bar is therefore derived from that registry
+  rather than written out: built-ins keep their positions and anything
+  contributed lands at the end, so the row you learn does not move under you.
+  Each button says three things a plain launcher would not: whether the panel
+  is open, whether it has the keyboard — that is where your keys are about to
+  go — and whether it has something to say, like jobs still running or errors
+  in the log you have not looked at. Clicking one opens it, through the same
+  dispatch as its shortcut. It costs a row; `panel_bar = false` gives it back.
+  The letters started out as the shortcut's own letter, read from the live
+  keymap, and that was thrown away after seeing it painted: `B Q J M T L` is
+  precise about which key to press and silent about what each one opens, and a
+  bar whose whole job is to reveal the panels cannot require knowing them.
 - **A log panel inside the terminal frontend** (`alt+l` in all seven presets,
   or Panels → Log). The file log has existed since #255 and it answers
   questions *afterwards*; it is no help while something is going wrong in front

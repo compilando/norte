@@ -537,6 +537,7 @@ pub async fn after_frame(
         mouse::FrameZones {
             tabs: ui::tab_zones(app, painted),
             menus: ui::menu_zones(app, painted),
+            panels: ui::panel_zones(app, painted),
             places: ui::places_zones(app, painted),
             tree: ui::tree_zones(app, painted),
             borders: ui::resize_borders(app, painted),

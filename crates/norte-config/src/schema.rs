@@ -253,6 +253,20 @@ pub struct UiSection {
     /// The GUI has its own chrome and ignores this key.
     #[serde(default)]
     pub menu_bar: Option<bool>,
+    /// Whether the panel bar is pinned under the menu bar. Absent = `true`.
+    ///
+    /// On for the same reason the menu bar is: the side panels — places, tree,
+    /// jobs, details, the log — were reachable by shortcut, by menu and by the
+    /// palette, and all three require knowing the panel exists. Nothing on
+    /// screen said so, which also means a panel contributed by a plugin was
+    /// invisible to anyone who did not go looking.
+    ///
+    /// It costs one row, and `panel_bar = false` gives it back — every panel
+    /// still opens by its own key and from the menu.
+    ///
+    /// The GUI has its own chrome and ignores this key.
+    #[serde(default)]
+    pub panel_bar: Option<bool>,
     /// Whether every listing carries a `..` row at the top. Absent = `true`.
     ///
     /// The row an orthodox reader expects: the cursor lands on it and Enter

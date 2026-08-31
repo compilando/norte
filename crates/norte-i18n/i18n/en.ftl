@@ -845,6 +845,15 @@ menu-item-layout-grow = Grow
 menu-item-layout-shrink = Shrink
 menu-item-layout-equalize = Equalise
 menu-item-layout-set-target = Set destination
+# SHORT names for the panel bar (#324). Separate from the menu labels on
+# purpose: those are phrases ("Places sidebar") and their initials would not
+# tell the panels apart.
+panelbar-places = Places
+panelbar-tree = Tree
+panelbar-viewer = Viewer
+panelbar-processes = Jobs
+panelbar-metadata = Details
+panelbar-log = Log
 menu-item-layout-places = Places sidebar
 menu-item-layout-preview = Docked viewer
 menu-item-layout-processes = Processes panel
@@ -1644,6 +1653,8 @@ setting-ui-quick-search-name = Quick search mode
 setting-ui-quick-search-desc = What `/` does: narrow the listing (filter) or move the cursor without changing it (jump).
 setting-ui-reduce-motion-name = Reduce motion
 setting-ui-reduce-motion-desc = Turn off animated effects (CRT flicker, cursor blink) for accessibility. GUI only.
+setting-ui-panel-bar-name = Panel bar
+setting-ui-panel-bar-desc = Whether the row of panel buttons stays pinned under the menu bar. On by default: the side panels were reachable by shortcut, by menu and by the palette, and all three require knowing the panel is there. Turning it off gives the row back — every panel still opens by its own key and from the menu. Ignored by the GUI.
 setting-ui-menu-bar-name = Menu bar
 setting-ui-menu-bar-desc = Whether the menu bar stays pinned to the top row. On by default: several commands are only reachable through the menu, and nothing on screen said it was there. Turning it off gives the row back — the menu still opens with its key. Ignored by the GUI.
 setting-ui-mouse-name = Mouse

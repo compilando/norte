@@ -183,6 +183,157 @@ pub fn menu_zones(app: &App, area: Rect) -> Vec<MenuZone> {
     out
 }
 
+/// Una casilla pulsable de la barra de paneles (#324).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PanelZone {
+    /// Fila.
+    pub row: u16,
+    /// Primera columna, inclusive.
+    pub x0: u16,
+    /// Última columna, inclusive.
+    pub x1: u16,
+    /// El comando que dispara pulsarla.
+    pub command: String,
+}
+
+/// Cuánto ocupa un botón: espacio, letra, marca de novedad.
+const ANCHO_BOTON: u16 = 3;
+
+/// El kind del panel que tiene el teclado, si lo tiene un panel.
+///
+/// Traduce `KeyOwner` a kind: la barra razona en kinds porque es lo que el
+/// registro le da, y `KeyOwner` es cosa de la TUI.
+fn kind_con_teclado(app: &App) -> Option<&'static str> {
+    match app.key_owner() {
+        crate::app::KeyOwner::Panes => None,
+        crate::app::KeyOwner::Places => Some("places"),
+        crate::app::KeyOwner::Preview => Some(crate::preview::KIND),
+        crate::app::KeyOwner::Processes => Some(crate::processes::KIND),
+        crate::app::KeyOwner::Tree => Some(crate::tree::KIND),
+        crate::app::KeyOwner::Log => Some(crate::logview::KIND),
+    }
+}
+
+/// Los botones de la barra de paneles, con lo que sabe la `App`.
+///
+/// Vive aquí y no en `norte-frontend` la parte de RECOGER el estado; el QUÉ y
+/// el ORDEN los decide `panelbar::buttons`, compartido con la ventana.
+#[must_use]
+pub fn panel_buttons(app: &App) -> Vec<norte_frontend::panelbar::PanelButton> {
+    let abiertos: Vec<&str> = app
+        .layout
+        .slot_ids()
+        .into_iter()
+        .filter_map(|id| {
+            app.layout
+                .kind_of(id)
+                .map(norte_frontend::layout::KindId::as_str)
+        })
+        .collect();
+    let foco = kind_con_teclado(app);
+    // Novedad: el registro con errores sin ver, y procesos con tareas vivas.
+    // Es lo que hace mirar la barra en vez de recordarla.
+    let mut novedad: Vec<&str> = Vec::new();
+    // Con el panel abierto ya las estás viendo: la marca sobra, y además le
+    // robaba el estilo al estado mientras durase la tarea. Mismo criterio que
+    // el registro, aquí abajo.
+    if app.processes_slot().is_none() && !app.board.rows().is_empty() {
+        novedad.push(crate::processes::KIND);
+    }
+    // Errores o avisos en el registro que el lector no ha tenido delante: si
+    // el panel está abierto ya los está viendo, así que la marca sobra.
+    //
+    // `has_at_or_above` y no `snapshot`: esto corre en cada frame, y clonar el
+    // anillo entero para preguntar «¿hay algún aviso?» eran dos mil líneas con
+    // sus dos `String` cada una, diez veces por segundo.
+    if app.log_slot().is_none()
+        && app
+            .log_ring
+            .as_ref()
+            .is_some_and(|r| r.has_at_or_above(norte_config::logline::LogLevel::Warn))
+    {
+        novedad.push(crate::logview::KIND);
+    }
+    norte_frontend::panelbar::buttons(
+        &app.kinds,
+        norte_frontend::panelbar::PanelBarInput {
+            open: &abiertos,
+            focused: foco,
+            attention: &novedad,
+        },
+    )
+}
+
+/// Las casillas pulsables de la barra de paneles.
+#[must_use]
+pub fn panel_zones(app: &App, area: Rect) -> Vec<PanelZone> {
+    let Some(bar) = crate::ui::geometry::panel_bar_visible(app, area) else {
+        return Vec::new();
+    };
+    let mut x = bar.x;
+    let mut out = Vec::new();
+    for b in panel_buttons(app) {
+        let fin = x.saturating_add(ANCHO_BOTON);
+        // Un botón que no cabe ENTERO no se pinta ni se puede pulsar: media
+        // letra no es un botón. Mismo criterio que los títulos del menú.
+        if fin > bar.x.saturating_add(bar.width) {
+            break;
+        }
+        out.push(PanelZone {
+            row: bar.y,
+            x0: x,
+            x1: fin.saturating_sub(1),
+            command: b.command,
+        });
+        x = fin;
+    }
+    out
+}
+
+/// Pinta la barra de paneles: qué paneles hay, cómo están y con qué tecla.
+pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
+    use norte_frontend::panelbar::PanelState;
+    let Some(bar) = crate::ui::geometry::panel_bar_visible(app, frame.area()) else {
+        return;
+    };
+    clear_themed(frame, bar, &app.theme);
+    let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
+    let mut ancho = 0_u16;
+    for b in panel_buttons(app) {
+        if ancho.saturating_add(ANCHO_BOTON) > bar.width {
+            break;
+        }
+        // Tres estilos para tres estados. Que un panel tenga el TECLADO no es
+        // lo mismo que esté abierto, y es la mitad de lo que se pregunta al
+        // mirar la barra: dónde van a ir mis teclas.
+        let estilo = match b.state {
+            PanelState::Focused => app.theme.role(Role::Selection),
+            PanelState::Open => app.theme.role(Role::Title),
+            PanelState::Closed => app.theme.role(Role::StatusBar),
+        };
+        // La letra conserva SIEMPRE el estilo de su estado, y la marca de
+        // novedad es un span aparte. Pintar el botón entero de aviso —como
+        // hacía la primera versión— le quitaba al lector la respuesta a «¿a
+        // dónde van a ir mis teclas?» justo mientras algo estaba pasando, que
+        // es cuando más se pregunta.
+        //
+        // La marca va DENTRO del ancho del botón (ocupa el espacio de la
+        // derecha) para que la fila no cambie de tamaño según lo que pase: una
+        // barra que baila se lee peor que una fija.
+        spans.push(ratatui::text::Span::styled(
+            format!(" {}", b.letter),
+            estilo,
+        ));
+        spans.push(if b.attention {
+            ratatui::text::Span::styled("·", app.theme.role(Role::Warning))
+        } else {
+            ratatui::text::Span::styled(" ", estilo)
+        });
+        ancho = ancho.saturating_add(ANCHO_BOTON);
+    }
+    frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), bar);
+}
+
 /// Pinta la barra de menús y su desplegable.
 pub(crate) fn draw_menu(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();

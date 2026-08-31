@@ -60,6 +60,7 @@ pub mod openers;
 pub mod palette;
 pub mod palette_state;
 mod pane;
+pub mod panelbar;
 pub mod places;
 pub mod plugin_config;
 pub mod profile_picker;

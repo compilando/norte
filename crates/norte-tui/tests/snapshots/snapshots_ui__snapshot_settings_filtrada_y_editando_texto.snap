@@ -3,14 +3,14 @@ source: crates/norte-tui/tests/snapshots_ui.rs
 expression: render_80x24(&app)
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
-"┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
-"│No┌ Ajustes ───────────────────────────────────────────────────────────────┐ha│"
-"│  │General                                                                 │  │"
+"                                                                                "
+"┌⟨f┌ Ajustes ───────────────────────────────────────────────────────────────┐──┐"
+"│No│General                                                                 │ha│"
 "│  │> Tipografía de la interfaz                                             │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
-"│ !│                                                                        │  │"
 "│  │                                                                        │  │"
+"│ !│                                                                        │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"
 "│  │                                                                        │  │"

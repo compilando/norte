@@ -55,3 +55,10 @@ walk one menu's commands, `Enter` runs and `Esc` closes.
 The bar stays pinned to the top row unless you turn it off (`[ui] menu_bar`),
 and it says on its right which key opens it. With the bar in view, clicking a
 title opens that menu directly, without going through the key.
+
+Just below it sits another row with one letter per panel — Places, Viewer,
+Jobs, Details, Tree, Log — there for the same reason: panels open by their own
+key, from the menu or from the palette, and all three require knowing the panel
+is there. Each letter also says whether its panel is open, whether it has the
+keyboard, and whether it has something to say; clicking it opens the panel. It
+costs a row too, and `[ui] panel_bar` gives it back.

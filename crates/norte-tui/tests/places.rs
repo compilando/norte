@@ -193,10 +193,10 @@ fn el_sidebar_ocupa_dieciseis_celdas_y_el_listado_empieza_en_la_diecisiete() {
     let app = app_con_sidebar();
     let buf = buffer_de(&app, 100, 30);
     let f = filas(&buf);
-    // Fila 2: dentro de los dos bloques, ya sin el borde superior. DOS y no
-    // una desde que la barra de menú va fijada (`[ui] menu_bar`): la fila 0 es
-    // la barra y la 1 el borde de arriba de los bloques.
-    let row = &f[2];
+    // Fila 3: dentro de los dos bloques, ya sin el borde superior. TRES desde
+    // que hay dos filas de cromo fijadas: la 0 es la barra de menús, la 1 la
+    // de paneles (#324) y la 2 el borde de arriba de los bloques.
+    let row = &f[3];
     let celda = |x: usize| row.chars().nth(x).expect("la celda está pintada");
     assert_eq!(celda(0), '│', "borde izquierdo del sidebar");
     assert_eq!(celda(15), '│', "borde derecho del sidebar, en la celda 15");

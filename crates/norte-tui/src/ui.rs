@@ -28,7 +28,9 @@ mod text;
 
 // `tests/`, `mouse.rs` y `event_loop.rs` nombran todo esto por `ui::..`, asi
 // que es la API de este modulo y no baja a `pub(crate)`.
-pub use chrome::{MenuHit, MenuZone, TabAction, TabZone, menu_zones, tab_zones};
+pub use chrome::{
+    MenuHit, MenuZone, PanelZone, TabAction, TabZone, menu_zones, panel_zones, tab_zones,
+};
 pub use compare::draw_compare;
 pub use geometry::{
     before_frame, pane_geometry, pane_list_rows, panel_slots, resize_borders, resolved_for,
@@ -41,8 +43,8 @@ pub use panels::{PlaceZone, TreeZone, places_zones, tree_zones};
 pub use pickers::draw_theme_picker;
 pub use text::fit_hint_groups;
 
-use chrome::draw_menu;
 pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
+use chrome::{draw_menu, draw_panel_bar};
 pub(crate) use geometry::{
     body_rect, centered, chrome_body, pane_cols, placed_of_kind, resolved_frame, slot_rect,
 };
@@ -271,6 +273,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if app.menu_bar || app.menu.is_some() {
         draw_menu(frame, app);
     }
+    // #324: y la fila de paneles debajo. Después del cuerpo por lo mismo que
+    // el menú: es cromo, y el cuerpo ya se repartió el sitio que le queda.
+    draw_panel_bar(frame, app);
     if let Some(help) = &app.help {
         draw_help(frame, help, &app.theme, &app.dialog_hints.help);
     }

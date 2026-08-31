@@ -3,10 +3,10 @@ source: crates/norte-tui/tests/snapshots_ui.rs
 expression: "format!(\"{text}\\n===\\n{hex}\")"
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
+"                                                                                "
 "┌⟨file⟩/casa/notas.txt─────────────────────────────────────────────────────────┐"
 "│año 2026                                                                      │"
 "│segunda línea                                                                 │"
-"│                                                                              │"
 "│                                                                              │"
 "│                                                                              │"
 "│                                                                              │"
@@ -21,9 +21,9 @@ expression: "format!(\"{text}\\n===\\n{hex}\")"
 
 ===
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
+"                                                                                "
 "┌⟨file⟩/casa/logo.png──────────────────────────────────────────────────────────┐"
 "│00000000  89 50 4e 47 0d 0a 1a 0a  00 00 00 0d 49 48 44 52   .PNG........IHDR │"
-"│                                                                              │"
 "│                                                                              │"
 "│                                                                              │"
 "│                                                                              │"

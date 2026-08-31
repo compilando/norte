@@ -3,14 +3,14 @@ source: crates/norte-tui/tests/snapshots_ui.rs
 expression: render(&app)
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
+"                                                                                "
 "┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
 "│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
 "│  /docs                               ││   cosa                  1 B          │"
 "│  /src                                ││                                      │"
-"│  @enlace                             ││                                      │"
-"│   nota┌ Historial ───────────────────────────────────────────────────┐       │"
-"│ ! �.da│ ⟨file⟩/proyectos                                             │       │"
-"│       │ ⟨file⟩/casa/docs                                             │       │"
+"│  @enla┌ Historial ───────────────────────────────────────────────────┐       │"
+"│   nota│ ⟨file⟩/proyectos                                             │       │"
+"│ ! �.da│ ⟨file⟩/casa/docs                                             │       │"
 "│       └──────────────────────────────────────────────────────────────┘       │"
 "│                                      ││                                      │"
 "│                                      ││                                      │"

@@ -3,6 +3,7 @@ source: crates/norte-tui/tests/layout_anchor.rs
 expression: "lines.join(\"\\n\")"
 ---
  Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                                             
+ S  V  P  D  Á  R                                                                                   
 ┌⟨file⟩/casa─────────────────────────────────────┐┌⟨file⟩/casa─────────────────────────────────────┐
 │Nombre▲                         Tamaño     Fecha││Nombre▲                         Tamaño     Fecha│
 │   f00                             1 B          ││   f00                             1 B          │
@@ -29,6 +30,5 @@ expression: "lines.join(\"\\n\")"
 │   f21                             1 B          ││   f21                             1 B          │
 │   f22                             1 B          ││   f22                             1 B          │
 │   f23                             1 B          ││   f23                             1 B          │
-│   f24                             1 B          ││   f24                             1 B          │
 └────────────────────────────────────────────────┘└────────────────────────────────────────────────┘
  ⟨file⟩/casa  1/60

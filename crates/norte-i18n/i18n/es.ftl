@@ -829,6 +829,15 @@ menu-item-layout-grow = Agrandar
 menu-item-layout-shrink = Encoger
 menu-item-layout-equalize = Igualar
 menu-item-layout-set-target = Fijar destino
+# Nombres CORTOS para la barra de paneles (#324). Aparte de las etiquetas del
+# menú a propósito: aquellas son frases («Panel de sitios») y sus iniciales no
+# distinguirían nada — tres empiezan por P.
+panelbar-places = Sitios
+panelbar-tree = Árbol
+panelbar-viewer = Visor
+panelbar-processes = Procesos
+panelbar-metadata = Detalles
+panelbar-log = Registro
 menu-item-layout-places = Panel de sitios
 menu-item-layout-preview = Visor acoplado
 menu-item-layout-processes = Panel de procesos
@@ -1641,6 +1650,8 @@ setting-ui-quick-search-name = Modo de búsqueda rápida
 setting-ui-quick-search-desc = Qué hace `/`: filtrar el listado (filter) o mover el cursor sin cambiarlo (jump).
 setting-ui-reduce-motion-name = Reducir movimiento
 setting-ui-reduce-motion-desc = Desactiva los efectos animados (flicker CRT, parpadeo del cursor) por accesibilidad. Solo GUI.
+setting-ui-panel-bar-name = Barra de paneles
+setting-ui-panel-bar-desc = Si la fila de botones de panel se queda fijada bajo la de menú. Encendida por defecto: los paneles laterales se abrían por atajo, por menú o por la paleta, y los tres exigen saber que el panel existe. Apagarla devuelve la fila — cada panel sigue abriéndose con su tecla y desde el menú. La GUI lo ignora.
 setting-ui-menu-bar-name = Barra de menú
 setting-ui-menu-bar-desc = Si la barra de menú se queda fijada en la fila de arriba. Encendida por defecto: hay comandos a los que solo se llega por el menú, y nada en pantalla decía que estaba ahí. Apagarla devuelve la fila — el menú sigue abriéndose con su tecla. La GUI lo ignora.
 setting-ui-mouse-name = Ratón

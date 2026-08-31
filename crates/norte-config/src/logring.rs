@@ -220,6 +220,18 @@ impl LogRing {
         r.lines.iter().cloned().collect()
     }
 
+    /// ¿Hay alguna línea de nivel `l` o peor?
+    ///
+    /// Sin clonar nada, que es el punto: la barra de paneles lo pregunta en
+    /// CADA frame para decidir si marca el botón del registro, y contestarlo
+    /// con [`Self::snapshot`] clonaba dos mil líneas —con sus dos `String`—
+    /// diez veces por segundo, disputándole el candado al hilo que escribe.
+    #[must_use]
+    pub fn has_at_or_above(&self, l: LogLevel) -> bool {
+        let r = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+        r.lines.iter().any(|linea| linea.level <= l)
+    }
+
     /// Mete una línea, tirando la más vieja si no cabe.
     fn push(&self, line: LogLine) {
         // `into_inner` y no descartar: dentro hay un `VecDeque` de datos, sin

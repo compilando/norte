@@ -25,15 +25,18 @@ const H: u16 = 12;
 
 /// Primera fila de listado de un pane en este layout.
 ///
-/// TRES desde que la barra de menú va fijada (`[ui] menu_bar`, encendida por
-/// defecto): fila 0 la barra, 1 el borde superior, 2 la cabecera de columnas.
+/// CUATRO desde que hay dos filas de cromo fijadas por defecto: fila 0 la barra
+/// de menús (`[ui] menu_bar`), 1 la barra de paneles (`[ui] panel_bar`, #324),
+/// 2 el borde superior y 3 la cabecera de columnas.
+///
 /// Que cambiar esta constante ARREGLE todos los tests de este fichero es la
 /// demostración de que el mapeo de clics siguió a la geometría solo — la resta
-/// de la fila se hace en el reparto del frame, no en el pintor, y el ratón lee
-/// ese mismo reparto.
-const FILA0: u16 = 3;
-/// Cuántas filas de listado caben. Una menos: la barra se la ha comido.
-const FILAS: u16 = 7;
+/// de las filas se hace en el reparto del frame, no en el pintor, y el ratón
+/// lee ese mismo reparto. Lo volvió a demostrar la barra de paneles: dos
+/// constantes y ningún test de clic tocado.
+const FILA0: u16 = 4;
+/// Cuántas filas de listado caben. Dos menos: las dos barras se las han comido.
+const FILAS: u16 = 6;
 
 fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("wire válido")
@@ -95,6 +98,7 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
         mouse::FrameZones {
             tabs: ui::tab_zones(app, frame.area),
             menus: ui::menu_zones(app, frame.area),
+            panels: ui::panel_zones(app, frame.area),
             places: ui::places_zones(app, frame.area),
             tree: ui::tree_zones(app, frame.area),
             borders: ui::resize_borders(app, frame.area),
@@ -163,14 +167,14 @@ fn el_layout_de_estos_tests_es_el_que_se_pinta() {
     let lines = pintar(&mut app);
     let geom = app.mouse.geometry().expect("hay geometría");
     let (left, right) = (geom[0], geom[1]);
-    // `y = 1` y una fila menos de alto: la barra de menú fijada se queda la
-    // fila 0. Que la GEOMETRÍA lo diga —y no solo el pintor— es el punto: el
-    // ratón lee estos rectángulos, así que un clic sigue cayendo donde el
+    // `y = 2` y dos filas menos de alto: las dos barras fijadas se quedan las
+    // filas 0 y 1. Que la GEOMETRÍA lo diga —y no solo el pintor— es el punto:
+    // el ratón lee estos rectángulos, así que un clic sigue cayendo donde el
     // lector lo dio.
-    assert_eq!((left.x, left.y, left.width, left.height), (0, 1, 30, 10));
+    assert_eq!((left.x, left.y, left.width, left.height), (0, 2, 30, 9));
     assert_eq!(
         (right.x, right.y, right.width, right.height),
-        (30, 1, 30, 10)
+        (30, 2, 30, 9)
     );
     assert_eq!(left.first_list_row, FILA0, "borde superior + cabecera");
     assert_eq!(left.list_rows, FILAS, "interior menos la cabecera");
@@ -291,15 +295,83 @@ fn el_menu_se_reabre_por_donde_iba() {
     );
 }
 
-/// Y con la barra apagada, la fila 0 vuelve a ser del panel: no hay barra que
-/// pulsar, así que el clic no puede abrir nada.
+/// Y con las DOS barras apagadas, la fila 0 vuelve a ser del panel: no hay
+/// barra que pulsar, así que el clic no puede abrir nada.
+///
+/// Las dos: con solo la de menús apagada, la de paneles se muda a la fila 0 y
+/// este clic caía en un botón. El test seguía verde —`menu.is_none()` se
+/// cumplía igual— mientras su invariante declarado era ya falso.
 #[test]
-fn sin_barra_fijada_un_click_arriba_no_abre_el_menu() {
+fn sin_barras_fijadas_un_click_arriba_no_abre_nada() {
     let mut app = app_pintada(5);
     app.menu_bar = false;
+    app.panel_bar = false;
     let _ = pintar(&mut app);
     let _ = mouse::handle(&mut app, ev(ABAJO, 2, 0));
     assert!(app.menu.is_none());
+    assert!(app.pending_panel_command.is_none());
+}
+
+/// Sin la de menús pero CON la de paneles, la fila 0 es de la barra de
+/// paneles: se muda arriba y sigue siendo pulsable.
+#[test]
+fn sin_barra_de_menus_la_de_paneles_se_muda_a_la_fila_cero() {
+    let mut app = app_pintada(5);
+    app.menu_bar = false;
+    let _ = pintar(&mut app);
+    let _ = mouse::handle(&mut app, ev(ABAJO, 1, 0));
+    assert_eq!(
+        app.pending_panel_command.as_deref(),
+        Some("layout.places"),
+        "el primer botón de la barra"
+    );
+    assert!(app.menu.is_none(), "y no abre el menú, que no está");
+}
+
+/// Los botones caen donde dicen las zonas, y solo ahí.
+///
+/// Tres celdas por botón desde la columna 0: el primero es `layout.places` y
+/// el sexto `layout.log`. Se comprueban los dos EXTREMOS y la celda siguiente
+/// al último, que es donde un `x1` mal calculado se nota.
+#[test]
+fn cada_boton_de_la_barra_cae_en_su_sitio() {
+    let mut app = app_pintada(5);
+    let _ = pintar(&mut app);
+    let pulsa = |app: &mut norte_tui::app::App, col: u16| {
+        app.pending_panel_command = None;
+        let _ = mouse::handle(app, ev(ABAJO, col, 1));
+        app.pending_panel_command.clone()
+    };
+    assert_eq!(pulsa(&mut app, 1).as_deref(), Some("layout.places"));
+    assert_eq!(
+        pulsa(&mut app, 16).as_deref(),
+        Some("layout.log"),
+        "el último"
+    );
+    assert_eq!(pulsa(&mut app, 18), None, "pasado el último no hay botón");
+}
+
+/// REGRESIÓN de un BLOCKER: con un overlay delante, la barra ni se pinta ni se
+/// puede pulsar.
+///
+/// La barra se pinta ANTES que los overlays, así que sus zonas seguían activas
+/// por debajo: con la ayuda abierta, un clic en la barra de título de la ayuda
+/// —que ocupa la misma fila— caía en un botón y abría o cerraba un panel que
+/// el lector no estaba viendo. Pintada y pulsable tienen que ser lo mismo.
+#[test]
+fn con_un_overlay_delante_la_barra_no_se_pulsa() {
+    let mut app = app_pintada(5);
+    let _ = pintar(&mut app);
+    // Un overlay cualquiera de los que tapan la fila.
+    app.open_theme_picker();
+    let _ = pintar(&mut app);
+    let antes = app.layout.clone();
+    let _ = mouse::handle(&mut app, ev(ABAJO, 1, 1));
+    assert!(
+        app.pending_panel_command.is_none(),
+        "un clic sobre el overlay tocó un botón de la barra"
+    );
+    assert_eq!(antes, app.layout, "y la disposición cambió por debajo");
 }
 
 /// La barra de estado no pertenece a ningún pane: fuera del hit test

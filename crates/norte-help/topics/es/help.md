@@ -59,3 +59,10 @@ La barra se queda fijada en la fila de arriba salvo que la apagues
 (`[ui] menu_bar`), y ahí dice a su derecha con qué tecla se abre. Con la barra
 a la vista, pulsar un título con el ratón abre ese menú directamente, sin
 pasar por la tecla.
+
+Justo debajo hay otra fila con una letra por panel —Sitios, Visor, Procesos,
+Detalles, Árbol, Registro—, que existe por el mismo motivo: los paneles se
+abren con su tecla, desde el menú o desde la paleta, y los tres caminos exigen
+saber que el panel está ahí. Cada letra dice además si su panel está abierto,
+si tiene el teclado y si tiene algo que contar; pulsarla lo abre. También
+cuesta una fila, y `[ui] panel_bar` la devuelve.

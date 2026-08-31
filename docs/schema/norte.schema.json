@@ -533,6 +533,14 @@
             "null"
           ]
         },
+        "panel_bar": {
+          "default": null,
+          "description": "Whether the panel bar is pinned under the menu bar. Absent = `true`.\n\nOn for the same reason the menu bar is: the side panels — places, tree,\njobs, details, the log — were reachable by shortcut, by menu and by the\npalette, and all three require knowing the panel exists. Nothing on\nscreen said so, which also means a panel contributed by a plugin was\ninvisible to anyone who did not go looking.\n\nIt costs one row, and `panel_bar = false` gives it back — every panel\nstill opens by its own key and from the menu.\n\nThe GUI has its own chrome and ignores this key.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "parent_entry": {
           "default": null,
           "description": "Whether every listing carries a `..` row at the top. Absent = `true`.\n\nThe row an orthodox reader expects: the cursor lands on it and Enter\ngoes up, which is muscle memory from every manager in the family.\n`parent_entry = false` gives the row back to the listing — going up\nis still Backspace, and its key never went anywhere.\n\nIt is never an OPERAND: with the cursor on it nothing is selected, so\na copy or a delete has nothing to act on rather than acting on the\nparent directory. That is enforced in the shared pane model, not in\neach frontend.",
