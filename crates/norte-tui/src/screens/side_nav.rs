@@ -120,6 +120,7 @@ pub async fn on_tree_key(
         "layout.preview" => app.toggle_preview(),
         "layout.processes" => app.toggle_processes(),
         "layout.metadata" => app.toggle_metadata(),
+        "layout.log" => app.toggle_log(),
         "dialog.confirm" => {
             let dest = app.tree().and_then(crate::tree::Tree::selected);
             if let Some(dir) = dest {
@@ -240,6 +241,7 @@ pub async fn on_places_key(
         "layout.preview" => app.toggle_preview(),
         "layout.processes" => app.toggle_processes(),
         "layout.metadata" => app.toggle_metadata(),
+        "layout.log" => app.toggle_log(),
         "pane.tree" => app.toggle_tree(),
         // `⏎` sobre una CABECERA pliega o despliega su sección, como en el
         // árbol de al lado. Antes no hacía nada: `activate()` devuelve `None`

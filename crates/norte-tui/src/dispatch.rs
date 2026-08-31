@@ -159,6 +159,7 @@ pub async fn dispatch(
         // `preview::want` en el bucle, contra el cursor de cada frame.
         Command::LayoutPreview => app.toggle_preview(),
         Command::LayoutProcesses => app.toggle_processes(),
+        Command::LayoutLog => app.toggle_log(),
         // #136: el árbol se abre, se enfoca y se cierra como el sidebar. Su
         // contenido lo pide el run loop, una rama por vuelta.
         Command::PaneTree => app.toggle_tree(),

@@ -832,6 +832,7 @@ menu-item-layout-set-target = Fijar destino
 menu-item-layout-places = Panel de sitios
 menu-item-layout-preview = Visor acoplado
 menu-item-layout-processes = Panel de procesos
+menu-item-layout-log = Registro
 menu-item-layout-metadata = Panel de detalles
 menu-item-layout-pick = Disposición...
 menu-item-profile-pick = Perfil...
@@ -890,6 +891,7 @@ help-cmd-layout-set-target = fijar destino
 help-cmd-layout-places = enseñar u ocultar el panel de sitios
 help-cmd-layout-preview = enseñar u ocultar el visor acoplado
 help-cmd-layout-processes = muestra u oculta el panel de procesos
+help-cmd-layout-log = muestra u oculta el registro de esta sesión
 help-cmd-layout-metadata = muestra u oculta el panel de detalles
 help-cmd-layout-pick = elige una disposición
 help-cmd-profile-pick = elige un perfil
@@ -1770,6 +1772,18 @@ gui-msg-shortcut-saved-not-applied = guardado, pero esta ventana conservó el ke
 processes-title = Procesos
 processes-empty = nada en marcha
 processes-has-keyboard = este panel tiene el teclado · Esc lo devuelve
+
+# El panel de registro (#323). El título lleva el nivel al lado porque un panel
+# que se ve vacío tiene que distinguir «no ha pasado nada» de «lo estás
+# filtrando fuera».
+log-title = Registro
+log-keys = e/w/i/d/t nivel · / filtrar · Fin al final · Esc devuelve el teclado
+log-empty = nada que enseñar con este filtro
+log-no-ring = sin registro instalado en este proceso
+log-dropped = { $n } líneas viejas descartadas
+# Cuando el anillo captura MÁS de lo que se enseña: subirlo no baja solo, así
+# que el proceso sigue pagando ese nivel hasta que se cierre el panel.
+log-capturing = capturando { $level }
 task-failed = falló
 metadata-title = Detalles
 metadata-empty = nada bajo el cursor

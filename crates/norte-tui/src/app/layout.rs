@@ -2,7 +2,7 @@
 //! los huecos laterales (places, preview, tree, procesos, metadatos),
 //! redimensionar y mover el foco de hueco en hueco.
 
-use super::{ALLOW_PROCESSES, App, KeyOwner, PlacesClick, TreeClick, TreeSpot};
+use super::{ALLOW_LOG, ALLOW_PROCESSES, App, KeyOwner, PlacesClick, TreeClick, TreeSpot};
 use norte_i18n::t;
 use norte_proto::VPath;
 
@@ -93,6 +93,7 @@ impl App {
             KeyOwner::Preview => self.preview_slot().is_some(),
             KeyOwner::Processes => self.processes_slot().is_some(),
             KeyOwner::Tree => self.tree_slot().is_some(),
+            KeyOwner::Log => self.log_slot().is_some(),
         };
         if !sigue {
             self.key_owner = KeyOwner::Panes;
@@ -602,6 +603,59 @@ impl App {
         }
     }
 
+    /// El hueco del panel de registro, si está abierto.
+    #[must_use]
+    pub fn log_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::logview::KIND)
+    }
+
+    /// Abre el panel de registro, lo enfoca, o lo cierra (#323).
+    ///
+    /// Tres estados y con el teclado al abrir, igual que el de procesos: se
+    /// abre para LEER algo concreto —filtrando por nivel o por texto—, no de
+    /// paso mientras navegas.
+    ///
+    /// No hay estado por hueco que insertar: hay un panel de registro y su
+    /// nivel y su filtro son de la sesión, no del sitio donde lo pongas.
+    pub fn toggle_log(&mut self) {
+        use norte_frontend::layout::{Edge, KindId, Node, Size};
+        match self.log_slot() {
+            Some(id) if self.key_owner == KeyOwner::Log => {
+                if let Some(nuevo) = self.layout.close_slot(id) {
+                    self.layout = nuevo;
+                    self.panes.refresh_visible(&self.layout);
+                    self.history.retain_tree(&self.layout);
+                }
+                self.key_owner = KeyOwner::Panes;
+                // Cerrar BAJA el nivel del anillo al que se estaba enseñando.
+                // Es la única forma de volver atrás: subirlo nunca baja
+                // —para que ir a DEBUG y volver no borre lo de en medio—, y sin
+                // esto una sola pulsación de `t` dejaba el proceso capturando
+                // TRACE el resto de la sesión, con su coste, mucho después de
+                // que nadie mirara. Cerrar el panel es decir «ya está».
+                if let Some(ring) = self.log_ring.as_ref() {
+                    ring.set_level(self.log_panel.level());
+                }
+                self.log_filter_input = None;
+            }
+            Some(_) => self.key_owner = KeyOwner::Log,
+            None => {
+                let id = self.mint_slot();
+                self.layout = self.layout.dock(
+                    self.focused_slot(),
+                    Edge::Bottom,
+                    // Diez filas: ocho de mensajes más el marco. Un log de
+                    // cuatro líneas obliga a desplazarse para leer una frase
+                    // que ocupa dos, y entonces no se usa.
+                    Size::Fixed(10),
+                    &Node::slot(id, KindId::new(crate::logview::KIND)),
+                );
+                self.panes.refresh_visible(&self.layout);
+                self.key_owner = KeyOwner::Log;
+            }
+        }
+    }
+
     /// Sube el cursor del panel de procesos. No-op si no está abierto.
     pub fn processes_up(&mut self) {
         if let Some(id) = self.processes_slot()
@@ -690,6 +744,35 @@ impl App {
             _ => {}
         }
         None
+    }
+
+    /// Despacha un comando del keymap con el teclado en el panel de registro
+    /// (#323), filtrado por [`ALLOW_LOG`].
+    ///
+    /// Su propio embudo y no el de procesos: aquel deja pasar `dialog.confirm`,
+    /// que allí CANCELA la tarea bajo el cursor. Un `Enter` en un visor de log
+    /// que cancela una copia es justo lo que una allowlist existe para impedir.
+    pub fn log_command(&mut self, cmd: &str) {
+        if !ALLOW_LOG.contains(&cmd) {
+            return; // fuera del allowlist de este panel: inerte
+        }
+        if self.panel_chrome_command(cmd) {
+            return;
+        }
+        match cmd {
+            "dialog.pane" | "pane.switch" => self.return_keys_to_panes(),
+            "layout.focus-next" => self.layout_focus(1),
+            "layout.focus-prev" => self.layout_focus(-1),
+            "layout.grow" => self.layout_resize(1),
+            "layout.shrink" => self.layout_resize(-1),
+            "layout.log" => self.toggle_log(),
+            "layout.processes" => self.toggle_processes(),
+            "layout.places" => self.toggle_places(),
+            "layout.preview" => self.toggle_preview(),
+            "layout.metadata" => self.toggle_metadata(),
+            "pane.tree" => self.toggle_tree(),
+            _ => {}
+        }
     }
 
     /// El hueco de la hoja de atributos, si está abierta.
@@ -787,6 +870,7 @@ impl App {
             KeyOwner::Places => self.places_slot(),
             KeyOwner::Tree => self.tree_slot(),
             KeyOwner::Processes => self.processes_slot(),
+            KeyOwner::Log => self.log_slot(),
             KeyOwner::Panes | KeyOwner::Preview => None,
         }
         .unwrap_or_else(|| self.focused_slot())

@@ -855,3 +855,132 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .collect();
     frame.render_widget(Paragraph::new(lines), area);
 }
+
+/// La hora `HH:MM:SS` de una marca en milisegundos, en UTC.
+///
+/// UTC y no local, igual que la columna de fecha en formato ISO: este árbol no
+/// lleva base de datos de husos, y una hora local inventada a partir de un
+/// desplazamiento fijo sería mentira dos veces al año. Lo que se compara aquí
+/// son líneas entre sí, y para eso el huso da igual mientras sea el mismo.
+fn hora_utc(epoch_ms: i64) -> String {
+    let sod = epoch_ms.div_euclid(1000).rem_euclid(86_400);
+    format!("{:02}:{:02}:{:02}", sod / 3600, (sod % 3600) / 60, sod % 60)
+}
+
+/// El panel de registro (#323): lo que está pasando, sin salir de la TUI.
+pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado: bool) {
+    use std::fmt::Write as _;
+    let theme = &app.theme;
+    let border = if con_teclado {
+        Role::BorderFocus
+    } else {
+        Role::BorderUnfocused
+    };
+    let panel = &app.log_panel;
+    // El título dice el nivel y el filtro: sin eso, un panel que se ve vacío
+    // no distingue «no ha pasado nada» de «lo estás filtrando fuera», que es
+    // la confusión que hace desconfiar de un visor de logs.
+    let mut titulo = format!(" {} · {} ", t("log-title"), panel.level().label().trim());
+    // Si el anillo está capturando MÁS de lo que se enseña, se dice. Pedir
+    // TRACE y volver a INFO deja el proceso capturando TRACE el resto de la
+    // sesión —a propósito, para que ir y volver no borre lo de en medio— y sin
+    // esta línea eso no se ve por ninguna parte.
+    if let Some(ring) = app.log_ring.as_ref()
+        && ring.level() > panel.level()
+    {
+        let _ = write!(
+            titulo,
+            "· {} ",
+            ta("log-capturing", &[("level", ring.level().label().trim())])
+        );
+    }
+    if !panel.filter().is_empty() {
+        let _ = write!(
+            titulo,
+            "· /{} ",
+            norte_encoding::mask_terminal_hazards(panel.filter())
+        );
+    }
+    // Lo descartado se DICE. Un anillo que tira lo viejo en silencio hace que
+    // el lector busque una línea que estuvo y ya no está, y concluya que el
+    // registro miente.
+    let descartadas = app
+        .log_ring
+        .as_ref()
+        .map_or(0, norte_config::logring::LogRing::dropped);
+    if descartadas > 0 {
+        let _ = write!(
+            titulo,
+            "· {} ",
+            ta("log-dropped", &[("n", &descartadas.to_string())])
+        );
+    }
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .title(titulo)
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(border));
+    // El pie: o el filtro que se está tecleando, o las teclas. El campo GANA
+    // porque mientras se escribe es lo único que importa, y porque un cursor
+    // que no se ve es un campo que no parece un campo.
+    if let Some(input) = &app.log_filter_input {
+        block = block.title_bottom(Line::styled(
+            format!(" /{}▏", norte_encoding::mask_terminal_hazards(input)),
+            theme.role(Role::Match),
+        ));
+    } else if con_teclado {
+        block = block.title_bottom(Line::styled(
+            format!(" {} ", t("log-keys")),
+            theme.role(Role::Info),
+        ));
+    }
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let Some(ring) = app.log_ring.as_ref() else {
+        // Sin anillo instalado (tests, o un embebedor que no montó el
+        // subscriber) se dice, en vez de pintar un panel vacío que parece que
+        // no pasa nada.
+        frame.render_widget(
+            Paragraph::new(Line::styled(t("log-no-ring"), theme.role(Role::Warning))),
+            inner,
+        );
+        return;
+    };
+    let lineas = ring.snapshot();
+    let alto = usize::from(inner.height);
+    let (visibles, desde) = panel.view(&lineas, alto);
+    if visibles.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::styled(t("log-empty"), theme.role(Role::Title))),
+            inner,
+        );
+        return;
+    }
+    let pintadas: Vec<Line<'_>> = visibles
+        .iter()
+        .skip(desde)
+        .take(alto)
+        .map(|l| {
+            let rol = match l.level {
+                norte_config::logline::LogLevel::Error => Role::Error,
+                norte_config::logline::LogLevel::Warn => Role::Warning,
+                _ => Role::Info,
+            };
+            // El módulo y el mensaje llevan rutas y nombres de host que eligió
+            // alguien que no es el lector: pasan por el mismo enmascarado que
+            // cualquier otro texto ajeno antes de tocar la terminal.
+            let cuerpo =
+                norte_encoding::mask_terminal_hazards(&format!("{}: {}", l.target, l.message));
+            Line::from(vec![
+                Span::raw(format!("{} ", hora_utc(l.epoch_ms))),
+                Span::styled(format!("{} ", l.level.label()), theme.role(rol)),
+                Span::raw(cuerpo),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(pintadas), inner);
+}

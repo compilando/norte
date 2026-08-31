@@ -140,6 +140,7 @@ commands! {
     "layout.preview" => LayoutPreview,
     "layout.processes" => LayoutProcesses,
     "layout.metadata" => LayoutMetadata,
+    "layout.log" => LayoutLog,
     "layout.pick" => LayoutPick,
     "profile.pick" => ProfilePick,
     "profile.save-as" => ProfileSaveAs,

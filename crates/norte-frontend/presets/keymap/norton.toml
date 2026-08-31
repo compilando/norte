@@ -79,6 +79,9 @@ keymap = [
     { on = ["alt+o"], run = "layout.focus-next" },
     { on = ["alt+O"], run = "layout.focus-prev" },
     { on = ["alt+j"], run = "layout.processes" },
+    # El registro (#323): no lo atestigua NC, se ata igual porque es de norte
+    # y `alt+l` está libre. Ver el bloque de divergencias de la cabecera.
+    { on = ["alt+l"], run = "layout.log" },
     # El resto de la familia `layout.*`, con los mismos acordes que en los
     # otros seis presets: ver la nota larga en `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },

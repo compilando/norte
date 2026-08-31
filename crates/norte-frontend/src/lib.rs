@@ -51,6 +51,7 @@ pub mod keymap;
 pub mod keysheet;
 pub mod layout;
 pub mod layout_picker;
+pub mod logpanel;
 pub mod menu;
 mod modal;
 pub mod mouse;

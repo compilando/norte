@@ -224,6 +224,7 @@ impl App {
             crate::preview::KIND => Some(FocusStop::Side(KeyOwner::Preview)),
             crate::processes::KIND => Some(FocusStop::Side(KeyOwner::Processes)),
             crate::tree::KIND => Some(FocusStop::Side(KeyOwner::Tree)),
+            crate::logview::KIND => Some(FocusStop::Side(KeyOwner::Log)),
             _ => None,
         }
     }

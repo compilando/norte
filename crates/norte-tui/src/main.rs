@@ -109,13 +109,22 @@ async fn main() -> Result<()> {
     // significa que un `--help`/`--version` —que salen antes— no deja rastro.
     // Correcto: no hacen nada que merezca un log.
     //
-    norte_core::logging::init_to_file(norte_core::logging::LogConfig {
-        dir: cfg.common.log_dir.as_deref(),
-        retain: cfg.common.log_retain,
-        // El fichero compartido: la CLI, el daemon y el terminal no coinciden
-        // vivos sobre el mismo estado como sí lo hacen el daemon y la ventana.
-        prefix: None,
-    });
+    // Y ADEMÁS a un anillo en memoria, que es lo que pinta `panel.log` (#323).
+    // El fichero sirve para investigar después; el anillo, para ver lo que está
+    // pasando sin salir de la TUI — que es donde se notó la falta: una conexión
+    // que falla en 240 ms deja un «permiso denegado» que no dice nada mientras
+    // el motivo exacto se escribe en un fichero de otra terminal.
+    let log_ring = norte_core::logging::init_to_file_with_ring(
+        norte_core::logging::LogConfig {
+            dir: cfg.common.log_dir.as_deref(),
+            retain: cfg.common.log_retain,
+            // El fichero compartido: la CLI, el daemon y el terminal no
+            // coinciden vivos sobre el mismo estado como sí lo hacen el daemon
+            // y la ventana.
+            prefix: None,
+        },
+        norte_config::logring::RING_DEFAULT,
+    );
     let (browse_eff, viewer_eff, dialog_eff) = build_keymaps(&cfg, cli_preset.as_deref())?;
     // Bindings `lua:` descartados del keymap.toml de PROYECTO (seguridad,
     // review M4 Lua): se avisa tras crear la App, jamás descarte mudo. El
@@ -142,6 +151,9 @@ async fn main() -> Result<()> {
     let left = initial_pane(&backend, &start, &start_attrs).await?;
     let right = initial_pane(&backend, &start, &start_attrs).await?;
     let mut app = App::new(left, right);
+    // `None` si ya había subscriber: entonces nadie escribe en el anillo y el
+    // panel lo DICE, en vez de enseñar un vacío que parece que no pasa nada.
+    app.log_ring = log_ring;
     // Un `--profile` explícito ya está APLICADO (entró en las capas de la
     // primera carga), así que se declara activo aquí y no por el camino del
     // cambio en caliente. De paso es lo que hace que el perfil pegajoso de la

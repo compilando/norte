@@ -179,7 +179,26 @@ pub struct LogConfig<'a> {
 ///
 /// Idempotente y no-fatal: si ya hay un subscriber, no hace nada.
 pub fn init(cfg: LogConfig<'_>) {
-    init_with(true, cfg);
+    let _ = init_with(true, cfg, None);
+}
+
+/// Como [`init_to_file`], y además un anillo en memoria que el frontend puede
+/// pintar (`panel.log`).
+///
+/// `None` si ya había un subscriber instalado, porque entonces NADIE le
+/// escribe al anillo. Devolverlo igualmente —como hacía la primera versión—
+/// dejaba al panel enseñando «nada que enseñar con este filtro» para siempre,
+/// que es justo la confusión que el panel existe para no crear: «no ha pasado
+/// nada» tiene que distinguirse de «no está conectado», y con el `Option` la
+/// interfaz puede decir la segunda.
+///
+/// El nivel del anillo se sube luego en caliente con
+/// [`LogRing::raise_to`](crate::logring::LogRing::raise_to). Arranca en INFO:
+/// un nivel verboso se paga aunque nadie mire.
+#[must_use]
+pub fn init_to_file_with_ring(cfg: LogConfig<'_>, cap: usize) -> Option<crate::logring::LogRing> {
+    let ring = crate::logring::LogRing::new(cap);
+    init_with(false, cfg, Some(&ring)).then_some(ring)
 }
 
 /// Como [`init`] pero SOLO al fichero. Para los frontends.
@@ -191,11 +210,21 @@ pub fn init(cfg: LogConfig<'_>) {
 /// producían un solo diagnóstico; esto es lo que lo arregla, y sin escribir un
 /// byte en una pantalla que están dibujando.
 pub fn init_to_file(cfg: LogConfig<'_>) {
-    init_with(false, cfg);
+    let _ = init_with(false, cfg, None);
 }
 
 /// El montaje común. `stderr` decide si va también la capa de terminal.
-fn init_with(stderr: bool, cfg: LogConfig<'_>) {
+///
+/// **Los filtros son POR CAPA y ya no uno global**, y ese cambio es lo que hace
+/// posible el panel de registro: con un `EnvFilter` sobre todo el registro, un
+/// nivel INFO significa que los `DEBUG` no se emiten, y entonces ningún panel
+/// puede enseñarlos después — filtrar en la ventana lo que nunca se registró es
+/// imposible. Con filtros por capa, el fichero y el stderr conservan
+/// exactamente el suyo (mismo [`filter_from`], mismo cap de `suppaftp`) y el
+/// anillo lleva el propio, que además se cambia en caliente.
+/// Devuelve si ESTE montaje fue el que se instaló: `false` significa que ya
+/// había un subscriber, y entonces nada de lo que se monta aquí recibe nada.
+fn init_with(stderr: bool, cfg: LogConfig<'_>, ring: Option<&crate::logring::LogRing>) -> bool {
     let file = match log_dir(cfg.dir) {
         Some(d) => file_layer(
             &d,
@@ -203,13 +232,20 @@ fn init_with(stderr: bool, cfg: LogConfig<'_>) {
             cfg.prefix.unwrap_or(LOG_PREFIX),
         ),
         None => None,
-    };
-    let terminal = stderr.then(|| tracing_subscriber::fmt::layer().with_writer(std::io::stderr));
-    let _ = tracing_subscriber::registry()
+    }
+    .map(|l| l.with_filter(filter_from(None)));
+    let terminal = stderr.then(|| {
+        tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_filter(filter_from(None))
+    });
+    let anillo = ring.map(crate::logring::ring_layer);
+    tracing_subscriber::registry()
         .with(file)
         .with(terminal)
-        .with(filter_from(None))
-        .try_init();
+        .with(anillo)
+        .try_init()
+        .is_ok()
 }
 
 #[cfg(test)]

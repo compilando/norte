@@ -440,6 +440,11 @@ mod k2b_gate_tests {
             "layout.preview",
             "layout.processes",
             "layout.focus-next",
+            // El registro (#323): panel que toma el teclado, así que entra en
+            // esta lista. Lo ata `alt+l` en los siete, y la regla del
+            // repositorio es que un cambio de teclas no está hecho hasta que
+            // están los siete — esto es lo que lo hace cumplir a máquina.
+            "layout.log",
         ];
         let mut faltan: Vec<String> = Vec::new();
         for nombre in NAMES {

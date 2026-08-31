@@ -19,6 +19,7 @@ pub mod jobs;
 pub mod keymap;
 pub mod keys;
 pub mod listing;
+pub mod logview;
 pub mod lua;
 pub mod metadata;
 pub mod mouse;

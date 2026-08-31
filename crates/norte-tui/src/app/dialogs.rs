@@ -198,6 +198,37 @@ pub const ALLOW_PROCESSES: &[&str] = &[
     "app.menu",
 ];
 
+/// ALLOWLIST del panel de registro (#323).
+///
+/// Propia y NO la de procesos, aunque los dos paneles se parezcan: allí
+/// `dialog.confirm` **cancela la tarea bajo el cursor**, y un `Enter` en un
+/// visor de log que cancela una copia es exactamente la clase de accidente que
+/// una allowlist existe para impedir. Aquí no hay nada que confirmar.
+///
+/// Tampoco lleva `dialog.up`/`down`: las flechas, las páginas, `Fin` y `Esc`
+/// los reclama el propio panel antes del keymap ([`crate::logview::key`]),
+/// porque son suyos mientras tenga el teclado.
+///
+/// Lo que sí lleva es el cromo: cerrar desde dentro con la misma tecla que
+/// abrió, cambiar de panel, redimensionar y el menú. Sin `layout.log` en esta
+/// lista, `alt+l` moría en el embudo y el panel no se podía cerrar con la
+/// tecla que lo abría — que es como se descubrió que hacía falta esta lista.
+pub const ALLOW_LOG: &[&str] = &[
+    "layout.log",
+    "layout.grow",
+    "layout.shrink",
+    "dialog.pane",
+    "pane.switch",
+    "layout.focus-next",
+    "layout.focus-prev",
+    "layout.places",
+    "layout.preview",
+    "layout.processes",
+    "layout.metadata",
+    "pane.tree",
+    "app.menu",
+];
+
 /// ALLOWLIST de DESPACHO del popup de navegación (`on_nav_popup_key`,
 /// main.rs), unión de lo que History, Hotlist y Volumes aceptan: `add`/
 /// `remove` los filtra el caller a `kind == Hotlist` (nada que nombrar ni

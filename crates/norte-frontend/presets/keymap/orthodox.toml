@@ -29,6 +29,8 @@ keymap = [
     # sitio que dice qué está copiando norte se llegaba solo por el menú.
     # `alt+j` de «jobs».
     { on = ["alt+j"], run = "layout.processes" },
+    # El registro (#323). `alt+l` de «log», libre en los siete presets.
+    { on = ["alt+l"], run = "layout.log" },
     # El resto de la familia `layout.*`, que estaba SIN TECLA en los siete
     # presets: cerrar un hueco, cambiarle el ancho, igualarlos y designar el
     # destino. Se llegaba solo por el menú o la paleta, y el menú los pintaba

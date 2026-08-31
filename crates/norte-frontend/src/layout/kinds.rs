@@ -95,6 +95,12 @@ impl KindRegistry {
                 // copia, igual que el sidebar—, y 16 columnas es lo que ocupa
                 // un nombre corto con dos niveles de sangrado y el marco.
                 decl("tree", (16, 5), true, true, false, SIN_ROLES),
+                // El registro (#323): se enfoca, toma teclas —filtra por nivel
+                // y por texto— y hay UNO. No opta a ningún rol: nadie copia a
+                // un log. 30 columnas es lo que ocupa `13:36:50 WARN` con un
+                // mensaje corto y el marco; por debajo la hora y el nivel se
+                // comen la línea entera y no queda sitio para lo que dice.
+                decl("log", (30, 4), true, true, false, SIN_ROLES),
             ],
         }
     }

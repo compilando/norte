@@ -47,6 +47,14 @@ const APLAZADOS: &[(&str, u32)] = &[
     // sabe PINTAR un hueco de preview —caería a «kind no soportado», en
     // gris—, y abrir un hueco que solo se pinta apagado no es abrirlo.
     ("layout.preview", 291),
+    // El panel de registro (#323) nace en la TUI, y lo COMPARTIDO ya está
+    // hecho: el anillo y su capa en `norte-config`, el estado de presentación
+    // —filtros, seguimiento del final— en `norte-frontend`. Lo que le falta a
+    // la ventana es pintarlo y montar el anillo al arrancar. Con un matiz que
+    // no tiene la TUI: la ventana arranca su propio daemon (#300), así que su
+    // anillo llevaría lo de ESTE proceso y no lo del daemon, que es donde pasa
+    // la mitad interesante.
+    ("layout.log", 326),
     // El renombrado en lote por plantilla (#310) nace en la TUI: el generador
     // y la validación viven en el crate COMPARTIDO, así que lo que le falta a
     // la ventana es la superficie —un prompt de plantilla— y no la lógica. La

@@ -50,7 +50,8 @@ use modals::draw_modal;
 use overlays::{draw_extensions, draw_palette, draw_plugin_config_panel, draw_settings};
 use pane::draw_pane;
 use panels::{
-    draw_metadata, draw_places, draw_preview, draw_processes, draw_tasks, draw_tree, draw_viewer,
+    draw_log, draw_metadata, draw_places, draw_preview, draw_processes, draw_tasks, draw_tree,
+    draw_viewer,
 };
 use pickers::{
     draw_columns_picker, draw_connections_picker, draw_layout_picker, draw_profile_picker,
@@ -199,6 +200,16 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
             p,
             app,
             app.key_owner() == crate::app::KeyOwner::Processes,
+        );
+    }
+    // El registro no lleva estado POR HUECO —hay uno, y su nivel y su filtro
+    // son de la sesión— así que basta el rectángulo donde cayó.
+    if let Some((_, rect)) = placed_of_kind(&res, &app.layout, crate::logview::KIND) {
+        draw_log(
+            frame,
+            rect,
+            app,
+            app.key_owner() == crate::app::KeyOwner::Log,
         );
     }
     if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::tree::KIND)

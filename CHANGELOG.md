@@ -9,6 +9,31 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A log panel inside the terminal frontend** (`alt+l` in all seven presets,
+  or Panels → Log). The file log has existed since #255 and it answers
+  questions *afterwards*; it is no help while something is going wrong in front
+  of you, because it lives in another terminal. This is the same lines, in
+  memory, next to the reader: `e`/`w`/`i`/`d`/`t` choose how much is shown, `/`
+  filters by text and searches the module name too, arrows and pages detach
+  from the tail so you can read while lines keep arriving, and `End`
+  re-attaches. It is what answers "and *why* did that fail?" — a connection
+  that dies leaves a "permission denied" on the status bar that says nothing,
+  while the exact reason was already written, somewhere else.
+  Two things it refuses to get wrong. Asking for more detail raises the
+  recording level for real, not just the filter — filtering to DEBUG what was
+  recorded at INFO would show nothing and look broken — and lowering it again
+  does NOT stop recording, so going down and back up cannot erase the very
+  stretch you were investigating. And the panel says what it is filtering and
+  how many old lines it dropped, because a viewer that looks empty has to tell
+  "nothing happened" apart from "you are filtering it out", and one that
+  discards silently makes a reader hunt for a line that was there a moment ago.
+  Making this possible needed the shared logging setup to move from one global
+  filter to per-layer filters: under a global INFO filter, DEBUG events are
+  never emitted at all, so no panel can show them later. The file and stderr
+  layers keep exactly the filter they had, **including the hard `suppaftp=info`
+  cap from #43** — that one matters more here than anywhere, because this
+  level is raised by a keypress, and `suppaftp` logs `PASS <password>` at
+  TRACE.
 - **The terminal frontend says when it is waiting** (#323). Opening a remote
   connection froze the screen, and the cause was not a missing spinner: a slow
   navigation ran its own event loop that read keys — so `Esc` always

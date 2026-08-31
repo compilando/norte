@@ -39,6 +39,7 @@ commands = [
     "layout.preview",
     "layout.processes",
     "layout.metadata",
+    "layout.log",
     "layout.pick",
 
     "profile.pick",
@@ -335,6 +336,32 @@ dentro.
 
 No hay pausa. El protocolo tiene cancelar y nada más, y un control que no hace
 lo que dice es peor que un control que falta.
+
+{{cmd:layout.log}} abre el registro de esta sesión: lo que norte va anotando
+mientras trabajas, en la propia terminal. Es lo que contesta «¿y por qué ha
+fallado eso?» sin salir a buscar un fichero — una conexión que se cae deja en la
+barra un «permiso denegado» que no dice nada, y aquí al lado está el motivo
+exacto.
+
+`e`, `w`, `i`, `d` y `t` eligen hasta qué nivel se enseña, de errores a todo; `/`
+filtra por texto, y busca también en el nombre del módulo, que es media búsqueda
+real. Las flechas y las páginas se despegan del final para que puedas leer
+mientras siguen llegando líneas, y `Fin` vuelve a pegarse. `Esc` devuelve el
+teclado sin cerrar el panel.
+
+Pedir más detalle sube el nivel de verdad, no solo el filtro: los mensajes de
+depuración no existen hasta que los pides, así que aparecen de ahí en adelante y
+no hacia atrás. Bajarlo otra vez **no** deja de guardarlos, para que ir y volver
+no te borre justo el rato que estabas mirando; el título dice qué se está
+guardando cuando es más de lo que se enseña, y cerrar el panel lo devuelve a su
+sitio. El panel guarda las últimas dos mil líneas y dice cuántas ha tirado.
+
+El detalle, en cambio, es **solo de norte**. Las bibliotecas que norte usa por
+dentro para hablar con un servidor escriben, a ese nivel, el contenido de lo que
+mandan — incluida tu contraseña antes de cifrarla. Así que sus mensajes se
+quedan siempre en avisos y errores, que es lo que explica un fallo, y ninguna
+tecla de este panel puede subirlos. El fichero al que apunta `norte paths` lleva
+las de todos a ese nivel, y también las del daemon, que aquí no se ven.
 
 {{cmd:layout.metadata}} abre a la derecha un panel de detalles que también
 sigue al cursor: nombre, clase, tamaño, cuándo se modificó y lo que el provider

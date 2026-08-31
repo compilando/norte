@@ -39,6 +39,7 @@ commands = [
     "layout.preview",
     "layout.processes",
     "layout.metadata",
+    "layout.log",
     "layout.pick",
 
     "profile.pick",
@@ -329,6 +330,32 @@ viewer, and deliberately so, because you opened it to press something in it.
 
 There is no pause. The protocol has cancel and nothing else, and a control that
 does not do what it says is worse than a control that is missing.
+
+{{cmd:layout.log}} opens this session's log: what norte is noting down while you
+work, right there in the terminal. It is what answers "and why did that fail?"
+without going off to find a file — a connection that dies leaves a "permission
+denied" on the bar that says nothing, and the exact reason is right here.
+
+`e`, `w`, `i`, `d` and `t` pick how much is shown, from errors to everything; `/`
+filters by text, and searches the module name too, which is half of what you
+actually look for. Arrows and pages detach from the tail so you can read while
+lines keep arriving, and `End` re-attaches. `Esc` hands the keyboard back without
+closing the panel.
+
+Asking for more detail really does raise the level, not just the filter: debug
+messages do not exist until you ask for them, so they appear from then on and not
+backwards. Lowering it again does **not** stop recording them, so going there and
+back does not erase the very stretch you were looking at; the title says what is
+being recorded whenever that is more than what is shown, and closing the panel
+puts it back. The panel keeps the last two thousand lines and says how many it
+dropped.
+
+That extra detail is **norte's only**, though. The libraries norte uses to talk
+to a server write, at that level, the contents of what they send — including your
+password before it is encrypted. So their messages stay at warnings and errors,
+which is what explains a failure, and no key in this panel can raise them. The
+file `norte paths` points at holds everyone's at that level, and the daemon's
+too, which are not visible here.
 
 {{cmd:layout.metadata}} opens a details panel on the right that also follows
 the cursor: name, kind, size, when it was last modified, and whatever the

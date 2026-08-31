@@ -264,6 +264,11 @@ pub async fn on_key(
         // mientras el lector creía tener el teclado en
         // la lista de tareas.
         on_processes_key(app, dialog_resolver, key.modifiers, key.code);
+    } else if app.key_owner() == crate::app::KeyOwner::Log && !modal_wins(app) {
+        // Panel de registro (#323), por el mismo motivo que el de procesos:
+        // sus teclas son de una letra y tienen que llegar aquí y no al
+        // listado, donde `d` es otra cosa.
+        crate::logview::apply(app, dialog_resolver, key.modifiers, key.code);
     } else if app.nav_popup.is_some() && !modal_wins(app) {
         // Popup historial/hotlist (spec 2026-07-18): Enter
         // sobre un item NAVEGA por el flujo de cd normal —

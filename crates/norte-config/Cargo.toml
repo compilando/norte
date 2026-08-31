@@ -28,6 +28,16 @@ tracing-appender = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+# Para probar la cota de secretos POR EL CAMINO REAL. `suppaftp` no emite
+# eventos de `tracing`: emite `log::trace!`, y el puente `tracing-log` cambia el
+# `target` del evento despachado a `"log"`, dejando el verdadero como campo. Los
+# tests que usaban `tracing::trace!(target: "suppaftp", …)` no probaban ese
+# camino, así que una defensa puesta sobre `meta.target()` en el sumidero
+# habría parecido correcta y no habría hecho nada. Las dos ya están en el árbol
+# (`suppaftp` usa `log`; `tracing-log` es feature por defecto de
+# `tracing-subscriber`), así que esto no añade dependencia nueva al binario.
+log = "0.4"
+tracing-log = "0.2"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
 [[test]]

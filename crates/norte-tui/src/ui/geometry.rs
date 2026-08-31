@@ -107,6 +107,15 @@ pub fn before_frame(app: &mut App, area: Rect) {
         let (_, list, _, _) = compare_layout(block_inner(body));
         view.pane.reconcile_viewport(usize::from(list.height));
     }
+    // El registro (#323), por el mismo motivo y con el mismo remedio. Nació
+    // con un alto ADIVINADO —diez, el que trae el hueco al abrirse— mientras
+    // su `draw` usaba el interior real, que son ocho: cada página se saltaba
+    // dos líneas y la primera, cuatro. Adivinar el viewport rompe el scroll en
+    // silencio, que es justo lo que esta función existe para no dejar hacer.
+    if let Some((_, rect)) = placed_of_kind(&res, &app.layout, crate::logview::KIND) {
+        let inner = block_inner(rect);
+        app.log_panel.set_viewport_rows(usize::from(inner.height));
+    }
 }
 
 /// El reparto de ESTE frame, con los `Auto` ya sustituidos.

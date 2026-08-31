@@ -231,6 +231,8 @@ pub enum KeyOwner {
     Processes,
     /// El árbol de directorios (#136).
     Tree,
+    /// El panel de registro (#323).
+    Log,
 }
 
 /// Lo que hace un click sobre una fila del sidebar de sitios (#226).
@@ -520,6 +522,21 @@ pub struct App {
     pub places_wants_drives: bool,
     /// El selector de conexiones (#140), si está abierto.
     pub connections_picker: Option<norte_frontend::connections_picker::ConnectionsPicker>,
+    /// El estado del panel de registro: qué nivel se enseña y qué se filtra.
+    pub log_panel: norte_frontend::logpanel::LogPanel,
+    /// El filtro de texto del registro MIENTRAS se teclea.
+    ///
+    /// Aparte del filtro ya aplicado (`log_panel.filter()`) porque son dos
+    /// cosas: lo que se está escribiendo y lo que está filtrando. Sin la
+    /// separación, cada letra re-filtraría la lista y el lector vería la
+    /// pantalla saltar bajo el cursor mientras escribe.
+    pub log_filter_input: Option<String>,
+    /// El anillo del que lee ese panel.
+    ///
+    /// `Option` porque el subscriber lo instala `main`, y los tests construyen
+    /// `App` sin él: un panel sin anillo se pinta vacío diciendo que no hay
+    /// registro instalado, que es la verdad, y no se cae.
+    pub log_ring: Option<norte_config::logring::LogRing>,
     /// Lo que el lector está esperando ahora mismo, si algo (#323).
     ///
     /// Lo pone y lo quita quien espera, y solo dura la espera: un `Busy` que
@@ -869,6 +886,9 @@ impl App {
             kinds: norte_frontend::layout::KindRegistry::builtin(),
             roles: norte_frontend::layout::Roles::con_active(crate::panel::SLOT_LEFT),
             key_owner: KeyOwner::Panes,
+            log_panel: norte_frontend::logpanel::LogPanel::default(),
+            log_filter_input: None,
+            log_ring: None,
             busy: None,
             menu: None,
             menu_ultimo: 0,

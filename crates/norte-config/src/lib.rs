@@ -19,6 +19,13 @@ pub mod load;
 /// depende de este crate por leer `norte.toml` no tiene por qué compilarlos.
 #[cfg(feature = "logging")]
 pub mod logging;
+pub mod logline;
+/// El anillo en memoria que un frontend pinta (#323 dejó ver por qué hacía
+/// falta). Misma feature que [`logging`]: es otra capa del mismo subscriber.
+/// El TIPO de línea, en cambio, vive en [`logline`] y sin feature — lo necesita
+/// quien pinta, que no compila subscriber ninguno.
+#[cfg(feature = "logging")]
+pub mod logring;
 pub mod profiles;
 pub mod schema;
 #[cfg(feature = "watch")]

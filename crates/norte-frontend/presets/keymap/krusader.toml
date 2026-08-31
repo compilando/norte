@@ -110,6 +110,10 @@ keymap = [
     # teclado. El anillo da la vuelta, así que hacia delante se llega igual.
     { on = ["alt+o"], run = "layout.focus-next" },
     { on = ["alt+j"], run = "layout.processes" },
+    # El registro (#323): NO lo atesta Krusader —no tiene un panel así—, se
+    # ata igual porque es de norte y `alt+l` está libre. Ver el bloque de
+    # divergencias de la cabecera.
+    { on = ["alt+l"], run = "layout.log" },
     # El resto de la familia `layout.*`, con los mismos acordes que en los
     # otros seis presets: ver la nota larga en `orthodox.toml`. Krusader tiene
     # lo suyo para el reparto (`Ctrl+Alt+R` orientación, `Ctrl+Alt+=` igualar),

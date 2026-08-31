@@ -147,6 +147,12 @@ pub const CATALOGUE: &[CommandDef] = &[
     // alcanzan desde la paleta y desde el menú.
     live("layout.processes", false),
     live("layout.metadata", false),
+    // El registro (#323). Este SÍ lleva acorde en los siete, a diferencia de
+    // sus vecinos: lo que se abre aquí es lo que explica por qué acaba de
+    // fallar algo, y buscarlo en la paleta justo cuando algo va mal es pedirle
+    // al lector el paso de más en el peor momento. `alt+l` estaba libre en los
+    // siete presets.
+    live("layout.log", false),
     // El selector de disposición. Sin acorde por el mismo #228, y además
     // porque el nombre de una disposición NO es el de un preset de teclas
     // aunque coincida: el diálogo lo dice en su pie.

@@ -103,6 +103,9 @@ pub const MENUS: &[Menu] = &[
             "layout.preview",
             "layout.processes",
             "layout.metadata",
+            // #323: el registro va junto a procesos, que es su vecino de
+            // sentido — los dos contestan «¿qué está haciendo esto?».
+            "layout.log",
             "layout.pick",
             "profile.pick",
             "pane.toggle-hidden",

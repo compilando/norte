@@ -753,6 +753,17 @@ places-empty = nothing here yet
 processes-title = Processes
 processes-empty = nothing running
 processes-has-keyboard = this panel has the keyboard · Esc returns it
+
+# The log panel (#323). The title carries the level because a panel that looks
+# empty has to tell "nothing happened" apart from "you are filtering it out".
+log-title = Log
+log-keys = e/w/i/d/t level · / filter · End to follow · Esc returns the keyboard
+log-empty = nothing to show with this filter
+log-no-ring = no log installed in this process
+log-dropped = { $n } old lines dropped
+# When the ring is capturing MORE than is being shown: raising it never lowers
+# by itself, so the process keeps paying for that level until the panel closes.
+log-capturing = capturing { $level }
 task-failed = failed
 metadata-title = Details
 metadata-empty = nothing under the cursor
@@ -837,6 +848,7 @@ menu-item-layout-set-target = Set destination
 menu-item-layout-places = Places sidebar
 menu-item-layout-preview = Docked viewer
 menu-item-layout-processes = Processes panel
+menu-item-layout-log = Log
 menu-item-layout-metadata = Details panel
 menu-item-layout-pick = Layout...
 menu-item-profile-pick = Profile...
@@ -895,6 +907,7 @@ help-cmd-layout-set-target = set destination
 help-cmd-layout-places = show or hide the places sidebar
 help-cmd-layout-preview = show or hide the docked viewer
 help-cmd-layout-processes = show or hide the processes panel
+help-cmd-layout-log = show or hide this session's log
 help-cmd-layout-metadata = show or hide the details panel
 help-cmd-layout-pick = choose a layout
 help-cmd-profile-pick = choose a profile
