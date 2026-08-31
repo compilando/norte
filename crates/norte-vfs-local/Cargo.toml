@@ -43,10 +43,19 @@ windows-sys = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
+criterion.workspace = true
+futures.workspace = true
 norte-testkit.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+
+# El benchmark que la ADR 0002 aplazó (#12): mide el suelo del sistema contra
+# el camino del provider, que es lo que decide si `tokio-uring` tiene algo que
+# ganar aquí.
+[[bench]]
+name = "local_io"
+harness = false
 
 [lints]
 workspace = true

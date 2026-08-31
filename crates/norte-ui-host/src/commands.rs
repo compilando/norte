@@ -162,6 +162,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "app.theme",
     "app.menu",
     "profile.pick",
+    "profile.save-as",
     "profile.next",
     "profile.prev",
     "pane.select-drive",
@@ -500,6 +501,8 @@ pub enum Efecto {
     Menu,
     /// Abre el selector de PERFILES (ADR 0079).
     PerfilElegir,
+    /// Guardar el espacio de trabajo de AHORA como un perfil (#318).
+    PerfilGuardarComo,
     /// Salta al perfil siguiente o al anterior, sin abrir nada.
     PerfilVecino {
         /// Hacia el anterior.
@@ -775,6 +778,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "app.theme" => Efecto::Tema,
         "app.menu" => Efecto::Menu,
         "profile.pick" => Efecto::PerfilElegir,
+        "profile.save-as" => Efecto::PerfilGuardarComo,
         "profile.next" => Efecto::PerfilVecino { atras: false },
         "profile.prev" => Efecto::PerfilVecino { atras: true },
         "pane.select-drive" => Efecto::Volumenes,

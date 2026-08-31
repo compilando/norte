@@ -74,29 +74,17 @@ pub async fn profile_save_as(app: &mut App) {
 }
 
 /// Lo que hay en pantalla, en la forma que `norte-config` escribe.
+///
+/// El CONTENIDO lo decide `norte_frontend::config::profile_snapshot`, que es
+/// la misma que llama la ventana (#318): aquí solo se contesta dónde está cada
+/// listado. Ver su rustdoc para por qué no hay dos copias de esto — es la
+/// lección de la ADR 0077, y este sería el peor sitio para olvidarla.
 fn snapshot_de(app: &App) -> norte_config::ProfileSnapshot {
-    let layout_toml = norte_frontend::layout::config::to_toml(&app.layout).ok();
-    let start = app
-        .layout
-        .slot_ids()
-        .into_iter()
-        .filter_map(|id| {
-            let norte_frontend::layout::SlotId(n) = id;
-            let pane = app.panes.browser(id)?;
-            Some((n.to_string(), pane.dir().to_wire()))
-        })
-        .collect();
-    norte_config::ProfileSnapshot {
-        title: None,
-        layout_toml,
-        // Los escalares se dejan para cuando exista la edición de config por
-        // pantalla: hoy lo que el lector cambia en marcha —tema, preset— ya
-        // se persiste por su propio camino, y copiarlo aquí escribiría dos
-        // veces lo mismo con dos verdades posibles.
-        ui: Vec::new(),
-        start,
-        keymap: keymap_del_perfil_activo(app),
-    }
+    norte_frontend::config::profile_snapshot(
+        &app.layout,
+        &|id| app.panes.browser(id).map(|p| p.dir().clone()),
+        keymap_del_perfil_activo(app),
+    )
 }
 
 /// El `keymap.toml` del perfil ACTIVO, tal cual, o `None` si no hay perfil o

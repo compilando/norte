@@ -197,6 +197,56 @@ pub fn load_with_profile(
     norte_config::load_with(layers_for, name, source, &load)
 }
 
+/// Lo que «guardar como perfil» guarda, montado a partir de lo que se VE
+/// (#306 en el terminal, #318 en la ventana).
+///
+/// Vive aquí, y no una copia en cada frontend, por la lección de la ADR 0077:
+/// **una decisión duplicada entre frontends diverge en silencio**. Y este es
+/// el peor sitio donde podría divergir — dos «guardar como» que producen
+/// perfiles distintos convierten el perfil en algo que depende de por dónde lo
+/// guardaste. Con una sola función, la paridad no es un test que haya que
+/// acordarse de escribir: es que no hay dos cosas que comparar.
+///
+/// `dir_de_hueco` contesta dónde está cada listado; un hueco que no lo sea
+/// (visor, procesos, sitios) contesta `None` y no entra en `[profile.start]`,
+/// que es lo correcto: no tiene directorio que recordar.
+///
+/// Lo que NO se guarda, y por qué:
+///
+/// - los escalares de `[ui]`: lo que el lector cambia en marcha —tema,
+///   preset— ya se persiste por su propio camino, y copiarlo aquí escribiría
+///   dos veces lo mismo con dos verdades posibles;
+/// - los favoritos, las conexiones y el resto de secciones. Un perfil es un
+///   espacio de TRABAJO, no una copia de la configuración entera: duplicar la
+///   hotlist en cada perfil la congelaría, y la del usuario sigue viéndose por
+///   debajo.
+///
+/// El `keymap.toml` sí se copia, BYTE a BYTE y sin reescribirlo: es un fichero
+/// del lector, con sus comentarios, y «guardar como» tiene que producir un
+/// perfil que se comporte igual que el que tenías.
+#[must_use]
+pub fn profile_snapshot(
+    arbol: &crate::layout::Node,
+    dir_de_hueco: &dyn Fn(crate::layout::SlotId) -> Option<norte_proto::VPath>,
+    keymap: Option<Vec<u8>>,
+) -> norte_config::ProfileSnapshot {
+    let start = arbol
+        .slot_ids()
+        .into_iter()
+        .filter_map(|id| {
+            let crate::layout::SlotId(n) = id;
+            Some((n.to_string(), dir_de_hueco(id)?.to_wire()))
+        })
+        .collect();
+    norte_config::ProfileSnapshot {
+        title: None,
+        layout_toml: crate::layout::config::to_toml(arbol).ok(),
+        ui: Vec::new(),
+        start,
+        keymap,
+    }
+}
+
 /// Lee todos los perfiles de `<dir>/profiles/`, con su título y su motivo si
 /// no cargan.
 ///
@@ -248,6 +298,46 @@ mod tests {
     use norte_config::{Layer, Layers};
 
     use super::*;
+
+    /// **Solo entra en `[profile.start]` lo que ES un listado.**
+    ///
+    /// Un hueco de visor, de procesos o de sitios no tiene directorio que
+    /// recordar, y meterlo con el del panel de al lado escribiría un perfil
+    /// que al abrirse manda un visor a un directorio.
+    #[test]
+    fn el_start_solo_lleva_los_huecos_que_son_listado() {
+        use crate::layout::SlotId;
+        use crate::layout::{Dir, KindId, Node};
+        let arbol = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::browser()),
+            ],
+        );
+        // El hueco 2 no contesta: no es un listado.
+        let snap = profile_snapshot(
+            &arbol,
+            &|SlotId(n)| (n == 1).then(|| norte_proto::VPath::parse("mem:///uno").unwrap()),
+            None,
+        );
+        assert_eq!(snap.start, [("1".to_owned(), "mem:///uno".to_owned())]);
+        assert!(snap.layout_toml.is_some(), "la disposición sí va entera");
+        assert!(snap.ui.is_empty(), "los escalares de [ui] no se copian");
+        assert!(snap.keymap.is_none());
+    }
+
+    /// El `keymap.toml` viaja BYTE a BYTE: es un fichero del lector, con sus
+    /// comentarios, y reescribirlo le cambiaría el suyo.
+    #[test]
+    fn el_keymap_se_copia_tal_cual() {
+        use crate::layout::SlotId;
+        use crate::layout::{KindId, Node};
+        let arbol = Node::slot(SlotId(1), KindId::browser());
+        let crudo = b"# mio\n[pane]\nkeymap = []\n\xff".to_vec();
+        let snap = profile_snapshot(&arbol, &|SlotId(_)| None, Some(crudo.clone()));
+        assert_eq!(snap.keymap.as_deref(), Some(crudo.as_slice()));
+    }
 
     /// Un árbol con capa de usuario y un perfil `work` cuyo contenido se da.
     fn arbol_con_perfil(

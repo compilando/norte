@@ -184,6 +184,20 @@ fn compare(
     rel: &[u8],
     index_mtime_sec: i64,
 ) -> State {
+    // Un SUBMÓDULO no es un fichero (#225). Su entrada del índice es un
+    // «gitlink» —modo `0o160000`— cuya ruta es el directorio, así que la
+    // búsqueda exacta la encuentra y la comparación de abajo veía un
+    // directorio donde el índice decía fichero: daba `D`, o sea por borrado un
+    // submódulo perfectamente sano.
+    //
+    // Lo que se contesta es NADA, y es deliberado: saber si tiene cambios
+    // exige abrir el repositorio de dentro —otro `.git`, otro índice, otro
+    // árbol de objetos—, que es la misma frontera que deja fuera el estado
+    // «staged». Callar es honesto; poner una marca sería afirmar algo que no
+    // se ha mirado.
+    if entry.mode & 0o170_000 == 0o160_000 {
+        return State::Clean;
+    }
     if meta.is_dir {
         // Era un fichero rastreado y ahora hay un directorio: para git eso es
         // el fichero borrado.
@@ -421,6 +435,42 @@ mod tests {
                 Some("?".to_string()),
                 Some("!".to_string())
             ]
+        );
+    }
+
+    /// **Un submódulo no está borrado** (#225).
+    ///
+    /// Su entrada del índice es un «gitlink» (modo `0o160000`) cuya ruta es el
+    /// DIRECTORIO, así que `index.get` la encuentra y `compare` veía un
+    /// directorio donde el índice decía fichero: `D`. O sea, la columna daba
+    /// por borrado un submódulo perfectamente sano, que es una falsa alarma
+    /// sobre lo que más asusta.
+    ///
+    /// Lo que dice ahora es NADA: sin abrir el repositorio de dentro no se
+    /// puede saber si tiene cambios, y callar es lo honesto. Decir «limpio»
+    /// con una marca sería afirmarlo.
+    #[test]
+    fn un_submodulo_no_sale_como_borrado() {
+        let idx = GitIndex::parse(&crate::index::tests_support::forja_con_modo(&[(
+            b"vendor/lib",
+            0,
+            11,
+            [0u8; 20],
+            0o160_000,
+        )]))
+        .expect("índice forjado");
+        let fs = FakeLocation::default().with_dir(b"vendor/lib");
+        assert_eq!(
+            status_for(
+                &idx,
+                &Ignores::default(),
+                &fs,
+                b"vendor",
+                &[b"lib".to_vec()],
+                INDICE_NUEVO
+            ),
+            vec![None],
+            "un submódulo sano no es ni «borrado» ni «sin rastrear»"
         );
     }
 

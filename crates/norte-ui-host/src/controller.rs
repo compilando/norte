@@ -523,6 +523,8 @@ enum Mensaje {
     /// estoy ahora» pondría en la lista un favorito distinto del que se acaba
     /// de escribir en el fichero.
     FavoritoPersistido(Box<(String, norte_proto::VPath, Option<&'static str>)>),
+    /// El perfil se escribió (o no): nombre y la clave del fallo (#318).
+    PerfilGuardado(Box<(String, Option<&'static str>)>),
     /// Un favorito se quitó, con la misma forma.
     FavoritoQuitado(Box<(String, Option<&'static str>)>),
     Apagar(oneshot::Sender<ShutdownReport>),
@@ -1093,6 +1095,12 @@ async fn actor(
             Mensaje::FavoritoQuitado(hecho) => {
                 let (nombre, fallo) = *hecho;
                 for u in estado.favorito_persistido(&nombre, None, fallo) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::PerfilGuardado(hecho) => {
+                let (nombre, fallo) = *hecho;
+                for u in estado.perfil_guardado(&nombre, fallo) {
                     let _ = updates.send(u);
                 }
             }
@@ -1696,6 +1704,13 @@ enum Pendiente {
         /// A dónde apunta el favorito.
         destino: VPath,
     },
+    /// Guardar el espacio de trabajo como un perfil (#318, ADR 0079).
+    ///
+    /// No lleva nada: lo que se guarda es lo que se VE, y eso se lee al
+    /// confirmar. La diferencia con el favorito de arriba no es un descuido —
+    /// allí el destino es una respuesta a «¿qué estabas mirando?», y aquí la
+    /// pregunta es «¿cómo está la pantalla?», que solo tiene sentido AHORA.
+    GuardarPerfil,
     /// Crear un directorio dentro de este otro. El nombre lo teclea el
     /// usuario y se valida al confirmar, no al teclear: corregir un nombre a
     /// medias es peor que verlo rechazado al final.
@@ -6978,6 +6993,119 @@ impl Estado {
         (None, Vec::new())
     }
 
+    /// Pide el NOMBRE con el que guardar el espacio de trabajo (#318).
+    ///
+    /// Prellenado con el perfil ACTIVO, que es lo que un «guardar como» hace
+    /// en todas partes: lo normal es partir del que tienes y darle otro
+    /// nombre. Sin perfil activo el campo nace vacío — inventar uno sería
+    /// proponer un directorio que el lector no ha pedido.
+    fn pedir_guardar_perfil(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let sugerido = self
+            .perfil_activo
+            .as_ref()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            // Las claves del TERMINAL, no unas nuevas: es el mismo diálogo, y
+            // Fluent se queda con la PRIMERA definición — una clave duplicada
+            // con otro texto deja muerta a la vieja sin decirlo.
+            title_key: "modal-profile-save-as".to_owned(),
+            destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
+            deadline_at_ms: None,
+            body: vec![crate::dto::DialogLine {
+                text: clamp_display(norte_i18n::t_in(self.lang, "modal-profile-save-as-hint")),
+                hostile: false,
+            }],
+            overflow_note: String::new(),
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: Some(clamp_display(sugerido.clone())),
+            input_hostile: false,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista,
+            input_crudo: sugerido,
+            reconocido: true,
+            al_confirmar: Some(Pendiente::GuardarPerfil),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Escribe `profiles/<nombre>/` con lo que hay en pantalla (#318).
+    ///
+    /// El CONTENIDO no se decide aquí: lo monta [`Self::instantanea_de_perfil`]
+    /// y lo escribe `norte_config::save_profile`, que es el mismo escritor que
+    /// usa el terminal. Es la exigencia de la ADR 0077 —una decisión duplicada
+    /// entre frontends diverge en silencio—, y aquí sería el peor sitio para
+    /// que divergiera: dos «guardar como» que producen perfiles distintos
+    /// convierten el perfil en algo que depende de por dónde lo guardaste.
+    ///
+    /// El nombre se valida ANTES de tocar disco, y el disco va fuera del actor.
+    fn guardar_perfil(
+        &mut self,
+        nombre: &str,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
+        let nombre = std::ffi::OsString::from(nombre.trim());
+        if !norte_config::valid_profile_name(&nombre) {
+            return (
+                Some("msg-profile-name-invalid"),
+                self.decir("msg-profile-name-invalid"),
+            );
+        }
+        let Some(dir) = self.dir_de_perfiles() else {
+            return (Some("host-no-config-dir"), self.decir("host-no-config-dir"));
+        };
+        let snap = self.instantanea_de_perfil();
+        let buzon = buzon.clone();
+        let visible = nombre.to_string_lossy().into_owned();
+        tokio::task::spawn_blocking(move || {
+            let clave = match norte_config::save_profile(&dir, &nombre, &snap) {
+                Ok(_) => None,
+                Err(e) => Some(clave_de_io(&e)),
+            };
+            let _ = buzon.blocking_send(Mensaje::PerfilGuardado(Box::new((visible, clave))));
+        });
+        (None, Vec::new())
+    }
+
+    /// Lo que hay en pantalla, en la forma que `norte-config` escribe (#318).
+    ///
+    /// El CONTENIDO lo decide `norte_frontend::config::profile_snapshot`, que
+    /// es la misma que llama el terminal: aquí solo se contesta dónde está
+    /// cada listado. Ver su rustdoc para por qué no hay dos copias de esto.
+    fn instantanea_de_perfil(&self) -> norte_config::ProfileSnapshot {
+        norte_frontend::config::profile_snapshot(
+            &self.arbol,
+            // Solo los huecos que SON un listado tienen directorio, y son los
+            // que `huecos` guarda: el visor, los procesos y los sitios no
+            // tienen nada que poner en `[profile.start]`.
+            &|SlotId(n)| self.huecos.get(&n).map(|h| h.pane.dir().clone()),
+            self.dir_de_escritura()
+                .and_then(|d| std::fs::read(d.join("keymap.toml")).ok()),
+        )
+    }
+
     /// Quita el favorito que el cursor señala (#309).
     ///
     /// Sin confirmación, como en el terminal: un favorito es un atajo, no un
@@ -7022,6 +7150,28 @@ impl Estado {
     }
 
     /// El disco contestó a un favorito guardado (#309): se refleja o se dice.
+    /// El perfil quedó escrito, o no (#318).
+    ///
+    /// No se activa solo: guardar es guardar, y cambiar de perfil es otra
+    /// cosa con su propia tecla. El terminal hace lo mismo, y el test de
+    /// paridad lo pide.
+    fn perfil_guardado(
+        &mut self,
+        nombre: &str,
+        fallo: Option<&'static str>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        if let Some(clave) = fallo {
+            return self.decir(clave);
+        }
+        self.status.message = Some(clamp_display(norte_i18n::ta_in(
+            self.lang,
+            "msg-profile-saved",
+            &[("name", &clamp_display(nombre.to_owned()))],
+        )));
+        let cambio = ViewChange::Status(self.status.clone());
+        vec![self.parche(vec![cambio])]
+    }
+
     fn favorito_persistido(
         &mut self,
         nombre: &str,
@@ -8931,6 +9081,9 @@ impl Estado {
                     // Partir pide un TAMAÑO, pero es el mismo diálogo de un
                     // campo de texto y una confirmación.
                     | Pendiente::Partir { .. }
+                    // Y guardar el perfil pide un NOMBRE, que acaba siendo un
+                    // directorio: mismo diálogo de un campo (#318).
+                    | Pendiente::GuardarPerfil
                     // Y los permisos piden un MODO, con la misma forma (#314).
                     // El corpus los documenta en la página de las propiedades,
                     // pero el CONTEXTO de teclas es este: un campo y dos
@@ -9816,6 +9969,7 @@ impl Estado {
             | Efecto::Tema
             | Efecto::Menu
             | Efecto::PerfilElegir
+            | Efecto::PerfilGuardarComo
             | Efecto::PerfilVecino { .. }
             | Efecto::Volumenes
             | Efecto::Conexiones
@@ -10075,6 +10229,7 @@ impl Estado {
             Efecto::Tema => self.abrir_tema(),
             Efecto::Menu => self.abrir_menu(),
             Efecto::PerfilElegir => self.pedir_perfiles(None, buzon),
+            Efecto::PerfilGuardarComo => self.pedir_guardar_perfil(),
             Efecto::PerfilVecino { atras } => self.pedir_perfiles(Some(!atras), buzon),
             Efecto::Volumenes => self.abrir_volumenes(backend, buzon),
             Efecto::Conexiones => self.abrir_conexiones(backend, buzon),
@@ -14371,6 +14526,14 @@ impl Estado {
             // no se relee aquí.
             Some(Pendiente::GuardarFavorito { destino }) => {
                 let (motivo, partes) = self.guardar_favorito(&destino, &dialogo.input_crudo, buzon);
+                rehusado = motivo;
+                salidas.extend(partes);
+            }
+            // #318: el perfil. A diferencia del favorito, lo que se guarda se
+            // lee AHORA: es el estado de la pantalla, no una respuesta que el
+            // diálogo capturó al abrirse.
+            Some(Pendiente::GuardarPerfil) => {
+                let (motivo, partes) = self.guardar_perfil(&dialogo.input_crudo, buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }

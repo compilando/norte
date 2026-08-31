@@ -202,10 +202,21 @@ pub mod tests_support {
     /// Un índice v2 con `(ruta, tamaño, mtime, oid)` por entrada.
     #[must_use]
     pub fn forja(entradas: &[(&[u8], u32, u32, [u8; 20])]) -> Vec<u8> {
+        let con_modo: Vec<_> = entradas
+            .iter()
+            .map(|(n, s, m, o)| (*n, *s, *m, *o, 0o100_644u32))
+            .collect();
+        forja_con_modo(&con_modo)
+    }
+
+    /// [`forja`] con el MODO de cada entrada, que es lo único que distingue un
+    /// submódulo (`0o160000`, el «gitlink») de un fichero normal.
+    #[must_use]
+    pub fn forja_con_modo(entradas: &[(&[u8], u32, u32, [u8; 20], u32)]) -> Vec<u8> {
         let mut out = b"DIRC".to_vec();
         out.extend_from_slice(&2u32.to_be_bytes());
         out.extend_from_slice(&(entradas.len() as u32).to_be_bytes());
-        for (name, size, mtime, oid) in entradas {
+        for (name, size, mtime, oid, mode) in entradas {
             let start = out.len();
             out.extend_from_slice(&7u32.to_be_bytes());
             out.extend_from_slice(&0u32.to_be_bytes());
@@ -213,7 +224,7 @@ pub mod tests_support {
             out.extend_from_slice(&0u32.to_be_bytes());
             out.extend_from_slice(&3u32.to_be_bytes());
             out.extend_from_slice(&5u32.to_be_bytes());
-            out.extend_from_slice(&0o100_644u32.to_be_bytes());
+            out.extend_from_slice(&mode.to_be_bytes());
             out.extend_from_slice(&0u32.to_be_bytes());
             out.extend_from_slice(&0u32.to_be_bytes());
             out.extend_from_slice(&size.to_be_bytes());

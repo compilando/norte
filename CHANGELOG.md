@@ -9,6 +9,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window can save the workspace as a profile** (#318), which until now
+  only the terminal could. The dialog is new; the CONTENT is not decided twice —
+  the snapshot builder moved into the shared crate, so both frontends call one
+  function and there is nothing left to keep in sync. That is ADR 0077's lesson
+  applied rather than policed: two "save as" that produced different profiles
+  would make a profile depend on where you saved it from.
 - **Marking while you move**, in all seven presets and both frontends. Space
   and Insert marked going DOWN and there was nothing for going up, nothing for
   a range, and nothing for "these and only these" — so a reader who overshot by
@@ -462,6 +468,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A git submodule was reported as deleted** (#225). Its index entry is a
+  gitlink whose path is the DIRECTORY, so the exact lookup found it and the
+  comparison then saw a directory where the index said file: `D`, on a
+  perfectly healthy submodule. It now reports nothing at all — knowing whether
+  a submodule has changes means opening the repository inside it, which is the
+  same boundary that keeps staged status out of v1. Saying nothing is honest; a
+  mark would be a claim about something never looked at.
 - **Semantic search stopped materialising the whole index to answer** (#122).
   It scored every stored vector into a second full-length list, sorted all of
   it, and threw away everything past the hundred asked for; now a bounded heap

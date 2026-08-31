@@ -370,6 +370,9 @@ it-remote:
 bench:
     cargo bench -p norte-tui --bench presupuestos
     cargo bench -p norte-core --bench copy_remoto
+    # El de la ADR 0002 / #12: el suelo del sistema contra el camino del
+    # provider. Es la vara que caduca la decisión de no meter `tokio-uring`.
+    cargo bench -p norte-vfs-local --bench local_io
 
 # ---------- instalación ----------
 

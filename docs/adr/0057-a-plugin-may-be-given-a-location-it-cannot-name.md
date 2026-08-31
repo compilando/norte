@@ -123,6 +123,14 @@ down three times (#165, #201, #181).
   rather than done.
 - What the first plugin does not do, said plainly and filed as #225: staged
   status (index versus HEAD) would need an object-database reader in the guest;
-  submodules are not handled; a `.git` FILE (worktrees) is not followed; and a
-  location on a provider that is not `file://` mints no token at all, so the
-  column is simply empty there.
+  a `.git` FILE (worktrees) is not followed; and a location on a provider that
+  is not `file://` mints no token at all, so the column is simply empty there.
+- **Submodules say nothing, and that is now deliberate.** They used to say `D`.
+  A submodule's index entry is a gitlink (mode `0o160000`) whose path is the
+  DIRECTORY, so the exact lookup finds it and the comparison then saw a
+  directory where the index said file — reporting a perfectly healthy submodule
+  as deleted, which is a false alarm about the one thing that alarms. It now
+  reports an empty cell: knowing whether a submodule has changes means opening
+  the repository inside it — another `.git`, another index, another object
+  store — which is the same boundary that keeps staged status out. Saying
+  nothing is honest; a mark would be a claim about something never looked at.

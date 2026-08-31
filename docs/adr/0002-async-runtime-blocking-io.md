@@ -40,12 +40,42 @@ provide backpressure. Cancellation is cooperative through
 `tokio-uring` remains a possible feature-gated optimization if benchmarks show
 a meaningful benefit.
 
+### The deferred benchmark was run, and the answer is no (#12)
+
+Measured 2026-08-31 on Linux (`crates/norte-vfs-local/benches/local_io.rs`,
+`just bench`), listing a directory of 20 000 entries:
+
+| | per listing | per entry |
+| --- | --- | --- |
+| `std::fs::read_dir` + `file_type` — the system's own floor | 3.67 ms | 183 ns |
+| the real path: `spawn_blocking` + bounded channel + one `Entry` per row | 23.83 ms | 1191 ns |
+
+**85% of the provider's listing time is not system calls.** The floor is
+measured doing exactly what the provider does — `read_dir` plus `file_type`,
+which on Linux comes from the dirent's `d_type` without an extra call — so the
+gap is `Entry` construction, the channel, and the handoff to the blocking pool.
+io_uring attacks the other 15%, and only part of it: it batches submissions, it
+does not stop us allocating a `VPath` per row.
+
+Reading is even clearer: the same harness reads 256 MiB through the provider at
+**5.0 GiB/s**, which is page cache and an order of magnitude above any device
+this would run on. The read path is not what limits a copy.
+
+So the feature gate is **not opened**. The line worth optimising, if listing
+ever needs to be faster, is the 85% — and that is ordinary Rust in
+`norte-vfs-local`, not a second I/O engine with its own cancellation semantics
+and a second platform-specific code path. Re-run the benchmark before revisiting
+this: the conclusion is a measurement, not an opinion, and it expires if the
+listing path changes shape.
+
 ## Consequences
 
 - The workspace has one concurrency model and can test timers with
   `tokio::time::pause`.
 - The blocking pool is bounded and configurable. Lazy streams release their
   blocking thread between chunks.
-- Peak Linux performance may remain below an io_uring implementation until the
-  deferred benchmark is run.
+- Peak Linux performance is NOT meaningfully below an io_uring implementation:
+  the benchmark above says system calls are 15% of a listing and that the read
+  path already runs an order of magnitude faster than any device. #12 is closed
+  on that measurement rather than on the guess this line used to carry.
 - Tokio becomes a structural dependency across the asynchronous codebase.

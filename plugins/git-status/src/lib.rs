@@ -9,6 +9,27 @@
 //!
 //! Lo que NO hace: escribir, ejecutar `git`, ni saber dónde está nada. No hay
 //! rutas en este código; hay un token y caminos relativos.
+//!
+//! # Lo que esta columna NO puede decir, y por qué (#225, ADR 0057)
+//!
+//! Compara el ÁRBOL DE TRABAJO contra el índice, y nada más. Las tres
+//! fronteras, dichas aquí para que nadie tenga que deducirlas del código:
+//!
+//! - **El estado «staged» (índice contra HEAD).** `M` significa «distinto del
+//!   índice». El `git status` corto tiene dos columnas porque un fichero puede
+//!   estar añadido, o staged y modificado otra vez. Distinguirlos exige leer el
+//!   árbol de HEAD, o sea un lector de la base de objetos dentro de un guest
+//!   `no_std`: los objetos sueltos son flujos zlib y los empaquetados piden el
+//!   índice del pack. Es mucho código, y la primera versión no lo intenta.
+//! - **Los submódulos.** Su entrada es un gitlink y se reconoce como tal, así
+//!   que ya no se dan por borrados; pero saber si tienen cambios exige abrir el
+//!   repositorio de dentro. La celda queda VACÍA, que es callar en vez de
+//!   afirmar.
+//! - **Una ubicación que no es `file://`.** La capacidad de ubicación no acuña
+//!   token para sftp, s3, mem ni el interior de un archivo comprimido: el
+//!   abridor confinado necesita un descriptor de directorio de verdad. Ahí la
+//!   columna sale vacía, que es correcto y conviene tenerlo escrito — el mismo
+//!   plugin PARECE roto para quien esté mirando un checkout remoto.
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
 extern crate alloc;
