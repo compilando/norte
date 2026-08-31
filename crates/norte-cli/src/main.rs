@@ -18,6 +18,7 @@ use norte_vfs_local::LocalProvider;
 
 mod doctor;
 mod help;
+mod paths;
 
 /// Ruta del binario de frontend a lanzar: el HERMANO de `exe` si existe,
 /// si no el nombre pelado (que el `PATH` resolverá). Puro para poder
@@ -237,6 +238,14 @@ enum Cmd {
     },
     /// Diagnósticos de solo lectura sobre capas de config y keymaps (H2)
     Doctor {
+        /// Salida JSON en vez de texto para humanos
+        #[arg(long)]
+        json: bool,
+    },
+    /// Dice DÓNDE está cada fichero que norte lee o escribe: las capas de
+    /// config, y de la resuelta el `norte.toml`, las teclas, las conexiones,
+    /// los secretos, el journal, el índice, los logs y el socket del daemon
+    Paths {
         /// Salida JSON en vez de texto para humanos
         #[arg(long)]
         json: bool,
@@ -665,6 +674,12 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if let Cmd::Doctor { json } = cli.cmd {
         return doctor_cmd(json).await;
     }
+    // `paths` resuelve rutas y las statea, nada más: mismo sitio por el mismo
+    // motivo. Y ANTES de construir engine: la pregunta «dónde está mi config»
+    // se hace justo cuando algo de eso está roto.
+    if let Cmd::Paths { json } = cli.cmd {
+        return paths_cmd(json, cli.socket.clone()).await;
+    }
     // La ayuda es el corpus EMBEBIDO más el keymap del usuario (H3g): ni
     // engine, ni daemon, ni red. Va aquí arriba por eso — construir un engine
     // para imprimir documentación sería trabajo que el lector paga sin verlo.
@@ -907,6 +922,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Cmd::Audit { .. }
         | Cmd::Ai { .. }
         | Cmd::Doctor { .. }
+        | Cmd::Paths { .. }
         | Cmd::Help { .. }
         | Cmd::ShellInit { .. }
         | Cmd::Tui { .. } => unreachable!("manejado arriba"),
@@ -1494,6 +1510,88 @@ fn shell_init_cmd(shell: &str) -> ExitCode {
         );
         ExitCode::FAILURE
     }
+}
+
+/// `norte paths`: print where every file norte reads or writes lives.
+///
+/// Resolution is NOT re-derived here — layers, config dir, state dir, the
+/// effective log dir and the socket all come from the same functions the rest
+/// of the binary uses, so this command cannot drift away from the code it
+/// explains. Read-only: it stats, it never creates, so asking where the config
+/// dir is does not bring it into existence.
+///
+/// Always exits `SUCCESS`: a missing path is an ANSWER (half of these files
+/// are optional), not a failure. Judging config is `doctor`'s job.
+async fn paths_cmd(json: bool, socket: Option<PathBuf>) -> anyhow::Result<ExitCode> {
+    let layers = norte_config::standard_layers();
+    let config_dir = norte_config::config_dir();
+    let socket = socket.unwrap_or_else(|| norte_core::daemon::default_socket_path(None));
+    // Mismo `[log] dir` efectivo que resuelven los frontends y `doctor`:
+    // apuntar al default mientras el log de verdad está en otro sitio es
+    // exactamente el fallo que este comando existe para evitar.
+    let layers_log = layers.clone();
+    // `collect` statea cada ruta (I/O síncrona, regla 2).
+    let entries = tokio::task::spawn_blocking(move || {
+        let dir_log = norte_config::load(&layers_log)
+            .ok()
+            .and_then(|c| c.log_dir)
+            .filter(|d| d.is_absolute());
+        let log_dir = norte_core::logging::log_dir(dir_log.as_deref());
+        paths::collect(
+            &layers_log,
+            &config_dir,
+            norte_config::dirs::state_dir().as_deref(),
+            log_dir.as_deref(),
+            &socket,
+        )
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("paths: {e}"))?;
+
+    if json {
+        #[derive(serde::Serialize)]
+        struct Row<'a> {
+            id: &'a str,
+            /// Lossy on purpose, and the only lossy thing here: a path that is
+            /// not UTF-8 still has to be printable. Same policy as `doctor`.
+            path: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            layer: Option<&'a str>,
+            exists: bool,
+        }
+        let rows: Vec<Row<'_>> = entries
+            .iter()
+            .map(|e| Row {
+                id: e.id,
+                path: e.path.display().to_string(),
+                layer: e.layer.map(paths::layer_name),
+                exists: e.exists,
+            })
+            .collect();
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &rows)
+            .context(norte_i18n::t("cli-serialize-failed"))?;
+        println!();
+    } else {
+        let ancho = entries.iter().map(|e| e.id.len()).max().unwrap_or(0);
+        for e in &entries {
+            let etiqueta = match e.layer {
+                Some(l) => format!("{}:{}", e.id, paths::layer_name(l)),
+                None => e.id.to_string(),
+            };
+            let marca = if e.exists {
+                String::new()
+            } else {
+                format!("  {}", norte_i18n::t("cli-paths-missing"))
+            };
+            println!(
+                "{etiqueta:<width$}  {}{marca}",
+                e.path.display(),
+                width = ancho + 8
+            );
+        }
+        println!("{}", norte_i18n::t("cli-paths-footer"));
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// `norte doctor` (H2): read-only diagnostics over config layers, keymaps,

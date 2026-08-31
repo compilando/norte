@@ -1601,6 +1601,8 @@ cli-doctor-footer-connections-not-probed = nota: el keyring/`age` no se prueban 
 # dos notas de arriba —, así que esto nombra la instrucción en vez de un
 # veredicto ok/mal.
 cli-doctor-footer-shell-init = cd-on-quit: añade `eval "$(norte shell-init bash)"` (o zsh/fish) al rc de tu shell
+cli-paths-missing = (no está)
+cli-paths-footer = nota: preguntar no crea nada — una ruta marcada «(no está)» sencillamente no se usa todavía. Las capas van en precedencia ASCENDENTE: manda la última. Si lo que SÍ está es válido lo dice `norte doctor`.
 cli-doctor-detail-connections-parse = connections.toml no parsea (corrígelo o bórralo)
 cli-doctor-detail-connections-none = no hay connections.toml, o no hay conexiones configuradas
 cli-doctor-detail-conn-secret-env-empty = { $detail } está definida pero VACÍA: dale un valor real o quítala (un secreto vacío no autentica, y antes se caía a las credenciales que ofreciera el entorno)

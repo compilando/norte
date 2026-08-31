@@ -1593,6 +1593,8 @@ cli-doctor-footer-connections-not-probed = note: keyring/age are not probed (sid
 # file cannot be seen from a child process — same honesty limit as the two
 # footers above — so this names the instruction instead of a pass/fail.
 cli-doctor-footer-shell-init = cd-on-quit: run `eval "$(norte shell-init bash)"` (or zsh/fish) from your shell's rc file
+cli-paths-missing = (not there)
+cli-paths-footer = note: nothing here is created by asking — a path marked "(not there)" is simply not in use yet. Layers are listed in ascending precedence: the last one wins. `norte doctor` says whether what IS there is valid.
 cli-doctor-detail-connections-parse = connections.toml does not parse (fix or remove it)
 cli-doctor-detail-connections-none = no connections.toml, or no connections configured
 cli-doctor-detail-conn-secret-env-empty = { $detail } is set but EMPTY: give it a real value or unset it (an empty secret cannot authenticate, and used to fall through to whatever credentials the environment offers)

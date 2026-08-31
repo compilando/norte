@@ -9,6 +9,21 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **`norte paths` says where everything lives.** `norte doctor` already knew
+  about the four config surfaces, the plugin directory, the secret store and
+  the log — it validated them — and printed the path of exactly one. Everything
+  else was folklore, and folklore is wrong the moment `NORTE_CONFIG_DIR` or
+  `XDG_CONFIG_HOME` is set, which is precisely when someone asks. The new
+  command lists the config layers in ascending precedence with their kind, then
+  the resolved config dir and each file under it, then state, the effective log
+  directory (`[log] dir` honoured, not the default) and the daemon socket —
+  each marked present or not, because "not there" is the answer to "why is
+  norte ignoring my file". It resolves nothing on its own: every path comes
+  from the same function the rest of the binary uses, so the command cannot
+  drift from the code it explains. Read-only like `doctor` — asking where the
+  config dir is does not create it — and it always exits 0, because a missing
+  optional file is an answer and judging config is `doctor`'s job. `--json`
+  for scripts.
 - **The window can save the workspace as a profile** (#318), which until now
   only the terminal could. The dialog is new; the CONTENT is not decided twice —
   the snapshot builder moved into the shared crate, so both frontends call one

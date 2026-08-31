@@ -451,3 +451,53 @@ fn index_semantic_embebido_cablea_proveedor() {
          proveedor, no Unsupported): {stderr}"
     );
 }
+
+/// `norte paths` contesta con el directorio que MANDA, no con el de siempre.
+///
+/// Es todo el valor del comando: quien pregunta dónde está su config suele
+/// preguntarlo justo porque no está donde creía. Un `paths` que ignorase
+/// `NORTE_CONFIG_DIR` daría la respuesta bonita y equivocada, que es peor que
+/// no tener comando. Se comprueba a nivel de PROCESO porque la resolución vive
+/// en el entorno, que es lo único que un test de unidad no puede tocar.
+#[test]
+fn paths_respeta_el_config_dir_del_entorno() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("connections.toml"), "").unwrap();
+
+    let out = Command::cargo_bin("norte")
+        .expect("binario norte compilado")
+        .env("NORTE_CONFIG_DIR", dir.path())
+        .args(["paths", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON");
+    let fila = |id: &str| {
+        json.as_array()
+            .expect("lista")
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap_or_else(|| panic!("falta la fila «{id}»: {json}"))
+            .clone()
+    };
+
+    let conexiones = fila("connections");
+    assert_eq!(
+        conexiones["path"].as_str().expect("path"),
+        dir.path().join("connections.toml").display().to_string(),
+        "la ruta debe salir del NORTE_CONFIG_DIR, no del dir del usuario"
+    );
+    // `exists` es un hecho comprobado: el que se escribió consta, el que no,
+    // no. Sin esto la columna podría ser un adorno constante.
+    assert_eq!(conexiones["exists"], serde_json::json!(true));
+    assert_eq!(fila("policy")["exists"], serde_json::json!(false));
+    // Preguntar no crea nada (mismo criterio que `doctor`).
+    assert!(
+        !dir.path().join("policy.toml").exists(),
+        "`paths` no puede crear lo que dice que falta"
+    );
+}
