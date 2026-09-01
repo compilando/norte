@@ -980,6 +980,43 @@
       ],
       "type": "object"
     },
+    "ConnectionFailed": {
+      "description": "Notificación [`CONNECTION_FAILED`] (server→client): una conexión remota NO\nse pudo establecer, y por qué (#322).\n\n# Por qué existe, si el error ya viaja\n\nEl fallo llega al que llamó como una CATEGORÍA de la taxonomía —casi\nsiempre `PermissionDenied`—, y eso es indistinguible de una clave\nequivocada, una passphrase mal escrita o un bucket sin permisos. La frase\nexacta —«el secreto de «miconn» está definido pero VACÍO»— se escribía en\nel log del daemon y se tiraba. Con la CLI embebida sí se leía, porque el\n`tracing` sale por el stderr del propio proceso: el mismo fallo se\ndiagnosticaba o no según el TRANSPORTE, que es la peor forma de que\ndependa.\n\nVa como notificación y no dentro del error a propósito. La taxonomía no\nlleva texto libre por decisión (ver [`crate::Error`]): quien decide con el\nerror decide por categoría, y una frase para leer no es una categoría.\nMisma forma que [`ConnectionDegraded`], que es el precedente de este\nrepositorio para «una condición de conexión con una explicación humana».\n\nUn peer 0.63 no la conoce y la DESCARTA en silencio, que es lo que ADR 0004\nmanda hacer con una notificación desconocida. Lo que pierde es exactamente\nlo que había antes: el fallo sigue llegando como categoría, sin la frase.",
+      "properties": {
+        "conn": {
+          "description": "Nombre de la conexión de `connections.toml`, si el fallo ocurrió al\nabrir una con nombre. `None` para una URL tecleada.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "description": "Detalle humano, ya en el idioma del daemon. Presentación, JAMÁS\ncontrato: no se parsea, no se compara, y puede faltar.\n\nSolo lo rellenan las variantes cuya frase se compone de campos que\npone el propio norte — ver `ConnectError::detalle_publico`. Las que\nenvuelven texto de terceros, rutas o el fichero de configuración NO\nllegan aquí: la regla 10 no distingue entre «un secreto» y «algo que\npuede contener un secreto».",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "host": {
+          "description": "Host, SIN userinfo (regla 10).",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Causa, vocabulario CERRADO comparable por igualdad — como el `reason`\nde [`ConnectionDegraded`]. Valores actuales: `\"secret-missing\"`,\n`\"secret-empty\"`, `\"secret-not-utf8\"`, `\"secret-store\"`,\n`\"auth-rejected\"`, `\"no-user\"`, `\"agent\"`.\n\nEl conjunto puede CRECER de forma aditiva: quien reciba uno\nDESCONOCIDO degrada con gracia apoyándose en `detail`, jamás rechaza la\nnotificación.",
+          "type": "string"
+        },
+        "scheme": {
+          "description": "Scheme al que se intentaba conectar (p. ej. `\"sftp\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scheme",
+        "host",
+        "reason"
+      ],
+      "type": "object"
+    },
     "ConnectionListResult": {
       "description": "Result de [`CONNECTION_LIST`].",
       "properties": {
@@ -5470,6 +5507,9 @@
     "connection_entry": {
       "$ref": "#/$defs/ConnectionEntry"
     },
+    "connection_failed": {
+      "$ref": "#/$defs/ConnectionFailed"
+    },
     "connection_list_result": {
       "$ref": "#/$defs/ConnectionListResult"
     },
@@ -5948,6 +5988,7 @@
     "compare_verdict",
     "conflict_kind",
     "connection_degraded",
+    "connection_failed",
     "connection_close_params",
     "connection_close_result",
     "connection_trust_host_key_params",

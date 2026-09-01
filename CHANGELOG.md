@@ -9,6 +9,37 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A connection that fails now says why** (#322, protocol **0.64.0**,
+  ADR 0090). Until now every failed dial reached the screen as the same three
+  words — permission denied — whether the secret was missing, empty, not text,
+  unreadable from the store, rejected by the server, or simply lacking a user.
+  The sentence that told them apart ("the secret for «rosetta» is defined but
+  EMPTY") was written to the daemon's log and dropped. Worse, it was
+  diagnosable or not depending on the *transport*: the embedded CLI printed it
+  to its own stderr, the daemon did not, and inside the TUI the alternate
+  screen ate even that.
+  The reason now travels as its own notification, `connection.failed`, with a
+  closed vocabulary you can compare by equality and an optional human sentence
+  beside it. The error keeps its category and changes in no way — the taxonomy
+  is what code decides with, and a sentence is not a category.
+  The sentence is an allowlist, not a `to_string()`: only the reasons norte
+  composes out of its own fields cross the wire. The ones that wrap third-party
+  text, paths, or the configuration file stay behind, because rule 10 does not
+  distinguish between "a secret" and "something that may contain a secret".
+  The authority travels without userinfo, masked and capped, in its own field
+  and never interpolated into the phrase — a failed connection is the place
+  where a host like `bank.example@evil.example` has the most to gain from being
+  read as the other one.
+  Both frontends print it from the same composer, so the TUI and the window
+  cannot drift apart on it, and `norte connect` — the command you type
+  precisely to find out why something will not connect — prints it too.
+  The reason also survives a retry: a failed dial goes into a cooldown, and the
+  attempt inside that window used to be served from the cache without ever
+  passing the explanation on, so the diagnosis disappeared at the one moment
+  someone was looking for it.
+  A peer on 0.63 drops the notification in silence and keeps exactly what it
+  had: the category, without the sentence.
+
 - **A connection can ask for its password** (#325, protocol **0.63.0**,
   ADR 0015 amended). `connections.toml` holds references, and the secret is
   looked for in three places: the environment variable, the system keyring, an

@@ -143,6 +143,60 @@
     "reason": "tls-auth-rejected",
     "scheme": "ftp"
   },
+  "connection_failed_agent": {
+    "conn": "trabajo",
+    "detail": "el secreto de «trabajo» está definido pero VACÍO",
+    "host": "servidor.example",
+    "reason": "agent",
+    "scheme": "sftp"
+  },
+  "connection_failed_auth_rejected": {
+    "conn": "trabajo",
+    "detail": "el secreto de «trabajo» está definido pero VACÍO",
+    "host": "servidor.example",
+    "reason": "auth-rejected",
+    "scheme": "sftp"
+  },
+  "connection_failed_no_user": {
+    "conn": "trabajo",
+    "detail": "el secreto de «trabajo» está definido pero VACÍO",
+    "host": "servidor.example",
+    "reason": "no-user",
+    "scheme": "sftp"
+  },
+  "connection_failed_secret_empty": {
+    "conn": "trabajo",
+    "detail": "el secreto de «trabajo» está definido pero VACÍO",
+    "host": "servidor.example",
+    "reason": "secret-empty",
+    "scheme": "sftp"
+  },
+  "connection_failed_secret_missing": {
+    "conn": "trabajo",
+    "detail": "el secreto de «trabajo» está definido pero VACÍO",
+    "host": "servidor.example",
+    "reason": "secret-missing",
+    "scheme": "sftp"
+  },
+  "connection_failed_secret_not_utf8": {
+    "conn": "trabajo",
+    "detail": "el secreto de «trabajo» está definido pero VACÍO",
+    "host": "servidor.example",
+    "reason": "secret-not-utf8",
+    "scheme": "sftp"
+  },
+  "connection_failed_secret_store": {
+    "conn": "trabajo",
+    "detail": "el secreto de «trabajo» está definido pero VACÍO",
+    "host": "servidor.example",
+    "reason": "secret-store",
+    "scheme": "sftp"
+  },
+  "connection_failed_sin_opcionales": {
+    "host": "servidor.example",
+    "reason": "auth-rejected",
+    "scheme": "sftp"
+  },
   "connection_provide_secret_params": {
     "conn": "coágulo-ñandú",
     "secret": "hunter2"
@@ -509,16 +563,16 @@
       "file:///casa/b%FF.bin"
     ]
   },
-  "fs_set_mode_params_recursivo_un_modo": {
-    "mode": 384,
+  "fs_set_mode_params_recursivo": {
+    "dir_mode": 493,
+    "mode": 420,
     "paths": [
       "file:///casa/arbol"
     ],
     "recursive": true
   },
-  "fs_set_mode_params_recursivo": {
-    "dir_mode": 493,
-    "mode": 420,
+  "fs_set_mode_params_recursivo_un_modo": {
+    "mode": 384,
     "paths": [
       "file:///casa/arbol"
     ],

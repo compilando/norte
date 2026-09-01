@@ -1006,6 +1006,45 @@ impl Estado {
         self.parche(vec![cambio])
     }
 
+    /// Una conexión NO se pudo abrir, y por qué (#322).
+    ///
+    /// Un `Notice` y no un banner persistente, al revés que la degradación: la
+    /// degradación describe una sesión que existe y sigue existiendo mientras
+    /// se mira; esto describe un intento que ya terminó, y un indicador
+    /// permanente sobre algo que no está abierto no se apagaría nunca.
+    ///
+    /// La línea la compone `norte_frontend::banners::failure_line`, que es el
+    /// MISMO código que usa la TUI: dos frases sobre por qué no se pudo entrar
+    /// en una máquina divergen en silencio, que es justo lo que ADR 0077
+    /// existe para evitar.
+    ///
+    /// **El orden con el error del listado NO está garantizado aquí.** En la
+    /// TUI sí lo está (el manejador retiene el `select!` mientras espera, así
+    /// que la categoría llega primero y esta frase la pisa); en la ventana son
+    /// dos productores independientes contra el mismo buzón, y la categoría
+    /// genérica puede procesarse DESPUÉS. Se acepta: los dos textos describen
+    /// el mismo fallo y ninguno es incorrecto. Si algún día importa, hay que
+    /// hacerlo explícito y no confiar en el planificador.
+    /// Devuelve DOS cosas, y el parche es la que se ve: el renderer solo
+    /// atiende los `Notice` de clase `fatal`, y su texto de estado sale de
+    /// `status.message`, que solo se mueve con un parche. Mandar el aviso solo
+    /// dejaba a la ventana sin pintar nada — con el test verde, porque
+    /// afirmaba sobre el sobre del puente y no sobre el estado. Es el mismo
+    /// patrón que `cambio_de_conexion`, que ya devuelve `vec![parche, aviso]`.
+    pub(super) fn conexion_fallida(
+        &mut self,
+        f: &norte_proto::methods::ConnectionFailed,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let linea = norte_frontend::banners::failure_line(self.lang, f);
+        self.status.message = Some(clamp_display(linea.clone()));
+        let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);
+        let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
+            key: "status-connection-failed".to_owned(),
+            detail: Some(linea),
+        }));
+        vec![parche, aviso]
+    }
+
     /// Recompone los avisos persistentes de la barra y devuelve su cambio.
     ///
     /// UN sitio para los tres, y en este orden: el journal habla de TODA la

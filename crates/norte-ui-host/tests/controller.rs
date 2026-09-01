@@ -11108,6 +11108,138 @@ async fn una_sesion_en_claro_deja_aviso_persistente() {
     );
 }
 
+/// #322: una conexión que NO se abre dice POR QUÉ, y con la frase concreta.
+///
+/// Sin esto el fallo llegaba como la categoría del error —`PermissionDenied`—
+/// que no distingue un secreto vacío de una clave equivocada ni de un bucket
+/// sin permisos. La frase exacta se quedaba en el log del daemon.
+///
+/// Y llega como aviso EFÍMERO, no como banner: la degradación describe una
+/// sesión que sigue abierta mientras se mira; esto, un intento que terminó.
+#[tokio::test]
+async fn una_conexion_que_falla_dice_por_que() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.fallidas.lock().expect("fallidas") = Some(rx);
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    tx.send(norte_proto::methods::ConnectionFailed {
+        conn: Some("rosetta".to_owned()),
+        scheme: "s3".to_owned(),
+        host: "cubo.example".to_owned(),
+        reason: "secret-empty".to_owned(),
+        detail: Some("el secreto de «rosetta» está definido pero VACÍO".to_owned()),
+    })
+    .expect("el host escucha");
+
+    // Sobre la PANTALLA, no sobre el sobre del puente. El renderer solo
+    // atiende los `Notice` de clase `fatal` y su texto de estado sale de
+    // `status.message`: un test que afirmara sobre el aviso se ponía verde con
+    // la ventana sin pintar nada, que es justo lo que pasó.
+    let detalle = foto_hasta(&h, &mut sub, "el fallo en la barra", |f| {
+        f.status
+            .message
+            .clone()
+            .filter(|m| m.contains("cubo.example"))
+    })
+    .await;
+    assert!(
+        detalle.contains("cubo.example"),
+        "el aviso nombra la máquina a la que no se entró: {detalle}"
+    );
+    assert!(
+        detalle.contains("rosetta"),
+        "y el nombre de connections.toml, que es el que el humano escribió: {detalle}"
+    );
+    assert!(
+        detalle.contains(&norte_i18n::t_in(
+            norte_i18n::Lang::Es,
+            "failed-reason-secret-empty"
+        )),
+        "y el MOTIVO traducido, que es lo que #322 existe para que cruce: {detalle}"
+    );
+    assert!(
+        !detalle.contains("s3://"),
+        "la autoridad va etiquetada, jamás como URL: {detalle}"
+    );
+
+    // Y el aviso viaja TAMBIÉN, con la misma línea: un frontend que sí atienda
+    // los `Notice` no depende de haber leído la foto.
+    let mut sub2 = h.subscribe();
+    tx.send(norte_proto::methods::ConnectionFailed {
+        conn: None,
+        scheme: "s3".to_owned(),
+        host: "otro.example".to_owned(),
+        reason: "auth-rejected".to_owned(),
+        detail: None,
+    })
+    .expect("el host escucha");
+    let aviso = foto_hasta_notice(&mut sub2, "status-connection-failed").await;
+    assert!(aviso.contains("otro.example"), "{aviso}");
+}
+
+/// El vocabulario de fallos también puede CRECER, y uno desconocido no puede
+/// heredar la frase del de al lado: se apoya en `detail`, como pide el proto.
+#[tokio::test]
+async fn un_fallo_de_motivo_desconocido_se_apoya_en_el_detalle() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.fallidas.lock().expect("fallidas") = Some(rx);
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    tx.send(norte_proto::methods::ConnectionFailed {
+        conn: None,
+        scheme: "sftp".to_owned(),
+        host: "maquina.example".to_owned(),
+        reason: "algo-que-no-existia".to_owned(),
+        detail: Some("el servidor pidió un método que norte no tiene".to_owned()),
+    })
+    .expect("el host escucha");
+
+    let detalle = foto_hasta(&h, &mut sub, "el fallo desconocido en la barra", |f| {
+        f.status
+            .message
+            .clone()
+            .filter(|m| m.contains("maquina.example"))
+    })
+    .await;
+    assert!(
+        detalle.contains("el servidor pidió un método que norte no tiene"),
+        "sin motivo conocido, el detalle es lo único que orienta: {detalle}"
+    );
+    assert!(
+        !detalle.contains(&norte_i18n::t_in(
+            norte_i18n::Lang::Es,
+            "failed-reason-auth-rejected"
+        )),
+        "un motivo desconocido no hereda la frase de otro: {detalle}"
+    );
+}
+
+/// Espera el siguiente aviso con esta clave y devuelve su detalle.
+async fn foto_hasta_notice(
+    sub: &mut norte_ui_host::controller::UiSubscription,
+    clave: &str,
+) -> String {
+    for _ in 0..40 {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+            .await
+            .expect("llega")
+            .expect("el host sigue vivo")
+        {
+            Update::Message(m) => {
+                if let UiUpdate::Notice(UiNotice::Message { key, detail }) = &m.payload
+                    && key == clave
+                {
+                    return detail.clone().unwrap_or_default();
+                }
+            }
+            Update::Lagged => {}
+        }
+    }
+    panic!("no llegó el aviso {clave}");
+}
+
 /// **Un motivo que este binario no conoce no se lee como «FTP en claro»**
 /// (#279). El vocabulario del wire puede crecer, y antes de esto un daemon más
 /// nuevo informando de una degradación NUEVA producía exactamente la misma

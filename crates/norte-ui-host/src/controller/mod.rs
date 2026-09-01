@@ -534,6 +534,8 @@ enum Mensaje {
     Conexion(norte_client::ConnEvent),
     /// Una sesión de un provider viaja SIN cifrar (#44).
     Degradada(Box<norte_proto::methods::ConnectionDegraded>),
+    /// Una conexión NO se pudo abrir, y por qué (#322).
+    Fallida(Box<norte_proto::methods::ConnectionFailed>),
     /// Un snapshot de progreso. Por la MISMA cola que todo lo demás, que es
     /// lo que garantiza que un estado terminal no se adelante ni se pierda.
     Progreso(Box<norte_proto::TaskProgress>),
@@ -847,6 +849,19 @@ impl UiHost {
                 }
             });
         }
+        // Y los fallos (#322), por el mismo buzón y con el mismo criterio: por
+        // qué NO se pudo entrar en una máquina se le dice a quien lo intentó,
+        // pueda esta ventana escribir o no.
+        if let Some(mut fallidas) = backend.take_failed() {
+            let buzon = tx.clone();
+            tokio::spawn(async move {
+                while let Some(f) = fallidas.recv().await {
+                    if buzon.send(Mensaje::Fallida(Box::new(f))).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
         // Las aprobaciones de policy son una MUTACIÓN por delegación: decir
         // que sí a la operación de un agente. Un frontend que todavía no
         // puede escribir tampoco puede autorizar que escriba otro, así que
@@ -1074,6 +1089,11 @@ async fn actor(
             }
             Mensaje::Degradada(d) => {
                 let _ = updates.send(estado.sesion_degradada(*d));
+            }
+            Mensaje::Fallida(f) => {
+                for u in estado.conexion_fallida(&f) {
+                    let _ = updates.send(u);
+                }
             }
             Mensaje::TaskNueva(task) => {
                 let (task, afectados, reintento) = *task;

@@ -6,6 +6,7 @@ archive.test_report	Request	Direct	methods::ArchiveTestReportParams	methods::Arc
 compare.rows	Notification	Stream	methods::CompareRowsBatch	()	
 connection.close	Request	Direct	methods::ConnectionCloseParams	methods::ConnectionCloseResult	
 connection.degraded	Notification	Direct	methods::ConnectionDegraded	()	
+connection.failed	Notification	Direct	methods::ConnectionFailed	()	
 connection.list	Request	Direct	()	methods::ConnectionListResult	
 connection.provide_secret	Request	Direct	methods::ConnectionProvideSecretParams	methods::ConnectionProvideSecretResult	
 connection.trust_host_key	Request	Direct	methods::ConnectionTrustHostKeyParams	methods::ConnectionTrustHostKeyResult	

@@ -203,6 +203,18 @@ pub trait HostBackend: Send + Sync + 'static {
         &self,
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::ConnectionDegraded>>;
 
+    /// El canal de fallos `connection.failed` (#322): POR QUÉ una conexión NO
+    /// se pudo abrir.
+    ///
+    /// Aparte de [`Self::take_degraded`] porque son dos hechos distintos —una
+    /// sesión abierta que viaja mal, y una que no llegó a abrirse—, y
+    /// mezclarlos hace que uno se pinte como el otro. Sin esto, el fallo llega
+    /// como la CATEGORÍA del error (casi siempre `PermissionDenied`), que no
+    /// distingue un secreto vacío de una clave equivocada.
+    fn take_failed(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::ConnectionFailed>>;
+
     /// Borra UNA entrada: a la papelera o permanente. Devuelve la Task ya
     /// encolada — el desenlace llega por su progreso, no por esta llamada.
     ///
@@ -788,6 +800,12 @@ impl HostBackend for norte_client::RemoteBackend {
         &self,
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::ConnectionDegraded>> {
         norte_client::RemoteBackend::take_degraded(self)
+    }
+
+    fn take_failed(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::ConnectionFailed>> {
+        norte_client::RemoteBackend::take_failed(self)
     }
 
     fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>> {

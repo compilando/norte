@@ -205,6 +205,141 @@ pub fn connection_banner(
     })
 }
 
+/// Por qué NO se pudo conectar, ya compuesto para pintar (#322).
+///
+/// Misma forma que [`DegradedBanner`] y por la misma razón: es un aviso sobre
+/// una CONEXIÓN, y la autoridad no se interpola en la frase. Lo que cambia es
+/// el momento — la degradación describe una sesión que existe, esto describe
+/// una que no llegó a existir — y por eso no se retiene: no hay nada abierto
+/// de lo que seguir avisando.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailureNotice {
+    /// La frase, ya traducida, SIN nada que venga del wire dentro.
+    pub text: String,
+    /// El nombre de `connections.toml`, enmascarado y acortado, si lo había.
+    ///
+    /// Es el único identificador que el humano ESCRIBIÓ, así que es el que
+    /// reconoce; el scheme y el host los dedujo norte. Va en su propio campo
+    /// como todo lo demás: viene del fichero de configuración, que es un
+    /// origen tan poco de fiar como el wire para lo que se pinta.
+    pub conn: Option<String>,
+    /// El esquema, enmascarado.
+    pub scheme: String,
+    /// El host, enmascarado y acortado.
+    pub host: String,
+    /// POR QUÉ falló, ya traducido. Vocabulario cerrado; uno desconocido cae
+    /// en la frase genérica y se apoya en `detail`.
+    pub reason: String,
+    /// El detalle humano del wire, enmascarado y acotado, y SOLO cuando el
+    /// motivo es desconocido — igual que en [`DegradedBanner::detail`]. Con un
+    /// motivo conocido la frase traducida ya lo dice, y el detalle sería texto
+    /// del otro extremo repitiéndola en el idioma del daemon.
+    pub detail: Option<String>,
+    /// Lo pintado difiere de lo que hay, en algún campo.
+    pub hostile: bool,
+}
+
+/// La clave i18n del motivo de un fallo, o `None` si este binario no lo conoce.
+///
+/// Un `match` sobre el vocabulario cerrado y no un `format!`, por lo mismo que
+/// [`clave_de_motivo`]: componer la clave con la cadena del otro extremo deja
+/// que el daemon elija qué mensaje del catálogo se pinta.
+fn clave_de_fallo(reason: &str) -> Option<&'static str> {
+    match reason {
+        "secret-missing" => Some("failed-reason-secret-missing"),
+        "secret-empty" => Some("failed-reason-secret-empty"),
+        "secret-not-utf8" => Some("failed-reason-secret-not-utf8"),
+        "secret-store" => Some("failed-reason-secret-store"),
+        "auth-rejected" => Some("failed-reason-auth-rejected"),
+        "no-user" => Some("failed-reason-no-user"),
+        "agent" => Some("failed-reason-agent"),
+        _ => None,
+    }
+}
+
+/// Compone el aviso de un fallo de conexión (#322).
+///
+/// Las mismas reglas que [`connection_banner`], y no por simetría: son las que
+/// impiden que un host como `banco.example@malo.example` se lea como userinfo
+/// de un host legítimo. Un fallo de conexión es justo donde alguien querría
+/// que se leyera así — «no pude entrar en tu banco, mete la clave otra vez».
+#[must_use]
+pub fn failure_notice(
+    lang: norte_i18n::Lang,
+    f: &norte_proto::methods::ConnectionFailed,
+) -> FailureNotice {
+    let (scheme, scheme_hostil) = crate::display_name(f.scheme.as_bytes());
+    let (host_pintable, host_hostil) = crate::display_name(f.host.as_bytes());
+    let scheme = crate::middle_ellipsis(&scheme, SCHEME_MAX);
+    let host = crate::middle_ellipsis(&host_pintable, HOST_MAX);
+    let (conn, conn_hostil) = match f.conn.as_deref() {
+        Some(c) if !c.is_empty() => {
+            let (pintable, hostil) = crate::display_name(c.as_bytes());
+            (Some(crate::middle_ellipsis(&pintable, HOST_MAX)), hostil)
+        }
+        _ => (None, false),
+    };
+    let conocido = clave_de_fallo(&f.reason);
+    let reason = norte_i18n::t_in(lang, conocido.unwrap_or("failed-reason-unknown"));
+    let (detail, detail_hostil) = match (conocido, f.detail.as_deref()) {
+        (None, Some(d)) if !d.is_empty() => {
+            let (pintable, hostil) = crate::display_name(d.as_bytes());
+            (Some(crate::middle_ellipsis(&pintable, DETAIL_MAX)), hostil)
+        }
+        _ => (None, false),
+    };
+    FailureNotice {
+        text: norte_i18n::t_in(lang, "status-connection-failed"),
+        conn,
+        scheme,
+        host,
+        reason,
+        detail,
+        hostile: scheme_hostil || host_hostil || detail_hostil || conn_hostil,
+    }
+}
+
+/// La línea de UN fallo de conexión, lista para pintar (#322).
+///
+/// Vive aquí y no en cada frontend por la regla D14, y esta vez con un motivo
+/// que ya se cobró una pieza: la TUI y la ventana tienen que decir lo MISMO
+/// sobre por qué no se pudo entrar en una máquina, y dos composiciones
+/// divergen en silencio (ADR 0077). La ventana la manda como el `detail` de un
+/// `Notice`, la TUI la pone en su barra: mismo texto, dos sitios.
+///
+/// La autoridad va ETIQUETADA —«esquema X, host Y»— y nunca como
+/// `scheme://host`: ver el rustdoc de [`connection_banner`] para qué se
+/// consigue mintiendo con la segunda forma.
+#[must_use]
+pub fn failure_line(lang: norte_i18n::Lang, f: &norte_proto::methods::ConnectionFailed) -> String {
+    let n = failure_notice(lang, f);
+    let linea = norte_i18n::ta_in(
+        lang,
+        "status-failed-subject",
+        &[
+            ("banner", &n.text),
+            ("scheme", &n.scheme),
+            ("host", &n.host),
+            ("reason", &n.reason),
+        ],
+    );
+    // El nombre de `connections.toml` DETRÁS, nunca delante. Es el único
+    // identificador que el humano escribió y por eso viaja — pero sale de un
+    // fichero, y `display_name` no enmascara lo imprimible: un nombre como
+    // `banco.example» — ✗ no se pudo conectar` puesto en cabeza se lee como un
+    // aviso COMPLETO sobre otra máquina, con el de verdad empujado detrás.
+    // Detrás del motivo no puede suplantar a nada: lo que va delante ya lo
+    // escribió norte.
+    let linea = match &n.conn {
+        Some(c) => format!("{linea} — «{c}»"),
+        None => linea,
+    };
+    match &n.detail {
+        Some(d) => format!("{linea}: {d}"),
+        None => linea,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,6 +405,125 @@ mod tests {
             reason: "ftp-plaintext".to_owned(),
             detail: None,
         }
+    }
+
+    fn fallo(scheme: &str, host: &str, reason: &str) -> norte_proto::methods::ConnectionFailed {
+        norte_proto::methods::ConnectionFailed {
+            conn: None,
+            scheme: scheme.to_owned(),
+            host: host.to_owned(),
+            reason: reason.to_owned(),
+            detail: None,
+        }
+    }
+
+    /// #322: el aviso de fallo hereda las reglas del de degradación, y eso se
+    /// comprueba con el MISMO corpus. Un fallo de conexión es el sitio con más
+    /// premio para mentir sobre a qué máquina se intentó entrar.
+    #[test]
+    fn ninguna_autoridad_hostil_del_corpus_entra_en_la_frase_de_un_fallo() {
+        let hosts = norte_testkit::corpus::hostile_hosts();
+        assert!(hosts.len() >= 6, "el corpus canónico no encoge");
+        for h in &hosts {
+            let aviso = failure_notice(
+                norte_i18n::Lang::Es,
+                &fallo(h.scheme, h.host, "auth-rejected"),
+            );
+            assert!(
+                !aviso.text.contains(h.host),
+                "[{}] la autoridad se interpoló en la frase: {:?}",
+                h.id,
+                aviso.text
+            );
+            assert!(aviso.scheme.chars().count() <= SCHEME_MAX, "[{}]", h.id);
+            assert!(aviso.host.chars().count() <= HOST_MAX, "[{}]", h.id);
+            let alterado = aviso.scheme != h.scheme && !aviso.scheme.contains('\u{2026}')
+                || aviso.host != h.host && !aviso.host.contains('\u{2026}');
+            assert!(
+                !alterado || aviso.hostile,
+                "[{}] se alteró y no lo dice: {:?} / {:?}",
+                h.id,
+                aviso.scheme,
+                aviso.host
+            );
+        }
+    }
+
+    /// El motivo se traduce por vocabulario CERRADO: uno que este binario no
+    /// conoce cae en la frase genérica y NO hereda la del de al lado.
+    ///
+    /// Es la misma regla que #279 puso en la degradación, y por la misma
+    /// razón: un daemon más nuevo informando de un motivo nuevo se leería
+    /// como el motivo viejo, o sea un aviso afirmando algo que nadie dijo.
+    #[test]
+    fn un_motivo_desconocido_cae_en_la_generica_y_se_apoya_en_el_detalle() {
+        let conocido = failure_notice(
+            norte_i18n::Lang::Es,
+            &fallo("sftp", "example.test", "secret-empty"),
+        );
+        assert_eq!(
+            conocido.reason,
+            norte_i18n::t_in(norte_i18n::Lang::Es, "failed-reason-secret-empty")
+        );
+
+        let mut f = fallo("sftp", "example.test", "motivo-del-futuro");
+        f.detail = Some("algo que este binario no sabe nombrar".to_owned());
+        let raro = failure_notice(norte_i18n::Lang::Es, &f);
+        assert_eq!(
+            raro.reason,
+            norte_i18n::t_in(norte_i18n::Lang::Es, "failed-reason-unknown"),
+            "un motivo desconocido no puede heredar la frase de otro"
+        );
+        assert_eq!(
+            raro.detail.as_deref(),
+            Some("algo que este binario no sabe nombrar"),
+            "sin motivo conocido, el detalle es lo único que orienta"
+        );
+        assert!(
+            conocido.detail.is_none(),
+            "con motivo conocido el detalle sobra: sería la misma frase en el idioma del daemon"
+        );
+    }
+
+    /// Este binario sabe traducir TODO el vocabulario que el proto declara.
+    ///
+    /// La otra mitad del cierre (la primera está en `norte-core`: lo que el
+    /// core emite es lo que el proto declara). Sin esto, olvidar una clave
+    /// i18n al añadir un motivo era invisible: `clave_de_fallo` devolviendo
+    /// `None` es indistinguible de «un daemon más nuevo», así que el motivo
+    /// nuevo se pintaba «desconocido» para siempre y nada se ponía rojo.
+    #[test]
+    fn se_traduce_todo_el_vocabulario_de_fallos() {
+        for reason in norte_proto::methods::CONNECTION_FAILURE_REASONS {
+            let clave = clave_de_fallo(reason)
+                .unwrap_or_else(|| panic!("el proto declara {reason:?} y aquí no se traduce"));
+            for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
+                let frase = norte_i18n::t_in(lang, clave);
+                assert_ne!(
+                    frase, clave,
+                    "[{lang:?}] {clave} no está en el catálogo: saldría su propio identificador"
+                );
+            }
+        }
+    }
+
+    /// El nombre de `connections.toml` va en su CAMPO, acotado y enmascarado.
+    ///
+    /// Lo escribió el humano, pero en un fichero: un nombre con un salto de
+    /// línea o un override bidi dentro rompe la barra igual que uno del wire.
+    #[test]
+    fn el_nombre_de_la_conexion_se_acota_y_se_enmascara() {
+        let mut f = fallo("s3", "example.test", "auth-rejected");
+        f.conn = Some(format!("mi\u{202e}conn{}", "x".repeat(200)));
+        let aviso = failure_notice(norte_i18n::Lang::Es, &f);
+        let conn = aviso.conn.expect("el nombre viaja");
+        assert!(
+            conn.chars().count() <= HOST_MAX,
+            "sin techo: {}",
+            conn.len()
+        );
+        assert!(!conn.contains('\u{202e}'), "el override bidi se enmascara");
+        assert!(aviso.hostile, "se alteró y no lo decía");
     }
 
     /// Un scheme repetido no ocupa dos huecos, y el que se nombra es el

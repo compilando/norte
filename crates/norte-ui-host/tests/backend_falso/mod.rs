@@ -341,6 +341,11 @@ pub struct Falso {
     pub degradadas: std::sync::Mutex<
         Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>>,
     >,
+    /// El canal de `connection.failed` (#322), para que el test empuje uno.
+    /// Aparte del de arriba, como en el backend de verdad.
+    pub fallidas: std::sync::Mutex<
+        Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionFailed>>,
+    >,
     /// Los directorios que se pidió crear.
     pub creados: std::sync::Mutex<Vec<VPath>>,
     /// Qué encuentra un `stat` sobre algo que este falso CREÓ (#303).
@@ -1319,6 +1324,12 @@ impl HostBackend for Falso {
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>>
     {
         self.degradadas.lock().expect("degradadas").take()
+    }
+
+    fn take_failed(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionFailed>> {
+        self.fallidas.lock().expect("fallidas").take()
     }
 
     /// #311: apunta el lote de sumas y devuelve una Task ya terminada. El

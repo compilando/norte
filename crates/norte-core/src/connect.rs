@@ -32,9 +32,12 @@ pub trait RemoteConnector: Send + Sync {
     /// avisos de seguridad emitidos al establecerlo (#44: degradación TLS).
     ///
     /// # Errors
+    /// [`DialError`], que lleva la categoría de siempre —
     /// [`Error::HostKeyUnknown`]/[`Error::HostKeyMismatch`] (flujo TOFU, ADR
-    /// 0015 D) o la categoría a la que degrade el fallo de conexión.
-    async fn connect(&self, scheme: &str, authority: &str) -> Result<Connected, Error>;
+    /// 0015 D) o aquella a la que degrade el fallo — y, si se puede contar, el
+    /// porqué (#322). Un `Error` se convierte solo con `.into()`: eso es «no
+    /// sé explicarlo», que era el comportamiento único antes.
+    async fn connect(&self, scheme: &str, authority: &str) -> Result<Connected, DialError>;
 
     /// La forma CANÓNICA de `authority` para esta conexión (#47, dedup): la
     /// authority con el usuario/puerto EFECTIVOS que usaría el connect —
@@ -97,6 +100,70 @@ impl ConnectionWarningReason {
     }
 }
 
+/// Causa de que una conexión NO se estableciera (#322). Vocabulario CERRADO:
+/// su [`Self::wire`] es el `reason` de [`norte_proto::methods::ConnectionFailed`].
+///
+/// Un enum y no un `&'static str` suelto, igual que
+/// [`ConnectionWarningReason`]: con la cadena a pelo, renombrar un valor aquí
+/// no ponía nada rojo —los goldens congelaban una copia distinta— y el efecto
+/// era que todos los fallos pasaban a pintarse como «motivo desconocido», en
+/// silencio y para siempre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ConnectionFailureReason {
+    /// No hay secreto en ninguna de las fuentes configuradas.
+    SecretMissing,
+    /// Lo hay, y está VACÍO — que no es lo mismo (#320).
+    SecretEmpty,
+    /// Lo hay y no es texto válido.
+    SecretNotUtf8,
+    /// El almacén de secretos no se pudo leer.
+    SecretStore,
+    /// El servidor rechazó las credenciales.
+    AuthRejected,
+    /// Falta el usuario.
+    NoUser,
+    /// El agente SSH no pudo autenticar.
+    Agent,
+}
+
+impl ConnectionFailureReason {
+    /// El string de wire (cerrado y contractual; ver `ConnectionFailed.reason`).
+    ///
+    /// Todo lo que devuelva esta función está en
+    /// [`norte_proto::methods::CONNECTION_FAILURE_REASONS`], y lo contrario
+    /// también: lo prueba `el_vocabulario_de_fallos_es_el_del_proto`.
+    #[must_use]
+    pub fn wire(self) -> &'static str {
+        match self {
+            Self::SecretMissing => "secret-missing",
+            Self::SecretEmpty => "secret-empty",
+            Self::SecretNotUtf8 => "secret-not-utf8",
+            Self::SecretStore => "secret-store",
+            Self::AuthRejected => "auth-rejected",
+            Self::NoUser => "no-user",
+            Self::Agent => "agent",
+        }
+    }
+
+    /// Todas las variantes, para las pruebas exhaustivas del vocabulario.
+    ///
+    /// Una constante y no un `strum`: son siete y la dependencia no se paga
+    /// sola. Si alguien añade una octava y no la mete aquí, el `match` de
+    /// [`Self::wire`] sí le obliga a decidir su cadena, y esta lista solo
+    /// deja de cubrirla — por eso la prueba compara EN LOS DOS SENTIDOS contra
+    /// el proto, que es donde el hueco se vería.
+    pub const TODAS: &'static [Self] = &[
+        Self::SecretMissing,
+        Self::SecretEmpty,
+        Self::SecretNotUtf8,
+        Self::SecretStore,
+        Self::AuthRejected,
+        Self::NoUser,
+        Self::Agent,
+    ];
+}
+
 /// Un aviso de seguridad producido al establecer una sesión remota (#44). El
 /// `host` va SIN userinfo (regla 10) por construcción — es el `Endpoint.host`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,12 +184,86 @@ pub struct Connected {
     pub warnings: Vec<ConnectionWarning>,
 }
 
+/// Por qué NO se pudo establecer una sesión, en lo que se puede contar (#322).
+///
+/// Simétrico de [`ConnectionWarning`]: el éxito lleva sus avisos, y el fallo
+/// lleva su explicación. Antes no la llevaba, y el resultado era que el
+/// frontend recibía una CATEGORÍA —`PermissionDenied`— indistinguible de una
+/// clave equivocada, mientras la frase exacta moría en el log del daemon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionFailure {
+    /// Nombre de `connections.toml`, si se abría una con nombre.
+    pub conn: Option<String>,
+    /// Scheme al que se intentaba conectar.
+    pub scheme: String,
+    /// Host, sin userinfo (regla 10).
+    pub host: String,
+    /// Causa, vocabulario CERRADO (ver `methods::ConnectionFailed::reason`).
+    pub reason: ConnectionFailureReason,
+    /// Frase humana, si la variante puede exponerla — ver
+    /// `ConnectError::detalle_publico`. `None` no es un fallo sin explicación:
+    /// es una explicación que no puede salir.
+    pub detail: Option<String>,
+}
+
 /// Observa los avisos de conexión (#44): el daemon lo implementa para difundir
 /// `connection.degraded`; la CLI embebida para imprimir por stderr. Inyectado en
 /// el [`Engine`](crate::Engine) con `set_connection_observer`.
 pub trait ConnectionObserver: Send + Sync {
     /// Un aviso ocurrió al establecer una sesión. Best-effort, no bloqueante.
     fn on_connection_warning(&self, warning: &ConnectionWarning);
+
+    /// Una sesión NO se pudo establecer (#322). Best-effort, no bloqueante.
+    ///
+    /// Con `default` vacío a propósito: los observadores que solo querían los
+    /// avisos siguen compilando, y quien quiera enseñar el porqué lo
+    /// implementa. Añadirlo sin default habría roto a los implementadores de
+    /// test por una notificación que no les interesa.
+    fn on_connection_failure(&self, _failure: &ConnectionFailure) {}
+}
+
+/// La causa publicable de un fallo, SIN el destino.
+///
+/// Se separa del destino porque se conocen en sitios distintos: la causa la
+/// sabe quien atrapó el `ConnectError`; el scheme y el host, quien pidió la
+/// conexión. Juntarlas antes obligaría a arrastrar el destino por todo el
+/// camino de error solo para volver a nombrarlo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Causa {
+    /// Nombre de `connections.toml`, si lo había.
+    pub conn: Option<String>,
+    /// Vocabulario CERRADO (ver `methods::ConnectionFailed::reason`).
+    pub reason: ConnectionFailureReason,
+    /// La frase, si la variante puede exponerla (regla 10).
+    pub detail: Option<String>,
+}
+
+/// Un fallo de conexión con lo que se le puede contar a quien mira.
+///
+/// El error viaja como siempre; la explicación va al lado. Existe porque el
+/// `RemoteConnector` devolvía solo la categoría, y ahí es donde se perdía el
+/// diagnóstico (#322).
+#[derive(Debug, Clone)]
+pub struct DialError {
+    /// La categoría que acaba en el wire como error de la operación.
+    pub error: Error,
+    /// Lo publicable del porqué. `None` = este connector no lo sabe explicar,
+    /// o la variante no puede exponer su texto.
+    ///
+    /// En un `Box` porque este tipo viaja en el `Err` de cada `connect`, y el
+    /// camino normal es el que NO lleva causa: engordar todos los `Result` del
+    /// pool con dos `String` que casi siempre están vacías es pagar el caso
+    /// raro en el caso común.
+    pub causa: Option<Box<Causa>>,
+}
+
+impl From<Error> for DialError {
+    /// Un fallo sin explicación publicable: exactamente el comportamiento
+    /// anterior a #322. Es lo que hace que un connector que no la aporte —los
+    /// dobles de test— no tenga que cambiar.
+    fn from(error: Error) -> Self {
+        Self { error, causa: None }
+    }
 }
 
 // Clave de anclaje del journal (M3-5, ADR 0025): vive en norte-connect (el
@@ -215,7 +356,10 @@ impl ConnectionManager {
         let spec = file.connections.get(name).ok_or(Error::NotFound)?.clone();
         let ep = spec.endpoint().map_err(log_and_map)?;
         let authority = authority_of(&ep);
-        let connected = self.establish(&spec, Some(name)).await?;
+        let connected = self
+            .establish(&spec, Some(name))
+            .await
+            .map_err(|d| d.error)?;
         Ok((ep.scheme, authority, connected))
     }
 
@@ -249,7 +393,7 @@ impl ConnectionManager {
         &self,
         spec: &ConnectionSpec,
         name: Option<&str>,
-    ) -> Result<Connected, Error> {
+    ) -> Result<Connected, DialError> {
         // El origen sale por parámetro, y `establish_inner` es una función
         // aparte, por un motivo que costó una prueba con una cuenta de verdad
         // descubrir: los brazos de scheme usan `?`, así que un fallo del
@@ -258,7 +402,7 @@ impl ConnectionManager {
         // caso que le importa — el del fallo.
         let mut origen = None;
         let resultado = self.establish_inner(spec, name, &mut origen).await;
-        if matches!(resultado, Err(Error::PermissionDenied))
+        if matches!(&resultado, Err(d) if d.error == Error::PermissionDenied)
             && origen == Some(norte_connect::SecretOrigin::Session)
         {
             let conn_name = match spec.endpoint() {
@@ -270,7 +414,7 @@ impl ConnectionManager {
                 conn = %conn_name,
                 "el servidor rechazó el secreto tecleado: se olvida y se vuelve a preguntar"
             );
-            return Err(secret_needed(&conn_name, spec));
+            return Err(secret_needed(&conn_name, spec).into());
         }
         resultado
     }
@@ -282,8 +426,8 @@ impl ConnectionManager {
         spec: &ConnectionSpec,
         name: Option<&str>,
         origen: &mut Option<norte_connect::SecretOrigin>,
-    ) -> Result<Connected, Error> {
-        let ep = spec.endpoint().map_err(log_and_map)?;
+    ) -> Result<Connected, DialError> {
+        let ep = spec.endpoint().map_err(|e| log_and_dial(e, name))?;
         let mut warnings: Vec<ConnectionWarning> = Vec::new();
         // El secreto solo se resuelve si el método de auth lo puede usar
         // (password/access-key siempre; key para la passphrase). Agent no
@@ -314,14 +458,14 @@ impl ConnectionManager {
                         tracing::warn!(conn = %conn_name, error = %e, "secreto vacío: se preguntará");
                         None
                     }
-                    Err(e) => return Err(log_and_map(e)),
+                    Err(e) => return Err(log_and_dial(e, name)),
                 };
                 // #325: si no está en ninguna parte y la conexión dice que hay
                 // que preguntarlo, esto sube por el cable como una PREGUNTA y
                 // el frontend abre su diálogo. El core no puede preguntar por
                 // su cuenta: su resolver no tiene interfaz de usuario.
                 if hallado.is_none() && spec.secret == norte_connect::SecretSource::Prompt {
-                    return Err(secret_needed(conn_name, spec));
+                    return Err(secret_needed(conn_name, spec).into());
                 }
                 hallado.map(|(s, origin)| {
                     *origen = Some(origin);
@@ -340,7 +484,7 @@ impl ConnectionManager {
             AuthMethod::Key => match self.secrets.resolve(conn_name, &spec.url).await {
                 Ok(s) => s,
                 Err(norte_connect::ConnectError::SecretEmpty { .. }) => None,
-                Err(e) => return Err(log_and_map(e)),
+                Err(e) => return Err(log_and_dial(e, name)),
             },
         };
         match ep.scheme.as_str() {
@@ -349,7 +493,7 @@ impl ConnectionManager {
                     .ssh
                     .connect(spec, secret.as_ref())
                     .await
-                    .map_err(log_and_map)?;
+                    .map_err(|e| log_and_dial(e, name))?;
                 // Base "/": los segmentos del VPath son absolutos del server.
                 Ok(Connected {
                     provider: Arc::new(
@@ -369,13 +513,16 @@ impl ConnectionManager {
                     // Convención guest: login anónimo.
                     (AuthMethod::Agent, _) => "anonymous".to_string(),
                     (AuthMethod::Password, None) => {
-                        return Err(log_and_map(norte_connect::ConnectError::Secret {
-                            conn: ep.host.clone(),
-                        }));
+                        return Err(log_and_dial(
+                            norte_connect::ConnectError::Secret {
+                                conn: ep.host.clone(),
+                            },
+                            name,
+                        ));
                     }
                     // key/access-key no existen en FTP.
                     (AuthMethod::Key | AuthMethod::AccessKey, _) => {
-                        return Err(Error::Unsupported);
+                        return Err(Error::Unsupported.into());
                     }
                 };
                 let port = ep.port.unwrap_or(21);
@@ -397,7 +544,7 @@ impl ConnectionManager {
                     .s3
                     .connect(spec, secret.as_ref())
                     .await
-                    .map_err(log_and_map)?;
+                    .map_err(|e| log_and_dial(e, name))?;
                 Ok(Connected {
                     provider: Arc::new(
                         ObjectProvider::new(op, "s3").with_logical_trash(spec.logical_trash),
@@ -405,7 +552,7 @@ impl ConnectionManager {
                     warnings,
                 })
             }
-            _ => Err(Error::Unsupported),
+            _ => Err(Error::Unsupported.into()),
         }
     }
 }
@@ -416,10 +563,11 @@ impl RemoteConnector for ConnectionManager {
     // que el VPath haya aceptado se rechaza al parsear la conexión, pero el
     // span se abriría ANTES (regla 10). Se loguea redactado tras el parse.
     #[tracing::instrument(level = "info", skip_all)]
-    async fn connect(&self, scheme: &str, authority: &str) -> Result<Connected, Error> {
+    async fn connect(&self, scheme: &str, authority: &str) -> Result<Connected, DialError> {
         let url = format!("{scheme}://{authority}");
-        let file = self.load_connections().await?;
-        let (name, spec) = resolve_spec(&file, &url).map_err(log_and_map)?;
+        let file = self.load_connections().await.map_err(DialError::from)?;
+        let (name, spec) =
+            resolve_spec(&file, &url).map_err(|e| DialError::from(log_and_map(e)))?;
         if let Ok(ep) = spec.endpoint() {
             tracing::info!(scheme = %ep.scheme, host = %ep.host, port = ?ep.port,
                 conexion = name.as_deref().unwrap_or("(ad-hoc)"), "conectando");
@@ -580,9 +728,78 @@ fn authority_of(ep: &norte_connect::Endpoint) -> String {
 /// Degrada un `ConnectError` a la taxonomía del wire dejando el DETALLE en el
 /// log del core (el wire lleva la categoría; el Display de `ConnectError` no
 /// contiene secretos por construcción).
+///
+/// Se conserva para los sitios que NO saben a qué conexión pertenece el fallo
+/// —resolver la URL, listar el fichero—: ahí no hay a quién avisar, y contar
+/// «falló una conexión» sin decir cuál sería ruido.
 fn log_and_map(e: norte_connect::ConnectError) -> Error {
     tracing::warn!(error = %e, "fallo de conexión remota");
     Error::from(e)
+}
+
+/// El vocabulario CERRADO de `connection.failed`, por variante (#322).
+///
+/// `None` = esta variante no se cuenta. No es lo mismo que «no tiene razón»:
+/// es que su explicación no aporta nada a quien mira (un TOFU ya viaja tipado,
+/// con su huella) o que no puede salir (regla 10, ver
+/// `ConnectError::detalle_publico`).
+///
+/// Exhaustivo a propósito: una variante nueva no compila hasta que alguien
+/// decida si el humano se entera de ella.
+#[expect(
+    clippy::match_same_arms,
+    reason = "dos brazos dan `None` por motivos distintos, y el comentario de \
+              cada uno es lo que hay que releer al añadir una variante; \
+              fundirlos borra la decisión"
+)]
+fn razon_de(e: &norte_connect::ConnectError) -> Option<ConnectionFailureReason> {
+    use ConnectionFailureReason as R;
+    use norte_connect::ConnectError as C;
+    match e {
+        C::Secret { .. } => Some(R::SecretMissing),
+        C::SecretEmpty { .. } => Some(R::SecretEmpty),
+        C::SecretNotUtf8 { .. } => Some(R::SecretNotUtf8),
+        C::SecretStore(_) => Some(R::SecretStore),
+        C::AuthFailed { .. } => Some(R::AuthRejected),
+        C::MissingUser => Some(R::NoUser),
+        C::Agent(_) => Some(R::Agent),
+        // Dos motivos distintos para el mismo `None`, y por eso NO se juntan
+        // los brazos: el TOFU viaja como error TIPADO con host, puerto,
+        // algoritmo y huella —contarlo otra vez como frase sería peor, no
+        // mejor—, mientras que el resto o no puede enseñar su texto (regla 10)
+        // o no dice nada accionable. Fundirlos borra la razón de cada uno, que
+        // es justo lo que hay que releer al añadir una variante.
+        C::HostKeyUnknown { .. } | C::HostKeyMismatch { .. } => None,
+        C::Config(_)
+        | C::InvalidUrl(_)
+        | C::Io(_)
+        | C::KeyLoad { .. }
+        | C::KeyUnsupported { .. }
+        | C::Ssh(_)
+        | C::KnownHosts(_)
+        | C::Ftp(_)
+        | C::Tls(_)
+        | C::S3(_) => None,
+    }
+}
+
+/// Como [`log_and_map`], pero conservando la causa para poder CONTARLA (#322).
+///
+/// Es el punto exacto donde el diagnóstico se perdía: aquí se escribía el
+/// `warn!` con la frase exacta y se devolvía solo la categoría.
+fn log_and_dial(e: norte_connect::ConnectError, name: Option<&str>) -> DialError {
+    tracing::warn!(error = %e, "fallo de conexión remota");
+    let causa = razon_de(&e).map(|reason| {
+        Box::new(Causa {
+            conn: name.map(ToOwned::to_owned),
+            reason,
+            detail: e.detalle_publico(),
+        })
+    });
+    DialError {
+        error: Error::from(e),
+        causa,
+    }
 }
 
 /// La PREGUNTA de #325, con a quién se le va a dar la contraseña.
@@ -648,7 +865,11 @@ mod tests {
 
         // `Connected` no es `Debug` (lleva providers), así que el desenlace se
         // saca a mano en vez de con `expect_err`.
-        let Err(err) = mgr.establish(&spec, Some("pregunta")).await else {
+        let Err(err) = mgr
+            .establish(&spec, Some("pregunta"))
+            .await
+            .map_err(|d| d.error)
+        else {
             panic!("no hay secreto en ninguna parte: debía preguntar");
         };
         assert!(
@@ -675,7 +896,10 @@ mod tests {
         s3.secret = norte_connect::SecretSource::Prompt;
         s3.access_key_id = Some("AKIAEXAMPLE".into());
         s3.endpoint = Some("https://s3.eu-west-1.example".into());
-        let Err(Error::SecretNeeded { endpoint, .. }) = mgr.establish(&s3, Some("cuenta")).await
+        let Err(Error::SecretNeeded { endpoint, .. }) = mgr
+            .establish(&s3, Some("cuenta"))
+            .await
+            .map_err(|d| d.error)
         else {
             panic!("s3 sin secreto debía preguntar");
         };
@@ -685,7 +909,11 @@ mod tests {
         // escalón 0 del resolutor lo tiene.
         mgr.secrets
             .remember_for_session("pregunta", norte_connect::Secret::new("tecleado".into()));
-        let Err(otro) = mgr.establish(&spec, Some("pregunta")).await else {
+        let Err(otro) = mgr
+            .establish(&spec, Some("pregunta"))
+            .await
+            .map_err(|d| d.error)
+        else {
             panic!("el transporte no existe: no puede haber conectado");
         };
         assert!(
@@ -727,7 +955,11 @@ mod tests {
 
         mgr.secrets
             .remember_for_session("cuenta", norte_connect::Secret::new("mal-tecleada".into()));
-        let Err(primero) = mgr.establish(&spec, Some("cuenta")).await else {
+        let Err(primero) = mgr
+            .establish(&spec, Some("cuenta"))
+            .await
+            .map_err(|d| d.error)
+        else {
             panic!("el servidor deniega: no puede haber conectado");
         };
         assert!(
@@ -776,7 +1008,11 @@ mod tests {
 
         mgr.secrets
             .remember_for_session("cuenta", norte_connect::Secret::new("valida".into()));
-        let Err(e) = mgr.establish(&spec, Some("cuenta")).await else {
+        let Err(e) = mgr
+            .establish(&spec, Some("cuenta"))
+            .await
+            .map_err(|d| d.error)
+        else {
             panic!("la clave no existe: no puede haber conectado");
         };
         assert!(

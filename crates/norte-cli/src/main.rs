@@ -2672,14 +2672,28 @@ async fn connect_cmd(backend: &Backend, target: &str, daemon: bool) -> anyhow::R
     reject_inline_password(&url)?;
     let root = VPath::parse(&url)
         .with_context(|| norte_i18n::ta("cli-invalid-url", &[("url", url.as_str())]))?;
+    // #322: el canal del PORQUÉ, tomado ANTES del intento. Este es el comando
+    // que se teclea justo para averiguar por qué una conexión no entra, y
+    // hasta ahora contestaba «permiso denegado» a un secreto vacío, a una
+    // clave equivocada y a un bucket ajeno por igual. Se toma aquí y no en el
+    // arranque porque ningún otro subcomando lo mira.
+    let mut fallos = backend.take_failed();
     // capabilities fuerza el establecimiento por el camino normal del engine.
     let result = match backend.capabilities(&root).await {
         Err(e) if tofu_confirm(backend, &e).await? => backend.capabilities(&root).await,
         other => other,
     };
-    result
-        .map_err(|e| anyhow::anyhow!("{e}"))
-        .context(norte_i18n::t("cli-connect-failed"))?;
+    if let Err(e) = result {
+        // El motivo, si el core supo contarlo. Va ANTES del error para que la
+        // última línea siga siendo la categoría, que es lo que un script mira.
+        if let Some(f) = fallos.as_mut().and_then(|rx| rx.try_recv().ok()) {
+            eprintln!(
+                "{}",
+                norte_frontend::banners::failure_line(norte_i18n::active(), &f)
+            );
+        }
+        return Err(anyhow::anyhow!("{e}")).context(norte_i18n::t("cli-connect-failed"));
+    }
     println!(
         "{}",
         norte_i18n::ta("cli-connect-ok", &[("target", target)])

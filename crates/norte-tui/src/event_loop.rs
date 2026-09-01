@@ -236,6 +236,9 @@ pub async fn run(
     mut degraded: Option<
         tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>,
     >,
+    mut failed: Option<
+        tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionFailed>,
+    >,
     mut journal_warnings: Option<
         tokio::sync::mpsc::UnboundedReceiver<norte_core::embedded::JournalStatus>,
     >,
@@ -451,6 +454,19 @@ pub async fn run(
                 // la compone (`App::connection_banner`) y la ayuda puede
                 // preguntar por scheme cuál se degradó.
                 app.note_degraded(d);
+            }
+            Some(f) = async {
+                match &mut failed {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                // #322: una conexión NO se abrió, y con el motivo. Llega
+                // DESPUÉS del error del listado que la disparó —el handler que
+                // lo espera bloquea este select mientras tanto—, así que pisa
+                // la categoría genérica con la frase concreta, que es el orden
+                // que se quiere.
+                app.note_connection_failed(&f);
             }
             Some(state) = async {
                 match &mut journal_warnings {

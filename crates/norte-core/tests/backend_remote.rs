@@ -1114,7 +1114,7 @@ impl norte_core::connect::RemoteConnector for ProbedHangingConnector {
         &self,
         _s: &str,
         _a: &str,
-    ) -> Result<norte_core::connect::Connected, norte_proto::Error> {
+    ) -> Result<norte_core::connect::Connected, norte_core::connect::DialError> {
         self.started
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let _probe = DropProbe(self.cancelled.clone());

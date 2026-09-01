@@ -272,6 +272,11 @@ async fn main() -> Result<()> {
     let approvals = backend.take_approvals();
     // #44: avisos `connection.degraded` del daemon → indicador persistente.
     let degraded = backend.take_degraded();
+    // #322: avisos `connection.failed` → POR QUÉ no se pudo abrir una. Canal
+    // aparte del de arriba y no un enum: son dos hechos distintos —una sesión
+    // abierta que viaja mal, y una que no llegó a abrirse— y mezclarlos hace
+    // que uno se pinte como el otro.
+    let failed = backend.take_failed();
     // #167/#177: el brazo embebido abre el journal en su primera mutación, y si
     // resulta que lo tiene otro proceso, esta sesión muta SIN registro. Eso se
     // dice EN la sesión y en el instante en que ocurre: un `eprintln!` de
@@ -370,6 +375,7 @@ async fn main() -> Result<()> {
         conn_events,
         approvals,
         degraded,
+        failed,
         journal_warnings,
     )
     .await;

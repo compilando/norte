@@ -15,7 +15,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use futures::StreamExt as _;
 use norte_proto::methods::{
-    self, ClientInfo, CompareRowsBatch, ConnectionDegraded, FsCapabilitiesParams,
+    self, ClientInfo, CompareRowsBatch, ConnectionDegraded, ConnectionFailed, FsCapabilitiesParams,
     FsCapabilitiesResult, FsCopyParams, FsDeleteParams, FsListParams, FsListResult, FsMoveParams,
     FsReadParams, FsReadResult, FsSearchParams, FsStatParams, FsStatResult, FsTaskResult,
     PolicyApprovalRequired, PolicyDecideParams, PolicyDecideResult, PolicyPendingResult,
@@ -168,6 +168,9 @@ struct Inner {
     /// Avisos `connection.degraded` (#44) hacia el frontend: cada notif de
     /// la bomba se reenvía por aquí (mismo patrón que `approvals_tx`).
     degraded_tx: mpsc::UnboundedSender<ConnectionDegraded>,
+    /// Fallos `connection.failed` (#322) hacia el frontend: por qué NO se
+    /// pudo conectar. Mismo canal de un solo consumidor que `degraded`.
+    failed_tx: mpsc::UnboundedSender<ConnectionFailed>,
     /// `approval_id`s ya entregados al frontend: la entrega del daemon es
     /// at-least-once (broadcast + resync pueden solapar; cada reconexión
     /// re-lista pendientes) y un prompt de SEGURIDAD duplicado confunde
@@ -276,6 +279,11 @@ impl Inner {
         let _ = self.degraded_tx.send(d);
     }
 
+    /// Encola un fallo `connection.failed` (#322) hacia el frontend.
+    fn push_failed(&self, f: ConnectionFailed) {
+        let _ = self.failed_tx.send(f);
+    }
+
     /// Retiene el ancla del directorio recién listado (#295).
     ///
     /// Un lock envenenado se traga sin ruido, y es la respuesta correcta: lo
@@ -308,6 +316,9 @@ pub struct RemoteBackend {
     /// Canal de avisos `connection.degraded` (#44). Mismo invariante que
     /// `foreign_rx`.
     degraded_rx: Mutex<Option<mpsc::UnboundedReceiver<ConnectionDegraded>>>,
+    /// Canal de fallos `connection.failed` (#322). Mismo invariante que
+    /// `degraded_rx`: un solo consumidor se lo lleva.
+    failed_rx: Mutex<Option<mpsc::UnboundedReceiver<ConnectionFailed>>>,
 }
 
 impl Clone for RemoteBackend {
@@ -327,6 +338,7 @@ impl Clone for RemoteBackend {
             events_rx: Mutex::new(None),
             approvals_rx: Mutex::new(None),
             degraded_rx: Mutex::new(None),
+            failed_rx: Mutex::new(None),
         }
     }
 }
@@ -416,6 +428,7 @@ impl RemoteBackend {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let (approvals_tx, approvals_rx) = mpsc::unbounded_channel();
         let (degraded_tx, degraded_rx) = mpsc::unbounded_channel();
+        let (failed_tx, failed_rx) = mpsc::unbounded_channel();
         let backend = Self {
             inner: Arc::new(Inner {
                 socket,
@@ -431,6 +444,7 @@ impl RemoteBackend {
                 events_tx,
                 approvals_tx,
                 degraded_tx,
+                failed_tx,
                 seen_approvals: Mutex::new(std::collections::HashSet::new()),
                 search_routes: Mutex::new(BatchRoutes::default()),
                 compare_routes: Mutex::new(BatchRoutes::default()),
@@ -441,6 +455,7 @@ impl RemoteBackend {
             events_rx: Mutex::new(Some(events_rx)),
             approvals_rx: Mutex::new(Some(approvals_rx)),
             degraded_rx: Mutex::new(Some(degraded_rx)),
+            failed_rx: Mutex::new(Some(failed_rx)),
         };
         // La 1ª conexión SÍ arranca el daemon (spawn); las reconexiones
         // NO (M3 del rust-reviewer: reconectar jamás debe resucitar un
@@ -1808,6 +1823,19 @@ impl RemoteBackend {
             .take()
     }
 
+    /// Se lleva el receptor de fallos `connection.failed` (#322): POR QUÉ no
+    /// se pudo conectar. Uno solo, como los otros `take_*`.
+    ///
+    /// Sin esto, el frontend recibe la categoría del error —`PermissionDenied`,
+    /// que no distingue un secreto vacío de una clave equivocada— y la frase
+    /// exacta se queda en el log del daemon.
+    ///
+    /// # Panics
+    /// Si el estado interno está envenenado por un panic previo.
+    pub fn take_failed(&self) -> Option<mpsc::UnboundedReceiver<ConnectionFailed>> {
+        self.failed_rx.lock().expect("failed_rx lock sano").take()
+    }
+
     /// `policy.decide` contra el daemon (M3-3b T5).
     ///
     /// # Errors
@@ -2314,6 +2342,25 @@ async fn pump_loop(
                 inner.push_degraded(d);
                 continue;
             }
+            // #322: POR QUÉ no se pudo conectar. Mismo trato que la de
+            // arriba — sin params o malformada, se descarta CON traza: una
+            // notificación de presentación no puede tumbar el router.
+            if n.method == methods::CONNECTION_FAILED {
+                let Some(params) = n.params else {
+                    tracing::warn!("connection.failed sin params: descartada");
+                    continue;
+                };
+                let f = match serde_json::from_value::<ConnectionFailed>(params) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "connection.failed malformada");
+                        continue;
+                    }
+                };
+                let Some(inner) = weak.upgrade() else { return };
+                inner.push_failed(f);
+                continue;
+            }
             // El daemon se va (0.46.0). Lo único que hay que quedarse es
             // si volver, y hay que quedárselo AQUÍ: cuando la conexión se
             // cierre no habrá forma de distinguir un relevo de una parada.
@@ -2455,6 +2502,7 @@ async fn pump_loop(
                 events_rx: Mutex::new(None),
                 approvals_rx: Mutex::new(None),
                 degraded_rx: Mutex::new(None),
+                failed_rx: Mutex::new(None),
             }
             .route(snapshot);
         }
@@ -2467,6 +2515,7 @@ async fn pump_loop(
             events_rx: Mutex::new(None),
             approvals_rx: Mutex::new(None),
             degraded_rx: Mutex::new(None),
+            failed_rx: Mutex::new(None),
         };
         *backend.inner.client.write().await = None;
         // Los feeds vivos (hits de una búsqueda, filas de una comparación)
@@ -2516,6 +2565,7 @@ async fn pump_loop(
                 events_rx: Mutex::new(None),
                 approvals_rx: Mutex::new(None),
                 degraded_rx: Mutex::new(None),
+                failed_rx: Mutex::new(None),
             };
             // ¿Sigue vivo el permiso de arranque? Por TIEMPO, no por
             // intentos (ver `Inner::handover_until`): dentro de la ventana
@@ -2675,6 +2725,7 @@ mod tests {
         let (events_tx, _er) = mpsc::unbounded_channel();
         let (approvals_tx, _ar) = mpsc::unbounded_channel();
         let (degraded_tx, _dr) = mpsc::unbounded_channel();
+        let (failed_tx, _ffr) = mpsc::unbounded_channel();
         Arc::new(Inner {
             socket,
             spawn_cmd: None,
@@ -2692,6 +2743,7 @@ mod tests {
             events_tx,
             approvals_tx,
             degraded_tx,
+            failed_tx,
             seen_approvals: Mutex::new(std::collections::HashSet::new()),
             search_routes: Mutex::new(BatchRoutes::default()),
             compare_routes: Mutex::new(BatchRoutes::default()),
@@ -2785,6 +2837,7 @@ mod tests {
             events_rx: Mutex::new(None),
             approvals_rx: Mutex::new(None),
             degraded_rx: Mutex::new(None),
+            failed_rx: Mutex::new(None),
         };
 
         let r = backend.establish(false).await;
@@ -2882,6 +2935,7 @@ mod tests {
             events_rx: Mutex::new(None),
             approvals_rx: Mutex::new(None),
             degraded_rx: Mutex::new(None),
+            failed_rx: Mutex::new(None),
         }
     }
 
@@ -2937,6 +2991,7 @@ mod tests {
     #[test]
     fn degraded_push_llega_a_take_degraded() {
         let (degraded_tx, degraded_rx) = mpsc::unbounded_channel();
+        let (failed_tx, _ffr) = mpsc::unbounded_channel();
         let (foreign_tx, _fr) = mpsc::unbounded_channel();
         let (events_tx, _er) = mpsc::unbounded_channel();
         let (approvals_tx, _ar) = mpsc::unbounded_channel();
@@ -2957,6 +3012,7 @@ mod tests {
             events_tx,
             approvals_tx,
             degraded_tx,
+            failed_tx,
             seen_approvals: Mutex::new(std::collections::HashSet::new()),
             search_routes: Mutex::new(BatchRoutes::default()),
             compare_routes: Mutex::new(BatchRoutes::default()),
@@ -2969,6 +3025,7 @@ mod tests {
             events_rx: Mutex::new(None),
             approvals_rx: Mutex::new(None),
             degraded_rx: Mutex::new(Some(degraded_rx)),
+            failed_rx: Mutex::new(None),
         };
 
         inner.push_degraded(ConnectionDegraded {
@@ -2986,6 +3043,76 @@ mod tests {
         assert!(
             backend.take_degraded().is_none(),
             "el receptor es one-shot, igual que take_approvals"
+        );
+    }
+
+    /// #322: el canal de `connection.failed` es el de `degraded` con otra
+    /// carga. Se prueba aparte porque son DOS canales: mezclarlos haría que un
+    /// fallo de conexión llegara como degradación y al revés.
+    #[test]
+    fn failed_push_llega_a_take_failed() {
+        let (failed_tx, failed_rx) = mpsc::unbounded_channel();
+        let (degraded_tx, _dr) = mpsc::unbounded_channel();
+        let (foreign_tx, _fr) = mpsc::unbounded_channel();
+        let (events_tx, _er) = mpsc::unbounded_channel();
+        let (approvals_tx, _ar) = mpsc::unbounded_channel();
+        let inner = Arc::new(Inner {
+            socket: PathBuf::from("/nonexistent/test.sock"),
+            spawn_cmd: None,
+            client_info: ClientInfo {
+                name: "test".into(),
+                version: "0".into(),
+            },
+            agent_session: None,
+            handover_until: Mutex::new(None),
+            peer_version: Mutex::new(None),
+            client: tokio::sync::RwLock::new(None),
+            watches: Mutex::new(HashMap::new()),
+            finished: Mutex::new(std::collections::VecDeque::new()),
+            foreign_tx,
+            events_tx,
+            approvals_tx,
+            degraded_tx,
+            failed_tx,
+            seen_approvals: Mutex::new(std::collections::HashSet::new()),
+            search_routes: Mutex::new(BatchRoutes::default()),
+            compare_routes: Mutex::new(BatchRoutes::default()),
+            sync_routes: Mutex::new(BatchRoutes::default()),
+            anchors: Mutex::new(AnchorCache::default()),
+        });
+        let backend = RemoteBackend {
+            inner: Arc::clone(&inner),
+            foreign_rx: Mutex::new(None),
+            events_rx: Mutex::new(None),
+            approvals_rx: Mutex::new(None),
+            degraded_rx: Mutex::new(None),
+            failed_rx: Mutex::new(Some(failed_rx)),
+        };
+
+        inner.push_failed(ConnectionFailed {
+            conn: Some("rosetta".into()),
+            scheme: "s3".into(),
+            host: "rosetta.example.test".into(),
+            reason: "secret-empty".into(),
+            detail: Some("la clave configurada está vacía".into()),
+        });
+
+        let mut rx = backend.take_failed().expect("primer dueño se lo lleva");
+        let got = rx.try_recv().expect("el fallo llegó al receptor");
+        assert_eq!(got.reason, "secret-empty");
+        assert_eq!(
+            got.detail.as_deref(),
+            Some("la clave configurada está vacía"),
+            "el detalle es lo único que este canal existe para transportar"
+        );
+        assert!(
+            backend.take_failed().is_none(),
+            "el receptor es one-shot, igual que take_degraded"
+        );
+        // Y NO se cruzan: el canal de degradación sigue vacío.
+        assert!(
+            backend.take_degraded().is_none(),
+            "este backend no cableó degraded; un fallo no debe aparecer ahí"
         );
     }
 

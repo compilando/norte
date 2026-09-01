@@ -70,6 +70,14 @@ struct Cooldown {
     until: tokio::time::Instant,
     next: Duration,
     last_err: Error,
+    /// El PORQUÉ del último fallo (#322), para poder repetirlo.
+    ///
+    /// Sin esto, la explicación desaparecía justo cuando alguien la busca: el
+    /// humano lee «el agente SSH no pudo autenticar», vuelve a pulsar dentro
+    /// de la ventana de backoff, y el segundo intento se sirve de esta caché
+    /// sin marcar — así que no pasa por el observer y la respuesta vuelve a ser
+    /// la categoría pelada.
+    last_causa: Option<Box<crate::connect::Causa>>,
 }
 
 const BACKOFF_INITIAL: Duration = Duration::from_secs(1);
@@ -215,7 +223,13 @@ impl SessionPool {
             cooldown.retain(|_, c| now < c.until + BACKOFF_MAX);
             if let Some(c) = cooldown.get_mut(&cache_key) {
                 if now < c.until {
-                    return Err(c.last_err.clone());
+                    let err = c.last_err.clone();
+                    let causa = c.last_causa.clone();
+                    // Fuera del lock: el observer es código ajeno, y esta es la
+                    // misma regla que en el camino normal.
+                    drop(cooldown);
+                    contar_el_fallo(observer.as_ref(), scheme, authority, causa);
+                    return Err(err);
                 }
                 if now > c.until + c.next {
                     c.next = BACKOFF_INITIAL;
@@ -343,16 +357,47 @@ struct DialJob {
     tx: watch::Sender<DialResult>,
 }
 
+/// #322: cuenta POR QUÉ no se pudo conectar, si se puede contar.
+///
+/// Es el punto donde la causa —que la sabe quien atrapó el `ConnectError`— se
+/// junta con el destino —que lo sabe este job—, y hasta ahora el porqué se
+/// quedaba en el log del daemon: el humano leía «permiso denegado» y nada más.
+///
+/// Se llama FUERA de los locks del pool, como los avisos de #44: el observer
+/// es código ajeno y no se le sostiene un lock mientras corre.
+fn contar_el_fallo(
+    observer: Option<&Arc<dyn crate::connect::ConnectionObserver>>,
+    scheme: &str,
+    authority: &str,
+    causa: Option<Box<crate::connect::Causa>>,
+) {
+    let (Some(obs), Some(causa)) = (observer, causa) else {
+        return;
+    };
+    obs.on_connection_failure(&crate::connect::ConnectionFailure {
+        conn: causa.conn,
+        scheme: scheme.to_owned(),
+        // La authority SIN userinfo (regla 10): lo que va delante del ÚLTIMO
+        // `@` es el usuario, y no sale. Mismo criterio de «el último» que usan
+        // `Authority::new` y `parse_endpoint`, así que `a@b@c` da `c` en los
+        // tres sitios. El puerto SÍ se queda: esto es un diagnóstico, y a qué
+        // puerto no se pudo entrar es parte de la respuesta.
+        host: authority.rsplit('@').next().unwrap_or(authority).to_owned(),
+        reason: causa.reason,
+        detail: causa.detail,
+    });
+}
+
 fn spawn_dial_job(job: DialJob) {
     tokio::spawn(async move {
-        let dialed: Option<Result<crate::connect::Connected, Error>> = tokio::select! {
+        let dialed: Option<Result<crate::connect::Connected, crate::connect::DialError>> = tokio::select! {
             () = job.cancel.cancelled() => None,
             r = tokio::time::timeout(
                 CONNECT_TIMEOUT,
                 job.connector.connect(&job.scheme, &job.authority),
             ) => Some(r.unwrap_or_else(|_| {
                 tracing::warn!(scheme = %job.scheme, "timeout estableciendo la conexión remota");
-                Err(Error::ProviderUnavailable { retryable: true })
+                Err(Error::ProviderUnavailable { retryable: true }.into())
             })),
         };
         let Some(pool) = job.pool.upgrade() else {
@@ -409,7 +454,8 @@ fn spawn_dial_job(job: DialJob) {
                 }
                 let _ = job.tx.send(Some(Ok(provider)));
             }
-            Some(Err(e)) => {
+            Some(Err(dial)) => {
+                let crate::connect::DialError { error: e, causa } = dial;
                 let mut connecting = pool.connecting.lock().expect("connecting lock sano");
                 let current = connecting
                     .get(&job.cache_key)
@@ -437,10 +483,14 @@ fn spawn_dial_job(job: DialJob) {
                             until: now,
                             next: BACKOFF_INITIAL,
                             last_err: e.clone(),
+                            last_causa: None,
                         });
                         entry.until = now + entry.next;
                         entry.next = (entry.next * 2).min(BACKOFF_MAX);
                         entry.last_err = e.clone();
+                        // #322: y el porqué, para poder repetirlo mientras
+                        // esta entrada sirva el error sin volver a marcar.
+                        entry.last_causa.clone_from(&causa);
                     } else {
                         // Error accionable (TOFU, auth, path): sin cooldown —
                         // el usuario corrige y reintenta al instante.
@@ -450,6 +500,17 @@ fn spawn_dial_job(job: DialJob) {
                     connecting.remove(&job.cache_key);
                 }
                 drop(connecting);
+                // #322: se CUENTA por qué, y SOLO si este job seguía vigente
+                // — el mismo criterio que los avisos de #44 de arriba. Un job
+                // abandonado (el humano se fue) o reemplazado por otro no
+                // tiene a nadie esperando su respuesta, y su aviso saldría en
+                // la barra de alguien que no había pedido nada.
+                //
+                // Fuera de los locks, también como #44: el observer es código
+                // ajeno y no se le sostiene un lock mientras corre.
+                if current {
+                    contar_el_fallo(job.observer.as_ref(), &job.scheme, &job.authority, causa);
+                }
                 let _ = job.tx.send(Some(Err(e)));
             }
         }

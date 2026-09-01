@@ -964,7 +964,36 @@ use crate::{
 /// degradar de versión o con una instalación mezclada (un `ntc` viejo de
 /// `cargo install` junto a una ventana nueva — ya ha ocurrido en este
 /// repositorio). Quitar la clave del fichero lo arregla.
-pub const PROTOCOL_VERSION: &str = "0.63.0";
+///
+/// `0.64.0` (#322): por qué NO se pudo conectar llega a quien mira.
+///
+/// Añade la notificación [`CONNECTION_FAILED`] y su
+/// [`ConnectionFailed`]. Hasta aquí, un fallo de conexión llegaba al frontend
+/// como una CATEGORÍA de la taxonomía —casi siempre `PermissionDenied`— y la
+/// frase que decía qué pasaba se escribía en el log del daemon y se tiraba:
+/// «permiso denegado» era indistinguible de una clave equivocada, una
+/// passphrase mal escrita o un bucket sin permisos. Y con la CLI embebida sí
+/// se leía, porque el `tracing` sale por el stderr del propio proceso, así que
+/// el mismo fallo se diagnosticaba o no según el TRANSPORTE.
+///
+/// Va por notificación y no dentro del error porque la taxonomía no lleva
+/// texto libre por decisión (ver [`crate::Error`]): con el error se DECIDE, y
+/// se decide por categoría. Es la misma forma que [`CONNECTION_DEGRADED`],
+/// que es el precedente de este repositorio para una condición de conexión con
+/// explicación humana.
+///
+/// Ventana N=0.64.x / N-1=0.63.x. Aditivo: no cambia el JSON de ninguna
+/// operación existente. La pérdida, para un **cliente 0.63 contra un daemon
+/// 0.64**: no conoce la notificación y la descarta en silencio (ADR 0004), o
+/// sea que se queda exactamente como estaba — el fallo le sigue llegando como
+/// categoría, sin la frase. No es una comprobación que deje de hacerse ni un
+/// alcance que se ensanche.
+///
+/// Y en el sentido contrario —**cliente 0.64 contra un daemon 0.63**, que es
+/// el caso mixto que este repositorio ya se ha encontrado con un
+/// `cargo install` rancio—: el canal existe, nadie lo alimenta, y el frontend
+/// se queda con la categoría. La misma degradación, sin nada que romperse.
+pub const PROTOCOL_VERSION: &str = "0.64.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -1776,6 +1805,48 @@ pub const CONNECTION_CLOSE: &str = "connection.close";
 /// decisión. Se difunde solo a conexiones humanas. Un cliente N-1 la ignora
 /// (notif desconocida, ADR 0004) — degrada al comportamiento previo (solo log).
 pub const CONNECTION_DEGRADED: &str = "connection.degraded";
+/// `connection.failed` — notificación server→client (0.64.0, #322): una
+/// conexión remota NO se pudo establecer, con la causa en vocabulario cerrado
+/// y la frase humana en `detail`.
+///
+/// Existe porque el error que recibe quien llamó es una CATEGORÍA
+/// (`PermissionDenied` casi siempre) y no distingue un secreto vacío de una
+/// clave equivocada. Ver [`ConnectionFailed`] para por qué va por aquí y no
+/// dentro del error.
+///
+/// Se difunde solo a conexiones humanas, como [`CONNECTION_DEGRADED`]: es una
+/// frase para leer, y una conexión de agente no lee. Un cliente 0.63 la ignora
+/// (notif desconocida, ADR 0004) y se queda exactamente como estaba.
+pub const CONNECTION_FAILED: &str = "connection.failed";
+
+/// El vocabulario CERRADO de [`ConnectionFailed::reason`], en un sitio.
+///
+/// Existe porque las tres piezas que tienen que estar de acuerdo viven en tres
+/// crates —quien lo EMITE (`norte-core`), quien lo TRADUCE (`norte-frontend`) y
+/// los goldens de aquí— y sin un origen común cada una guarda su propia copia
+/// de las siete cadenas. Renombrar una en el emisor no ponía nada rojo: la
+/// notificación seguía saliendo, el frontend dejaba de reconocerla y todos los
+/// fallos pasaban a pintarse como «motivo desconocido», para siempre y en
+/// silencio.
+///
+/// Con esto, el emisor prueba que todo lo suyo está aquí y el frontend prueba
+/// que sabe traducir todo lo de aquí. La lista puede CRECER —es aditivo, y
+/// quien reciba un valor que no conozca se apoya en `detail`—, pero un valor no
+/// puede cambiar de nombre sin que las dos pruebas lo digan.
+///
+/// ```
+/// use norte_proto::methods::CONNECTION_FAILURE_REASONS;
+/// assert!(CONNECTION_FAILURE_REASONS.contains(&"secret-empty"));
+/// ```
+pub const CONNECTION_FAILURE_REASONS: &[&str] = &[
+    "secret-missing",
+    "secret-empty",
+    "secret-not-utf8",
+    "secret-store",
+    "auth-rejected",
+    "no-user",
+    "agent",
+];
 /// `daemon.going_away` — el daemon avisa de que se va ANTES de dejar de
 /// aceptar (0.46.0).
 ///
@@ -6613,6 +6684,61 @@ pub struct ConnectionProvideSecretResult {
     /// `true` si el daemon lo guardó para esta sesión. `false` reservado para
     /// un futuro rechazo por política.
     pub stored: bool,
+}
+
+/// Notificación [`CONNECTION_FAILED`] (server→client): una conexión remota NO
+/// se pudo establecer, y por qué (#322).
+///
+/// # Por qué existe, si el error ya viaja
+///
+/// El fallo llega al que llamó como una CATEGORÍA de la taxonomía —casi
+/// siempre `PermissionDenied`—, y eso es indistinguible de una clave
+/// equivocada, una passphrase mal escrita o un bucket sin permisos. La frase
+/// exacta —«el secreto de «miconn» está definido pero VACÍO»— se escribía en
+/// el log del daemon y se tiraba. Con la CLI embebida sí se leía, porque el
+/// `tracing` sale por el stderr del propio proceso: el mismo fallo se
+/// diagnosticaba o no según el TRANSPORTE, que es la peor forma de que
+/// dependa.
+///
+/// Va como notificación y no dentro del error a propósito. La taxonomía no
+/// lleva texto libre por decisión (ver [`crate::Error`]): quien decide con el
+/// error decide por categoría, y una frase para leer no es una categoría.
+/// Misma forma que [`ConnectionDegraded`], que es el precedente de este
+/// repositorio para «una condición de conexión con una explicación humana».
+///
+/// Un peer 0.63 no la conoce y la DESCARTA en silencio, que es lo que ADR 0004
+/// manda hacer con una notificación desconocida. Lo que pierde es exactamente
+/// lo que había antes: el fallo sigue llegando como categoría, sin la frase.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionFailed {
+    /// Nombre de la conexión de `connections.toml`, si el fallo ocurrió al
+    /// abrir una con nombre. `None` para una URL tecleada.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conn: Option<String>,
+    /// Scheme al que se intentaba conectar (p. ej. `"sftp"`).
+    pub scheme: String,
+    /// Host, SIN userinfo (regla 10).
+    pub host: String,
+    /// Causa, vocabulario CERRADO comparable por igualdad — como el `reason`
+    /// de [`ConnectionDegraded`]. Valores actuales: `"secret-missing"`,
+    /// `"secret-empty"`, `"secret-not-utf8"`, `"secret-store"`,
+    /// `"auth-rejected"`, `"no-user"`, `"agent"`.
+    ///
+    /// El conjunto puede CRECER de forma aditiva: quien reciba uno
+    /// DESCONOCIDO degrada con gracia apoyándose en `detail`, jamás rechaza la
+    /// notificación.
+    pub reason: String,
+    /// Detalle humano, ya en el idioma del daemon. Presentación, JAMÁS
+    /// contrato: no se parsea, no se compara, y puede faltar.
+    ///
+    /// Solo lo rellenan las variantes cuya frase se compone de campos que
+    /// pone el propio norte — ver `ConnectError::detalle_publico`. Las que
+    /// envuelven texto de terceros, rutas o el fichero de configuración NO
+    /// llegan aquí: la regla 10 no distingue entre «un secreto» y «algo que
+    /// puede contener un secreto».
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// Notificación [`CONNECTION_DEGRADED`] (server→client): una sesión remota se

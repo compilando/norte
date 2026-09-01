@@ -370,6 +370,9 @@ fn may_observe(viewer: &Actor, owner: &Actor) -> bool {
 /// rompe el ciclo Shared→engine→observer→Shared.
 struct DaemonConnectionObserver {
     shared: std::sync::Weak<Shared>,
+    /// El observer que ya estuviera en la ranura del engine, si lo había.
+    /// La ranura es de UNO: quien instala reenvía, no pisa.
+    previo: Option<Arc<dyn crate::connect::ConnectionObserver>>,
 }
 
 impl crate::connect::ConnectionObserver for DaemonConnectionObserver {
@@ -397,6 +400,41 @@ impl crate::connect::ConnectionObserver for DaemonConnectionObserver {
             // Solo humanos: la sesión degradada es info de seguridad para el
             // usuario, no para el agente (mismo criterio que policy.*).
             shared.broadcast_humans(&Arc::from(frame.into_boxed_slice()));
+        }
+        if let Some(p) = &self.previo {
+            p.on_connection_warning(w);
+        }
+    }
+
+    /// #322: por qué NO se pudo conectar, para quien está mirando.
+    ///
+    /// Mismo camino y mismo criterio que el aviso de degradación: solo a
+    /// humanos. Una conexión de agente no lee frases — decide por categoría, y
+    /// la categoría ya le llega en el error de su operación.
+    fn on_connection_failure(&self, f: &crate::connect::ConnectionFailure) {
+        let Some(shared) = self.shared.upgrade() else {
+            return;
+        };
+        let notif = norte_proto::methods::ConnectionFailed {
+            conn: f.conn.clone(),
+            scheme: f.scheme.clone(),
+            host: f.host.clone(),
+            reason: f.reason.wire().to_owned(),
+            detail: f.detail.clone(),
+        };
+        let Ok(params) = serde_json::to_value(&notif) else {
+            return;
+        };
+        let n = Notification {
+            jsonrpc: norte_proto::wire::JsonRpcVersion,
+            method: methods::CONNECTION_FAILED.into(),
+            params: Some(params),
+        };
+        if let Ok(frame) = encode_frame(&n) {
+            shared.broadcast_humans(&Arc::from(frame.into_boxed_slice()));
+        }
+        if let Some(p) = &self.previo {
+            p.on_connection_failure(f);
         }
     }
 }
@@ -784,12 +822,19 @@ impl Daemon {
             }
         }));
         // #44: avisos de conexión (degradación TLS) → `connection.degraded` SOLO
-        // a humanos. `Weak` rompe el ciclo Shared → engine → observer → Shared.
-        shared
-            .engine
-            .set_connection_observer(Arc::new(DaemonConnectionObserver {
+        // a humanos, y #322: los fallos → `connection.failed`. `Weak` rompe el
+        // ciclo Shared → engine → observer → Shared.
+        //
+        // ENCADENA en vez de pisar, aunque hoy el engine que llega aquí venga
+        // recién construido: la ranura es de uno, y un instalador que la
+        // sobrescriba deja al anterior mudo EN SILENCIO. Ese es el fallo que
+        // el encadenado existe para que no vuelva a ser posible.
+        shared.engine.chain_connection_observer(|previo| {
+            Arc::new(DaemonConnectionObserver {
                 shared: Arc::downgrade(&shared),
-            }));
+                previo,
+            })
+        });
         // El escritor existe siempre que haya DÓNDE escribir, y es él quien
         // decide si de verdad escribe: arranca con el lock si el bind lo
         // consiguió, y sin él lo vuelve a intentar (#237). Lo que sigue

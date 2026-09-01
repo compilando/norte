@@ -60,6 +60,25 @@ impl App {
         })
     }
 
+    /// Una conexión NO se pudo abrir, y por qué (#322).
+    ///
+    /// Va a `message` y no al indicador persistente a propósito: la
+    /// degradación describe una sesión que existe y sigue existiendo mientras
+    /// se mira, esto describe un intento que ya terminó. Un indicador
+    /// permanente sobre algo que no está abierto no se apagaría nunca.
+    ///
+    /// Pisa el mensaje anterior porque el anterior es, casi siempre, la
+    /// CATEGORÍA del mismo fallo —`PermissionDenied`— que es exactamente lo
+    /// que #322 existe para mejorar. La frase la compone el módulo COMPARTIDO,
+    /// por la regla de siempre: dos copias de un aviso sobre una conexión son
+    /// dos sitios donde el enmascarado se olvida.
+    pub fn note_connection_failed(&mut self, f: &norte_proto::methods::ConnectionFailed) {
+        self.message = Some(norte_frontend::banners::failure_line(
+            norte_i18n::active(),
+            f,
+        ));
+    }
+
     /// Anota que esta sesión no está registrando sus mutaciones (#177).
     ///
     /// Idempotente: el core avisa una vez por EPISODIO, y si alguna vez avisara
@@ -177,6 +196,32 @@ mod tests {
         assert_eq!(d.host, "ejemplo.org", "el host sobrevive, no solo la frase");
         assert_eq!(d.reason, "ftp-plaintext");
         assert!(app.degraded_for("file").is_none());
+    }
+
+    /// #322: un fallo de conexión llega a la barra con su MOTIVO, no con la
+    /// categoría del error.
+    ///
+    /// Y a `message`, no al indicador persistente: no hay ninguna sesión
+    /// abierta de la que seguir avisando, así que un indicador permanente no
+    /// se apagaría nunca.
+    #[test]
+    fn un_fallo_de_conexion_dice_el_motivo_en_la_barra() {
+        let mut app = app_dos_panes();
+        app.note_connection_failed(&norte_proto::methods::ConnectionFailed {
+            conn: Some("rosetta".to_owned()),
+            scheme: "s3".to_owned(),
+            host: "cubo.example".to_owned(),
+            reason: "secret-empty".to_owned(),
+            detail: Some("el secreto está vacío".to_owned()),
+        });
+        let msg = app.message.clone().expect("la barra lo dice");
+        assert!(msg.contains("cubo.example"), "{msg}");
+        assert!(msg.contains("rosetta"), "{msg}");
+        assert!(msg.contains(&t("failed-reason-secret-empty")), "{msg}");
+        assert!(
+            app.connection_banner().is_none(),
+            "un fallo no enciende el indicador PERSISTENTE de degradación"
+        );
     }
 
     /// Y dos conexiones degradadas no se pisan: antes la última ganaba y la

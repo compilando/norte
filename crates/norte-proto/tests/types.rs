@@ -1271,10 +1271,16 @@ fn version_ventana_actual() {
     // ninguna comprobación ni se ensancha ningún alcance; lo que ese cliente no
     // tiene es la única forma de contestar la pregunta, y por eso la ventana se
     // desplaza igual.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.63.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.62.0"), "N-1");
+    // 0.64.0 (#322): la notificación `connection.failed`. Un cliente 0.63 no la
+    // conoce y la descarta en silencio (ADR 0004), o sea que se queda como
+    // estaba: el fallo le llega como categoría y la frase que lo explica no.
+    // No pierde ninguna comprobación —nadie decide con esa frase, es para
+    // leer— y aun así la ventana se DESPLAZA, porque ese cliente no puede
+    // enseñar el diagnóstico que el nuevo sí enseña.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.64.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.63.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.61.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.62.9"),
         "N-2 fuera de la ventana"
     );
 }

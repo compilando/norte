@@ -216,6 +216,7 @@ rpc_catalogo! {
     CONNECTION_TRUST_HOST_KEY, Request, Direct, methods::ConnectionTrustHostKeyParams, methods::ConnectionTrustHostKeyResult;
     CONNECTION_PROVIDE_SECRET, Request, Direct, methods::ConnectionProvideSecretParams, methods::ConnectionProvideSecretResult;
     CONNECTION_DEGRADED, Notification, Direct, methods::ConnectionDegraded, ();
+    CONNECTION_FAILED, Notification, Direct, methods::ConnectionFailed, ();
     DAEMON_GOING_AWAY, Notification, Direct, methods::DaemonGoingAway, ();
 
     // Policy: gobierno humano de lo que pide un agente.

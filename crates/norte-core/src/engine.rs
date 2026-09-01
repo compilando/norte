@@ -785,6 +785,35 @@ impl Engine {
             .expect("connection_observer lock sano") = Some(observer);
     }
 
+    /// Instala un observer ENCADENADO al que ya estuviera: `hacer` recibe el
+    /// anterior y devuelve el nuevo, que debe reenviarle lo que reciba.
+    ///
+    /// Existe porque la ranura es de UNO y hay DOS hechos que salen por ella
+    /// —la degradación (#44) y el fallo (#322)— que el frontend toma por
+    /// canales separados. Antes, el segundo instalador pisaba al primero y
+    /// dejaba su canal mudo para siempre, en silencio.
+    ///
+    /// Y es UNA operación y no «lee y luego pon»: con dos llamadas, dos
+    /// instaladores concurrentes leen el mismo anterior y el segundo pierde al
+    /// primero — el mismo fallo mudo, ahora con carrera. Aquí el swap ocurre
+    /// bajo el mismo candado de escritura.
+    ///
+    /// # Panics
+    /// Nunca en la práctica: solo por envenenamiento del lock interno.
+    pub fn chain_connection_observer<F>(&self, hacer: F)
+    where
+        F: FnOnce(
+            Option<Arc<dyn crate::connect::ConnectionObserver>>,
+        ) -> Arc<dyn crate::connect::ConnectionObserver>,
+    {
+        let mut ranura = self
+            .connection_observer
+            .write()
+            .expect("connection_observer lock sano");
+        let previo = ranura.take();
+        *ranura = Some(hacer(previo));
+    }
+
     /// Registra la host key de `host:port` tras confirmación explícita del
     /// usuario (flujo TOFU, método `connection.trust_host_key`).
     ///

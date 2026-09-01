@@ -159,6 +159,7 @@ async fn sftp_tofu_trust_y_provider() {
         .connect("sftp", &format!("{USER}@127.0.0.1:{port}"))
         .await
         .err()
+        .map(|d| d.error)
         .expect("primer contacto debe fallar");
     let Error::HostKeyUnknown {
         host,
@@ -287,6 +288,7 @@ async fn scheme_desconocido_es_unsupported() {
         .connect("gopher", "h")
         .await
         .err()
+        .map(|d| d.error)
         .expect("gopher no conecta");
     // La URL gopher://h ni siquiera parsea como conexión remota conocida.
     assert!(

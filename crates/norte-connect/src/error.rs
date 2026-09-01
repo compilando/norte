@@ -200,6 +200,79 @@ impl From<russh::Error> for ConnectError {
     }
 }
 
+impl ConnectError {
+    /// La frase que SÍ puede cruzar el cable y acabar en una pantalla, si la
+    /// hay (#322).
+    ///
+    /// Un fallo de conexión llegaba al frontend como una categoría y nada
+    /// más: `permiso denegado`, indistinguible de una clave equivocada, una
+    /// passphrase mal escrita o un bucket sin permisos. El diagnóstico exacto
+    /// —«el secreto de «miconn» está definido pero VACÍO»— se escribía en el
+    /// log del daemon y se tiraba. Peor: con la CLI embebida sí se leía,
+    /// porque el `tracing` sale por el stderr del propio proceso, o sea que el
+    /// mismo fallo se diagnosticaba o no según el TRANSPORTE.
+    ///
+    /// # Por qué es una lista blanca, y por qué es corta
+    ///
+    /// Esto manda texto a la pantalla de alguien y, por el wire, a cualquier
+    /// cliente. La regla 10 no distingue entre «un secreto» y «algo que
+    /// contiene un secreto», así que solo pasan las variantes cuyo mensaje se
+    /// compone de campos que ponemos NOSOTROS. Queda fuera:
+    ///
+    /// - `Config`: envuelve el error de `toml`, que ecoa la línea ofensora —y
+    ///   esa línea puede ser la del secreto. `doctor` ya lo evita por esto.
+    /// - `InvalidUrl`: una URL puede llevar `user:contraseña@host`.
+    /// - `Io`, `KeyLoad`, `KeyUnsupported`: llevan RUTAS, y `path.display()`
+    ///   es una conversión con pérdida silenciosa (regla 1).
+    /// - `Ssh`, `Ftp`, `Tls`, `S3`, `KnownHosts`: texto libre de una
+    ///   biblioteca de terceros. El de `s3` puede traer la URL firmada.
+    ///
+    /// Las TOFU no están porque no las necesitan: viajan 1:1 como variantes
+    /// tipadas con host, puerto, algoritmo y huella.
+    ///
+    /// El `match` es exhaustivo a propósito: una variante nueva no compila
+    /// hasta que alguien decida si su texto puede salir.
+    #[must_use]
+    #[expect(
+        clippy::match_same_arms,
+        reason = "`AuthFailed` calla por un motivo distinto del resto —su frase \
+                  interpola el USUARIO, no texto ajeno— y ese comentario es lo \
+                  que hay que releer al añadir una variante"
+    )]
+    pub fn detalle_publico(&self) -> Option<String> {
+        match self {
+            Self::Secret { .. }
+            | Self::SecretEmpty { .. }
+            | Self::SecretNotUtf8 { .. }
+            | Self::SecretStore(_)
+            | Self::MissingUser
+            | Self::Agent(_) => Some(self.to_string()),
+
+            // `AuthFailed` SÍ tiene motivo publicable —y lo publica, por su
+            // `reason` cerrado— pero su Display es «autenticación rechazada
+            // para {user}@{host}», o sea el USUARIO. El core quema un
+            // `rsplit('@')` dos ficheros más allá justo para que el userinfo
+            // no salga en `host`; devolverlo aquí lo desharía por la misma
+            // notificación. Y no se pierde nada: la frase traducida del motivo
+            // ya dice todo lo que esta aportaba.
+            Self::AuthFailed { .. } => None,
+
+            Self::Config(_)
+            | Self::InvalidUrl(_)
+            | Self::Io(_)
+            | Self::KeyLoad { .. }
+            | Self::KeyUnsupported { .. }
+            | Self::Ssh(_)
+            | Self::KnownHosts(_)
+            | Self::Ftp(_)
+            | Self::Tls(_)
+            | Self::S3(_)
+            | Self::HostKeyUnknown { .. }
+            | Self::HostKeyMismatch { .. } => None,
+        }
+    }
+}
+
 // Proyección a la taxonomía del protocolo (spec §17.7): el core la usa para
 // que el fallo de conexión viaje por el wire. Las variantes TOFU van 1:1
 // (portan host/port/algo/fingerprint para el flujo `connection.trust_host_key`,
@@ -302,5 +375,67 @@ mod tests {
             norte_proto::Error::from(e),
             norte_proto::Error::PermissionDenied
         ));
+    }
+
+    /// #322 / regla 10: `AuthFailed` NO publica su frase.
+    ///
+    /// Su `Display` es «autenticación rechazada para {user}@{host}», o sea el
+    /// USUARIO. El core quema un `rsplit('@')` para que el userinfo no salga
+    /// en el campo `host` de la notificación; devolverlo aquí lo desharía por
+    /// la misma notificación, y su `reason` cerrado ya dice lo mismo.
+    #[test]
+    fn el_usuario_no_sale_en_el_detalle_de_un_rechazo() {
+        let e = ConnectError::AuthFailed {
+            user: "alice".into(),
+            host: "servidor.example".into(),
+        };
+        assert!(
+            e.to_string().contains("alice@"),
+            "el mensaje interno sigue siendo útil en el log"
+        );
+        assert_eq!(e.detalle_publico(), None, "pero no cruza el cable: {e}");
+    }
+
+    /// Ninguna frase publicable INTERPOLA algo con forma de userinfo.
+    ///
+    /// Estructural y no por variante: `@` es la forma que tiene el userinfo, y
+    /// la afirmación tiene que seguir siendo cierta cuando alguien añada la
+    /// variante número veinte. Los campos van con centinelas para que, si una
+    /// frase futura los junta con un `@`, el `@` aparezca.
+    ///
+    /// `MissingUser` queda fuera y es la excepción que enseña la regla: su
+    /// frase lleva un `user@host` LITERAL, como ejemplo de lo que hay que
+    /// escribir, y no interpola nada — no tiene campos. Lo que este test
+    /// persigue es dato interpolado, no la letra `@`.
+    #[test]
+    fn ninguna_frase_publicable_interpola_userinfo() {
+        const USUARIO: &str = "CENTINELA-USUARIO";
+        let publicables = [
+            ConnectError::Secret {
+                conn: USUARIO.into(),
+            },
+            ConnectError::SecretEmpty {
+                conn: USUARIO.into(),
+                origin: SecretOrigin::Env,
+            },
+            ConnectError::SecretNotUtf8 {
+                conn: USUARIO.into(),
+                origin: SecretOrigin::Env,
+            },
+            ConnectError::SecretStore("el almacén no abre"),
+            ConnectError::Agent("el agente no responde"),
+        ];
+        for e in &publicables {
+            let d = e.detalle_publico().expect("esta variante publica");
+            assert!(
+                !d.contains(&format!("{USUARIO}@")) && !d.contains(&format!("@{USUARIO}")),
+                "una frase publicable interpola algo con forma de userinfo: {d}"
+            );
+        }
+        assert_eq!(
+            ConnectError::MissingUser.detalle_publico().as_deref(),
+            Some("la conexión no especifica usuario (usa user@host) y no hay $USER en el entorno"),
+            "su `user@host` es LITERAL: si alguien le añade campos, este assert lo dice"
+        );
     }
 }

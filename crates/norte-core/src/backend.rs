@@ -306,6 +306,13 @@ pub use norte_client::ConnEvent;
 /// Mapea el `ConnectionWarning` del core al `ConnectionDegraded` del wire.
 struct ChannelConnectionObserver {
     tx: mpsc::UnboundedSender<norte_proto::methods::ConnectionDegraded>,
+    /// El observer que ya estaba en la ranura, si lo había.
+    ///
+    /// La ranura del engine es de UNO y los dos canales se toman por separado,
+    /// así que el segundo en instalarse tiene que seguir llamando al primero.
+    /// Sin esto, `take_failed` después de `take_degraded` dejaba el canal de
+    /// degradación mudo — y mudo en silencio, que es la peor forma.
+    previo: Option<Arc<dyn crate::connect::ConnectionObserver>>,
 }
 
 impl crate::connect::ConnectionObserver for ChannelConnectionObserver {
@@ -316,6 +323,47 @@ impl crate::connect::ConnectionObserver for ChannelConnectionObserver {
             reason: w.reason.wire().to_owned(),
             detail: None,
         });
+        if let Some(p) = &self.previo {
+            p.on_connection_warning(w);
+        }
+    }
+
+    fn on_connection_failure(&self, f: &crate::connect::ConnectionFailure) {
+        if let Some(p) = &self.previo {
+            p.on_connection_failure(f);
+        }
+    }
+}
+
+/// Gemelo del de arriba para los fallos (#322): una conexión que NO se abrió.
+///
+/// Dos observers y no uno con dos canales porque los dos `take_*` son
+/// independientes: un frontend puede querer el aviso de seguridad y no el
+/// diagnóstico, o al revés, y forzar los dos a la vez convertiría a uno en la
+/// condición del otro.
+struct ChannelFailureObserver {
+    tx: mpsc::UnboundedSender<norte_proto::methods::ConnectionFailed>,
+    previo: Option<Arc<dyn crate::connect::ConnectionObserver>>,
+}
+
+impl crate::connect::ConnectionObserver for ChannelFailureObserver {
+    fn on_connection_warning(&self, w: &crate::connect::ConnectionWarning) {
+        if let Some(p) = &self.previo {
+            p.on_connection_warning(w);
+        }
+    }
+
+    fn on_connection_failure(&self, f: &crate::connect::ConnectionFailure) {
+        let _ = self.tx.send(norte_proto::methods::ConnectionFailed {
+            conn: f.conn.clone(),
+            scheme: f.scheme.clone(),
+            host: f.host.clone(),
+            reason: f.reason.wire().to_owned(),
+            detail: f.detail.clone(),
+        });
+        if let Some(p) = &self.previo {
+            p.on_connection_failure(f);
+        }
     }
 }
 
@@ -1982,11 +2030,53 @@ impl Backend {
         match self {
             Self::Embedded(engine) => {
                 let (tx, rx) = mpsc::unbounded_channel();
-                engine.set_connection_observer(Arc::new(ChannelConnectionObserver { tx }));
+                // Encadenando: la ranura es de UNO y este `take_*` no puede
+                // dejar mudo al del otro hecho (#322).
+                engine.chain_connection_observer(|previo| {
+                    Arc::new(ChannelConnectionObserver { tx, previo })
+                });
                 Some(rx)
             }
             #[cfg(unix)]
             Self::Remote(r) => r.take_degraded(),
+        }
+    }
+
+    /// Receptor de fallos `connection.failed` (#322): POR QUÉ una conexión NO
+    /// se abrió. Gemelo de [`Backend::take_degraded`] y con el mismo trato en
+    /// los dos brazos — en `Remote` viene del pump del daemon, en `Embedded`
+    /// instala un observer.
+    ///
+    /// Existe en `Embedded` y no solo en `Remote` porque el diagnóstico se
+    /// perdía en los DOS: en el daemon se quedaba en su log, y en el embebido
+    /// salía por el stderr del propio proceso — que en la TUI se lo come la
+    /// pantalla alternativa. Un fallo que se diagnostica o no según el
+    /// transporte es la peor forma de que dependa.
+    ///
+    /// One-shot en `Remote`, donde el receptor se lo lleva el primer dueño. En
+    /// `Embedded` NO lo es —igual que [`Backend::take_degraded`]—: cada
+    /// llamada encadena otro observer y devuelve otro receptor, y el que nadie
+    /// drene es un canal sin techo que solo crece. Llámalo UNA vez, en el
+    /// arranque.
+    ///
+    /// Por `&self` y no `&mut self` como [`Backend::take_degraded`]: ninguna
+    /// de las dos ramas lo necesitaba, y `norte connect` —el comando que se
+    /// teclea justo para diagnosticar esto— tiene el backend por referencia
+    /// compartida. Pedir `&mut` habría dejado fuera al único sitio donde el
+    /// humano está preguntando explícitamente «¿por qué no entra?».
+    pub fn take_failed(
+        &self,
+    ) -> Option<mpsc::UnboundedReceiver<norte_proto::methods::ConnectionFailed>> {
+        match self {
+            Self::Embedded(engine) => {
+                let (tx, rx) = mpsc::unbounded_channel();
+                engine.chain_connection_observer(|previo| {
+                    Arc::new(ChannelFailureObserver { tx, previo })
+                });
+                Some(rx)
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.take_failed(),
         }
     }
 

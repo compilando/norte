@@ -95,3 +95,4 @@ edits.
 | [0087](0087-the-window-is-a-supported-frontend-and-has-a-gate-that-runs.md) | The window is a supported frontend, and has a gate that runs | accepted |
 | [0088](0088-a-declared-capability-that-nobody-honours-is-a-lie.md) | A declared capability that nobody honours is a lie | accepted |
 | [0089](0089-the-protocol-gets-a-catalogue-so-forgetting-a-surface-turns-red.md) | The protocol gets a catalogue, so forgetting a surface turns red | accepted |
+| [0090](0090-why-a-connection-failed-is-a-notification-not-an-error-field.md) | Why a connection failed is a notification, not a field on the error | accepted |

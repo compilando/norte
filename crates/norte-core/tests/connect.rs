@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use norte_core::Engine;
 use norte_core::connect::{
-    Connected, ConnectionObserver, ConnectionWarning, ConnectionWarningReason, RemoteConnector,
+    Connected, ConnectionObserver, ConnectionWarning, ConnectionWarningReason, DialError,
+    RemoteConnector,
 };
 use norte_proto::{Entry, EntryKind, Error, VPath};
 use norte_testkit::MemProvider;
@@ -98,16 +99,16 @@ impl FakeConnector {
 
 #[async_trait]
 impl RemoteConnector for FakeConnector {
-    async fn connect(&self, scheme: &str, authority: &str) -> Result<Connected, Error> {
+    async fn connect(&self, scheme: &str, authority: &str) -> Result<Connected, DialError> {
         self.connects.fetch_add(1, Ordering::SeqCst);
         assert_eq!(scheme, "sftp");
         if *self.tofu.lock().unwrap() {
-            return Err(Error::HostKeyUnknown {
+            return Err(DialError::from(Error::HostKeyUnknown {
                 host: authority.to_string(),
                 port: Some(22),
                 algo: "ssh-ed25519".into(),
                 fingerprint: "SHA256:xyz".into(),
-            });
+            }));
         }
         Ok(Connected {
             provider: Arc::new(EcoProvider),
@@ -239,7 +240,7 @@ struct HangingConnector;
 
 #[async_trait]
 impl RemoteConnector for HangingConnector {
-    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, DialError> {
         std::future::pending().await
     }
     async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
@@ -301,7 +302,7 @@ impl GatedConnector {
 
 #[async_trait]
 impl RemoteConnector for GatedConnector {
-    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, DialError> {
         self.connects.fetch_add(1, Ordering::SeqCst);
         let _permit = self.gate.acquire().await.expect("gate viva");
         Ok(Connected {
@@ -357,7 +358,7 @@ struct ProbedHangingConnector {
 
 #[async_trait]
 impl RemoteConnector for ProbedHangingConnector {
-    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, DialError> {
         self.started.fetch_add(1, Ordering::SeqCst);
         let _probe = DropProbe(self.cancelled.clone());
         std::future::pending().await
@@ -427,14 +428,14 @@ struct FlakyConnector {
 
 #[async_trait]
 impl RemoteConnector for FlakyConnector {
-    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, DialError> {
         self.connects.fetch_add(1, Ordering::SeqCst);
         if self
             .failures
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |f| f.checked_sub(1))
             .is_ok()
         {
-            return Err(Error::ProviderUnavailable { retryable: true });
+            return Err(Error::ProviderUnavailable { retryable: true }.into());
         }
         Ok(Connected {
             provider: Arc::new(EcoProvider),
@@ -577,7 +578,7 @@ struct RevivingConnector {
 
 #[async_trait]
 impl RemoteConnector for RevivingConnector {
-    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, DialError> {
         self.connects.fetch_add(1, Ordering::SeqCst);
         let poisoned = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.poisons.lock().unwrap().push(poisoned.clone());
@@ -630,7 +631,7 @@ struct CanonConnector {
 
 #[async_trait]
 impl RemoteConnector for CanonConnector {
-    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, DialError> {
         self.connects.fetch_add(1, Ordering::SeqCst);
         Ok(Connected {
             provider: Arc::new(EcoProvider),
@@ -768,7 +769,7 @@ struct ZipReviving {
 
 #[async_trait]
 impl RemoteConnector for ZipReviving {
-    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, DialError> {
         let n = self.connects.fetch_add(1, Ordering::SeqCst) + 1;
         let member = format!("dial-{n}.txt");
         let zip = norte_testkit::ZipSmith::new()
@@ -890,6 +891,186 @@ async fn observer_recibe_el_aviso_de_degradacion() {
     assert_eq!(conn.connects.load(Ordering::SeqCst), 1, "cacheado");
 }
 
+/// Observer que apunta los FALLOS (#322).
+struct FailureObserver {
+    seen: Arc<std::sync::Mutex<Vec<norte_core::connect::ConnectionFailure>>>,
+}
+
+impl ConnectionObserver for FailureObserver {
+    fn on_connection_warning(&self, _w: &ConnectionWarning) {}
+
+    fn on_connection_failure(&self, f: &norte_core::connect::ConnectionFailure) {
+        self.seen.lock().expect("lock de test").push(f.clone());
+    }
+}
+
+/// Conector que falla con una causa CONTABLE: el destino lo pone el job.
+struct CausaConnector;
+
+#[async_trait]
+impl RemoteConnector for CausaConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, DialError> {
+        Err(DialError {
+            error: Error::PermissionDenied,
+            causa: Some(Box::new(norte_core::connect::Causa {
+                conn: Some("rosetta".into()),
+                reason: norte_core::connect::ConnectionFailureReason::SecretEmpty,
+                detail: Some("el secreto de «rosetta» está definido pero VACÍO".into()),
+            })),
+        })
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+    async fn provide_secret(&self, _c: &str, _s: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #322: un connect que falla con causa contable la entrega al observer, con
+/// el destino que solo el job conoce, y el que llamó SIGUE recibiendo su
+/// categoría.
+///
+/// Las dos mitades importan. Si el error dejara de ser `PermissionDenied`,
+/// esto habría cambiado la taxonomía —que es lo que decide— para arreglar un
+/// problema de presentación.
+#[tokio::test]
+async fn observer_recibe_el_motivo_de_un_fallo() {
+    let engine = Engine::new();
+    engine.set_connector(Arc::new(CausaConnector));
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    engine.set_connection_observer(Arc::new(FailureObserver { seen: seen.clone() }));
+
+    let err = engine
+        .stat(&vp("sftp://usuario@a.example/x"))
+        .await
+        .expect_err("el connect falla");
+    assert!(
+        matches!(err, Error::PermissionDenied),
+        "la taxonomía no cambia: {err:?}"
+    );
+
+    let got = seen.lock().expect("lock de test");
+    assert_eq!(got.len(), 1, "un fallo, un aviso: {got:?}");
+    let f = &got[0];
+    assert_eq!(f.reason.wire(), "secret-empty");
+    assert_eq!(f.conn.as_deref(), Some("rosetta"));
+    assert_eq!(f.scheme, "sftp");
+    assert_eq!(
+        f.host, "a.example",
+        "la authority va SIN userinfo (regla 10): {:?}",
+        f.host
+    );
+    assert!(!f.host.contains('@'), "ni rastro del usuario: {:?}", f.host);
+    assert_eq!(
+        f.detail.as_deref(),
+        Some("el secreto de «rosetta» está definido pero VACÍO")
+    );
+}
+
+/// Conector que falla SIEMPRE con una causa que además entra en cooldown.
+///
+/// `Agent` degrada a `ProviderUnavailable`, que es lo que dispara la caché
+/// negativa — el camino donde el motivo se perdía al reintentar.
+struct AgenteCaidoConnector {
+    intentos: AtomicUsize,
+}
+
+#[async_trait]
+impl RemoteConnector for AgenteCaidoConnector {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, DialError> {
+        self.intentos.fetch_add(1, Ordering::SeqCst);
+        Err(DialError {
+            error: Error::ProviderUnavailable { retryable: false },
+            causa: Some(Box::new(norte_core::connect::Causa {
+                conn: None,
+                reason: norte_core::connect::ConnectionFailureReason::Agent,
+                detail: Some("el agente SSH no responde".into()),
+            })),
+        })
+    }
+    async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+    async fn provide_secret(&self, _c: &str, _s: &str) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// #322: el motivo se REPITE mientras la caché negativa sirve el error.
+///
+/// Sin esto, la explicación desaparecía exactamente cuando alguien la busca:
+/// el humano lee «el agente SSH no pudo autenticar», vuelve a pulsar dentro de
+/// la ventana de backoff, y el segundo intento se sirve de la caché sin marcar
+/// —así que no pasa por el observer— y la respuesta vuelve a ser la categoría
+/// pelada.
+#[tokio::test]
+async fn el_motivo_se_repite_al_reintentar_dentro_del_backoff() {
+    let engine = Engine::new();
+    let conn = Arc::new(AgenteCaidoConnector {
+        intentos: AtomicUsize::new(0),
+    });
+    engine.set_connector(conn.clone());
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    engine.set_connection_observer(Arc::new(FailureObserver { seen: seen.clone() }));
+
+    for _ in 0..2 {
+        let e = engine
+            .stat(&vp("sftp://a.example/x"))
+            .await
+            .expect_err("falla");
+        assert!(matches!(e, Error::ProviderUnavailable { .. }), "fue {e:?}");
+    }
+
+    assert_eq!(
+        conn.intentos.load(Ordering::SeqCst),
+        1,
+        "el segundo intento se sirvió de la caché negativa (si no, este test no prueba nada)"
+    );
+    let got = seen.lock().expect("lock de test");
+    assert_eq!(
+        got.len(),
+        2,
+        "el porqué acompaña también al error cacheado: {got:?}"
+    );
+    assert!(
+        got.iter()
+            .all(|f| f.reason == norte_core::connect::ConnectionFailureReason::Agent)
+    );
+}
+
+/// El vocabulario que el core EMITE es exactamente el que el proto declara.
+///
+/// En los dos sentidos, y ese es el punto. Con el `reason` como `&'static str`
+/// suelto, renombrar un valor aquí no ponía nada rojo: los goldens del proto
+/// congelaban una copia distinta, la notificación seguía saliendo, y todos los
+/// fallos pasaban a pintarse como «motivo desconocido» para siempre. El
+/// emisor tiene que estar en el mismo sitio que el contrato.
+#[test]
+fn el_vocabulario_de_fallos_es_el_del_proto() {
+    use norte_core::connect::ConnectionFailureReason as R;
+    let del_core: Vec<&str> = R::TODAS.iter().map(|r| r.wire()).collect();
+    let del_proto = norte_proto::methods::CONNECTION_FAILURE_REASONS;
+    for w in &del_core {
+        assert!(
+            del_proto.contains(w),
+            "el core emite {w:?} y el proto no lo declara"
+        );
+    }
+    for w in del_proto {
+        assert!(
+            del_core.contains(w),
+            "el proto declara {w:?} y el core no lo puede emitir"
+        );
+    }
+    // Y ninguna repetida: dos variantes con la misma cadena hacen que una sea
+    // indistinguible de la otra en el cable.
+    let mut ordenadas = del_core.clone();
+    ordenadas.sort_unstable();
+    ordenadas.dedup();
+    assert_eq!(ordenadas.len(), del_core.len(), "dos variantes, una cadena");
+}
+
 /// #44: un connect SIN avisos jamás llama al observer.
 #[tokio::test]
 async fn observer_no_se_llama_sin_avisos() {
@@ -915,11 +1096,11 @@ struct SeqConnector {
 
 #[async_trait]
 impl RemoteConnector for SeqConnector {
-    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, Error> {
+    async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, DialError> {
         let n = self.connects.fetch_add(1, Ordering::SeqCst) + 1;
         if n == 1 {
             // Fallo ACCIONABLE (sin cooldown): el reintento marca al instante.
-            return Err(Error::PermissionDenied);
+            return Err(Error::PermissionDenied.into());
         }
         let _permit = self.gate.acquire().await.expect("gate viva");
         Ok(Connected {

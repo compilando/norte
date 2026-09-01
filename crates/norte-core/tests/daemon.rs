@@ -6194,7 +6194,7 @@ impl norte_core::connect::RemoteConnector for DegradingConnector {
         &self,
         scheme: &str,
         _authority: &str,
-    ) -> Result<norte_core::connect::Connected, norte_proto::Error> {
+    ) -> Result<norte_core::connect::Connected, norte_core::connect::DialError> {
         // El provider vivo responde `stat`; `mem` queda como testigo de que el
         // conector puede sostener uno propio si hiciera falta.
         let _ = &self.mem;
@@ -6307,6 +6307,125 @@ async fn degradacion_de_conexion_solo_a_humanos() {
     assert!(
         colado.is_err(),
         "un agente no recibe connection.degraded: {colado:?}"
+    );
+}
+
+/// Conector que SIEMPRE falla con causa contable (#322), y con userinfo en la
+/// authority para probar que no sale.
+struct FailingConnector;
+
+#[async_trait]
+impl norte_core::connect::RemoteConnector for FailingConnector {
+    async fn connect(
+        &self,
+        _scheme: &str,
+        _authority: &str,
+    ) -> Result<norte_core::connect::Connected, norte_core::connect::DialError> {
+        Err(norte_core::connect::DialError {
+            error: Error::PermissionDenied,
+            causa: Some(Box::new(norte_core::connect::Causa {
+                conn: Some("rosetta".into()),
+                reason: norte_core::connect::ConnectionFailureReason::SecretEmpty,
+                detail: Some("el secreto de «rosetta» está definido pero VACÍO".into()),
+            })),
+        })
+    }
+    async fn trust_host_key(
+        &self,
+        _h: &str,
+        _p: Option<u16>,
+        _f: &str,
+    ) -> Result<(), norte_proto::Error> {
+        Ok(())
+    }
+    async fn provide_secret(&self, _c: &str, _s: &str) -> Result<(), norte_proto::Error> {
+        Ok(())
+    }
+}
+
+/// Daemon cuyo engine no puede conectar con nada remoto.
+async fn spawn_daemon_failing() -> TestDaemon {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let engine = Arc::new(Engine::new());
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    engine.set_connector(Arc::new(FailingConnector));
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
+            state_dir: None,
+        },
+    )
+    .await
+    .expect("bind");
+    let run = tokio::spawn(daemon.run());
+    TestDaemon {
+        socket,
+        run,
+        _dir: dir,
+        mem,
+    }
+}
+
+/// #322: el humano recibe `connection.failed` con el motivo; el agente NO.
+///
+/// Y cruza el socket de verdad, que es la mitad que ninguna prueba de unidad
+/// cubre: el marco se codifica, se difunde y el SDK del otro lado lo decodea.
+/// Un error de dedo en la comparación del método sería invisible sin esto.
+#[tokio::test]
+async fn fallo_de_conexion_solo_a_humanos_y_sin_userinfo() {
+    let d = spawn_daemon_failing().await;
+    let mut human = connected_client(&d).await;
+    let mut agent = connected_agent(&d, "s1").await;
+
+    // Con USUARIO en la authority: lo que va delante del `@` no puede salir.
+    let err = human
+        .call::<_, FsStatResult>(
+            methods::FS_STAT,
+            &FsStatParams {
+                path: vp("sftp://alice@maquina.example/x"),
+                attrs: Vec::new(),
+            },
+        )
+        .await
+        .expect_err("el connect falla");
+    let _ = err;
+
+    let fallo = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let n = human.notification().await.expect("canal de notifs vivo");
+            if n.method == methods::CONNECTION_FAILED {
+                return serde_json::from_value::<norte_proto::methods::ConnectionFailed>(
+                    n.params.expect("la notif lleva params"),
+                )
+                .expect("shape de ConnectionFailed");
+            }
+        }
+    })
+    .await
+    .expect("connection.failed llega");
+
+    assert_eq!(fallo.scheme, "sftp");
+    assert_eq!(
+        fallo.host, "maquina.example",
+        "el userinfo NO sale (regla 10)"
+    );
+    assert!(!fallo.host.contains('@'), "ni rastro de alice");
+    assert_eq!(fallo.reason, "secret-empty");
+    assert_eq!(fallo.conn.as_deref(), Some("rosetta"));
+    assert!(fallo.detail.is_some());
+
+    // El agente no la recibe: es una frase para leer, y un agente decide por
+    // categoría — que ya le llega en el error de su operación.
+    let colado = tokio::time::timeout(Duration::from_millis(200), agent.notification()).await;
+    assert!(
+        colado.is_err(),
+        "un agente no recibe connection.failed: {colado:?}"
     );
 }
 

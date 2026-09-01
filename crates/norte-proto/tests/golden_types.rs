@@ -1156,7 +1156,12 @@ fn golden_methods() {
     // cuando están vacíos: con una sola fixtura por método, el día que dejaran
     // de omitirse —o que el default de `recursive` cambiara— el wire cambiaría
     // sin que nada se pusiera rojo.
-    assert_eq!(fixtures.len(), 178, "[methods.json] fixtures sin caso Rust");
+    // 178 → 186 en 0.64.0 (#322): + `connection.failed`, con UNA fixtura POR
+    // VALOR de su vocabulario cerrado (siete) más la que NO lleva los dos
+    // campos opcionales. Una sola dejaría renombrar los otros seis sin que
+    // nada se pusiera rojo, y `reason` se compara por igualdad en el frontend:
+    // un renombrado silencioso es una frase que deja de salir.
+    assert_eq!(fixtures.len(), 186, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
@@ -2661,8 +2666,8 @@ fn check_methods_policy(fixtures: &BTreeMap<String, Value>) {
 /// `provide_secret` (0.63.0, #325), que es su gemelo.
 fn check_methods_connection(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
-        ConnectionDegraded, ConnectionProvideSecretParams, ConnectionProvideSecretResult,
-        ConnectionTrustHostKeyParams, ConnectionTrustHostKeyResult,
+        ConnectionDegraded, ConnectionFailed, ConnectionProvideSecretParams,
+        ConnectionProvideSecretResult, ConnectionTrustHostKeyParams, ConnectionTrustHostKeyResult,
     };
     // #325. El `conn` lleva acentos y eñe a propósito: es una CLAVE de
     // `connections.toml`, o sea UTF-8 cualquiera, y este fixture es lo que
@@ -2716,6 +2721,45 @@ fn check_methods_connection(fixtures: &BTreeMap<String, Value>) {
             scheme: "ftp".into(),
             host: "backup.example".into(),
             reason: "tls-auth-rejected".into(),
+            detail: None,
+        },
+    );
+
+    // `connection.failed` (0.64.0, #322): UN fixture POR VALOR del vocabulario
+    // cerrado. Con uno solo, renombrar cualquiera de los otros seis no pondría
+    // nada en rojo — y `reason` se compara por igualdad en el frontend, así que
+    // un renombrado silencioso es una frase que deja de salir.
+    for (caso, reason) in [
+        ("connection_failed_secret_missing", "secret-missing"),
+        ("connection_failed_secret_empty", "secret-empty"),
+        ("connection_failed_secret_not_utf8", "secret-not-utf8"),
+        ("connection_failed_secret_store", "secret-store"),
+        ("connection_failed_auth_rejected", "auth-rejected"),
+        ("connection_failed_no_user", "no-user"),
+        ("connection_failed_agent", "agent"),
+    ] {
+        check_one(
+            fixtures,
+            caso,
+            &ConnectionFailed {
+                conn: Some("trabajo".into()),
+                scheme: "sftp".into(),
+                host: "servidor.example".into(),
+                reason: reason.into(),
+                detail: Some("el secreto de «trabajo» está definido pero VACÍO".into()),
+            },
+        );
+    }
+    // Y el caso SIN los dos opcionales: la prueba de que no viajan cuando no
+    // están (una URL tecleada no tiene nombre de conexión).
+    check_one(
+        fixtures,
+        "connection_failed_sin_opcionales",
+        &ConnectionFailed {
+            conn: None,
+            scheme: "sftp".into(),
+            host: "servidor.example".into(),
+            reason: "auth-rejected".into(),
             detail: None,
         },
     );
@@ -4043,7 +4087,15 @@ fn method_names_frozen() {
         methods::CONNECTION_PROVIDE_SECRET,
         "connection.provide_secret"
     );
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.63.0");
+    // 0.64.0 (#322): `connection.failed`. El fallo de conexión llegaba como
+    // categoría —`PermissionDenied`, indistinguible de una clave equivocada— y
+    // la frase que lo explicaba moría en el log del daemon; con la CLI
+    // embebida sí se leía, o sea que el diagnóstico dependía del TRANSPORTE.
+    // Va por notificación porque la taxonomía no lleva texto libre a
+    // propósito: con el error se decide, y se decide por categoría. Un cliente
+    // 0.63 la descarta y se queda como estaba.
+    assert_eq!(methods::CONNECTION_FAILED, "connection.failed");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.64.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,
