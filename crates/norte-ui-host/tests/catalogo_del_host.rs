@@ -17,14 +17,46 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Los ficheros del host donde se eligen claves.
-const FUENTES: &[(&str, &str)] = &[
-    ("controller.rs", include_str!("../src/controller.rs")),
-    ("help.rs", include_str!("../src/help.rs")),
-    ("extensions.rs", include_str!("../src/extensions.rs")),
-    ("settings.rs", include_str!("../src/settings.rs")),
-    ("pickers.rs", include_str!("../src/pickers.rs")),
-];
+/// Los ficheros del host donde se eligen claves: TODO `src/`, recorrido.
+///
+/// Antes era una lista de cinco `include_str!`. Cuando `controller.rs` se
+/// partió en treinta y tres ficheros (ADR 0086) la lista se quedó nombrando
+/// uno que ya no existía, y mantenerla a mano habría dejado de mirar los
+/// treinta y dos nuevos sin decir nada — que es exactamente la deriva que la
+/// cabecera de este fichero dice que hay que evitar. Se recorre el árbol: un
+/// fichero nuevo entra solo.
+fn fuentes() -> Vec<(String, String)> {
+    fn recorrer(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+        let mut entradas: Vec<_> = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("se lee {}: {e}", dir.display()))
+            .map(|e| e.expect("entrada").path())
+            .collect();
+        entradas.sort();
+        for ruta in entradas {
+            if ruta.is_dir() {
+                recorrer(&ruta, out);
+            } else if ruta.extension().is_some_and(|e| e == "rs") {
+                let nombre = ruta
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .expect("nombre")
+                    .to_owned();
+                let texto = std::fs::read_to_string(&ruta)
+                    .unwrap_or_else(|e| panic!("se lee {}: {e}", ruta.display()));
+                out.push((nombre, texto));
+            }
+        }
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut out = Vec::new();
+    recorrer(&src, &mut out);
+    assert!(
+        out.len() >= 30,
+        "el barrido tiene que ver el host entero, y ve {}",
+        out.len()
+    );
+    out
+}
 
 /// Los campos cuyo valor ES una clave Fluent.
 const CAMPOS: &[&str] = &["reason_key", "title_key", "label_key"];
@@ -124,10 +156,23 @@ fn parece_clave(s: &str) -> bool {
         && !s.ends_with('-')
 }
 
+/// ¿Lo que sigue al campo es un TIPO, o sea que esto declara y no elige?
+///
+/// Los tipos que un campo de clave puede llevar son pocos y todos empiezan
+/// por mayúscula o por `&`; un valor elegido empieza por comilla, por `self`,
+/// por una llamada o por un `match`. Se mira el primer token y ya.
+fn es_declaracion(ventana: &str) -> bool {
+    let t = ventana.trim_start();
+    ["String", "Option<", "Cow<", "&'static str", "&str"]
+        .iter()
+        .any(|tipo| t.starts_with(tipo))
+}
+
 /// Las claves que el host elige, por fichero y sitio.
 fn claves_elegidas() -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (nombre, fuente) in FUENTES {
+    let fuentes = fuentes();
+    for (nombre, fuente) in &fuentes {
         for campo in CAMPOS {
             let aguja = format!("{campo}:");
             let mut desde = 0usize;
@@ -136,6 +181,15 @@ fn claves_elegidas() -> BTreeMap<String, Vec<String>> {
                 desde = inicio;
                 let fin = hasta_limite(fuente, inicio + VENTANA);
                 let ventana = &fuente[inicio..fin];
+                // DECLARAR el campo no es ELEGIR una clave. Desde que el
+                // barrido mira todo `src/` ve también la definición del tipo
+                // (`reason_key: String` en `bridge.rs`), y un tipo no tiene
+                // literal que seguir. Se reconoce porque lo que sigue es un
+                // TIPO: en una elección, detrás va un literal, un `self.` o
+                // una llamada, nunca `String` ni `Option<`.
+                if es_declaracion(ventana) {
+                    continue;
+                }
                 let encontradas: Vec<String> = literales(ventana)
                     .into_iter()
                     .filter(|s| parece_clave(s))
@@ -166,7 +220,7 @@ fn claves_elegidas() -> BTreeMap<String, Vec<String>> {
     // Las que el host traduce en el sitio. Se toma el PRIMER literal que
     // parezca una clave dentro de la ventana: `t_in` lleva el idioma delante y
     // `ta_in` los argumentos detrás, así que el primero es siempre el id.
-    for (nombre, fuente) in FUENTES {
+    for (nombre, fuente) in &fuentes {
         for llamada in LLAMADAS {
             let mut desde = 0usize;
             while let Some(i) = fuente[desde..].find(llamada) {

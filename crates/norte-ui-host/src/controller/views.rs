@@ -1,0 +1,441 @@
+//! Armar la foto y las vistas que la componen.
+//!
+//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
+//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+
+// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
+// los mismos imports que el padre. Enumerarlos aquí sería una lista de
+// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
+// el padre importa algo — `super::*` la sigue sola.
+#[allow(clippy::wildcard_imports)]
+use super::*;
+
+impl Estado {
+    /// Proyecta un snapshot del daemon a lo que el renderer pinta.
+    pub(super) fn vista_de(p: &norte_proto::TaskProgress) -> TaskView {
+        // Por la regla COMPARTIDA, que cae a las entradas cuando no hay
+        // bytes totales: esto solo miraba bytes, así que un borrado —que no
+        // cuenta bytes— cruzaba el puente sin porcentaje de principio a fin.
+        let porcentaje = norte_frontend::tasks::progress_pct(p);
+        TaskView {
+            task_id: p.task_id.get(),
+            kind: clase_de_task(p.kind).to_owned(),
+            state: match p.state {
+                norte_proto::TaskState::Completed => TaskStateView::Done,
+                norte_proto::TaskState::Cancelled => TaskStateView::Cancelled,
+                norte_proto::TaskState::Failed { .. } => TaskStateView::Failed,
+                norte_proto::TaskState::Running | norte_proto::TaskState::Paused => {
+                    TaskStateView::Running
+                }
+                // Un estado que este host todavía no conoce se pinta como
+                // encolado: es lo único que no miente sobre algo que sigue
+                // vivo (`TaskState` es no exhaustivo por contrato del wire).
+                _ => TaskStateView::Queued,
+            },
+            percent: porcentaje,
+            detail: p.current.as_ref().map(|path| {
+                let (texto, _hostil) = norte_frontend::path_display(path);
+                clamp_display(texto)
+            }),
+            detail_hostile: p
+                .current
+                .as_ref()
+                .is_some_and(|path| norte_frontend::path_display(path).1),
+            foreign: false,
+        }
+    }
+
+    /// La pantalla entera: TODOS los huecos que el reparto pinta, cada uno
+    /// proyectado según lo que es.
+    ///
+    /// Los ocultos no viajan. Un kind que este host todavía no proyecta sí
+    /// viaja, en gris y con su nombre: preservar lo que no se entiende es la
+    /// regla de la sesión (ADR 0059), y hacerlo desaparecer sería peor que
+    /// enseñarlo apagado.
+    pub(super) fn snapshot(&self) -> ViewSnapshot {
+        let mut slots = Vec::new();
+        for (slot, _) in &self.reparto.placements {
+            let SlotId(id) = *slot;
+            if let Some(hueco) = self.huecos.get(&id) {
+                slots.push(SlotView::Browser(Box::new(self.browser(id, hueco))));
+                continue;
+            }
+            let kind = kind_de(&self.arbol, *slot);
+            match kind.as_ref().map(norte_frontend::layout::KindId::as_str) {
+                Some("metadata") => {
+                    slots.push(SlotView::Metadata(Box::new(self.hoja_de_atributos(*slot))));
+                }
+                Some("places") => slots.push(SlotView::Places(Box::new(self.barra_de_sitios(id)))),
+                Some("tree") => slots.push(SlotView::Tree(Box::new(self.arbol_de_ramas(id)))),
+                Some("processes") => slots.push(SlotView::Processes {
+                    slot_id: id,
+                    // Índice sobre las filas PINTADAS, que es lo que el
+                    // renderer resalta. Sobre el mapa entero, con el tablero
+                    // recortado, señalaba a otra.
+                    cursor: (self.filas_de_tablero() > 0)
+                        .then(|| self.cursor_procesos.min(self.filas_de_tablero() - 1) as u64),
+                }),
+                _ => {
+                    let nombre =
+                        kind.map_or_else(|| "unknown".to_owned(), |k| k.as_str().to_owned());
+                    // El kind sale de un fichero de disposición y `KindId` no
+                    // valida nada: es texto que puede traer controles, y acaba en
+                    // el DOM y en un `aria-label`.
+                    let (pintable, hostil) = norte_frontend::display_name(nombre.as_bytes());
+                    slots.push(SlotView::Unsupported {
+                        slot_id: id,
+                        kind_name: clamp_display(pintable),
+                        kind_name_hostile: hostil,
+                    });
+                }
+            }
+        }
+        ViewSnapshot {
+            compare: self.vista_comparacion(),
+            sync: self.vista_sincronizacion(),
+            connection: self.conexion.clone(),
+            layout: self.disposicion(),
+            slots,
+            focus: Some(self.enfocado()),
+            status: self.status.clone(),
+            // Una foto REEMPLAZA lo que el renderer tenga, así que va
+            // entera: un resync que se dejara fuera el diálogo abierto
+            // dejaría al usuario mirando una pantalla sin la pregunta que
+            // está esperando respuesta, con la operación destructiva todavía
+            // viva. Lo mismo con el tablero.
+            dialogs: self.vistas_de_dialogos(),
+            tasks: self.vistas_de_tasks(),
+            menu: self.vista_menu(),
+            profiles: self.vista_perfiles(),
+            palette: self.vista_paleta(),
+            whichkey: self.vista_whichkey(),
+            help: self.vista_ayuda(),
+            settings: self.vista_ajustes(),
+            extensions: self.vista_extensiones(),
+            agents: self.vista_agentes(),
+            plugin_output: self.escritorio.salida.clone(),
+            theme: self.vista_tema(),
+            search: self.vista_busqueda(),
+            layouts: self.vista_disposiciones(),
+            columns: self.vista_columnas(),
+            picker: self.vista_selector(),
+            viewer: self.vista_visor(),
+            ai_rename: self.vista_ia(),
+            locale: self.locale.clone(),
+        }
+    }
+
+    /// Cuántas líneas se le mandan al visor y cuánto avanza una página.
+    ///
+    /// Lo dice el renderer (`SetViewerRows`); mientras no lo haya dicho, se
+    /// estima con las celdas de la ventana menos el cromo. Es UN número para
+    /// las dos cosas a propósito: cuando la estimación y lo que se pinta no
+    /// coinciden, una página salta en silencio las líneas recortadas.
+    pub(super) fn alto_del_visor(&self) -> usize {
+        self.visor_filas
+            .unwrap_or_else(|| usize::from(self.viewport.1.saturating_sub(2)))
+            .max(1)
+    }
+
+    /// Las filas de la paleta: TODO lo que este host implementa.
+    ///
+    /// La descripción sale del catálogo Fluent compartido y el atajo del
+    /// keymap efectivo, igual que en el TUI: una paleta construida de una
+    /// lista a mano enseña atajos que el preset del usuario no tiene.
+    pub(super) fn filas_de_paleta(&self) -> Vec<norte_frontend::palette::Row> {
+        use norte_frontend::palette::first_chord;
+        // Con los EFECTOS de esta ventana, no con todos: la paleta era la
+        // única puerta que no pasaba por el keymap efectivo, así que una
+        // ventana de solo lectura ofrecía copiar, mover y borrar. La guarda
+        // de `aplicar_efecto` los rechazaba, pero ofrecer lo que se va a
+        // rehusar es prometer algo que no se va a hacer.
+        crate::commands::todos_con(self.efectos)
+            .into_iter()
+            .map(|cmd| norte_frontend::palette::Row {
+                key: cmd.to_owned(),
+                text: cmd.to_owned(),
+                desc: norte_i18n::t_in(self.lang, &format!("help-cmd-{}", cmd.replace('.', "-"))),
+                chord: first_chord(cmd, &self.efectivo)
+                    .or_else(|| first_chord(cmd, self.resolver_visor_efectivo()))
+                    .unwrap_or_else(|| "—".to_owned()),
+                // Un comando propio es vocabulario de este proyecto.
+                hostile: false,
+            })
+            .collect()
+    }
+
+    /// El efectivo del visor, para buscar el atajo de un comando suyo.
+    pub(super) fn resolver_visor_efectivo(&self) -> &Effective {
+        &self.efectivo_visor
+    }
+
+    /// Un click sobre una fila del selector de perfiles: la elige y la activa.
+    ///
+    /// La GENERACIÓN no es decorativa: la lista se llena desde una tarea de
+    /// fondo, así que un índice de la pantalla anterior nombra otro perfil
+    /// (ADR 0068). Una generación vieja se rechaza en vez de recortarse.
+    pub(super) fn activar_perfil_de_fila(
+        &mut self,
+        row: u32,
+        generation: u64,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if generation != self.gen_perfiles {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let Some(p) = self.selector_perfil.as_mut() else {
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        let i = row as usize;
+        let Some(fila) = p.rows().get(i) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        if fila.problem.is_some() {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-profile-broken".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        let nombre = fila.name.clone();
+        let envios = self.elegir_perfil(&nombre, backend, buzon);
+        (self.aplicada(), envios)
+    }
+
+    /// La proyección del selector de perfiles.
+    pub(super) fn vista_perfiles(&self) -> Option<crate::dto::ProfilePickerView> {
+        use norte_frontend::profile_picker::NameClash;
+        let p = self.selector_perfil.as_ref()?;
+        Some(crate::dto::ProfilePickerView {
+            rows: p
+                .rows()
+                .iter()
+                .map(|r| {
+                    // El nombre son BYTES de un directorio: se enmascara, y se
+                    // dice que se enmascaró (#266).
+                    let (pintable, hostil) =
+                        norte_frontend::display_os_name(std::path::Path::new(&r.name).as_os_str());
+                    crate::dto::ProfileRowView {
+                        name: clamp_display(pintable),
+                        name_hostile: hostil,
+                        title: r.title.clone().map(clamp_display),
+                        active: r.active,
+                        clash: match r.clash {
+                            NameClash::None => String::new(),
+                            NameClash::Layout => {
+                                norte_i18n::t_in(self.lang, "profile-picker-clash-layout")
+                            }
+                            NameClash::Keymap => {
+                                norte_i18n::t_in(self.lang, "profile-picker-clash-keymap")
+                            }
+                            NameClash::Both => {
+                                norte_i18n::t_in(self.lang, "profile-picker-clash-both")
+                            }
+                        },
+                        no_state: !r.carries_state,
+                        // El diagnóstico sale de un fichero del usuario: va
+                        // acotado y enmascarado como todo lo demás (#73).
+                        problem: r.problem.clone().map(clamp_display).unwrap_or_default(),
+                    }
+                })
+                .collect(),
+            cursor: p.cursor() as u64,
+            generation: self.gen_perfiles,
+        })
+    }
+
+    /// La proyección de la barra de menús.
+    ///
+    /// Los títulos van SIEMPRE —la barra sigue ahí con el desplegable
+    /// cerrado— y las entradas solo cuando hay uno abierto: un menú de doce
+    /// entradas por cada uno de los siete, en cada parche, es media pantalla
+    /// de JSON para pintar una fila de títulos.
+    pub(super) fn vista_menu(&self) -> crate::dto::MenuView {
+        use norte_frontend::menu::MENUS;
+        let ejecutables = crate::commands::todos_con(self.efectos);
+        let items = self.menu.as_ref().map_or_else(Vec::new, |m| {
+            MENUS.get(m.menu()).map_or_else(Vec::new, |menu| {
+                menu.items
+                    .iter()
+                    .map(|id| crate::dto::MenuItemView {
+                        // La etiqueta CORTA y propia (`menu-item-*`), no la
+                        // frase de `help-cmd-*`: esa es una descripción, y con
+                        // ella el desplegable tapa los dos paneles. Mismo
+                        // criterio que el TUI, que lo aprendió pintando.
+                        label: clamp_display(norte_i18n::t_in(
+                            self.lang,
+                            &format!("menu-item-{}", id.replace('.', "-")),
+                        )),
+                        chord: clamp_display(
+                            norte_frontend::palette::first_chord(id, &self.efectivo)
+                                .or_else(|| {
+                                    norte_frontend::palette::first_chord(id, &self.efectivo_visor)
+                                })
+                                .unwrap_or_else(|| "—".to_owned()),
+                        ),
+                        enabled: ejecutables.contains(id),
+                    })
+                    .collect()
+            })
+        });
+        crate::dto::MenuView {
+            // Por defecto ENCENDIDA, igual que el TUI: quien no ha dicho nada
+            // no ha pedido esconderla.
+            bar: self.config.common.ui_menu_bar.unwrap_or(true),
+            titles: MENUS
+                .iter()
+                .map(|m| clamp_display(norte_i18n::t_in(self.lang, m.title)))
+                .collect(),
+            open: self.menu.as_ref().map(|m| m.menu() as u64),
+            cursor: self.menu.as_ref().map_or(0, |m| m.item() as u64),
+            items,
+        }
+    }
+
+    /// La proyección de la paleta.
+    pub(super) fn vista_paleta(&self) -> Option<crate::dto::PaletteView> {
+        let p = self.paleta.as_ref()?;
+        let filas = p.rows();
+        let visibles = p.visible();
+        Some(crate::dto::PaletteView {
+            query: clamp_display(p.query_display()),
+            rows: visibles
+                .iter()
+                // Un tope, como cualquier otra lista que cruza: con la
+                // consulta vacía TODAS las filas son visibles, y las de
+                // plugin las pone un tercero.
+                .take(crate::bridge::MAX_ROWS_PER_BATCH)
+                .filter_map(|i| filas.get(*i))
+                .map(|r| crate::dto::PaletteRowView {
+                    text: clamp_display(r.text.clone()),
+                    desc: clamp_display(r.desc.clone()),
+                    chord: clamp_display(r.chord.clone()),
+                    // Lo que se pinta DIFIERE de lo que el manifiesto dice.
+                    // Una fila de plugin es texto de tercero en la pantalla
+                    // donde se elige qué código correr: sin esto se pintaba
+                    // enmascarada y sin decirlo.
+                    hostile: r.hostile,
+                    // Los comandos propios los implementa este host —salen de
+                    // su propia lista— y los de PLUGIN los resuelve el
+                    // daemon, que exige aprobada + encendida por su cuenta.
+                    enabled: true,
+                })
+                .collect(),
+            cursor: (!visibles.is_empty()).then_some(p.cursor() as u64),
+            total: filas.len() as u64,
+        })
+    }
+
+    /// La proyección del panel de continuaciones.
+    pub(super) fn vista_whichkey(&self) -> Option<crate::dto::WhichKeyView> {
+        let panel = self.whichkey.as_ref()?;
+        Some(crate::dto::WhichKeyView {
+            title: clamp_display(panel.title.clone()),
+            rows: panel
+                .rows
+                .iter()
+                .map(|r| crate::dto::WhichKeyRowView {
+                    chord: clamp_display(r.chord.clone()),
+                    label: clamp_display(r.label.clone()),
+                    enabled: r.avail == Availability::Here,
+                    opens_sequence: r.opens_sequence,
+                    reason: clamp_display(r.reason.clone()),
+                })
+                .collect(),
+        })
+    }
+
+    /// La proyección del visor, con la ventana de líneas que cabe.
+    ///
+    /// El alto sale del viewport en CELDAS —la misma rejilla que reparte la
+    /// pantalla—, menos el cromo: el visor ocupa la ventana entera.
+    pub(super) fn vista_visor(&self) -> Option<crate::dto::ViewerView> {
+        let v = self.visor.as_ref()?;
+        let imagen = Self::imagen_de(v);
+        let alto = self.alto_del_visor();
+        // El TUI pinta la ruta del visor con el encoding del panel ENFOCADO
+        // (`ui::panels`), y por lo mismo: es el fichero que se abrió desde
+        // ahí.
+        let (path, hostil) =
+            norte_frontend::path_display_with(&v.path, self.hueco().pane.name_encoding());
+        Some(crate::dto::ViewerView {
+            path_display: clamp_display(path),
+            path_hostile: hostil,
+            encoding: v.encoding_name().to_owned(),
+            eol: match v.eol() {
+                norte_encoding::Eol::Lf => "lf",
+                norte_encoding::Eol::CrLf => "crlf",
+                norte_encoding::Eol::Cr => "cr",
+                norte_encoding::Eol::Mixed => "mixed",
+                norte_encoding::Eol::None => "none",
+            }
+            .to_owned(),
+            hex: v.hex,
+            forced: v.is_forced(),
+            had_errors: v.had_errors(),
+            truncated: v.truncated,
+            total_rows: v.total_rows() as u64,
+            first_line: v.scroll as u64,
+            lines: v.rows(alto).into_iter().map(clamp_display).collect(),
+            // El nombre ya viene enmascarado del modelo compartido; se acota
+            // aquí como todo lo que cruza.
+            preview_by: v.preview_plugin().map_or_else(String::new, |n| {
+                // La MISMA clave que el TUI: el indicador «via …» no puede
+                // decirse de dos maneras según quién pinte. El nombre ya
+                // viene enmascarado del modelo compartido.
+                clamp_display(norte_i18n::ta_in(
+                    self.lang,
+                    "viewer-plugin-preview",
+                    &[("plugin", n)],
+                ))
+            }),
+            preview_lossy: v.preview_lossy(),
+            image: imagen.clone().ok().flatten(),
+            image_refused: match &imagen {
+                Err(clave) => clamp_display(norte_i18n::t_in(self.lang, clave)),
+                Ok(_) => String::new(),
+            },
+        })
+    }
+
+    /// Si lo que hay en el visor es una imagen PINTABLE, y si no, por qué no.
+    ///
+    /// `Ok(None)` = no es una imagen. `Ok(Some(_))` = lo es y se acepta.
+    /// `Err(clave)` = lo es y se RECHAZA, con la clave que lo explica.
+    ///
+    /// Los tres topes del ADR 0069, y los tres son negativas y no recortes:
+    ///
+    /// - El **formato** sale de los bytes mágicos, nunca de la extensión: una
+    ///   extensión es una afirmación de quien nombró el fichero.
+    /// - Las **dimensiones declaradas** se comparan con el presupuesto ANTES
+    ///   de que nadie decodifique. Un PNG de 64 KB puede declarar 60000×60000
+    ///   y costar gigabytes; leerle la cabecera es la única defensa barata.
+    ///   Una cabecera que no se entiende también se rechaza: «no sé» tratado
+    ///   como «adelante» es la puerta que esto existe para cerrar.
+    /// - Los **bytes** los acota quien los sirve, y un fichero que no cabe no
+    ///   se pinta A MEDIAS: media imagen decodificada es una imagen de otra
+    ///   cosa.
+    pub(super) fn imagen_de(
+        v: &norte_frontend::viewer::Viewer,
+    ) -> Result<Option<crate::dto::ImageView>, &'static str> {
+        let Some(fmt) = v.image_kind() else {
+            return Ok(None);
+        };
+        // La cabecera SIEMPRE cabe en lo que el visor ya leyó, así que
+        // rechazar aquí no cuesta un viaje.
+        let bytes = v.image_bytes().unwrap_or_default();
+        let Some((w, h)) = norte_frontend::viewer::image_dimensions(bytes) else {
+            return Err("viewer-image-unreadable");
+        };
+        if u64::from(w) * u64::from(h) > norte_frontend::viewer::PIXEL_BUDGET {
+            return Err("viewer-image-too-large");
+        }
+        Ok(Some(crate::dto::ImageView {
+            format: fmt.label().to_owned(),
+            width: w,
+            height: h,
+        }))
+    }
+}

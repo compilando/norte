@@ -586,6 +586,31 @@ independently through `PROTOCOL_VERSION`.
   longer in the listing is ignored rather than refusing the plan: between
   marking and asking, a file can be gone.
 
+### Changed
+
+- **The window's controller was one 18 725-line file** (ADR 0086), and 16 203
+  of those were a single `impl Estado` holding 422 methods: navigation, tabs,
+  search, dialogs, the viewer, sync, tasks, plugins, agents, profiles and
+  sessions, all in one block. The single-writer design was never the problem —
+  one mailbox, one task, one order, exactly as ADR 0066 promises — but one
+  writer does not require one file, and the conflation was paid on every
+  change: reading any capability meant paging past all of them.
+  It is now `controller/mod.rs` (the mailbox, the actor, `Estado` and the
+  action dispatch) plus 32 modules, one per capability, the largest 1 484
+  lines. Not a method body changed; that is checked and not claimed, method by
+  method, character by character, against the file it came from.
+  The move opened all 406 relocated methods to `pub(super)` — visible inside
+  `controller`, invisible outside it. Nothing else moved: `UiAction`,
+  `UiUpdate`, the snapshots, the bridge and its goldens are untouched, and the
+  dependency-boundary test still holds.
+  Two things fell out of doing it. About **250 methods are called across the
+  new boundaries**, which says plainly that these capabilities are not
+  independent slices — the dispatcher and the views reach nearly everywhere.
+  And the Fluent-key sweep in `catalogo_del_host.rs`, which read five named
+  files, now walks `src/` instead: its own header warned that a hand-written
+  list separates from the code at the first new surface, and this was it.
+  Widening it found a file it had never looked at.
+
 ### Fixed
 
 - **The window's tests bet on the clock 111 times** (ADR 0085). Every wait in
