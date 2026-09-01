@@ -307,6 +307,30 @@ pub async fn refresh_panes(
                 app.panes[i].set_skipped(skipped);
                 refreshed[i] = true;
             }
+            // La conexión pide su contraseña (#325): un refresco SÍ es un
+            // gesto del lector, así que aquí se PREGUNTA en vez de contestar
+            // con la categoría del error.
+            //
+            // Es el camino que se recorre de verdad al reabrir: la
+            // restauración de sesión deja el panel sobre la ruta remota sin
+            // preguntar nada —restaurar no es pedir conectarse—, y el primer
+            // Ctrl+R es lo que convierte eso en la pregunta. Sin esto, el
+            // único camino que preguntaba era navegar a mano, o sea salir del
+            // sitio donde estabas para poder volver.
+            Waited::Done(Err(Error::SecretNeeded { conn, endpoint })) => {
+                app.modal = Some(Modal::AskSecret {
+                    conn,
+                    endpoint,
+                    input: crate::app::TypedSecret::default(),
+                    dir: dir.clone(),
+                    pane: i,
+                    // `Record` y no un paso del rastro: un refresco no salió
+                    // del historial, así que no hay nada que rebobinar si la
+                    // pregunta se abandona. El panel se queda donde está.
+                    trail: crate::app::Trail::Record,
+                });
+                return refreshed;
+            }
             // Sin silencio: el dir pudo desaparecer (issue #20).
             Waited::Done(Err(e)) => {
                 app.message = Some(ta("msg-refresh-error", &[("error", &error_category(&e))]));

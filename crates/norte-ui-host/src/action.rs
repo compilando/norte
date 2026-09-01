@@ -153,6 +153,21 @@ pub enum UiAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         secret: Option<String>,
     },
+    /// Vuelve a listar UN hueco: el reintento de uno que quedó en error.
+    ///
+    /// Por hueco y no `pane.refresh`, que relista todos los visibles y actúa
+    /// sobre el foco: esto lo dispara un clic SOBRE el error de un hueco
+    /// concreto, y refrescar los otros de paso sería hacer más de lo que se
+    /// pidió.
+    ///
+    /// Es el gesto que convierte un panel parado en la pregunta que
+    /// corresponda —la contraseña de una conexión, típicamente—: el host no
+    /// pregunta solo al arrancar, porque restaurar una sesión no es pedir
+    /// conectarse.
+    RefreshSlot {
+        /// El hueco que se reintenta.
+        slot_id: u32,
+    },
     /// Enseñar el registro hasta este nivel (#326).
     ///
     /// Sube el del ANILLO si hace falta y nunca lo baja: filtrar en la

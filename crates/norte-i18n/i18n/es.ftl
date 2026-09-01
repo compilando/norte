@@ -935,6 +935,7 @@ msg-transfer-dest-invalid = eso no es una dirección: {$err}
 msg-transfer-dest-same = ahí es donde ya están: teclea otro destino
 msg-layout-load-failed = no se pudo cargar el layout «{$name}»: {$err}
 msg-session-detached = otra ventana tiene la sesión; ésta va por su cuenta
+msg-session-secret-needed = «{ $conn }» necesita su contraseña: pulsa refrescar en ese panel
 msg-session-slots-timeout = { $n } paneles no listaron a tiempo al arrancar: entra en ellos para rellenarlos
 pane-unlisted = sin listar
 modal-pack = Empaquetar en
@@ -1815,6 +1816,7 @@ processes-has-keyboard = este panel tiene el teclado · Esc lo devuelve
 # que se ve vacío tiene que distinguir «no ha pasado nada» de «lo estás
 # filtrando fuera».
 log-title = Registro
+slot-retry = reintentar
 log-keys = e/w/i/d/t nivel · / filtrar · Fin al final · Esc devuelve el teclado
 log-empty = nada que enseñar con este filtro
 log-no-ring = sin registro instalado en este proceso

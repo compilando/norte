@@ -11531,6 +11531,58 @@ fn pedira_el_secreto(f: &Falso) {
     });
 }
 
+/// Un hueco que arranca pidiendo la contraseña NO pregunta solo, pero DICE
+/// cuál y se puede reintentar — y el reintento sí pregunta.
+///
+/// Es el caso de reabrir norte: el daemon anterior se apagó por inactividad y
+/// se llevó el secreto de sesión, así que el panel guardado sobre `s3://…`
+/// vuelve con `SecretNeeded`. El arranque no abre el diálogo a propósito
+/// —restaurar una sesión no es pedir conectarse, y una contraseña pedida antes
+/// de que la pantalla exista es la forma que el ADR 0015 llama phishing— pero
+/// tampoco puede dejar un panel parado sin decir qué le pasa.
+#[tokio::test]
+async fn un_hueco_que_pide_secreto_dice_cual_y_el_reintento_pregunta() {
+    let backend = Arc::new(arbol_como_falso());
+    pedira_el_secreto(&backend);
+    // El listado del ARRANQUE es el que se topa con el error, así que la
+    // avería se arma antes de construir el host.
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    let SlotView::Browser(b) = &snap.slots[0] else {
+        panic!("el primer hueco es un listado");
+    };
+    let norte_ui_host::dto::SlotState::Error { reason_key, detail } = &b.state else {
+        panic!("el hueco se queda en error, no fingiendo un directorio vacío");
+    };
+    assert_eq!(reason_key, "err-secret-needed");
+    assert_eq!(
+        detail.as_deref(),
+        Some("rosetta"),
+        "y CUÁL: con dos paneles remotos, «hace falta un secreto» no es \
+         contestable"
+    );
+    // Sin diálogo: el arranque no pregunta solo.
+    assert!(
+        snap.dialogs.is_empty(),
+        "el arranque no abre la pregunta: la abre el primer gesto"
+    );
+
+    // El reintento SÍ la abre, porque es un gesto. Se rearma la avería: el
+    // secreto sigue faltando —nadie lo ha entregado— y el doble la consume de
+    // una en una.
+    pedira_el_secreto(&backend);
+    h.dispatch(UiAction::RefreshSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(
+        dialogos.last().map(|d| d.title_key.as_str()),
+        Some("modal-ask-secret-title"),
+        "reintentar es el gesto que convierte el panel parado en la pregunta"
+    );
+}
+
 /// #327: la ventana PREGUNTA la contraseña en vez de pintar el error.
 ///
 /// Hasta ahora un usuario de `norte-gui` sobre una conexión `secret = "prompt"`

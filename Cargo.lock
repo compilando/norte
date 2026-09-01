@@ -5418,6 +5418,7 @@ name = "norte-tui"
 version = "0.3.0-alpha.2"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bytes",
  "criterion",
  "crossterm",

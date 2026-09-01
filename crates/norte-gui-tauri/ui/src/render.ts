@@ -3226,9 +3226,24 @@ export class Screen {
     );
 
     if (slot.state.state === "error") {
-      dom.canvas.replaceChildren(
-        errorNode(this.t(slot.state.reason_key), slot.state.detail),
-      );
+      // Con un REINTENTO, y no solo la frase. Un hueco en error es lo que
+      // queda cuando el listado no se pudo hacer, y el caso corriente al
+      // reabrir es una conexión remota que pide su contraseña: sin nada que
+      // pulsar, la única salida era navegar a otro sitio para poder volver.
+      //
+      // Reintentar es el GESTO que abre la pregunta. El host no la abre solo
+      // al arrancar a propósito —restaurar una sesión no es pedir
+      // conectarse—, así que este botón es la mitad que faltaba.
+      const caja = errorNode(this.t(slot.state.reason_key), slot.state.detail);
+      const reintentar = document.createElement("button");
+      reintentar.type = "button";
+      reintentar.className = "slot-retry";
+      reintentar.textContent = this.t("slot-retry");
+      reintentar.addEventListener("click", () => {
+        this.send({ action: "refresh_slot", slot_id: slot.slot_id });
+      });
+      caja.append(reintentar);
+      dom.canvas.replaceChildren(caja);
       dom.rows.clear();
       return;
     }

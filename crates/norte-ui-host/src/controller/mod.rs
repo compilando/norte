@@ -3187,7 +3187,18 @@ impl Estado {
                 hueco.marcas_a_restaurar.clear();
                 hueco.estado = SlotState::Error {
                     reason_key: norte_frontend::error::error_key(&e).to_owned(),
-                    detail: None,
+                    // CUÁL pide la contraseña. Sin esto, un arranque con dos
+                    // paneles remotos decía «hace falta un secreto» dos veces
+                    // y no había forma de saber a cuál contestar. El nombre
+                    // sale de `connections.toml` —un fichero, no algo de
+                    // fiar— así que se enmascara y se acota como todo lo que
+                    // se pinta.
+                    detail: match &e {
+                        Error::SecretNeeded { conn, .. } => Some(clamp_display(
+                            norte_frontend::display_name(conn.as_bytes()).0,
+                        )),
+                        _ => None,
+                    },
                 };
             }
         }
@@ -3327,6 +3338,16 @@ impl Estado {
             }
             UiAction::Dialog { id, choice, secret } => {
                 self.responder_dialogo(*id, choice, secret.as_deref(), backend, buzon)
+            }
+            UiAction::RefreshSlot { slot_id } => {
+                let cambios = self.refrescar(*slot_id, backend, buzon);
+                if cambios.is_empty() {
+                    // Ya tenía algo en vuelo: lo que va a aterrizar es más
+                    // nuevo que este clic.
+                    (self.aplicada(), Vec::new())
+                } else {
+                    (self.aplicada(), vec![self.parche(cambios)])
+                }
             }
             UiAction::LogSetLevel { level } => self.nivel_de_registro(level),
             UiAction::LogSetFilter { filter } => self.filtro_de_registro(filter),

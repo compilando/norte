@@ -154,6 +154,10 @@
     "generation": 3,
     "row": 1
   },
+  "refresh_slot": {
+    "action": "refresh_slot",
+    "slot_id": 1
+  },
   "resize_slot": {
     "action": "resize_slot",
     "cells": 42,

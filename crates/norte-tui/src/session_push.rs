@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use norte_core::backend::Backend;
-use norte_i18n::t;
+use norte_i18n::{t, ta};
 use norte_proto::{Error, VPath};
 
 use crate::app::App;
@@ -140,10 +140,35 @@ async fn restore_slots(app: &mut App, backend: &Backend, presupuesto: std::time:
             }
             // Un directorio que ya no está NO deja el arranque a medias: el
             // pane se queda vacío en esa ruta y el lector navega desde ahí,
-            // que es lo mismo que pasa si lo borran contigo dentro. NO se
-            // marca `unlisted`: el listado se hizo y la respuesta fue un
-            // error, que es otra cosa que «no dio tiempo».
-            Err(e) => tracing::warn!(error = %e, "un hueco de la sesión no se pudo listar"),
+            // que es lo mismo que pasa si lo borran contigo dentro.
+            //
+            // Pero se MARCA, y esto se corrigió: la marca no era por «no dio
+            // tiempo», es por «esto no es el contenido del directorio». Un
+            // listado que falló y un directorio vacío se pintaban idénticos, y
+            // el caso corriente no es un directorio borrado — es una conexión
+            // remota que al reabrir pide su contraseña. El lector veía un
+            // panel vacío sobre `s3://…` y nada más: ni el motivo, ni que
+            // hubiera algo que hacer.
+            //
+            // No se pregunta aquí. Restaurar una sesión no es pedir
+            // conectarse, y una contraseña pedida antes de que la pantalla
+            // exista, por algo que nadie acaba de hacer, es la forma que el
+            // ADR 0015 llama phishing. La pregunta la abre el primer gesto
+            // sobre ese panel — `pane.refresh` o navegar.
+            Err(e) => {
+                tracing::warn!(error = %e, "un hueco de la sesión no se pudo listar");
+                if let Some(p) = app.panes.browser_mut(id) {
+                    p.unlisted = true;
+                }
+                if let Error::SecretNeeded { conn, .. } = &e {
+                    // Y se DICE cuál, porque con dos paneles remotos «hace
+                    // falta una contraseña» no es contestable.
+                    app.message = Some(ta(
+                        "msg-session-secret-needed",
+                        &[("conn", &norte_frontend::display_name(conn.as_bytes()).0)],
+                    ));
+                }
+            }
         }
     }
 }
@@ -633,6 +658,103 @@ mod session_push_tests {
                 "el hueco {id:?} se queda marcado, no fingiendo un dir vacío"
             );
         }
+    }
+
+    /// Un hueco que falla al restaurar NO finge un directorio vacío, y si lo
+    /// que falta es una contraseña lo DICE nombrando la conexión.
+    ///
+    /// Es el caso corriente al reabrir norte: el daemon anterior se apagó por
+    /// inactividad y se llevó el secreto de sesión —vive solo en su memoria,
+    /// ADR 0015—, así que el panel guardado sobre `s3://…` vuelve con
+    /// `SecretNeeded`. Antes: un `warn!` al fichero y un panel vacío,
+    /// indistinguible de un cubo sin objetos. Ni el motivo ni nada que hacer.
+    ///
+    /// No se PREGUNTA aquí, y es deliberado: restaurar una sesión no es pedir
+    /// conectarse. La pregunta la abre el primer gesto sobre ese panel.
+    #[tokio::test]
+    async fn un_hueco_que_pide_secreto_al_restaurar_lo_dice_y_no_finge_vacio() {
+        use norte_core::backend::Backend;
+        use std::sync::Arc;
+
+        /// Provider que solo sabe pedir la contraseña de `rosetta`.
+        struct PideSecreto;
+
+        #[async_trait::async_trait]
+        impl norte_vfs::Provider for PideSecreto {
+            fn scheme(&self) -> &'static str {
+                "mem"
+            }
+            fn capabilities(&self) -> norte_proto::Capabilities {
+                norte_proto::Capabilities {
+                    flags: norte_proto::CapabilityFlags::empty(),
+                    max_path: None,
+                }
+            }
+            async fn stat(&self, _p: &VPath) -> Result<norte_proto::Entry, Error> {
+                Err(Error::SecretNeeded {
+                    conn: "rosetta".to_owned(),
+                    endpoint: "s3://cubo.example".to_owned(),
+                })
+            }
+            async fn list(&self, _p: &VPath) -> Result<norte_vfs::EntryStream, Error> {
+                Err(Error::SecretNeeded {
+                    conn: "rosetta".to_owned(),
+                    endpoint: "s3://cubo.example".to_owned(),
+                })
+            }
+            async fn read(
+                &self,
+                _p: &VPath,
+                _r: Option<norte_proto::ByteRange>,
+            ) -> Result<norte_vfs::ByteStream, Error> {
+                Err(Error::Unsupported)
+            }
+            async fn write(&self, _p: &VPath) -> Result<Box<dyn norte_vfs::ByteSink>, Error> {
+                Err(Error::Unsupported)
+            }
+            async fn mkdir(&self, _p: &VPath) -> Result<(), Error> {
+                Err(Error::Unsupported)
+            }
+            async fn remove(&self, _p: &VPath) -> Result<(), Error> {
+                Err(Error::Unsupported)
+            }
+            async fn rename(&self, _f: &VPath, _t: &VPath) -> Result<(), Error> {
+                Err(Error::Unsupported)
+            }
+        }
+
+        let engine = norte_core::Engine::new();
+        engine.register_provider(Arc::new(PideSecreto));
+        let backend = Backend::Embedded(Arc::new(engine));
+        let d = VPath::parse("mem:///").expect("wire de test");
+        let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
+
+        super::restore_slots(&mut app, &backend, std::time::Duration::from_secs(5)).await;
+
+        let ids: Vec<_> = app
+            .layout
+            .slot_ids()
+            .into_iter()
+            .filter(|id| app.panes.browser(*id).is_some())
+            .collect();
+        for id in ids {
+            assert!(
+                app.panes.browser(id).is_some_and(|p| p.unlisted),
+                "el hueco {id:?} finge un directorio vacío: un listado que \
+                 falló y un cubo sin objetos se leían igual"
+            );
+        }
+        let msg = app.message.clone().expect("se dice qué falta");
+        assert!(
+            msg.contains("rosetta"),
+            "y CUÁL conexión: con dos paneles remotos, «hace falta una \
+             contraseña» no es contestable. Decía: {msg}"
+        );
+        // Y NO se abrió ningún diálogo: restaurar no es pedir conectarse.
+        assert!(
+            app.modal.is_none(),
+            "el arranque no pregunta solo; lo hace el primer gesto"
+        );
     }
 
     /// Y la marca se APAGA en cuanto alguien lista de verdad: es un estado,

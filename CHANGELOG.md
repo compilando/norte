@@ -674,7 +674,23 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
-- **You can edit a text field in the window.** Backspace, Delete, the arrows,
+- **Reopening norte no longer leaves a remote panel silently dead** (bridge
+  **47**). The daemon shuts down five minutes after its last client and the
+  session secret lives only in its memory (ADR 0015), so reopening later means
+  the saved panel over `s3://…` comes back asking for a password. Both frontends
+  swallowed that: the TUI's session restore logged a warning and left the panel
+  **empty and unmarked** — a listing that failed and a bucket with no objects
+  looked identical — and the window's startup listing bypassed the dialog path
+  entirely, landing in an error that named no connection and offered nothing to
+  press. The prompt only ever appeared if you navigated somewhere by hand, which
+  meant leaving the place you were trying to get into.
+  Startup still does not prompt on its own, and that is deliberate: restoring a
+  session is not a request to connect, and a password asked for before the
+  screen exists, for something nobody just did, is the shape ADR 0015 calls
+  phishing. What changed is that the panel now says **which** connection is
+  waiting and can be acted on — the TUI marks it and names it, the window shows
+  the name and a retry button — and every gesture prompts: refresh included, not
+  just navigation. Backspace, Delete, the arrows,
   Home/End and paste were all cancelled by the window's document-level key
   handler, which called `preventDefault()` on anything that was not a single
   printable character and forwarded it to the host, where nothing happened. A

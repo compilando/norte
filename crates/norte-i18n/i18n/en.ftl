@@ -782,6 +782,7 @@ processes-has-keyboard = this panel has the keyboard · Esc returns it
 # The log panel (#323). The title carries the level because a panel that looks
 # empty has to tell "nothing happened" apart from "you are filtering it out".
 log-title = Log
+slot-retry = retry
 log-keys = e/w/i/d/t level · / filter · End to follow · Esc returns the keyboard
 log-empty = nothing to show with this filter
 log-no-ring = no log installed in this process
@@ -960,6 +961,7 @@ msg-transfer-dest-invalid = that is not an address: {$err}
 msg-transfer-dest-same = that is where they already are: type another destination
 msg-layout-load-failed = could not load layout "{$name}": {$err}
 msg-session-detached = another window owns the session; this one runs on its own
+msg-session-secret-needed = «{ $conn }» needs its password: refresh that panel
 msg-session-slots-timeout = { $n } panels did not list in time at startup: enter them again to fill them
 pane-unlisted = not listed
 modal-pack = Pack into

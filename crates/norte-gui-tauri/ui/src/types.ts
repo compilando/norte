@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 46;
+export const BRIDGE_VERSION = 47;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -1046,6 +1046,7 @@ export type UiAction =
       secret?: string;
     }
   | { action: "dialog_input"; id: ModalId; text: string }
+  | { action: "refresh_slot"; slot_id: number }
   | { action: "log_set_level"; level: string }
   | { action: "log_set_filter"; filter: string }
   | { action: "log_scroll"; delta: number }

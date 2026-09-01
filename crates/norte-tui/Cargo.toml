@@ -97,6 +97,12 @@ zeroize.workspace = true
 portable-pty = { version = "0.9.0", default-features = false }
 
 [dev-dependencies]
+# Un `Provider` de test que devuelve `SecretNeeded`: es la respuesta que un
+# remoto da al reabrir cuando el daemon anterior se llevó el secreto, y no hay
+# forma de inyectarla con las averías de `norte-testkit` —que fallan con `Io` y
+# con `PermissionDenied`, no con esta—. Solo dev, y ya está en el grafo: el
+# `Provider` que se implementa es de `norte-vfs`, que la usa para declararlo.
+async-trait.workspace = true
 bytes.workspace = true
 criterion.workspace = true
 insta.workspace = true

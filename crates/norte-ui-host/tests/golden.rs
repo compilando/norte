@@ -161,6 +161,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::FilesDropped { .. } => "files_dropped",
         UiAction::TreeActivateRow { .. } => "tree_activate_row",
         UiAction::TreeToggleRow { .. } => "tree_toggle_row",
+        UiAction::RefreshSlot { .. } => "refresh_slot",
         UiAction::LogSetLevel { .. } => "log_set_level",
         UiAction::LogSetFilter { .. } => "log_set_filter",
         UiAction::LogScroll { .. } => "log_scroll",
@@ -211,6 +212,7 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
         // número, los nombres de wire nuevos son lo primero que hay que clavar
         // — y `tag_de_accion` no basta: con la lista de casos y las fixtures
         // las DOS vacías, `check_family` las cubre 1:1 y no dice nada.
+        ("refresh_slot", UiAction::RefreshSlot { slot_id: 1 }),
         (
             "log_set_level",
             UiAction::LogSetLevel {
