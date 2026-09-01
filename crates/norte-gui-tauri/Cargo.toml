@@ -7,7 +7,8 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 authors.workspace = true
-# El spike no se publica: es una respuesta a una pregunta, no un producto.
+# No se publica en crates.io: es una aplicación, y se distribuye como paquete
+# (deb, RPM, AppImage) con sus binarios hermanos dentro, no como biblioteca.
 publish = false
 
 # El ÚNICO crate del workspace que puede nombrar a Tauri, a WRY o a un runtime
@@ -15,9 +16,10 @@ publish = false
 # `norte-ui-host` compilan y pasan sus tests sin Tauri y sin Node instalados, y
 # sus tests de frontera lo vigilan.
 #
-# Fuera del gate por defecto (`core_pkgs` en el justfile lo excluye) mientras el
-# spike no cierre su go/no-go: arrastra WebKitGTK, GTK3 y libsoup3 del sistema,
-# que ninguna otra parte del árbol necesita para compilar.
+# Fuera del gate PORTABLE (`core_pkgs` en el justfile lo excluye) y no por ser
+# provisional —es un frontend soportado (ADR 0087)—: arrastra WebKitGTK, GTK3 y
+# libsoup3 del sistema, que ninguna otra parte del árbol necesita para
+# compilar. Su gate es `just gui-ci`, con su propio workflow.
 
 [features]
 # La instrumentación de la tarea 3.6: añade el comando `metrics`, por el que

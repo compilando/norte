@@ -586,6 +586,42 @@ independently through `PROTOCOL_VERSION`.
   longer in the listing is ignored rather than refusing the plan: between
   marking and asking, a file can be gone.
 
+### Added
+
+- **The graphical window is a supported frontend** (ADR 0087). `norte-gui` was
+  built as a spike with a go/no-go at the end, and had long since acquired
+  everything a frontend needs — the semantic host behind it, a versioned
+  bridge, a TypeScript renderer with 125 tests, a restrictive CSP, a boundary
+  test, and packaging that ships it with the `norte` and `ntc` binaries so a
+  clean install has a daemon to talk to. What it did not have was anyone
+  admitting it: the application id was `dev.norte.gui.spike`, the README said
+  in bold that there is no graphical interface, and CI never ran its gate.
+  Running that gate is what settled the question. `just gui-ci` was **red on
+  `main`**, in two unrelated ways, and had been for weeks: `boot()` had grown
+  past the `too_many_lines` threshold, and a test in the window's crate no
+  longer compiled because `UiHostOptions` had gained a field months later. A
+  gate that depends on someone remembering is not a gate.
+  So it has one now: `.github/workflows/gui.yml` installs WebKitGTK, GTK3 and
+  libsoup3 — only in that job — and runs `just gui-ci` on every change to the
+  window **or to what goes into it**: `norte-ui-host`, `norte-client`,
+  `norte-frontend`, `norte-proto` and the shared build configuration. Those
+  four are on the list precisely because of the failure above: a change there
+  can break the window while the portable gate stays green.
+  The crate still sits outside the portable gate, for the opposite reason than
+  before: not "until the spike closes", but because requiring a browser engine
+  to test `norte-vfs` would make that gate unrunnable on machines with no
+  business having one. The identifier drops `.spike` — done now, in alpha,
+  because an id change means an old install sits beside the new one rather
+  than upgrading, and after a stable release that is a migration.
+  And the half of the packaging promise that could only be checked by
+  installing is now a test: that the window **resolves** its sibling `norte`
+  binary at startup, falls back to `PATH` without one, and does not try to
+  launch a *directory* named `norte` — which would have surfaced as "could not
+  connect", saying nothing about the real cause.
+  Still open, and named rather than implied: accessibility, IME and fractional
+  scaling (#261) need a person in front of a screen, and the clean-machine
+  smoke test and old-glibc baseline remain from phase 7.1.
+
 ### Changed
 
 - **The window's controller was one 18 725-line file** (ADR 0086), and 16 203

@@ -1,9 +1,9 @@
 //! Qué enlace externo se puede abrir, y quién decide que se puede.
 //!
-//! El spike NO abre ninguno: no hay superficie que los produzca todavía. Lo
-//! que hay es la puerta, cerrada y con su prueba, porque la pregunta que la
-//! tarea 3.3 hace —«¿rechaza un esquema que no está en la lista?»— se
-//! contesta una vez y vale para la fase 4, y porque la respuesta por defecto
+//! La ventana NO abre ninguno todavía: no hay superficie que los produzca. Lo
+//! que hay es la puerta, cerrada y con su prueba, porque la pregunta —«¿rechaza
+//! un esquema que no está en la lista?»— se contesta una vez y vale para
+//! cuando la haya, y porque la respuesta por defecto
 //! de un renderer sin esta comprobación es «abro lo que me den», que con un
 //! `file://` es leer el disco y con un esquema del sistema es ejecutar algo.
 

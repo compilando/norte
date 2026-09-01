@@ -26,12 +26,16 @@ features := "--features norte-tui/schema --features norte-config/watch --feature
 # ponía cinco tests en rojo sin que nadie tocara código. Retirada la GUI GPUI
 # (ADR 0065), la exclusión sobra — pero la lección no: si un miembro nuevo trae
 # una feature que cambia el comportamiento del core, se saca de aquí otra vez.
-# `norte-gui-tauri` queda FUERA hasta que el spike cierre su go/no-go (fase 3
-# del plan multi-frontend): compilarlo exige WebKitGTK, GTK3 y libsoup3 del
-# sistema, y ninguna otra parte del árbol los necesita — un gate que no arranca
-# en una máquina sin ellos deja de ser un gate. Está en `members` a propósito:
-# así el `Cargo.lock` fija las versiones de Tauri y `cargo fmt --all` lo cubre.
-# Su gate propio es `just gui-ci`.
+# `norte-gui-tauri` queda FUERA de ESTE gate, y no porque sea provisional: es
+# un frontend soportado desde el 2026-09-01 (ADR 0087). Queda fuera porque
+# compilarlo exige WebKitGTK, GTK3 y libsoup3 del sistema, y ninguna otra parte
+# del árbol los necesita — un gate que no arranca en una máquina sin ellos deja
+# de ser un gate. Está en `members` a propósito: así el `Cargo.lock` fija las
+# versiones de Tauri y `cargo fmt --all` lo cubre.
+#
+# Su gate es `just gui-ci`, y lo corre `.github/workflows/gui.yml` en cada
+# cambio que le llegue. Correrlo a mano no bastaba: el 2026-09-01 llevaba rojo
+# en `main` sin que nadie lo supiera.
 core_pkgs := "--workspace --exclude norte-gui-tauri"
 
 # Suelo de disco libre (GiB) por debajo del cual `just ci` se niega a
@@ -464,15 +468,16 @@ dist-publish tag:
     @echo "subido a {{tag}}. Comprueba: gh release view {{tag}}"
 
 # ---------------------------------------------------------------------------
-# El spike del renderer de Tauri (fase 3 del plan multi-frontend).
+# La ventana: el renderer de Tauri (ADR 0087).
 #
-# Fuera del gate por defecto a propósito (ver `core_pkgs`): compilarlo exige
-# WebKitGTK, GTK3 y libsoup3 del sistema. Su gate es este, y se corre a mano.
+# Fuera del gate portable a propósito (ver `core_pkgs`): compilarlo exige
+# WebKitGTK, GTK3 y libsoup3 del sistema. Su gate es este, y lo corre
+# `.github/workflows/gui.yml`; a mano, `just gui-ci`.
 # ---------------------------------------------------------------------------
 
 gui_dir := "crates/norte-gui-tauri"
 
-# Las features del gate del spike. Existe por la misma razón que `features`
+# Las features del gate de la ventana. Existe por la misma razón que `features`
 # de arriba: `cargo -p norte-gui-tauri` a secas resuelve un conjunto DISTINTO
 # del de `core_pkgs` para los crates compartidos (norte-core y norte-testkit
 # entran por dev-dependencies), así que se compilaban y se quedaban en disco
@@ -496,7 +501,7 @@ gui-test-ui:
 gui-lint-ui:
     cd {{gui_dir}}/ui && npm run fmt:check && npm run lint && npm run typecheck
 
-# El gate del spike, entero. `gui-build` va ANTES de los tests de Rust porque
+# El gate de la ventana, entero. `gui-build` va ANTES de los tests de Rust porque
 # uno de ellos audita el bundle empaquetado (`el_bundle_no_llama_a_casa`).
 gui-ci: gui-lint-ui gui-test-ui gui-build
     CARGO_INCREMENTAL=0 cargo clippy -p norte-gui-tauri --all-targets {{gui_features}} -- -D warnings

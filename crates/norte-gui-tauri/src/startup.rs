@@ -99,16 +99,11 @@ async fn comando_de_daemon(socket: &std::path::Path) -> Option<Vec<std::ffi::OsS
     let socket = socket.to_path_buf();
     // Sondas de FS fuera del runtime (regla 2).
     tokio::task::spawn_blocking(move || {
-        let hermano = std::env::current_exe()
+        let junto_a = std::env::current_exe()
             .ok()
-            .and_then(|exe| exe.parent().map(|d| d.join("norte")))
-            .filter(|p| p.is_file());
-        let programa: std::ffi::OsString = match hermano {
-            Some(p) => p.into(),
-            None => "norte".into(),
-        };
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
         Some(vec![
-            programa,
+            programa_del_daemon(junto_a.as_deref()),
             "daemon".into(),
             "run".into(),
             "--socket".into(),
@@ -118,6 +113,57 @@ async fn comando_de_daemon(socket: &std::path::Path) -> Option<Vec<std::ffi::OsS
     .await
     .ok()
     .flatten()
+}
+
+/// Qué `norte` se va a lanzar: el HERMANO del ejecutable si está, y si no el
+/// del `PATH`.
+///
+/// Separada de [`comando_de_daemon`] para que se pueda probar. Es la promesa
+/// que sostiene el paquete —`norte-gui`, `norte` y `ntc` viajan juntos y la
+/// ventana encuentra al suyo (#256)— y hasta ahora sólo se podía comprobar
+/// instalando, que es cuando ya es tarde. Lo que no se puede probar aquí es
+/// `current_exe`, y por eso el directorio entra como argumento.
+fn programa_del_daemon(junto_a: Option<&std::path::Path>) -> std::ffi::OsString {
+    junto_a
+        .map(|d| d.join("norte"))
+        .filter(|p| p.is_file())
+        .map_or_else(|| "norte".into(), Into::into)
+}
+
+#[cfg(test)]
+mod prueba_del_daemon {
+    use super::programa_del_daemon;
+
+    /// Con un `norte` al lado, se lanza ESE y con su ruta completa.
+    ///
+    /// Es lo que hace que el paquete funcione: en una instalación limpia el
+    /// `PATH` puede no tener nada, y el hermano sí está.
+    #[test]
+    fn el_hermano_gana() {
+        let dir = tempfile::tempdir().expect("temp");
+        let hermano = dir.path().join("norte");
+        std::fs::write(&hermano, b"#!/bin/sh\n").expect("se escribe");
+        assert_eq!(programa_del_daemon(Some(dir.path())), hermano.as_os_str());
+    }
+
+    /// Sin hermano se cae al `PATH`, que es el caso del árbol de desarrollo.
+    #[test]
+    fn sin_hermano_se_cae_al_path() {
+        let dir = tempfile::tempdir().expect("temp");
+        assert_eq!(programa_del_daemon(Some(dir.path())), "norte");
+        assert_eq!(programa_del_daemon(None), "norte");
+    }
+
+    /// Un DIRECTORIO llamado `norte` no es un daemon: se ignora.
+    ///
+    /// Sin el `is_file` se lanzaría un directorio como si fuera un programa y
+    /// el fallo saldría como «no se pudo conectar», que no dice nada.
+    #[test]
+    fn un_directorio_no_es_un_daemon() {
+        let dir = tempfile::tempdir().expect("temp");
+        std::fs::create_dir(dir.path().join("norte")).expect("se crea");
+        assert_eq!(programa_del_daemon(Some(dir.path())), "norte");
+    }
 }
 
 /// Lo que puede impedir arrancar.
@@ -508,9 +554,20 @@ fn capas_con_perfil_en(
 
 /// Monta el host: configuración, socket, directorio, keymap y disposición.
 ///
+/// **Es una SECUENCIA, y por eso crece un paso por cosa que haya que montar.**
+/// Cada línea es un nombre y una llamada, en el único orden en que se pueden
+/// hacer: el log necesita la configuración, el keymap necesita el preset, el
+/// host los necesita a todos. Partirla para bajar del umbral del lint mete el
+/// orden en dos sitios y deja al lector reconstruyéndolo — y el orden es lo
+/// único delicado que hay aquí. Mismo trato que `aplicar_efecto` en el host.
+///
 /// # Errors
 /// [`StartupError`] si la configuración no carga, el directorio no vale, o no
 /// hay daemon al otro lado.
+#[expect(
+    clippy::too_many_lines,
+    reason = "secuencia de arranque: un paso por línea, y el orden es el contrato"
+)]
 pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // Las MISMAS capas que el TUI, leídas fuera del runtime (regla 2) — y con
     // el perfil que `--profile` nombre metido YA en ellas (#307, ADR 0079).

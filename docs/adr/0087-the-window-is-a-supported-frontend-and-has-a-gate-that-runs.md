@@ -1,0 +1,116 @@
+# 0087 - The window is a supported frontend, and has a gate that runs
+
+- Status: accepted
+- Date: 2026-09-01
+- Decision makers: Oscar González
+- Related: ADR 0065 (retiring the GPUI window), ADR 0066 (`norte-ui-host` and
+  the versioned bridge), ADR 0067 (the webview never gets a raw path), #256
+  (packaging), #261 (accessibility and desktop integration).
+
+## Context and problem statement
+
+`norte-gui-tauri` was built as a spike: an experiment with a go/no-go at the
+end. It has since acquired everything a frontend is supposed to have — the
+semantic host behind it (`norte-ui-host`), a versioned bridge, a plain
+TypeScript renderer with 125 tests, a restrictive CSP, a boundary test that
+forbids it from reaching past `norte-client`, and packaging that ships it with
+the `norte` and `ntc` binaries so a clean install has a daemon (#256).
+
+And it was still labelled an experiment everywhere it was labelled at all: the
+application identifier was `dev.norte.gui.spike`, `README.md` said in bold that
+**there is no graphical interface right now**, the justfile and `Cargo.toml`
+explained the exclusion by "until the spike closes its go/no-go", and CI never
+ran its gate.
+
+That last one is the part that stopped being a documentation problem.
+
+## What running the gate found
+
+`just gui-ci` existed and was run by hand. On 2026-09-01 it was **red on
+`main`**, in two independent ways, and had been for weeks:
+
+1. `startup.rs::boot` had grown to 104 lines and tripped `too_many_lines`,
+   which the workspace denies.
+2. `tests/celdas_locales.rs` did not compile: `UiHostOptions` gained a
+   `profile` field (#307) and this test, in another crate, was never updated.
+
+Neither is serious on its own. Together they are the argument: **a gate that
+depends on someone remembering is not a gate.** The portable gate never sees
+this crate, `just ci-fast` does not run `gui-ci`, and so the only thing
+standing between `norte-ui-host` and a broken window was habit.
+
+## Decision
+
+### Go. The window is a supported frontend
+
+The evidence is that it works, it is tested at the boundary that matters, and
+it is the frontend the project decided to build when GPUI was retired (ADR
+0065). Nothing in the go/no-go was still open except the labelling and the CI.
+
+Supported does not mean finished, and the ADR says so rather than leaving it
+implied: it is not exercised against screen readers, IME input or fractional
+scaling (#261), and the packages are built against a current
+glibc/WebKitGTK, so an older distribution needs a build from source. Those are
+release-readiness questions on diverse desktops. They are not "is this a real
+frontend".
+
+### Its gate runs in CI, in its own workflow
+
+`.github/workflows/gui.yml` installs WebKitGTK, GTK3 and libsoup3 — **only in
+that job** — and runs `just gui-ci`. It triggers on changes to
+`norte-gui-tauri` and to everything that goes into it: `norte-ui-host`,
+`norte-client`, `norte-frontend`, `norte-proto`, plus the shared configuration
+(`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `justfile`).
+
+Those four upstream crates are on the list because of the failure mode that
+just happened: a change to `norte-ui-host` can desynchronise the bridge or
+break a downstream test, and the portable gate will stay green through it.
+
+### The crate stays out of the portable gate, for the opposite reason
+
+`core_pkgs` still excludes it, and the comment saying why is rewritten: not
+"until the spike closes", but because requiring WebKitGTK to test `norte-vfs`
+would make the portable gate unrunnable on a machine that has no business
+having a browser engine installed. Staying out of that gate is now a
+*property*, not a *stage*.
+
+### The identifier drops `.spike`
+
+`dev.norte.gui.spike` → `dev.norte.gui`. It names the webview's data
+directory, the desktop entry and the package, so anyone inspecting an
+installation read that this was an experiment.
+
+Changing it has a price and that is why it was done now: an installation
+carrying the old id is not upgraded in place, it sits beside the new one. In
+alpha the price is zero. After a first stable release it would have been a
+migration. A test now asserts the id and that it does not say `spike`.
+
+### "The window finds its daemon" becomes testable
+
+The packaging tests already asserted that the bundle carries `norte` and `ntc`
+as sidecars. What they could not assert is the other half of the promise: that
+`norte-gui` *resolves* the sibling binary at startup. That logic lived inside
+`comando_de_daemon`, wrapped around `current_exe()`, and could only be checked
+by installing — which is when it is too late.
+
+It is now a pure function taking the directory, with three tests: the sibling
+wins and travels by full path; with no sibling it falls back to `PATH`; and a
+*directory* named `norte` is not a daemon — without that check the window
+would launch a directory and report "could not connect", which says nothing
+about what went wrong.
+
+## Consequences
+
+- Every PR touching the window or its contracts runs `just gui-ci`. The two
+  rots above could not have reached `main` and stayed.
+- No graphics dependency entered the portable gate; the CSP is untouched; the
+  webview still receives no raw path (ADR 0067); the window still speaks only
+  through `norte-client` and its boundary test still holds.
+- `README.md` and `ARCHITECTURE.md` no longer contradict the repository about
+  whether a graphical interface exists.
+- Remaining, and named rather than implied: #261 (accessibility, IME,
+  fractional scaling, compositor restart) needs a person in front of a screen;
+  the smoke test on a clean machine and the old-glibc/WebKitGTK baseline are
+  still open from phase 7.1; and `celdas_locales.rs` still polls with
+  `tokio::time::sleep`, which ADR 0085 removed from `norte-ui-host` and has not
+  yet been applied here.

@@ -92,3 +92,4 @@ edits.
 | [0084](0084-the-shell-behind-the-panels-is-a-process-not-a-scrollback.md) | The shell behind the panels is a process, not a scrollback | accepted |
 | [0085](0085-an-async-test-waits-for-an-event-not-for-the-clock.md) | An async test waits for an event, not for the clock | accepted |
 | [0086](0086-the-single-writer-is-one-actor-not-one-file.md) | The single writer is one actor, not one file | accepted |
+| [0087](0087-the-window-is-a-supported-frontend-and-has-a-gate-that-runs.md) | The window is a supported frontend, and has a gate that runs | accepted |

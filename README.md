@@ -38,11 +38,25 @@ cargo install --path crates/norte-cli --locked   # the `norte` command
 cargo install --path crates/norte-tui --locked   # the `ntc` file manager
 ```
 
-There is **no graphical interface right now.** The GPUI one was retired on
-2026-08-20 (ADR 0065) and its replacement is being built against the
-toolkit-independent boundary described in
-`docs/superpowers/plans/2026-08-19-multi-frontend-tauri-transition.md`. Until
-it lands, the TUI and the CLI are the frontends.
+There **is** a graphical interface: `norte-gui`, a Tauri window over the same
+core. It is a supported frontend as of 2026-09-01 (ADR 0087) — its own CI gate
+runs on every change to it or to the crates it is built on, and packaging ships
+it with the `norte` and `ntc` binaries so a clean install has a daemon to talk
+to. The GPUI attempt it replaced was retired on 2026-08-20 (ADR 0065).
+
+Supported does not mean finished. It is not yet exercised against screen
+readers, IME input or fractional scaling (#261), and the packages are built on
+a current glibc/WebKitGTK, so an older distribution needs a build from source.
+The TUI remains the frontend with the most surface.
+
+```sh
+cargo install --path crates/norte-gui-tauri --locked   # the `norte-gui` window
+```
+
+Building it needs the system's WebKitGTK, GTK3 and libsoup3 development
+packages; `make setup` does not install them, and neither does the portable
+test gate — that is deliberate, so a machine without them can still build and
+test everything else.
 
 ## Run
 

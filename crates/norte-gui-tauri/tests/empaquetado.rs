@@ -69,6 +69,27 @@ fn el_paquete_trae_el_daemon_y_el_cli() {
 /// Es lo que se lee en el gestor de paquetes, y decía «Spike vertical del
 /// renderer de Tauri sobre norte-ui-host» — una frase de bitácora interna
 /// delante de quien está decidiendo si instalar esto.
+/// **El identificador no dice `spike`.**
+///
+/// Es el id de aplicación: nombra el directorio de datos de la webview, la
+/// entrada de escritorio y el paquete. Mientras decía `dev.norte.gui.spike`,
+/// cualquiera que mirara qué hay instalado leía que esto es un experimento —
+/// y lo era, hasta que el go/no-go se cerró (ADR 0087).
+///
+/// Cambiarlo TIENE precio y por eso se hizo ahora: una instalación con el id
+/// viejo no se actualiza encima, se queda al lado. En alfa el precio es cero;
+/// después de la primera versión estable habría sido una migración.
+#[test]
+fn el_identificador_no_dice_spike() {
+    let cfg = conf();
+    let id = cfg["identifier"].as_str().expect("hay identifier");
+    assert!(
+        !id.contains("spike"),
+        "el id de aplicación sigue diciendo que esto es un experimento: {id}"
+    );
+    assert_eq!(id, "dev.norte.gui", "y es el que el paquete promete");
+}
+
 #[test]
 fn la_descripcion_no_habla_de_un_spike() {
     let cfg = conf();

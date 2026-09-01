@@ -1,0 +1,92 @@
+# El gate de la ventana, aparte del de la biblioteca (ADR 0087).
+#
+# Aparte por una razón concreta y no por gusto: compilar `norte-gui-tauri`
+# exige WebKitGTK, GTK3 y libsoup3 DEL SISTEMA. Meterlas en el gate portable
+# dejaría a cualquier máquina sin ellas incapaz de correr los tests del core,
+# que es justo lo que `core_pkgs` evita en el justfile. Aquí se instalan, y
+# sólo aquí.
+#
+# Antes esto no existía y `just gui-ci` se corría a mano. El resultado
+# previsible: el 2026-09-01 estaba ROJO en `main` —`boot()` pasaba del umbral
+# de `too_many_lines`— y nadie lo sabía. Un gate que depende de que alguien se
+# acuerde no es un gate.
+name: GUI
+
+# Las dos listas de `paths` son la MISMA y están escritas dos veces: GitHub
+# Actions no admite anclas YAML, así que un `&rutas`/`*rutas` no se expande —
+# se rechaza el fichero. Si se toca una, se toca la otra.
+on:
+  push:
+    branches: [main]
+    paths:
+      # La ventana y su renderer.
+      - "crates/norte-gui-tauri/**"
+      # Y todo lo que ENTRA en ella: el host semántico, el SDK por el que
+      # habla, la capa compartida de frontend y el protocolo. Un cambio en
+      # cualquiera de estos puede desincronizar el puente sin que el gate
+      # portable se entere — `just ci-fast` no corre esto.
+      - "crates/norte-ui-host/**"
+      - "crates/norte-client/**"
+      - "crates/norte-frontend/**"
+      - "crates/norte-proto/**"
+      # La configuración compartida: features, toolchain, recetas.
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "justfile"
+      - ".github/workflows/gui.yml"
+  pull_request:
+    paths:
+      - "crates/norte-gui-tauri/**"
+      - "crates/norte-ui-host/**"
+      - "crates/norte-client/**"
+      - "crates/norte-frontend/**"
+      - "crates/norte-proto/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "justfile"
+      - ".github/workflows/gui.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gui:
+    name: gui (lint, test, build, package)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Las dependencias gráficas de Linux. Sólo en este job: el gate portable
+      # del workspace no las necesita y no debe necesitarlas.
+      - name: Dependencias de WebKitGTK/GTK/libsoup
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: crates/norte-gui-tauri/ui/package-lock.json
+
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-nextest
+
+      # `npm ci` y no `npm install`: el lockfile manda, y un gate que resuelve
+      # versiones por su cuenta prueba algo que nadie tiene.
+      - run: just gui-deps
+
+      # Formato y lint del renderer, sus tests (vitest), el bundle de la
+      # webview, y luego clippy + tests + doctests de Rust. El bundle va antes
+      # porque uno de los tests de Rust lo audita (`el_bundle_no_llama_a_casa`).
+      - run: just gui-ci
