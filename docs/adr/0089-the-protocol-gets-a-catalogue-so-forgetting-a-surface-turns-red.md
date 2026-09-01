@@ -78,8 +78,17 @@ was built to fix, one level up. So each field is tied down:
   mentions every type, so a misspelled one does not build.
 - `kind` — a request has a `methods::X =>` arm in the dispatch; a notification
   does not. Both halves are asserted, and that is what catches `rpc.cancel`.
-- `shape` — the dispatch is sliced by arm, and an arm that registers a task
-  while declaring itself `Direct` fails. That is what catches `index.build`.
+- `shape` — the dispatch is sliced by arm, the delegation to the handler is
+  followed, and **both** directions fail: declaring `Direct` while registering
+  a task (which is what catches `index.build`), and declaring `Task` without
+  registering one. The first version only checked the former, because an arm
+  is usually a one-liner that delegates and says nothing by itself — so
+  `shape` could still lie with the gate green, which is the same defect one
+  level up again. Following the delegation is what closes it.
+  What is still *not* machine-checked is `Task` versus `Stream`: the
+  distinction is "has a dedicated notification method", and the catalogue does
+  not record which one. Naming the notification per stream entry would tie it;
+  that is the cheap next step and it is not done here.
 
 The same review found that the first tests could not have caught any of it:
 they matched with `contains`, so `methods::SYNC_PLAN` was satisfied by

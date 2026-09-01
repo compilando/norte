@@ -27,14 +27,30 @@ const DEFAULT_MAX_TOKENS: u32 = 4096;
 /// forma de que no vuelva a serlo es que la declaración dependa de lo que de
 /// verdad se manda. Un modelo que no está aquí NO declara la capability y cae
 /// al camino del prompt, que es donde el proyecto ya sabía estar.
+///
+/// **Fuente y fecha, porque esta lista CADUCA**: la sección «Compatibility»
+/// de `platform.claude.com/docs/en/build-with-claude/structured-outputs`,
+/// consultada el 2026-09-01. Equivocarse por defecto es barato —se cae al
+/// prompt, que funciona— y por exceso es un 400: ante la duda, fuera.
+///
+/// `claude-sonnet-4-5` va con FECHA a propósito: la documentación lista
+/// `claude-sonnet-4-5-20250929` y no el alias corto, así que un
+/// `claude-sonnet-4-5` a secas cae al prompt. Los demás llevan el prefijo
+/// corto porque el alias ES el id actual del modelo.
+///
+/// `claude-opus-4-1` estuvo aquí y no debía: no aparece en la lista.
 const MODELOS_CON_SALIDA_ESTRUCTURADA: &[&str] = &[
     "claude-fable-5",
     "claude-mythos-5",
+    "claude-mythos-preview",
     "claude-opus-5",
     "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
     "claude-opus-4-5",
-    "claude-opus-4-1",
     "claude-sonnet-5",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-5-20250929",
     "claude-haiku-4-5",
 ];
 
@@ -386,14 +402,30 @@ mod tests {
     }
 
     /// La capability y la lista de modelos no se pueden separar.
+    ///
+    /// Parametrizado con la lista ENTERA de la documentación (2026-09-01), no
+    /// con una muestra: la primera versión traía cuatro modelos de menos y uno
+    /// retirado, y una muestra no lo habría enseñado.
     #[test]
     fn la_capability_sigue_al_modelo() {
         for (modelo, espera) in [
-            ("claude-opus-5", true),
-            ("claude-sonnet-5", true),
-            ("claude-haiku-4-5", true),
-            ("claude-opus-4-8", true),
+            // Los que la documentación lista como soportados.
             ("claude-fable-5", true),
+            ("claude-mythos-5", true),
+            ("claude-mythos-preview", true),
+            ("claude-opus-5", true),
+            ("claude-opus-4-8", true),
+            ("claude-opus-4-7", true),
+            ("claude-opus-4-6", true),
+            ("claude-opus-4-5-20251101", true),
+            ("claude-sonnet-5", true),
+            ("claude-sonnet-4-6", true),
+            ("claude-sonnet-4-5-20250929", true),
+            ("claude-haiku-4-5-20251001", true),
+            // El alias CORTO de sonnet 4.5 no está en la lista: cae al prompt.
+            ("claude-sonnet-4-5", false),
+            // Retirado, y nunca estuvo en la lista de salida estructurada.
+            ("claude-opus-4-1", false),
             ("claude-3-opus-20240229", false),
             ("un-modelo-que-no-existe", false),
         ] {

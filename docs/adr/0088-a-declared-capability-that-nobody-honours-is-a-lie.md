@@ -164,7 +164,17 @@ someone actually configured.
   the live API. If the assumption is wrong, the symptom is an empty reply on
   exactly the models that enable this path, and that is the first place to
   look.
-- The model list is matched by prefix and will age. A model missing from it
-  falls back to the prompt, which is safe; an invented id that matches a prefix
-  gets a 400 from the provider. `JSON_OUTPUT` is read in exactly one place in
-  the repository — the metric — so neither direction relaxes a check.
+- **The model list ages, and it was wrong the day it was written.** The first
+  version came from a bundled API reference and was missing Opus 4.6, Opus 4.7
+  and Sonnet 4.6, while carrying Opus 4.1, which does not support structured
+  output at all. A review caught it; the live documentation settled it. The
+  list now cites its source and the date it was read, and the test enumerates
+  the whole published list rather than a sample — a sample would not have shown
+  four missing entries.
+  Being wrong by omission is cheap: the model falls back to the prompt, which
+  works. Being wrong by inclusion is a 400. So when in doubt, out — which is
+  why `claude-sonnet-4-5` is listed only with its date: the documentation lists
+  the dated id and not the short alias.
+  Matching is by prefix, so an invented id that happens to share one gets a 400
+  from the provider. `JSON_OUTPUT` is read in exactly one place in the
+  repository — the metric — so neither direction relaxes a check.

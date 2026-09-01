@@ -104,32 +104,66 @@ fn brazo_de<'a>(src: &'a str, k: &str) -> Option<&'a str> {
     Some(&resto[..fin])
 }
 
+/// El cuerpo de la función a la que un brazo DELEGA, si delega.
+///
+/// Casi todos los brazos son una línea que llama a un `handle_…`, así que
+/// mirar solo el brazo no dice si registra una Task. Sin seguir la delegación,
+/// la comprobación de abajo solo puede fallar en un sentido — que es como se
+/// quedó la primera versión.
+fn cuerpo_delegado<'a>(src: &'a str, brazo: &str) -> Option<&'a str> {
+    let nombre: String = brazo
+        .match_indices("handle_")
+        .chain(brazo.match_indices("dispatch_"))
+        .map(|(i, _)| {
+            brazo[i..]
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect::<String>()
+        })
+        .next()?;
+    for prefijo in ["async fn ", "fn "] {
+        let aguja = format!("{prefijo}{nombre}");
+        if let Some(i) = src.find(&aguja) {
+            let resto = &src[i..];
+            // Hasta el siguiente item de nivel 0.
+            let fin = resto[1..].find("\n}\n").map_or(resto.len(), |j| j + 1 + 3);
+            return Some(&resto[..fin]);
+        }
+    }
+    None
+}
+
 /// **Un método `Task` o `Stream` registra una Task; uno `Direct` no.**
 ///
-/// Es la comprobación que hace de `shape` algo que se puede desmentir. Los
-/// brazos de reparto que devuelven `task_id` lo hacen por `register_task` o
-/// construyendo un `FsTaskResult`; los directos no hacen ninguna de las dos.
+/// Es la comprobación que hace de `shape` algo que se puede desmentir, y
+/// desmiente en los DOS sentidos: declararse `Direct` y registrar una Task, y
+/// declararse `Task` sin registrar ninguna. La primera versión solo miraba el
+/// primero, así que `shape` seguía pudiendo mentir con el gate verde — que es
+/// exactamente lo que este catálogo existe para impedir.
 #[test]
 fn el_shape_del_catalogo_casa_con_lo_que_hace_el_daemon() {
     let src = fuente("src/daemon/server.rs");
+    // `register_task` y `FsTaskResult` son las dos formas en que un handler
+    // devuelve un `task_id`. Un `task_id` suelto NO cuenta: hay métodos
+    // directos que lo RECIBEN como parámetro (`task.cancel`, los informes).
+    let registra = |t: &str| t.contains("FsTaskResult") || t.contains("register_task");
+
     let mut mal = Vec::new();
     for m in CATALOGO.iter().filter(|m| m.kind == Kind::Request) {
         let Some(brazo) = brazo_de(&src, &constante_de(m)) else {
             continue; // Lo cubre `el_daemon_reparte_todas_las_peticiones`.
         };
-        // Se mira el brazo Y la función que llama: el brazo suele ser una
-        // línea que delega, así que un `Task` se reconoce por devolver
-        // `FsTaskResult` en cualquiera de los dos sitios.
-        // `FsTaskResult` o `register_task`, y NO un `task_id` suelto: hay
-        // métodos directos que RECIBEN un `task_id` como parámetro
-        // (`task.cancel`, los informes) y no registran nada.
-        let es_task = brazo.contains("FsTaskResult") || brazo.contains("register_task");
+        let delegado = cuerpo_delegado(&src, brazo);
+        let es_task = registra(brazo) || delegado.is_some_and(registra);
         let declarado_task = matches!(m.shape, Shape::Task | Shape::Stream);
-        // Solo se afirma en la dirección segura: un brazo que delega a una
-        // función puede no decir nada aquí, y eso no es una mentira. Lo que
-        // SÍ lo es: declararse `Direct` y registrar una Task a la vista.
-        if es_task && !declarado_task {
-            mal.push(format!("{} dice Direct y registra una Task", m.name));
+
+        match (es_task, declarado_task) {
+            (true, false) => mal.push(format!("{} dice Direct y registra una Task", m.name)),
+            (false, true) => mal.push(format!(
+                "{} dice {:?} y no registra ninguna Task",
+                m.name, m.shape
+            )),
+            _ => {}
         }
     }
     assert!(
