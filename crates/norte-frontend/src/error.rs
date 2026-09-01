@@ -64,6 +64,11 @@ pub fn error_key(e: &Error) -> &'static str {
         // `decompressed-bytes`) es diagnóstico, no UX: una sola clave.
         Error::LimitExceeded { .. } => "err-limit-exceeded",
         Error::HostKeyUnknown { .. } => "err-host-key-unknown",
+        // 0.63.0 (#325): la TUI lo intercepta y abre el diálogo, así que este
+        // texto solo lo ven los frontends que aún no preguntan (la CLI, y la
+        // ventana hasta #327). Tiene que decir qué hacer sin diálogo — poner
+        // la variable de entorno—, no «error desconocido».
+        Error::SecretNeeded { .. } => "err-secret-needed",
         Error::HostKeyMismatch { .. } => "err-host-key-mismatch",
         Error::CursorExpired => "err-cursor-expired",
         // 0.36.0 (batch rename): las dos son ACCIONABLES — caer en

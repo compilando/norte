@@ -12,7 +12,7 @@ commands = [
 
     "pane.connect",
     "pane.disconnect",]
-context = ["dialog.trust-host"]
+context = ["dialog.trust-host", "dialog.ask-secret"]
 +++
 A pane holds a remote location the same way it holds a directory. The address
 is a URL, and its scheme says who answers:
@@ -68,6 +68,27 @@ one, it is looked for in three places, in order: the `NORTE_SECRET_`
 environment variable for that connection, then the **system keyring**, then an
 encrypted `secrets.age` file. The first hit wins, so a machine with no keyring
 — a server, a container — still works through the other two.
+
+If none of the three has it, the connection fails — which is right on a
+machine with nobody in front of it. When somebody is, add `secret = "prompt"`
+to the entry and norte ASKS instead of failing: a dialog that does not show
+what you type, and that only appears once all three places above have come up
+empty. The dialog names the connection **and where it connects to**, which is
+what makes the question answerable: the name was chosen by the file, and a
+file may have been edited.
+
+It works with `auth = "password"` and `auth = "access-key"` only. With `agent`
+there is no secret to ask for, and with `key` the secret is the key's
+passphrase, where "empty" and "absent" mean the same thing — asking there
+would pop a dialog every time you use an unencrypted key. `norte doctor` warns
+you if the key is set where it does nothing.
+
+What you type lives in memory for as long as the daemon stands, and is
+written neither to the keyring, nor to `secrets.age`, nor to
+`connections.toml`. Stopping norte discards it and the next session asks
+again; to stop typing it every time, the environment variable or the keyring
+are still the place. Mistyping it does not trap you: when the server rejects
+it, norte forgets it and asks again.
 
 An S3 access key id is not on that list, because it is not a secret: it is an
 identifier, and it sits in `connections.toml` in the clear. The secret access

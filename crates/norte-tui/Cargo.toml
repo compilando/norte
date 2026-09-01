@@ -68,6 +68,12 @@ toml_edit.workspace = true
 # derecha comiéndose la cola. `unicode-width` es la herramienta estándar (la
 # usa la propia ratatui, misma versión ya en el árbol), MIT/Apache, mantenida.
 unicode-width = "0.2"
+# #325: lo que se teclea en el diálogo de contraseña es un secreto, y un
+# `String` normal deja su contenido en el heap tras el drop —donde acaba en un
+# core dump o en swap. `Zeroizing<String>` lo borra al soltarlo. No es una
+# dependencia nueva del árbol: `norte-connect` ya la usa para el mismo tipo
+# (`Secret`), y es la herramienta estándar del ecosistema (RustCrypto).
+zeroize.workspace = true
 # El SUBSHELL persistente de #142 necesita un pty de verdad: un shell
 # interactivo detrás de los paneles no puede vivir en una tubería —sin tty no
 # hay job control, ni prompt, ni line editing, y `bash` se pone en modo no

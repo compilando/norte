@@ -384,6 +384,21 @@ fn golden_error() {
                     fingerprint: "SHA256:abc123def456".to_owned(),
                 },
             ),
+            // 0.63.0 (#325): la conexión pide un secreto que no está en
+            // ninguna parte. Fixture propia porque es una categoría más de la
+            // familia «esto no se puede seguir sin un humano», y con una sola
+            // de la familia las demás se podrían renombrar sin que nada lo
+            // notara.
+            (
+                "secret_needed",
+                // El `endpoint` va en la fixtura porque es lo que hace
+                // contestable el diálogo, y sin él nada impediría que alguien
+                // lo quitara «porque el nombre ya está» (#325).
+                Error::SecretNeeded {
+                    conn: "rosetta".to_owned(),
+                    endpoint: "s3://s3.eu-west-1.amazonaws.com".to_owned(),
+                },
+            ),
             (
                 "host_key_mismatch",
                 Error::HostKeyMismatch {
@@ -1141,7 +1156,7 @@ fn golden_methods() {
     // cuando están vacíos: con una sola fixtura por método, el día que dejaran
     // de omitirse —o que el default de `recursive` cambiara— el wire cambiaría
     // sin que nada se pusiera rojo.
-    assert_eq!(fixtures.len(), 176, "[methods.json] fixtures sin caso Rust");
+    assert_eq!(fixtures.len(), 178, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
@@ -2642,11 +2657,32 @@ fn check_methods_policy(fixtures: &BTreeMap<String, Value>) {
     );
 }
 
-/// Familia connection.* (0.7.0, fase 6): `trust_host_key` del flujo TOFU.
+/// Familia connection.* (0.7.0, fase 6): `trust_host_key` del flujo TOFU, y
+/// `provide_secret` (0.63.0, #325), que es su gemelo.
 fn check_methods_connection(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
-        ConnectionDegraded, ConnectionTrustHostKeyParams, ConnectionTrustHostKeyResult,
+        ConnectionDegraded, ConnectionProvideSecretParams, ConnectionProvideSecretResult,
+        ConnectionTrustHostKeyParams, ConnectionTrustHostKeyResult,
     };
+    // #325. El `conn` lleva acentos y eñe a propósito: es una CLAVE de
+    // `connections.toml`, o sea UTF-8 cualquiera, y este fixture es lo que
+    // impide que alguien la normalice o la recorte de camino al cable. El
+    // `secret` es inventado: un fixture no es un secreto, y sin él nada
+    // congela la forma de los params (que es el argumento del propio
+    // fichero).
+    check_one(
+        fixtures,
+        "connection_provide_secret_params",
+        &ConnectionProvideSecretParams {
+            conn: "coágulo-ñandú".to_owned(),
+            secret: "hunter2".to_owned(),
+        },
+    );
+    check_one(
+        fixtures,
+        "connection_provide_secret_result",
+        &ConnectionProvideSecretResult { stored: true },
+    );
     check_one(
         fixtures,
         "connection_trust_host_key_params",
@@ -3997,7 +4033,17 @@ fn method_names_frozen() {
     // porque contra un daemon 0.61 no se puede pedir ninguna de las dos cosas:
     // los permisos se cambian ruta a ruta y el plan de la IA es del directorio
     // entero.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.62.0");
+    // 0.63.0 (#325): `Error::SecretNeeded` y `connection.provide_secret`. La
+    // pregunta que el core no puede hacer por su cuenta —su resolver de
+    // secretos no tiene interfaz de usuario ni debe tenerla— subiendo por el
+    // cable para que la conteste quien está delante, con el mismo flujo que el
+    // TOFU de las host keys. Un cliente 0.62 degrada el error a `Unknown` y
+    // enseña un fallo donde el nuevo abre un diálogo: es lo que ya hacía.
+    assert_eq!(
+        methods::CONNECTION_PROVIDE_SECRET,
+        "connection.provide_secret"
+    );
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.63.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

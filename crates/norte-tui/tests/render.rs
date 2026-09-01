@@ -520,6 +520,55 @@ fn modal_de_plan_ai_enmascara_y_no_oculta_el_destino() {
     );
 }
 
+/// #325: el diálogo de contraseña pinta PUNTOS, no lo tecleado. Es el test
+/// que sostiene la promesa de la caja: quien mire la pantalla por encima del
+/// hombro no lee la credencial.
+///
+/// (Mutación de control: pintar `input.expose()` en vez de los puntos hace
+/// que este test se ponga rojo por la primera aserción.)
+#[test]
+fn el_dialogo_de_contrasena_pinta_puntos_y_no_el_texto() {
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
+    let dir = vp("file:///x");
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir, Vec::new()),
+    );
+    let mut input = norte_tui::app::TypedSecret::default();
+    for c in "hunter2".chars() {
+        input.push(c);
+    }
+    app.modal = Some(norte_tui::app::Modal::AskSecret {
+        conn: "rosetta".into(),
+        endpoint: "s3://s3.eu-west-1.amazonaws.com".into(),
+        input,
+        dir: vp("s3://bucket/"),
+        pane: 0,
+        trail: norte_tui::app::Trail::Record,
+    });
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let content = terminal.backend().to_string();
+
+    assert!(
+        !content.contains("hunter2"),
+        "la contraseña jamás se pinta: {content}"
+    );
+    assert!(
+        content.contains(&"•".repeat(7)),
+        "un punto por carácter tecleado: {content}"
+    );
+    assert!(content.contains("rosetta"), "y la conexión SÍ: {content}");
+    // Y sobre todo el DESTINO: un diálogo que solo dice «conexión: rosetta»
+    // no se puede contestar con criterio, porque ese nombre lo eligió un
+    // fichero que puede haberse editado (#325, hallazgo del revisor de
+    // seguridad).
+    assert!(
+        content.contains("s3.eu-west-1.amazonaws.com"),
+        "el destino se pinta: {content}"
+    );
+}
+
 /// §17: un plan grande con veredictos hace el modal MÁS ALTO que el
 /// terminal, y `centered` lo recorta por ABAJO. La línea que dice que el
 /// lote NO se puede aplicar va arriba, pegada al dir, precisamente por eso:

@@ -546,6 +546,26 @@ pub async fn on_key(
             app.quit = true;
             return;
         }
+        // #325: el campo de contraseña teclea y borra AQUÍ, pero
+        // Enter y Esc siguen por el contexto `dialog` (allowlist
+        // `ALLOW_ASK_SECRET`). No entra en la maquinaria de
+        // `PromptKind` a propósito: esa presta el campo como
+        // `&mut String` —y ofrece un `text()` para pintarlo—, que
+        // es justo lo que un secreto no puede dar (regla 10).
+        if let Some(Modal::AskSecret { input, .. }) = app.modal.as_mut() {
+            let plain = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
+            match key.code {
+                KeyCode::Char(c) if plain => {
+                    input.push(c);
+                    return;
+                }
+                KeyCode::Backspace if plain => {
+                    input.pop();
+                    return;
+                }
+                _ => {}
+            }
+        }
         // Los diez prompts de TEXTO LIBRE comparten
         // teclado: teclear, borrar y Esc son la misma
         // operación sobre el prompt abierto, y consumen

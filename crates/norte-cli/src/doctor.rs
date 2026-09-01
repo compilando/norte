@@ -838,7 +838,23 @@ pub fn check_connections(
                 }
             }
             match spec.auth {
-                AuthMethod::Agent | AuthMethod::Key => {}
+                // #325: `secret = "prompt"` solo hace algo con `password` y
+                // `access-key`. Con `agent` no hay secreto que pedir, y con
+                // `key` el secreto es la PASSPHRASE de la clave, donde vacío y
+                // ausente son lo mismo — preguntar ahí sacaría un diálogo cada
+                // vez que alguien usa una clave sin cifrar. Que la clave no
+                // haga nada es defendible; que no lo diga NADIE es la misma
+                // clase de mentira silenciosa que #320 vino a quitar.
+                AuthMethod::Agent | AuthMethod::Key => {
+                    if spec.secret == norte_connect::SecretSource::Prompt {
+                        findings.push(Finding {
+                            section: "connections",
+                            severity: Severity::Warn,
+                            code: "conn-secret-prompt-inert",
+                            detail: name.clone(),
+                        });
+                    }
+                }
                 AuthMethod::Password | AuthMethod::AccessKey => {
                     let var = norte_connect::env_key(name);
                     // Set-but-unusable is its OWN diagnosis (#320), never
@@ -866,6 +882,18 @@ pub fn check_connections(
                             section: "connections",
                             severity,
                             code,
+                            detail: format!("{name}: {var}"),
+                        });
+                    } else if spec.secret == norte_connect::SecretSource::Prompt {
+                        // #325: la entrada dice `prompt`, así que la ausencia
+                        // está PREVISTA — norte la pedirá. Avisar aquí sería
+                        // el mismo tipo de mentira que #320 vino a quitar,
+                        // solo que del otro signo: un Warn sobre la única
+                        // configuración que no tiene nada roto.
+                        findings.push(Finding {
+                            section: "connections",
+                            severity: Severity::Ok,
+                            code: "conn-secret-prompt",
                             detail: format!("{name}: {var}"),
                         });
                     } else {
@@ -1799,6 +1827,43 @@ max = 10
             .find(|f| f.code == "conn-secret-env-present")
             .unwrap_or_else(|| panic!("expected an env-present finding: {findings2:?}"));
         assert_eq!(ok.severity, Severity::Ok);
+    }
+
+    /// #325: con `secret = "prompt"` la ausencia está PREVISTA —norte lo va a
+    /// pedir—, así que es `Ok` con su propio código y no el `Warn` de arriba.
+    /// Avisar aquí sería la misma mentira que #320 vino a quitar, del otro
+    /// signo: un aviso sobre la única configuración que no tiene nada roto.
+    #[test]
+    fn conexion_con_prompt_no_avisa_por_la_variable_ausente() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("connections.toml"),
+            "[connections.backup]\nurl = \"ftp://backup@ftp.example.com\"\n\
+             auth = \"password\"\nsecret = \"prompt\"\n",
+        )
+        .unwrap();
+
+        let findings = check_connections(dir.path(), &env(&[]));
+        assert!(
+            !findings.iter().any(|f| f.code == "conn-secret-env-absent"),
+            "con prompt no hay aviso por ausencia: {findings:?}"
+        );
+        let ok = findings
+            .iter()
+            .find(|f| f.code == "conn-secret-prompt")
+            .unwrap_or_else(|| panic!("expected a prompt finding: {findings:?}"));
+        assert_eq!(ok.severity, Severity::Ok);
+        assert!(ok.detail.contains("NORTE_SECRET_BACKUP"), "{}", ok.detail);
+
+        // Y una variable VACÍA sigue siendo Error aunque haya prompt: #320 va
+        // primero — una variable puesta a vacío es un fallo de configuración,
+        // no una forma de pedir el diálogo.
+        let vacia = check_connections(dir.path(), &env(&[("NORTE_SECRET_BACKUP", "")]));
+        let err = vacia
+            .iter()
+            .find(|f| f.code == "conn-secret-env-empty")
+            .unwrap_or_else(|| panic!("expected an env-empty finding: {vacia:?}"));
+        assert_eq!(err.severity, Severity::Error);
     }
 
     /// TDD (#320): the var set but EMPTY is neither present nor absent — it is

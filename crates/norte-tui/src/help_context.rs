@@ -32,6 +32,7 @@ pub const CONTEXTS: &[&str] = &[
     "dialog.collision",
     "dialog.approval",
     "dialog.trust-host",
+    "dialog.ask-secret",
     "dialog.trust-lua",
     "dialog.plugin-approval",
     "dialog.quit",
@@ -75,6 +76,14 @@ fn modal_context(modal: &Modal) -> &'static str {
         // quien pulsa F1 encima de una no puede recibir prosa de la otra.
         Modal::ConfirmPluginApproval { .. } => "dialog.plugin-approval",
         Modal::TrustHostKey { .. } => "dialog.trust-host",
+        // #325: id PROPIO y no el del TOFU, aunque hoy los dos los explique
+        // la misma página (`remote`, que es donde viven las conexiones y sus
+        // secretos): son dos preguntas distintas —una clave de host que
+        // comparar, una contraseña que teclear— y compartir id ataría la
+        // segunda a la página de la primera para siempre. `F1` encima no
+        // abre nada (`help_over_modal_allowed`), así que este id se llega
+        // hoy por el índice de la ayuda, no por la tecla.
+        Modal::AskSecret { .. } => "dialog.ask-secret",
         Modal::TrustLuaInit { .. } => "dialog.trust-lua",
         Modal::MarkPattern { .. } => "dialog.mark-pattern",
         Modal::TransferName { .. } => "dialog.transfer-name",
@@ -157,7 +166,12 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::Split { .. }
         // #314: el de permisos, por lo mismo — `F1` encima teclearía una efe
         // que ni siquiera es un dígito octal.
-        | Modal::Chmod { .. } => false,
+        | Modal::Chmod { .. }
+        // #325: se teclea una CONTRASEÑA. `F1` encima escribiría una efe
+        // dentro de ella, y —peor que en los de arriba— el campo no la
+        // enseña, así que el usuario no vería el carácter de más que acaba de
+        // meter en su credencial.
+        | Modal::AskSecret { .. } => false,
         Modal::ConfirmDelete { .. }
         | Modal::ConfirmTransfer { .. }
         | Modal::ConfirmQuit
@@ -277,6 +291,14 @@ mod tests {
                 algo: "ssh-ed25519".into(),
                 fingerprint: "SHA256:AAAA".into(),
                 dir: vp("sftp://h/"),
+                pane: 0,
+                trail: Trail::Record,
+            },
+            Modal::AskSecret {
+                conn: "rosetta".into(),
+                endpoint: "s3://s3.eu-west-1.amazonaws.com".into(),
+                input: crate::app::TypedSecret::default(),
+                dir: vp("s3://bucket/"),
                 pane: 0,
                 trail: Trail::Record,
             },

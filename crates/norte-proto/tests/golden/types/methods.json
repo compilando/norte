@@ -143,6 +143,13 @@
     "reason": "tls-auth-rejected",
     "scheme": "ftp"
   },
+  "connection_provide_secret_params": {
+    "conn": "coágulo-ñandú",
+    "secret": "hunter2"
+  },
+  "connection_provide_secret_result": {
+    "stored": true
+  },
   "connection_trust_host_key_params": {
     "algo": "ssh-ed25519",
     "fingerprint": "SHA256:abc123def456",

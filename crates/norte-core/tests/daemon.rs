@@ -1851,6 +1851,36 @@ async fn trust_host_key_llega_al_engine() {
     }
 }
 
+/// #325, el gemelo del de arriba: `connection.provide_secret` existe en el
+/// dispatch y llega al engine. Sin conector responde `Unsupported` por el
+/// wire; un `METHOD_NOT_FOUND` querría decir que el handler falta.
+#[tokio::test]
+async fn provide_secret_llega_al_engine() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+    let err = c
+        .call::<_, methods::ConnectionProvideSecretResult>(
+            methods::CONNECTION_PROVIDE_SECRET,
+            &methods::ConnectionProvideSecretParams {
+                conn: "rosetta".into(),
+                secret: "s3cr3t".into(),
+            },
+        )
+        .await
+        .expect_err("sin conector: Unsupported");
+    match err {
+        ClientError::Rpc(rpc) => {
+            assert_eq!(rpc.code, codes::APP_ERROR);
+            assert!(
+                matches!(rpc.data, Some(norte_proto::Error::Unsupported)),
+                "taxonomía Unsupported, fue {:?}",
+                rpc.data
+            );
+        }
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn metodo_desconocido_es_method_not_found() {
     let d = spawn_daemon(None).await;
@@ -3894,6 +3924,26 @@ async fn trust_host_key_de_agente_es_invalid_request() {
         )
         .await
         .expect_err("un agente no acepta host keys");
+    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
+}
+
+/// #325: teclear una contraseña es un acto HUMANO. Un agente que pudiera
+/// inyectar credenciales de sesión elegiría con qué identidad actúa el
+/// usuario en el host remoto, así que el gate es el mismo que el del TOFU.
+#[tokio::test]
+async fn provide_secret_de_agente_es_invalid_request() {
+    let d = spawn_daemon(None).await;
+    let agent = connected_agent(&d, "sess-secreto").await;
+    let err = agent
+        .call::<_, methods::ConnectionProvideSecretResult>(
+            methods::CONNECTION_PROVIDE_SECRET,
+            &methods::ConnectionProvideSecretParams {
+                conn: "rosetta".into(),
+                secret: "no-deberia-llegar".into(),
+            },
+        )
+        .await
+        .expect_err("un agente no entrega secretos de conexión");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
 }
 
@@ -6103,6 +6153,9 @@ impl norte_core::connect::RemoteConnector for DegradingConnector {
         _p: Option<u16>,
         _f: &str,
     ) -> Result<(), norte_proto::Error> {
+        Ok(())
+    }
+    async fn provide_secret(&self, _c: &str, _s: &str) -> Result<(), norte_proto::Error> {
         Ok(())
     }
 }

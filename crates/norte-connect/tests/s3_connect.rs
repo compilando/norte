@@ -56,6 +56,7 @@ fn spec_access_key(addr: SocketAddr) -> ConnectionSpec {
         access_key_id: Some(AK.to_string()),
         addressing: Some(norte_connect::AddressingStyle::Path),
         logical_trash: false,
+        secret: norte_connect::SecretSource::Stored,
     }
 }
 
@@ -215,6 +216,7 @@ async fn region_ausente_sin_endpoint_es_error() {
         access_key_id: Some(AK.to_string()),
         addressing: None,
         logical_trash: false,
+        secret: norte_connect::SecretSource::Stored,
     };
     let secret = Secret::new(SK.to_string());
     let err = S3Connector::new()

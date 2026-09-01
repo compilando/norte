@@ -39,6 +39,27 @@ pub const ALLOW_APPROVAL: &[&str] = &["dialog.approve", "dialog.deny", "dialog.c
 /// propósito (Enter jamás confía en una host key sin verificar).
 pub const ALLOW_TRUST_HOST: &[&str] = &["dialog.approve", "dialog.deny", "dialog.cancel"];
 
+/// ALLOWLIST de `Modal::AskSecret` (#325). Aquí `dialog.confirm` SÍ entra, al
+/// revés que en los tres de arriba, y la diferencia es de qué se pregunta:
+/// ellos piden un JUICIO sobre algo que el usuario no escribió —un
+/// fingerprint, una op de agente, unas capabilities—, donde un Enter reflejo
+/// aprueba sin haber mirado. Este pide un DATO que el usuario acaba de
+/// teclear, y sobre el que ya decidió al escribirlo.
+///
+/// `dialog.approve` queda fuera por lo contrario: entregar una contraseña no
+/// es aprobar nada, y ofrecer la tecla de aprobar aquí enseñaría que sirve
+/// para eso.
+///
+/// Con el campo VACÍO, confirmar vuelve a ser inerte — el guard está dentro
+/// de [`dialog_action`], que devuelve `None` y deja el diálogo abierto (mismo
+/// mecanismo que un plan de lote no aplicable). Las
+/// dos mitades importan: entregar la cadena vacía reproduciría lo que #320
+/// cerró —un secreto vacío deja al provider tomando credenciales del
+/// ambiente—, y cerrar obligaría a rehacer la navegación entera por un Enter
+/// de más, que en un campo donde no se ve lo tecleado es el error fácil de
+/// cometer. Cancelar sigue vivo: irse SÍ es una respuesta.
+pub const ALLOW_ASK_SECRET: &[&str] = &["dialog.confirm", "dialog.cancel"];
+
 /// ALLOWLIST de `Modal::ConfirmPluginApproval` (#280): mismo principio que
 /// [`ALLOW_APPROVAL`] — conceder capabilities a una extensión es LA decisión
 /// de seguridad de ese sistema, y `dialog.confirm` queda fuera a propósito:
@@ -300,6 +321,12 @@ pub const ALLOW_HELP: &[&str] = &[
 ///
 /// `Modal::TrustLuaInit` no tiene allowlist — decisión 8 del plan H1, se
 /// resuelve aparte con [`trust_lua_key`] — y devuelve `None` aquí siempre.
+// Tabla modal→desenlace, un brazo por variante y exhaustiva a propósito: es
+// LA lista de qué acepta cada diálogo como respuesta, y verla entera de una
+// vez es el punto. Partirla movería la frontera de la semántica de seguridad
+// a un sitio arbitrario y haría más difícil ver que no falta ningún modal —
+// mismo criterio, y misma excepción, que `modal_title_body`.
+#[allow(clippy::too_many_lines)]
 #[must_use]
 pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
     use norte_proto::CollisionPolicy as P;
@@ -397,6 +424,26 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
             Some(match cmd {
                 "dialog.approve" => DialogOutcome::Confirmed,
                 _ => DialogOutcome::Cancelled, // dialog.deny | dialog.cancel
+            })
+        }
+        // #325: el ÚNICO modal de texto libre que pasa por aquí. Los demás
+        // los intercepta el run loop entero (raw chars) y devuelven `None`;
+        // este solo intercepta teclear y borrar, y deja Enter/Esc a esta
+        // allowlist — porque su Enter es una DECISIÓN (entregar el secreto)
+        // y su Esc abandona una navegación suspendida, que es justo lo que
+        // `cancel_prompt` se niega a hacer.
+        Modal::AskSecret { input, .. } => {
+            if !ALLOW_ASK_SECRET.contains(&cmd) {
+                return None;
+            }
+            // Campo vacío = confirmar INERTE (ver [`ALLOW_ASK_SECRET`]).
+            if cmd == "dialog.confirm" && input.is_empty() {
+                return None;
+            }
+            Some(if cmd == "dialog.confirm" {
+                DialogOutcome::Confirmed
+            } else {
+                DialogOutcome::Cancelled
             })
         }
         // #103 T9: `MarkPattern` es texto libre, como el diálogo de

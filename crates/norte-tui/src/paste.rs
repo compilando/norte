@@ -170,7 +170,18 @@ pub fn route_paste(app: &mut App, text: &str) {
         // teclas pero rechazaban un pegado. Los demás modales
         // —confirmaciones, TOFU, colisión— resuelven por el contexto `dialog`
         // del keymap: aquí no hay nada que rellenar.
-        if let Some(kind) = app.modal.as_ref().and_then(Modal::prompt_kind) {
+        // #325: el campo de contraseña también, y es el caso donde MÁS
+        // importa — pegar desde un gestor de contraseñas es como la mayoría de
+        // la gente contesta ese diálogo, y sin este brazo no pasaba nada y
+        // nada lo decía. Va antes del `prompt_kind` porque a propósito NO es
+        // un `PromptKind` (esa maquinaria presta el campo como `&mut String`,
+        // que es justo lo que un secreto no puede dar).
+        if let Some(Modal::AskSecret { input, .. }) = app.modal.as_mut() {
+            for c in first_line.chars() {
+                input.push(c);
+            }
+            PasteOutcome::Inserted
+        } else if let Some(kind) = app.modal.as_ref().and_then(Modal::prompt_kind) {
             for c in first_line.chars() {
                 app.prompt_push(kind, c);
             }

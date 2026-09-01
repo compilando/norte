@@ -45,6 +45,11 @@ modal-trust-host-host = { $badge }host: { $host }
 modal-trust-host-algo = { $badge }algorithm: { $algo }
 modal-trust-host-fp = { $badge }fingerprint: { $fingerprint }
 modal-trust-host-note = compare it out of band before trusting.
+modal-ask-secret-title = Connection password
+modal-ask-secret-conn = { $badge }connection: { $conn }
+modal-ask-secret-endpoint = { $badge }connecting to: { $endpoint }
+modal-ask-secret-field = password: { $dots }
+modal-ask-secret-note = this session only: it is not saved anywhere.
 modal-lua-trust-title = Run project init.lua?
 modal-lua-trust-body = { $path } (sha256 { $hash }) will run WITH YOUR PERMISSIONS. A cloned repo's script can do anything you can. y = trust and run · n/Esc = deny (remembered until the file changes)
 modal-confirm-quit-title = Quit norte?
@@ -199,6 +204,7 @@ err-loop = symlink loop
 err-corrupt = not a valid archive/container
 err-limit-exceeded = container exceeds local safety limits (not opened)
 err-host-key-unknown = unknown host key (first contact)
+err-secret-needed = the connection secret is missing (set NORTE_SECRET_<CONNECTION>)
 err-host-key-mismatch = host key MISMATCH — possible MITM
 err-cursor-expired = the listing expired; refresh
 err-plan-stale = the folder changed; review the rename plan again
@@ -1628,6 +1634,8 @@ cli-doctor-detail-connections-none = no connections.toml, or no connections conf
 cli-doctor-detail-conn-secret-env-empty = { $detail } is set but EMPTY: give it a real value or unset it (an empty secret cannot authenticate, and used to fall through to whatever credentials the environment offers)
 cli-doctor-detail-conn-secret-env-not-utf8 = { $detail } is set to bytes that are not valid UTF-8, so the secret cannot be read at all: rewrite it, or store it in the keyring or in secrets.age
 cli-doctor-detail-conn-secret-env-absent = { $detail } is not set; the keyring or secrets.age may still supply the secret — this is only a warning because it cannot be checked from here
+cli-doctor-detail-conn-secret-prompt = { $detail } is not set, and the entry says secret = "prompt": norte will ask for it when the connection opens
+cli-doctor-detail-conn-secret-prompt-inert = { $detail } says secret = "prompt", which does nothing with this auth method — it only applies to password and access-key
 cli-doctor-detail-plugin-digest-stale = { $id }: manifest capabilities changed since approval; re-approval required
 cli-doctor-detail-plugin-help-truncated = { $id }: its help.md is over the size limit and is served cut short
 cli-doctor-detail-plugin-help-lossy = { $id }: its help.md has bytes that do not decode; they render as replacement characters

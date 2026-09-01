@@ -46,6 +46,11 @@ modal-trust-host-host = { $badge }host: { $host }
 modal-trust-host-algo = { $badge }algoritmo: { $algo }
 modal-trust-host-fp = { $badge }huella: { $fingerprint }
 modal-trust-host-note = compárala fuera de banda antes de confiar.
+modal-ask-secret-title = Contraseña de la conexión
+modal-ask-secret-conn = { $badge }conexión: { $conn }
+modal-ask-secret-endpoint = { $badge }se conecta a: { $endpoint }
+modal-ask-secret-field = contraseña: { $dots }
+modal-ask-secret-note = solo para esta sesión: no se guarda en ninguna parte.
 modal-lua-trust-title = ¿Ejecutar el init.lua del proyecto?
 modal-lua-trust-body = { $path } (sha256 { $hash }) se ejecutará CON TUS PERMISOS. El script de un repo clonado puede hacer todo lo que tú puedas. y = confiar y ejecutar · n/Esc = denegar (se recuerda hasta que el fichero cambie)
 modal-confirm-quit-title = ¿Salir de norte?
@@ -200,6 +205,7 @@ err-loop = ciclo de symlinks
 err-corrupt = no es un archivo/contenedor válido
 err-limit-exceeded = el contenedor excede los límites locales de seguridad (no se abre)
 err-host-key-unknown = host key desconocida (primer contacto)
+err-secret-needed = falta el secreto de la conexión (ponlo en NORTE_SECRET_<CONEXIÓN>)
 err-host-key-mismatch = host key NO COINCIDE — posible MITM
 err-cursor-expired = el listado expiró; refresca
 err-plan-stale = la carpeta cambió; revisa otra vez el plan de renombrado
@@ -1625,6 +1631,8 @@ cli-doctor-detail-connections-none = no hay connections.toml, o no hay conexione
 cli-doctor-detail-conn-secret-env-empty = { $detail } está definida pero VACÍA: dale un valor real o quítala (un secreto vacío no autentica, y antes se caía a las credenciales que ofreciera el entorno)
 cli-doctor-detail-conn-secret-env-not-utf8 = { $detail } tiene bytes que no son UTF-8 válido, así que el secreto no se puede leer: reescríbelo, o guárdalo en el keyring o en secrets.age
 cli-doctor-detail-conn-secret-env-absent = { $detail } no está definida; el keyring o secrets.age todavía pueden dar el secreto — es solo un aviso porque desde aquí no se comprueban
+cli-doctor-detail-conn-secret-prompt = { $detail } no está definida, y la entrada dice secret = "prompt": norte lo pedirá al abrir la conexión
+cli-doctor-detail-conn-secret-prompt-inert = { $detail } dice secret = "prompt", que con este método de auth no hace nada — solo se aplica a password y access-key
 cli-doctor-detail-plugin-digest-stale = { $id }: las capabilities del manifiesto cambiaron desde la aprobación; requiere re-aprobación
 cli-doctor-detail-plugin-help-truncated = { $id }: su help.md pasa del tope y se sirve cortado
 cli-doctor-detail-plugin-help-lossy = { $id }: su help.md tiene bytes que no decodifican; se pintan como caracteres de reemplazo

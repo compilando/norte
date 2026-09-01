@@ -844,6 +844,66 @@ impl Engine {
         connector.trust_host_key(host, port, fingerprint).await
     }
 
+    /// Guarda para ESTA sesión el secreto de la conexión `conn`, que un humano
+    /// acaba de teclear (método `connection.provide_secret`, #325).
+    ///
+    /// # Por qué existe, y qué NO hace
+    ///
+    /// El resolutor de secretos mira variable de entorno, keyring y fichero
+    /// `age` (ADR 0015). Cuando una entrada declara `secret = "prompt"` y
+    /// ninguna de las tres tiene nada, el core no puede seguir solo: devuelve
+    /// [`Error::SecretNeeded`] y el frontend pregunta. Esta puerta es por
+    /// donde vuelve la respuesta.
+    ///
+    /// **El secreto vive en memoria y solo hasta que el daemon pare.** No se
+    /// escribe a `connections.toml`, ni al keyring, ni al fichero `age`; ese
+    /// «recordar» es otra decisión y no la toma este método.
+    ///
+    /// # Quién puede llegar, y clasificación
+    ///
+    /// Las mismas dos ausencias que [`Self::trust_host_key`], por las mismas
+    /// razones: el despacho del daemon lo rechaza para todo actor que no sea
+    /// `Actor::User` (teclear una contraseña es un acto humano; un agente que
+    /// pudiera inyectar credenciales de sesión elegiría con qué identidad
+    /// actúa el usuario), y no hay entrada de journal porque no toca el árbol
+    /// de ficheros ni deja nada que deshacer — al parar el daemon desaparece.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] sin conector; los del conector.
+    ///
+    /// # Panics
+    /// Nunca en la práctica: solo por envenenamiento del lock interno.
+    // `skip_all` y no `skip(self)`: el segundo argumento es una CONTRASEÑA, y
+    // con `skip(self)` `tracing` la formatearía en el span. Está escrito aquí
+    // y no solo en el conector porque este es el método público, y es el que
+    // alguien ampliará.
+    #[tracing::instrument(level = "info", skip_all, fields(conn = %conn))]
+    pub async fn provide_secret(&self, conn: &str, secret: &str) -> Result<(), Error> {
+        // La cadena vacía se rechaza AQUÍ y no solo en el diálogo del TUI.
+        // Que un frontend deje inerte el confirmar con el campo vacío es
+        // presentación; que un secreto vacío no entre en el resolutor es
+        // política, vive en el core (regla 7), y sin esta guarda un cliente
+        // con un bug mete un vacío que —al ir el escalón de sesión el
+        // primero— tapa las otras tres fuentes hasta que alguien pare el
+        // daemon.
+        //
+        // `PermissionDenied` y no una variante nueva: es a lo que degrada
+        // `ConnectError::SecretEmpty` (#320) unos pasos más abajo, así que
+        // decir lo mismo aquí no inventa taxonomía — una credencial vacía es
+        // una credencial que no autentica.
+        if secret.is_empty() {
+            tracing::warn!("secreto vacío rechazado");
+            return Err(Error::PermissionDenied);
+        }
+        let connector = self
+            .connector
+            .read()
+            .expect("connector lock sano")
+            .clone()
+            .ok_or(Error::Unsupported)?;
+        connector.provide_secret(conn, secret).await
+    }
+
     /// La clave de registro/caché para `p`: providers de proceso van por
     /// scheme; los remotos por `scheme://authority`.
     fn provider_key(p: &VPath) -> String {

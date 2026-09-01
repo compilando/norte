@@ -1264,10 +1264,17 @@ fn version_ventana_actual() {
     // comprobarse; lo que no se estrecha es el alcance, y la ventana se
     // desplaza igual porque ese cliente no puede pedir ninguna de las dos
     // cosas.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.62.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.61.0"), "N-1");
+    // 0.63.0 (#325): `Error::SecretNeeded` y `connection.provide_secret`. Un
+    // cliente 0.62 degrada el error a `Unknown` y no llama al método, así que
+    // enseña un fallo donde el nuevo abre un diálogo — o sea que no puede abrir
+    // esa conexión, que es EXACTAMENTE lo que ya le pasaba. Aquí no se pierde
+    // ninguna comprobación ni se ensancha ningún alcance; lo que ese cliente no
+    // tiene es la única forma de contestar la pregunta, y por eso la ventana se
+    // desplaza igual.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.63.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.62.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.60.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.61.9"),
         "N-2 fuera de la ventana"
     );
 }

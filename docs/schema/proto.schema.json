@@ -996,6 +996,37 @@
       ],
       "type": "object"
     },
+    "ConnectionProvideSecretParams": {
+      "description": "Params de [`CONNECTION_PROVIDE_SECRET`] (#325): el secreto que el humano\nacaba de teclear para una conexión.\n\n**`Debug` está escrito a mano y NO deriva.** Es el único tipo del protocolo\nque lleva material secreto, y en cuanto alguien escriba un\n`tracing::debug!(?params)` en la capa RPC —que es exactamente lo que se hace\npara depurar un método nuevo— un `derive` habría puesto la contraseña en el\nfichero de log y en el panel de registro. Mismo criterio que\n`norte_connect::Secret`, que imprime `Secret(***)`.\n\nEl secreto vive en memoria del daemon mientras dure la sesión y no se\nescribe en ninguna parte. La decisión de dejarlo cruzar el socket está en el\nADR 0015 (enmienda 2026-09-01).\n\n```\nuse norte_proto::methods::ConnectionProvideSecretParams;\nlet p = ConnectionProvideSecretParams {\n    conn: \"rosetta\".to_owned(),\n    secret: \"hunter2\".to_owned(),\n};\n// El día que alguien añada `Debug` al `derive` de arriba para arreglar\n// otra cosa, esto se pone rojo antes de que la contraseña llegue a un log.\nassert!(!format!(\"{p:?}\").contains(\"hunter2\"));\nassert!(format!(\"{p:?}\").contains(\"rosetta\"));\n```",
+      "properties": {
+        "conn": {
+          "description": "Nombre de la conexión en `connections.toml`, el mismo que trajo el\n[`crate::Error::SecretNeeded`].",
+          "type": "string"
+        },
+        "secret": {
+          "description": "Lo tecleado. Jamás se loguea, jamás se persiste.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "conn",
+        "secret"
+      ],
+      "type": "object"
+    },
+    "ConnectionProvideSecretResult": {
+      "description": "Result de [`CONNECTION_PROVIDE_SECRET`].",
+      "properties": {
+        "stored": {
+          "description": "`true` si el daemon lo guardó para esta sesión. `false` reservado para\nun futuro rechazo por política.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "stored"
+      ],
+      "type": "object"
+    },
     "ConnectionTrustHostKeyParams": {
       "description": "Params de [`CONNECTION_TRUST_HOST_KEY`] (flujo TOFU, ADR 0015 D). Lleva el\nfingerprint que el usuario VERIFICÓ; el core lo compara con la clave que\nvuelve a presentar el servidor al reintentar, y solo registra si coincide.",
       "properties": {
@@ -1345,7 +1376,7 @@
               "type": "string"
             },
             "rule": {
-              "description": "Categoría GRUESA de la causa de denegación — NO el identificador de\nla regla concreta de `policy.toml` (que no se filtra, por\nseguridad). Vocabulario cerrado, comparable por igualdad:\n`\"out-of-scope\"` (ruta/op fuera del scope del agente),\n`\"scope-expired\"` (el scope aplicable venció),\n`\"policy-rule\"` (una regla `deny` de `policy.toml` hizo match),\n`\"no-rule\"` (fail-closed: dentro del scope pero sin regla que\naplique), `\"not-approved\"` (un `ask` fue denegado o su TTL venció).",
+              "description": "Categoría GRUESA de la causa de denegación — NO el identificador de\nla regla concreta de `policy.toml` (que no se filtra, por\nseguridad). Vocabulario cerrado, comparable por igualdad:\n`\"out-of-scope\"` (ruta/op fuera del scope del agente),\n`\"scope-expired\"` (el scope aplicable venció),\n`\"policy-rule\"` (una regla `deny` de `policy.toml` hizo match),\n`\"no-rule\"` (fail-closed: dentro del scope pero sin regla que\naplique), `\"not-approved\"` (un `ask` fue denegado o su TTL venció).\n\nEsos seis son los que CRUZAN EL CABLE. El SDK sintetiza además el\nNOMBRE DEL MÉTODO cuando un result de dos estados vuelve en falso\n(`connection.trust_host_key`, `connection.provide_secret`): ese\nvalor no viene del daemon, se construye en el cliente para no\ntratar un rechazo como un éxito. Un lector del wire no lo verá\nnunca, y el vocabulario de arriba sigue siendo cerrado.",
               "type": "string"
             }
           },
@@ -1510,6 +1541,29 @@
             "host",
             "algo",
             "fingerprint"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "La conexión pide un secreto que no está en ninguna parte, y su\n`connections.toml` dice que hay que PREGUNTARLO (`secret = \"prompt\"`,\n#325).\n\nMismo flujo que el TOFU de arriba, y a propósito: el frontend abre su\ndiálogo, manda lo tecleado con `connection.provide_secret` y REINTENTA\nesta misma navegación. El core no puede preguntar por su cuenta —el\nresolver de secretos no tiene interfaz de usuario ni debe tenerla—, así\nque la única forma de que un humano conteste es que la pregunta suba\npor aquí.\n\nLleva el nombre de la conexión Y su destino, y el destino es\nobligatorio: **un diálogo de contraseña que no dice a quién se la va a\ndar no es contestable.** El nombre lo eligió `connections.toml`, que\npuede venir de un dotfiles ajeno o de una línea editada; `trabajo` no\ndice nada sobre si esa entrada apunta hoy a la máquina de siempre o a\n`ftp://evil.example`. Es la misma razón por la que el TOFU de arriba\nlleva host, algoritmo y huella: quien contesta verifica al OTRO EXTREMO,\nno una etiqueta local.\n\nY el riesgo no es teórico en todos los esquemas: con `sftp` el\nhandshake SSH todavía pasa por el TOFU antes de mandar nada, pero un\n`ftp` va en claro y un `s3` con `endpoint` ajeno firma una petición\ncontra el servidor que la entrada eligió.\n\nUn cliente 0.62 degrada a `Unknown` y enseña un error en vez de un\ndiálogo — o sea que no puede conectar esa conexión, igual que hoy.",
+          "properties": {
+            "conn": {
+              "description": "Nombre de la conexión en `connections.toml`, el mismo que va en\n[`crate::methods::CONNECTION_PROVIDE_SECRET`].",
+              "type": "string"
+            },
+            "endpoint": {
+              "description": "A dónde se conectaría, `scheme://host[:puerto]`, **sin userinfo**\n(misma redacción que [`crate::methods::ConnectionDegraded`]: un\n`user:pass@` en la URL no se reenvía a la pantalla ni al log).\nSolo para MOSTRAR: el frontend no lo reparsea ni lo usa para\nconectar.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "secret_needed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "conn",
+            "endpoint"
           ],
           "type": "object"
         },
@@ -5419,6 +5473,12 @@
     "connection_list_result": {
       "$ref": "#/$defs/ConnectionListResult"
     },
+    "connection_provide_secret_params": {
+      "$ref": "#/$defs/ConnectionProvideSecretParams"
+    },
+    "connection_provide_secret_result": {
+      "$ref": "#/$defs/ConnectionProvideSecretResult"
+    },
     "connection_trust_host_key_params": {
       "$ref": "#/$defs/ConnectionTrustHostKeyParams"
     },
@@ -5892,6 +5952,8 @@
     "connection_close_result",
     "connection_trust_host_key_params",
     "connection_trust_host_key_result",
+    "connection_provide_secret_params",
+    "connection_provide_secret_result",
     "daemon_going_away",
     "daemon_shutdown_params",
     "daemon_shutdown_result",

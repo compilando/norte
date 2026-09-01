@@ -1128,6 +1128,9 @@ impl norte_core::connect::RemoteConnector for ProbedHangingConnector {
     ) -> Result<(), norte_proto::Error> {
         Ok(())
     }
+    async fn provide_secret(&self, _c: &str, _s: &str) -> Result<(), norte_proto::Error> {
+        Ok(())
+    }
 }
 
 /// #74: dropear el future de un submit remoto EN VUELO envía `rpc.cancel`

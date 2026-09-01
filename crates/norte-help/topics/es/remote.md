@@ -12,7 +12,7 @@ commands = [
 
     "pane.connect",
     "pane.disconnect",]
-context = ["dialog.trust-host"]
+context = ["dialog.trust-host", "dialog.ask-secret"]
 +++
 Un panel sostiene un sitio remoto igual que sostiene un directorio. La
 dirección es una URL, y su esquema dice quién contesta:
@@ -69,6 +69,27 @@ necesita uno, se busca en tres sitios y por este orden: la variable de entorno
 último un fichero `secrets.age` cifrado. Gana el primero que acierte, así que
 una máquina sin llavero —un servidor, un contenedor— sigue funcionando con los
 otros dos.
+
+Si ninguno de los tres lo tiene, la conexión falla — que es lo correcto en una
+máquina sin nadie delante. Cuando sí hay alguien, añade `secret = "prompt"` a
+la entrada y norte lo PIDE en vez de fallar: un diálogo que no enseña lo que
+tecleas y que solo aparece cuando los tres sitios de arriba han quedado
+vacíos. El diálogo dice el nombre de la conexión **y a dónde se conecta**, que
+es lo que hace la pregunta contestable: el nombre lo eligió el fichero, y un
+fichero se puede haber editado.
+
+Solo funciona con `auth = "password"` y `auth = "access-key"`. Con `agent` no
+hay secreto que pedir, y con `key` el secreto es la contraseña de la clave,
+donde «vacío» y «no hay» son lo mismo — preguntar ahí sacaría un diálogo cada
+vez que usas una clave sin cifrar. `norte doctor` te avisa si has puesto la
+clave donde no hace nada.
+
+Lo que escribas vive en memoria mientras el daemon siga en pie, y no se
+escribe en el llavero, ni en `secrets.age`, ni en `connections.toml`. Al parar
+norte desaparece y la próxima sesión vuelve a preguntar; para no teclearla cada
+vez, la variable de entorno o el llavero siguen siendo el sitio. Si te
+equivocas al teclearla, no te quedas atrapado: cuando el servidor la rechaza,
+norte la olvida y te vuelve a preguntar.
 
 El access key id de S3 no está en esa lista, porque no es un secreto: es un
 identificador, y va en claro en `connections.toml`. La secret access key que

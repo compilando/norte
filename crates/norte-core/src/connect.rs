@@ -62,6 +62,17 @@ pub trait RemoteConnector: Send + Sync {
         port: Option<u16>,
         fingerprint: &str,
     ) -> Result<(), Error>;
+
+    /// Guarda para ESTA sesión el secreto que un humano acaba de teclear
+    /// (`connection.provide_secret`, #325).
+    ///
+    /// El gemelo de [`Self::trust_host_key`], y por el mismo motivo: hay
+    /// decisiones que solo puede tomar quien está delante, y el core necesita
+    /// una puerta por la que reciban la respuesta. En memoria y nada más.
+    ///
+    /// # Errors
+    /// Implementación dependiente; el conector por defecto no falla.
+    async fn provide_secret(&self, conn: &str, secret: &str) -> Result<(), Error>;
 }
 
 /// Causa de una degradación de seguridad al conectar (#44). Vocabulario CERRADO:
@@ -220,24 +231,103 @@ impl ConnectionManager {
     /// Establece el transporte para `spec` y construye el provider. `name` es
     /// el nombre de la conexión en `connections.toml` (ad-hoc = None; el
     /// secreto se busca entonces bajo el host).
+    ///
+    /// # Una contraseña mal tecleada no se queda para siempre (#325)
+    ///
+    /// Si el secreto salió del escalón de SESIÓN —lo tecleó un humano hace un
+    /// momento— y el servidor lo rechaza, se OLVIDA y el fallo se convierte de
+    /// nuevo en `SecretNeeded`, o sea en el diálogo. Sin esto, un dedo torcido
+    /// dejaba la conexión muerta hasta parar el daemon: el escalón de sesión va
+    /// delante de los otros tres, así que el valor malo tapaba también la
+    /// variable de entorno con la que se intentaría arreglar, y como el core
+    /// solo pregunta cuando no encuentra NADA, el diálogo no volvía a salir.
+    ///
+    /// Solo el de sesión. Un secreto del entorno, del keyring o del `age` lo
+    /// puso alguien a propósito en un sitio que se puede editar: borrárselo
+    /// por un rechazo del servidor sería decidir por él que estaba mal.
     async fn establish(
         &self,
         spec: &ConnectionSpec,
         name: Option<&str>,
+    ) -> Result<Connected, Error> {
+        // El origen sale por parámetro, y `establish_inner` es una función
+        // aparte, por un motivo que costó una prueba con una cuenta de verdad
+        // descubrir: los brazos de scheme usan `?`, así que un fallo del
+        // transporte RETORNA de la función entera. Un bloque «después del
+        // match» dentro de `establish_inner` no se ejecutaba nunca en el único
+        // caso que le importa — el del fallo.
+        let mut origen = None;
+        let resultado = self.establish_inner(spec, name, &mut origen).await;
+        if matches!(resultado, Err(Error::PermissionDenied))
+            && origen == Some(norte_connect::SecretOrigin::Session)
+        {
+            let conn_name = match spec.endpoint() {
+                Ok(ep) => name.map_or(ep.host, ToString::to_string),
+                Err(_) => return resultado,
+            };
+            self.secrets.forget_session(&conn_name);
+            tracing::info!(
+                conn = %conn_name,
+                "el servidor rechazó el secreto tecleado: se olvida y se vuelve a preguntar"
+            );
+            return Err(secret_needed(&conn_name, spec));
+        }
+        resultado
+    }
+
+    /// El cuerpo de [`Self::establish`]. `origen` sale por parámetro porque es
+    /// lo único que su envoltorio necesita saber del camino recorrido.
+    async fn establish_inner(
+        &self,
+        spec: &ConnectionSpec,
+        name: Option<&str>,
+        origen: &mut Option<norte_connect::SecretOrigin>,
     ) -> Result<Connected, Error> {
         let ep = spec.endpoint().map_err(log_and_map)?;
         let mut warnings: Vec<ConnectionWarning> = Vec::new();
         // El secreto solo se resuelve si el método de auth lo puede usar
         // (password/access-key siempre; key para la passphrase). Agent no
         // lleva secreto (en s3, agent = cadena ambiente de opendal).
+        // El nombre bajo el que se guarda y se busca el secreto. Para una
+        // conexión con entrada es SU clave de `connections.toml`, única por
+        // construcción; el `unwrap_or(&ep.host)` es para las ad-hoc, que hoy
+        // NO pueden llegar aquí con secreto —`resolve_spec` las fija a
+        // `auth = "agent"`, y ese brazo no consulta el resolutor—. Si alguna
+        // vez una ad-hoc lleva otro método de auth, este nombre deja de ser
+        // único y dos hosts distintos podrían compartir entrada: entonces hace
+        // falta una clave que incluya el scheme y el puerto.
         let conn_name = name.unwrap_or(&ep.host);
         let secret: Option<Secret> = match spec.auth {
             AuthMethod::Agent => None,
-            AuthMethod::Password | AuthMethod::AccessKey => self
-                .secrets
-                .resolve(conn_name, &spec.url)
-                .await
-                .map_err(log_and_map)?,
+            AuthMethod::Password | AuthMethod::AccessKey => {
+                // Un `prompt` PREGUNTA también cuando lo que hay es la cadena
+                // vacía. El vacío sigue siendo un fallo de configuración —#320,
+                // y `norte doctor` lo dice— pero devolverlo aquí dejaría al
+                // usuario ante un «permiso denegado» opaco teniendo la persona
+                // delante y un diálogo listo para preguntarle. Se avisa y se
+                // pregunta.
+                let hallado = match self.secrets.resolve_with_origin(conn_name, &spec.url).await {
+                    Ok(v) => v,
+                    Err(e @ norte_connect::ConnectError::SecretEmpty { .. })
+                        if spec.secret == norte_connect::SecretSource::Prompt =>
+                    {
+                        tracing::warn!(conn = %conn_name, error = %e, "secreto vacío: se preguntará");
+                        None
+                    }
+                    Err(e) => return Err(log_and_map(e)),
+                };
+                // #325: si no está en ninguna parte y la conexión dice que hay
+                // que preguntarlo, esto sube por el cable como una PREGUNTA y
+                // el frontend abre su diálogo. El core no puede preguntar por
+                // su cuenta: su resolver no tiene interfaz de usuario.
+                if hallado.is_none() && spec.secret == norte_connect::SecretSource::Prompt {
+                    return Err(secret_needed(conn_name, spec));
+                }
+                hallado.map(|(s, origin)| {
+                    *origen = Some(origin);
+                    s
+                })
+            }
             // `key`: el secreto es la PASSPHRASE de la clave, y ahí vacío y
             // ausente son lo mismo — una clave sin cifrar no lleva passphrase, y
             // `load_secret_key` trata `Some("")` igual que `None`. Detrás no hay
@@ -358,6 +448,19 @@ impl RemoteConnector for ConnectionManager {
             .await
             .map_err(log_and_map)
     }
+
+    // `skip_all` y no `skip(self)`: el segundo parámetro es una CONTRASEÑA.
+    // Con `skip(self)`, `tracing` la formatearía en el span —a nivel info, al
+    // fichero y al panel de registro— y la regla 10 se habría roto por la
+    // línea más fácil de escribir del parche. El nombre de la conexión se
+    // registra a mano, que es lo único que aquí se puede decir.
+    #[tracing::instrument(level = "info", skip_all, fields(conn = %conn))]
+    async fn provide_secret(&self, conn: &str, secret: &str) -> Result<(), Error> {
+        self.secrets
+            .remember_for_session(conn, norte_connect::Secret::new(secret.to_string()));
+        tracing::info!("secreto de conexión recibido del frontend (solo en memoria)");
+        Ok(())
+    }
 }
 
 /// Resuelve la conexión para una URL remota: la ENTRADA de `connections.toml`
@@ -380,6 +483,11 @@ fn resolve_spec(
         access_key_id: None,
         addressing: None,
         logical_trash: false,
+        // Una conexión AD-HOC —navegar a una URL que no está en el fichero— no
+        // pregunta: no hay entrada que declare `secret = "prompt"`, y
+        // preguntarle una contraseña a alguien por teclear una URL sería
+        // enseñarle a teclear contraseñas en cualquier diálogo que aparezca.
+        secret: norte_connect::SecretSource::Stored,
     };
     let target = ad_hoc.endpoint()?;
     for (name, spec) in &file.connections {
@@ -477,6 +585,29 @@ fn log_and_map(e: norte_connect::ConnectError) -> Error {
     Error::from(e)
 }
 
+/// La PREGUNTA de #325, con a quién se le va a dar la contraseña.
+///
+/// No pasa por [`log_and_map`] a propósito: eso registra un `warn!` de «fallo
+/// de conexión remota», y esto no es un fallo — es la conexión funcionando
+/// como su dueño la configuró. Un `warn!` por cada navegación a una conexión
+/// `prompt` llenaría el fichero de log de avisos falsos y, desde #324,
+/// encendería el aviso del botón de registro en la barra de paneles.
+///
+/// El destino sale de [`norte_connect::ConnectionSpec::destination_display`],
+/// que enseña el `endpoint =` explícito además de la URL —en `s3` el «host»
+/// de la URL es el BUCKET, y quien recibe la credencial firmada es el
+/// endpoint— y quita el userinfo de las dos mitades (regla 10). Si la URL no
+/// parsea se cae al nombre a secas: quedarse sin preguntar por no poder pintar
+/// el destino sería peor.
+fn secret_needed(conn: &str, spec: &ConnectionSpec) -> Error {
+    let endpoint = spec.destination_display().unwrap_or_default();
+    tracing::info!(conn = %conn, endpoint = %endpoint, "falta el secreto: se preguntará");
+    Error::SecretNeeded {
+        conn: conn.to_string(),
+        endpoint,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,6 +629,164 @@ mod tests {
 
     fn file(toml: &str) -> ConnectionsFile {
         toml::from_str(toml).expect("toml válido")
+    }
+
+    /// #325: sin secreto en ninguna parte y con `secret = "prompt"`,
+    /// `establish` devuelve `SecretNeeded` ANTES de tocar la red — es una
+    /// pregunta, no un fallo de conexión. Con el default (`stored`) sigue su
+    /// camino y muere en el transporte, que es el comportamiento de siempre.
+    #[tokio::test]
+    async fn prompt_sin_secreto_es_secret_needed_antes_de_conectar() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let mgr = ConnectionManager::new(dir.path());
+        // Puerto 1 en loopback: si el brazo de `prompt` NO cortocircuitara,
+        // este test fallaría por un error de transporte en vez de por el
+        // veredicto — que es justo la distinción que se está fijando.
+        let mut spec = min_spec("sftp://nadie@127.0.0.1:1/");
+        spec.auth = AuthMethod::Password;
+        spec.secret = norte_connect::SecretSource::Prompt;
+
+        // `Connected` no es `Debug` (lleva providers), así que el desenlace se
+        // saca a mano en vez de con `expect_err`.
+        let Err(err) = mgr.establish(&spec, Some("pregunta")).await else {
+            panic!("no hay secreto en ninguna parte: debía preguntar");
+        };
+        assert!(
+            matches!(&err, Error::SecretNeeded { conn, .. } if conn == "pregunta"),
+            "la pregunta llega ENTERA por el wire, con el nombre de la conexión: {err:?}"
+        );
+
+        let Error::SecretNeeded { endpoint, .. } = &err else {
+            unreachable!()
+        };
+        assert_eq!(
+            endpoint, "sftp://127.0.0.1:1",
+            "y CON el destino: un diálogo de contraseña que no dice a quién se \
+             la va a dar no es contestable"
+        );
+
+        // Y en s3 el destino son las DOS mitades: el «host» de la URL es el
+        // bucket, y quien recibe la credencial firmada es el `endpoint =` —
+        // que es justo la pieza que un `connections.toml` ajeno puede apuntar
+        // a otro sitio. Enseñar solo el bucket contaría la mitad que no
+        // importa. (Salió probando la conexión de verdad, no de un test.)
+        let mut s3 = min_spec("s3://mi.bucket");
+        s3.auth = AuthMethod::AccessKey;
+        s3.secret = norte_connect::SecretSource::Prompt;
+        s3.access_key_id = Some("AKIAEXAMPLE".into());
+        s3.endpoint = Some("https://s3.eu-west-1.example".into());
+        let Err(Error::SecretNeeded { endpoint, .. }) = mgr.establish(&s3, Some("cuenta")).await
+        else {
+            panic!("s3 sin secreto debía preguntar");
+        };
+        assert_eq!(endpoint, "s3://mi.bucket @ https://s3.eu-west-1.example");
+
+        // Y una vez contestado, el mismo `establish` deja de preguntar: el
+        // escalón 0 del resolutor lo tiene.
+        mgr.secrets
+            .remember_for_session("pregunta", norte_connect::Secret::new("tecleado".into()));
+        let Err(otro) = mgr.establish(&spec, Some("pregunta")).await else {
+            panic!("el transporte no existe: no puede haber conectado");
+        };
+        assert!(
+            !matches!(otro, Error::SecretNeeded { .. }),
+            "ya no pregunta: {otro:?}"
+        );
+    }
+
+    /// #325 (los tres revisores): una contraseña MAL TECLEADA no puede quedarse
+    /// para siempre. El escalón de sesión va delante de los otros tres, así que
+    /// un valor equivocado no solo falla — tapa la variable de entorno con la
+    /// que se intentaría arreglar, y como el core solo pregunta cuando no
+    /// encuentra NADA, el diálogo no volvía a salir. Y el resolutor vive en el
+    /// daemon: ni cerrar la interfaz lo limpiaba.
+    ///
+    /// Aquí se comprueba con `access-key`, donde el secreto de sesión ES la
+    /// credencial: opendal responde `PermissionDenied` porque el bucket no
+    /// existe en ninguna parte, que es exactamente la forma que tiene un
+    /// servidor de decir «esa credencial no vale».
+    ///
+    /// (Mutación de control: quitar el bloque de `forget_session` de
+    /// `establish` deja el `PermissionDenied` y las dos aserciones se caen.)
+    #[tokio::test]
+    async fn un_secreto_de_sesion_rechazado_se_olvida_y_vuelve_a_preguntar() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let mgr = ConnectionManager::new(dir.path());
+        // Un servidor local que dice 403 a todo: es un RECHAZO DE CREDENCIAL
+        // de verdad, sin salir de la máquina. Un puerto cerrado no vale — da
+        // un error de transporte, que es justo el caso que este test NO mide,
+        // y con él el test pasaba también con el fallo puesto.
+        let puerto = servidor_que_deniega().await;
+        let mut spec = min_spec("s3://bucket-de-prueba");
+        spec.auth = AuthMethod::AccessKey;
+        spec.secret = norte_connect::SecretSource::Prompt;
+        spec.access_key_id = Some("AKIAEXAMPLE".into());
+        spec.endpoint = Some(format!("http://127.0.0.1:{puerto}"));
+        spec.region = Some("us-east-1".into());
+        spec.addressing = Some(norte_connect::AddressingStyle::Path);
+
+        mgr.secrets
+            .remember_for_session("cuenta", norte_connect::Secret::new("mal-tecleada".into()));
+        let Err(primero) = mgr.establish(&spec, Some("cuenta")).await else {
+            panic!("el servidor deniega: no puede haber conectado");
+        };
+        assert!(
+            matches!(primero, Error::SecretNeeded { .. }),
+            "el rechazo vuelve a ser la PREGUNTA, no un «permiso denegado» \
+             del que no se sale: {primero:?}"
+        );
+        assert!(
+            !mgr.secrets.forget_session("cuenta"),
+            "y el valor malo ya no está: `establish` lo olvidó"
+        );
+    }
+
+    /// Un puerto local que responde `403` a lo que sea y cierra. Devuelve el
+    /// puerto; la tarea muere con el runtime del test.
+    async fn servidor_que_deniega() -> u16 {
+        use tokio::io::AsyncWriteExt as _;
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let puerto = l.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = l.accept().await {
+                let _ = s
+                    .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+                let _ = s.shutdown().await;
+            }
+        });
+        puerto
+    }
+
+    /// El reverso, y el bug que este test destapó mientras se escribía: la
+    /// condición no puede ser «hubo `PermissionDenied` y hay algo en la
+    /// sesión». Un `auth = "key"` con la ruta de la clave mal puesta también
+    /// sale `PermissionDenied`, y ese secreto NO es el que falló — borrarlo
+    /// sacaría un diálogo de contraseña por un fichero que falta, y de paso
+    /// tiraría una credencial que sí valía.
+    #[tokio::test]
+    async fn un_fallo_ajeno_al_secreto_de_sesion_no_lo_borra() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let mgr = ConnectionManager::new(dir.path());
+        let mut spec = min_spec("sftp://127.0.0.1:1/");
+        spec.auth = AuthMethod::Key;
+        spec.key = Some(dir.path().join("no-existe"));
+
+        mgr.secrets
+            .remember_for_session("cuenta", norte_connect::Secret::new("valida".into()));
+        let Err(e) = mgr.establish(&spec, Some("cuenta")).await else {
+            panic!("la clave no existe: no puede haber conectado");
+        };
+        assert!(
+            !matches!(e, Error::SecretNeeded { .. }),
+            "un fallo de clave no es una pregunta de contraseña: {e:?}"
+        );
+        assert!(
+            mgr.secrets.forget_session("cuenta"),
+            "y el secreto de sesión sigue donde estaba"
+        );
     }
 
     const CONNS: &str = r#"
@@ -630,6 +919,7 @@ mod tests {
             access_key_id: None,
             addressing: None,
             logical_trash: false,
+            secret: norte_connect::SecretSource::Stored,
         }
     }
 

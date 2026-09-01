@@ -4,6 +4,99 @@
 use super::trail::Trail;
 use norte_i18n::ta;
 use norte_proto::VPath;
+use zeroize::Zeroizing;
+
+/// Lo tecleado en [`Modal::AskSecret`]: una contraseña a medio escribir.
+///
+/// Existe por dos cosas que un `String` no da, y ninguna es opcional aquí
+/// (regla 10):
+///
+/// * **`Debug` que REDACTA.** [`Modal`] deriva `Debug`, y ese `Debug` acaba en
+///   `tracing`, en el mensaje de un panic y en el diff de un `assert_eq!`.
+///   `Zeroizing<String>` delega su `Debug` en el `String`, así que sin este
+///   envoltorio la contraseña se imprimiría en los tres sitios.
+/// * **Borrado al soltar.** El interior es `Zeroizing`: el buffer se pisa con
+///   ceros en el drop, en vez de quedarse en el heap para un core dump o el
+///   swap.
+///
+/// # Por qué reserva sitio de antemano
+///
+/// `Zeroizing` borra la asignación ACTUAL entera, capacidad incluida — y solo
+/// esa: su propia documentación dice que «cannot ensure that previous
+/// reallocations did not leave values on the heap». Un `String` que crece
+/// 4→8→16→… va dejando por el camino trozos sin pisar de la contraseña a
+/// medio escribir. Naciendo con [`TEXT_FIELD_MAX_CHARS`] caracteres reservados
+/// —el mismo tope que los otros diez campos de texto, que además se aplica al
+/// teclear— no hay ninguna reasignación, y el «best effort» de zeroize pasa a
+/// ser exacto para esta copia. Las copias de más allá del `expose()` (los
+/// params, el frame serializado, el `Value` del daemon) siguen sin pisarse:
+/// ver el ADR 0015, que dice cuáles sí y cuáles no.
+///
+/// `PartialEq` está derivado para los tests (comparar dos modales) y compara
+/// en tiempo NO constante: no le pases nunca un valor de origen ajeno.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TypedSecret(Zeroizing<String>);
+
+impl Default for TypedSecret {
+    fn default() -> Self {
+        // Ver «Por qué reserva sitio de antemano» arriba: `String::new()` aquí
+        // reintroduce las reasignaciones y con ellas los restos en el heap.
+        Self(Zeroizing::new(String::with_capacity(TEXT_FIELD_MAX_CHARS)))
+    }
+}
+
+impl std::fmt::Debug for TypedSecret {
+    /// Nunca el contenido. La longitud tampoco: es información sobre la
+    /// contraseña, y para depurar basta saber si hay algo escrito.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_empty() {
+            "TypedSecret(vacío)"
+        } else {
+            "TypedSecret(***)"
+        })
+    }
+}
+
+impl TypedSecret {
+    /// El texto en claro, para entregarlo por `connection.provide_secret`.
+    /// Llamarlo es decir «aquí SÍ hace falta el secreto» — no lo uses para
+    /// pintar ni para registrar.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    /// Cuántos caracteres se han tecleado, para pintar los puntos.
+    #[must_use]
+    pub fn chars(&self) -> usize {
+        self.0.chars().count()
+    }
+
+    /// ¿Está vacío? Enter sobre un campo vacío no entrega nada.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Añade un carácter tecleado, hasta [`TEXT_FIELD_MAX_CHARS`].
+    ///
+    /// El tope es el de los otros diez campos de texto, y aquí además impide
+    /// que una tecla trabada haga crecer el buffer más allá de lo reservado —
+    /// que es cuando `String` reasigna y deja un trozo de la contraseña sin
+    /// pisar en el heap. Frenar en mudo es lo mismo que hacen ellos: el campo
+    /// se ve lleno.
+    pub fn push(&mut self, c: char) {
+        if self.0.chars().count() >= TEXT_FIELD_MAX_CHARS {
+            return;
+        }
+        self.0.push(c);
+    }
+
+    /// Borra el último carácter (retroceso).
+    pub fn pop(&mut self) {
+        self.0.pop();
+    }
+}
 
 /// Tipo de transferencia pendiente de confirmación/colisión.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,6 +284,41 @@ pub enum Modal {
         /// navegación —denegar, o un reintento que falla— el rastro se queda
         /// creyendo que el lector se fue de donde sigue estando. Quien
         /// responde al modal rebobina, y para eso necesita el sentido.
+        trail: Trail,
+    },
+    /// La conexión `conn` declara `secret = "prompt"` y ninguna de las tres
+    /// fuentes de siempre lo tiene (#325): un `Error::SecretNeeded` al navegar
+    /// a `dir`. Se teclea la contraseña, Enter la entrega
+    /// (`connection.provide_secret`) y REINTENTA la navegación; Esc cancela.
+    ///
+    /// El molde es [`Modal::TrustHostKey`] —transporta `dir`/`pane`/`trail`
+    /// por las mismas razones, y quien responde rebobina el rastro— con dos
+    /// diferencias que vienen de que aquí se ESCRIBE un secreto:
+    ///
+    /// * Enter SÍ confirma. En el TOFU no, porque confirmar es una decisión
+    ///   de seguridad que no debe dispararse sola; aquí Enter sobre un campo
+    ///   vacío no entrega nada (no hay decisión que disparar), y sobre un
+    ///   campo escrito es lo que el dedo del usuario ya iba a hacer.
+    /// * Lo tecleado NO se pinta: el diálogo dibuja un punto por carácter.
+    AskSecret {
+        /// Nombre de la entrada de `connections.toml` que pide el secreto —
+        /// la MISMA cadena que va en `connection.provide_secret`. Sale del
+        /// error del core, no del servidor remoto.
+        conn: String,
+        /// A dónde se conecta, `scheme://host[:puerto]` y ya redactado por el
+        /// core (sin userinfo). Solo para MOSTRAR, jamás se reparsea — pero
+        /// obligatorio: sin él la pregunta no es contestable, porque el
+        /// nombre de arriba lo eligió un fichero que puede haberse editado.
+        endpoint: String,
+        /// Lo tecleado hasta ahora. [`TypedSecret`] y no `String`: ni se
+        /// imprime en un `Debug` ni se queda en el heap tras el drop.
+        input: TypedSecret,
+        /// La ruta remota a la que reintentar navegar tras entregarlo.
+        dir: VPath,
+        /// El pane que estaba navegando (ver [`Modal::TrustHostKey::pane`]).
+        pane: usize,
+        /// El sentido del rastro de esa navegación (ver
+        /// [`Modal::TrustHostKey::trail`]).
         trail: Trail,
     },
     /// TOFU del `./.norte/init.lua` de PROYECTO (M4 Lua, ADR 0026): un repo

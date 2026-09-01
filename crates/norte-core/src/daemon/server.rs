@@ -5242,33 +5242,83 @@ async fn dispatch_task_family(
             }
             to_value(&methods::TaskCancelResult {})
         }
-        methods::CONNECTION_TRUST_HOST_KEY => {
-            // Aceptar un fingerprint bajo TOFU es una decisión de confianza
-            // HUMANA, como `grant_scope`/`decide`/`undo_session` (#66): un
-            // agente jamás bendice la identidad de un host.
-            if !matches!(actor, Actor::User) {
-                return Err(RpcError::protocol(
-                    codes::INVALID_REQUEST,
-                    "only a human (non-agent) connection may trust a host key",
-                ));
-            }
-            let p: methods::ConnectionTrustHostKeyParams = parse_params(req.params)?;
-            // El engine delega en el conector, que RE-VERIFICA el fingerprint
-            // contra la clave que el host presenta ahora (anti-TOCTOU, ADR
-            // 0015 D) antes de registrar nada. `algo` es informativo: la
-            // identidad que se confirma es el fingerprint.
-            shared
-                .engine
-                .trust_host_key(&p.host, p.port, &p.fingerprint)
-                .await
-                .map_err(RpcError::from)?;
-            to_value(&methods::ConnectionTrustHostKeyResult { trusted: true })
-        }
+        methods::CONNECTION_TRUST_HOST_KEY => dispatch_trust_host_key(req, &actor, shared).await,
+        methods::CONNECTION_PROVIDE_SECRET => dispatch_provide_secret(req, &actor, shared).await,
         other => Err(RpcError::protocol(
             codes::METHOD_NOT_FOUND,
             format!("unknown method: {other}"),
         )),
     }
+}
+
+/// `connection.trust_host_key` (#45): una de las dos puertas por las que el
+/// core le pregunta algo a un HUMANO. Fuera del `match` de
+/// `dispatch_task_family`, que se pasaba del tope de líneas al llegar su
+/// gemela.
+async fn dispatch_trust_host_key(
+    req: Request,
+    actor: &crate::journal::Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    // Aceptar un fingerprint bajo TOFU es una decisión de confianza HUMANA,
+    // como `grant_scope`/`decide`/`undo_session` (#66): un agente jamás
+    // bendice la identidad de un host.
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection may trust a host key",
+        ));
+    }
+    let p: methods::ConnectionTrustHostKeyParams = parse_params(req.params)?;
+    // El engine delega en el conector, que RE-VERIFICA el fingerprint contra
+    // la clave que el host presenta ahora (anti-TOCTOU, ADR 0015 D) antes de
+    // registrar nada. `algo` es informativo: la identidad que se confirma es
+    // el fingerprint.
+    shared
+        .engine
+        .trust_host_key(&p.host, p.port, &p.fingerprint)
+        .await
+        .map_err(RpcError::from)?;
+    to_value(&methods::ConnectionTrustHostKeyResult { trusted: true })
+}
+
+/// `connection.provide_secret` (#325): la otra puerta. El secreto que un
+/// humano acaba de teclear tras un [`norte_proto::Error::SecretNeeded`].
+async fn dispatch_provide_secret(
+    req: Request,
+    actor: &crate::journal::Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    // Teclear una contraseña es un acto HUMANO, por la misma razón que su
+    // gemela y una más: un agente que pudiera inyectar credenciales de sesión
+    // elegiría con qué identidad actúa el usuario en el host remoto.
+    if !matches!(actor, Actor::User) {
+        return Err(RpcError::protocol(
+            codes::INVALID_REQUEST,
+            "only a human (non-agent) connection may provide a connection secret",
+        ));
+    }
+    let p: methods::ConnectionProvideSecretParams = parse_params(req.params)?;
+    // Un secreto vacío es una petición MAL FORMADA, y se dice como tal: el
+    // engine también lo rechaza (defensa en profundidad, y es donde vive la
+    // política), pero desde ahí solo puede salir `PermissionDenied`, que a un
+    // cliente con un bug le diría que sus credenciales no valen en vez de que
+    // su petición no vale.
+    if p.secret.is_empty() {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "connection secret must not be empty",
+        ));
+    }
+    // Nada de esto se loguea: `p` tiene un `Debug` que redacta, el span de
+    // `dispatch` es `skip_all` y el engine instrumenta con `skip_all` también
+    // (regla 10).
+    shared
+        .engine
+        .provide_secret(&p.conn, &p.secret)
+        .await
+        .map_err(RpcError::from)?;
+    to_value(&methods::ConnectionProvideSecretResult { stored: true })
 }
 
 /// `fs.read` (0.5.0): UN tramo en base64, con tope por llamada. Se lee

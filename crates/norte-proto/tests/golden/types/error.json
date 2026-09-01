@@ -139,5 +139,10 @@
   "limit_exceeded_session_body": {
     "kind": "limit_exceeded",
     "limit": "session-body"
+  },
+  "secret_needed": {
+    "conn": "rosetta",
+    "endpoint": "s3://s3.eu-west-1.amazonaws.com",
+    "kind": "secret_needed"
   }
 }

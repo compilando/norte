@@ -72,6 +72,8 @@ struct FakeConnector {
     tofu: std::sync::Mutex<bool>,
     /// Avisos que el connect devuelve al establecer (#44: default vacío).
     warn_on_connect: Vec<ConnectionWarning>,
+    /// Lo último que llegó por `provide_secret` (#325).
+    secret_dado: std::sync::Mutex<Option<String>>,
 }
 
 impl FakeConnector {
@@ -81,6 +83,7 @@ impl FakeConnector {
             trusts: AtomicUsize::new(0),
             tofu: std::sync::Mutex::new(tofu),
             warn_on_connect: Vec::new(),
+            secret_dado: std::sync::Mutex::new(None),
         }
     }
 
@@ -120,6 +123,11 @@ impl RemoteConnector for FakeConnector {
     ) -> Result<(), Error> {
         self.trusts.fetch_add(1, Ordering::SeqCst);
         *self.tofu.lock().unwrap() = false;
+        Ok(())
+    }
+
+    async fn provide_secret(&self, _conn: &str, secret: &str) -> Result<(), Error> {
+        *self.secret_dado.lock().unwrap() = Some(secret.to_string());
         Ok(())
     }
 }
@@ -203,6 +211,29 @@ async fn tofu_error_trust_y_reintento() {
         .expect("stat tras trust");
 }
 
+/// #325: `provide_secret` llega al conector con el secreto tal cual, y sin
+/// conector es `Unsupported` en vez de un panic (igual que `trust_host_key`).
+#[tokio::test]
+async fn provide_secret_llega_al_conector() {
+    let engine = Engine::new();
+    assert!(matches!(
+        engine.provide_secret("rosetta", "s3cr3t").await,
+        Err(Error::Unsupported)
+    ));
+
+    let conn = Arc::new(FakeConnector::new(false));
+    engine.set_connector(conn.clone());
+    engine
+        .provide_secret("rosetta", "s3cr3t")
+        .await
+        .expect("provide_secret");
+    assert_eq!(
+        conn.secret_dado.lock().unwrap().as_deref(),
+        Some("s3cr3t"),
+        "el secreto llega íntegro: recortarlo o normalizarlo es cambiar la contraseña"
+    );
+}
+
 /// Conector que nunca resuelve: simula un servidor que acepta TCP y calla.
 struct HangingConnector;
 
@@ -213,6 +244,9 @@ impl RemoteConnector for HangingConnector {
     }
     async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
         std::future::pending().await
+    }
+    async fn provide_secret(&self, _c: &str, _s: &str) -> Result<(), Error> {
+        Ok(())
     }
 }
 
@@ -278,6 +312,9 @@ impl RemoteConnector for GatedConnector {
     async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
         Ok(())
     }
+    async fn provide_secret(&self, _c: &str, _s: &str) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 /// #47: dos peticiones concurrentes al mismo host esperan el MISMO dial —
@@ -326,6 +363,9 @@ impl RemoteConnector for ProbedHangingConnector {
         std::future::pending().await
     }
     async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+    async fn provide_secret(&self, _c: &str, _s: &str) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -402,6 +442,9 @@ impl RemoteConnector for FlakyConnector {
         })
     }
     async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+    async fn provide_secret(&self, _c: &str, _s: &str) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -546,6 +589,9 @@ impl RemoteConnector for RevivingConnector {
     async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
         Ok(())
     }
+    async fn provide_secret(&self, _c: &str, _s: &str) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 /// #47: una sesión que empieza a devolver `ProviderUnavailable` se EVICTA de
@@ -596,6 +642,9 @@ impl RemoteConnector for CanonConnector {
         Some("oscar@h".to_string())
     }
     async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+    async fn provide_secret(&self, _c: &str, _s: &str) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -738,6 +787,9 @@ impl RemoteConnector for ZipReviving {
     async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
         Ok(())
     }
+    async fn provide_secret(&self, _c: &str, _s: &str) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 /// #62: evictar una sesión ARRASTRA los providers archive compuestos sobre
@@ -876,6 +928,9 @@ impl RemoteConnector for SeqConnector {
         })
     }
     async fn trust_host_key(&self, _h: &str, _p: Option<u16>, _f: &str) -> Result<(), Error> {
+        Ok(())
+    }
+    async fn provide_secret(&self, _c: &str, _s: &str) -> Result<(), Error> {
         Ok(())
     }
 }

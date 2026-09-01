@@ -185,6 +185,15 @@ pub(crate) fn modal_title_body(
             fingerprint,
             ..
         } => trust_host_modal_text(host, *port, algo, fingerprint, &hints.trust_host),
+        // #325: el nombre de la conexión sale de `connections.toml` —lo
+        // escribió el propio usuario, no un servidor—, pero se sanea igual:
+        // un fichero de conexiones puede venir de un dotfile ajeno.
+        Modal::AskSecret {
+            conn,
+            endpoint,
+            input,
+            ..
+        } => ask_secret_modal_text(conn, endpoint, input, &hints.ask_secret),
         // TOFU Lua (M4): `path` viene YA saneado por el constructor del
         // modal (`detail_for_bar`); el cuerpo es un solo mensaje largo y el
         // Paragraph de este modal lleva wrap (abajo).
@@ -394,7 +403,10 @@ pub(crate) fn modal_height(modal: &crate::app::Modal) -> u16 {
         // TrustLuaInit: un mensaje largo con wrap (~4 líneas a 58 cols) +
         // bordes. TransferName sin error: 5 líneas de cuerpo (origen y dir
         // destino incluidos), +3.
-        Modal::TrustLuaInit { .. } | Modal::TransferName { .. } => 8,
+        // #325 `AskSecret`: conexión + destino + campo de puntos + nota +
+        // teclas son 5 líneas, +3. La caja NO cambia de alto al teclear — el
+        // campo pinta siempre una línea, llena o vacía.
+        Modal::TrustLuaInit { .. } | Modal::TransferName { .. } | Modal::AskSecret { .. } => 8,
         // Patrón/mkdir + hint + teclas (3 líneas) o + la línea de error (4),
         // más bordes (#103 T9: mismo cómputo `body_lines + 3` que el resto).
         // Sin error caen al comodín `6` de abajo (match_same_arms).
@@ -1304,6 +1316,60 @@ pub(crate) fn trust_host_modal_text(
         hint.to_owned(),
     ];
     (t("modal-trust-host-title"), lines.join("\n"))
+}
+
+/// Cuántos puntos como mucho pinta el campo de [`crate::app::Modal::AskSecret`].
+///
+/// Un tope y no el largo real porque una passphrase de 200 caracteres
+/// desbordaría la caja. **No esconde la longitud**: por debajo del tope hay un
+/// punto por carácter, que es exactamente el largo — y se queda así a
+/// propósito, porque ver aparecer un punto es la única confirmación de que la
+/// tecla entró en un campo que no enseña nada.
+const SECRET_DOTS_MAX: usize = 32;
+
+/// Título y cuerpo del diálogo de contraseña (#325).
+///
+/// Pinta la conexión, **a dónde se conecta** y un punto por carácter tecleado
+/// (hasta [`SECRET_DOTS_MAX`]). Es la única función de esta familia que recibe
+/// un secreto, y lo único que hace con él es contarlo.
+///
+/// El endpoint no es decoración: un diálogo de contraseña que solo dice
+/// `conexión: trabajo` no se puede contestar con criterio — el nombre lo eligió
+/// `connections.toml`, que puede venir de un dotfiles ajeno o de una línea
+/// editada, y `trabajo` no dice si esa entrada apunta hoy donde apuntaba ayer.
+/// Es la misma razón por la que el TOFU de host key enseña la huella. Viene
+/// del core ya redactado (sin userinfo) y se sanea aquí como todo lo demás.
+pub(crate) fn ask_secret_modal_text(
+    conn: &str,
+    endpoint: &str,
+    input: &crate::app::TypedSecret,
+    hint: &str,
+) -> (String, String) {
+    let (conn_txt, conn_hostile) = display_name(conn.as_bytes());
+    let (ep_txt, ep_hostile) = display_name(endpoint.as_bytes());
+    let lines = [
+        ta(
+            "modal-ask-secret-conn",
+            &[
+                ("badge", if conn_hostile { HOSTILE_BADGE } else { "" }),
+                ("conn", &clamp_chars(&conn_txt, 48)),
+            ],
+        ),
+        ta(
+            "modal-ask-secret-endpoint",
+            &[
+                ("badge", if ep_hostile { HOSTILE_BADGE } else { "" }),
+                ("endpoint", &clamp_chars(&ep_txt, 52)),
+            ],
+        ),
+        ta(
+            "modal-ask-secret-field",
+            &[("dots", &"•".repeat(input.chars().min(SECRET_DOTS_MAX)))],
+        ),
+        t("modal-ask-secret-note"),
+        hint.to_owned(),
+    ];
+    (t("modal-ask-secret-title"), lines.join("\n"))
 }
 
 #[cfg(test)]

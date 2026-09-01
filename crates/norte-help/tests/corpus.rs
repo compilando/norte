@@ -645,13 +645,14 @@ const DOCUMENTED: [&str; 155] = [
 /// `tests/help_gate.rs`, which reads `help_context::CONTEXTS` directly; this
 /// is the pin that the corpus does not drift from it in the meantime, and a
 /// disagreement surfaces there as an `UnknownContext`.
-const CONTEXTS: [&str; 17] = [
+const CONTEXTS: [&str; 18] = [
     "browse",
     "viewer",
     "dialog.confirm",
     "dialog.collision",
     "dialog.approval",
     "dialog.trust-host",
+    "dialog.ask-secret",
     "dialog.trust-lua",
     "dialog.plugin-approval",
     "dialog.quit",

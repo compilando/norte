@@ -70,6 +70,25 @@ fn trust_host() -> Modal {
     }
 }
 
+fn ask_secret_con(texto: &str) -> Modal {
+    let mut input = norte_tui::app::TypedSecret::default();
+    for c in texto.chars() {
+        input.push(c);
+    }
+    Modal::AskSecret {
+        conn: "rosetta".into(),
+        endpoint: "s3://s3.eu-west-1.amazonaws.com".into(),
+        input,
+        dir: vp("s3://bucket/"),
+        pane: 0,
+        trail: Trail::Record,
+    }
+}
+
+fn ask_secret() -> Modal {
+    ask_secret_con("hunter2")
+}
+
 /// Safety pin H1 T2: Enter (`dialog.confirm`) es INERTE sobre una
 /// aprobación de agente — aprobar una mutación de agente no es una
 
@@ -83,6 +102,101 @@ fn aprobacion_ignora_confirm() {
 #[test]
 fn trust_host_ignora_confirm() {
     assert_eq!(dialog_action(&trust_host(), "dialog.confirm"), None);
+}
+
+/// #325 y el contraste con el de arriba: el diálogo de contraseña SÍ acepta
+/// Enter —el dato lo acaba de teclear quien responde—, y NO acepta
+/// `dialog.approve`: entregar una contraseña no es aprobar nada, y ofrecer la
+/// tecla de aprobar aquí enseñaría que sirve para eso.
+#[test]
+fn ask_secret_acepta_confirm_y_no_approve() {
+    assert_eq!(
+        dialog_action(&ask_secret(), "dialog.confirm"),
+        Some(DialogOutcome::Confirmed)
+    );
+    assert_eq!(dialog_action(&ask_secret(), "dialog.approve"), None);
+    assert_eq!(dialog_action(&ask_secret(), "dialog.deny"), None);
+    assert_eq!(
+        dialog_action(&ask_secret(), "dialog.cancel"),
+        Some(DialogOutcome::Cancelled)
+    );
+}
+
+/// #325: con el campo VACÍO, confirmar es INERTE — el diálogo se queda. Las
+/// dos mitades importan: entregar la cadena vacía reproduciría lo que #320
+/// cerró (un secreto vacío deja al provider tomando credenciales del
+/// ambiente), y cerrar obligaría a rehacer la navegación entera por un Enter
+/// de más, que en un campo donde no se ve lo tecleado es el error fácil de
+/// cometer. Cancelar sigue vivo: irse SÍ es una respuesta.
+///
+/// (Mutación de control: quitar el guard de `is_empty` hace que la primera
+/// aserción devuelva `Confirmed`.)
+#[test]
+fn ask_secret_vacio_no_confirma_pero_si_cancela() {
+    assert_eq!(dialog_action(&ask_secret_con(""), "dialog.confirm"), None);
+    assert_eq!(
+        dialog_action(&ask_secret_con(""), "dialog.cancel"),
+        Some(DialogOutcome::Cancelled)
+    );
+}
+
+/// #325: PEGAR en el campo de contraseña funciona.
+///
+/// Es el caso donde más importa y el que se había quedado fuera: pegar desde
+/// un gestor de contraseñas es como la mayoría de la gente contesta este
+/// diálogo, y sin el brazo en `route_paste` no pasaba nada y nada lo decía —
+/// ni un carácter, ni un mensaje. El contrato de `route_paste` dice
+/// literalmente que un overlay que se queda una tecla tiene que quedarse
+/// también el pegado, «o las dos superficies divergen».
+///
+/// (Mutación de control: quitar el brazo de `AskSecret` de `route_paste` deja
+/// el campo vacío y la segunda aserción se pone roja.)
+#[test]
+fn pegar_llena_el_campo_de_contrasena() {
+    let dir = vp("file:///x");
+    let mut app = norte_tui::app::App::new(
+        norte_tui::app::Pane::new(dir.clone(), Vec::new()),
+        norte_tui::app::Pane::new(dir, Vec::new()),
+    );
+    app.modal = Some(ask_secret_con(""));
+    norte_tui::paste::route_paste(&mut app, "de-un-gestor");
+
+    let Some(Modal::AskSecret { input, .. }) = &app.modal else {
+        panic!("el modal sigue abierto: {:?}", app.modal);
+    };
+    assert_eq!(
+        input.chars(),
+        "de-un-gestor".chars().count(),
+        "lo pegado entra entero"
+    );
+    // Y pegar NO confirma: sigue haciendo falta un Enter.
+    assert!(matches!(app.modal, Some(Modal::AskSecret { .. })));
+}
+
+/// #325: el `Debug` del modal NO lleva la contraseña. Es el sitio por donde
+/// se escaparía sin ruido — `tracing`, el mensaje de un panic, el diff de un
+/// `assert_eq!` — y el envoltorio existe justo para eso (regla 10).
+#[test]
+fn el_debug_del_modal_no_lleva_el_secreto() {
+    let mut input = norte_tui::app::TypedSecret::default();
+    for c in "hunter2".chars() {
+        input.push(c);
+    }
+    let modal = Modal::AskSecret {
+        conn: "rosetta".into(),
+        endpoint: "s3://s3.eu-west-1.amazonaws.com".into(),
+        input,
+        dir: vp("s3://bucket/"),
+        pane: 0,
+        trail: Trail::Record,
+    };
+    let pintado = format!("{modal:?}");
+    assert!(
+        !pintado.contains("hunter2"),
+        "el Debug del modal filtró la contraseña: {pintado}"
+    );
+    // Y el nombre de la conexión SÍ, que es lo que hace útil el Debug.
+    assert!(pintado.contains("rosetta"), "{pintado}");
 }
 
 /// Safety pin H1 T2: la colisión no tiene default peligroso — ni

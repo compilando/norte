@@ -68,6 +68,16 @@ pub struct ConnectionSpec {
     /// defecto: el borrado degrada a permanente con aviso del frontend.
     #[serde(default)]
     pub logical_trash: bool,
+    /// De dónde sale el secreto cuando los tres escalones de siempre no lo
+    /// tienen (#325).
+    ///
+    /// Un valor CERRADO y no una expresión, y esto se decidió a propósito: una
+    /// gramática aquí invitaría a `${env:…}` y a `$(comando)` en un fichero que
+    /// se lee al arrancar, y la regla 10 existe justo para que ahí no pasen
+    /// cosas. Si algún día hace falta otra fuente se añade otro valor, no una
+    /// sintaxis.
+    #[serde(default)]
+    pub secret: SecretSource,
 }
 
 /// Cómo autenticarse.
@@ -85,6 +95,32 @@ pub enum AuthMethod {
     /// (s3) Access key: `access_key_id` en config + secret-access-key por el
     /// resolver. Desactiva la cadena ambiente (determinismo).
     AccessKey,
+}
+
+/// De dónde sale el secreto de una conexión cuando no está donde se busca
+/// siempre (#325).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SecretSource {
+    /// Solo los tres escalones de siempre: `NORTE_SECRET_<CONN>`, keyring,
+    /// `secrets.age`. Si ninguno lo tiene, la conexión falla — que es lo que
+    /// hacía norte hasta #325.
+    #[default]
+    Stored,
+    /// Y si ninguno lo tiene, PREGUNTARLO a quien está delante.
+    ///
+    /// El cuarto escalón y no el primero: una máquina de CI con la variable
+    /// puesta nunca ve un diálogo, y un portátil no necesita la variable. Lo
+    /// que se teclee vive en memoria mientras dure la sesión del daemon y no se
+    /// escribe en ninguna parte.
+    ///
+    /// **Solo con `auth = "password"` y `auth = "access-key"`.** Con `agent`
+    /// no hay secreto que pedir, y con `key` el secreto es la passphrase de la
+    /// clave, donde vacío y ausente son lo mismo — preguntar ahí sacaría un
+    /// diálogo cada vez que alguien usa una clave sin cifrar. `norte doctor`
+    /// avisa (`conn-secret-prompt-inert`) si la clave está puesta donde no
+    /// hace nada.
+    Prompt,
 }
 
 /// Estilo de direccionamiento S3 (ADR 0016 I).
@@ -126,6 +162,30 @@ pub struct Endpoint {
     pub port: Option<u16>,
 }
 
+impl Endpoint {
+    /// `scheme://host[:puerto]` para ENSEÑAR, sin userinfo (#325).
+    ///
+    /// El usuario se cae a propósito: la misma redacción que
+    /// `ConnectionDegraded` aplica a su `host`, y por el mismo motivo — un
+    /// `user:pass@` en la URL no debe llegar a la pantalla ni al log
+    /// (regla 10). Lo que queda es lo que hace contestable un diálogo de
+    /// contraseña: A QUIÉN se la va a dar.
+    ///
+    /// ```
+    /// # use norte_connect::ConnectionSpec;
+    /// let spec: ConnectionSpec =
+    ///     toml::from_str("url = \"sftp://oscar@host.example:2222\"").unwrap();
+    /// assert_eq!(spec.endpoint().unwrap().display(), "sftp://host.example:2222");
+    /// ```
+    #[must_use]
+    pub fn display(&self) -> String {
+        match self.port {
+            Some(p) => format!("{}://{}:{p}", self.scheme, self.host),
+            None => format!("{}://{}", self.scheme, self.host),
+        }
+    }
+}
+
 impl ConnectionSpec {
     /// Parsea el `scheme://[user@]host[:port]` de la `url`.
     ///
@@ -134,6 +194,57 @@ impl ConnectionSpec {
     pub fn endpoint(&self) -> Result<Endpoint, ConnectError> {
         parse_endpoint(&self.url)
     }
+
+    /// A dónde va de verdad esta conexión, para ENSEÑARLO al pedir el secreto
+    /// (#325). Sin userinfo, en ninguna de las dos mitades.
+    ///
+    /// No basta con la URL. En `s3` el «host» de la URL es el BUCKET, y el
+    /// servidor que va a recibir la credencial firmada es el `endpoint =` de
+    /// la entrada — que es justo la pieza que un `connections.toml` ajeno
+    /// puede apuntar a otro sitio. Enseñar solo `s3://mi-bucket` contaría la
+    /// mitad que no importa. Cuando hay endpoint explícito se enseñan las dos,
+    /// separadas por `@`.
+    ///
+    /// ```
+    /// # use norte_connect::ConnectionSpec;
+    /// let s: ConnectionSpec = toml::from_str(
+    ///     "url = \"s3://mi.bucket\"\nendpoint = \"https://oscar@s3.eu-west-1.example\"",
+    /// )
+    /// .unwrap();
+    /// assert_eq!(
+    ///     s.destination_display().unwrap(),
+    ///     "s3://mi.bucket @ https://s3.eu-west-1.example"
+    /// );
+    /// ```
+    ///
+    /// # Errors
+    /// Si la URL no tiene la forma esperada.
+    pub fn destination_display(&self) -> Result<String, ConnectError> {
+        let base = self.endpoint()?.display();
+        match self.endpoint.as_deref() {
+            Some(ep) if !ep.is_empty() => Ok(format!("{base} @ {}", sin_userinfo(ep))),
+            _ => Ok(base),
+        }
+    }
+}
+
+/// Quita el `user[:pass]@` de una URL de configuración, dejando el resto tal
+/// cual. Un `endpoint =` lo escribe una persona y puede llevar credenciales
+/// dentro; esto va a la pantalla y al log (regla 10).
+fn sin_userinfo(url: &str) -> String {
+    let Some((scheme, resto)) = url.split_once("://") else {
+        // Sin esquema no hay authority que recortar: se devuelve entero, que
+        // es más honesto que adivinar dónde empieza.
+        return url.to_string();
+    };
+    // El `@` de la authority es el ÚLTIMO antes de la primera `/`, porque una
+    // contraseña puede llevar arrobas.
+    let (authority, cola) = match resto.find('/') {
+        Some(i) => (&resto[..i], &resto[i..]),
+        None => (resto, ""),
+    };
+    let limpia = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    format!("{scheme}://{limpia}{cola}")
 }
 
 /// Parser mínimo de `scheme://[user@]host[:port]` (sin path). Evita una dep de

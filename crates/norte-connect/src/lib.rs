@@ -25,6 +25,8 @@ pub use s3::S3Connector;
 pub use opendal::Operator;
 pub use russh_sftp::client::SftpSession;
 pub use secret::{Secret, SecretResolver, env_key, journal_anchor_key};
-pub use spec::{AddressingStyle, AuthMethod, ConnectionSpec, ConnectionsFile, Endpoint, TlsMode};
+pub use spec::{
+    AddressingStyle, AuthMethod, ConnectionSpec, ConnectionsFile, Endpoint, SecretSource, TlsMode,
+};
 pub use ssh::SshConnector;
 pub use suppaftp::tokio::AsyncRustlsFtpStream as FtpStream;

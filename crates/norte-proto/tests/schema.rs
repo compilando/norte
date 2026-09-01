@@ -51,6 +51,8 @@ struct ProtocolSchema {
     connection_close_result: ConnectionCloseResult,
     connection_trust_host_key_params: ConnectionTrustHostKeyParams,
     connection_trust_host_key_result: ConnectionTrustHostKeyResult,
+    connection_provide_secret_params: ConnectionProvideSecretParams,
+    connection_provide_secret_result: ConnectionProvideSecretResult,
     daemon_going_away: DaemonGoingAway,
     daemon_shutdown_params: DaemonShutdownParams,
     daemon_shutdown_result: DaemonShutdownResult,

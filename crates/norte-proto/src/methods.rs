@@ -933,7 +933,38 @@ use crate::{
 /// cliente ya espera— y `ai.rename_plan` sigue mandando el directorio entero.
 /// Ninguna de las dos cosas es una comprobación que deje de hacerse: son
 /// alcances que no se estrechan.
-pub const PROTOCOL_VERSION: &str = "0.62.0";
+/// `0.63.0` (#325): preguntarle el secreto de una conexión a quien está
+/// delante.
+///
+/// Añade [`Error::SecretNeeded`](crate::Error::SecretNeeded) y el método
+/// [`CONNECTION_PROVIDE_SECRET`]. Es el mismo flujo que el TOFU de las host
+/// keys, y por el mismo motivo: el resolver de secretos vive en
+/// `norte-connect`, no tiene interfaz de usuario y no debe tenerla, así que la
+/// única forma de que un humano conteste es que la pregunta suba por el cable.
+/// Hasta aquí un secreto que no estuviera en el entorno, el keyring o
+/// `secrets.age` era una conexión que no se podía abrir.
+///
+/// **Un secreto cruza el socket por primera vez**, y eso se decidió a
+/// propósito: ADR 0015 (enmienda 2026-09-01) dice qué cruza, por dónde y por
+/// qué se acepta. En corto: es un UDS 0600 del propio usuario, y quien pueda
+/// leerlo ya puede leer `/proc/<pid>/environ`, que es donde hoy está la
+/// variable `NORTE_SECRET_*`. El modelo de amenaza no empeora.
+///
+/// Ventana N=0.63.x / N-1=0.62.x. Aditivo: nada del JSON de las operaciones
+/// existentes cambia. La pérdida, para un **cliente 0.62 contra un daemon
+/// 0.63**: no conoce `SecretNeeded`, así que lo degrada a `Unknown` y enseña un
+/// error donde el cliente nuevo abriría un diálogo. No es una comprobación que
+/// deje de hacerse ni un alcance que se ensanche — es exactamente lo que ese
+/// cliente ya hacía: no poder abrir esa conexión.
+///
+/// **Lo que sí duele es el camino de vuelta, y no está en el wire.**
+/// `ConnectionSpec` es `deny_unknown_fields`, así que un binario 0.62 leyendo
+/// un `connections.toml` que ya lleva `secret = "prompt"` no falla esa
+/// conexión: falla el fichero ENTERO, y con él todas las demás. Solo pasa al
+/// degradar de versión o con una instalación mezclada (un `ntc` viejo de
+/// `cargo install` junto a una ventana nueva — ya ha ocurrido en este
+/// repositorio). Quitar la clave del fichero lo arregla.
+pub const PROTOCOL_VERSION: &str = "0.63.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -1708,6 +1739,20 @@ pub const TASK_CANCEL: &str = "task.cancel";
 /// HUMANA: para una conexión de agente es `INVALID_REQUEST`, como p. ej.
 /// `policy.grant_scope`/`decide`/`undo_session`.
 pub const CONNECTION_TRUST_HOST_KEY: &str = "connection.trust_host_key";
+
+/// `connection.provide_secret` — entrega el secreto que un humano acaba de
+/// teclear para una conexión (#325, 0.63.0).
+///
+/// Se llama tras un [`Error::SecretNeeded`](crate::Error::SecretNeeded) y antes
+/// de reintentar la navegación, exactamente como `connection.trust_host_key`
+/// tras un `HostKeyUnknown`. El daemon lo guarda EN MEMORIA para esta sesión;
+/// no toca disco y muere con el proceso.
+///
+/// Decisión HUMANA, como la de confiar en una host key: para una sesión de
+/// agente es `INVALID_REQUEST`. Un agente que pudiera entregar credenciales
+/// sería un agente que puede autenticarse por su cuenta, que es justo lo que la
+/// puerta de política existe para impedir.
+pub const CONNECTION_PROVIDE_SECRET: &str = "connection.provide_secret";
 
 /// `connection.close` — cierra la sesión remota de una ruta (0.49.0, #140).
 ///
@@ -6513,6 +6558,61 @@ pub struct ConnectionTrustHostKeyResult {
     /// `true` si la clave quedó registrada (idempotente: `true` también si ya
     /// estaba). `false` reservado para un futuro rechazo por política.
     pub trusted: bool,
+}
+
+/// Params de [`CONNECTION_PROVIDE_SECRET`] (#325): el secreto que el humano
+/// acaba de teclear para una conexión.
+///
+/// **`Debug` está escrito a mano y NO deriva.** Es el único tipo del protocolo
+/// que lleva material secreto, y en cuanto alguien escriba un
+/// `tracing::debug!(?params)` en la capa RPC —que es exactamente lo que se hace
+/// para depurar un método nuevo— un `derive` habría puesto la contraseña en el
+/// fichero de log y en el panel de registro. Mismo criterio que
+/// `norte_connect::Secret`, que imprime `Secret(***)`.
+///
+/// El secreto vive en memoria del daemon mientras dure la sesión y no se
+/// escribe en ninguna parte. La decisión de dejarlo cruzar el socket está en el
+/// ADR 0015 (enmienda 2026-09-01).
+///
+/// ```
+/// use norte_proto::methods::ConnectionProvideSecretParams;
+/// let p = ConnectionProvideSecretParams {
+///     conn: "rosetta".to_owned(),
+///     secret: "hunter2".to_owned(),
+/// };
+/// // El día que alguien añada `Debug` al `derive` de arriba para arreglar
+/// // otra cosa, esto se pone rojo antes de que la contraseña llegue a un log.
+/// assert!(!format!("{p:?}").contains("hunter2"));
+/// assert!(format!("{p:?}").contains("rosetta"));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionProvideSecretParams {
+    /// Nombre de la conexión en `connections.toml`, el mismo que trajo el
+    /// [`crate::Error::SecretNeeded`].
+    pub conn: String,
+    /// Lo tecleado. Jamás se loguea, jamás se persiste.
+    pub secret: String,
+}
+
+impl std::fmt::Debug for ConnectionProvideSecretParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // El nombre de la conexión SÍ: sin él, un `Debug` no ayudaría a
+        // depurar nada y alguien acabaría imprimiendo la struct entera a mano.
+        f.debug_struct("ConnectionProvideSecretParams")
+            .field("conn", &self.conn)
+            .field("secret", &"***")
+            .finish()
+    }
+}
+
+/// Result de [`CONNECTION_PROVIDE_SECRET`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionProvideSecretResult {
+    /// `true` si el daemon lo guardó para esta sesión. `false` reservado para
+    /// un futuro rechazo por política.
+    pub stored: bool,
 }
 
 /// Notificación [`CONNECTION_DEGRADED`] (server→client): una sesión remota se

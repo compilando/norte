@@ -195,6 +195,8 @@ pub struct DialogHints {
     pub approval: String,
     /// `Modal::TrustHostKey`.
     pub trust_host: String,
+    /// `Modal::AskSecret` (#325).
+    pub ask_secret: String,
     /// Selector de tema (`App::theme_picker`).
     pub picker: String,
     /// Picker de columnas (`App::columns_picker`, #108 7a).
@@ -239,15 +241,16 @@ impl DialogHints {
     #[must_use]
     pub fn build(eff: &Effective) -> Self {
         use crate::app::{
-            ALLOW_APPROVAL, ALLOW_COLLISION, ALLOW_COLUMNS, ALLOW_CONFIRM, ALLOW_EXTENSIONS,
-            ALLOW_NAV_HOTLIST, ALLOW_NAV_VOLUMES, ALLOW_PICKER, ALLOW_PLUGIN_CONFIG,
-            ALLOW_TRUST_HOST,
+            ALLOW_APPROVAL, ALLOW_ASK_SECRET, ALLOW_COLLISION, ALLOW_COLUMNS, ALLOW_CONFIRM,
+            ALLOW_EXTENSIONS, ALLOW_NAV_HOTLIST, ALLOW_NAV_VOLUMES, ALLOW_PICKER,
+            ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST,
         };
         Self {
             confirm: dialog_hints(ALLOW_CONFIRM, eff),
             collision: dialog_hints(ALLOW_COLLISION, eff),
             approval: dialog_hints(ALLOW_APPROVAL, eff),
             trust_host: dialog_hints(ALLOW_TRUST_HOST, eff),
+            ask_secret: dialog_hints(ALLOW_ASK_SECRET, eff),
             // Non-modal overlays (MAJOR-1): arrows are self-evident, so they
             // are dropped from the PRINTED hint (never from dispatch — see
             // `without_navigation`).

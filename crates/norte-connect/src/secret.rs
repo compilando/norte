@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use zeroize::{Zeroize, Zeroizing};
 
@@ -59,10 +60,22 @@ impl Drop for SecretMap {
     }
 }
 
-/// Resuelve el secreto de una conexión por el orden env → keyring → `age`.
+/// Resuelve el secreto de una conexión por el orden env → keyring → `age` →
+/// lo que el humano tecleó en ESTA sesión.
 #[derive(Debug, Clone)]
 pub struct SecretResolver {
     config_dir: PathBuf,
+    /// Lo que un humano contestó, por conexión, para esta sesión (#325).
+    ///
+    /// En memoria y JAMÁS en disco: muere con el proceso. Va delante de los
+    /// tres escalones de fichero porque si ya se preguntó una vez, volver a
+    /// preguntar en cada navegación sería inaceptable — y detrás de nada,
+    /// porque lo que el humano acaba de teclear es más reciente que cualquier
+    /// cosa que hubiera guardada.
+    ///
+    /// `Mutex` y no `RwLock`: se toca una vez por conexión, no está en ningún
+    /// camino caliente.
+    session: Arc<Mutex<BTreeMap<String, Secret>>>,
 }
 
 impl SecretResolver {
@@ -71,7 +84,40 @@ impl SecretResolver {
     pub fn new(config_dir: impl Into<PathBuf>) -> Self {
         Self {
             config_dir: config_dir.into(),
+            session: Arc::new(Mutex::new(BTreeMap::new())),
         }
+    }
+
+    /// Guarda para ESTA sesión lo que un humano acaba de teclear (#325).
+    ///
+    /// En memoria y nada más: no hay camino de escritura a disco desde aquí, a
+    /// propósito. Guardar un secreto de verdad es una decisión aparte —y hoy,
+    /// en Linux, ni siquiera hay dónde: el keyring es una feature opt-in que
+    /// nadie enciende y `secrets.age` no tiene camino de escritura desde la
+    /// interfaz.
+    pub fn remember_for_session(&self, conn: &str, secret: Secret) {
+        let mut s = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+        s.insert(conn.to_string(), secret);
+    }
+
+    /// Olvida lo recordado para `conn`, si había algo. Devuelve si lo había.
+    ///
+    /// **Sin esto, una contraseña mal tecleada es permanente.** El escalón de
+    /// sesión va DELANTE de los otros tres, así que un valor equivocado no solo
+    /// falla: tapa la variable de entorno con la que el usuario intentaría
+    /// arreglarlo, e impide que vuelva a salir el diálogo (el core solo
+    /// pregunta cuando no encuentra NADA). Y como el resolutor vive en el
+    /// daemon, ni cerrar la interfaz lo limpia. Quien vea al servidor rechazar
+    /// una credencial de sesión tiene que llamar aquí.
+    pub fn forget_session(&self, conn: &str) -> bool {
+        let mut s = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+        s.remove(conn).is_some()
+    }
+
+    /// Lo que se recordó en esta sesión para `conn`, si algo.
+    fn remembered_this_session(&self, conn: &str) -> Option<Secret> {
+        let s = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+        s.get(conn).cloned()
     }
 
     /// Resuelve el secreto de la conexión `conn` (con `keyring_account`
@@ -95,15 +141,43 @@ impl SecretResolver {
     /// que no decodifican; o si el `secrets.age` existe pero no se puede
     /// descifrar/parsear. El keyring no disponible (headless) NO es error (se
     /// cae al siguiente).
-    #[tracing::instrument(level = "debug", skip_all, fields(conn = %conn))]
     pub async fn resolve(
         &self,
         conn: &str,
         keyring_account: &str,
     ) -> Result<Option<Secret>, ConnectError> {
+        Ok(self
+            .resolve_with_origin(conn, keyring_account)
+            .await?
+            .map(|(s, _)| s))
+    }
+
+    /// Como [`Self::resolve`], pero dice de QUÉ escalón salió el secreto.
+    ///
+    /// El origen no es diagnóstico: es lo que permite DESHACER una respuesta
+    /// equivocada (#325). Un secreto de [`SecretOrigin::Session`] lo tecleó un
+    /// humano hace un momento y puede estar mal; los otros tres los puso
+    /// alguien deliberadamente en un sitio que se puede editar. Solo el
+    /// primero se olvida solo cuando el servidor lo rechaza — ver
+    /// [`Self::forget_session`].
+    ///
+    /// # Errors
+    /// Las mismas que [`Self::resolve`].
+    #[tracing::instrument(level = "debug", skip_all, fields(conn = %conn))]
+    pub async fn resolve_with_origin(
+        &self,
+        conn: &str,
+        keyring_account: &str,
+    ) -> Result<Option<(Secret, SecretOrigin)>, ConnectError> {
+        // 0. Lo que el humano tecleó en esta sesión (#325). Delante de todo:
+        //    si ya contestó una vez, no se le vuelve a preguntar por navegar.
+        if let Some(s) = self.remembered_this_session(conn) {
+            return non_empty(s, conn, SecretOrigin::Session)
+                .map(|s| Some((s, SecretOrigin::Session)));
+        }
         // 1. Env var (override explícito para CI/corporativo).
         if let Some(s) = env_secret(conn)? {
-            return non_empty(s, conn, SecretOrigin::Env).map(Some);
+            return non_empty(s, conn, SecretOrigin::Env).map(|s| Some((s, SecretOrigin::Env)));
         }
         // 2. Keyring del OS (bloqueante → spawn_blocking). No disponible
         //    (headless) = se cae al fichero, no es error.
@@ -112,7 +186,8 @@ impl SecretResolver {
             .await
             .map_err(|_| ConnectError::SecretStore("error interno del resolver"))?;
         if let Some(s) = from_keyring {
-            return non_empty(s, conn, SecretOrigin::Keyring).map(Some);
+            return non_empty(s, conn, SecretOrigin::Keyring)
+                .map(|s| Some((s, SecretOrigin::Keyring)));
         }
         // 3. Fichero `secrets.age` cifrado (headless persistente).
         let dir = self.config_dir.clone();
@@ -121,7 +196,8 @@ impl SecretResolver {
             .await
             .map_err(|_| ConnectError::SecretStore("error interno del resolver"))??;
         if let Some(s) = from_age {
-            return non_empty(s, conn, SecretOrigin::AgeFile).map(Some);
+            return non_empty(s, conn, SecretOrigin::AgeFile)
+                .map(|s| Some((s, SecretOrigin::AgeFile)));
         }
         Ok(None)
     }
@@ -368,6 +444,60 @@ mod tests {
     fn env_key_sanitiza() {
         assert_eq!(env_key("trabajo"), "NORTE_SECRET_TRABAJO");
         assert_eq!(env_key("mi-server.1"), "NORTE_SECRET_MI_SERVER_1");
+    }
+
+    /// #325: lo recordado en la sesión gana a TODO, la env var incluida. Va
+    /// delante porque es lo más reciente —el humano acaba de teclearlo— y
+    /// porque si no, una variable puesta a un valor caducado dejaría el
+    /// diálogo sin efecto: se preguntaría en cada navegación y la respuesta no
+    /// se usaría nunca.
+    #[tokio::test]
+    async fn lo_recordado_en_la_sesion_gana_a_la_env_var() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let r = SecretResolver::new(dir.path());
+
+        // Sin nada recordado y sin ninguna fuente: no hay secreto.
+        assert!(
+            r.resolve("sesion-test", "sftp://h")
+                .await
+                .expect("resolve")
+                .is_none(),
+            "sin fuentes no hay secreto"
+        );
+
+        r.remember_for_session("sesion-test", Secret::new("tecleado".into()));
+        let s = r
+            .resolve("sesion-test", "sftp://h")
+            .await
+            .expect("resolve")
+            .expect("el de la sesión");
+        assert_eq!(s.expose(), "tecleado");
+    }
+
+    /// #325 + #320: recordar la cadena VACÍA no la pasa como secreto ni se
+    /// cae al escalón siguiente. El diálogo no la produce (Enter con el campo
+    /// vacío no entrega nada), pero el resolutor es público y no puede
+    /// confiar en eso: un vacío que pasara reproduciría exactamente el
+    /// arrastre de credenciales del ambiente que #320 cerró.
+    #[tokio::test]
+    async fn recordar_vacio_es_error_y_no_pasa_como_secreto() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let r = SecretResolver::new(dir.path());
+        r.remember_for_session("vacio-test", Secret::new(String::new()));
+        let err = r
+            .resolve("vacio-test", "sftp://h")
+            .await
+            .expect_err("un vacío recordado es error");
+        assert!(
+            matches!(
+                err,
+                ConnectError::SecretEmpty {
+                    origin: SecretOrigin::Session,
+                    ..
+                }
+            ),
+            "y dice de qué escalón vino: {err:?}"
+        );
     }
 
     #[test]

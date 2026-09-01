@@ -9,6 +9,52 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A connection can ask for its password** (#325, protocol **0.63.0**,
+  ADR 0015 amended). `connections.toml` holds references, and the secret is
+  looked for in three places: the environment variable, the system keyring, an
+  encrypted `secrets.age`. When none of them has it the connection simply
+  failed — which is correct on a CI runner and useless on a laptop, where the
+  person who knows the password is sitting in front of the screen. Add
+  `secret = "prompt"` to the entry and norte asks instead: a dialog that does
+  not show what you type, only appearing once those three have come up empty.
+  Opt-in and last for that reason — a machine with the variable set never sees
+  it, and a headless daemon never blocks on a question nobody will answer.
+  A typed URL with no entry behind it never prompts either; teaching people to
+  type passwords into whichever dialog appears is how phishing works. It
+  applies to `password` and `access-key` auth only, and `norte doctor` now says
+  so when the key is set where it does nothing.
+  The dialog names the connection **and where it connects to**. That second
+  line is the point: the name was chosen by the config file, and a config file
+  can arrive from someone else's dotfiles or a single edited line, so "work"
+  tells you nothing about whether that entry still points where it did
+  yesterday. It is the same reason the host-key dialog shows you a fingerprint.
+  What you type lives in memory for as long as the daemon stands and is
+  written nowhere — not the keyring, not `secrets.age`, not the config file —
+  so the next session asks again; the variable or the keyring are still the
+  place to stop typing it. Offering to remember it is deliberately left out:
+  on Linux the keyring backend is not even compiled in. Mistyping it does not
+  trap you either: when the server rejects a password you typed, norte forgets
+  it and asks again, instead of shadowing the environment variable you would
+  reach for with a value nothing can clear short of stopping the daemon.
+  You can paste into it, which is how most people will answer it.
+  The mechanism is the host-key TOFU flow reused whole. A new
+  `Error::SecretNeeded` suspends *that* navigation, the answer returns through
+  `connection.provide_secret`, and the navigation is retried — so it resumes in
+  the pane that started it, which is not necessarily the focused one. Like
+  trusting a host key, an agent connection cannot call it: injecting session
+  credentials would be choosing which identity you act under on the remote
+  host. A peer one version behind does not understand `SecretNeeded` and will
+  report it as an unknown error; nothing else changes for it — but note that an
+  older binary reading a config file that already has `secret = "prompt"`
+  rejects the whole file, so remove the key before downgrading.
+  The password crosses the daemon socket in cleartext, which is accepted and
+  written down: the socket is 0600 and owned by you, and anyone who can read it
+  can read the daemon's memory, where the secret has to live anyway. What is
+  not accepted is it leaking on the way — the params redact themselves in
+  `Debug`, every span is `skip_all`, and the terminal's own buffer is wiped
+  when the dialog closes. ADR 0015 says which copies are wiped and which are
+  not, rather than implying all of them are. The window does not paint this
+  dialog yet (#327).
 - **A bar that shows the panels exist** (#324): one row under the menu bar,
   one letter per panel — Places, Tree, Viewer, Jobs, Details, Log. They were
   reachable by shortcut, by menu and by the palette, and all three require

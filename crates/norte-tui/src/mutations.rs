@@ -21,7 +21,9 @@ use crate::app::{
 };
 use crate::keymap::{Resolution, Resolver, chord_from_crossterm};
 use crate::navigate::Cd;
-use crate::navigate::{semantic_hit_cd, settle_suspended_trail, trust_host_retry};
+use crate::navigate::{
+    provide_secret_retry, semantic_hit_cd, settle_suspended_trail, trust_host_retry,
+};
 use crate::overlays::{modal_help_toggle, modal_scroll};
 use crate::tasks::RetrySpec;
 
@@ -91,6 +93,12 @@ pub async fn on_dialog_key(
                 // desconocido es lo normal), y el único que no pasa por
                 // `trust_host_retry`.
                 Modal::TrustHostKey {
+                    dir, pane, trail, ..
+                }
+                // #325: y lo mismo al no dar el secreto. Cerrarlo abandona la
+                // navegación, y el secreto a medio teclear muere con el modal
+                // (`TypedSecret` se pisa con ceros al soltarlo).
+                | Modal::AskSecret {
                     dir, pane, trail, ..
                 } => settle_suspended_trail(app, pane, &dir, trail, &Cd::Cancelled),
                 _ => {}
@@ -273,8 +281,17 @@ pub async fn confirm_modal(
                 return Some(outcome);
             }
         }
+
+        // #325: entrega el secreto tecleado y REINTENTA la navegación. Aquí
+        // ya hay algo tecleado: con el campo vacío, `dialog_action` deja el
+        // confirmar inerte y esto no se alcanza.
+        m @ Modal::AskSecret { .. } => {
+            if let Some(outcome) = provide_secret_retry(app, backend, events, m).await {
+                return Some(outcome);
+            }
+        }
     }
-    // Todas las ramas salvo el retry TOFU (que ya volvió) abren aquí
+    // Todas las ramas salvo los dos retries (que ya volvieron) abren aquí
     // la siguiente pendiente, con el modal ya cerrado.
     app.open_next_pending();
     None

@@ -858,6 +858,7 @@ pub fn check_contexts_in(lang: Lang, topics: &[Topic], known: &[&str]) -> Vec<Is
 ///     "dialog.collision",
 ///     "dialog.approval",
 ///     "dialog.trust-host",
+///     "dialog.ask-secret",
 ///     "dialog.trust-lua",
 ///     "dialog.plugin-approval",
 ///     "dialog.quit",

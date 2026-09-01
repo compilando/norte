@@ -188,6 +188,13 @@ pub enum Error {
         /// `"policy-rule"` (una regla `deny` de `policy.toml` hizo match),
         /// `"no-rule"` (fail-closed: dentro del scope pero sin regla que
         /// aplique), `"not-approved"` (un `ask` fue denegado o su TTL venció).
+        ///
+        /// Esos seis son los que CRUZAN EL CABLE. El SDK sintetiza además el
+        /// NOMBRE DEL MÉTODO cuando un result de dos estados vuelve en falso
+        /// (`connection.trust_host_key`, `connection.provide_secret`): ese
+        /// valor no viene del daemon, se construye en el cliente para no
+        /// tratar un rechazo como un éxito. Un lector del wire no lo verá
+        /// nunca, y el vocabulario de arriba sigue siendo cerrado.
         rule: String,
     },
     /// La aprobación que se intentaba decidir ya no está (#279, desde 0.55.0).
@@ -284,6 +291,45 @@ pub enum Error {
         /// Fingerprint en formato OpenSSH `SHA256:<base64>` — la MISMA cadena
         /// que core y frontend comparan y que va en `trust_host_key`.
         fingerprint: String,
+    },
+    /// La conexión pide un secreto que no está en ninguna parte, y su
+    /// `connections.toml` dice que hay que PREGUNTARLO (`secret = "prompt"`,
+    /// #325).
+    ///
+    /// Mismo flujo que el TOFU de arriba, y a propósito: el frontend abre su
+    /// diálogo, manda lo tecleado con `connection.provide_secret` y REINTENTA
+    /// esta misma navegación. El core no puede preguntar por su cuenta —el
+    /// resolver de secretos no tiene interfaz de usuario ni debe tenerla—, así
+    /// que la única forma de que un humano conteste es que la pregunta suba
+    /// por aquí.
+    ///
+    /// Lleva el nombre de la conexión Y su destino, y el destino es
+    /// obligatorio: **un diálogo de contraseña que no dice a quién se la va a
+    /// dar no es contestable.** El nombre lo eligió `connections.toml`, que
+    /// puede venir de un dotfiles ajeno o de una línea editada; `trabajo` no
+    /// dice nada sobre si esa entrada apunta hoy a la máquina de siempre o a
+    /// `ftp://evil.example`. Es la misma razón por la que el TOFU de arriba
+    /// lleva host, algoritmo y huella: quien contesta verifica al OTRO EXTREMO,
+    /// no una etiqueta local.
+    ///
+    /// Y el riesgo no es teórico en todos los esquemas: con `sftp` el
+    /// handshake SSH todavía pasa por el TOFU antes de mandar nada, pero un
+    /// `ftp` va en claro y un `s3` con `endpoint` ajeno firma una petición
+    /// contra el servidor que la entrada eligió.
+    ///
+    /// Un cliente 0.62 degrada a `Unknown` y enseña un error en vez de un
+    /// diálogo — o sea que no puede conectar esa conexión, igual que hoy.
+    #[error("connection {conn} ({endpoint}) needs a secret")]
+    SecretNeeded {
+        /// Nombre de la conexión en `connections.toml`, el mismo que va en
+        /// [`crate::methods::CONNECTION_PROVIDE_SECRET`].
+        conn: String,
+        /// A dónde se conectaría, `scheme://host[:puerto]`, **sin userinfo**
+        /// (misma redacción que [`crate::methods::ConnectionDegraded`]: un
+        /// `user:pass@` en la URL no se reenvía a la pantalla ni al log).
+        /// Solo para MOSTRAR: el frontend no lo reparsea ni lo usa para
+        /// conectar.
+        endpoint: String,
     },
     /// La host key SSH CAMBIÓ respecto a la registrada en `known_hosts`:
     /// posible MITM. JAMÁS se acepta en silencio (0.7.0, fase 6).

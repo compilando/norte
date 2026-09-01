@@ -1900,6 +1900,21 @@ impl Backend {
         }
     }
 
+    /// Entrega al core el secreto de `conn` que el humano acaba de teclear,
+    /// tras un [`Error::SecretNeeded`] (#325). Vive en memoria, en el proceso
+    /// que tiene el engine, y hasta que ese proceso pare: no se persiste en
+    /// ningún sitio.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; [`Error::Unsupported`] si no hay conector.
+    pub async fn provide_secret(&self, conn: &str, secret: &str) -> Result<(), Error> {
+        match self {
+            Self::Embedded(engine) => engine.provide_secret(conn, secret).await,
+            #[cfg(unix)]
+            Self::Remote(r) => r.provide_secret(conn, secret).await,
+        }
+    }
+
     /// Canal de tasks FORÁNEAS (encoladas por otros frontends de la misma
     /// sesión). `None` en embebido o si ya se tomó. Solo el dueño original de
     /// la conexión debe llamarlo; un clon (scripting) no.

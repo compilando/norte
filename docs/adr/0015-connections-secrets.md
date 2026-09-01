@@ -4,7 +4,7 @@
 - Date: 2026-07-12
 - Decision makers: Oscar González
 - Related: ADRs 0007, 0011, 0013, 0014, and 0016; issues #36, #38, #320, #321,
-  and #322
+  #322, #325, and #327
 
 ## Context
 
@@ -37,6 +37,7 @@ key = "~/.ssh/id_ed25519"
 url = "ftp://backup@ftp.example.com:21"
 auth = "password"
 tls = "require"
+secret = "prompt"   # ask if env/keyring/age have nothing (2026-09-01 amendment)
 
 [connections.storage]
 url = "s3://my-bucket"
@@ -141,3 +142,127 @@ the determinism is ordering: the static provider is pushed to the FRONT of the
 chain and wins whenever explicit credentials exist. The chain is consulted only
 when they do not — which is precisely the hole the first correction closes.
 #321 tracks the upstream ask.
+
+## Amendment, 2026-09-01: a fourth source that ASKS, and what crosses the socket
+
+The Decision above lists three sources and stops. When none of them has the
+secret, the connection fails — right on a CI runner, wrong on a laptop, where
+the person who knows the password is sitting in front of the screen and norte
+has no way to take it from them. #325 adds the fourth step.
+
+**It is opt-in, per connection, and last.** A `secret = "prompt"` key on the
+entry (`SecretSource::{Stored, Prompt}`, default `Stored`) says "and if the
+three above come up empty, ask". Last and not first so the CI runner with the
+variable set never sees a dialog, and opt-in so a headless daemon does not
+start blocking on a question nobody will answer. An AD-HOC connection — a URL
+typed into a pane, with no entry in `connections.toml` — never prompts: there
+is no entry to declare it, and prompting for a typed URL would teach people to
+type passwords into whatever dialog appears.
+
+It applies to `auth = "password"` and `auth = "access-key"` only. With `agent`
+there is no secret to ask for; with `key` the secret is the key's passphrase,
+where empty and absent mean the same thing, so prompting would pop a dialog
+every time anyone uses an unencrypted key. A key set where it does nothing is
+not silently ignored — `norte doctor` reports `conn-secret-prompt-inert`.
+
+**The dialog names the endpoint, and that is not decoration.** `SecretNeeded`
+carries `conn` *and* `scheme://host[:port]`, redacted of userinfo the way
+`ConnectionDegraded` redacts its host. A password dialog that says only
+"connection: work" cannot be answered with any judgement: the name was chosen
+by `connections.toml`, which can arrive from someone else's dotfiles or a
+single edited line, and "work" says nothing about whether that entry still
+points where it did yesterday. It is the same reason the host-key dialog shows
+the fingerprint — the human verifies the *counterparty*, not a local label.
+The risk is not uniform across schemes, which is why the endpoint is mandatory
+rather than nice-to-have: an `sftp` still passes the host-key TOFU before
+anything is sent, but `ftp` goes out in the clear and an `s3` with an
+attacker-chosen `endpoint` signs a request against the server that entry picked.
+
+**The mechanism is the TOFU flow, reused.** `Error::SecretNeeded { conn }`
+(protocol 0.63.0) suspends the navigation exactly as `HostKeyUnknown` does; the
+frontend opens a modal; `connection.provide_secret` carries the answer back;
+that same navigation is retried. Like `connection.trust_host_key`, the daemon
+rejects the method for any actor that is not `Actor::User` with
+`INVALID_REQUEST` — an agent that could inject session credentials would be
+choosing which identity the user acts under on the remote host — and there is
+no journal entry, because nothing in the file tree changed and there is nothing
+to undo.
+
+Two limits of that gate, stated so nobody reads it as more than it is. `Actor`
+is **declared** at `initialize`, not authenticated; any same-uid process can
+claim `User`. That is the pre-existing model — `trust_host_key` rests on the
+same thing — and the socket's 0600 mode plus the `SO_PEERCRED` check are what
+actually keep other users out. And the gate covers **injection, not use**: an
+agent cannot supply a secret, but an agent session on the same daemon can use
+a connection a human unlocked, exactly as it could already use one unlocked by
+an environment variable.
+
+**What is stored, for how long, and how it is undone.** `SecretResolver` gains
+an in-memory map consulted as step 0. Precisely: **one map per daemon process,
+shared by every client of that uid**, not one per frontend — it outlives the
+`ntc` that answered by up to the daemon's idle timeout, so a second frontend
+started inside that window inherits an unlocked connection it never authorised.
+Nothing is written to `connections.toml`, the keyring, or `secrets.age`;
+stopping the daemon discards it. Offering to remember it is a separate decision
+and deliberately not taken here: on Linux the keyring backend is not even
+compiled in (`linux-keyring` is an opt-in feature nobody enables), and
+`secrets.age` has no write path from a frontend.
+
+Because step 0 sits ahead of the other three, a wrong value is worse than a
+failure: it shadows the environment variable someone would reach for to fix it,
+and the core only asks when it finds *nothing*, so the dialog would never come
+back. So `establish` **forgets** a session secret the server rejects and turns
+the failure back into `SecretNeeded` — the dialog reopens. Only the session
+rung: a secret in the environment, the keyring or the age file was put there
+deliberately somewhere editable, and deleting it on a server's say-so would be
+deciding for its owner. The eviction is conditioned on the origin of the
+credential that actually failed, not merely on a rejection having happened;
+without that, an `auth = "key"` with a bad key path — also `PermissionDenied` —
+would throw away an unrelated password and ask for it again.
+
+**The secret crosses the socket in cleartext, and that is accepted.** The UDS
+socket is mode 0600 and owned by the user (the daemon also refuses to run as
+root, hardens the parent directory to 0700, and checks `SO_PEERCRED` before
+reading a byte), so reading it already requires being that user — and that user
+can read the daemon's memory, where the secret must live anyway for the
+provider to use it. Encrypting the hop would protect nothing that is not
+already lost, and would add a key-exchange to the one protocol surface that has
+none.
+
+What is NOT accepted is the secret leaking on the way.
+`ConnectionProvideSecretParams` has a hand-written `Debug` that prints `***`
+(pinned by a doctest, because the leak would return the day someone adds
+`Debug` to the derive to fix something else); the dispatch span is `skip_all`;
+both `Engine::provide_secret` and the connector instrument with `skip_all` and
+log the connection name alone; and the TUI's typed buffer is a `TypedSecret`
+whose `Debug` redacts. The modal paints one dot per character.
+
+**Which copies are actually wiped, and which are not** — the honest version,
+because "it is zeroized" is easy to write and only partly true. Wiped: the
+TUI's buffer, whose `Zeroizing` interior is erased over its full capacity on
+drop, and which is born with its maximum capacity reserved so that growing it
+never abandons an un-wiped fragment on the heap (zeroize's own documentation is
+explicit that it "cannot ensure that previous reallocations did not leave
+values on the heap"). Not wiped: everything past `expose()` — the plain
+`String` in the params, the serialised frame, the `serde_json::Value` the
+daemon parses, and the copy handed to `Secret::new`. Under the same-user threat
+model above those are acceptable; a core dump of the daemon is the residual
+exposure, and it is residual only because anyone who can take one could read
+the live secret anyway.
+
+The dot count is **not** a length defence: below the cap it is the exact
+length, deliberately, because seeing a dot appear is the only confirmation a
+keystroke landed in a field that shows nothing. The cap exists so a long
+passphrase does not overflow the box.
+
+**Downgrading is the one direction that hurts, and it is not on the wire.**
+`ConnectionSpec` is `deny_unknown_fields`, so a pre-0.63 binary reading a
+`connections.toml` that already carries `secret = "prompt"` does not fail that
+one connection — it fails the whole file, and every connection in it. Only
+reachable by downgrading or by a mixed install; removing the key fixes it.
+
+**Not covered.** The window does not paint this dialog yet (#327 tracks it);
+until then a GUI user on a `prompt` connection reads the `err-secret-needed`
+message, which names the environment variable. And only navigation intercepts
+`SecretNeeded`: reaching a `prompt` connection as the destination of a copy,
+or through compare or sync, still surfaces that message instead of the dialog.

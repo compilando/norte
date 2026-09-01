@@ -21,7 +21,7 @@ use norte_frontend::busy::{Busy, BusyKind};
 use norte_frontend::layout::{BySlot, SlotId};
 use norte_proto::{Entry, Error, VPath};
 
-use crate::app::{App, Modal, Trail, error_message};
+use crate::app::{App, Modal, Trail, TypedSecret, error_message};
 use crate::console::{Console, Waited};
 use crate::fill::{Fill, release_refreshed_fill, spawn_fill};
 use crate::jobs::SearchRun;
@@ -558,6 +558,21 @@ fn aterrizar(
             // tiene que distinguirla de un cd abandonado, que no vuelve.
             Cd::Suspended
         }
+        // #325: la entrada dice `secret = "prompt"` y ninguna de las tres
+        // fuentes lo tiene. Mismo trato que el TOFU —y por las mismas
+        // razones—: el modal carga `pane` y `trail`, y el Enter reintenta
+        // ESTA navegación.
+        Err(Error::SecretNeeded { conn, endpoint }) => {
+            app.modal = Some(Modal::AskSecret {
+                conn,
+                endpoint,
+                input: TypedSecret::default(),
+                dir,
+                pane,
+                trail,
+            });
+            Cd::Suspended
+        }
         // Un error de listado NO tumba el TUI: el pane se queda, pero un
         // relleno previo de ESTE pane ya no aplica. El error se PORTA en el
         // desenlace (popup de historial).
@@ -623,6 +638,61 @@ pub async fn trust_host_retry(
             // Confiar FALLÓ: no hay reintento, así que la navegación que el
             // TOFU suspendió muere aquí — para el rastro es idéntica a un cd
             // abandonado, y el paso tiene que volver.
+            settle_suspended_trail(app, pane, &dir, trail, &Cd::Cancelled);
+            None
+        }
+    }
+}
+
+/// Entregar el secreto tecleado y REINTENTAR la navegación que
+/// `SecretNeeded` interrumpió (#325). Gemelo de [`trust_host_retry`], con el
+/// mismo contrato de retorno: `Some(cd)` = el desenlace vuelve YA al caller,
+/// `None` = entregarlo falló y el mensaje quedó en la barra.
+///
+/// Vive aquí por el mismo motivo que su gemelo: destructurar el modal, la
+/// llamada y el reintento no caben en el presupuesto de líneas de
+/// [`crate::mutations::on_dialog_key`].
+pub async fn provide_secret_retry(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut Console<'_>,
+    modal: Modal,
+) -> Option<Cd> {
+    let Modal::AskSecret {
+        conn,
+        input,
+        dir,
+        pane,
+        trail,
+        ..
+    } = modal
+    else {
+        // El caller solo llama con este modal (brazo `Modal::AskSecret`).
+        return None;
+    };
+    // El campo vacío ni siquiera llega aquí: `dialog_action` deja INERTE el
+    // confirmar de este modal mientras no haya nada tecleado, así que no hace
+    // falta repetir el guard — y repetirlo escondería que la decisión vive
+    // allí, junto al resto de la semántica de seguridad de los diálogos.
+    match backend.provide_secret(&conn, input.expose()).await {
+        Ok(()) => {
+            // El secreto ya está en el core; a partir de aquí es idéntico al
+            // TOFU. `cd_in` (no `cd`): se reanuda la navegación que el error
+            // interrumpió — su pane y su rastro.
+            let outcome = cd_in(app, backend, events, pane, dir.clone(), trail).await;
+            settle_suspended_trail(app, pane, &dir, trail, &outcome);
+            // El reintento puede abrir OTRO modal (un TOFU sobre el mismo
+            // host, o un `SecretNeeded` de otra conexión): jamás pisarlo.
+            if app.modal.is_none() {
+                app.open_next_pending();
+            }
+            Some(outcome)
+        }
+        Err(e) => {
+            app.message = Some(error_message(&e));
+            // Entregarlo FALLÓ: no hay reintento, así que la navegación que
+            // el error suspendió muere aquí — para el rastro es idéntica a un
+            // cd abandonado, y el paso tiene que volver.
             settle_suspended_trail(app, pane, &dir, trail, &Cd::Cancelled);
             None
         }

@@ -926,6 +926,38 @@ impl RemoteBackend {
         }
     }
 
+    /// `connection.provide_secret`: entrega el secreto que el humano tecleó
+    /// tras un [`Error::SecretNeeded`] (#325, ADR 0015).
+    ///
+    /// El secreto cruza el socket EN CLARO —el socket es de dominio unix, con
+    /// permisos 0600 y del propio usuario; ver ADR 0015— y el daemon lo
+    /// guarda solo en memoria, hasta que pare.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon.
+    pub async fn provide_secret(&self, conn: &str, secret: &str) -> Result<(), Error> {
+        let r: methods::ConnectionProvideSecretResult = self
+            .call_timed(
+                methods::CONNECTION_PROVIDE_SECRET,
+                &methods::ConnectionProvideSecretParams {
+                    conn: conn.to_string(),
+                    secret: secret.to_string(),
+                },
+            )
+            .await?;
+        // Mismo razonamiento que `trusted` arriba: un `stored: false` es la
+        // reserva para un core que se niegue, y tratarlo como éxito dejaría
+        // al usuario reintentando una navegación que nunca tendrá el
+        // secreto.
+        if r.stored {
+            Ok(())
+        } else {
+            Err(Error::PolicyDenied {
+                rule: "connection.provide_secret".to_string(),
+            })
+        }
+    }
+
     /// `fs.read` de un rango de bytes.
     ///
     /// # Errors

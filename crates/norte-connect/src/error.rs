@@ -20,6 +20,8 @@ pub enum SecretOrigin {
     Keyring,
     /// Fichero `secrets.age`.
     AgeFile,
+    /// Lo que un humano tecleó en esta sesión (#325).
+    Session,
 }
 
 impl std::fmt::Display for SecretOrigin {
@@ -28,6 +30,7 @@ impl std::fmt::Display for SecretOrigin {
             Self::Env => "variable de entorno",
             Self::Keyring => "keyring",
             Self::AgeFile => "secrets.age",
+            Self::Session => "lo tecleado en esta sesión",
         })
     }
 }
@@ -235,6 +238,11 @@ impl From<ConnectError> for norte_proto::Error {
             | ConnectError::SecretNotUtf8 { .. }
             | ConnectError::KeyUnsupported { .. }
             | ConnectError::KeyLoad { .. } => Self::PermissionDenied,
+            // NOTA (#325): `Error::SecretNeeded` no se produce aquí. Es una
+            // PREGUNTA, no un fallo, y necesita el ENDPOINT además del nombre
+            // —un diálogo de contraseña que no dice a quién se la va a dar no
+            // es contestable—; el endpoint lo conoce `establish`, en el core,
+            // no este resolutor. Se construye allí (`connect::secret_needed`).
             // La URL/config de la conexión no es válida.
             ConnectError::InvalidUrl(_) | ConnectError::MissingUser | ConnectError::Config(_) => {
                 Self::InvalidPath
