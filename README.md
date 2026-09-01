@@ -15,9 +15,10 @@ auditing.
 
 ## Install
 
-The release ships two binaries, each with its own installer: `ntc`, the file
-manager, and `norte`, the command line tool that runs the daemon, connections,
-policy, undo, the index and `doctor`. Install both:
+The release ships two binaries as portable archives, each with its own
+installer: `ntc`, the file manager, and `norte`, the command line tool that
+runs the daemon, connections, policy, undo, the index and `doctor`. Install
+both:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
@@ -39,10 +40,13 @@ cargo install --path crates/norte-tui --locked   # the `ntc` file manager
 ```
 
 There **is** a graphical interface: `norte-gui`, a Tauri window over the same
-core. It is a supported frontend as of 2026-09-01 (ADR 0087) — its own CI gate
-runs on every change to it or to the crates it is built on, and packaging ships
-it with the `norte` and `ntc` binaries so a clean install has a daemon to talk
-to. The GPUI attempt it replaced was retired on 2026-08-20 (ADR 0065).
+core, shipped as a `.deb`, `.rpm` or AppImage that carries the `norte` and
+`ntc` binaries with it so a clean install has a daemon to talk to. It is a
+supported frontend as of 2026-09-01 (ADR 0087): it has its own gate,
+`just gui-ci`, which the repository's `pre-push` hook runs (`just hooks`) on
+any change to the window or to the crates it is built on, and `just gui-smoke`
+installs the built package in a clean container and starts it there. The GPUI
+attempt it replaced was retired on 2026-08-20 (ADR 0065).
 
 Supported does not mean finished. It is not yet exercised against screen
 readers, IME input or fractional scaling (#261), and the packages are built on

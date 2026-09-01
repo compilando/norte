@@ -224,6 +224,47 @@ pub(crate) mod testutil {
         }
     }
 
+    /// Un fake server de VARIAS peticiones: contesta la n-ésima respuesta a
+    /// la n-ésima petición, y devuelve todas las peticiones en orden.
+    ///
+    /// Hace falta para probar un REINTENTO, que por definición son dos viajes:
+    /// el que el servidor rechaza y el que acepta. Con `serve_once` solo se
+    /// puede ver el primero, así que el fallback de la salida tipada del
+    /// proveedor compatible con `OpenAI` no se podía comprobar.
+    pub(crate) struct FakeHttpN {
+        pub(crate) base_url: String,
+        handle: tokio::task::JoinHandle<Vec<String>>,
+    }
+
+    impl FakeHttpN {
+        /// Las peticiones crudas, en orden. Consúmelas DESPUÉS de agotar las
+        /// respuestas.
+        pub(crate) async fn requests(self) -> Vec<String> {
+            self.handle.await.unwrap()
+        }
+    }
+
+    /// Arranca un fake server que atiende `responses.len()` peticiones.
+    pub(crate) async fn serve_seq(responses: Vec<Vec<u8>>) -> FakeHttpN {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let mut reqs = Vec::new();
+            for response in responses {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                reqs.push(read_request(&mut sock).await);
+                sock.write_all(&response).await.unwrap();
+                sock.flush().await.unwrap();
+                sock.shutdown().await.ok();
+            }
+            reqs
+        });
+        FakeHttpN {
+            base_url: format!("http://{addr}"),
+            handle,
+        }
+    }
+
     /// Construye una respuesta HTTP/1.1 cruda con `content-length` correcto y
     /// `connection: close` (una petición por conexión).
     pub(crate) fn response(

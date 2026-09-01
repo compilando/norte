@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# El suelo: nada sale de esta máquina sin pasar el gate.
+#
+# Existe porque un gate que depende de que alguien se acuerde se pudre. El
+# 2026-09-01 `just gui-ci` llevaba SEMANAS rojo en `main` de dos formas
+# distintas —una función pasada del umbral del lint, y un test que no
+# compilaba desde que `UiHostOptions` ganó un campo— y nadie lo sabía porque
+# se corría a mano (ADR 0087).
+#
+# CALLADO A PROPÓSITO. Un hook que vuelca la salida entera del gate es peor
+# que no tenerlo: entierra el resultado y, si al otro lado hay un asistente,
+# se le come la ventana de contexto. Verde = una línea. Rojo = la cola del
+# fallo y la ruta del log completo.
+#
+# Se salta con `git push --no-verify` cuando hace falta, que es lo correcto:
+# esto es un suelo, no una cerradura.
+#
+# Se instala con `just hooks` (pone `core.hooksPath`).
+set -uo pipefail
+
+# Un borrado de rama no construye nada.
+todo_borrados=1
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    [[ "$local_sha" =~ ^0+$ ]] || todo_borrados=0
+done
+[[ $todo_borrados -eq 1 ]] && exit 0
+
+RAIZ="$(git rev-parse --show-toplevel)"
+cd "$RAIZ" || exit 1
+LOG="$(mktemp -t norte-prepush-XXXXXX.log)"
+
+corre() {
+    local nombre="$1"; shift
+    printf '  %-10s ' "$nombre"
+    if "$@" >>"$LOG" 2>&1; then
+        printf '\033[32mok\033[0m\n'
+        return 0
+    fi
+    printf '\033[31mROJO\033[0m\n'
+    return 1
+}
+
+echo "pre-push:"
+fallo=0
+corre "ci-fast" just ci-fast || fallo=1
+
+# El gate de la ventana solo si el push la toca — o toca algo que entra en
+# ella. Es la misma lista que `.github/workflows/gui.yml`, y por el mismo
+# motivo: un cambio en `norte-ui-host` puede romper la ventana mientras el
+# gate portable sigue verde.
+base="$(git rev-parse --verify -q origin/main 2>/dev/null || echo HEAD~1)"
+if git diff --name-only "$base"...HEAD 2>/dev/null | grep -qE \
+    '^(crates/norte-(gui-tauri|ui-host|client|frontend|proto)/|Cargo\.(toml|lock)$|justfile$)'; then
+    corre "gui-ci" just gui-ci || fallo=1
+fi
+
+if [[ $fallo -eq 0 ]]; then
+    rm -f "$LOG"
+    exit 0
+fi
+
+echo
+echo "--- cola del fallo ---"
+tail -n 30 "$LOG"
+echo "----------------------"
+echo "log completo: $LOG"
+echo "si sabes lo que haces: git push --no-verify"
+exit 1

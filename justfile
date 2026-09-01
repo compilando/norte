@@ -144,6 +144,20 @@ ci: _disk lint test cov docs
 # sin cambios). El gate real pre-commit sigue siendo `just ci`.
 ci-fast: _disk lint test docs
 
+# Instala los hooks del repositorio (`.githooks/`). Una vez por clon.
+#
+# Hoy hay uno: `pre-push` corre `ci-fast`, y `gui-ci` si el push toca la
+# ventana o algo que entra en ella. Existe porque un gate que depende de que
+# alguien se acuerde se pudre — `gui-ci` llevaba semanas rojo en `main`
+# (ADR 0087) — y es el suelo que no depende de ningún servicio de nadie.
+#
+# Es un suelo, no una cerradura: `git push --no-verify` lo salta.
+#
+# Instala los hooks del repositorio. Una vez por clon.
+hooks:
+    git config core.hooksPath .githooks
+    @echo "hooks instalados desde .githooks/ (pre-push: ci-fast [+ gui-ci])"
+
 # ---------- disco: por qué se llena y cómo recuperarlo ----------
 
 # Guarda de espacio libre. Falla ANTES de compilar en vez de a mitad.
@@ -588,3 +602,19 @@ gui-package: gui-build
         cp -f "target/release/$b" "{{gui_dir}}/binaries/$b-$triple"
     done
     cd {{gui_dir}} && NO_STRIP=1 ./ui/node_modules/.bin/tauri build
+
+# Instala el PAQUETE en un contenedor limpio y comprueba que ahí dentro
+# funciona: los tres binarios, el listado inicial, y la ventana arrancando bajo
+# Xvfb sin morirse.
+#
+# El hermano de `dist-smoke` para la ventana. Aquél desempaqueta los tarballs
+# portables; éste hace lo que ninguno hacía: instalar de verdad en una
+# distribución que no ha visto este árbol. `empaquetado.rs` comprueba lo que el
+# paquete PROMETE (lee `tauri.conf.json`); esto, lo que HACE.
+#
+# Necesita Docker y un `just gui-package` previo. No necesita CI — que es el
+# punto: el fallo de instalación limpia no depende de quién apriete el botón.
+#
+# Instala el paquete en un contenedor limpio y lo arranca.
+gui-smoke imagen="debian:trixie":
+    ./scripts/gui-smoke.sh {{imagen}}

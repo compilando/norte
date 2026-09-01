@@ -147,13 +147,17 @@ someone actually configured.
 
 ### Remaining, named rather than implied
 
-- **An OpenAI-compatible endpoint is an arbitrary server**, and this declares
-  `JSON_OUTPUT` for all of them on the strength of the name, sending
-  `strict: true` unconditionally with no fallback. A server that validates its
-  body strictly answers 400 and a working feature turns into an opaque
-  `Internal`. The local validator covers correctness, not that; a config flag
-  or a retry without the contract is a separate change, and the trigger for it
-  is a real server misbehaving.
+- ~~An OpenAI-compatible endpoint is an arbitrary server, sending
+  `strict: true` unconditionally with no fallback.~~ **Fixed on the same day.**
+  "OpenAI-compatible" is a name, not a guarantee: a server that does not know
+  `response_format` answers 400, and a working rename turned into an opaque
+  `Internal`. There is now one retry without the contract, and only on a 400 —
+  the "your request is not valid" status. A 500 is not retried: it says
+  nothing about the contract, and repeating blindly spends the reader's quota
+  to fail again. Both directions have a fixture.
+  The capability is still declared for every compatible endpoint on the
+  strength of the name; what changed is that being wrong about it now degrades
+  instead of failing.
 - **That Anthropic returns structured output as an ordinary text block is
   documented, not observed.** `norte-ai` is offline-testable by design (ADR
   0031) — the fixtures assert what leaves the socket, not what comes back from

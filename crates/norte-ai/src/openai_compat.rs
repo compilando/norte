@@ -65,6 +65,22 @@ impl OpenAiCompatProvider {
         self.secret.as_ref().ok_or(AiError::Auth)
     }
 
+    /// Una petición de chat. Separada de `chat` para poder repetirla sin el
+    /// contrato cuando el servidor lo rechaza.
+    async fn enviar(&self, req: &ChatRequest) -> Result<reqwest::Response, AiError> {
+        let secret = self.secret()?;
+        let body = self.build_body(req)?;
+        let resp = self
+            .client
+            .post(format!("{}/v1/chat/completions", self.base_url))
+            .bearer_auth(secret.expose())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| http::transport(&e))?;
+        http::check_status(resp)
+    }
+
     /// Body de `/v1/chat/completions`: `req.system` se antepone como mensaje
     /// con rol `system` (el dialecto `OpenAI` lo acepta inline).
     fn build_body(&self, req: &ChatRequest) -> Result<Value, AiError> {
@@ -167,17 +183,28 @@ impl AiProvider for OpenAiCompatProvider {
 
     #[tracing::instrument(level = "debug", skip_all, fields(provider = "openai-compat"))]
     async fn chat(&self, req: ChatRequest) -> Result<ChatStream, AiError> {
-        let secret = self.secret()?;
-        let body = self.build_body(&req)?;
-        let resp = self
-            .client
-            .post(format!("{}/v1/chat/completions", self.base_url))
-            .bearer_auth(secret.expose())
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| http::transport(&e))?;
-        let resp = http::check_status(resp)?;
+        let resp = match self.enviar(&req).await {
+            Ok(r) => r,
+            // «Compatible con OpenAI» es un nombre, no una garantía: al otro
+            // lado hay servidores que no conocen `response_format` o que
+            // rechazan `strict`, y contestan 400. Sin esto, activar la salida
+            // tipada convertía una función que iba en un error opaco.
+            //
+            // UN reintento, y solo con contrato y solo ante un 400 —el estado
+            // de «tu petición no me vale»—: un 500 no se reintenta sin
+            // contrato porque no dice nada del contrato, y repetir a ciegas
+            // es gastar cuota del lector para volver a fallar.
+            Err(AiError::Http { status: 400 }) if req.json_schema.is_some() => {
+                tracing::info!(
+                    provider = "openai-compat",
+                    "el servidor rechazó la salida tipada; se repite sin contrato"
+                );
+                let mut sin_contrato = req.clone();
+                sin_contrato.json_schema = None;
+                self.enviar(&sin_contrato).await?
+            }
+            Err(e) => return Err(e),
+        };
         // El stream devuelto posee el body: dropearlo aborta la petición
         // HTTP (regla 3, cancelación drop-based).
         Ok(http::delta_stream(resp, parse_line))
@@ -217,7 +244,7 @@ mod tests {
     use futures::StreamExt;
 
     use super::*;
-    use crate::http::testutil::{response, serve_once};
+    use crate::http::testutil::{response, serve_once, serve_seq};
     use crate::provider::ChatMessage;
 
     /// `chat()` debe fallar en el establecimiento (el `ChatStream` no es
@@ -299,6 +326,56 @@ mod tests {
         assert!(raw.contains(r#""name":"norte_rename_plan""#), "{raw}");
         // Y `strict`, que es lo que lo convierte en contrato y no en consejo.
         assert!(raw.contains(r#""strict":true"#), "{raw}");
+    }
+
+    /// **Un servidor que rechaza el contrato con 400 no rompe la función.**
+    ///
+    /// «Compatible con `OpenAI`» es un nombre, no una garantía: al otro lado
+    /// puede haber un servidor que no conozca `response_format`. Sin este
+    /// reintento, activar la salida tipada convertía un renombrado que
+    /// funcionaba en un error opaco — y el ADR 0088 lo reconocía sin
+    /// arreglarlo.
+    #[tokio::test]
+    async fn un_400_al_contrato_se_repite_sin_el() {
+        let ok = ["data: [DONE]", ""].join("\n");
+        let srv = serve_seq(vec![
+            response(
+                400,
+                "Bad Request",
+                &[],
+                r#"{"error":"unknown response_format"}"#,
+            ),
+            response(200, "OK", &[], &ok),
+        ])
+        .await;
+        let p = provider(&srv.base_url, Some("sk-oa-1"));
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
+        req.json_schema = Some(crate::provider::JsonContract::new("plan", json!({})));
+
+        let stream = p.chat(req).await.expect("el reintento sale adelante");
+        let _: Vec<_> = stream.collect().await;
+
+        let reqs = srv.requests().await;
+        assert_eq!(reqs.len(), 2, "un rechazo, un reintento");
+        assert!(reqs[0].contains("response_format"), "{}", reqs[0]);
+        // Y el segundo va SIN contrato: repetir lo mismo sería gastar la
+        // cuota del lector para volver a fallar.
+        assert!(!reqs[1].contains("response_format"), "{}", reqs[1]);
+    }
+
+    /// Pero un 500 NO se repite sin contrato: no dice nada del contrato.
+    #[tokio::test]
+    async fn un_500_no_se_repite() {
+        let srv = serve_seq(vec![response(500, "Server Error", &[], "boom")]).await;
+        let p = provider(&srv.base_url, Some("sk-oa-1"));
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
+        req.json_schema = Some(crate::provider::JsonContract::new("plan", json!({})));
+
+        assert!(matches!(
+            chat_err(&p, req).await,
+            AiError::Http { status: 500 }
+        ));
+        assert_eq!(srv.requests().await.len(), 1, "un solo viaje");
     }
 
     /// `/v1/embeddings`: extrae los vectores en orden.
