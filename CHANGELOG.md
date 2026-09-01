@@ -630,6 +630,32 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The protocol has a catalogue, and forgetting a surface now turns the gate
+  red** (ADR 0089). Adding one of the ~70 methods means touching the constant
+  and its types, the daemon's dispatch, the remote client, the notification
+  routes, both backends, the schema aggregate, the goldens, MCP or the
+  frontends. None of those is redundant and the daemon's flat dispatch is
+  deliberate — the problem was never that there are many surfaces, it is that
+  **forgetting one did not show**. A method the daemon serves and the SDK
+  cannot call is invisible to every window.
+  `norte_proto::catalog` now lists every method with its kind, shape and types,
+  and six gates check it: every constant is catalogued and every entry still
+  exists, the daemon dispatches every request and does *not* dispatch a
+  notification, every notification is emitted, the remote client can ask for
+  everything (minus exceptions that must carry a written reason), the types are
+  in the schema aggregate, and the declared shape matches what the daemon does.
+  The wire is untouched: no serde type moved, no constant changed value, no
+  golden regenerated, `PROTOCOL_VERSION` stays at `0.63.0`.
+  It found a real gap on its first run — `policy.grant_scope` is served by the
+  daemon and absent from the SDK. That turned out to be deliberate (a scope is
+  granted from the terminal, with the daemon's low-level client), but *nowhere
+  did it say so*. Now it does.
+  The catalogue also gets a golden, which is the part that protects most:
+  nothing guarded the wire's method names before. The published schema carries
+  types, not methods, and the only golden holding method names has four of
+  them — so deleting `fs.rename_batch`, a textbook wire break, turned nothing
+  red beyond its callers failing to compile.
+
 - **The graphical window is a supported frontend** (ADR 0087). `norte-gui` was
   built as a spike with a go/no-go at the end, and had long since acquired
   everything a frontend needs — the semantic host behind it, a versioned

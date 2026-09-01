@@ -10,6 +10,7 @@ pub mod wire;
 
 pub mod attrs;
 pub mod caps;
+pub mod catalog;
 pub mod entry;
 pub mod error;
 pub mod methods;

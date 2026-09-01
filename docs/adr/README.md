@@ -94,3 +94,4 @@ edits.
 | [0086](0086-the-single-writer-is-one-actor-not-one-file.md) | The single writer is one actor, not one file | accepted |
 | [0087](0087-the-window-is-a-supported-frontend-and-has-a-gate-that-runs.md) | The window is a supported frontend, and has a gate that runs | accepted |
 | [0088](0088-a-declared-capability-that-nobody-honours-is-a-lie.md) | A declared capability that nobody honours is a lie | accepted |
+| [0089](0089-the-protocol-gets-a-catalogue-so-forgetting-a-surface-turns-red.md) | The protocol gets a catalogue, so forgetting a surface turns red | accepted |
