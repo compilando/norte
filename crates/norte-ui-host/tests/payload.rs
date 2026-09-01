@@ -55,6 +55,7 @@ async fn host_de(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot) {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca")
@@ -216,6 +217,10 @@ fn filas_de(s: &norte_ui_host::dto::SlotView) -> usize {
         SlotView::Places(p) => p.rows.len(),
         SlotView::Tree(t) => t.rows.len(),
         SlotView::Metadata(m) => m.fields.len(),
+        // El registro sí lleva las suyas, y por eso cuenta: manda una VENTANA
+        // del anillo, no el anillo — dos mil líneas por parche es justo lo que
+        // esta cuenta existe para que nadie pueda meter sin enterarse.
+        SlotView::Log(l) => l.lines.len(),
         // El panel de procesos no lleva sus filas en el hueco: las lleva
         // `ViewSnapshot::tasks`, que es una sola lista para toda la pantalla.
         SlotView::Processes { .. } | SlotView::Unsupported { .. } => 0,

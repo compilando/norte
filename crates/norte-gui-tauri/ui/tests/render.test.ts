@@ -14,6 +14,7 @@ import { BRIDGE_VERSION } from "../src/types";
 import type {
   BrowserSlotView,
   HostCatalog,
+  LogSlotView,
   RowView,
   UiAction,
   ViewSnapshot,
@@ -2167,6 +2168,120 @@ describe("los huecos que no son listados", () => {
     expect(document.querySelector(".processes .slot-note")?.textContent).toBe(
       catalogoReal()["processes-empty"] ?? "",
     );
+  });
+});
+
+describe("el panel de registro", () => {
+  function conRegistro(extra: Partial<LogSlotView> = {}): ViewSnapshot {
+    const v = vista({});
+    v.slots = [
+      ...v.slots,
+      {
+        kind: "log",
+        slot_id: 7,
+        lines: [
+          {
+            time: "12:00:00",
+            level: "error",
+            target: "norte_core::connect",
+            message: "no se pudo conectar",
+            hostile: false,
+          },
+          {
+            time: "12:00:01",
+            level: "info",
+            target: "norte_core",
+            message: "listado",
+            hostile: false,
+          },
+        ],
+        level: "info",
+        filter: "",
+        following: true,
+        total: 2,
+        first_visible: 0,
+        dropped_note: "",
+        capturing: "",
+        source: "de esta ventana",
+        ...extra,
+      },
+    ];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 0, width: 80, height: 12, role: null, focus_index: 2 },
+    ];
+    return v;
+  }
+
+  it("pinta las líneas y colorea por NIVEL, no por posición", () => {
+    const { screen } = montar();
+    screen.paint(conRegistro());
+    const filas = [...document.querySelectorAll(".log-line")];
+    expect(filas).toHaveLength(2);
+    // El nivel colorea la línea entera: leer un registro es buscar los
+    // errores, y un color solo en la etiqueta no se ve de un vistazo.
+    expect((filas[0] as HTMLElement).dataset["level"]).toBe("error");
+    expect((filas[1] as HTMLElement).dataset["level"]).toBe("info");
+    expect(filas[0]?.textContent).toContain("no se pudo conectar");
+  });
+
+  it("dice de qué PROCESO son las líneas", () => {
+    // La ventana arranca su propio daemon, así que aquí NO está lo del
+    // daemon. Callarlo haría que el panel pareciera roto: alguien lo abre
+    // mientras una conexión falla y no encuentra la línea que lo explica.
+    const { screen } = montar();
+    screen.paint(conRegistro());
+    expect(document.body.textContent).toContain("de esta ventana");
+  });
+
+  it("dice cuando está DESPEGADO del final y cuando tiró líneas", () => {
+    // «No pasa nada» y «te has despegado y esto es historia» son
+    // indistinguibles sin decirlo; y un registro con un agujero silencioso
+    // miente sobre lo que pasó.
+    const { screen } = montar();
+    screen.paint(
+      conRegistro({ following: false, dropped_note: "17 líneas viejas descartadas" }),
+    );
+    // La cabecera DEL hueco de registro: hay varias en la pantalla, y la
+    // primera es la del listado.
+    const caja = document.querySelector(".log");
+    const cabecera = caja?.parentElement?.querySelector(".slot-title")?.textContent ?? "";
+    expect(cabecera).toContain(catalogoReal()["log-detached"] ?? "");
+    expect(cabecera).toContain("17 líneas viejas descartadas");
+  });
+
+  it("el nivel PUESTO se marca, y pulsar otro lo pide por su id de wire", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(conRegistro());
+    const botones = [...document.querySelectorAll(".log-controls button")];
+    const puesto = botones.find((b) => (b as HTMLElement).dataset["on"] === "true");
+    expect(puesto?.textContent).toBe(catalogoReal()["log-level-info"] ?? "");
+
+    const debug = botones.find(
+      (b) => b.textContent === (catalogoReal()["log-level-debug"] ?? ""),
+    );
+    (debug as HTMLButtonElement).click();
+    const ultima = enviadas.at(-1);
+    expect(ultima?.action).toBe("log_set_level");
+    if (ultima?.action === "log_set_level") {
+      // El identificador de WIRE, no la etiqueta traducida: comparar frases
+      // traducidas ataría el nivel al idioma.
+      expect(ultima.level).toBe("debug");
+    }
+  });
+
+  it("la rueda desplaza por el HOST, no por el DOM", () => {
+    // La ventana visible la decide el host: dejar que el navegador desplace un
+    // trozo que solo tiene las líneas visibles no llegaría a ninguna parte.
+    const { screen, enviadas } = montar();
+    screen.paint(conRegistro());
+    const caja = document.querySelector(".log") as HTMLElement;
+    caja.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
+    const ultima = enviadas.at(-1);
+    expect(ultima?.action).toBe("log_scroll");
+    if (ultima?.action === "log_scroll") {
+      expect(ultima.delta).toBeGreaterThan(0);
+    }
   });
 });
 

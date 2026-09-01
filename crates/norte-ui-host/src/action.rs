@@ -153,6 +153,38 @@ pub enum UiAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         secret: Option<String>,
     },
+    /// Enseñar el registro hasta este nivel (#326).
+    ///
+    /// Sube el del ANILLO si hace falta y nunca lo baja: filtrar en la
+    /// pantalla lo que nunca se registró es imposible, y dejar de capturar al
+    /// bajar dejaría un agujero del tamaño del rato que se estuvo abajo.
+    LogSetLevel {
+        /// Vocabulario CERRADO: `error`, `warn`, `info`, `debug`, `trace`.
+        /// Uno que no se conoce se DICE, no cae en `info`.
+        level: String,
+    },
+    /// El filtro de texto del registro, sobre módulo y mensaje.
+    LogSetFilter {
+        /// Lo tecleado. Vacío = todo.
+        filter: String,
+    },
+    /// Sube (`delta` negativo) o baja por el registro, despegándose del final.
+    LogScroll {
+        /// Líneas. El renderer manda las que su rueda o su tecla signifiquen.
+        delta: i64,
+    },
+    /// Vuelve a pegar el registro al final y sigue lo que llega.
+    LogFollow,
+    /// Cuántas filas de registro cabían en el último frame.
+    ///
+    /// La pone el renderer, como la ventana del listado: adivinarla en el host
+    /// es lo que en la TUI hizo que cada página se saltara dos líneas y la
+    /// primera cuatro, y lo que ninguna de las dos ventanas enseñaba no se
+    /// podía leer de ninguna manera.
+    LogSetVisibleRange {
+        /// Filas visibles. Cero se trata como una.
+        rows: u32,
+    },
     /// La ventana ganó o perdió el foco del escritorio (#285).
     ///
     /// El host lo necesita para no avisar por fuera de lo que ya se está

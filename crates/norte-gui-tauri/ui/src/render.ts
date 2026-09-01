@@ -46,6 +46,7 @@ import type {
   PlacesSlotView,
   TreeSlotView,
   PickerView,
+  LogSlotView,
   ProcessesSlotView,
   SettingsView,
   ThemeView,
@@ -104,6 +105,13 @@ export class Screen {
   private dialogoPintado: number | null = null;
   /// El campo de texto vivo del diálogo de arriba, para REUSARLO.
   private dialogoInput: HTMLInputElement | null = null;
+  /** Los mandos del registro, conservados entre repintados (#326). */
+  private logControles: HTMLElement | null = null;
+  /** El hueco al que pertenecen: otro hueco, otros mandos. */
+  private logPintado: number | null = null;
+  /** Lo ultimo que se le dijo al host sobre cuantas filas caben. */
+  private logFilas: number | null = null;
+  private pendingLogRows: number | null = null;
   /// La página de ayuda que se pintó, para conservar su scroll.
   private helpPintada: string | null = null;
   /// El `blob:` de la imagen que se está enseñando, para REVOCARLO.
@@ -2718,6 +2726,10 @@ export class Screen {
       this.paintProcesses(dom, slot, view);
       return;
     }
+    if (slot.kind === "log") {
+      this.paintLog(dom, slot);
+      return;
+    }
     if (slot.kind === "unsupported") {
       // El nombre del kind sale del fichero de disposición del usuario: si el
       // host lo enmascaró, se dice — el mismo criterio que el resto.
@@ -2959,6 +2971,172 @@ export class Screen {
       revelar(lista.querySelector(`#process-row-${String(slot.cursor)}`) ?? undefined);
     }
     dom.scroller.replaceChildren(lista);
+  }
+
+  /**
+   * El panel de registro (#326): lo que este proceso está registrando.
+   *
+   * La cabecera lleva tres cosas que el panel no puede callar. El NIVEL y el
+   * FILTRO, porque un panel que se ve vacío con un filtro puesto se lee como
+   * un panel roto. Si está pegado al final, porque «no pasa nada» y «te has
+   * despegado y esto es historia» son indistinguibles sin decirlo. Y de qué
+   * PROCESO son las líneas: la ventana arranca su propio daemon, así que aquí
+   * NO está lo del daemon —los providers, el journal, la política—, y quien lo
+   * abra buscando el motivo de una conexión fallida no lo va a encontrar.
+   *
+   * Las líneas tiradas por el anillo también se dicen: un registro con un
+   * agujero silencioso miente sobre lo que pasó, porque la ausencia de una
+   * línea es indistinguible de que el evento no ocurriera.
+   */
+  private paintLog(dom: SlotDom, slot: LogSlotView): void {
+    dom.root.setAttribute("aria-label", this.t("log-title"));
+    dom.scroller.className = "log";
+    dom.title.replaceChildren(
+      document.createTextNode(this.t("log-title")),
+      chip(`${this.t("log-level")}: ${slot.level}`),
+      ...(slot.filter === "" ? [] : [chip(`/${slot.filter}`)]),
+      ...(slot.following ? [] : [chip(this.t("log-detached"))]),
+      // Se está guardando MÁS de lo que se ve: quien mira tiene derecho a
+      // saberlo, sobre todo antes de hacer una captura de pantalla.
+      ...(slot.capturing === "" ? [] : [chip(slot.capturing)]),
+      ...(slot.dropped_note === "" ? [] : [chip(slot.dropped_note)]),
+      chip(slot.source),
+    );
+    // El bloque de mandos se REUSA mientras siga siendo el mismo hueco. Se
+    // creaba en cada repintado, y como cada tecla del filtro provoca una foto
+    // —o sea un repintado—, el campo se destruía con el primer carácter y se
+    // perdían el foco y el caret. Es el mismo fallo que el campo de un diálogo
+    // ya tuvo, y la misma cura: conservar el nodo.
+    let mandos = this.logControles;
+    if (mandos === null || this.logPintado !== slot.slot_id) {
+      mandos = this.crearControlesDeRegistro();
+      this.logControles = mandos;
+      this.logPintado = slot.slot_id;
+    }
+    for (const b of mandos.querySelectorAll("button[data-level]")) {
+      const el = b as HTMLElement;
+      el.dataset["on"] = String(el.dataset["level"] === slot.level);
+    }
+    const filtro = mandos.querySelector(".log-filter");
+    // Solo si NO se está escribiendo en él: resembrarlo mientras tiene el foco
+    // devolvería la proyección del host encima de lo que el lector teclea.
+    if (filtro instanceof HTMLInputElement && document.activeElement !== filtro) {
+      filtro.value = slot.filter;
+    }
+    const seguir = mandos.querySelector(".log-follow");
+    if (seguir instanceof HTMLButtonElement) {
+      seguir.disabled = slot.following;
+    }
+
+    const lista = document.createElement("ul");
+    lista.className = "log-lines";
+    lista.setAttribute("role", "log");
+    for (const l of slot.lines) {
+      const fila = document.createElement("li");
+      fila.className = "log-line";
+      fila.dataset["level"] = l.level;
+      const hora = document.createElement("span");
+      hora.className = "log-time";
+      hora.textContent = l.time;
+      const nivel = document.createElement("span");
+      nivel.className = "log-level";
+      nivel.textContent = l.level;
+      const target = document.createElement("span");
+      target.className = "log-target";
+      target.textContent = l.target;
+      const msg = document.createElement("span");
+      msg.className = "log-message";
+      msg.textContent = l.message;
+      fila.append(hora, nivel, target, msg);
+      if (l.hostile) {
+        fila.append(badge(this.t("hostile-name")));
+      }
+      lista.append(fila);
+    }
+    // La rueda desplaza el registro por el HOST, no por el DOM: la ventana
+    // visible la decide él, y dejar que el navegador desplace un trozo que
+    // solo tiene las líneas visibles no llegaría a ninguna parte.
+    dom.scroller.onwheel = (e) => {
+      e.preventDefault();
+      this.send({ action: "log_scroll", delta: e.deltaY > 0 ? 3 : -3 });
+    };
+    // Un panel vacío lo DICE. Sin esto, «no hay nada», «el filtro se lo come
+    // todo» y «este proceso no tiene anillo» se pintan los tres igual: una
+    // caja en blanco, que se lee como un panel roto.
+    const cuerpo: HTMLElement =
+      slot.lines.length === 0 ? nota(this.t("log-empty")) : lista;
+    dom.scroller.replaceChildren(mandos, cuerpo);
+    this.scheduleLogRows(dom);
+  }
+
+  /**
+   * Los mandos del registro, UNA vez por hueco.
+   *
+   * Aparte del pintado porque llevan estado del DOM que no se puede tirar en
+   * cada foto: el foco y el caret del filtro.
+   */
+  private crearControlesDeRegistro(): HTMLElement {
+    const mandos = document.createElement("div");
+    mandos.className = "log-controls";
+    // Un botón por valor del vocabulario CERRADO. Se comparan por el
+    // identificador de wire y no por su etiqueta traducida: comparar frases
+    // traducidas ataría el nivel al idioma.
+    for (const nivel of ["error", "warn", "info", "debug", "trace"]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.dataset["level"] = nivel;
+      b.textContent = this.t(`log-level-${nivel}`);
+      b.addEventListener("click", () => {
+        this.send({ action: "log_set_level", level: nivel });
+      });
+      mandos.append(b);
+    }
+    const filtro = document.createElement("input");
+    filtro.type = "text";
+    filtro.className = "log-filter";
+    filtro.placeholder = this.t("log-filter");
+    filtro.setAttribute("aria-label", this.t("log-filter"));
+    filtro.addEventListener("input", () => {
+      this.send({ action: "log_set_filter", filter: filtro.value });
+    });
+    mandos.append(filtro);
+    const seguir = document.createElement("button");
+    seguir.type = "button";
+    seguir.className = "log-follow";
+    seguir.textContent = this.t("log-follow");
+    seguir.addEventListener("click", () => {
+      this.send({ action: "log_follow" });
+    });
+    mandos.append(seguir);
+    return mandos;
+  }
+
+  /**
+   * Cuántas líneas caben, medidas del DOM y mandadas al host.
+   *
+   * El host no puede adivinarlo, y mientras nadie se lo dijo se quedó con su
+   * valor de arranque —UNA fila— así que el panel enseñaba una línea recortada
+   * dentro de una caja de doce, y la rueda se saltaba dos por muesca. Es la
+   * misma medida que hace el listado y por el mismo motivo: la ventana visible
+   * la decide quien la pinta.
+   */
+  private scheduleLogRows(dom: SlotDom): void {
+    if (this.pendingLogRows !== null) {
+      return;
+    }
+    this.pendingLogRows = requestAnimationFrame(() => {
+      this.pendingLogRows = null;
+      const { h } = this.cell();
+      const cuerpo = dom.scroller.querySelector(".log-lines, .slot-note");
+      const alto =
+        cuerpo instanceof HTMLElement ? cuerpo.clientHeight : dom.scroller.clientHeight;
+      const rows = Math.max(1, Math.floor(alto / h));
+      if (this.logFilas === rows) {
+        return;
+      }
+      this.logFilas = rows;
+      this.send({ action: "log_set_visible_range", rows });
+    });
   }
 
   private paintAux(
@@ -3567,6 +3745,14 @@ function updateRow(el: HTMLElement, row: RowView, index: number, rowH: number): 
     nodes.push(cell);
   }
   el.replaceChildren(...nodes);
+}
+
+/** Una etiqueta pequena de cabecera (nivel, filtro, origen del registro). */
+function chip(text: string): HTMLElement {
+  const c = document.createElement("span");
+  c.className = "chip";
+  c.textContent = text;
+  return c;
 }
 
 function badge(text: string): HTMLElement {

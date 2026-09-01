@@ -108,6 +108,17 @@ pub struct LogRing {
     nivel: Arc<AtomicU8>,
     /// Cuántas se han descartado por llenarse.
     dropped: Arc<AtomicU64>,
+    /// Cuántas líneas han ENTRADO en total, desde siempre.
+    ///
+    /// Un contador que solo sube, para poder preguntar «¿ha cambiado algo?»
+    /// sin clonar el anillo. La ventana lo necesita porque su panel no se
+    /// repinta por frame como el de la TUI: tiene que sondear, y sondear con
+    /// [`LogRing::snapshot`] clonaría dos mil líneas por vuelta para casi
+    /// siempre descubrir que no hay nada nuevo.
+    ///
+    /// No vale la longitud: con el anillo lleno se queda fija en el tope y
+    /// deja de moverse justo cuando más está pasando.
+    pushed: Arc<AtomicU64>,
 }
 
 /// `Level` no es representable como número en la API pública de `tracing`, así
@@ -146,6 +157,7 @@ impl LogRing {
             })),
             nivel: Arc::new(AtomicU8::new(nivel_a_u8(Level::INFO))),
             dropped: Arc::new(AtomicU64::new(0)),
+            pushed: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -209,6 +221,15 @@ impl LogRing {
         self.dropped.load(Ordering::Relaxed)
     }
 
+    /// Cuántas líneas han entrado en total, para detectar cambios barato.
+    ///
+    /// Solo sube. Comparar dos lecturas dice si hay algo nuevo sin tomar el
+    /// candado del anillo ni clonar nada.
+    #[must_use]
+    pub fn pushed(&self) -> u64 {
+        self.pushed.load(Ordering::Relaxed)
+    }
+
     /// Copia de las líneas, de la más vieja a la más nueva.
     ///
     /// Una copia y no un préstamo: el candado no puede quedarse tomado
@@ -245,6 +266,7 @@ impl LogRing {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
         r.lines.push_back(line);
+        self.pushed.fetch_add(1, Ordering::Relaxed);
     }
 }
 

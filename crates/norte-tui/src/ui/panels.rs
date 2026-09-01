@@ -856,16 +856,12 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// La hora `HH:MM:SS` de una marca en milisegundos, en UTC.
+/// La hora de una línea de registro, del módulo COMPARTIDO.
 ///
-/// UTC y no local, igual que la columna de fecha en formato ISO: este árbol no
-/// lleva base de datos de husos, y una hora local inventada a partir de un
-/// desplazamiento fijo sería mentira dos veces al año. Lo que se compara aquí
-/// son líneas entre sí, y para eso el huso da igual mientras sea el mismo.
-fn hora_utc(epoch_ms: i64) -> String {
-    let sod = epoch_ms.div_euclid(1000).rem_euclid(86_400);
-    format!("{:02}:{:02}:{:02}", sod / 3600, (sod % 3600) / 60, sod % 60)
-}
+/// Estaba aquí hasta que la ventana necesitó la misma (#326): dos ideas de qué
+/// hora es en el panel de registro de cada frontend es la clase de diferencia
+/// que nadie mira hasta que compara dos capturas de pantalla.
+use norte_frontend::format::hora_utc;
 
 /// El panel de registro (#323): lo que está pasando, sin salir de la TUI.
 pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado: bool) {

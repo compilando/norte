@@ -20,7 +20,13 @@ norte-frontend.workspace = true
 # solo lectura (tarea 4.5). El host no la LEE de disco —quien lo arranca se la
 # pasa—, pero sí necesita nombrar su tipo. Ya estaba en el grafo vía
 # `norte-frontend`, y era dev-dependency de este crate: no compila nada nuevo.
-norte-config.workspace = true
+#
+# `logging` desde #326: el panel de registro LEE el anillo
+# (`norte_config::logring::LogRing`), que vive tras esa feature porque el módulo
+# lleva también la capa del subscriber. El binario que hospeda este host
+# (`norte-gui-tauri`) ya la enciende para montar esa capa, así que aquí no
+# compila nada nuevo — es el mismo grafo, declarado donde de verdad se usa.
+norte-config = { workspace = true, features = ["logging"] }
 # La ayuda (tarea 4.4): el corpus y su modelo de bloques. La dependencia va
 # host → help y nunca al revés (`norte_help::resolve` explica por qué): un
 # `norte-help` que conociera un frontend solo podría servir a uno. Ya está en
@@ -51,6 +57,11 @@ norte-testkit.workspace = true
 norte-vfs.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+# El panel de registro (#326) se prueba llenando el anillo por su camino de
+# VERDAD —la capa de `tracing` que lo alimenta—, y no con un `push` público.
+# Un `push` público se saltaría el filtro donde vive la cota de `suppaftp`
+# (que loguea `PASS <password>` a nivel TRACE), y esa cota no es negociable.
+tracing-subscriber.workspace = true
 # Una disposición de TRES listados, que ningún preset de fábrica trae: el
 # destino solo se puede adivinar mal cuando hay más de un candidato.
 toml.workspace = true

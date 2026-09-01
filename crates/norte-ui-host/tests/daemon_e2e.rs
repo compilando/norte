@@ -115,6 +115,7 @@ async fn host_contra(d: &DaemonDePrueba) -> (UiHost, ViewSnapshot) {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca")

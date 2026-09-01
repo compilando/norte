@@ -80,6 +80,29 @@ pub fn human_bytes_short(n: u64) -> String {
     format!("{value}{}", UNITS[unit])
 }
 
+/// La hora `HH:MM:SS` de una marca en milisegundos, en UTC.
+///
+/// UTC y no local, igual que la columna de fecha en formato ISO: este árbol no
+/// lleva base de datos de husos, y una hora local inventada a partir de un
+/// desplazamiento fijo sería mentira dos veces al año. Lo que se compara aquí
+/// son líneas entre sí, y para eso el huso da igual mientras sea el mismo.
+///
+/// Vive aquí desde #326, cuando la ventana necesitó la misma: dos ideas de qué
+/// hora es en el panel de registro de cada frontend es la clase de diferencia
+/// que nadie mira hasta que compara dos capturas de pantalla.
+///
+/// ```
+/// use norte_frontend::format::hora_utc;
+/// assert_eq!(hora_utc(0), "00:00:00");
+/// // Y una marca ANTERIOR a la época no da una hora negativa.
+/// assert_eq!(hora_utc(-1), "23:59:59");
+/// ```
+#[must_use]
+pub fn hora_utc(epoch_ms: i64) -> String {
+    let sod = epoch_ms.div_euclid(1000).rem_euclid(86_400);
+    format!("{:02}:{:02}:{:02}", sod / 3600, (sod % 3600) / 60, sod % 60)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

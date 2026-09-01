@@ -128,6 +128,11 @@ const DEL_HOST: &[&str] = &[
 /// dejarlas fuera sería el mismo agujero que este test viene a tapar.
 const COMPUESTAS: &[(&str, &[&str])] = &[
     ("help-callout-", &["note", "warn", "tip"]),
+    // Los mandos de nivel del panel de registro (#326). El sufijo es el
+    // vocabulario CERRADO de `LogLevel::wire`, y esta lista es la otra mitad:
+    // un nivel nuevo allí rompe aquí, que es donde hay que enterarse de que
+    // le falta su cadena.
+    ("log-level-", &["error", "warn", "info", "debug", "trace"]),
     // El sufijo es `TaskView::kind`, que lo produce `clase_de_task` en el
     // host con un `match` exhaustivo: esta lista es la otra mitad de ese
     // `match`, y una variante nueva de `TaskKind` rompe allí primero.

@@ -43,6 +43,42 @@ impl LogLevel {
         }
     }
 
+    /// El identificador ESTABLE, para el puente de la ventana (#326).
+    ///
+    /// Separado de [`Self::label`], que es lo que se PINTA: aquella lleva su
+    /// relleno de cinco columnas y podría cambiar de forma el día que la
+    /// columna cambie de ancho. Esto es un vocabulario cerrado que un renderer
+    /// compara por igualdad para colorear y para marcar cuál está puesto, y
+    /// comparar contra una etiqueta de pantalla ataría el color al ancho.
+    ///
+    /// ```
+    /// use norte_config::logline::LogLevel;
+    /// assert_eq!(LogLevel::Warn.wire(), "warn");
+    /// assert_eq!(LogLevel::from_wire("warn"), Some(LogLevel::Warn));
+    /// // Uno que no existe no cae en otro: se dice que no se conoce.
+    /// assert_eq!(LogLevel::from_wire("verbose"), None);
+    /// ```
+    #[must_use]
+    pub const fn wire(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warn => "warn",
+            Self::Info => "info",
+            Self::Debug => "debug",
+            Self::Trace => "trace",
+        }
+    }
+
+    /// El nivel de un identificador de wire, o `None` si no se conoce.
+    ///
+    /// `None` y no un valor por defecto: caer en `Info` ante algo que no se
+    /// entiende dejaría al panel enseñando otra cosa de la que se pidió, en
+    /// silencio.
+    #[must_use]
+    pub fn from_wire(s: &str) -> Option<Self> {
+        Self::all().into_iter().find(|l| l.wire() == s)
+    }
+
     /// Todos, del menos al más verboso.
     #[must_use]
     pub const fn all() -> [Self; 5] {

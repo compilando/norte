@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 45;
+export const BRIDGE_VERSION = 46;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -162,6 +162,45 @@ export interface ProcessesSlotView {
   cursor: number | null;
 }
 
+export interface LogLineView {
+  /** `HH:MM:SS`, en UTC — este árbol no lleva base de datos de husos. */
+  time: string;
+  /** Vocabulario CERRADO: error, warn, info, debug, trace. Se colorea por él. */
+  level: string;
+  target: string;
+  message: string;
+  /** Lo pintado difiere de lo que hay, en el módulo o en el mensaje. */
+  hostile: boolean;
+}
+
+export interface LogSlotView {
+  kind: "log";
+  slot_id: number;
+  /** Solo la VENTANA visible, nunca el anillo entero. */
+  lines: LogLineView[];
+  level: string;
+  filter: string;
+  /** Pegado al final y siguiendo lo que llega. */
+  following: boolean;
+  total: number;
+  first_visible: number;
+  /** Líneas que el anillo TIRÓ por quedarse sin sitio, YA DICHO y con el
+   *  número dentro: un renderer no traduce ni sustituye números. Vacío =
+   *  ninguna. Un registro con un agujero silencioso miente sobre lo que pasó. */
+  dropped_note: string;
+  /** Lo que el proceso está CAPTURANDO, si es más que lo que se enseña, ya
+   *  traducido. Vacío = son el mismo. Bajar lo que se ve no deja de capturar,
+   *  así que el panel puede decir «info» mientras se guarda TRACE — y quien
+   *  mira tiene derecho a saberlo antes de hacer una captura de pantalla. */
+  capturing: string;
+  /**
+   * De qué PROCESO son estas líneas, ya traducido. La ventana arranca su
+   * propio daemon, así que aquí NO está lo del daemon —los providers, el
+   * journal, la política—; callarlo haría que el panel pareciera roto.
+   */
+  source: string;
+}
+
 export type PlaceRowView =
   | { row: "header"; label: string; folded: boolean }
   | { row: "drive"; label: string; hostile: boolean; detail: string }
@@ -220,6 +259,7 @@ export type SlotView =
   | TreeSlotView
   | MetadataSlotView
   | ProcessesSlotView
+  | LogSlotView
   | UnsupportedSlotView;
 
 export interface PendingView {
@@ -1006,6 +1046,11 @@ export type UiAction =
       secret?: string;
     }
   | { action: "dialog_input"; id: ModalId; text: string }
+  | { action: "log_set_level"; level: string }
+  | { action: "log_set_filter"; filter: string }
+  | { action: "log_scroll"; delta: number }
+  | { action: "log_follow" }
+  | { action: "log_set_visible_range"; rows: number }
   | { action: "cancel_task"; task_id: number }
   | { action: "compare_select_row"; id: number }
   | { action: "compare_activate_row"; id: number }

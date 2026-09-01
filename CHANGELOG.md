@@ -9,6 +9,27 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window has the log panel** (#326, bridge **46**). It has been in the
+  TUI since #323, and everything shared was already built — the in-memory ring
+  and its `tracing` layer in `norte-config`, the presentation state (level
+  filter, text filter, following the end) in `norte-frontend`. What the window
+  did was fall through to "unsupported kind", in grey: opening a slot that only
+  paints greyed out is not opening it. The level buttons raise what the ring
+  *captures* and never lower it, because filtering on screen what was never
+  recorded is impossible, and because dropping back to errors and climbing again
+  would show a hole the size of the time you spent down there.
+  It also says **whose** log it is, and that line is the point: `norte-gui`
+  starts its own daemon, so this ring holds this process's lines and not the
+  daemon's — where the providers, the journal and the policy live. In the
+  embedded TUI they are the same process and it never came up. Saying nothing
+  would make the panel look broken: you open it while a connection is failing,
+  do not find the line that explains it, and conclude the panel does not work
+  rather than that you are looking somewhere else. Carrying the daemon's lines
+  over the wire is a separate piece of work.
+  Lines the ring had to drop are counted on screen, for the same reason: a log
+  with a silent hole lies about what happened, because a missing line is
+  indistinguishable from an event that never occurred.
+
 - **The window asks for a connection's password too** (#327, bridge **45**,
   ADR 0091).
   The TUI has done this since #325: a connection with `secret = "prompt"` whose

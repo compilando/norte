@@ -1799,6 +1799,15 @@ gui-msg-shortcut-saved-not-applied = guardado, pero esta ventana conservó el ke
 
 # Fase A: el panel de procesos y la hoja de atributos.
 processes-title = Procesos
+log-level = nivel
+log-level-error = error
+log-level-warn = aviso
+log-level-info = info
+log-level-debug = depuración
+log-level-trace = traza
+log-filter = filtrar módulo o mensaje
+log-follow = ir al final
+log-detached = despegado del final
 processes-empty = nada en marcha
 processes-has-keyboard = este panel tiene el teclado · Esc lo devuelve
 
@@ -1877,6 +1886,8 @@ host-layout-broken = ese fichero de disposición no parsea
 host-name-too-long = ese nombre es demasiado largo
 host-secret-empty = escribe la contraseña: entregarla vacía cambiaría de identidad, no de sesión
 host-secret-too-long = la contraseña no cabe: el tope son 256 caracteres
+host-log-level-unknown = ese nivel de registro no existe
+log-source-window = de esta ventana (el daemon registra aparte)
 host-name-not-editable = ese nombre no cabe en pantalla: aquí no se puede editar sin recortarlo
 host-cannot-transfer-root = una raíz no se copia ni se mueve
 host-no-other-slot = no hay otro panel

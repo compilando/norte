@@ -649,7 +649,15 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // salen de ella —la ventana los ignoraba— y antes que nada más, para que
     // lo que falle a partir de aquí deje rastro. Misma regla que el terminal:
     // un `--help` sale antes y no escribe nada, que es lo correcto.
-    logging(&cfg);
+    // #326: el log va TAMBIÉN a un anillo en memoria, que es lo que pinta el
+    // panel de registro. El fichero sirve para investigar después; el anillo,
+    // para ver lo que está pasando sin salir de la ventana.
+    //
+    // Ojo con lo que este anillo NO lleva: la ventana arranca su propio daemon
+    // (#300), así que aquí solo están las líneas de ESTE proceso — los
+    // providers, el journal y la política registran en el suyo. El panel lo
+    // dice; callarlo haría que pareciera roto.
+    let log_ring = logging(&cfg);
 
     let preset = if let Some(p) = &cli.preset {
         nombre_de(p, "--preset")?
@@ -719,6 +727,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         // Ya está APLICADO en `settings` (sus capas entraron arriba); esto es
         // para que el host lo sepa y el selector lo marque puesto (#307).
         profile: cli.profile.clone(),
+        log_ring,
     })
     .await?;
     let mut snapshot = snapshot;
@@ -797,12 +806,15 @@ fn start_dir(dir: Option<PathBuf>) -> Result<VPath, StartupError> {
 /// El prefijo SÍ es propio: el daemon y esta ventana pueden estar vivos a la
 /// vez, y compartir fichero de rotación haría que la retención de uno podase
 /// los ficheros del otro.
-fn logging(cfg: &norte_frontend::config::FrontendConfig) {
-    norte_config::logging::init_to_file(norte_config::logging::LogConfig {
-        dir: cfg.common.log_dir.as_deref(),
-        retain: cfg.common.log_retain,
-        prefix: Some("norte-gui.log"),
-    });
+fn logging(cfg: &norte_frontend::config::FrontendConfig) -> Option<norte_config::logring::LogRing> {
+    norte_config::logging::init_to_file_with_ring(
+        norte_config::logging::LogConfig {
+            dir: cfg.common.log_dir.as_deref(),
+            retain: cfg.common.log_retain,
+            prefix: Some("norte-gui.log"),
+        },
+        norte_config::logring::RING_DEFAULT,
+    )
 }
 
 #[cfg(test)]

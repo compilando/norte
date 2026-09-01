@@ -25,6 +25,10 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **46**: la pantalla puede llevar el PANEL DE REGISTRO (#326): la ventana
+///   visible del anillo en memoria, con su nivel, su filtro y si sigue el
+///   final. Dice de qué PROCESO son las líneas, porque la ventana arranca su
+///   propio daemon y las suyas no son las de él.
 /// - **45**: un diálogo puede pedir una CONTRASEÑA (#327). El campo se marca
 ///   como secreto y lo que viaja del host al renderer son PUNTOS, jamás el
 ///   texto: el renderer no lo pinta, no lo resiembra y no lo puede registrar.
@@ -152,7 +156,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 45;
+pub const BRIDGE_VERSION: u32 = 46;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

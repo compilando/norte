@@ -1742,6 +1742,81 @@ body {
   color: var(--selection-fg);
 }
 
+/* --- El panel de registro (#326) --------------------------------------- */
+
+.log {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-controls {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 2px 6px;
+  flex: 0 0 auto;
+}
+
+.log-controls button[data-on="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.log-filter {
+  flex: 1 1 auto;
+  min-width: 6ch;
+}
+
+.log-lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex: 1 1 auto;
+  overflow: hidden;
+  /* Monoespaciada, y no por estética: las columnas de hora y nivel son de
+     ancho fijo, y con una proporcional el mensaje empieza en un sitio
+     distinto por línea — que es lo que hace que una lista larga deje de
+     poder recorrerse con la vista. */
+  font-family: var(--mono, monospace);
+  white-space: pre;
+}
+
+.log-line {
+  padding: 0 6px;
+}
+
+.log-time,
+.log-level,
+.log-target {
+  opacity: 0.75;
+  margin-right: 1ch;
+}
+
+/* El nivel COLOREA la línea entera: leer un registro es buscar los errores, y
+   un color solo en la etiqueta de cinco letras no se ve de un vistazo. */
+.log-line[data-level="error"] {
+  color: var(--error-fg, #f66);
+}
+
+.log-line[data-level="warn"] {
+  color: var(--warn-fg, #fc6);
+}
+
+.log-line[data-level="debug"],
+.log-line[data-level="trace"] {
+  opacity: 0.8;
+}
+
+/* Una etiqueta pequeña de cabecera: el nivel, el filtro, el origen. */
+.chip {
+  margin-left: 1ch;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--chip-bg, rgb(128 128 128 / 20%));
+  font-size: 0.85em;
+}
+
 /* --- El árbol de directorios ------------------------------------------ */
 
 .tree {

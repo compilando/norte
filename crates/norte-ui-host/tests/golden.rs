@@ -161,6 +161,11 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::FilesDropped { .. } => "files_dropped",
         UiAction::TreeActivateRow { .. } => "tree_activate_row",
         UiAction::TreeToggleRow { .. } => "tree_toggle_row",
+        UiAction::LogSetLevel { .. } => "log_set_level",
+        UiAction::LogSetFilter { .. } => "log_set_filter",
+        UiAction::LogScroll { .. } => "log_scroll",
+        UiAction::LogFollow => "log_follow",
+        UiAction::LogSetVisibleRange { .. } => "log_set_visible_range",
         UiAction::CancelTask { .. } => "cancel_task",
         UiAction::CompareSelectRow { .. } => "compare_select_row",
         UiAction::CompareActivateRow { .. } => "compare_activate_row",
@@ -202,6 +207,28 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("cancel_task", UiAction::CancelTask { task_id: 42 }),
+        // #326: los cinco del panel de registro. En un puente que sube de
+        // número, los nombres de wire nuevos son lo primero que hay que clavar
+        // — y `tag_de_accion` no basta: con la lista de casos y las fixtures
+        // las DOS vacías, `check_family` las cubre 1:1 y no dice nada.
+        (
+            "log_set_level",
+            UiAction::LogSetLevel {
+                level: "debug".to_owned(),
+            },
+        ),
+        (
+            "log_set_filter",
+            UiAction::LogSetFilter {
+                filter: "connect".to_owned(),
+            },
+        ),
+        ("log_scroll", UiAction::LogScroll { delta: -3 }),
+        ("log_follow", UiAction::LogFollow),
+        (
+            "log_set_visible_range",
+            UiAction::LogSetVisibleRange { rows: 12 },
+        ),
         ("compare_select_row", UiAction::CompareSelectRow { id: 7 }),
         (
             "compare_activate_row",

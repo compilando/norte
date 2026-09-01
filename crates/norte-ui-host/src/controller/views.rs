@@ -67,6 +67,9 @@ impl Estado {
                 }
                 Some("places") => slots.push(SlotView::Places(Box::new(self.barra_de_sitios(id)))),
                 Some("tree") => slots.push(SlotView::Tree(Box::new(self.arbol_de_ramas(id)))),
+                Some(super::logpanel::KIND) => {
+                    slots.push(SlotView::Log(Box::new(self.panel_de_registro(id))));
+                }
                 Some("processes") => slots.push(SlotView::Processes {
                     slot_id: id,
                     // Índice sobre las filas PINTADAS, que es lo que el

@@ -322,6 +322,22 @@ impl Estado {
             let Some(nuevo) = self.arbol.close_slot(id) else {
                 return (self.aplicada(), Vec::new());
             };
+            // Cerrar el registro BAJA lo que el proceso captura (#326): el
+            // nivel del anillo se sube en caliente para poder enseñar más, y
+            // solo sube. Sin esto, una sola pulsación de «traza» dejaba el
+            // proceso guardando TRACE en memoria el resto de la sesión —
+            // incluida la cota de `suppaftp`, que es lo único que impide que
+            // ahí dentro aparezca una contraseña de FTP— con la interfaz
+            // diciendo «info» y sin ningún panel donde verlo. Es lo que ya
+            // hace la TUI al cerrar el suyo.
+            if kind == super::logpanel::KIND {
+                if let Some(anillo) = &self.log_ring {
+                    anillo.set_level(self.log_panel.level());
+                }
+                // Y el sondeo se apaga: la época sube, así que el temporizador
+                // en vuelo se deja morir sin rearmarse.
+                self.log_epoca += 1;
+            }
             return self.aplicar_disposicion(nuevo, backend, buzon);
         }
         let id = SlotId(self.nuevo_slot());
@@ -341,6 +357,10 @@ impl Estado {
         let (borde, tamano) = match kind {
             "places" => (Edge::Left, Size::Fixed(16)),
             "processes" => (Edge::Bottom, Size::Fixed(8)),
+            // El registro abajo, y más alto que el tablero: sus líneas son
+            // largas y ocho filas de las que dos son cromo no dejan leer una
+            // traza. Es el mismo sitio que le da la TUI.
+            "log" => (Edge::Bottom, Size::Fixed(12)),
             // El árbol a la izquierda y con el ancho de la barra de sitios: es
             // el mismo gesto —una columna de navegación al lado del listado— y
             // dos anchos distintos para lo mismo se notan.
@@ -358,6 +378,17 @@ impl Estado {
             // abiertas cada vez que el lector entra en una carpeta.
             self.sembrar_ramas();
             self.pedir_ramas(backend, buzon);
+        }
+        if kind == super::logpanel::KIND {
+            // Y el registro empieza a sondearse: el panel promete que SIGUE lo
+            // que llega, y esta ventana solo repinta cuando alguien hace algo.
+            // Sin esto, decía «pegado al final» sobre una lista congelada.
+            self.log_epoca += 1;
+            self.log_visto = self
+                .log_ring
+                .as_ref()
+                .map_or(0, norte_config::logring::LogRing::pushed);
+            self.sondear_registro(buzon);
         }
         salida
     }

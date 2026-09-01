@@ -51,6 +51,7 @@ mod input;
 mod layout;
 mod lifecycle;
 mod listing;
+mod logpanel;
 mod menu;
 mod nav;
 mod palette;
@@ -370,6 +371,17 @@ pub struct UiHostOptions {
     ///
     /// `OsString` porque es un nombre de directorio (#245).
     pub profile: Option<std::ffi::OsString>,
+    /// El anillo de registro del que lee el panel `log` (#326).
+    ///
+    /// Lo monta el PROCESO al arrancar —el subscriber de `tracing` se instala
+    /// una vez— y llega aquí porque el host no monta subscribers: los lee.
+    /// `None` = este binario no lo montó, y entonces el panel lo dice en vez
+    /// de enseñarse vacío, que sería indistinguible de «no ha pasado nada».
+    ///
+    /// Va por opción y no por un `set_*` posterior porque el panel puede
+    /// existir en la disposición de arranque: montarlo después dejaría la
+    /// primera foto con un registro que no es el que hay.
+    pub log_ring: Option<norte_config::logring::LogRing>,
 }
 
 /// Lo que un suscriptor recibe.
@@ -539,6 +551,10 @@ enum Mensaje {
     /// El secreto se entregó (o no), y con ello qué hacer con la navegación
     /// que `SecretNeeded` había suspendido (#327).
     SecretoEntregado(Box<(u32, VPath, Result<(), Error>)>),
+    /// Toca mirar si el registro tiene algo nuevo (#326). Lleva la ÉPOCA de la
+    /// apertura que lo programó: uno de una apertura anterior se deja morir en
+    /// vez de rearmarse para siempre.
+    RegistroTic(u64),
     /// Un snapshot de progreso. Por la MISMA cola que todo lo demás, que es
     /// lo que garantiza que un estado terminal no se adelante ni se pierda.
     Progreso(Box<norte_proto::TaskProgress>),
@@ -1061,6 +1077,11 @@ async fn actor(
             }
             Mensaje::Listado(datos) => {
                 for u in estado.aterrizar_listado(*datos, &backend, &buzon) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::RegistroTic(epoca) => {
+                for u in estado.tic_de_registro(epoca, &buzon) {
                     let _ = updates.send(u);
                 }
             }
@@ -2411,6 +2432,30 @@ struct Estado {
     /// solas —una tarea termina y se barre—, así que un cursor guardado
     /// siempre puede haberse quedado fuera.
     cursor_procesos: usize,
+    /// El estado del panel de registro: nivel, filtro y seguimiento (#326).
+    ///
+    /// El MISMO tipo que usa la TUI, con su regla de los dos niveles dentro
+    /// (el que se captura y el que se enseña) y la de que bajar el segundo no
+    /// deja de capturar. Duplicarlo aquí habría sido duplicar esas dos.
+    log_panel: norte_frontend::logpanel::LogPanel,
+    /// El anillo del que salen las líneas. `None` = este proceso no lo montó,
+    /// y entonces el panel lo DICE en vez de enseñarse vacío como si no
+    /// hubiera pasado nada.
+    log_ring: Option<norte_config::logring::LogRing>,
+    /// Cuántas filas de registro cabían en el último frame.
+    ///
+    /// La pone el renderer (`LogSetVisibleRange`), como la ventana del
+    /// listado: adivinarla aquí es lo que en la TUI hizo que cada página se
+    /// saltara dos líneas y la primera cuatro, y lo que ninguna de las dos
+    /// ventanas enseñaba no se podía leer de ninguna manera.
+    log_filas: usize,
+    /// Sube en cada APERTURA del panel. Distingue el temporizador de esta
+    /// apertura del de la anterior: abrir, cerrar y volver a abrir dejaría dos
+    /// vivos sobre el mismo panel, y el viejo se rearmaría para siempre.
+    log_epoca: u64,
+    /// El contador de entradas del anillo la última vez que se pintó, para no
+    /// mandar una foto por sondeo cuando no ha pasado nada.
+    log_visto: u64,
     /// El selector abierto, si lo hay.
     selector: Option<crate::pickers::Selector>,
     /// La ayuda, si está abierta. Tapa la pantalla y se queda las teclas,
@@ -2736,6 +2781,7 @@ impl Estado {
             theme,
             user_layouts,
             profile: perfil_de_arranque,
+            log_ring,
         } = options;
         let dir = &initial_dir;
         let lang = Self::lang_de(&locale);
@@ -2768,6 +2814,13 @@ impl Estado {
             selector_perfil: None,
             gen_perfiles: 0,
             cursor_procesos: 0,
+            log_panel: norte_frontend::logpanel::LogPanel::default(),
+            log_ring,
+            // Uno hasta que el primer frame diga la verdad: nunca cero, para
+            // que una página antes de pintar mueva algo en vez de nada.
+            log_filas: 1,
+            log_epoca: 0,
+            log_visto: 0,
             sitios: None,
             gen_sitios: 0,
             ramas: None,
@@ -3275,6 +3328,11 @@ impl Estado {
             UiAction::Dialog { id, choice, secret } => {
                 self.responder_dialogo(*id, choice, secret.as_deref(), backend, buzon)
             }
+            UiAction::LogSetLevel { level } => self.nivel_de_registro(level),
+            UiAction::LogSetFilter { filter } => self.filtro_de_registro(filter),
+            UiAction::LogScroll { delta } => self.desplazar_registro(*delta),
+            UiAction::LogFollow => self.seguir_registro(),
+            UiAction::LogSetVisibleRange { rows } => self.filas_de_registro(*rows),
             UiAction::CancelTask { task_id } => self.cancelar(*task_id),
             UiAction::CompareSelectRow { .. }
             | UiAction::CompareActivateRow { .. }

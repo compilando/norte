@@ -89,6 +89,25 @@
     "action": "layout_activate_row",
     "row": 0
   },
+  "log_follow": {
+    "action": "log_follow"
+  },
+  "log_scroll": {
+    "action": "log_scroll",
+    "delta": -3
+  },
+  "log_set_filter": {
+    "action": "log_set_filter",
+    "filter": "connect"
+  },
+  "log_set_level": {
+    "action": "log_set_level",
+    "level": "debug"
+  },
+  "log_set_visible_range": {
+    "action": "log_set_visible_range",
+    "rows": 12
+  },
   "mark_range": {
     "action": "mark_range",
     "from": 2,

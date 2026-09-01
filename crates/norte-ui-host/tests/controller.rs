@@ -59,6 +59,7 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca")
@@ -280,6 +281,7 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca")
@@ -771,6 +773,7 @@ async fn el_contador_lo_resuelve_el_host() {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -887,6 +890,7 @@ async fn host_con_layout(
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca")
@@ -2071,6 +2075,7 @@ async fn el_catalogo_da_sentido_a_un_attr() {
         profile: None,
         columns: columnas_de(&["name", "attr:posix.mode"]),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -2787,6 +2792,7 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -3034,6 +3040,7 @@ async fn host_solo_lectura(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewS
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::SoloLectura,
+        log_ring: None,
     })
     .await
     .expect("arranca")
@@ -3470,6 +3477,7 @@ async fn dos_columnas_que_se_enmascaran_igual_siguen_siendo_dos() {
             "plugin:acme.a\u{202e}b/x",
         ]),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -3572,6 +3580,7 @@ async fn una_disposicion_sin_listado_no_arranca() {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await;
     assert!(
@@ -3621,6 +3630,7 @@ async fn las_columnas_de_otro_esquema_no_estan_muertas() {
         profile: None,
         columns: norte_frontend::columns::ColumnsSettings::resolve(&cfg),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -3700,6 +3710,7 @@ prepend_keymap = [
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -4789,6 +4800,7 @@ async fn host_con_rutas(paths: norte_ui_host::settings::HostPaths) -> UiHost {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca")
@@ -5370,6 +5382,7 @@ async fn host_con_tema(theme: norte_ui_host::pickers::HostTheme) -> UiHost {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca")
@@ -5567,6 +5580,7 @@ async fn host_full(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot)
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca")
@@ -5873,6 +5887,7 @@ async fn un_click_en_la_barra_no_navega_a_otro_sitio_si_la_lista_cambio() {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -5978,6 +5993,7 @@ async fn un_favorito_roto_se_ve_y_dice_por_que() {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -6187,6 +6203,7 @@ async fn una_disposicion_rota_se_ve_y_no_se_aplica() {
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
         profile: None,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -6264,6 +6281,7 @@ async fn una_disposicion_que_esconde_el_listado_deja_el_hueco_vivo() {
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
         profile: None,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -6847,6 +6865,7 @@ async fn ninguna_superficie_enmascara_en_silencio() {
             profile: None,
             columns: norte_ui_host::columnas_por_defecto(),
             effects: norte_ui_host::commands::Efectos::Completo,
+            log_ring: None,
         })
         .await
         .expect("arranca");
@@ -6988,6 +7007,7 @@ async fn a_los_plugins_solo_se_les_pregunta_por_la_ventana() {
         profile: None,
         columns: columnas_de(&["name", "size", "plugin:acme.git/status"]),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -7056,6 +7076,7 @@ async fn la_insignia_de_un_plugin_llega_a_la_fila() {
         profile: None,
         columns: columnas_de(&["name", "plugin:acme.git/status"]),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -7263,6 +7284,7 @@ async fn encender_una_columna_attr_vuelve_a_listar() {
         // SIN la columna de modo: encenderla es lo que cambia la huella.
         columns: columnas_de(&["name", "size", "attr:posix.mode"]),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -9113,6 +9135,7 @@ kind = "status"
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -11157,6 +11180,330 @@ async fn una_sesion_en_claro_deja_aviso_persistente() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// El panel de registro (#326).
+// ---------------------------------------------------------------------------
+
+/// Emite unas líneas DENTRO del anillo, por su camino de verdad.
+///
+/// Por la capa de `tracing` y no por un `push` directo: el anillo no expone
+/// uno, y no debe — el filtro por el que pasa la capa es donde vive la cota de
+/// `suppaftp`, que loguea `PASS <contraseña>` a nivel TRACE. Un atajo para los
+/// tests que se saltara esa cota probaría un camino que no existe.
+fn con_lineas(anillo: &norte_config::logring::LogRing, f: impl FnOnce()) {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(anillo));
+    tracing::subscriber::with_default(s, f);
+}
+
+/// Un host con un anillo de registro montado y unas cuantas líneas dentro.
+async fn host_con_registro() -> (UiHost, norte_config::logring::LogRing) {
+    let anillo = norte_config::logring::LogRing::new(64);
+    // A DEBUG para que las cinco quepan; el panel enseña hasta INFO al abrirse,
+    // que es lo que hace interesante el test del filtro por nivel.
+    anillo.set_level(norte_config::logline::LogLevel::Debug);
+    let h = UiHost::start(UiHostOptions {
+        backend: Falso::con(&["a"]),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
+        viewport: (120, 40),
+        settings: norte_ui_host::ajustes_por_defecto(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: Some(anillo.clone()),
+    })
+    .await
+    .expect("arranca")
+    .0;
+    // La disposición de arranque no lleva registro: se abre con su tecla, que
+    // es como lo abre una persona. Y así el test cubre TAMBIÉN que
+    // `layout.log` esté atado y llegue al efecto.
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "l".to_owned(),
+        ctrl: false,
+        alt: true,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+    (h, anillo)
+}
+
+/// El hueco de registro de la foto, si está.
+fn registro(snap: &norte_ui_host::ViewSnapshot) -> &norte_ui_host::dto::LogSlotView {
+    snap.slots
+        .iter()
+        .find_map(|s| match s {
+            SlotView::Log(l) => Some(&**l),
+            _ => None,
+        })
+        .expect("hay un hueco de registro")
+}
+
+/// #326: la ventana PINTA el registro, con su nivel, su filtro y su origen.
+///
+/// Antes caía a «kind no soportado», en gris: abrir un hueco que solo se pinta
+/// apagado no es abrirlo. Y el panel dice de qué PROCESO son las líneas,
+/// porque la ventana arranca su propio daemon y las suyas no son las de él —
+/// callarlo haría que el panel pareciera roto.
+#[tokio::test]
+async fn la_ventana_pinta_el_registro() {
+    let (h, anillo) = host_con_registro().await;
+    con_lineas(&anillo, || {
+        tracing::info!(target: "norte_prueba", "una linea de prueba");
+    });
+    let mut sub = h.subscribe();
+
+    let vista = foto_hasta(&h, &mut sub, "el panel de registro", |f| {
+        f.slots
+            .iter()
+            .find_map(|s| match s {
+                SlotView::Log(l) => Some((**l).clone()),
+                _ => None,
+            })
+            .filter(|l| !l.lines.is_empty())
+    })
+    .await;
+    assert_eq!(vista.level, "info", "abre en INFO, como el anillo");
+    assert!(vista.following, "nace pegado al final");
+    assert_eq!(
+        vista.source,
+        norte_i18n::t_in(norte_i18n::Lang::Es, "log-source-window"),
+        "dice de qué proceso son las líneas"
+    );
+    assert!(
+        vista.lines.iter().any(|l| l.message.contains("prueba")),
+        "la línea que se acaba de emitir está: {:?}",
+        vista.lines
+    );
+    let _ = anillo;
+}
+
+/// El panel enseña las filas que el RENDERER dice que caben, no una.
+///
+/// El host arranca con una —nunca cero, para que una página mueva algo— y
+/// espera a que le digan el alto. Mientras nadie se lo decía, un panel de doce
+/// filas pintaba UNA línea recortada y la rueda se saltaba dos por muesca: el
+/// mismo defecto que en la TUI se arregló dejando de adivinar el viewport.
+#[tokio::test]
+async fn el_registro_ensena_las_filas_que_le_dicen_que_caben() {
+    let (h, anillo) = host_con_registro().await;
+    con_lineas(&anillo, || {
+        for i in 0..8 {
+            tracing::info!(target: "norte_prueba", n = i, "linea");
+        }
+    });
+    let mut sub = h.subscribe();
+
+    h.dispatch(UiAction::LogSetVisibleRange { rows: 6 })
+        .await
+        .expect("host vivo");
+    let vista = foto_hasta(&h, &mut sub, "seis filas", |f| {
+        let l = registro(f).clone();
+        (l.lines.len() == 6).then_some(l)
+    })
+    .await;
+    assert_eq!(vista.lines.len(), 6);
+    assert_eq!(vista.total, 8, "las ocho pasan el filtro; se ven seis");
+}
+
+/// Un `rows` disparatado se ACOTA: la webview no decide cuánto pesa una foto.
+///
+/// Sin techo, un `rows` de cuatro mil millones hace que cada foto lleve el
+/// anillo entero — dos mil líneas por acción, que es justo lo que la decisión
+/// D7 existe para impedir. El camino del listado ya se acotaba igual.
+#[tokio::test]
+async fn un_alto_disparatado_no_manda_el_anillo_entero() {
+    let (h, anillo) = host_con_registro().await;
+    con_lineas(&anillo, || {
+        for i in 0..40 {
+            tracing::info!(target: "norte_prueba", n = i, "linea");
+        }
+    });
+    let mut sub = h.subscribe();
+
+    h.dispatch(UiAction::LogSetVisibleRange { rows: u32::MAX })
+        .await
+        .expect("host vivo");
+    asentar().await;
+    let vista = foto_hasta(&h, &mut sub, "el registro acotado", |f| {
+        Some(registro(f).clone())
+    })
+    .await;
+    assert!(
+        vista.lines.len() <= 512,
+        "viajaron {} líneas: el techo no se aplicó",
+        vista.lines.len()
+    );
+}
+
+/// Cerrar el panel BAJA lo que el proceso captura.
+///
+/// El nivel del anillo se sube en caliente para poder enseñar más, y solo
+/// sube. Sin esto, una sola pulsación de «traza» dejaba el proceso guardando
+/// TRACE en memoria el resto de la sesión —con la cota de `suppaftp` como
+/// única barrera— y la interfaz diciendo «info», sin ningún panel donde verlo.
+#[tokio::test]
+async fn cerrar_el_panel_baja_lo_que_se_captura() {
+    let (h, anillo) = host_con_registro().await;
+    h.dispatch(UiAction::LogSetLevel {
+        level: "trace".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    asentar().await;
+    assert_eq!(anillo.level(), norte_config::logline::LogLevel::Trace);
+
+    // Y mientras esté abierto, el panel DICE que se captura más de lo que
+    // enseña: una captura de pantalla que dijera «info» sobre un proceso
+    // guardando TRACE sería una respuesta falsa.
+    h.dispatch(UiAction::LogSetLevel {
+        level: "info".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let mut sub = h.subscribe();
+    let vista = foto_hasta(&h, &mut sub, "el aviso de captura", |f| {
+        let l = registro(f).clone();
+        (!l.capturing.is_empty()).then_some(l)
+    })
+    .await;
+    assert!(vista.capturing.contains("trace"), "{}", vista.capturing);
+
+    // Cerrarlo con la misma tecla que lo abrió.
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "l".to_owned(),
+        ctrl: false,
+        alt: true,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+    asentar().await;
+    assert_eq!(
+        anillo.level(),
+        norte_config::logline::LogLevel::Info,
+        "cerrar el panel deja de capturar lo que ya no se enseña"
+    );
+}
+
+/// Pedir DEBUG SUBE el nivel del anillo, y bajar a ERROR no deja de capturar.
+///
+/// Las dos mitades importan y las dos son de `LogPanel`: filtrar en la
+/// pantalla lo que nunca se registró es imposible, así que pedir DEBUG tiene
+/// que hacer que el anillo empiece a capturarlo; y si bajar dejara de
+/// capturar, volver a subir enseñaría un agujero del tamaño del rato que se
+/// estuvo abajo.
+#[tokio::test]
+async fn el_nivel_del_panel_sube_el_del_anillo_y_no_lo_baja() {
+    let (h, anillo) = host_con_registro().await;
+    anillo.set_level(norte_config::logline::LogLevel::Info);
+
+    h.dispatch(UiAction::LogSetLevel {
+        level: "debug".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    asentar().await;
+    assert_eq!(
+        anillo.level(),
+        norte_config::logline::LogLevel::Debug,
+        "pedir DEBUG hace que el anillo lo capture"
+    );
+
+    h.dispatch(UiAction::LogSetLevel {
+        level: "error".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    asentar().await;
+    assert_eq!(
+        anillo.level(),
+        norte_config::logline::LogLevel::Debug,
+        "bajar lo que se ENSEÑA no deja de capturar"
+    );
+}
+
+/// Un nivel que no existe se DICE; no cae en `info`.
+#[tokio::test]
+async fn un_nivel_de_registro_desconocido_no_cae_en_otro() {
+    let (h, _anillo) = host_con_registro().await;
+    let ack = h
+        .dispatch(UiAction::LogSetLevel {
+            level: "verboso".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Unavailable {
+            reason_key: "host-log-level-unknown".to_owned()
+        }
+    );
+}
+
+/// El filtro recorta, y despegarse del final se DICE.
+///
+/// «No pasa nada» y «te has despegado y esto es historia» son indistinguibles
+/// sin decirlo, y eso es la mitad de para qué sirve el panel: uno que salta
+/// siempre al final no se puede leer mientras algo escribe.
+#[tokio::test]
+async fn el_filtro_recorta_y_despegarse_se_dice() {
+    let (h, anillo) = host_con_registro().await;
+    con_lineas(&anillo, || {
+        tracing::info!(target: "norte_prueba", "aguja");
+        tracing::info!(target: "norte_prueba", "pajar uno");
+        tracing::info!(target: "norte_prueba", "pajar dos");
+    });
+    let mut sub = h.subscribe();
+
+    h.dispatch(UiAction::LogSetFilter {
+        filter: "aguja".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let vista = foto_hasta(&h, &mut sub, "el registro filtrado", |f| {
+        let l = registro(f).clone();
+        (l.filter == "aguja").then_some(l)
+    })
+    .await;
+    assert_eq!(vista.total, 1, "solo la que casa: {:?}", vista.lines);
+
+    // Y despegarse: subir por el registro deja de seguir el final.
+    h.dispatch(UiAction::LogSetFilter {
+        filter: String::new(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::LogScroll { delta: -1 })
+        .await
+        .expect("host vivo");
+    let vista = foto_hasta(&h, &mut sub, "el registro despegado", |f| {
+        let l = registro(f).clone();
+        (!l.following).then_some(l)
+    })
+    .await;
+    assert!(!vista.following);
+
+    h.dispatch(UiAction::LogFollow).await.expect("host vivo");
+    let vista = foto_hasta(&h, &mut sub, "el registro pegado", |f| {
+        let l = registro(f).clone();
+        l.following.then_some(l)
+    })
+    .await;
+    assert!(vista.following, "volver al final se puede pedir");
+}
+
 /// Entra en `docs`, que es la navegación que dispara el listado remoto.
 async fn entrar_en_docs(h: &UiHost, snap: &norte_ui_host::ViewSnapshot) {
     let docs = listado(snap)
@@ -12466,6 +12813,7 @@ async fn en_solo_lectura_no_se_para_la_task_de_otro() {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::SoloLectura,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -12636,6 +12984,7 @@ async fn un_kind_desconocido_con_nombre_alterado_va_marcado() {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -12808,6 +13157,7 @@ async fn en_solo_lectura_no_hay_busqueda_semantica() {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::SoloLectura,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -14609,6 +14959,7 @@ async fn las_teclas_de_un_dialogo_las_pone_el_preset() {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -14799,6 +15150,7 @@ async fn host_en(backend: Arc<Falso>, inicio: &str) -> (UiHost, norte_ui_host::V
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca")
@@ -15570,6 +15922,7 @@ async fn una_tecla_reatada_contesta_el_dialogo() {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -15947,6 +16300,7 @@ async fn host_con_capas_y_favoritos(
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca")
@@ -16158,6 +16512,7 @@ async fn con_la_fila_de_subir_el_listado_la_lleva_primera() {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -17244,6 +17599,7 @@ async fn un_favorito_invalido_se_queda_y_se_dice() {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");
@@ -17429,6 +17785,7 @@ async fn la_config_siembra_la_ocultacion() {
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
     })
     .await
     .expect("arranca");

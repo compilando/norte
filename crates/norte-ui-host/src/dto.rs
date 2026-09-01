@@ -1457,6 +1457,8 @@ pub enum SlotView {
         /// Qué fila tiene el cursor, si hay alguna.
         cursor: Option<u64>,
     },
+    /// El panel de registro: lo que este proceso está registrando (#326).
+    Log(Box<LogSlotView>),
     /// Un hueco de un tipo que este host todavía no proyecta. Se enseña
     /// vacío y con su nombre: preservar lo que no se entiende es la regla de
     /// la sesión (ADR 0059), y desaparecer sería peor que estar en gris.
@@ -1469,6 +1471,100 @@ pub enum SlotView {
         /// El nombre pintado difiere del que hay en el fichero (#266).
         kind_name_hostile: bool,
     },
+}
+
+/// El panel de registro (#326): la ventana visible del anillo en memoria.
+///
+/// Solo la VENTANA, como el listado: un anillo de dos mil líneas mandado entero
+/// en cada parche es el derroche que la decisión D7 existe para evitar, y el
+/// registro se mueve más que un directorio.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogSlotView {
+    /// Id del hueco.
+    pub slot_id: u32,
+    /// Las líneas visibles, de arriba abajo y ya saneadas.
+    pub lines: Vec<LogLineView>,
+    /// Hasta qué nivel se está ENSEÑANDO, en su forma de wire.
+    ///
+    /// Vocabulario cerrado (`error`, `warn`, `info`, `debug`, `trace`) y no la
+    /// etiqueta traducida: el renderer marca cuál está puesto, y comparar
+    /// frases traducidas para eso obligaría al renderer a conocer el idioma
+    /// del host.
+    pub level: String,
+    /// El filtro de texto vigente, enmascarado y acotado. Vacío = todo.
+    ///
+    /// Lo teclea el lector, así que puede traer controles y marcas de
+    /// dirección: es texto para pintar como cualquier otro.
+    pub filter: String,
+    /// Está pegado al final y sigue lo que llega.
+    ///
+    /// Se dice porque es la diferencia entre «no pasa nada» y «te has
+    /// despegado y esto es historia»: sin ello, un panel quieto durante una
+    /// operación larga se lee igual en los dos casos.
+    pub following: bool,
+    /// Cuántas líneas pasan el filtro, para poder situar la ventana.
+    pub total: u64,
+    /// Índice de la primera línea que viaja en `lines`, dentro de las
+    /// filtradas.
+    pub first_visible: u64,
+    /// Cuántas líneas TIRÓ el anillo por quedarse sin sitio, ya DICHO.
+    ///
+    /// Se dice: un registro con un agujero silencioso miente sobre lo que
+    /// pasó, y la ausencia de una línea es indistinguible de que el evento no
+    /// ocurriera.
+    ///
+    /// Traducido aquí y con el NÚMERO dentro, no un `u64` para que el renderer
+    /// componga la frase: un renderer no traduce ni sustituye números. Es la
+    /// misma regla que `BrowserSlotView::skipped_note`. Vacío = ninguna.
+    pub dropped_note: String,
+    /// El nivel que el proceso está CAPTURANDO, si es MÁS que el que se
+    /// enseña. Ya traducido; vacío = son el mismo.
+    ///
+    /// Existe porque los dos niveles se separan a propósito —bajar lo que se
+    /// enseña no deja de capturar, o volver a subir mostraría un agujero— y
+    /// entonces el panel puede decir «info» mientras el proceso guarda TRACE
+    /// en memoria. Quien mira tiene derecho a saber que se está recogiendo más
+    /// de lo que ve, sobre todo antes de hacer una captura de pantalla.
+    pub capturing: String,
+    /// De qué PROCESO son estas líneas, ya traducido.
+    ///
+    /// Existe porque en la ventana la respuesta no es obvia y además no es la
+    /// que uno espera: `norte-gui` arranca su propio daemon (#300), así que
+    /// este anillo lleva lo del proceso de la VENTANA y **no** lo del daemon,
+    /// que es donde pasa la mitad interesante —los providers, el journal, la
+    /// política—. En la TUI embebida son el mismo proceso y no se nota.
+    ///
+    /// Callarlo haría que el panel pareciera roto: alguien abre el registro
+    /// mientras una conexión falla, no ve la línea que lo explica, y concluye
+    /// que el panel no funciona en vez de que está mirando otro proceso.
+    /// Llevar las líneas del daemon por el cable es otra cosa, y es #328.
+    pub source: String,
+}
+
+/// Una línea del registro, ya lista para pintar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogLineView {
+    /// La hora `HH:MM:SS`, en UTC.
+    ///
+    /// UTC y no local, igual que la columna de fecha en ISO: este árbol no
+    /// lleva base de datos de husos, y una hora local inventada a partir de
+    /// un desplazamiento fijo sería mentira dos veces al año. Lo que se
+    /// compara aquí son líneas entre sí, y para eso el huso da igual
+    /// mientras sea el mismo.
+    pub time: String,
+    /// El nivel, en su forma de wire — el renderer lo colorea por esto.
+    pub level: String,
+    /// El módulo que la emitió, enmascarado y acotado.
+    pub target: String,
+    /// El mensaje, enmascarado y acotado.
+    ///
+    /// Enmascarado como cualquier otro texto que se pinta, y aquí con un
+    /// motivo propio: un mensaje de registro puede llevar dentro el nombre de
+    /// un fichero que alguien eligió, y un `U+202E` ahí reordena la línea
+    /// entera del panel.
+    pub message: String,
+    /// Lo pintado difiere de lo que hay, en el módulo o en el mensaje.
+    pub hostile: bool,
 }
 
 /// El listado de un hueco.

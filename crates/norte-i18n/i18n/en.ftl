@@ -767,6 +767,15 @@ places-empty = nothing here yet
 # Fase A: el panel de procesos y la hoja de atributos. Dos paneles nuevos que
 # se abren a mano; la franja de tareas de siempre no se toca.
 processes-title = Processes
+log-level = level
+log-level-error = error
+log-level-warn = warn
+log-level-info = info
+log-level-debug = debug
+log-level-trace = trace
+log-filter = filter module or message
+log-follow = go to the end
+log-detached = detached from the end
 processes-empty = nothing running
 processes-has-keyboard = this panel has the keyboard · Esc returns it
 
@@ -1848,6 +1857,8 @@ host-layout-broken = that layout file does not parse
 host-name-too-long = that name is too long
 host-secret-empty = type the password: handing over an empty one changes identity, not session
 host-secret-too-long = the password does not fit: the cap is 256 characters
+host-log-level-unknown = that log level does not exist
+log-source-window = from this window (the daemon logs separately)
 host-name-not-editable = that name does not fit on screen: it cannot be edited here without truncating it
 host-cannot-transfer-root = a root cannot be copied or moved
 host-no-other-slot = there is no other panel
