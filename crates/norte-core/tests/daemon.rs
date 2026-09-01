@@ -30,6 +30,59 @@ fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("wire válido de test")
 }
 
+/// Cuánto se le da a una condición del daemon antes de darla por rota.
+///
+/// **Aquí sondear está BIEN, y es la diferencia con `norte-ui-host`.** Allí el
+/// actor vive en el proceso del test y se puede esperar a que el ejecutor se
+/// quede ocioso; aquí hay un daemon de verdad al otro lado de un socket de
+/// verdad, y no hay forma de saber que ha terminado de pensar salvo
+/// preguntándole. Lo que NO vale es dormir un plazo fijo y afirmar: eso es una
+/// apuesta sobre cuánto tarda una máquina cargada.
+///
+/// El plazo es presupuesto de FALLO, no de espera: en verde no se consume.
+const PLAZO: Duration = Duration::from_secs(10);
+
+/// Sondea `cond` hasta que sea cierta, y falla NOMBRANDO lo que esperaba.
+///
+/// El respiro entre sondeos existe para no quemar CPU contra un socket; no es
+/// lo que sostiene la prueba —eso lo hace la condición— y por eso el test no
+/// se vuelve más frágil si la máquina va lenta: solo da más vueltas.
+macro_rules! hasta {
+    ($que_esperaba:expr, $cond:expr) => {{
+        let limite = tokio::time::Instant::now() + PLAZO;
+        loop {
+            if $cond {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < limite,
+                "nunca ocurrió: {}",
+                $que_esperaba
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }};
+}
+
+/// El id de petición que la task de fondo deja en su hueco, cuando llega.
+///
+/// Seis tests lo esperaban con un `loop` SIN plazo: si el id no llegaba, el
+/// test se colgaba en vez de fallar — y un test colgado no dice qué esperaba.
+/// Es el mismo defecto que un `sleep` a ciegas, con otra cara.
+async fn esperar_id(slot: &Arc<std::sync::Mutex<Option<u64>>>) -> u64 {
+    let limite = tokio::time::Instant::now() + PLAZO;
+    loop {
+        if let Some(id) = *slot.lock().expect("id lock") {
+            return id;
+        }
+        assert!(
+            tokio::time::Instant::now() < limite,
+            "la petición de fondo nunca publicó su id"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
     let mut sink = mem.write(&vp(wire)).await.expect("write abre");
     sink.write(Bytes::copy_from_slice(content))
@@ -745,6 +798,14 @@ async fn fs_list_ttl_expira_el_listado() {
     let c = connected_client(&d).await;
     let page = list_page(&c, "mem:///", Some(1), None).await;
     let cur = page.next_cursor.expect("retiene");
+    // Un temporizador DEL SISTEMA BAJO PRUEBA, no una espera nuestra: lo que
+    // este test comprueba es que el TTL de 150 ms caduca el listado, así que
+    // hay que dejar pasar ese tiempo. No se puede sondear —caducar es dejar de
+    // estar— ni saltar con reloj virtual: el daemon corre en su propio runtime
+    // y sus temporizadores no los controla el test.
+    //
+    // Hacerlo determinista pide inyectar el reloj en el daemon, que es cambio
+    // de producción y no lo vale por un test. Los 400 ms son 2,6× el plazo.
     tokio::time::sleep(Duration::from_millis(400)).await;
     let err = c
         .call::<_, FsListResult>(
@@ -1311,18 +1372,23 @@ async fn pending_scope_se_limpia_al_desconectar_el_agente() {
         // `agent` se dropea aquí: su mitad de escritura cierra, el daemon ve
         // EOF y ejecuta la limpieza de sus pendientes.
     };
-    // La limpieza es asíncrona del lado del daemon: margen generoso sobre UDS
-    // local antes de comprobar (patrón de los otros tests con timing).
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // La limpieza es asíncrona del lado del daemon: se PREGUNTA hasta que la
+    // pendiente no está, en vez de dormir un margen y afirmar. Un margen fijo
+    // es una apuesta sobre la máquina; esto falla diciendo qué esperaba.
     let human = connected_client(&d).await;
-    let err = human
-        .call::<_, GrantScopeResult>(
-            methods::POLICY_GRANT_SCOPE,
-            &GrantScopeParams { request_id },
-        )
-        .await
-        .expect_err("la pendiente no debía sobrevivir a su conexión");
-    assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
+    hasta!("la pendiente del agente muerto se limpia", {
+        let r = human
+            .call::<_, GrantScopeResult>(
+                methods::POLICY_GRANT_SCOPE,
+                &GrantScopeParams { request_id },
+            )
+            .await;
+        // La condición ES la aserción: se sale del bucle solo con el error
+        // TIPADO que se espera. Cualquier otra cosa —éxito, u otro código—
+        // sigue dando vueltas y acaba en el fallo con nombre del plazo, que
+        // dice qué se esperaba en vez de dónde reventó.
+        matches!(&r, Err(ClientError::Rpc(rpc)) if rpc.code == codes::INVALID_PARAMS)
+    });
 }
 
 /// Un agente no puede pedir scope para OTRA sesión (la identidad la fija la
@@ -2252,6 +2318,11 @@ async fn daemon_se_apaga_solo_por_inactividad() {
     let d = spawn_daemon(Some(Duration::from_millis(1200))).await;
     {
         // Una conexión breve: mientras vive, no hay apagado.
+        //
+        // Otro temporizador DEL SISTEMA BAJO PRUEBA: hay que pasar del plazo
+        // de inactividad (1,2 s) para poder afirmar que NO se apagó. Es una
+        // aserción negativa sobre un plazo ajeno, así que no hay condición que
+        // sondear: la prueba es que a los 1,5 s siga vivo.
         let _c = connected_client(&d).await;
         tokio::time::sleep(Duration::from_millis(1500)).await;
         assert!(!d.run.is_finished(), "con cliente vivo no se apaga");
@@ -2478,8 +2549,10 @@ async fn call_tras_el_cierre_no_se_cuelga() {
         .expect("apagado")
         .expect("join")
         .expect("run ok");
-    // Dar tiempo a que el reader del cliente vea el EOF.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Sin margen fijo: lo que este test afirma es que la llamada CONTESTA y
+    // jamás se cuelga, y eso ya lo sostiene el `timeout` de abajo. Dormir
+    // antes solo hacía que el caso interesante —llamar ANTES de que el reader
+    // vea el EOF— nunca se probara.
     let err = tokio::time::timeout(
         Duration::from_secs(5),
         c.call::<_, FsListResult>(
@@ -4360,12 +4433,7 @@ async fn rpc_cancel_retira_el_ask_suspendido_sin_matar_la_conexion() {
     );
 
     // El agente RETIRA su request suspendida (rpc.cancel, best-effort notify).
-    let id = loop {
-        if let Some(id) = *id_slot.lock().expect("id lock") {
-            break id;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    };
+    let id = esperar_id(&id_slot).await;
     agent
         .notify(
             methods::RPC_CANCEL,
@@ -4458,12 +4526,7 @@ async fn cancel_gana_a_un_decide_posterior() {
     let notif = next_approval(&mut human).await;
 
     // ACCIÓN 1 (única "primera"): el agente RETIRA la request suspendida.
-    let id = loop {
-        if let Some(id) = *id_slot.lock().expect("id lock") {
-            break id;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    };
+    let id = esperar_id(&id_slot).await;
     agent
         .notify(
             methods::RPC_CANCEL,
@@ -4561,12 +4624,7 @@ async fn decide_gana_a_un_cancel_posterior() {
 
     // ACCIÓN 2 (llega TARDE): rpc.cancel de la request YA resuelta. No-op
     // benigno — NO debe perturbar la conexión del agente.
-    let id = loop {
-        if let Some(id) = *id_slot.lock().expect("id lock") {
-            break id;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    };
+    let id = esperar_id(&id_slot).await;
     agent
         .notify(
             methods::RPC_CANCEL,
@@ -4643,12 +4701,7 @@ async fn frames_pipelined_durante_un_ask_se_procesan_tras_el_desenlace() {
             .await
     });
     let _notif = next_approval(&mut human).await;
-    let copy_id = loop {
-        if let Some(id) = *id_slot.lock().expect("id lock") {
-            break id;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    };
+    let copy_id = esperar_id(&id_slot).await;
 
     // Con la copia suspendida, el agente pipelinea 5 fs.stat: el daemon las
     // lee del socket y las difiere (no las despacha hasta que el Ask resuelva).
@@ -4667,6 +4720,13 @@ async fn frames_pipelined_durante_un_ask_se_procesan_tras_el_desenlace() {
         }));
     }
     // Deja que los 5 frames lleguen al daemon (se bufferizan tras la copia).
+    //
+    // ESTE `sleep` se queda y no hay forma de afinarlo: lo que se espera es
+    // que el daemon los haya LEÍDO y DIFERIDO, y diferir es exactamente no
+    // contestar nada — no hay observable que sondear. Sostiene el SIGNIFICADO
+    // del test, no su corrección: sin él, un frame que no hubiera llegado
+    // antes del cancel se despacharía por el camino normal y el test pasaría
+    // sin haber ejercitado el diferido. Quitarlo no lo pone rojo; lo vacía.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // El agente retira la copia → se libera el dispatch; los 5 stats diferidos
@@ -6337,6 +6397,10 @@ impl norte_ai::AiProvider for FakeAi {
         _req: norte_ai::ChatRequest,
     ) -> Result<norte_ai::ChatStream, norte_ai::AiError> {
         use futures::StreamExt as _;
+        // Latencia SIMULADA del proveedor, no una espera del test: es lo que
+        // abre la ventana en la que un `rpc.cancel` llega con la petición en
+        // vuelo. Este `sleep` se queda, como el `retraso_ms` del doble de
+        // `norte-ui-host`.
         if let Some(d) = self.delay {
             tokio::time::sleep(d).await;
         }
@@ -6684,12 +6748,7 @@ async fn rpc_cancel_aborta_ai_rename_plan_en_vuelo() {
             .await
     });
 
-    let id = loop {
-        if let Some(id) = *id_slot.lock().expect("id lock") {
-            break id;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    };
+    let id = esperar_id(&id_slot).await;
     c.notify(
         methods::RPC_CANCEL,
         &methods::RpcCancelParams {
@@ -6999,12 +7058,7 @@ async fn rpc_cancel_aborta_search_semantic_en_vuelo() {
             .await
     });
 
-    let id = loop {
-        if let Some(id) = *id_slot.lock().expect("id lock") {
-            break id;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    };
+    let id = esperar_id(&id_slot).await;
     c.notify(
         methods::RPC_CANCEL,
         &methods::RpcCancelParams {
