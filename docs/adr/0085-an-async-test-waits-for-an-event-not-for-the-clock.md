@@ -76,10 +76,24 @@ waiting for instead of exploding in a later assertion that explains nothing.
 ### `asentar` — "is it certain that nothing happened?"
 
 For a negative claim there is no event to wait for. What has to be guaranteed
-is that anything the actor may have spawned before answering the ack has had
-its turn, so `asentar` yields the executor 32 times. Yielding is not a clock:
-it does not get worse under load, which is the entire difference. The file
-already used this shape (`siguiente_recuento`, 200 `yield_now`); this names it.
+is that anything the actor may have spawned before answering the ack has
+actually run. The gap is narrow and specific: the actor validates, spawns and
+*then* answers; the double records on entry to the backend method, but that
+method is only called when the spawned task gets its first poll.
+
+**With the clock paused, Tokio only advances time when it has no runnable
+work.** So awaiting one virtual millisecond *is* "wait until the executor runs
+dry": when it returns, every task spawned earlier has been polled at least once
+and is finished or awaiting something. It costs no real time and guesses
+nothing.
+
+The first version of this yielded 32 times, and that was a bet wearing another
+name — Tokio's own documentation says `yield_now` may re-poll the same task
+immediately, so "32 yields" never guaranteed the others had progressed.
+Measured afterwards: **thirty-three of these negative checks rested on that
+alone**, the rest also asserting on the ack, which is synchronous and sound.
+Replacing it also collapsed the double's simulated latencies, taking the
+controller binary from about thirteen seconds to 1.4.
 
 For "no further snapshot arrived", `asentar` is followed by
 `timeout(Duration::ZERO, sub.recv())` — a single poll, not a wait.

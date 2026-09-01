@@ -322,9 +322,9 @@ async fn siguiente_foto(sub: &mut norte_ui_host::UiSubscription) -> norte_ui_hos
 // - «¿ya pasó X?» → [`hasta`], que espera el AVISO del doble. Cuesta cero en
 //   el camino verde y nombra lo que esperaba cuando falla. Su forma corta,
 //   para el caso más común, es [`anotados`].
-// - «¿seguro que NO pasó nada?» → [`asentar`], que deja correr lo que ya está
-//   en la cola del ejecutor cediendo el turno. No es un reloj: no se degrada
-//   bajo carga.
+// - «¿seguro que NO pasó nada?» → [`asentar`], que espera a que al ejecutor no
+//   le quede trabajo listo. Con el reloj parado eso es el CONTRATO de tokio,
+//   no una apuesta sobre el planificador.
 // - «¿y cuando el doble no lo ve?» → [`foto_hasta`], que pide fotos hasta que
 //   la pantalla lo diga. Es lo que queda para una escritura que vuelve por
 //   `spawn_blocking` o un panel que se resiembra.
@@ -391,16 +391,42 @@ async fn foto_hasta<T>(
     v
 }
 
-/// Deja correr lo que YA está encolado, cediendo el turno.
+/// Espera a que al ejecutor NO le quede trabajo listo.
 ///
 /// Es la respuesta a «no se encoló nada»: ahí no hay evento que esperar, así
 /// que lo que hay que garantizar es que las tasks que el actor pudiera haber
-/// lanzado antes de contestar el ack han tenido su turno. Ceder no depende
-/// del reloj, que es la diferencia con dormir.
+/// lanzado antes de contestar el ack ya han corrido. El hueco es estrecho y
+/// concreto: el actor valida, hace `tokio::spawn` y CONTESTA el ack; el doble
+/// anota al entrar en el método, pero ese método solo se llama cuando la task
+/// lanzada recibe su primer poll.
+///
+/// **Con el reloj PARADO, tokio solo adelanta el tiempo cuando no le queda
+/// nada que correr.** O sea que dormir un instante virtual es exactamente
+/// «espera a que el ejecutor se quede sin trabajo»: cuando esto vuelve, toda
+/// task lanzada antes ha sido sondeada al menos una vez y está terminada o
+/// esperando algo. No cuesta tiempo real y no adivina nada.
+///
+/// Antes eran 32 `yield_now()`, y eso era una apuesta con otro nombre: la
+/// documentación de tokio dice que `yield_now` puede volver a sondear la misma
+/// task inmediatamente, así que «32 cesiones» no garantizaba que las demás
+/// hubieran avanzado. Treinta y tres de estas comprobaciones negativas
+/// dependían solo de eso.
+///
+/// El plazo es de socorro, no de espera: si el ejecutor nunca se queda quieto
+/// —una task que gira— esto lo dice en vez de colgarse para siempre.
 async fn asentar() {
-    for _ in 0..32 {
-        tokio::task::yield_now().await;
-    }
+    const SOCORRO: std::time::Duration = std::time::Duration::from_secs(15);
+    let quieto = async {
+        tokio::time::pause();
+        // Un instante VIRTUAL: el auto-avance del reloj parado no ocurre
+        // hasta que el ejecutor está ocioso, que es justo lo que se espera.
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        tokio::time::resume();
+    };
+    assert!(
+        tokio::time::timeout(SOCORRO, quieto).await.is_ok(),
+        "el ejecutor nunca se quedó sin trabajo: hay una task que gira"
+    );
 }
 
 /// Un nombre que no es UTF-8 cruza el bridge MARCADO y con el reemplazo
