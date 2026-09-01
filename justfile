@@ -146,16 +146,26 @@ ci: _disk lint test cov docs
 ci-fast: _disk lint test docs
     @just _sellar
 
-# Deja constancia de que el ÁRBOL actual pasó el gate, para que el `pre-push`
-# no lo repita. El hash es del árbol y no del commit: lo que se validó es el
-# contenido. Vive en `target/`, o sea que no se versiona ni viaja a otra
-# máquina — el sello vale donde se corrió.
+# Deja constancia de que este CONTENIDO pasó el gate, para que el `pre-push`
+# no lo repita. Vive en `target/`: no se versiona ni viaja a otra máquina — el
+# sello vale donde se corrió.
 #
 # Sin esto, quien hace lo correcto (correr el gate y luego empujar) lo paga dos
 # veces, y un suelo que cuesta veinte minutos acaba siendo un `--no-verify` de
 # costumbre.
+#
+# Se hashea el ÁRBOL DE TRABAJO y no `HEAD^{tree}`. La primera versión hacía lo
+# segundo y no servía para nada en el flujo normal: cuando corres el gate, tus
+# cambios todavía no están commiteados, así que sellaba el árbol del commit
+# ANTERIOR y el hook volvía a pagarlo entero. Lo demostró el primer push que lo
+# usó. Lo que el gate valida son los ficheros del disco, así que es eso lo que
+# se sella. Cuesta 0,2 s sobre 1.248 ficheros.
 _sellar:
-    @git rev-parse 'HEAD^{tree}' > target/.norte-gate-ok 2>/dev/null || true
+    @just _huella > target/.norte-gate-ok 2>/dev/null || true
+
+# La huella del contenido seguido por git, tal como está en el disco.
+_huella:
+    @git ls-files -z | xargs -0 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1
 
 # Instala los hooks del repositorio (`.githooks/`). Una vez por clon.
 #

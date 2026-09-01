@@ -35,14 +35,18 @@ cd "$RAIZ" || exit 1
 # commits tardó tanto que hubo que saltarlo — habiendo corrido `just ci`
 # entero, cobertura incluida, cinco minutos antes.
 #
-# El sello es el HASH DEL ÁRBOL, no el del commit: lo que el gate valida es el
-# contenido, así que reordenar commits o cambiar un mensaje no invalida nada, y
-# cambiar un byte de código sí. Correr `just ci` (o `ci-fast`) y empujar a
-# continuación es instantáneo; solo paga quien no lo corrió.
+# El sello es el hash del CONTENIDO seguido por git, tal como está en el disco
+# — no `HEAD^{tree}`. La primera versión usaba eso y no servía en el flujo
+# normal: al correr el gate los cambios aún no están commiteados, así que
+# sellaba el árbol del commit anterior. Lo demostró el primer push que lo usó.
+#
+# Así, reordenar commits o cambiar un mensaje no invalida nada, y cambiar un
+# byte de código sí. Correr `just ci` (o `ci-fast`) y empujar a continuación es
+# instantáneo; solo paga quien no lo corrió.
 SELLO="$RAIZ/target/.norte-gate-ok"
-ARBOL="$(git rev-parse HEAD^{tree})"
-if [[ -f "$SELLO" ]] && [[ "$(cat "$SELLO" 2>/dev/null)" == "$ARBOL" ]]; then
-    echo "pre-push: el gate ya pasó sobre este árbol ($(echo "$ARBOL" | cut -c1-8))"
+HUELLA="$(git ls-files -z | xargs -0 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1)"
+if [[ -f "$SELLO" ]] && [[ "$(cat "$SELLO" 2>/dev/null)" == "$HUELLA" ]]; then
+    echo "pre-push: el gate ya pasó sobre este contenido (${HUELLA:0:8})"
     exit 0
 fi
 
@@ -80,7 +84,7 @@ if [[ $fallo -eq 0 ]]; then
     # el sello vale para ESTA máquina y este contenido, que es lo que se
     # comprobó.
     mkdir -p "$(dirname "$SELLO")" 2>/dev/null || true
-    printf '%s' "$ARBOL" >"$SELLO" 2>/dev/null || true
+    printf '%s\n' "$HUELLA" >"$SELLO" 2>/dev/null || true
     exit 0
 fi
 
