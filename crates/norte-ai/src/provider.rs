@@ -86,9 +86,53 @@ pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     /// Tope de tokens de salida. `None` = el default del proveedor.
     pub max_tokens: Option<u32>,
-    /// Pide salida JSON estricta contra este schema (solo si el proveedor
-    /// declara [`AiCaps::JSON_OUTPUT`]; si no, se ignora y el caller valida).
-    pub json_schema: Option<serde_json::Value>,
+    /// Pide salida JSON estricta contra este contrato.
+    ///
+    /// Lo ATIENDE el proveedor que declara [`AiCaps::JSON_OUTPUT`]; el que no,
+    /// lo ignora y contesta lo que el prompt le pida. En los dos casos el
+    /// caller valida: un contrato en el cuerpo reduce los errores de formato,
+    /// no sustituye a la validación local.
+    pub json_schema: Option<JsonContract>,
+}
+
+/// Un contrato de salida tipada: cómo se llama y qué forma tiene.
+///
+/// El nombre no es decorativo — el mecanismo nativo de los proveedores
+/// compatibles con `OpenAI` lo exige (`response_format.json_schema.name`), y sin
+/// él cada llamante tendría que inventarse uno. Anthropic no lo usa, así que
+/// viaja igual y se ignora allí.
+///
+/// Existe para que la segunda respuesta tipada del proyecto no vuelva a
+/// empezar por decidir dónde va el schema.
+///
+/// ```
+/// use norte_ai::JsonContract;
+///
+/// let c = JsonContract::new(
+///     "rename_plan",
+///     serde_json::json!({"type": "object", "additionalProperties": false}),
+/// );
+/// assert_eq!(c.name, "rename_plan");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonContract {
+    /// Nombre del schema, tal como lo pide el proveedor que lo necesita.
+    pub name: String,
+    /// El JSON Schema. Objetos con `additionalProperties: false` y `required`
+    /// completo: es lo que los mecanismos nativos aceptan, y lo que hace que
+    /// «faltó un campo» sea un error del proveedor y no una sorpresa nuestra.
+    pub schema: serde_json::Value,
+}
+
+impl JsonContract {
+    /// Un contrato con su nombre y su schema.
+    #[must_use]
+    pub fn new(name: impl Into<String>, schema: serde_json::Value) -> Self {
+        Self {
+            name: name.into(),
+            schema,
+        }
+    }
 }
 
 impl ChatRequest {

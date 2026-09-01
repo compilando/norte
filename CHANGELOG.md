@@ -586,6 +586,48 @@ independently through `PROTOCOL_VERSION`.
   longer in the listing is ignored rather than refusing the plan: between
   marking and asking, a file can be gone.
 
+### Fixed
+
+- **`JSON_OUTPUT` was declared and never honoured** (ADR 0088). `norte-ai` had
+  all three pieces of structured output and none of the wiring: the capability
+  flag, a `ChatRequest::json_schema` field documented as "honoured by a
+  provider that declares it", and two providers declaring it — Anthropic for
+  *whatever model happened to be configured*. Neither provider's request
+  builder read the field, and the only caller, the AI rename plan, set it to
+  `None` while asking for JSON in prose. Nothing failed, because the local
+  validator has always done the real work; that is exactly why it could sit
+  like that. A declared capability that nobody honours is worse than an absent
+  one — absent, the core knows to be careful.
+  The contract now travels, mapped to each provider's native mechanism:
+  `output_config.format` for Anthropic, `response_format` with `strict: true`
+  for OpenAI-compatible. Ollama declares neither and sends neither — it was
+  already honest, and is now the *tested* fallback. The Anthropic capability
+  follows the **model** rather than the vendor, by the same predicate that
+  gates the request body, so the declaration cannot drift from what is sent.
+  Fixtures assert the exact bytes on the socket, not the behaviour.
+  The schema deliberately carries no `minLength`, `pattern` or numeric bounds —
+  Anthropic rejects a schema containing them — and a test forbids them. That
+  limitation makes the security boundary plain: **the rules that matter cannot
+  be expressed as a shape.** That every `from` exists, that `to` is a basename
+  with no traversal, that no destination is duplicated or collides with a file
+  that is not itself being renamed — `{"from":"a","to":"../x"}` satisfies the
+  schema perfectly. So the local validation is unchanged and still runs on
+  every reply, and a test feeds it hostile envelopes to keep it that way.
+  Replies parse in both shapes, so no provider breaks by not supporting the
+  contract. And each exchange now logs provider, whether the contract actually
+  travelled, entry count, bytes, milliseconds and an outcome category — never
+  the instruction, the filenames, the reply, or an error's text.
+
+- **Filenames leaked into the daemon's log on every failed AI plan** (ADR
+  0088). Found by the security review of the change above, and older than it:
+  `ai_to_proto_error` logged the error's `Display` for unmatched variants, and
+  a protocol error from the rename validator embeds the fragment that caused
+  the rejection — a name the model wrote, or, in the collision case, **a real
+  filename from the user's directory**. It went out at WARN every time a plan
+  was rejected, so anyone with the log or a diagnostic bundle had them.
+  Protocol errors now log their category and nothing else. HTTP errors still
+  log their text: a provider's status line has never seen a filename.
+
 ### Added
 
 - **The graphical window is a supported frontend** (ADR 0087). `norte-gui` was

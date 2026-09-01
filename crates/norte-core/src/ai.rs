@@ -6,7 +6,7 @@
 //!
 //! Los proveedores viven en `norte-ai`; aquí solo se orquestan bajo el gate.
 
-use norte_ai::{AiError, ChatMessage, ChatRequest};
+use norte_ai::{AiError, ChatMessage, ChatRequest, JsonContract};
 use norte_proto::{Segment, VPath};
 use serde::Deserialize;
 
@@ -393,11 +393,15 @@ pub fn build_rename_prompt(names: &[Segment], instruction: &str) -> Result<ChatR
         }
         lines.push(display.into_owned());
     }
-    let system = "You rename files. Reply with STRICT JSON only: an array of \
-         objects {\"from\": <existing name>, \"to\": <new name>}. Include ONLY \
-         files that should be renamed. `from` must exactly match an input name. \
-         `to` must be a plain file name: no slashes, no `..`, no leading dot \
-         tricks. No prose, no code fences — just the JSON array."
+    // El prompt sigue DESCRIBIENDO la forma, y no sobra: es lo único que
+    // tiene el proveedor que no atiende el contrato (Ollama, un servidor
+    // compatible que ignore `response_format`, un modelo Anthropic viejo). El
+    // contrato de abajo se lo ahorra a quien sí lo atiende.
+    let system = "You rename files. Reply with STRICT JSON only: an object \
+         {\"renames\": [{\"from\": <existing name>, \"to\": <new name>}]}. \
+         Include ONLY files that should be renamed. `from` must exactly match \
+         an input name. `to` must be a plain file name: no slashes, no `..`, \
+         no leading dot tricks. No prose, no code fences — just the JSON."
         .to_owned();
     let user = format!(
         "Instruction: {instruction}\n\nFiles (one per line):\n{}",
@@ -407,14 +411,92 @@ pub fn build_rename_prompt(names: &[Segment], instruction: &str) -> Result<ChatR
         system: Some(system),
         messages: vec![ChatMessage::user(user)],
         max_tokens: Some(4096),
-        json_schema: None,
+        json_schema: Some(contrato_de_rename()),
     })
+}
+
+/// El contrato de salida del plan de renombrado.
+///
+/// Raíz OBJETO y no array: los mecanismos nativos de salida estructurada
+/// esperan un objeto arriba, y envolver la lista en `renames` cuesta un campo
+/// y evita descubrirlo con un 400 en producción.
+///
+/// Sin `minLength`, `maxLength` ni `pattern`: la salida estructurada de
+/// Anthropic no admite restricciones de cadena, y ponerlas haría que el
+/// schema se rechazara entero. Las reglas de verdad —que `from` exista, que
+/// `to` sea un basename sin traversal, que no haya destinos duplicados ni
+/// colisiones— **no caben en un JSON Schema** y no es ahí donde tienen que
+/// vivir: las aplica [`validate_rename_reply`] contra el directorio REAL,
+/// atienda el proveedor el contrato o no.
+fn contrato_de_rename() -> JsonContract {
+    JsonContract::new(
+        "norte_rename_plan",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "renames": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "from": {"type": "string"},
+                            "to": {"type": "string"}
+                        },
+                        "required": ["from", "to"],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "required": ["renames"],
+            "additionalProperties": false
+        }),
+    )
 }
 
 #[derive(Deserialize)]
 struct RawRenameEntry {
     from: String,
     to: String,
+}
+
+/// El sobre que devuelve un proveedor que SÍ atendió el contrato.
+///
+/// `deny_unknown_fields` porque el contrato dice `additionalProperties:
+/// false`: el parser tiene que exigir lo mismo que el schema, o la pareja
+/// miente. Sin él, un `{"renames": [], "cambios": [...las de verdad...]}`
+/// —un modelo que se inventa la clave, un endpoint comprometido— salía como
+/// un plan VACÍO y en silencio: «no hay nada que renombrar» en vez de «esto
+/// no es la respuesta que pedí».
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRenamePlan {
+    renames: Vec<RawRenameEntry>,
+}
+
+/// Las DOS formas en las que puede llegar el plan.
+///
+/// El objeto `{"renames": [...]}` es lo que devuelve quien atiende el
+/// contrato de salida tipada. El array pelado es lo que devuelve quien no lo
+/// atiende y sólo tiene el prompt — Ollama, un servidor compatible que ignore
+/// `response_format`, un modelo Anthropic sin salida estructurada. Aceptar
+/// las dos es lo que permite que el contrato sea una MEJORA y no una ruptura:
+/// nada deja de funcionar por no soportarlo.
+///
+/// Lo que NO cambia según la forma es la validación: las dos caen en las
+/// mismas reglas contra el directorio real.
+/// Se decide por la PRIMERA llave, no probando y cayendo: un sobre con una
+/// entrada mala tiene que dar el error del sobre. Con el `if let Ok` de
+/// antes, `{"renames":[{"from":"a"}]}` fallaba en la rama del objeto, caía a
+/// la del array y salía «invalid type: map, expected a sequence» — el motivo
+/// de verdad, que era el campo `to` ausente, se descartaba por el camino.
+fn parsear_plan(texto: &str) -> Result<Vec<RawRenameEntry>, AiError> {
+    let error = |e: serde_json::Error| AiError::Protocol(format!("respuesta no es JSON: {e}"));
+    if texto.starts_with('{') {
+        return serde_json::from_str::<RawRenamePlan>(texto)
+            .map(|s| s.renames)
+            .map_err(error);
+    }
+    serde_json::from_str::<Vec<RawRenameEntry>>(texto).map_err(error)
 }
 
 /// Valida la respuesta del modelo contra el dir real (spec §9: el plan es el
@@ -430,8 +512,7 @@ struct RawRenameEntry {
 /// [`AiError::Protocol`] si el JSON no parsea o viola una regla de validación.
 pub fn validate_rename_reply(reply: &str, inputs: &[Segment]) -> Result<RenamePlan, AiError> {
     let trimmed = reply.trim();
-    let raw: Vec<RawRenameEntry> = serde_json::from_str(trimmed)
-        .map_err(|e| AiError::Protocol(format!("respuesta no es JSON de rename: {e}")))?;
+    let raw = parsear_plan(trimmed)?;
 
     let input_set: std::collections::HashSet<&[u8]> =
         inputs.iter().map(Segment::as_bytes).collect();
@@ -671,6 +752,81 @@ mod tests {
         .expect("plan");
         assert_eq!(plan.entries.len(), 2);
         assert_eq!(plan.entries[0].to.as_bytes(), b"a.txt");
+    }
+
+    /// **El plan llega en las DOS formas, y la validación es la misma.**
+    ///
+    /// El objeto lo devuelve quien atendió el contrato de salida tipada; el
+    /// array pelado, quien sólo tenía el prompt. Que las dos valgan es lo que
+    /// hace que el contrato sea una mejora y no una ruptura para Ollama o
+    /// para un modelo Anthropic sin salida estructurada.
+    #[test]
+    fn el_sobre_y_el_array_pelado_dan_el_mismo_plan() {
+        let inputs = [seg(b"A.TXT"), seg(b"B.TXT")];
+        let del_contrato = validate_rename_reply(
+            r#"{"renames":[{"from":"A.TXT","to":"a.txt"},{"from":"B.TXT","to":"b.txt"}]}"#,
+            &inputs,
+        )
+        .expect("plan del contrato");
+        let del_prompt = validate_rename_reply(
+            r#"[{"from":"A.TXT","to":"a.txt"},{"from":"B.TXT","to":"b.txt"}]"#,
+            &inputs,
+        )
+        .expect("plan del prompt");
+        assert_eq!(del_contrato.entries.len(), 2);
+        assert_eq!(del_contrato.entries.len(), del_prompt.entries.len());
+        for (a, b) in del_contrato.entries.iter().zip(&del_prompt.entries) {
+            assert_eq!(a.from.as_bytes(), b.from.as_bytes());
+            assert_eq!(a.to.as_bytes(), b.to.as_bytes());
+        }
+    }
+
+    /// **Un sobre con el contrato NO relaja ni una regla.**
+    ///
+    /// Es la mitad de seguridad de todo esto: la salida estructurada reduce
+    /// los errores de formato y no dice nada sobre el CONTENIDO. Un `to` con
+    /// traversal es JSON perfectamente válido contra el schema — el schema no
+    /// puede expresar «sin `..`» — así que quien lo rechaza sigue siendo la
+    /// validación local, atendiera el proveedor el contrato o no.
+    #[test]
+    fn un_sobre_hostil_se_rechaza_igual() {
+        let inputs = [seg(b"A")];
+        for cuerpo in [
+            r#"{"renames":[{"from":"A","to":"../fuera"}]}"#,
+            r#"{"renames":[{"from":"A","to":"a/b"}]}"#,
+            r#"{"renames":[{"from":"A","to":"..\\evil"}]}"#,
+            r#"{"renames":[{"from":"A","to":"!"}]}"#,
+            r#"{"renames":[{"from":"Z","to":"z"}]}"#,
+        ] {
+            assert!(
+                validate_rename_reply(cuerpo, &inputs).is_err(),
+                "coló: {cuerpo}"
+            );
+        }
+    }
+
+    /// El plan pide el contrato, y el contrato es el que los mecanismos
+    /// nativos aceptan: raíz objeto, `additionalProperties: false`, y sin las
+    /// restricciones de cadena que la salida estructurada de Anthropic
+    /// rechaza (`minLength`, `maxLength`, `pattern`).
+    #[test]
+    fn el_prompt_lleva_un_contrato_que_los_proveedores_aceptan() {
+        let req = build_rename_prompt(&[seg(b"a.txt")], "lower").expect("prompt");
+        let c = req.json_schema.expect("el plan pide salida tipada");
+        assert_eq!(c.name, "norte_rename_plan");
+        assert_eq!(c.schema["type"], "object");
+        assert_eq!(c.schema["additionalProperties"], false);
+        assert_eq!(
+            c.schema["properties"]["renames"]["items"]["additionalProperties"],
+            false
+        );
+        let texto = c.schema.to_string();
+        for prohibido in ["minLength", "maxLength", "pattern", "minimum", "maximum"] {
+            assert!(
+                !texto.contains(prohibido),
+                "`{prohibido}` hace que el schema se rechace entero"
+            );
+        }
     }
 
     #[test]

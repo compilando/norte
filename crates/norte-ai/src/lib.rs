@@ -15,6 +15,6 @@ pub mod ollama;
 pub mod openai_compat;
 
 pub use provider::{
-    AiCaps, AiError, AiProvider, ChatMessage, ChatRequest, ChatRole, ChatStream, ModelInfo,
-    SharedAiProvider,
+    AiCaps, AiError, AiProvider, ChatMessage, ChatRequest, ChatRole, ChatStream, JsonContract,
+    ModelInfo, SharedAiProvider,
 };

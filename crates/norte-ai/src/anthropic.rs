@@ -18,9 +18,39 @@ const API_VERSION: &str = "2023-06-01";
 /// exige siempre en el body).
 const DEFAULT_MAX_TOKENS: u32 = 4096;
 
+/// Las familias de modelo cuya salida estructurada (`output_config.format`)
+/// está soportada.
+///
+/// Se comprueba por PREFIJO porque los ids llevan variantes y fechas, y se
+/// declara la capability sólo si casa: `JSON_OUTPUT` era una capacidad
+/// declarada que nadie atendía —el cuerpo nunca llevaba el schema—, y la
+/// forma de que no vuelva a serlo es que la declaración dependa de lo que de
+/// verdad se manda. Un modelo que no está aquí NO declara la capability y cae
+/// al camino del prompt, que es donde el proyecto ya sabía estar.
+const MODELOS_CON_SALIDA_ESTRUCTURADA: &[&str] = &[
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-5",
+    "claude-opus-4-1",
+    "claude-sonnet-5",
+    "claude-haiku-4-5",
+];
+
+/// ¿Este modelo admite `output_config.format`?
+fn admite_salida_estructurada(modelo: &str) -> bool {
+    MODELOS_CON_SALIDA_ESTRUCTURADA
+        .iter()
+        .any(|m| modelo.starts_with(m))
+}
+
 /// Cliente de la Messages API de Anthropic (`POST /v1/messages`, SSE).
 ///
-/// - `capabilities()` = `STREAMING | JSON_OUTPUT` (sin `EMBEDDINGS`).
+/// - `capabilities()` = `STREAMING`, más `JSON_OUTPUT` **si el modelo
+///   configurado admite salida estructurada** (sin `EMBEDDINGS`, que
+///   Anthropic no ofrece). Declararla siempre era prometer un formato que un
+///   modelo viejo no da (ADR 0088).
 /// - Remoto: `is_local()` es `false`; el gate `local_only` del core lo veta.
 /// - Sin secreto configurado, `chat` devuelve [`AiError::Auth`] (nunca manda
 ///   una petición sin credencial).
@@ -90,6 +120,27 @@ impl AnthropicProvider {
         if !system_parts.is_empty() {
             body["system"] = Value::String(system_parts.join("\n"));
         }
+        // El contrato de salida tipada, si lo hay Y este modelo lo atiende.
+        // La Messages API lo lee de `output_config.format`; el nombre del
+        // contrato no viaja porque aquí no se usa.
+        //
+        // La RESPUESTA sigue siendo un bloque de texto: `output_config.format`
+        // restringe el contenido de ese bloque, no introduce un tipo de bloque
+        // nuevo, así que `parse_line` la lee por el mismo `text_delta` que
+        // todo lo demás. Está documentado y NO observado contra la API viva —
+        // aquí no se llama a la red (ADR 0031). Si esa suposición fuera falsa,
+        // el síntoma sería un `reply` vacío exactamente en los modelos que
+        // activan este camino; es lo primero que hay que mirar.
+        if let Some(contrato) = &req.json_schema
+            && admite_salida_estructurada(&self.model)
+        {
+            body["output_config"] = json!({
+                "format": {
+                    "type": "json_schema",
+                    "schema": contrato.schema,
+                }
+            });
+        }
         Ok(body)
     }
 }
@@ -135,7 +186,14 @@ impl AiProvider for AnthropicProvider {
     }
 
     fn capabilities(&self) -> AiCaps {
-        AiCaps::STREAMING | AiCaps::JSON_OUTPUT
+        let mut caps = AiCaps::STREAMING;
+        // Se declara sólo si el MODELO configurado la tiene. Declararla
+        // siempre era decir que el core puede confiar en el formato cuando
+        // con un modelo viejo no puede.
+        if admite_salida_estructurada(&self.model) {
+            caps |= AiCaps::JSON_OUTPUT;
+        }
+        caps
     }
 
     fn is_local(&self) -> bool {
@@ -249,6 +307,103 @@ mod tests {
         // El turno System inline sube al campo `system` top-level.
         assert!(raw.contains(r#""system":"tono seco""#), "{raw}");
         assert!(raw.contains(r#""max_tokens":4096"#), "{raw}");
+        // Sin contrato no se inventa uno.
+        assert!(!raw.contains("output_config"), "{raw}");
+    }
+
+    /// **El contrato de salida tipada VIAJA en el cuerpo** (ADR 0088).
+    ///
+    /// Es el test que faltaba: `AiCaps::JSON_OUTPUT` se declaraba y
+    /// `ChatRequest::json_schema` existía, pero el constructor del cuerpo no
+    /// lo leía nunca. Una capacidad declarada y no efectiva no se ve en
+    /// ningún test de comportamiento — se ve mirando lo que sale por el
+    /// socket, que es lo que esto hace.
+    #[tokio::test]
+    async fn el_contrato_viaja_en_output_config() {
+        let srv = serve_once(response(
+            200,
+            "OK",
+            &[("content-type", "text/event-stream")],
+            &sse_ok(),
+        ))
+        .await;
+        let p = AnthropicProvider::new(
+            Some(srv.base_url.clone()),
+            "claude-opus-5".to_string(),
+            Some(Secret::new("sk-test-123".to_string())),
+        );
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
+        req.json_schema = Some(crate::provider::JsonContract::new(
+            "plan",
+            json!({
+                "type": "object",
+                "properties": {"renames": {"type": "array"}},
+                "required": ["renames"],
+                "additionalProperties": false
+            }),
+        ));
+        let stream = p.chat(req).await.unwrap();
+        let _: Vec<_> = stream.collect().await;
+
+        let raw = srv.request().await;
+        assert!(raw.contains(r#""output_config""#), "{raw}");
+        assert!(raw.contains(r#""type":"json_schema""#), "{raw}");
+        assert!(raw.contains(r#""additionalProperties":false"#), "{raw}");
+        assert!(raw.contains(r#""required":["renames"]"#), "{raw}");
+    }
+
+    /// Y con un modelo que NO la soporta, no viaja — ni se declara.
+    ///
+    /// Mandar `output_config` a un modelo que no lo entiende es un 400, y
+    /// declarar la capability sería decirle al core que puede confiar en un
+    /// formato que nadie le garantiza. Las dos mitades tienen que decir lo
+    /// mismo, y por eso se comprueban juntas.
+    #[tokio::test]
+    async fn un_modelo_sin_soporte_ni_lo_declara_ni_lo_manda() {
+        let srv = serve_once(response(
+            200,
+            "OK",
+            &[("content-type", "text/event-stream")],
+            &sse_ok(),
+        ))
+        .await;
+        let p = AnthropicProvider::new(
+            Some(srv.base_url.clone()),
+            "claude-3-haiku-20240307".to_string(),
+            Some(Secret::new("sk-test-123".to_string())),
+        );
+        assert!(
+            !p.capabilities().contains(AiCaps::JSON_OUTPUT),
+            "un modelo viejo no promete salida estructurada"
+        );
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
+        req.json_schema = Some(crate::provider::JsonContract::new("plan", json!({})));
+        let stream = p.chat(req).await.unwrap();
+        let _: Vec<_> = stream.collect().await;
+
+        let raw = srv.request().await;
+        assert!(!raw.contains("output_config"), "{raw}");
+    }
+
+    /// La capability y la lista de modelos no se pueden separar.
+    #[test]
+    fn la_capability_sigue_al_modelo() {
+        for (modelo, espera) in [
+            ("claude-opus-5", true),
+            ("claude-sonnet-5", true),
+            ("claude-haiku-4-5", true),
+            ("claude-opus-4-8", true),
+            ("claude-fable-5", true),
+            ("claude-3-opus-20240229", false),
+            ("un-modelo-que-no-existe", false),
+        ] {
+            let p = AnthropicProvider::new(None, modelo.to_string(), None);
+            assert_eq!(
+                p.capabilities().contains(AiCaps::JSON_OUTPUT),
+                espera,
+                "{modelo}"
+            );
+        }
     }
 
     #[tokio::test]

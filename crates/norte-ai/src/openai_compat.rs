@@ -89,6 +89,23 @@ impl OpenAiCompatProvider {
         if let Some(n) = req.max_tokens {
             body["max_tokens"] = json!(n);
         }
+        // El contrato de salida tipada, en el mecanismo de ESTA API: no es
+        // `output_config` como en Anthropic, es `response_format`, y aquí el
+        // nombre del contrato sí viaja porque el campo lo exige.
+        //
+        // `strict: true` es lo que convierte el schema en un contrato en vez
+        // de en una sugerencia. Un servidor compatible que no lo entienda
+        // contesta texto igual: por eso la validación local no es opcional.
+        if let Some(contrato) = &req.json_schema {
+            body["response_format"] = json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": contrato.name,
+                    "schema": contrato.schema,
+                    "strict": true,
+                }
+            });
+        }
         Ok(body)
     }
 }
@@ -252,6 +269,36 @@ mod tests {
             raw.contains(r#"{"content":"tono seco","role":"system"}"#),
             "{raw}"
         );
+        // Sin contrato no se inventa uno.
+        assert!(!raw.contains("response_format"), "{raw}");
+    }
+
+    /// **El contrato viaja en `response_format`, con su nombre y `strict`.**
+    ///
+    /// Este camino es INCONDICIONAL —no hay lista de modelos que valga
+    /// contra un servidor arbitrario— y por eso su fixture importa más que
+    /// el de Anthropic: es el que apunta a máquinas ajenas.
+    #[tokio::test]
+    async fn el_contrato_viaja_en_response_format() {
+        let body = ["data: [DONE]", ""].join("\n");
+        let srv = serve_once(response(200, "OK", &[], &body)).await;
+        let p = provider(&srv.base_url, Some("sk-oa-1"));
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
+        req.json_schema = Some(crate::provider::JsonContract::new(
+            "norte_rename_plan",
+            json!({"type": "object", "additionalProperties": false}),
+        ));
+        let stream = p.chat(req).await.unwrap();
+        let _: Vec<_> = stream.collect().await;
+
+        let raw = srv.request().await;
+        assert!(raw.contains(r#""response_format""#), "{raw}");
+        assert!(raw.contains(r#""type":"json_schema""#), "{raw}");
+        // El nombre viaja: este mecanismo lo exige, a diferencia del de
+        // Anthropic.
+        assert!(raw.contains(r#""name":"norte_rename_plan""#), "{raw}");
+        // Y `strict`, que es lo que lo convierte en contrato y no en consejo.
+        assert!(raw.contains(r#""strict":true"#), "{raw}");
     }
 
     /// `/v1/embeddings`: extrae los vectores en orden.

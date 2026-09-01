@@ -244,6 +244,40 @@ mod tests {
         );
     }
 
+    /// **Ollama no promete salida estructurada y no la manda** (ADR 0088).
+    ///
+    /// Es el camino de FALLBACK, y hasta ahora se daba por supuesto. Que un
+    /// contrato en la petición no cambie ni el cuerpo ni la capability es lo
+    /// que sostiene que activar la salida tipada en otros proveedores no
+    /// rompiera a éste: aquí se sigue contestando a lo que pide el prompt, y
+    /// el core acepta esa forma.
+    #[tokio::test]
+    async fn un_contrato_no_cambia_ni_el_cuerpo_ni_la_capability() {
+        let body = [
+            r#"{"model":"llama-test","message":{"role":"assistant","content":"[]"},"done":true}"#,
+            "",
+        ]
+        .join("\n");
+        let srv = serve_once(response(200, "OK", &[], &body)).await;
+        let p = provider(&srv.base_url);
+        assert!(
+            !p.capabilities().contains(AiCaps::JSON_OUTPUT),
+            "no se promete lo que no se atiende"
+        );
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
+        req.json_schema = Some(crate::provider::JsonContract::new(
+            "norte_rename_plan",
+            json!({"type": "object"}),
+        ));
+        let stream = p.chat(req).await.unwrap();
+        let _: Vec<_> = stream.collect().await;
+
+        let raw = srv.request().await;
+        assert!(!raw.contains("json_schema"), "{raw}");
+        assert!(!raw.contains("response_format"), "{raw}");
+        assert!(!raw.contains("output_config"), "{raw}");
+    }
+
     /// El campo `.error` del daemon sale como `Err(Protocol)` con el mensaje.
     #[tokio::test]
     async fn error_del_daemon_es_protocol() {

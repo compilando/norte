@@ -1241,10 +1241,38 @@ impl Engine {
 
         let req = crate::ai::build_rename_prompt(&names, instruction)
             .map_err(|e| ai_to_proto_error(&e))?;
-        let mut chat = provider
-            .chat(req)
-            .await
-            .map_err(|e| ai_to_proto_error(&e))?;
+        // Lo que se mide del canje, y lo que NO. Aquí se sabe si el contrato
+        // de salida tipada llegó a viajar (`estructurada`), y sin eso no hay
+        // forma de saber si sirve de algo: una capacidad declarada y no
+        // efectiva es justo lo que este camino tenía.
+        //
+        // Nunca la instrucción, nunca los nombres, nunca la respuesta: son
+        // datos del usuario y el log no es sitio para ellos (regla 10). Sólo
+        // el proveedor, el número de entradas, el tiempo y qué pasó.
+        let estructurada = provider
+            .capabilities()
+            .contains(norte_ai::AiCaps::JSON_OUTPUT);
+        let proveedor = provider.id();
+        let empezo = std::time::Instant::now();
+        // El fallo de establecimiento se mide TAMBIÉN: si sólo se midiera el
+        // camino que llega a parsear, `estructurada` diría qué tal va el
+        // contrato entre los intercambios que ya funcionaban, que es la
+        // muestra equivocada — los que se caen en red o en auth son los que
+        // más interesa contar.
+        let mut chat = match provider.chat(req).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::info!(
+                    proveedor,
+                    estructurada,
+                    entradas = names.len(),
+                    ms = empezo.elapsed().as_millis(),
+                    resultado = categoria_de_ai(&e),
+                    "plan de renombrado por IA"
+                );
+                return Err(ai_to_proto_error(&e));
+            }
+        };
         // Cota del reply (security MAJOR del review #M4): un endpoint
         // comprometido/MITM puede stremear deltas sub-1MiB sin fin (el tope
         // por línea de http.rs no acota el ACUMULADO) → OOM. Un plan
@@ -1261,7 +1289,18 @@ impl Engine {
             }
             reply.push_str(&delta);
         }
-        crate::ai::validate_rename_reply(&reply, &names).map_err(|e| ai_to_proto_error(&e))
+        let plan = crate::ai::validate_rename_reply(&reply, &names);
+        let categoria = plan.as_ref().map_or_else(|e| categoria_de_ai(e), |_| "ok");
+        tracing::info!(
+            proveedor,
+            estructurada,
+            entradas = names.len(),
+            bytes = reply.len(),
+            ms = empezo.elapsed().as_millis(),
+            resultado = categoria,
+            "plan de renombrado por IA"
+        );
+        plan.map_err(|e| ai_to_proto_error(&e))
     }
 
     /// Total de entradas omitidas del índice del contenedor de `p` (#93),
@@ -4021,9 +4060,37 @@ fn ai_denied_to_error(reason: &crate::ai::AiDenied) -> Error {
     }
 }
 
-/// Mapea un [`norte_ai::AiError`] a la taxonomía del wire (M4-A2). El detalle
-/// (mensajes del proveedor, que jamás contienen la clave por construcción)
-/// queda en el log; el wire lleva la categoría.
+/// La CATEGORÍA de un fallo de IA, para la métrica. Nunca su texto: el
+/// `Display` de un `Protocol` lleva el fragmento que motivó el rechazo, y ese
+/// fragmento lo escribió el modelo sobre nombres del usuario —o es un nombre
+/// real del directorio, en el error de colisión—.
+fn categoria_de_ai(e: &norte_ai::AiError) -> &'static str {
+    use norte_ai::AiError as A;
+    match e {
+        A::Protocol(_) => "parse",
+        A::Auth => "auth",
+        A::RateLimited { .. } => "rate_limit",
+        A::Transport(_) => "transport",
+        A::Cancelled => "cancelada",
+        A::Unsupported => "no_soportado",
+        _ => "otro",
+    }
+}
+
+/// Mapea un [`norte_ai::AiError`] a la taxonomía del wire (M4-A2). El wire
+/// lleva la categoría; al log va lo que se puede decir sin repetir datos del
+/// usuario.
+///
+/// **`Protocol` no se loguea con su texto.** Su `Display` lleva el fragmento
+/// que motivó el rechazo, y en el camino del rename ese fragmento puede ser
+/// un nombre que escribió el modelo —o uno REAL del directorio, en el error
+/// de colisión de `validate_rename_reply`—. Es contenido del usuario, y un
+/// log del daemon o un volcado de diagnóstico no es sitio para él (regla 10).
+/// Lo que sí se dice es que fue de protocolo: la categoría es lo que un log
+/// necesita para que alguien sepa dónde mirar.
+///
+/// El resto de variantes sí llevan texto: `Http` es el estado y el cuerpo del
+/// proveedor, que no ha visto ningún nombre del usuario.
 pub(crate) fn ai_to_proto_error(e: &norte_ai::AiError) -> Error {
     use norte_ai::AiError as A;
     match e {
@@ -4031,8 +4098,12 @@ pub(crate) fn ai_to_proto_error(e: &norte_ai::AiError) -> Error {
         A::Cancelled => Error::Cancelled,
         A::Unsupported => Error::Unsupported,
         A::RateLimited { .. } | A::Transport(_) => Error::ProviderUnavailable { retryable: true },
-        // Http/Protocol y cualquier variante futura (AiError es
-        // non_exhaustive): categoría gruesa, detalle al log.
+        A::Protocol(_) => {
+            tracing::warn!("proveedor de IA: respuesta que no cumple el formato");
+            Error::Internal { panic: false }
+        }
+        // Http y cualquier variante futura (AiError es non_exhaustive):
+        // categoría gruesa, detalle al log.
         _ => {
             tracing::warn!(error = %e, "proveedor de IA: respuesta o estado inesperado");
             Error::Internal { panic: false }
