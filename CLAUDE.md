@@ -379,6 +379,15 @@ bundle or as coordinated packages is an open question phase 7 has to answer
 - Use Conventional Commits, for example `feat(vfs): ...` or `fix(tui): ...`.
   Keep pull requests below 400 net changed lines where practical, and give each
   PR one purpose.
+- **Name branches `<type>/<kebab-description>`**, with the same types the
+  commits use: `feat`, `fix`, `refactor`, `test`, `chore`, `docs`, `perf`,
+  `ci`, `build`. So `feat/daemon-handover`, `fix/empty-secret`,
+  `refactor/controller-split`. The description says what the branch is *for*,
+  not what the first commit happened to be: a branch called
+  `tests/deterministic-ui-host-waits` that grew four more changes stops
+  describing itself, and the name is what a reviewer reads first.
+  A branch that genuinely spans several types is `chore/`, and that is usually
+  a sign it should have been several branches.
 - For a bug fix, add a failing test first. Encoding and path regressions also
   need a fixture in the canonical `norte-testkit` corpus.
 - Add rustdoc and a doctest to every public item in protocol, VFS, and SDK
