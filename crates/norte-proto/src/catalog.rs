@@ -81,6 +81,14 @@ pub struct MethodInfo {
     pub params_ty: &'static str,
     /// Nombre del tipo de result, o `"()"` si no lleva.
     pub result_ty: &'static str,
+    /// Para un [`Shape::Stream`], las notificaciones por las que entrega.
+    /// Vacío en todo lo demás.
+    ///
+    /// Es lo que ata `Stream`: sin esto, la diferencia con `Task` era «tiene
+    /// notificación propia» y el catálogo no decía cuál, así que nadie podía
+    /// desmentirlo. Nombrándolas, un test comprueba que existen, que están
+    /// catalogadas y que son notificaciones de verdad.
+    pub stream_notifs: &'static [&'static str],
 }
 
 impl MethodInfo {
@@ -104,7 +112,10 @@ impl MethodInfo {
 /// arregla: menciona cada uno, así que un nombre mal escrito no compila. Sin
 /// ella el catálogo sería una lista de deseos.
 macro_rules! rpc_catalogo {
-    ($( $konst:ident, $kind:ident, $shape:ident, $params:ty, $result:ty; )*) => {
+    ($(
+        $konst:ident, $kind:ident, $shape:ident, $params:ty, $result:ty
+        $(, [$($notif:ident),* $(,)?])? ;
+    )*) => {
         /// Todos los métodos del protocolo, en el orden en que se declararon.
         pub const CATALOGO: &[MethodInfo] = &[
             $(
@@ -114,6 +125,7 @@ macro_rules! rpc_catalogo {
                     shape: Shape::$shape,
                     params_ty: stringify!($params),
                     result_ty: stringify!($result),
+                    stream_notifs: &[$($(methods::$notif),*)?],
                 }
             ),*
         ];
@@ -149,9 +161,9 @@ rpc_catalogo! {
     FS_SET_MODE, Request, Task, methods::FsSetModeParams, methods::FsTaskResult;
 
     // Buscar y comparar: Task que entrega por notificación dirigida.
-    FS_SEARCH, Request, Stream, methods::FsSearchParams, methods::FsTaskResult;
+    FS_SEARCH, Request, Stream, methods::FsSearchParams, methods::FsTaskResult, [SEARCH_HITS];
     SEARCH_HITS, Notification, Stream, methods::SearchHits, ();
-    FS_COMPARE, Request, Stream, methods::FsCompareParams, methods::FsTaskResult;
+    FS_COMPARE, Request, Stream, methods::FsCompareParams, methods::FsTaskResult, [COMPARE_ROWS];
     COMPARE_ROWS, Notification, Stream, methods::CompareRowsBatch, ();
 
     // Recuento, sumas y sus informes.
@@ -182,7 +194,7 @@ rpc_catalogo! {
     FILE_COMBINE, Request, Task, methods::FileCombineParams, methods::FsTaskResult;
 
     // Sincronizar: el plan queda RETENIDO a nombre de la conexión.
-    SYNC_PLAN, Request, Stream, methods::SyncPlanParams, methods::FsTaskResult;
+    SYNC_PLAN, Request, Stream, methods::SyncPlanParams, methods::FsTaskResult, [SYNC_STEPS, SYNC_PLAN_DONE];
     SYNC_STEPS, Notification, Stream, methods::SyncStepsBatch, ();
     SYNC_PLAN_DONE, Notification, Stream, methods::SyncPlanDone, ();
     SYNC_APPLY, Request, Task, methods::SyncApplyParams, methods::FsTaskResult;
@@ -259,6 +271,52 @@ mod tests {
         for m in CATALOGO {
             if m.kind == Kind::Notification {
                 assert_eq!(m.result(), None, "{} es notificación y trae result", m.name);
+            }
+        }
+    }
+
+    /// **Un `Stream` nombra por dónde entrega, y lo nombrado es una
+    /// notificación catalogada.**
+    ///
+    /// Es lo que hace `Stream` desmentible. Antes, la diferencia con `Task`
+    /// era «tiene notificación propia» y el catálogo no decía cuál: se podía
+    /// declarar `Stream` cualquier cosa y nada se ponía rojo.
+    #[test]
+    fn un_stream_nombra_su_notificacion_y_existe() {
+        for m in CATALOGO {
+            if m.shape == Shape::Stream && m.kind == Kind::Request {
+                assert!(
+                    !m.stream_notifs.is_empty(),
+                    "{} dice Stream y no dice por dónde entrega",
+                    m.name
+                );
+            }
+            for n in m.stream_notifs {
+                let Some(info) = buscar(n) else {
+                    panic!("{} nombra `{n}`, que no está en el catálogo", m.name);
+                };
+                assert_eq!(
+                    info.kind,
+                    Kind::Notification,
+                    "{} entrega por `{n}`, que no es una notificación",
+                    m.name
+                );
+            }
+        }
+    }
+
+    /// Y lo que no es `Stream` no nombra ninguna: un `Task` que dijera
+    /// entregar por notificación estaría mintiendo sobre su forma.
+    #[test]
+    fn solo_un_stream_nombra_notificaciones() {
+        for m in CATALOGO {
+            if m.shape != Shape::Stream {
+                assert!(
+                    m.stream_notifs.is_empty(),
+                    "{} es {:?} y nombra notificaciones de stream",
+                    m.name,
+                    m.shape
+                );
             }
         }
     }

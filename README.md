@@ -48,6 +48,10 @@ any change to the window or to the crates it is built on, and `just gui-smoke`
 installs the built package in a clean container and starts it there. The GPUI
 attempt it replaced was retired on 2026-08-20 (ADR 0065).
 
+The gates run **locally**: `just ci` before merging, and the `pre-push` hook as
+the floor. There are workflows under `.github/workflows/`, but GitHub Actions
+is disabled on this repository, so nothing runs there — install the hook.
+
 Supported does not mean finished. It is not yet exercised against screen
 readers, IME input or fractional scaling (#261), and the packages are built on
 a current glibc/WebKitGTK, so an older distribution needs a build from source.

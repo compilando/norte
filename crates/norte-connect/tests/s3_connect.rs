@@ -150,6 +150,71 @@ async fn access_key_o_secret_vacios_son_error_local() {
     );
 }
 
+/// **#321: NINGÚN método de autenticación construye un operador de s3 sin
+/// credenciales explícitas, salvo el que las pide a propósito.**
+///
+/// Lo que hace determinista a `access-key` no es que la cadena ambiente esté
+/// apagada: `disable_config_load` solo apaga entorno, perfil e IMDS, y en
+/// opendal 0.58 deja dentro SSO, web-identity, process y ECS. Lo que la hace
+/// determinista es que el proveedor estático entra por delante y GANA — o
+/// sea, que siempre haya credenciales estáticas.
+///
+/// De ahí este test, que no comprueba un caso sino una PROPIEDAD sobre todo el
+/// enum: cada variante o exige credenciales, o es `Agent` —la única que pide
+/// la cadena a propósito, para el caso CI/rol de instancia— o se rechaza. El
+/// riesgo que cierra es el que la issue nombra: que mañana alguien añada un
+/// `auth` nuevo, se olvide de poner credenciales, y la conexión autentique en
+/// silencio con la identidad que el entorno ofrezca. Un `match` exhaustivo
+/// hace que añadir una variante no compile hasta decidir a qué grupo va.
+///
+/// No se prueba con variables de entorno hostiles porque `std::env::set_var`
+/// es `unsafe` en la edición 2024 y la regla 5 lo prohíbe; se prueba la
+/// propiedad que sostiene la garantía, que es la que puede romperse por
+/// descuido.
+#[tokio::test]
+async fn ningun_auth_llega_a_la_cadena_ambiente_por_descuido() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let addr = start_s3s(dir.path()).await;
+    let secret = Secret::new(SK.to_string());
+
+    for auth in [
+        AuthMethod::Agent,
+        AuthMethod::Key,
+        AuthMethod::Password,
+        AuthMethod::AccessKey,
+    ] {
+        let mut spec = spec_access_key(addr);
+        spec.auth = auth;
+        match auth {
+            // La ÚNICA que usa la cadena ambiente, y lo hace porque se le
+            // pide: rol de instancia, CI, entorno corporativo.
+            AuthMethod::Agent => {}
+            // Sin credenciales estáticas no se construye nada: se dice.
+            AuthMethod::Key | AuthMethod::Password => {
+                let err = S3Connector::new()
+                    .connect(&spec, Some(&secret))
+                    .await
+                    .expect_err("s3 no acepta key/password");
+                assert!(
+                    matches!(err, norte_connect::ConnectError::Config(_)),
+                    "{auth:?}: {err:?}"
+                );
+            }
+            // Exige las dos mitades, y ausentes o vacías es lo mismo.
+            AuthMethod::AccessKey => {
+                let sin = S3Connector::new()
+                    .connect(&spec, None)
+                    .await
+                    .expect_err("sin secreto no conecta");
+                assert!(
+                    matches!(sin, norte_connect::ConnectError::Secret { .. }),
+                    "{sin:?}"
+                );
+            }
+        }
+    }
+}
+
 /// #320: `endpoint`/`region` presentes y vacíos no son «sin poner» — opendal
 /// los descarta y el destino REAL pasa a ser AWS (y la región, la del entorno).
 /// El usuario cree estar hablando con su `MinIO`. Se rechazan al construir.

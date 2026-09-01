@@ -27,6 +27,25 @@ done
 
 RAIZ="$(git rev-parse --show-toplevel)"
 cd "$RAIZ" || exit 1
+
+# SELLO: el árbol que ya pasó el gate.
+#
+# Un suelo que cuesta veinte minutos se convierte en un `--no-verify` de
+# costumbre, y entonces no es un suelo. Ya pasó: el push que trajo estos
+# commits tardó tanto que hubo que saltarlo — habiendo corrido `just ci`
+# entero, cobertura incluida, cinco minutos antes.
+#
+# El sello es el HASH DEL ÁRBOL, no el del commit: lo que el gate valida es el
+# contenido, así que reordenar commits o cambiar un mensaje no invalida nada, y
+# cambiar un byte de código sí. Correr `just ci` (o `ci-fast`) y empujar a
+# continuación es instantáneo; solo paga quien no lo corrió.
+SELLO="$RAIZ/target/.norte-gate-ok"
+ARBOL="$(git rev-parse HEAD^{tree})"
+if [[ -f "$SELLO" ]] && [[ "$(cat "$SELLO" 2>/dev/null)" == "$ARBOL" ]]; then
+    echo "pre-push: el gate ya pasó sobre este árbol ($(echo "$ARBOL" | cut -c1-8))"
+    exit 0
+fi
+
 LOG="$(mktemp -t norte-prepush-XXXXXX.log)"
 
 corre() {
@@ -56,6 +75,12 @@ fi
 
 if [[ $fallo -eq 0 ]]; then
     rm -f "$LOG"
+    # Se sella lo que acaba de pasar, para que un segundo push del mismo árbol
+    # no vuelva a pagarlo. Va en `target/`, que no se versiona ni se comparte:
+    # el sello vale para ESTA máquina y este contenido, que es lo que se
+    # comprobó.
+    mkdir -p "$(dirname "$SELLO")" 2>/dev/null || true
+    printf '%s' "$ARBOL" >"$SELLO" 2>/dev/null || true
     exit 0
 fi
 

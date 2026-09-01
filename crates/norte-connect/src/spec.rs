@@ -93,7 +93,13 @@ pub enum AuthMethod {
     /// Contraseña por el resolver.
     Password,
     /// (s3) Access key: `access_key_id` en config + secret-access-key por el
-    /// resolver. Desactiva la cadena ambiente (determinismo).
+    /// resolver.
+    ///
+    /// Es determinista porque las credenciales explícitas GANAN, no porque la
+    /// cadena ambiente esté apagada: `disable_config_load` solo apaga entorno,
+    /// perfil e IMDS, y en opendal 0.58 deja dentro SSO, web-identity, process
+    /// y ECS (#321). Lo que impide llegar a esa cadena es que el conector
+    /// rechaza un `access_key_id` o un secreto ausentes o VACÍOS (#320).
     AccessKey,
 }
 

@@ -49,8 +49,24 @@ pull-request requirement.
   `max_path = 1024`. Do not advertise append, random write, symlinks, atomic
   rename, stable node IDs, or trash before ADR 0019.
 - Build the operator in the connection layer from a public access-key ID and a
-  separately resolved secret. Explicit credentials disable ambient config and
-  metadata; `auth=agent` deliberately uses the ambient AWS chain.
+  separately resolved secret; `auth=agent` deliberately uses the ambient AWS
+  chain.
+- **What keeps explicit credentials deterministic is that they win, not that
+  the chain is off** (#321, amended 2026-09-01). This ADR used to say that
+  explicit credentials "disable ambient config and metadata", and by opendal
+  0.58 that is only half true: `disable_config_load()` and
+  `disable_ec2_metadata()` switch off the environment, the profile and IMDS,
+  and leave **SSO, web-identity, process and ECS** in the chain. reqsign can
+  turn those off; opendal exposes no flag that reaches them.
+  It is not exploitable today because the static provider is pushed to the
+  *front* of the chain and wins whenever there are static credentials — and
+  the connector refuses an absent or empty key id or secret before building
+  anything (#320). So the chain is only consulted when there are none, which
+  is the case those guards make impossible.
+  The distinction matters because it says where the safety actually lives: in
+  the guards, not in the two flags. A future `auth` method that forgets to set
+  credentials would silently fall through to an ambient identity, and this
+  time without #320's warning to catch it.
 
 ## Testing
 

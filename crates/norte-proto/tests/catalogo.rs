@@ -113,8 +113,16 @@ fn el_catalogo_tiene_golden() {
         .iter()
         .map(|m| {
             format!(
-                "{}\t{:?}\t{:?}\t{}\t{}",
-                m.name, m.kind, m.shape, m.params_ty, m.result_ty
+                "{}\t{:?}\t{:?}\t{}\t{}\t{}",
+                m.name,
+                m.kind,
+                m.shape,
+                m.params_ty,
+                m.result_ty,
+                // Por dónde entrega un `Stream`: es parte de lo que el
+                // catálogo afirma, así que cambiarlo tiene que salir en el
+                // diff igual que cambiar la forma.
+                m.stream_notifs.join(",")
             )
         })
         .collect();

@@ -138,11 +138,24 @@ semver baseline="v0.3.0-alpha.2":
 # Lo que corre CI. `_disk` primero: quedarse sin disco a mitad de un build no
 # falla limpio, corrompe artefactos.
 ci: _disk lint test cov docs
+    @just _sellar
 
 # Iteración rápida: todo el gate MENOS cobertura (cov recompila proto/vfs/core
 # instrumentados en su propio target y re-corre sus tests: ~34 s fijos incluso
 # sin cambios). El gate real pre-commit sigue siendo `just ci`.
 ci-fast: _disk lint test docs
+    @just _sellar
+
+# Deja constancia de que el ÁRBOL actual pasó el gate, para que el `pre-push`
+# no lo repita. El hash es del árbol y no del commit: lo que se validó es el
+# contenido. Vive en `target/`, o sea que no se versiona ni viaja a otra
+# máquina — el sello vale donde se corrió.
+#
+# Sin esto, quien hace lo correcto (correr el gate y luego empujar) lo paga dos
+# veces, y un suelo que cuesta veinte minutos acaba siendo un `--no-verify` de
+# costumbre.
+_sellar:
+    @git rev-parse 'HEAD^{tree}' > target/.norte-gate-ok 2>/dev/null || true
 
 # Instala los hooks del repositorio (`.githooks/`). Una vez por clon.
 #

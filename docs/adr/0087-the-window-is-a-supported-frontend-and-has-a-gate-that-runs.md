@@ -54,17 +54,33 @@ glibc/WebKitGTK, so an older distribution needs a build from source. Those are
 release-readiness questions on diverse desktops. They are not "is this a real
 frontend".
 
-### Its gate runs in CI, in its own workflow
+### Its gate runs on every push — from a hook, not from a service
 
-`.github/workflows/gui.yml` installs WebKitGTK, GTK3 and libsoup3 — **only in
-that job** — and runs `just gui-ci`. It triggers on changes to
-`norte-gui-tauri` and to everything that goes into it: `norte-ui-host`,
-`norte-client`, `norte-frontend`, `norte-proto`, plus the shared configuration
-(`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `justfile`).
+The gate is `just gui-ci`, and what runs it is `.githooks/pre-push`
+(`just hooks`), on any push whose diff touches `norte-gui-tauri` or anything
+that goes into it: `norte-ui-host`, `norte-client`, `norte-frontend`,
+`norte-proto`, plus the shared configuration. Those four upstream crates are on
+the list because of the failure mode that prompted this ADR: a change to
+`norte-ui-host` can desynchronise the bridge or break a downstream test while
+the portable gate stays green.
 
-Those four upstream crates are on the list because of the failure mode that
-just happened: a change to `norte-ui-host` can desynchronise the bridge or
-break a downstream test, and the portable gate will stay green through it.
+`.github/workflows/gui.yml` exists and does the same thing with WebKitGTK, GTK3
+and libsoup3 installed **only in that job** — but **GitHub Actions is disabled
+on this repository**, and has been since 2026-07-13. So it runs nothing today.
+
+The first version of this ADR said "its own CI gate runs on every change". That
+was false when it was written, and not because of the workflow: nothing at all
+had run for seven weeks. The claim is recorded here rather than quietly fixed
+because it is the same failure the ADR is about — a gate believed in rather
+than observed — committed while writing the ADR against it.
+
+The workflow file stays. It is correct, it costs nothing while Actions is off,
+and re-enabling Actions is one setting. What must not stay is the belief that
+it is running.
+
+**So the floor is local, and it has to be one people keep.** A hook that makes
+a push take twenty minutes gets `--no-verify`d into irrelevance, which is how
+this rots the next time; see the stamp in `.githooks/pre-push`.
 
 ### The crate stays out of the portable gate, for the opposite reason
 
@@ -101,8 +117,10 @@ about what went wrong.
 
 ## Consequences
 
-- Every PR touching the window or its contracts runs `just gui-ci`. The two
-  rots above could not have reached `main` and stayed.
+- Every push touching the window or its contracts runs `just gui-ci`, from the
+  hook. The two rots above could not have reached `main` and stayed — but only
+  as long as the hook is installed (`just hooks`, once per clone) and not
+  skipped, which is a weaker guarantee than a service and is stated as such.
 - No graphics dependency entered the portable gate; the CSP is untouched; the
   webview still receives no raw path (ADR 0067); the window still speaks only
   through `norte-client` and its boundary test still holds.
