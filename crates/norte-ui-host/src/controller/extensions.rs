@@ -686,11 +686,12 @@ impl Estado {
             ],
             input: None,
             input_hostile: false,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id: modal,
             vista: vista.clone(),
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             reconocido: true,
             al_confirmar: Some(Pendiente::AprobarExtension {
                 id: id.to_owned(),

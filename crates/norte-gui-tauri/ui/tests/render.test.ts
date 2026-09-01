@@ -361,6 +361,7 @@ describe("Screen", () => {
         ],
         input: null,
         input_hostile: false,
+        input_secret: false,
       },
     ];
     screen.paint(v);
@@ -387,6 +388,7 @@ describe("Screen", () => {
         choices: [{ id: "cancel", label_key: "dialog-cancel", destructive: false }],
         input: null,
         input_hostile: false,
+        input_secret: false,
       },
     ];
     screen.paint(v);
@@ -559,6 +561,7 @@ describe("el campo de texto de un diálogo", () => {
         choices: [{ id: "confirm", label_key: "dialog-confirm", destructive: false }],
         input,
         input_hostile: hostile,
+        input_secret: false,
       },
     ];
     return v;
@@ -603,6 +606,87 @@ describe("el campo de texto de un diálogo", () => {
     expect(ultima?.action).toBe("dialog_input");
     if (ultima?.action === "dialog_input") {
       expect(ultima.text).toBe("informe");
+    }
+  });
+
+  it("una contraseña se pinta como contraseña y no se resiembra con los puntos", () => {
+    const { screen, enviadas } = montar();
+    const v = conDialogo("", false);
+    v.dialogs[0]!.title_key = "modal-ask-secret-title";
+    v.dialogs[0]!.input_secret = true;
+    screen.paint(v);
+
+    const campo = campoVivo();
+    expect(campo.type).toBe("password");
+    // Ni el gestor de contraseñas del navegador lo ofrece ni lo guarda: esto
+    // es para ESTA sesión, que es lo que el cuerpo del diálogo promete.
+    // `new-password` y no `off`: Chromium y WebView2 IGNORAN `off` en un campo
+    // de contraseña a propósito, y este es el valor que sí respetan.
+    expect(campo.autocomplete).toBe("new-password");
+
+    campo.value = "s3cr3t";
+    campo.dispatchEvent(new Event("input", { bubbles: true }));
+
+    // Teclear NO manda nada: por `dialog_input` cruzarían `s`, `s3`, `s3c`… y
+    // cada prefijo se quedaría en un trozo de heap que nadie pisa.
+    expect(enviadas.some((a) => a.action === "dialog_input")).toBe(false);
+
+    // Y un repintado no resiembra el campo: hacerlo convertiría la contraseña
+    // del usuario en lo que mandara el host.
+    screen.paint(v);
+    expect(campoVivo().value).toBe("s3cr3t");
+
+    // Cruza UNA vez, con la respuesta.
+    const boton = document.querySelector(".dialog .choices button");
+    (boton as HTMLButtonElement).click();
+    const ultima = enviadas.at(-1);
+    expect(ultima?.action).toBe("dialog");
+    if (ultima?.action === "dialog") {
+      expect(ultima.choice).toBe("confirm");
+      expect(ultima.secret).toBe("s3cr3t");
+    }
+  });
+
+  it("Enter dentro del campo de contraseña confirma y lleva el valor", () => {
+    const { screen, enviadas } = montar();
+    const v = conDialogo("", false);
+    v.dialogs[0]!.title_key = "modal-ask-secret-title";
+    v.dialogs[0]!.input_secret = true;
+    screen.paint(v);
+
+    const campo = campoVivo();
+    campo.value = "s3cr3t";
+    campo.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    // Sin esto, Enter salía al host como el acorde `dialog.confirm` — que
+    // sobre un diálogo de contraseña no lleva nada y por tanto es inerte—,
+    // así que la forma más natural de contestar no habría hecho nada.
+    const ultima = enviadas.at(-1);
+    expect(ultima?.action).toBe("dialog");
+    if (ultima?.action === "dialog") {
+      expect(ultima.secret).toBe("s3cr3t");
+    }
+  });
+
+  it("cancelar no lleva la contraseña", () => {
+    const { screen, enviadas } = montar();
+    const v = conDialogo("", false);
+    v.dialogs[0]!.title_key = "modal-ask-secret-title";
+    v.dialogs[0]!.input_secret = true;
+    v.dialogs[0]!.choices = [
+      { id: "confirm", label_key: "dialog-confirm", destructive: false },
+      { id: "cancel", label_key: "dialog-cancel", destructive: false },
+    ];
+    screen.paint(v);
+    campoVivo().value = "s3cr3t";
+
+    const botones = document.querySelectorAll(".dialog .choices button");
+    (botones[1] as HTMLButtonElement).click();
+    const ultima = enviadas.at(-1);
+    expect(ultima?.action).toBe("dialog");
+    if (ultima?.action === "dialog") {
+      expect(ultima.choice).toBe("cancel");
+      expect(ultima.secret).toBeUndefined();
     }
   });
 
@@ -2329,6 +2413,7 @@ describe("un diálogo que pregunta por una operación", () => {
         ],
         input: null,
         input_hostile: false,
+        input_secret: false,
       },
     ];
     screen.paint(v);

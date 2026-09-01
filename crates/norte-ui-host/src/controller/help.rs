@@ -205,6 +205,12 @@ impl Estado {
                 // son el diálogo que pide que teclees algo, y el corpus tiene
                 // UNA que habla de eso.
                 Some(Pendiente::InstruccionIa { .. }) => "dialog.ai-rename",
+                // #327: el de la contraseña tiene su PROPIA página, la misma
+                // que usa la TUI (`remote.md`, junto al TOFU). Mandarlo a la
+                // de «teclea un nombre» sería la divergencia entre frontends
+                // que ADR 0077 existe para evitar, cometida en el mismo cambio
+                // que añade su test de paridad.
+                Some(Pendiente::EntregarSecreto { .. }) => "dialog.ask-secret",
                 // #311: el diálogo de sumas es un cuadro de LECTURA sobre lo
                 // que hay bajo el cursor, como las propiedades.
                 Some(Pendiente::CopiarSumas { .. }) => "dialog.properties",

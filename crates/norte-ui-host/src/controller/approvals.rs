@@ -85,6 +85,31 @@ impl Estado {
     /// reparsean a una operación —la op real va ligada al `approval_id`—, y
     /// se pintan con el saneado canónico porque las controla quien pidió la
     /// operación.
+    /// Las dos respuestas de una aprobación de agente.
+    ///
+    /// Fuera del constructor porque el constructor ya no cabía, y aparte
+    /// porque estas dos etiquetas no son las de un diálogo normal: `approve`
+    /// y `deny` se llaman distinto de `confirm`/`cancel` a propósito — en una
+    /// superficie de seguridad, «confirmar» y «aprobar» no deberían poder
+    /// confundirse en un renderer.
+    fn aprobar_o_denegar() -> Vec<DialogChoice> {
+        vec![
+            DialogChoice {
+                id: "approve".to_owned(),
+                label_key: "dialog-approve".to_owned(),
+                // Aprobar una mutación de un agente ES destructivo: el
+                // renderer la pinta como tal, y Enter no la dispara sola
+                // porque no hay respuesta por defecto.
+                destructive: true,
+            },
+            DialogChoice {
+                id: "deny".to_owned(),
+                label_key: "dialog-deny".to_owned(),
+                destructive: false,
+            },
+        ]
+    }
+
     pub(super) fn abrir_aprobacion(
         &mut self,
         req: &norte_proto::methods::PolicyApprovalRequired,
@@ -211,28 +236,15 @@ impl Estado {
             deadline_at_ms: vence_en,
             body: cuerpo,
             overflow_note: nota,
-            choices: vec![
-                DialogChoice {
-                    id: "approve".to_owned(),
-                    label_key: "dialog-approve".to_owned(),
-                    // Aprobar una mutación de un agente ES destructivo: el
-                    // renderer la pinta como tal, y Enter no la dispara sola
-                    // porque no hay respuesta por defecto.
-                    destructive: true,
-                },
-                DialogChoice {
-                    id: "deny".to_owned(),
-                    label_key: "dialog-deny".to_owned(),
-                    destructive: false,
-                },
-            ],
+            choices: Self::aprobar_o_denegar(),
             input: None,
             input_hostile: false,
+            input_secret: false,
         };
         let caidos = self.apilar_dialogo(Dialogo {
             id,
             vista: vista.clone(),
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             // Se abre SOLA: la trae una op de un agente, no una tecla.
             reconocido: false,
             al_confirmar: Some(Pendiente::Decidir {

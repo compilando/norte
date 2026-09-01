@@ -341,6 +341,17 @@ pub struct Falso {
     pub degradadas: std::sync::Mutex<
         Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>>,
     >,
+    /// El PRIMER `list` sobre un directorio que existe falla con esto (#327),
+    /// y se consume: el reintento tras entregar el secreto entra.
+    pub pide_secreto: std::sync::Mutex<Option<Error>>,
+    /// Lo entregado por `provide_secret` (#327): `(conn, secreto)`, en orden.
+    ///
+    /// El secreto se guarda EN CLARO aquí a propósito: es lo que el test tiene
+    /// que poder comprobar —que llega tal cual y a la conexión que lo pidió—,
+    /// y este doble solo vive dentro de un test.
+    pub secretos_dados: std::sync::Mutex<Vec<(String, String)>>,
+    /// Qué contesta `provide_secret`. `None` = lo acepta.
+    pub secreto: std::sync::Mutex<Option<Result<(), Error>>>,
     /// El canal de `connection.failed` (#322), para que el test empuje uno.
     /// Aparte del de arriba, como en el backend de verdad.
     pub fallidas: std::sync::Mutex<
@@ -1496,6 +1507,18 @@ impl HostBackend for Falso {
         self.attrs_pedidos.lock().expect("attrs").push(attrs);
         self.listados.fetch_add(1, Ordering::SeqCst);
         self.latido();
+        // #327: la conexión pide su contraseña. Se consume UNA vez —quien la
+        // entrega vuelve a listar y esta vez tiene que entrar—, que es
+        // exactamente el flujo que hay que poder probar.
+        if let Some(fallo) = self
+            .pide_secreto
+            .lock()
+            .expect("pide_secreto")
+            .take()
+            .filter(|_| self.arbol.contains_key(&dir.to_wire()))
+        {
+            return Box::pin(async move { Err(fallo) });
+        }
         if !self.arbol.contains_key(&dir.to_wire()) {
             return Box::pin(async { Err(Error::NotFound) });
         }
@@ -1845,6 +1868,28 @@ impl HostBackend for Falso {
             .clone()
             .unwrap_or_else(|| Ok(Vec::new()));
         Box::pin(async move { cs })
+    }
+
+    fn provide_secret(
+        &self,
+        conn: String,
+        secret: String,
+    ) -> BoxFuture<'static, Result<(), Error>> {
+        // Se apunta lo entregado para que el test compruebe que llega TAL
+        // CUAL: el punto entero de #327 es que la contraseña no la toca nadie
+        // entre el campo y el core.
+        self.secretos_dados
+            .lock()
+            .expect("secretos_dados")
+            .push((conn, secret));
+        self.latido();
+        let res = self
+            .secreto
+            .lock()
+            .expect("secreto")
+            .clone()
+            .unwrap_or(Ok(()));
+        Box::pin(async move { res })
     }
 
     fn close_connection(&self, path: VPath) -> BoxFuture<'static, Result<bool, Error>> {

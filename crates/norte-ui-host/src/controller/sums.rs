@@ -203,11 +203,12 @@ impl Estado {
             choices,
             input: None,
             input_hostile: false,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista: vista.clone(),
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             reconocido: true,
             al_confirmar: copiable.then_some(Pendiente::CopiarSumas { bytes }),
         });

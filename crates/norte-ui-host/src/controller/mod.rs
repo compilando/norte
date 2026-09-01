@@ -536,6 +536,9 @@ enum Mensaje {
     Degradada(Box<norte_proto::methods::ConnectionDegraded>),
     /// Una conexión NO se pudo abrir, y por qué (#322).
     Fallida(Box<norte_proto::methods::ConnectionFailed>),
+    /// El secreto se entregó (o no), y con ello qué hacer con la navegación
+    /// que `SecretNeeded` había suspendido (#327).
+    SecretoEntregado(Box<(u32, VPath, Result<(), Error>)>),
     /// Un snapshot de progreso. Por la MISMA cola que todo lo demás, que es
     /// lo que garantiza que un estado terminal no se adelante ni se pierda.
     Progreso(Box<norte_proto::TaskProgress>),
@@ -1057,7 +1060,13 @@ async fn actor(
                 }
             }
             Mensaje::Listado(datos) => {
-                if let Some(u) = estado.aterrizar_listado(*datos, &backend, &buzon) {
+                for u in estado.aterrizar_listado(*datos, &backend, &buzon) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::SecretoEntregado(datos) => {
+                let (slot, dir, res) = *datos;
+                for u in estado.secreto_entregado(slot, &dir, res, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
@@ -1579,7 +1588,13 @@ struct Dialogo {
     /// FICHERO. Pasarlo por el recorte de pantalla creaba directorios con
     /// una elipsis dentro: el mismo error que ADR 0061 decidió no volver a
     /// cometer, en miniatura.
-    input_crudo: String,
+    ///
+    /// Un enum y no un `String` desde #327: hay un diálogo que pide una
+    /// CONTRASEÑA, y guardarla aquí como texto normal la mandaría a un
+    /// `Debug`, al heap sin pisar, y —lo peor— a la proyección de pintado por
+    /// el mismo camino que un nombre de fichero. Con dos formas, quien escriba
+    /// tiene que decir cuál es.
+    tecleado: Tecleado,
     /// Este diálogo se ABRIÓ SOLO, y todavía no se le ha reconocido.
     ///
     /// Una aprobación y el informe de un lote aparecen sin que nadie acabe de
@@ -1601,6 +1616,52 @@ struct Dialogo {
     /// es una respuesta, porque la pregunta la hizo quien está delante.
     reconocido: bool,
 }
+/// Lo tecleado en el campo de un diálogo, según lo que sea.
+///
+/// Dos formas y no un `String` porque el trato es DISTINTO y la diferencia no
+/// puede quedar a criterio de quien llama: un nombre de fichero se pinta
+/// enmascarado, una contraseña se pinta como puntos y no se pinta nunca. Con
+/// un solo tipo, la única barrera era acordarse — y el modo de fallo era una
+/// contraseña saliendo por el mismo `display_name` que un nombre, o dentro de
+/// un `Debug` del estado entero.
+#[derive(Debug)]
+enum Tecleado {
+    /// Un nombre, una instrucción, una plantilla: texto que se enseña.
+    Texto(String),
+    /// Una contraseña, y el host NO la tiene mientras se escribe.
+    ///
+    /// Sin datos dentro, y eso es la decisión: el campo lo enmascara el
+    /// `input type=password` del renderer, así que aquí no hay nada que contar
+    /// ni que pintar, y la contraseña cruza una sola vez —con la respuesta,
+    /// en `UiAction::Dialog::secret`— en el instante en que el lector decide
+    /// entregarla. Lo que el host no tiene no se le puede escapar por un
+    /// `Debug`, por una foto ni por un log.
+    ///
+    /// La variante existe igual porque es la barrera de TIPO: `texto()`
+    /// devuelve nada sobre ella, así que una pendiente de texto que aterrizara
+    /// por error sobre este diálogo no puede leer un secreto — no hay ninguno.
+    Secreto,
+}
+
+/// El tope de una contraseña, del crate COMPARTIDO: lo que se rechaza aquí es
+/// exactamente lo que aquel puede guardar sin reasignar.
+use norte_frontend::secret::SECRET_MAX_CHARS;
+
+impl Tecleado {
+    /// El texto, para las pendientes que trabajan con texto.
+    ///
+    /// Vacío para un secreto, a propósito: si alguna vez una pendiente de
+    /// texto acabara sobre un diálogo de contraseña, lo que recibe es nada.
+    /// Un `panic!` sería peor —tumbar la ventana por un error de cableado— y
+    /// aquí no hay nada más que devolver.
+    fn texto(&self) -> &str {
+        match self {
+            Self::Texto(s) => s,
+            Self::Secreto => "",
+        }
+    }
+}
+
 /// Un fichero que se está creando para editarlo (#290).
 #[derive(Debug)]
 struct Creacion {
@@ -1637,6 +1698,25 @@ enum Pendiente {
     /// Preguntar al índice por SIGNIFICADO. Lo que se teclea es la consulta,
     /// y no lleva más operandos: el alcance es el índice entero.
     ConsultaSemantica,
+    /// Entregar el secreto de una conexión y REINTENTAR la navegación que
+    /// `Error::SecretNeeded` interrumpió (#325/#327).
+    ///
+    /// Lleva a dónde iba el panel porque esta pendiente es el único sitio de
+    /// esta ventana donde una navegación sobrevive a la respuesta que la
+    /// interrumpió: el listado ya volvió con error, y el hueco se quedó
+    /// enseñando el directorio que abandonaba. Sin el destino aquí, entregar
+    /// el secreto dejaría al lector con la contraseña dada y el panel donde
+    /// estaba.
+    EntregarSecreto {
+        /// Nombre de la entrada de `connections.toml` que lo pide — la MISMA
+        /// cadena que va en `connection.provide_secret`. Sale del error del
+        /// core, no del servidor remoto.
+        conn: String,
+        /// El hueco que estaba navegando.
+        slot: u32,
+        /// A dónde reintentar.
+        dir: VPath,
+    },
     /// Marcar —o desmarcar— por patrón. Lo que se teclea es el glob.
     Patron {
         /// `true` añade marcas, `false` las quita.
@@ -3067,6 +3147,12 @@ impl Estado {
     /// se aplica en [`Estado::aterriza`]. Por eso el cursor sigue
     /// respondiendo mientras un NFS muerto piensa: el único escritor no está
     /// esperando a nadie.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "despachador exhaustivo: un brazo por acción y sin lógica dentro, \
+                  como `ejecutar_pendiente`. Partirlo por la mitad solo movería \
+                  la frontera a un sitio arbitrario"
+    )]
     fn aplicar(
         &mut self,
         accion: &UiAction,
@@ -3186,7 +3272,9 @@ impl Estado {
             UiAction::ProfileActivateRow { row, generation } => {
                 self.activar_perfil_de_fila(*row, *generation, backend, buzon)
             }
-            UiAction::Dialog { id, choice } => self.responder_dialogo(*id, choice, backend, buzon),
+            UiAction::Dialog { id, choice, secret } => {
+                self.responder_dialogo(*id, choice, secret.as_deref(), backend, buzon)
+            }
             UiAction::CancelTask { task_id } => self.cancelar(*task_id),
             UiAction::CompareSelectRow { .. }
             | UiAction::CompareActivateRow { .. }

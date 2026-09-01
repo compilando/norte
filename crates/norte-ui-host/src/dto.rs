@@ -2027,6 +2027,24 @@ pub struct DialogView {
     /// dirección). Es la única superficie donde se pide aprobar un nombre, y
     /// enseñarlo crudo es como se aprueba otra cosa.
     pub input_hostile: bool,
+    /// El campo es una CONTRASEÑA (#327).
+    ///
+    /// Cuando es `true`, [`Self::input`] lleva PUNTOS —uno por carácter— y no
+    /// el texto: lo tecleado se queda en el host, en un buffer que se pisa con
+    /// ceros al soltarlo (`norte_frontend::secret::TypedSecret`). El renderer
+    /// pinta el campo como contraseña y **nunca lo resiembra** con este valor,
+    /// que convertiría lo que el usuario escribió en una fila de puntos
+    /// literales.
+    ///
+    /// Un campo propio y no «adivínalo por el título» porque esta es la única
+    /// diferencia que importa entre pintar un nombre de fichero y pintar una
+    /// contraseña, y dejarla implícita significa que el siguiente diálogo que
+    /// pida un secreto la herede mal.
+    ///
+    /// `#[serde(default)]`: un renderer de un puente anterior no lo manda, y
+    /// su ausencia significa «no es un secreto», que es lo que era antes.
+    #[serde(default)]
+    pub input_secret: bool,
 }
 
 /// Una línea del cuerpo de un diálogo.

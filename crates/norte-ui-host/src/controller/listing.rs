@@ -71,10 +71,29 @@ impl Estado {
         datos: RespuestaListado,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
-    ) -> Option<BridgeEnvelope<UiUpdate>> {
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let (token, slot, dir, res) = datos;
         if self.huecos.get(&slot).and_then(|h| h.en_vuelo) != Some(token) {
-            return None;
+            return Vec::new();
+        }
+        // #327: la entrada declara `secret = "prompt"` y ninguna de las tres
+        // fuentes lo tiene. Se PREGUNTA en vez de pintar el error, que es lo
+        // único que esta ventana sabía hacer: el texto de `err-secret-needed`
+        // nombra una variable de entorno y ahí se acababa el camino.
+        //
+        // El estado del hueco se deja como lo dejaría cualquier otro error
+        // —a propósito—: si el diálogo se cierra sin contestar, lo que queda
+        // detrás es la pantalla que ya sabía explicarse.
+        if let Err(Error::SecretNeeded { conn, endpoint }) = &res {
+            let (conn, endpoint) = (conn.clone(), endpoint.clone());
+            self.aterriza_en(slot, dir.clone(), res);
+            // La foto ANTES del diálogo: el hueco acaba de cambiar de estado y
+            // el diálogo se apila encima. Al revés, el renderer vería la
+            // pregunta sobre la pantalla anterior.
+            let snap = self.snapshot();
+            let mut fuera = vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))];
+            fuera.extend(self.pedir_secreto(conn, &endpoint, slot, dir));
+            return fuera;
         }
         self.aterriza_en(slot, dir, res);
         self.pedir_pliegue(slot, backend, buzon);
@@ -89,7 +108,7 @@ impl Estado {
         // marcas—, así que se manda una foto en vez de enumerar parches que
         // el renderer tendría que casar.
         let snap = self.snapshot();
-        Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+        vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))]
     }
 
     /// Lo que un sondeo averiguó, aplicado; y se pide la siguiente tanda.

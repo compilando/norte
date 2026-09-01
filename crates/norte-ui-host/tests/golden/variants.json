@@ -30,7 +30,8 @@
     "input_hostile": false,
     "overflow_note": "",
     "subject": null,
-    "title_key": "modal-delete-title"
+    "title_key": "modal-delete-title",
+    "input_secret": false
   },
   "placement_role_none": {
     "focus_index": 0,

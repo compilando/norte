@@ -1468,6 +1468,7 @@ async fn confirmar_dos_veces_no_borra_dos_veces() {
         .dispatch(UiAction::Dialog {
             id,
             choice: "confirm".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -1477,6 +1478,7 @@ async fn confirmar_dos_veces_no_borra_dos_veces() {
         .dispatch(UiAction::Dialog {
             id,
             choice: "confirm".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -1511,6 +1513,7 @@ async fn una_respuesta_que_no_existe_no_se_interpreta() {
         .dispatch(UiAction::Dialog {
             id,
             choice: "borra-y-no-preguntes".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -1536,6 +1539,7 @@ async fn la_task_aparece_y_su_desenlace_no_se_pierde() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -1583,6 +1587,7 @@ async fn una_task_terminada_se_va_del_tablero_sola() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -1638,6 +1643,7 @@ async fn cancelar_es_idempotente() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -1869,6 +1875,7 @@ async fn crear_directorio_teclea_y_encola() {
     host.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -1903,6 +1910,7 @@ async fn un_nombre_invalido_no_crea_nada() {
     host.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -2019,6 +2027,7 @@ async fn cualquier_respuesta_que_no_sea_aprobar_deniega() {
     host.dispatch(UiAction::Dialog {
         id,
         choice: "deny".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -2280,6 +2289,7 @@ async fn un_resync_no_se_come_las_tasks_vivas() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -3071,6 +3081,7 @@ async fn en_solo_lectura_no_hay_aprobaciones_que_responder() {
         .dispatch(UiAction::Dialog {
             id: norte_ui_host::ModalId(1),
             choice: "approve".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -3381,6 +3392,7 @@ async fn el_nombre_que_se_teclea_es_el_que_se_crea() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -5672,6 +5684,7 @@ async fn el_panel_de_procesos_toma_sus_teclas() {
         h.dispatch(UiAction::Dialog {
             id,
             choice: "confirm".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -6363,6 +6376,7 @@ async fn buscar_abre_su_vista_y_los_hallazgos_llegan_en_lotes() {
     h.dispatch(UiAction::Dialog {
         id: dialogo.id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -6428,6 +6442,7 @@ async fn buscar(
     h.dispatch(UiAction::Dialog {
         id: dialogo.id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -6629,6 +6644,7 @@ async fn ir_a_un_resultado_navega_y_deja_el_cursor_encima() {
     h.dispatch(UiAction::Dialog {
         id: dialogo.id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -6684,6 +6700,7 @@ async fn un_patron_vacio_no_lanza_nada() {
     h.dispatch(UiAction::Dialog {
         id: dialogo.id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -6720,6 +6737,7 @@ async fn un_hallazgo_hostil_va_marcado() {
     h.dispatch(UiAction::Dialog {
         id: dialogo.id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -7868,6 +7886,7 @@ async fn partir_lee_el_tamano_en_binario() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -7914,6 +7933,7 @@ async fn partir_rehusa_un_tamano_que_no_vale() {
         .dispatch(UiAction::Dialog {
             id,
             choice: "confirm".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -7990,6 +8010,7 @@ async fn empaquetar_saca_el_formato_del_nombre() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8031,6 +8052,7 @@ async fn empaquetar_rehusa_un_formato_que_no_se_escribe() {
         .dispatch(UiAction::Dialog {
             id,
             choice: "confirm".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -8087,6 +8109,7 @@ async fn una_copia_que_choca_se_puede_reintentar_con_otra_politica() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8129,12 +8152,14 @@ async fn una_copia_que_choca_se_puede_reintentar_con_otra_politica() {
     h.dispatch(UiAction::Dialog {
         id: cid,
         choice: "overwrite".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
     h.dispatch(UiAction::Dialog {
         id: cid,
         choice: "overwrite".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8169,6 +8194,7 @@ async fn cancelar_una_colision_no_reintenta() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8193,6 +8219,7 @@ async fn cancelar_una_colision_no_reintenta() {
     h.dispatch(UiAction::Dialog {
         id: cid,
         choice: "cancel".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8220,6 +8247,7 @@ async fn copiar_compone_el_destino_en_rust() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8257,6 +8285,7 @@ async fn mover_es_otro_verbo_y_lo_dice() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8371,6 +8400,7 @@ async fn las_marcas_se_consumen_al_enviar() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8404,6 +8434,7 @@ async fn al_terminar_una_copia_se_relista_el_destino() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8447,6 +8478,7 @@ async fn una_colision_llega_al_tablero_como_fallo() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8482,6 +8514,7 @@ async fn una_copia_que_nace_terminal_tambien_relista() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8512,6 +8545,7 @@ async fn un_destino_de_solo_lectura_lo_dice_al_encolar() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8543,6 +8577,7 @@ async fn una_copia_en_marcha_se_cancela() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8614,6 +8649,7 @@ async fn un_refresco_no_pisa_una_navegacion_en_vuelo() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8864,6 +8900,7 @@ async fn el_destino_se_compone_byte_a_byte() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8905,6 +8942,7 @@ async fn mover_relista_tambien_el_origen() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -8981,6 +9019,7 @@ async fn el_cursor_sobrevive_a_un_refresco() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -9172,6 +9211,7 @@ async fn las_marcas_que_se_consumen_son_las_del_origen() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -9237,6 +9277,7 @@ async fn un_hueco_oculto_afectado_queda_para_recargar() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -9346,6 +9387,7 @@ async fn las_marcas_sobreviven_a_un_refresco() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -9428,6 +9470,7 @@ async fn mover_relista_el_origen_aunque_el_provider_lo_escriba_distinto() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -9531,6 +9574,7 @@ async fn un_nombre_sin_tocar_no_renombra_nada() {
         .dispatch(UiAction::Dialog {
             id: d.id,
             choice: "confirm".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -9585,6 +9629,7 @@ async fn un_nombre_tocado_con_fffd_se_rechaza() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -9638,6 +9683,7 @@ async fn un_nombre_nuevo_sale_como_movimiento_al_mismo_sitio() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -9803,6 +9849,7 @@ async fn pedir_plan(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -10301,6 +10348,7 @@ async fn descartar_una_revision_no_mata_la_peticion_siguiente() {
     h.dispatch(UiAction::Dialog {
         id: id2,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -10539,6 +10587,7 @@ async fn crear_un_directorio_con_fffd_se_rechaza() {
         .dispatch(UiAction::Dialog {
             id,
             choice: "confirm".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -11108,6 +11157,282 @@ async fn una_sesion_en_claro_deja_aviso_persistente() {
     );
 }
 
+/// Entra en `docs`, que es la navegación que dispara el listado remoto.
+async fn entrar_en_docs(h: &UiHost, snap: &norte_ui_host::ViewSnapshot) {
+    let docs = listado(snap)
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("el directorio está");
+    h.dispatch(UiAction::Activate {
+        slot_id: 1,
+        key: docs.key,
+        generation: listado(snap).generation,
+    })
+    .await
+    .expect("host vivo");
+}
+
+/// Arma el doble para que el SIGUIENTE listado pida la contraseña (#327).
+///
+/// Después de arrancar el host, no antes: el listado del arranque se llevaría
+/// la petición y la ventana nacería con el panel en error, que es otro caso.
+fn pedira_el_secreto(f: &Falso) {
+    *f.pide_secreto.lock().expect("pide_secreto") = Some(norte_proto::Error::SecretNeeded {
+        conn: "rosetta".to_owned(),
+        endpoint: "s3://cubo.example".to_owned(),
+    });
+}
+
+/// #327: la ventana PREGUNTA la contraseña en vez de pintar el error.
+///
+/// Hasta ahora un usuario de `norte-gui` sobre una conexión `secret = "prompt"`
+/// veía el texto de `err-secret-needed` —que nombra una variable de entorno— y
+/// ahí se acababa el camino. La TUI abría un diálogo desde #325: el mismo
+/// hueco de paridad que ADR 0077 existe para no dejar abierto.
+#[tokio::test]
+async fn la_ventana_pide_el_secreto_y_reintenta_la_navegacion() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    pedira_el_secreto(&backend);
+    let mut sub = h.subscribe();
+    // Entrar en el directorio dispara el listado que pide el secreto.
+    entrar_en_docs(&h, &snap).await;
+
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let d = dialogos.last().expect("el diálogo se abrió");
+    assert_eq!(d.title_key, "modal-ask-secret-title");
+    // La pregunta dice A DÓNDE va la contraseña, y no solo cómo se llama la
+    // entrada: el nombre lo eligió un fichero, y un fichero se edita.
+    assert_eq!(
+        d.destination.as_ref().map(|l| l.text.as_str()),
+        Some("s3://cubo.example"),
+        "sin el destino la pregunta no es contestable"
+    );
+    assert_eq!(d.subject.as_ref().map(|l| l.text.as_str()), Some("rosetta"));
+    assert!(d.input_secret, "el campo es una contraseña");
+    assert_eq!(d.input.as_deref(), Some(""), "nace vacío");
+
+    // Teclear por el camino de un NOMBRE no hace nada sobre este diálogo: el
+    // host no guarda contraseñas, y un renderer que las mandara por ahí
+    // estaría metiendo material secreto por la vía de un nombre de fichero.
+    let ack = h
+        .dispatch(UiAction::DialogInput {
+            id: d.id,
+            text: "s3cr3t".to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Stale {
+            reason: StaleAction::Modal
+        },
+        "un campo de contraseña no se teclea por `dialog_input`"
+    );
+
+    // Confirmar entrega el secreto TAL CUAL y reintenta ESA navegación. Va
+    // CON la respuesta: cruza una vez, en el instante en que se decide.
+    h.dispatch(UiAction::Dialog {
+        id: d.id,
+        choice: "confirm".to_owned(),
+        secret: Some("s3cr3t".to_owned()),
+    })
+    .await
+    .expect("host vivo");
+
+    let dados = anotados(&backend, "el secreto entregado", 1, |f| {
+        f.secretos_dados.lock().expect("secretos_dados").clone()
+    })
+    .await;
+    assert_eq!(
+        dados[0],
+        ("rosetta".to_owned(), "s3cr3t".to_owned()),
+        "llega entero y a la conexión que lo pidió"
+    );
+
+    // Y el panel acaba DONDE iba: entregar la contraseña sin reanudar la
+    // navegación dejaría al lector con el secreto dado y el panel quieto.
+    let dir = foto_hasta(&h, &mut sub, "el panel entró", |f| {
+        let SlotView::Browser(b) = f.slots.first()? else {
+            return None;
+        };
+        b.path_display
+            .ends_with("/casa/docs")
+            .then(|| b.path_display.clone())
+    })
+    .await;
+    assert!(dir.ends_with("/casa/docs"), "{dir}");
+}
+
+/// Confirmar con el campo VACÍO es inerte: ni entrega, ni cierra.
+///
+/// Entregar la cadena vacía reproduce #320 —un secreto vacío hace que la
+/// conexión autentique con la cadena ambiente, o sea con una identidad que
+/// nadie pidió— y cerrar convertiría un dedo que se adelanta en una navegación
+/// abandonada.
+#[tokio::test]
+async fn confirmar_sin_teclear_nada_no_entrega_ni_cierra() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    pedira_el_secreto(&backend);
+    let mut sub = h.subscribe();
+    entrar_en_docs(&h, &snap).await;
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let id = dialogos.last().expect("el diálogo se abrió").id;
+
+    // Sin acuse previo: lo abrió la navegación del lector, así que la primera
+    // respuesta ya es una respuesta. Y con el campo vacío, no hace nada.
+    let ack = h
+        .dispatch(UiAction::Dialog {
+            id,
+            choice: "confirm".to_owned(),
+            secret: None,
+        })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Unavailable {
+            reason_key: "host-secret-empty".to_owned()
+        },
+        "el confirmar de un campo de contraseña vacío es inerte"
+    );
+
+    asentar().await;
+    assert!(
+        backend
+            .secretos_dados
+            .lock()
+            .expect("secretos_dados")
+            .is_empty(),
+        "no se entregó NADA: la cadena vacía es #320"
+    );
+    // Y el diálogo sigue delante: responder con un `Stale` querría decir que
+    // se cerró.
+    let ack = h
+        .dispatch(UiAction::Dialog {
+            id,
+            choice: "cancel".to_owned(),
+            secret: None,
+        })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Applied { .. }),
+        "el diálogo seguía abierto: {ack:?}"
+    );
+}
+
+/// Una contraseña que no cabe se RECHAZA, no se recorta.
+///
+/// Recortar era peor que el tope: entregar los primeros 256 caracteres de una
+/// frase de paso más larga falla la autenticación sin decir por qué, y el
+/// lector no puede sospecharlo porque el campo va enmascarado.
+#[tokio::test]
+async fn una_contrasena_que_no_cabe_se_rechaza() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    pedira_el_secreto(&backend);
+    let mut sub = h.subscribe();
+    entrar_en_docs(&h, &snap).await;
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let id = dialogos.last().expect("el diálogo se abrió").id;
+
+    let ack = h
+        .dispatch(UiAction::Dialog {
+            id,
+            choice: "confirm".to_owned(),
+            secret: Some("x".repeat(257)),
+        })
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        ack,
+        ActionAck::Unavailable {
+            reason_key: "host-secret-too-long".to_owned()
+        }
+    );
+    asentar().await;
+    assert!(
+        backend
+            .secretos_dados
+            .lock()
+            .expect("secretos_dados")
+            .is_empty(),
+        "no se entregó una contraseña a medias"
+    );
+}
+
+/// Dos paneles sobre la misma conexión NO apilan dos preguntas iguales.
+///
+/// Cada una traía su propio campo vacío, y bajo suficientes de ellas el
+/// desalojo por tope de la pila se lleva por delante las aprobaciones de
+/// agente sin reconocer, que es lo primero que sacrifica.
+#[tokio::test]
+async fn dos_listados_de_la_misma_conexion_no_apilan_dos_preguntas() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    pedira_el_secreto(&backend);
+    let mut sub = h.subscribe();
+    entrar_en_docs(&h, &snap).await;
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogos.len(), 1);
+
+    // Otra navegación al mismo sitio, y otra vez sin secreto.
+    pedira_el_secreto(&backend);
+    h.dispatch(UiAction::Parent { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    asentar().await;
+    let foto = foto_hasta(&h, &mut sub, "la pila estable", |f| Some(f.dialogs.len())).await;
+    assert_eq!(foto, 1, "una pregunta por conexión, no una por listado");
+}
+
+/// Cerrar el diálogo abandona la navegación, como el TOFU: no se entrega nada
+/// y el hueco se queda con el error que ya sabía explicarse.
+#[tokio::test]
+async fn cancelar_el_secreto_abandona_la_navegacion() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+    pedira_el_secreto(&backend);
+    let mut sub = h.subscribe();
+    entrar_en_docs(&h, &snap).await;
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let id = dialogos.last().expect("el diálogo se abrió").id;
+
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "cancel".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    asentar().await;
+    assert!(
+        backend
+            .secretos_dados
+            .lock()
+            .expect("secretos_dados")
+            .is_empty(),
+        "cancelar no entrega nada"
+    );
+    let motivo = foto_hasta(&h, &mut sub, "el hueco en error", |f| {
+        let SlotView::Browser(b) = f.slots.first()? else {
+            return None;
+        };
+        match &b.state {
+            norte_ui_host::dto::SlotState::Error { reason_key, .. } => Some(reason_key.clone()),
+            _ => None,
+        }
+    })
+    .await;
+    assert_eq!(
+        motivo, "err-secret-needed",
+        "detrás del diálogo queda la pantalla que ya sabía explicarse"
+    );
+}
+
 /// #322: una conexión que NO se abre dice POR QUÉ, y con la frase concreta.
 ///
 /// Sin esto el fallo llegaba como la categoría del error —`PermissionDenied`—
@@ -11356,6 +11681,7 @@ async fn una_mutacion_sin_journal_deja_aviso() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -11625,6 +11951,7 @@ async fn el_aviso_de_journal_se_apaga_cuando_vuelve_a_aceptarse_una_mutacion() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -11637,6 +11964,7 @@ async fn el_aviso_de_journal_se_apaga_cuando_vuelve_a_aceptarse_una_mutacion() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -11776,6 +12104,7 @@ async fn una_aprobacion_que_no_llega_al_daemon_se_dice() {
         host.dispatch(UiAction::Dialog {
             id,
             choice: "approve".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -11914,6 +12243,7 @@ async fn un_clic_sobre_una_aprobacion_recien_abierta_no_la_aprueba() {
     host.dispatch(UiAction::Dialog {
         id,
         choice: "approve".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -11927,6 +12257,7 @@ async fn un_clic_sobre_una_aprobacion_recien_abierta_no_la_aprueba() {
     host.dispatch(UiAction::Dialog {
         id,
         choice: "approve".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -12358,6 +12689,7 @@ async fn la_ventana_busca_por_significado() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -12411,6 +12743,7 @@ async fn una_busqueda_semantica_sin_indice_dice_que_falta_construirlo() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -12435,6 +12768,7 @@ async fn una_consulta_semantica_vacia_no_se_manda() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -13440,6 +13774,7 @@ async fn aprobar_pregunta_y_enumera_las_capabilities() {
     h.dispatch(UiAction::Dialog {
         id: d.id,
         choice: "approve".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -13895,6 +14230,7 @@ async fn un_gobierno_fallido_vuelve_a_preguntar_al_core() {
     h.dispatch(UiAction::Dialog {
         id: d.id,
         choice: "approve".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -14017,6 +14353,7 @@ async fn el_panel_de_agentes_deshace_la_sesion_elegida() {
         h.dispatch(UiAction::Dialog {
             id: d.id,
             choice: "deny".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -14057,6 +14394,7 @@ async fn el_panel_de_agentes_deshace_la_sesion_elegida() {
     h.dispatch(UiAction::Dialog {
         id: d.id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -14120,6 +14458,7 @@ async fn una_peticion_nueva_repinta_el_panel_y_no_mueve_la_seleccion() {
         h.dispatch(UiAction::Dialog {
             id: d.id,
             choice: "deny".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -14164,6 +14503,7 @@ async fn una_peticion_nueva_repinta_el_panel_y_no_mueve_la_seleccion() {
         h.dispatch(UiAction::Dialog {
             id: d.id,
             choice: "deny".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -14340,6 +14680,7 @@ async fn editar_uno_nuevo_crea_el_fichero_y_lo_abre() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -14400,6 +14741,7 @@ async fn lo_creado_que_dejo_de_ser_un_fichero_no_se_abre() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -14775,6 +15117,7 @@ async fn soltar_confirmado_copia_y_respeta_las_marcas() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -14930,6 +15273,7 @@ async fn con_la_ventana_delante_no_se_avisa_fuera() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -14969,6 +15313,7 @@ async fn sin_foco_el_aviso_sale_y_lleva_el_nombre() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -15310,6 +15655,7 @@ async fn marcar_todo_invertir_y_por_patron() {
     h.dispatch(UiAction::Dialog {
         id: d.id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -15334,6 +15680,7 @@ async fn marcar_todo_invertir_y_por_patron() {
         .dispatch(UiAction::Dialog {
             id: d.id,
             choice: "confirm".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");
@@ -15373,6 +15720,7 @@ async fn el_tablero_se_recorre_y_se_descarta() {
     h.dispatch(UiAction::Dialog {
         id: d.id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -15691,6 +16039,7 @@ async fn la_ventana_guarda_un_favorito_con_el_nombre_sugerido() {
     h.dispatch(UiAction::Dialog {
         id: d[0].id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -17138,6 +17487,7 @@ async fn los_rechazos_de_un_lote_se_dicen_una_sola_vez() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -17179,6 +17529,7 @@ async fn el_lote_dice_cuantas_terminaron_bien_y_cuantas_no() {
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -17704,6 +18055,7 @@ async fn cambiar_permisos_teclea_y_encola() {
     host.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
+        secret: None,
     })
     .await
     .expect("host vivo");
@@ -17737,6 +18089,7 @@ async fn un_modo_invalido_no_cambia_nada() {
         .dispatch(UiAction::Dialog {
             id,
             choice: "confirm".to_owned(),
+            secret: None,
         })
         .await
         .expect("host vivo");

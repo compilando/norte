@@ -282,6 +282,23 @@ pub trait HostBackend: Send + Sync + 'static {
     /// cuando no se cerró nada enseña a no fiarse del mensaje.
     fn close_connection(&self, path: VPath) -> BoxFuture<'static, Result<bool, Error>>;
 
+    /// Entrega el secreto que una conexión pidió (#325/#327).
+    ///
+    /// `conn` es el nombre de `connections.toml` que vino en el
+    /// `Error::SecretNeeded`, no algo que el servidor remoto haya dicho.
+    ///
+    /// `secret` viaja en claro porque el core lo necesita en claro para
+    /// autenticar; lo que este frontend puede prometer es que su copia se pisa
+    /// con ceros al soltarla (`norte_frontend::secret::TypedSecret`) y que
+    /// nunca llega a la capa de pintado. De las copias de más allá de aquí
+    /// —los params, el frame, el `Value` del daemon— habla el ADR 0015.
+    ///
+    /// Un core que se NIEGUE a guardarlo llega como error y no como `Ok`: el
+    /// SDK ya traduce ese `stored: false`. Tratarlo como éxito dejaría al
+    /// usuario reintentando una navegación que nunca va a tener el secreto.
+    fn provide_secret(&self, conn: String, secret: String)
+    -> BoxFuture<'static, Result<(), Error>>;
+
     /// Parte un fichero en trozos de `part_bytes`, como Task (#132).
     fn split_file(
         &self,
@@ -1110,6 +1127,15 @@ impl HostBackend for norte_client::RemoteBackend {
     fn close_connection(&self, path: VPath) -> BoxFuture<'static, Result<bool, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.close_connection(&path).await })
+    }
+
+    fn provide_secret(
+        &self,
+        conn: String,
+        secret: String,
+    ) -> BoxFuture<'static, Result<(), Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.provide_secret(&conn, &secret).await })
     }
 
     fn split_file(

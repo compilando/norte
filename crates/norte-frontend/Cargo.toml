@@ -17,6 +17,11 @@ unicode-normalization.workspace = true
 serde = { workspace = true, features = ["derive"] }
 schemars = { workspace = true, features = ["derive"], optional = true }
 thiserror.workspace = true
+# `secret::TypedSecret` (#327): el buffer de una contraseña a medio teclear se
+# pisa con ceros al soltarlo. Ya estaba en el grafo por norte-tui; lo que hace
+# este movimiento es que la ventana NO herede una segunda copia sin la
+# garantía. Es un tipo de seguridad, y de esos no puede haber dos.
+zeroize.workspace = true
 # `Params` (`layout::tree`): la bolsa OPACA de un hueco. Es `serde_json::Map`
 # porque el blob de sesión de L2 viaja por JSON-RPC y el fichero de layout usa
 # el MISMO formato (ADR 0058 D4) — un solo modelo de valor para los dos. Ya

@@ -45,11 +45,12 @@ impl Estado {
             ],
             input: Some(String::new()),
             input_hostile: false,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista: vista.clone(),
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             reconocido: true,
             al_confirmar: Some(Pendiente::InstruccionIa { dir }),
         });
@@ -629,13 +630,14 @@ impl Estado {
             ],
             input: Some(siembra.clone()),
             input_hostile: hostil,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista: vista.clone(),
             // El crudo arranca IGUAL que la siembra: es lo que permite
             // reconocer «no lo ha tocado» sin llevar una bandera aparte.
-            input_crudo: siembra.clone(),
+            tecleado: Tecleado::Texto(siembra.clone()),
             reconocido: true,
             al_confirmar: Some(Pendiente::Renombrar { from, siembra }),
         });

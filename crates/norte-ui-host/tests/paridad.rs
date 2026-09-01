@@ -123,6 +123,38 @@ fn nada_clasificado_esta_construido() {
     }
 }
 
+/// Los DOS frontends preguntan la contraseña; ninguno se queda pintando el
+/// error (#325/#327).
+///
+/// No es un comando, así que no cae en las listas de arriba — y por eso mismo
+/// se le pone una prueba propia. Es una DECISIÓN duplicada entre frontends, que
+/// es la clase de cosa que ADR 0077 existe para que no diverja en silencio: la
+/// TUI la tomó en #325 y la ventana tardó dos versiones en tomarla, durante las
+/// cuales un usuario de `norte-gui` sobre una conexión `secret = "prompt"` leía
+/// el nombre de una variable de entorno y se quedaba ahí.
+///
+/// Se comprueba por el CÓDIGO y no por comportamiento porque son dos binarios
+/// con dos bucles distintos; lo que esta prueba impide es que alguien borre el
+/// brazo de uno de los dos y el otro siga verde.
+#[test]
+fn los_dos_frontends_preguntan_el_secreto() {
+    let sitios = [
+        // La TUI: el `cd` que se topa con el error abre su modal.
+        ("norte-tui", "../norte-tui/src/navigate.rs"),
+        // La ventana: el listado que vuelve con el error abre su diálogo.
+        ("norte-ui-host", "src/controller/listing.rs"),
+    ];
+    for (quien, ruta) in sitios {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(ruta);
+        let src = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        assert!(
+            src.contains("Error::SecretNeeded"),
+            "{quien} ya no reacciona a `SecretNeeded` en {ruta}: o lo movió, o \
+             volvió a dejar al lector delante de un error que no puede contestar"
+        );
+    }
+}
+
 /// Toda issue de la lista es un número de verdad.
 #[test]
 fn todo_aplazado_tiene_issue() {

@@ -29,6 +29,15 @@ impl Estado {
             // que nadie va a leer sería peor que decirlo.
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
+        if !matches!(dialogo.tecleado, Tecleado::Texto(_)) {
+            // Un campo de CONTRASEÑA no se teclea por aquí (#327): el host no
+            // guarda lo que se escribe, y la contraseña cruza una sola vez con
+            // la respuesta. Un renderer que lo mande igual está metiendo
+            // material secreto por el camino de un nombre de fichero, así que
+            // se descarta ANTES de tocarlo — sin guardarlo, sin proyectarlo y
+            // sin contestar con una frase que hable de «nombres».
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        }
         if texto.len() > MAX_NOMBRE {
             // Ni se recorta ni se acepta a medias: un nombre no es una
             // cadena de pantalla, y recortarlo es inventarse otro.
@@ -39,7 +48,11 @@ impl Estado {
                 Vec::new(),
             );
         }
-        texto.clone_into(&mut dialogo.input_crudo);
+        let Tecleado::Texto(crudo) = &mut dialogo.tecleado else {
+            // Imposible: lo filtra el guard de arriba, antes de mirar nada.
+            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        };
+        texto.clone_into(crudo);
         // Lo que se PINTA es otra cosa: enmascarado (un `U+202E` en el
         // nombre que te van a pedir aprobar se ve) y acotado.
         let (pintable, hostil) = norte_frontend::display_name(texto.as_bytes());
@@ -69,6 +82,7 @@ impl Estado {
     pub(super) fn ejecutar_pendiente(
         &mut self,
         dialogo: Dialogo,
+        secreto: Option<&str>,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
@@ -81,16 +95,39 @@ impl Estado {
                 Self::lanzar_borrado(paths, permanente, backend, buzon);
             }
             Some(Pendiente::InstruccionIa { dir }) => {
-                let instruccion = dialogo.input_crudo.clone();
+                let instruccion = dialogo.tecleado.texto().to_owned();
                 salidas.extend(self.lanzar_plan_ia(dir, instruccion, backend, buzon));
             }
             Some(Pendiente::ConsultaSemantica) => {
-                let consulta = dialogo.input_crudo.clone();
+                let consulta = dialogo.tecleado.texto().to_owned();
                 salidas.extend(self.lanzar_semantica(consulta, backend, buzon));
             }
+            Some(Pendiente::EntregarSecreto { conn, slot, dir }) => {
+                // El campo vacío no llega aquí: `responder_dialogo` deja el
+                // confirmar INERTE mientras no haya nada, y ahí es donde tiene
+                // que estar —a esta altura el diálogo ya se ha ido de la pila,
+                // y «no cerrar» ya no es una opción—. Lo que sí se comprueba
+                // es la FORMA: sin ella, un error de cableado entregaría el
+                // texto de un campo normal como si fuera una contraseña.
+                let (Tecleado::Secreto, Some(secreto)) = (&dialogo.tecleado, secreto) else {
+                    rehusado = Some("host-secret-empty");
+                    return (rehusado, salidas);
+                };
+                // Se envuelve NADA MÁS llegar: a partir de aquí la copia del
+                // host se pisa con ceros cuando la task acaba, en vez de
+                // quedarse en el heap hasta que alguien reutilice el bloque.
+                let mut secreto_seguro = norte_frontend::secret::TypedSecret::default();
+                secreto_seguro.set(secreto);
+                Self::lanzar_secreto(conn, secreto_seguro, slot, dir, backend, buzon);
+            }
             Some(Pendiente::Renombrar { from, siembra }) => {
-                let (motivo, partes) =
-                    self.confirmar_rename(&from, &siembra, &dialogo.input_crudo, backend, buzon);
+                let (motivo, partes) = self.confirmar_rename(
+                    &from,
+                    &siembra,
+                    dialogo.tecleado.texto(),
+                    backend,
+                    buzon,
+                );
                 rehusado = motivo;
                 salidas.extend(partes);
             }
@@ -130,7 +167,7 @@ impl Estado {
                 salidas.push(self.parche_filas());
             }
             Some(Pendiente::Buscar { root }) => {
-                let patron = dialogo.input_crudo.clone();
+                let patron = dialogo.tecleado.texto().to_owned();
                 if patron.is_empty() {
                     // Un patrón vacío casaría el árbol entero: no es una
                     // búsqueda, es un listado recursivo, y se dice en vez
@@ -156,9 +193,9 @@ impl Estado {
                     _ => unreachable!("el patrón de arriba solo deja esos dos"),
                 };
                 let (motivo, partes) = if fichero {
-                    self.crear_fichero(&dir, &dialogo.input_crudo, backend, buzon)
+                    self.crear_fichero(&dir, dialogo.tecleado.texto(), backend, buzon)
                 } else {
-                    self.crear_directorio(&dir, &dialogo.input_crudo, backend, buzon)
+                    self.crear_directorio(&dir, dialogo.tecleado.texto(), backend, buzon)
                 };
                 rehusado = motivo;
                 salidas.extend(partes);
@@ -166,7 +203,8 @@ impl Estado {
             // #309: el favorito. El destino lo capturó el diálogo al abrirse,
             // no se relee aquí.
             Some(Pendiente::GuardarFavorito { destino }) => {
-                let (motivo, partes) = self.guardar_favorito(&destino, &dialogo.input_crudo, buzon);
+                let (motivo, partes) =
+                    self.guardar_favorito(&destino, dialogo.tecleado.texto(), buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }
@@ -174,7 +212,7 @@ impl Estado {
             // lee AHORA: es el estado de la pantalla, no una respuesta que el
             // diálogo capturó al abrirse.
             Some(Pendiente::GuardarPerfil) => {
-                let (motivo, partes) = self.guardar_perfil(&dialogo.input_crudo, buzon);
+                let (motivo, partes) = self.guardar_perfil(dialogo.tecleado.texto(), buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }
@@ -182,7 +220,7 @@ impl Estado {
             // este `match` es un despachador y ya roza su tope.
             Some(p @ (Pendiente::Partir { .. } | Pendiente::Empaquetar { .. })) => {
                 let (motivo, partes) =
-                    self.ejecutar_de_archivo(p, &dialogo.input_crudo, backend, buzon);
+                    self.ejecutar_de_archivo(p, dialogo.tecleado.texto(), backend, buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }
@@ -204,13 +242,13 @@ impl Estado {
                 }
             }
             Some(Pendiente::Permisos { targets }) => {
-                let tecleado = dialogo.input_crudo.clone();
+                let tecleado = dialogo.tecleado.texto().to_owned();
                 let (motivo, partes) = self.cambiar_permisos(targets, &tecleado, backend, buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }
             Some(Pendiente::Patron { marcar }) => {
-                let patron = dialogo.input_crudo.clone();
+                let patron = dialogo.tecleado.texto().to_owned();
                 let (motivo, partes) = self.aplicar_patron(marcar, &patron);
                 rehusado = motivo;
                 salidas.extend(partes);
@@ -287,6 +325,7 @@ impl Estado {
         &mut self,
         id: ModalId,
         choice: &str,
+        secreto: Option<&str>,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
@@ -327,6 +366,45 @@ impl Estado {
         if let Some(rechazo) = self.rechaza_por_solo_lectura(pos) {
             return rechazo;
         }
+        // Confirmar con el campo de contraseña VACÍO es inerte: no entrega y
+        // no cierra (#327). Entregar la cadena vacía reproduce #320 —un
+        // secreto vacío hace que la conexión autentique con la cadena ambiente,
+        // o sea con una identidad que nadie pidió—, y cerrar el diálogo
+        // convertiría un dedo que se adelanta en una navegación abandonada.
+        //
+        // Vive AQUÍ, antes del `remove`, y no dentro de `ejecutar_pendiente`:
+        // allí el diálogo ya se ha ido de la pila y «no cerrar» ya no es una
+        // opción. Es el mismo sitio que la TUI eligió (`ALLOW_ASK_SECRET`).
+        //
+        // Se juzga lo que ACABA de llegar y no un estado guardado: el host no
+        // tiene ninguno, y así el campo que el lector ve vacío es exactamente
+        // el que se evalúa. Con un buffer en el host los dos podían diferir
+        // —un diálogo apilado encima descarta el nodo del campo, y al volver
+        // se pinta vacío sobre un buffer que no lo estaba—, y entonces
+        // «confirmar sobre un campo vacío no hace nada» dejaba de ser cierto
+        // justo donde se había prometido.
+        if choice == "confirm" && matches!(self.dialogos[pos].tecleado, Tecleado::Secreto) {
+            if secreto.is_none_or(str::is_empty) {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: "host-secret-empty".to_owned(),
+                    },
+                    Vec::new(),
+                );
+            }
+            // Y una que no cabe se RECHAZA, no se recorta. Recortar era peor
+            // que el tope: entregar los primeros 256 caracteres de una frase
+            // de paso más larga falla la autenticación sin decir por qué, y el
+            // lector no tiene forma de sospecharlo — el campo va enmascarado.
+            if secreto.is_some_and(|s| s.chars().count() > SECRET_MAX_CHARS) {
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: "host-secret-too-long".to_owned(),
+                    },
+                    Vec::new(),
+                );
+            }
+        }
         let dialogo = self.dialogos.remove(pos);
         let mut salidas = Vec::new();
         // `confirm` es la respuesta afirmativa de los diálogos normales;
@@ -335,7 +413,7 @@ impl Estado {
         // poder confundirse en un renderer.
         let mut rehusado = None;
         if choice == "confirm" || choice == "approve" {
-            let (motivo, partes) = self.ejecutar_pendiente(dialogo, backend, buzon);
+            let (motivo, partes) = self.ejecutar_pendiente(dialogo, secreto, backend, buzon);
             rehusado = motivo;
             salidas.extend(partes);
         } else if let Some(Pendiente::Decidir { approval_id, .. }) = dialogo.al_confirmar {

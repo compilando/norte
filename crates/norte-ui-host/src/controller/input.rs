@@ -113,7 +113,13 @@ impl Estado {
         let Some(choice) = elegido else {
             return (self.aplicada(), Vec::new());
         };
-        self.responder_dialogo(id, &choice, backend, buzon)
+        // Sin secreto, y no es un olvido (#327): una TECLA no puede llevar una
+        // contraseña. Sobre un diálogo que la pide, este camino confirma con
+        // `None`, o sea de forma inerte, y la única puerta que entrega es la
+        // del renderer —el botón y el Enter del propio campo—, que sí tiene el
+        // valor. Es lo que se quiere: el host no guarda lo tecleado, así que
+        // un acorde no puede entregar algo que el host no tiene.
+        self.responder_dialogo(id, &choice, None, backend, buzon)
     }
 
     /// El verbo `dialog.*` de una tecla, por el resolutor COMPARTIDO (#287).

@@ -65,6 +65,7 @@ pub mod places;
 pub mod plugin_config;
 pub mod profile_picker;
 pub mod rename_pattern;
+pub mod secret;
 pub mod session;
 pub mod settings;
 pub mod shell;

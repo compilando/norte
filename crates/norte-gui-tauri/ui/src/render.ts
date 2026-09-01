@@ -3409,12 +3409,52 @@ export class Screen {
       let input = previo;
       if (input === null) {
         input = document.createElement("input");
-        input.type = "text";
-        input.value = top.input;
+        // #327: una contraseña se pinta como contraseña. Lo que llega en
+        // `top.input` son PUNTOS —el host no manda nunca el texto—, así que
+        // sembrar el campo con eso escribiría puntos literales dentro: se
+        // siembra vacío, que es lo que el diálogo acaba de abrir.
+        input.type = top.input_secret ? "password" : "text";
+        input.value = top.input_secret ? "" : top.input;
+        if (top.input_secret) {
+          // `new-password` y no `off`: Chromium y WebView2 IGNORAN `off` en un
+          // campo de contraseña a propósito, y este es el valor que sí
+          // respetan. Esto no se guarda en ninguna parte, que es justo lo que
+          // el cuerpo del diálogo promete.
+          input.autocomplete = "new-password";
+          input.setAttribute("autocorrect", "off");
+          input.spellcheck = false;
+        }
         const vivo = input;
         vivo.addEventListener("input", () => {
+          // Una CONTRASEÑA no se manda al teclear (#327): el host no guarda lo
+          // que se escribe, el campo lo enmascara el propio navegador, y por
+          // aquí cruzarían `h`, `hu`, `hun`… — un prefijo por pulsación, cada
+          // uno en un trozo de heap que nadie pisa. Cruza una vez, al
+          // confirmar.
+          if (top.input_secret) {
+            return;
+          }
           this.send({ action: "dialog_input", id: top.id, text: vivo.value });
         });
+        if (top.input_secret) {
+          // Enter DENTRO del campo confirma, y lleva el valor. Sin esto, la
+          // tecla sale al host como un acorde `dialog.confirm` — que sobre un
+          // diálogo de contraseña no lleva nada y por tanto es inerte—, así
+          // que la forma más natural de contestar no habría hecho nada.
+          vivo.addEventListener("keydown", (e) => {
+            if (e.key !== "Enter") {
+              return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            this.send({
+              action: "dialog",
+              id: top.id,
+              choice: "confirm",
+              secret: vivo.value,
+            });
+          });
+        }
         queueMicrotask(() => {
           vivo.focus();
         });
@@ -3431,6 +3471,19 @@ export class Screen {
       b.textContent = this.t(c.label_key);
       b.dataset["destructive"] = String(c.destructive);
       b.addEventListener("click", () => {
+        // La contraseña viaja CON la respuesta afirmativa, y solo con ella
+        // (#327): cancelar no entrega nada. Se lee del campo vivo en este
+        // instante, que es lo que el lector está viendo — el host no guarda
+        // ninguna copia con la que pudiera discrepar.
+        if (top.input_secret && c.id === "confirm") {
+          this.send({
+            action: "dialog",
+            id: top.id,
+            choice: c.id,
+            secret: this.dialogoInput?.value ?? "",
+          });
+          return;
+        }
         this.send({ action: "dialog", id: top.id, choice: c.id });
       });
       choices.append(b);

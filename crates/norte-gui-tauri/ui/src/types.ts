@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 44;
+export const BRIDGE_VERSION = 45;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -291,6 +291,12 @@ export interface DialogView {
   choices: DialogChoice[];
   input: string | null;
   input_hostile: boolean;
+  /** El campo es una CONTRASEÑA (#327). Lo que llega en `input` son PUNTOS,
+   *  uno por carácter, jamás el texto: el host guarda lo tecleado aparte, en
+   *  un buffer que se pisa con ceros al soltarlo. El renderer pinta el campo
+   *  como `password` y NUNCA lo resiembra con `input` — hacerlo convertiría
+   *  la contraseña del usuario en una fila de puntos literales. */
+  input_secret: boolean;
 }
 
 /** Una pareja del plan: de qué nombre a qué nombre. */
@@ -988,7 +994,17 @@ export type UiAction =
   | { action: "set_visible_range"; slot_id: number; first: number; count: number }
   | { action: "focus_slot"; slot_id: number }
   | { action: "sort_by"; slot_id: number; column: string }
-  | { action: "dialog"; id: ModalId; choice: string }
+  | {
+      action: "dialog";
+      id: ModalId;
+      choice: string;
+      /** La contraseña tecleada, SOLO en un diálogo con `input_secret`
+       *  (#327). Va con la respuesta y no con cada pulsación: por
+       *  `dialog_input` cruzarían `h`, `hu`, `hun`… y cada prefijo se queda
+       *  en un trozo de heap que nadie pisa. Así cruza UNA vez, en el
+       *  instante en que el lector decide entregarla. */
+      secret?: string;
+    }
   | { action: "dialog_input"; id: ModalId; text: string }
   | { action: "cancel_task"; task_id: number }
   | { action: "compare_select_row"; id: number }

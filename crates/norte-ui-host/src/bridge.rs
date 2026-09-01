@@ -25,6 +25,9 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **45**: un diálogo puede pedir una CONTRASEÑA (#327). El campo se marca
+///   como secreto y lo que viaja del host al renderer son PUNTOS, jamás el
+///   texto: el renderer no lo pinta, no lo resiembra y no lo puede registrar.
 /// - **44**: el renderer puede ARRASTRAR el borde entre dos huecos. Manda
 ///   dónde está el puntero en celdas de layout; qué pareja se reparte y
 ///   cuánto le toca a cada uno lo decide el host, que es quien tiene el
@@ -149,7 +152,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 44;
+pub const BRIDGE_VERSION: u32 = 45;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

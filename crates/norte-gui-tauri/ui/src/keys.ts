@@ -27,6 +27,50 @@ export function keyInputOf(e: KeyboardEvent): KeyInput | null {
   };
 }
 
+/** Teclas que EDITAN un campo de texto sin escribir un carácter. */
+const EDICION = new Set([
+  "Backspace",
+  "Delete",
+  "ArrowLeft",
+  "ArrowRight",
+  "Home",
+  "End",
+]);
+
+/**
+ * ¿Esta tecla es del CAMPO de texto que tiene el foco, y no del host?
+ *
+ * Un campo abierto es dueño de las teclas de texto y de las de edición. De las
+ * de texto lo era ya; de las de edición no, y esa mitad que faltaba hacía que
+ * `preventDefault` cancelara el borrado y el pegado del propio campo — y el
+ * host se los tragaba sin hacer nada. O sea que un nombre a medio escribir no
+ * se podía corregir y no se podía pegar nada dentro.
+ *
+ * Se notaba poco con un `mkdir` —se reescribe y ya— y deja de ser una molestia
+ * en el campo de una CONTRASEÑA (#327): cuarenta caracteres aleatorios, sin ver
+ * lo que se teclea, y la única salida de una errata era Escape, que abandona la
+ * navegación. La TUI tiene las dos cosas desde siempre, y su comentario dice
+ * por qué el pegado importa aquí más que en ningún sitio: pegar desde un gestor
+ * de contraseñas es como la mayoría de la gente contesta ese diálogo.
+ *
+ * Vive aquí, exportada, y no dentro del manejador de `main.ts`, porque ahí no
+ * había forma de probarla — y no estaba probada.
+ */
+export function esParaElCampo(k: KeyInput, hayCampo: boolean): boolean {
+  if (!hayCampo) {
+    return false;
+  }
+  // «Una tecla de texto» se mide en puntos de código, no en unidades UTF-16:
+  // `length === 1` deja fuera un emoji (dos unidades) y una `é` en NFD (macOS),
+  // así que `preventDefault` se los llevaba y no se podían escribir.
+  const esTexto = !k.ctrl && !k.alt && !k.meta && [...k.key].length === 1;
+  // El portapapeles y el deshacer del campo. `meta` fuera a propósito: en este
+  // escritorio no es un modificador de edición, y dejarlo pasar abriría un
+  // hueco por el que se colarían acordes del host.
+  const esPortapapeles = k.ctrl && !k.alt && !k.meta && "vacxz".includes(k.key);
+  return esTexto || EDICION.has(k.key) || esPortapapeles;
+}
+
 export function keyAction(k: KeyInput): UiAction {
   return { action: "key", ...k };
 }

@@ -65,8 +65,9 @@ impl Estado {
                 ],
                 input: Some(String::new()),
                 input_hostile: false,
+                input_secret: false,
             },
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             al_confirmar: Some(Pendiente::Patron { marcar }),
         });
         let cambio = ViewChange::Dialogs {
@@ -134,8 +135,9 @@ impl Estado {
                 ],
                 input: Some(String::new()),
                 input_hostile: false,
+                input_secret: false,
             },
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             al_confirmar: Some(Pendiente::Buscar { root }),
         });
         let cambio = ViewChange::Dialogs {
@@ -502,11 +504,12 @@ impl Estado {
             ],
             input: Some(String::new()),
             input_hostile: false,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista: vista.clone(),
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             reconocido: true,
             al_confirmar: Some(Pendiente::ConsultaSemantica),
         });

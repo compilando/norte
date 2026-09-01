@@ -509,11 +509,12 @@ impl Estado {
             ],
             input: Some(clamp_display(sugerido.clone())),
             input_hostile: false,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista,
-            input_crudo: sugerido,
+            tecleado: Tecleado::Texto(sugerido),
             reconocido: true,
             al_confirmar: Some(Pendiente::GuardarFavorito { destino }),
         });
@@ -610,11 +611,12 @@ impl Estado {
             ],
             input: Some(clamp_display(sugerido.clone())),
             input_hostile: false,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista,
-            input_crudo: sugerido,
+            tecleado: Tecleado::Texto(sugerido),
             reconocido: true,
             al_confirmar: Some(Pendiente::GuardarPerfil),
         });
@@ -1004,6 +1006,148 @@ impl Estado {
         self.degradadas.note(d);
         let cambio = self.cambio_de_banners();
         self.parche(vec![cambio])
+    }
+
+    /// La conexión pide su contraseña (#325/#327): se abre el diálogo.
+    ///
+    /// La pregunta nombra la conexión **y a dónde se conecta**, y esa segunda
+    /// línea es el punto: el nombre lo eligió un fichero de configuración, y un
+    /// fichero puede llegar de los dotfiles de otro o de una línea editada, así
+    /// que «trabajo» no dice nada sobre si esa entrada sigue apuntando donde
+    /// apuntaba ayer. Es la misma razón por la que el diálogo de host key
+    /// enseña una huella. Cada parte en su CAMPO, jamás interpolada en la
+    /// frase.
+    ///
+    /// El campo nace vacío y confirmar sobre él es INERTE (ver
+    /// `ejecutar_pendiente`): entregar la cadena vacía reproduce #320, donde un
+    /// secreto vacío hacía que la conexión autenticara con la cadena ambiente
+    /// —una identidad que nadie pidió—.
+    pub(super) fn pedir_secreto(
+        &mut self,
+        conn: String,
+        endpoint: &str,
+        slot: u32,
+        dir: VPath,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        // UNA pregunta por conexión. Dos paneles sobre la misma entrada
+        // `prompt` —o un refresco mientras el diálogo está delante— apilaban
+        // otra pregunta idéntica, con su propio campo vacío; y bajo suficientes
+        // de esas, el desalojo por tope de `apilar_dialogo` se lleva por
+        // delante las APROBACIONES de agente sin reconocer, que es lo primero
+        // que sacrifica.
+        if self.dialogos.iter().any(|d| {
+            matches!(&d.al_confirmar, Some(Pendiente::EntregarSecreto { conn: c, .. }) if *c == conn)
+        }) {
+            return Vec::new();
+        }
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        // Los dos vienen del CORE, no del servidor remoto, pero se enmascaran
+        // igual: el nombre sale de un fichero y el endpoint de una URL, y
+        // ninguno de los dos orígenes es de fiar para lo que se pinta.
+        let linea = |s: &str| {
+            let (pintable, hostil) = norte_frontend::display_name(s.as_bytes());
+            crate::dto::DialogLine {
+                text: clamp_display(pintable),
+                hostile: hostil,
+            }
+        };
+        let vista = DialogView {
+            id,
+            title_key: "modal-ask-secret-title".to_owned(),
+            // A DÓNDE va la contraseña. En `destination` y no en el cuerpo por
+            // lo que dice el rustdoc de ese campo: un separador dentro del
+            // texto lo puede escribir el propio dato.
+            destination: Some(linea(endpoint)),
+            // QUÉ entrada la pide.
+            subject: Some(linea(&conn)),
+            asker: None,
+            deadline: None,
+            deadline_at_ms: None,
+            // Dónde acaba lo que se teclea, y es la misma frase que dice la
+            // TUI: el secreto vive en la memoria del daemon hasta que pare, y
+            // no se escribe en ningún fichero. Quien va a teclear una
+            // contraseña tiene derecho a saberlo ANTES.
+            //
+            // `hostile: false` porque es una frase del catálogo, no un dato:
+            // no ha pasado por `display_name` porque no viene de fuera.
+            body: vec![crate::dto::DialogLine {
+                text: clamp_display(norte_i18n::t_in(self.lang, "modal-ask-secret-note")),
+                hostile: false,
+            }],
+            overflow_note: String::new(),
+            choices: vec![
+                crate::dto::DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    // No es destructivo: no borra nada. Lo que lo hace
+                    // delicado —que sale un secreto— no es lo que esa marca
+                    // significa, y usarla aquí devaluaría la de un borrado.
+                    destructive: false,
+                },
+                crate::dto::DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            // Vacío, y con `Some`: es lo que le dice al renderer que aquí SE
+            // ESCRIBE. Lo que viaje por aquí serán siempre puntos.
+            input: Some(String::new()),
+            input_hostile: false,
+            input_secret: true,
+        };
+        let mut fuera = self.apilar_dialogo(Dialogo {
+            id,
+            vista,
+            tecleado: Tecleado::Secreto,
+            // `true`: esto lo abrió un GESTO del lector —la navegación que
+            // acaba de hacer—, así que la siguiente respuesta ya ES una
+            // respuesta. La regla del «ya lo veo» es para lo que aparece sin
+            // que nadie lo pida (una aprobación de agente, el informe de un
+            // lote), y aquí la pregunta la hizo quien está delante. Es lo
+            // mismo que hace la TUI, donde Enter contesta directo.
+            //
+            // Y no abre ningún hueco: confirmar sin teclear nada es inerte,
+            // así que el peor caso de un dedo adelantado es no hacer nada.
+            reconocido: true,
+            al_confirmar: Some(Pendiente::EntregarSecreto { conn, slot, dir }),
+        });
+        // `apilar_dialogo` solo apila —y devuelve lo que se cayó por el tope—:
+        // el parche que lo PINTA lo manda quien abre, como el resto.
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        fuera.push(self.parche(vec![cambio]));
+        fuera
+    }
+
+    /// El secreto se entregó (o no): se reintenta la navegación, o se dice.
+    ///
+    /// El reintento es de ESA navegación —su hueco y su destino—, que es lo
+    /// que la pendiente transporta. Si entregarlo falló, no hay reintento: el
+    /// hueco se queda como el error lo dejó y la barra lo cuenta.
+    pub(super) fn secreto_entregado(
+        &mut self,
+        slot: u32,
+        dir: &VPath,
+        res: Result<(), Error>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        match res {
+            // `Record` y no `Replay`, aunque esto sea un reintento: un
+            // `Replay` necesita un SENTIDO del rastro, y aquí no lo hay —esta
+            // navegación pudo nacer de una tecla, de un favorito o de un
+            // `back`, y el error no lo transportó—. Inventarse uno sería peor
+            // que no tenerlo.
+            //
+            // Y no duplica: el listado fallido dejó el hueco ENSEÑANDO el
+            // directorio al que no se pudo entrar, así que en el reintento
+            // `anterior == destino` y `navegar_hueco` no registra nada.
+            Ok(()) => self.navegar_hueco(slot, dir, Trail::Record, backend, buzon),
+            Err(e) => self.decir(norte_frontend::error::error_key(&e)),
+        }
     }
 
     /// Una conexión NO se pudo abrir, y por qué (#322).

@@ -4,99 +4,15 @@
 use super::trail::Trail;
 use norte_i18n::ta;
 use norte_proto::VPath;
-use zeroize::Zeroizing;
 
 /// Lo tecleado en [`Modal::AskSecret`]: una contraseña a medio escribir.
 ///
-/// Existe por dos cosas que un `String` no da, y ninguna es opcional aquí
-/// (regla 10):
-///
-/// * **`Debug` que REDACTA.** [`Modal`] deriva `Debug`, y ese `Debug` acaba en
-///   `tracing`, en el mensaje de un panic y en el diff de un `assert_eq!`.
-///   `Zeroizing<String>` delega su `Debug` en el `String`, así que sin este
-///   envoltorio la contraseña se imprimiría en los tres sitios.
-/// * **Borrado al soltar.** El interior es `Zeroizing`: el buffer se pisa con
-///   ceros en el drop, en vez de quedarse en el heap para un core dump o el
-///   swap.
-///
-/// # Por qué reserva sitio de antemano
-///
-/// `Zeroizing` borra la asignación ACTUAL entera, capacidad incluida — y solo
-/// esa: su propia documentación dice que «cannot ensure that previous
-/// reallocations did not leave values on the heap». Un `String` que crece
-/// 4→8→16→… va dejando por el camino trozos sin pisar de la contraseña a
-/// medio escribir. Naciendo con [`TEXT_FIELD_MAX_CHARS`] caracteres reservados
-/// —el mismo tope que los otros diez campos de texto, que además se aplica al
-/// teclear— no hay ninguna reasignación, y el «best effort» de zeroize pasa a
-/// ser exacto para esta copia. Las copias de más allá del `expose()` (los
-/// params, el frame serializado, el `Value` del daemon) siguen sin pisarse:
-/// ver el ADR 0015, que dice cuáles sí y cuáles no.
-///
-/// `PartialEq` está derivado para los tests (comparar dos modales) y compara
-/// en tiempo NO constante: no le pases nunca un valor de origen ajeno.
-#[derive(Clone, PartialEq, Eq)]
-pub struct TypedSecret(Zeroizing<String>);
-
-impl Default for TypedSecret {
-    fn default() -> Self {
-        // Ver «Por qué reserva sitio de antemano» arriba: `String::new()` aquí
-        // reintroduce las reasignaciones y con ellas los restos en el heap.
-        Self(Zeroizing::new(String::with_capacity(TEXT_FIELD_MAX_CHARS)))
-    }
-}
-
-impl std::fmt::Debug for TypedSecret {
-    /// Nunca el contenido. La longitud tampoco: es información sobre la
-    /// contraseña, y para depurar basta saber si hay algo escrito.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.0.is_empty() {
-            "TypedSecret(vacío)"
-        } else {
-            "TypedSecret(***)"
-        })
-    }
-}
-
-impl TypedSecret {
-    /// El texto en claro, para entregarlo por `connection.provide_secret`.
-    /// Llamarlo es decir «aquí SÍ hace falta el secreto» — no lo uses para
-    /// pintar ni para registrar.
-    #[must_use]
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-
-    /// Cuántos caracteres se han tecleado, para pintar los puntos.
-    #[must_use]
-    pub fn chars(&self) -> usize {
-        self.0.chars().count()
-    }
-
-    /// ¿Está vacío? Enter sobre un campo vacío no entrega nada.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Añade un carácter tecleado, hasta [`TEXT_FIELD_MAX_CHARS`].
-    ///
-    /// El tope es el de los otros diez campos de texto, y aquí además impide
-    /// que una tecla trabada haga crecer el buffer más allá de lo reservado —
-    /// que es cuando `String` reasigna y deja un trozo de la contraseña sin
-    /// pisar en el heap. Frenar en mudo es lo mismo que hacen ellos: el campo
-    /// se ve lleno.
-    pub fn push(&mut self, c: char) {
-        if self.0.chars().count() >= TEXT_FIELD_MAX_CHARS {
-            return;
-        }
-        self.0.push(c);
-    }
-
-    /// Borra el último carácter (retroceso).
-    pub fn pop(&mut self) {
-        self.0.pop();
-    }
-}
+/// Reexportado del crate COMPARTIDO desde #327, cuando la ventana necesitó el
+/// mismo campo. Es un tipo de SEGURIDAD —`Debug` que redacta, buffer pisado al
+/// soltarlo, capacidad reservada de antemano— y dos implementaciones son dos
+/// sitios donde alguna de las tres garantías se olvida. Se queda el nombre
+/// aquí para no tocar los treinta call sites de este frontend.
+pub use norte_frontend::secret::TypedSecret;
 
 /// Tipo de transferencia pendiente de confirmación/colisión.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -632,6 +548,18 @@ pub enum Modal {
 /// (#103), y para cuando lo compartían nueve modales el nombre decía de dónde
 /// venía en vez de qué mide (#121).
 pub const TEXT_FIELD_MAX_CHARS: usize = 256;
+
+/// El tope de una contraseña es el mismo, y ahora se COMPRUEBA (#327).
+///
+/// Desde que `TypedSecret` vive en el crate compartido son dos constantes en
+/// dos crates, y su rustdoc afirma que valen lo mismo. Una afirmación así, sin
+/// nada que la ate, dura hasta que alguien mueve una: entonces el campo de
+/// contraseña de la TUI frena a una longitud y el de la ventana a otra, y
+/// ninguna prueba lo dice.
+const _: () = assert!(
+    TEXT_FIELD_MAX_CHARS == norte_frontend::secret::SECRET_MAX_CHARS,
+    "el tope de un campo de texto y el de una contraseña se separaron"
+);
 
 /// Borra el último CARÁCTER de un texto en forma WIRE.
 ///

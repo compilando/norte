@@ -236,7 +236,8 @@
           "hostile": false,
           "text": "delete"
         },
-        "title_key": "modal-mkdir-title"
+        "title_key": "modal-mkdir-title",
+        "input_secret": false
       }
     ]
   },

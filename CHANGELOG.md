@@ -9,6 +9,40 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window asks for a connection's password too** (#327, bridge **45**,
+  ADR 0091).
+  The TUI has done this since #325: a connection with `secret = "prompt"` whose
+  three sources have all come up empty suspends the navigation, asks, hands the
+  answer to the core and retries. The window did not — it painted the text of
+  `err-secret-needed`, which names an environment variable, and that was the end
+  of the road. It is the parity hole ADR 0077 exists to close: a decision one
+  frontend takes and the other does not diverges in silence.
+  What is typed never crosses to the painting layer, and — the part that took a
+  second pass — **the host does not know what is being typed at all**. Every
+  other dialog field sends its whole contents to the host on each keystroke,
+  which is right for a filename and wrong for a password: it puts `h`, `hu`,
+  `hun`… across the bridge, each in a heap block nobody overwrites. The password
+  now crosses once, with the answer. The window field is masked by the browser
+  itself, so there was never anything for the host to paint.
+  The buffer type that holds the one remaining copy moved from the TUI to the
+  shared crate: it is a security type — a `Debug` that redacts, a wipe on drop,
+  capacity reserved up front so growing the string never leaves a half-typed
+  password behind on the heap — and two copies of one are two places for a
+  guarantee to be forgotten. Its reserve is now counted in bytes, which it was
+  not: an accented passphrase fitted the character cap and not the byte reserve,
+  so the string grew, and growing is exactly the thing that leaves the old
+  contents behind.
+  A password too long to fit is refused rather than truncated: handing over the
+  first 256 characters of a longer passphrase fails authentication with no
+  indication of why, and a masked field gives the reader no way to suspect it.
+  Confirming an empty field is inert: it neither hands anything over nor closes
+  the dialog. An empty secret is not an empty session — it makes the connection
+  authenticate with the ambient chain, which is #320.
+  The question names the connection **and where it connects to**, each in its
+  own field and never interpolated into the sentence. The name was chosen by a
+  configuration file, and a configuration file can arrive from someone else's
+  dotfiles.
+
 - **A connection that fails now says why** (#322, protocol **0.64.0**,
   ADR 0090). Until now every failed dial reached the screen as the same three
   words — permission denied — whether the secret was missing, empty, not text,
@@ -618,6 +652,18 @@ independently through `PROTOCOL_VERSION`.
   marking and asking, a file can be gone.
 
 ### Fixed
+
+- **You can edit a text field in the window.** Backspace, Delete, the arrows,
+  Home/End and paste were all cancelled by the window's document-level key
+  handler, which called `preventDefault()` on anything that was not a single
+  printable character and forwarded it to the host, where nothing happened. A
+  name you mistyped in the `mkdir` prompt could only be fixed by retyping it,
+  and nothing could be pasted in at all. Barely noticeable there; disqualifying
+  in the password field #327 adds, where the text is masked, the value is often
+  forty random characters, and the only way out of a typo was Escape — which
+  abandons the navigation. Pasting from a password manager is how most people
+  answer that dialog. The rule now lives in `keys.ts`, exported and tested;
+  inside the handler there was no way to test it, and it was not tested.
 
 - **`JSON_OUTPUT` was declared and never honoured** (ADR 0088). `norte-ai` had
   all three pieces of structured output and none of the wiring: the capability

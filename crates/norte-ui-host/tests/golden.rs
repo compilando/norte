@@ -225,6 +225,7 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
             UiAction::Dialog {
                 id: ModalId(3),
                 choice: "confirm".to_owned(),
+                secret: None,
             },
         ),
         (
@@ -521,6 +522,7 @@ fn dialogo_de_referencia() -> DialogView {
         ],
         input: Some(String::new()),
         input_hostile: false,
+        input_secret: false,
     }
 }
 
@@ -2031,6 +2033,7 @@ mod variantes {
                     }],
                     input: None,
                     input_hostile: false,
+                    input_secret: false,
                 })
                 .expect("json"),
             ),

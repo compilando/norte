@@ -78,8 +78,6 @@ impl Estado {
         }
     }
 
-    /// Mete una Task recién encolada en el tablero y deja su progreso
-    /// bombeando hacia el actor.
     /// Relanza la transferencia que chocó, con la política elegida (#274).
     ///
     /// Repite el MISMO verbo: un «sobrescribir» sobre una copia que se
@@ -123,6 +121,38 @@ impl Estado {
         });
     }
 
+    /// Entrega el secreto al core y devuelve el desenlace por el buzón (#327).
+    ///
+    /// El `TypedSecret` se MUEVE a la task y muere con ella, así que la copia
+    /// del host se pisa con ceros en cuanto el core contesta. El `String` en
+    /// claro que exige la llamada nace lo más tarde posible y vive lo mínimo.
+    /// De las copias de más allá —los params, el frame, el `Value` del
+    /// daemon— habla el ADR 0015.
+    ///
+    /// No devuelve nada: como todo lo que TARDA en esta ventana, la respuesta
+    /// vuelve al actor como un mensaje más. El único escritor no espera a
+    /// nadie, así que el cursor sigue respondiendo mientras el core autentica.
+    pub(super) fn lanzar_secreto(
+        conn: String,
+        secreto: norte_frontend::secret::TypedSecret,
+        slot: u32,
+        dir: VPath,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        tokio::spawn(async move {
+            let res = backend
+                .provide_secret(conn, secreto.expose().to_owned())
+                .await;
+            drop(secreto);
+            let _ = buzon
+                .send(Mensaje::SecretoEntregado(Box::new((slot, dir, res))))
+                .await;
+        });
+    }
+
     /// El reintento que ya tenía esta task, si la hay y es de esta época.
     ///
     /// Un reanuncio de la reconexión no sabe con qué se pidió la task, así que
@@ -152,6 +182,8 @@ impl Estado {
         }
     }
 
+    /// Mete una Task recién encolada en el tablero y deja su progreso
+    /// bombeando hacia el actor.
     pub(super) fn registrar_task(
         &mut self,
         task: crate::backend::HostTask,
@@ -598,11 +630,12 @@ impl Estado {
             ],
             input: None,
             input_hostile: false,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id: modal,
             vista,
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             // Se abrió SOLO —llega cuando la task termina, encima de lo que el
             // lector estuviera haciendo—, así que la primera respuesta solo lo
             // reconoce. Es la misma regla que una aprobación de agente, y aquí
@@ -1207,11 +1240,12 @@ impl Estado {
             }],
             input: None,
             input_hostile: false,
+            input_secret: false,
         };
         let caidos = self.apilar_dialogo(Dialogo {
             id,
             vista,
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             // Se abre SOLO, cuando el daemon contesta.
             reconocido: false,
             al_confirmar: None,

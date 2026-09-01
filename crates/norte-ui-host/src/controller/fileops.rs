@@ -229,11 +229,12 @@ impl Estado {
             ],
             input: None,
             input_hostile: false,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista: vista.clone(),
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             reconocido: true,
             al_confirmar: Some(Pendiente::Borrar { paths, permanente }),
         });
@@ -313,11 +314,12 @@ impl Estado {
             ],
             input: Some(String::new()),
             input_hostile: false,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista: vista.clone(),
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             reconocido: true,
             al_confirmar: Some(Pendiente::Empaquetar { dir, sources }),
         });
@@ -381,11 +383,12 @@ impl Estado {
             ],
             input: Some(String::new()),
             input_hostile: false,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista: vista.clone(),
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             reconocido: true,
             al_confirmar: Some(Pendiente::Partir {
                 path: entrada.path.clone(),
@@ -578,11 +581,12 @@ impl Estado {
             // aquí se teclea, sin que tenga que deducirlo del título.
             input: Some(String::new()),
             input_hostile: false,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista: vista.clone(),
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             reconocido: true,
             al_confirmar: Some(Pendiente::CrearDirectorio { dir }),
         });
@@ -655,11 +659,12 @@ impl Estado {
             ],
             input: Some(modo.clone()),
             input_hostile: false,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista: vista.clone(),
-            input_crudo: modo,
+            tecleado: Tecleado::Texto(modo),
             reconocido: true,
             al_confirmar: Some(Pendiente::Permisos { targets }),
         });
@@ -765,11 +770,12 @@ impl Estado {
             ],
             input: Some(String::new()),
             input_hostile: false,
+            input_secret: false,
         };
         self.dialogos.push(Dialogo {
             id,
             vista,
-            input_crudo: String::new(),
+            tecleado: Tecleado::Texto(String::new()),
             reconocido: true,
             al_confirmar: Some(Pendiente::CrearFichero { dir }),
         });
@@ -993,7 +999,19 @@ impl Estado {
                         // que se declara de solo lectura.
                         | Pendiente::InstruccionIa { .. }
                         // Tampoco: la consulta sale del proceso.
-                        | Pendiente::ConsultaSemantica
+                        | Pendiente::ConsultaSemantica // `EntregarSecreto` NO está, y es deliberado (#327):
+                                                       // entregar la contraseña habilita LEER un sitio al que
+                                                       // no se podía entrar, que es justo lo que una ventana
+                                                       // de solo lectura sí hace. Vetarlo dejaría la conexión
+                                                       // `prompt` inservible en solo lectura sin ganar nada
+                                                       // — el secreto va a la memoria del daemon, no al
+                                                       // disco, y lo que se autorice después lo sigue
+                                                       // gobernando la política.
+                                                       //
+                                                       // Se dice aquí porque el rustdoc de esta función avisa
+                                                       // de que esta es la puerta por la que pasaría el
+                                                       // siguiente diálogo, y un silencio no se distingue de
+                                                       // un olvido.
                 )
             });
         if !muta {

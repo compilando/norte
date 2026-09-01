@@ -133,6 +133,25 @@ pub enum UiAction {
         id: ModalId,
         /// Respuesta elegida.
         choice: String,
+        /// La contraseña, y SOLO para un diálogo que la pide (#327).
+        ///
+        /// Viaja aquí y no por [`Self::DialogInput`] a propósito. Ese manda el
+        /// campo ENTERO en cada pulsación, que para un nombre de fichero está
+        /// bien y para una contraseña significa que `h`, `hu`, `hun`… cruzan el
+        /// IPC y se quedan, cada uno en su trozo de heap que nadie pisa: una
+        /// contraseña de veinte caracteres deja veinte prefijos suyos por el
+        /// camino. Con esto cruza UNA vez, en el instante en que el lector
+        /// decide entregarla.
+        ///
+        /// El corolario es que **el host no sabe lo que se está tecleando**
+        /// hasta ese momento, y no le hace falta: el campo lo enmascara el
+        /// propio `input type=password` del renderer, así que no hay puntos
+        /// que contar. Lo que el host no tiene no se le puede escapar.
+        ///
+        /// `None` en todos los demás diálogos, y en uno de secreto significa
+        /// campo vacío: confirmar así es INERTE (ver `responder_dialogo`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<String>,
     },
     /// La ventana ganó o perdió el foco del escritorio (#285).
     ///

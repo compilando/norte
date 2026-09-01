@@ -3,7 +3,7 @@
 
 import { invokeMetrics, tauriPort } from "./bridge";
 import type { HostPort } from "./bridge";
-import { keyAction, keyInputOf } from "./keys";
+import { esParaElCampo, keyAction, keyInputOf } from "./keys";
 import { Screen } from "./render";
 import { Session } from "./session";
 import { BRIDGE_VERSION } from "./types";
@@ -220,14 +220,9 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     if (k === null) {
       return;
     }
-    const target = e.target;
-    // Un campo de texto abierto es dueño de las teclas de TEXTO. «Una
-    // tecla de texto» se mide en puntos de código, no en unidades UTF-16:
-    // `length === 1` deja fuera un emoji (dos unidades) y una `é` en NFD
-    // (macOS), así que `preventDefault` se los llevaba y no se podían
-    // escribir en un nombre.
-    const esTexto = !k.ctrl && !k.alt && !k.meta && [...k.key].length === 1;
-    if (target instanceof HTMLInputElement && esTexto) {
+    // Un campo de texto abierto es dueño de sus teclas: las que escriben y
+    // las que EDITAN. La regla vive en `keys.ts`, donde se puede probar.
+    if (esParaElCampo(k, e.target instanceof HTMLInputElement)) {
       return;
     }
     // Con la ayuda leyendo su CUERPO, las teclas de página son del scroll y
