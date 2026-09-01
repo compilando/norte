@@ -308,6 +308,101 @@ async fn siguiente_foto(sub: &mut norte_ui_host::UiSubscription) -> norte_ui_hos
     }
 }
 
+// ---------------------------------------------------------------------------
+// Esperar sin reloj.
+//
+// Estos tests hablan con un actor que encola cada mutación con `tokio::spawn`
+// y contesta el ack ANTES de que la task corra. Así que el test que quiere ver
+// lo encolado tiene que esperar a algo, y durante mucho tiempo ese algo fue un
+// `sleep(30)`: una apuesta de reloj de pared que, con 423 tests en paralelo,
+// pierde en cuanto la máquina va cargada. Un test intermitente es un bug.
+//
+// Hay tres preguntas y cada una tiene su herramienta:
+//
+// - «¿ya pasó X?» → [`hasta`], que espera el AVISO del doble. Cuesta cero en
+//   el camino verde y nombra lo que esperaba cuando falla. Su forma corta,
+//   para el caso más común, es [`anotados`].
+// - «¿seguro que NO pasó nada?» → [`asentar`], que deja correr lo que ya está
+//   en la cola del ejecutor cediendo el turno. No es un reloj: no se degrada
+//   bajo carga.
+// - «¿y cuando el doble no lo ve?» → [`foto_hasta`], que pide fotos hasta que
+//   la pantalla lo diga. Es lo que queda para una escritura que vuelve por
+//   `spawn_blocking` o un panel que se resiembra.
+//
+// Para un plazo de VERDAD (el TTL del tablero, un timeout de extensión) no
+// vale ninguna de las dos: eso es `#[tokio::test(start_paused = true)]` y
+// `tokio::time::advance`, que salta el plazo en vez de esperarlo.
+// ---------------------------------------------------------------------------
+
+/// Espera a que el doble ANOTE lo que el test busca. Sin reloj.
+///
+/// `que_esperaba` es lo que se imprime si no llega: un test que se cuelga
+/// tiene que decir qué esperaba, no reventar en la aserción de después.
+async fn hasta<T>(f: &Falso, que_esperaba: &str, que: impl Fn(&Falso) -> Option<T>) -> T {
+    f.hasta(que_esperaba, que).await
+}
+
+/// Espera a que el doble tenga al menos `n` anotaciones en la lista que se le
+/// señala, y devuelve una copia.
+///
+/// Es la forma corta de [`hasta`] para el caso de lejos más común: «ya se
+/// encoló lo que tenía que encolarse». Devuelve el `Vec` clonado y no el
+/// `MutexGuard` a propósito: un guard no cruza un `await`.
+async fn anotados<T: Clone>(
+    f: &Falso,
+    que_esperaba: &str,
+    n: usize,
+    campo: impl Fn(&Falso) -> Vec<T>,
+) -> Vec<T> {
+    hasta(f, que_esperaba, |f| {
+        let v = campo(f);
+        (v.len() >= n).then_some(v)
+    })
+    .await
+}
+
+/// Repite `Resync` hasta que la foto cumpla lo que se le pide.
+///
+/// Cada vuelta es un viaje de ida y vuelta al actor, así que el bucle avanza
+/// al ritmo del host y no al del reloj. Es lo que hace falta cuando lo que se
+/// espera NO lo anota el doble —una escritura en disco que vuelve por
+/// `spawn_blocking`, un panel que se resiembra— y por eso [`hasta`] no sirve.
+///
+/// El plazo es el presupuesto de FALLO, igual que en [`hasta`]: en el camino
+/// verde la primera o la segunda foto ya trae lo que se busca.
+async fn foto_hasta<T>(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+    que_esperaba: &str,
+    que: impl Fn(&norte_ui_host::ViewSnapshot) -> Option<T>,
+) -> T {
+    const SOCORRO: std::time::Duration = std::time::Duration::from_secs(15);
+    let espera = async {
+        loop {
+            h.dispatch(UiAction::Resync).await.expect("host vivo");
+            if let Some(v) = que(&siguiente_foto(sub).await) {
+                return v;
+            }
+        }
+    };
+    let Ok(v) = tokio::time::timeout(SOCORRO, espera).await else {
+        panic!("la pantalla nunca llegó a: {que_esperaba}")
+    };
+    v
+}
+
+/// Deja correr lo que YA está encolado, cediendo el turno.
+///
+/// Es la respuesta a «no se encoló nada»: ahí no hay evento que esperar, así
+/// que lo que hay que garantizar es que las tasks que el actor pudiera haber
+/// lanzado antes de contestar el ack han tenido su turno. Ceder no depende
+/// del reloj, que es la diferencia con dormir.
+async fn asentar() {
+    for _ in 0..32 {
+        tokio::task::yield_now().await;
+    }
+}
+
 /// Un nombre que no es UTF-8 cruza el bridge MARCADO y con el reemplazo
 /// canónico: ni se rechaza la entrada ni se pierde el aviso.
 #[tokio::test]
@@ -497,8 +592,14 @@ async fn una_respuesta_tardia_no_pisa_la_navegacion_nueva() {
         listado(&foto).path_display
     );
     // Y la tardía no produce una segunda foto con el directorio abandonado.
-    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-    let mas = tokio::time::timeout(std::time::Duration::from_millis(50), sub.recv()).await;
+    // Se espera a que las TRES respuestas hayan vuelto —la relevada incluida,
+    // que es la que podría pisar— y solo entonces se mira el canal.
+    hasta(&backend, "que no vuele ningún listado", |f| {
+        (f.listados() == 3 && f.en_calma()).then_some(())
+    })
+    .await;
+    asentar().await;
+    let mas = tokio::time::timeout(std::time::Duration::ZERO, sub.recv()).await;
     assert!(mas.is_err(), "la respuesta relevada no llega a la pantalla");
     assert_eq!(backend.listados(), 3, "inicial + docs + vuelta");
 }
@@ -546,14 +647,15 @@ async fn un_listado_grande_ni_espera_ni_cruza_entero() {
     );
 
     // El resto llega por detrás. Se sondea, en vez de contar mensajes: los
-    // lotes son asíncronos y el número exacto no es el contrato.
+    // lotes son asíncronos y el número exacto no es el contrato. Lo que NO
+    // hace falta es un reloj: cada vuelta es un viaje de ida y vuelta al
+    // actor, así que el bucle avanza al ritmo del drenaje, no al del reloj.
     let mut sub = host.subscribe();
     let mut total = primeras;
-    for _ in 0..100 {
+    for _ in 0..2_000 {
         if total >= 5_000 {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         host.dispatch(UiAction::Resync).await.expect("host vivo");
         let foto = siguiente_foto(&mut sub).await;
         total = listado(&foto).total_rows.expect("hay total");
@@ -1360,8 +1462,13 @@ async fn confirmar_dos_veces_no_borra_dos_veces() {
         "el segundo confirm es una carrera, no una orden"
     );
 
-    // Y solo se pidió UN borrado.
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    // Y solo se pidió UN borrado: se espera al primero, y se deja correr lo
+    // que hubiera detrás antes de contar.
+    hasta(&backend, "el borrado encolado", |f| {
+        (!f.borrados.lock().expect("borrados").is_empty()).then_some(())
+    })
+    .await;
+    asentar().await;
     assert_eq!(backend.borrados.lock().expect("borrados").len(), 1);
 }
 
@@ -1739,8 +1846,11 @@ async fn crear_directorio_teclea_y_encola() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let creados = backend.creados.lock().expect("creados").clone();
+    let creados = hasta(&backend, "la creación encolada", |f| {
+        let c = f.creados.lock().expect("creados").clone();
+        (!c.is_empty()).then_some(c)
+    })
+    .await;
     assert_eq!(creados.len(), 1, "se encoló una creación");
     assert!(
         creados[0].to_wire().ends_with("carpeta nueva"),
@@ -1770,7 +1880,7 @@ async fn un_nombre_invalido_no_crea_nada() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    asentar().await;
     assert!(
         backend.creados.lock().expect("creados").is_empty(),
         "`..` no es un nombre de directorio"
@@ -1886,7 +1996,10 @@ async fn cualquier_respuesta_que_no_sea_aprobar_deniega() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    hasta(&backend, "la decisión mandada", |f| {
+        (!f.decisiones.lock().expect("decisiones").is_empty()).then_some(())
+    })
+    .await;
     assert_eq!(
         backend.decisiones.lock().expect("decisiones").clone(),
         vec![(9, false)],
@@ -2170,13 +2283,14 @@ async fn siguiente_mensaje_de_estado(
     h: &UiHost,
     sub: &mut norte_ui_host::controller::UiSubscription,
 ) -> String {
-    for _ in 0..40 {
+    // Cada vuelta es un viaje de ida y vuelta al actor: el bucle avanza al
+    // ritmo del host, no al del reloj.
+    for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let foto = siguiente_foto(sub).await;
         if let Some(m) = foto.status.message.clone() {
             return m;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     panic!("la barra no dijo nada");
 }
@@ -2376,11 +2490,10 @@ async fn un_listado_perezoso_se_sondea_y_las_celdas_se_llenan() {
     );
 
     let mut sub = h.subscribe();
-    // El sondeo sale solo, en cuanto el listado aterriza. Se le da tiempo al
-    // viaje de ida y vuelta y se pide una foto: lo que importa es que la
-    // pantalla acabe con las celdas llenas, no por qué mensaje llegó.
-    for _ in 0..40 {
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    // El sondeo sale solo, en cuanto el listado aterriza. Se pide foto tras
+    // foto: lo que importa es que la pantalla acabe con las celdas llenas, no
+    // por qué mensaje llegó. Cada vuelta es un viaje al actor, no una espera.
+    for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let foto = siguiente_foto(&mut sub).await;
         let lleno = listado(&foto)
@@ -2418,7 +2531,13 @@ async fn lo_sondeado_no_se_vuelve_a_pedir() {
         .await
         .expect("host vivo");
     }
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Se espera al PRIMER sondeo y se deja correr lo demás: si los cinco
+    // repintados sondearan, los otros cuatro ya estarían encolados.
+    hasta(&backend, "el primer sondeo", |f| {
+        (!f.sondeos.lock().expect("sondeos").is_empty()).then_some(())
+    })
+    .await;
+    asentar().await;
     let sondeos = backend.sondeos.lock().expect("sondeos").clone();
     assert_eq!(
         sondeos.len(),
@@ -2898,7 +3017,7 @@ async fn en_solo_lectura_borrar_no_abre_nada() {
         matches!(ack, ActionAck::Unavailable { .. }),
         "F8 se responde, no se ejecuta: {ack:?}"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    asentar().await;
     assert!(
         backend.borrados.lock().expect("borrados").is_empty(),
         "y no borra nada"
@@ -2912,7 +3031,7 @@ async fn en_solo_lectura_crear_no_crea() {
     let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
     let ack = h.dispatch(tecla("F7")).await.expect("host vivo");
     assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    asentar().await;
     assert!(backend.creados.lock().expect("creados").is_empty());
 }
 
@@ -2989,8 +3108,8 @@ async fn navegar_a_un_directorio_grande_lo_trae_entero() {
     .await
     .expect("host vivo");
 
-    for _ in 0..60 {
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    // Cada vuelta es un viaje al actor: el relleno avanza entre foto y foto.
+    for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let foto = siguiente_foto(&mut sub).await;
         if listado(&foto).total_rows == Some(300) {
@@ -3094,14 +3213,10 @@ async fn una_ventana_grande_se_sondea_en_tandas_hasta_el_final() {
     .await
     .expect("host vivo");
 
-    for _ in 0..60 {
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        if backend.sondeos.lock().expect("sondeos").len() >= 500 {
-            return;
-        }
-    }
-    let n = backend.sondeos.lock().expect("sondeos").len();
-    panic!("el sondeo se paró en {n} de 500: la tanda no se re-armó");
+    hasta(&backend, "las 500 entradas sondeadas", |f| {
+        (f.sondeos.lock().expect("sondeos").len() >= 500).then_some(())
+    })
+    .await;
 }
 
 /// Un sondeo que aterriza cuando el listado YA es otro no pega nada.
@@ -3138,7 +3253,14 @@ async fn un_sondeo_de_otro_listado_no_hidrata() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // Lo que este caso pone en vuelo: el listado de casa, el sondeo del
+    // `a.txt` de FUERA —el que llega tarde y no debe hidratar— y el listado
+    // de docs. Se espera a que no quede ninguna volando.
+    hasta(&backend, "el sondeo tardío ya servido", |f| {
+        (f.listados() >= 2 && f.en_calma()).then_some(())
+    })
+    .await;
+    asentar().await;
 
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Resync).await.expect("host vivo");
@@ -3172,8 +3294,7 @@ async fn un_provider_que_devuelve_otra_ortografia_no_deja_la_celda_en_blanco() {
     let backend = Arc::new(f);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    for _ in 0..40 {
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let foto = siguiente_foto(&mut sub).await;
         let lleno = listado(&foto)
@@ -3237,8 +3358,11 @@ async fn el_nombre_que_se_teclea_es_el_que_se_crea() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let creados = backend.creados.lock().expect("creados").clone();
+    let creados = hasta(&backend, "la creación encolada", |f| {
+        let c = f.creados.lock().expect("creados").clone();
+        (!c.is_empty()).then_some(c)
+    })
+    .await;
     assert_eq!(creados.len(), 1, "se encoló una creación");
     let nombre = creados[0]
         .file_name()
@@ -3361,13 +3485,19 @@ async fn un_visor_que_llega_tarde_no_se_abre_solo() {
     f.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
     f.contenido
         .insert("mem:///casa/notas.txt".to_owned(), b"hola\n".to_vec());
-    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
     h.dispatch(tecla("F3")).await.expect("host vivo");
     // Antes de que llegue el contenido, se cierra.
     h.dispatch(tecla("Escape")).await.expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // La lectura tardía ya volvió: no queda ninguna en vuelo.
+    hasta(&backend, "la lectura tardía servida", |f| {
+        (f.servidos() >= 2 && f.en_calma()).then_some(())
+    })
+    .await;
+    asentar().await;
 
     h.dispatch(UiAction::Resync).await.expect("host vivo");
     let foto = siguiente_foto(&mut sub).await;
@@ -7715,9 +7845,10 @@ async fn partir_lee_el_tamano_en_binario() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-
-    let ps = backend.partidos.lock().expect("partidos");
+    let ps = anotados(&backend, "el troceado encolado", 1, |f| {
+        f.partidos.lock().expect("partidos").clone()
+    })
+    .await;
     assert_eq!(ps.len(), 1);
     assert_eq!(ps[0].part_bytes, 10 * 1024 * 1024, "MiB, no millones");
     // Cuál sea la entrada bajo el cursor da igual —el listado ordena y el
@@ -7764,7 +7895,7 @@ async fn partir_rehusa_un_tamano_que_no_vale() {
         matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "msg-split-bad-size"),
         "{ack:?}"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    asentar().await;
     assert!(backend.partidos.lock().expect("partidos").is_empty());
 }
 
@@ -7786,9 +7917,11 @@ async fn juntar_exige_empezar_por_el_primer_trozo() {
 
     // El cursor arranca en la primera fila: el `.001`.
     ejecutar_por_paleta(&h, &mut sub, "pane.combine-files").await;
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
     {
-        let js = backend.juntados.lock().expect("juntados");
+        let js = anotados(&backend, "la unión encolada", 1, |f| {
+            f.juntados.lock().expect("juntados").clone()
+        })
+        .await;
         assert_eq!(js.len(), 1, "desde el .001 sí");
         assert_eq!(
             js[0].dest.to_wire(),
@@ -7834,9 +7967,10 @@ async fn empaquetar_saca_el_formato_del_nombre() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-
-    let ps = backend.empaquetados.lock().expect("empaquetados");
+    let ps = anotados(&backend, "el empaquetado encolado", 1, |f| {
+        f.empaquetados.lock().expect("empaquetados").clone()
+    })
+    .await;
     assert_eq!(ps.len(), 1, "un gesto, una task");
     assert_eq!(
         ps[0].format,
@@ -7878,7 +8012,7 @@ async fn empaquetar_rehusa_un_formato_que_no_se_escribe() {
         matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "msg-pack-unknown-format"),
         "{ack:?}"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    asentar().await;
     assert!(
         backend
             .empaquetados
@@ -7978,9 +8112,10 @@ async fn una_copia_que_choca_se_puede_reintentar_con_otra_politica() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-
-    let ts = backend.transferencias.lock().expect("transferencias");
+    let ts = anotados(&backend, "la original y el reintento", 2, |f| {
+        f.transferencias.lock().expect("transferencias").clone()
+    })
+    .await;
     assert_eq!(ts.len(), 2, "la original y el reintento: {ts:?}");
     let (from, to, mover, colision) = &ts[1];
     assert_eq!(
@@ -8035,8 +8170,11 @@ async fn cancelar_una_colision_no_reintenta() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-
+    anotados(&backend, "la transferencia original", 1, |f| {
+        f.transferencias.lock().expect("transferencias").clone()
+    })
+    .await;
+    asentar().await;
     assert_eq!(
         backend.transferencias.lock().expect("transferencias").len(),
         1,
@@ -8059,9 +8197,10 @@ async fn copiar_compone_el_destino_en_rust() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-    let ts = backend.transferencias.lock().expect("transferencias");
+    let ts = anotados(&backend, "la transferencia encolada", 1, |f| {
+        f.transferencias.lock().expect("transferencias").clone()
+    })
+    .await;
     assert_eq!(ts.len(), 1, "una entrada bajo el cursor, una task");
     let (from, to, mover, colision) = &ts[0];
     assert_eq!(
@@ -8095,8 +8234,10 @@ async fn mover_es_otro_verbo_y_lo_dice() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let ts = backend.transferencias.lock().expect("transferencias");
+    let ts = anotados(&backend, "el movimiento encolado", 1, |f| {
+        f.transferencias.lock().expect("transferencias").clone()
+    })
+    .await;
     assert!(ts[0].2, "F6 mueve");
 }
 
@@ -8164,7 +8305,7 @@ async fn en_solo_lectura_copiar_no_abre_nada() {
     let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
     let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
     assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    asentar().await;
     assert!(
         backend
             .transferencias
@@ -8207,8 +8348,10 @@ async fn las_marcas_se_consumen_al_enviar() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
+    anotados(&backend, "las dos tasks de las dos marcas", 2, |f| {
+        f.transferencias.lock().expect("transferencias").clone()
+    })
+    .await;
     assert_eq!(
         backend.transferencias.lock().expect("transferencias").len(),
         2,
@@ -8249,13 +8392,10 @@ async fn al_terminar_una_copia_se_relista_el_destino() {
         .expect("hay task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
-    for _ in 0..40 {
-        if backend.listados() > antes {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("nadie volvió a listar el destino tras la copia");
+    hasta(&backend, "el relistado del destino tras la copia", |f| {
+        (f.listados() > antes).then_some(())
+    })
+    .await;
 }
 
 /// Una colisión no es una excepción del host: es el desenlace TIPADO de la
@@ -8320,13 +8460,10 @@ async fn una_copia_que_nace_terminal_tambien_relista() {
     .await
     .expect("host vivo");
 
-    for _ in 0..40 {
-        if backend.listados() > antes {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("una copia ya terminada al llegar dejó la pantalla sin refrescar");
+    hasta(&backend, "el refresco de una copia ya terminada", |f| {
+        (f.listados() > antes).then_some(())
+    })
+    .await;
 }
 
 /// Un destino que no acepta escrituras rechaza al ENCOLAR, antes de que haya
@@ -8353,7 +8490,7 @@ async fn un_destino_de_solo_lectura_lo_dice_al_encolar() {
     .await
     .expect("host vivo");
 
-    for _ in 0..40 {
+    for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let foto = siguiente_foto(&mut sub).await;
         if let Some(m) = &foto.status.message {
@@ -8364,7 +8501,6 @@ async fn un_destino_de_solo_lectura_lo_dice_al_encolar() {
             assert!(foto.tasks.is_empty(), "no llegó a haber task");
             return;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     panic!("un rechazo al encolar se perdió en silencio");
 }
@@ -8438,6 +8574,7 @@ async fn un_refresco_no_pisa_una_navegacion_en_vuelo() {
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
         .expect("host vivo");
+    let antes = backend.listados();
     h.dispatch(UiAction::Activate {
         slot_id: 2,
         key,
@@ -8455,8 +8592,16 @@ async fn un_refresco_no_pisa_una_navegacion_en_vuelo() {
     .await
     .expect("host vivo");
 
-    // La navegación llega a su destino y NADIE la devuelve a `casa/docs`.
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // La navegación llega a su destino y NADIE la devuelve a `casa/docs`. Se
+    // espera a que el listado de `hondo` se haya PEDIDO y a que no quede
+    // ninguna respuesta volando —incluido el refresco que dispara la copia
+    // terminada, que es el que podría pisarla—; solo entonces se mira la
+    // pantalla, UNA vez.
+    hasta(&backend, "el listado de hondo, ya servido", |f| {
+        (f.listados() > antes && f.en_calma()).then_some(())
+    })
+    .await;
+    asentar().await;
     h.dispatch(UiAction::Resync).await.expect("host vivo");
     let foto = siguiente_foto(&mut sub).await;
     assert!(
@@ -8696,8 +8841,10 @@ async fn el_destino_se_compone_byte_a_byte() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let ts = backend.transferencias.lock().expect("transferencias");
+    let ts = anotados(&backend, "la transferencia encolada", 1, |f| {
+        f.transferencias.lock().expect("transferencias").clone()
+    })
+    .await;
     let (from, to, _, _) = &ts[0];
     assert!(
         from.to_wire().starts_with("mem:///casa/caf"),
@@ -8745,15 +8892,12 @@ async fn mover_relista_tambien_el_origen() {
         .expect("hay task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
-    for _ in 0..40 {
-        // Los DOS: el origen (`casa`, de donde sale) y el destino
-        // (`casa/docs`, a donde llega).
-        if backend.listados() >= antes + 2 {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("un movimiento dejó sin relistar uno de los dos paneles");
+    // Los DOS: el origen (`casa`, de donde sale) y el destino (`casa/docs`, a
+    // donde llega).
+    hasta(&backend, "el relistado de los dos paneles", |f| {
+        (f.listados() >= antes + 2).then_some(())
+    })
+    .await;
 }
 
 /// Un refresco conserva el cursor POR RUTA, no por índice.
@@ -8823,8 +8967,7 @@ async fn el_cursor_sobrevive_a_un_refresco() {
         .expect("hay task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
-    for _ in 0..40 {
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let foto = siguiente_foto(&mut sub).await;
         let b = listado(&foto);
@@ -9006,7 +9149,13 @@ async fn las_marcas_que_se_consumen_son_las_del_origen() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    anotados(
+        &backend,
+        "la transferencia que consume las marcas",
+        1,
+        |f| f.transferencias.lock().expect("transferencias").clone(),
+    )
+    .await;
 
     h.dispatch(UiAction::Resync).await.expect("host vivo");
     let foto = siguiente_foto(&mut sub).await;
@@ -9074,7 +9223,9 @@ async fn un_hueco_oculto_afectado_queda_para_recargar() {
         .clone()
         .expect("hay task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // El desenlace de la task llega por su propio canal: se deja correr antes
+    // de ensanchar, para que el hueco escondido ya esté marcado.
+    asentar().await;
 
     // Se ensancha la ventana: el hueco que estaba escondido vuelve, y como
     // quedó marcado CARGANDO, se lista.
@@ -9084,13 +9235,10 @@ async fn un_hueco_oculto_afectado_queda_para_recargar() {
     })
     .await
     .expect("host vivo");
-    for _ in 0..40 {
-        if backend.listados() > listados_antes + 1 {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("el hueco que volvió sigue enseñando un listado anterior al borrado");
+    hasta(&backend, "el relistado del hueco que volvió", |f| {
+        (f.listados() > listados_antes + 1).then_some(())
+    })
+    .await;
 }
 
 /// En solo lectura, la PALETA tampoco ofrece lo que muta.
@@ -9184,8 +9332,7 @@ async fn las_marcas_sobreviven_a_un_refresco() {
         .expect("hay task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
-    for _ in 0..40 {
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let foto = siguiente_foto(&mut sub).await;
         let b = listado_de(&foto, 2);
@@ -9268,16 +9415,13 @@ async fn mover_relista_el_origen_aunque_el_provider_lo_escriba_distinto() {
         .expect("hay task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
-    for _ in 0..40 {
-        // Los DOS paneles. Sin apuntar el directorio del HUECO de origen, el
-        // padre de la entrada (`⟨mem⟩/CASA`) no casaría con lo que el panel
-        // enseña (`⟨mem⟩/casa`) y el origen se quedaría sin relistar.
-        if backend.listados() >= antes + 2 {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("el panel de origen se quedó sin relistar");
+    // Los DOS paneles. Sin apuntar el directorio del HUECO de origen, el
+    // padre de la entrada (`⟨mem⟩/CASA`) no casaría con lo que el panel
+    // enseña (`⟨mem⟩/casa`) y el origen se quedaría sin relistar.
+    hasta(&backend, "el relistado de los dos paneles", |f| {
+        (f.listados() >= antes + 2).then_some(())
+    })
+    .await;
 }
 
 // ---------------------------------------------------------------------------
@@ -9371,7 +9515,7 @@ async fn un_nombre_sin_tocar_no_renombra_nada() {
         },
         "{ack:?}"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    asentar().await;
     assert!(
         backend
             .transferencias
@@ -9418,7 +9562,7 @@ async fn un_nombre_tocado_con_fffd_se_rechaza() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    asentar().await;
     assert!(
         backend
             .transferencias
@@ -9471,9 +9615,10 @@ async fn un_nombre_nuevo_sale_como_movimiento_al_mismo_sitio() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-    let ts = backend.transferencias.lock().expect("transferencias");
+    let ts = anotados(&backend, "el renombrado encolado", 1, |f| {
+        f.transferencias.lock().expect("transferencias").clone()
+    })
+    .await;
     assert_eq!(ts.len(), 1);
     let (from, to, mover, colision) = &ts[0];
     assert!(mover, "renombrar es mover");
@@ -9527,7 +9672,7 @@ async fn en_solo_lectura_renombrar_no_abre_nada() {
         .await
         .expect("host vivo");
     assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    asentar().await;
     assert!(
         backend
             .transferencias
@@ -9700,8 +9845,10 @@ async fn aprobar_manda_el_lote_con_el_hash_del_core() {
         "la primera tecla no aprueba nada"
     );
     h.dispatch(tecla("y")).await.expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let lotes = backend.lotes.lock().expect("lotes");
+    let lotes = anotados(&backend, "el lote aprobado", 1, |f| {
+        f.lotes.lock().expect("lotes").clone()
+    })
+    .await;
     assert_eq!(lotes.len(), 1, "UNA task para el lote entero");
     let (dir, parejas, hash) = &lotes[0];
     assert_eq!(dir.to_wire(), "mem:///casa");
@@ -9760,7 +9907,13 @@ async fn una_pareja_invalida_tumba_el_plan_entero() {
     let mut sub = h.subscribe();
     pedir_plan(&h, &mut sub).await;
 
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    // El plan del modelo ya volvió: lo que se comprueba es lo que el host
+    // hace CON él, no que todavía no haya llegado.
+    hasta(&backend, "el plan del modelo, ya servido", |f| {
+        f.en_calma().then_some(())
+    })
+    .await;
+    asentar().await;
     h.dispatch(UiAction::Resync).await.expect("host vivo");
     let foto = siguiente_foto(&mut sub).await;
     assert!(
@@ -9798,9 +9951,15 @@ async fn un_plan_que_llega_tarde_no_reabre_lo_cerrado() {
     let mut sub = h.subscribe();
     pedir_plan(&h, &mut sub).await;
 
-    // Antes de que el modelo conteste, se descarta.
+    // Antes de que el modelo conteste, se descarta. Y se espera a que el
+    // plan tardío HAYA llegado: sin eso, el test pasaría por no haber
+    // esperado bastante, que es la forma más silenciosa de no probar nada.
     h.dispatch(tecla("Escape")).await.expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    hasta(&backend, "el plan tardío, ya servido", |f| {
+        f.en_calma().then_some(())
+    })
+    .await;
+    asentar().await;
     h.dispatch(UiAction::Resync).await.expect("host vivo");
     let foto = siguiente_foto(&mut sub).await;
     assert!(
@@ -9822,7 +9981,7 @@ async fn descartar_cierra_y_no_aplica_nada() {
     siguiente_revision(&mut sub).await.expect("abre");
 
     h.dispatch(tecla("Escape")).await.expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    asentar().await;
     h.dispatch(UiAction::Resync).await.expect("host vivo");
     let foto = siguiente_foto(&mut sub).await;
     assert!(foto.ai_rename.is_none(), "se cerró y sigue cerrada");
@@ -9921,7 +10080,7 @@ async fn en_solo_lectura_no_se_pide_plan() {
         !p.rows.iter().any(|r| r.text == "pane.ai-rename"),
         "una ventana de solo lectura no ofrece pedir un plan"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    asentar().await;
     assert!(
         backend
             .instrucciones
@@ -10124,17 +10283,14 @@ async fn descartar_una_revision_no_mata_la_peticion_siguiente() {
     // Y la petición 2 sigue viva. La señal que NO se puede confundir con un
     // parche rezagado de la revisión 1 es que el core reciba un SEGUNDO
     // veredicto: solo lo pide un plan que llegó y se abrió.
-    for _ in 0..40 {
-        if backend.veredictos_pedidos.lock().expect("veredictos").len() == 2 {
-            assert_eq!(
-                backend.instrucciones.lock().expect("instrucciones").len(),
-                2
-            );
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("descartar una revisión se llevó por delante la petición siguiente");
+    anotados(&backend, "el segundo veredicto", 2, |f| {
+        f.veredictos_pedidos.lock().expect("veredictos").clone()
+    })
+    .await;
+    assert_eq!(
+        backend.instrucciones.lock().expect("instrucciones").len(),
+        2
+    );
 }
 
 /// La primera tecla que llega a la revisión solo la RECONOCE.
@@ -10159,13 +10315,16 @@ async fn la_primera_tecla_solo_reconoce_la_revision() {
     }
 
     h.dispatch(tecla("y")).await.expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    asentar().await;
     assert!(
         backend.lotes.lock().expect("lotes").is_empty(),
         "la tecla que venía en camino no aprueba nada"
     );
     h.dispatch(tecla("y")).await.expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    anotados(&backend, "el lote que aprueba la segunda tecla", 1, |f| {
+        f.lotes.lock().expect("lotes").clone()
+    })
+    .await;
     assert_eq!(
         backend.lotes.lock().expect("lotes").len(),
         1,
@@ -10222,7 +10381,7 @@ async fn un_acorde_con_modificador_no_aprueba_el_plan() {
             "ctrl={ctrl}: {ack:?}"
         );
     }
-    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    asentar().await;
     assert!(backend.lotes.lock().expect("lotes").is_empty());
 }
 
@@ -10271,9 +10430,12 @@ async fn no_se_aprueba_un_plan_sin_recorrerlo_entero() {
     for _ in 0..6 {
         h.dispatch(tecla("PageDown")).await.expect("host vivo");
     }
-    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    asentar().await;
     h.dispatch(tecla("y")).await.expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    anotados(&backend, "el lote aprobado", 1, |f| {
+        f.lotes.lock().expect("lotes").clone()
+    })
+    .await;
     assert_eq!(backend.lotes.lock().expect("lotes").len(), 1);
 }
 
@@ -10361,7 +10523,7 @@ async fn crear_un_directorio_con_fffd_se_rechaza() {
         },
         "{ack:?}"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    asentar().await;
     assert!(
         backend.creados.lock().expect("creados").is_empty(),
         "no se crea un directorio con el U+FFFD que inventó la pantalla"
@@ -10392,7 +10554,7 @@ async fn enter_no_aprueba_el_plan() {
     for _ in 0..3 {
         h.dispatch(tecla("Enter")).await.expect("host vivo");
     }
-    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    asentar().await;
     assert!(
         backend.lotes.lock().expect("lotes").is_empty(),
         "ningún Enter aprueba un lote"
@@ -10420,7 +10582,10 @@ async fn el_boton_aprueba_sin_reconocimiento_previo() {
         .await
         .expect("host vivo");
     assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
-    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    anotados(&backend, "el lote que aprueba el botón", 1, |f| {
+        f.lotes.lock().expect("lotes").clone()
+    })
+    .await;
     assert_eq!(backend.lotes.lock().expect("lotes").len(), 1);
 }
 
@@ -10767,7 +10932,7 @@ async fn una_copia_no_pide_informe_de_lote() {
     siguientes_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
     siguientes_tasks(&mut sub).await;
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    asentar().await;
     assert!(
         backend
             .informes_pedidos
@@ -11075,7 +11240,7 @@ async fn una_aprobacion_repetida_no_abre_dos_dialogos() {
     // La misma, reconstruida por el resync: sin TTL, porque `policy.pending`
     // no lo transporta.
     tx.send(peticion(0)).expect("el host escucha");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    asentar().await;
     assert!(
         !hubo_dialogos(&mut sub).await,
         "la repetida no abre nada nuevo"
@@ -11240,9 +11405,9 @@ async fn un_empaquetado_cancelado_no_avisa_de_un_archivo_que_no_existe() {
     siguientes_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Cancelled);
 
-    // Se le da tiempo de sobra a que pidiera el informe: lo que se afirma es
-    // que NO lo pide, y eso solo se puede afirmar esperando.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // Lo que se afirma es que NO lo pide: se deja correr todo lo que el
+    // desenlace de la task pudiera haber encolado, y se mira después.
+    asentar().await;
     assert!(
         backend
             .informes_pack_pedidos
@@ -11489,7 +11654,7 @@ async fn con_el_tablero_recortado_se_cancela_la_fila_que_se_ve() {
     // Se suscribe DESPUÉS de meterlas: doscientas sesenta y una altas
     // producen más parches de los que cabe leer, y quedarse atrás no es lo
     // que este test mide. La foto que pide el resync trae el tablero entero.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    asentar().await;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Resync).await.expect("host vivo");
     let foto = siguiente_foto(&mut sub).await;
@@ -11594,7 +11759,7 @@ async fn un_clic_sobre_una_aprobacion_recien_abierta_no_la_aprueba() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    asentar().await;
     assert!(
         backend.decisiones.lock().expect("decisiones").is_empty(),
         "el primer clic solo reconoce"
@@ -11607,7 +11772,10 @@ async fn un_clic_sobre_una_aprobacion_recien_abierta_no_la_aprueba() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    hasta(&backend, "la decisión mandada", |f| {
+        (!f.decisiones.lock().expect("decisiones").is_empty()).then_some(())
+    })
+    .await;
     assert_eq!(
         backend.decisiones.lock().expect("decisiones").clone(),
         vec![(21, true)]
@@ -11724,18 +11892,17 @@ async fn tras_un_relevo_un_id_repetido_no_hereda_nada() {
         .expect("el host escucha");
     evtx.send(norte_client::ConnEvent::Restored)
         .expect("el host escucha");
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    // El relevo lo procesa el actor: se le deja correr antes de inyectar la
+    // task del daemon nuevo, o la carrera sería con el reconectado.
+    asentar().await;
 
     // Su primera task también es la 3, y también es un lote.
     let p2 = inyectar_task_de(&tx, 3, norte_proto::TaskKind::RenameBatch);
     p2.send_modify(|p| p.state = norte_proto::TaskState::Completed);
-    for _ in 0..40 {
-        if backend.informes_pedidos.lock().expect("pedidos").len() == 2 {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("el informe de la task nueva no se pidió: heredó la marca de la vieja");
+    anotados(&backend, "el informe de la task NUEVA", 2, |f| {
+        f.informes_pedidos.lock().expect("pedidos").clone()
+    })
+    .await;
 }
 
 /// La pila de diálogos tiene techo, y que se cayó uno se DICE.
@@ -12113,7 +12280,7 @@ async fn una_consulta_semantica_vacia_no_se_manda() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    asentar().await;
     assert!(
         backend
             .semanticas_pedidas
@@ -12846,7 +13013,7 @@ async fn un_plan_que_borra_pregunta_dos_veces() {
         preguntando.confirming.is_some(),
         "un plan que borra árboles pregunta otra vez: {preguntando:?}"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    asentar().await;
     assert!(
         backend.aplicados.lock().expect("aplicados").is_empty(),
         "y todavía no ha aplicado nada"
@@ -12856,20 +13023,17 @@ async fn un_plan_que_borra_pregunta_dos_veces() {
     h.dispatch(tecla("n")).await.expect("host vivo");
     let retirada = siguiente_sync(&mut sub).await.expect("sigue abierto");
     assert!(retirada.confirming.is_none());
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    asentar().await;
     assert!(backend.aplicados.lock().expect("aplicados").is_empty());
 
     // `a` y luego `y`: ahora sí, y con el hash que devolvió el CORE.
     h.dispatch(tecla("y")).await.expect("host vivo");
     let _ = siguiente_sync(&mut sub).await;
     h.dispatch(tecla("y")).await.expect("host vivo");
-    for _ in 0..40 {
-        if !backend.aplicados.lock().expect("aplicados").is_empty() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    let aplicados = backend.aplicados.lock().expect("aplicados").clone();
+    let aplicados = anotados(&backend, "el plan aplicado", 1, |f| {
+        f.aplicados.lock().expect("aplicados").clone()
+    })
+    .await;
     assert_eq!(aplicados.len(), 1, "una sola vez");
 }
 
@@ -12916,13 +13080,13 @@ async fn un_apply_de_resultado_desconocido_no_se_reofrece() {
         assert!(vista.can_approve, "{}", vista.status);
 
         h.dispatch(tecla("y")).await.expect("host vivo");
-        for _ in 0..40 {
-            if !backend.aplicados.lock().expect("aplicados").is_empty() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        anotados(&backend, "el apply pedido", 1, |f| {
+            f.aplicados.lock().expect("aplicados").clone()
+        })
+        .await;
+        // El desenlace del apply vuelve por el buzón: se le deja correr antes
+        // de preguntar qué pinta la pantalla.
+        asentar().await;
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let tras = siguiente_foto(&mut sub).await.sync.expect("sigue abierto");
         assert_eq!(
@@ -12964,12 +13128,10 @@ async fn con_el_apply_en_vuelo_escape_no_cierra() {
     // `y` es `dialog.approve` en el preset (#287): aprobar un plan es decir
     // que sí a lo que ya está delante, no «confirmar» a secas.
     h.dispatch(tecla("y")).await.expect("host vivo");
-    for _ in 0..40 {
-        if !backend.aplicados.lock().expect("aplicados").is_empty() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
+    anotados(&backend, "el plan aplicado", 1, |f| {
+        f.aplicados.lock().expect("aplicados").clone()
+    })
+    .await;
     assert_eq!(backend.aplicados.lock().expect("aplicados").len(), 1);
 
     // El PRIMER `Escape` pide parar y NO cierra: cerrar pierde el informe
@@ -12980,7 +13142,10 @@ async fn con_el_apply_en_vuelo_escape_no_cierra() {
     let foto = siguiente_foto(&mut sub).await;
     let panel = foto.sync.expect("el panel se queda");
     assert!(panel.cancel_requested, "y la pantalla acusa que se le oyó");
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    hasta(&backend, "la parada pedida al daemon", |f| {
+        (!f.canceladas_por_id.lock().expect("canceladas").is_empty()).then_some(())
+    })
+    .await;
     let paradas = backend
         .canceladas_por_id
         .lock()
@@ -13046,12 +13211,10 @@ async fn el_informe_de_la_sincronizacion_dice_lo_que_fallo() {
         vista = siguiente_sync(&mut sub).await.expect("sigue abierto");
     }
     h.dispatch(tecla("y")).await.expect("host vivo");
-    for _ in 0..40 {
-        if !backend.aplicados.lock().expect("aplicados").is_empty() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
+    anotados(&backend, "el plan aplicado", 1, |f| {
+        f.aplicados.lock().expect("aplicados").clone()
+    })
+    .await;
     // El daemon termina la Task del apply.
     let tx = backend
         .progreso
@@ -13107,7 +13270,7 @@ async fn aprobar_pregunta_y_enumera_las_capabilities() {
         d.subject.as_ref().map(|s| s.text.as_str()),
         Some("acme.ftp")
     );
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    asentar().await;
     assert!(
         backend.gobierno.lock().expect("gobierno").is_empty(),
         "y todavía no se ha concedido nada"
@@ -13161,7 +13324,7 @@ async fn en_solo_lectura_no_se_gobierna_ninguna_extension() {
             "`{tecla_de}` en solo lectura: {ack:?}"
         );
     }
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    asentar().await;
     assert!(backend.gobierno.lock().expect("gobierno").is_empty());
 }
 
@@ -13185,7 +13348,7 @@ async fn encender_sin_aprobar_se_rehusa() {
             if reason_key == "host-extension-not-approved"),
         "{ack:?}"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    asentar().await;
     assert!(backend.gobierno.lock().expect("gobierno").is_empty());
 }
 
@@ -13213,12 +13376,10 @@ async fn el_editor_de_config_cicla_teclea_y_valida() {
     // milisegundos no son una garantía, y un test que afirma presencia
     // contra el reloj es rojo intermitente.
     h.dispatch(tecla("Enter")).await.expect("host vivo");
-    for _ in 0..40 {
-        if !backend.escrituras.lock().expect("escrituras").is_empty() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
+    anotados(&backend, "la escritura del `bool`", 1, |f| {
+        f.escrituras.lock().expect("escrituras").clone()
+    })
+    .await;
     assert_eq!(
         backend.escrituras.lock().expect("escrituras").as_slice(),
         [(
@@ -13256,7 +13417,7 @@ async fn el_editor_de_config_cicla_teclea_y_valida() {
             if reason_key == "host-value-rejected"),
         "{ack:?}"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    asentar().await;
     assert_eq!(
         backend.escrituras.lock().expect("escrituras").len(),
         1,
@@ -13283,16 +13444,12 @@ async fn el_editor_de_config_cicla_teclea_y_valida() {
         h.dispatch(tecla(c)).await.expect("host vivo");
     }
     h.dispatch(tecla("Enter")).await.expect("host vivo");
-    for _ in 0..20 {
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        let escrituras = backend.escrituras.lock().expect("escrituras").clone();
-        if escrituras.len() == 2 {
-            assert_eq!(escrituras[1].1, "timeout");
-            assert_eq!(escrituras[1].2, "42");
-            return;
-        }
-    }
-    panic!("la clave tecleada nunca se mandó");
+    let escrituras = anotados(&backend, "la clave tecleada, mandada", 2, |f| {
+        f.escrituras.lock().expect("escrituras").clone()
+    })
+    .await;
+    assert_eq!(escrituras[1].1, "timeout");
+    assert_eq!(escrituras[1].2, "42");
 }
 
 /// Mientras se TECLEA un valor, `a` es una letra y no una concesión.
@@ -13318,7 +13475,7 @@ async fn tecleando_un_valor_las_letras_son_letras() {
     h.dispatch(tecla("Enter")).await.expect("host vivo");
     esperar_buffer(&h, &mut sub).await;
     h.dispatch(tecla("a")).await.expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    asentar().await;
     assert!(
         backend.gobierno.lock().expect("gobierno").is_empty(),
         "la `a` tecleada no concedió capabilities"
@@ -13442,14 +13599,13 @@ async fn la_paleta_ejecuta_un_comando_de_extension_y_ensena_su_salida() {
     // Las filas de plugin se UNEN cuando el daemon contesta: la paleta se
     // pinta antes, con los comandos propios.
     let mut llegaron = false;
-    for _ in 0..40 {
+    for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let p = siguiente_foto(&mut sub).await.palette.expect("abierta");
         if p.rows.iter().any(|r| r.text.contains("Saludar")) {
             llegaron = true;
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     assert!(llegaron, "la fila del comando de la extensión nunca llegó");
     // Se acota tecleando, que es para lo que está la paleta: el título del
@@ -13462,11 +13618,10 @@ async fn la_paleta_ejecuta_un_comando_de_extension_y_ensena_su_salida() {
     assert_eq!(p.rows.len(), 1, "el filtro deja una sola fila: {p:?}");
     h.dispatch(tecla("Enter")).await.expect("host vivo");
 
-    for _ in 0..40 {
+    for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let foto = siguiente_foto(&mut sub).await;
         let Some(salida) = foto.plugin_output else {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
             continue;
         };
         assert_eq!(
@@ -13520,7 +13675,7 @@ async fn en_solo_lectura_no_se_ejecuta_un_comando_de_extension() {
             !p.rows.iter().any(|r| r.text.contains("Saludar")),
             "una ventana sin efectos no ofrece ejecutar código de tercero"
         );
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        asentar().await;
     }
     // Y el catálogo ni se pidió: la puerta se cierra antes del viaje.
     assert_eq!(
@@ -13539,7 +13694,7 @@ async fn en_solo_lectura_no_se_ejecuta_un_comando_de_extension() {
 /// actualizaciones se queda sin ellas en cuanto el test manda una foto por
 /// otro motivo, y entonces falla por plazo diciendo algo que no es.
 async fn esperar_buffer(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) {
-    for _ in 0..40 {
+    for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let abierto = siguiente_foto(sub)
             .await
@@ -13549,7 +13704,6 @@ async fn esperar_buffer(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) {
         if abierto {
             return;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     panic!("el buffer de edición nunca se abrió");
 }
@@ -13587,16 +13741,13 @@ async fn un_gobierno_fallido_vuelve_a_preguntar_al_core() {
     .await
     .expect("host vivo");
 
-    for _ in 0..40 {
-        let ahora = backend
+    hasta(&backend, "el catálogo repedido tras el gobierno", |f| {
+        let ahora = f
             .catalogos_pedidos
             .load(std::sync::atomic::Ordering::SeqCst);
-        if ahora > pedidos {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("un gobierno fallido dejó la pantalla afirmando lo que no sabe");
+        (ahora > pedidos).then_some(())
+    })
+    .await;
 }
 
 /// Con la salida de un comando en pantalla, las teclas son SUYAS.
@@ -13622,24 +13773,22 @@ async fn la_salida_de_un_comando_no_deja_pasar_teclas() {
     h.dispatch(tecla_mod("p", true, false))
         .await
         .expect("host vivo");
-    for _ in 0..40 {
+    for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         let p = siguiente_foto(&mut sub).await.palette.expect("abierta");
         if p.rows.iter().any(|r| r.text.contains("Saludar")) {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     for c in "Saludar".chars() {
         h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
     }
     h.dispatch(tecla("Enter")).await.expect("host vivo");
-    for _ in 0..40 {
+    for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         if siguiente_foto(&mut sub).await.plugin_output.is_some() {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 
     // Una tecla de navegación con el panel abierto NO mueve lo de debajo.
@@ -13743,7 +13892,7 @@ async fn el_panel_de_agentes_deshace_la_sesion_elegida() {
         d.choices.iter().any(|c| c.id == "confirm" && c.destructive),
         "deshacer escribe: la respuesta va marcada"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    asentar().await;
     assert!(backend.deshechas.lock().expect("deshechas").is_empty());
 
     // Y al confirmar viaja el id CRUDO, no el que se pinta.
@@ -13753,15 +13902,11 @@ async fn el_panel_de_agentes_deshace_la_sesion_elegida() {
     })
     .await
     .expect("host vivo");
-    for _ in 0..40 {
-        let pedidas = backend.deshechas.lock().expect("deshechas").clone();
-        if !pedidas.is_empty() {
-            assert_eq!(pedidas, ["agente\u{202e}1".to_owned()]);
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("el deshacer nunca se pidió");
+    let pedidas = anotados(&backend, "el deshacer pedido", 1, |f| {
+        f.deshechas.lock().expect("deshechas").clone()
+    })
+    .await;
+    assert_eq!(pedidas, ["agente\u{202e}1".to_owned()]);
 }
 
 /// En solo lectura no se deshace nada: se DICE.
@@ -13781,7 +13926,7 @@ async fn en_solo_lectura_no_se_deshace_una_sesion() {
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-read-only"),
         "{ack:?}"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    asentar().await;
     assert!(backend.deshechas.lock().expect("deshechas").is_empty());
 }
 
@@ -13836,13 +13981,12 @@ async fn una_peticion_nueva_repinta_el_panel_y_no_mueve_la_seleccion() {
     // cambia es su cuenta, y la lista tiene que decir que cambió.
     tx.send(pedir("agente-B", 23)).expect("el host escucha");
     let mut panel = elegida.clone();
-    for _ in 0..40 {
+    for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host vivo");
         panel = siguiente_foto(&mut sub).await.agents.expect("abierto");
         if panel.generation > elegida.generation {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
     assert!(
         panel.generation > elegida.generation,
@@ -14041,10 +14185,11 @@ async fn editar_uno_nuevo_crea_el_fichero_y_lo_abre() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-
     {
-        let creados = backend.creados.lock().expect("creados");
+        let creados = anotados(&backend, "el fichero creado", 1, |f| {
+            f.creados.lock().expect("creados").clone()
+        })
+        .await;
         assert_eq!(creados.len(), 1, "{creados:?}");
         assert_eq!(creados[0].to_wire(), "file:///casa/borrador.md");
     }
@@ -14100,10 +14245,11 @@ async fn lo_creado_que_dejo_de_ser_un_fichero_no_se_abre() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-
     {
-        let creados = backend.creados.lock().expect("creados");
+        let creados = anotados(&backend, "el fichero creado", 1, |f| {
+            f.creados.lock().expect("creados").clone()
+        })
+        .await;
         assert_eq!(creados.len(), 1, "el fichero SÍ se creó: {creados:?}");
     }
     assert!(
@@ -14474,10 +14620,11 @@ async fn soltar_confirmado_copia_y_respeta_las_marcas() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-
     {
-        let ts = backend.transferencias.lock().expect("transferencias");
+        let ts = anotados(&backend, "la copia del drop", 1, |f| {
+            f.transferencias.lock().expect("transferencias").clone()
+        })
+        .await;
         assert_eq!(ts.len(), 1, "{ts:?}");
         let (from, to, mover, _) = &ts[0];
         assert!(!*mover, "un drop COPIA, jamás mueve: {ts:?}");
@@ -14637,7 +14784,7 @@ async fn con_la_ventana_delante_no_se_avisa_fuera() {
         .clone()
         .expect("hay task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    asentar().await;
 
     assert!(
         nativos.try_recv().is_err(),
@@ -14681,13 +14828,13 @@ async fn sin_foco_el_aviso_sale_y_lleva_el_nombre() {
     });
 
     let mut visto = None;
-    for _ in 0..40 {
+    for _ in 0..2_000 {
         if let Ok(norte_ui_host::dto::NativeEffect::Notify { titulo, cuerpo }) = nativos.try_recv()
         {
             visto = Some((titulo, cuerpo));
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        asentar().await;
     }
     let (titulo, cuerpo) = visto.expect("sin foco, el aviso sale");
     assert!(!titulo.is_empty(), "el aviso dice QUÉ pasó");
@@ -14762,7 +14909,7 @@ async fn cerrar_el_selector_sin_elegir_no_transfiere() {
     h.dispatch(UiAction::DirectoryPicked { path: None })
         .await
         .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    asentar().await;
     assert!(
         backend
             .transferencias
@@ -14790,7 +14937,7 @@ async fn un_destino_que_nadie_pidio_no_hace_nada() {
         matches!(ack, ActionAck::Stale { .. }),
         "sin selector abierto, la respuesta es obsoleta: {ack:?}"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    asentar().await;
     assert!(
         backend
             .transferencias
@@ -14935,13 +15082,10 @@ async fn una_tecla_reatada_contesta_el_dialogo() {
         siguiente_foto(&mut sub).await.dialogs.is_empty(),
         "`z` atada a `dialog.confirm` contesta la pregunta"
     );
-    for _ in 0..40 {
-        if !backend.borrados.lock().expect("borrados").is_empty() {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("y el borrado se encoló");
+    hasta(&backend, "el borrado encolado", |f| {
+        (!f.borrados.lock().expect("borrados").is_empty()).then_some(())
+    })
+    .await;
 }
 
 /// Con un CAMPO abierto, las teclas del diálogo son letras.
@@ -15074,15 +15218,10 @@ async fn el_tablero_se_recorre_y_se_descarta() {
     })
     .await
     .expect("host vivo");
-    let mut vivas = Vec::new();
-    for _ in 0..40 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        vivas = siguiente_foto(&mut sub).await.tasks;
-        if !vivas.is_empty() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
+    let vivas = foto_hasta(&h, &mut sub, "la task del mkdir en el tablero", |f| {
+        (!f.tasks.is_empty()).then(|| f.tasks.clone())
+    })
+    .await;
     assert!(!vivas.is_empty(), "la task del mkdir llegó al tablero");
     if vivas
         .iter()
@@ -15097,17 +15236,13 @@ async fn el_tablero_se_recorre_y_se_descarta() {
     }
 
     // Cuando termina, sí: la fila desaparece del tablero.
-    for _ in 0..40 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let tasks = siguiente_foto(&mut sub).await.tasks;
-        if tasks
+    foto_hasta(&h, &mut sub, "ninguna task corriendo", |f| {
+        f.tasks
             .iter()
             .all(|t| !matches!(t.state, norte_ui_host::dto::TaskStateView::Running))
-        {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
+            .then_some(())
+    })
+    .await;
     ejecutar_por_paleta(&h, &mut sub, "task.dismiss").await;
     h.dispatch(UiAction::Resync).await.expect("host vivo");
     assert!(
@@ -15401,9 +15536,20 @@ async fn la_ventana_guarda_un_favorito_con_el_nombre_sugerido() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-
-    let escrito = std::fs::read_to_string(raiz.path().join("norte.toml")).expect("norte.toml");
+    // La escritura vuelve por `spawn_blocking` y, al volver, el host
+    // RESIEMBRA la lista de favoritos que está abierta: esperar a que la
+    // pantalla lo pinte es esperar a que el fichero esté escrito, sin
+    // adivinar cuánto tarda.
+    // La escritura vuelve por `spawn_blocking`, y al confirmar la lista se
+    // cierra: no queda nada en la pantalla que decir «ya está». Se mira el
+    // FICHERO, que es lo que el test afirma, dando una vuelta al actor entre
+    // ojeada y ojeada en vez de dormir un plazo fijo.
+    let escrito = foto_hasta(&h, &mut sub, "el favorito escrito en norte.toml", |_| {
+        std::fs::read_to_string(raiz.path().join("norte.toml"))
+            .ok()
+            .filter(|s| s.contains("casa"))
+    })
+    .await;
     assert!(
         escrito.contains("casa"),
         "el favorito acabó en el fichero: {escrito}"
@@ -15433,9 +15579,15 @@ async fn la_ventana_quita_el_favorito_del_cursor() {
         matches!(ack, norte_ui_host::ActionAck::Applied { .. }),
         "la tecla la atiende el selector: {ack:?}"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let despues = siguiente_foto(&mut sub).await;
+    // Igual que al añadir: la lista abierta se resiembra cuando la escritura
+    // vuelve, así que la fila que se va es la señal de que el fichero ya está.
+    let despues = foto_hasta(&h, &mut sub, "la lista sin el favorito", |f| {
+        f.picker
+            .as_ref()
+            .is_some_and(|p| p.rows.is_empty())
+            .then(|| f.clone())
+    })
+    .await;
 
     let escrito = std::fs::read_to_string(raiz.path().join("norte.toml")).expect("norte.toml");
     assert!(
@@ -15459,23 +15611,15 @@ async fn un_perfil_que_no_carga_deja_todo_como_estaba() {
 
     // Sin perfiles, girar no tiene a dónde ir — y lo dice en vez de fingir.
     ejecutar_por_paleta(&h, &mut sub, "profile.next").await;
-    // Por PLAZO y no por cuenta de vueltas: leer `profiles/` es una tarea de
-    // fondo, así que el aviso no llega en la foto siguiente sino cuando esa
-    // tarea contesta. Con seis resyncs seguidos, una máquina cargada los
-    // gastaba todos antes de que el hilo de fondo despertara y el test se
-    // ponía rojo sin que nada estuviera roto — que es como se aprende a
-    // ignorar un rojo.
-    let dicho = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            h.dispatch(UiAction::Resync).await.expect("host vivo");
-            if siguiente_foto(&mut sub).await.status.message.is_some() {
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+    // Sin cuenta de vueltas: leer `profiles/` es una tarea de fondo, así que
+    // el aviso no llega en la foto siguiente sino cuando esa tarea contesta.
+    // Con seis resyncs seguidos, una máquina cargada los gastaba todos antes
+    // de que el hilo de fondo despertara y el test se ponía rojo sin que nada
+    // estuviera roto — que es como se aprende a ignorar un rojo.
+    foto_hasta(&h, &mut sub, "el aviso de que no hay otro perfil", |f| {
+        f.status.message.is_some().then_some(())
     })
     .await;
-    assert!(dicho.is_ok(), "sin otro perfil se dice, no se calla");
 }
 
 /// Con `[ui] parent_entry`, el listado lleva su fila `..` — y no es un
@@ -16641,38 +16785,33 @@ async fn los_volumenes_por_lado_no_siguen_al_foco() {
         let mut sub = h.subscribe();
 
         ejecutar_por_paleta(&h, &mut sub, comando).await;
-        let mut con_filas = None;
-        for _ in 0..40 {
-            let f = foto(&h, &mut sub).await;
-            if f.picker.as_ref().is_some_and(|p| !p.rows.is_empty()) {
-                con_filas = f.picker;
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
+        let con_filas = foto_hasta(&h, &mut sub, "la tabla de montaje", |f| {
+            f.picker
+                .as_ref()
+                .is_some_and(|p| !p.rows.is_empty())
+                .then(|| f.picker.clone())
+        })
+        .await;
         assert!(
             con_filas.is_some(),
             "{comando}: la tabla de montaje llega al selector"
         );
 
         h.dispatch(tecla("Enter")).await.expect("host vivo");
-        let mut ok = false;
-        for _ in 0..40 {
-            let f = foto(&h, &mut sub).await;
-            if f.picker.is_none() && listado_de(&f, montado).path_display.contains("otro") {
-                assert!(
-                    listado_de(&f, quieto).path_display.ends_with("/casa"),
-                    "{comando}: el panel del foco NO se ha movido: {}",
-                    listado_de(&f, quieto).path_display
-                );
-                ok = true;
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
+        let montada = foto_hasta(
+            &h,
+            &mut sub,
+            &format!("{comando}: el volumen montado en el hueco del lado {montado}"),
+            |f| {
+                (f.picker.is_none() && listado_de(f, montado).path_display.contains("otro"))
+                    .then(|| f.clone())
+            },
+        )
+        .await;
         assert!(
-            ok,
-            "{comando}: el volumen se monta en el hueco del lado {montado}, no en el del foco"
+            listado_de(&montada, quieto).path_display.ends_with("/casa"),
+            "{comando}: el panel del foco NO se ha movido: {}",
+            listado_de(&montada, quieto).path_display
         );
     }
 }
@@ -17346,7 +17485,17 @@ async fn un_informe_a_medias_no_abre_veredicto() {
     }))
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    // Se espera a que el informe HAYA vuelto: lo que se afirma es que con él
+    // en la mano no se abre nada, no que todavía no hubiera llegado.
+    hasta(&backend, "el informe de sumas pedido", |f| {
+        (!f.sumas_informes_pedidos
+            .lock()
+            .expect("informes")
+            .is_empty())
+        .then_some(())
+    })
+    .await;
+    asentar().await;
     let f = foto(&host, &mut sub).await;
     assert!(
         f.dialogs.is_empty(),
@@ -17400,9 +17549,10 @@ async fn cambiar_permisos_teclea_y_encola() {
     })
     .await
     .expect("host vivo");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-    let lotes = backend.permisos.lock().expect("permisos").clone();
+    let lotes = anotados(&backend, "el lote de permisos encolado", 1, |f| {
+        f.permisos.lock().expect("permisos").clone()
+    })
+    .await;
     assert_eq!(lotes.len(), 1, "se encoló UN lote");
     assert_eq!(lotes[0].1, 0o750, "en OCTAL: 750, no 750 decimal");
     assert_eq!(lotes[0].0.len(), 1, "sobre lo que hay bajo el cursor");
@@ -17436,7 +17586,7 @@ async fn un_modo_invalido_no_cambia_nada() {
         matches!(&ack, ActionAck::Unavailable { .. }),
         "un 899 no es octal y se dice: {ack:?}"
     );
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    asentar().await;
     assert!(
         backend.permisos.lock().expect("permisos").is_empty(),
         "y no se encoló nada"

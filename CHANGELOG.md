@@ -588,6 +588,31 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The window's tests bet on the clock 111 times** (ADR 0085). Every wait in
+  `norte-ui-host`'s controller suite was a `tokio::time::sleep` of 20 to 400 ms
+  followed by an assertion — a guess about how long a machine takes, placed
+  while nextest runs 423 tests in parallel. Sixty of them had no retry at all,
+  so when the guess lost, the failure landed on an assertion twenty lines away
+  from the cause. The rest retried on a one-second budget of wall clock that a
+  loaded machine can exhaust with nothing broken. Both shapes are how a suite
+  teaches people to re-run a red test instead of reading it, and this
+  repository's rule is that an intermittently red test is a bug.
+  They are gone: 111 → **0**. The test double now announces what it records, so
+  a test waits for the event it is about (`hasta`), proves a negative by
+  letting the executor drain rather than by sleeping (`asentar`), or reads
+  snapshots until the screen says what it should (`foto_hasta`) — and every
+  wait names what it was waiting for when it gives up. Real deadlines use
+  `start_paused` and skip the wait instead of serving it. The four sleeps left
+  in the double are the latency it *simulates*, and it now counts requests and
+  answers so a test about a LATE response waits for that response to arrive
+  instead of proving nothing by not having waited long enough.
+  Measured before and after, because the usual justification for this work does
+  not hold here: the suite was never slow on their account. 423 tests took
+  15.1 s and all ~376 controller tests together were 3.9 s of CPU; it is now
+  13.2 s. What was bought is trust, not seconds. Workspace-wide the count went
+  227 → 117; the rest (`norte-core/tests/daemon.rs` has 19) can have the same
+  treatment.
+
 - **An empty secret quietly borrowed someone else's credentials** (#320). Set
   `NORTE_SECRET_<CONN>` to the empty string — a mistyped `read`, an unset
   variable exported anyway — and the connection did not fail: opendal discards

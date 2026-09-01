@@ -62,10 +62,41 @@ impl Puerta {
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Falso {
+    /// Un aviso por cada cosa que el doble ANOTA.
+    ///
+    /// Es lo que convierte «duerme 30 ms y mira» en «espera a que pase». El
+    /// actor encola cada mutación con `tokio::spawn` y contesta el ack antes
+    /// de que la task corra, así que el test que quiera ver lo encolado
+    /// tiene que esperar a ALGO; sin esto, ese algo era el reloj.
+    ///
+    /// `notify_waiters` solo despierta a quien YA espera, así que quien
+    /// espera arma el futuro antes de volver a mirar (`Falso::hasta`), igual
+    /// que hace `Puerta::esperar`.
+    ///
+    /// `Arc` porque hay anotaciones que ocurren FUERA de `&self`: el cierre
+    /// de cancelación de una task se queda vivo cuando el doble ya no está a
+    /// mano, y también tiene que avisar.
+    pub pulso: Arc<tokio::sync::Notify>,
     /// `wire del dir` → `(nombre, es_dir)`.
     pub arbol: HashMap<String, Vec<(Vec<u8>, bool)>>,
     pub listados: AtomicUsize,
+    /// Lecturas PEDIDAS y ya SERVIDAS: listados, sondeos y contenidos.
+    ///
+    /// Los dos números solo se separan con `retraso_ms`, y es justo ahí donde
+    /// hace falta: un test que quiere ver qué hace el host con una respuesta
+    /// TARDÍA tiene que saber cuándo ha llegado. Antes lo adivinaba durmiendo
+    /// más que el retraso. `servidos == pedidos` es «ya no vuela ninguna»,
+    /// que es la pregunta que esos tests hacen de verdad — y que no exige
+    /// contar a mano cuántas respuestas pone en vuelo cada caso.
+    pub pedidos: AtomicUsize,
+    /// La otra mitad de `pedidos`: `Arc` porque quien la sube es la respuesta,
+    /// que corre en su propia task cuando el doble ya no está a mano.
+    pub servidos: Arc<AtomicUsize>,
     /// Retraso artificial, para provocar la carrera de una respuesta tardía.
+    ///
+    /// Este `sleep` se queda: es la latencia que el doble SIMULA, no una
+    /// apuesta del test sobre cuánto tarda el actor. Lo que no se adivina es
+    /// cuándo acabó — eso lo dice `servidos`.
     pub retraso_ms: u64,
     /// Detiene el stream JUSTO después de la primera página, hasta que el
     /// test la abre.
@@ -149,6 +180,15 @@ pub struct Falso {
     pub cancelaciones: Arc<AtomicUsize>,
     /// El emisor del progreso de la última task, para que el test lo mueva.
     pub progreso: std::sync::Mutex<Option<tokio::sync::watch::Sender<norte_proto::TaskProgress>>>,
+    /// El emisor de la task de `create_file`, guardado solo para que NO se
+    /// caiga.
+    ///
+    /// Es la única del doble que nace corriendo y termina por detrás, así que
+    /// es la única cuyo canal tiene que seguir abierto cuando el host va a
+    /// leer el desenlace. Aparte de `progreso` porque ese lo MUEVEN los
+    /// tests, y esta no la mueve nadie.
+    pub progreso_create:
+        std::sync::Mutex<Option<tokio::sync::watch::Sender<norte_proto::TaskProgress>>>,
     /// Los emisores de TODAS las tasks de transferencia, por id.
     ///
     /// Un solo hueco no vale para un lote: al llegar la segunda se soltaba el
@@ -317,6 +357,12 @@ pub struct Falso {
     pub permisos: std::sync::Mutex<Vec<(Vec<VPath>, u32)>>,
     /// Las rutas de cada lote de sumas que se pidió (#311).
     pub sumas_pedidas: std::sync::Mutex<Vec<Vec<VPath>>>,
+    /// Los ids de task cuyo INFORME de sumas se pidió, en orden.
+    ///
+    /// Existe para poder esperar a que el informe haya vuelto: un test que
+    /// afirma que un informe a medias NO abre nada tiene que haberlo tenido
+    /// en la mano, o estaría comprobando que todavía no ha llegado.
+    pub sumas_informes_pedidos: std::sync::Mutex<Vec<u64>>,
     /// El informe que devuelve `checksum_report`. Por defecto, vacío y
     /// completo — un test que quiera digests lo pone.
     pub sumas_informe: std::sync::Mutex<norte_proto::methods::FsChecksumReportResult>,
@@ -365,6 +411,48 @@ impl Falso {
     pub fn pon(&mut self, dir: &str, entradas: impl IntoIterator<Item = (Vec<u8>, bool)>) {
         self.arbol
             .insert(dir.to_owned(), entradas.into_iter().collect());
+    }
+
+    /// El doble acaba de anotar algo: quien esperaba, que mire.
+    ///
+    /// Va DESPUÉS de la anotación, siempre. Avisar antes despertaría a un
+    /// test que volvería a ver el estado viejo y a dormirse, y esa carrera
+    /// es exactamente la que este mecanismo existe para quitar.
+    pub fn latido(&self) {
+        self.pulso.notify_waiters();
+    }
+
+    /// Espera a que el doble haya anotado lo que se le pregunta. Sin reloj.
+    ///
+    /// `que` mira el doble y devuelve `Some` cuando ya está: el valor sale
+    /// clonado, porque el `MutexGuard` no puede cruzar un `await`.
+    ///
+    /// El plazo de socorro NO es una espera: es el presupuesto de FALLO. En
+    /// el camino verde no se consume ni un milisegundo —el aviso llega y la
+    /// función vuelve—, y cuando se agota el test dice QUÉ esperaba en vez
+    /// de reventar veinte líneas más abajo en una aserción que no explica
+    /// nada. Bajo carga tampoco se vuelve frágil: quince segundos son tres
+    /// órdenes de magnitud más de lo que tarda un `spawn` en correr.
+    pub async fn hasta<T>(&self, que_esperaba: &str, que: impl Fn(&Self) -> Option<T>) -> T {
+        const SOCORRO: std::time::Duration = std::time::Duration::from_secs(15);
+        let espera = async {
+            loop {
+                if let Some(v) = que(self) {
+                    return v;
+                }
+                // El futuro se arma ANTES de la segunda comprobación:
+                // armarlo después perdería un latido caído justo en medio.
+                let avisado = self.pulso.notified();
+                if let Some(v) = que(self) {
+                    return v;
+                }
+                avisado.await;
+            }
+        };
+        let Ok(v) = tokio::time::timeout(SOCORRO, espera).await else {
+            panic!("el doble nunca anotó: {que_esperaba}")
+        };
+        v
     }
 
     /// El cuerpo compartido de copiar y mover en el falso: apunta lo que se
@@ -417,6 +505,7 @@ impl Falso {
             .lock()
             .expect("transferencias")
             .push((from, to, mover, on_collision));
+        self.latido();
         let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(100 + n as u64);
         let progreso = norte_proto::TaskProgress {
@@ -459,6 +548,21 @@ impl Falso {
 
     pub fn listados(&self) -> usize {
         self.listados.load(Ordering::SeqCst)
+    }
+
+    /// Cuántas lecturas ya VOLVIERON (listados, sondeos y contenidos).
+    pub fn servidos(&self) -> usize {
+        self.servidos.load(Ordering::SeqCst)
+    }
+
+    /// Cuántas lecturas se PIDIERON.
+    pub fn pedidos(&self) -> usize {
+        self.pedidos.load(Ordering::SeqCst)
+    }
+
+    /// ¿No vuela ninguna lectura? Todo lo que se pidió, ya volvió.
+    pub fn en_calma(&self) -> bool {
+        self.servidos() >= self.pedidos()
     }
 
     /// Las entradas de un directorio, tal como las devolvería el listado.
@@ -553,6 +657,7 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<norte_proto::methods::PluginListResult, Error>> {
         self.catalogos_pedidos
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.latido();
         let plugins = self.plugins.lock().expect("plugins").clone();
         let errores = self
             .errores_de_carga
@@ -579,6 +684,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("mutex de páginas")
             .push(id.clone());
+        self.latido();
         let markdown = self.paginas.get(&id).cloned().unwrap_or_default();
         Box::pin(async move {
             Ok(norte_proto::methods::PluginHelpResult {
@@ -607,6 +713,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("mutex de búsquedas")
             .push(patron.clone());
+        self.latido();
         let hallazgos = self.hallazgos.get(&patron).cloned().unwrap_or_default();
         let cancelaciones = Arc::clone(&self.cancelaciones);
         Box::pin(async move {
@@ -696,6 +803,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("mutex de decorados")
             .push(paths.clone());
+        self.latido();
         let tabla = self.decoraciones.clone();
         Box::pin(async move {
             if tabla.is_empty() {
@@ -729,6 +837,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("mutex de columnas")
             .push((plugin, column.clone(), paths.clone()));
+        self.latido();
         let tabla = self.valores_de_columna.clone();
         Box::pin(async move {
             // Posicional 1:1 con `paths`, SIEMPRE: es el contrato, y un
@@ -753,12 +862,14 @@ impl HostBackend for Falso {
             .lock()
             .expect("mutex de fichas")
             .push(id.clone());
+        self.latido();
         let keys = self.esquemas.get(&id).cloned().unwrap_or_default();
         Box::pin(async move { Ok(norte_proto::methods::PluginGetConfigResult { keys }) })
     }
 
     fn undo_session(&self, session: String) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.deshechas.lock().expect("deshechas").push(session);
+        self.latido();
         let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(900 + n as u64);
         let progreso = norte_proto::TaskProgress {
@@ -801,6 +912,7 @@ impl HostBackend for Falso {
             "approval:{id}:{approved}:{}",
             expected_digest.as_deref().unwrap_or("-")
         ));
+        self.latido();
         let fallo = self.error_al_gobernar.lock().expect("gobierno").clone();
         // Y el catálogo cambia: el host lo REPIDE tras un OK, así que un
         // falso que contestara siempre lo mismo dejaría pasar una pantalla
@@ -824,6 +936,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("gobierno")
             .push(format!("enabled:{id}:{enabled}"));
+        self.latido();
         let fallo = self.error_al_gobernar.lock().expect("gobierno").clone();
         if fallo.is_none() {
             for p in self.plugins.lock().expect("plugins").iter_mut() {
@@ -845,6 +958,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("escrituras")
             .push((id, key, value));
+        self.latido();
         let fallo = self.error_al_escribir.lock().expect("escribir").clone();
         Box::pin(async move { fallo.map_or(Ok(()), Err) })
     }
@@ -859,6 +973,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("ejecutados")
             .push((id, command));
+        self.latido();
         let salida = self.salida_de_comando.lock().expect("salida").clone();
         Box::pin(async move { salida.unwrap_or_else(|| Ok(String::new())) })
     }
@@ -870,10 +985,15 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<Vec<u8>, Error>> {
         let bytes = self.contenido.get(&path.to_wire()).cloned();
         let retraso = self.retraso_ms;
+        self.pedidos.fetch_add(1, Ordering::SeqCst);
+        let servidos = Arc::clone(&self.servidos);
+        let pulso = Arc::clone(&self.pulso);
         Box::pin(async move {
             if retraso > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
             }
+            servidos.fetch_add(1, Ordering::SeqCst);
+            pulso.notify_waiters();
             let mut b = bytes.ok_or(Error::NotFound)?;
             if let Some(r) = range {
                 let off = usize::try_from(r.offset).unwrap_or(usize::MAX).min(b.len());
@@ -888,6 +1008,8 @@ impl HostBackend for Falso {
 
     fn stat(&self, path: VPath, _attrs: Vec<String>) -> BoxFuture<'static, Result<Entry, Error>> {
         self.sondeos.lock().expect("sondeos").push(path.clone());
+        self.pedidos.fetch_add(1, Ordering::SeqCst);
+        self.latido();
         let grita = self.stat_grita;
         let retraso = self.retraso_ms;
         // El padre del path dice en qué directorio buscarlo; la entrada sale
@@ -934,10 +1056,14 @@ impl HostBackend for Falso {
                 attrs: std::collections::BTreeMap::new(),
             })
         });
+        let servidos = Arc::clone(&self.servidos);
+        let pulso = Arc::clone(&self.pulso);
         Box::pin(async move {
             if retraso > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
             }
+            servidos.fetch_add(1, Ordering::SeqCst);
+            pulso.notify_waiters();
             entrada.ok_or(Error::NotFound)
         })
     }
@@ -966,6 +1092,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("decisiones")
             .push((approval_id, approve));
+        self.latido();
         let fallo = self
             .error_al_decidir
             .lock()
@@ -989,6 +1116,7 @@ impl HostBackend for Falso {
         plan_hash: norte_proto::methods::PlanHash,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.aplicados.lock().expect("aplicados").push(plan_hash);
+        self.latido();
         if let Some(e) = self
             .error_al_aplicar
             .lock()
@@ -1020,12 +1148,14 @@ impl HostBackend for Falso {
         // Cancelable DE VERDAD: con un cancelador que no cuenta, un test de
         // cancelación pasa igual con el panel congelado.
         let canceladas = Arc::clone(&self.canceladas_por_id);
+        let pulso = Arc::clone(&self.pulso);
         Box::pin(async move {
             Ok(HostTask {
                 id,
                 progress: rx,
                 cancel: Arc::new(move || {
                     canceladas.lock().expect("canceladas").push(id.get());
+                    pulso.notify_waiters();
                 }),
                 foreign: false,
             })
@@ -1057,6 +1187,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("planes")
             .push((params.source, params.dest, params.mode));
+        self.latido();
         let plan = self.plan_de_sync.lock().expect("plan").clone();
         let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(400 + n as u64);
@@ -1124,6 +1255,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("comparaciones")
             .push((params.left, params.right));
+        self.latido();
         let filas = self.filas_comparadas.lock().expect("filas").clone();
         let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(300 + n as u64);
@@ -1177,6 +1309,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("semánticas")
             .push((query, k));
+        self.latido();
         let hits = self.semanticos.lock().expect("semánticos").clone();
         Box::pin(async move { hits.ok_or(Error::NotFound) })
     }
@@ -1198,6 +1331,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("sumas")
             .push(params.paths.clone());
+        self.latido();
         let progreso = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(10),
             kind: norte_proto::TaskKind::Checksum,
@@ -1223,8 +1357,13 @@ impl HostBackend for Falso {
 
     fn checksum_report(
         &self,
-        _task: norte_proto::TaskId,
+        task: norte_proto::TaskId,
     ) -> BoxFuture<'static, Result<norte_proto::methods::FsChecksumReportResult, Error>> {
+        self.sumas_informes_pedidos
+            .lock()
+            .expect("informes de sumas")
+            .push(task.get());
+        self.latido();
         let informe = self.sumas_informe.lock().expect("informe").clone();
         Box::pin(async move { Ok(informe) })
     }
@@ -1240,6 +1379,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("permisos")
             .push((params.paths.clone(), params.mode));
+        self.latido();
         let progreso = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(9),
             kind: norte_proto::TaskKind::SetMode,
@@ -1265,6 +1405,7 @@ impl HostBackend for Falso {
 
     fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.creados.lock().expect("creados").push(path);
+        self.latido();
         let progreso = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(8),
             kind: norte_proto::TaskKind::Mkdir,
@@ -1290,6 +1431,7 @@ impl HostBackend for Falso {
 
     fn create_file(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.creados.lock().expect("creados").push(path);
+        self.latido();
         // Con id PROPIO: el gesto de «editar uno nuevo» mira el desenlace de
         // SU task para abrir el fichero, y compartir el 8 con `mkdir` haría
         // que un test de crear directorio disparase esa apertura.
@@ -1312,16 +1454,18 @@ impl HostBackend for Falso {
             unvisited: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(vivo.clone());
+        // El emisor se queda vivo mientras viva el doble. Soltarlo tras el
+        // envío cierra el canal antes de que el host haya leído el cambio, y
+        // esa es justo la carrera que este falso existe para no tener; antes
+        // se compraba durmiendo cincuenta milisegundos, que es una apuesta
+        // sobre cuándo bombea el host.
+        *self.progreso_create.lock().expect("progreso create") = Some(tx.clone());
         tokio::spawn(async move {
             let _ = tx.send(norte_proto::TaskProgress {
                 state: norte_proto::TaskState::Completed,
                 entries_done: 1,
                 ..vivo
             });
-            // El emisor se queda vivo un instante: soltarlo en el mismo
-            // suspiro cierra el canal antes de que el host haya leído el
-            // cambio, y eso es la carrera que este falso existe para no tener.
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         });
         Box::pin(async move {
             Ok(HostTask {
@@ -1340,9 +1484,12 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<(norte_client::EntryStream, Option<u64>), Error>> {
         self.attrs_pedidos.lock().expect("attrs").push(attrs);
         self.listados.fetch_add(1, Ordering::SeqCst);
+        self.latido();
         if !self.arbol.contains_key(&dir.to_wire()) {
             return Box::pin(async { Err(Error::NotFound) });
         }
+        // Se cuenta DESPUÉS del `NotFound`: el que no vuela no se espera.
+        self.pedidos.fetch_add(1, Ordering::SeqCst);
         let lazy = self.lazy;
         // El directorio bajo el que el provider cuelga sus entradas. Con
         // `padre_distinto`, OTRA ortografía del mismo sitio.
@@ -1392,10 +1539,14 @@ impl HostBackend for Falso {
         let retraso = self.retraso_ms;
         let omitidas = self.omitidas;
         let puerta = self.puerta_drenaje.clone();
+        let servidos = Arc::clone(&self.servidos);
+        let pulso = Arc::clone(&self.pulso);
         Box::pin(async move {
             if retraso > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
             }
+            servidos.fetch_add(1, Ordering::SeqCst);
+            pulso.notify_waiters();
             // 100 = `FIRST_PAGE` del host: la entrada 101 es la primera del
             // DRENAJE, y es ahí donde se corta.
             let stream: norte_client::EntryStream = Box::pin(futures::stream::unfold(
@@ -1442,6 +1593,7 @@ impl HostBackend for Falso {
             if *quedan > 0 {
                 *quedan -= 1;
                 self.puestas.lock().expect("puestas").push(body);
+                self.latido();
                 return Box::pin(async {
                     Err(Error::LimitExceeded {
                         limit: Error::LIMIT_SESSION_BODY.to_owned(),
@@ -1451,6 +1603,7 @@ impl HostBackend for Falso {
         }
         self.puestas.lock().expect("puestas").push(body.clone());
         *self.escrito.lock().expect("escrito") = Some(body);
+        self.latido();
         Box::pin(async { Ok(9) })
     }
 
@@ -1473,15 +1626,25 @@ impl HostBackend for Falso {
             .lock()
             .expect("instrucciones")
             .push(instruction);
+        self.latido();
         // Los nombres que viajaron (#121): es lo que permite ver que un plan
         // pedido sobre cinco ficheros no manda los mil del directorio.
         self.nombres_ia.lock().expect("nombres_ia").push(names);
+        self.latido();
         let plan = self.plan_ia.clone();
         let retraso = self.retraso_ia_ms;
+        // Pedir un plan es una LECTURA: el modelo no muta nada. Entra en la
+        // misma cuenta que los listados, que es lo que permite esperar a que
+        // «no vuele ninguna» sin contar a mano las respuestas de cada caso.
+        self.pedidos.fetch_add(1, Ordering::SeqCst);
+        let servidos = Arc::clone(&self.servidos);
+        let pulso = Arc::clone(&self.pulso);
         Box::pin(async move {
             if retraso > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
             }
+            servidos.fetch_add(1, Ordering::SeqCst);
+            pulso.notify_waiters();
             let Some(pares) = plan else {
                 return Err(Error::Unsupported);
             };
@@ -1503,6 +1666,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("veredictos")
             .push(pairs);
+        self.latido();
         let v = self.veredicto.clone();
         Box::pin(async move { v.ok_or(Error::Unsupported) })
     }
@@ -1517,6 +1681,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("lotes")
             .push((dir, pairs, plan_hash));
+        self.latido();
         let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(200 + n as u64);
         let progreso = norte_proto::TaskProgress {
@@ -1555,6 +1720,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("informes")
             .push(task_id.get());
+        self.latido();
         let informe = self.informe.lock().expect("informe").clone();
         Box::pin(async move { informe.ok_or(Error::Unsupported) })
     }
@@ -1567,6 +1733,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("informes undo")
             .push(task_id.get());
+        self.latido();
         let informe = self.informe_undo.lock().expect("informe undo").clone();
         Box::pin(async move { informe.ok_or(Error::Unsupported) })
     }
@@ -1579,6 +1746,7 @@ impl HostBackend for Falso {
             .lock()
             .expect("informes pack")
             .push(task_id.get());
+        self.latido();
         let informe = self.informe_pack.lock().expect("informe pack").clone();
         Box::pin(async move { informe.ok_or(Error::Unsupported) })
     }
@@ -1600,6 +1768,7 @@ impl HostBackend for Falso {
             .clone()
         {
             self.borrados.lock().expect("borrados").push((path, mode));
+            self.latido();
             return Box::pin(async move { Err(e) });
         }
         if self.borrar_de_verdad {
@@ -1609,6 +1778,7 @@ impl HostBackend for Falso {
                 .insert(path.to_wire());
         }
         self.borrados.lock().expect("borrados").push((path, mode));
+        self.latido();
         let progreso = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(7),
             kind: norte_proto::TaskKind::Delete,
@@ -1641,6 +1811,7 @@ impl HostBackend for Falso {
         params: norte_proto::methods::ArchivePackParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.empaquetados.lock().expect("empaquetados").push(params);
+        self.latido();
         self.task_de_archivo(norte_proto::TaskKind::Pack, 11)
     }
 
@@ -1649,6 +1820,7 @@ impl HostBackend for Falso {
         params: norte_proto::methods::ArchiveTestParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.comprobados.lock().expect("comprobados").push(params);
+        self.latido();
         self.task_de_archivo(norte_proto::TaskKind::TestArchive, 12)
     }
 
@@ -1666,6 +1838,7 @@ impl HostBackend for Falso {
 
     fn close_connection(&self, path: VPath) -> BoxFuture<'static, Result<bool, Error>> {
         self.cerradas.lock().expect("cerradas").push(path);
+        self.latido();
         let res = self
             .cierre
             .lock()
@@ -1680,6 +1853,7 @@ impl HostBackend for Falso {
         params: norte_proto::methods::FileSplitParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.partidos.lock().expect("partidos").push(params);
+        self.latido();
         self.task_de_archivo(norte_proto::TaskKind::Split, 13)
     }
 
@@ -1688,11 +1862,13 @@ impl HostBackend for Falso {
         params: norte_proto::methods::FileCombineParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.juntados.lock().expect("juntados").push(params);
+        self.latido();
         self.task_de_archivo(norte_proto::TaskKind::Combine, 14)
     }
 
     fn dir_size(&self, paths: Vec<VPath>) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.recuentos.lock().expect("recuentos").push(paths);
+        self.latido();
         let progreso = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(9),
             kind: norte_proto::TaskKind::DirSize,

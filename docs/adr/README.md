@@ -90,3 +90,4 @@ edits.
 | [0082](0082-what-norte-hands-to-a-program-it-does-not-own.md) | What norte hands to a program it does not own | accepted |
 | [0083](0083-permissions-down-a-tree-are-two-modes-and-one-batch.md) | Permissions down a tree are two modes and one batch | accepted |
 | [0084](0084-the-shell-behind-the-panels-is-a-process-not-a-scrollback.md) | The shell behind the panels is a process, not a scrollback | accepted |
+| [0085](0085-an-async-test-waits-for-an-event-not-for-the-clock.md) | An async test waits for an event, not for the clock | accepted |
