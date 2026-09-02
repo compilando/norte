@@ -1934,6 +1934,63 @@ impl RemoteBackend {
         Ok(r.revision)
     }
 
+    /// `log.tail` contra el daemon (L2): lo que su anillo de registro tiene
+    /// después de `cursor` (0.65.0, #328, ADR 0092).
+    ///
+    /// `cursor: None` pide «lo que haya» — NO es lo mismo que `Some(0)`, ver
+    /// [`methods::LogTailParams::cursor`]: contra un anillo que ya dio la
+    /// vuelta, un `0` reportaría un `lost` falso en el primer sondeo. Este
+    /// SDK no traduce nada: pasa el `Option` tal cual.
+    ///
+    /// El caso alcanzable de verdad no es un daemon MÁS VIEJO —un cliente
+    /// 0.65 nunca completa `initialize` contra uno 0.64, ver
+    /// [`methods::LOG_TAIL`]— sino uno de la MISMA versión compilado sin la
+    /// feature `logging`, que no tiene anillo que servir. Los dos casos
+    /// contestan `METHOD_NOT_FOUND` igual, así que no hace falta distinguirlos
+    /// aquí: la respuesta al método ya es la única señal que hace falta.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon; [`Error::Unsupported`] si no tiene registro
+    /// que servir.
+    pub async fn log_tail(
+        &self,
+        cursor: Option<u64>,
+        max: u32,
+    ) -> Result<methods::LogTailResult, Error> {
+        self.call_no_method_is_unsupported(
+            methods::LOG_TAIL,
+            &methods::LogTailParams { cursor, max },
+        )
+        .await
+    }
+
+    /// `log.level` contra el daemon (L2): sube el nivel que su anillo está
+    /// guardando y devuelve el que de verdad quedó puesto (0.65.0, #328,
+    /// ADR 0092).
+    ///
+    /// El anillo nunca BAJA de nivel (ver [`methods::LOG_LEVEL`]), así que
+    /// pedir uno menos verboso que el vigente no es un error: el daemon
+    /// contesta el que ya tenía puesto, y este SDK lo entrega tal cual — no
+    /// hay nada que traducir ni que pre-validar contra [`methods::LOG_LEVELS`]
+    /// en el cliente.
+    ///
+    /// # Errors
+    /// Lo que responda el daemon; [`Error::Unsupported`] contra uno sin
+    /// registro que servir (ver [`Self::log_tail`]). Un `level` fuera del
+    /// vocabulario es `INVALID_PARAMS`, no `Unsupported` — son dos preguntas
+    /// distintas y el daemon las distingue a propósito.
+    pub async fn log_level(&self, level: &str) -> Result<String, Error> {
+        let r: methods::LogLevelResult = self
+            .call_no_method_is_unsupported(
+                methods::LOG_LEVEL,
+                &methods::LogLevelParams {
+                    level: level.to_owned(),
+                },
+            )
+            .await?;
+        Ok(r.level)
+    }
+
     /// La versión de protocolo que el peer declaró en el último handshake
     /// (#294), o `None` si todavía no se ha conectado nunca.
     ///
@@ -2846,6 +2903,203 @@ mod tests {
             inner.client.read().await.is_none(),
             "y el hueco queda VACÍO: con un cliente ahí, nadie enruta y un join() cuelga para siempre"
         );
+    }
+
+    /// Un daemon de mentira que hace el handshake completo —INITIALIZE,
+    /// TASK_LIST vacío, POLICY_PENDING con `METHOD_NOT_FOUND` (que el resync
+    /// tolera, ver [`RemoteBackend::resync`])— y contesta cualquier OTRO
+    /// método con lo que devuelva `responder`.
+    ///
+    /// Separado de [`stub_que_rechaza_task_list`] porque las pruebas de
+    /// `log_tail`/`log_level` no quieren reimplementar el handshake entero
+    /// para probar una sola respuesta.
+    fn stub_daemon_con(
+        socket: &std::path::Path,
+        responder: impl Fn(&str) -> norte_proto::wire::Response + Send + Sync + 'static,
+    ) -> tokio::task::JoinHandle<()> {
+        let listener = tokio::net::UnixListener::bind(socket).expect("bind del stub");
+        tokio::spawn(async move {
+            let Ok((mut conn, _)) = listener.accept().await else {
+                return;
+            };
+            let mut decoder = norte_proto::wire::FrameDecoder::new();
+            let mut buf = vec![0u8; 8192];
+            loop {
+                let n = match tokio::io::AsyncReadExt::read(&mut conn, &mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => n,
+                };
+                if decoder.push(&buf[..n]).is_err() {
+                    return;
+                }
+                while let Some(frame) = decoder.next_frame() {
+                    let Ok(req) = serde_json::from_slice::<norte_proto::wire::Request>(&frame)
+                    else {
+                        continue;
+                    };
+                    let resp = if req.method == norte_proto::methods::INITIALIZE {
+                        norte_proto::wire::Response::ok(
+                            req.id.clone(),
+                            serde_json::to_value(norte_proto::methods::InitializeResult {
+                                server_info: norte_proto::methods::ServerInfo {
+                                    name: "stub".into(),
+                                    version: "0".into(),
+                                },
+                                protocol_version: norte_proto::methods::PROTOCOL_VERSION.into(),
+                                encodings: vec!["json".into()],
+                            })
+                            .expect("json"),
+                        )
+                    } else if req.method == norte_proto::methods::TASK_LIST {
+                        norte_proto::wire::Response::ok(
+                            req.id.clone(),
+                            serde_json::json!({"tasks": []}),
+                        )
+                    } else if req.method == norte_proto::methods::POLICY_PENDING {
+                        norte_proto::wire::Response::err(
+                            Some(req.id.clone()),
+                            norte_proto::wire::RpcError::protocol(
+                                norte_proto::wire::codes::METHOD_NOT_FOUND,
+                                "el stub no monta policy.pending",
+                            ),
+                        )
+                    } else {
+                        let mut r = responder(&req.method);
+                        r.id = Some(req.id.clone());
+                        r
+                    };
+                    let Ok(bytes) = norte_proto::wire::encode_frame(&resp) else {
+                        return;
+                    };
+                    if tokio::io::AsyncWriteExt::write_all(&mut conn, &bytes)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        })
+    }
+
+    /// El caso alcanzable de verdad (ver rustdoc de [`methods::LOG_TAIL`]):
+    /// un daemon misma-versión SIN anillo —compilado sin la feature
+    /// `logging`— contesta `METHOD_NOT_FOUND`, y el SDK lo entrega como
+    /// [`Error::Unsupported`] en vez de un error de protocolo crudo, que es
+    /// lo que un panel convierte en una frase (#328).
+    #[tokio::test]
+    async fn log_tail_contra_un_daemon_sin_anillo_degrada_a_unsupported() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = dir.path().join("stub.sock");
+        let _stub = stub_daemon_con(&socket, |method| {
+            assert_eq!(method, norte_proto::methods::LOG_TAIL);
+            norte_proto::wire::Response::err(
+                None,
+                norte_proto::wire::RpcError::protocol(
+                    norte_proto::wire::codes::METHOD_NOT_FOUND,
+                    "sin anillo",
+                ),
+            )
+        });
+
+        let inner = test_inner_en(socket);
+        let backend = backend_for(Arc::clone(&inner));
+        backend.establish(false).await.expect("handshake");
+
+        let err = backend
+            .log_tail(None, 500)
+            .await
+            .expect_err("sin anillo: Unsupported");
+        assert!(matches!(err, Error::Unsupported));
+    }
+
+    /// Y contra un daemon que SÍ tiene anillo, las líneas llegan parseadas
+    /// — no un `serde_json::Value` crudo que cada frontend tendría que
+    /// reinterpretar.
+    #[tokio::test]
+    async fn log_tail_contra_un_daemon_con_anillo_devuelve_las_lineas() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = dir.path().join("stub.sock");
+        let _stub = stub_daemon_con(&socket, |method| {
+            assert_eq!(method, norte_proto::methods::LOG_TAIL);
+            norte_proto::wire::Response::ok(
+                norte_proto::wire::RequestId::Num(0),
+                serde_json::to_value(methods::LogTailResult {
+                    lines: vec![methods::LogLine {
+                        epoch_ms: 1_756_000_000_000,
+                        level: "info".into(),
+                        target: "norte_core::daemon".into(),
+                        message: "escuchando".into(),
+                    }],
+                    next: 1,
+                    lost: 0,
+                    level: "info".into(),
+                    capacity: 2000,
+                })
+                .expect("json"),
+            )
+        });
+
+        let inner = test_inner_en(socket);
+        let backend = backend_for(Arc::clone(&inner));
+        backend.establish(false).await.expect("handshake");
+
+        let r = backend.log_tail(None, 500).await.expect("con anillo: ok");
+        assert_eq!(r.lines.len(), 1);
+        assert_eq!(r.lines[0].message, "escuchando");
+        assert_eq!(r.next, 1);
+    }
+
+    /// `log.level` degrada igual que `log.tail`: mismo daemon, mismo motivo.
+    #[tokio::test]
+    async fn log_level_contra_un_daemon_sin_anillo_degrada_a_unsupported() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = dir.path().join("stub.sock");
+        let _stub = stub_daemon_con(&socket, |method| {
+            assert_eq!(method, norte_proto::methods::LOG_LEVEL);
+            norte_proto::wire::Response::err(
+                None,
+                norte_proto::wire::RpcError::protocol(
+                    norte_proto::wire::codes::METHOD_NOT_FOUND,
+                    "sin anillo",
+                ),
+            )
+        });
+
+        let inner = test_inner_en(socket);
+        let backend = backend_for(Arc::clone(&inner));
+        backend.establish(false).await.expect("handshake");
+
+        let err = backend
+            .log_level("debug")
+            .await
+            .expect_err("sin anillo: Unsupported");
+        assert!(matches!(err, Error::Unsupported));
+    }
+
+    /// El daemon puede contestar un nivel MÁS verbose que el pedido —nunca
+    /// baja (ADR 0092)— y el SDK entrega justo eso, sin reinterpretarlo.
+    #[tokio::test]
+    async fn log_level_devuelve_el_nivel_que_de_verdad_quedo_puesto() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = dir.path().join("stub.sock");
+        let _stub = stub_daemon_con(&socket, |method| {
+            assert_eq!(method, norte_proto::methods::LOG_LEVEL);
+            norte_proto::wire::Response::ok(
+                norte_proto::wire::RequestId::Num(0),
+                serde_json::to_value(methods::LogLevelResult {
+                    level: "debug".into(),
+                })
+                .expect("json"),
+            )
+        });
+
+        let inner = test_inner_en(socket);
+        let backend = backend_for(Arc::clone(&inner));
+        backend.establish(false).await.expect("handshake");
+
+        let level = backend.log_level("warn").await.expect("con anillo: ok");
+        assert_eq!(level, "debug", "el anillo no baja: contesta lo vigente");
     }
 
     /// El permiso de arranque caduca por TIEMPO y no por intentos.
