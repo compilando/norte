@@ -204,6 +204,42 @@ impl App {
             .find(|id| self.layout.kind_of(*id).is_some_and(|k| k.as_str() == kind))
     }
 
+    /// El primer hueco con ese kind que el lector VE ahora mismo (#329).
+    ///
+    /// La pareja de [`Self::slot_of_kind`], y las dos hacen falta porque hay
+    /// dos preguntas: quien va a colocar un panel quiere saber si ya existe
+    /// —duplicarlo sería lo malo—, y quien pinta un botón o cuenta una novedad
+    /// quiere saber si el lector lo tiene delante. Preguntar la primera y
+    /// actuar como si fuera la segunda es lo que hacía que un panel escondido
+    /// en una pestaña se pintara abierto y se comiera su marca de aviso.
+    pub(crate) fn slot_of_kind_visible(
+        &self,
+        kind: &str,
+    ) -> Option<norte_frontend::layout::SlotId> {
+        self.layout
+            .visible_slot_ids()
+            .into_iter()
+            .find(|id| self.layout.kind_of(*id).is_some_and(|k| k.as_str() == kind))
+    }
+
+    /// ¿Tiene el lector este hueco delante?
+    fn se_ve(&self, id: norte_frontend::layout::SlotId) -> bool {
+        self.layout.visible_slot_ids().contains(&id)
+    }
+
+    /// Saca a la luz el hueco `id`: activa su pestaña en cada grupo del camino.
+    ///
+    /// No es un gesto propio y por eso no toca el teclado: lo llaman los
+    /// toggles antes de enfocar, porque enfocar algo que no se ve es mandar las
+    /// teclas a ninguna parte.
+    fn revelar(&mut self, id: norte_frontend::layout::SlotId) {
+        let nuevo = self.layout.reveal(id);
+        if nuevo != self.layout {
+            self.layout = nuevo;
+            self.panes.refresh_visible(&self.layout);
+        }
+    }
+
     /// Abre el sidebar de sitios, lo enfoca, o lo cierra.
     ///
     /// Las tres en una tecla, y en este orden: si no está, se acopla a la
@@ -217,7 +253,11 @@ impl App {
     pub fn toggle_places(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         match self.places_slot() {
-            Some(id) if self.key_owner == KeyOwner::Places => {
+            // `se_ve` en la guarda desde #329: un panel escondido en una
+            // pestaña no se cierra, se enseña. Cerrar lo que el lector no
+            // tiene delante es la única de las tres acciones que no puede
+            // deshacer mirando.
+            Some(id) if self.key_owner == KeyOwner::Places && self.se_ve(id) => {
                 if let Some(nuevo) = self.layout.close_slot(id) {
                     self.layout = nuevo;
                     self.panes.refresh_visible(&self.layout);
@@ -225,7 +265,10 @@ impl App {
                 }
                 self.key_owner = KeyOwner::Panes;
             }
-            Some(_) => self.key_owner = KeyOwner::Places,
+            Some(id) => {
+                self.revelar(id);
+                self.key_owner = KeyOwner::Places;
+            }
             None => {
                 let id = self.mint_slot();
                 self.panes
@@ -405,7 +448,7 @@ impl App {
     pub fn toggle_preview(&mut self) {
         use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, RoleId, Size};
         match self.preview_slot() {
-            Some(id) if self.key_owner == KeyOwner::Preview => {
+            Some(id) if self.key_owner == KeyOwner::Preview && self.se_ve(id) => {
                 if let Some(nuevo) = self.layout.close_slot(id) {
                     self.layout = nuevo;
                     self.panes.refresh_visible(&self.layout);
@@ -413,7 +456,10 @@ impl App {
                 }
                 self.key_owner = KeyOwner::Panes;
             }
-            Some(_) => self.key_owner = KeyOwner::Preview,
+            Some(id) => {
+                self.revelar(id);
+                self.key_owner = KeyOwner::Preview;
+            }
             None => {
                 let id = self.mint_slot();
                 self.panes
@@ -453,7 +499,7 @@ impl App {
     pub fn toggle_tree(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         match self.tree_slot() {
-            Some(id) if self.key_owner == KeyOwner::Tree => {
+            Some(id) if self.key_owner == KeyOwner::Tree && self.se_ve(id) => {
                 if let Some(nuevo) = self.layout.close_slot(id) {
                     self.layout = nuevo;
                     self.panes.refresh_visible(&self.layout);
@@ -468,6 +514,7 @@ impl App {
                 if let Some(t) = self.panes.tree_mut(id) {
                     t.anchor(dir);
                 }
+                self.revelar(id);
                 self.key_owner = KeyOwner::Tree;
             }
             None => {
@@ -575,7 +622,7 @@ impl App {
     pub fn toggle_processes(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         match self.processes_slot() {
-            Some(id) if self.key_owner == KeyOwner::Processes => {
+            Some(id) if self.key_owner == KeyOwner::Processes && self.se_ve(id) => {
                 if let Some(nuevo) = self.layout.close_slot(id) {
                     self.layout = nuevo;
                     self.panes.refresh_visible(&self.layout);
@@ -583,7 +630,10 @@ impl App {
                 }
                 self.key_owner = KeyOwner::Panes;
             }
-            Some(_) => self.key_owner = KeyOwner::Processes,
+            Some(id) => {
+                self.revelar(id);
+                self.key_owner = KeyOwner::Processes;
+            }
             None => {
                 let id = self.mint_slot();
                 self.panes
@@ -617,16 +667,12 @@ impl App {
     /// (#328) son dos RPC por segundo, y pagarlas por un panel que nadie tiene
     /// delante, durante toda la sesión, es gastar red por nada.
     ///
-    /// Lo que esta función NO arregla es la barra de paneles, que sigue
-    /// derivando su estado de `slot_ids()` y por eso pinta como abierto un
-    /// panel escondido en una pestaña: eso es #329 y tiene su propia rama.
+    /// Nació aquí con #328 y ahora delega en [`Self::slot_of_kind_visible`]:
+    /// #329 encontró la misma pregunta en la barra de paneles y en los cinco
+    /// toggles, así que la respuesta dejó de ser cosa del registro.
     #[must_use]
     pub fn log_slot_visible(&self) -> Option<norte_frontend::layout::SlotId> {
-        self.layout.visible_slot_ids().into_iter().find(|id| {
-            self.layout
-                .kind_of(*id)
-                .is_some_and(|k| k.as_str() == crate::logview::KIND)
-        })
+        self.slot_of_kind_visible(crate::logview::KIND)
     }
 
     /// Abre el panel de registro, lo enfoca, o lo cierra (#323).
@@ -640,7 +686,7 @@ impl App {
     pub fn toggle_log(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         match self.log_slot() {
-            Some(id) if self.key_owner == KeyOwner::Log => {
+            Some(id) if self.key_owner == KeyOwner::Log && self.se_ve(id) => {
                 if let Some(nuevo) = self.layout.close_slot(id) {
                     self.layout = nuevo;
                     self.panes.refresh_visible(&self.layout);
@@ -668,7 +714,10 @@ impl App {
                 // apagaría la captura de otro frontend que esté mirando.
                 self.log_remote.reiniciar();
             }
-            Some(_) => self.key_owner = KeyOwner::Log,
+            Some(id) => {
+                self.revelar(id);
+                self.key_owner = KeyOwner::Log;
+            }
             None => {
                 let id = self.mint_slot();
                 self.layout = self.layout.dock(
@@ -823,7 +872,13 @@ impl App {
     pub fn toggle_metadata(&mut self) {
         use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, RoleId, Size};
         if let Some(id) = self.metadata_slot() {
-            if let Some(nuevo) = self.layout.close_slot(id) {
+            // #329: si está escondido detrás de una pestaña, esta tecla lo
+            // ENSEÑA. La hoja de atributos no toma el teclado —se mira, no se
+            // recorre—, así que sus estados son dos, y el que falta cuando no
+            // se ve no es «cerrar» sino «tráelo».
+            if !self.se_ve(id) {
+                self.revelar(id);
+            } else if let Some(nuevo) = self.layout.close_slot(id) {
                 self.layout = nuevo;
                 self.panes.refresh_visible(&self.layout);
                 self.history.retain_tree(&self.layout);
@@ -988,6 +1043,121 @@ impl App {
 mod tests {
     use super::*;
     use crate::app::testutil::*;
+
+    /// Un árbol con el registro escondido en la pestaña que no está activa.
+    fn app_con_registro_escondido() -> App {
+        use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
+
+        let mut app = app_dos_panes();
+        app.set_layout(Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(10)],
+            children: vec![
+                Node::slot(SlotId(80), KindId::browser()),
+                Node::Tabs {
+                    children: vec![
+                        Node::slot(SlotId(81), KindId::browser()),
+                        Node::slot(SlotId(82), KindId::new(crate::logview::KIND)),
+                    ],
+                    active: 0,
+                },
+            ],
+        });
+        app
+    }
+
+    /// El botón de un panel escondido en una pestaña dice CERRADO (#329).
+    ///
+    /// Decía abierto, porque la barra preguntaba si el hueco EXISTE. Para el
+    /// lector no existe: no lo ve, y lo que el botón le promete es enseñárselo.
+    #[test]
+    fn un_panel_escondido_en_una_pestana_se_pinta_cerrado() {
+        use norte_frontend::panelbar::PanelState;
+
+        let app = app_con_registro_escondido();
+        let boton = crate::ui::chrome::panel_buttons(&app)
+            .into_iter()
+            .find(|b| b.kind == crate::logview::KIND)
+            .expect("el registro tiene botón");
+        assert_eq!(boton.state, PanelState::Closed);
+    }
+
+    /// Y pulsarlo lo SACA A LA LUZ y se lleva el teclado, en vez de mandar el
+    /// teclado a algo invisible (#329).
+    ///
+    /// Antes caía en la rama «ya está abierto, enfócalo»: las teclas dejaban de
+    /// llegar a lo que sí se veía, la barra decía «enfocado», y la siguiente
+    /// pulsación cerraba un panel que nadie había visto nunca.
+    #[test]
+    fn pulsar_un_panel_escondido_lo_ensena() {
+        use norte_frontend::layout::SlotId;
+
+        let mut app = app_con_registro_escondido();
+        app.toggle_log();
+        assert!(
+            app.layout.visible_slot_ids().contains(&SlotId(82)),
+            "sigue detrás de la otra pestaña"
+        );
+        assert_eq!(app.key_owner(), KeyOwner::Log);
+        assert!(app.log_slot().is_some(), "y desde luego no lo ha cerrado");
+    }
+
+    /// La segunda pulsación ya sí cierra: enseñar y enfocar es UN paso, no dos.
+    ///
+    /// Si sacarlo a la luz costara una pulsación y enfocarlo otra, el panel que
+    /// el lector acaba de pedir se quedaría sin teclado, y la promesa de los
+    /// tres estados —abre y coge el teclado, coge el teclado, cierra— tendría
+    /// cuatro.
+    #[test]
+    fn la_segunda_pulsacion_cierra_lo_que_la_primera_ensenó() {
+        let mut app = app_con_registro_escondido();
+        app.toggle_log();
+        app.toggle_log();
+        assert!(app.log_slot().is_none());
+        assert_eq!(app.key_owner(), KeyOwner::Panes);
+    }
+
+    /// Un panel ESCONDIDO no se come la marca de novedad (#329).
+    ///
+    /// La marca se calla cuando el panel está abierto porque entonces ya lo
+    /// estás viendo. Escondido no lo estás viendo, así que callarla apagaba el
+    /// aviso justo en el caso en que hace falta.
+    #[test]
+    fn un_registro_escondido_conserva_su_marca_de_novedad() {
+        use norte_config::logring::LogRing;
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let mut app = app_con_registro_escondido();
+        let anillo = LogRing::new(16);
+        let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&anillo));
+        tracing::subscriber::with_default(s, || {
+            tracing::warn!(target: "norte_core::prueba", "algo se degradó");
+        });
+        app.log_ring = Some(anillo);
+
+        let boton = crate::ui::chrome::panel_buttons(&app)
+            .into_iter()
+            .find(|b| b.kind == crate::logview::KIND)
+            .expect("el registro tiene botón");
+        assert!(
+            boton.attention,
+            "hay un aviso y el lector no lo tiene delante"
+        );
+    }
+
+    /// El caso corriente no cambia: un panel acoplado, visible, se enfoca y se
+    /// cierra como siempre.
+    #[test]
+    fn un_panel_a_la_vista_sigue_haciendo_los_tres_pasos() {
+        let mut app = app_dos_panes();
+        app.toggle_log();
+        assert_eq!(app.key_owner(), KeyOwner::Log, "abre y coge el teclado");
+        app.key_owner = KeyOwner::Panes;
+        app.toggle_log();
+        assert_eq!(app.key_owner(), KeyOwner::Log, "se lo lleva de vuelta");
+        app.toggle_log();
+        assert!(app.log_slot().is_none(), "y solo entonces cierra");
+    }
 
     /// #136: el árbol se abre anclado DONDE está el listado, no en la raíz del
     /// sistema: un árbol que colgara siempre de `/` enseñaría diez mil ramas

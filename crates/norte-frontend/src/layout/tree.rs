@@ -998,6 +998,74 @@ impl Node {
         None
     }
 
+    /// El mismo árbol con el hueco `id` VISIBLE: activa su pestaña en cada
+    /// grupo del camino (#329).
+    ///
+    /// Existe porque [`Self::slot_ids`] y [`Self::visible_slot_ids`] contestan
+    /// dos preguntas distintas —«¿existe?» y «¿se ve?»— y hay una tercera que
+    /// no tenía respuesta: «que se vea». Sin ella, quien encontraba un hueco
+    /// escondido solo podía mandarle el teclado, que es enfocar algo que el
+    /// lector no tiene delante.
+    ///
+    /// Recorre TODO el camino y no solo el grupo de dentro: activar la pestaña
+    /// interior dejando la exterior en otra deja el hueco igual de invisible, y
+    /// el llamante creería haberlo enseñado. Un hueco que ya se ve, o que no
+    /// está, devuelve el árbol igual — esto asegura un invariante, no ejecuta
+    /// un gesto.
+    ///
+    /// ```
+    /// use norte_frontend::layout::{KindId, Node, SlotId};
+    /// let arbol = Node::Tabs {
+    ///     children: vec![
+    ///         Node::slot(SlotId(1), KindId::browser()),
+    ///         Node::slot(SlotId(2), KindId::new("log")),
+    ///     ],
+    ///     active: 0,
+    /// };
+    /// assert!(!arbol.visible_slot_ids().contains(&SlotId(2)));
+    /// assert!(arbol.reveal(SlotId(2)).visible_slot_ids().contains(&SlotId(2)));
+    /// ```
+    #[must_use]
+    pub fn reveal(&self, id: SlotId) -> Self {
+        match self {
+            Self::Slot { .. } => self.clone(),
+            Self::Split {
+                dir,
+                children,
+                sizes,
+            } => Self::Split {
+                dir: *dir,
+                children: children
+                    .iter()
+                    .map(|c| {
+                        if c.contains(id) {
+                            c.reveal(id)
+                        } else {
+                            c.clone()
+                        }
+                    })
+                    .collect(),
+                sizes: sizes.clone(),
+            },
+            // El `active` de entrada no se lee a propósito: revelar no lo
+            // conserva ni lo mueve un paso, lo FIJA en la pestaña que contiene
+            // al hueco. Ese es todo el gesto.
+            Self::Tabs { children, .. } => {
+                let Some(pos) = children.iter().position(|c| c.contains(id)) else {
+                    return self.clone();
+                };
+                Self::Tabs {
+                    children: children
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| if i == pos { c.reveal(id) } else { c.clone() })
+                        .collect(),
+                    active: pos,
+                }
+            }
+        }
+    }
+
     /// Deja activa la pestaña `i` del grupo que contiene `id`.
     #[must_use]
     pub fn set_active_for(&self, id: SlotId, i: usize) -> Self {
@@ -1201,6 +1269,70 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Sacar a la luz un hueco escondido activa SU pestaña** (#329).
+    ///
+    /// La barra de paneles y los toggles preguntan «¿existe?» y actúan como si
+    /// hubieran preguntado «¿se ve?». Esto es la mitad que faltaba: poder
+    /// contestar «que se vea».
+    #[test]
+    fn revelar_activa_la_pestana_del_hueco() {
+        let arbol = Node::Tabs {
+            children: vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::new("log")),
+            ],
+            active: 0,
+        };
+        assert!(!arbol.visible_slot_ids().contains(&SlotId(2)));
+        let visto = arbol.reveal(SlotId(2));
+        assert!(visto.visible_slot_ids().contains(&SlotId(2)));
+        assert!(
+            !visto.visible_slot_ids().contains(&SlotId(1)),
+            "activar una pestaña esconde a su hermana: es lo que significa"
+        );
+    }
+
+    /// Y lo hace en CADA grupo del camino, no solo en el de dentro.
+    ///
+    /// Con grupos anidados, activar el interior y dejar el exterior en otra
+    /// pestaña deja el hueco tan invisible como estaba, y el llamante creería
+    /// haberlo enseñado.
+    #[test]
+    fn revelar_atraviesa_los_grupos_anidados() {
+        let dentro = Node::Tabs {
+            children: vec![
+                Node::slot(SlotId(3), KindId::browser()),
+                Node::slot(SlotId(4), KindId::new("log")),
+            ],
+            active: 0,
+        };
+        let arbol = Node::Tabs {
+            children: vec![Node::slot(SlotId(5), KindId::browser()), dentro],
+            active: 0,
+        };
+        assert!(!arbol.visible_slot_ids().contains(&SlotId(4)));
+        let visto = arbol.reveal(SlotId(4));
+        assert!(
+            visto.visible_slot_ids().contains(&SlotId(4)),
+            "el grupo de fuera seguía enseñando la otra pestaña"
+        );
+    }
+
+    /// Un hueco que ya se ve —o que no está— no mueve nada: revelar no es un
+    /// gesto, es un invariante que se asegura.
+    #[test]
+    fn revelar_lo_que_ya_se_ve_no_cambia_el_arbol() {
+        let arbol = Node::Tabs {
+            children: vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(2), KindId::new("log")),
+            ],
+            active: 1,
+        };
+        assert_eq!(arbol.reveal(SlotId(2)), arbol);
+        assert_eq!(arbol.reveal(SlotId(99)), arbol, "y uno que no está tampoco");
+    }
 
     /// Arrastrar el borde pone el hueco donde dice el puntero, y lo que uno
     /// gana lo pierde su vecino.

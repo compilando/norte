@@ -759,6 +759,27 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **A panel hidden behind a tab is no longer reported as open** (#329, TUI).
+  The panel bar asked the layout whether a slot *exists*, and a slot behind a
+  tab that is not the active one exists perfectly well while the reader cannot
+  see it. So the button lit up as open, its attention mark went quiet — the
+  log's warnings stopped marking the bar exactly when nobody had them in
+  front of them — and pressing it sent the keyboard to an invisible panel:
+  your keys stopped reaching what you were looking at, the bar said "focused",
+  and the next press closed a panel you had never seen.
+  The bar now derives its state from what is on screen, and the toggles gained
+  the answer they were missing. There were two questions — "does it exist?",
+  which is what stops a second copy being docked, and "is it visible?" — and
+  no way to say **"make it visible"**; finding a hidden panel, a toggle could
+  only send it the keyboard. `Node::reveal` activates its tab in every group
+  along the path, because activating the inner one while an outer group shows
+  a different tab leaves the panel just as hidden and the caller believing it
+  did something.
+  Revealing and focusing stay ONE press, so the three states hold as they were
+  (open and take the keyboard, take the keyboard, close) instead of growing a
+  fourth. Closing is now the only one of them gated on the panel being on
+  screen: it is the single action a reader cannot undo by looking.
+
 - **Reopening norte no longer leaves a remote panel silently dead** (bridge
   **47**). The daemon shuts down five minutes after its last client and the
   session secret lives only in its memory (ADR 0015), so reopening later means

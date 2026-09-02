@@ -220,9 +220,14 @@ fn kind_con_teclado(app: &App) -> Option<&'static str> {
 /// el ORDEN los decide `panelbar::buttons`, compartido con la ventana.
 #[must_use]
 pub fn panel_buttons(app: &App) -> Vec<norte_frontend::panelbar::PanelButton> {
+    // `visible_slot_ids` y no `slot_ids` desde #329: un hueco detrás de una
+    // pestaña que no está activa EXISTE, pero el lector no lo ve, y lo que un
+    // botón de esta barra promete es enseñárselo. Pintarlo abierto convertía la
+    // primera pulsación en «no pasa nada» y la segunda en cerrar algo que nunca
+    // estuvo delante.
     let abiertos: Vec<&str> = app
         .layout
-        .slot_ids()
+        .visible_slot_ids()
         .into_iter()
         .filter_map(|id| {
             app.layout
@@ -237,7 +242,10 @@ pub fn panel_buttons(app: &App) -> Vec<norte_frontend::panelbar::PanelButton> {
     // Con el panel abierto ya las estás viendo: la marca sobra, y además le
     // robaba el estilo al estado mientras durase la tarea. Mismo criterio que
     // el registro, aquí abajo.
-    if app.processes_slot().is_none() && !app.board.rows().is_empty() {
+    // La marca se calla con el panel A LA VISTA, no con el panel existente
+    // (#329): escondido en una pestaña no lo estás viendo, y callarla ahí
+    // apagaba el aviso justo en el caso en que sirve para algo.
+    if app.slot_of_kind_visible(crate::processes::KIND).is_none() && !app.board.rows().is_empty() {
         novedad.push(crate::processes::KIND);
     }
     // Errores o avisos en el registro que el lector no ha tenido delante: si
@@ -246,7 +254,7 @@ pub fn panel_buttons(app: &App) -> Vec<norte_frontend::panelbar::PanelButton> {
     // `has_at_or_above` y no `snapshot`: esto corre en cada frame, y clonar el
     // anillo entero para preguntar «¿hay algún aviso?» eran dos mil líneas con
     // sus dos `String` cada una, diez veces por segundo.
-    if app.log_slot().is_none()
+    if app.slot_of_kind_visible(crate::logview::KIND).is_none()
         && app
             .log_ring
             .as_ref()

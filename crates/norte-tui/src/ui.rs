@@ -13,7 +13,10 @@ use crate::app::{App, display_name};
 use crate::theme::TuiTheme;
 use norte_i18n::{t, ta};
 
-mod chrome;
+// `pub(crate)` y no privado desde #329: los tests de `app::layout` comprueban
+// que el BOTÓN dice lo mismo que la pantalla, y esa pareja —el estado del árbol
+// y lo que la barra deriva de él— es justo lo que se desincronizaba.
+pub(crate) mod chrome;
 mod compare;
 mod geometry;
 mod help;
