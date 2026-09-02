@@ -78,6 +78,24 @@ fn bajo_cota(target: &str, level: Level) -> bool {
 
 pub use crate::logline::{LogLevel, LogLine};
 
+/// Lo que había después de un cursor, y lo que ese cursor se perdió.
+///
+/// Existe para [`LogRing::since`], que a su vez existe para que un frontend
+/// pueda sondear sin repintar dos mil líneas por vuelta (ver
+/// [`LogRing::pushed`]): el cliente guarda `next` y en la siguiente vuelta
+/// pide desde ahí. `lost` es lo que hace ese sondeo honesto — sin él, un
+/// cliente lento que se queda atrás del anillo vería un salto en el
+/// contenido y no una explicación.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tail {
+    /// Las líneas posteriores al cursor, de la más vieja a la más nueva.
+    pub lines: Vec<LogLine>,
+    /// El cursor para la siguiente llamada.
+    pub next: u64,
+    /// Cuántas líneas cayeron del anillo antes de que este cursor las viera.
+    pub lost: u64,
+}
+
 /// De `tracing` al tipo que pinta el frontend.
 fn nivel_de(l: Level) -> LogLevel {
     match l {
@@ -239,6 +257,74 @@ impl LogRing {
     pub fn snapshot(&self) -> Vec<LogLine> {
         let r = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
         r.lines.iter().cloned().collect()
+    }
+
+    /// Lo que hay después de `cursor`, hasta `max` líneas.
+    ///
+    /// `cursor` no es un índice en `lines`: es la posición de
+    /// [`Self::pushed`] la última vez que quien pregunta miró. Eso es lo que
+    /// hace posible decir cuánto se perdió — un índice en el `VecDeque` ya no
+    /// significa nada en cuanto una línea vieja sale por el otro lado.
+    ///
+    /// La aritmética: `pushed` solo sube y `lines.len()` es lo que sobrevive,
+    /// así que la línea más vieja que queda tiene posición
+    /// `base = pushed - len`. Un cursor por debajo de `base` se perdió
+    /// `base - cursor` líneas, y es justo lo que [`Tail::lost`] cuenta — la
+    /// alternativa, callarlo, es la misma mentira que
+    /// [`Self::dropped`] existe para no contar. Un cursor por ENCIMA de
+    /// `pushed` —un daemon que se reinició bajo un cliente que conservó su
+    /// cursor de antes— no es un pánico ni un hueco: se trata como si fuera
+    /// `pushed`, sin nada nuevo y sin nada perdido, porque no hay manera de
+    /// saber qué había ahí y afirmar un hueco sería mentir en la otra
+    /// dirección.
+    ///
+    /// `base`, `pushed` y la copia de `lines` se leen bajo el MISMO candado:
+    /// leer `pushed` fuera de él permitiría que un escritor concurrente
+    /// metiera líneas entre una lectura y la otra, y `lost` saldría mal —
+    /// intermitente, que en este módulo es un bicho y no ruido.
+    ///
+    /// # Ejemplos
+    ///
+    /// ```
+    /// use norte_config::logring::{LogRing, ring_layer};
+    /// use tracing_subscriber::prelude::*;
+    ///
+    /// let anillo = LogRing::new(10);
+    /// let sub = tracing_subscriber::registry().with(ring_layer(&anillo));
+    /// tracing::subscriber::with_default(sub, || {
+    ///     tracing::info!("conectando");
+    /// });
+    ///
+    /// let tail = anillo.since(0, 10);
+    /// assert_eq!(tail.lines.len(), 1);
+    /// assert_eq!(tail.next, 1, "la próxima llamada pide desde aquí");
+    /// assert_eq!(tail.lost, 0, "nada se perdió: el cursor no iba rancio");
+    /// ```
+    #[must_use]
+    pub fn since(&self, cursor: u64, max: usize) -> Tail {
+        // `pushed` y `r.lines` bajo el MISMO candado (ver el rustdoc): leerlos
+        // por separado dejaría una ventana para que `push` metiera una línea
+        // entre las dos lecturas y `base` desencajara.
+        let r = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
+        let pushed = self.pushed.load(Ordering::Relaxed);
+        // Invariante: `pushed` nunca decrece y `lines.len()` es lo que
+        // sobrevivió de él, así que `pushed >= lines.len()` siempre — la resta
+        // no puede desbordar por abajo.
+        let base = pushed - r.lines.len() as u64;
+        let cursor = cursor.min(pushed);
+        let lost = base.saturating_sub(cursor);
+        // `cursor` ya está acotado a `pushed`, y `base <= pushed`, así que
+        // `cursor.max(base) >= base` siempre — la resta tampoco desborda.
+        let start = cursor.max(base) - base;
+        let lines: Vec<LogLine> = r
+            .lines
+            .iter()
+            .skip(start as usize)
+            .take(max)
+            .cloned()
+            .collect();
+        let next = base + start + lines.len() as u64;
+        Tail { lines, next, lost }
     }
 
     /// ¿Hay alguna línea de nivel `l` o peor?
@@ -655,6 +741,64 @@ mod tests {
             v.iter().any(|l| l.message.contains("reconectando")),
             "el aviso de un tercero SÍ tiene que entrar: {v:?}"
         );
+    }
+
+    /// El caso normal: pides desde donde te quedaste y te dan lo nuevo.
+    #[test]
+    fn desde_un_cursor_llegan_solo_las_nuevas() {
+        let anillo = LogRing::new(10);
+        for i in 0..4 {
+            anillo.push(linea(Level::INFO, "norte_core", &format!("l{i}")));
+        }
+        let t = anillo.since(2, 100);
+        assert_eq!(t.lines.len(), 2);
+        assert_eq!(t.lines[0].message, "l2");
+        assert_eq!(t.next, 4);
+        assert_eq!(t.lost, 0);
+    }
+
+    /// Un cursor de antes del desbordamiento DICE cuántas se perdió. Un hueco
+    /// silencioso miente sobre lo que hubo, que es el motivo de que `dropped`
+    /// exista.
+    #[test]
+    fn un_cursor_rancio_dice_cuantas_se_perdio() {
+        let anillo = LogRing::new(3);
+        for i in 0..7 {
+            anillo.push(linea(Level::INFO, "norte_core", &format!("l{i}")));
+        }
+        // El anillo guarda l4,l5,l6: base = 7 - 3 = 4.
+        let t = anillo.since(1, 100);
+        assert_eq!(t.lost, 3, "se perdió l1, l2 y l3");
+        assert_eq!(t.lines.len(), 3);
+        assert_eq!(t.lines[0].message, "l4");
+        assert_eq!(t.next, 7);
+    }
+
+    /// `max` acota la respuesta y el cursor avanza SOLO lo entregado: pedir de
+    /// nuevo continúa donde se cortó, sin saltarse nada.
+    #[test]
+    fn max_acota_y_el_cursor_no_se_adelanta() {
+        let anillo = LogRing::new(10);
+        for i in 0..5 {
+            anillo.push(linea(Level::INFO, "norte_core", &format!("l{i}")));
+        }
+        let t = anillo.since(0, 2);
+        assert_eq!(t.lines.len(), 2);
+        assert_eq!(t.next, 2);
+        let t2 = anillo.since(t.next, 2);
+        assert_eq!(t2.lines[0].message, "l2");
+    }
+
+    /// Un cursor del futuro —un daemon reiniciado bajo un cliente que guardó el
+    /// suyo— no es un pánico ni un hueco: no hay nada nuevo y no se perdió nada.
+    #[test]
+    fn un_cursor_del_futuro_no_inventa_nada() {
+        let anillo = LogRing::new(10);
+        anillo.push(linea(Level::INFO, "norte_core", "l0"));
+        let t = anillo.since(99, 100);
+        assert!(t.lines.is_empty());
+        assert_eq!(t.next, 1);
+        assert_eq!(t.lost, 0);
     }
 
     /// El mensaje va delante y los campos detrás, como en el fichero: las dos
