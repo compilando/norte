@@ -28,10 +28,10 @@
     "id": 1,
     "input": null,
     "input_hostile": false,
+    "input_secret": false,
     "overflow_note": "",
     "subject": null,
-    "title_key": "modal-delete-title",
-    "input_secret": false
+    "title_key": "modal-delete-title"
   },
   "placement_role_none": {
     "focus_index": 0,

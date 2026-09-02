@@ -300,13 +300,13 @@
         "id": 3,
         "input": "",
         "input_hostile": false,
+        "input_secret": false,
         "overflow_note": "… se enseñan 1 de 3",
         "subject": {
           "hostile": false,
           "text": "delete"
         },
-        "title_key": "modal-mkdir-title",
-        "input_secret": false
+        "title_key": "modal-mkdir-title"
       }
     ],
     "extensions": {
