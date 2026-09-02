@@ -2906,7 +2906,7 @@ mod tests {
     }
 
     /// Un daemon de mentira que hace el handshake completo —INITIALIZE,
-    /// TASK_LIST vacío, POLICY_PENDING con `METHOD_NOT_FOUND` (que el resync
+    /// `TASK_LIST` vacío, `POLICY_PENDING` con `METHOD_NOT_FOUND` (que el resync
     /// tolera, ver [`RemoteBackend::resync`])— y contesta cualquier OTRO
     /// método con lo que devuelva `responder`.
     ///
@@ -2982,6 +2982,27 @@ mod tests {
         })
     }
 
+    /// Respuesta que da [`stub_daemon_con`] cuando el método pedido no era
+    /// el que la prueba esperaba.
+    ///
+    /// A propósito NO es un `assert_eq!` dentro del closure: eso vive en la
+    /// tarea `tokio::spawn`eada de `stub_daemon_con`, cuyo `JoinHandle` nunca
+    /// se espera, así que un pánico ahí no tumba la prueba — solo se nota
+    /// indirectamente, como un error distinto en `establish()` o en la
+    /// llamada bajo prueba. Con un código de error DISTINGUIBLE de
+    /// `METHOD_NOT_FOUND`, un método inesperado hace fallar la propia
+    /// aserción que la prueba ya hace (`Error::Unsupported` no sale de
+    /// aquí, o el `expect("con anillo: ok")` revienta con el error real).
+    fn respuesta_de_metodo_inesperado(method: &str) -> norte_proto::wire::Response {
+        norte_proto::wire::Response::err(
+            None,
+            norte_proto::wire::RpcError::protocol(
+                norte_proto::wire::codes::INTERNAL_ERROR,
+                format!("stub: método inesperado {method}"),
+            ),
+        )
+    }
+
     /// El caso alcanzable de verdad (ver rustdoc de [`methods::LOG_TAIL`]):
     /// un daemon misma-versión SIN anillo —compilado sin la feature
     /// `logging`— contesta `METHOD_NOT_FOUND`, y el SDK lo entrega como
@@ -2992,14 +3013,17 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket = dir.path().join("stub.sock");
         let _stub = stub_daemon_con(&socket, |method| {
-            assert_eq!(method, norte_proto::methods::LOG_TAIL);
-            norte_proto::wire::Response::err(
-                None,
-                norte_proto::wire::RpcError::protocol(
-                    norte_proto::wire::codes::METHOD_NOT_FOUND,
-                    "sin anillo",
-                ),
-            )
+            if method == norte_proto::methods::LOG_TAIL {
+                norte_proto::wire::Response::err(
+                    None,
+                    norte_proto::wire::RpcError::protocol(
+                        norte_proto::wire::codes::METHOD_NOT_FOUND,
+                        "sin anillo",
+                    ),
+                )
+            } else {
+                respuesta_de_metodo_inesperado(method)
+            }
         });
 
         let inner = test_inner_en(socket);
@@ -3021,23 +3045,26 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket = dir.path().join("stub.sock");
         let _stub = stub_daemon_con(&socket, |method| {
-            assert_eq!(method, norte_proto::methods::LOG_TAIL);
-            norte_proto::wire::Response::ok(
-                norte_proto::wire::RequestId::Num(0),
-                serde_json::to_value(methods::LogTailResult {
-                    lines: vec![methods::LogLine {
-                        epoch_ms: 1_756_000_000_000,
+            if method == norte_proto::methods::LOG_TAIL {
+                norte_proto::wire::Response::ok(
+                    norte_proto::wire::RequestId::Num(0),
+                    serde_json::to_value(methods::LogTailResult {
+                        lines: vec![methods::LogLine {
+                            epoch_ms: 1_756_000_000_000,
+                            level: "info".into(),
+                            target: "norte_core::daemon".into(),
+                            message: "escuchando".into(),
+                        }],
+                        next: 1,
+                        lost: 0,
                         level: "info".into(),
-                        target: "norte_core::daemon".into(),
-                        message: "escuchando".into(),
-                    }],
-                    next: 1,
-                    lost: 0,
-                    level: "info".into(),
-                    capacity: 2000,
-                })
-                .expect("json"),
-            )
+                        capacity: 2000,
+                    })
+                    .expect("json"),
+                )
+            } else {
+                respuesta_de_metodo_inesperado(method)
+            }
         });
 
         let inner = test_inner_en(socket);
@@ -3056,14 +3083,17 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket = dir.path().join("stub.sock");
         let _stub = stub_daemon_con(&socket, |method| {
-            assert_eq!(method, norte_proto::methods::LOG_LEVEL);
-            norte_proto::wire::Response::err(
-                None,
-                norte_proto::wire::RpcError::protocol(
-                    norte_proto::wire::codes::METHOD_NOT_FOUND,
-                    "sin anillo",
-                ),
-            )
+            if method == norte_proto::methods::LOG_LEVEL {
+                norte_proto::wire::Response::err(
+                    None,
+                    norte_proto::wire::RpcError::protocol(
+                        norte_proto::wire::codes::METHOD_NOT_FOUND,
+                        "sin anillo",
+                    ),
+                )
+            } else {
+                respuesta_de_metodo_inesperado(method)
+            }
         });
 
         let inner = test_inner_en(socket);
@@ -3084,14 +3114,17 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket = dir.path().join("stub.sock");
         let _stub = stub_daemon_con(&socket, |method| {
-            assert_eq!(method, norte_proto::methods::LOG_LEVEL);
-            norte_proto::wire::Response::ok(
-                norte_proto::wire::RequestId::Num(0),
-                serde_json::to_value(methods::LogLevelResult {
-                    level: "debug".into(),
-                })
-                .expect("json"),
-            )
+            if method == norte_proto::methods::LOG_LEVEL {
+                norte_proto::wire::Response::ok(
+                    norte_proto::wire::RequestId::Num(0),
+                    serde_json::to_value(methods::LogLevelResult {
+                        level: "debug".into(),
+                    })
+                    .expect("json"),
+                )
+            } else {
+                respuesta_de_metodo_inesperado(method)
+            }
         });
 
         let inner = test_inner_en(socket);

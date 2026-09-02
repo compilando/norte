@@ -332,10 +332,15 @@ impl LogRing {
         // `cursor` ya está acotado a `pushed`, y `base <= pushed`, así que
         // `cursor.max(base) >= base` siempre — la resta tampoco desborda.
         let start = cursor.max(base) - base;
+        // `start` no cabe siempre en `usize` en un objetivo de 32 bits; el
+        // `unwrap_or(usize::MAX)` es seguro porque el vector real jamás
+        // supera `usize::MAX` elementos, así que un `start` que no cabe ya
+        // es mayor que `r.lines.len()` — saltárselo entero da la misma lista
+        // vacía que saltarse el `start` real habría dado.
         let lines: Vec<LogLine> = r
             .lines
             .iter()
-            .skip(start as usize)
+            .skip(usize::try_from(start).unwrap_or(usize::MAX))
             .take(max)
             .cloned()
             .collect();

@@ -740,6 +740,14 @@ impl Daemon {
     /// este bind lo AVISA por `warn!` y sigue (#166). No se rechaza porque
     /// «permisivo a propósito» es una configuración legítima; lo que no puede
     /// ser es indistinguible de un olvido.
+    // Secuencia de arranque estrictamente lineal (socket → plugins → sesión
+    // → `Shared` → routers), un paso por bloque — mismo criterio que
+    // `dispatch`/`dispatch_fs_task` en este mismo fichero: trocearla en
+    // sub-funciones no reduciría la complejidad real del bind, solo la
+    // escondería detrás de una indirección y de más parámetros cruzando la
+    // frontera. Cruzó las 100 líneas cuando 0.65.0 montó el anillo de
+    // registro (`log_ring`) en `Shared` (#328, ADR 0092).
+    #[allow(clippy::too_many_lines)]
     #[tracing::instrument(skip(engine, scopes, approvals, cfg))]
     pub async fn bind_with_policy(
         engine: Arc<Engine>,
