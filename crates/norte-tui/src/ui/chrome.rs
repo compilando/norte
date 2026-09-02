@@ -219,16 +219,22 @@ fn kind_con_teclado(app: &App) -> Option<&'static str> {
 /// Vive aquí y no en `norte-frontend` la parte de RECOGER el estado; el QUÉ y
 /// el ORDEN los decide `panelbar::buttons`, compartido con la ventana.
 #[must_use]
-pub fn panel_buttons(app: &App) -> Vec<norte_frontend::panelbar::PanelButton> {
-    // `visible_slot_ids` y no `slot_ids` desde #329: un hueco detrás de una
-    // pestaña que no está activa EXISTE, pero el lector no lo ve, y lo que un
-    // botón de esta barra promete es enseñárselo. Pintarlo abierto convertía la
-    // primera pulsación en «no pasa nada» y la segunda en cerrar algo que nunca
-    // estuvo delante.
-    let abiertos: Vec<&str> = app
-        .layout
-        .visible_slot_ids()
-        .into_iter()
+pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::PanelButton> {
+    // Del REPARTO y no del árbol (#331). Fue en dos pasos, y los dos hacían
+    // falta: #329 cambió `slot_ids` por `visible_slot_ids` porque un hueco
+    // detrás de una pestaña inactiva existe y no se ve; pero `visible_slot_ids`
+    // contesta qué pestaña está activa, no qué CABE. Un panel cuya pestaña sí
+    // está activa y que el reparto descarta por falta de sitio se seguía
+    // pintando abierto. Las colocaciones son literalmente lo que se pinta, así
+    // que cubren las dos preguntas de una vez.
+    //
+    // Cuesta un reparto más por frame, como `tab_zones` y sus vecinas: es el
+    // precio de que el cromo diga la verdad sobre un cuerpo que ya se repartió.
+    let res = crate::ui::geometry::resolved_frame(app, area);
+    let abiertos: Vec<&str> = res
+        .placements
+        .iter()
+        .map(|(id, _)| *id)
         .filter_map(|id| {
             app.layout
                 .kind_of(id)
@@ -284,7 +290,7 @@ pub fn panel_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     };
     let mut x = bar.x;
     let mut out = Vec::new();
-    for b in panel_buttons(app) {
+    for b in panel_buttons(app, area) {
         let fin = x.saturating_add(ANCHO_BOTON);
         // Un botón que no cabe ENTERO no se pinta ni se puede pulsar: media
         // letra no es un botón. Mismo criterio que los títulos del menú.
@@ -311,7 +317,7 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
     clear_themed(frame, bar, &app.theme);
     let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
     let mut ancho = 0_u16;
-    for b in panel_buttons(app) {
+    for b in panel_buttons(app, frame.area()) {
         if ancho.saturating_add(ANCHO_BOTON) > bar.width {
             break;
         }

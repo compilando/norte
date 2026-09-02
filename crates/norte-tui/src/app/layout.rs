@@ -229,6 +229,17 @@ impl App {
     }
 
     /// ¿Tiene el lector este hueco delante?
+    ///
+    /// Responde por PESTAÑAS, no por sitio, y esa asimetría con la barra es
+    /// deliberada (#331): la barra deriva de las colocaciones del reparto —sabe
+    /// qué cabe—, y aquí no se puede, porque `App` no guarda el área pintada.
+    /// Un toggle razona sobre el árbol, que es lo único que tiene.
+    ///
+    /// Consecuencia, escrita para que nadie la descubra de nuevo: un panel cuya
+    /// pestaña está activa pero que el reparto descarta por falta de sitio se
+    /// pinta cerrado y esta tecla lo cierra. Arreglarlo pediría meter el último
+    /// área en el estado —un dato de presentación viviendo donde no vive—, que
+    /// es una decisión aparte y probablemente peor que la asimetría.
     fn se_ve(&self, id: norte_frontend::layout::SlotId) -> bool {
         self.layout.visible_slot_ids().contains(&id)
     }
@@ -1057,6 +1068,15 @@ mod tests {
     use super::*;
     use crate::app::testutil::*;
 
+    /// Una pantalla con sitio de sobra, para cuando lo que se prueba no es la
+    /// falta de sitio.
+    const PANTALLA: ratatui::layout::Rect = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 110,
+        height: 30,
+    };
+
     /// Un árbol con el registro escondido en la pestaña que no está activa.
     fn app_con_registro_escondido() -> App {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
@@ -1088,11 +1108,60 @@ mod tests {
         use norte_frontend::panelbar::PanelState;
 
         let app = app_con_registro_escondido();
-        let boton = crate::ui::panel_buttons(&app)
+        let boton = crate::ui::panel_buttons(&app, PANTALLA)
             .into_iter()
             .find(|b| b.kind == crate::logview::KIND)
             .expect("el registro tiene botón");
         assert_eq!(boton.state, PanelState::Closed);
+    }
+
+    /// Un panel que el reparto descarta por falta de sitio tampoco está
+    /// abierto (#331).
+    ///
+    /// `visible_slot_ids` contesta qué pestaña está activa, no qué CABE. El
+    /// MISMO árbol, con el panel en la pestaña activa, se lee distinto en dos
+    /// pantallas — y eso es exactamente lo que hay que ver, porque prueba que
+    /// el botón mira el reparto y no el árbol.
+    #[test]
+    fn un_panel_que_no_cabe_se_pinta_cerrado() {
+        use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
+        use norte_frontend::panelbar::PanelState;
+
+        let mut app = app_dos_panes();
+        // En horizontal, porque el caso que DESCARTA un hueco es el colapso:
+        // dos hermanos que se disputan el mismo eje y cuyos mínimos no caben.
+        // Un `Fixed` no vale para probar esto — se recorta, no se cae.
+        app.set_layout(Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
+            children: vec![
+                Node::slot(SlotId(40), KindId::browser()),
+                Node::slot(SlotId(41), KindId::new(crate::logview::KIND)),
+            ],
+        });
+
+        let estado = |app: &App, ancho: u16| {
+            crate::ui::panel_buttons(
+                app,
+                ratatui::layout::Rect {
+                    x: 0,
+                    y: 0,
+                    width: ancho,
+                    height: 30,
+                },
+            )
+            .into_iter()
+            .find(|b| b.kind == crate::logview::KIND)
+            .expect("el registro tiene botón")
+            .state
+        };
+
+        assert_eq!(estado(&app, 110), PanelState::Open, "con sitio, abierto");
+        assert_eq!(
+            estado(&app, 24),
+            PanelState::Closed,
+            "el reparto lo descartó, así que el botón no puede decir que sí"
+        );
     }
 
     /// Y pulsarlo lo SACA A LA LUZ y se lleva el teclado, en vez de mandar el
@@ -1231,7 +1300,7 @@ mod tests {
                 },
             ],
         });
-        let boton = crate::ui::panel_buttons(&app)
+        let boton = crate::ui::panel_buttons(&app, PANTALLA)
             .into_iter()
             .find(|b| b.kind == crate::processes::KIND)
             .expect("procesos tiene botón");
@@ -1275,7 +1344,7 @@ mod tests {
         });
         app.log_ring = Some(anillo);
 
-        let boton = crate::ui::panel_buttons(&app)
+        let boton = crate::ui::panel_buttons(&app, PANTALLA)
             .into_iter()
             .find(|b| b.kind == crate::logview::KIND)
             .expect("el registro tiene botón");
