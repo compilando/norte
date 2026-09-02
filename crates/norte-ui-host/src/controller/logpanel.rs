@@ -172,14 +172,20 @@ impl Estado {
         crate::dto::LogSlotView {
             slot_id: slot,
             lines: ventana.collect(),
-            // El nivel del DAEMON cuando es lo que se está leyendo: es global
-            // a todos sus clientes y solo sube, así que enseñar el que se pidió
-            // sería enseñar una petición y llamarla estado. `source_note` dice
-            // de quién es.
-            level: match (fuente, &self.log_remoto.nivel) {
-                (LogSource::Daemon, Some(n)) => clamp_display(n.clone()),
-                _ => self.log_panel.level().wire().to_owned(),
-            },
+            // El que se ENSEÑA, siempre, en todas las fuentes — y por tanto el
+            // que los botones controlan.
+            //
+            // Enseñar aquí el que el daemon contestó era un error de dos
+            // cabezas: el filtro de `visibles` sigue siendo el del panel, así
+            // que con el daemon a `trace` y el panel a `info` la cabecera
+            // marcaba `trace` mientras cada línea `debug` del daemon llegaba
+            // por el cable y se tiraba en silencio —justo el «no hay líneas de
+            // DEBUG es indistinguible de no capturarlas» que el rustdoc de
+            // `LogTailResult::level` existe para impedir—; y pulsar `info` no
+            // movía la marca, porque el daemon nunca baja, así que el mando se
+            // leía como muerto. El nivel del daemon se dice en `capturing`,
+            // que es el sitio que ya significa «se recoge más de lo que se ve».
+            level: self.log_panel.level().wire().to_owned(),
             // El filtro lo TECLEA el lector, así que se pinta como cualquier
             // otro texto de fuera: enmascarado y acotado.
             filter: clamp_display(
@@ -188,42 +194,8 @@ impl Estado {
             following: self.log_panel.following(),
             total: visibles.len() as u64,
             first_visible: desde as u64,
-            // Las de los DOS anillos, sumadas: lo que se enseña es una lista
-            // sola, y un hueco es un hueco venga de donde venga. Solo se
-            // cuentan las del daemon cuando el daemon es una de las fuentes
-            // que se están leyendo — decir que se perdieron líneas de un
-            // registro que no se está mirando sería una alarma sobre nada.
-            dropped_note: match self
-                .log_ring
-                .as_ref()
-                .map_or(0, norte_config::logring::LogRing::dropped)
-                .saturating_add(if fuente == LogSource::Window {
-                    0
-                } else {
-                    self.log_remoto.perdidas
-                }) {
-                0 => String::new(),
-                n => clamp_display(norte_i18n::ta_in(
-                    self.lang,
-                    "log-dropped",
-                    &[("n", &n.to_string())],
-                )),
-            },
-            // Solo cuando se CAPTURA más de lo que se enseña: decir «capturando
-            // info» sobre un panel que enseña info sería ruido, y el ruido es
-            // lo que hace que se deje de leer la línea que sí importa.
-            capturing: match self
-                .log_ring
-                .as_ref()
-                .map(norte_config::logring::LogRing::level)
-            {
-                Some(cap) if cap > self.log_panel.level() => clamp_display(norte_i18n::ta_in(
-                    self.lang,
-                    "log-capturing",
-                    &[("level", cap.wire())],
-                )),
-                _ => String::new(),
-            },
+            dropped_note: self.nota_de_descartes(fuente),
+            capturing: self.nota_de_captura(fuente),
             source: clamp_display(norte_i18n::t_in(
                 self.lang,
                 match fuente {
@@ -258,33 +230,135 @@ impl Estado {
 
     /// La fuente que de verdad se está enseñando.
     ///
-    /// La preferencia se guarda tal cual (`LogPanel::source`), pero sin un
-    /// segundo anillo al otro lado no hay nada que mezclar: `Both` se colapsa
-    /// a `Window`, que es lo que el lector está mirando. El panel informa de
-    /// lo que hay, no de lo que se pidió.
+    /// La preferencia se guarda tal cual (`LogPanel::source`), pero una fuente
+    /// que no existe no se puede enseñar, y el panel informa de lo que hay y no
+    /// de lo que se pidió. Se colapsa en las DOS direcciones, que son la misma
+    /// regla vista desde cada orilla:
+    ///
+    /// - sin un anillo al otro lado (un daemon sin la feature `logging`, o el
+    ///   caso embebido) todo cae a `Window`;
+    /// - sin anillo en ESTE proceso —nadie montó la capa— no hay nada local que
+    ///   mezclar, así que todo cae a `Daemon`. Sin esto, un `Both` sobre un
+    ///   proceso sin anillo se anunciaba como «de la ventana y del daemon»
+    ///   siendo la lista entera del daemon.
+    ///
+    /// Con los dos anillos ausentes queda `Window`, que es donde vive la frase
+    /// de #326: no hay registro EN MEMORIA que leer, y eso no es lo mismo que
+    /// «no se registra nada».
     fn fuente_efectiva(&self) -> LogSource {
-        if self.log_remoto.servicio == Servicio::Sirve {
-            self.log_panel.source()
-        } else {
-            LogSource::Window
+        match (
+            self.log_remoto.servicio == Servicio::Sirve,
+            self.log_ring.is_some(),
+        ) {
+            (true, true) => self.log_panel.source(),
+            (true, false) => LogSource::Daemon,
+            (false, _) => LogSource::Window,
         }
     }
 
     /// Lo que hay que decir sobre la fuente. Vacío = nada que decir.
     ///
     /// Dos frases excluyentes, y las dos existen para que el panel no mienta
-    /// por omisión: que el daemon no tiene registro que servir —o el lector
-    /// creería que la mitad interesante simplemente no ocurre— y de quién es
-    /// el nivel que hay al lado, cuando lo que se lee es el del daemon.
+    /// por omisión. Que el daemon no tiene registro que servir, o el lector
+    /// creería que la mitad interesante simplemente no ocurre. Y **de quién es
+    /// el nivel**, siempre que el daemon sea una de las fuentes que se leen —
+    /// no solo cuando es la única: en `Both`, que es lo que trae el panel al
+    /// abrirse, pulsar «traza» sube un anillo GLOBAL al daemon, compartido con
+    /// todos sus clientes, que no vuelve a bajar y que cerrar este panel no
+    /// baja. Callarlo en el camino corriente dejaba esa decisión sin anunciar.
     fn nota_de_fuente(&self, fuente: LogSource) -> String {
         let clave = if self.log_remoto.servicio == Servicio::SinAnillo {
             "log-source-unsupported"
-        } else if fuente == LogSource::Daemon {
-            "log-source-daemon-level"
-        } else {
+        } else if fuente == LogSource::Window {
             return String::new();
+        } else {
+            "log-source-daemon-level"
         };
         clamp_display(norte_i18n::t_in(self.lang, clave))
+    }
+
+    /// Qué anillo está guardando MÁS de lo que se enseña, y cuál.
+    ///
+    /// Solo cuando se captura de más: decir «capturando info» sobre un panel
+    /// que enseña info sería ruido, y el ruido es lo que hace que se deje de
+    /// leer la línea que sí importa.
+    ///
+    /// Con una sola fuente la frase no nombra el anillo —no hay otro con el
+    /// que confundirlo—; con las dos, cada parte dice de quién habla. Que aquí
+    /// aparezca el nivel del daemon es lo que hace legible la regla entera: el
+    /// suyo es global a sus clientes y solo sube, así que puede estar muy por
+    /// encima del que este panel enseña, y ese hueco es exactamente lo que
+    /// esta frase existe para no callar.
+    fn nota_de_captura(&self, fuente: LogSource) -> String {
+        let ensena = self.log_panel.level();
+        let local = self
+            .log_ring
+            .as_ref()
+            .map(norte_config::logring::LogRing::level)
+            .filter(|cap| *cap > ensena);
+        let remoto = self
+            .log_remoto
+            .nivel
+            .as_deref()
+            .and_then(LogLevel::from_wire)
+            .filter(|cap| *cap > ensena);
+        let frase =
+            |clave, cap: LogLevel| norte_i18n::ta_in(self.lang, clave, &[("level", cap.wire())]);
+        let partes: Vec<String> = match fuente {
+            LogSource::Window => local
+                .map(|c| frase("log-capturing", c))
+                .into_iter()
+                .collect(),
+            LogSource::Daemon => remoto
+                .map(|c| frase("log-capturing-daemon", c))
+                .into_iter()
+                .collect(),
+            LogSource::Both => local
+                .map(|c| frase("log-capturing-window", c))
+                .into_iter()
+                .chain(remoto.map(|c| frase("log-capturing-daemon", c)))
+                .collect(),
+        };
+        clamp_display(partes.join(" · "))
+    }
+
+    /// Las líneas que se han perdido, por anillo y DICIENDO de cuál.
+    ///
+    /// Dos números y no uno, porque no significan lo mismo y no viven lo
+    /// mismo: el del anillo local cuenta lo que ha evacuado desde que arrancó
+    /// el proceso y no se reinicia nunca; el del daemon cuenta lo que ESTA
+    /// apertura del panel se perdió, y vuelve a cero al reabrirlo. Sumarlos
+    /// daba un número que no era ninguna de las dos cosas.
+    ///
+    /// De cada anillo solo se habla si se está leyendo: avisar de un hueco en
+    /// un registro que no está en pantalla es una alarma sobre nada.
+    fn nota_de_descartes(&self, fuente: LogSource) -> String {
+        let mut partes: Vec<String> = Vec::new();
+        let locales = self
+            .log_ring
+            .as_ref()
+            .map_or(0, norte_config::logring::LogRing::dropped);
+        if locales > 0 && fuente != LogSource::Daemon {
+            partes.push(norte_i18n::ta_in(
+                self.lang,
+                // Sin nombrar el anillo cuando es el único que se lee: es la
+                // misma frase que la TUI, que nunca tiene dos.
+                if fuente == LogSource::Window {
+                    "log-dropped"
+                } else {
+                    "log-dropped-window"
+                },
+                &[("n", &locales.to_string())],
+            ));
+        }
+        if self.log_remoto.perdidas > 0 && fuente != LogSource::Window {
+            partes.push(norte_i18n::ta_in(
+                self.lang,
+                "log-missed-daemon",
+                &[("n", &self.log_remoto.perdidas.to_string())],
+            ));
+        }
+        clamp_display(partes.join(" · "))
     }
 
     /// Una línea, saneada.
@@ -556,9 +630,20 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
-        if self.huecos_de_registro().is_empty() || self.log_remoto.en_vuelo {
+        if self.huecos_de_registro().is_empty()
             // Con una en vuelo no se encola otra: un daemon que tardara más de
             // medio segundo acumularía una petición por tic para siempre.
+            || self.log_remoto.en_vuelo
+            // Y a un daemon que ya ha dicho que no tiene registro no se le
+            // vuelve a preguntar. La negativa NO puede cambiar mientras ese
+            // daemon viva: sale de una feature de compilación o de un montaje
+            // que falló al arrancar. Seguir sondeando eran dos RPC por segundo,
+            // para siempre, por una respuesta que no puede ser otra.
+            //
+            // Es asimétrico a propósito. Lo POSITIVO sí hay que seguir
+            // pidiéndolo —el registro crece— y por eso `Sirve` no corta nada.
+            || self.log_remoto.servicio == Servicio::SinAnillo
+        {
             return;
         }
         self.log_remoto.en_vuelo = true;

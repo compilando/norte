@@ -685,6 +685,15 @@ fn disposicion_de_referencia() -> LayoutView {
                 role: None,
                 focus_index: 5,
             },
+            SlotPlacement {
+                slot_id: 10,
+                x: 24,
+                y: 36,
+                width: 96,
+                height: 2,
+                role: None,
+                focus_index: 6,
+            },
         ],
     }
 }
@@ -718,8 +727,8 @@ fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
 }
 
 /// Los huecos de la foto de referencia: un listado, la hoja de atributos, el
-/// panel de procesos, la barra de sitios, el árbol y uno de un tipo que este
-/// host no proyecta.
+/// panel de procesos, la barra de sitios, el árbol, el panel de registro con
+/// sus dos fuentes y uno de un tipo que este host no proyecta.
 ///
 /// Larga a propósito, y crece con cada `SlotView` nueva: es UNA lista de
 /// literales sin lógica dentro, y repartirla escondería justo lo que este
@@ -850,6 +859,50 @@ fn slots_de_referencia() -> Vec<SlotView> {
             ],
             cursor: 1,
             generation: 3,
+        })),
+        // El panel de registro, con las DOS fuentes a la vista (#328, puente
+        // 48). La combinación no es decorativa: es la única en la que se ven
+        // a la vez el selector (`sources_available`), la fuente efectiva, la
+        // frase que dice de quién es el nivel, una línea de cada proceso, y
+        // las dos cuentas de pérdidas —que son números distintos y por eso no
+        // se suman—. Sin ella, los cuatro campos que el puente 48 añadió no
+        // los clavaba nada y el renderer podía separarse en silencio.
+        SlotView::Log(Box::new(norte_ui_host::dto::LogSlotView {
+            slot_id: 10,
+            lines: vec![
+                norte_ui_host::dto::LogLineView {
+                    time: "12:00:00".to_owned(),
+                    level: "error".to_owned(),
+                    target: "norte_core::connect".to_owned(),
+                    message: "no se pudo conectar".to_owned(),
+                    hostile: false,
+                    source: "daemon".to_owned(),
+                },
+                norte_ui_host::dto::LogLineView {
+                    time: "12:00:01".to_owned(),
+                    level: "info".to_owned(),
+                    target: "norte_ui_host".to_owned(),
+                    // Con el reemplazo canónico y MARCADA: un mensaje de
+                    // registro puede llevar dentro un nombre que alguien
+                    // eligió.
+                    message: "abriendo caf\u{fffd}.txt".to_owned(),
+                    hostile: true,
+                    source: "window".to_owned(),
+                },
+            ],
+            // El que se ENSEÑA, siempre: es el que los botones controlan.
+            level: "info".to_owned(),
+            filter: "connect".to_owned(),
+            following: false,
+            total: 2,
+            first_visible: 0,
+            dropped_note: "la ventana descartó 17 líneas viejas · te perdiste 4 líneas del daemon"
+                .to_owned(),
+            capturing: "la ventana captura debug · el daemon captura trace".to_owned(),
+            source: "de la ventana y del daemon".to_owned(),
+            source_mode: "both".to_owned(),
+            sources_available: true,
+            source_note: "el nivel es el del daemon: global a sus clientes y solo sube".to_owned(),
         })),
         SlotView::Unsupported {
             slot_id: 2,

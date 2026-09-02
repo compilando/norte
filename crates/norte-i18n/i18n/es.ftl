@@ -1821,9 +1821,18 @@ log-keys = e/w/i/d/t nivel · / filtrar · Fin al final · Esc devuelve el tecla
 log-empty = nada que enseñar con este filtro
 log-no-ring = sin registro instalado en este proceso
 log-dropped = { $n } líneas viejas descartadas
+# Con DOS anillos en pantalla (#328) cada cuenta dice de cuál habla: la de la
+# ventana cuenta lo evacuado desde que arrancó el proceso, la del daemon lo que
+# esta apertura del panel se perdió. Son números distintos y no se suman.
+log-dropped-window = la ventana descartó { $n } líneas viejas
+log-missed-daemon = te perdiste { $n } líneas del daemon
 # Cuando el anillo captura MÁS de lo que se enseña: subirlo no baja solo, así
 # que el proceso sigue pagando ese nivel hasta que se cierre el panel.
 log-capturing = capturando { $level }
+# Y con los dos a la vista hay que decir de quién es cada nivel: el del daemon
+# es global a todos sus clientes, no baja nunca y cerrar este panel no lo toca.
+log-capturing-window = la ventana captura { $level }
+log-capturing-daemon = el daemon captura { $level }
 task-failed = falló
 metadata-title = Detalles
 metadata-empty = nada bajo el cursor

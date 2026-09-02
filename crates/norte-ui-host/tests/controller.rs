@@ -11210,6 +11210,19 @@ async fn host_con_backend_y_registro(
     // A DEBUG para que las cinco quepan; el panel enseña hasta INFO al abrirse,
     // que es lo que hace interesante el test del filtro por nivel.
     anillo.set_level(norte_config::logline::LogLevel::Debug);
+    let h = host_con_backend_y_anillo(backend, Some(anillo.clone())).await;
+    (h, anillo)
+}
+
+/// Y lo mismo SIN anillo en este proceso: nadie montó la capa de `tracing`.
+///
+/// No es un caso de laboratorio —es lo que ve la ventana cuando el anillo no
+/// se instala— y es el que decide si «los dos» puede anunciarse sobre una
+/// lista que es entera del daemon.
+async fn host_con_backend_y_anillo(
+    backend: Arc<Falso>,
+    anillo: Option<norte_config::logring::LogRing>,
+) -> UiHost {
     let h = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
@@ -11226,7 +11239,7 @@ async fn host_con_backend_y_registro(
         profile: None,
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
-        log_ring: Some(anillo.clone()),
+        log_ring: anillo,
     })
     .await
     .expect("arranca")
@@ -11235,7 +11248,7 @@ async fn host_con_backend_y_registro(
     // es como lo abre una persona. Y así el test cubre TAMBIÉN que
     // `layout.log` esté atado y llegue al efecto.
     tecla_registro(&h).await;
-    (h, anillo)
+    h
 }
 
 /// La tecla que abre el registro — y, pulsada otra vez, lo cierra.
@@ -11636,6 +11649,40 @@ async fn con_daemon_se_mezclan_las_dos_fuentes() {
         .find(|l| l.message.contains("de la ventana"))
         .expect("está");
     assert_eq!(de_la_ventana.source, "window");
+    // Y en «los dos», que es como nace el panel, YA se dice de quién es el
+    // nivel: es el camino corriente, y por él pulsar «traza» sube un anillo
+    // global al daemon que no vuelve a bajar y que cerrar este panel no baja.
+    // Decirlo solo con el daemon como única fuente dejaba sin anunciar
+    // justamente la vez que más pasa.
+    assert_eq!(
+        v.source_note,
+        norte_i18n::t_in(norte_i18n::Lang::Es, "log-source-daemon-level"),
+        "el camino corriente también avisa de qué nivel se está tocando"
+    );
+}
+
+/// Sin anillo en ESTA ventana, la fuente cae al DAEMON.
+///
+/// El espejo del caso embebido: allí falta el anillo de enfrente y todo cae a
+/// `Window`; aquí falta el de aquí. Sin esto, un `Both` sobre un proceso que
+/// nunca montó la capa se anunciaba como «de la ventana y del daemon» siendo
+/// la lista entera del daemon.
+#[tokio::test]
+async fn sin_anillo_local_la_fuente_cae_al_daemon() {
+    let backend = Falso::con(&["a"]);
+    backend.responde_log_tail(vec![linea_wire(20, "info", "norte_core", "del daemon")], 1);
+    let host = host_con_backend_y_anillo(Arc::clone(&backend), None).await;
+    let v = foto_registro(&host).await;
+    assert_eq!(v.source_mode, "daemon");
+    assert_eq!(
+        v.source,
+        norte_i18n::t_in(norte_i18n::Lang::Es, "log-source-daemon")
+    );
+    assert!(
+        v.lines.iter().any(|l| l.message.contains("del daemon")),
+        "y se enseñan las suyas: {:?}",
+        v.lines
+    );
 }
 
 /// Un daemon que no sabe servir su registro NO deja el panel mudo: vuelve al
@@ -11648,28 +11695,47 @@ async fn un_daemon_sin_registro_se_dice_en_el_panel() {
     backend.log_tail_no_soportado();
     let (host, _anillo) = host_con_backend_y_registro(Arc::clone(&backend)).await;
     let v = foto_registro(&host).await;
-    assert!(
-        !backend.cursores_pedidos().is_empty(),
-        "se llegó a preguntar"
-    );
+    let preguntas = backend.cursores_pedidos().len();
+    assert!(preguntas > 0, "se llegó a preguntar");
     assert_eq!(v.source_mode, "window");
     assert!(!v.source_note.is_empty(), "tiene que decir por qué");
+
+    // Y no se le vuelve a preguntar. Esa negativa no puede cambiar mientras
+    // ese daemon viva —sale de una feature de compilación o de un montaje que
+    // falló al arrancar—, así que seguir sondeando eran dos RPC por segundo,
+    // para siempre, por una respuesta que no puede ser otra.
+    sondear(&host).await;
+    sondear(&host).await;
+    assert_eq!(
+        backend.cursores_pedidos().len(),
+        preguntas,
+        "a un daemon sin registro no se le repregunta"
+    );
 }
 
-/// Subir el nivel con el daemon como fuente se lo pide AL DAEMON: el cliente
-/// no aplica niveles, y el nivel que se enseña es el que el daemon contestó.
+/// El nivel se le pide AL DAEMON, pero el que la cabecera marca es el que se
+/// ENSEÑA — y el del daemon se dice aparte, como captura de más.
+///
+/// Las dos mitades son la misma trampa vista por sus dos caras. El cliente no
+/// aplica niveles: la cota que impide que ahí dentro aparezca una contraseña
+/// vive en el proceso que tiene el anillo, así que pedir es todo lo que se
+/// puede hacer. Y lo que la cabecera marca tiene que seguir siendo lo que se
+/// enseña, porque es lo que FILTRA la lista y lo que los botones controlan:
+/// marcar ahí el nivel del daemon —que es global a sus clientes, que otro pudo
+/// subir y que nunca baja— dejaba `trace` encendido mientras el panel tiraba en
+/// silencio cada línea `debug` que llegaba por el cable, y pulsar `info` no
+/// movía la marca. Un mando que no mueve lo que marca se lee como roto.
 #[tokio::test]
-async fn subir_el_nivel_con_fuente_daemon_va_al_daemon() {
+async fn el_nivel_del_daemon_se_pide_y_se_dice_aparte() {
     let backend = Falso::con(&["a"]);
-    // El daemon sí tiene registro, y su nivel está en `debug`: es GLOBAL a
-    // todos sus clientes y solo sube, así que pedirle `trace` no garantiza
-    // `trace` — y lo que el panel enseña es lo que él conteste.
+    // Otro cliente ya subió el anillo del daemon a `trace`. Es global y solo
+    // sube, así que pedirle `info` no lo baja: contesta el que tiene.
     backend.responde_log_tail(Vec::new(), 0);
-    backend.log_level_contesta("debug");
+    backend.log_level_contesta("trace");
     let (host, _anillo) = host_con_backend_y_registro(Arc::clone(&backend)).await;
     poner_fuente(&host, "daemon").await;
     host.dispatch(UiAction::LogSetLevel {
-        level: "trace".to_owned(),
+        level: "info".to_owned(),
     })
     .await
     .expect("host vivo");
@@ -11678,10 +11744,25 @@ async fn subir_el_nivel_con_fuente_daemon_va_al_daemon() {
         (!v.is_empty()).then_some(v)
     })
     .await;
-    assert_eq!(pedidos, vec!["trace".to_owned()]);
+    assert_eq!(pedidos, vec!["info".to_owned()], "se le PIDE al daemon");
+
     let v = foto_registro(&host).await;
     assert_eq!(v.source_mode, "daemon");
-    assert_eq!(v.level, "debug", "manda lo que contestó el daemon");
+    assert_eq!(
+        v.level, "info",
+        "la cabecera marca lo que se ENSEÑA, que es lo que filtra la lista"
+    );
+    // Y el del daemon no se calla: sale donde ya vive «se recoge más de lo que
+    // se ve», y ahí SÍ dice de quién es el anillo.
+    assert_eq!(
+        v.capturing,
+        norte_i18n::ta_in(
+            norte_i18n::Lang::Es,
+            "log-capturing-daemon",
+            &[("level", "trace")]
+        ),
+        "el anillo del daemon guarda más de lo que este panel enseña"
+    );
     assert!(
         !v.source_note.is_empty(),
         "y dice de QUIÉN es ese nivel: es global al daemon"

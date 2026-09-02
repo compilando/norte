@@ -1507,24 +1507,38 @@ pub struct LogSlotView {
     /// Índice de la primera línea que viaja en `lines`, dentro de las
     /// filtradas.
     pub first_visible: u64,
-    /// Cuántas líneas TIRÓ el anillo por quedarse sin sitio, ya DICHO.
+    /// Cuántas líneas se han perdido, y de QUÉ anillo, ya DICHO.
     ///
     /// Se dice: un registro con un agujero silencioso miente sobre lo que
     /// pasó, y la ausencia de una línea es indistinguible de que el evento no
     /// ocurriera.
     ///
+    /// Con las dos fuentes a la vista (#328) son **dos números y no uno**,
+    /// cada uno nombrando su anillo, porque no significan lo mismo ni viven lo
+    /// mismo: el de la ventana cuenta lo que su anillo ha evacuado desde que
+    /// arrancó el proceso y no se reinicia nunca; el del daemon cuenta lo que
+    /// ESTA apertura del panel se perdió. Sumarlos daba un número que no era
+    /// ninguna de las dos cosas.
+    ///
     /// Traducido aquí y con el NÚMERO dentro, no un `u64` para que el renderer
     /// componga la frase: un renderer no traduce ni sustituye números. Es la
     /// misma regla que `BrowserSlotView::skipped_note`. Vacío = ninguna.
     pub dropped_note: String,
-    /// El nivel que el proceso está CAPTURANDO, si es MÁS que el que se
-    /// enseña. Ya traducido; vacío = son el mismo.
+    /// Qué anillo está CAPTURANDO más de lo que se enseña, y hasta dónde. Ya
+    /// traducido; vacío = ninguno.
     ///
     /// Existe porque los dos niveles se separan a propósito —bajar lo que se
     /// enseña no deja de capturar, o volver a subir mostraría un agujero— y
     /// entonces el panel puede decir «info» mientras el proceso guarda TRACE
     /// en memoria. Quien mira tiene derecho a saber que se está recogiendo más
     /// de lo que ve, sobre todo antes de hacer una captura de pantalla.
+    ///
+    /// Y desde #328 es también donde se dice el nivel del DAEMON, nombrándolo:
+    /// el suyo es global a todos sus clientes, otro pudo subirlo y nunca baja,
+    /// así que puede estar muy por encima del que este panel enseña. En
+    /// [`Self::level`] no cabe —ése es el que FILTRA la lista y el que los
+    /// botones mueven— y ponerlo ahí dejaba marcado un nivel que el panel no
+    /// estaba aplicando.
     pub capturing: String,
     /// De qué PROCESO son estas líneas, ya traducido.
     ///

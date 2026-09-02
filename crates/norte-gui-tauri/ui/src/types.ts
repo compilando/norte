@@ -188,14 +188,18 @@ export interface LogSlotView {
   following: boolean;
   total: number;
   first_visible: number;
-  /** Líneas que el anillo TIRÓ por quedarse sin sitio, YA DICHO y con el
-   *  número dentro: un renderer no traduce ni sustituye números. Vacío =
-   *  ninguna. Un registro con un agujero silencioso miente sobre lo que pasó. */
+  /** Líneas perdidas, YA DICHAS y con el número dentro: un renderer no traduce
+   *  ni sustituye números. Vacío = ninguna. Un registro con un agujero
+   *  silencioso miente sobre lo que pasó. Con las dos fuentes a la vista son
+   *  DOS cuentas nombradas y no una suma: la de la ventana cuenta desde que
+   *  arrancó el proceso, la del daemon lo que esta apertura se perdió. */
   dropped_note: string;
-  /** Lo que el proceso está CAPTURANDO, si es más que lo que se enseña, ya
-   *  traducido. Vacío = son el mismo. Bajar lo que se ve no deja de capturar,
-   *  así que el panel puede decir «info» mientras se guarda TRACE — y quien
-   *  mira tiene derecho a saberlo antes de hacer una captura de pantalla. */
+  /** Qué anillo está CAPTURANDO más de lo que se enseña, ya traducido. Vacío =
+   *  ninguno. Bajar lo que se ve no deja de capturar, así que el panel puede
+   *  decir «info» mientras se guarda TRACE — y quien mira tiene derecho a
+   *  saberlo antes de hacer una captura de pantalla. Aquí sale también el
+   *  nivel del DAEMON, nombrándolo: el suyo es global a sus clientes y nunca
+   *  baja, así que no puede ir en `level`, que es el que filtra la lista. */
   capturing: string;
   /**
    * De qué PROCESO son estas líneas, ya traducido. La ventana arranca su

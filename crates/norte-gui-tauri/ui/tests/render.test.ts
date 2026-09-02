@@ -2320,6 +2320,9 @@ describe("el panel de registro", () => {
     // local y lo dice, en vez de quedarse mudo y parecer roto.
     const { screen } = montar();
     const nota = catalogoReal()["log-source-unsupported"] ?? "";
+    // La clave TIENE que existir: sin esto, borrarla del catálogo dejaría el
+    // `toContain("")` de abajo pasando siempre y la prueba diría que sí a nada.
+    expect(nota).not.toBe("");
     screen.paint(conRegistro({ source_note: nota }));
     const caja = document.querySelector(".log");
     const cabecera = caja?.parentElement?.querySelector(".slot-title")?.textContent ?? "";
