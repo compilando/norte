@@ -678,9 +678,11 @@ impl App {
     /// (#328) son dos RPC por segundo, y pagarlas por un panel que nadie tiene
     /// delante, durante toda la sesión, es gastar red por nada.
     ///
-    /// Nació aquí con #328 y ahora delega en [`Self::slot_of_kind_visible`]:
-    /// #329 encontró la misma pregunta en la barra de paneles y en los cinco
-    /// toggles, así que la respuesta dejó de ser cosa del registro.
+    /// Nació aquí con #328 y ahora delega en `slot_of_kind_visible` —sin
+    /// enlace: es `pub(crate)` y esto es público, y rustdoc deniega el enlace
+    /// de lo público a lo privado—: #329 encontró la misma pregunta en la barra
+    /// de paneles y en los cinco toggles, así que la respuesta dejó de ser cosa
+    /// del registro.
     #[must_use]
     pub fn log_slot_visible(&self) -> Option<norte_frontend::layout::SlotId> {
         self.slot_of_kind_visible(crate::logview::KIND)
