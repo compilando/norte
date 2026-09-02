@@ -3375,9 +3375,22 @@ fn handle_log_tail(
 /// el pedido, y eso no es un fallo: es por lo que el result lleva el nivel en
 /// vez de un `bool`.
 ///
+/// **Las dos negativas de este método son distintas y se contestan
+/// distinto**: sin anillo es `Unsupported` («este daemon no sirve registro»,
+/// y el panel degrada al suyo diciéndolo), y un nivel fuera del vocabulario es
+/// `INVALID_PARAMS` («lo que mandaste no es un nivel»), mismo criterio que el
+/// `max: 0` de [`handle_log_tail`]. Colapsarlas en una dejaría a un cliente
+/// sin poder distinguir un daemon sin registro de una errata suya, que es la
+/// misma confusión vacío-contra-ausente que el resto de este cambio evita.
+///
 /// El gate de actor vive en el brazo de `dispatch`, igual que en
 /// [`handle_log_tail`].
-#[tracing::instrument(skip(shared))]
+///
+/// El span no lleva el `level` que vino del cable hasta DESPUÉS de validarlo:
+/// es una `String` de longitud arbitraria elegida por el cliente, y
+/// formatearla antes del rechazo sería registrar lo que un peer quiera por el
+/// simple hecho de haberlo mandado.
+#[tracing::instrument(skip(shared, p), fields(level = tracing::field::Empty))]
 fn handle_log_level(
     p: &methods::LogLevelParams,
     shared: &Arc<Shared>,
@@ -3389,8 +3402,14 @@ fn handle_log_level(
     // aceptar lo que no se entiende y poner otra cosa dejaría al lector
     // creyendo que pidió algo que nadie hizo.
     let Some(nivel) = norte_config::logline::LogLevel::from_wire(&p.level) else {
-        return Err(RpcError::from(norte_proto::Error::Unsupported));
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "log.level: `level` must be one of error|warn|info|debug|trace",
+        ));
     };
+    // Ya validado: aquí `nivel` es uno de los cinco, y lo que se registra es
+    // la cadena canónica de ese enum, no la que mandó el peer.
+    tracing::Span::current().record("level", nivel.wire());
     ring.raise_to(nivel);
     to_value(&methods::LogLevelResult {
         level: ring.level().wire().to_owned(),

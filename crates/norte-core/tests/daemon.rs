@@ -8730,12 +8730,20 @@ async fn un_core_suelto_no_escribe_el_estado_ajeno() {
 /// subscriber del test escribe en él— porque en el proceso de verdad también
 /// lo es: quien monta el registro es el binario, y el daemon solo lo sirve.
 async fn spawn_daemon_con_anillo() -> (TestDaemon, norte_config::logring::LogRing) {
+    spawn_daemon_con_anillo_de(norte_config::logring::RING_DEFAULT).await
+}
+
+/// El mismo, con el anillo del tamaño que pida el test.
+///
+/// Un anillo PEQUEÑO es la única forma de llegar al desbordamiento sin emitir
+/// dos mil líneas, y el desbordamiento es lo que hace comprobable el `lost`.
+async fn spawn_daemon_con_anillo_de(cap: usize) -> (TestDaemon, norte_config::logring::LogRing) {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
     let engine = Arc::new(Engine::new());
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
-    let anillo = norte_config::logring::LogRing::new(norte_config::logring::RING_DEFAULT);
+    let anillo = norte_config::logring::LogRing::new(cap);
     let daemon = Daemon::bind(
         engine,
         DaemonConfig {
@@ -8784,6 +8792,16 @@ fn hacia_el_anillo(anillo: &norte_config::logring::LogRing) -> tracing::subscrib
 /// del anillo se sube DESDE la interfaz. Si subir el nivel por `log.level`
 /// dejara pasar un target de terceros, una pulsación en un panel pondría una
 /// contraseña en pantalla.
+///
+/// **Cubre el camino de `tracing`, no el del puente `log`.** `suppaftp` no
+/// emite eventos de `tracing`: emite `log::trace!`, y `tracing-log` los
+/// despacha con el `target` estático `"log"`. Ese otro camino ya está fijado
+/// en `norte-config`
+/// (`logring::tests::la_contrasena_no_entra_ni_por_el_puente_de_log`), y la
+/// cota es la MISMA función para los dos, así que repetirlo por el socket
+/// probaría dos veces lo mismo. Lo que este test añade es que subir el nivel
+/// POR EL CABLE no la levanta; el nombre `suppaftp` está aquí porque es el
+/// target que la lista blanca nombra, no porque éste sea su camino real.
 #[tokio::test]
 async fn subir_el_nivel_por_el_cable_no_levanta_la_cota() {
     let (d, anillo) = spawn_daemon_con_anillo().await;
@@ -8903,6 +8921,87 @@ async fn el_cursor_encadena_dos_llamadas() {
     );
 }
 
+/// Un cursor que se quedó atrás recibe el hueco CONTADO, y no un cero.
+///
+/// Es lo único que hace honesto el sondeo, y es el caso que ninguno de los
+/// otros tests toca: todos preguntan al día o sin cursor, así que el `lost` que
+/// viaja por el cable siempre valía cero — sustituir esa cuenta por un `0`
+/// literal en el daemon los habría dejado a todos verdes. El fallo que esto
+/// impide es concreto: un panel sondea, la máquina se atasca treinta segundos
+/// con el daemon a tope, el panel vuelve a preguntar y se le contesta un
+/// registro con un salto y ninguna explicación — una línea que falta es
+/// indistinguible de un suceso que no ocurrió.
+///
+/// Se afirma el número EXACTO, no `> 0`: un `lost` que solo tiene que ser
+/// positivo lo cumple cualquier cuenta mal hecha, y este número alimenta una
+/// marca de hueco que dice cuántas.
+#[tokio::test]
+async fn un_cursor_que_se_quedo_atras_recibe_el_hueco_contado() {
+    const CAP: usize = 64;
+    const EMITIDAS: u64 = 100;
+
+    let (d, anillo) = spawn_daemon_con_anillo_de(CAP).await;
+    let _guard = hacia_el_anillo(&anillo);
+    let c = connected_client(&d).await;
+
+    tracing::info!(target: "norte_core::prueba", "la última que este cliente vio");
+    let a: methods::LogTailResult = c
+        .call(
+            methods::LOG_TAIL,
+            &serde_json::json!({ "cursor": null, "max": 500 }),
+        )
+        .await
+        .expect("primera vuelta");
+    assert_eq!(a.lost, 0, "sin cursor no se afirma hueco");
+
+    // El cliente se queda parado mientras el daemon sigue trabajando, y el
+    // anillo da la vuelta por debajo de su cursor.
+    for i in 0..EMITIDAS {
+        tracing::info!(target: "norte_core::prueba", "mientras no mirabas: {i}");
+    }
+
+    let b: methods::LogTailResult = c
+        .call(
+            methods::LOG_TAIL,
+            &serde_json::json!({ "cursor": a.next, "max": 500 }),
+        )
+        .await
+        .expect("segunda vuelta");
+
+    // Que entraron exactamente las mías y nada más es lo que hace legible el
+    // número de abajo: sin esto, un `lost` distinto no diría si falla la
+    // cuenta o si el daemon logueó por su cuenta.
+    assert_eq!(
+        b.next - a.next,
+        EMITIDAS,
+        "entre las dos vueltas entraron solo las líneas del test"
+    );
+    // De las 100 que entraron, el anillo solo conserva 64: las 36 primeras
+    // —justo las que este cursor esperaba— se cayeron por detrás.
+    assert_eq!(
+        b.lost,
+        EMITIDAS - u64::try_from(CAP).expect("cabe"),
+        "el hueco se cuenta, no se calla"
+    );
+    assert_eq!(b.lines.len(), CAP, "y llega el anillo entero");
+    assert!(
+        !b.lines
+            .iter()
+            .any(|l| l.message.contains("la última que este cliente vio")),
+        "esa ya se había caído: es de lo que el hueco cuenta"
+    );
+    // Y la vuelta siguiente, con el cursor al día, no arrastra el hueco de la
+    // anterior: `lost` es de ESTE cursor, no de todo lo que el anillo tiró.
+    let c2: methods::LogTailResult = c
+        .call(
+            methods::LOG_TAIL,
+            &serde_json::json!({ "cursor": b.next, "max": 500 }),
+        )
+        .await
+        .expect("tercera vuelta");
+    assert_eq!(c2.lost, 0, "un cursor al día no perdió nada");
+}
+
 /// `max` se acota en el servidor: pedir un millón no manda un millón.
 #[tokio::test]
 async fn el_servidor_acota_max() {
@@ -8920,10 +9019,14 @@ async fn el_servidor_acota_max() {
         )
         .await
         .expect("pedir de más no es un error");
-    assert!(
-        r.lines.len() <= 1000,
-        "el servidor recorta: llegaron {}",
-        r.lines.len()
+    // EXACTAMENTE mil, que aquí es determinista: 1200 líneas emitidas en un
+    // anillo de 2000, así que ninguna se cayó y el recorte es lo único que
+    // limita. Un `<=` habría pasado igual con un servidor que contestara una
+    // sola línea, o ninguna.
+    assert_eq!(
+        r.lines.len(),
+        1000,
+        "el servidor recorta a su tope, ni más ni menos"
     );
     // Y lo que no cupo NO se pierde: sigue después de `next`.
     let siguiente: methods::LogTailResult = c
@@ -9001,6 +9104,13 @@ async fn sin_anillo_el_registro_no_existe_en_vez_de_estar_vacio() {
 ///
 /// Aceptar lo que no se entiende y poner otra cosa dejaría al lector creyendo
 /// que pidió algo que nadie hizo.
+///
+/// Y se rechaza con `INVALID_PARAMS`, que es OTRO error que el del daemon sin
+/// anillo (`Unsupported`, ver
+/// `sin_anillo_el_registro_no_existe_en_vez_de_estar_vacio`). Con un solo
+/// código, un cliente no podría distinguir «este daemon no tiene registro» de
+/// «mandé una errata», y las dos cosas piden respuestas distintas: la primera
+/// degrada al anillo local para siempre, la segunda se corrige y se reintenta.
 #[tokio::test]
 async fn un_nivel_desconocido_se_rechaza_y_el_anillo_no_se_mueve() {
     let (d, anillo) = spawn_daemon_con_anillo().await;
@@ -9014,10 +9124,14 @@ async fn un_nivel_desconocido_se_rechaza_y_el_anillo_no_se_mueve() {
         )
         .await
         .expect_err("ese nivel no existe");
-    assert!(
-        matches!(err, ClientError::Rpc(ref rpc) if matches!(rpc.data, Some(norte_proto::Error::Unsupported))),
-        "{err:?}"
-    );
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(
+            rpc.code,
+            codes::INVALID_PARAMS,
+            "una errata no es una capacidad que falte"
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
     assert_eq!(
         anillo.level(),
         norte_config::logline::LogLevel::Info,

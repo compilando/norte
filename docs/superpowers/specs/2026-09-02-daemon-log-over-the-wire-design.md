@@ -86,8 +86,13 @@ a hole the size of the time spent down there.
 ## Agents may not read it
 
 `log.tail` and `log.level` refuse an `Actor::Agent` in the dispatch, with the
-same `INVALID_REQUEST` shape `policy.request_scope` uses for the mirror-image
-case.
+same `PolicyDenied { rule: "not-approved" }` that `host.volumes` and
+`connection.list` already answer — the two methods this pair is modelled on,
+both of them human-only for the same reason and both gating **before** the
+params parse. (An earlier draft of this section said `INVALID_REQUEST`, the
+shape `policy.request_scope` uses for the mirror-image case; that would have
+been a second vocabulary for one decision. The category is closed and travels
+in `data`, which is what a frontend reads.)
 
 The reason is concrete, not a principle. The daemon's ring carries paths,
 connection names and the activity of **other sessions**, so for a scoped agent

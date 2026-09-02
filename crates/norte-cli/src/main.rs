@@ -643,18 +643,25 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         // El fichero compartido: es el que lee `norte doctor`.
         prefix: None,
     };
-    // El DAEMON —y solo él— monta además un anillo en memoria (#328, ADR
-    // 0092): es el registro que `log.tail` sirve a un frontend que vive en
+    // `norte daemon run` —y solo él— monta además un anillo en memoria (#328,
+    // ADR 0092): es el registro que `log.tail` sirve a un frontend que vive en
     // otro proceso, y sin él la ventana pinta el anillo del proceso
-    // equivocado (#326). Un `norte cp` no tiene a quién enseñárselo y pagaría
-    // dos mil líneas de memoria por nadie, así que el resto de subcomandos
-    // sigue con `init` a secas.
+    // equivocado (#326). Todo lo demás sigue con `init` a secas, porque no
+    // tiene a quién enseñárselo y pagaría dos mil líneas de memoria por nadie
+    // — y eso incluye `norte daemon stop`, que es un cliente que manda una
+    // petición y se muere.
     //
-    // `init_with_ring` y no `init_to_file_with_ring`: el daemon conserva su
-    // stderr. Quitárselo dejaría a quien arranca `norte daemon run` en una
-    // terminal para ver por qué no levanta sin leer nada.
+    // `init_with_ring` y no `init_to_file_with_ring`: este camino ya montaba
+    // `init`, o sea CON stderr, así que la otra función no habría añadido un
+    // anillo sino QUITADO una capa. Quien arranca `norte daemon run` en una
+    // terminal para ver por qué no levanta dejaría de leer nada.
     #[cfg(unix)]
-    let anillo_de_registro = if matches!(cli.cmd, Cmd::Daemon { .. }) {
+    let anillo_de_registro = if matches!(
+        cli.cmd,
+        Cmd::Daemon {
+            cmd: DaemonCmd::Run { .. }
+        }
+    ) {
         norte_core::logging::init_with_ring(log_cfg, norte_config::logring::RING_DEFAULT)
     } else {
         norte_core::logging::init(log_cfg);

@@ -86,8 +86,11 @@ the level is **global to the daemon**, and it **never goes down** — dropping
 back and climbing again would show a hole the size of the time spent down
 there.
 
-**Agents are refused, on both methods**, with the same `INVALID_REQUEST` shape
-`policy.request_scope` uses for the mirror-image case. The reason is concrete,
+**Agents are refused, on both methods**, with the `PolicyDenied { rule:
+"not-approved" }` that `host.volumes` and `connection.list` already answer —
+the two human-only methods this pair is modelled on — and the gate runs
+**before** the params parse, so an agent cannot tell "forbidden" from "bad
+params" by fuzzing the shape of its own request. The reason is concrete,
 not a principle: the daemon's ring carries paths, connection names and the
 activity of *other sessions*, so for a scoped agent it is an existence oracle
 for paths outside its sandbox — precisely the leak `read_gate_all` already
@@ -140,6 +143,21 @@ than the ring holds.
 **Raising the level is a decision one client takes for everyone**, and the
 panel says so rather than pretending it is private.
 
+**Rule 10 now has a second consumer, and it is a remote one.** Until this ADR,
+"never put a secret in a log" was enforced against a ring that only the local
+process could read; from here on, whatever reaches that ring can be pulled over
+a socket by any human client, at a verbosity that same client chose. The
+whitelist handles the third-party half of the problem — `suppaftp`, `russh`,
+`hyper` and everything else stays at INFO however high the level goes — but it
+offers **zero protection against our own targets**: a future
+`debug!(?cfg, "conectando")` in `norte-connect` would start at DEBUG, is a
+`norte` target, and would therefore travel. The tree is clean today because two
+separate things hold: `norte-connect`'s instruments use `skip_all` rather than
+recording their arguments, and `Secret` has a redacting `Debug`. Neither is
+enforced by a lint. So: **a new `debug!`/`trace!` on a path that can hold a
+credential is now a wire-visible decision**, and the place to check it is the
+same review that would check a new protocol field.
+
 **A peer one version behind loses only what it never had.** A 0.64 client does
 not call the methods and keeps painting its local ring — the status quo.
 
@@ -168,6 +186,14 @@ after `next`. `max: 0` **is** an error (`-32602`), following `FsListParams::limi
 and for its reason — a poll with `max: 0` would return an empty list forever
 with the cursor standing still, and on screen that reads as "nothing is
 happening" rather than as the caller bug it is.
+
+**A malformed request and a missing capability get different codes**, and on
+these two methods that distinction is load-bearing. `-32602` is "what you sent
+is not a level" (or not a page size); `Unsupported` is "this daemon has no ring
+to serve". A client that cannot tell them apart cannot choose between fixing
+its request and degrading to its local ring forever, which is the same
+empty-versus-absent confusion this whole change exists to remove. So an
+unknown `level` string is `-32602`, not `Unsupported`.
 
 **`capacity` is an upper bound, not the clamp.** It is the deepest history that
 could ever come back, so it is the right number to size against; it is not a

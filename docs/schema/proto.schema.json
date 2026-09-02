@@ -2795,7 +2795,7 @@
       "description": "Params de [`LOG_LEVEL`]: el nivel que el cliente PIDE.\n\n```\nuse norte_proto::methods::LogLevelParams;\nlet p = LogLevelParams { level: \"debug\".to_owned() };\nassert_eq!(serde_json::to_value(&p).unwrap()[\"level\"], serde_json::json!(\"debug\"));\n```",
       "properties": {
         "level": {
-          "description": "Una de las cadenas de [`LOG_LEVELS`].\n\nEs lo que se PIDE, no lo que queda: el daemon aplica su propia cota y\ncontesta con lo que de verdad se puso. Un valor fuera del vocabulario\nes [`crate::Error::Unsupported`] y NO se degrada a un nivel por defecto\n— aceptar un nivel que no se entiende y poner otro dejaría al lector\ncreyendo que pidió algo que nadie hizo.",
+          "description": "Una de las cadenas de [`LOG_LEVELS`].\n\nEs lo que se PIDE, no lo que queda: el daemon aplica su propia cota y\ncontesta con lo que de verdad se puso.\n\n**Un valor fuera del vocabulario es `INVALID_PARAMS` (`-32602`)** y NO\nse degrada a un nivel por defecto — aceptar un nivel que no se entiende\ny poner otro dejaría al lector creyendo que pidió algo que nadie hizo.\nEl mismo código que el `max: 0` de [`LogTailParams::max`], y por lo\nmismo: es una petición mal formada, no una capacidad que falte.\n\nQue sea ése y no [`crate::Error::Unsupported`] importa porque\n`Unsupported` ya significa otra cosa en estos dos métodos: «este daemon\nno tiene registro que servir» (ver [`LOG_TAIL`]). Con un solo código,\nun cliente no podría distinguir un daemon sin anillo de una errata\nsuya, que es la misma confusión entre vacío y ausente que este bump\nexiste para no tener.",
           "type": "string"
         }
       },

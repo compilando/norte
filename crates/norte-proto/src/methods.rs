@@ -8325,10 +8325,20 @@ pub struct LogLevelParams {
     /// Una de las cadenas de [`LOG_LEVELS`].
     ///
     /// Es lo que se PIDE, no lo que queda: el daemon aplica su propia cota y
-    /// contesta con lo que de verdad se puso. Un valor fuera del vocabulario
-    /// es [`crate::Error::Unsupported`] y NO se degrada a un nivel por defecto
-    /// — aceptar un nivel que no se entiende y poner otro dejaría al lector
-    /// creyendo que pidió algo que nadie hizo.
+    /// contesta con lo que de verdad se puso.
+    ///
+    /// **Un valor fuera del vocabulario es `INVALID_PARAMS` (`-32602`)** y NO
+    /// se degrada a un nivel por defecto — aceptar un nivel que no se entiende
+    /// y poner otro dejaría al lector creyendo que pidió algo que nadie hizo.
+    /// El mismo código que el `max: 0` de [`LogTailParams::max`], y por lo
+    /// mismo: es una petición mal formada, no una capacidad que falte.
+    ///
+    /// Que sea ése y no [`crate::Error::Unsupported`] importa porque
+    /// `Unsupported` ya significa otra cosa en estos dos métodos: «este daemon
+    /// no tiene registro que servir» (ver [`LOG_TAIL`]). Con un solo código,
+    /// un cliente no podría distinguir un daemon sin anillo de una errata
+    /// suya, que es la misma confusión entre vacío y ausente que este bump
+    /// existe para no tener.
     pub level: String,
 }
 
