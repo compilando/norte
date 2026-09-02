@@ -51,6 +51,8 @@ pub const RING_DEFAULT: usize = 2000;
 /// hyper. Lo que se quiere ver es lo que hace norte. Así que sube de nivel lo
 /// NUESTRO, y lo de terceros se queda en INFO pase lo que pase — que es lo que
 /// hacía el filtro global que quitamos.
+///
+/// Son nombres de CRATE, y se comparan como tales: ver [`es_nuestro`].
 const NUESTRO: &[&str] = &["norte", "ntc"];
 
 /// El target cuyo TRACE lleva contraseñas (regla 10, #43). Redundante con la
@@ -58,6 +60,31 @@ const NUESTRO: &[&str] = &["norte", "ntc"];
 /// cinturón: es la única cota que está documentada con un CVE detrás, y
 /// perderla al refactorizar la lista blanca sería silencioso.
 const TARGET_CON_SECRETOS: &str = "suppaftp";
+
+/// ¿Es este target NUESTRO? Por SEGMENTO de crate, nunca por prefijo crudo.
+///
+/// Un `starts_with` sobre la cadena entera —que es lo que había— aceptaba
+/// `nortex` y `ntcp`: una dependencia futura con un nombre así habría entrado
+/// en TRACE, en un anillo cuyo nivel sube cualquier cliente local con una
+/// tecla y que se lee en pantalla. Y esta lista blanca es la ÚNICA cota que
+/// mantiene fuera el `PASS <contraseña>` de `suppaftp` (#43, regla 10), así
+/// que ensancharla por descuido es exactamente el fallo que no se ve.
+///
+/// La forma de un target de verdad es `norte_core::connect`,
+/// `norte_vfs_local`, `ntc`: nombre de CRATE con guiones bajos, y detrás la
+/// ruta de módulo tras `::`. Así que se compara contra el primer segmento, y
+/// solo vale si es el nombre exacto (`norte`, `ntc`, el binario) o si continúa
+/// con `_` (`norte_core`, `ntc_algo`). `nortex` no continúa con `_` y queda
+/// fuera, que es el punto.
+fn es_nuestro(target: &str) -> bool {
+    let raiz = target.split("::").next().unwrap_or(target);
+    NUESTRO.iter().any(|nuestro| {
+        raiz == *nuestro
+            || raiz
+                .strip_prefix(*nuestro)
+                .is_some_and(|resto| resto.starts_with('_'))
+    })
+}
 
 /// ¿Puede esta línea entrar en el anillo por encima de INFO?
 ///
@@ -70,10 +97,11 @@ fn bajo_cota(target: &str, level: Level) -> bool {
         // defecto, y es el nivel al que el anillo arranca.
         return true;
     }
-    // `starts_with` y no `==`: los módulos hijos (`norte_core::connect`,
-    // `suppaftp::command`) llevan el mismo criterio que su raíz.
-    !target.starts_with(TARGET_CON_SECRETOS)
-        && NUESTRO.iter().any(|nuestro| target.starts_with(nuestro))
+    // El segundo cinturón sigue siendo un `starts_with` crudo, y eso es
+    // deliberado: en una lista NEGRA lo ancho es lo seguro, así que un
+    // `suppaftp_algo` que no existe hoy ya estaría cubierto. En la lista
+    // BLANCA es al revés, y por eso ésa va por segmento ([`es_nuestro`]).
+    !target.starts_with(TARGET_CON_SECRETOS) && es_nuestro(target)
 }
 
 pub use crate::logline::{LogLevel, LogLine};
@@ -627,6 +655,44 @@ mod tests {
                 bajo_cota(target, Level::TRACE),
                 "«{target}» es nuestro y no pudo subir"
             );
+        }
+        // Y el binario a secas, con y sin ruta de módulo detrás: `norte` es un
+        // crate de verdad, no solo un prefijo.
+        for target in ["norte", "norte::daemon", "ntc::app"] {
+            assert!(
+                bajo_cota(target, Level::TRACE),
+                "«{target}» es nuestro y no pudo subir"
+            );
+        }
+    }
+
+    /// La lista blanca casa por SEGMENTO de crate, no por prefijo crudo.
+    ///
+    /// Con `starts_with` sobre la cadena entera, una dependencia futura
+    /// llamada `nortex` o `ntcp` habría entrado en TRACE en un anillo que
+    /// cualquier cliente local sube con una tecla y lee en pantalla. Esta lista
+    /// es la ÚNICA cota que deja fuera el `PASS <contraseña>` de `suppaftp`
+    /// (#43, regla 10), así que las negativas están aquí para que el próximo
+    /// refactor no la ensanche en silencio.
+    #[test]
+    fn un_crate_que_solo_empieza_igual_no_es_nuestro() {
+        for target in [
+            "nortex",
+            "nortex::x",
+            "nortexyz::client",
+            "ntcp",
+            "ntcp::session",
+            "norteño",
+        ] {
+            for nivel in [Level::DEBUG, Level::TRACE] {
+                assert!(
+                    !bajo_cota(target, nivel),
+                    "«{target}» no es nuestro y entró en el anillo en {nivel}"
+                );
+            }
+            // Y sus INFO y peores siguen entrando, como los de cualquier
+            // tercero: son los que explican un fallo.
+            assert!(bajo_cota(target, Level::INFO), "{target}");
         }
     }
 

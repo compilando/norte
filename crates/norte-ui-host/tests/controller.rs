@@ -11590,6 +11590,11 @@ async fn sondear(h: &UiHost) {
 /// (`Both` → `Window` → `Daemon` → `Both`): no hay una acción «pon ésta», y
 /// fabricar una solo para los tests probaría un camino que nadie usa.
 async fn poner_fuente(h: &UiHost, fuente: &str) {
+    // Primero se deja aterrizar la respuesta del daemon: el mando NO recorre
+    // mientras no se sepa que hay una segunda fuente —mover la preferencia por
+    // debajo de un lector que no puede verla moverse es lo que se arregló—, así
+    // que pulsarlo antes del primer `log.tail` no haría nada.
+    asentar().await;
     let vueltas = match fuente {
         "window" => 1,
         "daemon" => 2,
@@ -11710,6 +11715,83 @@ async fn un_daemon_sin_registro_se_dice_en_el_panel() {
         backend.cursores_pedidos().len(),
         preguntas,
         "a un daemon sin registro no se le repregunta"
+    );
+}
+
+/// Y tampoco se le pide el NIVEL: es la otra mitad de la misma regla.
+///
+/// La ventana lo pedía por la FUENTE sola, así que contra un daemon que ya
+/// había contestado `Unsupported` cada pulsación de nivel mandaba un `log.level`
+/// cuya respuesta ya se conocía — un RPC por tecla, para siempre. La TUI ya
+/// exigía las dos condiciones y decía por qué; ahora es la misma regla en las
+/// dos.
+#[tokio::test]
+async fn a_un_daemon_sin_registro_no_se_le_pide_el_nivel() {
+    let backend = Falso::con(&["a"]);
+    backend.log_tail_no_soportado();
+    let (host, _anillo) = host_con_backend_y_registro(Arc::clone(&backend)).await;
+    // La premisa: ya contestó que no tiene anillo que servir.
+    let v = foto_registro(&host).await;
+    assert!(
+        !v.sources_available,
+        "el daemon ya dijo que no tiene anillo"
+    );
+
+    // Y la preferencia del panel sigue siendo la de la apertura («los dos»),
+    // que es lo que hacía que la condición de la fuente se cumpliera sola.
+    for nivel in ["debug", "trace", "warn"] {
+        host.dispatch(UiAction::LogSetLevel {
+            level: (*nivel).to_owned(),
+        })
+        .await
+        .expect("host vivo");
+    }
+    asentar().await;
+    assert!(
+        backend.log_level_pedidos().is_empty(),
+        "un RPC muerto por pulsación: {:?}",
+        backend.log_level_pedidos()
+    );
+}
+
+/// Sin daemon que sirva, el mando de fuente no mueve la PREFERENCIA.
+///
+/// Hoy no se ve —la fuente efectiva colapsa a «esta ventana» de todos modos, y
+/// el renderer ni pinta el selector—, y por eso es justo el que se cuela: la
+/// preferencia se movía a espaldas de un lector que no podía verla moverse, y
+/// reaparecía puesta en otra cosa la primera vez que sí hubiera daemon
+/// sirviendo. Se comprueba por ese camino: se pulsa con la respuesta retenida
+/// y se suelta después.
+#[tokio::test]
+async fn sin_segunda_fuente_el_mando_no_mueve_la_preferencia() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", [(b"a".to_vec(), false)]);
+    let puerta = Arc::new(backend_falso::Puerta::default());
+    f.puerta_registro = Some(Arc::clone(&puerta));
+    let backend = Arc::new(f);
+    backend.responde_log_tail(vec![linea_wire(10, "info", "norte_core", "del daemon")], 1);
+    let (host, _anillo) = host_con_backend_y_registro(Arc::clone(&backend)).await;
+
+    // Con la respuesta retenida no se sabe todavía si hay una segunda fuente.
+    let v = foto_registro(&host).await;
+    assert!(!v.sources_available, "aún no ha contestado nadie");
+
+    // Dos vueltas del mando: sin guarda dejarían la preferencia en «daemon».
+    for _ in 0..2 {
+        host.dispatch(UiAction::LogCycleSource)
+            .await
+            .expect("host vivo");
+    }
+    asentar().await;
+
+    // Ahora sí contesta, y aparece el selector: la preferencia tiene que
+    // seguir siendo la de la apertura.
+    puerta.abrir();
+    let v = foto_registro(&host).await;
+    assert!(v.sources_available, "ahora sirve su registro");
+    assert_eq!(
+        v.source_mode, "both",
+        "el mando movió la preferencia sin que nadie pudiera verlo"
     );
 }
 

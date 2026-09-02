@@ -8043,8 +8043,16 @@ pub const LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 /// # Quién puede llamarlo
 ///
 /// SOLO una conexión humana. Una conexión de agente (`agent_session` en
-/// [`INITIALIZE`]) recibe `INVALID_REQUEST`, igual que en los demás actos que
-/// son de gobierno humano.
+/// [`INITIALIZE`]) recibe `Error::PolicyDenied` con `rule: "not-approved"`,
+/// que en el cable es [`codes::APP_ERROR`](crate::wire::codes::APP_ERROR)
+/// (`-32000`) — el mismo que `host.volumes`, `index.embed` o `ai.rename_plan`.
+///
+/// **No es `INVALID_REQUEST` (`-32600`)**, y eso hay que decirlo aquí porque
+/// este rustdoc ES el contrato publicado: un cliente de terceros que ramificara
+/// por `-32600` para reconocer «vedado» no acertaría nunca y archivaría la
+/// negativa como error genérico de aplicación — o sea, volvería a confundir
+/// prohibido con vacío, que es justo lo que el párrafo siguiente existe para
+/// separar.
 ///
 /// El motivo es concreto y no un principio: el anillo del daemon lleva rutas,
 /// nombres de conexión y la actividad de OTRAS sesiones, así que para un
@@ -8056,11 +8064,18 @@ pub const LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 ///
 /// # Cuando el otro extremo no lo tiene
 ///
-/// Un daemon 0.64 no conoce el método, y uno compilado SIN la feature
-/// `logging` no tiene anillo que servir: los dos contestan «method not
-/// found». El panel degrada a su anillo local y **dice por qué**. Es la
-/// ventana N/N-1 haciendo su trabajo, y la degradación tiene que ser
-/// explícita: un panel que se queda a medias sin explicación parece roto.
+/// El caso alcanzable es UNO: un daemon de la MISMA versión compilado SIN la
+/// feature `logging`, que no tiene anillo que servir y contesta
+/// `Error::Unsupported` — [`codes::APP_ERROR`](crate::wire::codes::APP_ERROR)
+/// (`-32000`), no `METHOD_NOT_FOUND`. El panel degrada a su anillo local y
+/// **dice por qué**: la degradación tiene que ser explícita, porque un panel
+/// que se queda a medias sin explicación parece roto.
+///
+/// Un daemon 0.64 NO es ese caso, y escribirlo aquí como si lo fuera manda a
+/// quien implemente la degradación a escribir una rama muerta: un cliente 0.65
+/// no llega a mandar `log.tail` contra él, porque muere antes en el
+/// [`INITIALIZE`] con `VERSION_MISMATCH` (ver [`PROTOCOL_VERSION`]). No hay
+/// ventana N/N-1 que hacer aquí.
 ///
 /// ```
 /// assert_eq!(norte_proto::methods::LOG_TAIL, "log.tail");
@@ -8100,7 +8115,10 @@ pub const LOG_TAIL: &str = "log.tail";
 ///
 /// SOLO una conexión humana, por lo dicho en [`LOG_TAIL`] y con más razón:
 /// subir la verbosidad del daemon es subir la de un trabajo del que un agente
-/// no es parte.
+/// no es parte. Misma negativa y mismo código que allí: `Error::PolicyDenied`
+/// con `rule: "not-approved"`, o sea
+/// [`codes::APP_ERROR`](crate::wire::codes::APP_ERROR) (`-32000`), NO
+/// `INVALID_REQUEST`.
 ///
 /// ```
 /// assert_eq!(norte_proto::methods::LOG_LEVEL, "log.level");

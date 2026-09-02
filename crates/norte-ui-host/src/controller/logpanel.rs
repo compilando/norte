@@ -120,6 +120,28 @@ impl RegistroRemoto {
         self.en_vuelo = false;
         self.perdidas = 0;
     }
+
+    /// ¿Tiene sentido volver a preguntarle algo a este daemon?
+    ///
+    /// A uno que ya dijo que no tiene registro, no: la negativa no puede
+    /// cambiar mientras ese daemon viva —sale de una feature de compilación o
+    /// de un montaje que le falló al arrancar—, así que seguir preguntando son
+    /// RPC para siempre por una respuesta que no puede ser otra. Es asimétrico
+    /// a propósito: lo POSITIVO sí hay que seguir pidiéndolo, porque el
+    /// registro crece.
+    ///
+    /// Lo comparten el sondeo de `log.tail` y la petición de `log.level`, y
+    /// eso es el arreglo de una asimetría: el nivel se pedía solo por la
+    /// fuente, así que contra un daemon que ya había contestado `Unsupported`
+    /// la ventana mandaba un RPC muerto por cada pulsación de nivel. La TUI ya
+    /// lo hacía bien (`RegistroRemoto::debe_pedir`); ahora es la misma regla en
+    /// las dos.
+    ///
+    /// No hay comparación de versiones aquí ni en ninguna parte: un daemon más
+    /// viejo ni siquiera completa el `initialize`.
+    pub(super) const fn debe_pedir(&self) -> bool {
+        !matches!(self.servicio, Servicio::SinAnillo)
+    }
 }
 
 /// Una línea del cable a la forma que el panel pinta.
@@ -425,7 +447,11 @@ impl Estado {
         if let Some(anillo) = &self.log_ring {
             anillo.raise_to(nivel);
         }
-        if self.log_panel.source() != LogSource::Window {
+        // Y solo si hay alguien a quien pedírselo: a un daemon que ya dijo que
+        // no tiene anillo, subirle el nivel es un RPC por pulsación cuya
+        // respuesta ya se conoce. Es la misma condición que corta el sondeo
+        // (ver `RegistroRemoto::debe_pedir`), y la TUI ya la aplicaba aquí.
+        if self.log_panel.source() != LogSource::Window && self.log_remoto.debe_pedir() {
             let backend = Arc::clone(backend);
             let buzon = buzon.clone();
             let epoca = self.log_epoca;
@@ -445,8 +471,17 @@ impl Estado {
     /// existe. Aun así se acepta la acción en vez de rechazarla — el renderer
     /// solo la manda cuando el selector está en pantalla, y un `Unavailable`
     /// aquí sería un aviso sobre una pulsación que nadie pudo dar.
+    ///
+    /// La guarda es de AQUÍ y no del renderer, y eso se corrigió: dejarla en
+    /// `sources_available` bastaba para que no se viera nada raro —la fuente
+    /// efectiva colapsa a `Window` de todos modos—, pero la PREFERENCIA se
+    /// movía por debajo de un lector que no puede verla moverse, y reaparecía
+    /// puesta en otra cosa el día que sí hubiera daemon. Es lo mismo que hace
+    /// la TUI, que tampoco recorre sin daemon que sirva.
     pub(super) fn fuente_de_registro(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.log_panel.cycle_source();
+        if self.log_remoto.servicio == Servicio::Sirve {
+            self.log_panel.cycle_source();
+        }
         self.repintar_registro()
     }
 
@@ -642,7 +677,7 @@ impl Estado {
             //
             // Es asimétrico a propósito. Lo POSITIVO sí hay que seguir
             // pidiéndolo —el registro crece— y por eso `Sirve` no corta nada.
-            || self.log_remoto.servicio == Servicio::SinAnillo
+            || !self.log_remoto.debe_pedir()
         {
             return;
         }

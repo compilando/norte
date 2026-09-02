@@ -27,7 +27,10 @@ independently through `PROTOCOL_VERSION`.
   Raising the level is a **method** and not a field the client applies, so the
   cap that keeps an FTP password out of the panel (`suppaftp` logs
   `PASS <password>` at TRACE, #43) stays in the only process that can enforce
-  it. Agents are refused on both: the daemon's ring names paths, connections and
+  it. That cap is a whitelist, and it now matches by **module segment**: it used
+  to accept any target starting with `norte`/`ntc` as a raw prefix, so a future
+  dependency named `nortex` or `ntcp` would have silently earned TRACE into a
+  ring any local client can raise and read. Agents are refused on both: the daemon's ring names paths, connections and
   other sessions, so for a scoped agent it is an existence oracle for everything
   outside its sandbox.
   A daemon with no ring to serve — built without the `logging` feature, or one

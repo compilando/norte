@@ -1945,9 +1945,14 @@ impl RemoteBackend {
     /// El caso alcanzable de verdad no es un daemon MÁS VIEJO —un cliente
     /// 0.65 nunca completa `initialize` contra uno 0.64, ver
     /// [`methods::LOG_TAIL`]— sino uno de la MISMA versión compilado sin la
-    /// feature `logging`, que no tiene anillo que servir. Los dos casos
-    /// contestan `METHOD_NOT_FOUND` igual, así que no hace falta distinguirlos
-    /// aquí: la respuesta al método ya es la única señal que hace falta.
+    /// feature `logging`, que no tiene anillo que servir y contesta
+    /// `Error::Unsupported` (`-32000`).
+    ///
+    /// Este SDK dobla ADEMÁS un `METHOD_NOT_FOUND` en [`Error::Unsupported`]
+    /// (`call_no_method_is_unsupported`), y eso se queda: es defensa contra un
+    /// peer que no sea este daemon, no la descripción del caso que ocurre.
+    /// Quien lea esto para escribir una degradación tiene UNA rama que
+    /// programar, y es [`Error::Unsupported`].
     ///
     /// # Errors
     /// Lo que responda el daemon; [`Error::Unsupported`] si no tiene registro
