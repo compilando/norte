@@ -215,7 +215,9 @@ Both `Kind::Request`, `Shape::Direct`, with their params/result type paths, in `
 
 - [ ] **Step 4: Bump `PROTOCOL_VERSION` and document the version**
 
-`PROTOCOL_VERSION` at `crates/norte-proto/src/methods.rs:996` goes to `"0.65.0"`. Add the version's paragraph to the history block in the same file, in the voice of the ones around it: what it adds, and what a 0.64 client/daemon does instead (answers "method not found"; the panel degrades to its own ring and says so).
+`PROTOCOL_VERSION` at `crates/norte-proto/src/methods.rs:996` goes to `"0.65.0"`. Add the version's paragraph to the history block in the same file, in the voice of the ones around it: what it adds, and what a peer that cannot serve it does instead.
+
+**Corrected 2026-09-02 (protocol-guardian, task 2).** This step first said "what a 0.64 client/daemon does instead (answers method not found)". That direction does not exist: `version_compatible` accepts only `cn == sn || cn + 1 == sn`, and the daemon refuses `initialize` with `VERSION_MISMATCH` when the client's minor is higher, so a 0.65 client against a 0.64 daemon dies at the handshake. There is **exactly one** degradation branch, and tasks 4, 6 and 7 wire that one: a **same-version** daemon built without the `logging` feature, which has no ring and answers `METHOD_NOT_FOUND`.
 
 - [ ] **Step 5: Regenerate the goldens and READ the diff**
 
@@ -382,7 +384,9 @@ pub async fn log_tail(&self, cursor: Option<u64>, max: u32) -> Result<methods::L
 pub async fn log_level(&self, level: &str) -> Result<String, Error>;
 ```
 
-Both go through `call_no_method_is_unsupported` — the helper `session_get` already uses (`remote/mod.rs:1909`) — so a 0.64 daemon surfaces as `Error::Unsupported` rather than a raw protocol error. That is the value Task 6 turns into a sentence on screen.
+Both go through `call_no_method_is_unsupported` — the helper `session_get` already uses (`remote/mod.rs:1909`) — so a daemon that answers `METHOD_NOT_FOUND` surfaces as `Error::Unsupported` rather than a raw protocol error. That is the value Task 6 turns into a sentence on screen.
+
+**The reachable case is a same-version daemon built without the `logging` feature**, not an older daemon: a 0.65 client never completes `initialize` against a 0.64 daemon (`VERSION_MISMATCH`), so it never gets to send `log.tail`. Do not write a version comparison here — the answer to the method is the only signal, and it is enough.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -577,10 +581,11 @@ async fn con_daemon_se_mezclan_las_dos_fuentes() {
 }
 
 /// Un daemon que no sabe servir su registro NO deja el panel mudo: vuelve al
-/// anillo local y lo DICE. Es la mitad que #326 ya resolvió, aplicada al caso
-/// N-1.
+/// anillo local y lo DICE. Es la mitad que #326 ya resolvió, aplicada al único
+/// caso alcanzable: un daemon de la MISMA versión compilado sin la feature
+/// `logging`. Uno más viejo no llega aquí — muere en el `initialize`.
 #[tokio::test]
-async fn un_daemon_viejo_se_dice_en_el_panel() {
+async fn un_daemon_sin_registro_se_dice_en_el_panel() {
     let backend = BackendFalso::nuevo();
     backend.log_tail_no_soportado();
     let (host, _anillo) = host_con_backend_y_registro(backend).await;
