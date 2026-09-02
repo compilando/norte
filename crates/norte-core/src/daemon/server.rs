@@ -120,6 +120,27 @@ const MAX_SCOPE_TTL_MS: u64 = 24 * 60 * 60 * 1000;
 /// Cada cuánto barre el server los listados retenidos expirados de una
 /// conexión VIVA-pero-muda (además del barrido perezoso en cada `fs.list`).
 const LISTING_SWEEP: Duration = Duration::from_secs(30);
+/// Líneas de registro que `log.tail` entrega COMO MUCHO en una vuelta (#328,
+/// ADR 0092).
+///
+/// Mil, o sea la mitad del anillo por defecto
+/// ([`norte_config::logring::RING_DEFAULT`]). El recorte es del servidor —el
+/// `max` del cliente es una petición, igual que en `fs.list`— y no pierde
+/// nada: lo que no cabe sigue estando después de `next`, y la vuelta
+/// siguiente lo recoge.
+///
+/// La mitad y no el anillo entero porque el caso normal es un panel abierto
+/// sondeando cada ~300 ms, que trae unidades de líneas; el número solo lo toca
+/// quien se pone al día tras un rato sin mirar, y a ése le vale con dar dos
+/// vueltas. Enteras, las dos mil líneas son un frame de megas —cada una lleva
+/// dos `String` y el mensaje llega hasta 2 KiB— construido en el reactor.
+///
+/// **No se publica en el protocolo a propósito** (ADR 0092): el cliente
+/// dimensiona con `capacity`, que es la cota superior de lo que puede llegar,
+/// e itera sobre `next` hasta que la respuesta viene vacía. Congelar este
+/// número en el wire sería prometer para siempre uno elegido antes de la
+/// primera respuesta real.
+const LOG_TAIL_MAX_LINES: usize = 1000;
 /// Tope del prompt de `ai.rename_plan` (security review M4-IA): los tokens de
 /// ENTRADA son el coste del proveedor; el frame de 16 MiB no es un límite.
 const MAX_AI_INSTRUCTION_BYTES: usize = 4 * 1024;
@@ -269,6 +290,22 @@ struct Shared {
     /// llega la 2. El backend embebido tiene el suyo, y es el MISMO tipo — uno
     /// con pool y otro sin él sería la asimetría de #165/#201/#181 otra vez.
     column_pool: Arc<crate::plugins::ColumnPool>,
+    /// El anillo de registro de ESTE proceso, si alguien montó uno (#328,
+    /// ADR 0092). Es lo que sirven `log.tail` y `log.level`.
+    ///
+    /// No está en [`DaemonConfig`] porque no es configuración: es el objeto
+    /// VIVO en el que escribe la capa de `tracing`, y de eso solo sabe quien
+    /// instaló el subscriber — el binario, con [`Daemon::with_log_ring`],
+    /// entre el bind y el `run`. El mismo reparto que `scopes` y `approvals`,
+    /// que también llegan por fuera de la config por ser objetos compartidos
+    /// y no valores.
+    ///
+    /// Vacío es el daemon SIN registro que enseñar: el montaje no se hizo, o
+    /// falló porque ya había un subscriber. Entonces los dos métodos contestan
+    /// [`norte_proto::Error::Unsupported`] y jamás una lista vacía — un
+    /// registro vacío y un registro ausente no pueden leerse igual, que es
+    /// justo la confusión que #326 empezó a arreglar.
+    log_ring: std::sync::OnceLock<norte_config::logring::LogRing>,
 }
 
 /// Una petición de scope registrada por un agente, a la espera de que un
@@ -794,6 +831,7 @@ impl Daemon {
             plugins: Mutex::new(plugins),
             plugin_runtime,
             column_pool: Arc::new(crate::plugins::ColumnPool::default()),
+            log_ring: std::sync::OnceLock::new(),
             directed_feeds: Mutex::new(HashMap::new()),
             ui_session: Arc::new(crate::ui_session::SessionStore::new(sesion)),
             session_persists: Arc::clone(&session_persists),
@@ -859,6 +897,30 @@ impl Daemon {
             idle_timeout: cfg.idle_timeout,
             session_writer,
         })
+    }
+
+    /// Monta el anillo de registro que este daemon servirá por `log.tail`
+    /// (#328, ADR 0092).
+    ///
+    /// Se llama entre el bind y [`Self::run`], y lo llama quien instaló el
+    /// subscriber: el anillo tiene que ser EL MISMO en el que escribe la capa
+    /// de `tracing`, y eso solo lo sabe el binario que montó el registro
+    /// (`norte_config::logging::init_with_ring`). Por eso no viaja en
+    /// [`DaemonConfig`], que son valores, sino aquí, con `scopes` y
+    /// `approvals`, que son objetos compartidos.
+    ///
+    /// Un daemon al que no se le monte ninguno contesta
+    /// [`norte_proto::Error::Unsupported`] a `log.tail` y a `log.level`, y
+    /// nunca una lista vacía: el frontend degrada a su anillo local DICIENDO
+    /// por qué.
+    ///
+    /// Una segunda llamada no cambia el anillo ya montado — hay uno por
+    /// proceso, y cambiarlo en caliente dejaría al cliente con un cursor que
+    /// cuenta líneas de otro sitio.
+    #[must_use]
+    pub fn with_log_ring(self, ring: norte_config::logring::LogRing) -> Self {
+        let _ = self.shared.log_ring.set(ring);
+        self
     }
 
     /// Dónde quedó el socket (para clientes y logs).
@@ -2595,6 +2657,39 @@ async fn dispatch(
             }
             handle_connection_list().await
         }
+        // `log.tail` / `log.level` (0.65.0, #328, ADR 0092): el registro de
+        // ESTE proceso, que un frontend en otro no puede ver de ninguna otra
+        // forma — la ventana arranca su propio daemon (#300), así que su
+        // anillo tiene las líneas del puente y no las del provider que falló.
+        //
+        // El gate va ANTES del parseo, mismo criterio que `connection.list` y
+        // `host.volumes` y por el mismo motivo doble: el anillo lleva rutas,
+        // nombres de conexión y actividad de OTRAS sesiones —un oráculo de
+        // existencia fuera del recinto de un agente, la misma fuga que
+        // `read_gate_all` documenta para `plugin.decorate`— y un agente no
+        // puede distinguir «vedado» de «params malos» fuzzeando la forma de su
+        // propia petición.
+        methods::LOG_TAIL => {
+            if !matches!(conn.actor, Actor::User) {
+                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+                    rule: "not-approved".into(),
+                }));
+            }
+            let p: methods::LogTailParams = parse_params(req.params)?;
+            handle_log_tail(&p, shared)
+        }
+        // Subir el nivel es más de lo mismo: un agente subiría la verbosidad
+        // de un trabajo del que no es parte. Y quien lo aplica es el daemon
+        // —`LogRing::raise_to`, con su lista blanca—, jamás el cliente.
+        methods::LOG_LEVEL => {
+            if !matches!(conn.actor, Actor::User) {
+                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
+                    rule: "not-approved".into(),
+                }));
+            }
+            let p: methods::LogLevelParams = parse_params(req.params)?;
+            handle_log_level(&p, shared)
+        }
         // plugin.* (M4-P3): listar el catálogo (cualquier conexión) y aprobar/
         // activar (SOLO humanos — es consentir capabilities, acto de seguridad).
         methods::PLUGIN_LIST => handle_plugin_list(req.params, shared),
@@ -3191,6 +3286,114 @@ async fn handle_connection_list() -> Result<serde_json::Value, RpcError> {
             .into_iter()
             .map(|(name, url)| methods::ConnectionEntry { name, url })
             .collect(),
+    })
+}
+
+/// `log.tail` (0.65.0, #328, ADR 0092): lo que el anillo de registro de ESTE
+/// proceso tiene después de un cursor.
+///
+/// El gate de actor (SOLO `User`) vive en el brazo de `dispatch` que llama
+/// aquí, ANTES del parseo de params: a esta función solo llega una conexión ya
+/// autorizada, así que no vuelve a comprobar el actor.
+///
+/// Tres decisiones del ADR se aplican en estas pocas líneas:
+///
+/// - **Sin anillo, `Unsupported`.** Nunca una lista vacía: un registro que no
+///   existe y uno que no tiene nada que contar se leen igual en pantalla, y el
+///   panel necesita poder decir «este daemon no lo sirve» para degradar al
+///   suyo DICIENDO por qué.
+/// - **`cursor: null` no es `0`.** Un cero afirma haber visto la línea número
+///   cero, así que contra un anillo que ya dio la vuelta contestaría un `lost`
+///   enorme y falso — nadie perdió lo que nunca esperó. El anillo empieza por
+///   la más vieja que conserva en los dos casos; lo que cambia es que sin
+///   cursor no se afirma ningún hueco.
+/// - **`max` se acota aquí** a [`LOG_TAIL_MAX_LINES`], como `fs.list` con
+///   `FS_LIST_MAX_PAGE`: pedir de más no es un error y no pierde nada, porque
+///   lo que no cabe sigue estando después de `next`. Pedir CERO sí lo es
+///   (`INVALID_PARAMS`, mismo criterio que `FsListParams::limit`): un panel
+///   sondeando con `max: 0` recibiría una lista vacía cada vuelta con el
+///   cursor parado, y eso en pantalla se lee como «no está pasando nada» en
+///   vez de como el error de programación que es.
+#[tracing::instrument(skip(shared))]
+fn handle_log_tail(
+    p: &methods::LogTailParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    // El anillo PRIMERO: a un daemon que no sirve registro, la respuesta
+    // honesta es «no lo tengo», también cuando los params vienen mal — lo que
+    // el cliente tiene que hacer después es lo mismo en los dos casos.
+    let Some(ring) = shared.log_ring.get() else {
+        return Err(RpcError::from(norte_proto::Error::Unsupported));
+    };
+    if p.max == 0 {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            "log.tail: `max` must be at least 1 (a zero page would poll forever)",
+        ));
+    }
+    let max = usize::try_from(p.max)
+        .unwrap_or(usize::MAX)
+        .min(LOG_TAIL_MAX_LINES);
+    // Sin cursor se pide desde el principio de lo que el anillo CONSERVA, que
+    // es lo que `since(0, …)` entrega; lo que no vale de ese cero es su
+    // `lost`, que contaría como perdido todo lo que ya se había caído antes de
+    // que este lector existiera.
+    let tail = ring.since(p.cursor.unwrap_or(0), max);
+    to_value(&methods::LogTailResult {
+        lines: tail
+            .lines
+            .into_iter()
+            .map(|l| methods::LogLine {
+                epoch_ms: l.epoch_ms,
+                level: l.level.wire().to_owned(),
+                target: l.target,
+                message: l.message,
+            })
+            .collect(),
+        next: tail.next,
+        lost: if p.cursor.is_some() { tail.lost } else { 0 },
+        // El nivel viaja CON las líneas a las que se aplica: es global al
+        // daemon y otro cliente pudo subirlo hace un segundo, así que en un
+        // método aparte nacería rancio.
+        level: ring.level().wire().to_owned(),
+        capacity: u32::try_from(ring.capacity()).unwrap_or(u32::MAX),
+    })
+}
+
+/// `log.level` (0.65.0, #328, ADR 0092): sube el nivel del anillo de ESTE
+/// proceso y contesta el que quedó.
+///
+/// **La cota de seguridad no se toca aquí, y ése es el diseño entero.** Quien
+/// decide qué se guarda es [`norte_config::logring::LogRing::raise_to`], con
+/// su lista blanca: solo los targets de norte suben de INFO, y `suppaftp`
+/// —que emite `PASS <contraseña>` en TRACE (#43, regla 10)— se queda abajo
+/// pida quien pida lo que pida. El cliente PIDE un nivel; no lo calcula, no lo
+/// aplica y no conoce la lista. Una segunda copia de esa defensa al otro lado
+/// del cable se separaría de ésta en cuanto una de las dos cambiara.
+///
+/// Como el anillo no baja, el nivel que se contesta puede ser MÁS verboso que
+/// el pedido, y eso no es un fallo: es por lo que el result lleva el nivel en
+/// vez de un `bool`.
+///
+/// El gate de actor vive en el brazo de `dispatch`, igual que en
+/// [`handle_log_tail`].
+#[tracing::instrument(skip(shared))]
+fn handle_log_level(
+    p: &methods::LogLevelParams,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let Some(ring) = shared.log_ring.get() else {
+        return Err(RpcError::from(norte_proto::Error::Unsupported));
+    };
+    // Un nivel que no está en el vocabulario NO se degrada a uno por defecto:
+    // aceptar lo que no se entiende y poner otra cosa dejaría al lector
+    // creyendo que pidió algo que nadie hizo.
+    let Some(nivel) = norte_config::logline::LogLevel::from_wire(&p.level) else {
+        return Err(RpcError::from(norte_proto::Error::Unsupported));
+    };
+    ring.raise_to(nivel);
+    to_value(&methods::LogLevelResult {
+        level: ring.level().wire().to_owned(),
     })
 }
 

@@ -248,6 +248,22 @@ impl LogRing {
         self.pushed.load(Ordering::Relaxed)
     }
 
+    /// Cuántas líneas cabe guardar aquí dentro.
+    ///
+    /// Es la historia MÁS PROFUNDA que se puede pedir, y por eso viaja en la
+    /// respuesta de `log.tail` (ADR 0092): quien pinta el registro puede decir
+    /// «esto es todo lo que hay» en vez de insinuar que hay más. Cota
+    /// SUPERIOR y no promesa — quien sirve el anillo recorta además lo que
+    /// entrega en una vuelta, así que una sola llamada con este tamaño puede
+    /// volver corta.
+    ///
+    /// No es [`Self::pushed`] ni la longitud de ahora: las dos se mueven, y
+    /// ésta es la única de las tres que dice dónde está el fondo.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.ring.lock().unwrap_or_else(PoisonError::into_inner).cap
+    }
+
     /// Copia de las líneas, de la más vieja a la más nueva.
     ///
     /// Una copia y no un préstamo: el candado no puede quedarse tomado
@@ -787,6 +803,22 @@ mod tests {
         assert_eq!(t.next, 2);
         let t2 = anillo.since(t.next, 2);
         assert_eq!(t2.lines[0].message, "l2");
+    }
+
+    /// La capacidad es la que se pidió y NO se mueve con lo que entra: es lo
+    /// que un lector remoto necesita para saber dónde está el fondo de la
+    /// historia (ADR 0092).
+    #[test]
+    fn la_capacidad_dice_el_fondo_y_no_la_ocupacion() {
+        let anillo = LogRing::new(3);
+        assert_eq!(anillo.capacity(), 3, "vacío ya sabe cuánto le cabe");
+        for i in 0..7 {
+            anillo.push(linea(Level::INFO, "norte_core", &format!("l{i}")));
+        }
+        assert_eq!(anillo.capacity(), 3, "lleno y desbordado, la misma");
+        // Un anillo de cero líneas no existe: `new` lo sube a una, y la
+        // capacidad tiene que decir lo que hay, no lo que se pidió.
+        assert_eq!(LogRing::new(0).capacity(), 1);
     }
 
     /// Un cursor del futuro —un daemon reiniciado bajo un cliente que guardó el

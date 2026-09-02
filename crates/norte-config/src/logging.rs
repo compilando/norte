@@ -201,6 +201,28 @@ pub fn init_to_file_with_ring(cfg: LogConfig<'_>, cap: usize) -> Option<crate::l
     init_with(false, cfg, Some(&ring)).then_some(ring)
 }
 
+/// Como [`init`] —stderr MÁS fichero—, y además el anillo en memoria. Para el
+/// DAEMON (#328, ADR 0092).
+///
+/// Existe porque el daemon necesita las dos cosas a la vez y ninguna de las
+/// otras dos se las da: [`init`] no monta anillo, y
+/// [`init_to_file_with_ring`] deja al proceso sin stderr. Quitarle el stderr
+/// a `norte daemon run` sería una regresión callada — quien lo arranca en una
+/// terminal para ver por qué no levanta dejaría de leer nada.
+///
+/// Solo el daemon lo llama: un `norte cp` no tiene a quién enseñarle un
+/// anillo, y pagaría dos mil líneas de memoria por nadie. El resto del CLI
+/// sigue con [`init`].
+///
+/// `None` con el mismo criterio que [`init_to_file_with_ring`]: si ya había
+/// subscriber, nadie escribe en este anillo y devolverlo dejaría al lector
+/// creyendo que un registro vacío es que no ha pasado nada.
+#[must_use]
+pub fn init_with_ring(cfg: LogConfig<'_>, cap: usize) -> Option<crate::logring::LogRing> {
+    let ring = crate::logring::LogRing::new(cap);
+    init_with(true, cfg, Some(&ring)).then_some(ring)
+}
+
 /// Como [`init`] pero SOLO al fichero. Para los frontends.
 ///
 /// La TUI no instalaba subscriber ninguno, y lo decía en un comentario: un

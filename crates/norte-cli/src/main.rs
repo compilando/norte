@@ -637,18 +637,37 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // un sitio distinto del que escriben los frontends — con `norte doctor`
     // señalando uno de los dos, que es peor que no señalar ninguno.
     let cfg_log = norte_config::load(&norte_config::standard_layers()).ok();
-    norte_core::logging::init(norte_core::logging::LogConfig {
+    let log_cfg = norte_core::logging::LogConfig {
         dir: cfg_log.as_ref().and_then(|c| c.log_dir.as_deref()),
         retain: cfg_log.as_ref().and_then(|c| c.log_retain),
         // El fichero compartido: es el que lee `norte doctor`.
         prefix: None,
-    });
+    };
+    // El DAEMON —y solo él— monta además un anillo en memoria (#328, ADR
+    // 0092): es el registro que `log.tail` sirve a un frontend que vive en
+    // otro proceso, y sin él la ventana pinta el anillo del proceso
+    // equivocado (#326). Un `norte cp` no tiene a quién enseñárselo y pagaría
+    // dos mil líneas de memoria por nadie, así que el resto de subcomandos
+    // sigue con `init` a secas.
+    //
+    // `init_with_ring` y no `init_to_file_with_ring`: el daemon conserva su
+    // stderr. Quitárselo dejaría a quien arranca `norte daemon run` en una
+    // terminal para ver por qué no levanta sin leer nada.
+    #[cfg(unix)]
+    let anillo_de_registro = if matches!(cli.cmd, Cmd::Daemon { .. }) {
+        norte_core::logging::init_with_ring(log_cfg, norte_config::logring::RING_DEFAULT)
+    } else {
+        norte_core::logging::init(log_cfg);
+        None
+    };
+    #[cfg(not(unix))]
+    norte_core::logging::init(log_cfg);
 
     // El daemon construye SU PROPIO engine (con journal+policy, M3-4): el
     // embebido de abajo es solo para el resto de subcomandos.
     #[cfg(unix)]
     if let Cmd::Daemon { cmd } = cli.cmd {
-        return daemon_cmd(cmd).await;
+        return daemon_cmd(cmd, anillo_de_registro).await;
     }
     // MCP/policy/undo hablan al daemon directamente como cliente (no van por
     // el Backend embebido): el daemon es el dueño del journal y la policy.
@@ -2073,9 +2092,18 @@ async fn make_backend(
 
 /// `norte daemon run|stop` (ADR 0011). El engine que sirve el daemon es el
 /// MISMO embebido de esta CLI: solo cambia el transporte (regla 7).
+///
+/// `anillo` es el registro en memoria que montó `run` (#328): el MISMO en el
+/// que escribe la capa de `tracing`, y el que `log.tail` sirve. `None` —el
+/// montaje falló porque ya había subscriber— deja al daemon contestando
+/// `Unsupported` a los dos métodos de registro, que es lo que el frontend
+/// necesita para degradar diciendo por qué.
 #[cfg(unix)]
 #[allow(clippy::too_many_lines)]
-async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
+async fn daemon_cmd(
+    cmd: DaemonCmd,
+    anillo: Option<norte_config::logring::LogRing>,
+) -> anyhow::Result<ExitCode> {
     use norte_core::daemon::{
         Client, Daemon, DaemonApprovalResolver, DaemonConfig, default_socket_path,
     };
@@ -2234,6 +2262,13 @@ async fn daemon_cmd(cmd: DaemonCmd) -> anyhow::Result<ExitCode> {
             )
             .await
             .context("no se pudo enlazar el daemon")?;
+            // El anillo se monta entre el bind y el `run`, que es donde puede
+            // montarse: lo tiene el proceso (lo creó el subscriber), no la
+            // config del daemon.
+            let daemon = match anillo {
+                Some(anillo) => daemon.with_log_ring(anillo),
+                None => daemon,
+            };
             eprintln!(
                 "{}",
                 norte_i18n::ta(

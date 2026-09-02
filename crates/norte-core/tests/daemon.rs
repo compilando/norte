@@ -8720,6 +8720,323 @@ async fn un_core_suelto_no_escribe_el_estado_ajeno() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// El registro del daemon por el cable (#328, ADR 0092).
+// ---------------------------------------------------------------------------
+
+/// Un daemon con anillo de registro montado, y el anillo.
+///
+/// El anillo es EL MISMO objeto de los dos lados —el daemon lo sirve, el
+/// subscriber del test escribe en él— porque en el proceso de verdad también
+/// lo es: quien monta el registro es el binario, y el daemon solo lo sirve.
+async fn spawn_daemon_con_anillo() -> (TestDaemon, norte_config::logring::LogRing) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let engine = Arc::new(Engine::new());
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let anillo = norte_config::logring::LogRing::new(norte_config::logring::RING_DEFAULT);
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: None,
+            state_dir: None,
+        },
+    )
+    .await
+    .expect("bind")
+    .with_log_ring(anillo.clone());
+    let run = tokio::spawn(daemon.run());
+    (
+        TestDaemon {
+            socket,
+            run,
+            _dir: dir,
+            mem,
+        },
+        anillo,
+    )
+}
+
+/// Encamina las líneas de ESTE hilo al anillo mientras viva el guard.
+///
+/// Un subscriber GLOBAL solo se puede instalar una vez por proceso, y estos
+/// tests necesitan el suyo; el de ámbito lo resuelve, igual que `con_lineas`
+/// en `norte-ui-host`. El daemon corre en el mismo hilo (el runtime de
+/// `#[tokio::test]` es de un hilo), así que sus líneas entran también — que es
+/// exactamente lo que pasa en el proceso de verdad.
+///
+/// Por la capa de `tracing` y no metiendo líneas a mano: el filtro por el que
+/// pasa esa capa es donde vive la cota de `suppaftp`, y un atajo que se la
+/// saltara probaría un camino que no existe.
+fn hacia_el_anillo(anillo: &norte_config::logring::LogRing) -> tracing::subscriber::DefaultGuard {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(anillo));
+    tracing::subscriber::set_default(s)
+}
+
+/// LA prueba de este trabajo: la cota sigue viva al otro lado del socket.
+///
+/// `suppaftp` escribe `PASS <contraseña>` en TRACE (#43, regla 10), y el nivel
+/// del anillo se sube DESDE la interfaz. Si subir el nivel por `log.level`
+/// dejara pasar un target de terceros, una pulsación en un panel pondría una
+/// contraseña en pantalla.
+#[tokio::test]
+async fn subir_el_nivel_por_el_cable_no_levanta_la_cota() {
+    let (d, anillo) = spawn_daemon_con_anillo().await;
+    let _guard = hacia_el_anillo(&anillo);
+    let c = connected_client(&d).await;
+
+    let nivel: methods::LogLevelResult = c
+        .call(methods::LOG_LEVEL, &serde_json::json!({ "level": "trace" }))
+        .await
+        .expect("el humano sube el nivel");
+    assert_eq!(nivel.level, "trace", "el daemon contesta el que QUEDÓ");
+
+    tracing::trace!(target: "suppaftp", "PASS secreto-de-verdad");
+    tracing::trace!(target: "hyper::proto", "cabecera cruda");
+    tracing::trace!(target: "norte_core::connect", "esto sí");
+
+    let r: methods::LogTailResult = c
+        .call(
+            methods::LOG_TAIL,
+            &serde_json::json!({ "cursor": null, "max": 500 }),
+        )
+        .await
+        .expect("el humano lee el registro");
+    let mensajes: Vec<_> = r.lines.iter().map(|l| l.message.as_str()).collect();
+    assert!(mensajes.iter().any(|m| m.contains("esto sí")));
+    assert!(!mensajes.iter().any(|m| m.contains("secreto-de-verdad")));
+    assert!(!mensajes.iter().any(|m| m.contains("cabecera cruda")));
+}
+
+/// Un agente no lee el registro del daemon: lleva rutas, nombres de conexión y
+/// actividad de OTRAS sesiones, o sea un oráculo de existencia fuera de su
+/// scope. Y se le dice que está vedado, no que está vacío.
+///
+/// Con anillo montado a propósito: así lo que refusa es el gate de actor y no
+/// la ausencia de registro, que contestaría otra cosa.
+#[tokio::test]
+async fn un_agente_no_lee_el_registro() {
+    let (d, anillo) = spawn_daemon_con_anillo().await;
+    let _guard = hacia_el_anillo(&anillo);
+    let agent = connected_agent(&d, "a1").await;
+
+    let vedado = |err: ClientError| match err {
+        ClientError::Rpc(rpc) => assert!(
+            matches!(
+                rpc.data,
+                Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"
+            ),
+            "vedado, no vacío ni mal-formado: {:?}",
+            rpc.data
+        ),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    };
+
+    // Y pase lo que pase con los params: el gate corre ANTES del parseo, así
+    // que un agente no distingue «vedado» de «params malos» fuzzeando su
+    // propia petición — ni siquiera el `max: 0` que a un humano le daría
+    // INVALID_PARAMS.
+    for params in [
+        serde_json::json!({ "cursor": null, "max": 10 }),
+        serde_json::json!({ "max": 0 }),
+        serde_json::json!({ "algo": "que no existe" }),
+        serde_json::Value::Null,
+    ] {
+        vedado(
+            agent
+                .call::<_, methods::LogTailResult>(methods::LOG_TAIL, &params)
+                .await
+                .expect_err("un agente no lee el registro"),
+        );
+    }
+    vedado(
+        agent
+            .call::<_, methods::LogLevelResult>(
+                methods::LOG_LEVEL,
+                &serde_json::json!({ "level": "debug" }),
+            )
+            .await
+            .expect_err("un agente no sube la verbosidad de un trabajo ajeno"),
+    );
+}
+
+/// El cursor sobrevive dos llamadas y no repite ni se salta líneas.
+#[tokio::test]
+async fn el_cursor_encadena_dos_llamadas() {
+    let (d, anillo) = spawn_daemon_con_anillo().await;
+    let _guard = hacia_el_anillo(&anillo);
+    let c = connected_client(&d).await;
+
+    tracing::info!(target: "norte_core::prueba", "primera");
+    let a: methods::LogTailResult = c
+        .call(
+            methods::LOG_TAIL,
+            &serde_json::json!({ "cursor": null, "max": 500 }),
+        )
+        .await
+        .expect("primera vuelta");
+    assert!(a.lines.iter().any(|l| l.message.contains("primera")));
+    tracing::info!(target: "norte_core::prueba", "segunda");
+    let b: methods::LogTailResult = c
+        .call(
+            methods::LOG_TAIL,
+            &serde_json::json!({ "cursor": a.next, "max": 500 }),
+        )
+        .await
+        .expect("segunda vuelta");
+    assert!(b.lines.iter().any(|l| l.message.contains("segunda")));
+    assert!(!b.lines.iter().any(|l| l.message.contains("primera")));
+    // Sin cursor no se afirma ningún hueco: nadie perdió lo que nunca esperó.
+    assert_eq!(a.lost, 0);
+    assert_eq!(b.lost, 0, "un cursor al día no se perdió nada");
+    // El nivel y el fondo de la historia viajan con las líneas, para que el
+    // panel pueda decir «esto es todo lo que hay» y a qué nivel se capturó.
+    assert_eq!(a.level, "info", "el anillo arranca en INFO");
+    assert_eq!(
+        a.capacity,
+        u32::try_from(norte_config::logring::RING_DEFAULT).expect("cabe"),
+    );
+}
+
+/// `max` se acota en el servidor: pedir un millón no manda un millón.
+#[tokio::test]
+async fn el_servidor_acota_max() {
+    let (d, anillo) = spawn_daemon_con_anillo().await;
+    let _guard = hacia_el_anillo(&anillo);
+    let c = connected_client(&d).await;
+
+    for i in 0..1200 {
+        tracing::info!(target: "norte_core::prueba", "l{i}");
+    }
+    let r: methods::LogTailResult = c
+        .call(
+            methods::LOG_TAIL,
+            &serde_json::json!({ "cursor": 0, "max": 100_000 }),
+        )
+        .await
+        .expect("pedir de más no es un error");
+    assert!(
+        r.lines.len() <= 1000,
+        "el servidor recorta: llegaron {}",
+        r.lines.len()
+    );
+    // Y lo que no cupo NO se pierde: sigue después de `next`.
+    let siguiente: methods::LogTailResult = c
+        .call(
+            methods::LOG_TAIL,
+            &serde_json::json!({ "cursor": r.next, "max": 500 }),
+        )
+        .await
+        .expect("la vuelta siguiente recoge el resto");
+    assert!(
+        !siguiente.lines.is_empty(),
+        "quedaban líneas después del recorte"
+    );
+}
+
+/// `max: 0` es un error de params, no una página vacía.
+///
+/// Un panel que sondeara con cero recibiría una lista vacía cada vuelta con el
+/// cursor parado, y en pantalla eso se lee como «no está pasando nada» en vez
+/// de como el error de programación que es. Mismo criterio que
+/// `FsListParams::limit`.
+#[tokio::test]
+async fn max_cero_no_es_una_pagina_vacia() {
+    let (d, anillo) = spawn_daemon_con_anillo().await;
+    let _guard = hacia_el_anillo(&anillo);
+    let c = connected_client(&d).await;
+
+    let err = c
+        .call::<_, methods::LogTailResult>(
+            methods::LOG_TAIL,
+            &serde_json::json!({ "cursor": null, "max": 0 }),
+        )
+        .await
+        .expect_err("cero no es una página");
+    match err {
+        ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
+        other => panic!("esperaba Rpc, fue {other:?}"),
+    }
+}
+
+/// Un daemon SIN anillo dice que no lo tiene, y no contesta una lista vacía.
+///
+/// Es la diferencia que hace posible que el panel degrade a su registro local
+/// DICIENDO por qué: un registro vacío y un registro ausente no pueden leerse
+/// igual (#326). Es también el daemon compilado sin la feature `logging`, y el
+/// que arrancó cuando ya había otro subscriber instalado.
+#[tokio::test]
+async fn sin_anillo_el_registro_no_existe_en_vez_de_estar_vacio() {
+    let d = spawn_daemon(None).await;
+    let c = connected_client(&d).await;
+
+    for (metodo, params) in [
+        (
+            methods::LOG_TAIL,
+            serde_json::json!({ "cursor": null, "max": 10 }),
+        ),
+        (methods::LOG_LEVEL, serde_json::json!({ "level": "debug" })),
+    ] {
+        let err = c
+            .call::<_, serde_json::Value>(metodo, &params)
+            .await
+            .expect_err("este daemon no tiene registro que servir");
+        match err {
+            ClientError::Rpc(rpc) => assert!(
+                matches!(rpc.data, Some(norte_proto::Error::Unsupported)),
+                "{metodo}: se esperaba Unsupported, fue {:?}",
+                rpc.data
+            ),
+            other => panic!("esperaba Rpc, fue {other:?}"),
+        }
+    }
+}
+
+/// Un nivel que no está en el vocabulario NO se degrada al de por defecto.
+///
+/// Aceptar lo que no se entiende y poner otra cosa dejaría al lector creyendo
+/// que pidió algo que nadie hizo.
+#[tokio::test]
+async fn un_nivel_desconocido_se_rechaza_y_el_anillo_no_se_mueve() {
+    let (d, anillo) = spawn_daemon_con_anillo().await;
+    let _guard = hacia_el_anillo(&anillo);
+    let c = connected_client(&d).await;
+
+    let err = c
+        .call::<_, methods::LogLevelResult>(
+            methods::LOG_LEVEL,
+            &serde_json::json!({ "level": "verboso-del-todo" }),
+        )
+        .await
+        .expect_err("ese nivel no existe");
+    assert!(
+        matches!(err, ClientError::Rpc(ref rpc) if matches!(rpc.data, Some(norte_proto::Error::Unsupported))),
+        "{err:?}"
+    );
+    assert_eq!(
+        anillo.level(),
+        norte_config::logline::LogLevel::Info,
+        "el anillo se queda donde estaba"
+    );
+
+    // Y bajar no baja: pedir menos verbosidad que la vigente contesta la
+    // vigente, que es la respuesta honesta y no un fallo.
+    let _: methods::LogLevelResult = c
+        .call(methods::LOG_LEVEL, &serde_json::json!({ "level": "debug" }))
+        .await
+        .expect("sube a debug");
+    let r: methods::LogLevelResult = c
+        .call(methods::LOG_LEVEL, &serde_json::json!({ "level": "error" }))
+        .await
+        .expect("pedir menos no es un error");
+    assert_eq!(r.level, "debug", "el anillo NUNCA baja");
+}
+
 /// #294 — el SDK RETIENE la versión que el peer declaró en el handshake.
 ///
 /// Sin ella un cliente no puede saber que la comprobación que acaba de pedir
