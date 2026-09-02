@@ -13,10 +13,7 @@ use crate::app::{App, display_name};
 use crate::theme::TuiTheme;
 use norte_i18n::{t, ta};
 
-// `pub(crate)` y no privado desde #329: los tests de `app::layout` comprueban
-// que el BOTÓN dice lo mismo que la pantalla, y esa pareja —el estado del árbol
-// y lo que la barra deriva de él— es justo lo que se desincronizaba.
-pub(crate) mod chrome;
+mod chrome;
 mod compare;
 mod geometry;
 mod help;
@@ -47,6 +44,13 @@ pub use pickers::draw_theme_picker;
 pub use text::fit_hint_groups;
 
 pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
+// Solo para los tests, y por eso va con su `cfg`: fuera de ellos la barra la
+// pinta este módulo y nadie más necesita derivar sus botones. Sale desde #329
+// porque los tests de `app::layout` comprueban que el BOTÓN dice lo mismo que
+// la pantalla, y esa pareja —el estado del árbol y lo que la barra deriva de
+// él— es exactamente lo que se desincronizaba.
+#[cfg(test)]
+pub(crate) use chrome::panel_buttons;
 use chrome::{draw_menu, draw_panel_bar};
 pub(crate) use geometry::{
     body_rect, centered, chrome_body, pane_cols, placed_of_kind, resolved_frame, slot_rect,

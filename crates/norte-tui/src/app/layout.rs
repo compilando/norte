@@ -86,14 +86,20 @@ impl App {
     /// Se comprueba por el KIND en el árbol y no por una bandera aparte: la
     /// pregunta es literalmente «¿sigue ahí?», y una bandera es un segundo
     /// sitio donde equivocarse.
-    fn settle_key_owner(&mut self) {
+    /// Desde #329 pregunta si el panel SE VE, no si existe. Un panel que se
+    /// queda detrás de una pestaña —porque el lector cambió de pestaña, no
+    /// porque cerrara nada— tiene el teclado igual de inútil que uno cerrado:
+    /// las teclas van a algo que no está en pantalla. Y la barra lo pinta
+    /// cerrado, así que el estado que el lector ve y el que manda dejaban de
+    /// ser el mismo.
+    pub(crate) fn settle_key_owner(&mut self) {
         let sigue = match self.key_owner {
             KeyOwner::Panes => true,
-            KeyOwner::Places => self.places_slot().is_some(),
-            KeyOwner::Preview => self.preview_slot().is_some(),
-            KeyOwner::Processes => self.processes_slot().is_some(),
-            KeyOwner::Tree => self.tree_slot().is_some(),
-            KeyOwner::Log => self.log_slot().is_some(),
+            KeyOwner::Places => self.slot_of_kind_visible("places").is_some(),
+            KeyOwner::Preview => self.slot_of_kind_visible(crate::preview::KIND).is_some(),
+            KeyOwner::Processes => self.slot_of_kind_visible(crate::processes::KIND).is_some(),
+            KeyOwner::Tree => self.slot_of_kind_visible(crate::tree::KIND).is_some(),
+            KeyOwner::Log => self.slot_of_kind_visible(crate::logview::KIND).is_some(),
         };
         if !sigue {
             self.key_owner = KeyOwner::Panes;
@@ -456,10 +462,15 @@ impl App {
                 }
                 self.key_owner = KeyOwner::Panes;
             }
-            Some(id) => {
-                self.revelar(id);
-                self.key_owner = KeyOwner::Preview;
-            }
+            // Sacarlo a la luz NO se lleva el teclado, y aquí está la
+            // diferencia con los otros cinco (#329): para el lector, revelar
+            // un visor escondido es ABRIRLO, y este toggle abre sin coger las
+            // teclas por lo que dice el párrafo de arriba — con el teclado
+            // dentro, las flechas dejan de mover el cursor al que el panel
+            // sigue. Siguen siendo tres pulsaciones desde escondido: enseñar,
+            // enfocar, cerrar; las mismas que desde cerrado.
+            Some(id) if !self.se_ve(id) => self.revelar(id),
+            Some(_) => self.key_owner = KeyOwner::Preview,
             None => {
                 let id = self.mint_slot();
                 self.panes
@@ -1075,7 +1086,7 @@ mod tests {
         use norte_frontend::panelbar::PanelState;
 
         let app = app_con_registro_escondido();
-        let boton = crate::ui::chrome::panel_buttons(&app)
+        let boton = crate::ui::panel_buttons(&app)
             .into_iter()
             .find(|b| b.kind == crate::logview::KIND)
             .expect("el registro tiene botón");
@@ -1102,6 +1113,133 @@ mod tests {
         assert!(app.log_slot().is_some(), "y desde luego no lo ha cerrado");
     }
 
+    /// Un panel que se ESCONDE pierde el teclado, igual que uno que se cierra
+    /// (#329).
+    ///
+    /// `settle_key_owner` preguntaba si el panel existe. Cambiar de pestaña no
+    /// cierra nada, así que el registro se quedaba con las teclas detrás de
+    /// otra pestaña: se pulsaba y no pasaba nada visible, mientras la barra ya
+    /// lo pintaba cerrado — el estado que el lector ve y el que manda dejaban
+    /// de ser el mismo. `tab_cycle` y `tab_goto` lo llaman por eso.
+    #[test]
+    fn un_panel_que_se_esconde_suelta_el_teclado() {
+        use norte_frontend::layout::SlotId;
+
+        let mut app = app_con_registro_escondido();
+        app.toggle_log();
+        assert_eq!(app.key_owner(), KeyOwner::Log, "visible y con las teclas");
+
+        // Lo que hace cualquier camino que cambia de pestaña.
+        app.layout = app.layout.set_active_for(SlotId(82), 0);
+        assert!(!app.layout.visible_slot_ids().contains(&SlotId(82)));
+
+        app.settle_key_owner();
+        assert_eq!(
+            app.key_owner(),
+            KeyOwner::Panes,
+            "se escondió y se quedó con las teclas"
+        );
+    }
+
+    /// El visor escondido se ENSEÑA sin llevarse el teclado, al revés que los
+    /// otros cinco.
+    ///
+    /// No es una excepción caprichosa: este toggle abre sin coger las teclas
+    /// porque el visor sigue al cursor del listado, y para el lector revelar
+    /// uno escondido ES abrirlo. Con el teclado dentro, las flechas dejarían de
+    /// mover el cursor al que el panel sigue — o sea que enseñarlo apagaría lo
+    /// único que hace.
+    #[test]
+    fn revelar_el_visor_no_se_lleva_el_teclado() {
+        use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
+
+        let mut app = app_dos_panes();
+        app.set_layout(Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Weight(1), Size::Fixed(30)],
+            children: vec![
+                Node::slot(SlotId(70), KindId::browser()),
+                Node::Tabs {
+                    children: vec![
+                        Node::slot(SlotId(71), KindId::browser()),
+                        Node::slot(SlotId(72), KindId::new(crate::preview::KIND)),
+                    ],
+                    active: 0,
+                },
+            ],
+        });
+        app.toggle_preview();
+        assert!(app.layout.visible_slot_ids().contains(&SlotId(72)));
+        assert_eq!(
+            app.key_owner(),
+            KeyOwner::Panes,
+            "enseñarlo no puede apagar las flechas del listado"
+        );
+        app.toggle_preview();
+        assert_eq!(app.key_owner(), KeyOwner::Preview, "y la segunda lo enfoca");
+    }
+
+    /// La hoja de atributos es de DOS estados, así que lo que le falta cuando
+    /// está escondida no es «cerrar» sino «tráela».
+    #[test]
+    fn la_hoja_de_atributos_escondida_se_ensena_en_vez_de_cerrarse() {
+        use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
+
+        let mut app = app_dos_panes();
+        app.set_layout(Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Weight(1), Size::Fixed(30)],
+            children: vec![
+                Node::slot(SlotId(60), KindId::browser()),
+                Node::Tabs {
+                    children: vec![
+                        Node::slot(SlotId(61), KindId::browser()),
+                        Node::slot(SlotId(62), KindId::new(crate::metadata::KIND)),
+                    ],
+                    active: 0,
+                },
+            ],
+        });
+        app.toggle_metadata();
+        assert!(
+            app.layout.visible_slot_ids().contains(&SlotId(62)),
+            "la cerró sin que el lector la hubiera visto"
+        );
+        app.toggle_metadata();
+        assert!(app.metadata_slot().is_none(), "y la segunda sí cierra");
+    }
+
+    /// Un panel de procesos escondido tampoco se come su marca de novedad.
+    #[test]
+    fn procesos_escondido_conserva_su_marca_de_novedad() {
+        use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
+
+        let mut app = app_dos_panes();
+        app.set_layout(Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(8)],
+            children: vec![
+                Node::slot(SlotId(50), KindId::browser()),
+                Node::Tabs {
+                    children: vec![
+                        Node::slot(SlotId(51), KindId::browser()),
+                        Node::slot(SlotId(52), KindId::new(crate::processes::KIND)),
+                    ],
+                    active: 0,
+                },
+            ],
+        });
+        let boton = crate::ui::panel_buttons(&app)
+            .into_iter()
+            .find(|b| b.kind == crate::processes::KIND)
+            .expect("procesos tiene botón");
+        assert_eq!(
+            boton.attention,
+            !app.board.rows().is_empty(),
+            "la marca depende de si hay tareas, no de que el hueco exista"
+        );
+    }
+
     /// La segunda pulsación ya sí cierra: enseñar y enfocar es UN paso, no dos.
     ///
     /// Si sacarlo a la luz costara una pulsación y enfocarlo otra, el panel que
@@ -1109,7 +1247,7 @@ mod tests {
     /// tres estados —abre y coge el teclado, coge el teclado, cierra— tendría
     /// cuatro.
     #[test]
-    fn la_segunda_pulsacion_cierra_lo_que_la_primera_ensenó() {
+    fn la_segunda_pulsacion_cierra_lo_que_la_primera_ensena() {
         let mut app = app_con_registro_escondido();
         app.toggle_log();
         app.toggle_log();
@@ -1135,7 +1273,7 @@ mod tests {
         });
         app.log_ring = Some(anillo);
 
-        let boton = crate::ui::chrome::panel_buttons(&app)
+        let boton = crate::ui::panel_buttons(&app)
             .into_iter()
             .find(|b| b.kind == crate::logview::KIND)
             .expect("el registro tiene botón");

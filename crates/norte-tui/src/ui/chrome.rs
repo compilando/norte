@@ -239,13 +239,17 @@ pub fn panel_buttons(app: &App) -> Vec<norte_frontend::panelbar::PanelButton> {
     // Novedad: el registro con errores sin ver, y procesos con tareas vivas.
     // Es lo que hace mirar la barra en vez de recordarla.
     let mut novedad: Vec<&str> = Vec::new();
-    // Con el panel abierto ya las estás viendo: la marca sobra, y además le
+    // Con el panel A LA VISTA ya las estás viendo: la marca sobra, y además le
     // robaba el estilo al estado mientras durase la tarea. Mismo criterio que
     // el registro, aquí abajo.
-    // La marca se calla con el panel A LA VISTA, no con el panel existente
-    // (#329): escondido en una pestaña no lo estás viendo, y callarla ahí
-    // apagaba el aviso justo en el caso en que sirve para algo.
-    if app.slot_of_kind_visible(crate::processes::KIND).is_none() && !app.board.rows().is_empty() {
+    //
+    // «A la vista» y no «existente» desde #329: escondido en una pestaña no lo
+    // estás viendo, y callar la marca ahí apagaba el aviso justo en el caso en
+    // que sirve para algo. Se pregunta a `abiertos`, que ya ES el conjunto de
+    // kinds visibles: recorrer el árbol otra vez costaría dos pasadas más por
+    // frame y dejaría la misma pregunta contestada en dos sitios, libres de
+    // separarse.
+    if !abiertos.contains(&crate::processes::KIND) && !app.board.rows().is_empty() {
         novedad.push(crate::processes::KIND);
     }
     // Errores o avisos en el registro que el lector no ha tenido delante: si
@@ -254,7 +258,7 @@ pub fn panel_buttons(app: &App) -> Vec<norte_frontend::panelbar::PanelButton> {
     // `has_at_or_above` y no `snapshot`: esto corre en cada frame, y clonar el
     // anillo entero para preguntar «¿hay algún aviso?» eran dos mil líneas con
     // sus dos `String` cada una, diez veces por segundo.
-    if app.slot_of_kind_visible(crate::logview::KIND).is_none()
+    if !abiertos.contains(&crate::logview::KIND)
         && app
             .log_ring
             .as_ref()

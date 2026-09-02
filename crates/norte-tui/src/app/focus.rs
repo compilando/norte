@@ -140,6 +140,11 @@ impl App {
         self.layout = self.layout.set_active_for(focus, dest);
         self.panes.refresh_visible(&self.layout);
         self.history.retain_tree(&self.layout);
+        // #329: cambiar de pestaña puede esconder el panel que tenía el
+        // teclado, y entonces las teclas iban a algo que ya no está en
+        // pantalla. No lo cierra nadie, así que sin esto no había quien lo
+        // devolviera a los listados.
+        self.settle_key_owner();
     }
 
     /// Va a la pestaña `n` (base 1) del grupo enfocado.
@@ -149,6 +154,8 @@ impl App {
             self.layout = self.layout.set_active_for(focus, n.saturating_sub(1));
             self.panes.refresh_visible(&self.layout);
             self.history.retain_tree(&self.layout);
+            // Mismo motivo que en `tab_cycle` (#329).
+            self.settle_key_owner();
         }
     }
 

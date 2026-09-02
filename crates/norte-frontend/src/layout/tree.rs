@@ -1009,9 +1009,14 @@ impl Node {
     ///
     /// Recorre TODO el camino y no solo el grupo de dentro: activar la pestaña
     /// interior dejando la exterior en otra deja el hueco igual de invisible, y
-    /// el llamante creería haberlo enseñado. Un hueco que ya se ve, o que no
-    /// está, devuelve el árbol igual — esto asegura un invariante, no ejecuta
-    /// un gesto.
+    /// el llamante creería haberlo enseñado. Un hueco que no está devuelve el
+    /// árbol igual — esto asegura un invariante, no ejecuta un gesto.
+    ///
+    /// Uno que ya se ve lo devuelve igual salvo en un caso, y conviene decirlo:
+    /// el tipo permite un `active` fuera de rango, que [`Self::visible_slot_ids`]
+    /// y el reparto clampan los dos al primero. Sobre uno así, revelar el hueco
+    /// que YA se veía escribe el índice de verdad. Normaliza, no mueve nada de
+    /// sitio.
     ///
     /// ```
     /// use norte_frontend::layout::{KindId, Node, SlotId};
@@ -1316,6 +1321,50 @@ mod tests {
         assert!(
             visto.visible_slot_ids().contains(&SlotId(4)),
             "el grupo de fuera seguía enseñando la otra pestaña"
+        );
+    }
+
+    /// Con un `Split` por el camino, revelar respeta TODO lo demás: los
+    /// tamaños, y la pestaña activa de un grupo que no contiene al hueco.
+    ///
+    /// El riesgo de una función que reconstruye el árbol es perder por el
+    /// camino algo que nadie mira en el test, y aquí lo que se perdería son
+    /// medidas: un `Split` que vuelve con pesos por defecto reparte la pantalla
+    /// de otra manera sin que nada se ponga rojo.
+    #[test]
+    fn revelar_conserva_medidas_y_los_grupos_ajenos() {
+        let ajeno = Node::Tabs {
+            children: vec![
+                Node::slot(SlotId(10), KindId::browser()),
+                Node::slot(SlotId(11), KindId::browser()),
+            ],
+            active: 1,
+        };
+        let arbol = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Fixed(24), Size::Weight(1)],
+            children: vec![
+                ajeno,
+                Node::Tabs {
+                    children: vec![
+                        Node::slot(SlotId(1), KindId::browser()),
+                        Node::slot(SlotId(2), KindId::new("log")),
+                    ],
+                    active: 0,
+                },
+            ],
+        };
+        let visto = arbol.reveal(SlotId(2));
+        assert!(visto.visible_slot_ids().contains(&SlotId(2)));
+        assert!(
+            visto.visible_slot_ids().contains(&SlotId(11)),
+            "el grupo de al lado no se toca: no contiene al hueco"
+        );
+        let (sizes, _) = visto.sizes_of(SlotId(2)).expect("sigue en el split");
+        assert_eq!(
+            (sizes[0], sizes[1]),
+            (Size::Fixed(24), Size::Weight(1)),
+            "reconstruir el split se llevó por delante las medidas"
         );
     }
 
