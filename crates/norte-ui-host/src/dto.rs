@@ -1537,8 +1537,37 @@ pub struct LogSlotView {
     /// Callarlo haría que el panel pareciera roto: alguien abre el registro
     /// mientras una conexión falla, no ve la línea que lo explica, y concluye
     /// que el panel no funciona en vez de que está mirando otro proceso.
-    /// Llevar las líneas del daemon por el cable es otra cosa, y es #328.
+    /// Desde #328 las del daemon también llegan, y esto dice cuáles se ven.
     pub source: String,
+    /// La fuente EFECTIVA, en vocabulario cerrado: `window`, `daemon` o
+    /// `both` (#328).
+    ///
+    /// Efectiva y no la preferencia guardada: sin un segundo anillo al otro
+    /// lado —un daemon sin la feature `logging`— la preferencia `both` se
+    /// enseña como `window`, porque eso es lo que el lector está mirando. Un
+    /// panel que dijera «los dos» sobre las líneas de uno solo mentiría en el
+    /// sitio donde más caro sale: el que abre el registro buscando lo que no
+    /// encuentra.
+    ///
+    /// Cerrado y sin traducir, como `level`: el renderer marca cuál está
+    /// puesta, y comparar frases traducidas para eso lo ataría al idioma.
+    pub source_mode: String,
+    /// Hay de verdad una SEGUNDA fuente que ofrecer.
+    ///
+    /// `false` mientras el daemon no haya contestado nunca a su registro, y
+    /// entonces el selector no se pinta: ofrecer tres fuentes donde solo hay
+    /// una es un mando que no hace nada, que es peor que no tenerlo.
+    pub sources_available: bool,
+    /// Lo que hay que decir sobre la fuente, ya traducido. Vacío = nada.
+    ///
+    /// Dos frases, y son excluyentes. Que el daemon **no tiene registro que
+    /// servir**, que es la mitad de #326 aplicada a la otra orilla: el panel
+    /// vuelve al anillo local y lo dice, en vez de quedarse mudo. Y, cuando lo
+    /// que se enseña es el del daemon, **de quién es el nivel**: es global al
+    /// proceso, otro cliente pudo subirlo, y solo sube — así que el número que
+    /// hay al lado no es «lo que pediste», y callarlo dejaría al lector
+    /// creyendo que su petición se aplicó tal cual.
+    pub source_note: String,
 }
 
 /// Una línea del registro, ya lista para pintar.
@@ -1565,6 +1594,14 @@ pub struct LogLineView {
     pub message: String,
     /// Lo pintado difiere de lo que hay, en el módulo o en el mensaje.
     pub hostile: bool,
+    /// De qué PROCESO salió: `window` o `daemon` (#328).
+    ///
+    /// Por línea y no solo en la cabecera, porque en una lista mezclada es la
+    /// mitad de la información: «el provider falló» y «la ventana no pudo
+    /// pintarlo» se leen igual sin saber quién lo escribió, y son dos averías
+    /// distintas. Cerrado y sin traducir: el renderer marca la fila, no la
+    /// lee en voz alta.
+    pub source: String,
 }
 
 /// El listado de un hueco.

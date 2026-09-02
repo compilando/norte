@@ -190,6 +190,17 @@ pub enum UiAction {
     },
     /// Vuelve a pegar el registro al final y sigue lo que llega.
     LogFollow,
+    /// Recorre la FUENTE del registro: los dos → esta ventana → el daemon
+    /// (#328).
+    ///
+    /// UN mando y no tres, y sin parámetro: son tres estados de una misma
+    /// pregunta —«¿de quién quiero leer?»— y un `set` con vocabulario abierto
+    /// obligaría a validar en el host una cadena que el renderer no tiene
+    /// motivo para componer.
+    ///
+    /// No hace nada visible cuando no hay una segunda fuente: entonces el
+    /// renderer ni siquiera pinta el selector (`sources_available`).
+    LogCycleSource,
     /// Cuántas filas de registro cabían en el último frame.
     ///
     /// La pone el renderer, como la ventana del listado: adivinarla en el host

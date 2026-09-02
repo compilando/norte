@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 47;
+export const BRIDGE_VERSION = 48;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -171,6 +171,10 @@ export interface LogLineView {
   message: string;
   /** Lo pintado difiere de lo que hay, en el módulo o en el mensaje. */
   hostile: boolean;
+  /** De qué PROCESO salió: `window` o `daemon` (#328). En una lista mezclada
+   *  es la mitad de la información: «el provider falló» y «la ventana no pudo
+   *  pintarlo» se leen igual sin saber quién lo escribió. */
+  source: string;
 }
 
 export interface LogSlotView {
@@ -195,10 +199,21 @@ export interface LogSlotView {
   capturing: string;
   /**
    * De qué PROCESO son estas líneas, ya traducido. La ventana arranca su
-   * propio daemon, así que aquí NO está lo del daemon —los providers, el
-   * journal, la política—; callarlo haría que el panel pareciera roto.
+   * propio daemon, así que hasta #328 aquí NO estaba lo del daemon —los
+   * providers, el journal, la política—; callarlo haría que el panel pareciera
+   * roto.
    */
   source: string;
+  /** La fuente EFECTIVA, en vocabulario cerrado: `window`, `daemon` o `both`.
+   *  Efectiva y no la preferencia: sin un segundo anillo al otro lado, `both`
+   *  se enseña como `window`, porque eso es lo que se está mirando. */
+  source_mode: string;
+  /** Hay de verdad una segunda fuente que ofrecer. `false` = el selector NO se
+   *  pinta: un mando entre tres vistas de un mismo anillo promete algo que no
+   *  existe. */
+  sources_available: boolean;
+  /** Lo que hay que decir sobre la fuente, ya traducido. Vacío = nada. */
+  source_note: string;
 }
 
 export type PlaceRowView =
@@ -1051,6 +1066,7 @@ export type UiAction =
   | { action: "log_set_filter"; filter: string }
   | { action: "log_scroll"; delta: number }
   | { action: "log_follow" }
+  | { action: "log_cycle_source" }
   | { action: "log_set_visible_range"; rows: number }
   | { action: "cancel_task"; task_id: number }
   | { action: "compare_select_row"; id: number }

@@ -555,6 +555,16 @@ enum Mensaje {
     /// apertura que lo programó: uno de una apertura anterior se deja morir en
     /// vez de rearmarse para siempre.
     RegistroTic(u64),
+    /// Lo que el daemon contestó a `log.tail` (#328), con la ÉPOCA de la
+    /// apertura que lo pidió.
+    ///
+    /// La época no es adorno: entre pedir y contestar caben un cierre y una
+    /// apertura, y unas líneas de la sesión anterior aterrizando en el panel
+    /// nuevo serían historia que nadie pidió por delante de la que sí.
+    RegistroRemoto(u64, Box<Result<norte_proto::methods::LogTailResult, Error>>),
+    /// Lo que el daemon contestó a `log.level` (#328): el nivel que de verdad
+    /// quedó puesto, que puede no ser el que se pidió.
+    RegistroNivel(u64, Box<Result<String, Error>>),
     /// Un snapshot de progreso. Por la MISMA cola que todo lo demás, que es
     /// lo que garantiza que un estado terminal no se adelante ni se pierda.
     Progreso(Box<norte_proto::TaskProgress>),
@@ -1081,7 +1091,17 @@ async fn actor(
                 }
             }
             Mensaje::RegistroTic(epoca) => {
-                for u in estado.tic_de_registro(epoca, &buzon) {
+                for u in estado.tic_de_registro(epoca, &backend, &buzon) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::RegistroRemoto(epoca, res) => {
+                for u in estado.aterrizar_registro_remoto(epoca, *res) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::RegistroNivel(epoca, res) => {
+                for u in estado.aterrizar_nivel_remoto(epoca, *res) {
                     let _ = updates.send(u);
                 }
             }
@@ -2456,6 +2476,14 @@ struct Estado {
     /// El contador de entradas del anillo la última vez que se pintó, para no
     /// mandar una foto por sondeo cuando no ha pasado nada.
     log_visto: u64,
+    /// La mitad REMOTA del panel de registro: lo que el daemon lleva
+    /// entregado de su anillo y lo que se sabe de él (#328).
+    ///
+    /// Junta y no seis campos sueltos: son un solo asunto —una fuente de
+    /// líneas con su cursor, su estado y su petición en vuelo— y sueltos
+    /// convertían a `Estado` en la clase de estructura que se describe con
+    /// una lista de banderas.
+    log_remoto: logpanel::RegistroRemoto,
     /// El selector abierto, si lo hay.
     selector: Option<crate::pickers::Selector>,
     /// La ayuda, si está abierta. Tapa la pantalla y se queda las teclas,
@@ -2821,6 +2849,7 @@ impl Estado {
             log_filas: 1,
             log_epoca: 0,
             log_visto: 0,
+            log_remoto: logpanel::RegistroRemoto::default(),
             sitios: None,
             gen_sitios: 0,
             ramas: None,
@@ -3349,10 +3378,11 @@ impl Estado {
                     (self.aplicada(), vec![self.parche(cambios)])
                 }
             }
-            UiAction::LogSetLevel { level } => self.nivel_de_registro(level),
+            UiAction::LogSetLevel { level } => self.nivel_de_registro(level, backend, buzon),
             UiAction::LogSetFilter { filter } => self.filtro_de_registro(filter),
             UiAction::LogScroll { delta } => self.desplazar_registro(*delta),
             UiAction::LogFollow => self.seguir_registro(),
+            UiAction::LogCycleSource => self.fuente_de_registro(),
             UiAction::LogSetVisibleRange { rows } => self.filas_de_registro(*rows),
             UiAction::CancelTask { task_id } => self.cancelar(*task_id),
             UiAction::CompareSelectRow { .. }

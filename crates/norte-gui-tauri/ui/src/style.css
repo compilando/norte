@@ -1808,6 +1808,24 @@ body {
   opacity: 0.8;
 }
 
+/* Una línea del DAEMON se marca al margen (#328). Un filete y no un color: el
+   color ya lo tiene tomado el nivel, que es lo que se busca de un vistazo. */
+.log-line[data-source="daemon"] {
+  border-left: 2px solid var(--chip-bg, rgb(128 128 128 / 40%));
+  padding-left: 4px;
+}
+
+/* La fuente es un SELECTOR cuando hay dos anillos que ofrecer: un botón con
+   forma de etiqueta, para que se vea que se puede pulsar sin meter otro mando
+   en una cabecera que ya lleva cinco. */
+.log-source {
+  border: 1px solid var(--chip-bg, rgb(128 128 128 / 40%));
+  color: inherit;
+  font: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
 /* Una etiqueta pequeña de cabecera: el nivel, el filtro, el origen. */
 .chip {
   margin-left: 1ch;

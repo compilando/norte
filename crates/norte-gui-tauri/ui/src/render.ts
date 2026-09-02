@@ -3000,7 +3000,15 @@ export class Screen {
       // saberlo, sobre todo antes de hacer una captura de pantalla.
       ...(slot.capturing === "" ? [] : [chip(slot.capturing)]),
       ...(slot.dropped_note === "" ? [] : [chip(slot.dropped_note)]),
-      chip(slot.source),
+      // La fuente. Con un daemon que sirve su registro es un SELECTOR —una
+      // pulsación recorre ventana, daemon y los dos—; sin él es una etiqueta,
+      // porque un mando entre tres vistas de un mismo anillo promete algo que
+      // no existe. El host ya colapsa `both` a `window` en ese caso, así que
+      // aquí solo hay que decidir si se puede pulsar.
+      slot.sources_available ? this.selectorDeFuente(slot) : chip(slot.source),
+      // Y lo que haya que decir de ella: que el daemon no sirve su registro,
+      // o de quién es el nivel que se está enseñando.
+      ...(slot.source_note === "" ? [] : [chip(slot.source_note)]),
     );
     // El bloque de mandos se REUSA mientras siga siendo el mismo hueco. Se
     // creaba en cada repintado, y como cada tecla del filtro provoca una foto
@@ -3035,6 +3043,10 @@ export class Screen {
       const fila = document.createElement("li");
       fila.className = "log-line";
       fila.dataset["level"] = l.level;
+      // De qué proceso salió. En la lista mezclada es lo que separa «el
+      // provider falló» de «la ventana no pudo pintarlo», que se leen igual y
+      // son dos averías distintas.
+      fila.dataset["source"] = l.source;
       const hora = document.createElement("span");
       hora.className = "log-time";
       hora.textContent = l.time;
@@ -3067,6 +3079,29 @@ export class Screen {
       slot.lines.length === 0 ? nota(this.t("log-empty")) : lista;
     dom.scroller.replaceChildren(mandos, cuerpo);
     this.scheduleLogRows(dom);
+  }
+
+  /**
+   * El selector de fuente del registro (#328).
+   *
+   * Se crea en cada pintado y no se reusa como el bloque de mandos: no tiene
+   * estado del DOM que perder —ni foco ni caret— y su etiqueta cambia con la
+   * fuente, que es justo lo que hay que repintar.
+   *
+   * `data-source` lleva el identificador de WIRE y no la etiqueta traducida:
+   * es lo que permite comprobar cuál está puesta sin atar la prueba al idioma,
+   * la misma regla que los botones de nivel.
+   */
+  private selectorDeFuente(slot: LogSlotView): HTMLElement {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "chip log-source";
+    b.dataset["source"] = slot.source_mode;
+    b.textContent = slot.source;
+    b.addEventListener("click", () => {
+      this.send({ action: "log_cycle_source" });
+    });
+    return b;
   }
 
   /**

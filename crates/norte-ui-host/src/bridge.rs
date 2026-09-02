@@ -25,6 +25,11 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **48**: el panel de registro lee TAMBIÉN el del daemon (#328). El hueco
+///   dice qué fuente se está enseñando (`source_mode`), si hay de verdad una
+///   segunda que ofrecer (`sources_available`) y qué hay que decir sobre ella
+///   (`source_note`); cada línea dice de qué proceso salió, y `log_cycle_source`
+///   recorre las tres.
 /// - **47**: un hueco en ERROR se puede reintentar por si solo
 ///   (`refresh_slot`). El caso corriente al reabrir es una conexion remota que
 ///   pide su contrasena, y sin nada que pulsar la unica salida era navegar a
@@ -160,7 +165,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 47;
+pub const BRIDGE_VERSION: u32 = 48;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

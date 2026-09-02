@@ -2186,6 +2186,7 @@ describe("el panel de registro", () => {
             target: "norte_core::connect",
             message: "no se pudo conectar",
             hostile: false,
+            source: "daemon",
           },
           {
             time: "12:00:01",
@@ -2193,6 +2194,7 @@ describe("el panel de registro", () => {
             target: "norte_core",
             message: "listado",
             hostile: false,
+            source: "window",
           },
         ],
         level: "info",
@@ -2203,6 +2205,9 @@ describe("el panel de registro", () => {
         dropped_note: "",
         capturing: "",
         source: "de esta ventana",
+        source_mode: "window",
+        sources_available: false,
+        source_note: "",
         ...extra,
       },
     ];
@@ -2268,6 +2273,57 @@ describe("el panel de registro", () => {
       // traducidas ataría el nivel al idioma.
       expect(ultima.level).toBe("debug");
     }
+  });
+
+  it("sin una segunda fuente NO hay selector que pulsar", () => {
+    // Un mando entre tres vistas de un mismo anillo promete algo que no
+    // existe: el daemon de esta ventana puede no servir su registro, y
+    // entonces la fuente es una etiqueta y no un botón.
+    const { screen } = montar();
+    screen.paint(conRegistro());
+    expect(document.querySelector(".log-source")).toBeNull();
+    // Pero se sigue DICIENDO de dónde son las líneas: eso no era opcional.
+    expect(document.body.textContent).toContain("de esta ventana");
+  });
+
+  it("con daemon el selector recorre las tres fuentes de una pulsación", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(
+      conRegistro({
+        sources_available: true,
+        source_mode: "both",
+        source: "de la ventana y del daemon",
+      }),
+    );
+    const selector = document.querySelector(".log-source");
+    expect(selector).not.toBeNull();
+    // El identificador de WIRE, no la frase traducida: comparar frases ataría
+    // la prueba al idioma.
+    expect((selector as HTMLElement).dataset["source"]).toBe("both");
+    (selector as HTMLButtonElement).click();
+    expect(enviadas.at(-1)?.action).toBe("log_cycle_source");
+  });
+
+  it("cada línea dice de qué proceso salió", () => {
+    // En una lista mezclada es la mitad de la información: «el provider falló»
+    // y «la ventana no pudo pintarlo» se leen igual sin saber quién lo
+    // escribió, y son dos averías distintas.
+    const { screen } = montar();
+    screen.paint(conRegistro({ sources_available: true, source_mode: "both" }));
+    const filas = [...document.querySelectorAll(".log-line")];
+    expect((filas[0] as HTMLElement).dataset["source"]).toBe("daemon");
+    expect((filas[1] as HTMLElement).dataset["source"]).toBe("window");
+  });
+
+  it("dice cuando el daemon NO sirve su registro", () => {
+    // La mitad de #326 aplicada a la otra orilla: el panel vuelve al anillo
+    // local y lo dice, en vez de quedarse mudo y parecer roto.
+    const { screen } = montar();
+    const nota = catalogoReal()["log-source-unsupported"] ?? "";
+    screen.paint(conRegistro({ source_note: nota }));
+    const caja = document.querySelector(".log");
+    const cabecera = caja?.parentElement?.querySelector(".slot-title")?.textContent ?? "";
+    expect(cabecera).toContain(nota);
   });
 
   it("la rueda desplaza por el HOST, no por el DOM", () => {

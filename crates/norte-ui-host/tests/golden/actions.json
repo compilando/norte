@@ -89,6 +89,9 @@
     "action": "layout_activate_row",
     "row": 0
   },
+  "log_cycle_source": {
+    "action": "log_cycle_source"
+  },
   "log_follow": {
     "action": "log_follow"
   },

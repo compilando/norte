@@ -388,7 +388,14 @@ impl Estado {
                 .log_ring
                 .as_ref()
                 .map_or(0, norte_config::logring::LogRing::pushed);
+            // Y la mitad remota empieza de cero (#328): esta apertura pide
+            // «lo que haya» y no arrastra ni el cursor ni las líneas de la
+            // anterior. Reabrir el panel enseña el registro de AHORA; la
+            // historia vieja ya se leyó, y ponerla por delante de la nueva
+            // sería empezar la lista donde nadie está mirando.
+            self.log_remoto.reiniciar();
             self.sondear_registro(buzon);
+            self.pedir_registro_remoto(backend, buzon);
         }
         salida
     }

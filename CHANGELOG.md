@@ -39,6 +39,27 @@ independently through `PROTOCOL_VERSION`.
   `level` outside the vocabulary is `-32602`, not `Unsupported`, so that "you
   sent a typo" stays distinguishable from "this daemon has no log".
 
+- **The window's log panel reads the daemon too** (#328, bridge **48**). The
+  panel now merges two rings by timestamp and marks every line with the process
+  it came from — in a mixed list "the provider failed" and "the window could not
+  paint it" read alike, and they are two different faults. A selector cycles
+  between this window, the daemon and both; it is **not painted at all** when
+  the daemon has never answered its log, because a control that switches between
+  three views of one ring promises something that does not exist. For the same
+  reason the panel reports the *effective* source rather than the stored
+  preference: with no second ring, "both" is shown as "window".
+  The remote half hangs off the 500 ms tick the panel already re-arms, so there
+  is no second timer to forget to stop, and the request carries the panel's
+  **epoch**: between asking and answering there is room for a close and a
+  reopen, and lines from the previous session landing in the new panel would be
+  history nobody asked for, in front of the history they did.
+  When the daemon has no log to serve the panel falls back to the local ring and
+  **says so** — the same rule #326 wrote for the process, applied to the other
+  shore. And with the daemon as the source, the level shown is the one the
+  daemon *answered*, with a line saying whose it is: it is global to every
+  client of that daemon and only ever rises, so showing what was asked for and
+  calling it state would be showing a request.
+
 - **The window has the log panel** (#326, bridge **46**). It has been in the
   TUI since #323, and everything shared was already built — the in-memory ring
   and its `tracing` layer in `norte-config`, the presentation state (level

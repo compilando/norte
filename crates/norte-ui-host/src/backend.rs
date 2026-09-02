@@ -173,6 +173,37 @@ pub trait HostBackend: Send + Sync + 'static {
     /// frontends, y por eso viaja como JSON opaco.
     fn session_get(&self) -> BoxFuture<'static, Result<(methods::Session, bool), Error>>;
 
+    /// El registro del DAEMON desde `cursor`, como mucho `max` líneas (#328).
+    ///
+    /// `cursor: None` pide «lo que haya», que es lo que manda un panel al
+    /// abrirse, y NO es lo mismo que `Some(0)`: contra un anillo que ya ha
+    /// dado la vuelta, un cero reportaría un `lost` falso en el primer sondeo.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] cuando el otro extremo no tiene registro que
+    /// servir. El caso alcanzable no es un daemon MÁS VIEJO —un cliente 0.65
+    /// nunca completa el `initialize` contra uno 0.64— sino uno de la misma
+    /// versión compilado sin la feature `logging`. No hay comparación de
+    /// versiones en ningún lado: la respuesta al método es la única señal.
+    fn log_tail(
+        &self,
+        cursor: Option<u64>,
+        max: u32,
+    ) -> BoxFuture<'static, Result<methods::LogTailResult, Error>>;
+
+    /// Sube el nivel que el anillo del daemon guarda, y devuelve el que de
+    /// verdad quedó puesto (#328).
+    ///
+    /// El nivel es GLOBAL al daemon y solo SUBE: pedir menos verbosidad no es
+    /// un error y no baja nada, contesta el que ya había. Por eso lo aplica él
+    /// y no el cliente — la cota que impide que ahí dentro aparezca una
+    /// contraseña vive en el proceso que tiene el anillo.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] igual que [`Self::log_tail`]; un nivel fuera del
+    /// vocabulario es `InvalidParams`, que es otra pregunta.
+    fn log_level(&self, level: String) -> BoxFuture<'static, Result<String, Error>>;
+
     /// Escribe la sesión sobre la revisión que se leyó. Devuelve la nueva.
     ///
     /// Un `Conflict` significa que otra ventana escribió en medio: se relee,
@@ -807,6 +838,20 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<u64, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.session_put(version, revision, body).await })
+    }
+
+    fn log_tail(
+        &self,
+        cursor: Option<u64>,
+        max: u32,
+    ) -> BoxFuture<'static, Result<methods::LogTailResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.log_tail(cursor, max).await })
+    }
+
+    fn log_level(&self, level: String) -> BoxFuture<'static, Result<String, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.log_level(&level).await })
     }
 
     fn take_conn_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>> {

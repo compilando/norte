@@ -411,6 +411,37 @@ pub struct Falso {
     /// —esto pasa antes de que haya task— y la pantalla tiene que
     /// distinguirlo.
     pub transferencia_rechazada: Option<Error>,
+    /// Lo que `log.tail` entrega en la SIGUIENTE vuelta: `(líneas, next)`
+    /// (#328). Se sirve UNA vez y se vacía.
+    ///
+    /// Se vacía porque un anillo de verdad no vuelve a entregar lo que ya dio:
+    /// un doble que repitiera haría que un sondeo de más duplicara líneas en
+    /// el panel, y entonces un test que cuenta apariciones estaría midiendo el
+    /// reloj en vez del encadenado del cursor.
+    pub registro_remoto: std::sync::Mutex<Option<(Vec<norte_proto::methods::LogLine>, u64)>>,
+    /// El `next` de la última respuesta servida. `None` = este daemon NO tiene
+    /// registro que servir y contesta `Unsupported`, que es lo que hace uno de
+    /// la misma versión compilado sin la feature `logging` — el único caso de
+    /// degradación alcanzable, porque uno más viejo muere en el `initialize`.
+    pub registro_next: std::sync::Mutex<Option<u64>>,
+    /// Los cursores con los que se pidió `log.tail`, en orden. Es lo que
+    /// permite comprobar que la primera vuelta manda `None` («lo que haya») y
+    /// las siguientes encadenan.
+    pub cursores_de_registro: std::sync::Mutex<Vec<Option<u64>>>,
+    /// El nivel que el daemon dice tener puesto: lo contestan TANTO
+    /// `log.level` como cada `log.tail`, igual que el daemon de verdad.
+    /// `None` = no sabe de registro y `log.level` contesta `Unsupported`.
+    pub nivel_remoto: std::sync::Mutex<Option<String>>,
+    /// Los niveles que se le pidieron al daemon, en orden.
+    pub niveles_pedidos: std::sync::Mutex<Vec<String>>,
+    /// Retiene la respuesta de `log.tail` hasta que el test la suelta.
+    ///
+    /// Es la única forma de estar DENTRO de la ventana en la que una petición
+    /// sigue volando mientras el panel se cierra y se vuelve a abrir, que es
+    /// donde vive la pregunta de si una respuesta rancia puede colarse en el
+    /// panel nuevo. Un `sleep` valdría de casualidad; esto no depende del
+    /// reloj.
+    pub puerta_registro: Option<Arc<Puerta>>,
 }
 
 impl Falso {
@@ -427,6 +458,40 @@ impl Falso {
     pub fn pon(&mut self, dir: &str, entradas: impl IntoIterator<Item = (Vec<u8>, bool)>) {
         self.arbol
             .insert(dir.to_owned(), entradas.into_iter().collect());
+    }
+
+    /// Arma la SIGUIENTE respuesta de `log.tail` (#328).
+    ///
+    /// A partir de aquí el doble sabe de registro: las vueltas posteriores a
+    /// ésta contestan sin líneas nuevas y con el mismo `next`, que es lo que
+    /// hace un anillo al que ya se le vació la cola.
+    pub fn responde_log_tail(&self, lineas: Vec<norte_proto::methods::LogLine>, next: u64) {
+        *self.registro_remoto.lock().expect("registro") = Some((lineas, next));
+    }
+
+    /// Este daemon no tiene registro que servir: los dos métodos contestan
+    /// `Unsupported`. Es el estado por defecto, escrito para que el test que
+    /// lo prueba lo DIGA en vez de depender de un `Default`.
+    pub fn log_tail_no_soportado(&self) {
+        *self.registro_remoto.lock().expect("registro") = None;
+        *self.registro_next.lock().expect("next") = None;
+    }
+
+    /// El nivel que el daemon dice tener puesto, en `log.level` y en cada
+    /// `log.tail`. Los dos contestan lo mismo, como el daemon de verdad: el
+    /// nivel es UNO y global al proceso.
+    pub fn log_level_contesta(&self, nivel: &str) {
+        *self.nivel_remoto.lock().expect("nivel") = Some(nivel.to_owned());
+    }
+
+    /// Los niveles que se le pidieron al daemon, en orden.
+    pub fn log_level_pedidos(&self) -> Vec<String> {
+        self.niveles_pedidos.lock().expect("niveles").clone()
+    }
+
+    /// Los cursores con los que se pidió `log.tail`, en orden.
+    pub fn cursores_pedidos(&self) -> Vec<Option<u64>> {
+        self.cursores_de_registro.lock().expect("cursores").clone()
     }
 
     /// El doble acaba de anotar algo: quien esperaba, que mire.
@@ -1920,6 +1985,66 @@ impl HostBackend for Falso {
         self.juntados.lock().expect("juntados").push(params);
         self.latido();
         self.task_de_archivo(norte_proto::TaskKind::Combine, 14)
+    }
+
+    fn log_tail(
+        &self,
+        cursor: Option<u64>,
+        _max: u32,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::LogTailResult, Error>> {
+        self.cursores_de_registro
+            .lock()
+            .expect("cursores")
+            .push(cursor);
+        self.latido();
+        // La respuesta se resuelve AQUÍ, no dentro del futuro: lo que el test
+        // arma es lo que estaba puesto cuando la petición SALIÓ, y con la
+        // puerta echada hay dos peticiones vivas a la vez.
+        let armado = self.registro_remoto.lock().expect("registro").take();
+        let nivel = self
+            .nivel_remoto
+            .lock()
+            .expect("nivel")
+            .clone()
+            .unwrap_or_else(|| "info".to_owned());
+        let next = {
+            let mut ultimo = self.registro_next.lock().expect("next");
+            if let Some((_, n)) = &armado {
+                *ultimo = Some(*n);
+            }
+            *ultimo
+        };
+        let puerta = self.puerta_registro.clone();
+        Box::pin(async move {
+            if let Some(p) = puerta {
+                p.esperar().await;
+            }
+            // Sin `next` no se ha servido nada nunca: este daemon no tiene
+            // anillo que servir.
+            let Some(next) = next else {
+                return Err(Error::Unsupported);
+            };
+            Ok(norte_proto::methods::LogTailResult {
+                lines: armado.map(|(l, _)| l).unwrap_or_default(),
+                next,
+                lost: 0,
+                level: nivel,
+                capacity: 64,
+            })
+        })
+    }
+
+    fn log_level(&self, level: String) -> BoxFuture<'static, Result<String, Error>> {
+        self.niveles_pedidos
+            .lock()
+            .expect("niveles")
+            .push(level.clone());
+        self.latido();
+        // Lo que contesta es lo que el daemon TIENE puesto, no lo que se pidió:
+        // su anillo nunca baja de nivel, así que pedir menos verbosidad deja el
+        // que ya había.
+        let nivel = self.nivel_remoto.lock().expect("nivel").clone();
+        Box::pin(async move { nivel.ok_or(Error::Unsupported) })
     }
 
     fn dir_size(&self, paths: Vec<VPath>) -> BoxFuture<'static, Result<HostTask, Error>> {

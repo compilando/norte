@@ -166,6 +166,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::LogSetFilter { .. } => "log_set_filter",
         UiAction::LogScroll { .. } => "log_scroll",
         UiAction::LogFollow => "log_follow",
+        UiAction::LogCycleSource => "log_cycle_source",
         UiAction::LogSetVisibleRange { .. } => "log_set_visible_range",
         UiAction::CancelTask { .. } => "cancel_task",
         UiAction::CompareSelectRow { .. } => "compare_select_row",
@@ -227,6 +228,7 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
         ),
         ("log_scroll", UiAction::LogScroll { delta: -3 }),
         ("log_follow", UiAction::LogFollow),
+        ("log_cycle_source", UiAction::LogCycleSource),
         (
             "log_set_visible_range",
             UiAction::LogSetVisibleRange { rows: 12 },

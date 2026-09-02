@@ -11198,12 +11198,20 @@ fn con_lineas(anillo: &norte_config::logring::LogRing, f: impl FnOnce()) {
 
 /// Un host con un anillo de registro montado y unas cuantas líneas dentro.
 async fn host_con_registro() -> (UiHost, norte_config::logring::LogRing) {
+    host_con_backend_y_registro(Falso::con(&["a"])).await
+}
+
+/// Lo mismo, con un doble que el test ha armado: es lo que hace falta para
+/// la mitad remota (#328), donde lo que se prueba es qué contesta el daemon.
+async fn host_con_backend_y_registro(
+    backend: Arc<Falso>,
+) -> (UiHost, norte_config::logring::LogRing) {
     let anillo = norte_config::logring::LogRing::new(64);
     // A DEBUG para que las cinco quepan; el panel enseña hasta INFO al abrirse,
     // que es lo que hace interesante el test del filtro por nivel.
     anillo.set_level(norte_config::logline::LogLevel::Debug);
     let h = UiHost::start(UiHostOptions {
-        backend: Falso::con(&["a"]),
+        backend,
         initial_dir: dir(),
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
@@ -11226,6 +11234,12 @@ async fn host_con_registro() -> (UiHost, norte_config::logring::LogRing) {
     // La disposición de arranque no lleva registro: se abre con su tecla, que
     // es como lo abre una persona. Y así el test cubre TAMBIÉN que
     // `layout.log` esté atado y llegue al efecto.
+    tecla_registro(&h).await;
+    (h, anillo)
+}
+
+/// La tecla que abre el registro — y, pulsada otra vez, lo cierra.
+async fn tecla_registro(h: &UiHost) {
     h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
         key: "l".to_owned(),
         ctrl: false,
@@ -11235,7 +11249,6 @@ async fn host_con_registro() -> (UiHost, norte_config::logring::LogRing) {
     }))
     .await
     .expect("host vivo");
-    (h, anillo)
 }
 
 /// El hueco de registro de la foto, si está.
@@ -11502,6 +11515,243 @@ async fn el_filtro_recorta_y_despegarse_se_dice() {
     })
     .await;
     assert!(vista.following, "volver al final se puede pedir");
+}
+
+// ---------------------------------------------------------------------------
+// El panel de registro lee TAMBIÉN el daemon (#328).
+// ---------------------------------------------------------------------------
+
+/// Una línea tal y como viene por el cable.
+fn linea_wire(
+    epoch_ms: i64,
+    level: &str,
+    target: &str,
+    message: &str,
+) -> norte_proto::methods::LogLine {
+    norte_proto::methods::LogLine {
+        epoch_ms,
+        level: level.to_owned(),
+        target: target.to_owned(),
+        message: message.to_owned(),
+    }
+}
+
+/// La foto del panel de registro, con todo lo que estuviera en vuelo ya
+/// aterrizado.
+///
+/// `asentar` primero: la respuesta del daemon vuelve al actor por el MISMO
+/// buzón que las acciones, así que cuando el ejecutor se queda quieto el
+/// mensaje ya está encolado y el `Resync` de `foto_hasta` va detrás. Sin
+/// reloj y sin adivinar.
+async fn foto_registro(h: &UiHost) -> norte_ui_host::dto::LogSlotView {
+    // Con alto de verdad: el host arranca con UNA fila —nunca cero, para que
+    // una página mueva algo— y con una fila la ventana visible es la última
+    // línea, así que una lista mezclada se vería como la mitad de la que hay.
+    h.dispatch(UiAction::LogSetVisibleRange { rows: 20 })
+        .await
+        .expect("host vivo");
+    let mut sub = h.subscribe();
+    asentar().await;
+    foto_hasta(h, &mut sub, "el panel de registro", |f| {
+        Some(registro(f).clone())
+    })
+    .await
+}
+
+/// Dispara UNA vuelta más del sondeo de 500 ms.
+///
+/// Adelantar el reloj y no dormirlo: el plazo es de VERDAD —el temporizador
+/// que el panel se rearma solo— y ésa es exactamente la herramienta que la
+/// nota de las esperas deterministas de este fichero señala para un plazo.
+async fn sondear(h: &UiHost) {
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_millis(600)).await;
+    tokio::time::resume();
+    asentar().await;
+    let _ = h;
+}
+
+/// Deja la FUENTE del panel en la que se pide.
+///
+/// A base del mando de verdad, que es UN solo botón que recorre las tres
+/// (`Both` → `Window` → `Daemon` → `Both`): no hay una acción «pon ésta», y
+/// fabricar una solo para los tests probaría un camino que nadie usa.
+async fn poner_fuente(h: &UiHost, fuente: &str) {
+    let vueltas = match fuente {
+        "window" => 1,
+        "daemon" => 2,
+        "both" => 3,
+        otra => panic!("fuente desconocida: {otra}"),
+    };
+    for _ in 0..vueltas {
+        h.dispatch(UiAction::LogCycleSource)
+            .await
+            .expect("host vivo");
+    }
+    asentar().await;
+}
+
+/// Con un daemon que no sabe de registro no hay dos anillos, así que no hay
+/// selector que enseñar: el panel se queda exactamente como en #326.
+#[tokio::test]
+async fn embebido_no_ofrece_selector_de_fuente() {
+    let (host, _anillo) = host_con_registro().await;
+    let v = foto_registro(&host).await;
+    assert!(!v.sources_available);
+    assert_eq!(v.source_mode, "window");
+}
+
+/// Con daemon, el panel trae las líneas de los DOS y cada una dice de dónde es.
+#[tokio::test]
+async fn con_daemon_se_mezclan_las_dos_fuentes() {
+    let backend = Falso::con(&["a"]);
+    backend.responde_log_tail(vec![linea_wire(20, "info", "norte_core", "del daemon")], 1);
+    let (host, anillo) = host_con_backend_y_registro(Arc::clone(&backend)).await;
+    con_lineas(&anillo, || {
+        tracing::info!(target: "norte_prueba", "de la ventana");
+    });
+    let v = foto_registro(&host).await;
+    assert!(v.sources_available);
+    assert_eq!(v.source_mode, "both");
+    let textos: Vec<_> = v.lines.iter().map(|l| l.message.as_str()).collect();
+    assert!(
+        textos.iter().any(|t| t.contains("del daemon")),
+        "faltan las del daemon: {textos:?}"
+    );
+    assert!(
+        textos.iter().any(|t| t.contains("de la ventana")),
+        "faltan las de la ventana: {textos:?}"
+    );
+    // Y cada una dice de dónde salió: en una lista mezclada, «esto lo escribió
+    // el daemon» es la mitad de la información.
+    let del_daemon = v
+        .lines
+        .iter()
+        .find(|l| l.message.contains("del daemon"))
+        .expect("está");
+    assert_eq!(del_daemon.source, "daemon");
+    let de_la_ventana = v
+        .lines
+        .iter()
+        .find(|l| l.message.contains("de la ventana"))
+        .expect("está");
+    assert_eq!(de_la_ventana.source, "window");
+}
+
+/// Un daemon que no sabe servir su registro NO deja el panel mudo: vuelve al
+/// anillo local y lo DICE. Es la mitad que #326 ya resolvió, aplicada al único
+/// caso alcanzable: un daemon de la MISMA versión compilado sin la feature
+/// `logging`. Uno más viejo no llega aquí — muere en el `initialize`.
+#[tokio::test]
+async fn un_daemon_sin_registro_se_dice_en_el_panel() {
+    let backend = Falso::con(&["a"]);
+    backend.log_tail_no_soportado();
+    let (host, _anillo) = host_con_backend_y_registro(Arc::clone(&backend)).await;
+    let v = foto_registro(&host).await;
+    assert!(
+        !backend.cursores_pedidos().is_empty(),
+        "se llegó a preguntar"
+    );
+    assert_eq!(v.source_mode, "window");
+    assert!(!v.source_note.is_empty(), "tiene que decir por qué");
+}
+
+/// Subir el nivel con el daemon como fuente se lo pide AL DAEMON: el cliente
+/// no aplica niveles, y el nivel que se enseña es el que el daemon contestó.
+#[tokio::test]
+async fn subir_el_nivel_con_fuente_daemon_va_al_daemon() {
+    let backend = Falso::con(&["a"]);
+    // El daemon sí tiene registro, y su nivel está en `debug`: es GLOBAL a
+    // todos sus clientes y solo sube, así que pedirle `trace` no garantiza
+    // `trace` — y lo que el panel enseña es lo que él conteste.
+    backend.responde_log_tail(Vec::new(), 0);
+    backend.log_level_contesta("debug");
+    let (host, _anillo) = host_con_backend_y_registro(Arc::clone(&backend)).await;
+    poner_fuente(&host, "daemon").await;
+    host.dispatch(UiAction::LogSetLevel {
+        level: "trace".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    let pedidos = hasta(&backend, "el nivel pedido al daemon", |f| {
+        let v = f.log_level_pedidos();
+        (!v.is_empty()).then_some(v)
+    })
+    .await;
+    assert_eq!(pedidos, vec!["trace".to_owned()]);
+    let v = foto_registro(&host).await;
+    assert_eq!(v.source_mode, "daemon");
+    assert_eq!(v.level, "debug", "manda lo que contestó el daemon");
+    assert!(
+        !v.source_note.is_empty(),
+        "y dice de QUIÉN es ese nivel: es global al daemon"
+    );
+}
+
+/// El sondeo encadena el cursor: la segunda vuelta pide desde donde acabó la
+/// primera y no repite líneas.
+#[tokio::test]
+async fn el_sondeo_encadena_el_cursor() {
+    let backend = Falso::con(&["a"]);
+    backend.responde_log_tail(vec![linea_wire(10, "info", "norte_core", "primera")], 1);
+    let (host, _anillo) = host_con_backend_y_registro(Arc::clone(&backend)).await;
+    let v = foto_registro(&host).await;
+    assert!(v.lines.iter().any(|l| l.message.contains("primera")));
+
+    backend.responde_log_tail(vec![linea_wire(20, "info", "norte_core", "segunda")], 2);
+    sondear(&host).await;
+    let cursores = backend.cursores_pedidos();
+    assert_eq!(cursores[0], None, "la primera vuelta pide «lo que haya»");
+    assert!(
+        cursores[1..].iter().all(Option::is_some),
+        "ninguna vuelta posterior vuelve a pedir «lo que haya»: {cursores:?}"
+    );
+    assert_eq!(cursores[1], Some(1), "la segunda encadena donde acabó");
+    let v = foto_registro(&host).await;
+    let textos: Vec<_> = v.lines.iter().map(|l| l.message.as_str()).collect();
+    assert_eq!(
+        textos.iter().filter(|t| t.contains("primera")).count(),
+        1,
+        "la primera línea no se repite: {textos:?}"
+    );
+    assert!(textos.iter().any(|t| t.contains("segunda")), "{textos:?}");
+}
+
+/// Una respuesta que sigue volando cuando el panel se cierra NO entra en el
+/// panel que se vuelve a abrir.
+///
+/// Es la pregunta que se hace sola en cuanto la petición es asíncrona: entre
+/// pedir y contestar caben un cierre y una apertura, y unas líneas de la
+/// sesión anterior aterrizando en el panel nuevo serían historia que nadie
+/// pidió, delante de la que sí. La ÉPOCA de la apertura viaja con la petición
+/// y es lo que la deja morir — el mismo mecanismo que ya apaga el
+/// temporizador.
+#[tokio::test]
+async fn una_respuesta_en_vuelo_no_entra_en_el_panel_reabierto() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", [(b"a".to_vec(), false)]);
+    let puerta = Arc::new(backend_falso::Puerta::default());
+    f.puerta_registro = Some(Arc::clone(&puerta));
+    let backend = Arc::new(f);
+    backend.responde_log_tail(
+        vec![linea_wire(10, "info", "norte_core", "de la apertura vieja")],
+        1,
+    );
+    let (host, _anillo) = host_con_backend_y_registro(Arc::clone(&backend)).await;
+    // La petición de la primera apertura sigue retenida: se cierra y se
+    // vuelve a abrir por debajo de ella.
+    tecla_registro(&host).await;
+    tecla_registro(&host).await;
+    puerta.abrir();
+
+    let v = foto_registro(&host).await;
+    assert!(
+        !v.lines
+            .iter()
+            .any(|l| l.message.contains("de la apertura vieja")),
+        "la respuesta de la apertura anterior no entra: {:?}",
+        v.lines
+    );
 }
 
 /// Entra en `docs`, que es la navegación que dispara el listado remoto.

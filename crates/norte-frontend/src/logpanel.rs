@@ -213,9 +213,32 @@ impl LogPanel {
     #[must_use]
     pub fn view<'a>(&self, lines: &'a [LogLine], alto: usize) -> (Vec<&'a LogLine>, usize) {
         let visibles: Vec<&LogLine> = lines.iter().filter(|l| self.matches(l)).collect();
-        let tope = visibles.len().saturating_sub(alto);
-        let desde = self.scroll.map_or(tope, |s| s.min(tope));
+        let desde = self.window_start(visibles.len(), alto);
         (visibles, desde)
+    }
+
+    /// Desde qué índice empieza la ventana de `alto` filas sobre una lista ya
+    /// filtrada de `total` elementos.
+    ///
+    /// La otra mitad de [`Self::view`], expuesta aparte porque quien mezcla dos
+    /// fuentes ([`merge`]) ya no tiene un `&[LogLine]` que darle: tiene parejas
+    /// `(línea, origen)`. Sin esto, ese llamante tenía que materializar la
+    /// mezcla en un `Vec<LogLine>` propio —clonando lo que `merge` presta a
+    /// propósito— solo para volver a preguntar por el desplazamiento.
+    ///
+    /// ```
+    /// use norte_frontend::logpanel::LogPanel;
+    /// let mut p = LogPanel::default();
+    /// p.set_viewport_rows(10);
+    /// // Pegado al final: la ventana empieza donde caben las diez últimas.
+    /// assert_eq!(p.window_start(25, 10), 15);
+    /// // Y nunca por encima del tope, aunque la lista encoja debajo.
+    /// assert_eq!(p.window_start(4, 10), 0);
+    /// ```
+    #[must_use]
+    pub fn window_start(&self, total: usize, alto: usize) -> usize {
+        let tope = total.saturating_sub(alto);
+        self.scroll.map_or(tope, |s| s.min(tope))
     }
 
     /// Cuántas líneas del anillo pasan los filtros.
