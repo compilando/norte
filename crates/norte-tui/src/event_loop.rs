@@ -524,6 +524,35 @@ pub async fn run(
                     app.panes[pane].hydrate(&path, entry.size, entry.mtime_ms);
                 }
             }
+            (epoca, res) = async {
+                match &mut work.log_tail {
+                    Some(pr) => (pr.epoca, (&mut pr.rx).await.ok()),
+                    None => std::future::pending().await,
+                }
+            } => {
+                // El registro del daemon (#328): el hueco se limpia SIEMPRE,
+                // haya contestado, fallado o muerto la task — el freno de
+                // `log_next_at` es lo que evita el reintento en bucle, y un
+                // canal cerrado no puede dejar el sondeo apagado para siempre.
+                work.log_tail = None;
+                if let Some(res) = res {
+                    crate::logview::aterrizar_tail(app, epoca, res);
+                }
+            }
+            (epoca, res) = async {
+                match &mut work.log_level {
+                    Some(pr) => (pr.epoca, (&mut pr.rx).await.ok()),
+                    None => std::future::pending().await,
+                }
+            } => {
+                // El nivel que el daemon dejó puesto DE VERDAD, que puede no
+                // ser el que se pidió: su anillo es global a sus clientes y
+                // solo sube.
+                work.log_level = None;
+                if let Some(res) = res {
+                    crate::logview::aterrizar_nivel(app, epoca, res);
+                }
+            }
             (generation, res) = async {
                 match &mut work.compare_stat {
                     Some(pr) => (pr.generation, (&mut pr.rx).await.ok()),

@@ -162,6 +162,68 @@ pub struct DecorateFetch {
     )>,
 }
 
+/// Cada cuánto se le tira del registro al daemon (#328).
+///
+/// La terminal repinta por frame y su bucle despierta diez veces por segundo,
+/// así que sin este freno el panel abierto serían diez RPC por segundo para
+/// enseñar lo mismo. Medio segundo: un registro se lee, no se cronometra —y es
+/// el mismo ritmo que la ventana, que sí necesita temporizador propio porque
+/// solo repinta cuando alguien hace algo.
+pub const LOG_TAIL_PERIODO: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Una vuelta de `log.tail` en vuelo (#328).
+///
+/// La ÉPOCA viaja con la petición: entre pedir y contestar caben un cierre y
+/// una apertura del panel, y la respuesta de la sesión anterior tiene que morir
+/// en vez de aterrizar —con su cursor— en el panel nuevo.
+pub struct LogTailProbe {
+    /// La apertura del panel bajo la que se pidió.
+    pub epoca: u64,
+    /// Lo que el daemon contestó, entero: el error también, porque
+    /// [`Error::Unsupported`] es el hecho de que ese daemon no tiene registro
+    /// que servir y hay que dejar de preguntar.
+    pub rx: tokio::sync::oneshot::Receiver<Result<norte_proto::methods::LogTailResult, Error>>,
+}
+
+/// Lanza una vuelta de `log.tail` desde donde se quedó el cursor.
+///
+/// `cursor: None` la primera vez —«dame lo que haya»— y el `next` que llegó
+/// después; nunca un cero, que contra un anillo que ya dio la vuelta
+/// reportaría un `lost` falso.
+pub fn spawn_log_tail(backend: &Backend, cursor: Option<u64>, epoca: u64) -> LogTailProbe {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let b = backend.clone();
+    tokio::spawn(async move {
+        let _ = tx.send(b.log_tail(cursor, crate::logview::MAX_REMOTO).await);
+    });
+    LogTailProbe { epoca, rx }
+}
+
+/// Una petición `log.level` al daemon en vuelo (#328). Mismo molde y misma
+/// época que [`LogTailProbe`].
+pub struct LogLevelProbe {
+    /// La apertura del panel bajo la que se pidió.
+    pub epoca: u64,
+    /// El nivel que de verdad quedó puesto, que puede no ser el que se pidió:
+    /// el anillo del daemon es global a sus clientes y solo sube.
+    pub rx: tokio::sync::oneshot::Receiver<Result<String, Error>>,
+}
+
+/// Le pide al daemon que capture al menos `nivel`.
+pub fn spawn_log_level(
+    backend: &Backend,
+    nivel: norte_config::logline::LogLevel,
+    epoca: u64,
+) -> LogLevelProbe {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let b = backend.clone();
+    let pedido = nivel.wire().to_owned();
+    tokio::spawn(async move {
+        let _ = tx.send(b.log_level(&pedido).await);
+    });
+    LogLevelProbe { epoca, rx }
+}
+
 /// Una lectura de preview en vuelo, por HUECO.
 ///
 /// Guarda la ruta que pidió: cuando llega, si el hueco ya quiere otra cosa

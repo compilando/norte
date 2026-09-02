@@ -350,12 +350,26 @@ being recorded whenever that is more than what is shown, and closing the panel
 puts it back. The panel keeps the last two thousand lines and says how many it
 dropped.
 
+With `ntc --socket` the daemon is **another process**: the providers, the
+journal, the policy and the reason a connection never opened are all on the far
+side of the socket, and this terminal's log only has this terminal's lines. So
+the panel asks for its log too and merges them by time, with a rule down the
+margin on the lines that came from it. `s` cycles the three views — this
+terminal, the daemon, both — and is only offered when there is a daemon serving
+its log; one built without it says so, rather than letting you believe the
+interesting half never happens. Raising the level asks it too, and there is a
+difference the status bar warns you about: its ring belongs to **all** its
+clients, never lowers, and closing this panel does not lower it either. The
+missed-line counts stay apart — this side's and its own do not mean the same
+thing and are never summed.
+
 That extra detail is **norte's only**, though. The libraries norte uses to talk
 to a server write, at that level, the contents of what they send — including your
 password before it is encrypted. So their messages stay at warnings and errors,
 which is what explains a failure, and no key in this panel can raise them. The
-file `norte paths` points at holds everyone's at that level, and the daemon's
-too, which are not visible here.
+file `norte paths` points at holds everyone's at that level, and the same cap
+holds on the far side: the daemon's ring applies it in the process that owns it,
+which is where it has to be.
 
 {{cmd:layout.metadata}} opens a details panel on the right that also follows
 the cursor: name, kind, size, when it was last modified, and whatever the

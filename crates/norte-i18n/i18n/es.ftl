@@ -1818,20 +1818,27 @@ processes-has-keyboard = este panel tiene el teclado · Esc lo devuelve
 log-title = Registro
 slot-retry = reintentar
 log-keys = e/w/i/d/t nivel · / filtrar · Fin al final · Esc devuelve el teclado
+# Solo se ofrece cuando el daemon sirve su registro (#328): anunciar un mando
+# que recorrería tres vistas del MISMO anillo es prometer algo que no existe.
+log-keys-source = s fuente
 log-empty = nada que enseñar con este filtro
 log-no-ring = sin registro instalado en este proceso
 log-dropped = { $n } líneas viejas descartadas
-# Con DOS anillos en pantalla (#328) cada cuenta dice de cuál habla: la de la
-# ventana cuenta lo evacuado desde que arrancó el proceso, la del daemon lo que
-# esta apertura del panel se perdió. Son números distintos y no se suman.
-log-dropped-window = la ventana descartó { $n } líneas viejas
+# Con DOS anillos en pantalla (#328) cada cuenta dice de cuál habla: la de este
+# proceso cuenta lo evacuado desde que arrancó, la del daemon lo que esta
+# apertura del panel se perdió. Son números distintos y no se suman.
+#
+# «Este proceso» y no «la ventana»: las mismas frases las usan la ventana y
+# `ntc --socket`, que no es una ventana, y la clave se llama `-window` por la
+# variante de `LogSource`, no por el frontend.
+log-dropped-window = este proceso descartó { $n } líneas viejas
 log-missed-daemon = te perdiste { $n } líneas del daemon
 # Cuando el anillo captura MÁS de lo que se enseña: subirlo no baja solo, así
 # que el proceso sigue pagando ese nivel hasta que se cierre el panel.
 log-capturing = capturando { $level }
 # Y con los dos a la vista hay que decir de quién es cada nivel: el del daemon
 # es global a todos sus clientes, no baja nunca y cerrar este panel no lo toca.
-log-capturing-window = la ventana captura { $level }
+log-capturing-window = este proceso captura { $level }
 log-capturing-daemon = el daemon captura { $level }
 task-failed = falló
 metadata-title = Detalles
@@ -1898,10 +1905,10 @@ host-name-too-long = ese nombre es demasiado largo
 host-secret-empty = escribe la contraseña: entregarla vacía cambiaría de identidad, no de sesión
 host-secret-too-long = la contraseña no cabe: el tope son 256 caracteres
 host-log-level-unknown = ese nivel de registro no existe
-log-source-window = de esta ventana (el daemon registra aparte)
+log-source-window = de este proceso (el daemon registra aparte)
 log-source-daemon = del daemon
-log-source-both = de la ventana y del daemon
-log-source-unsupported = este daemon no sirve su registro: se enseña el de la ventana
+log-source-both = de este proceso y del daemon
+log-source-unsupported = este daemon no sirve su registro: se enseña el de este proceso
 log-source-daemon-level = el nivel es el del daemon: global a sus clientes y solo sube
 host-name-not-editable = ese nombre no cabe en pantalla: aquí no se puede editar sin recortarlo
 host-cannot-transfer-root = una raíz no se copia ni se mueve

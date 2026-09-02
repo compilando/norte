@@ -873,22 +873,31 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado
         Role::BorderUnfocused
     };
     let panel = &app.log_panel;
-    // El título dice el nivel y el filtro: sin eso, un panel que se ve vacío
-    // no distingue «no ha pasado nada» de «lo estás filtrando fuera», que es
-    // la confusión que hace desconfiar de un visor de logs.
-    let mut titulo = format!(" {} · {} ", t("log-title"), panel.level().label().trim());
-    // Si el anillo está capturando MÁS de lo que se enseña, se dice. Pedir
-    // TRACE y volver a INFO deja el proceso capturando TRACE el resto de la
-    // sesión —a propósito, para que ir y volver no borre lo de en medio— y sin
-    // esta línea eso no se ve por ninguna parte.
-    if let Some(ring) = app.log_ring.as_ref()
-        && ring.level() > panel.level()
-    {
-        let _ = write!(
-            titulo,
-            "· {} ",
-            ta("log-capturing", &[("level", ring.level().label().trim())])
-        );
+    let fuente = crate::logview::fuente_efectiva(app);
+    // El título dice el nivel, la FUENTE y el filtro: sin eso, un panel que se
+    // ve vacío no distingue «no ha pasado nada» de «lo estás filtrando fuera»
+    // ni de «estás mirando el registro del otro proceso», que es la confusión
+    // que hace desconfiar de un visor de logs.
+    //
+    // El nivel es SIEMPRE el que se ENSEÑA, en todas las fuentes: es el que la
+    // tecla controla y el que filtra la lista. Marcar aquí el que el daemon
+    // contestó tener puesto sería el peor error posible del panel — con el
+    // daemon en `trace` y el panel en `info`, la cabecera diría `trace`
+    // mientras cada línea `debug` que cruza el socket se tira en silencio.
+    let mut titulo = format!(
+        " {} · {} · {} ",
+        t("log-title"),
+        panel.level().label().trim(),
+        crate::logview::etiqueta_de_fuente(app, fuente)
+    );
+    // Si algún anillo está capturando MÁS de lo que se enseña, se dice, y con
+    // los dos a la vista cada parte dice de quién habla. Pedir TRACE y volver a
+    // INFO deja el proceso capturando TRACE el resto de la sesión —a propósito,
+    // para que ir y volver no borre lo de en medio— y sin esta línea eso no se
+    // ve por ninguna parte.
+    let captura = crate::logview::nota_de_captura(app, fuente);
+    if !captura.is_empty() {
+        let _ = write!(titulo, "· {captura} ");
     }
     if !panel.filter().is_empty() {
         let _ = write!(
@@ -897,19 +906,14 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado
             norte_encoding::mask_terminal_hazards(panel.filter())
         );
     }
-    // Lo descartado se DICE. Un anillo que tira lo viejo en silencio hace que
-    // el lector busque una línea que estuvo y ya no está, y concluya que el
-    // registro miente.
-    let descartadas = app
-        .log_ring
-        .as_ref()
-        .map_or(0, norte_config::logring::LogRing::dropped);
-    if descartadas > 0 {
-        let _ = write!(
-            titulo,
-            "· {} ",
-            ta("log-dropped", &[("n", &descartadas.to_string())])
-        );
+    // Lo descartado se DICE, y por anillo: el local cuenta lo evacuado desde
+    // que arrancó el proceso, el del daemon lo que ESTA apertura se perdió. Son
+    // números distintos y no se suman. Un anillo que tira lo viejo en silencio
+    // hace que el lector busque una línea que estuvo y ya no está, y concluya
+    // que el registro miente.
+    let descartes = crate::logview::nota_de_descartes(app, fuente);
+    if !descartes.is_empty() {
+        let _ = write!(titulo, "· {descartes} ");
     }
     let mut block = Block::default()
         .borders(Borders::ALL)
@@ -925,10 +929,16 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado
             theme.role(Role::Match),
         ));
     } else if con_teclado {
-        block = block.title_bottom(Line::styled(
-            format!(" {} ", t("log-keys")),
-            theme.role(Role::Info),
-        ));
+        // La tecla de la fuente solo se ofrece cuando HAY una segunda: anunciar
+        // un mando que recorrería tres vistas del mismo anillo es prometer algo
+        // que no existe. Es la misma regla que en la ventana, donde el selector
+        // simplemente no se pinta.
+        let teclas = if app.log_remote.servicio == crate::logview::Servicio::Sirve {
+            format!("{} · {}", t("log-keys"), t("log-keys-source"))
+        } else {
+            t("log-keys")
+        };
+        block = block.title_bottom(Line::styled(format!(" {teclas} "), theme.role(Role::Info)));
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -936,19 +946,25 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado
         return;
     }
 
-    let Some(ring) = app.log_ring.as_ref() else {
+    if app.log_ring.is_none() && fuente == norte_frontend::logpanel::LogSource::Window {
         // Sin anillo instalado (tests, o un embebedor que no montó el
-        // subscriber) se dice, en vez de pintar un panel vacío que parece que
-        // no pasa nada.
+        // subscriber) y sin daemon que sirva el suyo se dice, en vez de pintar
+        // un panel vacío que parece que no pasa nada. No es «no se registra
+        // nada»: el proceso sigue escribiendo a su fichero; lo que falta es el
+        // anillo en memoria, que es lo que este panel lee.
         frame.render_widget(
             Paragraph::new(Line::styled(t("log-no-ring"), theme.role(Role::Warning))),
             inner,
         );
         return;
-    };
-    let lineas = ring.snapshot();
+    }
+    // Las dos fuentes, mezcladas por marca de tiempo y ya filtradas (#328).
+    // Prestadas, no clonadas: el anillo ya clonó una vez en su `snapshot` y
+    // aquí se pinta como mucho una pantalla.
+    let lineas = crate::logview::instantanea(app);
+    let visibles = crate::logview::visibles(app, &lineas);
     let alto = usize::from(inner.height);
-    let (visibles, desde) = panel.view(&lineas, alto);
+    let desde = panel.window_start(visibles.len(), alto);
     if visibles.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::styled(t("log-empty"), theme.role(Role::Title))),
@@ -960,7 +976,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado
         .iter()
         .skip(desde)
         .take(alto)
-        .map(|l| {
+        .map(|(l, origen)| {
             let rol = match l.level {
                 norte_config::logline::LogLevel::Error => Role::Error,
                 norte_config::logline::LogLevel::Warn => Role::Warning,
@@ -971,7 +987,21 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado
             // cualquier otro texto ajeno antes de tocar la terminal.
             let cuerpo =
                 norte_encoding::mask_terminal_hazards(&format!("{}: {}", l.target, l.message));
+            // Una línea del DAEMON se marca al margen, y solo con las dos
+            // fuentes en pantalla: con una sola no hay nada que distinguir, y
+            // el filete gastaría dos columnas por línea para no decir nada. Un
+            // filete y no un color, igual que en la ventana: el color ya lo
+            // tiene tomado el nivel, que es lo que se busca de un vistazo.
+            let margen = match (fuente, origen) {
+                (
+                    norte_frontend::logpanel::LogSource::Both,
+                    norte_frontend::logpanel::LogSource::Daemon,
+                ) => "│ ",
+                (norte_frontend::logpanel::LogSource::Both, _) => "  ",
+                _ => "",
+            };
             Line::from(vec![
+                Span::styled(margen, theme.role(Role::BorderUnfocused)),
                 Span::raw(format!("{} ", hora_utc(l.epoch_ms))),
                 Span::styled(format!("{} ", l.level.label()), theme.role(rol)),
                 Span::raw(cuerpo),
@@ -979,4 +1009,140 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado
         })
         .collect();
     frame.render_widget(Paragraph::new(pintadas), inner);
+}
+
+#[cfg(test)]
+mod draw_log_tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    /// Pinta el panel de registro y devuelve lo que quedó en el buffer.
+    fn pintado(app: &App, ancho: u16, alto: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(ancho, alto)).expect("terminal de test");
+        terminal
+            .draw(|f| draw_log(f, f.area(), app, true))
+            .expect("draw");
+        terminal.backend().to_string()
+    }
+
+    /// Las dos columnas de margen de una fila pintada.
+    ///
+    /// Hay que pelar dos cosas antes: la comilla que pone el `Display` de
+    /// `TestBackend` y el BORDE izquierdo del bloque, que es otro `│` y que la
+    /// primera versión de este test confundió con el filete del daemon —
+    /// declarando marcada como remota una línea de esta terminal.
+    fn margen(fila: &str) -> String {
+        fila.chars()
+            .skip_while(|c| *c == '"')
+            .skip(1)
+            .take(2)
+            .collect()
+    }
+
+    /// Con un daemon aparte, las DOS fuentes llegan a las filas pintadas, y la
+    /// del daemon se distingue por el filete del margen (#328).
+    ///
+    /// Es el agujero que `ntc --socket` tenía: los providers, el journal, la
+    /// política y el motivo por el que una conexión falló están en el otro
+    /// proceso, y este panel solo enseñaba lo de la terminal. La ventana ya lo
+    /// resolvió, y arreglarlo en un solo frontend es lo que los hace divergir
+    /// en silencio (ADR 0077).
+    #[test]
+    fn el_panel_pinta_la_terminal_y_el_daemon_y_los_distingue() {
+        let mut app = crate::app::testutil::app_dos_panes();
+        let anillo = norte_config::logring::LogRing::new(10);
+        {
+            use tracing_subscriber::layer::SubscriberExt as _;
+            let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&anillo));
+            tracing::subscriber::with_default(s, || tracing::info!("linea-de-la-terminal"));
+        }
+        let local_ms = anillo.snapshot()[0].epoch_ms;
+        app.log_ring = Some(anillo);
+        app.toggle_log();
+        let epoca = app.log_remote.epoca;
+        crate::logview::aterrizar_tail(
+            &mut app,
+            epoca,
+            Ok(norte_proto::methods::LogTailResult {
+                lines: vec![norte_proto::methods::LogLine {
+                    epoch_ms: local_ms + 1,
+                    level: "info".to_owned(),
+                    target: "norte_core::daemon".to_owned(),
+                    message: "linea-del-daemon".to_owned(),
+                }],
+                next: 7,
+                lost: 0,
+                // El nivel del daemon, MÁS alto que el que el panel enseña:
+                // es lo que hace visible la regla de los dos niveles.
+                level: "trace".to_owned(),
+                capacity: 2000,
+            }),
+        );
+
+        let texto = pintado(&app, 120, 8);
+        let fila_local = texto
+            .lines()
+            .find(|l| l.contains("linea-de-la-terminal"))
+            .expect("la línea de esta terminal no se pintó");
+        let fila_daemon = texto
+            .lines()
+            .find(|l| l.contains("linea-del-daemon"))
+            .expect("la línea del daemon no se pintó");
+        // El filete del margen es lo que separa «el provider falló» de «la
+        // terminal no pudo pintarlo», que se leen igual y son dos averías
+        // distintas.
+        assert_eq!(
+            margen(fila_daemon),
+            "│ ",
+            "la línea del daemon no se marcó al margen: {fila_daemon:?}"
+        );
+        assert_eq!(
+            margen(fila_local),
+            "  ",
+            "la línea de esta terminal se marcó como del daemon: {fila_local:?}"
+        );
+
+        // El nivel que se MARCA es el que se ENSEÑA, en todas las fuentes: el
+        // del daemon se dice en la nota de captura y no en la cabecera. Con la
+        // cabecera diciendo `traza` mientras el filtro sigue en `info`, cada
+        // línea DEBUG del daemon cruzaría el socket y se tiraría en silencio.
+        let cabecera = texto.lines().next().unwrap_or_default();
+        assert!(
+            cabecera.contains(norte_config::logline::LogLevel::Info.label().trim()),
+            "la cabecera no marca el nivel que se enseña: {cabecera:?}"
+        );
+        assert!(
+            texto.contains(&norte_i18n::ta(
+                "log-capturing-daemon",
+                &[(
+                    "level",
+                    norte_config::logline::LogLevel::Trace.label().trim()
+                )]
+            )),
+            "no se dice que el daemon captura más de lo que se ve: {texto}"
+        );
+    }
+
+    /// Sin daemon que sirva su registro no se ofrece la tecla de la fuente:
+    /// recorrer tres vistas del MISMO anillo es un mando que promete algo que
+    /// no existe.
+    #[test]
+    fn la_tecla_de_la_fuente_solo_se_ofrece_cuando_hay_dos() {
+        let mut app = crate::app::testutil::app_dos_panes();
+        app.log_ring = Some(norte_config::logring::LogRing::new(10));
+        app.toggle_log();
+        let sin = pintado(&app, 120, 8);
+        assert!(
+            !sin.contains(&norte_i18n::t("log-keys-source")),
+            "se ofreció la fuente sin una segunda que ofrecer: {sin}"
+        );
+
+        app.log_remote.servicio = crate::logview::Servicio::Sirve;
+        let con = pintado(&app, 120, 8);
+        assert!(
+            con.contains(&norte_i18n::t("log-keys-source")),
+            "con daemon, la tecla de la fuente no se anuncia: {con}"
+        );
+    }
 }

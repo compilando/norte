@@ -16,7 +16,9 @@ use tokio_util::sync::CancellationToken;
 use crate::fill::Fill;
 use crate::jobs::{CompareRun, SearchRun, SyncRun};
 use crate::lua::CommandRun;
-use crate::probes::{CompareStatProbe, DecorateFetch, PreviewFetch, Probed, StatProbe};
+use crate::probes::{
+    CompareStatProbe, DecorateFetch, LogLevelProbe, LogTailProbe, PreviewFetch, Probed, StatProbe,
+};
 use norte_proto::{Error, VPath};
 
 /// Petición `ai.rename_plan` EN VUELO (M4-IA). Abortar el `JoinHandle`
@@ -180,6 +182,17 @@ pub struct InFlight {
     pub decorate: BySlot<DecorateFetch>,
     /// L3: una lectura de preview en vuelo por hueco, superseded al moverse.
     pub preview: BySlot<PreviewFetch>,
+    /// Una vuelta de `log.tail` en vuelo (#328): a lo sumo una — el panel de
+    /// registro es uno, y con dos un daemon lento acumularía una petición por
+    /// vuelta del bucle para siempre.
+    pub log_tail: Option<LogTailProbe>,
+    /// Cuándo toca la siguiente (ver [`crate::probes::LOG_TAIL_PERIODO`]).
+    /// `None` = ya, que es lo que hace que abrir el panel pregunte en el acto.
+    pub log_next_at: Option<tokio::time::Instant>,
+    /// Una petición `log.level` al daemon en vuelo (#328): a lo sumo una, y la
+    /// última pulsación releva a la anterior — pedirle dos niveles seguidos a
+    /// un anillo que solo sube es pedirle el mayor.
+    pub log_level: Option<LogLevelProbe>,
     /// El subshell persistente (#142): UNO por sesión, arrancado perezosamente
     /// la primera vez que se pide `app.toggle-panels` y vivo hasta salir.
     ///

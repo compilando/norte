@@ -356,12 +356,26 @@ no te borre justo el rato que estabas mirando; el título dice qué se está
 guardando cuando es más de lo que se enseña, y cerrar el panel lo devuelve a su
 sitio. El panel guarda las últimas dos mil líneas y dice cuántas ha tirado.
 
+Con `ntc --socket`, el daemon es **otro proceso**: los providers, el journal, la
+política y el motivo por el que una conexión no llegó a abrirse están del otro
+lado del socket, y el registro de esta terminal solo tiene lo de esta terminal.
+Así que el panel pide también el suyo y los junta por hora, con un filete al
+margen en las líneas que vienen de él. `s` recorre las tres vistas —esta
+terminal, el daemon, las dos— y solo se ofrece cuando hay un daemon que sirva su
+registro; uno que se compiló sin él lo dice, en vez de dejarte creer que la
+mitad interesante no ocurre. Subir el nivel se lo pide también a él, y ahí hay
+una diferencia que la barra de estado te avisa: su anillo es de **todos** sus
+clientes, no baja nunca, y cerrar este panel tampoco lo baja. Las cuentas de
+líneas perdidas van por separado —las de aquí y las suyas no significan lo mismo
+y no se suman.
+
 El detalle, en cambio, es **solo de norte**. Las bibliotecas que norte usa por
 dentro para hablar con un servidor escriben, a ese nivel, el contenido de lo que
 mandan — incluida tu contraseña antes de cifrarla. Así que sus mensajes se
 quedan siempre en avisos y errores, que es lo que explica un fallo, y ninguna
 tecla de este panel puede subirlos. El fichero al que apunta `norte paths` lleva
-las de todos a ese nivel, y también las del daemon, que aquí no se ven.
+las de todos a ese nivel, y la misma cota vale al otro lado: el anillo del
+daemon la aplica en el proceso que lo tiene, que es donde tiene que estar.
 
 {{cmd:layout.metadata}} abre a la derecha un panel de detalles que también
 sigue al cursor: nombre, clase, tamaño, cuándo se modificó y lo que el provider

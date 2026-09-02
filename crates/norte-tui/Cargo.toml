@@ -115,6 +115,12 @@ norte-vfs.workspace = true
 # test-util: `start_paused` en los tests con timers (deterministas, sin
 # carreras de wall-clock). Solo dev — no entra en el binario.
 tokio = { workspace = true, features = ["test-util"] }
+# El panel de registro (#323, #328) se prueba llenando el anillo por su camino
+# de VERDAD —la capa de `tracing` que lo alimenta—, y no con un `push` público.
+# Un `push` público se saltaría el filtro donde vive la cota de `suppaftp` (que
+# loguea `PASS <contraseña>` a nivel TRACE), y esa cota no es negociable. Es la
+# misma dependencia, por lo mismo, que en `norte-ui-host`.
+tracing-subscriber.workspace = true
 
 [[bench]]
 name = "presupuestos"

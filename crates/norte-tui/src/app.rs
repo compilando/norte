@@ -551,6 +551,13 @@ pub struct App {
     /// `App` sin él: un panel sin anillo se pinta vacío diciendo que no hay
     /// registro instalado, que es la verdad, y no se cae.
     pub log_ring: Option<norte_config::logring::LogRing>,
+    /// La mitad REMOTA de ese panel: lo que el daemon lleva contado (#328).
+    ///
+    /// Con `--socket` el anillo de arriba solo tiene las líneas de esta
+    /// terminal, y los providers, el journal, la política y el motivo por el
+    /// que una conexión falló están en el otro proceso. La petición en vuelo
+    /// no vive aquí sino en `InFlight`, que es quien habla con el backend.
+    pub log_remote: crate::logview::RegistroRemoto,
     /// Lo que el lector está esperando ahora mismo, si algo (#323).
     ///
     /// Lo pone y lo quita quien espera, y solo dura la espera: un `Busy` que
@@ -903,6 +910,7 @@ impl App {
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             log_filter_input: None,
             log_ring: None,
+            log_remote: crate::logview::RegistroRemoto::default(),
             busy: None,
             menu: None,
             menu_ultimo: 0,

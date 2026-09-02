@@ -24,8 +24,8 @@ use crate::mouse;
 use crate::navigate::{apply_cd, cd};
 use crate::overlays::{fetch_plugin_page, settle_help_over_modal, watch_refresh_allowed};
 use crate::probes::{
-    STAT_BATCH_MAX, STAT_WINDOW_RADIUS, spawn_compare_stat_probe, spawn_preview_fetch,
-    spawn_stat_probe,
+    LOG_TAIL_PERIODO, STAT_BATCH_MAX, STAT_WINDOW_RADIUS, spawn_compare_stat_probe,
+    spawn_log_level, spawn_log_tail, spawn_preview_fetch, spawn_stat_probe,
 };
 use crate::refresh::{after_panes_refresh, refresh_panes};
 use crate::suspend::run_suspended;
@@ -654,4 +654,49 @@ pub fn spawn_probes(app: &mut App, backend: &Backend, work: &mut InFlight) {
             ));
         }
     }
+    spawn_log_probes(app, backend, work);
+}
+
+/// El registro del DAEMON (#328): tirar de sus líneas y subirle el nivel.
+///
+/// Solo con el panel ABIERTO, que es donde está la mitad del ahorro: un panel
+/// cerrado no cuesta nada, y es donde pasa la mayor parte del tiempo. Y se
+/// pregunta incluso con la fuente puesta en «esta terminal», porque es la única
+/// forma de saber si hay una segunda fuente que ofrecer —y por tanto de decidir
+/// si la tecla `s` significa algo.
+///
+/// Sin temporizador propio: esta terminal ya repinta por frame y su bucle
+/// despierta diez veces por segundo, así que lo único que hace falta es el
+/// freno de [`crate::probes::LOG_TAIL_PERIODO`]. La ventana sí necesita reloj
+/// porque solo repinta cuando alguien hace algo.
+fn spawn_log_probes(app: &mut App, backend: &Backend, work: &mut InFlight) {
+    if app.log_slot().is_none() {
+        return;
+    }
+    // Lo que la tecla dejó pedido: subirle el nivel al anillo del daemon. Se
+    // toma SIEMPRE aunque haya otra en vuelo —la última pulsación manda— y la
+    // respuesta dice de paso si ese daemon sabe de registro.
+    //
+    // Y se descarta sin pedir nada a un daemon que ya dijo que no tiene
+    // registro: subirle el nivel a un anillo que no existe es una RPC por
+    // pulsación cuya respuesta ya se sabe.
+    if let Some(nivel) = app.log_remote.pide_nivel.take()
+        && app.log_remote.debe_pedir()
+    {
+        work.log_level = Some(spawn_log_level(backend, nivel, app.log_remote.epoca));
+    }
+    if work.log_tail.is_some()
+        || !app.log_remote.debe_pedir()
+        || work
+            .log_next_at
+            .is_some_and(|t| t > tokio::time::Instant::now())
+    {
+        return;
+    }
+    work.log_next_at = Some(tokio::time::Instant::now() + LOG_TAIL_PERIODO);
+    work.log_tail = Some(spawn_log_tail(
+        backend,
+        app.log_remote.cursor,
+        app.log_remote.epoca,
+    ));
 }

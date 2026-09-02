@@ -2816,6 +2816,50 @@ impl Backend {
             Self::Remote(r) => r.plugin_set_config(id, key, value).await,
         }
     }
+
+    /// El registro del DAEMON desde `cursor` (`log.tail`, 0.65.0, #328,
+    /// ADR 0092).
+    ///
+    /// `cursor: None` es «dame lo que haya» y NO es lo mismo que cero: contra
+    /// un anillo que ya dio la vuelta, un cero reportaría un `lost` falso en
+    /// la primera vuelta. Después se encadena el `next` que llegó.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo. En `Embedded` es siempre
+    /// [`Error::Unsupported`], y eso NO es una carencia: el anillo del core
+    /// embebido está en ESTE proceso, así que ya es el que el frontend lee —
+    /// no hay una segunda fuente que ofrecer. En `Remote`, un daemon de la
+    /// misma versión compilado sin la feature `logging` contesta lo mismo, y
+    /// esa respuesta no puede cambiar mientras ese daemon viva.
+    pub async fn log_tail(
+        &self,
+        cursor: Option<u64>,
+        max: u32,
+    ) -> Result<norte_proto::methods::LogTailResult, Error> {
+        match self {
+            Self::Embedded(_) => Err(Error::Unsupported),
+            #[cfg(unix)]
+            Self::Remote(r) => r.log_tail(cursor, max).await,
+        }
+    }
+
+    /// Sube el nivel que el anillo del daemon captura (`log.level`, 0.65.0,
+    /// #328) y devuelve el que de verdad quedó puesto.
+    ///
+    /// Su anillo es SUYO: es global a todos sus clientes y nunca baja, así
+    /// que lo pedido y lo puesto no tienen por qué coincidir — de ahí que
+    /// esto devuelva un nivel en vez de un `()`.
+    ///
+    /// # Errors
+    /// Taxonomía del protocolo; [`Error::Unsupported`] en `Embedded` y contra
+    /// un daemon sin registro que servir (ver [`Self::log_tail`]).
+    pub async fn log_level(&self, level: &str) -> Result<String, Error> {
+        match self {
+            Self::Embedded(_) => Err(Error::Unsupported),
+            #[cfg(unix)]
+            Self::Remote(r) => r.log_level(level).await,
+        }
+    }
 }
 
 /// Mapea un fallo de [`crate::PluginRegistry::set_config`] a la taxonomía

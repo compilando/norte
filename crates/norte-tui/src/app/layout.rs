@@ -637,6 +637,16 @@ impl App {
                     ring.set_level(self.log_panel.level());
                 }
                 self.log_filter_input = None;
+                // Y lo del daemon se suelta (#328): sus líneas y su cursor son
+                // de ESTA apertura, y una respuesta que llegue tarde no puede
+                // aterrizar en la siguiente. Lo que NO se olvida es si sirve su
+                // registro — es un hecho sobre el daemon, no sobre el panel—,
+                // y su nivel tampoco: no lo baja nadie.
+                //
+                // El anillo del daemon no se baja al cerrar, al revés que el
+                // local: es global a todos sus clientes, y bajárselo desde aquí
+                // apagaría la captura de otro frontend que esté mirando.
+                self.log_remote.reiniciar();
             }
             Some(_) => self.key_owner = KeyOwner::Log,
             None => {

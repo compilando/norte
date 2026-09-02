@@ -55,10 +55,33 @@ independently through `PROTOCOL_VERSION`.
   history nobody asked for, in front of the history they did.
   When the daemon has no log to serve the panel falls back to the local ring and
   **says so** — the same rule #326 wrote for the process, applied to the other
-  shore. And with the daemon as the source, the level shown is the one the
-  daemon *answered*, with a line saying whose it is: it is global to every
-  client of that daemon and only ever rises, so showing what was asked for and
-  calling it state would be showing a request.
+  shore. The level *marked* is always the one the panel **shows**, in every
+  source, because that is what the buttons control and what filters the list;
+  the daemon's own level rides the "capturing" line, which names whose ring it
+  describes. Marking the daemon's there was the worst bug of the first pass:
+  with the daemon at `trace` and the panel at `info`, the header said `trace`
+  while every `debug` line crossed the socket and was dropped in silence.
+
+- **`ntc --socket` reads the daemon's log too** (#328). The same hole, the same
+  answer, in the other frontend — a decision one takes and the other does not
+  diverges in silence (ADR 0077). The panel merges the two rings by timestamp,
+  rules the daemon's lines down the margin, and `s` cycles this terminal, the
+  daemon and both. `s` is a key of the panel and not a command of the keymap,
+  like the five level keys and `/` beside it: it only exists while the panel
+  holds the keyboard, so **no preset binds it**, and it is only offered at all
+  when a daemon is serving its log.
+  There is no timer: the terminal already repaints per frame, so the pull hangs
+  off the loop it already runs, with a 500 ms floor and one request in flight —
+  ten a second to paint the same thing would be the cost of having no floor. The
+  request carries the panel's **epoch**, so a late answer cannot land its cursor
+  in the next opening. The two miss counters stay apart and are never summed:
+  the local ring's counts what it has evicted since the process started, the
+  daemon's what *this* opening missed. And raising the level asks the daemon
+  too, announcing on the status bar that the ring being raised is global to
+  every client of that daemon and never lowers — the announcement goes to the
+  bar and not to the panel's border because a border is one line that `ratatui`
+  clips in silence, and the clipped thing was the sentence naming the daemon's
+  level.
 
 - **The window has the log panel** (#326, bridge **46**). It has been in the
   TUI since #323, and everything shared was already built — the in-memory ring

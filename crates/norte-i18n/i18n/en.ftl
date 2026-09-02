@@ -784,13 +784,20 @@ processes-has-keyboard = this panel has the keyboard · Esc returns it
 log-title = Log
 slot-retry = retry
 log-keys = e/w/i/d/t level · / filter · End to follow · Esc returns the keyboard
+# Only offered when the daemon serves its log (#328): announcing a control that
+# would cycle three views of the SAME ring promises something that is not there.
+log-keys-source = s source
 log-empty = nothing to show with this filter
 log-no-ring = no log installed in this process
 log-dropped = { $n } old lines dropped
-# With TWO rings on screen (#328) each count says which one it means: the
-# window's counts what has been evicted since the process started, the daemon's
-# counts what this opening of the panel missed. Different numbers; never summed.
-log-dropped-window = the window discarded { $n } old lines
+# With TWO rings on screen (#328) each count says which one it means: this
+# process's counts what has been evicted since it started, the daemon's counts
+# what this opening of the panel missed. Different numbers; never summed.
+#
+# "This process" and not "the window": the same phrases serve the window and
+# `ntc --socket`, which is not a window; the key is named `-window` after the
+# `LogSource` variant, not after a frontend.
+log-dropped-window = this process discarded { $n } old lines
 log-missed-daemon = you missed { $n } of the daemon's lines
 # When the ring is capturing MORE than is being shown: raising it never lowers
 # by itself, so the process keeps paying for that level until the panel closes.
@@ -798,7 +805,7 @@ log-capturing = capturing { $level }
 # And with both in view, each level has to say whose it is: the daemon's is
 # global to all its clients, never lowers, and closing this panel does not
 # touch it.
-log-capturing-window = the window is capturing { $level }
+log-capturing-window = this process is capturing { $level }
 log-capturing-daemon = the daemon is capturing { $level }
 task-failed = failed
 metadata-title = Details
@@ -1870,10 +1877,10 @@ host-name-too-long = that name is too long
 host-secret-empty = type the password: handing over an empty one changes identity, not session
 host-secret-too-long = the password does not fit: the cap is 256 characters
 host-log-level-unknown = that log level does not exist
-log-source-window = from this window (the daemon logs separately)
+log-source-window = from this process (the daemon logs separately)
 log-source-daemon = from the daemon
-log-source-both = from the window and the daemon
-log-source-unsupported = this daemon does not serve its log: showing the window's
+log-source-both = from this process and the daemon
+log-source-unsupported = this daemon does not serve its log: showing this process's
 log-source-daemon-level = the level is the daemon's: global to its clients, and it only rises
 host-name-not-editable = that name does not fit on screen: it cannot be edited here without truncating it
 host-cannot-transfer-root = a root cannot be copied or moved
