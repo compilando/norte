@@ -494,6 +494,39 @@ impl Backend {
         }
     }
 
+    /// ¿Hay un daemon al otro lado, o el core está en ESTE proceso?
+    ///
+    /// La pregunta del transporte, desnuda, que es distinta de
+    /// [`Self::is_journalled`]: aquella dice qué se puede PROMETER (journal y
+    /// spool) y ésta dice si existe un segundo proceso del que hablar.
+    ///
+    /// Existe porque hay superficies que no son «puedo o no puedo» sino «hay
+    /// otro sitio o no lo hay», y la primera es el panel de registro (#328).
+    /// Con el core embebido hay un solo anillo —el de este proceso, que es el
+    /// que el panel ya lee—, así que preguntarle al backend por el registro
+    /// del daemon contesta [`Error::Unsupported`] con toda la razón, y un
+    /// frontend que tratara esa respuesta como un hecho sobre un daemon
+    /// acabaría diciendo «este daemon no sirve su registro» donde no hay
+    /// ninguno. La respuesta correcta ahí no es otra frase: es **no
+    /// preguntar**, y no mencionar a nadie.
+    ///
+    /// Se decide UNA vez y no cambia: el `Backend` no cambia de brazo en vida
+    /// del proceso.
+    ///
+    /// ```
+    /// use norte_core::{Engine, backend::Backend};
+    /// use std::sync::Arc;
+    /// assert!(!Backend::Embedded(Arc::new(Engine::new())).is_remote());
+    /// ```
+    #[must_use]
+    pub const fn is_remote(&self) -> bool {
+        match self {
+            Self::Embedded(_) => false,
+            #[cfg(unix)]
+            Self::Remote(_) => true,
+        }
+    }
+
     /// Abre ya el journal (si hace falta) y dice si ESTA sesión queda
     /// registrada — la pregunta que un frontend hace justo antes de mutar y
     /// necesita CONTESTAR al humano antes del sí, no después (`norte ai
@@ -2831,6 +2864,23 @@ impl Backend {
     /// no hay una segunda fuente que ofrecer. En `Remote`, un daemon de la
     /// misma versión compilado sin la feature `logging` contesta lo mismo, y
     /// esa respuesta no puede cambiar mientras ese daemon viva.
+    ///
+    /// Las dos respuestas se escriben igual y **no significan lo mismo**, así
+    /// que quien pinta un panel decide con [`Self::is_remote`] antes de
+    /// preguntar: sin daemon no hay nada de lo que informar, y una frase sobre
+    /// «este daemon» donde no hay ninguno es peor que el silencio.
+    ///
+    /// ```
+    /// use norte_core::{Engine, backend::Backend};
+    /// use norte_proto::Error;
+    /// use std::sync::Arc;
+    /// let rt = tokio::runtime::Runtime::new().expect("runtime");
+    /// let backend = Backend::Embedded(Arc::new(Engine::new()));
+    /// assert!(matches!(
+    ///     rt.block_on(backend.log_tail(None, 10)),
+    ///     Err(Error::Unsupported)
+    /// ));
+    /// ```
     pub async fn log_tail(
         &self,
         cursor: Option<u64>,
@@ -2853,6 +2903,18 @@ impl Backend {
     /// # Errors
     /// Taxonomía del protocolo; [`Error::Unsupported`] en `Embedded` y contra
     /// un daemon sin registro que servir (ver [`Self::log_tail`]).
+    ///
+    /// ```
+    /// use norte_core::{Engine, backend::Backend};
+    /// use norte_proto::Error;
+    /// use std::sync::Arc;
+    /// let rt = tokio::runtime::Runtime::new().expect("runtime");
+    /// let backend = Backend::Embedded(Arc::new(Engine::new()));
+    /// assert!(matches!(
+    ///     rt.block_on(backend.log_level("debug")),
+    ///     Err(Error::Unsupported)
+    /// ));
+    /// ```
     pub async fn log_level(&self, level: &str) -> Result<String, Error> {
         match self {
             Self::Embedded(_) => Err(Error::Unsupported),

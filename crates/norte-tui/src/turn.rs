@@ -659,18 +659,32 @@ pub fn spawn_probes(app: &mut App, backend: &Backend, work: &mut InFlight) {
 
 /// El registro del DAEMON (#328): tirar de sus líneas y subirle el nivel.
 ///
-/// Solo con el panel ABIERTO, que es donde está la mitad del ahorro: un panel
-/// cerrado no cuesta nada, y es donde pasa la mayor parte del tiempo. Y se
-/// pregunta incluso con la fuente puesta en «esta terminal», porque es la única
-/// forma de saber si hay una segunda fuente que ofrecer —y por tanto de decidir
-/// si la tecla `s` significa algo.
+/// Dos condiciones antes de gastar una sola RPC, y cada una tapa una avería
+/// distinta que ya se había colado:
+///
+/// - **Hay un daemon.** Con el core embebido —que es el arranque por defecto de
+///   `ntc`— el anillo del core es el de este proceso, o sea el que el panel ya
+///   está leyendo. Preguntarle a `Backend::log_tail` devuelve `Unsupported` con
+///   toda la razón, pero el panel lo leía como un hecho sobre un daemon y
+///   acababa poniendo «este daemon no sirve su registro» donde no hay ninguno.
+///   La respuesta no es otra frase: es no preguntar.
+/// - **El panel se VE.** No que exista: uno escondido detrás de una pestaña que
+///   no es la activa sigue existiendo, y sondearlo son dos RPC por segundo, toda
+///   la sesión, por algo que nadie tiene delante.
+///
+/// Con las dos cumplidas se pregunta incluso con la fuente puesta en «esta
+/// terminal», porque es la única forma de saber si hay una segunda fuente que
+/// ofrecer —y por tanto de decidir si la tecla `s` significa algo.
 ///
 /// Sin temporizador propio: esta terminal ya repinta por frame y su bucle
 /// despierta diez veces por segundo, así que lo único que hace falta es el
 /// freno de [`crate::probes::LOG_TAIL_PERIODO`]. La ventana sí necesita reloj
 /// porque solo repinta cuando alguien hace algo.
 fn spawn_log_probes(app: &mut App, backend: &Backend, work: &mut InFlight) {
-    if app.log_slot().is_none() {
+    // La del transporte se pregunta al `Backend` y no al estado copiado en
+    // `App`: aquí se está a punto de hablar por el cable, y quien decide si hay
+    // cable es quien lo tiene.
+    if !backend.is_remote() || app.log_slot_visible().is_none() {
         return;
     }
     // Lo que la tecla dejó pedido: subirle el nivel al anillo del daemon. Se

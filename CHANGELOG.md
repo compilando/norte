@@ -70,6 +70,14 @@ independently through `PROTOCOL_VERSION`.
   like the five level keys and `/` beside it: it only exists while the panel
   holds the keyboard, so **no preset binds it**, and it is only offered at all
   when a daemon is serving its log.
+  A plain `ntc` — no daemon, which is the default start — is **unchanged from
+  #326**: nothing is asked over any wire, and the panel says nothing about an
+  origin, because with one process and one ring there is nothing to tell apart
+  and the absence of the segment is the answer. The embedded core answers
+  `Unsupported` to `log.tail` for a good reason (its ring is the one this panel
+  is already reading), and reading that as a fact about a daemon is how the
+  border ended up saying "this daemon does not serve its log" where there was
+  no daemon at all.
   There is no timer: the terminal already repaints per frame, so the pull hangs
   off the loop it already runs, with a 500 ms floor and one request in flight —
   ten a second to paint the same thing would be the cost of having no floor. The

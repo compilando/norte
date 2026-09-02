@@ -169,6 +169,12 @@ async fn main() -> Result<()> {
     // que atenúa, que es sincronizar. Se decide UNA vez, aquí, porque el
     // `Backend` no cambia de brazo en vida del proceso.
     app.backend_journalled = backend.is_journalled();
+    // Y si hay un daemon del que hablar (#328). Aquí y una sola vez, por lo
+    // mismo que la línea de arriba: el `Backend` no cambia de brazo en vida del
+    // proceso. Sin esto, un `ntc` corriente —sin daemon ninguno— abría el panel
+    // de registro y su borde acababa diciendo «este daemon no sirve su
+    // registro», que es una frase sobre alguien que no existe.
+    app.log_remote.hay_daemon = backend.is_remote();
     // #117: el catálogo del scheme de arranque — incondicional, como el cd
     // (una vez por scheme y sesión; el picker de la tarea 4 lo quiere
     // aunque no haya columnas attr configuradas); un fallo NO tumba el

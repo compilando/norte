@@ -896,10 +896,15 @@ fn slots_de_referencia() -> Vec<SlotView> {
             following: false,
             total: 2,
             first_visible: 0,
-            dropped_note: "la ventana descartó 17 líneas viejas · te perdiste 4 líneas del daemon"
-                .to_owned(),
-            capturing: "la ventana captura debug · el daemon captura trace".to_owned(),
-            source: "de la ventana y del daemon".to_owned(),
+            // Las frases van LITERALES y no por `t()`, que es lo que hace del
+            // golden una foto del cable; se copian de `i18n/es.ftl` a mano, así
+            // que hay que mantenerlas al día — dijeron «la ventana» hasta que
+            // #328 las hizo también de `ntc`, que no es una ventana.
+            dropped_note:
+                "este proceso descartó 17 líneas viejas · te perdiste 4 líneas del daemon"
+                    .to_owned(),
+            capturing: "este proceso captura debug · el daemon captura trace".to_owned(),
+            source: "de este proceso y del daemon".to_owned(),
             source_mode: "both".to_owned(),
             sources_available: true,
             source_note: "el nivel es el del daemon: global a sus clientes y solo sube".to_owned(),

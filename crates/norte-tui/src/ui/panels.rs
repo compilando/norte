@@ -884,12 +884,14 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, con_teclado
     // contestó tener puesto sería el peor error posible del panel — con el
     // daemon en `trace` y el panel en `info`, la cabecera diría `trace`
     // mientras cada línea `debug` que cruza el socket se tira en silencio.
-    let mut titulo = format!(
-        " {} · {} · {} ",
-        t("log-title"),
-        panel.level().label().trim(),
-        crate::logview::etiqueta_de_fuente(app, fuente)
-    );
+    let mut titulo = format!(" {} · {} ", t("log-title"), panel.level().label().trim());
+    // La fuente solo cuando hay dos sitios de los que pueda venir una línea.
+    // Sin daemon no hay segmento y no falta nada: un `ntc` corriente tiene un
+    // proceso y un anillo, y una frase sobre el origen contestaría una pregunta
+    // que nadie se ha hecho — exactamente el panel que dejó #326.
+    if let Some(fuente_txt) = crate::logview::etiqueta_de_fuente(app, fuente) {
+        let _ = write!(titulo, "· {fuente_txt} ");
+    }
     // Si algún anillo está capturando MÁS de lo que se enseña, se dice, y con
     // los dos a la vista cada parte dice de quién habla. Pedir TRACE y volver a
     // INFO deja el proceso capturando TRACE el resto de la sesión —a propósito,
@@ -1059,6 +1061,7 @@ mod draw_log_tests {
         }
         let local_ms = anillo.snapshot()[0].epoch_ms;
         app.log_ring = Some(anillo);
+        app.log_remote.hay_daemon = true;
         app.toggle_log();
         let epoca = app.log_remote.epoca;
         crate::logview::aterrizar_tail(
@@ -1138,11 +1141,59 @@ mod draw_log_tests {
             "se ofreció la fuente sin una segunda que ofrecer: {sin}"
         );
 
+        app.log_remote.hay_daemon = true;
         app.log_remote.servicio = crate::logview::Servicio::Sirve;
         let con = pintado(&app, 120, 8);
         assert!(
             con.contains(&norte_i18n::t("log-keys-source")),
             "con daemon, la tecla de la fuente no se anuncia: {con}"
+        );
+    }
+
+    /// Un `ntc` corriente —sin daemon, que es el arranque por defecto— pinta el
+    /// panel EXACTAMENTE como lo dejó #326: un proceso, un anillo, y ni una
+    /// palabra sobre un origen ni sobre un daemon.
+    ///
+    /// La ausencia del segmento es la respuesta. Cualquier frase ahí contesta
+    /// una pregunta que nadie se ha hecho, y las que había —«el daemon registra
+    /// aparte», «este daemon no sirve su registro»— hablaban de alguien que no
+    /// existe.
+    #[test]
+    fn sin_daemon_el_panel_es_el_de_326() {
+        let mut app = crate::app::testutil::app_dos_panes();
+        let anillo = norte_config::logring::LogRing::new(10);
+        {
+            use tracing_subscriber::layer::SubscriberExt as _;
+            let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&anillo));
+            tracing::subscriber::with_default(s, || tracing::info!("una linea cualquiera"));
+        }
+        app.log_ring = Some(anillo);
+        app.toggle_log();
+
+        let texto = pintado(&app, 120, 8);
+        let cabecera = texto.lines().next().unwrap_or_default();
+        assert!(
+            texto.contains("una linea cualquiera"),
+            "el panel de siempre dejó de pintar: {texto}"
+        );
+        for clave in [
+            "log-source-window",
+            "log-source-both",
+            "log-source-daemon",
+            "log-source-unsupported",
+            "log-source-daemon-level",
+            "log-keys-source",
+        ] {
+            assert!(
+                !texto.contains(&norte_i18n::t(clave)),
+                "se habló de un daemon que no existe ({clave}): {texto}"
+            );
+        }
+        // Y lo que sí tiene que seguir estando: el título y el nivel.
+        assert!(
+            cabecera.contains(&norte_i18n::t("log-title"))
+                && cabecera.contains(norte_config::logline::LogLevel::Info.label().trim()),
+            "el título perdió lo suyo: {cabecera:?}"
         );
     }
 }

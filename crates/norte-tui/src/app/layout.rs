@@ -609,6 +609,26 @@ impl App {
         self.slot_of_kind(crate::logview::KIND)
     }
 
+    /// El hueco del panel de registro **si de verdad está en pantalla**.
+    ///
+    /// Distinto de [`Self::log_slot`], que dice si EXISTE: un hueco detrás de
+    /// una pestaña que no es la activa sigue existiendo y no se ve. La
+    /// diferencia importa donde algo CUESTA — el sondeo del registro del daemon
+    /// (#328) son dos RPC por segundo, y pagarlas por un panel que nadie tiene
+    /// delante, durante toda la sesión, es gastar red por nada.
+    ///
+    /// Lo que esta función NO arregla es la barra de paneles, que sigue
+    /// derivando su estado de `slot_ids()` y por eso pinta como abierto un
+    /// panel escondido en una pestaña: eso es #329 y tiene su propia rama.
+    #[must_use]
+    pub fn log_slot_visible(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.layout.visible_slot_ids().into_iter().find(|id| {
+            self.layout
+                .kind_of(*id)
+                .is_some_and(|k| k.as_str() == crate::logview::KIND)
+        })
+    }
+
     /// Abre el panel de registro, lo enfoca, o lo cierra (#323).
     ///
     /// Tres estados y con el teclado al abrir, igual que el de procesos: se

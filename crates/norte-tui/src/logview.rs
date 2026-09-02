@@ -67,6 +67,22 @@ pub enum Servicio {
 /// es el único que escribe.
 #[derive(Debug, Default)]
 pub struct RegistroRemoto {
+    /// ¿Hay un daemon del que hablar?
+    ///
+    /// Lo pone `main` una sola vez, de `Backend::is_remote`, y no cambia: el
+    /// backend no cambia de brazo en vida del proceso. En `false` —un `ntc`
+    /// corriente, que es el arranque POR DEFECTO— este panel es exactamente el
+    /// de #326: un proceso, un anillo, y ni una palabra sobre un daemon.
+    ///
+    /// Sin este campo el panel mentía, y de dos maneras seguidas: el brazo
+    /// embebido contesta `Unsupported` a `log.tail` con toda la razón —su
+    /// anillo es el que este panel ya está leyendo—, así que el borde pasaba
+    /// por «de este proceso (el daemon registra aparte)» durante el primer
+    /// sondeo y se quedaba en «este daemon no sirve su registro» después. No
+    /// hay ningún daemon. La frase estaba escrita para la otra degradación —un
+    /// daemon de verdad compilado sin la feature `logging`— y aquí se la estaba
+    /// poniendo a nadie.
+    pub hay_daemon: bool,
     /// Lo que el daemon lleva entregado, de lo más viejo a lo más nuevo.
     ///
     /// Se acumula y no se repide entero en cada vuelta: el sondeo tira del
@@ -107,6 +123,14 @@ impl RegistroRemoto {
     /// Las líneas y el cursor son de ESTA apertura; que el daemon sirva o no
     /// su registro es un hecho sobre el daemon, y olvidarlo escondería la
     /// segunda fuente cada vez que se reabre el panel.
+    ///
+    /// Eso hace que un veredicto `SinAnillo` dure lo que dure el proceso, y es
+    /// deliberado, no un descuido: ese estado sale de una feature de
+    /// COMPILACIÓN del binario que hay al otro lado del socket (o de un montaje
+    /// que le falló al arrancar), así que no puede cambiar bajo un daemon vivo.
+    /// Lo que sí cambia —que un daemon se reinicie compilado de otra manera— es
+    /// una conexión nueva, y ésa trae su propia sesión. Revisado y aparcado a
+    /// propósito, para que no haya que volver a discutirlo.
     pub fn reiniciar(&mut self) {
         self.lineas.clear();
         self.cursor = None;
@@ -126,9 +150,12 @@ impl RegistroRemoto {
     ///
     /// No hay comparación de versiones en ningún sitio, y no la hay porque un
     /// daemon más viejo ni siquiera completa el `initialize`.
+    ///
+    /// Y a un daemon que no existe tampoco: sin `hay_daemon` no se pregunta
+    /// nunca — ver ese campo.
     #[must_use]
     pub const fn debe_pedir(&self) -> bool {
-        !matches!(self.servicio, Servicio::SinAnillo)
+        self.hay_daemon && !matches!(self.servicio, Servicio::SinAnillo)
     }
 }
 
@@ -200,7 +227,14 @@ pub fn visibles<'a>(
         .collect()
 }
 
-/// Cómo se llama lo que se está enseñando.
+/// Cómo se llama lo que se está enseñando. `None` = no hay nada que decir.
+///
+/// **Sin daemon no hay segmento**, y la ausencia ES la respuesta: un `ntc`
+/// corriente tiene un proceso y un anillo, así que no hay dos cosas que
+/// distinguir y cualquier frase sobre el origen sería contestar una pregunta
+/// que nadie se ha hecho. Es el mismo razonamiento con el que la ventana
+/// esconde su selector cuando no hay una segunda fuente, y deja el panel
+/// exactamente como lo dejó #326.
 ///
 /// Un daemon que ha dicho que no tiene registro que servir se dice AQUÍ y no
 /// en una frase aparte, y es una diferencia con la ventana que tiene motivo: el
@@ -209,11 +243,14 @@ pub fn visibles<'a>(
 /// aparte)» y «este daemon no sirve su registro»— dicen lo mismo dos veces y
 /// no caben. La segunda gana porque explica POR QUÉ no hay más que esto.
 #[must_use]
-pub fn etiqueta_de_fuente(app: &crate::app::App, fuente: LogSource) -> String {
-    if app.log_remote.servicio == Servicio::SinAnillo {
-        return t("log-source-unsupported");
+pub fn etiqueta_de_fuente(app: &crate::app::App, fuente: LogSource) -> Option<String> {
+    if !app.log_remote.hay_daemon {
+        return None;
     }
-    t(match fuente {
+    if app.log_remote.servicio == Servicio::SinAnillo {
+        return Some(t("log-source-unsupported"));
+    }
+    Some(t(match fuente {
         // De ESTE proceso, y decirlo es el punto: con `--socket`, aquí NO está
         // lo del daemon —los providers, el journal, la política—, que es la
         // mitad interesante.
@@ -224,7 +261,7 @@ pub fn etiqueta_de_fuente(app: &crate::app::App, fuente: LogSource) -> String {
         LogSource::Window => "log-no-ring",
         LogSource::Daemon => "log-source-daemon",
         LogSource::Both => "log-source-both",
-    })
+    }))
 }
 
 /// De quién es el nivel que se acaba de subir. Vacío = de nadie más que de
@@ -535,7 +572,11 @@ pub fn aplicar_accion(app: &mut crate::app::App, accion: LogAction) {
             // leer el daemon está pidiendo su nivel aunque todavía no haya
             // contestado, y la respuesta a esta llamada es justamente una de
             // las dos formas de averiguar si sabe de registro.
-            if app.log_panel.source() != LogSource::Window {
+            //
+            // Y solo si hay alguien a quien pedírselo: sin daemon, o con uno
+            // que ya dijo que no tiene anillo, esto sería estado muerto que
+            // nadie drena.
+            if app.log_panel.source() != LogSource::Window && app.log_remote.debe_pedir() {
                 app.log_remote.pide_nivel = Some(l);
             }
             // Y se DICE, porque ese anillo no es de este proceso: es global a
@@ -818,6 +859,8 @@ mod tests {
         con_lineas(&anillo, || tracing::info!("de esta terminal"));
         let local_ms = anillo.snapshot()[0].epoch_ms;
         app.log_ring = Some(anillo);
+        // Lo que `main` pone de `Backend::is_remote`: hay un segundo proceso.
+        app.log_remote.hay_daemon = true;
         app.toggle_log();
         let epoca = app.log_remote.epoca;
         aterrizar_tail(
@@ -942,13 +985,93 @@ mod tests {
         let mut app = app_con_las_dos_fuentes();
         assert_eq!(
             etiqueta_de_fuente(&app, LogSource::Both),
-            norte_i18n::t("log-source-both")
+            Some(norte_i18n::t("log-source-both"))
         );
         app.log_remote.servicio = Servicio::SinAnillo;
         assert_eq!(
             etiqueta_de_fuente(&app, fuente_efectiva(&app)),
-            norte_i18n::t("log-source-unsupported"),
+            Some(norte_i18n::t("log-source-unsupported")),
             "un daemon sin registro tiene que decirse"
+        );
+    }
+
+    /// Sin daemon —el `ntc` corriente, que es el arranque por defecto— no se
+    /// pregunta nada y no se nombra a nadie.
+    ///
+    /// Es la avería que la revisión encontró: el brazo embebido contesta
+    /// `Unsupported` a `log.tail` con toda la razón —su anillo es el que este
+    /// panel ya lee—, y el panel lo leía como un hecho sobre un daemon. Con un
+    /// `ntc` sin daemon ninguno, el borde pasaba por «de este proceso (el
+    /// daemon registra aparte)» y se quedaba en «este daemon no sirve su
+    /// registro». La respuesta correcta no es una tercera frase: es la ausencia
+    /// del segmento, que es como estaba en #326.
+    #[test]
+    fn sin_daemon_no_se_sondea_ni_se_nombra_a_nadie() {
+        let mut app = crate::app::testutil::app_dos_panes();
+        app.log_ring = Some(norte_config::logring::LogRing::new(10));
+        app.toggle_log();
+        assert!(!app.log_remote.hay_daemon, "por defecto no hay daemon");
+        assert!(
+            !app.log_remote.debe_pedir(),
+            "se iba a sondear a un daemon que no existe"
+        );
+        for fuente in [LogSource::Window, LogSource::Daemon, LogSource::Both] {
+            assert_eq!(
+                etiqueta_de_fuente(&app, fuente),
+                None,
+                "se nombró un origen con un solo anillo ({fuente:?})"
+            );
+        }
+        // Y la fuente efectiva no puede ser otra cosa: `servicio` jamás llega a
+        // `Sirve` porque nadie pregunta.
+        assert_eq!(fuente_efectiva(&app), LogSource::Window);
+        // Ni se anuncia el anillo de nadie al subir el nivel.
+        aplicar_accion(&mut app, LogAction::Level(LogLevel::Trace));
+        assert_eq!(app.message, None);
+        assert_eq!(app.log_remote.pide_nivel, None);
+    }
+
+    /// El sondeo mira si el panel se VE, no si existe: uno escondido detrás de
+    /// una pestaña que no es la activa sigue en el árbol, y sondearlo son dos
+    /// RPC por segundo toda la sesión por algo que nadie tiene delante.
+    ///
+    /// La barra de paneles sigue contando el hueco escondido como abierto —eso
+    /// es #329 y no se toca aquí—; lo que este test fija es que el gasto de red
+    /// no depende de ese bug.
+    #[test]
+    fn un_panel_detras_de_una_pestana_no_se_sondea() {
+        use norte_frontend::layout::{KindId, Node};
+        let mut app = app_con_las_dos_fuentes();
+        let id = app.log_slot().expect("el panel está abierto");
+        assert_eq!(
+            app.log_slot_visible(),
+            Some(id),
+            "se ve antes de esconderlo"
+        );
+
+        // El mismo hueco, ahora en la pestaña NO activa de unas pestañas.
+        let otro = app
+            .layout
+            .slot_ids()
+            .into_iter()
+            .find(|s| *s != id)
+            .expect("hay más huecos que el registro");
+        app.layout = Node::Tabs {
+            children: vec![
+                Node::slot(otro, KindId::new("pane")),
+                Node::slot(id, KindId::new(KIND)),
+            ],
+            active: 0,
+        };
+        assert_eq!(
+            app.log_slot(),
+            Some(id),
+            "sigue existiendo, que es lo que `log_slot` contesta"
+        );
+        assert_eq!(
+            app.log_slot_visible(),
+            None,
+            "un hueco detrás de otra pestaña no está en pantalla"
         );
     }
 
@@ -1009,6 +1132,7 @@ mod tests {
     #[test]
     fn un_daemon_sin_registro_deja_de_sondearse_y_un_fallo_no() {
         let mut app = crate::app::testutil::app_dos_panes();
+        app.log_remote.hay_daemon = true;
         app.toggle_log();
         let epoca = app.log_remote.epoca;
         aterrizar_tail(
@@ -1106,11 +1230,18 @@ mod tests {
     /// fuentes: su anillo es suyo, y sin subirlo las líneas que se están
     /// pidiendo no llegan a existir al otro lado. Por la PREFERENCIA y no por
     /// la fuente efectiva — quien eligió leer el daemon está pidiendo su nivel
-    /// aunque todavía no haya contestado.
+    /// aunque todavía no haya contestado. Que HAYA daemon, en cambio, sí manda:
+    /// sin él la petición sería estado muerto que nadie drena.
     #[test]
     fn subir_el_nivel_se_lo_pide_tambien_al_daemon() {
         let mut app = crate::app::testutil::app_dos_panes();
+        app.log_remote.hay_daemon = true;
         app.toggle_log();
+        assert_eq!(
+            app.log_remote.servicio,
+            Servicio::SinRespuesta,
+            "todavía no ha contestado, y aun así se le pide"
+        );
         aplicar_accion(&mut app, LogAction::Level(LogLevel::Debug));
         assert_eq!(
             app.log_remote.pide_nivel,
