@@ -21,11 +21,31 @@
 
 use norte_config::logline::{LogLevel, LogLine};
 
+/// De dónde salen las líneas que el panel enseña.
+///
+/// Esto es la PREFERENCIA guardada, no lo que se pinta. Un frontend con el
+/// core embebido —un solo proceso, un solo anillo— no tiene una segunda
+/// fuente que mostrar, y quien decide reducir `Both` a `Window` y esconder el
+/// selector en ese caso es ESE frontend: aquí no hay manera de saber si hay un
+/// daemon al otro lado, y esta crate no debe fingir que la hay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LogSource {
+    /// Solo este proceso.
+    Window,
+    /// Solo el daemon.
+    Daemon,
+    /// Los dos, mezclados por marca de tiempo.
+    #[default]
+    Both,
+}
+
 /// Estado del panel.
 #[derive(Debug, Clone)]
 pub struct LogPanel {
     /// Hasta qué verbosidad se ENSEÑA.
     level: LogLevel,
+    /// Qué fuente se enseña: preferencia, no lo pintado (ver [`LogSource`]).
+    source: LogSource,
     /// Filtro de texto sobre módulo y mensaje. Vacío = todo.
     filter: String,
     /// El mismo, ya en minúsculas.
@@ -55,6 +75,7 @@ impl Default for LogPanel {
             // INFO: lo mismo que captura el anillo al arrancar, así que abrir
             // el panel enseña algo desde el primer momento.
             level: LogLevel::Info,
+            source: LogSource::Both,
             filter: String::new(),
             filter_lc: String::new(),
             scroll: None,
@@ -87,6 +108,30 @@ impl LogPanel {
         // es lo último que encaja, no el trozo donde estaba mirando de otra
         // lista.
         self.scroll = None;
+    }
+
+    /// La fuente que se está enseñando (preferencia, ver [`LogSource`]).
+    #[must_use]
+    pub const fn source(&self) -> LogSource {
+        self.source
+    }
+
+    /// Cambia la fuente.
+    pub fn set_source(&mut self, s: LogSource) {
+        self.source = s;
+        // Igual que al cambiar de filtro o de nivel: la lista compuesta
+        // cambia de forma, y quedarse en el desplazamiento de la ANTERIOR
+        // deja al lector en un trozo que no pidió.
+        self.scroll = None;
+    }
+
+    /// Recorre las tres fuentes y vuelve a la primera: es UN mando, no tres.
+    pub fn cycle_source(&mut self) {
+        self.set_source(match self.source {
+            LogSource::Window => LogSource::Daemon,
+            LogSource::Daemon => LogSource::Both,
+            LogSource::Both => LogSource::Window,
+        });
     }
 
     /// El filtro de texto actual.
@@ -181,6 +226,49 @@ impl LogPanel {
     #[must_use]
     pub fn visible_count(&self, lines: &[LogLine]) -> usize {
         lines.iter().filter(|l| self.matches(l)).count()
+    }
+}
+
+/// Mezcla dos listas ya ordenadas por `epoch_ms`, marcando el origen de cada
+/// línea. Estable: a igual marca, primero la local — dos procesos en una
+/// misma máquina comparten reloj, así que las marcas iguales son el caso
+/// normal, no el raro, y una lista que se reordena entre frames no se puede
+/// leer.
+///
+/// Devuelve líneas PRESTADAS a propósito: el anillo ya clonó una vez en su
+/// `snapshot`, y el panel pinta como mucho una pantalla; clonar dos mil
+/// líneas otra vez por frame es justo el gasto que la proyección de la
+/// ventana se escribió para evitar.
+///
+/// El filtro de nivel y el de texto NO se aplican aquí: van después, sobre el
+/// resultado, para que una línea del daemon no se cuele por venir de fuera.
+#[must_use]
+pub fn merge<'a>(
+    local: &'a [LogLine],
+    remote: &'a [LogLine],
+    s: LogSource,
+) -> Vec<(&'a LogLine, LogSource)> {
+    match s {
+        LogSource::Window => local.iter().map(|l| (l, LogSource::Window)).collect(),
+        LogSource::Daemon => remote.iter().map(|l| (l, LogSource::Daemon)).collect(),
+        LogSource::Both => {
+            let mut out = Vec::with_capacity(local.len() + remote.len());
+            let mut i = 0;
+            let mut j = 0;
+            while i < local.len() && j < remote.len() {
+                if remote[j].epoch_ms < local[i].epoch_ms {
+                    out.push((&remote[j], LogSource::Daemon));
+                    j += 1;
+                } else {
+                    // Igual marca: la local primero, a propósito.
+                    out.push((&local[i], LogSource::Window));
+                    i += 1;
+                }
+            }
+            out.extend(local[i..].iter().map(|l| (l, LogSource::Window)));
+            out.extend(remote[j..].iter().map(|l| (l, LogSource::Daemon)));
+            out
+        }
     }
 }
 
@@ -356,5 +444,68 @@ mod tests {
         p.scroll_up(2, 10);
         p.show_level(LogLevel::Error);
         assert!(p.following());
+    }
+
+    /// Línea con marca de tiempo, para las pruebas de mezcla. Distinto de
+    /// [`l`] (que fija `epoch_ms` a 0 y pide nivel y módulo) porque `merge`
+    /// solo le importa la marca y el mensaje.
+    fn le(ms: i64, msg: &str) -> LogLine {
+        LogLine {
+            epoch_ms: ms,
+            level: LogLevel::Info,
+            target: "t".into(),
+            message: msg.into(),
+        }
+    }
+
+    /// La mezcla respeta el reloj, y a igual marca no baila: primero la local.
+    #[test]
+    fn la_mezcla_ordena_por_marca_y_es_estable() {
+        let local = vec![le(10, "ventana-a"), le(30, "ventana-b")];
+        let remoto = vec![le(10, "daemon-a"), le(20, "daemon-b")];
+        let m = merge(&local, &remoto, LogSource::Both);
+        let ms: Vec<_> = m.iter().map(|(l, _)| l.message.as_str()).collect();
+        assert_eq!(ms, ["ventana-a", "daemon-a", "daemon-b", "ventana-b"]);
+        assert_eq!(m[1].1, LogSource::Daemon);
+    }
+
+    /// Elegir una fuente NO mezcla: enseña esa y nada más.
+    #[test]
+    fn una_fuente_sola_no_trae_la_otra() {
+        let local = vec![le(10, "ventana")];
+        let remoto = vec![le(20, "daemon")];
+        assert_eq!(merge(&local, &remoto, LogSource::Window).len(), 1);
+        assert_eq!(
+            merge(&local, &remoto, LogSource::Daemon)[0].0.message,
+            "daemon"
+        );
+    }
+
+    /// El ciclo recorre las tres y vuelve: es UN mando, no tres.
+    #[test]
+    fn el_ciclo_de_fuente_da_la_vuelta() {
+        let mut p = LogPanel::default();
+        assert_eq!(p.source(), LogSource::Both);
+        p.cycle_source();
+        p.cycle_source();
+        p.cycle_source();
+        assert_eq!(p.source(), LogSource::Both);
+    }
+
+    /// El filtro de nivel y el de texto siguen aplicándose DESPUÉS de mezclar:
+    /// una línea del daemon que no pasa el filtro no se cuela por venir de
+    /// fuera.
+    #[test]
+    fn el_filtro_manda_tambien_sobre_lo_remoto() {
+        let mut p = LogPanel::default();
+        p.show_level(LogLevel::Error);
+        let remoto = vec![LogLine {
+            epoch_ms: 1,
+            level: LogLevel::Debug,
+            target: "norte_core".into(),
+            message: "ruido".into(),
+        }];
+        let m = merge(&[], &remoto, LogSource::Both);
+        assert!(!p.matches(m[0].0));
     }
 }
