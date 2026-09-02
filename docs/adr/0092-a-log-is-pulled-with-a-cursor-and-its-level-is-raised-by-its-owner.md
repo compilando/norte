@@ -141,17 +141,41 @@ than the ring holds.
 panel says so rather than pretending it is private.
 
 **A peer one version behind loses only what it never had.** A 0.64 client does
-not call the methods and keeps painting its local ring — the status quo. A 0.65
-client against a 0.64 daemon, or against one built without the `logging`
-feature and so with no ring to serve, gets "method not found" and **falls back
-saying why**. That last part is not optional: a panel that degrades in silence
-is indistinguishable from a daemon that did nothing, which is the confusion
-#326 started to fix.
+not call the methods and keeps painting its local ring — the status quo.
+
+**The opposite direction is not a case, and it must not be written as one.** A
+0.65 client against a 0.64 daemon never reaches `log.tail`: `version_compatible`
+does not negotiate a client minor *higher* than the server's, so the daemon
+refuses `initialize` with `VERSION_MISMATCH` and the connection is over before
+any method is sent. Describing it as "asks, and is told the method does not
+exist" would put a branch in the frontend that can never run — worse than no
+branch, because it looks tested. This is the same accounting ADR 0004's window
+already produced at 0.47.
+
+**The fallback that does happen is a same-version daemon built without
+`logging`.** It knows both methods and has no ring to serve, so it answers
+`METHOD_NOT_FOUND` (or `Unsupported`, depending on how the daemon wires it).
+That is the one condition under which a peer that completed the handshake can
+refuse these methods, and the panel then falls back to its local ring **saying
+why**. That last part is not optional: a panel that degrades in silence is
+indistinguishable from a daemon that did nothing, which is the confusion #326
+started to fix.
 
 **`max` is a request, not a contract.** The daemon clamps, the way `fs.list`
 clamps against `FS_LIST_MAX_PAGE` and `fs.read` against `FS_READ_MAX_CHUNK`.
 Asking for more is not an error and loses nothing: what does not fit is still
-after `next`.
+after `next`. `max: 0` **is** an error (`-32602`), following `FsListParams::limit`
+and for its reason — a poll with `max: 0` would return an empty list forever
+with the cursor standing still, and on screen that reads as "nothing is
+happening" rather than as the caller bug it is.
+
+**`capacity` is an upper bound, not the clamp.** It is the deepest history that
+could ever come back, so it is the right number to size against; it is not a
+promise that one call with `max = capacity` returns everything, since the
+daemon may clamp well below it. A client catching up iterates on `next` until
+the answer comes back empty. Publishing the clamp itself as a constant would
+freeze an unchosen number into the wire today; it can be added additively later
+if it turns out anyone needs it before the first response arrives.
 
 **The daemon has to grow a ring at all**, and expose its capacity. That is the
 task this ADR precedes, not part of the wire.

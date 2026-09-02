@@ -1284,12 +1284,17 @@ fn version_ventana_actual() {
     // contraseña vive en el proceso del anillo y por eso `log.level` es un
     // MÉTODO, así que un peer viejo no puede saltársela por no conocerla.
     //
-    // Lo que desplaza la ventana es la otra dirección, que aquí es tan real
-    // como la primera: un cliente 0.65 contra un daemon 0.64 —o contra uno
-    // compilado sin la feature `logging`, que no tiene anillo— recibe «method
-    // not found» y tiene que DECIR por qué se queda con el registro local. Un
-    // panel que degrada en silencio es indistinguible de un daemon que no hizo
-    // nada, que es la confusión que #326 empezó a arreglar.
+    // La otra dirección NO cuenta, y conviene decirlo porque es tentador
+    // escribirla: un cliente 0.65 contra un daemon 0.64 no llega a intentarlo,
+    // porque `version_compatible` no negocia un minor de cliente MAYOR que el
+    // del servidor y ese cliente muere en el `initialize` con
+    // `VERSION_MISMATCH`. Es la misma cuenta que se anotó en 0.47.0.
+    //
+    // Lo que sí hay que atender es un daemon de ESTA misma versión compilado
+    // sin la feature `logging`: conoce los métodos, no tiene anillo, y contesta
+    // `METHOD_NOT_FOUND`. Ahí el panel se queda con el registro local y tiene
+    // que DECIR por qué — degradar en silencio es indistinguible de un daemon
+    // que no hizo nada, que es la confusión que #326 empezó a arreglar.
     assert!(version_compatible(PROTOCOL_VERSION, "0.65.9"), "N");
     assert!(version_compatible(PROTOCOL_VERSION, "0.64.0"), "N-1");
     assert!(

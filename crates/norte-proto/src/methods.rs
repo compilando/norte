@@ -989,10 +989,12 @@ use crate::{
 /// categoría, sin la frase. No es una comprobación que deje de hacerse ni un
 /// alcance que se ensanche.
 ///
-/// Y en el sentido contrario —**cliente 0.64 contra un daemon 0.63**, que es
-/// el caso mixto que este repositorio ya se ha encontrado con un
-/// `cargo install` rancio—: el canal existe, nadie lo alimenta, y el frontend
-/// se queda con la categoría. La misma degradación, sin nada que romperse.
+/// El sentido contrario —**cliente 0.64 contra un daemon 0.63**— no llega a
+/// ocurrir: [`version_compatible`] no negocia un minor de cliente MAYOR que el
+/// del servidor, así que ese cliente muere en el `initialize` con
+/// `VERSION_MISMATCH` y jamás llega a esperar la notificación. El caso mixto
+/// que este repositorio ya se ha encontrado —un `cargo install` rancio— se ve
+/// como una conexión que se rehúsa, no como una degradación silenciosa.
 ///
 /// `0.65.0` (#328): el registro del DAEMON se puede leer desde fuera.
 ///
@@ -1023,13 +1025,24 @@ use crate::{
 /// Ventana N=0.65.x / N-1=0.64.x. Aditivo: no cambia el JSON de ninguna
 /// operación existente. La pérdida, para un **cliente 0.64 contra un daemon
 /// 0.65**: no llama a los métodos y su panel se queda con el anillo local —lo
-/// que #326 construyó—, o sea exactamente lo que ya tenía. Y en el sentido que
-/// el handshake también permite —**cliente 0.65 contra un daemon 0.64**, o
-/// contra uno compilado SIN la feature `logging`, que no tiene anillo que
-/// servir—: el método contesta «method not found» y el panel degrada al anillo
-/// local **diciendo por qué**. Un panel que se queda vacío sin explicación es
-/// indistinguible de un daemon que no hizo nada, y esa es justamente la
-/// confusión que #326 empezó a arreglar.
+/// que #326 construyó—, o sea exactamente lo que ya tenía.
+///
+/// **El sentido contrario no existe.** Un cliente 0.65 contra un daemon 0.64
+/// no llega a intentar `log.tail`: [`version_compatible`] no negocia un minor
+/// de cliente MAYOR que el del servidor, así que ese cliente muere en el
+/// `initialize` con `VERSION_MISMATCH`. Escribirlo como «pide el método y le
+/// contestan que no existe» sería describir una rama que no puede correr, y un
+/// frontend que la programara estaría escribiendo código muerto.
+///
+/// Lo que SÍ ocurre, y es lo que el frontend tiene que atender, es un daemon
+/// **de esta misma versión** compilado sin la feature `logging`: conoce los
+/// métodos y no tiene anillo que servir, así que contesta
+/// `METHOD_NOT_FOUND` (o `Unsupported`, según cómo lo cablee el daemon). Ésa
+/// es la única condición por la que un peer que sí ha completado el handshake
+/// puede rehusar estos dos métodos, y ante ella el panel degrada al anillo
+/// local **diciendo por qué**: un panel que se queda vacío sin explicación es
+/// indistinguible de un daemon que no hizo nada, que es justo la confusión que
+/// #326 empezó a arreglar.
 pub const PROTOCOL_VERSION: &str = "0.65.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
@@ -8199,13 +8212,20 @@ pub struct LogTailParams {
     /// [`FS_LIST`] con [`FS_LIST_MAX_PAGE`] y [`FS_READ`] con
     /// [`FS_READ_MAX_CHUNK`]. Pedir de más no es un error y no se pierde nada
     /// — lo que no quepa sigue estando después de [`LogTailResult::next`], y
-    /// la vuelta siguiente lo recoge. El tope útil es descubrible sin
-    /// documentación: nunca puede haber más líneas que
-    /// [`LogTailResult::capacity`].
+    /// la vuelta siguiente lo recoge. Para dimensionarlo, ver
+    /// [`LogTailResult::capacity`], que es la cota superior de lo que puede
+    /// llegar (no necesariamente el recorte que aplique el daemon).
     ///
-    /// No lleva `default`: un `max` ausente valdría cero y contestaría una
-    /// lista vacía a alguien que pedía el registro, que es un fallo que parece
-    /// «no ha pasado nada».
+    /// **`0` es error (`-32602`)**, el mismo criterio que
+    /// [`FsListParams::limit`] con `Some(0)` y por el mismo motivo: una página
+    /// vacía en bucle. Un panel que sondea con `max: 0` recibiría una lista
+    /// vacía cada vuelta con el cursor sin avanzar, y eso en pantalla se lee
+    /// como «no está pasando nada» en vez de como el error de programación que
+    /// es. Rechazarlo es lo que separa las dos cosas.
+    ///
+    /// Y por eso tampoco lleva `default`: un `max` ausente valdría cero, o sea
+    /// que la forma de equivocarse sería exactamente la misma, solo que sin
+    /// que nadie la hubiera escrito.
     pub max: u32,
 }
 
@@ -8278,9 +8298,17 @@ pub struct LogTailResult {
     ///
     /// Dice hasta dónde llega la historia que se puede pedir, que es lo que
     /// permite a quien lo pinta decir «esto es todo lo que hay» en vez de
-    /// insinuar que hay más. Y de paso da el tope útil de
-    /// [`LogTailParams::max`] sin que nadie tenga que leer una constante: no
-    /// puede haber más líneas que esto.
+    /// insinuar que hay más.
+    ///
+    /// **Es una cota SUPERIOR de lo que puede llegar, no el recorte que
+    /// aplique el daemon.** Nunca vendrán más líneas que esto, pero pueden
+    /// venir bastantes menos: un daemon con un anillo de 2000 puede estar
+    /// recortando a 500, y entonces un cliente que pida `max: capacity` recibe
+    /// una respuesta corta. Eso no es un fallo ni una pérdida —lo que no cupo
+    /// sigue después de [`Self::next`]—, pero sí quiere decir que quien
+    /// necesite ponerse al día tiene que **iterar sobre `next` hasta que la
+    /// respuesta venga vacía**, y no dar por hecho que una sola llamada con el
+    /// tamaño del anillo lo trae todo.
     pub capacity: u32,
 }
 

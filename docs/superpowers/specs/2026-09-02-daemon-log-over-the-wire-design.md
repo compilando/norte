@@ -136,13 +136,31 @@ Clocks: both processes are on one machine and share a clock, so merging by
 timestamp is honest. Against a genuinely remote daemon it is not, and the merge
 says so rather than interleaving two clocks silently.
 
-## When the daemon is older
+## When the daemon cannot serve it
 
-A 0.64 daemon does not know `log.tail` and answers "method not found". The
-panel then falls back to what #326 built — its own ring, with the chip — and
-**says why**: this daemon cannot serve its log. That is the N/N−1 window doing
-its job, and it is the same answer for a daemon built without the `logging`
-feature, which has no ring to serve.
+**Corrected 2026-09-02 (protocol-guardian, task 2).** The first draft of this
+section said a 0.64 daemon answers "method not found" and the panel degrades.
+That cannot happen, and a later task wiring a branch for it would be writing
+code that never runs.
+
+`version_compatible` does not negotiate a client minor *higher* than the
+server's (`crates/norte-proto/src/methods.rs`, the 0.x arm: `cn == sn ||
+cn + 1 == sn`), and the daemon enforces it — `initialize` is refused with
+`VERSION_MISMATCH` (`crates/norte-core/src/daemon/server.rs`). So a 0.65
+client against a 0.64 daemon **dies at the handshake**. It never sends
+`log.tail`, and what the human sees is a connection that was refused, with the
+upgrade signal the version-mismatch code already carries. The reverse — a 0.64
+client against a 0.65 daemon — is fine and loses only what it never had: it
+does not call the methods and keeps painting its local ring.
+
+The fallback the panel must actually implement is a **same-version daemon
+built without the `logging` feature**. It knows both methods and has no ring to
+serve, so it answers `METHOD_NOT_FOUND` (or `Unsupported`, depending on how the
+daemon wires it). The panel then falls back to what #326 built — its own ring,
+with the chip — and **says why**: this daemon cannot serve its log.
+
+So there is exactly one degradation branch, keyed on the method being refused,
+not on a version comparison.
 
 ## Testing
 

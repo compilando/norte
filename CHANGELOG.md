@@ -30,9 +30,11 @@ independently through `PROTOCOL_VERSION`.
   it. Agents are refused on both: the daemon's ring names paths, connections and
   other sessions, so for a scoped agent it is an existence oracle for everything
   outside its sandbox.
-  A 0.64 daemon — or one built without the `logging` feature, which has no ring
-  to serve — answers "method not found", and the panel falls back to its local
-  ring **saying why**.
+  A daemon built without the `logging` feature knows both methods and has no
+  ring to serve, so it answers "method not found" and the panel falls back to
+  its local ring **saying why**. A 0.64 daemon is not that case: a newer client
+  is refused at `initialize` with `VERSION_MISMATCH` and never gets as far as
+  asking.
 
 - **The window has the log panel** (#326, bridge **46**). It has been in the
   TUI since #323, and everything shared was already built — the in-memory ring
