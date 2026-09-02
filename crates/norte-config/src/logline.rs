@@ -127,4 +127,42 @@ mod tests {
             assert_eq!(l.label().len(), 5, "{l:?} rompe la columna");
         }
     }
+
+    /// **El vocabulario de niveles es EL MISMO que el del protocolo, en las
+    /// dos direcciones** (0.65.0, #328).
+    ///
+    /// Hay dos copias porque tiene que haberlas: `norte-proto` no puede
+    /// depender de este crate —la flecha va al revés— así que
+    /// `methods::LOG_LEVELS` repite las cinco cadenas como vocabulario del
+    /// wire. Y este test es el único sitio del árbol desde el que se ven las
+    /// dos, así que es donde vive la igualdad. Es el mismo patrón que el
+    /// vocabulario de hashing, donde `norte-core` guarda una copia congelada
+    /// por el formato del journal.
+    ///
+    /// Se comprueba en LAS DOS direcciones a propósito. Solo «cada nivel
+    /// nuestro está en el protocolo» dejaría añadir uno al wire que ningún
+    /// frontend sabría pintar; solo la inversa dejaría añadir uno aquí que no
+    /// se podría pedir por el cable. Y `from_wire` cierra el viaje de vuelta:
+    /// que las cadenas coincidan no sirve de nada si la que llega no se sabe
+    /// convertir.
+    #[test]
+    fn el_vocabulario_de_niveles_es_el_mismo_que_el_del_protocolo() {
+        use std::collections::BTreeSet;
+
+        let nuestros: BTreeSet<&str> = LogLevel::all().into_iter().map(LogLevel::wire).collect();
+        let del_wire: BTreeSet<&str> = norte_proto::methods::LOG_LEVELS.iter().copied().collect();
+        assert_eq!(
+            nuestros, del_wire,
+            "los dos vocabularios de nivel se han separado: renombrar uno es \
+             un cambio de wire (bump + golden), y añadir uno hay que hacerlo \
+             en los dos sitios"
+        );
+        for w in norte_proto::methods::LOG_LEVELS {
+            assert_eq!(
+                LogLevel::from_wire(w).map(LogLevel::wire),
+                Some(*w),
+                "`{w}` viaja por el cable y no se sabe convertir de vuelta"
+            );
+        }
+    }
 }

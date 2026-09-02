@@ -1066,6 +1066,7 @@ fn golden_methods() {
     check_methods_sync(&fixtures);
     check_methods_sync_notifs(&fixtures);
     check_methods_sync_apply(&fixtures);
+    check_methods_log(&fixtures);
     // 98 → 101 en 0.32.0: + ai_rename_plan_params/result/result_empty (M4-IA,
     // ADR 0031). 101 → 106 en 0.33.0: + index_embed_params,
     // index_search_semantic_params(/_no_root)/result y semantic_hit (M4-IA-2,
@@ -1161,7 +1162,117 @@ fn golden_methods() {
     // campos opcionales. Una sola dejaría renombrar los otros seis sin que
     // nada se pusiera rojo, y `reason` se compara por igualdad en el frontend:
     // un renombrado silencioso es una frase que deja de salir.
-    assert_eq!(fixtures.len(), 186, "[methods.json] fixtures sin caso Rust");
+    // 186 → 196 en 0.65.0 (#328): + los diez de `log.tail`/`log.level`. Cinco
+    // de ellos son UNO POR VALOR del vocabulario de niveles: con una sola
+    // fixtura se podrían renombrar los otros cuatro sin que nada se pusiera
+    // rojo, y `level` se compara por igualdad —para colorear una fila, para
+    // marcar cuál está puesto y para decidir qué se captura—, así que un
+    // renombrado silencioso es un panel que deja de colorear. Las otras cinco
+    // congelan las dos formas que significan algo por sí solas: la petición
+    // SIN cursor (que viaja como `null` explícito y quiere decir «lo que
+    // tengas», no «desde el principio») y el sondeo que no encontró nada
+    // (`lines: []` con `lost: 0`, que es la respuesta más frecuente y la
+    // única que distingue «no ha pasado nada» de «se perdió algo»).
+    assert_eq!(fixtures.len(), 196, "[methods.json] fixtures sin caso Rust");
+}
+
+/// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
+///
+/// Lo que congelan estas fixturas es el vocabulario cerrado de niveles —cinco
+/// cadenas comparadas por igualdad a los dos lados del cable—, que un cursor
+/// ausente viaja como `null` explícito y no como un cero, y que un sondeo
+/// vacío es `lines: []` con `lost: 0`. Las tres cosas son la diferencia entre
+/// un panel que dice la verdad sobre lo que hubo y uno con un hueco callado.
+fn check_methods_log(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{
+        LOG_LEVELS, LogLevelParams, LogLevelResult, LogLine, LogTailParams, LogTailResult,
+    };
+    // Una fixtura por valor del vocabulario. El bucle va sobre `LOG_LEVELS`
+    // para que añadir un nivel sin su fixtura se ponga rojo aquí, en vez de
+    // pasar desapercibido hasta que un frontend no sepa colorearlo.
+    for nivel in LOG_LEVELS {
+        check_one(
+            fixtures,
+            &format!("log_level_params_{nivel}"),
+            &LogLevelParams {
+                level: (*nivel).to_owned(),
+            },
+        );
+    }
+    // El result no es un `bool`: el anillo NUNCA baja de nivel, así que pedir
+    // `warn` con el anillo ya en `debug` contesta `debug`. Eso no es un fallo,
+    // y con un `bool` habría que mentir con un `true` o alarmar con un `false`.
+    check_one(
+        fixtures,
+        "log_level_result",
+        &LogLevelResult {
+            level: "debug".to_owned(),
+        },
+    );
+    check_one(
+        fixtures,
+        "log_tail_params",
+        &LogTailParams {
+            cursor: Some(1234),
+            max: 500,
+        },
+    );
+    // `cursor` ausente serializa como `null` explícito (ADR 0004; `Option` sin
+    // `skip`), y esa forma es la que manda un panel al abrirse. Es un caso
+    // aparte a propósito: `null` quiere decir «lo que tengas» y `0` quiere
+    // decir «desde la primera línea que existió», que contra un anillo que ya
+    // dio la vuelta obligaría a contestar un `lost` enorme y falso.
+    check_one(
+        fixtures,
+        "log_tail_params_sin_cursor",
+        &LogTailParams {
+            cursor: None,
+            max: 500,
+        },
+    );
+    // La segunda línea es de `suppaftp` y va en INFO: la cota del anillo deja
+    // pasar lo de terceros hasta ahí y ni un nivel más, pase lo que pase con
+    // `log.level`. Y el `target` viaja ENTERO, que es lo que hace posible esa
+    // cota y también el filtro por subsistema del lector.
+    check_one(
+        fixtures,
+        "log_tail_result",
+        &LogTailResult {
+            lines: vec![
+                LogLine {
+                    epoch_ms: 1_756_000_000_000,
+                    level: "warn".to_owned(),
+                    target: "norte_core::connect".to_owned(),
+                    message: "la sesión de «trabajo» se degradó a texto en claro".to_owned(),
+                },
+                LogLine {
+                    epoch_ms: 1_756_000_000_123,
+                    level: "info".to_owned(),
+                    target: "suppaftp".to_owned(),
+                    message: "connected".to_owned(),
+                },
+            ],
+            next: 4001,
+            lost: 12,
+            level: "info".to_owned(),
+            capacity: 2000,
+        },
+    );
+    // El sondeo que no encontró nada, que es la respuesta más frecuente: una
+    // lista VACÍA y `lost: 0`. La fixtura existe porque `lines` no se omite —
+    // el día que alguien le pusiera `skip_serializing_if`, «no ha pasado nada»
+    // y «el campo no vino» dejarían de distinguirse en el cable.
+    check_one(
+        fixtures,
+        "log_tail_result_vacio",
+        &LogTailResult {
+            lines: Vec::new(),
+            next: 4001,
+            lost: 0,
+            level: "info".to_owned(),
+            capacity: 2000,
+        },
+    );
 }
 
 /// `fs.dir_size` (0.49.0, #139): lo que se congela es que las rutas viajan
@@ -4095,7 +4206,17 @@ fn method_names_frozen() {
     // propósito: con el error se decide, y se decide por categoría. Un cliente
     // 0.63 la descarta y se queda como estaba.
     assert_eq!(methods::CONNECTION_FAILED, "connection.failed");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.64.0");
+    // 0.65.0 (#328): `log.tail` y `log.level`. El registro del DAEMON, que un
+    // frontend con proceso aparte no puede ver de ninguna otra forma — su
+    // panel pinta el anillo del proceso equivocado, y desde #326 lo dice. Se
+    // TIRA con un cursor y no se empuja: el daemon no guarda estado por
+    // cliente y la respuesta dice cuántas líneas se cayeron por detrás, que es
+    // lo que una notificación perdida no puede decir. Y subir el nivel es un
+    // MÉTODO para que la cota que impide enseñar un `PASS` de FTP la aplique
+    // el único código que puede aplicarla: el que tiene el anillo.
+    assert_eq!(methods::LOG_TAIL, "log.tail");
+    assert_eq!(methods::LOG_LEVEL, "log.level");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.65.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

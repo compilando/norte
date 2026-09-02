@@ -244,6 +244,12 @@ rpc_catalogo! {
     // Sesión de la ventana.
     SESSION_GET, Request, Direct, (), methods::SessionGetResult;
     SESSION_PUT, Request, Direct, methods::SessionPutParams, methods::SessionPutResult;
+
+    // El registro del daemon, que un frontend con proceso aparte no puede ver
+    // de otra forma. `Direct` y no `Stream`: se TIRA con un cursor, así que no
+    // hay notificación por la que entregue nada (ADR 0092).
+    LOG_TAIL, Request, Direct, methods::LogTailParams, methods::LogTailResult;
+    LOG_LEVEL, Request, Direct, methods::LogLevelParams, methods::LogLevelResult;
 }
 
 /// La entrada de un método por su nombre de wire.

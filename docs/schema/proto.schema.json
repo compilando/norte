@@ -2791,6 +2791,128 @@
       ],
       "type": "object"
     },
+    "LogLevelParams": {
+      "description": "Params de [`LOG_LEVEL`]: el nivel que el cliente PIDE.\n\n```\nuse norte_proto::methods::LogLevelParams;\nlet p = LogLevelParams { level: \"debug\".to_owned() };\nassert_eq!(serde_json::to_value(&p).unwrap()[\"level\"], serde_json::json!(\"debug\"));\n```",
+      "properties": {
+        "level": {
+          "description": "Una de las cadenas de [`LOG_LEVELS`].\n\nEs lo que se PIDE, no lo que queda: el daemon aplica su propia cota y\ncontesta con lo que de verdad se puso. Un valor fuera del vocabulario\nes [`crate::Error::Unsupported`] y NO se degrada a un nivel por defecto\n— aceptar un nivel que no se entiende y poner otro dejaría al lector\ncreyendo que pidió algo que nadie hizo.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "LogLevelResult": {
+      "description": "Result de [`LOG_LEVEL`]: el nivel que QUEDÓ.\n\nNo es un `bool` de «hecho», y eso es la mitad del argumento del método\n(ver [`LOG_LEVEL`]): el anillo nunca baja de nivel, así que pedir uno menos\nverboso que el vigente contesta el vigente, y eso no es un fallo sino la\nrespuesta correcta. Con un `bool` habría que elegir entre mentir con un\n`true` o alarmar con un `false`.\n\n```\nuse norte_proto::methods::LogLevelResult;\n// Se pidió `warn` con el anillo ya en `debug`: se contesta `debug`, que es\n// lo que hay. El anillo no baja (un hueco del tamaño del rato que estuvo\n// abajo es justo lo que este panel existe para no tener).\nlet r = LogLevelResult { level: \"debug\".to_owned() };\nassert_eq!(serde_json::to_value(&r).unwrap()[\"level\"], serde_json::json!(\"debug\"));\n```",
+      "properties": {
+        "level": {
+          "description": "El nivel vigente tras la petición: una de las cadenas de\n[`LOG_LEVELS`]. Puede ser MÁS verboso que el pedido.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "LogLine": {
+      "description": "Una línea de registro TAL COMO VIAJA (0.65.0, #328).\n\nNo es el tipo que pinta un frontend, y eso es a propósito.\n`norte_config::logline::LogLine` es el de PRESENTACIÓN: su nivel es un enum\nque ordena por verbosidad —porque ésa es la comparación que hace el filtro—\ny trae una etiqueta rellenada a cinco columnas para que la lista se pueda\nrecorrer con la vista. Ninguna de las dos cosas pertenece a un cable: un\nancho de columna que cambia no puede ser un cambio de wire, y un orden de\nenum no se serializa. Aquí el nivel es una de las cadenas de\n[`LOG_LEVELS`], comparable por igualdad y congelada por los goldens.\n\nLos dos tipos coexisten a propósito y la dependencia solo va en un sentido:\n`norte-config` depende de este crate, así que el que convierte es aquél.\n\n```\nuse norte_proto::methods::LogLine;\nlet l = LogLine {\n    epoch_ms: 1_756_000_000_000,\n    level: \"warn\".to_owned(),\n    target: \"norte_core::connect\".to_owned(),\n    message: \"sesión degradada\".to_owned(),\n};\nlet j = serde_json::to_value(&l).expect(\"json\");\nassert_eq!(j[\"level\"], serde_json::json!(\"warn\"));\n// El `target` viaja entero: es lo que decide la cota de seguridad y lo que\n// el lector filtra, así que recortarlo lo rompería por los dos lados.\nassert_eq!(j[\"target\"], serde_json::json!(\"norte_core::connect\"));\n```",
+      "properties": {
+        "epoch_ms": {
+          "description": "Milisegundos desde la época (UTC), con el mismo criterio que\n`mtime_ms` (ADR 0004): entero CON signo.\n\nEs lo que permite mezclar el registro del daemon con el del propio\nproceso en una sola lista. La mezcla es honesta mientras los dos\nprocesos compartan reloj, que es el caso de un daemon local; contra uno\ngenuinamente remoto no lo es, y quien la haga tiene que decirlo en vez\nde intercalar dos relojes en silencio.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "level": {
+          "description": "Nivel del evento: una de las cadenas de [`LOG_LEVELS`].\n\nCadena y no enum porque el vocabulario es cerrado y comparable por\nigualdad, y porque un valor desconocido tiene que poder LLEGAR: un\nreceptor que no lo reconozca degrada al nivel por defecto y lo dice, en\nvez de rechazar una respuesta entera por una línea.",
+          "type": "string"
+        },
+        "message": {
+          "description": "El mensaje y sus campos, ya aplanados a texto.\n\nEs PRESENTACIÓN: no se parsea, no se compara y puede venir en el idioma\ndel daemon. Lo que decide está en `level` y `target`.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Módulo que lo emitió (`norte_core::connect`), entero.\n\nEntero porque es lo que decide la cota de seguridad del anillo —lo que\nno empieza por `norte` no sube de INFO— y también lo que el lector\nfiltra para quedarse con un subsistema.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "epoch_ms",
+        "level",
+        "target",
+        "message"
+      ],
+      "type": "object"
+    },
+    "LogTailParams": {
+      "description": "Params de [`LOG_TAIL`].\n\n```\nuse norte_proto::methods::LogTailParams;\n// El panel que acaba de abrirse no tiene cursor: quiere lo que haya.\nlet abriendo = LogTailParams { cursor: None, max: 500 };\n// El emisor canónico escribe `cursor: null` explícito (ADR 0004), que es\n// justo lo que hace visible en el cable la diferencia entre «lo que\n// tengas» y «desde el principio de los tiempos».\nassert!(serde_json::to_string(&abriendo).unwrap().contains(r#\"\"cursor\":null\"#));\n// Y la vuelta siguiente pide desde donde la anterior lo dejó.\nlet siguiendo: LogTailParams =\n    serde_json::from_str(r#\"{\"cursor\":1234,\"max\":500}\"#).unwrap();\nassert_eq!(siguiendo.cursor, Some(1234));\n```",
+      "properties": {
+        "cursor": {
+          "default": null,
+          "description": "Desde dónde. Es el [`LogTailResult::next`] de la vuelta anterior, no un\níndice en ninguna lista: cuenta líneas que han ENTRADO en el anillo\ndesde siempre, que es lo único que sigue significando algo cuando una\nlínea vieja ya salió por el otro lado.\n\n**`null` (o ausente) es «lo que tengas»**, que es lo que manda un panel\nal abrirse, y NO es lo mismo que `0`. Un cero afirma que quien pregunta\nvio la línea número cero y quiere todo lo posterior, así que contra un\nanillo que ya ha dado la vuelta el daemon tendría que contestar un\n`lost` enorme — y ese hueco sería falso: nadie perdió unas líneas que\nnunca esperó. Con `null` el daemon empieza por la más vieja que\nconserva y contesta `lost: 0`. Por eso es un `Option` y no un\ncentinela: el centinela obliga a que las dos preguntas compartan valor,\ny son preguntas distintas.\n\nUn cursor por ENCIMA de lo que el daemon ha visto —un daemon que se\nreinició debajo de un cliente que conservó el suyo— no es un error ni\nun hueco: se contesta sin nada nuevo y sin nada perdido, porque\nafirmar un hueco ahí sería mentir en la otra dirección.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max": {
+          "description": "Cuántas líneas COMO MUCHO en esta respuesta.\n\nEs una petición, no un contrato: el daemon recorta, igual que\n[`FS_LIST`] con [`FS_LIST_MAX_PAGE`] y [`FS_READ`] con\n[`FS_READ_MAX_CHUNK`]. Pedir de más no es un error y no se pierde nada\n— lo que no quepa sigue estando después de [`LogTailResult::next`], y\nla vuelta siguiente lo recoge. El tope útil es descubrible sin\ndocumentación: nunca puede haber más líneas que\n[`LogTailResult::capacity`].\n\nNo lleva `default`: un `max` ausente valdría cero y contestaría una\nlista vacía a alguien que pedía el registro, que es un fallo que parece\n«no ha pasado nada».",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max"
+      ],
+      "type": "object"
+    },
+    "LogTailResult": {
+      "description": "Result de [`LOG_TAIL`].\n\n```\nuse norte_proto::methods::{LogLine, LogTailResult};\nlet r = LogTailResult {\n    lines: vec![LogLine {\n        epoch_ms: 1_756_000_000_000,\n        level: \"info\".to_owned(),\n        target: \"norte_core::daemon\".to_owned(),\n        message: \"escuchando\".to_owned(),\n    }],\n    next: 4001,\n    lost: 12,\n    level: \"info\".to_owned(),\n    capacity: 2000,\n};\nlet j = serde_json::to_value(&r).expect(\"json\");\n// Doce líneas se cayeron por detrás antes de que este cursor las viera, y\n// la respuesta lo DICE en vez de dejar un salto en el contenido.\nassert_eq!(j[\"lost\"], serde_json::json!(12));\nassert_eq!(j[\"next\"], serde_json::json!(4001));\n```",
+      "properties": {
+        "capacity": {
+          "description": "Cuántas líneas cabe guardar en el anillo del daemon.\n\nDice hasta dónde llega la historia que se puede pedir, que es lo que\npermite a quien lo pinta decir «esto es todo lo que hay» en vez de\ninsinuar que hay más. Y de paso da el tope útil de\n[`LogTailParams::max`] sin que nadie tenga que leer una constante: no\npuede haber más líneas que esto.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "level": {
+          "description": "El nivel que el anillo del daemon está guardando AHORA MISMO: una de\nlas cadenas de [`LOG_LEVELS`].\n\nViaja en cada respuesta a propósito, en vez de tener método propio.\nQuien pinta el registro tiene que enseñar qué nivel está puesto —si no,\n«no hay líneas de DEBUG» es indistinguible de «no se están\ncapturando»—, y el nivel es GLOBAL al daemon: otro cliente pudo\nsubirlo hace un segundo. Con un método aparte, esa respuesta nace\nrancia y el panel enseña un nivel que ya no es el que hay; aquí llega\ncon las líneas a las que se aplica, en el mismo viaje que ya se estaba\nhaciendo.",
+          "type": "string"
+        },
+        "lines": {
+          "description": "Las líneas posteriores al cursor, de la MÁS VIEJA a la más nueva.\n\nEl orden es parte del contrato: quien las recibe las añade al final de\nlo que ya tenía, y una lista al revés obligaría a cada receptor a\nsaberlo y a darle la vuelta.",
+          "items": {
+            "$ref": "#/$defs/LogLine"
+          },
+          "type": "array"
+        },
+        "lost": {
+          "description": "Cuántas líneas se cayeron del anillo antes de que ESTE cursor las\nviera.\n\nEs lo que hace honesto el sondeo. Sin este número, un cliente que se\nqueda atrás —o que estuvo un rato sin preguntar— vería un salto en el\ncontenido y ninguna explicación, y un registro con un hueco silencioso\nmiente sobre lo que pasó: una línea que falta es indistinguible de un\nsuceso que nunca ocurrió. El panel ya pinta una marca de hueco para su\nanillo local; esto alimenta la misma marca para el remoto.\n\n**No es «todo lo que el anillo ha tirado jamás»**, que es un número\ndistinto y no dice nada sobre lo que perdió quien pregunta. Cuenta lo\nque se perdió ESTE cursor, así que con un cursor al día vale cero,\ny para una primera llamada sin cursor vale cero también.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "next": {
+          "description": "El cursor para la siguiente llamada. Se guarda tal cual y se manda\ncomo [`LogTailParams::cursor`].\n\nEs la posición DESPUÉS de la última línea entregada, no la de la\núltima: sumarle uno por fuera es el error clásico que se come una\nlínea o repite otra, y aquí no hace falta hacer ninguna cuenta.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "lines",
+        "next",
+        "lost",
+        "level",
+        "capacity"
+      ],
+      "type": "object"
+    },
     "MatchInfo": {
       "description": "Contexto de UN match de contenido.",
       "properties": {
@@ -5681,6 +5803,21 @@
     "initialize_result": {
       "$ref": "#/$defs/InitializeResult"
     },
+    "log_level_params": {
+      "$ref": "#/$defs/LogLevelParams"
+    },
+    "log_level_result": {
+      "$ref": "#/$defs/LogLevelResult"
+    },
+    "log_line": {
+      "$ref": "#/$defs/LogLine"
+    },
+    "log_tail_params": {
+      "$ref": "#/$defs/LogTailParams"
+    },
+    "log_tail_result": {
+      "$ref": "#/$defs/LogTailResult"
+    },
     "match_info": {
       "$ref": "#/$defs/MatchInfo"
     },
@@ -6050,6 +6187,11 @@
     "index_search_semantic_result",
     "initialize_params",
     "initialize_result",
+    "log_level_params",
+    "log_level_result",
+    "log_line",
+    "log_tail_params",
+    "log_tail_result",
     "match_info",
     "on_unknown",
     "pair_transform",

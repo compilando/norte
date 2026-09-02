@@ -97,3 +97,4 @@ edits.
 | [0089](0089-the-protocol-gets-a-catalogue-so-forgetting-a-surface-turns-red.md) | The protocol gets a catalogue, so forgetting a surface turns red | accepted |
 | [0090](0090-why-a-connection-failed-is-a-notification-not-an-error-field.md) | Why a connection failed is a notification, not a field on the error | accepted |
 | [0091](0091-a-password-does-not-cross-a-bridge-on-every-keystroke.md) | A password does not cross a bridge on every keystroke | accepted |
+| [0092](0092-a-log-is-pulled-with-a-cursor-and-its-level-is-raised-by-its-owner.md) | A log is pulled with a cursor, and its level is raised by whoever owns the ring | accepted |

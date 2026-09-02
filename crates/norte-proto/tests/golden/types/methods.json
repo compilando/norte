@@ -704,6 +704,59 @@
       "version": "0.1.0"
     }
   },
+  "log_level_params_debug": {
+    "level": "debug"
+  },
+  "log_level_params_error": {
+    "level": "error"
+  },
+  "log_level_params_info": {
+    "level": "info"
+  },
+  "log_level_params_trace": {
+    "level": "trace"
+  },
+  "log_level_params_warn": {
+    "level": "warn"
+  },
+  "log_level_result": {
+    "level": "debug"
+  },
+  "log_tail_params": {
+    "cursor": 1234,
+    "max": 500
+  },
+  "log_tail_params_sin_cursor": {
+    "cursor": null,
+    "max": 500
+  },
+  "log_tail_result": {
+    "capacity": 2000,
+    "level": "info",
+    "lines": [
+      {
+        "epoch_ms": 1756000000000,
+        "level": "warn",
+        "message": "la sesión de «trabajo» se degradó a texto en claro",
+        "target": "norte_core::connect"
+      },
+      {
+        "epoch_ms": 1756000000123,
+        "level": "info",
+        "message": "connected",
+        "target": "suppaftp"
+      }
+    ],
+    "lost": 12,
+    "next": 4001
+  },
+  "log_tail_result_vacio": {
+    "capacity": 2000,
+    "level": "info",
+    "lines": [],
+    "lost": 0,
+    "next": 4001
+  },
   "match_info": {
     "line": 3,
     "preview": "hay un año aquí"

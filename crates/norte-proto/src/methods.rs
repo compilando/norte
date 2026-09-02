@@ -993,7 +993,44 @@ use crate::{
 /// el caso mixto que este repositorio ya se ha encontrado con un
 /// `cargo install` rancio—: el canal existe, nadie lo alimenta, y el frontend
 /// se queda con la categoría. La misma degradación, sin nada que romperse.
-pub const PROTOCOL_VERSION: &str = "0.64.0";
+///
+/// `0.65.0` (#328): el registro del DAEMON se puede leer desde fuera.
+///
+/// Añade [`LOG_TAIL`] y [`LOG_LEVEL`], con [`LogTailParams`],
+/// [`LogTailResult`], [`LogLevelParams`], [`LogLevelResult`] y la forma de
+/// wire de una línea, [`LogLine`]. Hasta aquí el panel de registro de un
+/// frontend pintaba el anillo de SU PROPIO proceso, y con un daemon aparte
+/// —que es lo normal en la ventana, que arranca el suyo (#300)— ese anillo
+/// tiene las líneas del puente y del renderer, mientras que los providers, el
+/// journal, la política y el motivo por el que una conexión falló están al
+/// otro lado del socket. El panel no estaba roto: estaba mirando el proceso
+/// equivocado, y desde #326 lo dice. Esto es la otra mitad.
+///
+/// **Se tira del registro con un cursor; no lo empuja el daemon.** El anillo
+/// ya lleva un contador monótono, así que el cursor no cuesta producirlo y el
+/// daemon no guarda estado por cliente — ni suscripción que registrar, ni baja
+/// que se pierda cuando un cliente muere. Una notificación que se cae es un
+/// hueco silencioso; un cursor rancio es aritmética, y la respuesta dice
+/// exactamente cuántas líneas se cayeron por detrás. Un panel cerrado no
+/// cuesta nada, que es donde está la mayor parte del tiempo.
+///
+/// **El nivel se sube por MÉTODO, no por parámetro.** La cota del anillo
+/// —`suppaftp` escribe `PASS <contraseña>` en TRACE (#43, regla 10)— vive en
+/// el proceso que tiene el anillo, así que la única forma de que sobreviva al
+/// socket es que el cliente PIDA un nivel y sea el daemon quien lo aplique.
+/// No hay una segunda copia de la lista blanca que mantener en sincronía.
+///
+/// Ventana N=0.65.x / N-1=0.64.x. Aditivo: no cambia el JSON de ninguna
+/// operación existente. La pérdida, para un **cliente 0.64 contra un daemon
+/// 0.65**: no llama a los métodos y su panel se queda con el anillo local —lo
+/// que #326 construyó—, o sea exactamente lo que ya tenía. Y en el sentido que
+/// el handshake también permite —**cliente 0.65 contra un daemon 0.64**, o
+/// contra uno compilado SIN la feature `logging`, que no tiene anillo que
+/// servir—: el método contesta «method not found» y el panel degrada al anillo
+/// local **diciendo por qué**. Un panel que se queda vacío sin explicación es
+/// indistinguible de un daemon que no hizo nada, y esa es justamente la
+/// confusión que #326 empezó a arreglar.
+pub const PROTOCOL_VERSION: &str = "0.65.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -7933,4 +7970,360 @@ pub struct SessionPutParams {
 pub struct SessionPutResult {
     /// Revisión resultante; el cliente la guarda para su siguiente `put`.
     pub revision: u64,
+}
+
+/// El vocabulario CERRADO de niveles de registro que viaja por el wire, del
+/// menos al más verboso (0.65.0, #328).
+///
+/// Está aquí y no se importa de `norte-config` porque las dependencias van en
+/// la otra dirección: `norte-config` depende de este crate, nunca al revés.
+/// Que sean las mismas cinco cadenas no es una coincidencia que haya que
+/// mantener a mano — un test de `norte-config`, que es el único sitio desde el
+/// que se ven los dos crates, comprueba que los dos conjuntos son iguales EN
+/// LAS DOS DIRECCIONES. Es el mismo patrón que este repositorio ya usa para el
+/// vocabulario de hashing, donde `norte-core` guarda una copia congelada por
+/// el formato del journal y una igualdad ata las dos.
+///
+/// Se compara por IGUALDAD, así que renombrar cualquiera de los cinco es un
+/// cambio de wire con su bump. Un receptor que vea uno que no conoce degrada
+/// —lo trata como el nivel por defecto y lo dice—, jamás rechaza la respuesta.
+///
+/// ```
+/// use norte_proto::methods::LOG_LEVELS;
+/// assert_eq!(LOG_LEVELS, ["error", "warn", "info", "debug", "trace"]);
+/// // Del menos al más verboso: la posición es el orden, y el filtro de un
+/// // panel es «como mucho tan verboso como esto».
+/// assert_eq!(LOG_LEVELS[0], "error");
+/// ```
+pub const LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
+
+/// `log.tail` — lo que el anillo de registro del DAEMON tiene después de un
+/// cursor (0.65.0, #328).
+///
+/// # Por qué existe
+///
+/// Un frontend con panel de registro pinta el anillo de su propio proceso, y
+/// eso es la respuesta correcta solo cuando el core va embebido. La ventana
+/// arranca su propio daemon (#300), así que su anillo tiene las líneas del
+/// puente, del renderer y del arranque, mientras que los providers, el
+/// journal, la política y el motivo por el que una conexión no se pudo abrir
+/// ocurren al otro lado de un socket. Lo mismo le pasa a `ntc --socket`. El
+/// panel no estaba roto —desde #326 dice de QUIÉN es el registro que enseña—,
+/// pero decirlo no es lo mismo que poder leer el otro.
+///
+/// # Por qué se TIRA y no se empuja
+///
+/// El anillo ya lleva un contador monótono de líneas que han entrado, así que
+/// un cursor no cuesta producirlo, y con él **el daemon no guarda estado por
+/// cliente**: no hay suscripción que registrar ni baja que se pierda cuando un
+/// cliente muere sin avisar. Una notificación que se cae por el camino es un
+/// hueco silencioso en un registro, que es la peor cosa que le puede pasar a
+/// un registro —una línea que falta es indistinguible de un suceso que no
+/// ocurrió—; un cursor rancio, en cambio, es aritmética, y
+/// [`LogTailResult::lost`] dice exactamente cuántas líneas se cayeron por
+/// detrás antes de que este cursor las viera. Y un panel cerrado no cuesta
+/// nada, mientras que una suscripción sigue pagando.
+///
+/// Lo que se paga a cambio es latencia: hasta un intervalo de sondeo (~300 ms
+/// en el frontend). Para una lista que lee una persona, eso no es un coste.
+///
+/// # Quién puede llamarlo
+///
+/// SOLO una conexión humana. Una conexión de agente (`agent_session` en
+/// [`INITIALIZE`]) recibe `INVALID_REQUEST`, igual que en los demás actos que
+/// son de gobierno humano.
+///
+/// El motivo es concreto y no un principio: el anillo del daemon lleva rutas,
+/// nombres de conexión y la actividad de OTRAS sesiones, así que para un
+/// agente con un scope acotado es un oráculo de existencia sobre rutas fuera
+/// de su recinto — exactamente la fuga que `read_gate_all` ya documenta para
+/// [`PLUGIN_DECORATE`] y [`PLUGIN_COLUMN_VALUES`]. Un registro vacío y un
+/// registro prohibido no pueden leerse igual, y por eso es un error del
+/// protocolo y no una lista vacía.
+///
+/// # Cuando el otro extremo no lo tiene
+///
+/// Un daemon 0.64 no conoce el método, y uno compilado SIN la feature
+/// `logging` no tiene anillo que servir: los dos contestan «method not
+/// found». El panel degrada a su anillo local y **dice por qué**. Es la
+/// ventana N/N-1 haciendo su trabajo, y la degradación tiene que ser
+/// explícita: un panel que se queda a medias sin explicación parece roto.
+///
+/// ```
+/// assert_eq!(norte_proto::methods::LOG_TAIL, "log.tail");
+/// ```
+pub const LOG_TAIL: &str = "log.tail";
+
+/// `log.level` — sube el nivel que el anillo del DAEMON está guardando
+/// (0.65.0, #328).
+///
+/// # Por qué es un método y no un parámetro
+///
+/// Ésta es la decisión de diseño del bump entero (ADR 0092). El anillo tiene
+/// una COTA que no se negocia: `suppaftp` emite `PASS <contraseña>` al nivel
+/// TRACE de la biblioteca `log` (#43, regla 10), y el nivel de este anillo se
+/// sube desde la interfaz, así que sin la cota una tecla de un panel pondría
+/// una contraseña de FTP en pantalla. La cota es una lista BLANCA — solo los
+/// targets de norte suben de INFO; todo lo de terceros se queda en INFO pida
+/// quien pida lo que pida.
+///
+/// Esa cota vive en el proceso que tiene el anillo. Para que sobreviva al
+/// socket hay dos formas, y solo una funciona: el cliente PIDE un nivel y es
+/// el daemon quien llama a su propio setter, contestando con el nivel que de
+/// verdad quedó puesto. La otra —mandar el nivel como un campo que el cliente
+/// aplica— exigiría una segunda copia de la lista blanca al otro lado del
+/// cable, y dos copias de una defensa se separan en cuanto una cambia.
+///
+/// # Dos cosas que hay que enseñar, no esconder
+///
+/// El nivel es **global al daemon**: un cliente que lo sube lo sube para todos
+/// los que estén mirando. Y **nunca baja** — bajar a errores y volver a subir
+/// enseñaría un hueco del tamaño del rato que se estuvo abajo, y el hueco es
+/// la mentira que este panel existe para no contar. Un `level` pedido más
+/// bajo que el vigente contesta el vigente, y eso no es un error: es la
+/// respuesta honesta, y por eso el result LLEVA el nivel en vez de un `bool`.
+///
+/// # Quién puede llamarlo
+///
+/// SOLO una conexión humana, por lo dicho en [`LOG_TAIL`] y con más razón:
+/// subir la verbosidad del daemon es subir la de un trabajo del que un agente
+/// no es parte.
+///
+/// ```
+/// assert_eq!(norte_proto::methods::LOG_LEVEL, "log.level");
+/// ```
+pub const LOG_LEVEL: &str = "log.level";
+
+/// Una línea de registro TAL COMO VIAJA (0.65.0, #328).
+///
+/// No es el tipo que pinta un frontend, y eso es a propósito.
+/// `norte_config::logline::LogLine` es el de PRESENTACIÓN: su nivel es un enum
+/// que ordena por verbosidad —porque ésa es la comparación que hace el filtro—
+/// y trae una etiqueta rellenada a cinco columnas para que la lista se pueda
+/// recorrer con la vista. Ninguna de las dos cosas pertenece a un cable: un
+/// ancho de columna que cambia no puede ser un cambio de wire, y un orden de
+/// enum no se serializa. Aquí el nivel es una de las cadenas de
+/// [`LOG_LEVELS`], comparable por igualdad y congelada por los goldens.
+///
+/// Los dos tipos coexisten a propósito y la dependencia solo va en un sentido:
+/// `norte-config` depende de este crate, así que el que convierte es aquél.
+///
+/// ```
+/// use norte_proto::methods::LogLine;
+/// let l = LogLine {
+///     epoch_ms: 1_756_000_000_000,
+///     level: "warn".to_owned(),
+///     target: "norte_core::connect".to_owned(),
+///     message: "sesión degradada".to_owned(),
+/// };
+/// let j = serde_json::to_value(&l).expect("json");
+/// assert_eq!(j["level"], serde_json::json!("warn"));
+/// // El `target` viaja entero: es lo que decide la cota de seguridad y lo que
+/// // el lector filtra, así que recortarlo lo rompería por los dos lados.
+/// assert_eq!(j["target"], serde_json::json!("norte_core::connect"));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogLine {
+    /// Milisegundos desde la época (UTC), con el mismo criterio que
+    /// `mtime_ms` (ADR 0004): entero CON signo.
+    ///
+    /// Es lo que permite mezclar el registro del daemon con el del propio
+    /// proceso en una sola lista. La mezcla es honesta mientras los dos
+    /// procesos compartan reloj, que es el caso de un daemon local; contra uno
+    /// genuinamente remoto no lo es, y quien la haga tiene que decirlo en vez
+    /// de intercalar dos relojes en silencio.
+    pub epoch_ms: i64,
+    /// Nivel del evento: una de las cadenas de [`LOG_LEVELS`].
+    ///
+    /// Cadena y no enum porque el vocabulario es cerrado y comparable por
+    /// igualdad, y porque un valor desconocido tiene que poder LLEGAR: un
+    /// receptor que no lo reconozca degrada al nivel por defecto y lo dice, en
+    /// vez de rechazar una respuesta entera por una línea.
+    pub level: String,
+    /// Módulo que lo emitió (`norte_core::connect`), entero.
+    ///
+    /// Entero porque es lo que decide la cota de seguridad del anillo —lo que
+    /// no empieza por `norte` no sube de INFO— y también lo que el lector
+    /// filtra para quedarse con un subsistema.
+    pub target: String,
+    /// El mensaje y sus campos, ya aplanados a texto.
+    ///
+    /// Es PRESENTACIÓN: no se parsea, no se compara y puede venir en el idioma
+    /// del daemon. Lo que decide está en `level` y `target`.
+    pub message: String,
+}
+
+/// Params de [`LOG_TAIL`].
+///
+/// ```
+/// use norte_proto::methods::LogTailParams;
+/// // El panel que acaba de abrirse no tiene cursor: quiere lo que haya.
+/// let abriendo = LogTailParams { cursor: None, max: 500 };
+/// // El emisor canónico escribe `cursor: null` explícito (ADR 0004), que es
+/// // justo lo que hace visible en el cable la diferencia entre «lo que
+/// // tengas» y «desde el principio de los tiempos».
+/// assert!(serde_json::to_string(&abriendo).unwrap().contains(r#""cursor":null"#));
+/// // Y la vuelta siguiente pide desde donde la anterior lo dejó.
+/// let siguiendo: LogTailParams =
+///     serde_json::from_str(r#"{"cursor":1234,"max":500}"#).unwrap();
+/// assert_eq!(siguiendo.cursor, Some(1234));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogTailParams {
+    /// Desde dónde. Es el [`LogTailResult::next`] de la vuelta anterior, no un
+    /// índice en ninguna lista: cuenta líneas que han ENTRADO en el anillo
+    /// desde siempre, que es lo único que sigue significando algo cuando una
+    /// línea vieja ya salió por el otro lado.
+    ///
+    /// **`null` (o ausente) es «lo que tengas»**, que es lo que manda un panel
+    /// al abrirse, y NO es lo mismo que `0`. Un cero afirma que quien pregunta
+    /// vio la línea número cero y quiere todo lo posterior, así que contra un
+    /// anillo que ya ha dado la vuelta el daemon tendría que contestar un
+    /// `lost` enorme — y ese hueco sería falso: nadie perdió unas líneas que
+    /// nunca esperó. Con `null` el daemon empieza por la más vieja que
+    /// conserva y contesta `lost: 0`. Por eso es un `Option` y no un
+    /// centinela: el centinela obliga a que las dos preguntas compartan valor,
+    /// y son preguntas distintas.
+    ///
+    /// Un cursor por ENCIMA de lo que el daemon ha visto —un daemon que se
+    /// reinició debajo de un cliente que conservó el suyo— no es un error ni
+    /// un hueco: se contesta sin nada nuevo y sin nada perdido, porque
+    /// afirmar un hueco ahí sería mentir en la otra dirección.
+    #[serde(default)]
+    pub cursor: Option<u64>,
+    /// Cuántas líneas COMO MUCHO en esta respuesta.
+    ///
+    /// Es una petición, no un contrato: el daemon recorta, igual que
+    /// [`FS_LIST`] con [`FS_LIST_MAX_PAGE`] y [`FS_READ`] con
+    /// [`FS_READ_MAX_CHUNK`]. Pedir de más no es un error y no se pierde nada
+    /// — lo que no quepa sigue estando después de [`LogTailResult::next`], y
+    /// la vuelta siguiente lo recoge. El tope útil es descubrible sin
+    /// documentación: nunca puede haber más líneas que
+    /// [`LogTailResult::capacity`].
+    ///
+    /// No lleva `default`: un `max` ausente valdría cero y contestaría una
+    /// lista vacía a alguien que pedía el registro, que es un fallo que parece
+    /// «no ha pasado nada».
+    pub max: u32,
+}
+
+/// Result de [`LOG_TAIL`].
+///
+/// ```
+/// use norte_proto::methods::{LogLine, LogTailResult};
+/// let r = LogTailResult {
+///     lines: vec![LogLine {
+///         epoch_ms: 1_756_000_000_000,
+///         level: "info".to_owned(),
+///         target: "norte_core::daemon".to_owned(),
+///         message: "escuchando".to_owned(),
+///     }],
+///     next: 4001,
+///     lost: 12,
+///     level: "info".to_owned(),
+///     capacity: 2000,
+/// };
+/// let j = serde_json::to_value(&r).expect("json");
+/// // Doce líneas se cayeron por detrás antes de que este cursor las viera, y
+/// // la respuesta lo DICE en vez de dejar un salto en el contenido.
+/// assert_eq!(j["lost"], serde_json::json!(12));
+/// assert_eq!(j["next"], serde_json::json!(4001));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogTailResult {
+    /// Las líneas posteriores al cursor, de la MÁS VIEJA a la más nueva.
+    ///
+    /// El orden es parte del contrato: quien las recibe las añade al final de
+    /// lo que ya tenía, y una lista al revés obligaría a cada receptor a
+    /// saberlo y a darle la vuelta.
+    pub lines: Vec<LogLine>,
+    /// El cursor para la siguiente llamada. Se guarda tal cual y se manda
+    /// como [`LogTailParams::cursor`].
+    ///
+    /// Es la posición DESPUÉS de la última línea entregada, no la de la
+    /// última: sumarle uno por fuera es el error clásico que se come una
+    /// línea o repite otra, y aquí no hace falta hacer ninguna cuenta.
+    pub next: u64,
+    /// Cuántas líneas se cayeron del anillo antes de que ESTE cursor las
+    /// viera.
+    ///
+    /// Es lo que hace honesto el sondeo. Sin este número, un cliente que se
+    /// queda atrás —o que estuvo un rato sin preguntar— vería un salto en el
+    /// contenido y ninguna explicación, y un registro con un hueco silencioso
+    /// miente sobre lo que pasó: una línea que falta es indistinguible de un
+    /// suceso que nunca ocurrió. El panel ya pinta una marca de hueco para su
+    /// anillo local; esto alimenta la misma marca para el remoto.
+    ///
+    /// **No es «todo lo que el anillo ha tirado jamás»**, que es un número
+    /// distinto y no dice nada sobre lo que perdió quien pregunta. Cuenta lo
+    /// que se perdió ESTE cursor, así que con un cursor al día vale cero,
+    /// y para una primera llamada sin cursor vale cero también.
+    pub lost: u64,
+    /// El nivel que el anillo del daemon está guardando AHORA MISMO: una de
+    /// las cadenas de [`LOG_LEVELS`].
+    ///
+    /// Viaja en cada respuesta a propósito, en vez de tener método propio.
+    /// Quien pinta el registro tiene que enseñar qué nivel está puesto —si no,
+    /// «no hay líneas de DEBUG» es indistinguible de «no se están
+    /// capturando»—, y el nivel es GLOBAL al daemon: otro cliente pudo
+    /// subirlo hace un segundo. Con un método aparte, esa respuesta nace
+    /// rancia y el panel enseña un nivel que ya no es el que hay; aquí llega
+    /// con las líneas a las que se aplica, en el mismo viaje que ya se estaba
+    /// haciendo.
+    pub level: String,
+    /// Cuántas líneas cabe guardar en el anillo del daemon.
+    ///
+    /// Dice hasta dónde llega la historia que se puede pedir, que es lo que
+    /// permite a quien lo pinta decir «esto es todo lo que hay» en vez de
+    /// insinuar que hay más. Y de paso da el tope útil de
+    /// [`LogTailParams::max`] sin que nadie tenga que leer una constante: no
+    /// puede haber más líneas que esto.
+    pub capacity: u32,
+}
+
+/// Params de [`LOG_LEVEL`]: el nivel que el cliente PIDE.
+///
+/// ```
+/// use norte_proto::methods::LogLevelParams;
+/// let p = LogLevelParams { level: "debug".to_owned() };
+/// assert_eq!(serde_json::to_value(&p).unwrap()["level"], serde_json::json!("debug"));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogLevelParams {
+    /// Una de las cadenas de [`LOG_LEVELS`].
+    ///
+    /// Es lo que se PIDE, no lo que queda: el daemon aplica su propia cota y
+    /// contesta con lo que de verdad se puso. Un valor fuera del vocabulario
+    /// es [`crate::Error::Unsupported`] y NO se degrada a un nivel por defecto
+    /// — aceptar un nivel que no se entiende y poner otro dejaría al lector
+    /// creyendo que pidió algo que nadie hizo.
+    pub level: String,
+}
+
+/// Result de [`LOG_LEVEL`]: el nivel que QUEDÓ.
+///
+/// No es un `bool` de «hecho», y eso es la mitad del argumento del método
+/// (ver [`LOG_LEVEL`]): el anillo nunca baja de nivel, así que pedir uno menos
+/// verboso que el vigente contesta el vigente, y eso no es un fallo sino la
+/// respuesta correcta. Con un `bool` habría que elegir entre mentir con un
+/// `true` o alarmar con un `false`.
+///
+/// ```
+/// use norte_proto::methods::LogLevelResult;
+/// // Se pidió `warn` con el anillo ya en `debug`: se contesta `debug`, que es
+/// // lo que hay. El anillo no baja (un hueco del tamaño del rato que estuvo
+/// // abajo es justo lo que este panel existe para no tener).
+/// let r = LogLevelResult { level: "debug".to_owned() };
+/// assert_eq!(serde_json::to_value(&r).unwrap()["level"], serde_json::json!("debug"));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogLevelResult {
+    /// El nivel vigente tras la petición: una de las cadenas de
+    /// [`LOG_LEVELS`]. Puede ser MÁS verboso que el pedido.
+    pub level: String,
 }

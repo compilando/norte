@@ -9,6 +9,31 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The daemon's log can be read over the wire** (#328, protocol **0.65.0**,
+  ADR 0092). Two read-only methods: `log.tail { cursor, max }` answers with the
+  lines after `cursor`, the next cursor, how many that cursor missed, the level
+  currently being captured and how deep the ring goes; `log.level { level }`
+  raises what the daemon captures and answers with the level that actually
+  took. This is the wire half of the hole #326 named — a frontend with its own
+  daemon paints its own process's lines, and the providers, the journal, the
+  policy and the reason a connection failed are all on the other side of a
+  socket.
+  It is **pulled with a cursor and not pushed**, because the ring already owns a
+  monotonic counter: the daemon keeps no per-client state, and where a dropped
+  notification would be a silent hole, a stale cursor is arithmetic — the answer
+  says exactly how many lines fell off the back. A `null` cursor means "whatever
+  you have", which is not the same as `0`: a zero would make a ring that has
+  already wrapped report a gap nobody actually missed.
+  Raising the level is a **method** and not a field the client applies, so the
+  cap that keeps an FTP password out of the panel (`suppaftp` logs
+  `PASS <password>` at TRACE, #43) stays in the only process that can enforce
+  it. Agents are refused on both: the daemon's ring names paths, connections and
+  other sessions, so for a scoped agent it is an existence oracle for everything
+  outside its sandbox.
+  A 0.64 daemon — or one built without the `logging` feature, which has no ring
+  to serve — answers "method not found", and the panel falls back to its local
+  ring **saying why**.
+
 - **The window has the log panel** (#326, bridge **46**). It has been in the
   TUI since #323, and everything shared was already built — the in-memory ring
   and its `tracing` layer in `norte-config`, the presentation state (level

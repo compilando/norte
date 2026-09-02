@@ -1277,10 +1277,23 @@ fn version_ventana_actual() {
     // No pierde ninguna comprobación —nadie decide con esa frase, es para
     // leer— y aun así la ventana se DESPLAZA, porque ese cliente no puede
     // enseñar el diagnóstico que el nuevo sí enseña.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.64.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.63.0"), "N-1");
+    // 0.65.0 (#328): `log.tail` y `log.level`. Dos métodos nuevos que un
+    // cliente 0.64 no llama, así que su panel de registro se queda con el
+    // anillo de su propio proceso — lo que ya tenía. No se pierde ninguna
+    // comprobación: la cota que impide que un TRACE de `suppaftp` enseñe una
+    // contraseña vive en el proceso del anillo y por eso `log.level` es un
+    // MÉTODO, así que un peer viejo no puede saltársela por no conocerla.
+    //
+    // Lo que desplaza la ventana es la otra dirección, que aquí es tan real
+    // como la primera: un cliente 0.65 contra un daemon 0.64 —o contra uno
+    // compilado sin la feature `logging`, que no tiene anillo— recibe «method
+    // not found» y tiene que DECIR por qué se queda con el registro local. Un
+    // panel que degrada en silencio es indistinguible de un daemon que no hizo
+    // nada, que es la confusión que #326 empezó a arreglar.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.65.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.64.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.62.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.63.9"),
         "N-2 fuera de la ventana"
     );
 }
