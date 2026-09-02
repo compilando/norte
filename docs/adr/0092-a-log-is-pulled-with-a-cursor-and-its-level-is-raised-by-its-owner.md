@@ -172,7 +172,8 @@ already produced at 0.47.
 
 **The fallback that does happen is a same-version daemon built without
 `logging`.** It knows both methods and has no ring to serve, so it answers
-`METHOD_NOT_FOUND` (or `Unsupported`, depending on how the daemon wires it).
+`Unsupported` (`-32000`) — the daemon DISPATCHES both, so `METHOD_NOT_FOUND` is
+not an answer it can give; the SDK folds that code in anyway, defensively.
 That is the one condition under which a peer that completed the handshake can
 refuse these methods, and the panel then falls back to its local ring **saying
 why**. That last part is not optional: a panel that degrades in silence is

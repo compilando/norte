@@ -1036,8 +1036,9 @@ use crate::{
 ///
 /// Lo que SÍ ocurre, y es lo que el frontend tiene que atender, es un daemon
 /// **de esta misma versión** compilado sin la feature `logging`: conoce los
-/// métodos y no tiene anillo que servir, así que contesta
-/// `METHOD_NOT_FOUND` (o `Unsupported`, según cómo lo cablee el daemon). Ésa
+/// métodos y no tiene anillo que servir, así que contesta `Unsupported`
+/// (`-32000`) — el daemon los REPARTE, así que `METHOD_NOT_FOUND` no es una
+/// respuesta que pueda dar; el SDK lo pliega igualmente por defensa. Ésa
 /// es la única condición por la que un peer que sí ha completado el handshake
 /// puede rehusar estos dos métodos, y ante ella el panel degrada al anillo
 /// local **diciendo por qué**: un panel que se queda vacío sin explicación es
