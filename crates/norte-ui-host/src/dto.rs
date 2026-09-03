@@ -50,6 +50,9 @@ pub struct ViewSnapshot {
     pub tasks: Vec<TaskView>,
     /// La barra de menús: los títulos, y el desplegado si hay alguno.
     pub menu: MenuView,
+    /// La barra de paneles (#324): qué paneles hay, cómo están, y si alguno
+    /// tiene algo que contar. Puente 51.
+    pub panel_bar: PanelBarView,
     /// El selector de perfiles, si está abierto.
     pub profiles: Option<ProfilePickerView>,
     /// La paleta de comandos, si está abierta.
@@ -185,6 +188,57 @@ pub struct MenuItemView {
     /// limitación en un misterio. Es la misma regla que la paleta aplica a
     /// las filas que no puede correr.
     pub enabled: bool,
+}
+
+/// La barra de paneles (#324, puente 51): una fila de botones, uno por
+/// panel que se abre y se cierra, que ENSEÑA los paneles en vez de esperar a
+/// que el lector sepa que existen.
+///
+/// Qué botones hay y en qué orden lo decide `norte_frontend::panelbar` —el
+/// mismo código que la TUI (ADR 0077)—; este host solo recoge el estado y lo
+/// traduce. Viaja entera con cada cambio: seis botones no valen un protocolo
+/// de deltas.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelBarView {
+    /// `[ui] panel_bar`: si la barra se pinta. Apagada, los paneles siguen
+    /// abriéndose por su tecla, su menú y la paleta.
+    pub bar: bool,
+    /// Los botones, en el orden en que se pintan. Un click vuelve como el
+    /// ÍNDICE en esta lista (`UiAction::PanelBarActivate`), nunca como un
+    /// comando: el renderer no despacha (ADR 0069).
+    pub buttons: Vec<PanelButtonView>,
+}
+
+/// Un botón de la barra de paneles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelButtonView {
+    /// El kind que abre. Texto de disposición, ya enmascarado: un kind puede
+    /// venir de un fichero o de un plugin, y acaba en un atributo del DOM.
+    pub kind: String,
+    /// El nombre corto, en el idioma de la sesión.
+    pub label: String,
+    /// La letra que la TUI pinta; aquí acompaña a la etiqueta para que las
+    /// dos superficies se lean igual.
+    pub letter: String,
+    /// El atajo que hace lo mismo que el botón, o `—` si no tiene.
+    pub chord: String,
+    /// Cerrado, abierto, o abierto Y con el teclado.
+    pub state: PanelButtonState,
+    /// Tiene algo que contar sin estar a la vista: el registro con avisos
+    /// sin leer, procesos con tareas en el tablero.
+    pub attention: bool,
+}
+
+/// Cómo está el panel de un botón.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelButtonState {
+    /// Ni siquiera está en la disposición.
+    Closed,
+    /// Colocado y a la vista, pero el teclado va a otro sitio.
+    Open,
+    /// Colocado, a la vista, y con el teclado.
+    Focused,
 }
 
 /// La paleta de comandos abierta.
@@ -2457,6 +2511,18 @@ pub enum ViewChange {
         /// La barra, siempre: la fila de títulos sigue ahí con el
         /// desplegable cerrado.
         menu: MenuView,
+    },
+    /// La barra de paneles cambió: se abrió o cerró un panel, se movió el
+    /// teclado, o algo empezó a tener algo que contar.
+    ///
+    /// No la emite ningún sitio en particular: el host la compara con la
+    /// última que mandó cada vez que arma un parche, y la añade si difiere.
+    /// Es lo que hace que un panel abierto por tecla, por menú, por paleta o
+    /// por la propia barra la actualice igual — el «por frame» de la TUI,
+    /// traducido a un puente que solo habla cuando algo cambia.
+    PanelBar {
+        /// La barra entera.
+        panel_bar: PanelBarView,
     },
     /// La paleta se abrió, se filtró, se movió o se cerró.
     Palette {

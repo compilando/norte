@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 50;
+export const BRIDGE_VERSION = 51;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -156,6 +156,20 @@ export interface MetadataSlotView {
   note: string;
 }
 
+/**
+ * El visor ACOPLADO (#291, puente 51): el fichero bajo el cursor del listado
+ * al que este hueco sigue, leído solo, como en la TUI.
+ */
+export interface PreviewSlotView {
+  kind: "preview";
+  slot_id: number;
+  /** El visor con lo leído, o `null` si no hay fichero que enseñar. */
+  viewer: ViewerView | null;
+  /** Por qué no hay fichero, YA DICHO: un directorio, nada bajo el cursor,
+   *  un error de lectura. Vacío cuando hay visor. */
+  note: string;
+}
+
 export interface ProcessesSlotView {
   kind: "processes";
   slot_id: number;
@@ -277,6 +291,7 @@ export type SlotView =
   | PlacesSlotView
   | TreeSlotView
   | MetadataSlotView
+  | PreviewSlotView
   | ProcessesSlotView
   | LogSlotView
   | UnsupportedSlotView;
@@ -510,6 +525,32 @@ export interface MenuView {
   /** Las entradas del desplegado; vacías si no hay ninguno. */
   items: MenuItemView[];
   cursor: number;
+}
+
+/** Cómo está el panel de un botón de la barra (puente 51). */
+export type PanelButtonState = "closed" | "open" | "focused";
+
+/** Un botón de la barra de paneles. */
+export interface PanelButtonView {
+  /** El kind que abre, ya enmascarado: acaba en un atributo del DOM. */
+  kind: string;
+  /** El nombre corto, en el idioma de la sesión. */
+  label: string;
+  /** La letra que la TUI pinta; aquí acompaña a la etiqueta. */
+  letter: string;
+  /** El atajo que hace lo mismo, o `—`. */
+  chord: string;
+  state: PanelButtonState;
+  /** Tiene algo que contar sin estar a la vista. */
+  attention: boolean;
+}
+
+/** La barra de paneles (#324, puente 51): qué paneles hay y cómo están. */
+export interface PanelBarView {
+  /** `[ui] panel_bar`: si la barra se pinta. */
+  bar: boolean;
+  /** Un click vuelve como el ÍNDICE aquí, nunca como un comando. */
+  buttons: PanelButtonView[];
 }
 
 export interface WhichKeyRowView {
@@ -976,6 +1017,7 @@ export interface ViewSnapshot {
   dialogs: DialogView[];
   tasks: TaskView[];
   menu: MenuView;
+  panel_bar: PanelBarView;
   profiles: ProfilePickerView | null;
   palette: PaletteView | null;
   whichkey: WhichKeyView | null;
@@ -1016,6 +1058,7 @@ export type ViewChange =
   | { change: "ai_rename"; ai_rename: AiRenameView | null }
   | { change: "which_key"; whichkey: WhichKeyView | null }
   | { change: "menu"; menu: MenuView }
+  | { change: "panel_bar"; panel_bar: PanelBarView }
   | { change: "profiles"; profiles: ProfilePickerView | null }
   | { change: "palette"; palette: PaletteView | null }
   | { change: "help"; help: HelpView | null }
@@ -1116,6 +1159,7 @@ export type UiAction =
   | { action: "menu_point_row"; row: number }
   | { action: "menu_activate_row"; row: number }
   | { action: "menu_close" }
+  | { action: "panelbar_activate"; button: number }
   | { action: "resize_slot"; slot_id: number; cells: number }
   | { action: "profile_activate_row"; row: number; generation: number }
   | { action: "resync" };

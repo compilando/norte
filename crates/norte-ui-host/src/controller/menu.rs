@@ -115,6 +115,33 @@ impl Estado {
         self.ejecutar_del_menu(elegido, backend, buzon)
     }
 
+    /// Un click en la barra de paneles (#324): el botón `button` de la barra
+    /// que este host mandó, por el MISMO despacho que su atajo. Dos caminos
+    /// para abrir el mismo panel divergen en cuanto uno crece un detalle —
+    /// la lección de ADR 0077 aplicada dentro de un solo frontend, igual que
+    /// en la TUI.
+    pub(super) fn pulsar_barra_de_paneles(
+        &mut self,
+        button: u32,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let botones = self.botones_de_paneles();
+        let Some(boton) = botones.get(button as usize) else {
+            // La barra que el renderer pintó ya no es esta: un plugin
+            // aportó un kind, o se retiró. Que pida foto.
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        let comando = boton.command.clone();
+        match crate::commands::efecto_de(&comando, 1) {
+            Some(efecto) => self.aplicar_efecto(efecto, backend, buzon),
+            // Un kind aportado cuyo `layout.<kind>` no está en el catálogo:
+            // el botón existe para ENSEÑAR el panel, y decir que no se puede
+            // abrir desde aquí es mejor que un click mudo.
+            None => self.no_implementado(&comando),
+        }
+    }
+
     /// Un click FUERA del desplegable lo cierra sin ejecutar nada.
     pub(super) fn cerrar_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.menu.is_none() {

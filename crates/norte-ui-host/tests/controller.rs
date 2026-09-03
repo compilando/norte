@@ -17264,6 +17264,117 @@ async fn el_menu_se_recorre_y_lo_elegido_corre() {
     assert_eq!(siguiente_foto(&mut sub).await.menu.open, None);
 }
 
+/// #324: la barra de paneles cruza el puente con lo que la TUI pinta — qué
+/// paneles hay, en qué orden, cuál está abierto y cuál tiene el teclado — y
+/// pulsar un botón abre el panel por el MISMO despacho que su atajo. La barra
+/// nueva viaja como PARCHE en el mismo envío que abre el panel, sin que
+/// `alternar_hueco` sepa que existe.
+#[tokio::test]
+async fn la_barra_de_paneles_ensena_los_paneles_y_un_click_los_abre() {
+    use norte_ui_host::dto::{PanelButtonState, ViewChange};
+    let (h, snap) = host_arbol(arbol()).await;
+    let barra = &snap.panel_bar;
+    assert!(barra.bar, "la barra se pinta por defecto, como en la TUI");
+    let kinds: Vec<&str> = barra.buttons.iter().map(|b| b.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        ["places", "viewer", "processes", "metadata", "tree", "log"],
+        "los mismos botones y el mismo orden que `panelbar::buttons`"
+    );
+    let sitios = kinds.iter().position(|k| *k == "places").expect("places");
+    let boton = &barra.buttons[sitios];
+    assert_eq!(boton.label, "Sitios", "traducido al idioma de la sesión");
+    assert_eq!(boton.letter, "S");
+    assert_eq!(boton.state, PanelButtonState::Closed, "{barra:?}");
+    assert!(
+        barra.buttons.iter().all(|b| !b.attention),
+        "sin tareas ni avisos nada tiene novedad: {barra:?}"
+    );
+
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::PanelBarActivate {
+        button: u32::try_from(sitios).expect("seis botones caben en un u32"),
+    })
+    .await
+    .expect("host vivo");
+    // Lo que abre el panel LLEVA la barra nueva: abrir un hueco cambia el
+    // reparto y va como FOTO, y la foto trae la barra; un cambio que fuera
+    // como parche la traería como `ViewChange::PanelBar`. Se aceptan las
+    // dos formas, y con plazo: un host que no la mandara dejaría este
+    // `recv` esperando para siempre, y un test colgado no es un test rojo.
+    let mut barra_nueva = None;
+    let plazo = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while barra_nueva.is_none() {
+        let siguiente = tokio::time::timeout_at(plazo, sub.recv())
+            .await
+            .expect("la barra nueva llega antes de cinco segundos")
+            .expect("host vivo");
+        let Update::Message(m) = siguiente else {
+            continue;
+        };
+        match m.payload {
+            UiUpdate::Snapshot(s) => barra_nueva = Some(s.panel_bar),
+            UiUpdate::Patch(p) => {
+                if let Some(ViewChange::PanelBar { panel_bar }) = p
+                    .changes
+                    .into_iter()
+                    .find(|c| matches!(c, ViewChange::PanelBar { .. }))
+                {
+                    barra_nueva = Some(panel_bar);
+                }
+            }
+            UiUpdate::Notice(_) => {}
+        }
+    }
+    let barra = barra_nueva.expect("la barra viajó");
+    assert_ne!(
+        barra.buttons[sitios].state,
+        PanelButtonState::Closed,
+        "el panel de sitios está abierto: {barra:?}"
+    );
+
+    // Abrir la barra de sitios dispara una lectura de volúmenes que aterriza
+    // como OTRA foto, más tarde: se espera a la foto que enseña el estado
+    // pedido, no a la siguiente que haya en la cola.
+    let con_sitios =
+        |s: &norte_ui_host::ViewSnapshot| s.slots.iter().any(|v| matches!(v, SlotView::Places(_)));
+    let abierto = foto_hasta(&h, &mut sub, "el hueco de sitios colocado", |s| {
+        con_sitios(s).then(|| s.clone())
+    })
+    .await;
+    assert_ne!(
+        abierto.panel_bar.buttons[sitios].state,
+        PanelButtonState::Closed
+    );
+
+    // El mismo botón otra vez lo CIERRA: es un conmutador, como su atajo.
+    let ack = h
+        .dispatch(UiAction::PanelBarActivate {
+            button: u32::try_from(sitios).expect("seis botones caben en un u32"),
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "fue {ack:?}");
+    let cerrado = foto_hasta(&h, &mut sub, "el hueco de sitios cerrado", |s| {
+        (!con_sitios(s)).then(|| s.clone())
+    })
+    .await;
+    assert_eq!(
+        cerrado.panel_bar.buttons[sitios].state,
+        PanelButtonState::Closed
+    );
+
+    // Un índice que la barra no tiene es una barra vieja: que pida foto.
+    let ack = h
+        .dispatch(UiAction::PanelBarActivate { button: 99 })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, norte_ui_host::ActionAck::Stale { .. }),
+        "fue {ack:?}"
+    );
+}
+
 /// El menú se REABRE por donde iba, no por el primero.
 ///
 /// Abrirlo siempre por el primero obliga a recorrer la barra entera en cada

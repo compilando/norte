@@ -32,6 +32,7 @@ import type {
   HelpSpanView,
   HelpView,
   MenuView,
+  PanelBarView,
   PaletteView,
   ExtensionsView,
   TabGroupView,
@@ -42,6 +43,7 @@ import type {
   LayoutPickerView,
   ProfilePickerView,
   MetadataSlotView,
+  PreviewSlotView,
   SearchView,
   PlacesSlotView,
   TreeSlotView,
@@ -73,6 +75,46 @@ function nota(texto: string): HTMLElement {
   p.className = "slot-note";
   p.textContent = texto;
   return p;
+}
+
+/**
+ * El cuerpo de un visor: las líneas, o los fragmentos con estilo si un
+ * plugin los puso. Lo comparten el visor a pantalla completa y el acoplado
+ * (#291): es el mismo visor en otro sitio, y dos cuerpos divergen.
+ *
+ * Siempre `textContent`: el texto lo escribió un plugin. El rol va en
+ * `data-role`, que la hoja de estilos mapea a las variables del tema, y el
+ * color propio solo cuando no hay rol — el tema del lector manda sobre la
+ * paleta fija del plugin. El fondo no tiene rol que lo mande: un medio
+ * bloque sin fondo es media imagen (puente 50).
+ */
+function viewerBody(viewer: ViewerView): HTMLElement {
+  const body = document.createElement("pre");
+  body.className = viewer.hex ? "viewer-body hexview" : "viewer-body";
+  if (viewer.styled.length === 0) {
+    body.textContent = viewer.lines.join("\n");
+    return body;
+  }
+  for (const linea of viewer.styled) {
+    const fila = document.createElement("div");
+    fila.className = "viewer-line";
+    for (const s of linea) {
+      const el = document.createElement("span");
+      el.className = "viewer-span";
+      el.textContent = s.text;
+      if (s.role !== null) {
+        el.dataset["role"] = s.role;
+      } else if (s.fg !== null) {
+        el.style.color = s.fg;
+      }
+      if (s.bg !== null) {
+        el.style.backgroundColor = s.bg;
+      }
+      fila.append(el);
+    }
+    body.append(fila);
+  }
+  return body;
 }
 
 /** Filas de más que se piden por arriba y por abajo del hueco visible. */
@@ -130,12 +172,15 @@ export class Screen {
   private pendingRange = new Map<number, number>();
   /** La altura que la barra de menús está reservando, ya en CSS. */
   private menuBarHeight: string | null = null;
+  /** Lo mismo para la barra de paneles (#324). */
+  private panelBarHeight: string | null = null;
   /** La reserva cambió: el host tiene que oír el alto nuevo. */
   private viewportSucio = false;
 
   constructor(
     private readonly root: HTMLElement,
     private readonly menuRoot: HTMLElement,
+    private readonly panelBarRoot: HTMLElement,
     private readonly paletteRoot: HTMLElement,
     private readonly whichKeyRoot: HTMLElement,
     private readonly helpRoot: HTMLElement,
@@ -220,6 +265,7 @@ export class Screen {
       this.paintSlot(dom, slot, view, cell);
     }
     this.paintMenu(view.menu);
+    this.paintPanelBar(view.panel_bar);
     this.paintPalette(view.palette);
     this.paintWhichKey(view.whichkey);
     this.paintHelp(view.help);
@@ -238,6 +284,69 @@ export class Screen {
     this.paintViewer(view.viewer);
     this.paintAiRename(view.ai_rename);
     this.paintDialogs(view.dialogs);
+  }
+
+  /**
+   * La barra de paneles (#324): un botón por panel que se abre y se cierra,
+   * con su estado y su marca de novedad.
+   *
+   * Los botones vienen DECIDIDOS del host —qué hay, en qué orden, con qué
+   * letra— porque la decisión es de `norte-frontend` y la TUI pinta la
+   * misma (ADR 0077). Aquí solo se pintan y se pulsan; un click vuelve como
+   * el índice del botón, nunca como un comando (ADR 0069).
+   *
+   * Reserva su fila igual que la barra de menús: el host reparte sobre el
+   * alto que este renderer declara, y una fila flotante taparía la primera
+   * del listado.
+   */
+  private paintPanelBar(bar: PanelBarView): void {
+    const alto = bar.bar ? "var(--cell-h)" : "0px";
+    if (this.panelBarHeight !== alto) {
+      document.documentElement.style.setProperty("--panelbar-h", alto);
+      this.panelBarHeight = alto;
+      this.viewportSucio = true;
+    }
+    if (!bar.bar) {
+      this.panelBarRoot.replaceChildren();
+      return;
+    }
+    const fila = document.createElement("nav");
+    fila.className = "panelbar";
+    fila.setAttribute("role", "toolbar");
+    fila.setAttribute("aria-label", this.t("panelbar-label"));
+    for (const [i, b] of bar.buttons.entries()) {
+      const boton = document.createElement("button");
+      boton.type = "button";
+      boton.className = "panelbar-button";
+      boton.dataset["kind"] = b.kind;
+      boton.dataset["state"] = b.state;
+      // `aria-pressed` es lo que un lector de pantalla entiende por «este
+      // panel está abierto»; el foco del teclado va aparte, en el estado.
+      boton.setAttribute("aria-pressed", String(b.state !== "closed"));
+      boton.title = b.chord === "—" ? b.label : `${b.label} (${b.chord})`;
+      const letra = document.createElement("span");
+      letra.className = "panelbar-letter";
+      letra.textContent = b.letter;
+      const nombre = document.createElement("span");
+      nombre.className = "panelbar-name";
+      nombre.textContent = b.label;
+      boton.append(letra, nombre);
+      if (b.attention) {
+        // La marca es un span APARTE y el botón conserva el estilo de su
+        // estado: pintarlo entero de aviso le quitaría al lector la
+        // respuesta a «¿a dónde van mis teclas?» justo cuando más la busca.
+        const marca = document.createElement("span");
+        marca.className = "panelbar-attention";
+        marca.textContent = "·";
+        marca.setAttribute("aria-label", this.t("panelbar-attention"));
+        boton.append(marca);
+      }
+      boton.addEventListener("click", () => {
+        this.send({ action: "panelbar_activate", button: i });
+      });
+      fila.append(boton);
+    }
+    this.panelBarRoot.replaceChildren(fila);
   }
 
   /**
@@ -2323,40 +2432,9 @@ export class Screen {
       head.append(no);
     }
 
-    const body = document.createElement("pre");
-    body.className = viewer.hex ? "viewer-body hexview" : "viewer-body";
+    const body = viewerBody(viewer);
     body.setAttribute("tabindex", "-1");
     body.setAttribute("aria-describedby", `viewer-meta-${String(viewer.first_line)}`);
-    if (viewer.styled.length === 0) {
-      body.textContent = viewer.lines.join("\n");
-    } else {
-      // Una preview de plugin con sus fragmentos (puente 49): un nodo por
-      // línea y un `span` por fragmento. Siempre `textContent`: el texto lo
-      // escribió un plugin. El rol va en `data-role`, que la hoja de estilos
-      // mapea a las variables del tema, y el color propio solo cuando no hay
-      // rol — el tema del lector manda sobre la paleta fija del plugin.
-      for (const linea of viewer.styled) {
-        const fila = document.createElement("div");
-        fila.className = "viewer-line";
-        for (const s of linea) {
-          const el = document.createElement("span");
-          el.className = "viewer-span";
-          el.textContent = s.text;
-          if (s.role !== null) {
-            el.dataset["role"] = s.role;
-          } else if (s.fg !== null) {
-            el.style.color = s.fg;
-          }
-          // El fondo no tiene rol que lo mande: un medio bloque sin fondo
-          // es media imagen (puente 50).
-          if (s.bg !== null) {
-            el.style.backgroundColor = s.bg;
-          }
-          fila.append(el);
-        }
-        body.append(fila);
-      }
-    }
 
     box.append(head, body);
     if (viewer.image !== null) {
@@ -2751,6 +2829,10 @@ export class Screen {
       this.paintMetadata(dom, slot);
       return;
     }
+    if (slot.kind === "preview") {
+      this.paintPreview(dom, slot);
+      return;
+    }
     if (slot.kind === "processes") {
       this.paintProcesses(dom, slot, view);
       return;
@@ -2963,6 +3045,40 @@ export class Screen {
       lista.append(dt, dd);
     }
     dom.scroller.replaceChildren(lista);
+  }
+
+  /**
+   * El visor acoplado (#291): el mismo cuerpo que el visor a pantalla
+   * completa —es el mismo visor en otro sitio, como en la TUI— con la ruta
+   * de título y, si no hay fichero, la nota que dice por qué.
+   *
+   * Las líneas vienen ENTERAS hasta el tope del host y este hueco las
+   * desplaza solo, como cualquier panel de una ventana: el visor grande pide
+   * páginas porque tiene teclas de visor; este sigue al cursor del listado.
+   */
+  private paintPreview(dom: SlotDom, slot: PreviewSlotView): void {
+    const titulo =
+      slot.viewer === null ? this.t("panelbar-viewer") : slot.viewer.path_display;
+    dom.root.setAttribute("aria-label", titulo);
+    dom.title.textContent = titulo;
+    if (slot.viewer?.path_hostile === true) {
+      dom.title.append(badge(this.t("hostile-name")));
+    }
+    dom.scroller.className = "preview";
+    if (slot.viewer === null) {
+      dom.scroller.replaceChildren(nota(slot.note));
+      return;
+    }
+    const via = slot.viewer.preview_by;
+    const cabecera: HTMLElement[] = [];
+    if (via !== "") {
+      // Lo que se enseña lo produjo un PLUGIN: se dice, como en el grande.
+      const marca = document.createElement("span");
+      marca.className = "viewer-via";
+      marca.textContent = via;
+      cabecera.push(marca);
+    }
+    dom.scroller.replaceChildren(...cabecera, viewerBody(slot.viewer));
   }
 
   /**

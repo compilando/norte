@@ -44,9 +44,11 @@ function montar(): { screen: Screen; enviadas: UiAction[]; root: HTMLElement } {
     dialogs,
     aiRename,
   ] = nodos;
+  const panelBar = document.createElement("div");
   const screen = new Screen(
     root,
     menu as HTMLElement,
+    panelBar,
     palette as HTMLElement,
     whichkey as HTMLElement,
     help as HTMLElement,
@@ -138,6 +140,7 @@ describe("el contrato con el host", () => {
       "layouts",
       "menu",
       "palette",
+      "panel_bar",
       "picker",
       "plugin_output",
       "profiles",

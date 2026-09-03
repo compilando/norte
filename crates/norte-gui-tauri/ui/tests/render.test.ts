@@ -94,6 +94,27 @@ function vista(browser: Partial<BrowserSlotView>): ViewSnapshot {
     dialogs: [],
     tasks: [],
     menu: { bar: true, titles: ["Archivo", "Paneles"], open: null, items: [], cursor: 0 },
+    panel_bar: {
+      bar: true,
+      buttons: [
+        {
+          kind: "places",
+          label: "Sitios",
+          letter: "S",
+          chord: "alt+p",
+          state: "open",
+          attention: false,
+        },
+        {
+          kind: "log",
+          label: "Registro",
+          letter: "R",
+          chord: "—",
+          state: "closed",
+          attention: true,
+        },
+      ],
+    },
     profiles: null,
     palette: null,
     whichkey: null,
@@ -123,6 +144,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
   document.body.replaceChildren();
   const root = document.createElement("main");
   const menu = document.createElement("div");
+  const panelBar = document.createElement("div");
   const profiles = document.createElement("div");
   const palette = document.createElement("div");
   const whichkey = document.createElement("div");
@@ -143,6 +165,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
   const aiRename = document.createElement("div");
   document.body.append(
     root,
+    panelBar,
     menu,
     palette,
     whichkey,
@@ -165,6 +188,7 @@ function montar(opciones: { imageBytes?: () => Promise<ArrayBuffer> } = {}): {
   const screen = new Screen(
     root,
     menu,
+    panelBar,
     palette,
     whichkey,
     help,
@@ -1270,6 +1294,45 @@ describe("la barra de menús", () => {
     expect(document.querySelector(".menubar")).toBeNull();
   });
 
+  // #324: la barra de paneles ENSEÑA los paneles — estado, novedad, y un
+  // click que vuelve como índice, nunca como comando (ADR 0069).
+  it("la barra de paneles pinta cada botón con su estado y reserva su fila", () => {
+    const { screen, enviadas } = montar();
+    screen.paint(vista({}));
+    expect(document.documentElement.style.getPropertyValue("--panelbar-h")).toBe(
+      "var(--cell-h)",
+    );
+    const botones = [
+      ...document.querySelectorAll(".panelbar-button"),
+    ] as HTMLButtonElement[];
+    expect(botones.map((b) => b.dataset["kind"])).toEqual(["places", "log"]);
+    expect(botones[0]?.dataset["state"]).toBe("open");
+    expect(botones[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(botones[0]?.title).toBe("Sitios (alt+p)");
+    expect(botones[1]?.dataset["state"]).toBe("closed");
+    expect(botones[1]?.getAttribute("aria-pressed")).toBe("false");
+    expect(botones[1]?.title).toBe("Registro");
+    // La novedad es una marca APARTE, no un cambio de estilo del botón.
+    expect(botones[0]?.querySelector(".panelbar-attention")).toBeNull();
+    expect(botones[1]?.querySelector(".panelbar-attention")).not.toBeNull();
+    // Y la fila tiene su landmark, traducido del catálogo real.
+    expect(document.querySelector(".panelbar")?.getAttribute("aria-label")).toBe(
+      "Barra de paneles",
+    );
+
+    botones[1]?.click();
+    expect(enviadas).toEqual([{ action: "panelbar_activate", button: 1 }]);
+  });
+
+  it("con la barra de paneles apagada no reserva nada", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.panel_bar.bar = false;
+    screen.paint(v);
+    expect(document.documentElement.style.getPropertyValue("--panelbar-h")).toBe("0px");
+    expect(document.querySelector(".panelbar")).toBeNull();
+  });
+
   it("el desplegado marca su título, su cursor y lo que no se puede hacer", () => {
     const { screen } = montar();
     screen.paint(conMenu(1));
@@ -2156,6 +2219,74 @@ describe("los huecos que no son listados", () => {
     const valores = [...document.querySelectorAll(".metadata-fields dd")];
     expect(valores[0]?.getAttribute("data-hostile")).toBe("true");
     expect(valores[1]?.getAttribute("data-hostile")).toBe("false");
+  });
+
+  // #291: el visor acoplado es el MISMO cuerpo que el grande, en un hueco.
+  it("el visor acoplado pinta las líneas del fichero bajo el cursor con su ruta", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.slots = [
+      ...v.slots,
+      {
+        kind: "preview",
+        slot_id: 7,
+        note: "",
+        viewer: {
+          path_display: "⟨file⟩/casa/notas.md",
+          path_hostile: false,
+          encoding: "UTF-8",
+          eol: "lf",
+          hex: false,
+          forced: false,
+          had_errors: false,
+          truncated: false,
+          total_rows: 2,
+          first_line: 0,
+          lines: ["Título", "texto"],
+          preview_by: "via Markdown",
+          preview_lossy: false,
+          image: null,
+          image_refused: "",
+          styled: [
+            [{ text: "Título", role: "title", fg: null, bg: null }],
+            [{ text: "texto", role: null, fg: "#ff0000", bg: "#000040" }],
+          ],
+        },
+      },
+    ];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 60, y: 0, width: 60, height: 38, role: null, focus_index: 2 },
+    ];
+    screen.paint(v);
+    const hueco = document.querySelector(".preview") as HTMLElement;
+    expect(hueco.querySelector(".viewer-via")?.textContent).toBe("via Markdown");
+    const lineas = [...hueco.querySelectorAll(".viewer-line")];
+    expect(lineas).toHaveLength(2);
+    expect(lineas[0]?.querySelector(".viewer-span")?.getAttribute("data-role")).toBe(
+      "title",
+    );
+    const segundo = lineas[1]?.querySelector(".viewer-span") as HTMLElement;
+    expect(segundo.style.color).toBe("rgb(255, 0, 0)");
+    expect(segundo.style.backgroundColor).toBe("rgb(0, 0, 64)");
+    // Y el visor GRANDE no se abrió: es un hueco, no un overlay.
+    expect(document.querySelector('[role="document"]')).toBeNull();
+  });
+
+  it("el visor acoplado sin fichero DICE por qué", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.slots = [
+      ...v.slots,
+      { kind: "preview", slot_id: 7, note: "directorio", viewer: null },
+    ];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 60, y: 0, width: 60, height: 38, role: null, focus_index: 2 },
+    ];
+    screen.paint(v);
+    expect(document.querySelector(".preview .slot-note")?.textContent).toBe("directorio");
+    expect(document.querySelector(".preview .viewer-body")).toBeNull();
   });
 
   it("la hoja sin nada bajo el cursor lo DICE", () => {

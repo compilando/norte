@@ -475,6 +475,16 @@ pub enum UiAction {
     },
     /// Cierra el menú desplegado sin ejecutar nada (un click fuera).
     MenuClose,
+    /// Pulsa un botón de la barra de paneles (#324, puente 51): abre el
+    /// panel si está cerrado y lo cierra si está abierto.
+    ///
+    /// Lleva el índice y no el comando, por lo mismo que el menú: el host
+    /// resuelve el botón contra la barra que él mismo mandó, y el panel se
+    /// abre por el MISMO despacho que su atajo (ADR 0069, ADR 0077).
+    PanelBarActivate {
+        /// Qué botón, en el orden en que viajaron.
+        button: u32,
+    },
     /// Arrastra el borde que hay entre `slot_id` y el hueco de al lado.
     ///
     /// `cells` es DÓNDE está el puntero en el eje del reparto, en celdas de

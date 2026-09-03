@@ -138,6 +138,10 @@
     "delta": -1,
     "slot_id": 1
   },
+  "panelbar_activate": {
+    "action": "panel_bar_activate",
+    "button": 2
+  },
   "parent": {
     "action": "parent",
     "slot_id": 1

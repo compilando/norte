@@ -122,6 +122,7 @@ impl Estado {
             dialogs: self.vistas_de_dialogos(),
             tasks: self.vistas_de_tasks(),
             menu: self.vista_menu(),
+            panel_bar: self.vista_barra_de_paneles(),
             profiles: self.vista_perfiles(),
             palette: self.vista_paleta(),
             whichkey: self.vista_whichkey(),
@@ -308,6 +309,91 @@ impl Estado {
             cursor: self.menu.as_ref().map_or(0, |m| m.item() as u64),
             items,
         }
+    }
+
+    /// La proyección de la barra de paneles (#324).
+    ///
+    /// Lo que la TUI hace en `panel_buttons`, con lo que este host sabe: qué
+    /// se COLOCÓ (del reparto, no del árbol — un hueco detrás de una pestaña
+    /// o descartado por falta de sitio no está abierto, #329/#331), quién
+    /// tiene el teclado, y qué tiene algo que contar sin estar a la vista.
+    /// El QUÉ y el ORDEN son de `norte_frontend::panelbar`, compartidos.
+    pub(super) fn vista_barra_de_paneles(&self) -> crate::dto::PanelBarView {
+        let botones = self.botones_de_paneles();
+        crate::dto::PanelBarView {
+            // Por defecto ENCENDIDA, igual que la de menús y que la TUI.
+            bar: self.config.common.ui_panel_bar.unwrap_or(true),
+            buttons: botones
+                .iter()
+                .map(|b| {
+                    let (kind, _) = norte_frontend::display_name(b.kind.as_bytes());
+                    crate::dto::PanelButtonView {
+                        label: clamp_display(norte_frontend::panelbar::label_in(
+                            self.lang, &b.kind, &b.command,
+                        )),
+                        kind,
+                        letter: b.letter.to_string(),
+                        chord: clamp_display(
+                            norte_frontend::palette::first_chord(&b.command, &self.efectivo)
+                                .unwrap_or_else(|| "—".to_owned()),
+                        ),
+                        state: match b.state {
+                            norte_frontend::panelbar::PanelState::Closed => {
+                                crate::dto::PanelButtonState::Closed
+                            }
+                            norte_frontend::panelbar::PanelState::Open => {
+                                crate::dto::PanelButtonState::Open
+                            }
+                            norte_frontend::panelbar::PanelState::Focused => {
+                                crate::dto::PanelButtonState::Focused
+                            }
+                        },
+                        attention: b.attention,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// Los botones de la barra, con su comando: lo que un click resuelve.
+    pub(super) fn botones_de_paneles(&self) -> Vec<norte_frontend::panelbar::PanelButton> {
+        let colocados: Vec<String> = self
+            .reparto
+            .placements
+            .iter()
+            .filter_map(|(id, _)| kind_de(&self.arbol, *id))
+            .map(|k| k.as_str().to_owned())
+            .collect();
+        let abiertos: Vec<&str> = colocados.iter().map(String::as_str).collect();
+        // Un listado con el teclado no es «un panel enfocado»: la barra dice
+        // a qué PANEL van las teclas, y a los listados van por defecto.
+        let del_foco = kind_de(&self.arbol, SlotId(self.enfocado())).map(|k| k.as_str().to_owned());
+        let focused = del_foco.as_deref().filter(|k| *k != "browser");
+        // Novedad: el registro con avisos sin ver, y procesos con tareas en
+        // el tablero. Con el panel A LA VISTA ya lo estás viendo: la marca
+        // sobra. Mismo criterio que la TUI, y por eso se pregunta a los
+        // colocados y no al árbol.
+        let mut novedad: Vec<&str> = Vec::new();
+        if !abiertos.contains(&"processes") && self.filas_de_tablero() > 0 {
+            novedad.push("processes");
+        }
+        if !abiertos.contains(&super::logpanel::KIND)
+            && self
+                .log_ring
+                .as_ref()
+                .is_some_and(|r| r.has_at_or_above(norte_config::logline::LogLevel::Warn))
+        {
+            novedad.push(super::logpanel::KIND);
+        }
+        norte_frontend::panelbar::buttons_in(
+            &self.kinds,
+            norte_frontend::panelbar::PanelBarInput {
+                open: &abiertos,
+                focused,
+                attention: &novedad,
+            },
+            self.lang,
+        )
     }
 
     /// La proyección de la paleta.

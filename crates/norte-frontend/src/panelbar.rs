@@ -82,6 +82,26 @@ pub struct PanelBarInput<'a> {
 /// es lo que permite aprenderla con el dedo.
 #[must_use]
 pub fn buttons(reg: &KindRegistry, input: PanelBarInput<'_>) -> Vec<PanelButton> {
+    buttons_con(reg, input, norte_i18n::t)
+}
+
+/// [`buttons`] en un idioma DICHO: la letra sale del nombre corto, así que
+/// una ventana que traduce con el idioma de su sesión tiene que derivarla
+/// del MISMO nombre que enseña, o «Sitios» llevaría la `P` de «Places».
+#[must_use]
+pub fn buttons_in(
+    reg: &KindRegistry,
+    input: PanelBarInput<'_>,
+    lang: norte_i18n::Lang,
+) -> Vec<PanelButton> {
+    buttons_con(reg, input, |clave| norte_i18n::t_in(lang, clave))
+}
+
+fn buttons_con(
+    reg: &KindRegistry,
+    input: PanelBarInput<'_>,
+    t: impl Fn(&str) -> String,
+) -> Vec<PanelButton> {
     let mut out: Vec<PanelButton> = Vec::new();
     for decl in reg.decls() {
         let id = decl.id.as_str();
@@ -92,7 +112,7 @@ pub fn buttons(reg: &KindRegistry, input: PanelBarInput<'_>) -> Vec<PanelButton>
             .iter()
             .find(|(k, _)| *k == id)
             .map_or_else(|| format!("layout.{id}"), |(_, c)| (*c).to_string());
-        let letter = letra(&nombre_corto(id, &command), id, &out);
+        let letter = letra(&nombre_con(id, &command, &t), id, &out);
         let abierto = input.open.contains(&id);
         let state = if !abierto {
             PanelState::Closed
@@ -125,7 +145,7 @@ pub fn es_boton(decl: &crate::layout::KindDecl) -> bool {
     !ESTRUCTURALES.contains(&decl.id.as_str()) && decl.focusable
 }
 
-/// El nombre CORTO del panel, en el idioma del lector.
+/// El nombre CORTO del panel, en un idioma DICHO.
 ///
 /// Clave propia (`panelbar-<kind>`) y no la etiqueta del menú, que es una
 /// frase: «Panel de sitios», «Panel de detalles» y «Panel de procesos» empiezan
@@ -135,13 +155,23 @@ pub fn es_boton(decl: &crate::layout::KindDecl) -> bool {
 /// Sin clave —un panel aportado por un plugin— cae a la etiqueta del menú, y
 /// sin ella al id del kind: nunca a nada, porque un botón sin letra no es un
 /// botón.
-fn nombre_corto(kind: &str, command: &str) -> String {
+///
+/// En un idioma dicho y no en el global porque la ventana traduce con el de
+/// su sesión (`t_in`), y una etiqueta que saliera del global diría otro
+/// idioma que el resto de su cromo. La TUI pasa por [`buttons`], que usa el
+/// global.
+#[must_use]
+pub fn label_in(lang: norte_i18n::Lang, kind: &str, command: &str) -> String {
+    nombre_con(kind, command, |clave| norte_i18n::t_in(lang, clave))
+}
+
+fn nombre_con(kind: &str, command: &str, t: impl Fn(&str) -> String) -> String {
     // Comparación con la CLAVE, no `starts_with`: el contrato de `t` es que
     // devuelve el id cuando el mensaje falta, y `starts_with("panelbar-")`
     // también dispararía con una traducción presente cuyo texto empezara por
     // ese literal.
     let clave = format!("panelbar-{kind}");
-    let propia = norte_i18n::t(&clave);
+    let propia = t(&clave);
     if propia != clave {
         return propia;
     }
@@ -150,7 +180,7 @@ fn nombre_corto(kind: &str, command: &str) -> String {
     // de traducciones, así que un kind aportado cae siempre al id. Se queda
     // como escalón RESERVADO para cuando un plugin pueda registrar mensajes.
     let clave_menu = format!("menu-item-{}", command.replace('.', "-"));
-    let del_menu = norte_i18n::t(&clave_menu);
+    let del_menu = t(&clave_menu);
     if del_menu == clave_menu {
         kind.to_string()
     } else {

@@ -44,6 +44,20 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window has the panel bar (#324, bridge 51).** The TUI got it
+  first and the window did not, which is exactly the drift ADR 0077 is
+  about. The same row of buttons — one per panel that opens and closes,
+  derived from the kind registry so a plugin's panel shows up by itself —
+  with the same three states (closed, open, open with the keyboard) and the
+  same attention mark (the log with unread warnings, jobs on the board).
+  What the bar holds and in what order is decided once, in
+  `norte_frontend::panelbar`; the host only gathers state and translates,
+  and the letter now comes from the session's language, not the process
+  one (`Sitios` carried the `P` of `Places`). A click travels as the
+  button's index and opens the panel through the same dispatch as its
+  shortcut (ADR 0069); the bar rides as a patch on any update that changes
+  it, so a panel opened by key, menu, palette or the bar itself refreshes
+  it alike. `[ui] panel_bar = false` hides it, as in the TUI.
 - **`org.norte.image-ansi`: pictures in the viewer.** A `previewer` for
   `image/png`, `image/jpeg` and `image/gif` (first frame) that paints the
   picture as `▀` half-block cells, the upper pixel in the foreground and the

@@ -2543,6 +2543,10 @@ struct Estado {
     arbol: Node,
     /// Los kinds que este host sabe declarar (mínimos, foco, roles).
     kinds: KindRegistry,
+    /// La última barra de paneles que cruzó el puente. `parche` la compara
+    /// con la de ahora y manda la nueva si difiere: es lo que hace que la
+    /// barra se actualice por cualquier camino sin que cada camino lo sepa.
+    ultima_barra: Option<crate::dto::PanelBarView>,
     /// El reparto del ÚLTIMO tamaño conocido: quién se pinta, quién no, y en
     /// qué orden se tabula. Vive y muere con el tamaño, no con el árbol.
     reparto: Resolved,
@@ -2884,6 +2888,7 @@ impl Estado {
             visor: None,
             arbol,
             kinds,
+            ultima_barra: None,
             reparto,
             viewport,
             roles,
@@ -3359,6 +3364,9 @@ impl Estado {
             UiAction::MenuPointRow { row } => self.apuntar_en_menu(*row),
             UiAction::MenuActivateRow { row } => self.activar_del_menu(*row, backend, buzon),
             UiAction::MenuClose => self.cerrar_menu(),
+            UiAction::PanelBarActivate { button } => {
+                self.pulsar_barra_de_paneles(*button, backend, buzon)
+            }
             UiAction::ResizeSlot { slot_id, cells } => {
                 self.arrastrar_borde(*slot_id, *cells, backend, buzon)
             }

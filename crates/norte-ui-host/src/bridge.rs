@@ -173,7 +173,12 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 50;
+///
+/// - **51**: el snapshot lleva la BARRA DE PANELES (#324): botones derivados
+///   del registro de kinds, con estado y novedad, y una acción por índice
+///   para pulsarlos. Va también como parche (`ViewChange::PanelBar`) en
+///   cualquier envío que la cambie.
+pub const BRIDGE_VERSION: u32 = 51;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

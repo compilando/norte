@@ -191,6 +191,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::MenuPointRow { .. } => "menu_point_row",
         UiAction::MenuActivateRow { .. } => "menu_activate_row",
         UiAction::MenuClose => "menu_close",
+        UiAction::PanelBarActivate { .. } => "panelbar_activate",
         UiAction::ResizeSlot { .. } => "resize_slot",
         UiAction::ProfileActivateRow { .. } => "profile_activate_row",
         UiAction::Resync => "resync",
@@ -381,6 +382,10 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
         ("menu_point_row", UiAction::MenuPointRow { row: 3 }),
         ("menu_activate_row", UiAction::MenuActivateRow { row: 3 }),
         ("menu_close", UiAction::MenuClose),
+        (
+            "panelbar_activate",
+            UiAction::PanelBarActivate { button: 2 },
+        ),
         (
             "resize_slot",
             UiAction::ResizeSlot {
@@ -970,6 +975,31 @@ fn perfiles_de_referencia() -> norte_ui_host::dto::ProfilePickerView {
 
 /// La barra de menús con uno DESPLEGADO: la fixture tiene que llevar las dos
 /// mitades, porque son las dos que el renderer pinta.
+fn barra_de_paneles_de_referencia() -> norte_ui_host::dto::PanelBarView {
+    use norte_ui_host::dto::{PanelButtonState, PanelButtonView};
+    norte_ui_host::dto::PanelBarView {
+        bar: true,
+        buttons: vec![
+            PanelButtonView {
+                kind: "places".to_owned(),
+                label: "Sitios".to_owned(),
+                letter: "S".to_owned(),
+                chord: "alt+p".to_owned(),
+                state: PanelButtonState::Open,
+                attention: false,
+            },
+            PanelButtonView {
+                kind: "log".to_owned(),
+                label: "Registro".to_owned(),
+                letter: "R".to_owned(),
+                chord: "—".to_owned(),
+                state: PanelButtonState::Closed,
+                attention: true,
+            },
+        ],
+    }
+}
+
 fn menu_de_referencia() -> norte_ui_host::dto::MenuView {
     norte_ui_host::dto::MenuView {
         bar: true,
@@ -1010,6 +1040,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         dialogs: vec![dialogo_de_referencia()],
         tasks: vec![task_de_referencia()],
         menu: menu_de_referencia(),
+        panel_bar: barra_de_paneles_de_referencia(),
         profiles: Some(perfiles_de_referencia()),
         palette: Some(norte_ui_host::dto::PaletteView {
             query: "orde".to_owned(),
@@ -1913,6 +1944,12 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
             "menu",
             ViewChange::Menu {
                 menu: menu_de_referencia(),
+            },
+        ),
+        (
+            "panel_bar",
+            ViewChange::PanelBar {
+                panel_bar: barra_de_paneles_de_referencia(),
             },
         ),
         (

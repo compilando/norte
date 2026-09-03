@@ -601,6 +601,30 @@
       "total": 42
     }
   },
+  "panel_bar": {
+    "change": "panel_bar",
+    "panel_bar": {
+      "bar": true,
+      "buttons": [
+        {
+          "attention": false,
+          "chord": "alt+p",
+          "kind": "places",
+          "label": "Sitios",
+          "letter": "S",
+          "state": "open"
+        },
+        {
+          "attention": true,
+          "chord": "—",
+          "kind": "log",
+          "label": "Registro",
+          "letter": "R",
+          "state": "closed"
+        }
+      ]
+    }
+  },
   "picker": {
     "change": "picker",
     "picker": {

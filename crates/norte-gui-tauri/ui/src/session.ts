@@ -154,6 +154,9 @@ export class Session {
       case "menu":
         s.menu = c.menu;
         return true;
+      case "panel_bar":
+        s.panel_bar = c.panel_bar;
+        return true;
       case "profiles":
         s.profiles = c.profiles;
         return true;

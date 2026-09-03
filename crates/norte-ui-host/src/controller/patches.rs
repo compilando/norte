@@ -24,11 +24,29 @@ impl Estado {
     }
 
     pub(super) fn sobre(&mut self, u: UiUpdate) -> BridgeEnvelope<UiUpdate> {
+        // Una foto entera lleva la barra dentro: es lo último que el
+        // renderer vio de ella, y lo que el siguiente parche compara.
+        if let UiUpdate::Snapshot(s) = &u {
+            self.ultima_barra = Some(s.panel_bar.clone());
+        }
         self.sequence += 1;
         BridgeEnvelope::new(self.instance.clone(), self.sequence, u)
     }
 
-    pub(super) fn parche(&mut self, changes: Vec<ViewChange>) -> BridgeEnvelope<UiUpdate> {
+    pub(super) fn parche(&mut self, mut changes: Vec<ViewChange>) -> BridgeEnvelope<UiUpdate> {
+        // La barra de paneles va en CUALQUIER parche que la cambie, sin que
+        // el sitio que arma el parche lo sepa (#324). Es la traducción del
+        // «se deriva por frame» de la TUI: allí `panel_buttons` corre en cada
+        // pintado; aquí el puente solo habla cuando algo cambia, así que se
+        // compara con la última que cruzó. Un panel abierto por tecla, por
+        // menú, por paleta o por la barra misma actualiza la barra igual.
+        let barra = self.vista_barra_de_paneles();
+        if self.ultima_barra.as_ref() != Some(&barra) {
+            changes.push(ViewChange::PanelBar {
+                panel_bar: barra.clone(),
+            });
+            self.ultima_barra = Some(barra);
+        }
         let base = self.sequence;
         self.sobre(UiUpdate::Patch(ViewPatch {
             base_sequence: base,

@@ -663,6 +663,11 @@ palette-hint = [enter] run · [esc] close
 # The menu bar's name for a screen reader. Only the WINDOW paints it: in the
 # terminal the bar is a row of text, with no landmark to label.
 menu-bar-label = Menu bar
+# The same for the panel bar (#324), which in the window is a row of buttons
+# with a landmark of its own.
+panelbar-label = Panel bar
+# A bar button's attention mark, for a screen reader.
+panelbar-attention = Something new
 # H3c, and a SEPARATE key on purpose: `palette-hint` is painted by both
 # frontends, and only the TUI has a help overlay for F1 to open (the GUI's is
 # phase H3f). Folded into the string above, the GUI's footer would advertise a

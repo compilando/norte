@@ -670,6 +670,11 @@ palette-hint = [enter] ejecutar · [esc] cerrar
 # VENTANA: en el terminal la barra es una fila de texto y no hay landmark que
 # etiquetar.
 menu-bar-label = Barra de menús
+# Lo mismo para la barra de paneles (#324), que en la ventana es una fila de
+# botones con landmark propio.
+panelbar-label = Barra de paneles
+# La marca de novedad de un botón de la barra, para un lector de pantalla.
+panelbar-attention = Novedades
 # H3c, y clave SEPARADA a propósito: `palette-hint` lo pintan los DOS
 # frontends, y solo la TUI tiene overlay de ayuda que F1 pueda abrir (el de la
 # GUI es la fase H3f). Metido en la cadena de arriba, el pie de la GUI
