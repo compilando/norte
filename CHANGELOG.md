@@ -9,6 +9,35 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A plugin says which WIT it was built against, and the host says whether
+  it serves it** (ADR 0094). The version of a WIT package is part of every
+  interface name a component imports or exports, so any bump made a compiled
+  plugin fail inside wasmtime with an error naming one interface — after the
+  manager had shown it approved and enabled. The catalogue now reads the
+  `norte:*` packages a binary names (with `wasmparser`, no compile) when it
+  reads the binary for the approval digest, and a version the host does not
+  serve lists the plugin as **broken with both versions**: in the manager, in
+  `norte plugin list`, and in `norte doctor` as its own warning,
+  `plugin-wit-mismatch`, because the fix is a rebuild and not an edit. The
+  state file is untouched; a rebuilt binary is approved again (#241). The
+  host serves one version of each package, kept equal to the `.wit` files by
+  a structural test; there is no compatibility window, and the policy for
+  bumps — minor for any change, named in this file with "plugins built
+  against `norte:plugin@X` need a rebuild" — is written down for the first
+  time. Verified on this machine: the syntect previewer installed in August
+  was built against `norte:plugin@0.7.0` and had been silently dead since the
+  0.8.0 bump; doctor now says so.
+- **A plugin author guide, a template, and `just plugins`.**
+  [`docs/plugins.md`](docs/plugins.md) is the whole story for a third party:
+  the five kinds, the manifest field by field, what each capability grants
+  and what approving shows, `[config]`, layout, building, installing and
+  consenting, diagnostics, help pages, WIT compatibility, and a walk-through
+  from an empty directory to a running command. [`plugins/template/`](plugins/template/)
+  is the smallest previewer+command guest that builds, every file commented,
+  built and installed by an end-to-end test so it cannot rot.
+  `just plugin-git-status` installs the official columns plugin the way
+  `plugin-syntect` does; `just plugins` installs every official one.
+
 - **A provider plugin serves the scheme it declares** (ADR 0093). A
   `[[contributions.provider]]` could be declared, approved and enabled, and
   nothing ever resolved it: the connection manager matched schemes by hand

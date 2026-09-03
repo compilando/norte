@@ -99,3 +99,4 @@ edits.
 | [0091](0091-a-password-does-not-cross-a-bridge-on-every-keystroke.md) | A password does not cross a bridge on every keystroke | accepted |
 | [0092](0092-a-log-is-pulled-with-a-cursor-and-its-level-is-raised-by-its-owner.md) | A log is pulled with a cursor, and its level is raised by whoever owns the ring | accepted |
 | [0093](0093-a-provider-plugin-serves-the-scheme-it-declares.md) | A provider plugin serves the scheme it declares | accepted |
+| [0094](0094-a-plugin-says-which-wit-it-was-built-against.md) | A plugin says which WIT it was built against, and the host says whether it serves it | accepted |

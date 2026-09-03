@@ -9,6 +9,8 @@ This directory contains the design and operating documentation for norte.
 - [Architecture overview](../ARCHITECTURE.md): a concise map of the workspace
   and its dependency rules.
 - [Theme configuration](theming.md): bundled themes and custom theme files.
+- [Plugin author guide](plugins.md): writing, building, installing and
+  diagnosing a WASM plugin.
 - [Architecture decisions](adr/README.md): the ADR index and decision history.
 - [Contributing guide](../CONTRIBUTING.md): development workflow and review
   expectations.
