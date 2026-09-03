@@ -140,6 +140,7 @@ async fn main() -> Result<()> {
 
     // El DIR posicional manda sobre el `cwd`; se valida aquí para dar un
     // error claro en vez de un listado fallido dentro del TUI ya arrancado.
+    let explicit_dir = args.dir.is_some();
     let start = start_dir(args.dir)?;
     // #108 b4: columnas y orden desde `[ui.columns]` — resuelto UNA vez;
     // los ids inválidos no rompen el arranque (doctor los reporta). ANTES de
@@ -232,7 +233,7 @@ async fn main() -> Result<()> {
     // una sesión guardada es más específica que una preferencia de config, y
     // es la que gana— y antes del tema, que no depende de ninguna de las dos.
     // Un fallo NO tumba el arranque: se sigue con la pantalla de la config.
-    restore_session(&mut app, &backend).await;
+    restore_session(&mut app, &backend, explicit_dir.then_some(&start)).await;
     apply_theme(&mut app, &cfg);
     // Copia de la hotlist en el App (spec 2026-07-18): la fuente del popup
     // `Ctrl+D`; se refresca en cada hot-reload OK (`reload_config`).

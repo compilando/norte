@@ -87,6 +87,26 @@ impl App {
         body
     }
 
+    /// `ntc <DIR>` sobre una sesión aplicada: el panel ACTIVO pasa a `dir`
+    /// y nada más cambia. La sesión guardada es más específica que la
+    /// configuración, pero un directorio escrito en la línea de órdenes es
+    /// más específico que las dos: quien teclea `ntc ~/proyecto` quiere ver
+    /// `~/proyecto`, no donde cerró ayer.
+    ///
+    /// Conserva el orden y los ocultos del panel (son preferencias, no
+    /// sitio) y olvida el cursor guardado, que era una fila de OTRO
+    /// directorio. El hueco sigue en la lista de los que hay que listar.
+    pub fn pin_start_dir(&mut self, dir: norte_proto::VPath) {
+        let idx = self.focus();
+        let slot = self.panes.slot_of(idx);
+        let pane = &mut self.panes[idx];
+        let (sort, hidden) = (pane.sort(), pane.show_hidden());
+        *pane = Pane::new(dir, Vec::new());
+        pane.set_sort(sort);
+        pane.set_show_hidden(hidden);
+        self.session.cursors.remove(&slot.0);
+    }
+
     /// Aplica una sesión guardada y dice qué huecos necesitan listado.
     ///
     /// Pone la disposición, siembra cada listado con su directorio, su orden,

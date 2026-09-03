@@ -101,6 +101,37 @@ fn un_perfil_explicito_gana_al_pegajoso() {
     );
 }
 
+/// `ntc <DIR>` gana a la sesión guardada en el panel activo, y SOLO ahí: el
+/// resto de la pantalla vuelve como estaba. Antes la sesión pisaba el
+/// argumento y `ntc ~/proyecto` abría donde se cerró la última vez.
+#[test]
+fn un_directorio_explicito_gana_a_la_sesion_en_el_panel_activo() {
+    let mut app = app_basica();
+    let foco = app.focus();
+    let activo = app.panes.slot_of(foco);
+    let mut spec = app.panes[foco].sort();
+    spec.dirs_first = !spec.dirs_first;
+    app.panes[foco].set_sort(spec);
+    let body = app.session_body();
+
+    let mut other = app_basica();
+    let ask = other.apply_session(&body);
+    other.pin_start_dir(vp("file:///pedido"));
+    let foco = other.focus();
+    assert_eq!(other.panes[foco].dir(), &vp("file:///pedido"));
+    assert_eq!(
+        other.panes[foco].sort(),
+        spec,
+        "el orden guardado se conserva: solo cambia el directorio"
+    );
+    assert_eq!(
+        other.panes[1 - foco].dir(),
+        &vp("file:///der"),
+        "el otro panel es el de la sesión"
+    );
+    assert!(ask.contains(&activo), "el hueco sigue pidiendo su listado");
+}
+
 /// Sin perfil, la clave sigue siendo `default`: quien nunca elija uno lee y
 /// escribe exactamente donde ya escribía.
 #[test]

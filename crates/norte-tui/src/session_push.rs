@@ -25,7 +25,10 @@ use crate::listing::initial_pane;
 /// sesión ilegible o un directorio que ya no existe dejan lo que había: la
 /// disposición de la configuración, que es lo que se tenía antes de que esto
 /// existiera.
-pub async fn restore_session(app: &mut App, backend: &Backend) {
+///
+/// `start` es el DIR de la línea de órdenes cuando lo hubo: gana a la sesión
+/// en el panel activo ([`App::pin_start_dir`]), y se lista con los demás.
+pub async fn restore_session(app: &mut App, backend: &Backend, start: Option<&VPath>) {
     let (sesion, dueña) = match backend.session_get().await {
         Ok(v) => v,
         Err(e) => {
@@ -48,6 +51,9 @@ pub async fn restore_session(app: &mut App, backend: &Backend) {
     // que un cliente ajeno que hiciera lo que dice el contrato tenía su cuerpo
     // interpretado como si fuera de la versión 0.
     app.apply_session_value(sesion.version, &sesion.body);
+    if let Some(dir) = start {
+        app.pin_start_dir(dir.clone());
+    }
     restore_slots(app, backend, RESTORE_BUDGET).await;
 }
 
