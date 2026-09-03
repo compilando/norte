@@ -134,7 +134,7 @@ async fn spawn_daemon_mem(
             socket_path: Some(socket.clone()),
             idle_timeout: idle,
             listing_ttl,
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -179,7 +179,7 @@ async fn spawn_daemon_policy() -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -217,7 +217,7 @@ async fn spawn_daemon_ask(approval_ttl: Duration) -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -637,7 +637,7 @@ async fn fs_list_skipped_viaja_en_todas_las_paginas() {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -2345,7 +2345,7 @@ async fn dos_daemons_no_comparten_socket() {
             socket_path: Some(d.socket.clone()),
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: d.socket.parent().map(std::path::Path::to_path_buf),
             state_dir: None,
         },
     )
@@ -2370,7 +2370,7 @@ async fn bind_rechaza_dir_symlink() {
             socket_path: Some(link.join("d.sock")),
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -2407,7 +2407,7 @@ async fn spawn_daemon_at(socket: PathBuf) -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -2735,7 +2735,7 @@ async fn spawn_daemon_journal() -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -6238,7 +6238,7 @@ async fn spawn_daemon_degrading() -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -6358,7 +6358,7 @@ async fn spawn_daemon_failing() -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -6568,7 +6568,7 @@ async fn spawn_daemon_ai_delay(reply: &str, delay: Option<Duration>) -> TestDaem
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -6922,7 +6922,7 @@ async fn spawn_daemon_embed(delay: Option<Duration>) -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -8398,7 +8398,7 @@ async fn spawn_daemon_estado(state: &std::path::Path) -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: Some(state.to_path_buf()),
         },
     )
@@ -8751,7 +8751,7 @@ async fn spawn_daemon_con_anillo_de(cap: usize) -> (TestDaemon, norte_config::lo
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )

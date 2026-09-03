@@ -67,7 +67,7 @@ async fn daemon() -> DaemonDePrueba {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: Some(dir.path().to_path_buf()),
         },
     )

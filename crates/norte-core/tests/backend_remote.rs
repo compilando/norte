@@ -64,7 +64,7 @@ async fn spawn_daemon_with(dir: tempfile::TempDir, mem: Arc<MemProvider>) -> Tes
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -462,13 +462,16 @@ async fn bind_at(
 ) {
     let engine = Arc::new(Engine::new());
     engine.register_provider(mem as Arc<dyn Provider>);
+    // El directorio del socket hace de raíz de plugins: un tempdir del
+    // caller, nunca el `~/.config` real (ver `DaemonConfig::plugins_dir`).
+    let plugins_dir = socket.parent().map(std::path::Path::to_path_buf);
     let daemon = Daemon::bind(
         engine,
         DaemonConfig {
             socket_path: Some(socket),
             idle_timeout: None,
             listing_ttl: std::time::Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir,
             state_dir: None,
         },
     )
@@ -886,7 +889,7 @@ async fn spawn_daemon_ask() -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -1155,7 +1158,7 @@ async fn submit_abandonado_envia_rpc_cancel_y_mata_el_dispatch() {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -1236,7 +1239,7 @@ async fn un_listado_abandonado_no_se_queda_la_conexion() {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
@@ -1310,7 +1313,7 @@ async fn spawn_daemon_sync() -> TestDaemon {
             socket_path: Some(socket.clone()),
             idle_timeout: None,
             listing_ttl: Duration::from_mins(2),
-            plugins_dir: None,
+            plugins_dir: Some(dir.path().to_path_buf()),
             state_dir: None,
         },
     )
