@@ -168,3 +168,22 @@ approval digest, which is never reordered.
 What a hook may do is a policy and journal question before it is a WIT one — a
 guest that runs before a mutation can veto, delay or observe it, and each of
 those is a different contract. That design is not attempted here.
+
+## Amendment 2026-09-03: a declared `ai` capability is rejected, for the same reason
+
+`capabilities.ai` had the hook's exact shape one tier down: it parsed, it
+entered the approval digest, it painted an `ai` badge in the extension manager
+— and no interface in any WIT package, and no line in the host, ever read it.
+A human approving a plugin with `ai = "chat"` was granting "AI access" that
+granted nothing. ADR 0088 names that failure: a declared capability nobody
+honours is a lie.
+
+`Manifest::from_toml` now rejects a manifest that declares `ai` at all, with
+`ManifestError::AiNotImplemented`. Presence is what is checked, not the value:
+every mode would be equally inert. The field stays, because spec §7.1 names an
+AI capability among what a manifest may declare, and because it is hashed by
+presence — manifests without it keep their digests, so nobody's consent moves.
+
+When an AI interface arrives it will be a `norte:host` interface over
+`norte-ai`, gated by policy like everything else a guest asks the host for, and
+this rejection is the line to delete.

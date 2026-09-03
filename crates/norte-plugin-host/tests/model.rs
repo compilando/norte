@@ -1336,3 +1336,116 @@ fn catalogo_by_category_incluye_decorator() {
     let cats: Vec<Category> = groups.iter().map(|(c, _)| *c).collect();
     assert_eq!(cats, vec![Category::Previewer, Category::Decorator]);
 }
+
+/// La capability `ai` se parseaba, entraba en el digest y pintaba insignia,
+/// y ningún host la leía: no hay interfaz WIT de IA ni sitio que la linke.
+/// Un humano aprobaba «acceso a IA» y concedía nada — la mentira de ADR 0088
+/// con la firma de los hooks. Mismo remedio: se rechaza al parsear, con el
+/// motivo, y el campo se queda porque spec §7.1 lo nombra.
+#[test]
+fn la_capability_ai_se_rechaza_porque_nadie_la_honra() {
+    let src = r#"
+        [plugin]
+        id = "org.demo.oracle"
+        name = "Oracle"
+        publisher = "demo"
+        version = "0.1.0"
+        category = "command"
+        [capabilities]
+        ai = "chat"
+    "#;
+    assert!(matches!(
+        Manifest::from_toml(src),
+        Err(ManifestError::AiNotImplemented)
+    ));
+    // Sin la promesa, el mismo plugin entra.
+    let sin_ai = src.replace(r#"ai = "chat""#, "");
+    assert!(Manifest::from_toml(&sin_ai).is_ok());
+}
+
+/// Un provider plugin sirve el scheme que declara — y eso hace del scheme un
+/// nombre que puede SUPLANTAR: `file`, `sftp` y `s3` los sirve el core y un
+/// plugin que los reclame estaría poniéndose delante de un provider con
+/// papelera, reanudación y TLS. Los schemes con `+` son la composición de
+/// archivos (ADR 0018) y tampoco se ceden.
+#[test]
+fn un_provider_no_puede_reclamar_un_scheme_del_core() {
+    for reservado in [
+        "file",
+        "sftp",
+        "ftp",
+        "s3",
+        "zip+sftp",
+        "tar+gz+file",
+        "rar",
+        "foo+bar",
+    ] {
+        let src = format!(
+            r#"
+            [plugin]
+            id = "org.demo.usurper"
+            name = "Usurper"
+            publisher = "demo"
+            version = "0.1.0"
+            category = "provider"
+            [[contributions.provider]]
+            scheme = "{reservado}"
+        "#
+        );
+        assert!(
+            matches!(
+                Manifest::from_toml(&src),
+                Err(ManifestError::ReservedScheme)
+            ),
+            "{reservado} debería estar reservado"
+        );
+    }
+    // Y un scheme que no es ni siquiera un nombre de scheme (mayúsculas,
+    // barras, vacío) se rechaza por la misma puerta: lo que llega al
+    // connector tiene que ser lo que un VPath puede llevar.
+    for malo in ["", "Web-DAV", "a/b", "x y"] {
+        let src = format!(
+            r#"
+            [plugin]
+            id = "org.demo.usurper"
+            name = "Usurper"
+            publisher = "demo"
+            version = "0.1.0"
+            category = "provider"
+            [[contributions.provider]]
+            scheme = "{malo}"
+        "#
+        );
+        assert!(
+            matches!(
+                Manifest::from_toml(&src),
+                Err(ManifestError::ReservedScheme)
+            ),
+            "{malo:?} no es un scheme"
+        );
+    }
+}
+
+/// Un provider plugin recibe red a `ip:puerto`, nunca a la IP entera, y el
+/// host no sabe el puerto por defecto de un scheme ajeno: lo declara la
+/// contribución. Entra en el digest — cambiarlo cambia a qué se concede red.
+#[test]
+fn el_puerto_por_defecto_de_un_provider_se_declara_y_entra_en_el_digest() {
+    let con = r#"
+        [plugin]
+        id = "org.demo.dav"
+        name = "DAV"
+        publisher = "demo"
+        version = "0.1.0"
+        category = "provider"
+        [[contributions.provider]]
+        scheme = "webdav"
+        default-port = 8443
+    "#;
+    let m = Manifest::from_toml(con).unwrap();
+    assert_eq!(m.contributions.provider[0].default_port, Some(8443));
+    let sin = con.replace("default-port = 8443", "");
+    let m2 = Manifest::from_toml(&sin).unwrap();
+    assert_eq!(m2.contributions.provider[0].default_port, None);
+    assert_ne!(m.approval_digest(), m2.approval_digest());
+}

@@ -99,6 +99,13 @@ pub struct ColumnContrib {
 pub struct ProviderContrib {
     /// Scheme del VFS (sin `://`).
     pub scheme: String,
+    /// Puerto al que conecta el guest cuando la URL no lo dice (`default-port
+    /// = 8443`). Un provider plugin recibe red a `ip:puerto`, nunca a la IP
+    /// entera, y el host no conoce el puerto por defecto de un scheme ajeno:
+    /// sin este campo y sin puerto en la URL, la conexión se rehúsa. Entra en
+    /// el digest de aprobación como el scheme.
+    #[serde(default, rename = "default-port")]
+    pub default_port: Option<u16>,
 }
 
 /// Un hook declarado: el evento al que engancha.
@@ -187,6 +194,11 @@ impl Contributions {
         h.update((self.provider.len() as u64).to_le_bytes());
         for c in &self.provider {
             update_str(h, &c.scheme);
+            // Presencia + valor, como cualquier opcional del digest: el
+            // puerto decide a qué se concede red, así que cambiarlo tras
+            // aprobar es cambiar lo aprobado.
+            h.update([u8::from(c.default_port.is_some())]);
+            h.update(c.default_port.unwrap_or_default().to_le_bytes());
         }
         h.update((self.hook.len() as u64).to_le_bytes());
         for c in &self.hook {
@@ -597,6 +609,29 @@ pub enum ManifestError {
          así que declarar uno instalaría un plugin inerte"
     )]
     HookNotImplemented,
+    /// `capabilities.ai` declarada cuando NADA la honra: no hay interfaz WIT
+    /// de IA ni sitio en el host que la linke. Se parseaba, entraba en el
+    /// digest y pintaba insignia, así que un humano aprobaba «acceso a IA» y
+    /// concedía nada — la capability declarada que nadie honra (ADR 0088),
+    /// con la misma firma que los hooks y el mismo remedio: se rechaza al
+    /// parsear y el campo se queda porque spec §7.1 lo nombra.
+    #[error(
+        "la capability `ai` aún no está implementada: no hay interfaz WIT que la sirva, \
+         así que declararla aprobaría un permiso que no concede nada"
+    )]
+    AiNotImplemented,
+    /// Un `[[contributions.provider]]` reclama un scheme que no puede servir:
+    /// uno del core ([`CORE_SCHEMES`]), un formato de archivo o un scheme con
+    /// `+` (composición, ADR 0018), o algo que no es un scheme (charset de
+    /// [`norte_proto::Scheme`]). Un plugin que sirviera `sftp://` se pondría
+    /// delante de un provider con papelera, reanudación y TLS, y uno que
+    /// sirviera `ftp://` recibiría las contraseñas FTP guardadas; el humano
+    /// que aprueba no vería la diferencia.
+    #[error(
+        "contributions.provider[].scheme reservado o inválido: `file`, `sftp`, `ftp`, `s3` y \
+         los formatos de archivo los sirve el core, y el scheme debe ser `[a-z][a-z0-9.-]*`"
+    )]
+    ReservedScheme,
     /// Dos o más directorios declaran el MISMO `plugin.id` (issue #69): se
     /// rechazan TODOS (fail-closed). Un segundo directorio no puede reclamar el
     /// id de un plugin aprobado para colar su propio `plugin.wasm`.
@@ -705,6 +740,35 @@ pub const COMMAND_MAX_COUNT: usize = 32;
 /// re-exporta a su vez para los frontends que no dependen de este crate.
 pub use norte_proto::methods::is_valid_plugin_id;
 
+/// Schemes que sirve el core y que un provider plugin NO puede reclamar.
+///
+/// `ftp` está, aunque su guest sea WASM: un plugin que lo reclamase recibiría
+/// por `configure` la contraseña de cada conexión `ftp://` guardada, y la
+/// pantalla de aprobación no enseñaba el scheme. El día que el guest embebido
+/// se distribuya como plugin, `ftp` sale de aquí en ese mismo commit.
+pub const CORE_SCHEMES: &[&str] = &["file", "sftp", "ftp", "s3"];
+
+/// `true` si un `[[contributions.provider]]` puede declarar `scheme`: es un
+/// scheme válido para un [`norte_proto::VPath`], no es de
+/// [`CORE_SCHEMES`], no es un formato de archivo y no lleva `+`, el operador
+/// de composición de ADR 0018 (`zip+sftp`).
+///
+/// ```
+/// use norte_plugin_host::scheme_claimable;
+/// assert!(scheme_claimable("webdav"));
+/// assert!(!scheme_claimable("ftp"));
+/// assert!(!scheme_claimable("sftp"));
+/// assert!(!scheme_claimable("zip+sftp"));
+/// assert!(!scheme_claimable("Web-DAV"));
+/// ```
+#[must_use]
+pub fn scheme_claimable(scheme: &str) -> bool {
+    norte_proto::Scheme::new(scheme).is_ok()
+        && !scheme.contains('+')
+        && !CORE_SCHEMES.contains(&scheme)
+        && !norte_proto::ARCHIVE_FORMATS.contains(&scheme)
+}
+
 impl Manifest {
     /// Parsea y VALIDA un `plugin.toml`.
     ///
@@ -758,6 +822,23 @@ impl Manifest {
         // hooks no están implementados le mandaría a arreglar lo otro.
         if raw.plugin.category == Category::Hook || !raw.contributions.hook.is_empty() {
             return Err(ManifestError::HookNotImplemented);
+        }
+        // `ai`: misma familia que los hooks — una promesa que nadie cumple.
+        // Se mira la PRESENCIA, no el valor: cualquier modo sería igual de
+        // inerte.
+        if raw.capabilities.ai.is_some() {
+            return Err(ManifestError::AiNotImplemented);
+        }
+        // Un provider sirve el scheme que declara, así que el scheme es un
+        // nombre que se puede suplantar: los del core y los de archivo no se
+        // ceden, y lo que no es un scheme no llega al connector.
+        if raw
+            .contributions
+            .provider
+            .iter()
+            .any(|c| !scheme_claimable(&c.scheme))
+        {
+            return Err(ManifestError::ReservedScheme);
         }
         // Tope de 280 CARACTERES (no bytes: un idioma no-ASCII no debe pagar
         // el tope antes de tiempo). Cosmética pero fail-loud, como `id`.

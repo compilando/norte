@@ -158,12 +158,28 @@ impl HelpPresence {
 /// `None` cuando no hay binario servible: un plugin sin `.wasm` no ejecuta
 /// nada, así que no hay código que anclar.
 fn wasm_digest(dir: &Path) -> Option<String> {
-    use sha2::Digest as _;
     let path = verified_child(dir, "plugin.wasm")?;
     let bytes = std::fs::read(path).ok()?;
+    Some(wasm_digest_of(&bytes))
+}
+
+/// El digest de un binario tal como el catálogo lo ancla en
+/// [`PluginEntry::wasm_digest`]: sha256 en hex minúscula. Público para que
+/// quien vaya a INSTANCIAR unos bytes pueda comprobar que son los que el
+/// humano aprobó, en vez de confiar en que la ruta no cambió entre el
+/// descubrimiento y la carga.
+///
+/// ```
+/// use norte_plugin_host::wasm_digest_of;
+/// assert_eq!(wasm_digest_of(b"").len(), 64);
+/// assert_ne!(wasm_digest_of(b"a"), wasm_digest_of(b"b"));
+/// ```
+#[must_use]
+pub fn wasm_digest_of(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
     let mut h = sha2::Sha256::new();
-    h.update(&bytes);
-    Some(crate::capability::hex_lower(&h.finalize()))
+    h.update(bytes);
+    crate::capability::hex_lower(&h.finalize())
 }
 
 /// Resuelve el tri-estado de `<dir>/help.md` (H3e). El `is_file` LAXO sigue
