@@ -8,7 +8,7 @@
 //!   `fg`), no un mock.
 //! - Los CUATRO topes anti-DoS de la tabla ADR 0037 decisión 1 se aplican
 //!   POST-retorno del guest y rechazan ENTERO (fail-closed, no truncan): un
-//!   guest real que devuelve una línea con más de 64 spans dispara
+//!   guest real que devuelve una línea con más de 256 spans dispara
 //!   [`RuntimeError::StyledPreviewTooLarge`] — el caller (`norte-core`, fuera
 //!   de alcance de este crate) es quien decide caer a la previsualización
 //!   plana; aquí se fija el contrato del runtime.
@@ -31,7 +31,7 @@ fn styled_preview_roundtrip_roles_y_fg_wasm_real() {
 
     let content = b"hola 42 TODO mundo";
     let lines = inst
-        .render_styled_preview("text/plain", content)
+        .render_styled_preview("text/plain", content, None)
         .expect("render-styled");
 
     // Línea 0 = cabecera plana (sin rol/fg), un único span.
@@ -80,16 +80,16 @@ fn styled_preview_supera_tope_de_spans_por_linea_se_rechaza_entero() {
         .expect("instancia");
 
     // El guest tokeniza por espacios y separa cada token con un span
-    // adicional de un solo carácter: 40 palabras en una línea → 79 spans
-    // (40 tokens + 39 separadores), por encima del tope de 64/línea (ADR
-    // 0037 tabla de decisión 1).
-    let words: Vec<String> = (0..40).map(|i| format!("w{i}")).collect();
+    // adicional de un solo carácter: 130 palabras en una línea → 259 spans
+    // (130 tokens + 129 separadores), por encima del tope de 256/línea (ADR
+    // 0037 tabla de decisión 1, enmienda D4).
+    let words: Vec<String> = (0..130).map(|i| format!("w{i}")).collect();
     let line = words.join(" ");
     let content = line.as_bytes();
 
     let err = inst
-        .render_styled_preview("text/plain", content)
-        .expect_err("una línea de 79 spans supera el tope de 64");
+        .render_styled_preview("text/plain", content, None)
+        .expect_err("una línea de 259 spans supera el tope de 256");
     assert!(
         matches!(err, RuntimeError::StyledPreviewTooLarge(ref m) if m.contains("spans")),
         "fue {err:?}"

@@ -62,8 +62,30 @@ const VIEW_CAP: u64 = 256 * 1024;
 /// cosas distintas. Un fallo del previewer de plugin NO es un error — degrada
 /// a la vista cruda, que es el contrato de arriba.
 pub async fn viewer_for(backend: &Backend, path: &VPath) -> Result<Viewer, Error> {
+    // El ancho del terminal es el del visor a pantalla completa, y es lo que
+    // un previewer de imagen usa para encoger (proto 0.66.0). Sin terminal
+    // —tests, un pipe— no hay pista y el guest elige su ancho.
+    let columns = crossterm::terminal::size()
+        .ok()
+        .map(|(cols, _)| u32::from(cols));
+    let viewer = viewer_for_width(backend, path, columns).await?;
+    Ok(viewer)
+}
+
+/// [`viewer_for`] con el ancho dicho por el llamante (el visor acoplado de un
+/// hueco es más estrecho que la pantalla).
+///
+/// # Errors
+///
+/// Los mismos que [`viewer_for`]: lo que devuelva el `Backend` al leer la
+/// cabecera; un previewer roto degrada, no falla.
+pub async fn viewer_for_width(
+    backend: &Backend,
+    path: &VPath,
+    columns: Option<u32>,
+) -> Result<Viewer, Error> {
     let (bytes, truncated) = read_head(backend, path).await?;
-    let viewer = match backend.plugin_preview_styled(path).await {
+    let viewer = match backend.plugin_preview_styled(path, columns).await {
         Ok(Some(p)) => {
             Viewer::with_plugin_preview_styled(path.clone(), p.plugin_name, &p.lines, p.lossy)
         }

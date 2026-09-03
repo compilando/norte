@@ -14,7 +14,7 @@ use norte_frontend::layout::SlotId;
 use norte_proto::{Entry, Error, VPath};
 
 use crate::viewer::Viewer;
-use crate::viewer_open::viewer_for;
+use crate::viewer_open::viewer_for_width;
 
 /// Sonda de stat del VIEWPORT (#52): hidrata size/mtime de las entradas
 /// VISIBLES que el listado lazy dejó en None — no solo la enfocada, o las
@@ -242,12 +242,15 @@ pub struct PreviewFetch {
 /// esperando delante del preview, así que no hay nada que cancelar con `Esc`.
 /// Lo que sí hay es supersesión: mover el cursor deja caer este `Receiver` y
 /// la respuesta se pierde sin aplicarse.
-pub fn spawn_preview_fetch(backend: &Backend, path: VPath) -> PreviewFetch {
+///
+/// `columns` es el ancho del hueco en celdas, para el previewer (0.66.0):
+/// `None` cuando no se sabe, y el guest elige.
+pub fn spawn_preview_fetch(backend: &Backend, path: VPath, columns: Option<u32>) -> PreviewFetch {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
     let p = path.clone();
     tokio::spawn(async move {
-        let _ = tx.send(viewer_for(&b, &p).await);
+        let _ = tx.send(viewer_for_width(&b, &p, columns).await);
     });
     PreviewFetch { path, rx }
 }

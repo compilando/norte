@@ -46,6 +46,10 @@ pub struct StyledSpan {
     /// Color de primer plano crudo (fallback cuando `role` es `None`, o
     /// cuando el propio plugin no declaró rol), o `None` para el del tema.
     pub fg: Option<Rgb>,
+    /// Color de FONDO crudo (proto 0.66.0, D4): un previewer de imagen pinta
+    /// medios bloques con el píxel de arriba en `fg` y el de abajo aquí.
+    /// `None` = el fondo del visor. SIEMPRE `None` en el camino ANSI-SGR.
+    pub bg: Option<Rgb>,
 }
 
 /// Una línea = secuencia de tramos con estilo.
@@ -64,9 +68,12 @@ pub type StyledLine = Vec<StyledSpan>;
 /// assert_eq!(out.len(), 1);
 /// assert_eq!(
 ///     out[0][0],
-///     StyledSpan { text: "hi".into(), role: None, fg: Some((255, 0, 0)) }
+///     StyledSpan { text: "hi".into(), role: None, fg: Some((255, 0, 0)), bg: None }
 /// );
-/// assert_eq!(out[0][1], StyledSpan { text: " fin".into(), role: None, fg: None });
+/// assert_eq!(
+///     out[0][1],
+///     StyledSpan { text: " fin".into(), role: None, fg: None, bg: None }
+/// );
 /// ```
 #[must_use]
 pub fn parse_sgr(input: &str) -> Vec<StyledLine> {
@@ -83,6 +90,7 @@ pub fn parse_sgr(input: &str) -> Vec<StyledLine> {
                 text: std::mem::take(cur),
                 role: None,
                 fg,
+                bg: None,
             });
         }
     };
@@ -249,7 +257,8 @@ mod tests {
             vec![StyledSpan {
                 text: "hola mundo".into(),
                 role: None,
-                fg: None
+                fg: None,
+                bg: None,
             }]
         );
     }
@@ -265,12 +274,14 @@ mod tests {
                 StyledSpan {
                     text: "rojo".into(),
                     role: None,
-                    fg: Some((255, 0, 0))
+                    fg: Some((255, 0, 0)),
+                    bg: None,
                 },
                 StyledSpan {
                     text: " fin".into(),
                     role: None,
-                    fg: None
+                    fg: None,
+                    bg: None,
                 },
             ]
         );
@@ -284,7 +295,8 @@ mod tests {
             StyledSpan {
                 text: "A".into(),
                 role: None,
-                fg: Some((205, 0, 0))
+                fg: Some((205, 0, 0)),
+                bg: None,
             }
         );
         // 46 = cubo: n=30 → (0,255,0)
@@ -312,7 +324,8 @@ mod tests {
             vec![StyledSpan {
                 text: "antesdespues".into(),
                 role: None,
-                fg: None
+                fg: None,
+                bg: None,
             }]
         );
     }
@@ -327,7 +340,8 @@ mod tests {
             vec![StyledSpan {
                 text: "xy".into(),
                 role: None,
-                fg: None
+                fg: None,
+                bg: None,
             }]
         );
     }
@@ -351,7 +365,8 @@ mod tests {
             StyledSpan {
                 text: "B".into(),
                 role: None,
-                fg: None
+                fg: None,
+                bg: None,
             }
         );
     }

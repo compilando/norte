@@ -2495,6 +2495,7 @@ impl Backend {
     pub async fn plugin_preview_styled(
         &self,
         path: &VPath,
+        columns: Option<u32>,
     ) -> Result<Option<norte_proto::methods::PluginPreviewStyled>, Error> {
         match self {
             Self::Embedded(engine) => {
@@ -2540,7 +2541,11 @@ impl Backend {
                     let runtime = norte_plugin_host::PluginRuntime::new()?;
                     let mut inst = runtime.instantiate(&wasm, caps)?;
                     inst.set_settings(settings);
-                    inst.render_styled_preview(&mime_owned, &content)
+                    inst.render_styled_preview(
+                        &mime_owned,
+                        &content,
+                        crate::plugins::clamp_preview_columns(columns),
+                    )
                 })
                 .await
                 .map_err(|_| Error::Internal { panic: true })?;
@@ -2564,7 +2569,7 @@ impl Backend {
                 }))
             }
             #[cfg(unix)]
-            Self::Remote(r) => r.plugin_preview_styled(path).await,
+            Self::Remote(r) => r.plugin_preview_styled(path, columns).await,
         }
     }
 

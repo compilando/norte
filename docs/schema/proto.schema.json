@@ -3516,7 +3516,7 @@
       "type": "object"
     },
     "PluginPreviewStyled": {
-      "description": "La preview CON ESTILO producida por un plugin previewer (0.27.0, G3, ADR\n0037): gemelo de [`PluginPreview`] con `lines` de [`SpanWire`] en vez de\nun `output: String` plano. Topes del wire (ADR 0037): ≤10 000 líneas,\n≤64 spans por línea, texto de span ≤4 KiB, payload total ≤4 MiB (mismo\ntope de retorno del runtime que ya usan [`PLUGIN_PREVIEW`]/\n[`PLUGIN_RUN_COMMAND`]) — el server los aplica antes de enviar; un\ncliente los re-valida y cae a [`PLUGIN_PREVIEW`] si se violan.",
+      "description": "La preview CON ESTILO producida por un plugin previewer (0.27.0, G3, ADR\n0037): gemelo de [`PluginPreview`] con `lines` de [`SpanWire`] en vez de\nun `output: String` plano. Topes del wire (ADR 0037): ≤10 000 líneas,\n≤256 spans por línea, texto de span ≤4 KiB, payload total ≤4 MiB (mismo\ntope de retorno del runtime que ya usan [`PLUGIN_PREVIEW`]/\n[`PLUGIN_RUN_COMMAND`]) — el server los aplica antes de enviar; un\ncliente los re-valida y cae a [`PLUGIN_PREVIEW`] si se violan.",
       "properties": {
         "lines": {
           "description": "Líneas de la preview; cada línea es una lista de spans en orden.",
@@ -3550,8 +3550,17 @@
       "type": "object"
     },
     "PluginPreviewStyledParams": {
-      "description": "Params de [`PLUGIN_PREVIEW_STYLED`]: idéntico a [`PluginPreviewParams`]\n(mismo archivo, misma resolución de previewer — solo cambia la forma del\nresult).",
+      "description": "Params de [`PLUGIN_PREVIEW_STYLED`]: [`PluginPreviewParams`] (mismo\narchivo, misma resolución de previewer) más el ancho del visor, que la\npreview plana no necesita porque no puede pintar una imagen.",
       "properties": {
+        "columns": {
+          "description": "Ancho del visor que va a pintar la preview, en CELDAS (0.66.0, D4).\nExiste porque un previewer de imagen tiene que decidir a cuántas\nceldas encoge la foto, y solo quien pinta lo sabe. `None` = el\ncliente no lo sabe o no tiene visor (la CLI), y el guest elige su\nancho por defecto. Es una PISTA, no un contrato: un guest puede\ndevolver líneas más largas y el visor las recorta como siempre.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "path": {
           "$ref": "#/$defs/VPath",
           "description": "Ruta del archivo a previsualizar (el core lee sus bytes)."
@@ -4361,8 +4370,23 @@
       ]
     },
     "SpanWire": {
-      "description": "Un span de texto con estilo opcional (elemento de una línea de\n[`PluginPreviewStyled::lines`], 0.27.0, G3, ADR 0037): el HOST pinta, el\nplugin solo describe. `text` es texto del plugin — NO CONFIABLE, un\nfrontend debe enmascararlo antes de renderizarlo (mismo trato que\n`PluginInfo::name`/`title`). `role` referencia un nombre de\n`norte_theme::Role` — el HOST lo valida contra el conjunto CERRADO al\nproducirlo (un nombre desconocido nunca sale al wire como texto libre,\ncolapsa a `None` antes de serializar); un cliente remoto que reciba de un\ndaemon en el que no confía plenamente un `role` que no reconoce debe\ntratarlo igual, como `None`. `fg` es un fallback de color RGB crudo para\nspans sin rol (p. ej. la paleta fija de un highlighter); cuando AMBOS\nestán presentes, `role` gana — el tema del usuario tiene precedencia\nsobre un color fijo del plugin.\n\n```\nuse norte_proto::methods::SpanWire;\nlet s: SpanWire = serde_json::from_str(r#\"{\"text\":\"fn\"}\"#).unwrap();\nassert_eq!(s.text, \"fn\");\nassert_eq!(s.role, None);\nassert_eq!(s.fg, None);\n```",
+      "description": "Un span de texto con estilo opcional (elemento de una línea de\n[`PluginPreviewStyled::lines`], 0.27.0, G3, ADR 0037): el HOST pinta, el\nplugin solo describe. `text` es texto del plugin — NO CONFIABLE, un\nfrontend debe enmascararlo antes de renderizarlo (mismo trato que\n`PluginInfo::name`/`title`). `role` referencia un nombre de\n`norte_theme::Role` — el HOST lo valida contra el conjunto CERRADO al\nproducirlo (un nombre desconocido nunca sale al wire como texto libre,\ncolapsa a `None` antes de serializar); un cliente remoto que reciba de un\ndaemon en el que no confía plenamente un `role` que no reconoce debe\ntratarlo igual, como `None`. `fg` es un fallback de color RGB crudo para\nspans sin rol (p. ej. la paleta fija de un highlighter); cuando AMBOS\nestán presentes, `role` gana — el tema del usuario tiene precedencia\nsobre un color fijo del plugin. `bg` (0.66.0, D4) es el fondo RGB, que\nse pinta tal cual haya o no rol: junto con `fg` es lo que deja a un\npreviewer de imagen meter dos píxeles en una celda (`▀`). Ausente en\ntodo span anterior a 0.66.0, y omitido del wire cuando falta.\n\n```\nuse norte_proto::methods::SpanWire;\nlet s: SpanWire = serde_json::from_str(r#\"{\"text\":\"fn\"}\"#).unwrap();\nassert_eq!(s.text, \"fn\");\nassert_eq!(s.role, None);\nassert_eq!(s.fg, None);\nassert_eq!(s.bg, None);\n```",
       "properties": {
+        "bg": {
+          "description": "Color de FONDO del span (0.66.0, D4). Existe por una sola clase de\npreviewer: el que pinta una imagen con medios bloques, donde cada\ncelda son DOS píxeles —el de arriba en `fg`, el de abajo en `bg`— y\nsin fondo la mitad de la imagen no existe. Un frontend que no pinte\nfondos lo ignora sin perder texto. Un `role` presente sigue mandando\nsobre `fg`; sobre `bg` no hay rol que mande, porque los roles del\ntema son de cromo y ninguno describe el fondo de un fragmento.",
+          "items": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "fg": {
           "description": "Color RGB crudo de respaldo cuando no hay `role` (un byte por canal).",
           "items": {

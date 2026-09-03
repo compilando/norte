@@ -2347,6 +2347,11 @@ export class Screen {
           } else if (s.fg !== null) {
             el.style.color = s.fg;
           }
+          // El fondo no tiene rol que lo mande: un medio bloque sin fondo
+          // es media imagen (puente 50).
+          if (s.bg !== null) {
+            el.style.backgroundColor = s.bg;
+          }
           fila.append(el);
         }
         body.append(fila);

@@ -136,6 +136,10 @@ impl Estado {
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         let path = entrada.path.clone();
+        // El ancho del visor, en celdas, para el previewer (proto 0.66.0):
+        // un previewer de imagen encoge a esto. El visor ocupa la ventana
+        // entera, así que es el viewport.
+        let columnas = Some(u32::from(self.viewport.0));
         tokio::spawn(async move {
             // Un byte de más que el presupuesto: es lo que delata que el
             // fichero seguía. El resto NO se lee.
@@ -161,7 +165,7 @@ impl Estado {
             // un fichero sin poder mirarse.
             let preview = match tokio::time::timeout(
                 PLAZO_PLUGINS,
-                backend.plugin_preview_styled(path.clone()),
+                backend.plugin_preview_styled(path.clone(), columnas),
             )
             .await
             {

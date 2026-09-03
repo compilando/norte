@@ -1019,6 +1019,10 @@
   "plugin_preview_styled_params": {
     "path": "file:///home/user/doc.rs"
   },
+  "plugin_preview_styled_params_columns": {
+    "columns": 80,
+    "path": "file:///home/user/photo.png"
+  },
   "plugin_preview_styled_result": {
     "lines": [
       [
@@ -1245,6 +1249,19 @@
   },
   "span_wire_bare": {
     "text": "fn"
+  },
+  "span_wire_bg": {
+    "bg": [
+      0,
+      0,
+      255
+    ],
+    "fg": [
+      255,
+      0,
+      0
+    ],
+    "text": "▀"
   },
   "span_wire_styled": {
     "fg": [

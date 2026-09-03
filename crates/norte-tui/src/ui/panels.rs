@@ -76,13 +76,20 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
                     line.iter()
                         .map(|span| {
                             let s = Span::raw(span.text.clone());
-                            if let Some(role) = span.role {
-                                s.style(app.theme.role(role))
+                            let mut style = if let Some(role) = span.role {
+                                app.theme.role(role)
                             } else if let Some((r, g, b)) = span.fg {
-                                s.style(Style::default().fg(Color::Rgb(r, g, b)))
+                                Style::default().fg(Color::Rgb(r, g, b))
                             } else {
-                                s
+                                Style::default()
+                            };
+                            // El fondo (proto 0.66.0, D4): ningún rol manda
+                            // sobre él, y un medio bloque sin fondo es media
+                            // imagen.
+                            if let Some((r, g, b)) = span.bg {
+                                style = style.bg(Color::Rgb(r, g, b));
                             }
+                            s.style(style)
                         })
                         .collect::<Vec<_>>(),
                 )
@@ -180,13 +187,20 @@ pub(crate) fn draw_preview(
                     line.iter()
                         .map(|span| {
                             let s = Span::raw(span.text.clone());
-                            if let Some(role) = span.role {
-                                s.style(app.theme.role(role))
+                            let mut style = if let Some(role) = span.role {
+                                app.theme.role(role)
                             } else if let Some((r, g, b)) = span.fg {
-                                s.style(Style::default().fg(Color::Rgb(r, g, b)))
+                                Style::default().fg(Color::Rgb(r, g, b))
                             } else {
-                                s
+                                Style::default()
+                            };
+                            // El fondo (proto 0.66.0, D4): ningún rol manda
+                            // sobre él, y un medio bloque sin fondo es media
+                            // imagen.
+                            if let Some((r, g, b)) = span.bg {
+                                style = style.bg(Color::Rgb(r, g, b));
                             }
+                            s.style(style)
                         })
                         .collect::<Vec<_>>(),
                 )

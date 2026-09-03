@@ -111,7 +111,14 @@
 // llamándose igual—, así que un previewer compilado ayer sigue cargando. Un
 // guest de columnas compilado contra 0.1.0 importa un nombre que ya no existe
 // y el catálogo lo lista como desfasado, con las dos versiones.
-package norte:plugin@0.8.0;
+//
+// 0.8.0 → 0.9.0 (2026-09-03, demo D4 / ADR 0037 enmienda): `span` gana `bg`
+// y `preview-input` gana `columns`. Los pide el previewer de imagen: medios
+// bloques con dos píxeles por celda, y el ancho al que encoger. Los records
+// WIT no tienen campos opcionales, así que es RUPTURA para todo previewer y
+// command compilado contra 0.8.0 (syntect, la plantilla, markdown, los demos):
+// se recompilan aquí, y los de fuera se listan como desfasados (ADR 0094).
+package norte:plugin@0.9.0;
 
 /// Genera una previsualización de UN recurso que el HOST ya leyó y le pasa
 /// (regla 9: el guest jamás toca el FS; recibe los bytes). Devuelve texto
@@ -122,6 +129,11 @@ interface previewer {
         mimetype: string,
         /// Contenido del recurso (el host lo leyó bajo fs-read=scoped).
         content: list<u8>,
+        /// Ancho del visor que va a pintar, en celdas (0.9.0, demo D4), o
+        /// `none` si quien pide no tiene visor (la CLI). Una PISTA: un
+        /// previewer de imagen la usa para decidir a cuántas celdas encoge;
+        /// uno de texto la ignora y el visor recorta como siempre.
+        columns: option<u32>,
     }
     render: func(input: preview-input) -> result<string, string>;
 
@@ -137,6 +149,11 @@ interface previewer {
         text: string,
         role: option<string>,
         fg: option<tuple<u8, u8, u8>>,
+        /// Color de FONDO (0.9.0, demo D4): un previewer de imagen pinta cada
+        /// celda como un medio bloque `▀` con el píxel de arriba en `fg` y el
+        /// de abajo en `bg`. Sin rol que mande sobre él: los roles del tema
+        /// son de cromo y ninguno describe el fondo de un fragmento.
+        bg: option<tuple<u8, u8, u8>>,
     }
 
     /// Una línea = una secuencia ORDENADA de spans.

@@ -561,10 +561,16 @@ pub async fn after_frame(
                     .is_some_and(|s| s == path);
                 let in_flight = work.preview.get(slot).is_some_and(|f| f.path == path);
                 if !ya && !in_flight {
+                    // El ancho del HUECO, no el de la pantalla (0.66.0): un
+                    // previewer de imagen encoge a lo que le digan, y el
+                    // acoplado es la mitad de la terminal. Sin los dos
+                    // bordes del marco.
+                    let columnas = ui::slot_rect(&res, slot)
+                        .map(|r| u32::from(r.width.saturating_sub(2).max(1)));
                     // Empezar otra SUSTITUYE la que hubiera: el `Receiver`
                     // viejo se cae aquí y su respuesta no se aplica nunca.
                     work.preview
-                        .set(slot, Some(spawn_preview_fetch(backend, path)));
+                        .set(slot, Some(spawn_preview_fetch(backend, path, columnas)));
                 }
             }
             Some((slot, crate::preview::Want::Note(clave))) => {

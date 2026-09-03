@@ -19,6 +19,7 @@ fn span_view(s: &norte_frontend::ansi::StyledSpan) -> crate::dto::SpanView {
         text: clamp_display(s.text.clone()),
         role: s.role.map(|r| r.as_kebab().to_owned()),
         fg: s.fg.map(|(r, g, b)| format!("#{r:02x}{g:02x}{b:02x}")),
+        bg: s.bg.map(|(r, g, b)| format!("#{r:02x}{g:02x}{b:02x}")),
     }
 }
 

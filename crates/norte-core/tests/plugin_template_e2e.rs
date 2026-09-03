@@ -102,7 +102,7 @@ fn the_template_builds_installs_and_runs() {
         .expect("renders");
     assert_eq!(plain, "text/plain, 17 bytes\nline one");
     let styled = inst
-        .render_styled_preview("text/plain", b"line one\nline two")
+        .render_styled_preview("text/plain", b"line one\nline two", None)
         .expect("renders styled");
     assert_eq!(styled.len(), 2, "one span per line: {styled:?}");
     assert_eq!(styled[0].len(), 1);

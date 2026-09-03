@@ -1,0 +1,25 @@
+# `org.norte.image-ansi`: pictures in the viewer as half-block cells (demo
+# plugin D4). Not a workspace member, like every guest.
+[workspace]
+
+[package]
+name = "image-ansi-preview"
+edition = "2021"
+version = "0.1.0"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Image previews for norte's viewer, two pixels per cell, as a WASM previewer plugin"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+# Pure-Rust decoders only (png, zune-jpeg, gif), so the crate compiles to
+# wasm32-wasip2 unchanged; no rayon, no other formats.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+strip = true

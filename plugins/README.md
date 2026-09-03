@@ -14,6 +14,7 @@ gate red.
 | `file-icons/` | `org.norte.file-icons` | decorator | A badge per row saying what kind of file it is, from the name alone; `style = emoji` or `ascii`. |
 | `media-info/` | `org.norte.media-info` | columns | `dims` for PNG/JPEG/GIF/WebP and `duration` for WAV/MP3/FLAC, from at most 64 KiB of header read under the location token. |
 | `markdown/` | `org.norte.markdown` | previewer | `text/markdown` as styled lines: headings, emphasis, code, lists, quotes, links. |
+| `image-ansi/` | `org.norte.image-ansi` | previewer | PNG, JPEG and GIF as `▀` half-block cells, two pixels per cell (`fg` + `bg`), shrunk to the viewer's width. |
 
 The syntax-highlighting previewer (`org.norte.syntect`) lives with the host's
 example guests, in `crates/norte-plugin-host/examples-wasm/previewer-syntect/`.

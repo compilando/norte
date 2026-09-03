@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 49;
+export const BRIDGE_VERSION = 50;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -439,6 +439,8 @@ export interface SpanView {
   text: string;
   role: string | null;
   fg: string | null;
+  /** El FONDO, `#rrggbb` (puente 50): medios bloques de un previewer de imagen. */
+  bg: string | null;
 }
 
 /**

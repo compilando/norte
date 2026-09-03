@@ -132,6 +132,20 @@ pub enum PluginConfigSetError {
 /// alguien pidió su preview.
 pub(crate) const PREVIEW_MAX_BYTES: u64 = 1024 * 1024;
 
+/// Tope del ancho en celdas que un cliente puede pedir a un previewer (D4,
+/// proto 0.66.0). El campo es una PISTA y el guest está encerrado (memoria y
+/// reloj acotados), así que un `u32::MAX` no rompe nada; pero un cliente
+/// hostil no tiene por qué poder hacer que cada previewer del catálogo se
+/// gaste su presupuesto entero reescalando una foto que nadie va a ver.
+/// Más ancho que cualquier terminal.
+pub(crate) const PREVIEW_MAX_COLUMNS: u32 = 1024;
+
+/// Acota el ancho pedido a [`PREVIEW_MAX_COLUMNS`]; `None` sigue siendo
+/// `None`. El único embudo entre el wire (o el brazo embebido) y el guest.
+pub(crate) fn clamp_preview_columns(columns: Option<u32>) -> Option<u32> {
+    columns.map(|c| c.min(PREVIEW_MAX_COLUMNS))
+}
+
 /// Decodifica los bytes ACOTADOS de un fichero para pasárselos al previewer
 /// (§6.2, #29): el texto detectado (por `norte-encoding`) viaja como UTF-8 —
 /// jamás bytes crudos sobre los que el guest asuma UTF-8 — y un binario
@@ -177,6 +191,11 @@ pub(crate) fn guess_mimetype(path: &norte_proto::VPath) -> &'static str {
         Some("xml") => "text/xml",
         Some("js") => "text/javascript",
         Some("css") => "text/css",
+        // Pictures (D4): un previewer de imagen las reclama por tipo exacto.
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
         _ => "application/octet-stream",
     }
 }
@@ -210,6 +229,7 @@ pub(crate) fn to_wire_lines(
                     text: s.text,
                     role: s.role,
                     fg: s.fg.map(|(r, g, b)| [r, g, b]),
+                    bg: s.bg.map(|(r, g, b)| [r, g, b]),
                 })
                 .collect()
         })
@@ -1511,17 +1531,20 @@ command = [{ id = "run", title = "Run" }]
                     text: "42".to_owned(),
                     role: Some("number".to_owned()), // no es un Role válido: pasa igual
                     fg: None,
+                    bg: None,
                 },
                 Span {
                     text: " TODO".to_owned(),
                     role: Some("keyword".to_owned()),
                     fg: Some((255, 200, 0)),
+                    bg: Some((0, 0, 64)),
                 },
             ],
             vec![Span {
                 text: "plano".to_owned(),
                 role: None,
                 fg: None,
+                bg: None,
             }],
         ];
         let wire = to_wire_lines(lines);
@@ -2049,6 +2072,23 @@ mimetypes = ["text/*"]
         assert_eq!(
             guess_mimetype(&vpath("file:///a.MARKDOWN")),
             "text/markdown"
+        );
+        assert_eq!(guess_mimetype(&vpath("file:///a.png")), "image/png");
+        assert_eq!(guess_mimetype(&vpath("file:///a.JPG")), "image/jpeg");
+        assert_eq!(guess_mimetype(&vpath("file:///a.jpeg")), "image/jpeg");
+        assert_eq!(guess_mimetype(&vpath("file:///a.gif")), "image/gif");
+        assert_eq!(guess_mimetype(&vpath("file:///a.webp")), "image/webp");
+    }
+
+    /// D4: el ancho que pide un cliente llega al guest acotado; la ausencia
+    /// sigue siendo ausencia (el guest elige), no un cero ni el tope.
+    #[test]
+    fn clamp_preview_columns_acota_y_respeta_none() {
+        assert_eq!(clamp_preview_columns(None), None);
+        assert_eq!(clamp_preview_columns(Some(80)), Some(80));
+        assert_eq!(
+            clamp_preview_columns(Some(u32::MAX)),
+            Some(PREVIEW_MAX_COLUMNS)
         );
         assert_eq!(
             guess_mimetype(&vpath("file:///a")),
@@ -2825,9 +2865,11 @@ header = "Size"
         // `run_column_values` solo llama a `mint_for` cuando la capability
         // está concedida; aquí se pinea la mitad observable: con capabilities
         // por defecto, `granted()` es falso.
-        assert!(!norte_plugin_host::Capabilities::default()
-            .location
-            .granted());
+        assert!(
+            !norte_plugin_host::Capabilities::default()
+                .location
+                .granted()
+        );
         drop(mint.mint_for(&vpath, None, false));
         assert_eq!(mint.live_tokens(), 0);
     }

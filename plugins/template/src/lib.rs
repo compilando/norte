@@ -45,6 +45,7 @@ impl PreviewerGuest for Template {
                     text: line.to_string(),
                     role: None,
                     fg: None,
+                    bg: None,
                 }]
             })
             .collect())

@@ -330,12 +330,15 @@ fn viewer_preview_styled_role_gana_a_fg_y_pinta_del_tema() {
             text: "AAA".to_owned(),
             role: Some("title".to_owned()),
             fg: Some([255, 0, 0]),
+            bg: None,
         },
-        // Solo fg: pinta el crudo tal cual, sin tema de por medio.
+        // Solo fg (y un fondo, 0.66.0): pinta el crudo tal cual, sin tema
+        // de por medio.
         SpanWire {
             text: "BBB".to_owned(),
             role: None,
             fg: Some([0, 255, 0]),
+            bg: Some([0, 0, 64]),
         },
     ]];
     app.viewer = Some(norte_tui::viewer::Viewer::with_plugin_preview_styled(
@@ -360,6 +363,12 @@ fn viewer_preview_styled_role_gana_a_fg_y_pinta_del_tema() {
     assert!(
         cells.iter().any(|c| c.fg == Color::Rgb(0, 255, 0)),
         "el span SIN role pinta su fg crudo tal cual"
+    );
+    assert!(
+        cells
+            .iter()
+            .any(|c| c.fg == Color::Rgb(0, 255, 0) && c.bg == Color::Rgb(0, 0, 64)),
+        "el fondo del span (0.66.0) se pinta en la misma celda que su fg"
     );
 }
 

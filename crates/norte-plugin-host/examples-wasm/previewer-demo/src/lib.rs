@@ -80,6 +80,7 @@ impl PreviewerGuest for Demo {
             text: format!("[{}] {n} bytes", input.mimetype),
             role: None,
             fg: None,
+            bg: None,
         }]);
 
         for line in text.lines().take(3) {
@@ -102,6 +103,7 @@ fn highlight_line(line: &str) -> Vec<Span> {
                 text: " ".to_string(),
                 role: None,
                 fg: None,
+                bg: None,
             });
         }
         first = false;
@@ -111,18 +113,21 @@ fn highlight_line(line: &str) -> Vec<Span> {
                 text: word.to_string(),
                 role: Some("number".to_string()),
                 fg: None,
+                bg: None,
             });
         } else if KEYWORDS.contains(&word) {
             spans.push(Span {
                 text: word.to_string(),
                 role: Some("keyword".to_string()),
                 fg: Some((255, 200, 0)),
+                bg: None,
             });
         } else {
             spans.push(Span {
                 text: word.to_string(),
                 role: None,
                 fg: None,
+                bg: None,
             });
         }
     }

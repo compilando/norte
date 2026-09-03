@@ -292,6 +292,7 @@ impl Viewer {
                         text: crate::display_name(span.text.as_bytes()).0,
                         role: None, // ANSI-SGR no tiene concepto de rol (G3a, ver ansi.rs)
                         fg: span.fg,
+                        bg: None,
                     })
                     .collect()
             })
@@ -320,7 +321,8 @@ impl Viewer {
     /// `None` — jamás un panic ni una cadena libre que otra capa deba
     /// re-interpretar (ADR 0037, mismo criterio que un tema con datos
     /// parciales, ADR 0020). `fg` es el fallback RGB crudo, ya acotado por
-    /// el wire (`[u8; 3]` siempre representable) — se copia tal cual.
+    /// el wire (`[u8; 3]` siempre representable) — se copia tal cual; `bg`
+    /// (0.66.0) igual, y no hay rol que le gane: un fondo es un fondo.
     #[must_use]
     pub fn with_plugin_preview_styled(
         path: VPath,
@@ -336,6 +338,7 @@ impl Viewer {
                         text: crate::display_name(span.text.as_bytes()).0,
                         role: span.role.as_deref().and_then(norte_theme::Role::from_kebab),
                         fg: span.fg.map(|[r, g, b]| (r, g, b)),
+                        bg: span.bg.map(|[r, g, b]| (r, g, b)),
                     })
                     .collect()
             })
@@ -906,11 +909,13 @@ mod tests {
                 text: "buen\u{7}o".to_owned(), // BEL crudo
                 role: None,
                 fg: None,
+                bg: None,
             }],
             vec![SpanWire {
                 text: "a\u{202E}b".to_owned(), // RLO (bidi hostil)
                 role: None,
                 fg: None,
+                bg: None,
             }],
         ];
         let v = Viewer::with_plugin_preview_styled(vp(), "Demo".to_owned(), &lines, false);
@@ -941,16 +946,19 @@ mod tests {
                 text: "42".to_owned(),
                 role: Some("number".to_owned()), // no es un Role válido
                 fg: None,
+                bg: None,
             },
             SpanWire {
                 text: "TODO".to_owned(),
                 role: Some("keyword".to_owned()), // tampoco
                 fg: Some([255, 200, 0]),
+                bg: Some([0, 0, 64]),
             },
             SpanWire {
                 text: "err".to_owned(),
                 role: Some("hostile-badge".to_owned()), // SÍ es un Role válido
                 fg: None,
+                bg: None,
             },
         ]];
         let v = Viewer::with_plugin_preview_styled(vp(), "Demo".to_owned(), &lines, false);

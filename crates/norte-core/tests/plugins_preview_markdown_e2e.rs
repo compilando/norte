@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use norte_core::plugins::{install, PluginRegistry};
+use norte_core::plugins::{PluginRegistry, install};
 use norte_plugin_host::PluginRuntime;
 
 const ID: &str = "org.norte.markdown";
@@ -88,7 +88,7 @@ fn markdown_is_chosen_for_its_type_and_renders_styled_lines() {
     let doc = b"# Title\n\nSome *text* and `code`.\n\n```rust\nfn a() {}\n```\n\n- one\n- [norte](https://x.y)\n";
     let mut inst = rt.instantiate(&wasm_path, caps).expect("instantiates");
     let styled = inst
-        .render_styled_preview("text/markdown", doc)
+        .render_styled_preview("text/markdown", doc, None)
         .expect("renders");
     let text = |line: &Vec<norte_plugin_host::previewer_iface::Span>| {
         line.iter().map(|s| s.text.as_str()).collect::<String>()

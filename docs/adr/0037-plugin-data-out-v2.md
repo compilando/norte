@@ -89,7 +89,7 @@ violation, never trusting a daemon blindly):
 | Limit | Value |
 | --- | --- |
 | Lines per styled preview | ≤ 10,000 |
-| Spans per line | ≤ 64 |
+| Spans per line | ≤ 256 (64 until the D4 amendment below) |
 | Span text length | ≤ 4 KiB |
 | Total styled-preview payload | ≤ 4 MiB (reuses the existing plugin runtime return cap, spec:211) |
 | Badge length, POST-masking | ≤ 8 chars |
@@ -222,6 +222,29 @@ role-colored child element in the GUI row.
   deliberately not recorded here.
 
 ## Amendment log
+
+- **2026-09-03 (demo D4, `org.norte.image-ansi`): a span has a background,
+  and the request carries the viewer's width.** Decision 2 gave a span
+  `role` + `fg` and no `bg`, on the reasoning that a highlighter never needs
+  one. An image previewer does: the only way to put two pixels in one cell
+  is the `▀` half block with `fg` for the upper pixel and `bg` for the lower,
+  and without a width hint the guest cannot know how much to shrink the
+  picture. Both are additive: `SpanWire.bg: Option<[u8;3]>` and
+  `PluginPreviewStyledParams.columns: Option<u32>` (proto **0.66.0**, both
+  omitted when absent so the 0.27.0 goldens do not move), and the same two
+  fields on `record span` / `record preview-input` in `norte:plugin`
+  **0.9.0**, which under ADR 0094 means every previewer built against 0.8.0
+  needs a rebuild. Host paint (decision 3) is unchanged for the foreground —
+  a role still wins over `fg` — and `bg` is painted as given, in the TUI as
+  an RGB background and in the window as a `background-color` on the span
+  (bridge 50). `columns` is a hint, never a bound: the anti-DoS caps of
+  decision 1 still apply post-return and count spans and bytes, not what the
+  guest was told. One of those caps moves with it: **spans per line 64 →
+  256**. A picture is one span per cell — two photo pixels are never the
+  same colour, so nothing merges — and 64 cells is a thumbnail; 256 is the
+  width of a large terminal. The total-bytes cap (4 MiB) still bounds the
+  whole answer, so the change is to the shape a guest may return, not to
+  the memory it may cost the host.
 
 - **2026-09-03 (demo D3, `org.norte.markdown`): an exact mimetype beats a
   glob.** `resolve_previewer` chose the first consented previewer in

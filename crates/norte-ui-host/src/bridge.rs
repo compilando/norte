@@ -25,6 +25,10 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **50**: un fragmento de preview lleva FONDO (`SpanView::bg`, proto
+///   0.66.0, D4): el previewer de imagen pinta medios bloques con dos píxeles
+///   por celda, y sin fondo la mitad de la imagen no existe. Y el host manda
+///   al previewer el ancho del visor en celdas para que encoja a medida.
 /// - **49**: el visor lleva los FRAGMENTOS de una preview de plugin
 ///   (`ViewerView::styled`): texto, rol del tema o color propio, una entrada
 ///   por fila de `lines`. La TUI pintaba roles y colores desde ADR 0037 y la
@@ -169,7 +173,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 49;
+pub const BRIDGE_VERSION: u32 = 50;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

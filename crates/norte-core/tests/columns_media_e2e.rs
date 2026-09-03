@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use norte_core::plugins::{install, PluginRegistry};
+use norte_core::plugins::{PluginRegistry, install};
 use norte_plugin_host::PluginRuntime;
 use norte_proto::VPath;
 

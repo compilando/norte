@@ -3666,6 +3666,7 @@ async fn plugin_preview_styled_sin_previewer_es_none() {
             methods::PLUGIN_PREVIEW_STYLED,
             &methods::PluginPreviewStyledParams {
                 path: vp("mem:///nota.txt"),
+                columns: None,
             },
         )
         .await

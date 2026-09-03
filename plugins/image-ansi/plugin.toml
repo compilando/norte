@@ -1,0 +1,16 @@
+[plugin]
+id = "org.norte.image-ansi"
+name = "Image preview"
+publisher = "norte"
+version = "0.1.0"
+category = "previewer"
+description = "PNG, JPEG and GIF in the viewer as coloured half-block cells, two pixels per cell, shrunk to the viewer's width."
+
+# Exact types, one per decoder the guest carries. `image/webp` is guessed by
+# the host but not declared here: the pure-Rust webp decoder is not part of
+# this build.
+[contributions]
+previewer = [{ mimetypes = ["image/png", "image/jpeg", "image/gif"] }]
+
+# Nothing. The host hands the previewer the file's bytes.
+[capabilities]

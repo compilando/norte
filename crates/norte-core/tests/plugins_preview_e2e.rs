@@ -389,7 +389,7 @@ mod styled {
         // clásico ya lo prueba (arriba, in-memory); aquí basta confirmar que
         // el WIRE respeta el mismo fail-closed antes de aprobar.
         let none_yet = backend
-            .plugin_preview_styled(&vp("mem:///doc.txt"))
+            .plugin_preview_styled(&vp("mem:///doc.txt"), None)
             .await
             .expect("plugin.preview_styled no es error sin aprobar");
         assert!(
@@ -407,7 +407,7 @@ mod styled {
             .expect("activar por el wire");
 
         let preview = backend
-            .plugin_preview_styled(&vp("mem:///doc.txt"))
+            .plugin_preview_styled(&vp("mem:///doc.txt"), None)
             .await
             .expect("plugin.preview_styled no es error")
             .expect("aprobado+activado: el previewer aplica");
@@ -448,7 +448,7 @@ mod styled {
         let mem2 = &mem;
         write_file(mem2, "mem:///code.txt", b"TODO 42 norte plano\nsegunda").await;
         let preview2 = backend
-            .plugin_preview_styled(&vp("mem:///code.txt"))
+            .plugin_preview_styled(&vp("mem:///code.txt"), None)
             .await
             .expect("preview_styled ok")
             .expect("previewer sigue aprobado+activado");
@@ -493,7 +493,7 @@ mod styled {
         bad.extend_from_slice(b"linea\xFFmala\n");
         write_file(&mem, "mem:///bad.txt", &bad).await;
         let preview_lossy = backend
-            .plugin_preview_styled(&vp("mem:///bad.txt"))
+            .plugin_preview_styled(&vp("mem:///bad.txt"), None)
             .await
             .expect("preview_styled ok")
             .expect("previewer sigue aprobado+activado");

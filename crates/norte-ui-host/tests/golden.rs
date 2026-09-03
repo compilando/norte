@@ -730,16 +730,19 @@ fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
                 text: "quinta".to_owned(),
                 role: Some("title".to_owned()),
                 fg: Some("#ff0000".to_owned()),
+                bg: None,
             },
             norte_ui_host::dto::SpanView {
                 text: " lín".to_owned(),
                 role: None,
                 fg: Some("#00ff00".to_owned()),
+                bg: Some("#000080".to_owned()),
             },
             norte_ui_host::dto::SpanView {
                 text: "ea".to_owned(),
                 role: None,
                 fg: None,
+                bg: None,
             },
         ]],
     }

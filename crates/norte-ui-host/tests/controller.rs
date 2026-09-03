@@ -7484,6 +7484,7 @@ fn preview_de(
                     text: (*l).to_owned(),
                     role: Some("info".to_owned()),
                     fg: None,
+                    bg: None,
                 }]
             })
             .collect(),
@@ -7571,11 +7572,13 @@ async fn el_visor_lleva_los_fragmentos_de_la_preview() {
                         text: "fn".to_owned(),
                         role: Some("title".to_owned()),
                         fg: Some([255, 0, 0]),
+                        bg: None,
                     },
                     norte_proto::methods::SpanWire {
                         text: " main".to_owned(),
                         role: None,
                         fg: Some([0, 128, 255]),
+                        bg: Some([0, 0, 64]),
                     },
                     norte_proto::methods::SpanWire {
                         // Un rol que el tema no conoce degrada a plano, y un
@@ -7583,18 +7586,21 @@ async fn el_visor_lleva_los_fragmentos_de_la_preview() {
                         text: "()\u{202e}{}".to_owned(),
                         role: Some("no-es-un-rol".to_owned()),
                         fg: None,
+                        bg: None,
                     },
                 ],
                 vec![norte_proto::methods::SpanWire {
                     text: "plano".to_owned(),
                     role: None,
                     fg: None,
+                    bg: None,
                 }],
             ],
             lossy: false,
         },
     );
-    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let f = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&f)).await;
     let mut sub = h.subscribe();
 
     h.dispatch(tecla("F3")).await.expect("host vivo");
@@ -7607,6 +7613,14 @@ async fn el_visor_lleva_los_fragmentos_de_la_preview() {
         }
     }
     let v = visor.expect("el visor abre");
+
+    // El ancho del visor viaja con la petición (0.66.0): es el viewport
+    // con el que arrancó el host, no un `None` que deja elegir al guest.
+    assert_eq!(
+        f.anchos_de_preview.lock().expect("mutex").as_slice(),
+        &[Some(120)],
+        "una petición, con el ancho del viewport"
+    );
 
     assert_eq!(v.styled.len(), 2, "una entrada por fila: {:?}", v.styled);
     assert_eq!(
@@ -7621,6 +7635,12 @@ async fn el_visor_lleva_los_fragmentos_de_la_preview() {
     assert_eq!(primera[0].fg.as_deref(), Some("#ff0000"));
     assert_eq!(primera[1].role, None);
     assert_eq!(primera[1].fg.as_deref(), Some("#0080ff"));
+    assert_eq!(
+        primera[1].bg.as_deref(),
+        Some("#000040"),
+        "el fondo cruza (puente 50)"
+    );
+    assert_eq!(primera[0].bg, None);
     assert_eq!(primera[2].role, None, "un rol desconocido degrada a plano");
     assert!(
         !primera[2].text.contains('\u{202e}'),

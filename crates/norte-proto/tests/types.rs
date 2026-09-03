@@ -1295,10 +1295,18 @@ fn version_ventana_actual() {
     // `METHOD_NOT_FOUND`. Ahí el panel se queda con el registro local y tiene
     // que DECIR por qué — degradar en silencio es indistinguible de un daemon
     // que no hizo nada, que es la confusión que #326 empezó a arreglar.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.65.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.64.0"), "N-1");
+    //
+    // 0.66.0 (D4, ADR 0037): `SpanWire::bg` y `PluginPreviewStyledParams::
+    // columns`, los dos opcionales y omitidos cuando faltan. Aditivo, y la
+    // ventana se DESPLAZA por lo de siempre: un cliente 0.65 ignora `bg`
+    // (ADR 0004) y pinta una imagen con la mitad de sus píxeles, y no manda
+    // `columns`, así que el guest elige un ancho que el visor recorta. Ni
+    // error ni aviso — que es la pérdida silenciosa que la ventana N/N-1
+    // permite y N-2 no.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.66.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.65.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.63.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.64.9"),
         "N-2 fuera de la ventana"
     );
 }
@@ -1543,6 +1551,7 @@ fn plugin_preview_styled_roundtrip() {
     };
     let p = PluginPreviewStyledParams {
         path: vpath("file:///a.rs"),
+        columns: None,
     };
     let back: PluginPreviewStyledParams =
         serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
@@ -1557,6 +1566,7 @@ fn plugin_preview_styled_roundtrip() {
                 text: "fn".into(),
                 role: Some("match".into()),
                 fg: None,
+                bg: None,
             }]],
             lossy: false,
         }),
@@ -1594,6 +1604,7 @@ fn span_wire_and_decoration_wire_optionals_are_independent_and_omitted() {
         text: "fn".into(),
         role: None,
         fg: None,
+        bg: None,
     };
     assert_eq!(
         serde_json::to_string(&bare).unwrap(),

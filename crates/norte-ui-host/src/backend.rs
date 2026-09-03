@@ -568,6 +568,7 @@ pub trait HostBackend: Send + Sync + 'static {
     fn plugin_preview_styled(
         &self,
         path: VPath,
+        columns: Option<u32>,
     ) -> BoxFuture<'static, Result<Option<methods::PluginPreviewStyled>, Error>>;
 
     /// Las DECORACIONES que los plugins ponen sobre un lote de rutas.
@@ -959,9 +960,10 @@ impl HostBackend for norte_client::RemoteBackend {
     fn plugin_preview_styled(
         &self,
         path: VPath,
+        columns: Option<u32>,
     ) -> BoxFuture<'static, Result<Option<methods::PluginPreviewStyled>, Error>> {
         let backend = self.clone();
-        Box::pin(async move { backend.plugin_preview_styled(&path).await })
+        Box::pin(async move { backend.plugin_preview_styled(&path, columns).await })
     }
 
     fn plugin_decorate(

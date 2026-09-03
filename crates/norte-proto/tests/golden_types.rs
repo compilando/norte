@@ -1173,7 +1173,11 @@ fn golden_methods() {
     // tengas», no «desde el principio») y el sondeo que no encontró nada
     // (`lines: []` con `lost: 0`, que es la respuesta más frecuente y la
     // única que distingue «no ha pasado nada» de «se perdió algo»).
-    assert_eq!(fixtures.len(), 196, "[methods.json] fixtures sin caso Rust");
+    // 196 → 198 en 0.66.0 (D4): + `span_wire_bg` y
+    // `plugin_preview_styled_params_columns`. Fixturas APARTE porque los dos
+    // campos se omiten cuando faltan: las de antes prueban que el wire viejo
+    // no se movió, estas que el nuevo existe.
+    assert_eq!(fixtures.len(), 198, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -2393,6 +2397,32 @@ fn check_methods_plugin_data_out_v2(fixtures: &BTreeMap<String, Value>) {
     check_methods_plugin_decorate_and_columns(fixtures);
 }
 
+/// 0.66.0 (D4): el fondo de un span, y el ancho del visor en la petición.
+/// Fixturas APARTE de las de 0.27.0: los dos campos se omiten cuando faltan,
+/// así que aquellas prueban que el wire viejo no se movió y estas que el
+/// nuevo existe.
+fn check_methods_plugin_preview_styled_066(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{PluginPreviewStyledParams, SpanWire};
+    check_one(
+        fixtures,
+        "span_wire_bg",
+        &SpanWire {
+            text: "▀".into(),
+            role: None,
+            fg: Some([255, 0, 0]),
+            bg: Some([0, 0, 255]),
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_preview_styled_params_columns",
+        &PluginPreviewStyledParams {
+            path: vpath("file:///home/user/photo.png"),
+            columns: Some(80),
+        },
+    );
+}
+
 /// `plugin.preview_styled` (0.27.0): mismo patrón all-or-nothing que
 /// `plugin.preview`, con `lines: Vec<Vec<SpanWire>>` en vez de `output: String`.
 fn check_methods_plugin_preview_styled(fixtures: &BTreeMap<String, Value>) {
@@ -2408,6 +2438,7 @@ fn check_methods_plugin_preview_styled(fixtures: &BTreeMap<String, Value>) {
             text: "fn".into(),
             role: None,
             fg: None,
+            bg: None,
         },
     );
     check_one(
@@ -2417,13 +2448,16 @@ fn check_methods_plugin_preview_styled(fixtures: &BTreeMap<String, Value>) {
             text: "año".into(),
             role: Some("match".into()),
             fg: Some([200, 40, 40]),
+            bg: None,
         },
     );
+    check_methods_plugin_preview_styled_066(fixtures);
     check_one(
         fixtures,
         "plugin_preview_styled_params",
         &PluginPreviewStyledParams {
             path: vpath("file:///home/user/doc.rs"),
+            columns: None,
         },
     );
     check_one(
@@ -2439,17 +2473,20 @@ fn check_methods_plugin_preview_styled(fixtures: &BTreeMap<String, Value>) {
                             text: "fn".into(),
                             role: Some("match".into()),
                             fg: None,
+                            bg: None,
                         },
                         SpanWire {
                             text: " main".into(),
                             role: None,
                             fg: None,
+                            bg: None,
                         },
                     ],
                     vec![SpanWire {
                         text: "año".into(),
                         role: None,
                         fg: Some([255, 0, 0]),
+                        bg: None,
                     }],
                 ],
                 lossy: false,
@@ -2469,6 +2506,7 @@ fn check_methods_plugin_preview_styled(fixtures: &BTreeMap<String, Value>) {
                     text: "a\u{fffd}b".into(),
                     role: None,
                     fg: None,
+                    bg: None,
                 }]],
                 lossy: true,
             }),
@@ -4216,7 +4254,10 @@ fn method_names_frozen() {
     // el único código que puede aplicarla: el que tiene el anillo.
     assert_eq!(methods::LOG_TAIL, "log.tail");
     assert_eq!(methods::LOG_LEVEL, "log.level");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.65.0");
+    // 0.66.0 (D4): ningún método nuevo — dos campos opcionales, `SpanWire::bg`
+    // y `PluginPreviewStyledParams::columns`, para el previewer de imagen que
+    // pinta medios bloques y necesita saber a cuántas celdas encoger.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.66.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

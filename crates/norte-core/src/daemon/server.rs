@@ -3814,7 +3814,11 @@ async fn handle_plugin_preview_styled(
     let outcome = tokio::task::spawn_blocking(move || {
         let mut inst = runtime.instantiate(&wasm, caps)?;
         inst.set_settings(settings);
-        inst.render_styled_preview(mime, &content)
+        inst.render_styled_preview(
+            mime,
+            &content,
+            crate::plugins::clamp_preview_columns(p.columns),
+        )
     })
     .await
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "styled preview task panicked"))?;

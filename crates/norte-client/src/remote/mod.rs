@@ -2159,9 +2159,13 @@ impl RemoteBackend {
     pub async fn plugin_preview_styled(
         &self,
         path: &VPath,
+        columns: Option<u32>,
     ) -> Result<Option<methods::PluginPreviewStyled>, Error> {
         let client = self.client().await?;
-        let params = methods::PluginPreviewStyledParams { path: path.clone() };
+        let params = methods::PluginPreviewStyledParams {
+            path: path.clone(),
+            columns,
+        };
         let call = client
             .call::<_, methods::PluginPreviewStyledResult>(methods::PLUGIN_PREVIEW_STYLED, &params);
         match tokio::time::timeout(CALL_TIMEOUT, call).await {
@@ -3437,6 +3441,7 @@ mod tests {
                 text: "hola".into(),
                 role: None,
                 fg: None,
+                bg: None,
             }]],
             lossy: false,
         };

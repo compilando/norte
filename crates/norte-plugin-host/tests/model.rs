@@ -1430,7 +1430,7 @@ fn un_provider_no_puede_reclamar_un_scheme_del_core() {
 
 /// Un guest compilado contra otra versión del WIT no se carga: se lista en
 /// `errors` con las DOS versiones (ADR 0094). Con el binario intacto entra
-/// en `plugins`. Se fabrica el viejo reescribiendo `@0.8.0` por `@0.7.0` en
+/// en `plugins`. Se fabrica el viejo reescribiendo `@0.9.0` por `@0.7.0` en
 /// los bytes del guest real (una versión que el host no sirve para ningún
 /// paquete).
 #[test]
@@ -1448,7 +1448,7 @@ fn un_guest_compilado_contra_otro_wit_se_lista_roto() {
     assert!(cat.errors.is_empty(), "{:?}", cat.errors);
     assert_eq!(cat.plugins.len(), 1, "el guest actual carga");
 
-    let viejo = support::rewrite_bytes(&bytes, b"@0.8.0", b"@0.7.0");
+    let viejo = support::rewrite_bytes(&bytes, b"@0.9.0", b"@0.7.0");
     std::fs::write(&wasm_path, viejo).unwrap();
     let cat = Catalog::load_dir(root.path());
     assert!(cat.plugins.is_empty(), "no se carga");
@@ -1461,7 +1461,7 @@ fn un_guest_compilado_contra_otro_wit_se_lista_roto() {
         } => {
             assert_eq!(package, "norte:plugin");
             assert_eq!(built_against, "0.7.0");
-            assert_eq!(served, "0.8.0");
+            assert_eq!(served, "0.9.0");
         }
         otro => panic!("se esperaba WitMismatch, salió {otro:?}"),
     }

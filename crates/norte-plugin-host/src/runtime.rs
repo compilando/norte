@@ -51,8 +51,11 @@ const MAX_RETURN_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STYLED_LINES: usize = 10_000;
 
 /// Tope de SPANS por línea de un `render-styled` (ADR 0037 tabla de decisión
-/// 1).
-const MAX_STYLED_SPANS_PER_LINE: usize = 64;
+/// 1). Era 64; un previewer de imagen pinta UN span por celda (`▀` con su
+/// `fg`/`bg`, 0.9.0) y 64 celdas es una miniatura, así que la enmienda de
+/// D4 lo sube al ancho de una terminal grande. El tope de bytes totales
+/// sigue acotando el conjunto.
+const MAX_STYLED_SPANS_PER_LINE: usize = 256;
 
 /// Tope de bytes UTF-8 del `text` de UN span (ADR 0037 tabla de decisión 1:
 /// "4 KiB"). Medido en BYTES, no en caracteres — un WIT `string` no impone
@@ -64,7 +67,8 @@ const MAX_STYLED_SPAN_TEXT_BYTES: usize = 4 * 1024;
 /// `render-styled` (ADR 0037 tabla de decisión 1): reutiliza el mismo tope
 /// que `MAX_RETURN_BYTES` (el cap de retorno del runtime, issue #68) — un
 /// preview estilizado no debe poder inflar la memoria del host más que
-/// cualquier otro valor de retorno de un guest.
+/// cualquier otro valor de retorno de un guest. Desde 0.9.0 se mide con
+/// [`span_wire_cost`] —texto MÁS campos—, no solo con el texto.
 const MAX_STYLED_TOTAL_TEXT_BYTES: usize = MAX_RETURN_BYTES;
 
 /// Tope del tamaño del ARTEFACTO `.wasm` en disco ANTES de compilarlo (issue
@@ -210,15 +214,30 @@ fn cap_styled_text(lines: Vec<Vec<Span>>) -> Result<Vec<Vec<Span>>, RuntimeError
                     span.text.len()
                 )));
             }
-            total_text_bytes += span.text.len();
+            total_text_bytes += span_wire_cost(span);
         }
     }
     if total_text_bytes > MAX_STYLED_TOTAL_TEXT_BYTES {
         return Err(RuntimeError::StyledPreviewTooLarge(format!(
-            "{total_text_bytes} bytes totales de texto (máx {MAX_STYLED_TOTAL_TEXT_BYTES})"
+            "{total_text_bytes} bytes totales estimados en el wire (máx {MAX_STYLED_TOTAL_TEXT_BYTES})"
         )));
     }
     Ok(lines)
+}
+
+/// Lo que un span cuesta en el wire, aproximado por arriba: el texto más
+/// los campos que lleva. Hasta 0.9.0 el tope total contaba solo el texto, y
+/// un span de UN carácter con `fg` y `bg` —cada celda de una imagen— pesa
+/// cuarenta bytes de JSON por tres de texto: el tope de bytes tiene que
+/// medir lo que de verdad cruza, o no acota nada.
+fn span_wire_cost(span: &Span) -> usize {
+    const BASE: usize = 12; // `{"text":""},`
+    const COLOUR: usize = 16; // `"fg":[255,255,255],`
+    const ROLE: usize = 10; // `"role":"",`
+    BASE + span.text.len()
+        + span.role.as_ref().map_or(0, |r| ROLE + r.len())
+        + span.fg.map_or(0, |_| COLOUR)
+        + span.bg.map_or(0, |_| COLOUR)
 }
 
 /// Tope agregado sobre un LOTE de `decorate`/`column-values` (mismo
@@ -835,6 +854,8 @@ impl PluginInstance {
         let input = PreviewInput {
             mimetype: mimetype.to_owned(),
             content: content.to_vec(),
+            // El render PLANO no tiene visor que medir: sin pista de ancho.
+            columns: None,
         };
         let out = self
             .bindings
@@ -860,11 +881,13 @@ impl PluginInstance {
         &mut self,
         mimetype: &str,
         content: &[u8],
+        columns: Option<u32>,
     ) -> Result<Vec<Vec<Span>>, RuntimeError> {
         self.rearm();
         let input = PreviewInput {
             mimetype: mimetype.to_owned(),
             content: content.to_vec(),
+            columns,
         };
         let out = self
             .bindings

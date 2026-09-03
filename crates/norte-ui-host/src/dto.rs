@@ -1331,6 +1331,10 @@ pub struct SpanView {
     pub role: Option<String>,
     /// El color propio del plugin, `#rrggbb`. Solo cuenta sin `role`.
     pub fg: Option<String>,
+    /// El FONDO del fragmento, `#rrggbb` (puente 50): un previewer de imagen
+    /// pinta medios bloques con el píxel de arriba en `fg` y el de abajo
+    /// aquí. Ningún rol manda sobre él.
+    pub bg: Option<String>,
 }
 
 /// Una imagen reconocida y aceptada: qué es y cuánto dice medir.

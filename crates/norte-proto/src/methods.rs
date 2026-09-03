@@ -163,7 +163,8 @@ use crate::{
 /// llamarlos tras inspeccionar `InitializeResult::protocol_version` y
 /// preferir no arriesgarse. Topes del wire
 /// (server ENFORCE, cliente re-valida fail-closed a lo plano si se violan):
-/// ≤10 000 líneas, ≤64 spans/línea, texto de span ≤4 KiB, payload total
+/// ≤10 000 líneas, ≤256 spans/línea (64 hasta 0.66.0: una imagen pinta un
+/// span por celda), texto de span ≤4 KiB, payload total
 /// ≤4 MiB (mismo tope de retorno del runtime, ya usado por
 /// [`PLUGIN_RUN_COMMAND`]/[`PLUGIN_PREVIEW`]), badge ≤8 chars TRAS
 /// enmascarar. `role: Option<String>` en [`SpanWire`]/[`DecorationWire`] se
@@ -1044,7 +1045,22 @@ use crate::{
 /// local **diciendo por qué**: un panel que se queda vacío sin explicación es
 /// indistinguible de un daemon que no hizo nada, que es justo la confusión que
 /// #326 empezó a arreglar.
-pub const PROTOCOL_VERSION: &str = "0.65.0";
+///
+/// # 0.66.0 — el fondo de un span y el ancho del visor (D4, ADR 0037)
+///
+/// Dos campos opcionales: [`SpanWire::bg`] y
+/// [`PluginPreviewStyledParams::columns`]. Los pide el previewer de imagen:
+/// pinta cada par de píxeles como un medio bloque con el de arriba en `fg` y
+/// el de abajo en `bg`, y tiene que saber a cuántas celdas encoger.
+///
+/// Ventana N=0.66.x / N-1=0.65.x. Aditivo: sin `bg` el JSON de un span es el
+/// de antes, y sin `columns` la petición es la de antes. La pérdida, para un
+/// **cliente 0.65 contra un daemon 0.66**: no manda `columns`, así que el
+/// guest elige su ancho por defecto y el visor recorta; y lee un span con
+/// `bg` ignorando el campo (ADR 0004), así que una imagen se pinta con la
+/// mitad de sus píxeles — legible como bloques de color de arriba, sin
+/// error y sin aviso. Un cliente 0.66 contra un daemon 0.65 no negocia.
+pub const PROTOCOL_VERSION: &str = "0.66.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -7489,7 +7505,10 @@ pub struct PluginPreviewResult {
 /// tratarlo igual, como `None`. `fg` es un fallback de color RGB crudo para
 /// spans sin rol (p. ej. la paleta fija de un highlighter); cuando AMBOS
 /// están presentes, `role` gana — el tema del usuario tiene precedencia
-/// sobre un color fijo del plugin.
+/// sobre un color fijo del plugin. `bg` (0.66.0, D4) es el fondo RGB, que
+/// se pinta tal cual haya o no rol: junto con `fg` es lo que deja a un
+/// previewer de imagen meter dos píxeles en una celda (`▀`). Ausente en
+/// todo span anterior a 0.66.0, y omitido del wire cuando falta.
 ///
 /// ```
 /// use norte_proto::methods::SpanWire;
@@ -7497,6 +7516,7 @@ pub struct PluginPreviewResult {
 /// assert_eq!(s.text, "fn");
 /// assert_eq!(s.role, None);
 /// assert_eq!(s.fg, None);
+/// assert_eq!(s.bg, None);
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -7511,12 +7531,21 @@ pub struct SpanWire {
     /// Color RGB crudo de respaldo cuando no hay `role` (un byte por canal).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fg: Option<[u8; 3]>,
+    /// Color de FONDO del span (0.66.0, D4). Existe por una sola clase de
+    /// previewer: el que pinta una imagen con medios bloques, donde cada
+    /// celda son DOS píxeles —el de arriba en `fg`, el de abajo en `bg`— y
+    /// sin fondo la mitad de la imagen no existe. Un frontend que no pinte
+    /// fondos lo ignora sin perder texto. Un `role` presente sigue mandando
+    /// sobre `fg`; sobre `bg` no hay rol que mande, porque los roles del
+    /// tema son de cromo y ninguno describe el fondo de un fragmento.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg: Option<[u8; 3]>,
 }
 
 /// La preview CON ESTILO producida por un plugin previewer (0.27.0, G3, ADR
 /// 0037): gemelo de [`PluginPreview`] con `lines` de [`SpanWire`] en vez de
 /// un `output: String` plano. Topes del wire (ADR 0037): ≤10 000 líneas,
-/// ≤64 spans por línea, texto de span ≤4 KiB, payload total ≤4 MiB (mismo
+/// ≤256 spans por línea, texto de span ≤4 KiB, payload total ≤4 MiB (mismo
 /// tope de retorno del runtime que ya usan [`PLUGIN_PREVIEW`]/
 /// [`PLUGIN_RUN_COMMAND`]) — el server los aplica antes de enviar; un
 /// cliente los re-valida y cae a [`PLUGIN_PREVIEW`] si se violan.
@@ -7536,14 +7565,22 @@ pub struct PluginPreviewStyled {
     pub lossy: bool,
 }
 
-/// Params de [`PLUGIN_PREVIEW_STYLED`]: idéntico a [`PluginPreviewParams`]
-/// (mismo archivo, misma resolución de previewer — solo cambia la forma del
-/// result).
+/// Params de [`PLUGIN_PREVIEW_STYLED`]: [`PluginPreviewParams`] (mismo
+/// archivo, misma resolución de previewer) más el ancho del visor, que la
+/// preview plana no necesita porque no puede pintar una imagen.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginPreviewStyledParams {
     /// Ruta del archivo a previsualizar (el core lee sus bytes).
     pub path: VPath,
+    /// Ancho del visor que va a pintar la preview, en CELDAS (0.66.0, D4).
+    /// Existe porque un previewer de imagen tiene que decidir a cuántas
+    /// celdas encoge la foto, y solo quien pinta lo sabe. `None` = el
+    /// cliente no lo sabe o no tiene visor (la CLI), y el guest elige su
+    /// ancho por defecto. Es una PISTA, no un contrato: un guest puede
+    /// devolver líneas más largas y el visor las recorta como siempre.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub columns: Option<u32>,
 }
 
 /// Result de [`PLUGIN_PREVIEW_STYLED`]: la preview con estilo del primer

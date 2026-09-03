@@ -1063,16 +1063,19 @@
       "styled": [
         [
           {
+            "bg": null,
             "fg": "#ff0000",
             "role": "title",
             "text": "quinta"
           },
           {
+            "bg": "#000080",
             "fg": "#00ff00",
             "role": null,
             "text": " lín"
           },
           {
+            "bg": null,
             "fg": null,
             "role": null,
             "text": "ea"

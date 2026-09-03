@@ -509,10 +509,10 @@ describe("el visor", () => {
       image_refused: "",
       styled: [
         [
-          { text: "fn", role: "title", fg: "#ff0000" },
-          { text: " main", role: null, fg: "#0080ff" },
+          { text: "fn", role: "title", fg: "#ff0000", bg: null },
+          { text: " main", role: null, fg: "#0080ff", bg: "#00ff00" },
         ],
-        [{ text: "plano", role: null, fg: null }],
+        [{ text: "plano", role: null, fg: null, bg: null }],
       ],
     };
     screen.paint(v);
@@ -530,6 +530,9 @@ describe("el visor", () => {
     // Sin rol, el color propio del plugin sí.
     expect(main.dataset["role"]).toBeUndefined();
     expect(main.style.color).toBe("rgb(0, 128, 255)");
+    // Y el fondo, cuando viene (puente 50).
+    expect(main.style.backgroundColor).toBe("rgb(0, 255, 0)");
+    expect(fn_.style.backgroundColor).toBe("");
     // El texto sigue siendo TEXTO.
     expect(body.textContent).toBe("fn mainplano");
   });

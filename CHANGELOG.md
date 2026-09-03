@@ -9,6 +9,26 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **Protocol 0.66.0, `norte:plugin` 0.8.0 → 0.9.0, bridge 50: a span has a
+  background and the viewer says how wide it is.** `SpanWire` gains
+  `bg: [r, g, b]` and `plugin.preview_styled` takes `columns`, both optional
+  and both omitted when absent, so the wire a 0.65 peer sends and reads did
+  not move: a 0.65 daemon ignores the width and never sends a background; a
+  0.65 client drops the background and paints the foreground it always did.
+  The same two fields land on `span` and `preview-input` in the WIT, which
+  is why the package moves — **plugins built against `norte:plugin@0.8.0`
+  need a rebuild** (`just plugins force` rebuilds the official ones; until
+  then the catalogue lists them as broken). The TUI paints `bg` as an RGB
+  background and sends the terminal's width; the window paints it as the
+  span's `background-color` and sends its viewport's. It is what an image
+  previewer needs to draw two pixels per cell with `▀` and to shrink a
+  picture to the viewer (ADR 0037 amendment). Source breaks for anyone
+  building on the crates: the SDK's `RemoteBackend::plugin_preview_styled`
+  and `norte-ui-host`'s `HostBackend::plugin_preview_styled` take the width
+  as a second argument, and `norte_frontend::ansi::StyledSpan` and
+  `norte_ui_host::dto::SpanView` gain a public `bg` field. The daemon
+  clamps a requested width to 1024 cells, and the per-line span cap counts
+  each span's colours towards the 4 MiB total, not only its text.
 - **`norte:location` 0.1.0 → 0.2.0: `read-prefix`.** `read` reads a file
   whole and charges it whole against the page's budget, so a column that
   only needs a header — the dimensions of a PNG, the bitrate of an MP3 —
@@ -24,6 +44,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **`org.norte.image-ansi`: pictures in the viewer.** A `previewer` for
+  `image/png`, `image/jpeg` and `image/gif` (first frame) that paints the
+  picture as `▀` half-block cells, the upper pixel in the foreground and the
+  lower in the background — the two fields `norte:plugin@0.9.0` added — and
+  shrinks it to the width the viewer reports, never enlarging; transparency
+  is blended over black. Decoding is the pure-Rust `image` crate with its
+  dimensions and allocation bounded; a file at the host's 1 MiB read cap is
+  refused with a line rather than rendered from a truncated prefix. The
+  host learned `png`/`jpg`/`jpeg`/`gif`/`webp` → `image/*`, and the
+  per-line span cap moved from 64 to 256 because a photo is one span per
+  cell (ADR 0037 amendment). `just plugin-image-ansi`.
 - **`org.norte.markdown`: Markdown as styled lines in the viewer.** A
   `previewer` for `text/markdown` — headings in the theme's title role with
   the hashes dropped, emphasis and strong in their own colours, inline and

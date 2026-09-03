@@ -175,8 +175,20 @@ wit_bindgen::generate!({
 });
 ```
 
+A styled previewer returns lines of `span`s. A span carries `text`, an
+optional `role` (a name from norte's theme — `keyword`, `number`, `title`,
+`info` — which the host paints with whatever colour the user's theme gives
+it), an optional `fg` and, since `norte:plugin@0.9.0`, an optional `bg`, both
+`(r, g, b)`. When a role and a colour are both present, the role wins for the
+foreground; `bg` is painted as given. Foreground and background together are
+what lets a previewer draw pixels: the `▀` half block with `fg` for the top
+pixel and `bg` for the bottom one. `preview-input.columns` is the width of
+the viewer in cells when the host knows it (the TUI sends the terminal's
+width, the window its viewport's); `none` means no hint, and the guest picks
+its own width. Treat it as a hint, never as a promise of a buffer that size.
+
 The host caps what a guest may return: 4 MiB per call, 10 000 styled lines,
-64 spans per line, 4 KiB of text per span, 8 cells per decorator badge,
+256 spans per line, 4 KiB of text per span, 8 cells per decorator badge,
 1024 log lines of 4 KiB. Exceeding a cap rejects the whole answer; nothing is
 truncated silently. A call has 10 seconds of wall-clock; a guest that runs
 out reports "out of time", not "crashed". The store is limited to 64 MiB and
@@ -236,7 +248,7 @@ were its own.
 ## WIT compatibility (ADR 0094)
 
 The version of a WIT package is part of every interface name your component
-imports or exports (`norte:plugin/previewer@0.8.0`). **When norte moves a
+imports or exports (`norte:plugin/previewer@0.9.0`). **When norte moves a
 package, every binary built against the previous version stops loading.**
 This is a fact of the component model; what norte promises is what it does
 about it:

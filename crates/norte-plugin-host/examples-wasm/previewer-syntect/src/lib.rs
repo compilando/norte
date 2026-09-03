@@ -105,6 +105,7 @@ impl PreviewerGuest for Syntect {
                     text: l.to_string(),
                     role: None,
                     fg: None,
+                    bg: None,
                 }]
             })
             .collect())

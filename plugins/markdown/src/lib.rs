@@ -30,6 +30,7 @@ mod guest {
                         text: s.text,
                         role: s.role.map(str::to_owned),
                         fg: s.fg,
+                        bg: None,
                     })
                     .collect()
             })
