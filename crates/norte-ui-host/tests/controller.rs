@@ -7702,6 +7702,56 @@ async fn el_visor_lleva_los_fragmentos_de_la_preview() {
     );
 }
 
+/// Lo que el renderer MIDIÓ del cuerpo del visor (puente 53) manda sobre el
+/// viewport la próxima vez que se abre: el viewport cuenta el cromo, y una
+/// imagen encogida a él se salía por la derecha.
+#[tokio::test]
+async fn el_visor_pide_el_ancho_que_midio_el_renderer() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"main.rs".to_vec(), false)]);
+    f.contenido
+        .insert("mem:///casa/main.rs".to_owned(), b"fn main() {}".to_vec());
+    let f = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&f)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    assert_eq!(
+        anchos_de_preview_tras(&h, &mut sub, &f, 1).await.as_slice(),
+        &[Some(120)]
+    );
+
+    h.dispatch(UiAction::SetViewerCols { cols: 77 })
+        .await
+        .expect("host vivo");
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    assert_eq!(
+        anchos_de_preview_tras(&h, &mut sub, &f, 2).await.as_slice(),
+        &[Some(120), Some(77)],
+        "la segunda apertura pide el ancho medido"
+    );
+}
+
+/// Pide fotos hasta que el backend falso haya visto `n` peticiones de
+/// preview con estilo, y devuelve los anchos que llevaban.
+async fn anchos_de_preview_tras(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+    f: &Falso,
+    n: usize,
+) -> Vec<Option<u32>> {
+    let mut anchos = Vec::new();
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let _ = siguiente_foto(sub).await;
+        anchos.clone_from(&f.anchos_de_preview.lock().expect("mutex"));
+        if anchos.len() >= n {
+            break;
+        }
+    }
+    anchos
+}
+
 /// Un previewer que no aplica NO estorba: el visor enseña el fichero.
 #[tokio::test]
 async fn sin_previewer_el_visor_ensena_el_fichero() {

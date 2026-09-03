@@ -2560,6 +2560,10 @@ struct Estado {
     /// `None` mientras no lo diga: se cae al tamaño en celdas menos el cromo,
     /// que es una estimación y se comporta como tal.
     visor_filas: Option<usize>,
+    /// Celdas de ancho del CUERPO del visor, medidas por el renderer la
+    /// última vez que lo pintó. `None` hasta entonces: la primera apertura
+    /// usa el viewport, que se pasa por el cromo.
+    visor_columnas: Option<u32>,
     /// El testigo de la lectura del visor en vuelo, si la hay.
     ///
     /// Sin él, una lectura lenta abría el visor DESPUÉS de que el usuario lo
@@ -2925,6 +2929,7 @@ impl Estado {
             resolver_dialogo: Resolver::new(keymap_dialog),
             efectos,
             visor_filas: None,
+            visor_columnas: None,
             visor_en_vuelo: None,
             visor_token: None,
             visor: None,
@@ -3398,6 +3403,10 @@ impl Estado {
             }
             UiAction::Key(k) => self.tecla(k, backend, buzon),
             UiAction::SetViewerRows { rows } => self.fijar_filas_del_visor(*rows),
+            UiAction::SetViewerCols { cols } => {
+                self.visor_columnas = Some((*cols).clamp(1, u32::from(u16::MAX)));
+                (self.aplicada(), Vec::new())
+            }
             UiAction::AiRenameDecide { approve } => {
                 self.decidir_revision_ia(*approve, backend, buzon)
             }

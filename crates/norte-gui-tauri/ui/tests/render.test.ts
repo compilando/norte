@@ -460,7 +460,7 @@ describe("la cabecera", () => {
 
 describe("el visor", () => {
   it("tapa la pantalla y dice con qué encoding está leyendo", () => {
-    const { screen } = montar();
+    const { screen, enviadas } = montar();
     const v = vista({});
     v.viewer = {
       path_display: "⟨file⟩/casa/notas.txt",
@@ -485,6 +485,10 @@ describe("el visor", () => {
     expect(doc.getAttribute("aria-label")).toContain("notas.txt");
     expect(doc.querySelector(".viewer-body")?.textContent).toBe("primera\nsegunda");
     expect(doc.querySelector(".viewer-meta")?.textContent).toContain("UTF-8");
+    // Quien pinta declara el tamaño del cuerpo: filas Y columnas (puente
+    // 53), que es lo que el previewer recibe la próxima vez.
+    expect(enviadas.some((a) => a.action === "set_viewer_rows")).toBe(true);
+    expect(enviadas.some((a) => a.action === "set_viewer_cols")).toBe(true);
   });
 
   it("un binario se pinta como hexadecimal y lo dice", () => {

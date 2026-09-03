@@ -168,6 +168,8 @@ export class Screen {
   private imagenDe: string | null = null;
   /** Las líneas de visor que ya se declararon. */
   private viewerRows = 0;
+  /** Las columnas del cuerpo del visor que el host ya conoce. */
+  private viewerCols = 0;
   /** La ayuda está abierta con el CUERPO enfocado. */
   private helpBodyFocused = false;
   private pendingRange = new Map<number, number>();
@@ -2510,10 +2512,19 @@ export class Screen {
     // celdas de disposición menos un cromo adivinado, así que mandaba más
     // líneas de las que se ven —se recortaban sin decirlo— y avanzaba una
     // página por un número distinto: cada página saltaba lo recortado.
-    const filas = Math.max(1, Math.floor(body.clientHeight / this.cell().h));
+    const celda = this.cell();
+    const filas = Math.max(1, Math.floor(body.clientHeight / celda.h));
     if (filas !== this.viewerRows) {
       this.viewerRows = filas;
       this.send({ action: "set_viewer_rows", rows: filas });
+    }
+    // Y cuántas COLUMNAS, por lo mismo: es lo que el host le dice al
+    // previewer (proto 0.66.0) la próxima vez, y el viewport entero cuenta
+    // el cromo — una imagen encogida a él se salía por la derecha.
+    const columnas = Math.max(1, Math.floor(body.clientWidth / celda.w));
+    if (columnas !== this.viewerCols) {
+      this.viewerCols = columnas;
+      this.send({ action: "set_viewer_cols", cols: columnas });
     }
   }
 

@@ -137,9 +137,11 @@ impl Estado {
         let buzon = buzon.clone();
         let path = entrada.path.clone();
         // El ancho del visor, en celdas, para el previewer (proto 0.66.0):
-        // un previewer de imagen encoge a esto. El visor ocupa la ventana
-        // entera, así que es el viewport.
-        let columnas = Some(u32::from(self.viewport.0));
+        // un previewer de imagen encoge a esto. Lo que MIDIÓ el renderer la
+        // última vez que pintó el cuerpo del visor (`SetViewerCols`), o el
+        // viewport si todavía no lo ha pintado nunca — que se pasa por el
+        // cromo, y por eso no es la primera opción.
+        let columnas = Some(self.visor_columnas.unwrap_or(u32::from(self.viewport.0)));
         tokio::spawn(async move {
             // Un byte de más que el presupuesto: es lo que delata que el
             // fichero seguía. El resto NO se lee.

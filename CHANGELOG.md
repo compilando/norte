@@ -44,6 +44,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window's viewer asks the previewer for its measured width
+  (bridge 53).** It sent the whole viewport, which counts the chrome, so
+  a picture shrunk to it ran off the right edge; the renderer now reports
+  the viewer body's columns the way it reported its rows, and the next
+  styled preview is asked for that width.
 - **The window compares two files (#312, bridge 52).** The last command
   in the parity matrix's deferred list; the list is now empty. Which two
   files and which program are the decisions the TUI already shares

@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 52;
+export const BRIDGE_VERSION = 53;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -1159,6 +1159,7 @@ export type UiAction =
   | { action: "set_viewport"; width: number; height: number }
   | ({ action: "key" } & KeyInput)
   | { action: "set_viewer_rows"; rows: number }
+  | { action: "set_viewer_cols"; cols: number }
   | { action: "help_select_topic"; row: number }
   | { action: "help_activate"; index: number }
   | { action: "settings_select_row"; row: number }

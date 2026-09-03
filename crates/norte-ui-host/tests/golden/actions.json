@@ -221,6 +221,10 @@
     "action": "select_tab",
     "slot_id": 3
   },
+  "set_viewer_cols": {
+    "action": "set_viewer_cols",
+    "cols": 110
+  },
   "set_viewer_rows": {
     "action": "set_viewer_rows",
     "rows": 40

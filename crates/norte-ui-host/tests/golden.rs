@@ -178,6 +178,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::SetViewport { .. } => "set_viewport",
         UiAction::Key(_) => "key",
         UiAction::SetViewerRows { .. } => "set_viewer_rows",
+        UiAction::SetViewerCols { .. } => "set_viewer_cols",
         UiAction::HelpSelectTopic { .. } => "help_select_topic",
         UiAction::HelpActivate { .. } => "help_activate",
         UiAction::SettingsSelectRow { .. } => "settings_select_row",
@@ -446,6 +447,7 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("set_viewer_rows", UiAction::SetViewerRows { rows: 40 }),
+        ("set_viewer_cols", UiAction::SetViewerCols { cols: 110 }),
         (
             "set_viewport",
             UiAction::SetViewport {

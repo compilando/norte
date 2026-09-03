@@ -353,6 +353,14 @@ pub enum UiAction {
         /// Líneas visibles.
         rows: u32,
     },
+    /// Cuántas CELDAS de ancho tiene el cuerpo del visor, medidas por quien
+    /// pinta. Es lo que se le dice al previewer (proto 0.66.0) la próxima
+    /// vez que se abra: el viewport entero contaba el cromo, y una imagen
+    /// encogida a él se salía por la derecha.
+    SetViewerCols {
+        /// Celdas de ancho del cuerpo.
+        cols: u32,
+    },
     /// Pone el cursor de la lateral de la ayuda en esa fila y ENSEÑA lo que
     /// haya (un click).
     ///

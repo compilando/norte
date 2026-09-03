@@ -182,7 +182,10 @@ use serde::{Deserialize, Serialize};
 ///   que quien hospeda corrió esperándolo —el comparador de dos ficheros—,
 ///   como foto y como parche, y la acción con la que quien hospeda la
 ///   devuelve.
-pub const BRIDGE_VERSION: u32 = 52;
+/// - **53**: el renderer declara cuántas COLUMNAS tiene el cuerpo del visor
+///   (`SetViewerCols`), como ya declaraba las filas: es el ancho que el
+///   previewer recibe.
+pub const BRIDGE_VERSION: u32 = 53;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///
