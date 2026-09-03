@@ -488,6 +488,20 @@ plugin-file-icons *ARGS:
     cp $origen/target/wasm32-wasip2/release/file_icons.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
+# Las columnas de dimensiones y duración (`plugins/media-info`, demo D2).
+plugin-media-info *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    flag=""; [ "{{ARGS}}" = "force" ] && flag="--force"
+    origen=plugins/media-info
+    cargo build --release --target wasm32-wasip2 --manifest-path $origen/Cargo.toml
+    stage=target/plugin-stage/media-info
+    rm -rf "$stage" && mkdir -p "$stage"
+    cp $origen/plugin.toml "$stage/plugin.toml"
+    [ -f $origen/help.md ] && cp $origen/help.md "$stage/help.md" || true
+    cp $origen/target/wasm32-wasip2/release/media_info.wasm "$stage/plugin.wasm"
+    cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
+
 # Todos los plugins oficiales, de una vez. `just plugins force` reemplaza los
 # ya instalados (y retira su consentimiento, como dice `plugin install`).
 [positional-arguments]
@@ -497,6 +511,7 @@ plugins *ARGS:
     just plugin-syntect "$@"
     just plugin-git-status "$@"
     just plugin-file-icons "$@"
+    just plugin-media-info "$@"
 
 # ---------- distribución ----------
 

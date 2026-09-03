@@ -12,6 +12,7 @@ gate red.
 | `template/` | `org.example.template` | previewer + command | The smallest guest that builds. Copy it to start a plugin of your own — see [the author guide](../docs/plugins.md). |
 | `git-status/` | `org.norte.git-status` | columns | A `git-status` column: which files changed against the index, read under the repository root the host confines it to (ADR 0057). |
 | `file-icons/` | `org.norte.file-icons` | decorator | A badge per row saying what kind of file it is, from the name alone; `style = emoji` or `ascii`. |
+| `media-info/` | `org.norte.media-info` | columns | `dims` for PNG/JPEG/GIF/WebP and `duration` for WAV/MP3/FLAC, from at most 64 KiB of header read under the location token. |
 
 The syntax-highlighting previewer (`org.norte.syntect`) lives with the host's
 example guests, in `crates/norte-plugin-host/examples-wasm/previewer-syntect/`.

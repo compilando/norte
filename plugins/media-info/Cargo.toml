@@ -1,0 +1,25 @@
+# `org.norte.media-info`: image dimensions and audio duration as columns,
+# from file HEADERS read under the location token (demo plugin D2).
+#
+# Not a workspace member, like every guest. The parsers are pure functions
+# over bytes with their own tests on the host — hence `rlib` next to `cdylib`.
+[workspace]
+
+[package]
+name = "media-info"
+edition = "2021"
+version = "0.1.0"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Image dimensions and audio duration for norte listings, as a WASM columns plugin"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+strip = true

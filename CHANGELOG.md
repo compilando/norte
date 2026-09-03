@@ -24,6 +24,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **`org.norte.media-info`: `dims` and `duration` columns from file
+  headers.** A `columns` plugin with `location = "read"` and no root marker:
+  for a file whose extension claims an image (PNG, JPEG, GIF, WebP) or an
+  audio track (WAV, MP3, FLAC) it reads at most 64 KiB through `read-prefix`
+  — plus a `stat` for MP3's constant-bitrate estimate — and answers
+  `1920×1080` or `3:41`. Anything else is not opened; a header that does not
+  parse is an empty cell, never a guess. Each parser is a pure function over
+  bytes with its own tests on hand-built headers; the gate installs the real
+  guest, runs both columns over a temp directory that includes a 200 KiB
+  file with a valid header in front, and checks that the location-less call
+  answers nothing. `just plugin-media-info`; add the columns as
+  `plugin:org.norte.media-info/dims` and `…/duration`.
 - **`org.norte.file-icons`, the first demo plugin.** A `decorator` that puts
   a badge on each row saying what kind of file it is — code, script,
   document, image, audio, video, archive, configuration, and the names that
