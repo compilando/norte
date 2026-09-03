@@ -457,6 +457,13 @@ enum PluginCmd {
         #[arg(long)]
         force: bool,
     },
+    /// Desinstala un plugin por su id. RETIRA su consentimiento
+    Uninstall {
+        /// Id del plugin (reverse-DNS, p. ej. `org.norte.demo`)
+        id: String,
+    },
+    /// Lista los plugins instalados con su estado (aprobado, activado) y capabilities
+    List,
 }
 
 /// Subcomandos MCP.
@@ -1801,7 +1808,85 @@ async fn plugin_cmd(backend: &Backend, cmd: PluginCmd) -> anyhow::Result<ExitCod
                 }
             }
         }
+        // Simétrico de `Install`: sin daemon. El id llega de la línea de
+        // comandos y `uninstall` lo valida antes de convertirlo en ruta.
+        PluginCmd::Uninstall { id } => {
+            let dir = norte_core::connect::config_dir();
+            match norte_core::plugins::uninstall(&dir, &id) {
+                Ok(rep) => {
+                    println!(
+                        "{}",
+                        norte_i18n::ta("cli-plugin-uninstalled", &[("id", &rep.id)])
+                    );
+                    if rep.was_approved {
+                        println!("{}", norte_i18n::t("cli-plugin-uninstalled-consent"));
+                    }
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(e) => {
+                    // Texto al usuario por Fluent (#319); el `Display` del
+                    // error se queda para los logs.
+                    use norte_core::plugins::UninstallError as U;
+                    let msg = match &e {
+                        U::InvalidId => norte_i18n::t("cli-plugin-uninstall-invalid-id"),
+                        U::NotInstalled(id) => {
+                            norte_i18n::ta("cli-plugin-uninstall-not-installed", &[("id", id)])
+                        }
+                        U::Io(io) => {
+                            norte_i18n::ta("cli-plugin-uninstall-io", &[("error", &io.to_string())])
+                        }
+                    };
+                    eprintln!("{msg}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
+        }
+        // `plugin.list`, el mismo catálogo que pinta el gestor: id, categoría,
+        // los DOS hechos (aprobado, activado) y las capabilities que aprobar
+        // concedería. El nombre viene de un tercero: saneado, como en el
+        // gestor. Los rotos se cuentan, no se listan — `norte doctor` los
+        // explica uno a uno.
+        PluginCmd::List => plugin_list(backend).await,
     }
+}
+
+/// `norte plugin list`: una fila por plugin instalado, tabulada.
+async fn plugin_list(backend: &Backend) -> anyhow::Result<ExitCode> {
+    let listado = backend.plugins_list().await?;
+    if listado.plugins.is_empty() && listado.errors.is_empty() {
+        println!("{}", norte_i18n::t("cli-plugin-list-empty"));
+        return Ok(ExitCode::SUCCESS);
+    }
+    for p in &listado.plugins {
+        let (nombre, _) = norte_frontend::display_name(p.name.as_bytes());
+        let aprobado = norte_i18n::t(if p.approved {
+            "cli-plugin-state-approved"
+        } else {
+            "cli-plugin-state-unapproved"
+        });
+        let activado = norte_i18n::t(if p.enabled {
+            "cli-plugin-state-enabled"
+        } else {
+            "cli-plugin-state-disabled"
+        });
+        let caps = if p.capabilities.is_empty() {
+            "-".to_string()
+        } else {
+            p.capabilities.join(",")
+        };
+        println!(
+            "{}\t{}\t{aprobado}\t{activado}\t{caps}\t{nombre}",
+            p.id, p.category
+        );
+    }
+    if !listado.errors.is_empty() {
+        let n = listado.errors.len().to_string();
+        eprintln!(
+            "{}",
+            norte_i18n::ta("cli-plugin-list-broken", &[("count", &n)])
+        );
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// `norte index build|query` (M4, ADR 0034).
@@ -2604,12 +2689,36 @@ async fn gc_cmd(
     }
 }
 
+/// ¿`s` es una URL que la CLI enruta como remota? Los schemes del core, los
+/// de archivo-como-directorio, y los que declare un provider plugin
+/// INSTALADO (`plugin_schemes`): en cuanto hay quien sirve `webdav://`, un
+/// argumento `webdav://x` deja de ser un fichero local con nombre raro.
+/// Consentido o no — enrutar no concede nada; conectar sigue fail-closed.
+fn is_remote_url(s: &str, plugin_schemes: &[String]) -> bool {
+    REMOTE_SCHEMES.iter().any(|p| s.starts_with(p))
+        || is_archive_url(s)
+        || plugin_schemes.iter().any(|sch| {
+            s.strip_prefix(sch.as_str())
+                .is_some_and(|resto| resto.len() > 3 && resto.starts_with("://"))
+        })
+}
+
+/// Los schemes de los provider plugins instalados bajo el config dir de
+/// este proceso: un `plugin.toml` por plugin, leído UNA vez por proceso y
+/// solo para enrutar (`cp` pregunta dos veces por comando).
+fn plugin_schemes() -> &'static [String] {
+    static SCHEMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    SCHEMES.get_or_init(|| {
+        norte_core::plugins::installed_provider_schemes(&norte_core::connect::config_dir())
+    })
+}
+
 fn vpath(path: &std::path::Path) -> anyhow::Result<VPath> {
     // Una URL remota va por el parser wire; todo lo demás es un path NATIVO
     // local (bytes, jamás forzados a UTF-8 — un arg no-UTF8 no puede ser URL
     // y cae al camino nativo).
     if let Some(s) = path.to_str()
-        && (REMOTE_SCHEMES.iter().any(|p| s.starts_with(p)) || is_archive_url(s))
+        && is_remote_url(s, plugin_schemes())
     {
         reject_inline_password(s)?;
         return VPath::parse(s).with_context(|| norte_i18n::ta("cli-invalid-url", &[("url", s)]));
@@ -4052,6 +4161,30 @@ mod sigint_gate_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Un provider plugin instalado añade su scheme al enrutado de la CLI; sin
+    /// él, el mismo argumento sigue siendo un fichero local (`a://b` es un
+    /// nombre legal). El scheme casa ENTERO: `mem` instalado no convierte
+    /// `memplug://x` en URL.
+    #[test]
+    fn un_scheme_de_plugin_instalado_enruta_como_url() {
+        let ninguno: Vec<String> = vec![];
+        assert!(!is_remote_url("memplug://host", &ninguno));
+        let memplug = vec!["memplug".to_string()];
+        assert!(is_remote_url("memplug://host", &memplug));
+        assert!(
+            !is_remote_url("memplug://", &memplug),
+            "sin authority no es URL"
+        );
+        let mem = vec!["mem".to_string()];
+        assert!(
+            !is_remote_url("memplug://host", &mem),
+            "prefijo no es scheme"
+        );
+        // Los del core y los de archivo siguen entrando sin plugin.
+        assert!(is_remote_url("sftp://h", &ninguno));
+        assert!(is_remote_url("zip+file:///a.zip/!/x", &ninguno));
+    }
 
     /// Reserva normativa de ADR 0018: ningún scheme remoto de la allowlist
     /// puede empezar por `<formato>+` — el registro de formatos manda.

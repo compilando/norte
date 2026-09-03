@@ -105,6 +105,17 @@ norte plugin install <dir> --force  # replaces it, and withdraws its consent
 not the `.wasm`, so replacing the binary under an identical manifest would
 otherwise keep running new code under a permission granted to old code.
 
+```sh
+norte plugin list                   # id, category, approved, enabled, capabilities
+norte plugin uninstall <id>         # removes it, and withdraws its consent
+```
+
+A `provider` plugin serves the URL scheme it declares (ADR 0093): once one
+declaring `webdav` is installed, approved and enabled, `webdav://host:8443`
+opens through it. `file`, `sftp`, `ftp` and `s3` stay with the core and cannot
+be claimed. A plugin that declares `net` reaches exactly the connection's
+`ip:port` — the URL's port, or the `default-port` its manifest declares.
+
 Signing and a registry are deliberately absent — installing from a local path
 needs neither, and both need decisions this project has not made yet.
 

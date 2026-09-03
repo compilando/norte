@@ -329,6 +329,19 @@ cli-spool-sweep-failed = warning: could not sweep { $path }: { $error }
 # not activate, and saying only "installed" would leave the reader waiting for
 # something that is not going to happen.
 cli-plugin-unapproved = still NOT approved: approve it and switch it on in the extension manager
+cli-plugin-uninstalled = uninstalled: { $id }
+# Uninstalling withdraws the approval too, on purpose: a plugin installed later
+# under the same id must not inherit consent given to another binary.
+cli-plugin-uninstalled-consent = its approval went with it: a plugin with the same id installs unapproved
+cli-plugin-uninstall-invalid-id = not a plugin id: expected reverse-DNS, e.g. `org.foo.bar`
+cli-plugin-uninstall-not-installed = { $id } is not installed
+cli-plugin-uninstall-io = uninstalling: { $error }
+cli-plugin-list-empty = no plugins installed
+cli-plugin-list-broken = { $count } broken plugin(s) not listed — `norte doctor` says why
+cli-plugin-state-approved = approved
+cli-plugin-state-unapproved = NOT approved
+cli-plugin-state-enabled = on
+cli-plugin-state-disabled = off
 # A blocker is two fields on two lines, not one joined by `: ` — the same
 # reason as the failure rows below (corpus `cause_join_spoof`).
 cli-sync-blocker = { $rel }
@@ -1674,6 +1687,7 @@ cli-doctor-detail-conn-secret-env-not-utf8 = { $detail } is set to bytes that ar
 cli-doctor-detail-conn-secret-env-absent = { $detail } is not set; the keyring or secrets.age may still supply the secret — this is only a warning because it cannot be checked from here
 cli-doctor-detail-conn-secret-prompt = { $detail } is not set, and the entry says secret = "prompt": norte will ask for it when the connection opens
 cli-doctor-detail-conn-secret-prompt-inert = { $detail } says secret = "prompt", which does nothing with this auth method — it only applies to password and access-key
+cli-doctor-detail-connection-scheme-unserved = { $detail }: nothing serves that scheme — not the core, and no installed provider plugin declares it (a typo, or a plugin still to install)
 cli-doctor-detail-plugin-digest-stale = { $id }: manifest capabilities changed since approval; re-approval required
 cli-doctor-detail-plugin-help-truncated = { $id }: its help.md is over the size limit and is served cut short
 cli-doctor-detail-plugin-help-lossy = { $id }: its help.md has bytes that do not decode; they render as replacement characters

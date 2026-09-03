@@ -9,6 +9,54 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A provider plugin serves the scheme it declares** (ADR 0093). A
+  `[[contributions.provider]]` could be declared, approved and enabled, and
+  nothing ever resolved it: the connection manager matched schemes by hand
+  against the core's providers and an embedded FTP guest, so a third-party
+  provider was inert on arrival — the hook lie, one floor up, and the opposite
+  of what ADR 0041 promised. The manager now asks the catalogue first for any
+  scheme that is not the core's: an approved and enabled plugin declaring
+  `webdav` serves `webdav://host`, instantiated under its own manifest's
+  capabilities and configured with the connection's endpoint and credentials.
+  The guest has no DNS, so when its manifest declares `net` the host resolves
+  the endpoint through the same anti-SSRF filter the FTP guest uses and adds
+  exactly `ip:port` to the allow-list the human approved — the URL's port or
+  the contribution's `default-port`, never the whole host, and with neither
+  the connection is refused. What runs is what was approved: the bytes of
+  `plugin.wasm` are hashed and compared with the digest the catalogue anchored
+  before the guest is instantiated. `file`, `sftp`, `ftp` and `s3` are
+  **reserved**: a manifest claiming one is rejected, and the registry never
+  answers for them, so approving a plugin can never put it in front of a
+  backend with trash, resume and TLS — or in front of the stored FTP
+  passwords. The scheme a provider claims now shows among its capabilities as
+  `provider:webdav`, because that is what approving grants. The connection
+  parser accepts any scheme a `VPath` can carry instead of a closed list, the
+  CLI routes an argument as a URL when an installed provider declares its
+  scheme, and `norte doctor` warns about a connection whose scheme nobody
+  serves — the typo the closed list used to catch. Proven end to end with the
+  `provider-mem` guest installed for real: unapproved, the scheme does not
+  exist; consented, it lists; with `net`, a metadata-range endpoint is refused
+  and a binary swapped after approval stops serving.
+- **`norte plugin list` and `norte plugin uninstall <id>`.** The CLI could
+  install a plugin and never remove it. `list` prints what the extension
+  manager shows — id, category, the two facts (approved, enabled), the
+  capabilities approving would grant — and counts broken ones without listing
+  them. `uninstall` removes the directory **and withdraws the approval**, for
+  the reason `install --force` already did: the state file is merged on write,
+  so a removed key would survive and a plugin installed later under the same id
+  would inherit consent given to another binary. The id is validated as a
+  plugin id before it becomes a path.
+
+### Changed
+
+- **A manifest declaring `ai` is rejected, not accepted and ignored** (ADR 0022
+  amendment). The capability parsed, entered the approval digest and painted a
+  badge in the manager, and no host interface honoured it: a human approved
+  "AI access" and granted nothing — the declared capability nobody honours
+  (ADR 0088), with the same shape as the hooks A2 closed. Same remedy: the
+  manifest is refused with the reason, the field stays because spec §7.1 names
+  it, and digests of manifests without `ai` do not move.
+
 - **The daemon's log can be read over the wire** (#328, protocol **0.65.0**,
   ADR 0092). Two read-only methods: `log.tail { cursor, max }` answers with the
   lines after `cursor`, the next cursor, how many that cursor missed, the level

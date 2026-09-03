@@ -254,7 +254,8 @@ fn sin_userinfo(url: &str) -> String {
 }
 
 /// Parser mínimo de `scheme://[user@]host[:port]` (sin path). Evita una dep de
-/// URL completa: solo estos schemes remotos.
+/// URL completa. El scheme es cualquiera válido para un `VPath`: el core
+/// decide después si lo sirve él o un provider plugin que lo declare.
 fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
     let (scheme, rest) = url
         .split_once("://")
@@ -281,7 +282,11 @@ fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
         Some((u, hp)) => (Some(u.to_string()), hp),
         None => (None, authority),
     };
-    if !matches!(scheme, "sftp" | "ftp" | "s3") {
+    // Cualquier scheme que un `VPath` pueda llevar: los del core y los que
+    // declare un provider plugin. La lista cerrada `sftp|ftp|s3` que hubo
+    // aquí hacía imposible que un plugin sirviera `webdav://` sin tocar este
+    // crate, que es justo lo que un plugin no puede tocar.
+    if norte_proto::Scheme::new(scheme).is_err() {
         return Err(ConnectError::InvalidUrl(url.to_string()));
     }
     // s3://bucket: la authority es SOLO el bucket. Un `user@` en posición de
@@ -447,10 +452,28 @@ mod tests {
         assert_eq!(ep.port, Some(2121));
     }
 
+    /// Un provider plugin sirve el scheme que declara, así que el parser de
+    /// conexiones no puede llevar la lista cerrada `sftp|ftp|s3`: `webdav://`
+    /// llega aquí antes de que nadie pregunte al catálogo. Lo que se exige es
+    /// que sea un scheme (el alfabeto de `norte_proto::Scheme`), no que sea
+    /// uno de los tres del core.
+    #[test]
+    fn endpoint_acepta_el_scheme_de_un_plugin() {
+        let ep = parse_endpoint("webdav://u@files.example.com:8443").unwrap();
+        assert_eq!(ep.scheme, "webdav");
+        assert_eq!(ep.user.as_deref(), Some("u"));
+        assert_eq!(ep.host, "files.example.com");
+        assert_eq!(ep.port, Some(8443));
+        assert_eq!(parse_endpoint("memplug://host").unwrap().scheme, "memplug");
+        // Pero lo que no es un scheme sigue fuera: mayúsculas, vacío, barras.
+        assert!(parse_endpoint("HTTP://host").is_err());
+        assert!(parse_endpoint("://host").is_err());
+        assert!(parse_endpoint("a/b://host").is_err());
+    }
+
     #[test]
     fn endpoint_invalido() {
         assert!(parse_endpoint("sin-scheme").is_err());
-        assert!(parse_endpoint("http://host").is_err()); // scheme no remoto
         assert!(parse_endpoint("sftp://host:noport").is_err());
         assert!(parse_endpoint("sftp://").is_err()); // host vacío
         assert!(parse_endpoint("sftp://@host").is_err()); // usuario vacío

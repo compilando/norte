@@ -46,6 +46,18 @@ cannot rearrange what you read. A row for an extension that is not approved and
 enabled is dimmed and says which of the two it is — which is the answer you
 came for, if you are reading that page to decide whether to turn it on.
 
+A provider is the one kind that answers to a URL: install one that declares
+`webdav`, approve it and turn it on, and `webdav://host` opens through it. The
+scheme it claims shows among its capabilities as `provider:webdav`, because
+that is what approving grants. The schemes norte serves itself — `file`,
+`sftp`, `ftp`, `s3` — cannot be claimed by an extension, so approving one never
+puts it in front of a built-in backend.
+
+Extensions come and go from the command line: `norte plugin install <dir>`
+brings one in unapproved, `norte plugin list` shows the same two facts as this
+screen, and `norte plugin uninstall <id>` removes it **and its approval** — a
+plugin installed later under the same id starts from nothing.
+
 > 💡 `norte doctor` reports what is wrong with an installed extension: a manifest that does not parse, a digest that no longer matches, a help page over the size limit.
 
 # A project that brings its own script
@@ -66,8 +78,8 @@ Configuration from a project directory follows the same rule and is on
 ## Approving an extension
 
 Approving is THE security decision of this system: an approved extension acts
-on your behalf with the capabilities it declares — reading files, running
-programs, reaching the network. So norte **asks**, and the question lists them
+on your behalf with the capabilities it declares — reading under a location,
+reaching the network. So norte **asks**, and the question lists them
 one per line, each flagged separately when its text is not what it looks like.
 `Enter` does not grant: it takes the approve key, the same as an agent's
 operation.

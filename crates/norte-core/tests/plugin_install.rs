@@ -6,7 +6,9 @@
 
 use std::path::Path;
 
-use norte_core::plugins::{InstallError, PluginRegistry, install};
+use norte_core::plugins::{
+    InstallError, PluginRegistry, UninstallError, install, installed_provider_schemes, uninstall,
+};
 
 const MANIFEST: &str = r#"
 [plugin]
@@ -21,6 +23,19 @@ previewer = [{ mimetypes = ["text/*"] }]
 
 [capabilities]
 fs-read = "scoped"
+"#;
+
+/// Un provider plugin: la CLI enruta su scheme en cuanto está instalado.
+const PROVIDER_MANIFEST: &str = r#"
+[plugin]
+id = "org.norte.memplug"
+name = "Mem plug"
+publisher = "norte"
+version = "0.1.0"
+category = "provider"
+
+[[contributions.provider]]
+scheme = "memplug"
 "#;
 
 /// Un origen con manifiesto y `.wasm` (bytes cualesquiera: install no ejecuta).
@@ -201,4 +216,77 @@ location = "read"
         info.capabilities
     );
     assert!(!info.approved, "instalar no consiente nada");
+}
+
+/// Desinstalar quita el directorio y deja la entrada de estado APAGADA — no
+/// borrada: `persist_state` fusiona sobre el fichero, así que quitar la clave
+/// la dejaría intacta, y un plugin con el mismo id que volviera a instalarse
+/// heredaría el consentimiento del anterior.
+#[test]
+fn desinstalar_quita_el_directorio_y_retira_el_consentimiento() {
+    let cfg = tempfile::tempdir().expect("tempdir");
+    let src = origen(cfg.path(), MANIFEST, b"\0asm");
+    install(cfg.path(), &src, false).expect("instala");
+    {
+        let mut reg = PluginRegistry::discover(cfg.path()).expect("discover");
+        assert!(reg.set_approval("org.norte.demo", true).expect("aprueba"));
+        assert!(reg.set_enabled("org.norte.demo", true).expect("activa"));
+    }
+
+    let rep = uninstall(cfg.path(), "org.norte.demo").expect("desinstala");
+    assert_eq!(rep.id, "org.norte.demo");
+    assert!(rep.was_approved, "el informe dice que HABÍA consentimiento");
+    assert!(!cfg.path().join("plugins").join("org.norte.demo").exists());
+
+    // Reinstalar el mismo id vuelve SIN consentimiento.
+    install(cfg.path(), &src, false).expect("reinstala");
+    let reg = PluginRegistry::discover(cfg.path()).expect("discover");
+    let p = reg
+        .list()
+        .plugins
+        .into_iter()
+        .find(|p| p.id == "org.norte.demo")
+        .expect("descubierto");
+    assert!(!p.approved && !p.enabled, "el consentimiento no sobrevive");
+}
+
+/// La CLI decide si un argumento es una URL por su scheme, y un provider
+/// plugin instalado añade el suyo: `webdav://x` tiene que dejar de ser un
+/// fichero local con nombre raro en cuanto hay quien lo sirve. Se cuentan los
+/// INSTALADOS, consentidos o no: enrutar la URL no concede nada, y conectar
+/// sigue siendo fail-closed.
+#[test]
+fn los_schemes_de_los_providers_instalados_se_listan() {
+    let cfg = tempfile::tempdir().expect("tempdir");
+    assert!(installed_provider_schemes(cfg.path()).is_empty());
+    let src = origen(cfg.path(), PROVIDER_MANIFEST, b"\0asm");
+    install(cfg.path(), &src, false).expect("instala");
+    assert_eq!(installed_provider_schemes(cfg.path()), vec!["memplug"]);
+}
+
+/// Un id que no está instalado es un error con nombre, no un `Ok` vacío.
+#[test]
+fn desinstalar_lo_que_no_esta_es_un_error() {
+    let cfg = tempfile::tempdir().expect("tempdir");
+    match uninstall(cfg.path(), "org.norte.nadie") {
+        Err(UninstallError::NotInstalled(id)) => assert_eq!(id, "org.norte.nadie"),
+        otro => panic!("se esperaba NotInstalled, salió {otro:?}"),
+    }
+}
+
+/// El id llega de la línea de comandos y se convierte en una RUTA bajo
+/// `plugins/`: todo lo que no sea un id de plugin se rechaza ANTES de tocar
+/// el disco, o `../../..` borraría lo que apuntase.
+#[test]
+fn desinstalar_rechaza_un_id_que_no_es_un_id() {
+    let cfg = tempfile::tempdir().expect("tempdir");
+    let fuera = cfg.path().join("fuera");
+    std::fs::create_dir_all(&fuera).expect("mkdir");
+    for malo in ["../fuera", "plugins", ".", "", "org.norte.demo/.."] {
+        assert!(
+            matches!(uninstall(cfg.path(), malo), Err(UninstallError::InvalidId)),
+            "{malo:?} debería rechazarse"
+        );
+    }
+    assert!(fuera.is_dir(), "nada fuera de plugins/ se toca");
 }

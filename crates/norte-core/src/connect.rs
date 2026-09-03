@@ -21,7 +21,11 @@ use norte_vfs::Provider;
 use norte_vfs_object::ObjectProvider;
 use norte_vfs_sftp::SftpProvider;
 
-use crate::ftp_plugin::connect_ftp_plugin;
+use crate::ftp_plugin::{connect_ftp_plugin, fmt_ip, resolve_ip};
+use norte_plugin_host::PluginRuntime;
+
+use crate::plugin_provider::{PluginProvider, map_runtime_error};
+use crate::plugins::{PluginRegistry, ResolvedProvider};
 
 /// Establece providers remotos bajo demanda. El Engine lo consulta cuando un
 /// `VPath` remoto no tiene provider cacheado; la implementación real es
@@ -487,6 +491,18 @@ impl ConnectionManager {
                 Err(e) => return Err(log_and_dial(e, name)),
             },
         };
+        // Un provider plugin sirve el scheme que declara. Se pregunta al
+        // catálogo ANTES de los brazos del core para todo scheme que no sea
+        // del core: `ftp` incluido, porque su guest embebido es un fallback y
+        // un plugin instalado lo sustituye. Los del core no se consultan —el
+        // manifiesto ya rechaza reclamarlos, y no consultarlos es la segunda
+        // puerta.
+        if let Some(via_plugin) = self.via_plugin(&ep, spec, secret.as_ref(), name).await {
+            return via_plugin.map(|provider| Connected {
+                provider: Arc::new(provider),
+                warnings,
+            });
+        }
         match ep.scheme.as_str() {
             "sftp" => {
                 let session = self
@@ -554,6 +570,152 @@ impl ConnectionManager {
             }
             _ => Err(Error::Unsupported.into()),
         }
+    }
+
+    /// `Some` si un provider plugin consentido sirve el scheme de `ep`, con
+    /// el resultado de conectarlo; `None` si el scheme es del core o ningún
+    /// plugin lo declara, y entonces contestan los brazos del core.
+    async fn via_plugin(
+        &self,
+        ep: &norte_connect::Endpoint,
+        spec: &ConnectionSpec,
+        secret: Option<&Secret>,
+        name: Option<&str>,
+    ) -> Option<Result<PluginProvider, DialError>> {
+        if norte_plugin_host::CORE_SCHEMES.contains(&ep.scheme.as_str()) {
+            return None;
+        }
+        let resolved = self.resolve_plugin_provider(&ep.scheme).await?;
+        Some(
+            self.connect_plugin_provider(resolved, ep, spec, secret, name)
+                .await,
+        )
+    }
+
+    /// El provider plugin APROBADO y ACTIVADO que declara `scheme`, o `None`.
+    ///
+    /// Redescubre el catálogo en cada conexión: es lo que ya hace el `Backend`
+    /// embebido para cada llamada de plugin, y una conexión se establece una
+    /// vez y se cachea en el Engine, así que el coste no se repite por op. Un
+    /// catálogo que no se puede leer se trata como vacío, con aviso: un
+    /// directorio `plugins/` roto no debe dejar sin FTP a nadie.
+    async fn resolve_plugin_provider(&self, scheme: &str) -> Option<ResolvedProvider> {
+        let dir = self.config_dir.clone();
+        let scheme = scheme.to_owned();
+        let discovered =
+            tokio::task::spawn_blocking(move || match PluginRegistry::discover(&dir) {
+                Ok(reg) => reg.resolve_provider(&scheme),
+                Err(e) => {
+                    tracing::warn!(error = %e, "el catálogo de plugins no se pudo leer");
+                    None
+                }
+            })
+            .await;
+        match discovered {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "el descubrimiento del catálogo abortó");
+                None
+            }
+        }
+    }
+
+    /// Instancia el guest de un provider plugin bajo las capabilities de SU
+    /// manifiesto y lo configura con el endpoint y las credenciales de la
+    /// conexión.
+    ///
+    /// **Red.** El guest no tiene DNS. Si el manifiesto declara `net`, el host
+    /// resuelve el endpoint —con el mismo filtro anti-SSRF que el FTP
+    /// embebido— y añade `ip:puerto` a la allow-list declarada: el humano
+    /// aprobó «red» y la conexión es suya, pero un puerto, no la máquina.
+    /// El puerto es el de la URL o el `default-port` de la contribución;
+    /// sin ninguno de los dos no se sabe a qué conceder y se rehúsa. Sin
+    /// `net` en el manifiesto no hay red, y el endpoint cruza tal cual (un
+    /// provider en memoria lo ignora).
+    ///
+    /// **Binario.** Se leen los bytes de `plugin.wasm`, se hashean y se
+    /// comparan con el digest que el catálogo ancló: lo que corre es lo que
+    /// el humano aprobó, no lo que haya en esa ruta ahora.
+    async fn connect_plugin_provider(
+        &self,
+        resolved: ResolvedProvider,
+        ep: &norte_connect::Endpoint,
+        spec: &ConnectionSpec,
+        secret: Option<&Secret>,
+        name: Option<&str>,
+    ) -> Result<PluginProvider, DialError> {
+        let ResolvedProvider {
+            id,
+            wasm,
+            wasm_digest,
+            capabilities: mut caps,
+            settings,
+            default_port,
+            ..
+        } = resolved;
+        let password = match (spec.auth, secret) {
+            (AuthMethod::Password, Some(s)) => s.expose().to_string(),
+            (AuthMethod::Password, None) => {
+                return Err(log_and_dial(
+                    norte_connect::ConnectError::Secret {
+                        conn: ep.host.clone(),
+                    },
+                    name,
+                ));
+            }
+            (AuthMethod::Agent, _) => String::new(),
+            // Una clave o un access-key no tienen forma en la interfaz WIT
+            // del provider: solo cruza `user` + `password`.
+            (AuthMethod::Key | AuthMethod::AccessKey, _) => {
+                return Err(Error::Unsupported.into());
+            }
+        };
+        let port = ep.port.or(default_port);
+        let port_suffix = port.map(|p| format!(":{p}")).unwrap_or_default();
+        let endpoint = if let Some(net) = caps.net.as_mut() {
+            let Some(port) = port else {
+                tracing::warn!(
+                    plugin = %id, scheme = %ep.scheme,
+                    "sin puerto en la URL ni default-port en el manifiesto: no se concede red"
+                );
+                return Err(Error::Unsupported.into());
+            };
+            let host = ep.host.clone();
+            let ip = tokio::task::spawn_blocking(move || resolve_ip(&host, port))
+                .await
+                .map_err(|_| Error::Internal { panic: true })??;
+            net.hosts.push(format!("{ip}:{port}"));
+            format!("{}{port_suffix}", fmt_ip(ip))
+        } else {
+            format!("{}{port_suffix}", ep.host)
+        };
+        tracing::info!(plugin = %id, scheme = %ep.scheme, "provider por plugin");
+
+        // Leer, hashear e instanciar (compila cranelift): todo bloqueante
+        // (regla 2). El digest se compara ANTES de instanciar.
+        let scheme = ep.scheme.clone();
+        let provider = tokio::task::spawn_blocking(move || {
+            let bytes = std::fs::read(&wasm).map_err(|_| Error::Unsupported)?;
+            if norte_plugin_host::wasm_digest_of(&bytes) != wasm_digest {
+                tracing::warn!(plugin = %id, "el plugin.wasm no es el que se aprobó");
+                return Err(Error::PermissionDenied);
+            }
+            let runtime = PluginRuntime::new().map_err(|e| map_runtime_error(&e))?;
+            PluginProvider::from_bytes(runtime, &bytes, caps, scheme)
+                .map_err(|e| map_runtime_error(&e))
+        })
+        .await
+        .map_err(|_| Error::Internal { panic: true })??;
+        provider.set_settings(settings).await;
+        provider
+            .configure(
+                endpoint,
+                ep.user.clone().unwrap_or_default(),
+                password,
+                "/".to_string(),
+            )
+            .await?;
+        Ok(provider)
     }
 }
 
@@ -671,17 +833,20 @@ fn resolve_spec(
 }
 
 /// Puerto default del scheme — constante de matching (nunca viaja): s3 no
-/// lleva puerto en la authority (443 nominal); sftp=22, ftp=21.
-fn default_port(scheme: &str) -> u16 {
+/// lleva puerto en la authority (443 nominal); sftp=22, ftp=21. Un scheme de
+/// plugin no tiene default que el core conozca: `None`, y entonces solo un
+/// puerto explícito casa con un puerto explícito.
+fn default_port(scheme: &str) -> Option<u16> {
     match scheme {
-        "sftp" => 22,
-        "s3" => 443,
-        _ => 21,
+        "sftp" => Some(22),
+        "ftp" => Some(21),
+        "s3" => Some(443),
+        _ => None,
     }
 }
 
-fn effective_port(ep: &norte_connect::Endpoint) -> u16 {
-    ep.port.unwrap_or_else(|| default_port(&ep.scheme))
+fn effective_port(ep: &norte_connect::Endpoint) -> Option<u16> {
+    ep.port.or_else(|| default_port(&ep.scheme))
 }
 
 /// La forma canónica de dedup (#47): la authority del endpoint RESUELTO
@@ -689,7 +854,7 @@ fn effective_port(ep: &norte_connect::Endpoint) -> u16 {
 /// `sftp://h:22` y `sftp://h` canonicalizan igual.
 fn canonical_authority_of(ep: &norte_connect::Endpoint) -> String {
     let mut canon = ep.clone();
-    if canon.port == Some(default_port(&canon.scheme)) {
+    if canon.port.is_some() && canon.port == default_port(&canon.scheme) {
         canon.port = None;
     }
     authority_of(&canon)

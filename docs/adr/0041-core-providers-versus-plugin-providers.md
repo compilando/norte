@@ -82,6 +82,15 @@ a host-mediated network capability — is what they need.
 FTP stays as it is and keeps its role: it is the interface's proof and its
 regression test.
 
+> **Addendum 2026-09-03.** This decision described a path that did not exist
+> when it was written. A `[[contributions.provider]]` could be declared,
+> approved and enabled, and nothing resolved it: the connection manager matched
+> schemes by hand, and the only provider guest ever loaded was the FTP one
+> embedded in `norte-core`. ADR 0093 builds the path — the catalogue is asked
+> by scheme, the core's schemes are reserved, `ftp` is claimable with the
+> embedded guest as fallback — and proves it with a guest installed the way a
+> third party's would be.
+
 ### 3. The gaps close on demand, not in advance
 
 The missing pieces — server-side copy, trash, attributes, resume,

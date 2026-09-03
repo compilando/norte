@@ -819,14 +819,28 @@ pub fn check_connections(
             detail: String::new(),
         });
     } else {
+        // El parser de conexiones acepta cualquier scheme (un provider plugin
+        // sirve el que declara, ADR 0093), así que `sfpt://` ya no muere al
+        // parsear: se contesta al conectar con un `Unsupported` pelado. Aquí
+        // están el fichero y el catálogo uno al lado del otro, que es el
+        // único sitio donde se puede decir «nadie sirve ese scheme».
+        let plugin_schemes = norte_core::plugins::installed_provider_schemes(config_dir);
         for (name, spec) in &file.connections {
             match spec.endpoint() {
-                Ok(_) => findings.push(Finding {
-                    section: "connections",
-                    severity: Severity::Ok,
-                    code: "connection-ok",
-                    detail: name.clone(),
-                }),
+                Ok(ep) => {
+                    let served = norte_core::plugins::CORE_SCHEMES.contains(&ep.scheme.as_str())
+                        || plugin_schemes.contains(&ep.scheme);
+                    findings.push(Finding {
+                        section: "connections",
+                        severity: if served { Severity::Ok } else { Severity::Warn },
+                        code: if served {
+                            "connection-ok"
+                        } else {
+                            "connection-scheme-unserved"
+                        },
+                        detail: name.clone(),
+                    });
+                }
                 Err(e) => {
                     findings.push(Finding {
                         section: "connections",
@@ -1942,6 +1956,44 @@ max = 10
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(findings[0].code, "connections-none");
         assert!(findings[0].detail.is_empty(), "{}", findings[0].detail);
+    }
+
+    /// Un scheme que nadie sirve —ni el core ni un provider plugin
+    /// instalado— es un aviso con el nombre de la conexión. Antes era un
+    /// error de parseo; con el parser abierto a los schemes de plugin, este
+    /// es el único sitio que puede cazar el `sfpt://` tecleado.
+    #[test]
+    fn un_scheme_que_nadie_sirve_es_un_aviso() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("connections.toml"),
+            "[connections.typo]\nurl = \"sfpt://host\"\n[connections.ok]\nurl = \"sftp://host\"\n",
+        )
+        .unwrap();
+        let findings = check_connections(dir.path(), &env(&[]));
+        let typo = findings
+            .iter()
+            .find(|f| f.detail == "typo")
+            .expect("la conexión con el typo tiene hallazgo");
+        assert_eq!(typo.code, "connection-scheme-unserved");
+        assert_eq!(typo.severity, Severity::Warn);
+        let ok = findings
+            .iter()
+            .find(|f| f.detail == "ok")
+            .expect("la buena");
+        assert_eq!(ok.code, "connection-ok");
+
+        // Instalado un provider que declara `sfpt`, deja de ser un typo.
+        let plugin = dir.path().join("plugins/org.demo.sfpt");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(
+            plugin.join("plugin.toml"),
+            "[plugin]\nid = \"org.demo.sfpt\"\nname = \"S\"\npublisher = \"d\"\nversion = \"0.1.0\"\ncategory = \"provider\"\n[[contributions.provider]]\nscheme = \"sfpt\"\n",
+        )
+        .unwrap();
+        let findings = check_connections(dir.path(), &env(&[]));
+        let typo = findings.iter().find(|f| f.detail == "typo").unwrap();
+        assert_eq!(typo.code, "connection-ok");
     }
 
     /// TDD: broken `connections.toml` → a single `Error` finding, `detail`

@@ -330,6 +330,19 @@ cli-spool-sweep-failed = aviso: no se pudo barrer { $path }: { $error }
 # Se imprime bajo un plugin instalado y NO aprobado: instalar no activa, y
 # decir solo «instalado» dejaría al lector esperando algo que no va a pasar.
 cli-plugin-unapproved = queda SIN aprobar: apruébalo y actívalo en el gestor de extensiones
+cli-plugin-uninstalled = desinstalado: { $id }
+# Desinstalar retira también la aprobación, a propósito: un plugin instalado
+# después con el mismo id no debe heredar el consentimiento dado a otro binario.
+cli-plugin-uninstalled-consent = su consentimiento se fue con él: uno con el mismo id se instala sin aprobar
+cli-plugin-uninstall-invalid-id = no es un id de plugin: se espera reverse-DNS, p. ej. `org.foo.bar`
+cli-plugin-uninstall-not-installed = { $id } no está instalado
+cli-plugin-uninstall-io = desinstalando: { $error }
+cli-plugin-list-empty = no hay plugins instalados
+cli-plugin-list-broken = { $count } plugin(s) rotos sin listar — `norte doctor` dice por qué
+cli-plugin-state-approved = aprobado
+cli-plugin-state-unapproved = SIN aprobar
+cli-plugin-state-enabled = activado
+cli-plugin-state-disabled = apagado
 # Un bloqueo son DOS campos en DOS líneas, no uno unido por `: ` — el mismo
 # motivo que las filas de fallo de abajo (corpus `cause_join_spoof`).
 cli-sync-blocker = { $rel }
@@ -1644,6 +1657,7 @@ cli-doctor-detail-conn-secret-env-not-utf8 = { $detail } tiene bytes que no son 
 cli-doctor-detail-conn-secret-env-absent = { $detail } no está definida; el keyring o secrets.age todavía pueden dar el secreto — es solo un aviso porque desde aquí no se comprueban
 cli-doctor-detail-conn-secret-prompt = { $detail } no está definida, y la entrada dice secret = "prompt": norte lo pedirá al abrir la conexión
 cli-doctor-detail-conn-secret-prompt-inert = { $detail } dice secret = "prompt", que con este método de auth no hace nada — solo se aplica a password y access-key
+cli-doctor-detail-connection-scheme-unserved = { $detail }: nada sirve ese scheme — ni el core, ni ningún provider plugin instalado lo declara (un error de tecleo, o un plugin por instalar)
 cli-doctor-detail-plugin-digest-stale = { $id }: las capabilities del manifiesto cambiaron desde la aprobación; requiere re-aprobación
 cli-doctor-detail-plugin-help-truncated = { $id }: su help.md pasa del tope y se sirve cortado
 cli-doctor-detail-plugin-help-lossy = { $id }: su help.md tiene bytes que no decodifican; se pintan como caracteres de reemplazo

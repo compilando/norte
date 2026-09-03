@@ -73,7 +73,7 @@ fn is_forbidden_ip(ip: IpAddr, allow_loopback: bool) -> bool {
 /// `127.0.0.1`/`::1` solo cuando el host destino es explícitamente loopback
 /// (tests, túneles locales) — jamás por un hostname que resuelva sorpresivamente
 /// a loopback.
-fn resolve_ip(host: &str, port: u16) -> Result<IpAddr, Error> {
+pub(crate) fn resolve_ip(host: &str, port: u16) -> Result<IpAddr, Error> {
     use std::net::ToSocketAddrs;
     // Si el usuario pidió literalmente loopback, se permite el destino loopback.
     let allow_loopback = host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
@@ -133,7 +133,7 @@ pub async fn connect_ftp_plugin(
 
 /// Formatea una IP para el endpoint `ip:puerto`. IPv6 va entre corchetes
 /// (`[::1]:21`) para que `suppaftp`/`ToSocketAddrs` del guest lo parsee.
-fn fmt_ip(ip: IpAddr) -> String {
+pub(crate) fn fmt_ip(ip: IpAddr) -> String {
     match ip {
         IpAddr::V4(v4) => v4.to_string(),
         IpAddr::V6(v6) => format!("[{v6}]"),

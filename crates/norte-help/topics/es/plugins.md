@@ -45,6 +45,18 @@ no está aprobada y activada sale atenuada y dice cuál de las dos cosas falta,
 que es justo la respuesta que buscabas si estás leyendo esa página para decidir
 si la enciendes.
 
+Un provider es la única clase que responde a una URL: instala uno que declare
+`webdav`, apruébalo y enciéndelo, y `webdav://host` se abre a través de él. El
+scheme que reclama sale entre sus capacidades como `provider:webdav`, porque
+eso es lo que concede aprobarlo. Los schemes que norte sirve por sí mismo
+—`file`, `sftp`, `ftp`, `s3`— no los puede reclamar una extensión, así que
+aprobar una jamás la pone delante de un backend propio.
+
+Las extensiones entran y salen desde la línea de comandos: `norte plugin
+install <dir>` trae una sin aprobar, `norte plugin list` enseña los mismos dos
+hechos que esta pantalla, y `norte plugin uninstall <id>` la quita **con su
+aprobación** —un plugin instalado después con el mismo id empieza de cero.
+
 > 💡 `norte doctor` informa de qué le pasa a una extensión instalada: un manifiesto que no parsea, un digest que ya no cuadra, una página de ayuda por encima del tope de tamaño.
 
 # Un proyecto que trae su propio script
@@ -66,8 +78,8 @@ La configuración de un directorio de proyecto sigue la misma regla y está en
 ## Aprobar una extensión
 
 Aprobar es LA decisión de seguridad de este sistema: una extensión aprobada
-actúa en tu nombre con las capacidades que declara —leer ficheros, correr
-programas, salir a la red—. Por eso norte **pregunta** y la pregunta las
+actúa en tu nombre con las capacidades que declara —leer bajo una ubicación,
+salir a la red—. Por eso norte **pregunta** y la pregunta las
 enumera una por línea, cada una marcada aparte si su texto no es lo que
 parece. `Enter` no concede: hace falta la tecla de aprobar, igual que con la
 operación de un agente.

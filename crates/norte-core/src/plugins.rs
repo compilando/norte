@@ -374,6 +374,34 @@ pub type ResolvedPreviewer = (
 /// repetir el tuple de 5 elementos (clippy `type_complexity`).
 pub type ResolvedDecorator = ResolvedPreviewer;
 
+/// Resultado de [`PluginRegistry::resolve_provider`]: el provider plugin
+/// consentido que sirve un scheme, con lo que hace falta para instanciarlo
+/// SIN volver a fiarse del disco.
+///
+/// Un struct y no la tupla de los otros resolvers porque lleva dos cosas más
+/// que ellos no necesitan: el digest del binario que el humano aprobó
+/// (quien instancia compara los bytes que lee contra él) y el puerto por
+/// defecto de la contribución (a qué se concede red).
+#[derive(Debug, Clone)]
+pub struct ResolvedProvider {
+    /// Id del plugin.
+    pub id: String,
+    /// Nombre legible (texto de tercero).
+    pub name: String,
+    /// Ruta canónica de `plugin.wasm`, verificada dentro del directorio.
+    pub wasm: PathBuf,
+    /// Digest del `plugin.wasm` tal como lo ancló el catálogo al descubrir:
+    /// lo que la aprobación cubre (#241). Quien instancie DEBE leer los
+    /// bytes, hashearlos y comparar — una ruta no es una promesa.
+    pub wasm_digest: String,
+    /// Capabilities del manifiesto (el sandbox las hace cumplir).
+    pub capabilities: norte_plugin_host::Capabilities,
+    /// Valores de `[config]` resueltos, para `set_settings`.
+    pub settings: BTreeMap<String, String>,
+    /// `default-port` de la contribución que declara el scheme, si lo trae.
+    pub default_port: Option<u16>,
+}
+
 /// El trabajo de leer el `help.md` de UN plugin ya resuelto, listo para
 /// ejecutarse fuera del reactor (H3e). Se obtiene con
 /// [`PluginRegistry::help_job`] y se consume con [`HelpJob::read`].
@@ -507,7 +535,23 @@ impl PluginRegistry {
                     publisher: e.manifest.publisher.clone(),
                     version: e.manifest.version.clone(),
                     category: e.manifest.category.as_str().to_string(),
-                    capabilities: e.manifest.capabilities.badges(),
+                    // Las insignias del manifiesto MÁS el scheme que un
+                    // provider reclama (`provider:webdav`): es lo que aprobar
+                    // concede —ponerse delante de `webdav://`— y hasta aquí
+                    // el humano aprobaba un provider sin ver para qué scheme.
+                    capabilities: e
+                        .manifest
+                        .capabilities
+                        .badges()
+                        .into_iter()
+                        .chain(
+                            e.manifest
+                                .contributions
+                                .provider
+                                .iter()
+                                .map(|c| format!("provider:{}", c.scheme)),
+                        )
+                        .collect(),
                     // Aprobación EFECTIVA (issue #69): `approved` en el fichero
                     // pero con el digest de capabilities CASANDO el del manifiesto
                     // actual. Si las capabilities cambiaron en disco tras aprobar,
@@ -1029,6 +1073,67 @@ impl PluginRegistry {
             .collect()
     }
 
+    /// Resuelve el provider plugin APROBADO y ACTIVADO que declara `scheme`
+    /// en `contributions.provider[].scheme`: el que sirve `scheme://`.
+    ///
+    /// Hasta aquí un provider se declaraba, se aprobaba y se activaba, y
+    /// NADIE lo resolvía: el `ConnectionManager` casaba schemes a mano contra
+    /// los providers del core y un guest FTP embebido. Esta es la mitad del
+    /// registro que faltaba; la otra es que el manager pregunte.
+    ///
+    /// Primero que case, como [`Self::resolve_columns`]: dos plugins
+    /// consentidos que reclamen el mismo scheme son una colisión de
+    /// configuración, y el orden del catálogo (`category, id`) la hace al
+    /// menos determinista. Filtra por `category == Provider`, mismo
+    /// razonamiento de world dedicado que [`Self::resolve_decorators`]: solo
+    /// un binario que implementa `norte-provider` debe instanciarse como tal.
+    ///
+    /// Los schemes del core ([`norte_plugin_host::CORE_SCHEMES`]) no se
+    /// sirven NUNCA desde aquí, aunque una entrada del catálogo los declare:
+    /// el manifiesto ya los rechaza al parsear, y esta es la segunda puerta,
+    /// la que se puede probar sin pasar por la primera.
+    ///
+    /// Un plugin que declara el scheme pero no está consentido se anota en el
+    /// log: la respuesta al usuario es `Unsupported` —la misma que un scheme
+    /// que nadie sirve— y el panel de registro es donde se lee el porqué.
+    #[must_use]
+    pub fn resolve_provider(&self, scheme: &str) -> Option<ResolvedProvider> {
+        if norte_plugin_host::CORE_SCHEMES.contains(&scheme) {
+            return None;
+        }
+        self.catalog.plugins.iter().find_map(|e| {
+            if e.manifest.category != norte_plugin_host::Category::Provider {
+                return None;
+            }
+            let contrib = e
+                .manifest
+                .contributions
+                .provider
+                .iter()
+                .find(|c| c.scheme == scheme)?;
+            let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
+            if !Self::approval_is_current(&st, e) || !st.enabled {
+                tracing::warn!(
+                    plugin = %e.manifest.id,
+                    scheme,
+                    "declara el scheme pero no está aprobado y activado"
+                );
+                return None;
+            }
+            let wasm = Self::verified_wasm(&e.dir)?;
+            let wasm_digest = e.wasm_digest.clone()?;
+            Some(ResolvedProvider {
+                id: e.manifest.id.clone(),
+                name: e.manifest.name.clone(),
+                wasm,
+                wasm_digest,
+                capabilities: e.manifest.capabilities.clone(),
+                settings: e.settings.clone(),
+                default_port: contrib.default_port,
+            })
+        })
+    }
+
     /// Resuelve el plugin `columns` APROBADO y ACTIVADO que declara la
     /// columna `column_id` en `contributions.columns[].id` (M4 declaró la
     /// contribución, ADR 0037 la respalda con WIT/host). A diferencia de
@@ -1425,6 +1530,121 @@ fs-read = "scoped"
         let dir = config_dir.join("plugins").join(id);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("plugin.toml"), src).unwrap();
+    }
+
+    /// Un provider plugin, con binario: `resolve_provider` exige el `.wasm`
+    /// verificado como cualquier otro resolver.
+    const PROVIDER_MANIFEST: &str = r#"
+[plugin]
+id = "org.norte.memplug"
+name = "Mem plug"
+publisher = "norte"
+version = "0.1.0"
+category = "provider"
+[[contributions.provider]]
+scheme = "memplug"
+"#;
+
+    fn write_provider(config_dir: &Path, id: &str, src: &str) {
+        write_plugin(config_dir, id, src);
+        std::fs::write(
+            config_dir.join("plugins").join(id).join("plugin.wasm"),
+            b"\0asm",
+        )
+        .unwrap();
+    }
+
+    /// Un `[[contributions.provider]]` se declaraba, se aprobaba y se
+    /// activaba, y NADIE lo resolvía: `connect.rs` casaba schemes a mano. Esta
+    /// es la mitad del registro: dado un scheme, el plugin consentido que lo
+    /// declara — o nada.
+    #[test]
+    fn resolve_provider_elige_el_plugin_consentido_que_declara_el_scheme() {
+        let tmp = TempDir::new().unwrap();
+        write_provider(tmp.path(), "org.norte.memplug", PROVIDER_MANIFEST);
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+
+        // Sin consentir: nada, aunque el scheme case (fail-closed).
+        assert!(reg.resolve_provider("memplug").is_none());
+        reg.set_approval("org.norte.memplug", true).unwrap();
+        assert!(
+            reg.resolve_provider("memplug").is_none(),
+            "aprobado pero apagado"
+        );
+        reg.set_enabled("org.norte.memplug", true).unwrap();
+
+        let r = reg
+            .resolve_provider("memplug")
+            .expect("consentido y activado");
+        assert_eq!(r.id, "org.norte.memplug");
+        assert_eq!(r.name, "Mem plug");
+        assert!(r.wasm.ends_with("plugin.wasm"));
+        assert_eq!(
+            r.wasm_digest,
+            norte_plugin_host::wasm_digest_of(b"\0asm"),
+            "el digest que se devuelve es el del binario anclado"
+        );
+        assert_eq!(r.default_port, None);
+        // Otro scheme no lo sirve: el plugin sirve lo que DECLARA.
+        assert!(reg.resolve_provider("webdav").is_none());
+        // Y lo que aprobar concede se ENSEÑA: el scheme va en las insignias.
+        let info = reg.list().plugins.into_iter().next().unwrap();
+        assert!(
+            info.capabilities.iter().any(|c| c == "provider:memplug"),
+            "{:?}",
+            info.capabilities
+        );
+
+        // Sin binario no hay nada que instanciar, consentido o no.
+        std::fs::remove_file(tmp.path().join("plugins/org.norte.memplug/plugin.wasm")).unwrap();
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        assert!(reg.resolve_provider("memplug").is_none());
+    }
+
+    /// La segunda puerta: aunque una entrada del catálogo declare un scheme
+    /// del core (el manifiesto lo rechaza, así que hay que colarla a mano),
+    /// el registro no lo sirve. Es lo que hace del guard del manager una
+    /// optimización y no la única defensa.
+    #[test]
+    fn resolve_provider_nunca_sirve_un_scheme_del_core() {
+        let tmp = TempDir::new().unwrap();
+        write_provider(tmp.path(), "org.norte.memplug", PROVIDER_MANIFEST);
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+        reg.set_approval("org.norte.memplug", true).unwrap();
+        reg.set_enabled("org.norte.memplug", true).unwrap();
+        // Se reclama `sftp` por detrás del parser.
+        reg.catalog.plugins[0].manifest.contributions.provider[0].scheme = "sftp".to_owned();
+        // El ancla cambia con las contribuciones, así que se re-aprueba en
+        // memoria para que lo único que quede en pie sea la puerta.
+        reg.set_approval_in_memory("org.norte.memplug", true);
+        assert!(reg.resolve_provider("sftp").is_none());
+    }
+
+    /// Un plugin de otra categoría con una contribución `provider` colada no
+    /// entra: `provider` tiene su propio world, y solo un binario que lo
+    /// implementa debe instanciarse como tal (mismo criterio que
+    /// `resolve_decorators`).
+    #[test]
+    fn resolve_provider_ignora_otras_categorias() {
+        let tmp = TempDir::new().unwrap();
+        write_provider(
+            tmp.path(),
+            "org.norte.sneaky",
+            r#"
+[plugin]
+id = "org.norte.sneaky"
+name = "Sneaky"
+publisher = "norte"
+version = "0.1.0"
+category = "command"
+[[contributions.provider]]
+scheme = "memplug"
+"#,
+        );
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+        reg.set_approval("org.norte.sneaky", true).unwrap();
+        reg.set_enabled("org.norte.sneaky", true).unwrap();
+        assert!(reg.resolve_provider("memplug").is_none());
     }
 
     #[test]
@@ -2826,6 +3046,109 @@ pub fn install(config_dir: &Path, src: &Path, force: bool) -> Result<InstallRepo
         id: manifest.id,
         name: manifest.name,
         replaced,
+    })
+}
+
+/// Los schemes del core, que ningún provider plugin sirve (ADR 0093). Se
+/// re-exporta para quien no depende de `norte-plugin-host` (la CLI).
+pub use norte_plugin_host::CORE_SCHEMES;
+
+/// Los schemes que declaran los provider plugins INSTALADOS bajo
+/// `config_dir`, consentidos o no, ordenados y sin repetir.
+///
+/// Es para quien tiene que decidir si un argumento es una URL antes de que
+/// nadie conecte (la CLI): enrutar `webdav://x` como URL no concede nada, y
+/// la conexión sigue siendo fail-closed en [`PluginRegistry::resolve_provider`].
+/// Un catálogo ilegible es una lista vacía: la CLI no puede hacer nada mejor
+/// que tratar el argumento como fichero.
+///
+/// Lee SOLO los manifiestos: el catálogo entero hashea cada `plugin.wasm` y
+/// resuelve cada `[config]`, y esto se pregunta para enrutar un argumento.
+#[must_use]
+pub fn installed_provider_schemes(config_dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(config_dir.join("plugins")) else {
+        return Vec::new();
+    };
+    let mut schemes: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter_map(|d| std::fs::read_to_string(d.path().join("plugin.toml")).ok())
+        .filter_map(|src| norte_plugin_host::Manifest::from_toml(&src).ok())
+        .filter(|m| m.category == norte_plugin_host::Category::Provider)
+        .flat_map(|m| m.contributions.provider.into_iter().map(|c| c.scheme))
+        .collect();
+    schemes.sort();
+    schemes.dedup();
+    schemes
+}
+
+/// Qué hizo [`uninstall`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UninstallReport {
+    /// Id desinstalado.
+    pub id: String,
+    /// `true` si el plugin tenía consentimiento (aprobado en el estado): el
+    /// informe lo dice porque es lo que acaba de dejar de existir.
+    pub was_approved: bool,
+}
+
+/// Por qué no se pudo desinstalar.
+#[derive(Debug, thiserror::Error)]
+pub enum UninstallError {
+    /// El id no es un id de plugin (reverse-DNS). Se rechaza ANTES de tocar el
+    /// disco: el id se convierte en una ruta bajo `plugins/`, y un `..` sería
+    /// un borrado fuera de ella.
+    #[error("id de plugin inválido: se espera reverse-DNS (p. ej. `org.foo.bar`)")]
+    InvalidId,
+    /// No hay ningún plugin instalado con ese id.
+    #[error("`{0}` no está instalado")]
+    NotInstalled(String),
+    /// Error de I/O borrando o escribiendo el estado.
+    #[error("desinstalando: {0}")]
+    Io(#[from] io::Error),
+}
+
+/// Desinstala el plugin `id`: borra `config_dir/plugins/<id>/` y deja su
+/// entrada de `plugins-state.toml` APAGADA.
+///
+/// Apagada y no borrada, por la misma razón que [`install`] con `force`:
+/// `persist_state` fusiona sobre el documento existente, así que quitar la
+/// clave del mapa la dejaría intacta en el fichero — y un plugin con el mismo
+/// id que se instalase después heredaría un consentimiento que nadie le dio.
+///
+/// El estado se LEE antes de borrar nada: si `plugins-state.toml` está
+/// corrupto, se falla con el directorio intacto. Al revés, un borrado seguido
+/// de una lectura fallida dejaría la aprobación viva en el fichero y un
+/// segundo `uninstall` contestando «no está instalado» para siempre. El
+/// borrado va antes de ESCRIBIR el estado por la razón contraria: si falla a
+/// medias, lo que queda es un plugin roto que el descubridor lista en
+/// `errors`, no un plugin entero con el consentimiento retirado en silencio.
+///
+/// Un daemon en marcha sigue con su registro en memoria hasta que vuelve a
+/// descubrir; conectar por scheme redescubre siempre, ejecutar un comando
+/// falla por falta de binario.
+///
+/// # Errors
+/// [`UninstallError`] si el id no es un id, si no está instalado, o por I/O.
+pub fn uninstall(config_dir: &Path, id: &str) -> Result<UninstallReport, UninstallError> {
+    if !norte_plugin_host::is_valid_plugin_id(id) {
+        return Err(UninstallError::InvalidId);
+    }
+    let dir = config_dir.join("plugins").join(id);
+    if !dir.is_dir() {
+        return Err(UninstallError::NotInstalled(id.to_owned()));
+    }
+    let state_path = config_dir.join(PluginRegistry::STATE_FILE);
+    let mut state = PluginRegistry::read_state(&state_path)?;
+    let was_approved = state.get(id).is_some_and(|st| st.approved);
+
+    std::fs::remove_dir_all(&dir)?;
+
+    state.insert(id.to_owned(), PluginState::default());
+    persist_state(config_dir, &state)?;
+
+    Ok(UninstallReport {
+        id: id.to_owned(),
+        was_approved,
     })
 }
 
