@@ -9,6 +9,19 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **`org.norte.file-icons`, the first demo plugin.** A `decorator` that puts
+  a badge on each row saying what kind of file it is — code, script,
+  document, image, audio, video, archive, configuration, and the names that
+  mean something on their own (`Cargo.toml`, `Makefile`, `.gitignore`,
+  `Dockerfile`, `LICENSE`, `README`) — from the name alone: no capabilities,
+  no path, no idea whether an entry is a directory. The extension is the tail
+  after the last dot, in bytes, and a dotfile has none — the rule
+  `mark.extension` and the rename template already use. Its one setting,
+  `style`, switches emoji for ASCII glyphs in the extension manager. Lives in
+  `plugins/file-icons/`, installs with `just plugin-file-icons` (and
+  `just plugins`), and the gate builds it, installs it, runs it over the
+  hostile-name corpus and flips the setting.
+
 - **The window paints a plugin preview's roles and colours** (bridge **49**).
   The TUI has painted styled previews since ADR 0037; the window flattened
   the same spans to plain lines, so a syntax-highlighted preview arrived in

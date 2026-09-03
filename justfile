@@ -474,6 +474,20 @@ plugin-git-status *ARGS:
     cp $origen/target/wasm32-wasip2/release/git_status.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
+# El decorator de iconos por tipo de fichero (`plugins/file-icons`, demo D1).
+plugin-file-icons *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    flag=""; [ "{{ARGS}}" = "force" ] && flag="--force"
+    origen=plugins/file-icons
+    cargo build --release --target wasm32-wasip2 --manifest-path $origen/Cargo.toml
+    stage=target/plugin-stage/file-icons
+    rm -rf "$stage" && mkdir -p "$stage"
+    cp $origen/plugin.toml "$stage/plugin.toml"
+    [ -f $origen/help.md ] && cp $origen/help.md "$stage/help.md" || true
+    cp $origen/target/wasm32-wasip2/release/file_icons.wasm "$stage/plugin.wasm"
+    cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
+
 # Todos los plugins oficiales, de una vez. `just plugins force` reemplaza los
 # ya instalados (y retira su consentimiento, como dice `plugin install`).
 [positional-arguments]
@@ -482,6 +496,7 @@ plugins *ARGS:
     set -euo pipefail
     just plugin-syntect "$@"
     just plugin-git-status "$@"
+    just plugin-file-icons "$@"
 
 # ---------- distribución ----------
 

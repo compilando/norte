@@ -1,0 +1,22 @@
+[plugin]
+id = "org.norte.file-icons"
+name = "File icons"
+publisher = "norte"
+version = "0.1.0"
+category = "decorator"
+description = "A badge on each row saying what kind of file it is, from its name."
+
+# A decorator is asked about every visible page and answers one badge per
+# entry. It sees names, never paths and never kinds — so a directory gets no
+# badge unless its name says something (`.git`, `node_modules`).
+[[contributions.decorator]]
+
+# Nothing: the name is all this plugin needs.
+[capabilities]
+
+# Emoji by default; `ascii` for terminals without an emoji font.
+[config.style]
+type = "enum"
+values = ["emoji", "ascii"]
+default = "emoji"
+description = "Glyph set for the badges: emoji, or plain ASCII."

@@ -1,0 +1,28 @@
+# `org.norte.file-icons`: a badge per row that says what kind of file it is,
+# from the name alone (demo plugin D1 of the plugin program).
+#
+# Not a workspace member, like every guest: own lockfile, own profile,
+# compiles to `wasm32-wasip2`. The table in `icons.rs` is pure and has its
+# own tests on the host — hence `rlib` next to `cdylib`.
+[workspace]
+
+[package]
+name = "file-icons"
+edition = "2021"
+version = "0.1.0"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "File-type badges for norte listings, as a WASM decorator plugin"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Guest-side bindings from the same WIT the host serves (`wit` is a symlink
+# to `crates/norte-plugin-host/wit`).
+wit-bindgen = "0.46"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+strip = true
