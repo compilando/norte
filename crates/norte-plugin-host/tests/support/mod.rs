@@ -54,6 +54,34 @@ pub fn build_guest(name: &str) -> Option<PathBuf> {
     Some(wasm)
 }
 
+/// Reemplaza CADA aparición de `from` por `to` en `bytes`. Solo con
+/// longitudes iguales: es para fabricar un guest «compilado contra otra
+/// versión» reescribiendo `@0.8.0` en su sección de imports sin mover ni un
+/// offset de las demás secciones.
+///
+/// # Panics
+/// Si las longitudes difieren: un reemplazo que desplaza bytes deja un
+/// componente que ningún lector recorre, y el test estaría probando basura.
+#[must_use]
+#[allow(dead_code)]
+pub fn rewrite_bytes(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+    assert_eq!(from.len(), to.len(), "solo reemplazos de la misma longitud");
+    let mut out = bytes.to_vec();
+    if from.is_empty() {
+        return out;
+    }
+    let mut i = 0;
+    while i + from.len() <= out.len() {
+        if &out[i..i + from.len()] == from {
+            out[i..i + from.len()].copy_from_slice(to);
+            i += from.len();
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 /// `true` si `rustup` reporta `target` entre los instalados.
 fn target_installed(target: &str) -> bool {
     Command::new("rustup")

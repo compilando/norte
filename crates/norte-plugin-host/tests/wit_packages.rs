@@ -19,6 +19,10 @@
 
 use std::path::{Path, PathBuf};
 
+use norte_plugin_host::{SERVED_WIT, wit_mismatch, wit_packages};
+
+mod support;
+
 fn wit_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("wit")
 }
@@ -98,6 +102,90 @@ fn las_referencias_cruzadas_llevan_version() {
             );
         }
     }
+}
+
+/// Lo que el host DICE servir es lo que los ficheros `.wit` declaran. Si
+/// alguien sube `norte:plugin` a 0.9.0 y no toca la tabla, el catálogo
+/// listaría como rotos los guests recién compilados — o peor, cargaría los
+/// viejos sin avisar.
+#[test]
+fn served_wit_matches_the_package_files() {
+    let mut declared: Vec<(String, String)> = Vec::new();
+    for fichero in [
+        "norte-plugin.wit",
+        "deps/host/host.wit",
+        "deps/provider/provider.wit",
+        "deps/location/location.wit",
+    ] {
+        let src = leer(fichero);
+        let linea = src
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("package norte:"))
+            .unwrap_or_else(|| panic!("{fichero} no declara `package norte:…`"));
+        let cuerpo = linea.trim_start_matches("package ").trim_end_matches(';');
+        let (paquete, version) = cuerpo.split_once('@').expect("versión");
+        declared.push((paquete.to_owned(), version.to_owned()));
+    }
+    declared.sort();
+    let mut served: Vec<(String, String)> = SERVED_WIT
+        .iter()
+        .map(|(p, v)| ((*p).to_owned(), (*v).to_owned()))
+        .collect();
+    served.sort();
+    assert_eq!(
+        served, declared,
+        "SERVED_WIT no es lo que los .wit declaran"
+    );
+}
+
+/// Los imports de un guest REAL nombran los paquetes servidos, y un guest
+/// recién compilado no es un mismatch.
+#[test]
+fn wit_imports_of_a_real_guest_name_the_served_versions() {
+    let Some(wasm) = support::build_guest("previewer-demo") else {
+        return;
+    };
+    let bytes = std::fs::read(wasm).expect("lee el guest");
+    let imports = wit_packages(&bytes);
+    assert!(
+        imports.contains(&("norte:plugin".to_owned(), "0.8.0".to_owned())),
+        "{imports:?}"
+    );
+    assert!(
+        imports.contains(&("norte:host".to_owned(), "0.1.0".to_owned())),
+        "{imports:?}"
+    );
+    assert!(wit_mismatch(&imports).is_none());
+}
+
+/// Un guest compilado contra otra versión del paquete es un mismatch con las
+/// DOS versiones en la mano: la suya y la servida. Se fabrica reescribiendo
+/// `@0.8.0` por `@0.1.0` en los bytes del guest real — misma longitud, así
+/// que las secciones siguen siendo válidas y el lector las recorre.
+#[test]
+fn a_guest_built_against_another_version_is_a_mismatch() {
+    let Some(wasm) = support::build_guest("previewer-demo") else {
+        return;
+    };
+    let bytes = std::fs::read(wasm).expect("lee el guest");
+    let viejo = support::rewrite_bytes(&bytes, b"@0.8.0", b"@0.1.0");
+    let imports = wit_packages(&viejo);
+    let m = wit_mismatch(&imports).expect("mismatch");
+    assert_eq!(m.package, "norte:plugin");
+    assert_eq!(m.built_against, "0.1.0");
+    assert_eq!(m.served, "0.8.0");
+}
+
+/// Bytes que no son un componente no tienen imports: ni error ni pánico, que
+/// es lo que el catálogo necesita para que un `plugin.wasm` basura siga
+/// siendo «sin binario» y no «catálogo caído».
+#[test]
+fn bytes_that_are_not_a_component_have_no_imports() {
+    assert!(wit_packages(b"\0asm\x01\0\0\0").is_empty());
+    assert!(wit_packages(b"garbage").is_empty());
+    assert!(wit_packages(b"").is_empty());
+    assert!(wit_mismatch(&[]).is_none());
 }
 
 /// El paquete compartido importa del de host, nunca al revés: `norte:host` es

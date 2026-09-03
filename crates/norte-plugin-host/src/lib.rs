@@ -33,6 +33,7 @@ mod catalog;
 mod config_values;
 mod manifest;
 mod runtime;
+mod wit_imports;
 
 pub use capability::{Capabilities, LocationCap, NetCap, Scope};
 pub use catalog::{
@@ -58,3 +59,4 @@ pub use runtime::{
 /// adapter host lo lleva en su `ByteSink` y lo pasa a los métodos
 /// `writer_*`/`writer_drop` de [`ProviderInstance`].
 pub use wasmtime::component::ResourceAny as WriterHandle;
+pub use wit_imports::{SERVED_WIT, WitMismatch, wit_mismatch, wit_packages};

@@ -39,6 +39,11 @@ sha2.workspace = true
 # anyhow lo exige la API de wasmtime (sus Result son anyhow::Error).
 wasmtime = { version = "46", default-features = false, features = ["runtime", "component-model", "cranelift", "std"] }
 wasmtime-wasi = "46"
+# Lee los imports de un componente SIN compilarlo (ADR 0094): el catálogo
+# anota contra qué `norte:*@versión` se compiló cada guest y lista como roto
+# —con las dos versiones— el que no case, en vez de dejar que wasmtime muera
+# nombrando un import. Ya viene con wasmtime; aquí solo se enlaza directo.
+wasmparser.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]

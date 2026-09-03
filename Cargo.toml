@@ -166,6 +166,11 @@ suppaftp = "10"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 opendal = { version = "0.58", default-features = false, features = ["services-s3", "http-transport-reqwest", "executors-tokio"] }
 sha2 = "0.10"
+# Lector de la sección de imports de un componente WASM sin compilarlo (ADR
+# 0094): el catálogo de plugins dice contra qué `norte:*@versión` se compiló
+# un guest antes de que wasmtime falle al instanciarlo. Es la MISMA versión
+# que wasmtime 46 ya arrastra (ver Cargo.lock): cero código nuevo en el árbol.
+wasmparser = "0.251"
 # Anclas HMAC del head del journal (M3-5, ADR 0025): hermana RustCrypto de
 # sha2 (ya presente), sin transitivas nuevas. Alternativa evaluada: firmar
 # con ed25519 — dep pesada sin ganancia en un daemon mono-usuario.
