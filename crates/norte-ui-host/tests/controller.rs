@@ -7550,6 +7550,91 @@ async fn el_visor_ensena_la_preview_de_un_plugin_y_dice_de_quien_es() {
     );
 }
 
+/// La preview de un plugin llega a la ventana CON sus fragmentos (puente
+/// 49): rol del tema en kebab, color propio en `#rrggbb`, texto ya
+/// enmascarado. Hasta aquí `ViewerView` la aplanaba a `lines`, y la ventana
+/// pintaba en gris lo que la TUI pintaba en color.
+#[tokio::test]
+async fn el_visor_lleva_los_fragmentos_de_la_preview() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"main.rs".to_vec(), false)]);
+    f.contenido
+        .insert("mem:///casa/main.rs".to_owned(), b"fn main() {}".to_vec());
+    f.previews.insert(
+        "mem:///casa/main.rs".to_owned(),
+        norte_proto::methods::PluginPreviewStyled {
+            plugin_id: "acme.syntax".to_owned(),
+            plugin_name: "Syntax".to_owned(),
+            lines: vec![
+                vec![
+                    norte_proto::methods::SpanWire {
+                        text: "fn".to_owned(),
+                        role: Some("title".to_owned()),
+                        fg: Some([255, 0, 0]),
+                    },
+                    norte_proto::methods::SpanWire {
+                        text: " main".to_owned(),
+                        role: None,
+                        fg: Some([0, 128, 255]),
+                    },
+                    norte_proto::methods::SpanWire {
+                        // Un rol que el tema no conoce degrada a plano, y un
+                        // override bidi del plugin llega enmascarado.
+                        text: "()\u{202e}{}".to_owned(),
+                        role: Some("no-es-un-rol".to_owned()),
+                        fg: None,
+                    },
+                ],
+                vec![norte_proto::methods::SpanWire {
+                    text: "plano".to_owned(),
+                    role: None,
+                    fg: None,
+                }],
+            ],
+            lossy: false,
+        },
+    );
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    h.dispatch(tecla("F3")).await.expect("host vivo");
+    let mut visor = None;
+    for _ in 0..20 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone() {
+            visor = Some(v);
+            break;
+        }
+    }
+    let v = visor.expect("el visor abre");
+
+    assert_eq!(v.styled.len(), 2, "una entrada por fila: {:?}", v.styled);
+    assert_eq!(
+        v.styled.len(),
+        v.lines.len(),
+        "las mismas filas que `lines`"
+    );
+    let primera = &v.styled[0];
+    assert_eq!(primera.len(), 3);
+    assert_eq!(primera[0].text, "fn");
+    assert_eq!(primera[0].role.as_deref(), Some("title"));
+    assert_eq!(primera[0].fg.as_deref(), Some("#ff0000"));
+    assert_eq!(primera[1].role, None);
+    assert_eq!(primera[1].fg.as_deref(), Some("#0080ff"));
+    assert_eq!(primera[2].role, None, "un rol desconocido degrada a plano");
+    assert!(
+        !primera[2].text.contains('\u{202e}'),
+        "el override bidi no cruza crudo: {:?}",
+        primera[2].text
+    );
+    assert_eq!(v.styled[1][0].text, "plano");
+    assert_eq!(
+        v.lines[0],
+        primera.iter().map(|s| s.text.as_str()).collect::<String>(),
+        "`lines` es el mismo texto, aplanado"
+    );
+}
+
 /// Un previewer que no aplica NO estorba: el visor enseña el fichero.
 #[tokio::test]
 async fn sin_previewer_el_visor_ensena_el_fichero() {

@@ -10,6 +10,18 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+/// Un fragmento del modelo compartido, en la forma del puente: el rol por su
+/// nombre kebab (ya validado contra el tema), el color como `#rrggbb`, el
+/// texto acotado. El enmascarado se hizo a la entrada
+/// (`Viewer::with_plugin_preview_styled`), una sola vez.
+fn span_view(s: &norte_frontend::ansi::StyledSpan) -> crate::dto::SpanView {
+    crate::dto::SpanView {
+        text: clamp_display(s.text.clone()),
+        role: s.role.map(|r| r.as_kebab().to_owned()),
+        fg: s.fg.map(|(r, g, b)| format!("#{r:02x}{g:02x}{b:02x}")),
+    }
+}
+
 impl Estado {
     /// Proyecta un snapshot del daemon a lo que el renderer pinta.
     pub(super) fn vista_de(p: &norte_proto::TaskProgress) -> TaskView {
@@ -400,6 +412,19 @@ impl Estado {
                 Err(clave) => clamp_display(norte_i18n::t_in(self.lang, clave)),
                 Ok(_) => String::new(),
             },
+            // Los fragmentos con estilo de la MISMA ventana de filas que
+            // `lines` (mismo `alto`, mismo `scroll`): una entrada por fila.
+            // El texto ya llegó enmascarado del modelo compartido; se acota
+            // aquí como todo lo que cruza.
+            styled: v
+                .plugin_styled_rows(alto)
+                .map(|filas| {
+                    filas
+                        .iter()
+                        .map(|linea| linea.iter().map(span_view).collect())
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 

@@ -1060,6 +1060,25 @@
       "path_hostile": false,
       "preview_by": "via PDF de ACME",
       "preview_lossy": true,
+      "styled": [
+        [
+          {
+            "fg": "#ff0000",
+            "role": "title",
+            "text": "quinta"
+          },
+          {
+            "fg": "#00ff00",
+            "role": null,
+            "text": " lín"
+          },
+          {
+            "fg": null,
+            "role": null,
+            "text": "ea"
+          }
+        ]
+      ],
       "total_rows": 120,
       "truncated": true
     },

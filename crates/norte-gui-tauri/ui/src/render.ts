@@ -2327,7 +2327,31 @@ export class Screen {
     body.className = viewer.hex ? "viewer-body hexview" : "viewer-body";
     body.setAttribute("tabindex", "-1");
     body.setAttribute("aria-describedby", `viewer-meta-${String(viewer.first_line)}`);
-    body.textContent = viewer.lines.join("\n");
+    if (viewer.styled.length === 0) {
+      body.textContent = viewer.lines.join("\n");
+    } else {
+      // Una preview de plugin con sus fragmentos (puente 49): un nodo por
+      // línea y un `span` por fragmento. Siempre `textContent`: el texto lo
+      // escribió un plugin. El rol va en `data-role`, que la hoja de estilos
+      // mapea a las variables del tema, y el color propio solo cuando no hay
+      // rol — el tema del lector manda sobre la paleta fija del plugin.
+      for (const linea of viewer.styled) {
+        const fila = document.createElement("div");
+        fila.className = "viewer-line";
+        for (const s of linea) {
+          const el = document.createElement("span");
+          el.className = "viewer-span";
+          el.textContent = s.text;
+          if (s.role !== null) {
+            el.dataset["role"] = s.role;
+          } else if (s.fg !== null) {
+            el.style.color = s.fg;
+          }
+          fila.append(el);
+        }
+        body.append(fila);
+      }
+    }
 
     box.append(head, body);
     if (viewer.image !== null) {

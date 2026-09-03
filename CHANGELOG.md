@@ -9,6 +9,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window paints a plugin preview's roles and colours** (bridge **49**).
+  The TUI has painted styled previews since ADR 0037; the window flattened
+  the same spans to plain lines, so a syntax-highlighted preview arrived in
+  grey. `ViewerView` now carries `styled`: one entry per visible line, each
+  the ordered list of its spans with the theme role's kebab name or the
+  plugin's own `#rrggbb`. The renderer paints one `span` per fragment, the
+  role through the theme's variables (as row badges already do) and the
+  colour inline only when there is no role — the reader's theme wins over a
+  plugin's fixed palette, as in the TUI. Text is masked once at entry and
+  stays text in the DOM; `lines` is unchanged for the raw view.
+
 - **A plugin says which WIT it was built against, and the host says whether
   it serves it** (ADR 0094). The version of a WIT package is part of every
   interface name a component imports or exports, so any bump made a compiled

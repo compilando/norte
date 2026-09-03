@@ -25,6 +25,10 @@ use serde::{Deserialize, Serialize};
 /// pantalla a medias — que es peor que una que dice que no sabe leerla.
 /// Reabrir la regla es un ADR nuevo, no un parche aquí.
 ///
+/// - **49**: el visor lleva los FRAGMENTOS de una preview de plugin
+///   (`ViewerView::styled`): texto, rol del tema o color propio, una entrada
+///   por fila de `lines`. La TUI pintaba roles y colores desde ADR 0037 y la
+///   ventana los aplanaba a texto; ahora los dos frontends enseñan lo mismo.
 /// - **48**: el panel de registro lee TAMBIÉN el del daemon (#328). El hueco
 ///   dice qué fuente se está enseñando (`source_mode`), si hay de verdad una
 ///   segunda que ofrecer (`sources_available`) y qué hay que decir sobre ella
@@ -165,7 +169,7 @@ use serde::{Deserialize, Serialize};
 ///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
 ///   incluidos); un cambio de foco viaja como parche y no como foto.
 /// - **1**: el contrato inicial de la fase 2.
-pub const BRIDGE_VERSION: u32 = 48;
+pub const BRIDGE_VERSION: u32 = 49;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

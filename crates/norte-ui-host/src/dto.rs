@@ -1308,6 +1308,29 @@ pub struct ViewerView {
     /// usuario sabe que es una foto y que aparece como bytes sin una palabra
     /// parece norte roto, no norte prudente.
     pub image_refused: String,
+    /// Las líneas visibles CON ESTILO cuando lo que se enseña lo produjo un
+    /// previewer (puente 49): una entrada por fila de [`Self::lines`], cada
+    /// una la lista ordenada de sus fragmentos. Vacío en la vista cruda.
+    ///
+    /// El mismo texto que `lines`, partido y con su rol o su color: la TUI
+    /// lo pintaba desde el primer día y la ventana lo aplanaba. Un renderer
+    /// que no pinte fragmentos sigue con `lines` y no pierde nada.
+    pub styled: Vec<Vec<SpanView>>,
+}
+
+/// Un fragmento de una línea de preview con estilo (ADR 0037).
+///
+/// `role` GANA sobre `fg` cuando vienen los dos, como en la TUI: el tema del
+/// lector manda sobre el color fijo de un plugin. Un rol que el tema no
+/// conoce no llega aquí: el modelo compartido ya lo dejó en `None`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpanView {
+    /// El texto, ya enmascarado a la entrada y acotado aquí.
+    pub text: String,
+    /// El rol del tema en kebab-case (`title`, `error`, `match`…), validado.
+    pub role: Option<String>,
+    /// El color propio del plugin, `#rrggbb`. Solo cuenta sin `role`.
+    pub fg: Option<String>,
 }
 
 /// Una imagen reconocida y aceptada: qué es y cuánto dice medir.

@@ -2215,6 +2215,38 @@ body {
   color: var(--info-fg);
 }
 
+/* Una preview de plugin con estilo (puente 49): una línea por `div`, un
+   fragmento por `span`. El rol es vocabulario cerrado del tema y se mapea a
+   sus variables; un rol sin regla hereda el color del cuerpo. El color propio
+   de un plugin va inline, y solo cuando no hay rol. */
+.viewer-line {
+  min-height: var(--cell-h);
+}
+
+.viewer-span[data-role="title"] {
+  color: var(--title-fg);
+}
+
+.viewer-span[data-role="warning"] {
+  color: var(--warning-fg);
+}
+
+.viewer-span[data-role="error"] {
+  color: var(--error-fg);
+}
+
+.viewer-span[data-role="info"] {
+  color: var(--info-fg);
+}
+
+.viewer-span[data-role="hostile-badge"] {
+  color: var(--hostile-fg);
+}
+
+.viewer-span[data-role="selection"] {
+  color: var(--selection-fg);
+}
+
 /* Lo que el provider se saltó al listar. En la cabecera del hueco, con el
    color de aviso: no es un error —el listado sirve— pero está incompleto, y
    eso no se puede ver mirando las filas que sí están. */

@@ -451,6 +451,7 @@ describe("el visor", () => {
       preview_lossy: false,
       image: null,
       image_refused: "",
+      styled: [],
     };
     screen.paint(v);
     const doc = document.querySelector('[role="document"]') as HTMLElement;
@@ -478,12 +479,59 @@ describe("el visor", () => {
       preview_lossy: false,
       image: null,
       image_refused: "",
+      styled: [],
     };
     screen.paint(v);
     expect(document.querySelector(".viewer-body")?.classList.contains("hexview")).toBe(
       true,
     );
     expect(document.querySelector(".viewer-meta")?.textContent).toContain("hex");
+  });
+
+  it("una preview de plugin se pinta por fragmentos, con su rol o su color", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.viewer = {
+      path_display: "⟨file⟩/casa/main.rs",
+      path_hostile: false,
+      encoding: "UTF-8",
+      eol: "lf",
+      hex: false,
+      forced: false,
+      had_errors: false,
+      truncated: false,
+      total_rows: 2,
+      first_line: 0,
+      lines: ["fn main", "plano"],
+      preview_by: "via Syntax",
+      preview_lossy: false,
+      image: null,
+      image_refused: "",
+      styled: [
+        [
+          { text: "fn", role: "title", fg: "#ff0000" },
+          { text: " main", role: null, fg: "#0080ff" },
+        ],
+        [{ text: "plano", role: null, fg: null }],
+      ],
+    };
+    screen.paint(v);
+    const body = document.querySelector(".viewer-body") as HTMLElement;
+    const lineas = body.querySelectorAll(".viewer-line");
+    expect(lineas.length).toBe(2);
+    const spans = (lineas[0] as Element).querySelectorAll<HTMLElement>(".viewer-span");
+    expect(spans.length).toBe(2);
+    const fn_ = spans[0] as HTMLElement;
+    const main = spans[1] as HTMLElement;
+    expect(fn_.textContent).toBe("fn");
+    // El rol manda: va en `data-role` y el color fijo del plugin NO se aplica.
+    expect(fn_.dataset["role"]).toBe("title");
+    expect(fn_.style.color).toBe("");
+    // Sin rol, el color propio del plugin sí.
+    expect(main.dataset["role"]).toBeUndefined();
+    expect(main.style.color).toBe("rgb(0, 128, 255)");
+    // El texto sigue siendo TEXTO.
+    expect(body.textContent).toBe("fn mainplano");
   });
 
   it("sin visor abierto, no hay nada que tape la pantalla", () => {
@@ -511,6 +559,7 @@ describe("el visor", () => {
       preview_lossy: false,
       image: null,
       image_refused: "",
+      styled: [],
     };
     screen.paint(v);
     const body = document.querySelector(".viewer-body") as HTMLElement;
@@ -739,6 +788,7 @@ describe("la imagen del visor", () => {
     lines: ["00000000  89 50 4e 47"],
     preview_by: "",
     preview_lossy: false,
+    styled: [],
   };
 
   it("pide los bytes APARTE y los pinta como blob", async () => {
@@ -836,6 +886,7 @@ describe("la preview de un plugin en el visor", () => {
       preview_lossy: true,
       image: null,
       image_refused: "",
+      styled: [],
     };
     screen.paint(v);
     const via = document.querySelector(".viewer-via");
@@ -869,6 +920,7 @@ describe("la preview de un plugin en el visor", () => {
       preview_lossy: true,
       image: null,
       image_refused: "",
+      styled: [],
     };
     screen.paint(v);
     const head = document.querySelector(".viewer-head");
@@ -901,6 +953,7 @@ describe("la preview de un plugin en el visor", () => {
       preview_lossy: false,
       image: null,
       image_refused: "",
+      styled: [],
     };
     screen.paint(v);
     expect(document.querySelector(".viewer-via")).toBeNull();

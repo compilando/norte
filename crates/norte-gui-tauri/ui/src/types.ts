@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 48;
+export const BRIDGE_VERSION = 49;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -422,6 +422,23 @@ export interface ViewerView {
   image: ImageView | null;
   /** Por qué NO se pinta una imagen reconocida, ya traducido. */
   image_refused: string;
+  /**
+   * Las líneas visibles CON ESTILO cuando lo que se enseña lo produjo un
+   * previewer (puente 49): una entrada por fila de `lines`. Vacío en la
+   * vista cruda, y entonces se pinta `lines`.
+   */
+  styled: SpanView[][];
+}
+
+/**
+ * Un fragmento de una línea de preview con estilo. `role` GANA sobre `fg`
+ * cuando vienen los dos: el tema del lector manda sobre el color fijo de un
+ * plugin. El rol ya viene validado por el host.
+ */
+export interface SpanView {
+  text: string;
+  role: string | null;
+  fg: string | null;
 }
 
 /**

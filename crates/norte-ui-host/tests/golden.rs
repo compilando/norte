@@ -723,6 +723,25 @@ fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
             height: 1080,
         }),
         image_refused: String::new(),
+        // La misma línea que `lines`, partida en sus fragmentos: uno con rol
+        // (y un `fg` que el rol tapa), otro con solo color, otro plano.
+        styled: vec![vec![
+            norte_ui_host::dto::SpanView {
+                text: "quinta".to_owned(),
+                role: Some("title".to_owned()),
+                fg: Some("#ff0000".to_owned()),
+            },
+            norte_ui_host::dto::SpanView {
+                text: " lín".to_owned(),
+                role: None,
+                fg: Some("#00ff00".to_owned()),
+            },
+            norte_ui_host::dto::SpanView {
+                text: "ea".to_owned(),
+                role: None,
+                fg: None,
+            },
+        ]],
     }
 }
 
