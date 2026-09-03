@@ -63,6 +63,7 @@ pub const MUTAN: &[&str] = &[
     "pane.checksum",
     "pane.checksum-verify",
     "pane.ai-rename",
+    "pane.rename-batch",
     "pane.semantic-search",
     "pane.sync-dirs",
     // Abrir con la aplicación del escritorio y abrir un terminal LANZAN
@@ -184,6 +185,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.checksum",
     "pane.checksum-verify",
     "pane.ai-rename",
+    "pane.rename-batch",
     "pane.semantic-search",
     "pane.compare-dirs",
     "pane.sync-dirs",
@@ -615,6 +617,10 @@ pub enum Efecto {
     /// Pide un plan de renombrado para el directorio ENTERO. Abre el prompt
     /// de la instrucción; el plan llega después y se revisa antes de nada.
     RenameIa,
+    /// Renombrar en lote por PLANTILLA (#310): abre el prompt de la
+    /// plantilla, y el plan —determinista, sin modelo— entra por la MISMA
+    /// revisión que el de la IA.
+    RenameLote,
     /// Pide parar una task del tablero.
     ///
     /// Sobrevive a [`Efectos::SoloLectura`] **solo para las tasks propias**, y
@@ -803,6 +809,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.checksum" => Efecto::Sumas { verificar: false },
         "pane.checksum-verify" => Efecto::Sumas { verificar: true },
         "pane.ai-rename" => Efecto::RenameIa,
+        "pane.rename-batch" => Efecto::RenameLote,
         "pane.semantic-search" => Efecto::BuscarSemantica,
         "pane.compare-dirs" => Efecto::Comparar,
         "pane.dir-size" => Efecto::TamanoDeDirectorio,

@@ -60,6 +60,142 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
+    /// Abre el prompt de la PLANTILLA del renombrado en lote (#310),
+    /// prellenado con `[N].[E]` —el nombre tal y como está— o con lo que se
+    /// tecleó si se vuelve a abrir tras un diagnóstico.
+    ///
+    /// Prellenar con la identidad y no en blanco, como la TUI: así lo primero
+    /// que se ve es la forma que tiene una plantilla. Los nombres sobre los
+    /// que actúa se fijan AQUÍ —lo marcado, o el del cursor—, el mismo
+    /// operando que cualquier otra operación; solo los que son texto, porque
+    /// un par del plan viaja UTF-8 por protocolo.
+    pub(super) fn pedir_plantilla_de_lote(
+        &mut self,
+        siembra: Option<String>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let dir = self.hueco().pane.dir().clone();
+        let nombres: Vec<String> = self
+            .hueco()
+            .pane
+            .marked_paths()
+            .iter()
+            .filter_map(|p| p.file_name())
+            .filter_map(|s| String::from_utf8(s.as_bytes().to_vec()).ok())
+            .collect();
+        if nombres.is_empty() {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-rename-batch-nothing".to_owned(),
+                },
+                Vec::new(),
+            );
+        }
+        let texto = siembra.unwrap_or_else(|| "[N].[E]".to_owned());
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        let vista = DialogView {
+            id,
+            title_key: "modal-rename-batch".to_owned(),
+            destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
+            deadline_at_ms: None,
+            body: vec![
+                Self::linea_de_ruta(&dir),
+                crate::dto::DialogLine {
+                    text: clamp_display(norte_i18n::t_in(self.lang, "modal-rename-batch-hint")),
+                    hostile: false,
+                },
+            ],
+            overflow_note: String::new(),
+            choices: vec![
+                DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    destructive: false,
+                },
+                DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: Some(texto.clone()),
+            input_hostile: false,
+            input_secret: false,
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            vista: vista.clone(),
+            tecleado: Tecleado::Texto(texto),
+            reconocido: true,
+            al_confirmar: Some(Pendiente::PlantillaLote { dir, nombres }),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Genera el plan de la plantilla y lo mete en la MISMA revisión que el
+    /// de la IA (#310): lo que hace segura la operación no es de dónde
+    /// salieron los nombres.
+    ///
+    /// Una plantilla que no sirve se explica en la barra y el prompt se
+    /// vuelve a abrir con lo tecleado, en vez de tirar el texto: la TUI lo
+    /// deja abierto con el diagnóstico debajo, y esto es lo mismo con
+    /// diálogos que se cierran al confirmar.
+    pub(super) fn lanzar_plan_de_plantilla(
+        &mut self,
+        dir: VPath,
+        nombres: &[String],
+        plantilla: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let texto = plantilla.trim().to_owned();
+        if let Err(e) = norte_frontend::rename_pattern::check(&texto, nombres) {
+            let clave = norte_frontend::rename_pattern::error_key(e);
+            self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+            let mut salidas = vec![self.parche(vec![ViewChange::Status(self.status.clone())])];
+            let (_, reabierto) = self.pedir_plantilla_de_lote(Some(texto));
+            salidas.extend(reabierto);
+            return salidas;
+        }
+        // Los pares que NO cambian se descartan, como en la TUI: un plan de
+        // identidad no renombra nada, y confirmar sin tocar la plantilla es
+        // inocuo.
+        let entradas: Vec<norte_proto::methods::AiRenameEntry> =
+            norte_frontend::rename_pattern::plan(&texto, nombres, 1)
+                .into_iter()
+                .filter(|(from, to)| from != to)
+                .map(|(from, to)| norte_proto::methods::AiRenameEntry { from, to })
+                .collect();
+        if entradas.is_empty() {
+            self.status.message = Some(clamp_display(norte_i18n::t_in(
+                self.lang,
+                "msg-rename-batch-no-changes",
+            )));
+            return vec![self.parche(vec![ViewChange::Status(self.status.clone())])];
+        }
+        // CONTRA el directorio que se planeó, con el mismo cinturón que el
+        // plan del modelo: un `from` que no esté ahí no entra.
+        let del_dir: Vec<Vec<u8>> = self
+            .hueco()
+            .pane
+            .entries()
+            .iter()
+            .filter_map(|e| e.path.file_name().map(|s| s.as_bytes().to_vec()))
+            .collect();
+        self.epoca_ia += 1;
+        let epoca = self.epoca_ia;
+        let Some(parejas) = norte_frontend::rename_pairs_in(&entradas, Some(&del_dir)) else {
+            return self.decir_de_ia(epoca, "msg-ai-rename-invalid-plan");
+        };
+        self.abrir_revision(epoca, dir, entradas, parejas, backend, buzon)
+    }
+
     /// Le pide el plan al modelo. La respuesta vuelve al actor.
     ///
     /// Una época nueva por petición: entre pedirlo y que llegue, el lector
@@ -184,11 +320,24 @@ impl Estado {
         let Some(parejas) = norte_frontend::rename_pairs_in(&plan.entries, Some(&nombres)) else {
             return self.decir_de_ia(epoca, "msg-ai-rename-invalid-plan");
         };
-        // El veredicto se pide EN EL MISMO viaje: la revisión necesita el
-        // `plan_hash` para que aprobar haga algo, y un plan que se quedara
-        // esperando a que alguien se lo pidiera después no tendría quién.
-        // Va spawneado porque contra un directorio enorme es un `fs.list`
-        // entero, y esperarlo aquí congelaría el actor.
+        self.abrir_revision(epoca, dir, plan.entries, parejas, backend, buzon)
+    }
+
+    /// Abre la revisión de un plan —del modelo o de una plantilla (#310)— y
+    /// le pide al core el veredicto EN EL MISMO viaje: la revisión necesita
+    /// el `plan_hash` para que aprobar haga algo, y un plan que se quedara
+    /// esperando a que alguien se lo pidiera después no tendría quién. Va
+    /// spawneado porque contra un directorio enorme es un `fs.list` entero,
+    /// y esperarlo aquí congelaría el actor.
+    fn abrir_revision(
+        &mut self,
+        epoca: u64,
+        dir: VPath,
+        entradas: Vec<norte_proto::methods::AiRenameEntry>,
+        parejas: Vec<norte_proto::methods::RenamePair>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let b = Arc::clone(backend);
         let buz = buzon.clone();
         let d = dir.clone();
@@ -204,7 +353,7 @@ impl Estado {
         });
         self.revision_ia = Some(RevisionIa {
             dir,
-            entradas: plan.entries,
+            entradas,
             parejas,
             plan: norte_frontend::BatchPlan::Pending,
             primera: 0,

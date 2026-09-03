@@ -130,6 +130,7 @@ impl Estado {
             | Efecto::Transferir { .. }
             | Efecto::Renombrar
             | Efecto::RenameIa
+            | Efecto::RenameLote
             // #314: cambiar permisos escribe, así que una ventana de solo
             // lectura tampoco lo hace.
             | Efecto::Permisos
@@ -185,6 +186,7 @@ impl Estado {
             | Efecto::Transferir { .. }
             | Efecto::Renombrar
             | Efecto::RenameIa
+            | Efecto::RenameLote
             | Efecto::Permisos
             | Efecto::BuscarSemantica => self.efecto_que_muta(efecto),
         }
@@ -454,6 +456,7 @@ impl Estado {
             Efecto::Transferir { mover } => self.pedir_transferencia(mover),
             Efecto::Renombrar => self.pedir_rename(),
             Efecto::RenameIa => self.pedir_instruccion_ia(),
+            Efecto::RenameLote => self.pedir_plantilla_de_lote(None),
             Efecto::Permisos => self.pedir_permisos(),
             Efecto::BuscarSemantica => self.pedir_consulta_semantica(),
             // Los demás no llegan aquí: el `match` de arriba los reparte.

@@ -98,6 +98,12 @@ impl Estado {
                 let instruccion = dialogo.tecleado.texto().to_owned();
                 salidas.extend(self.lanzar_plan_ia(dir, instruccion, backend, buzon));
             }
+            Some(Pendiente::PlantillaLote { dir, nombres }) => {
+                let plantilla = dialogo.tecleado.texto().to_owned();
+                salidas.extend(
+                    self.lanzar_plan_de_plantilla(dir, &nombres, &plantilla, backend, buzon),
+                );
+            }
             Some(Pendiente::ConsultaSemantica) => {
                 let consulta = dialogo.tecleado.texto().to_owned();
                 salidas.extend(self.lanzar_semantica(consulta, backend, buzon));

@@ -51,12 +51,10 @@ const APLAZADOS: &[(&str, u32)] = &[
     // líneas — que era el matiz que la TUI no tiene, porque allí el daemon
     // embebido es el mismo proceso. Llevar las del daemon por el cable sigue
     // pendiente, y es #328.
-    // El renombrado en lote por plantilla (#310) nace en la TUI: el generador
-    // y la validación viven en el crate COMPARTIDO, así que lo que le falta a
-    // la ventana es la superficie —un prompt de plantilla— y no la lógica. La
-    // revisión del plan sí la tiene ya, porque es la misma que la del rename
-    // con IA.
-    ("pane.rename-batch", 310),
+    // `pane.rename-batch` (#310) estuvo aquí: el generador y la validación
+    // eran del crate compartido y a la ventana solo le faltaba el prompt de
+    // la plantilla. Ya lo tiene, y el plan entra por la misma revisión que el
+    // de la IA.
     // Comparar dos ficheros (#312) delega en un programa externo, y esta
     // ventana todavía no sabe lanzar uno esperándolo: el camino nativo que
     // tiene —`shell::open`— es el de «entrégaselo al escritorio y vuelve»,

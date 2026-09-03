@@ -205,6 +205,9 @@ impl Estado {
                 // son el diálogo que pide que teclees algo, y el corpus tiene
                 // UNA que habla de eso.
                 Some(Pendiente::InstruccionIa { .. }) => "dialog.ai-rename",
+                // La plantilla del lote (#310): la misma página que la TUI le
+                // da a su prompt, la del renombrado.
+                Some(Pendiente::PlantillaLote { .. }) => "dialog.rename",
                 // #327: el de la contraseña tiene su PROPIA página, la misma
                 // que usa la TUI (`remote.md`, junto al TOFU). Mandarlo a la
                 // de «teclea un nombre» sería la divergencia entre frontends

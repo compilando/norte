@@ -44,6 +44,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window renames in batch by template (#310).** `pane.rename-batch`
+  opens the template prompt, prefilled with `[N].[E]` like the TUI, over
+  what is marked or under the cursor. The template is checked with the
+  reader in front of it (an empty one, or one that would leave a name
+  empty or with a `/`) and the prompt comes back with what was typed and
+  the reason in the status line; a good one generates the plan without a
+  model and puts it through the same review as the AI plan, with the
+  core's verdict and `plan_hash`, so approving executes exactly what was
+  shown. Out of the parity matrix's deferred list; the only command left
+  there is comparing two files (#312).
 - **The window has the docked viewer (#291).** The last of the seven
   ADR 0058 slot kinds the window painted in grey: `layout.preview` now
   opens a `viewer` slot beside the listing, at equal width, that follows

@@ -998,6 +998,8 @@ impl Estado {
                         // modelo, que no es algo que deba hacer una ventana
                         // que se declara de solo lectura.
                         | Pendiente::InstruccionIa { .. }
+                        // Y el lote por plantilla (#310) acaba en un rename.
+                        | Pendiente::PlantillaLote { .. }
                         // Tampoco: la consulta sale del proceso.
                         | Pendiente::ConsultaSemantica // `EntregarSecreto` NO está, y es deliberado (#327):
                                                        // entregar la contraseña habilita LEER un sitio al que

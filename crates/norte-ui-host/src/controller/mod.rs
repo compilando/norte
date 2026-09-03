@@ -1925,6 +1925,17 @@ enum Pendiente {
         /// El directorio sobre el que planear.
         dir: VPath,
     },
+    /// La PLANTILLA del renombrado en lote (#310). Lo que se teclea es una
+    /// plantilla, no un nombre: el plan se genera aquí y se revisa antes de
+    /// nada, como el de la IA.
+    PlantillaLote {
+        /// El directorio sobre el que planear.
+        dir: VPath,
+        /// Los nombres sobre los que actúa el lote: lo marcado, o el del
+        /// cursor. Se fijan al abrir el prompt, como el operando de
+        /// cualquier otra operación.
+        nombres: Vec<String>,
+    },
     /// Renombrar UNA entrada dentro de su propio directorio.
     ///
     /// Lleva la SIEMBRA del campo, no solo la ruta, y esa es la pieza que

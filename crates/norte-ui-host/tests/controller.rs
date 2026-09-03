@@ -811,16 +811,17 @@ async fn el_contador_lo_resuelve_el_host() {
 async fn un_comando_que_el_host_no_hace_no_dispara_nada() {
     let (h, snap) = host_arbol(arbol()).await;
     let antes = listado(&snap).clone();
-    // `alt+r` es el renombrado en lote (#310) en el preset ortodoxo: existe,
-    // está ligada, y este host todavía no la implementa —le falta la
-    // superficie del prompt de plantilla—. El ejemplo ha ido cambiando según
-    // se construía lo anterior —fue `F5` hasta copiar, `F4` hasta que editar
-    // pasó a abrir con el escritorio (#290), `alt+t` hasta el panel de árbol
-    // y `alt+q` hasta el visor acoplado (#291)—, y esa rotación es justamente
-    // la señal de que la ventana se acerca a la paridad.
+    // `alt+C` es comparar dos ficheros (#312) en el preset ortodoxo: existe,
+    // está ligada, y este host todavía no la implementa —no sabe lanzar un
+    // programa esperándolo—. El ejemplo ha ido cambiando según se construía
+    // lo anterior —fue `F5` hasta copiar, `F4` hasta que editar pasó a abrir
+    // con el escritorio (#290), `alt+t` hasta el panel de árbol, `alt+q`
+    // hasta el visor acoplado (#291) y `alt+r` hasta el lote por plantilla
+    // (#310)—, y esa rotación es justamente la señal de que la ventana se
+    // acerca a la paridad.
     let ack = h
         .dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
-            key: "r".to_owned(),
+            key: "C".to_owned(),
             ctrl: false,
             alt: true,
             shift: false,
@@ -9981,6 +9982,113 @@ async fn pedir_plan(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) {
     })
     .await
     .expect("host vivo");
+}
+
+/// #310: el renombrado en lote por PLANTILLA en la ventana. El prompt fija
+/// el operando (lo marcado), la plantilla se valida con el humano delante y
+/// el prompt vuelve con lo tecleado y el diagnóstico en la barra, y el plan
+/// —determinista, sin modelo— entra por la MISMA revisión que el de la IA,
+/// con el veredicto del core en su viaje.
+#[tokio::test]
+async fn el_lote_por_plantilla_se_revisa_como_el_de_la_ia() {
+    let pares = [("ep1.mkv", "ep01.mkv"), ("ep2.mkv", "ep02.mkv")];
+    let backend = falso_con_plan(&pares, Some(veredicto_ok(&pares)));
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    // El lote actúa sobre lo MARCADO: los dos.
+    por_la_paleta(&h, &mut sub, "mark.all").await;
+    por_la_paleta(&h, &mut sub, "rename-batch").await;
+    let prompt = foto_hasta(&h, &mut sub, "el prompt de la plantilla", |s| {
+        s.dialogs
+            .iter()
+            .find(|d| d.title_key == "modal-rename-batch")
+            .cloned()
+    })
+    .await;
+    assert_eq!(
+        prompt.input.as_deref(),
+        Some("[N].[E]"),
+        "prellenado con la identidad, como la TUI"
+    );
+
+    // Una plantilla que dejaría un `/` dentro se explica y el prompt VUELVE
+    // con lo tecleado, en vez de tirarlo.
+    h.dispatch(UiAction::DialogInput {
+        id: prompt.id,
+        text: "a/[N]".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id: prompt.id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    let reabierto = foto_hasta(
+        &h,
+        &mut sub,
+        "el prompt reabierto con el diagnóstico",
+        |s| {
+            s.dialogs
+                .iter()
+                .find(|d| d.title_key == "modal-rename-batch" && d.id != prompt.id)
+                .cloned()
+                .filter(|_| s.status.message.as_deref().is_some_and(|m| m.contains('/')))
+        },
+    )
+    .await;
+    assert_eq!(reabierto.input.as_deref(), Some("a/[N]"));
+    assert!(
+        backend.instrucciones.lock().expect("mutex").is_empty(),
+        "al modelo no se le pidió nada"
+    );
+
+    // La buena: el plan se genera aquí y se revisa como el de la IA.
+    h.dispatch(UiAction::DialogInput {
+        id: reabierto.id,
+        text: "ep0[C].[E]".to_owned(),
+    })
+    .await
+    .expect("host vivo");
+    h.dispatch(UiAction::Dialog {
+        id: reabierto.id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    let mut v = siguiente_revision(&mut sub)
+        .await
+        .expect("abre la revisión");
+    assert_eq!(v.total, 2, "{v:?}");
+    assert_eq!(v.pairs[0].from.text, "ep1.mkv");
+    assert_eq!(v.pairs[0].to.text, "ep01.mkv");
+    assert_eq!(v.pairs[1].to.text, "ep02.mkv");
+    for _ in 0..40 {
+        if v.confirmable {
+            break;
+        }
+        v = siguiente_revision(&mut sub).await.expect("sigue abierta");
+    }
+    assert!(
+        v.confirmable,
+        "el core dio su veredicto sobre el plan de la plantilla"
+    );
+    assert!(
+        backend.instrucciones.lock().expect("mutex").is_empty(),
+        "sigue sin haber modelo de por medio"
+    );
+    assert_eq!(
+        backend.veredictos_pedidos.lock().expect("mutex").len(),
+        1,
+        "un veredicto pedido, para el plan de la plantilla"
+    );
+    assert!(
+        backend.lotes.lock().expect("lotes").is_empty(),
+        "revisar no aplica nada"
+    );
 }
 
 /// El plan se REVISA antes de nada: llega, se pinta pareja a pareja, y el
