@@ -104,6 +104,13 @@
 // El token es opaco y de un solo uso lógico (lo acuña el host por petición):
 // el guest no aprende la ruta, que es lo que hace que esto no sea un agujero
 // en la regla 9 sino una capacidad con su propio permiso.
+//
+// 2026-09-03 (demo D2, ADR 0094): el world `norte-columns` importa
+// `norte:location@0.2.0` (`read-prefix`). Este paquete se queda en 0.8.0: no
+// cambia ninguna de SUS interfaces —`norte:plugin/previewer@0.8.0` sigue
+// llamándose igual—, así que un previewer compilado ayer sigue cargando. Un
+// guest de columnas compilado contra 0.1.0 importa un nombre que ya no existe
+// y el catálogo lo lista como desfasado, con las dos versiones.
 package norte:plugin@0.8.0;
 
 /// Genera una previsualización de UN recurso que el HOST ya leyó y le pasa
@@ -243,6 +250,6 @@ world norte-columns {
     // columnas, y lo que decide si SIRVE algo es la capacidad aprobada del
     // manifiesto (un token `none`, o un error por token desconocido). Un
     // import de más en el linker nunca rompe nada; uno no resuelto sí.
-    import norte:location/location@0.1.0;
+    import norte:location/location@0.2.0;
     export columns;
 }

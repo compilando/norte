@@ -114,6 +114,26 @@ says so and says why.
   third-party ecosystem ever makes recompiling on release day the wrong ask;
   nothing here prevents it, and `SERVED_WIT` is the table it would extend.
 
+## Amendment 2026-09-03: what "any change" means, learned on the first bump
+
+The first bump under this policy came the same day: `norte:location` gained
+`read-prefix` (0.1.0 → 0.2.0) for the media-info demo. The `norte-columns`
+world in the `norte:plugin` package imports that interface, so the
+`norte-plugin.wit` file changed too — and decision 4 said "minor bump for any
+change".
+
+`norte:plugin` was **not** bumped, and the rule is refined: **a package bumps
+when one of its own interfaces changes**, because the version travels in the
+interface names, and only those names decide whether a binary loads. A
+world's import list is not an interface name: a previewer compiled against
+`norte:plugin/previewer@0.8.0` still exports that exact name and still loads.
+A columns guest compiled against `norte:location@0.1.0` imports a name that
+no longer exists, and the catalogue lists it with both versions — which is
+this ADR working as intended, on the package that actually moved.
+
+Bumping `norte:plugin` as well would have staled every previewer to announce
+a change that did not touch them.
+
 ## Alternatives considered
 
 - **A `wit` field in the manifest.** Self-declared and stale; see decision 1.

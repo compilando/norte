@@ -314,6 +314,13 @@ pub trait LocationHost: Send + Sync + std::fmt::Debug {
     /// Lo que el implementador considere: la cadena viaja tal cual al guest.
     fn read(&self, token: &str, rel: &[u8]) -> Result<Vec<u8>, String>;
 
+    /// Como [`Self::read`], como mucho los primeros `max` bytes: lo que una
+    /// cabecera necesita. El implementador lee y cobra solo lo que devuelve.
+    ///
+    /// # Errors
+    /// Igual que [`Self::read`].
+    fn read_prefix(&self, token: &str, rel: &[u8], max: u64) -> Result<Vec<u8>, String>;
+
     /// Metadatos de una entrada bajo el token (sin seguir symlinks).
     ///
     /// # Errors
@@ -335,6 +342,11 @@ impl location::Host for HostState {
     fn read(&mut self, token: String, rel: Vec<u8>) -> Result<Vec<u8>, String> {
         let host = self.location_host()?;
         host.read(&token, &rel)
+    }
+
+    fn read_prefix(&mut self, token: String, rel: Vec<u8>, max: u64) -> Result<Vec<u8>, String> {
+        let host = self.location_host()?;
+        host.read_prefix(&token, &rel, max)
     }
 
     fn stat(&mut self, token: String, rel: Vec<u8>) -> Result<location::Meta, String> {

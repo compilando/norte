@@ -329,6 +329,43 @@ impl ConfinedRoot {
         Ok(buf)
     }
 
+    /// Lee como mucho los primeros `max` bytes de un fichero bajo la raíz:
+    /// lo que una cabecera necesita (`norte:location@0.2.0`, demo D2).
+    ///
+    /// Cobra SOLO lo que devuelve, y `max` se acota además por
+    /// `max_read_bytes`: un guest no puede pedir «los primeros 4 GiB». Un
+    /// fichero más corto que `max` llega entero, y eso no es un error —el
+    /// guest que necesite saber si se cortó tiene `stat`.
+    ///
+    /// # Errors
+    ///
+    /// Las de [`LocationError`]: `Escapes` si la ruta sale, `TypeMismatch`
+    /// si no es un fichero regular, `Budget` si la sesión se acabó.
+    pub fn read_prefix(&self, rel: &[u8], max: u64) -> Result<Vec<u8>, LocationError> {
+        self.charge_call()?;
+        let (parent, name) = Self::split(rel)?;
+        self.ensure_allowed(&Self::components(rel)?)?;
+        let dir = self.dir_fd(&parent)?;
+        let file = openat_read(dir.as_raw_fd(), name.as_ref())?;
+        let meta = file.metadata().map_err(|e| from_io(&e))?;
+        if !meta.is_file() {
+            return Err(LocationError::TypeMismatch);
+        }
+        let tope = max.min(self.bounds.max_read_bytes);
+        // Se cobra ANTES de leer, por lo que se va a leer como mucho: un
+        // sondeo que falla no puede ser gratis (#240), y `st_size` puede
+        // mentir, así que el tope y no el tamaño.
+        self.charge_bytes(tope.min(meta.len()))?;
+        let mut buf = Vec::with_capacity(usize::try_from(tope.min(meta.len())).unwrap_or(0));
+        let leidos = std::io::Read::read_to_end(&mut std::io::Read::take(file, tope), &mut buf)
+            .map_err(|e| from_io(&e))?;
+        // Lo que de verdad se entregó por encima de lo cobrado (un fichero
+        // que creció bajo el `stat`): el cobro no puede quedarse corto.
+        let leidos = u64::try_from(leidos).unwrap_or(u64::MAX);
+        self.charge_bytes(leidos.saturating_sub(tope.min(meta.len())))?;
+        Ok(buf)
+    }
+
     /// `lstat` de una entrada bajo la raíz: el símbolo NO se sigue.
     ///
     /// # Errors
@@ -668,6 +705,49 @@ mod tests {
         let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[]).unwrap();
         // Sin `O_NONBLOCK` este assert no falla: no termina.
         assert_eq!(root.read(b"index"), Err(LocationError::TypeMismatch));
+    }
+
+    /// `read_prefix` (norte:location 0.2.0): entrega y COBRA como mucho `max`
+    /// bytes. Una columna sobre cien vídeos cuesta cien cabeceras y no cien
+    /// vídeos, y el presupuesto de la sesión lo refleja.
+    #[test]
+    fn read_prefix_entrega_y_cobra_solo_la_cabecera() {
+        let dir = tempfile::tempdir().unwrap();
+        let contenido: Vec<u8> = (0..100u8).collect();
+        std::fs::write(dir.path().join("pista.mp3"), &contenido).unwrap();
+        std::fs::create_dir(dir.path().join("carpeta")).unwrap();
+
+        let bounds = Bounds {
+            max_total_bytes: 60,
+            ..Bounds::default()
+        };
+        let root = ConfinedRoot::open(dir.path(), bounds, &[]).unwrap();
+        assert_eq!(
+            root.read_prefix(b"pista.mp3", 50).unwrap(),
+            contenido[..50],
+            "los primeros 50"
+        );
+        // Un segundo prefijo de 50 no cabe en los 60 de la sesión: se cobró
+        // lo entregado, no lo que el fichero mide.
+        assert_eq!(
+            root.read_prefix(b"pista.mp3", 50),
+            Err(LocationError::Budget)
+        );
+
+        let root = ConfinedRoot::open(dir.path(), Bounds::default(), &[]).unwrap();
+        assert_eq!(
+            root.read_prefix(b"pista.mp3", 1000).unwrap(),
+            contenido,
+            "más corto que `max`: entero, sin error"
+        );
+        assert_eq!(
+            root.read_prefix(b"carpeta", 10),
+            Err(LocationError::TypeMismatch)
+        );
+        assert_eq!(
+            root.read_prefix(b"../fuera", 10),
+            Err(LocationError::Escapes)
+        );
     }
 
     /// #238: la raíz protegida que cae DENTRO no se atraviesa, ni a un nivel

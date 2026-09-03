@@ -2766,11 +2766,9 @@ header = "Size"
         // `run_column_values` solo llama a `mint_for` cuando la capability
         // está concedida; aquí se pinea la mitad observable: con capabilities
         // por defecto, `granted()` es falso.
-        assert!(
-            !norte_plugin_host::Capabilities::default()
-                .location
-                .granted()
-        );
+        assert!(!norte_plugin_host::Capabilities::default()
+            .location
+            .granted());
         drop(mint.mint_for(&vpath, None, false));
         assert_eq!(mint.live_tokens(), 0);
     }
@@ -3522,6 +3520,12 @@ fn mint_token() -> String {
 impl norte_plugin_host::LocationHost for LocationMint {
     fn read(&self, token: &str, rel: &[u8]) -> Result<Vec<u8>, String> {
         self.resolve(token)?.read(rel).map_err(|e| e.to_string())
+    }
+
+    fn read_prefix(&self, token: &str, rel: &[u8], max: u64) -> Result<Vec<u8>, String> {
+        self.resolve(token)?
+            .read_prefix(rel, max)
+            .map_err(|e| e.to_string())
     }
 
     fn stat(

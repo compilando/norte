@@ -131,6 +131,12 @@ impl norte_plugin_host::LocationHost for SpyLocation {
         }
     }
 
+    fn read_prefix(&self, token: &str, rel: &[u8], max: u64) -> Result<Vec<u8>, String> {
+        let mut bytes = self.read(token, rel)?;
+        bytes.truncate(usize::try_from(max).unwrap_or(usize::MAX));
+        Ok(bytes)
+    }
+
     fn stat(
         &self,
         _token: &str,

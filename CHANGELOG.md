@@ -7,6 +7,21 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Changed
+
+- **`norte:location` 0.1.0 → 0.2.0: `read-prefix`.** `read` reads a file
+  whole and charges it whole against the page's budget, so a column that
+  only needs a header — the dimensions of a PNG, the bitrate of an MP3 —
+  spent the session's 64 MiB in a dozen rows and never got a cell for a
+  video. `read-prefix(token, rel, max)` returns and charges at most `max`
+  bytes, capped by the host's per-read bound. This is the first WIT bump
+  since ADR 0094 wrote down what a bump does: **plugins built against
+  `norte:location@0.1.0` need a rebuild** — the catalogue lists them as
+  broken with both versions until then (`just plugins force` rebuilds the
+  official ones). `norte:plugin` stays at 0.8.0: none of its interfaces
+  changes name, only the `norte-columns` world's import, so a previewer
+  built yesterday still loads (ADR 0094 amendment).
+
 ### Added
 
 - **`org.norte.file-icons`, the first demo plugin.** A `decorator` that puts
