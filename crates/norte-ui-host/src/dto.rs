@@ -89,6 +89,10 @@ pub struct ViewSnapshot {
     /// una salida guardada dentro de una pantalla que no está abierta no la
     /// ve nadie.
     pub plugin_output: Option<ExtensionOutputView>,
+    /// La salida de un PROGRAMA que esta ventana corrió esperándolo (#312,
+    /// puente 52): hoy, el comparador de dos ficheros. `None` si no hay
+    /// ninguna en pantalla.
+    pub program_output: Option<ProgramOutputView>,
     /// Los ajustes, si están abiertos. Solo LECTURA: esta ventana enseña lo
     /// que hay y no escribe nada hasta que la fase 5 dé el camino seguro.
     pub settings: Option<SettingsView>,
@@ -695,6 +699,32 @@ pub struct ExtensionOutputView {
     pub text_hostile: bool,
     /// La salida no cabía entera y se cortó.
     pub truncated: bool,
+}
+
+/// La salida de un PROGRAMA que la ventana corrió y esperó (#312).
+///
+/// La terminal tiene un camino que el navegador no tiene: suspenderse,
+/// correr `diff -u` y esperar una tecla. Esto es su equivalente honesto: el
+/// proceso que hospeda corre el programa, captura lo que imprimió y se
+/// enseña aquí hasta que el lector lo cierra. Lo que imprimió lo escribió
+/// otro programa sobre ficheros que nombró cualquiera: entra enmascarado,
+/// por líneas y acotado, como la salida de una extensión.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramOutputView {
+    /// Clave Fluent del título: qué se hizo («comparar dos ficheros»).
+    pub title_key: String,
+    /// El programa y sus argumentos, ya enmascarados, para decir QUÉ corrió.
+    pub command: MaskedTextView,
+    /// Lo que imprimió (stdout y stderr, en ese orden), LÍNEA A LÍNEA.
+    pub lines: Vec<String>,
+    /// Alguna línea se pinta distinta de lo que el programa imprimió.
+    pub text_hostile: bool,
+    /// La salida no cabía entera y se cortó.
+    pub truncated: bool,
+    /// El programa no pudo correr, o acabó con error. Un comparador
+    /// devuelve 1 cuando los ficheros difieren, así que esto NO es
+    /// «distinto de cero»: es «no arrancó» o «se pasó del plazo».
+    pub failed: bool,
 }
 
 /// Las sesiones de AGENTE que esta ventana ha visto pedir permiso.
@@ -2615,6 +2645,11 @@ pub enum ViewChange {
         /// Lo que imprimió, o `None` si se cerró.
         output: Option<ExtensionOutputView>,
     },
+    /// La salida de un programa (#312) se enseñó o se cerró.
+    ProgramOutput {
+        /// Lo que imprimió, o `None` si se cerró.
+        output: Option<ProgramOutputView>,
+    },
     /// Los ajustes se abrieron, movieron el cursor o se cerraron.
     Settings {
         /// Los ajustes, o `None` si se cerraron.
@@ -2735,6 +2770,27 @@ pub enum NativeEffect {
         /// Dónde abrir el selector: el directorio del panel activo. Es una
         /// sugerencia, no una restricción — el lector puede irse a otro sitio.
         desde: norte_proto::VPath,
+    },
+    /// Corre un PROGRAMA con estos argumentos (#312): suelto (`detached`,
+    /// un comparador gráfico que abre su ventana) o ESPERÁNDOLO y
+    /// capturando lo que imprima, que vuelve como
+    /// `UiAction::ProgramFinished` y se enseña.
+    ///
+    /// El argv viene RESUELTO: el programa ya es una ruta absoluta (ADR
+    /// 0082, antes de darle un `cwd`) y las rutas de los ficheros ya están
+    /// interpoladas con las reglas compartidas (`[ui] diff`, `%F`). Quien
+    /// hospeda no decide nada: lanza. En BYTES, porque un nombre de fichero
+    /// es bytes (regla 1) y un argumento que no fuera UTF-8 abriría otro
+    /// fichero o ninguno.
+    RunProgram {
+        /// Clave Fluent de lo que se está haciendo, para el panel.
+        title_key: String,
+        /// Programa (ruta absoluta) y argumentos, en bytes.
+        argv: Vec<Vec<u8>>,
+        /// Directorio de trabajo, en bytes nativos, si lo hay.
+        cwd: Option<Vec<u8>>,
+        /// `true` = lanzar y soltar; `false` = esperar y capturar.
+        detached: bool,
     },
     /// Abre un terminal sentado en ESTE directorio.
     OpenTerminal {

@@ -152,6 +152,9 @@ struct Escritorio {
     /// PALETA, que no necesita tener el gestor abierto —ni lo abre—, y una
     /// salida guardada dentro de una pantalla cerrada no la ve nadie.
     salida: Option<crate::dto::ExtensionOutputView>,
+    /// La salida del último PROGRAMA que se corrió esperándolo (#312), si
+    /// sigue en pantalla.
+    programa: Option<crate::dto::ProgramOutputView>,
 }
 
 /// Lo que esta ventana sabe de las sesiones de AGENTE.
@@ -3444,6 +3447,13 @@ impl Estado {
             // aceptar texto que nadie va a leer.
             UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
             UiAction::DirectoryPicked { path } => self.destino_elegido(path.clone()),
+            UiAction::ProgramFinished {
+                title_key,
+                command,
+                output,
+                truncated,
+                failed,
+            } => self.programa_terminado(title_key, command, output, *truncated, *failed),
             UiAction::FilesDropped { paths } => self.soltados(paths),
             UiAction::WindowFocus { focused } => {
                 self.enfocada = *focused;

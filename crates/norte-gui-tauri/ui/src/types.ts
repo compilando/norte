@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 51;
+export const BRIDGE_VERSION = 52;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -765,6 +765,20 @@ export interface ExtensionOutputView {
   truncated: boolean;
 }
 
+/** La salida de un programa que quien hospeda corrió esperándolo (#312). */
+export interface ProgramOutputView {
+  /** Clave Fluent del título: qué se hizo. */
+  title_key: string;
+  /** El programa y sus argumentos, ya enmascarados. */
+  command: MaskedTextView;
+  /** stdout y stderr, LÍNEA A LÍNEA, cada una enmascarada y acotada. */
+  lines: string[];
+  text_hostile: boolean;
+  truncated: boolean;
+  /** No arrancó, o se pasó del plazo. NO es «salió distinto de cero». */
+  failed: boolean;
+}
+
 export interface ExtensionsView {
   rows: ExtensionRowView[];
   cursor: number;
@@ -1026,6 +1040,7 @@ export interface ViewSnapshot {
   extensions: ExtensionsView | null;
   agents: AgentsView | null;
   plugin_output: ExtensionOutputView | null;
+  program_output: ProgramOutputView | null;
   theme: ThemeView | null;
   search: SearchView | null;
   compare: CompareView | null;
@@ -1066,6 +1081,7 @@ export type ViewChange =
   | { change: "extensions"; extensions: ExtensionsView | null }
   | { change: "agents"; agents: AgentsView | null }
   | { change: "plugin_output"; output: ExtensionOutputView | null }
+  | { change: "program_output"; output: ProgramOutputView | null }
   | { change: "theme"; theme: ThemeView | null }
   | { change: "picker"; picker: PickerView | null }
   | { change: "layouts"; layouts: LayoutPickerView | null }

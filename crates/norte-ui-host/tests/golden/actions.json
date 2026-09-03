@@ -166,6 +166,35 @@
     "generation": 3,
     "row": 1
   },
+  "program_finished": {
+    "action": "program_finished",
+    "command": "/usr/bin/diff -u a.txt b.txt",
+    "failed": false,
+    "output": [
+      45,
+      45,
+      45,
+      32,
+      97,
+      46,
+      116,
+      120,
+      116,
+      10,
+      43,
+      43,
+      43,
+      32,
+      98,
+      46,
+      116,
+      120,
+      116,
+      10
+    ],
+    "title_key": "program-output-compare",
+    "truncated": false
+  },
   "refresh_slot": {
     "action": "refresh_slot",
     "slot_id": 1

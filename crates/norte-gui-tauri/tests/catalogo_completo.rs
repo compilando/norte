@@ -116,6 +116,9 @@ const DEL_HOST: &[&str] = &[
     "out.notice.key",
     "slot.state.reason_key",
     "top.title_key",
+    // El título del panel de salida de un programa (#312): el host la elige
+    // entre literales suyos, que el barrido del host sí sigue.
+    "output.title_key",
     "c.label_key",
     // `taskNode` recibe el traductor y compone `gui-task-kind-…`, que está
     // en `COMPUESTAS`.

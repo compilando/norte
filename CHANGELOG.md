@@ -44,6 +44,19 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window compares two files (#312, bridge 52).** The last command
+  in the parity matrix's deferred list; the list is now empty. Which two
+  files and which program are the decisions the TUI already shares
+  (`norte_frontend::diffpair`, `[ui] diff`, `diff -u` by default — the
+  default now lives in the shared crate). What changes is how it runs:
+  the terminal suspends and waits for a key; the window hands a
+  `RunProgram` native effect to the process that hosts it — the program
+  resolved to an absolute path before any `cwd` (ADR 0082), the two paths
+  interpolated, everything in bytes — which launches it detached when
+  `[ui] diff_detached` says the differ opens a window, and otherwise runs
+  it, waits with a deadline, captures what it printed and hands it back
+  as an action. The host masks it line by line and shows it in a program
+  output panel until Esc closes it.
 - **The window renames in batch by template (#310).** `pane.rename-batch`
   opens the template prompt, prefilled with `[N].[E]` like the TUI, over
   what is marked or under the cursor. The template is checked with the

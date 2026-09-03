@@ -134,6 +134,7 @@ impl Estado {
             extensions: self.vista_extensiones(),
             agents: self.vista_agentes(),
             plugin_output: self.escritorio.salida.clone(),
+            program_output: self.escritorio.programa.clone(),
             theme: self.vista_tema(),
             search: self.vista_busqueda(),
             layouts: self.vista_disposiciones(),

@@ -67,6 +67,31 @@ pub async fn bombear(
                         .await;
                 });
             }
+            // Un programa que se ESPERA (#312) contesta con lo que imprimió,
+            // por la misma puerta que el selector de carpeta: `dispatch`.
+            // Uno suelto se lanza y se olvida, como todo lo demás.
+            Ok(NativeEffect::RunProgram {
+                title_key,
+                argv,
+                cwd,
+                detached: false,
+            }) => {
+                let host = std::sync::Arc::clone(&host);
+                tokio::task::spawn(async move {
+                    let hecho = tokio::task::spawn_blocking(move || correr(&argv, cwd.as_deref()))
+                        .await
+                        .unwrap_or_else(|_| Corrido::fallo(String::new()));
+                    let _ = host
+                        .dispatch(norte_ui_host::UiAction::ProgramFinished {
+                            title_key,
+                            command: hecho.command,
+                            output: hecho.output,
+                            truncated: hecho.truncated,
+                            failed: hecho.failed,
+                        })
+                        .await;
+                });
+            }
             Ok(efecto) => {
                 // Sin esperar al resultado: un `xdg-open` puede tardar
                 // segundos en devolver, y el siguiente gesto de quien está
@@ -89,6 +114,33 @@ pub fn ejecutar(efecto: &NativeEffect) -> Resultado {
         NativeEffect::OpenPath { path } => abrir(path),
         NativeEffect::OpenTerminal { dir } => terminal(dir),
         NativeEffect::Notify { titulo, cuerpo } => avisar(titulo, cuerpo),
+        // Suelto: el comparador abre su ventana y esta no espera. El argv
+        // viene resuelto e interpolado del host; aquí solo se lanza.
+        NativeEffect::RunProgram {
+            argv,
+            cwd,
+            detached: true,
+            ..
+        } => {
+            use std::os::unix::ffi::OsStrExt as _;
+            let Some((programa, args)) = argv.split_first() else {
+                return Resultado::SinPrograma;
+            };
+            let args: Vec<std::ffi::OsString> = args
+                .iter()
+                .map(|a| std::ffi::OsStr::from_bytes(a).to_owned())
+                .collect();
+            let cwd = cwd
+                .as_deref()
+                .map(|d| std::path::Path::new(std::ffi::OsStr::from_bytes(d)));
+            lanzar(
+                std::path::Path::new(std::ffi::OsStr::from_bytes(programa)),
+                &args,
+                cwd,
+            )
+        }
+        // El que se ESPERA lo atiende `bombear`: tiene que contestar.
+        NativeEffect::RunProgram { .. } => Resultado::SinPrograma,
         // Los dos los atiende `bombear`, y ninguno lanza un programa: al
         // selector de carpeta hay que CONTESTARLE con la ruta, y el tema es un
         // catálogo que rehacer. Aquí no hay nada que ejecutar.
@@ -235,6 +287,108 @@ fn terminal(dir: &norte_proto::VPath) -> Resultado {
         return lanzar(&ruta, &argv[1..], Some(&nativa));
     }
     Resultado::SinPrograma
+}
+
+/// Lo que un programa esperado dejó (#312).
+struct Corrido {
+    /// El argv, en texto, para decir qué corrió.
+    command: String,
+    /// stdout y stderr, en ese orden, hasta [`SALIDA_MAX`].
+    output: Vec<u8>,
+    /// Se cortó por el tope.
+    truncated: bool,
+    /// No arrancó, o se pasó del plazo.
+    failed: bool,
+}
+
+impl Corrido {
+    fn fallo(command: String) -> Self {
+        Self {
+            command,
+            output: Vec::new(),
+            truncated: false,
+            failed: true,
+        }
+    }
+}
+
+/// Cuánta salida se conserva de un programa esperado: el host la parte en
+/// líneas y la acota otra vez, pero un `diff` de dos ISOs no tiene por qué
+/// llenar la memoria de esta ventana antes de llegar ahí.
+const SALIDA_MAX: usize = 1024 * 1024;
+
+/// Cuánto se espera a un programa antes de darlo por colgado. Un comparador
+/// de texto acaba al instante; uno que tarde más está esperando a alguien.
+const PLAZO_PROGRAMA: std::time::Duration = std::time::Duration::from_mins(1);
+
+/// Corre y ESPERA, capturando lo que imprima (#312). Bloquea: se llama
+/// desde `spawn_blocking`. Sin shell de por medio: el argv ya viene
+/// resuelto e interpolado, y meterlo por `sh -c` sería volver a interpretar
+/// nombres de fichero que nombró cualquiera.
+fn correr(argv: &[Vec<u8>], cwd: Option<&[u8]>) -> Corrido {
+    use std::io::Read as _;
+    use std::os::unix::ffi::OsStrExt as _;
+    let command = argv
+        .iter()
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let Some((programa, resto)) = argv.split_first() else {
+        return Corrido::fallo(command);
+    };
+    let mut cmd = std::process::Command::new(std::ffi::OsStr::from_bytes(programa));
+    cmd.args(resto.iter().map(|a| std::ffi::OsStr::from_bytes(a)))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(d) = cwd {
+        cmd.current_dir(std::ffi::OsStr::from_bytes(d));
+    }
+    let Ok(mut hijo) = cmd.spawn() else {
+        return Corrido::fallo(command);
+    };
+    // Se leen las dos tuberías hasta el tope y se espera con plazo. Leer
+    // primero y esperar después: un hijo que llene su stderr con la tubería
+    // sin leer se queda bloqueado, y `wait` no volvería nunca.
+    let mut output = Vec::new();
+    let mut truncated = false;
+    let mut lector = |tubo: Option<&mut dyn std::io::Read>| {
+        let Some(t) = tubo else {
+            return;
+        };
+        let mut buf = Vec::new();
+        let _ = t.take((SALIDA_MAX + 1) as u64).read_to_end(&mut buf);
+        if buf.len() > SALIDA_MAX {
+            buf.truncate(SALIDA_MAX);
+            truncated = true;
+        }
+        output.extend_from_slice(&buf);
+    };
+    let mut out = hijo.stdout.take();
+    let mut err = hijo.stderr.take();
+    lector(out.as_mut().map(|o| o as &mut dyn std::io::Read));
+    lector(err.as_mut().map(|e| e as &mut dyn std::io::Read));
+    let inicio = std::time::Instant::now();
+    let failed = loop {
+        match hijo.try_wait() {
+            Ok(Some(_)) => break false,
+            Ok(None) if inicio.elapsed() < PLAZO_PROGRAMA => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Ok(None) => {
+                let _ = hijo.kill();
+                let _ = hijo.wait();
+                break true;
+            }
+            Err(_) => break true,
+        }
+    };
+    Corrido {
+        command,
+        output,
+        truncated,
+        failed,
+    }
 }
 
 /// Lanza y SUELTA: la ventana no espera a que un PDF abra.

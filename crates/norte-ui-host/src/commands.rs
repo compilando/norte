@@ -74,6 +74,7 @@ pub const MUTAN: &[&str] = &[
     // Copiar la ruta NO está aquí: pone texto en el portapapeles y no toca
     // nada, que es tan de solo lectura como leer un nombre.
     "pane.open",
+    "pane.compare-files",
     // Editar es abrir con la aplicación del escritorio, así que lanza un
     // proceso igual que `pane.open`.
     "pane.edit",
@@ -160,6 +161,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "app.agents",
     "app.terminal",
     "pane.open",
+    "pane.compare-files",
     "pane.edit",
     "pane.copy-path",
     "app.theme",
@@ -495,6 +497,10 @@ pub enum Efecto {
     CopiarRuta,
     /// Abre lo señalado con la aplicación que el escritorio elija.
     AbrirExterno,
+    /// Compara DOS ficheros (#312) con el programa de `[ui] diff` —o
+    /// `diff -u`—, lanzado por quien hospeda: suelto si abre ventana,
+    /// esperándolo y capturando su salida si no.
+    CompararFicheros,
     /// Abre un terminal sentado en el directorio del panel activo.
     Terminal,
     /// Enseña el tema activo por dentro.
@@ -785,6 +791,7 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         // un fichero es más ruido que ayuda. Lo que se pierde es respetar
         // `$EDITOR`: aquí decide el escritorio, y puede abrir un visor.
         "pane.open" | "pane.edit" => Efecto::AbrirExterno,
+        "pane.compare-files" => Efecto::CompararFicheros,
         "app.terminal" => Efecto::Terminal,
         "app.theme" => Efecto::Tema,
         "app.menu" => Efecto::Menu,

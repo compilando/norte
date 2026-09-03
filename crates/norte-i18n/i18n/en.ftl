@@ -736,6 +736,12 @@ ext-commands-title = Commands
 plugin-output-title = Extension output
 plugin-output-empty = (it printed nothing)
 plugin-output-truncated = the output was cut: it was longer than fits
+# The output of a program the window ran and waited for (#312).
+program-output-title = Program output
+program-output-compare = Compare two files
+program-output-failed = the program did not run, or ran out of time
+# The `[ui] diff` program (or `diff`) is not on the PATH.
+host-program-missing = no program to do it with: it is not on the PATH
 ext-config-none = This extension declares no settings.
 ext-config-range = between {$min} and {$max}
 ext-config-min = at least {$min}

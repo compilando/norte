@@ -36,6 +36,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const syncEl = doc.getElementById("sync");
   const agentsEl = doc.getElementById("agents");
   const pluginOutputEl = doc.getElementById("plugin-output");
+  const programOutputEl = doc.getElementById("program-output");
   const viewerEl = doc.getElementById("viewer");
   const dialogsEl = doc.getElementById("dialogs");
   const aiRenameEl = doc.getElementById("ai-rename");
@@ -59,6 +60,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     syncEl === null ||
     agentsEl === null ||
     pluginOutputEl === null ||
+    programOutputEl === null ||
     viewerEl === null ||
     dialogsEl === null ||
     aiRenameEl === null ||
@@ -119,6 +121,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     syncEl,
     agentsEl,
     pluginOutputEl,
+    programOutputEl,
     viewerEl,
     dialogsEl,
     aiRenameEl,

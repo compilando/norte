@@ -55,13 +55,14 @@ const APLAZADOS: &[(&str, u32)] = &[
     // eran del crate compartido y a la ventana solo le faltaba el prompt de
     // la plantilla. Ya lo tiene, y el plan entra por la misma revisión que el
     // de la IA.
-    // Comparar dos ficheros (#312) delega en un programa externo, y esta
-    // ventana todavía no sabe lanzar uno esperándolo: el camino nativo que
-    // tiene —`shell::open`— es el de «entrégaselo al escritorio y vuelve»,
-    // que para un `diff -u` de terminal es un parpadeo. La regla del operando
-    // sí es compartida (`norte_frontend::diffpair`), así que lo que falta es
-    // el lanzamiento, no la decisión.
-    ("pane.compare-files", 312),
+    // Comparar dos ficheros (#312) estuvo aquí: la ventana no sabía lanzar un
+    // programa esperándolo. Desde `NativeEffect::RunProgram` quien hospeda
+    // lo corre —suelto si abre ventana, capturando su salida si no— y la
+    // salida vuelve como acción y se enseña. La decisión del operando y del
+    // programa siguen siendo las compartidas (`diffpair`, `[ui] diff`).
+    //
+    // Con esto la lista queda VACÍA: todo comando vivo del catálogo lo hace
+    // la ventana o no aplica a una ventana.
     // Los perfiles (ADR 0079) ya están en las dos: el selector, girar por la
     // lista y el cambio en caliente. Lo que la ventana todavía no hace es
     // acordarse de dónde dejaste cada panel DENTRO de cada perfil — la

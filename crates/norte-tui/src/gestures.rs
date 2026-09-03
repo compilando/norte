@@ -349,15 +349,6 @@ pub fn edit_under_cursor(app: &App) -> Result<EditLaunch, String> {
     }))
 }
 
-/// El argv por defecto para comparar dos ficheros: `diff -u`.
-///
-/// POSIX lo garantiza en cualquier sistema donde norte corra en un terminal, y
-/// su salida es texto que se queda en pantalla hasta que el lector pulsa una
-/// tecla. Es el equivalente honesto de lo que `xdg-open` hace por
-/// `pane.open`: algo que funciona sin haber escrito configuración. Quien
-/// quiera `meld`, `delta` o `vimdiff` lo dice en `[ui] diff`.
-const DIFF_POR_DEFECTO: [&str; 3] = ["diff", "-u", "%F"];
-
 /// Comparar DOS ficheros (#312), delegando en el programa de `[ui] diff`.
 ///
 /// El operando lo decide el crate compartido ([`norte_frontend::diffpair`]):
@@ -405,7 +396,10 @@ pub fn compare_files(app: &App) -> Result<EditLaunch, String> {
             cwd: Some(dir),
         }));
     }
-    let plantilla: Vec<String> = DIFF_POR_DEFECTO.iter().map(|s| (*s).to_owned()).collect();
+    let plantilla: Vec<String> = norte_frontend::diffpair::DEFAULT_ARGV
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
     Ok(EditLaunch::Shell(crate::app::PendingShell {
         argv: norte_frontend::openers::expand_argv(&plantilla, &[&na, &nb], &dir),
         cwd: norte_frontend::shell::child_cwd(&dir),

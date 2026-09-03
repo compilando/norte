@@ -178,7 +178,11 @@ use serde::{Deserialize, Serialize};
 ///   del registro de kinds, con estado y novedad, y una acción por índice
 ///   para pulsarlos. Va también como parche (`ViewChange::PanelBar`) en
 ///   cualquier envío que la cambie.
-pub const BRIDGE_VERSION: u32 = 51;
+/// - **52**: la SALIDA DE UN PROGRAMA (#312): lo que imprimió un programa
+///   que quien hospeda corrió esperándolo —el comparador de dos ficheros—,
+///   como foto y como parche, y la acción con la que quien hospeda la
+///   devuelve.
+pub const BRIDGE_VERSION: u32 = 52;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

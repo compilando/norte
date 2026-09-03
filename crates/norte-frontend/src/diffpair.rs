@@ -62,6 +62,17 @@ impl PairError {
 /// assert_eq!(pair(&[&a], Some(&a), None), Err(PairError::NotTwo));
 /// ```
 ///
+/// El comparador cuando `[ui] diff` no dice nada: `diff -u` con las DOS
+/// rutas. POSIX garantiza que existe y su salida es texto que se queda en
+/// pantalla — el equivalente honesto de lo que `xdg-open` hace por
+/// `pane.open`: algo que funciona sin haber escrito configuración. Quien
+/// quiera `meld`, `delta` o `vimdiff` lo dice en `[ui] diff`.
+///
+/// Aquí y no en cada frontend (ADR 0077): la terminal lo corre esperando una
+/// tecla y la ventana lo corre capturando la salida, pero QUÉ se corre es la
+/// misma decisión.
+pub const DEFAULT_ARGV: [&str; 3] = ["diff", "-u", "%F"];
+
 /// # Errors
 ///
 /// [`PairError`] cuando no son exactamente dos, o cuando alguno no es un

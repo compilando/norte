@@ -706,6 +706,25 @@
       ]
     }
   },
+  "program_output": {
+    "change": "program_output",
+    "output": {
+      "command": {
+        "hostile": false,
+        "text": "/usr/bin/diff -u a.txt b.txt"
+      },
+      "failed": false,
+      "lines": [
+        "--- a.txt",
+        "+++ b.txt",
+        "-hola�",
+        "+hola"
+      ],
+      "text_hostile": true,
+      "title_key": "program-output-compare",
+      "truncated": true
+    }
+  },
   "rows": {
     "change": "rows",
     "first_visible": 40,

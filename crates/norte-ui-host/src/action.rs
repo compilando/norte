@@ -245,6 +245,23 @@ pub enum UiAction {
         /// del sistema de ficheros, no un `VPath`: convertirla es del host.
         path: Option<String>,
     },
+    /// Un programa que se corrió esperándolo (`NativeEffect::RunProgram`)
+    /// terminó (#312): lo que imprimió, en bruto. El host lo enmascara,
+    /// lo parte en líneas y lo acota antes de enseñarlo — es texto de otro
+    /// programa sobre ficheros que nombró cualquiera.
+    ProgramFinished {
+        /// La clave del título que viajó en el efecto.
+        title_key: String,
+        /// El argv que corrió, ya en texto para decirlo (lossy: es para
+        /// enseñarlo, no para volver a correrlo).
+        command: String,
+        /// stdout y stderr, en ese orden, hasta el tope del que hospeda.
+        output: Vec<u8>,
+        /// Quien hospeda cortó la salida.
+        truncated: bool,
+        /// No arrancó, o se pasó del plazo.
+        failed: bool,
+    },
     /// El lector SOLTÓ ficheros del escritorio sobre la ventana (#283).
     ///
     /// Solo entra: arrastrar hacia FUERA no se ofrece, porque eso es publicar

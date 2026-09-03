@@ -165,6 +165,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::LogSetLevel { .. } => "log_set_level",
         UiAction::LogSetFilter { .. } => "log_set_filter",
         UiAction::LogScroll { .. } => "log_scroll",
+        UiAction::ProgramFinished { .. } => "program_finished",
         UiAction::PreviewScroll { .. } => "preview_scroll",
         UiAction::LogFollow => "log_follow",
         UiAction::LogCycleSource => "log_cycle_source",
@@ -229,6 +230,16 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("log_scroll", UiAction::LogScroll { delta: -3 }),
+        (
+            "program_finished",
+            UiAction::ProgramFinished {
+                title_key: "program-output-compare".to_owned(),
+                command: "/usr/bin/diff -u a.txt b.txt".to_owned(),
+                output: b"--- a.txt\n+++ b.txt\n".to_vec(),
+                truncated: false,
+                failed: false,
+            },
+        ),
         (
             "preview_scroll",
             UiAction::PreviewScroll {
@@ -1123,6 +1134,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         extensions: Some(extensiones_de_referencia()),
         agents: Some(agentes_de_referencia()),
         plugin_output: Some(salida_de_referencia()),
+        program_output: Some(programa_de_referencia()),
         theme: Some(tema_de_referencia()),
         search: Some(busqueda_de_referencia()),
         layouts: Some(disposiciones_de_referencia()),
@@ -1464,6 +1476,28 @@ fn agentes_de_referencia() -> norte_ui_host::dto::AgentsView {
 
 /// La salida de un comando de extensión: lo que imprimió un tercero, ya
 /// enmascarado, acotado, y diciendo que se cortó.
+/// La salida de un programa (#312, puente 52): el comparador, con una línea
+/// enmascarada y la salida cortada, que son los dos campos que el renderer
+/// pinta distinto.
+fn programa_de_referencia() -> norte_ui_host::dto::ProgramOutputView {
+    norte_ui_host::dto::ProgramOutputView {
+        title_key: "program-output-compare".to_owned(),
+        command: norte_ui_host::dto::MaskedTextView {
+            text: "/usr/bin/diff -u a.txt b.txt".to_owned(),
+            hostile: false,
+        },
+        lines: vec![
+            "--- a.txt".to_owned(),
+            "+++ b.txt".to_owned(),
+            "-hola\u{fffd}".to_owned(),
+            "+hola".to_owned(),
+        ],
+        text_hostile: true,
+        truncated: true,
+        failed: false,
+    }
+}
+
 fn salida_de_referencia() -> norte_ui_host::dto::ExtensionOutputView {
     norte_ui_host::dto::ExtensionOutputView {
         // El nombre de la extensión enmascarado Y marcado, con el texto
@@ -1903,6 +1937,12 @@ fn cambios_de_overlay() -> Vec<(&'static str, ViewChange)> {
             "plugin_output",
             ViewChange::PluginOutput {
                 output: Some(salida_de_referencia()),
+            },
+        ),
+        (
+            "program_output",
+            ViewChange::ProgramOutput {
+                output: Some(programa_de_referencia()),
             },
         ),
         (

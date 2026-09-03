@@ -809,21 +809,40 @@ async fn el_contador_lo_resuelve_el_host() {
 /// nada, y lo dice con la misma frase que el TUI.
 #[tokio::test]
 async fn un_comando_que_el_host_no_hace_no_dispara_nada() {
-    let (h, snap) = host_arbol(arbol()).await;
+    // El ejemplo fue rotando según la ventana se acercaba a la paridad —`F5`
+    // hasta copiar, `F4` hasta editar (#290), `alt+t` hasta el árbol, `alt+q`
+    // hasta el visor acoplado (#291), `alt+r` hasta el lote (#310), `alt+C`
+    // hasta comparar (#312)— y se acabaron: la ventana hace todo lo que el
+    // catálogo tiene vivo. Lo que queda es lo que NO APLICA a una ventana
+    // (`tests/paridad.rs`), y `ctrl+o` en el preset `norton` está ligado a
+    // uno de esos, `app.toggle-panels`: esconder los paneles para ver el
+    // terminal de detrás no significa nada en una ventana.
+    let (h, snap) = UiHost::start(UiHostOptions {
+        backend: arbol(),
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("norton").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("norton").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
     let antes = listado(&snap).clone();
-    // `alt+C` es comparar dos ficheros (#312) en el preset ortodoxo: existe,
-    // está ligada, y este host todavía no la implementa —no sabe lanzar un
-    // programa esperándolo—. El ejemplo ha ido cambiando según se construía
-    // lo anterior —fue `F5` hasta copiar, `F4` hasta que editar pasó a abrir
-    // con el escritorio (#290), `alt+t` hasta el panel de árbol, `alt+q`
-    // hasta el visor acoplado (#291) y `alt+r` hasta el lote por plantilla
-    // (#310)—, y esa rotación es justamente la señal de que la ventana se
-    // acerca a la paridad.
     let ack = h
         .dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
-            key: "C".to_owned(),
-            ctrl: false,
-            alt: true,
+            key: "o".to_owned(),
+            ctrl: true,
+            alt: false,
             shift: false,
             meta: false,
         }))
@@ -10116,6 +10135,108 @@ async fn el_lote_por_plantilla_se_revisa_como_el_de_la_ia() {
         backend.lotes.lock().expect("lotes").is_empty(),
         "revisar no aplica nada"
     );
+}
+
+/// #312: comparar dos ficheros desde la ventana. El operando y el programa
+/// son las decisiones compartidas con la TUI (`diffpair`, `[ui] diff`,
+/// `diff -u` por defecto); lo que cambia es que quien hospeda corre el
+/// programa ESPERÁNDOLO —el argv sale resuelto e interpolado, en bytes— y lo
+/// que imprimió vuelve como acción y se enseña en su panel hasta que se
+/// cierra.
+#[tokio::test]
+async fn comparar_dos_ficheros_corre_el_comparador_y_ensena_su_salida() {
+    let mut falso = Falso::default();
+    falso.pon(
+        "file:///casa",
+        vec![(b"a.txt".to_vec(), false), (b"b.txt".to_vec(), false)],
+    );
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_en(Arc::clone(&backend), "file:///casa").await;
+    let mut sub = h.subscribe();
+    let mut efectos = h.native_effects();
+
+    // Con UNO solo bajo el cursor y nada enfrente, el comando lo DICE.
+    // `alt+C` es su atajo en el preset ortodoxo.
+    let ack = h
+        .dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+            key: "C".to_owned(),
+            ctrl: false,
+            alt: true,
+            shift: false,
+            meta: false,
+        }))
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "msg-compare-files-need-two"),
+        "fue {ack:?}"
+    );
+
+    // Marcados los dos: sale el efecto con el argv por defecto, resuelto.
+    por_la_paleta(&h, &mut sub, "mark.all").await;
+    ejecutar_por_paleta(&h, &mut sub, "pane.compare-files").await;
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), efectos.recv())
+        .await
+        .expect("sale el efecto")
+        .expect("canal vivo");
+    let norte_ui_host::dto::NativeEffect::RunProgram {
+        title_key,
+        argv,
+        cwd,
+        detached,
+    } = efecto
+    else {
+        panic!("se esperaba correr un programa: {efecto:?}");
+    };
+    assert_eq!(title_key, "program-output-compare");
+    assert!(
+        !detached,
+        "`diff -u` se espera: su salida es lo que se enseña"
+    );
+    let como_texto: Vec<String> = argv
+        .iter()
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect();
+    assert!(
+        como_texto[0].ends_with("/diff"),
+        "el programa va resuelto a ruta absoluta (ADR 0082): {como_texto:?}"
+    );
+    assert_eq!(
+        &como_texto[1..],
+        ["-u", "/casa/a.txt", "/casa/b.txt"],
+        "las DOS rutas nativas, interpoladas por `%F`"
+    );
+    assert_eq!(cwd.as_deref(), Some(b"/casa".as_slice()));
+
+    // Lo que imprimió vuelve como acción y se enseña, por líneas y
+    // enmascarado; Esc lo cierra.
+    h.dispatch(UiAction::ProgramFinished {
+        title_key,
+        command: como_texto.join(" "),
+        output: b"--- a.txt\n+++ b.txt\n-hola\x1b[31m\n+adios\n".to_vec(),
+        truncated: false,
+        failed: false,
+    })
+    .await
+    .expect("host vivo");
+    let con_salida = foto_hasta(&h, &mut sub, "la salida del programa", |s| {
+        s.program_output.clone()
+    })
+    .await;
+    assert_eq!(con_salida.title_key, "program-output-compare");
+    assert_eq!(con_salida.lines.len(), 4, "{con_salida:?}");
+    assert_eq!(con_salida.lines[0], "--- a.txt");
+    assert!(
+        con_salida.text_hostile,
+        "el escape de la tercera línea se marcó"
+    );
+    assert!(!con_salida.lines[2].contains('\x1b'));
+    assert!(!con_salida.failed);
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    foto_hasta(&h, &mut sub, "el panel cerrado", |s| {
+        s.program_output.is_none().then_some(())
+    })
+    .await;
 }
 
 /// El plan se REVISA antes de nada: llega, se pinta pareja a pareja, y el

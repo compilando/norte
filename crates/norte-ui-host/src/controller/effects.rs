@@ -139,6 +139,7 @@ impl Estado {
             // Los dos que LANZAN un proceso: lo que ese proceso haga con los
             // ficheros no lo decide esta ventana.
             | Efecto::AbrirExterno
+            | Efecto::CompararFicheros
             | Efecto::Terminal
                 if self.efectos == crate::commands::Efectos::SoloLectura =>
             {
@@ -150,6 +151,7 @@ impl Estado {
             Efecto::Sumas { verificar } => self.lanzar_sumas(verificar, backend, buzon),
             Efecto::MarcarPatron { marcar } => self.pedir_patron(marcar),
             Efecto::AbrirExterno => self.abrir_externo(),
+            Efecto::CompararFicheros => self.comparar_ficheros(),
             Efecto::Terminal => self.abrir_terminal(),
             Efecto::Comparar => self.pedir_comparacion(backend, buzon),
             Efecto::Desconectar => self.desconectar(backend, buzon),
@@ -403,6 +405,152 @@ impl Estado {
             return Self::sin_escritorio();
         }
         (self.aplicada(), self.decir("msg-opening-terminal"))
+    }
+
+    /// Compara DOS ficheros (#312) con el programa de `[ui] diff`.
+    ///
+    /// QUÉ dos lo decide `norte_frontend::diffpair` —lo marcado, o el de
+    /// aquí contra el de enfrente— y QUÉ programa lo decide la misma
+    /// configuración que en la terminal, con la misma interpolación
+    /// (`openers::expand_argv`) y el mismo valor por defecto. Lo que cambia
+    /// es cómo se corre: la terminal se suspende y espera una tecla; aquí
+    /// corre quien hospeda, suelto si `[ui] diff_detached` dice que el
+    /// comparador abre ventana, y esperándolo y capturando su salida si no.
+    pub(super) fn comparar_ficheros(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        use std::os::unix::ffi::OsStrExt as _;
+        let aqui = self.hueco();
+        let marcadas: Vec<&norte_proto::Entry> = aqui.pane.marked_entries();
+        let alli = self
+            .roles
+            .get(norte_frontend::layout::RoleId::Target)
+            .and_then(|SlotId(s)| self.huecos.get(&s))
+            .and_then(|h| h.pane.selected());
+        let pareja = norte_frontend::diffpair::pair(&marcadas, aqui.pane.selected(), alli);
+        let (a, b) = match pareja {
+            Ok(p) => p,
+            Err(e) => {
+                let clave = e.message_key();
+                let dicho = self.decir(clave);
+                return (
+                    ActionAck::Unavailable {
+                        reason_key: clave.to_owned(),
+                    },
+                    dicho,
+                );
+            }
+        };
+        let dir = self.hueco().pane.dir().clone();
+        let (Ok(na), Ok(nb), Ok(nd)) = (
+            norte_vfs::native::vpath_to_native(&a),
+            norte_vfs::native::vpath_to_native(&b),
+            norte_vfs::native::vpath_to_native(&dir),
+        ) else {
+            let fuera = self.decir("host-not-local");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-not-local".to_owned(),
+                },
+                fuera,
+            );
+        };
+        let propio = self
+            .config
+            .common
+            .ui_diff
+            .as_ref()
+            .filter(|c| !c.is_empty())
+            .cloned();
+        let detached = propio.is_some() && self.config.common.ui_diff_detached.unwrap_or(false);
+        let plantilla = propio.unwrap_or_else(|| {
+            norte_frontend::diffpair::DEFAULT_ARGV
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect()
+        });
+        let mut argv = norte_frontend::openers::expand_argv(&plantilla, &[&na, &nb], &nd);
+        // El programa se resuelve a ruta absoluta ANTES de darle un `cwd`
+        // (ADR 0082): un nombre suelto con `current_dir` puesto se buscaría
+        // en el directorio que se está mirando.
+        let Some(programa) = argv
+            .first()
+            .and_then(|p| norte_frontend::openers::resolve_program(p))
+        else {
+            let no = self.decir("host-program-missing");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-program-missing".to_owned(),
+                },
+                no,
+            );
+        };
+        argv[0] = programa.into_os_string();
+        let efecto = crate::dto::NativeEffect::RunProgram {
+            title_key: "program-output-compare".to_owned(),
+            argv: argv.iter().map(|a| a.as_bytes().to_vec()).collect(),
+            cwd: Some(nd.as_os_str().as_bytes().to_vec()),
+            detached,
+        };
+        if !self.nativo(efecto) {
+            return Self::sin_escritorio();
+        }
+        (self.aplicada(), self.decir("msg-opening-external"))
+    }
+
+    /// Lo que imprimió un programa que se corrió esperándolo (#312): se
+    /// enmascara por líneas, se acota, y se enseña.
+    pub(super) fn programa_terminado(
+        &mut self,
+        title_key: &str,
+        command: &str,
+        output: &[u8],
+        truncated: bool,
+        failed: bool,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Mismos topes que la salida de una extensión: es la misma clase de
+        // texto, de otro programa.
+        const MAX_LINEAS: usize = 2000;
+        let texto = String::from_utf8_lossy(output);
+        let mut lineas = Vec::new();
+        let mut hostil = false;
+        for linea in texto.lines().take(MAX_LINEAS) {
+            let (pintable, marcada) = norte_frontend::display_name(linea.as_bytes());
+            hostil |= marcada;
+            lineas.push(clamp_display(pintable));
+        }
+        let cortado = truncated || texto.lines().nth(MAX_LINEAS).is_some();
+        let (cmd, cmd_hostil) = norte_frontend::display_name(command.as_bytes());
+        self.escritorio.programa = Some(crate::dto::ProgramOutputView {
+            // La clave VUELVE de quien hospeda: se reconoce contra las que
+            // este host emite, y lo que no se reconoce cae a la genérica —
+            // una clave de fuera no se pinta como su propio identificador.
+            title_key: match title_key {
+                "program-output-compare" => "program-output-compare".to_owned(),
+                _ => "program-output-title".to_owned(),
+            },
+            command: crate::dto::MaskedTextView {
+                text: clamp_display(cmd),
+                hostile: cmd_hostil,
+            },
+            lines: lineas,
+            text_hostile: hostil,
+            truncated: cortado,
+            failed,
+        });
+        let cambio = ViewChange::ProgramOutput {
+            output: self.escritorio.programa.clone(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Cierra el panel de salida de un programa.
+    pub(super) fn cerrar_salida_de_programa(
+        &mut self,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.escritorio.programa = None;
+        (
+            self.aplicada(),
+            vec![self.parche(vec![ViewChange::ProgramOutput { output: None }])],
+        )
     }
 
     /// Nadie escucha los efectos nativos: se DICE.

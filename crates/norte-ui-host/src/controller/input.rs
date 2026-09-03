@@ -185,6 +185,14 @@ impl Estado {
             }
             return Some((self.aplicada(), Vec::new()));
         }
+        // La salida de un programa (#312), por lo mismo y con las mismas
+        // teclas: se lee y se cierra.
+        if self.escritorio.programa.is_some() {
+            if matches!(k.key.as_str(), "Escape" | "esc" | "Enter" | "enter") {
+                return Some(self.cerrar_salida_de_programa());
+            }
+            return Some((self.aplicada(), Vec::new()));
+        }
         // La AYUDA va primero, incluso antes que el visor, y no por gusto:
         // se abre ENCIMA de lo que hubiera —también encima del visor, que es
         // desde donde se pide la página del visor— y quien está arriba se

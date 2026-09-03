@@ -44,6 +44,7 @@ import type {
   ProfilePickerView,
   MetadataSlotView,
   PreviewSlotView,
+  ProgramOutputView,
   SearchView,
   PlacesSlotView,
   TreeSlotView,
@@ -196,6 +197,7 @@ export class Screen {
     private readonly syncRoot: HTMLElement,
     private readonly agentsRoot: HTMLElement,
     private readonly pluginOutputRoot: HTMLElement,
+    private readonly programOutputRoot: HTMLElement,
     private readonly viewerRoot: HTMLElement,
     private readonly dialogsRoot: HTMLElement,
     private readonly aiRenameRoot: HTMLElement,
@@ -273,6 +275,7 @@ export class Screen {
     this.paintExtensions(view.extensions);
     this.paintAgents(view.agents);
     this.paintPluginOutput(view.plugin_output);
+    this.paintProgramOutput(view.program_output);
     this.paintTheme(view.theme);
     this.paintPicker(view.picker);
     this.paintProfiles(view.profiles);
@@ -1454,6 +1457,65 @@ export class Screen {
       caja.append(corte);
     }
     this.pluginOutputRoot.replaceChildren(caja);
+  }
+
+  /**
+   * La salida de un programa que quien hospeda corrió esperándolo (#312):
+   * el comparador de dos ficheros. La misma caja que la salida de una
+   * extensión —es la misma clase de texto, de otro programa— con el
+   * comando que corrió y, si no arrancó, dicho.
+   */
+  private paintProgramOutput(output: ProgramOutputView | null): void {
+    if (output === null) {
+      if (this.programOutputRoot.dataset["open"] === "true") {
+        this.programOutputRoot.replaceChildren();
+        this.programOutputRoot.dataset["open"] = "false";
+      }
+      return;
+    }
+    this.programOutputRoot.dataset["open"] = "true";
+    const caja = document.createElement("section");
+    caja.className = "plugin-output program-output";
+    caja.setAttribute("role", "dialog");
+    caja.setAttribute("aria-modal", "true");
+    caja.setAttribute("aria-label", this.t(output.title_key));
+    const titulo = document.createElement("h2");
+    titulo.textContent = this.t(output.title_key);
+    const quien = document.createElement("p");
+    quien.className = "plugin-output-who";
+    const cmd = document.createElement("span");
+    cmd.className = "plugin-output-command program-output-command";
+    cmd.dataset["hostile"] = String(output.command.hostile);
+    cmd.textContent = output.command.text;
+    quien.append(cmd);
+    if (output.command.hostile) {
+      quien.append(badge(this.t("hostile-name")));
+    }
+    caja.append(titulo, quien);
+    if (output.failed) {
+      const no = document.createElement("p");
+      no.className = "program-output-failed";
+      no.setAttribute("role", "alert");
+      no.textContent = this.t("program-output-failed");
+      caja.append(no);
+    }
+    const cuerpo = document.createElement("pre");
+    cuerpo.className = "plugin-output-text";
+    cuerpo.dataset["hostile"] = String(output.text_hostile);
+    cuerpo.textContent =
+      output.lines.length === 0 ? this.t("plugin-output-empty") : output.lines.join("\n");
+    caja.append(cuerpo);
+    if (output.text_hostile) {
+      caja.append(badge(this.t("hostile-name")));
+    }
+    if (output.truncated) {
+      const corte = document.createElement("p");
+      corte.className = "plugin-output-truncated";
+      corte.setAttribute("role", "status");
+      corte.textContent = this.t("plugin-output-truncated");
+      caja.append(corte);
+    }
+    this.programOutputRoot.replaceChildren(caja);
   }
 
   /**

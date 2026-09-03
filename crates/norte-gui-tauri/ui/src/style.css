@@ -1492,6 +1492,17 @@ body {
   color: var(--warning-fg, var(--title-fg));
 }
 
+/* La salida de un programa (#312) comparte la caja de la de una extensión;
+   el comando no lleva el separador porque va solo. */
+.program-output-command::before {
+  content: none;
+}
+
+.program-output-failed {
+  margin: 6px 0 0;
+  color: var(--error-fg);
+}
+
 /* El dominio de un `enum` puede ser largo: sin esto se pega a la
    descripción y las dos se leen como una sola frase. */
 .extensions-key-kind {
