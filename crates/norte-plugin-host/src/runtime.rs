@@ -72,7 +72,7 @@ const MAX_STYLED_TOTAL_TEXT_BYTES: usize = MAX_RETURN_BYTES;
 /// al tamaño; no se gasta ese trabajo en un artefacto arbitrariamente grande. 64
 /// MiB es amplísimo para un componente legítimo (los guests de ejemplo pesan
 /// cientos de KiB). Por encima se rechaza sin llegar a `Component::from_file`.
-const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Periodo del hilo "ticker" que incrementa la época del motor. Junto con el
 /// deadline por llamada define el tope de RELOJ de una operación del guest

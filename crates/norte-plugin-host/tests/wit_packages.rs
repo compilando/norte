@@ -161,7 +161,7 @@ fn wit_imports_of_a_real_guest_name_the_served_versions() {
 
 /// Un guest compilado contra otra versión del paquete es un mismatch con las
 /// DOS versiones en la mano: la suya y la servida. Se fabrica reescribiendo
-/// `@0.8.0` por `@0.1.0` en los bytes del guest real — misma longitud, así
+/// `@0.8.0` por `@0.7.0` en los bytes del guest real — misma longitud, así
 /// que las secciones siguen siendo válidas y el lector las recorre.
 #[test]
 fn a_guest_built_against_another_version_is_a_mismatch() {
@@ -169,12 +169,24 @@ fn a_guest_built_against_another_version_is_a_mismatch() {
         return;
     };
     let bytes = std::fs::read(wasm).expect("lee el guest");
-    let viejo = support::rewrite_bytes(&bytes, b"@0.8.0", b"@0.1.0");
+    // El lado de los EXPORTS (`norte:plugin`). `0.7.0`: una versión que el
+    // host no sirve para ningún paquete, para que confundir paquete y
+    // versión no pase por casualidad.
+    let viejo = support::rewrite_bytes(&bytes, b"@0.8.0", b"@0.7.0");
     let imports = wit_packages(&viejo);
     let m = wit_mismatch(&imports).expect("mismatch");
     assert_eq!(m.package, "norte:plugin");
-    assert_eq!(m.built_against, "0.1.0");
+    assert_eq!(m.built_against, "0.7.0");
     assert_eq!(m.served, "0.8.0");
+
+    // Y el lado de los IMPORTS (`norte:host`): cualquiera de los dos puede
+    // estar desfasado.
+    let viejo = support::rewrite_bytes(&bytes, b"@0.1.0", b"@0.0.9");
+    let imports = wit_packages(&viejo);
+    let m = wit_mismatch(&imports).expect("mismatch en imports");
+    assert_eq!(m.package, "norte:host");
+    assert_eq!(m.built_against, "0.0.9");
+    assert_eq!(m.served, "0.1.0");
 }
 
 /// Bytes que no son un componente no tienen imports: ni error ni pánico, que

@@ -2978,6 +2978,15 @@ pub enum InstallError {
     /// El origen no tiene `plugin.wasm`.
     #[error("no hay `plugin.wasm` en {0}")]
     NoWasm(PathBuf),
+    /// El `plugin.wasm` supera el tope de artefacto del runtime: ni el
+    /// catálogo lo leería ni el runtime lo instanciaría, así que no se copia.
+    #[error("`plugin.wasm` mide {len} bytes y el tope es {cap}")]
+    WasmTooLarge {
+        /// Bytes del fichero.
+        len: u64,
+        /// El tope.
+        cap: u64,
+    },
     /// Ya hay un plugin instalado con ese id y no se pidió reemplazarlo.
     #[error(
         "`{0}` ya está instalado; reemplazarlo RETIRA su consentimiento — repite con `--force` si es lo que quieres"
@@ -3019,6 +3028,16 @@ pub fn install(config_dir: &Path, src: &Path, force: bool) -> Result<InstallRepo
     let wasm_src = src.join("plugin.wasm");
     if !wasm_src.is_file() {
         return Err(InstallError::NoWasm(wasm_src));
+    }
+    // El tope del artefacto se aplica en la puerta: un binario que el
+    // catálogo no va a leer (y el runtime no va a instanciar) no se copia a
+    // la config para que cada descubrimiento lo liste como roto.
+    let len = std::fs::metadata(&wasm_src)?.len();
+    if len > norte_plugin_host::MAX_ARTIFACT_BYTES {
+        return Err(InstallError::WasmTooLarge {
+            len,
+            cap: norte_plugin_host::MAX_ARTIFACT_BYTES,
+        });
     }
 
     let dest = config_dir.join("plugins").join(&manifest.id);

@@ -1664,7 +1664,7 @@ cli-doctor-detail-conn-secret-prompt = { $detail } no está definida, y la entra
 cli-doctor-detail-conn-secret-prompt-inert = { $detail } dice secret = "prompt", que con este método de auth no hace nada — solo se aplica a password y access-key
 cli-doctor-detail-connection-scheme-unserved = { $detail }: nada sirve ese scheme — ni el core, ni ningún provider plugin instalado lo declara (un error de tecleo, o un plugin por instalar)
 cli-doctor-detail-plugin-wit-mismatch = { $detail }: compilado contra un paquete WIT que este norte no sirve — recompila el plugin contra el WIT actual y vuelve a aprobarlo
-cli-doctor-detail-plugin-digest-stale ={ $id }: las capabilities del manifiesto cambiaron desde la aprobación; requiere re-aprobación
+cli-doctor-detail-plugin-digest-stale = { $id }: las capabilities del manifiesto cambiaron desde la aprobación; requiere re-aprobación
 cli-doctor-detail-plugin-help-truncated = { $id }: su help.md pasa del tope y se sirve cortado
 cli-doctor-detail-plugin-help-lossy = { $id }: su help.md tiene bytes que no decodifican; se pintan como caracteres de reemplazo
 cli-doctor-detail-plugin-help-empty = { $id }: anuncia un help.md que no sirve nada: vacío, ilegible, o un enlace que apunta fuera del directorio del propio plugin

@@ -51,8 +51,8 @@ pub use manifest::{
     is_valid_plugin_id, scheme_claimable,
 };
 pub use runtime::{
-    ColumnsInstance, DecoratorInstance, LocationHost, PluginInstance, PluginRuntime,
-    ProviderInstance, RuntimeError, columns_iface, decorator_iface, location_iface,
+    ColumnsInstance, DecoratorInstance, LocationHost, MAX_ARTIFACT_BYTES, PluginInstance,
+    PluginRuntime, ProviderInstance, RuntimeError, columns_iface, decorator_iface, location_iface,
     previewer_iface, provider_iface,
 };
 /// Handle opaco de un `writer` resource del guest (#30 stage 2b-write): el

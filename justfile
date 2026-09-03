@@ -476,9 +476,12 @@ plugin-git-status *ARGS:
 
 # Todos los plugins oficiales, de una vez. `just plugins force` reemplaza los
 # ya instalados (y retira su consentimiento, como dice `plugin install`).
+[positional-arguments]
 plugins *ARGS:
-    just plugin-syntect {{ARGS}}
-    just plugin-git-status {{ARGS}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just plugin-syntect "$@"
+    just plugin-git-status "$@"
 
 # ---------- distribución ----------
 

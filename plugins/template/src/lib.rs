@@ -57,7 +57,11 @@ impl CommandGuest for Template {
     fn run(id: String, arg: String) -> Result<String, String> {
         match id.as_str() {
             "hello" => {
-                let greeting = host_config::get("greeting").unwrap_or_else(|| "hello".to_string());
+                // The host resolves `[config]` defaults before it calls you:
+                // `None` means the key is not declared in the manifest, never
+                // "unset". Do not fall back to a second default here.
+                let greeting =
+                    host_config::get("greeting").ok_or("`greeting` is not declared in [config]")?;
                 Ok(format!("{greeting}, {arg}"))
             }
             other => Err(format!("unknown command `{other}`")),

@@ -80,9 +80,10 @@ previewer look the same in both frontends.
      — makes a previously compiled guest fail to instantiate. This is a fact
      of the component model, not a policy; the policy is what norte does
      about it.
-   - `Catalog::load_dir` reads the component's imports with `wasmparser` and
-     records, per plugin, the `norte:*` packages and versions it imports.
-     `PluginEntry` gains `wit: Vec<(String, String)>` (package, version).
+   - `Catalog::load_dir` reads the component's imports and exports with
+     `wasmparser` and compares the `norte:*` packages and versions it names
+     with the ones the host serves. (Nothing is stored on `PluginEntry`: an
+     entry that loaded has, by construction, no mismatch — decided in review.)
    - A plugin whose imports name a package version the host does not serve
      is **listed, not loaded**: it goes to `errors` with a new
      `LoadError::WitMismatch { package, built_against, served }`, the manager

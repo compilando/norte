@@ -55,11 +55,6 @@ pub struct PluginEntry {
     /// se comprueba por cada previsualización y por cada página de columnas,
     /// y leer megabytes ahí sería pagar el hash en el bucle de pintado.
     pub wasm_digest: Option<String>,
-    /// Los paquetes `norte:*` que el binario nombra, con su versión, leídos
-    /// del `.wasm` al descubrir (ADR 0094, [`crate::wit_packages`]). Vacío
-    /// sin binario. Un plugin que llega aquí NO tiene mismatch: el que lo
-    /// tiene va a [`Catalog::errors`] con [`ManifestError::WitMismatch`].
-    pub wit: Vec<(String, String)>,
 }
 
 impl PluginEntry {
@@ -162,9 +157,28 @@ impl HelpPresence {
 ///
 /// `None` cuando no hay binario servible: un plugin sin `.wasm` no ejecuta
 /// nada, así que no hay código que anclar.
-fn read_wasm(dir: &Path) -> Option<Vec<u8>> {
-    let path = verified_child(dir, "plugin.wasm")?;
-    std::fs::read(path).ok()
+fn read_wasm(dir: &Path) -> WasmRead {
+    let Some(path) = verified_child(dir, "plugin.wasm") else {
+        return WasmRead::Absent;
+    };
+    // El tope ANTES de leer: `std::fs::metadata` y no `read` — un fichero
+    // disperso de varios GiB se instala sin coste y se leería entero en cada
+    // descubrimiento. El mismo tope que aplica el runtime al instanciar.
+    match std::fs::metadata(&path).map(|m| m.len()) {
+        Ok(len) if len > crate::MAX_ARTIFACT_BYTES => WasmRead::TooLarge(len),
+        Ok(_) => std::fs::read(&path).map_or(WasmRead::Absent, WasmRead::Bytes),
+        Err(_) => WasmRead::Absent,
+    }
+}
+
+/// Lo que hay en `<dir>/plugin.wasm`, sin haberlo leído si no cabe.
+enum WasmRead {
+    /// No hay binario servible (ausente, symlink fuera, ilegible).
+    Absent,
+    /// Lo hay, y mide más que [`crate::MAX_ARTIFACT_BYTES`]: no se lee.
+    TooLarge(u64),
+    /// Los bytes.
+    Bytes(Vec<u8>),
 }
 
 /// El digest de un binario tal como el catálogo lo ancla en
@@ -332,7 +346,27 @@ impl Catalog {
                 // nombra (ADR 0094). Un guest compilado contra otra versión
                 // se lista como roto con las dos versiones, en vez de
                 // cargarse y morir en wasmtime nombrando una interfaz.
-                let bytes = read_wasm(&dir);
+                let bytes = match read_wasm(&dir) {
+                    WasmRead::Absent => None,
+                    WasmRead::Bytes(b) => Some(b),
+                    WasmRead::TooLarge(len) => {
+                        cat.errors.push(LoadError {
+                            dir,
+                            error: ManifestError::ArtifactTooLarge {
+                                len,
+                                cap: crate::MAX_ARTIFACT_BYTES,
+                            },
+                        });
+                        continue;
+                    }
+                };
+                // Un plugin con `config.toml` inválido Y binario desfasado
+                // reporta lo primero: los valores se resuelven antes, y una
+                // causa por entrada basta para que el humano actúe.
+                //
+                // Los paquetes que el binario nombra no se guardan: un plugin
+                // que llega a `plugins` ya demostró no tener mismatch, y el
+                // que lo tiene va a `errors` con las dos versiones.
                 let wit = bytes
                     .as_deref()
                     .map(crate::wit_packages)
@@ -351,7 +385,6 @@ impl Catalog {
                 cat.plugins.push(PluginEntry {
                     help: help_presence(&dir),
                     wasm_digest: bytes.as_deref().map(wasm_digest_of),
-                    wit,
                     manifest,
                     dir,
                     enabled: false,

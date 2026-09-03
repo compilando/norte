@@ -92,9 +92,9 @@ Absent means denied.
 
 | Key | Values | What it grants |
 | --- | --- | --- |
-| `fs-read` | `"scoped"` | receive the bytes of the file the host already read (previewers) |
+| `fs-read` | `"scoped"` | the `host-log::read-scoped` door: read a blob the host seeded under a token. A previewer gets the file's bytes in `preview-input` without it — declare it only if you call `read-scoped` |
 | `fs-write` | `"scoped"` | reserved; no host door uses it yet |
-| `net` | `{ hosts = ["203.0.113.5", "198.51.100.7:8443"] }` | outbound TCP to exactly those addresses (bare IP = any port). A provider also gets the connection's own `ip:port`, resolved by the host. No DNS: the guest connects by IP. |
+| `net` | `{ hosts = ["203.0.113.5", "198.51.100.7:8443", "[2001:db8::1]:443"] }` | outbound TCP to exactly those addresses (bare IP = any port). Matched as text against the address the guest connects to, so write IPv6 the way Rust prints it (`::1`, `[::1]:443`). A provider also gets the connection's own `ip:port`, resolved by the host. No DNS: the guest connects by IP. |
 | `location` | `"read"` | read, stat and list under an opaque token for the directory being listed (columns). The guest never learns the path. |
 | `location-root-marker` | `".git"` | with `location`: the host opens the nearest ancestor containing that name instead of the listed directory, and tells you the prefix |
 | `exec` | `"none"` or absent | there is no other value. A plugin never runs a program. |

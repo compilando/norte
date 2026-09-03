@@ -264,6 +264,26 @@ fn los_schemes_de_los_providers_instalados_se_listan() {
     assert_eq!(installed_provider_schemes(cfg.path()), vec!["memplug"]);
 }
 
+/// Un `plugin.wasm` por encima del tope del runtime no se copia: ni el
+/// catálogo lo leería ni el runtime lo instanciaría, y copiarlo dejaría un
+/// plugin que cada descubrimiento lista como roto.
+#[test]
+fn instalar_rechaza_un_binario_por_encima_del_tope() {
+    let cfg = tempfile::tempdir().expect("tempdir");
+    let src = origen(cfg.path(), MANIFEST, b"\0asm");
+    let f = std::fs::File::create(src.join("plugin.wasm")).expect("wasm");
+    f.set_len(norte_plugin_host::MAX_ARTIFACT_BYTES + 1)
+        .expect("sparse");
+    drop(f);
+    match install(cfg.path(), &src, false) {
+        Err(InstallError::WasmTooLarge { len, cap }) => {
+            assert_eq!(len, cap + 1);
+        }
+        otro => panic!("se esperaba WasmTooLarge, salió {otro:?}"),
+    }
+    assert!(!cfg.path().join("plugins/org.norte.demo").exists());
+}
+
 /// Un id que no está instalado es un error con nombre, no un `Ok` vacío.
 #[test]
 fn desinstalar_lo_que_no_esta_es_un_error() {

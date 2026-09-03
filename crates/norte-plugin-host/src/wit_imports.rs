@@ -48,6 +48,16 @@ pub struct WitMismatch {
 /// ningún paquete de norte: vector vacío — nunca un error ni un pánico,
 /// porque el catálogo lo llama sobre lo que haya en `plugin.wasm`.
 ///
+/// Recorre también los componentes ANIDADOS: un guest que embeba un
+/// componente que nombre `norte:plugin@0.7.0` se lista como desfasado
+/// aunque wasmtime solo enlace los nombres del exterior. Es un falso
+/// positivo posible, nunca un falso pase, y ningún guest de norte anida
+/// componentes hoy. Quien lo necesite estrecha esto a la sección exterior.
+///
+/// El coste es lineal en el tamaño del fichero, que el catálogo acota ANTES
+/// de leerlo ([`crate::MAX_ARTIFACT_BYTES`]); `wasmparser` no descomprime ni
+/// recurre.
+///
 /// ```
 /// use norte_plugin_host::wit_packages;
 /// assert!(wit_packages(b"garbage").is_empty());
@@ -84,11 +94,28 @@ pub fn wit_packages(bytes: &[u8]) -> Vec<(String, String)> {
 
 /// `norte:<pkg>/<iface>@<ver>` → `(norte:<pkg>, <ver>)`; cualquier otra forma,
 /// `None`.
+///
+/// La versión viene del BINARIO, y el binario lo escribe un tercero: solo se
+/// acepta una con forma de versión (`[A-Za-z0-9.+-]`, 64 bytes como mucho).
+/// Lo que no la tenga no es un nombre de norte y no produce mismatch — y la
+/// cadena que acaba en el gestor, en `plugin list` y en `norte doctor` no
+/// puede llevar un escape de terminal ni cien kilobytes. `wasmparser` solo
+/// garantiza UTF-8.
 fn parse_norte_name(name: &str) -> Option<(String, String)> {
     let rest = name.strip_prefix("norte:")?;
     let (pkg, tail) = rest.split_once('/')?;
     let (_iface, version) = tail.rsplit_once('@')?;
-    if pkg.is_empty() || version.is_empty() {
+    let version_ok = !version.is_empty()
+        && version.len() <= 64
+        && version
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".+-".contains(&b));
+    let pkg_ok = !pkg.is_empty()
+        && pkg.len() <= 64
+        && pkg
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if !version_ok || !pkg_ok {
         return None;
     }
     Some((format!("norte:{pkg}"), version.to_owned()))
@@ -130,5 +157,23 @@ mod tests {
         assert_eq!(parse_norte_name("wasi:io/streams@0.2.0"), None);
         assert_eq!(parse_norte_name("norte:host/host-log"), None);
         assert_eq!(parse_norte_name("norte:/x@1"), None);
+    }
+
+    /// La versión la escribe el binario de un tercero: un escape de terminal
+    /// o cien kilobytes tras la `@` no es una versión, y no llega a ninguna
+    /// pantalla.
+    #[test]
+    fn una_version_que_no_tiene_forma_de_version_no_es_un_nombre_de_norte() {
+        assert_eq!(
+            parse_norte_name("norte:plugin/previewer@\u{1b}]0;x\u{7}"),
+            None
+        );
+        let larga = format!("norte:plugin/previewer@{}", "9".repeat(100_000));
+        assert_eq!(parse_norte_name(&larga), None);
+        assert_eq!(
+            parse_norte_name("norte:plugin/previewer@0.9.0-rc.1+b"),
+            Some(("norte:plugin".to_owned(), "0.9.0-rc.1+b".to_owned()))
+        );
+        assert_eq!(parse_norte_name("norte:Plu gin/x@1.0.0"), None);
     }
 }

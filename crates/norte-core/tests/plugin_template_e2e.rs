@@ -86,11 +86,29 @@ fn the_template_builds_installs_and_runs() {
         .run_command(&rt, ID, "hello", "norte")
         .expect("hello runs");
     assert_eq!(out, "hello, norte");
-    // An unknown command is the guest's error, not a crash.
-    assert!(reg.run_command(&rt, ID, "nope", "").is_err());
+    // An unknown command is the guest's error, with the guest's words — not
+    // a crash, and not a host error that would also pass this line.
+    let err = reg
+        .run_command(&rt, ID, "nope", "")
+        .expect_err("unknown command");
+    assert!(err.to_string().contains("unknown command"), "{err}");
     // The previewer is found for what it declares, and ships its help page.
-    let (id, _, _, _, _) = reg.resolve_previewer("text/plain").expect("previewer");
+    let (id, _, wasm_path, caps, _) = reg.resolve_previewer("text/plain").expect("previewer");
     assert_eq!(id, ID);
+    // And it RENDERS, plain and styled: the template's two other exports.
+    let mut inst = rt.instantiate(&wasm_path, caps).expect("instantiates");
+    let plain = inst
+        .render_preview("text/plain", b"line one\nline two")
+        .expect("renders");
+    assert_eq!(plain, "text/plain, 17 bytes\nline one");
+    let styled = inst
+        .render_styled_preview("text/plain", b"line one\nline two")
+        .expect("renders styled");
+    assert_eq!(styled.len(), 2, "one span per line: {styled:?}");
+    assert_eq!(styled[0].len(), 1);
+    assert_eq!(styled[0][0].text, "text/plain, 17 bytes");
+    assert!(styled[0][0].role.is_none() && styled[0][0].fg.is_none());
+    assert_eq!(styled[1][0].text, "line one");
     let info = reg
         .list()
         .plugins

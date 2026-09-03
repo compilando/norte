@@ -504,7 +504,14 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
                 section: "plugins",
                 severity: Severity::Warn,
                 code: "plugin-wit-mismatch",
-                detail: format!("{dir}: {package}@{built_against} (served: @{served})"),
+                // `package` and `served` are the host's constants; the version
+                // the binary names is third-party bytes, and the reader for
+                // this list narrows it to a version shape — masked and capped
+                // here anyway, at the same boundary as every other detail.
+                detail: format!(
+                    "{dir}: {package}@{} (served: @{served})",
+                    masked_and_capped(built_against)
+                ),
             });
             continue;
         }
@@ -1391,11 +1398,10 @@ fs-read = "scoped"
         let guest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../norte-plugin-host/examples-wasm/previewer-demo");
         // `CARGO_TARGET_TMPDIR` only exists for integration tests; this is a
-        // unit test of the binary, so the guests go under the system temp.
-        let target_dir = option_env!("CARGO_TARGET_TMPDIR").map_or_else(
-            || std::env::temp_dir().join("norte-wasm-guests"),
-            |d| std::path::PathBuf::from(d).join("wasm-guests"),
-        );
+        // unit test of the binary, so the guest goes under the workspace's
+        // `target/` (where `just prune` can see it), never the system temp.
+        let target_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/tmp/wasm-guests");
         let status = Command::new(env!("CARGO"))
             .current_dir(&guest_dir)
             .args([
@@ -1416,7 +1422,7 @@ fs-read = "scoped"
     /// A plugin whose binary was built against another WIT is its own
     /// finding — a warning that names the package and both versions — and
     /// NOT the generic broken-manifest error: the author has to rebuild, not
-    /// edit (ADR 0094). Made by rewriting `@0.8.0` to `@0.1.0` in the bytes
+    /// edit (ADR 0094). Made by rewriting `@0.8.0` to `@0.7.0` in the bytes
     /// of the real demo guest (same length, sections stay valid).
     #[test]
     fn un_plugin_de_otro_wit_es_un_hallazgo_propio() {
@@ -1425,7 +1431,7 @@ fs-read = "scoped"
         };
         let viejo: Vec<u8> = {
             let mut out = bytes.clone();
-            let (from, to) = (b"@0.8.0", b"@0.1.0");
+            let (from, to) = (b"@0.8.0", b"@0.7.0");
             let mut i = 0;
             while i + from.len() <= out.len() {
                 if &out[i..i + from.len()] == from {
@@ -1448,7 +1454,7 @@ fs-read = "scoped"
             .unwrap_or_else(|| panic!("expected plugin-wit-mismatch: {findings:?}"));
         assert_eq!(f.severity, Severity::Warn);
         assert!(f.detail.contains("org.norte.demo"), "{}", f.detail);
-        assert!(f.detail.contains("norte:plugin@0.1.0"), "{}", f.detail);
+        assert!(f.detail.contains("norte:plugin@0.7.0"), "{}", f.detail);
         assert!(f.detail.contains("@0.8.0"), "{}", f.detail);
         assert!(
             !findings.iter().any(|f| f.code == "plugin-manifest-broken"),

@@ -651,6 +651,19 @@ pub enum ManifestError {
         /// La que este host sirve.
         served: String,
     },
+    /// El `plugin.wasm` supera el tope de artefacto
+    /// ([`crate::MAX_ARTIFACT_BYTES`]) y el catálogo NO lo lee: leerlo para
+    /// hashearlo y leer sus imports materializaría en memoria lo que un
+    /// tercero decidió, en cada descubrimiento, y un fallo ahí tumba el
+    /// catálogo entero y no un plugin. El runtime aplica el mismo tope al
+    /// instanciar; este es el mismo tope, una puerta antes.
+    #[error("plugin.wasm mide {len} bytes y el tope es {cap}: no se lee")]
+    ArtifactTooLarge {
+        /// Bytes del fichero.
+        len: u64,
+        /// El tope.
+        cap: u64,
+    },
     /// Dos o más directorios declaran el MISMO `plugin.id` (issue #69): se
     /// rechazan TODOS (fail-closed). Un segundo directorio no puede reclamar el
     /// id de un plugin aprobado para colar su propio `plugin.wasm`.

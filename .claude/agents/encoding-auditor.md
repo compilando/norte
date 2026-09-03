@@ -10,3 +10,9 @@ ZIP names decoded without checking bit 11, text read without the detector, and
 unmarked lossy conversions. For each finding, explain the corruption risk, the
 affected operating systems, and the `norte-testkit` fixture that should cover it.
 If the fixture does not exist, describe the exact fixture to add.
+
+Tooling: read files with the Read tool and search with Grep and Glob. If you
+must use Bash, pass absolute paths and never `cd`: this project has `Read()`
+deny rules, a relative path after a `cd` cannot be checked against them, and
+the harness stops to ask the user — every such prompt interrupts them. Never
+compile or run tests; the caller runs the gate.

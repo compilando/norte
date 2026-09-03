@@ -25,11 +25,12 @@ id = "hello"
 title = "Say hello"
 
 [capabilities]
-# `scoped`: the guest reads ONLY the bytes the host already read and handed
-# it. It never opens a file. Declaring it is what lets a preview reach you.
-fs-read = "scoped"
-# There is no `exec`: a plugin can never run a program. `net`, `location`
-# and `fs-write` exist; each one shows as a badge when a human approves.
+# Nothing. A previewer receives the file's bytes in `preview-input` and needs
+# no capability for that. `fs-read = "scoped"` would grant the
+# `host-log::read-scoped` door (a token the host seeds); `net`, `location`
+# and `fs-write` exist too. Each one shows as a badge when a human approves,
+# so declare only what your code uses. There is no `exec`: a plugin can
+# never run a program.
 
 # Settings the user can edit in the manager, with their defaults. The guest
 # reads them through `host-config`. Types: string, bool, int, enum.

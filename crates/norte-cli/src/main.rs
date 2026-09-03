@@ -1494,6 +1494,10 @@ fn doctor_finding_line(f: &doctor::Finding) -> String {
             "cli-doctor-detail-plugin-digest-stale",
             &[("id", &f.detail)],
         ),
+        "plugin-wit-mismatch" => norte_i18n::ta(
+            "cli-doctor-detail-plugin-wit-mismatch",
+            &[("detail", &f.detail)],
+        ),
         // H3e `plugin-help-*`: same policy — `detail` stays the machine value
         // (the plugin id; for `foreign-command`, `{id}: {command}`, already
         // masked and capped at the `doctor` boundary) and the sentence lives

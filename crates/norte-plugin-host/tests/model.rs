@@ -1430,8 +1430,9 @@ fn un_provider_no_puede_reclamar_un_scheme_del_core() {
 
 /// Un guest compilado contra otra versión del WIT no se carga: se lista en
 /// `errors` con las DOS versiones (ADR 0094). Con el binario intacto entra
-/// en `plugins` y su `wit` dice contra qué se compiló. Se fabrica el viejo
-/// reescribiendo `@0.8.0` por `@0.1.0` en los bytes del guest real.
+/// en `plugins`. Se fabrica el viejo reescribiendo `@0.8.0` por `@0.7.0` en
+/// los bytes del guest real (una versión que el host no sirve para ningún
+/// paquete).
 #[test]
 fn un_guest_compilado_contra_otro_wit_se_lista_roto() {
     let Some(wasm) = support::build_guest("previewer-demo") else {
@@ -1445,16 +1446,9 @@ fn un_guest_compilado_contra_otro_wit_se_lista_roto() {
     std::fs::write(&wasm_path, &bytes).unwrap();
     let cat = Catalog::load_dir(root.path());
     assert!(cat.errors.is_empty(), "{:?}", cat.errors);
-    assert_eq!(cat.plugins.len(), 1);
-    assert!(
-        cat.plugins[0]
-            .wit
-            .contains(&("norte:plugin".to_owned(), "0.8.0".to_owned())),
-        "{:?}",
-        cat.plugins[0].wit
-    );
+    assert_eq!(cat.plugins.len(), 1, "el guest actual carga");
 
-    let viejo = support::rewrite_bytes(&bytes, b"@0.8.0", b"@0.1.0");
+    let viejo = support::rewrite_bytes(&bytes, b"@0.8.0", b"@0.7.0");
     std::fs::write(&wasm_path, viejo).unwrap();
     let cat = Catalog::load_dir(root.path());
     assert!(cat.plugins.is_empty(), "no se carga");
@@ -1466,10 +1460,37 @@ fn un_guest_compilado_contra_otro_wit_se_lista_roto() {
             served,
         } => {
             assert_eq!(package, "norte:plugin");
-            assert_eq!(built_against, "0.1.0");
+            assert_eq!(built_against, "0.7.0");
             assert_eq!(served, "0.8.0");
         }
         otro => panic!("se esperaba WitMismatch, salió {otro:?}"),
+    }
+}
+
+/// Un `plugin.wasm` por encima del tope de artefacto no se LEE: se lista
+/// como roto con su tamaño, sin materializarlo. Un fichero disperso de
+/// varios GiB se instala gratis, y leerlo entero en cada descubrimiento
+/// tumbaría el catálogo, no un plugin.
+#[test]
+fn un_binario_por_encima_del_tope_se_lista_roto_sin_leerlo() {
+    let root = tempfile::tempdir().unwrap();
+    write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
+    let wasm = root.path().join("org.norte.syntax-preview/plugin.wasm");
+    let f = std::fs::File::create(&wasm).unwrap();
+    // Disperso: ocupa nada, mide de más.
+    f.set_len(norte_plugin_host::MAX_ARTIFACT_BYTES + 1)
+        .unwrap();
+    drop(f);
+
+    let cat = Catalog::load_dir(root.path());
+    assert!(cat.plugins.is_empty());
+    assert_eq!(cat.errors.len(), 1);
+    match &cat.errors[0].error {
+        ManifestError::ArtifactTooLarge { len, cap } => {
+            assert_eq!(*len, norte_plugin_host::MAX_ARTIFACT_BYTES + 1);
+            assert_eq!(*cap, norte_plugin_host::MAX_ARTIFACT_BYTES);
+        }
+        otro => panic!("se esperaba ArtifactTooLarge, salió {otro:?}"),
     }
 }
 

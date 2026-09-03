@@ -102,8 +102,14 @@ says so and says why.
   one verb. The wasmtime error is no longer the first thing a plugin author
   sees.
 - Reading the import section adds a parse of every `plugin.wasm` at
-  discovery, on the bytes the catalogue already reads for the digest. Bounded
-  by the artifact cap the runtime already enforces on the same file.
+  discovery, on the bytes the catalogue already reads for the digest. The
+  artifact cap the runtime enforces at instantiation (64 MiB) is now enforced
+  at discovery too, by size, before the file is read — a binary over it is
+  listed as broken with its size — and at `norte plugin install`, which
+  refuses to copy it. The parse itself is linear, iterative and does not
+  decompress. The version string a binary names is narrowed to a version
+  shape at the reader (ASCII, 64 bytes), so what reaches the manager and the
+  doctor cannot carry a terminal escape.
 - The policy is one version, stated. A window is a later decision, if a
   third-party ecosystem ever makes recompiling on release day the wrong ask;
   nothing here prevents it, and `SERVED_WIT` is the table it would extend.
