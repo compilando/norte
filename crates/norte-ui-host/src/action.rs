@@ -188,6 +188,15 @@ pub enum UiAction {
         /// Líneas. El renderer manda las que su rueda o su tecla signifiquen.
         delta: i64,
     },
+    /// Desplaza el visor ACOPLADO de un hueco (#291): la rueda sobre él. Las
+    /// teclas no pasan por aquí — van por el keymap del visor cuando el hueco
+    /// tiene el foco, como en la TUI.
+    PreviewScroll {
+        /// Qué hueco.
+        slot_id: u32,
+        /// Líneas, negativo hacia arriba.
+        delta: i64,
+    },
     /// Vuelve a pegar el registro al final y sigue lo que llega.
     LogFollow,
     /// Recorre la FUENTE del registro: los dos → esta ventana → el daemon

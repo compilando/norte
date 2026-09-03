@@ -1131,6 +1131,7 @@ export type UiAction =
   | { action: "log_set_level"; level: string }
   | { action: "log_set_filter"; filter: string }
   | { action: "log_scroll"; delta: number }
+  | { action: "preview_scroll"; slot_id: number; delta: number }
   | { action: "log_follow" }
   | { action: "log_cycle_source" }
   | { action: "log_set_visible_range"; rows: number }

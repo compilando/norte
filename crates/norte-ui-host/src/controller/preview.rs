@@ -23,8 +23,9 @@ use super::*;
 /// completa: lo que cambia es el vínculo, no lo que hay dentro.
 pub(super) const KIND: &str = "viewer";
 
-/// Cuántas filas cruzan para un hueco de preview: el hueco las desplaza
-/// solo, así que van enteras hasta el tope del puente.
+/// Tope de filas que cruzan para un hueco de preview. Lo normal es que
+/// viaje la VENTANA que cabe en el hueco (`alto_de_preview`); esto acota
+/// un hueco sin colocación conocida.
 const PREVIEW_MAX_ROWS: usize = crate::bridge::MAX_ROWS_PER_BATCH;
 
 /// Lo que un hueco de preview tiene AHORA, y lo que está pidiendo.
@@ -73,8 +74,13 @@ impl Estado {
         let seguido =
             norte_frontend::layout::resolve_follow(&self.arbol, slot, &self.roles, &mut diags)
                 .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active));
+        // Con el FOCO en el propio hueco de preview el rol activo es él, y
+        // seguirse a sí mismo es seguir a nadie: entonces manda el listado
+        // activo, que siempre existe. En la TUI el teclado y el rol son dos
+        // cosas distintas y esto no pasa; aquí el foco ES el rol.
         let entrada = seguido
             .and_then(|SlotId(s)| self.huecos.get(&s))
+            .or_else(|| self.huecos.get(&self.activo()))
             .and_then(|h| h.pane.selected());
         let Some(e) = entrada else {
             return Quiere::Nota("preview-empty");
@@ -219,12 +225,120 @@ impl Estado {
         Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
     }
 
-    /// La proyección de un hueco de preview.
+    /// Cuántas filas caben en el hueco `slot`: su alto menos el cromo
+    /// (título y borde). Es la ventana que viaja y la página que las teclas
+    /// saltan. Un hueco que no está colocado no tiene alto: cae al tope.
+    fn alto_de_preview(&self, slot: u32) -> usize {
+        self.reparto
+            .placements
+            .iter()
+            .find(|(s, _)| *s == SlotId(slot))
+            .map_or(PREVIEW_MAX_ROWS, |(_, r)| {
+                usize::from(r.height.saturating_sub(2)).clamp(1, PREVIEW_MAX_ROWS)
+            })
+    }
+
+    /// El hueco de preview con el FOCO, si el foco está en uno y tiene
+    /// visor. Sin visor —una nota— no hay nada que mover, y las teclas
+    /// siguen su camino.
+    fn preview_enfocado(&self) -> Option<u32> {
+        let SlotId(id) = self.roles.get(norte_frontend::layout::RoleId::Active)?;
+        let es_visor = kind_de(&self.arbol, SlotId(id)).is_some_and(|k| k.as_str() == KIND);
+        (es_visor && self.previews.get(&id).is_some_and(|e| e.viewer.is_some())).then_some(id)
+    }
+
+    /// Las teclas del visor sobre el hueco acoplado con el foco (#291).
+    ///
+    /// Se resuelven con el keymap del VISOR, como en el grande: `viewer.*`
+    /// mueve este visor. `viewer.close` no cierra el hueco — devuelve el
+    /// foco al listado, como la TUI: cerrar un panel que el lector solo
+    /// quería dejar de manejar es la respuesta equivocada; cerrarlo es
+    /// `layout.preview`. `None` = el foco no está en un visor acoplado, o la
+    /// tecla no es suya: que siga por el camino normal.
+    pub(super) fn tecla_en_preview(
+        &mut self,
+        k: &crate::keys::KeyInput,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        let slot = self.preview_enfocado()?;
+        let chord = k.to_chord().ok()?;
+        let (command, count) = match self.resolver_visor.push(chord) {
+            Resolution::Run { command, count } => (command, count),
+            // Un prefijo a medias es suyo; lo que no está atado, no.
+            Resolution::Pending(_) | Resolution::Counting(_) => {
+                return Some((self.aplicada(), Vec::new()));
+            }
+            Resolution::Unavailable { .. } | Resolution::Reset => return None,
+        };
+        let efecto = crate::commands::efecto_visor_de(&command, count.times())?;
+        let alto = self.alto_de_preview(slot);
+        if matches!(efecto, crate::commands::EfectoVisor::Cerrar) {
+            let listado = SlotId(self.activo());
+            self.roles
+                .set(norte_frontend::layout::RoleId::Active, listado);
+            self.reconcilia_roles();
+            let cambio = ViewChange::Layout(self.disposicion());
+            return Some((self.aplicada(), vec![self.parche(vec![cambio])]));
+        }
+        let v = self.previews.get_mut(&slot)?.viewer.as_mut()?;
+        Self::mover_visor(v, efecto, alto);
+        let snap = self.snapshot();
+        Some((
+            self.aplicada(),
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+        ))
+    }
+
+    /// Aplica un efecto de visor que NO es cerrar.
+    fn mover_visor(
+        v: &mut norte_frontend::viewer::Viewer,
+        efecto: crate::commands::EfectoVisor,
+        alto: usize,
+    ) {
+        use crate::commands::EfectoVisor;
+        let pasos = |n: i64| usize::try_from(n.abs()).unwrap_or(usize::MAX);
+        match efecto {
+            EfectoVisor::Cerrar => {}
+            EfectoVisor::Linea(n) if n < 0 => v.scroll_up(pasos(n)),
+            EfectoVisor::Linea(n) => v.scroll_down(pasos(n)),
+            EfectoVisor::Pagina(n) if n < 0 => v.scroll_up(pasos(n).saturating_mul(alto)),
+            EfectoVisor::Pagina(n) => v.scroll_down(pasos(n).saturating_mul(alto)),
+            EfectoVisor::Extremo { al_final: false } => v.scroll_top(),
+            EfectoVisor::Extremo { al_final: true } => v.scroll_bottom(),
+            EfectoVisor::Hex => v.toggle_hex(),
+            EfectoVisor::Encoding => v.cycle_encoding(),
+            EfectoVisor::EncodingAuto => v.reset_encoding(),
+        }
+    }
+
+    /// La rueda sobre un hueco de preview: `delta` líneas por el HOST, que
+    /// es quien decide la ventana visible (como el registro).
+    pub(super) fn desplazar_preview(
+        &mut self,
+        slot: u32,
+        delta: i64,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.oculto(slot) {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        }
+        let Some(v) = self.previews.get_mut(&slot).and_then(|e| e.viewer.as_mut()) else {
+            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        };
+        Self::mover_visor(v, crate::commands::EfectoVisor::Linea(delta), 1);
+        let snap = self.snapshot();
+        (
+            self.aplicada(),
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+        )
+    }
+
+    /// La proyección de un hueco de preview: la VENTANA de filas que cabe
+    /// en el hueco, desde donde el visor está desplazado.
     pub(super) fn vista_de_preview(&self, slot: u32) -> crate::dto::PreviewSlotView {
         let est = self.previews.get(&slot);
+        let alto = self.alto_de_preview(slot);
         let viewer = est
             .and_then(|e| e.viewer.as_ref())
-            .map(|v| self.vista_de_visor(v, PREVIEW_MAX_ROWS, false));
+            .map(|v| self.vista_de_visor(v, alto, false));
         let note = if viewer.is_some() {
             String::new()
         } else {

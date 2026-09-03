@@ -1750,17 +1750,18 @@ body {
   overflow: auto;
 }
 
-/* El visor acoplado (#291): el mismo cuerpo que el grande, pero es el HUECO
-   quien desplaza — las líneas vienen enteras hasta el tope del host. */
+/* El visor acoplado (#291): el mismo cuerpo que el grande. Desplaza el
+   HOST —viene la ventana que cabe—, así que aquí no hay scroll del DOM: la
+   rueda manda `preview_scroll` y las teclas van por el keymap del visor. */
 .preview {
-  overflow: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
 .preview .viewer-body {
-  overflow: visible;
-  flex: 0 0 auto;
+  overflow: hidden;
+  flex: 1 1 auto;
 }
 
 .preview .viewer-via {

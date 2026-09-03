@@ -17569,6 +17569,114 @@ async fn el_hueco_de_preview_sigue_al_cursor_y_ensena_el_visor() {
     assert!(cerrado.viewer.is_none(), "el visor GRANDE no se abrió");
 }
 
+/// #291, segunda mitad: con el FOCO en el hueco acoplado, las teclas del
+/// visor mueven ese visor; la rueda lo mueve por el host; `viewer.close`
+/// devuelve el foco al listado sin cerrar el hueco (como la TUI); y sin el
+/// foco, las flechas siguen moviendo el listado.
+#[tokio::test]
+async fn el_hueco_de_preview_con_el_foco_se_mueve_con_las_teclas_del_visor() {
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"largo.txt".to_vec(), false)]);
+    let texto = (1..=80)
+        .map(|i| format!("línea {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    f.contenido
+        .insert("mem:///casa/largo.txt".to_owned(), texto.into_bytes());
+    let f = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&f)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "layout.preview").await;
+    let preview_de = |s: &norte_ui_host::ViewSnapshot| {
+        s.slots.iter().find_map(|v| match v {
+            SlotView::Preview(p) => Some(p.as_ref().clone()),
+            _ => None,
+        })
+    };
+    // Bajar hasta el fichero.
+    for _ in 0..3 {
+        h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    }
+    let con_visor = foto_hasta(&h, &mut sub, "el hueco de preview con el fichero", |s| {
+        preview_de(s).filter(|p| p.viewer.is_some())
+    })
+    .await;
+    let v = con_visor.viewer.as_ref().expect("visor");
+    assert_eq!(v.first_line, 0);
+    assert!(
+        v.lines.len() < 80 && v.lines.len() <= 38,
+        "viaja la VENTANA que cabe en el hueco, no el fichero: {}",
+        v.lines.len()
+    );
+    let slot = con_visor.slot_id;
+
+    // Sin el foco, una flecha va al LISTADO, no al visor. Abajo y no arriba:
+    // arriba cambiaría el fichero bajo el cursor, y con él lo que el hueco
+    // enseña — lo que se mide aquí es a quién fue la tecla.
+    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    let sin_foco = foto_hasta(&h, &mut sub, "la flecha fue al listado", |s| {
+        preview_de(s).filter(|p| p.viewer.as_ref().is_some_and(|v| v.first_line == 0))
+    })
+    .await;
+    assert!(sin_foco.viewer.is_some());
+
+    // Con el foco en el hueco: la flecha mueve el visor.
+    let ack = h
+        .dispatch(UiAction::FocusSlot { slot_id: slot })
+        .await
+        .expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Applied { .. }),
+        "enfocar el hueco: {ack:?}"
+    );
+    let enfocado = foto_hasta(&h, &mut sub, "el hueco de preview con el foco", |s| {
+        s.layout
+            .placements
+            .iter()
+            .any(|p| p.slot_id == slot && p.role == Some(norte_ui_host::dto::SlotRole::Active))
+            .then(|| s.clone())
+    })
+    .await;
+    assert_eq!(enfocado.focus, Some(slot));
+    let ack = h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    assert!(
+        matches!(ack, ActionAck::Applied { .. }),
+        "la flecha en el visor: {ack:?}"
+    );
+    let movido = foto_hasta(&h, &mut sub, "el visor acoplado bajó una línea", |s| {
+        preview_de(s).filter(|p| p.viewer.as_ref().is_some_and(|v| v.first_line == 1))
+    })
+    .await;
+    assert_eq!(movido.viewer.expect("visor").first_line, 1);
+
+    // La rueda, por el host.
+    h.dispatch(UiAction::PreviewScroll {
+        slot_id: slot,
+        delta: 3,
+    })
+    .await
+    .expect("host vivo");
+    foto_hasta(&h, &mut sub, "la rueda bajó tres más", |s| {
+        preview_de(s).filter(|p| p.viewer.as_ref().is_some_and(|v| v.first_line == 4))
+    })
+    .await;
+
+    // `viewer.close` (Esc en el keymap del visor) devuelve el foco al
+    // listado y deja el hueco donde está.
+    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    let devuelto = foto_hasta(&h, &mut sub, "el foco volvió al listado", |s| {
+        let activo = s
+            .layout
+            .placements
+            .iter()
+            .find(|p| p.role == Some(norte_ui_host::dto::SlotRole::Active))
+            .map(|p| p.slot_id);
+        (activo.is_some() && activo != Some(slot)).then(|| s.clone())
+    })
+    .await;
+    assert!(preview_de(&devuelto).is_some(), "el hueco sigue abierto");
+}
+
 /// El menú se REABRE por donde iba, no por el primero.
 ///
 /// Abrirlo siempre por el primero obliga a recorrer la barra entera en cada

@@ -2273,6 +2273,45 @@ describe("los huecos que no son listados", () => {
     expect(document.querySelector('[role="document"]')).toBeNull();
   });
 
+  it("la rueda sobre el visor acoplado desplaza por el HOST", () => {
+    const { screen, enviadas } = montar();
+    const v = vista({});
+    v.slots = [
+      ...v.slots,
+      {
+        kind: "preview",
+        slot_id: 7,
+        note: "",
+        viewer: {
+          path_display: "⟨file⟩/casa/notas.txt",
+          path_hostile: false,
+          encoding: "UTF-8",
+          eol: "lf",
+          hex: false,
+          forced: false,
+          had_errors: false,
+          truncated: false,
+          total_rows: 200,
+          first_line: 0,
+          lines: ["una", "dos"],
+          preview_by: "",
+          preview_lossy: false,
+          image: null,
+          image_refused: "",
+          styled: [],
+        },
+      },
+    ];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 60, y: 0, width: 60, height: 38, role: null, focus_index: 2 },
+    ];
+    screen.paint(v);
+    const caja = document.querySelector(".preview") as HTMLElement;
+    caja.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
+    expect(enviadas.at(-1)).toEqual({ action: "preview_scroll", slot_id: 7, delta: 3 });
+  });
+
   it("el visor acoplado sin fichero DICE por qué", () => {
     const { screen } = montar();
     const v = vista({});

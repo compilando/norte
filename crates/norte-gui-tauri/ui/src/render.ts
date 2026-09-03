@@ -3052,9 +3052,9 @@ export class Screen {
    * completa —es el mismo visor en otro sitio, como en la TUI— con la ruta
    * de título y, si no hay fichero, la nota que dice por qué.
    *
-   * Las líneas vienen ENTERAS hasta el tope del host y este hueco las
-   * desplaza solo, como cualquier panel de una ventana: el visor grande pide
-   * páginas porque tiene teclas de visor; este sigue al cursor del listado.
+   * Viene la VENTANA de líneas que cabe en el hueco, desde donde el host
+   * tiene desplazado el visor: la rueda y las teclas del visor lo mueven por
+   * él, igual que el grande.
    */
   private paintPreview(dom: SlotDom, slot: PreviewSlotView): void {
     const titulo =
@@ -3066,9 +3066,21 @@ export class Screen {
     }
     dom.scroller.className = "preview";
     if (slot.viewer === null) {
+      dom.scroller.onwheel = null;
       dom.scroller.replaceChildren(nota(slot.note));
       return;
     }
+    // La rueda desplaza por el HOST, como el registro: la ventana visible
+    // la decide él, y las teclas del visor —con el hueco enfocado— mueven el
+    // mismo desplazamiento.
+    dom.scroller.onwheel = (e) => {
+      e.preventDefault();
+      this.send({
+        action: "preview_scroll",
+        slot_id: slot.slot_id,
+        delta: e.deltaY > 0 ? 3 : -3,
+      });
+    };
     const via = slot.viewer.preview_by;
     const cabecera: HTMLElement[] = [];
     if (via !== "") {

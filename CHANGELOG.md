@@ -63,9 +63,11 @@ independently through `PROTOCOL_VERSION`.
   layout does not place reads nothing, a directory or a special file is
   said and not read, and a reply travels with its slot and its token so a
   late one for a cursor that moved is dropped. The slot asks the
-  previewer for its own width. Lines travel whole up to the bridge's row
-  cap and the slot scrolls them itself; it has no viewer keys, which is
-  the one thing left for a later batch.
+  previewer for its own width. The window of lines that fits the slot
+  travels, from wherever the viewer is scrolled: with the focus on the
+  slot the viewer's keys move it (the same keymap as the full-screen
+  viewer), the wheel moves it through the host, and `viewer.close` hands
+  the focus back to the listing without closing the slot, as the TUI does.
 - **The window has the panel bar (#324, bridge 51).** The TUI got it
   first and the window did not, which is exactly the drift ADR 0077 is
   about. The same row of buttons — one per panel that opens and closes,

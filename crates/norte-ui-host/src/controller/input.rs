@@ -299,6 +299,12 @@ impl Estado {
         if let Some(salida) = self.tecla_de_un_overlay(k, backend, buzon) {
             return salida;
         }
+        // El visor ACOPLADO con el foco se queda las teclas del visor (#291),
+        // como en la TUI: es el mismo visor en otro sitio. Lo que su keymap
+        // no ata —el tabulador, un atajo global— sigue su camino normal.
+        if let Some(salida) = self.tecla_en_preview(k) {
+            return salida;
+        }
         let Ok(chord) = k.to_chord() else {
             // Una tecla que el adaptador no entiende no se adivina.
             return (

@@ -156,6 +156,11 @@
     "generation": 4,
     "row": 1
   },
+  "preview_scroll": {
+    "action": "preview_scroll",
+    "delta": 3,
+    "slot_id": 11
+  },
   "profile_activate_row": {
     "action": "profile_activate_row",
     "generation": 3,
