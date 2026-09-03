@@ -99,6 +99,24 @@
             "width": 96,
             "x": 24,
             "y": 36
+          },
+          {
+            "focus_index": 7,
+            "height": 2,
+            "role": null,
+            "slot_id": 11,
+            "width": 60,
+            "x": 0,
+            "y": 34
+          },
+          {
+            "focus_index": 8,
+            "height": 2,
+            "role": null,
+            "slot_id": 12,
+            "width": 60,
+            "x": 60,
+            "y": 34
           }
         ],
         "tabs": [
@@ -572,6 +590,24 @@
           "width": 96,
           "x": 24,
           "y": 36
+        },
+        {
+          "focus_index": 7,
+          "height": 2,
+          "role": null,
+          "slot_id": 11,
+          "width": 60,
+          "x": 0,
+          "y": 34
+        },
+        {
+          "focus_index": 8,
+          "height": 2,
+          "role": null,
+          "slot_id": 12,
+          "width": 60,
+          "x": 60,
+          "y": 34
         }
       ],
       "tabs": [
@@ -1008,6 +1044,62 @@
         "source_note": "el nivel es el del daemon: global a sus clientes y solo sube",
         "sources_available": true,
         "total": 2
+      },
+      {
+        "kind": "preview",
+        "note": "",
+        "slot_id": 11,
+        "viewer": {
+          "encoding": "UTF-8",
+          "eol": "lf",
+          "first_line": 4,
+          "forced": false,
+          "had_errors": false,
+          "hex": false,
+          "image": {
+            "format": "PNG",
+            "height": 1080,
+            "width": 1920
+          },
+          "image_refused": "",
+          "lines": [
+            "quinta línea"
+          ],
+          "path_display": "⟨file⟩/home/oscar/notas.txt",
+          "path_hostile": false,
+          "preview_by": "via PDF de ACME",
+          "preview_lossy": true,
+          "styled": [
+            [
+              {
+                "bg": null,
+                "fg": "#ff0000",
+                "role": "title",
+                "text": "quinta"
+              },
+              {
+                "bg": "#000080",
+                "fg": "#00ff00",
+                "role": null,
+                "text": " lín"
+              },
+              {
+                "bg": null,
+                "fg": null,
+                "role": null,
+                "text": "ea"
+              }
+            ]
+          ],
+          "total_rows": 120,
+          "truncated": true
+        }
+      },
+      {
+        "kind": "preview",
+        "note": "directorio",
+        "slot_id": 12,
+        "viewer": null
       },
       {
         "kind": "unsupported",

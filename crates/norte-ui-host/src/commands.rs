@@ -134,6 +134,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "layout.processes",
     "layout.log",
     "layout.metadata",
+    "layout.preview",
     "pane.tree",
     "pane.tab-new",
     "pane.tab-close",
@@ -738,6 +739,8 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "layout.places" => Efecto::AlternarHueco { kind: "places" },
         "layout.processes" => Efecto::AlternarHueco { kind: "processes" },
         "layout.log" => Efecto::AlternarHueco { kind: "log" },
+        // El último de los siete de la ADR 0058 (#291): el visor acoplado.
+        "layout.preview" => Efecto::AlternarHueco { kind: "viewer" },
         "pane.tree" => Efecto::AlternarHueco { kind: "tree" },
         // `pane.properties` cae aquí a propósito: las propiedades de esta
         // ventana SON la hoja de atributos, que ya enseña nombre, clase,

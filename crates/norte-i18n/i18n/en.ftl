@@ -848,6 +848,9 @@ preview-title = Preview
 preview-directory = directory
 preview-empty = nothing selected
 preview-not-a-file = not a regular file
+# The window (#291): the read failed and the slot says so, instead of
+# leaving the previous file up as if it were this one.
+preview-unreadable = could not be read
 msg-theme-applied = theme applied: { $name }
 msg-theme-reverted = theme unchanged
 msg-theme-saved = theme saved: { $name } → { $path }

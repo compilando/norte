@@ -44,6 +44,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window has the docked viewer (#291).** The last of the seven
+  ADR 0058 slot kinds the window painted in grey: `layout.preview` now
+  opens a `viewer` slot beside the listing, at equal width, that follows
+  the cursor and shows the same viewer the full-screen one shows —
+  including a plugin's styled preview, so a picture paints as half blocks
+  next to the file list. The rule is the TUI's (ADR 0077): a slot the
+  layout does not place reads nothing, a directory or a special file is
+  said and not read, and a reply travels with its slot and its token so a
+  late one for a cursor that moved is dropped. The slot asks the
+  previewer for its own width. Lines travel whole up to the bridge's row
+  cap and the slot scrolls them itself; it has no viewer keys, which is
+  the one thing left for a later batch.
 - **The window has the panel bar (#324, bridge 51).** The TUI got it
   first and the window did not, which is exactly the drift ADR 0077 is
   about. The same row of buttons — one per panel that opens and closes,

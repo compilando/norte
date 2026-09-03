@@ -58,6 +58,7 @@ mod palette;
 mod panel;
 mod patches;
 mod places;
+mod preview;
 mod profiles;
 mod search;
 mod selectors;
@@ -440,6 +441,11 @@ type Contenido = (
     Option<norte_proto::methods::PluginPreviewStyled>,
 );
 
+/// Lo mismo, para el visor ACOPLADO (#291): el hueco que lo pidió va
+/// delante, y no se resuelve al llegar — el hueco puede haberse cerrado, y
+/// entonces la respuesta se tira.
+type PreviewContenido = (u32, Contenido);
+
 /// Lo que vuelve de un listado: su testigo, el hueco, el directorio, y las
 /// entradas de la primera página con CUÁNTAS se saltó el provider.
 type RespuestaListado = (
@@ -516,6 +522,9 @@ enum Mensaje {
     /// tecla: mandarlas por separado abriría el visor crudo y lo cambiaría
     /// por la preview un instante después, que es un parpadeo que nadie pidió.
     Contenido(Box<Contenido>),
+    /// Lo que un hueco de preview pidió (#291): igual que [`Self::Contenido`]
+    /// pero para el visor acoplado, y con el hueco delante.
+    PreviewContenido(Box<PreviewContenido>),
     /// Lo que un sondeo averiguó de unas cuantas entradas (tamaño y fecha de
     /// un listado perezoso).
     ///
@@ -1117,6 +1126,12 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
+            Mensaje::PreviewContenido(datos) => {
+                let (slot, (token, path, leido, preview)) = *datos;
+                if let Some(u) = estado.aterrizar_preview(slot, token, path, leido, preview) {
+                    let _ = updates.send(u);
+                }
+            }
             Mensaje::Fondo(f) => {
                 for u in estado.aplicar_de_fondo(*f, &backend, &buzon) {
                     let _ = updates.send(u);
@@ -1219,6 +1234,14 @@ async fn actor(
                 let _ = responde.send(informe);
                 return;
             }
+        }
+        // El visor acoplado sigue al cursor (#291), y el cursor lo mueve
+        // cualquier mensaje: una tecla, un listado que aterriza, un panel
+        // que se abre. Se pregunta DESPUÉS de cada uno, como la TUI lo
+        // pregunta en cada frame: qué debería estar enseñando cada hueco de
+        // preview colocado, y si no es lo que enseña, se pide.
+        for u in estado.sondear_previews(&backend, &buzon) {
+            let _ = updates.send(u);
         }
     }
 }
@@ -2435,6 +2458,10 @@ struct Estado {
     /// como mucho: dos listas idénticas de discos no son una disposición,
     /// son un fallo (lo dice el registro compartido, `multi: false`).
     sitios: Option<norte_frontend::places::PlacesState>,
+    /// Lo que cada hueco de preview enseña (#291), por hueco: qué ruta, el
+    /// visor con lo leído o la nota que lo sustituye, y lo que está en
+    /// vuelo. Por hueco y no uno solo: el registro permite varios.
+    previews: std::collections::BTreeMap<u32, preview::EstadoPreview>,
     /// El árbol de directorios, si la disposición coloca uno. Hay UNO como
     /// mucho, por lo mismo que la barra de sitios.
     ramas: Option<norte_frontend::tree::Tree>,
@@ -2855,6 +2882,7 @@ impl Estado {
             log_visto: 0,
             log_remoto: logpanel::RegistroRemoto::default(),
             sitios: None,
+            previews: std::collections::BTreeMap::new(),
             gen_sitios: 0,
             ramas: None,
             gen_ramas: 0,

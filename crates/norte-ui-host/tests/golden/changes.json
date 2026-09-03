@@ -510,6 +510,24 @@
         "width": 96,
         "x": 24,
         "y": 36
+      },
+      {
+        "focus_index": 7,
+        "height": 2,
+        "role": null,
+        "slot_id": 11,
+        "width": 60,
+        "x": 0,
+        "y": 34
+      },
+      {
+        "focus_index": 8,
+        "height": 2,
+        "role": null,
+        "slot_id": 12,
+        "width": 60,
+        "x": 60,
+        "y": 34
       }
     ],
     "tabs": [

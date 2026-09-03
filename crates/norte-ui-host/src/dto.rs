@@ -1540,6 +1540,10 @@ pub enum SlotView {
     },
     /// El panel de registro: lo que este proceso está registrando (#326).
     Log(Box<LogSlotView>),
+    /// El visor ACOPLADO (#291, puente 51): el fichero bajo el cursor del
+    /// listado al que este hueco sigue, leído solo. Kind `viewer` en la
+    /// disposición; `preview` en el wire, que es lo que es.
+    Preview(Box<PreviewSlotView>),
     /// Un hueco de un tipo que este host todavía no proyecta. Se enseña
     /// vacío y con su nombre: preservar lo que no se entiende es la regla de
     /// la sesión (ADR 0059), y desaparecer sería peor que estar en gris.
@@ -1552,6 +1556,24 @@ pub enum SlotView {
         /// El nombre pintado difiere del que hay en el fichero (#266).
         kind_name_hostile: bool,
     },
+}
+
+/// El visor acoplado (#291): lo que enseña un hueco `viewer`.
+///
+/// El MISMO [`ViewerView`] que el visor a pantalla completa —es el mismo
+/// visor en otro sitio, como en la TUI—, con dos diferencias que son del
+/// vínculo y no del contenido: sigue al cursor del listado en vez de abrirse
+/// con una tecla, y las líneas vienen ENTERAS hasta el tope del puente para
+/// que el hueco las desplace solo, porque no tiene teclas de visor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PreviewSlotView {
+    /// Id del hueco.
+    pub slot_id: u32,
+    /// El visor con lo leído, o `None` si no hay fichero que enseñar.
+    pub viewer: Option<ViewerView>,
+    /// Por qué no hay fichero, YA DICHO: un directorio, nada bajo el
+    /// cursor, un error de lectura. Vacío cuando hay visor.
+    pub note: String,
 }
 
 /// El panel de registro (#326): la ventana visible del anillo en memoria.

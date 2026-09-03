@@ -221,6 +221,9 @@ fn filas_de(s: &norte_ui_host::dto::SlotView) -> usize {
         // del anillo, no el anillo — dos mil líneas por parche es justo lo que
         // esta cuenta existe para que nadie pueda meter sin enterarse.
         SlotView::Log(l) => l.lines.len(),
+        // El visor acoplado (#291) lleva las líneas del fichero, ENTERAS
+        // hasta el tope del puente: cuentan, y la cota de arriba las acota.
+        SlotView::Preview(p) => p.viewer.as_ref().map_or(0, |v| v.lines.len()),
         // El panel de procesos no lleva sus filas en el hueco: las lleva
         // `ViewSnapshot::tasks`, que es una sola lista para toda la pantalla.
         SlotView::Processes { .. } | SlotView::Unsupported { .. } => 0,

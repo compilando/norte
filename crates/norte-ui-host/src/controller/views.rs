@@ -79,6 +79,9 @@ impl Estado {
                     slots.push(SlotView::Metadata(Box::new(self.hoja_de_atributos(*slot))));
                 }
                 Some("places") => slots.push(SlotView::Places(Box::new(self.barra_de_sitios(id)))),
+                Some(super::preview::KIND) => {
+                    slots.push(SlotView::Preview(Box::new(self.vista_de_preview(id))));
+                }
                 Some("tree") => slots.push(SlotView::Tree(Box::new(self.arbol_de_ramas(id)))),
                 Some(super::logpanel::KIND) => {
                     slots.push(SlotView::Log(Box::new(self.panel_de_registro(id))));
@@ -455,14 +458,33 @@ impl Estado {
     /// pantalla—, menos el cromo: el visor ocupa la ventana entera.
     pub(super) fn vista_visor(&self) -> Option<crate::dto::ViewerView> {
         let v = self.visor.as_ref()?;
-        let imagen = Self::imagen_de(v);
-        let alto = self.alto_del_visor();
+        Some(self.vista_de_visor(v, self.alto_del_visor(), true))
+    }
+
+    /// La proyección de UN visor: el de pantalla completa o el de un hueco
+    /// de preview (#291), que son el mismo modelo con otro vínculo.
+    ///
+    /// `con_imagen`: si una imagen aceptada se anuncia para que el renderer
+    /// pida sus bytes. Solo el visor grande los sirve (`BytesDeImagen` es
+    /// «la imagen del visor abierto»); en un hueco, una foto la pinta el
+    /// previewer de imágenes con sus medios bloques, o se ve en crudo.
+    pub(super) fn vista_de_visor(
+        &self,
+        v: &norte_frontend::viewer::Viewer,
+        alto: usize,
+        con_imagen: bool,
+    ) -> crate::dto::ViewerView {
+        let imagen = if con_imagen {
+            Self::imagen_de(v)
+        } else {
+            Ok(None)
+        };
         // El TUI pinta la ruta del visor con el encoding del panel ENFOCADO
         // (`ui::panels`), y por lo mismo: es el fichero que se abrió desde
         // ahí.
         let (path, hostil) =
             norte_frontend::path_display_with(&v.path, self.hueco().pane.name_encoding());
-        Some(crate::dto::ViewerView {
+        crate::dto::ViewerView {
             path_display: clamp_display(path),
             path_hostile: hostil,
             encoding: v.encoding_name().to_owned(),
@@ -512,7 +534,7 @@ impl Estado {
                         .collect()
                 })
                 .unwrap_or_default(),
-        })
+        }
     }
 
     /// Si lo que hay en el visor es una imagen PINTABLE, y si no, por qué no.

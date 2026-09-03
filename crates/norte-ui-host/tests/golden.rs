@@ -631,76 +631,101 @@ fn disposicion_de_referencia() -> LayoutView {
             ],
             active: 0,
         }],
-        placements: vec![
-            SlotPlacement {
-                slot_id: 1,
-                x: 0,
-                y: 0,
-                width: 60,
-                height: 38,
-                role: Some(SlotRole::Active),
-                focus_index: 0,
-            },
-            SlotPlacement {
-                slot_id: 2,
-                x: 60,
-                y: 0,
-                width: 60,
-                height: 38,
-                role: Some(SlotRole::Target),
-                focus_index: 1,
-            },
-            // Los otros huecos de `slots` también se COLOCAN. Sin esto el
-            // corpus describía una pantalla que nombra seis huecos y pinta
-            // dos, así que un renderer podía pasar el contrato sin saber
-            // pintar la barra lateral, la ficha, los procesos ni el árbol.
-            SlotPlacement {
-                slot_id: 5,
-                x: 0,
-                y: 38,
-                width: 40,
-                height: 2,
-                role: None,
-                focus_index: 2,
-            },
-            SlotPlacement {
-                slot_id: 6,
-                x: 40,
-                y: 38,
-                width: 40,
-                height: 2,
-                role: None,
-                focus_index: 3,
-            },
-            SlotPlacement {
-                slot_id: 7,
-                x: 80,
-                y: 38,
-                width: 40,
-                height: 2,
-                role: None,
-                focus_index: 4,
-            },
-            SlotPlacement {
-                slot_id: 8,
-                x: 0,
-                y: 36,
-                width: 24,
-                height: 2,
-                role: None,
-                focus_index: 5,
-            },
-            SlotPlacement {
-                slot_id: 10,
-                x: 24,
-                y: 36,
-                width: 96,
-                height: 2,
-                role: None,
-                focus_index: 6,
-            },
-        ],
+        placements: colocaciones_de_referencia(),
     }
+}
+
+/// Dónde cae cada hueco del corpus. Aparte porque son once, y el tope de
+/// líneas por función es un tope, no una sugerencia.
+fn colocaciones_de_referencia() -> Vec<SlotPlacement> {
+    vec![
+        SlotPlacement {
+            slot_id: 1,
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 38,
+            role: Some(SlotRole::Active),
+            focus_index: 0,
+        },
+        SlotPlacement {
+            slot_id: 2,
+            x: 60,
+            y: 0,
+            width: 60,
+            height: 38,
+            role: Some(SlotRole::Target),
+            focus_index: 1,
+        },
+        // Los otros huecos de `slots` también se COLOCAN. Sin esto el
+        // corpus describía una pantalla que nombra seis huecos y pinta
+        // dos, así que un renderer podía pasar el contrato sin saber
+        // pintar la barra lateral, la ficha, los procesos ni el árbol.
+        SlotPlacement {
+            slot_id: 5,
+            x: 0,
+            y: 38,
+            width: 40,
+            height: 2,
+            role: None,
+            focus_index: 2,
+        },
+        SlotPlacement {
+            slot_id: 6,
+            x: 40,
+            y: 38,
+            width: 40,
+            height: 2,
+            role: None,
+            focus_index: 3,
+        },
+        SlotPlacement {
+            slot_id: 7,
+            x: 80,
+            y: 38,
+            width: 40,
+            height: 2,
+            role: None,
+            focus_index: 4,
+        },
+        SlotPlacement {
+            slot_id: 8,
+            x: 0,
+            y: 36,
+            width: 24,
+            height: 2,
+            role: None,
+            focus_index: 5,
+        },
+        SlotPlacement {
+            slot_id: 10,
+            x: 24,
+            y: 36,
+            width: 96,
+            height: 2,
+            role: None,
+            focus_index: 6,
+        },
+        // Los dos huecos de preview (#291): con fichero y con nota.
+        SlotPlacement {
+            slot_id: 11,
+            x: 0,
+            y: 34,
+            width: 60,
+            height: 2,
+            role: None,
+            focus_index: 7,
+        },
+        SlotPlacement {
+            slot_id: 12,
+            x: 60,
+            y: 34,
+            width: 60,
+            height: 2,
+            role: None,
+            focus_index: 8,
+        },
+    ]
 }
 
 /// El visor que clavan las fixtures.
@@ -935,6 +960,18 @@ fn slots_de_referencia() -> Vec<SlotView> {
             source_mode: "both".to_owned(),
             sources_available: true,
             source_note: "el nivel es el del daemon: global a sus clientes y solo sube".to_owned(),
+        })),
+        // El visor acoplado (#291, puente 51): el MISMO `ViewerView` que el
+        // grande, dentro de un hueco, y su gemelo sin fichero con la nota.
+        SlotView::Preview(Box::new(norte_ui_host::dto::PreviewSlotView {
+            slot_id: 11,
+            viewer: Some(visor_de_referencia()),
+            note: String::new(),
+        })),
+        SlotView::Preview(Box::new(norte_ui_host::dto::PreviewSlotView {
+            slot_id: 12,
+            viewer: None,
+            note: "directorio".to_owned(),
         })),
         SlotView::Unsupported {
             slot_id: 2,

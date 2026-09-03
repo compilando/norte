@@ -43,10 +43,9 @@ const APLAZADOS: &[(&str, u32)] = &[
     // de esta ventana era de solo lectura. Desde #309 hay una que sí —los
     // favoritos—, así que se fue de esta lista y entró en
     // `IMPLEMENTADOS_DIALOGO`.
-    // El único de los siete de la ADR 0058 que sigue fuera: esta ventana no
-    // sabe PINTAR un hueco de preview —caería a «kind no soportado», en
-    // gris—, y abrir un hueco que solo se pinta apagado no es abrirlo.
-    ("layout.preview", 291),
+    // `layout.preview` estuvo aquí hasta #291: era el único de los siete de
+    // la ADR 0058 que la ventana no pintaba. Ahora el hueco `viewer` sigue al
+    // cursor y enseña el mismo visor que el grande.
     // `layout.log` estuvo aquí desde #323 y se fue con #326: la ventana pinta
     // el registro, monta el anillo al arrancar, y DICE de qué proceso son las
     // líneas — que era el matiz que la TUI no tiene, porque allí el daemon

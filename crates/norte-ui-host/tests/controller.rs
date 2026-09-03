@@ -811,16 +811,16 @@ async fn el_contador_lo_resuelve_el_host() {
 async fn un_comando_que_el_host_no_hace_no_dispara_nada() {
     let (h, snap) = host_arbol(arbol()).await;
     let antes = listado(&snap).clone();
-    // `alt+q` es el hueco de previsualización en el preset ortodoxo: existe,
-    // está ligada, y este host todavía no la implementa —no sabe PINTAR un
-    // hueco `preview`, y abrir uno que solo se pinta en gris no es abrirlo. El
-    // ejemplo ha ido cambiando según se construía lo anterior —fue `F5` hasta
-    // copiar, `F4` hasta que editar pasó a abrir con el escritorio (#290) y
-    // `alt+t` hasta el panel de árbol—, y esa rotación es justamente la señal
-    // de que la ventana se acerca a la paridad.
+    // `alt+r` es el renombrado en lote (#310) en el preset ortodoxo: existe,
+    // está ligada, y este host todavía no la implementa —le falta la
+    // superficie del prompt de plantilla—. El ejemplo ha ido cambiando según
+    // se construía lo anterior —fue `F5` hasta copiar, `F4` hasta que editar
+    // pasó a abrir con el escritorio (#290), `alt+t` hasta el panel de árbol
+    // y `alt+q` hasta el visor acoplado (#291)—, y esa rotación es justamente
+    // la señal de que la ventana se acerca a la paridad.
     let ack = h
         .dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
-            key: "q".to_owned(),
+            key: "r".to_owned(),
             ctrl: false,
             alt: true,
             shift: false,
@@ -17373,6 +17373,92 @@ async fn la_barra_de_paneles_ensena_los_paneles_y_un_click_los_abre() {
         matches!(ack, norte_ui_host::ActionAck::Stale { .. }),
         "fue {ack:?}"
     );
+}
+
+/// #291: el hueco de preview SIGUE al cursor y enseña el mismo visor que el
+/// grande — con la preview del plugin y sus fragmentos—; sobre un
+/// directorio dice que lo es, y cerrarlo lo quita. El último de los siete
+/// kinds de la ADR 0058 que la ventana no pintaba.
+#[tokio::test]
+async fn el_hueco_de_preview_sigue_al_cursor_y_ensena_el_visor() {
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"main.rs".to_vec(), false)],
+    );
+    f.contenido
+        .insert("mem:///casa/main.rs".to_owned(), b"fn main() {}".to_vec());
+    f.previews.insert(
+        "mem:///casa/main.rs".to_owned(),
+        norte_proto::methods::PluginPreviewStyled {
+            plugin_id: "acme.syntax".to_owned(),
+            plugin_name: "Syntax".to_owned(),
+            lines: vec![vec![norte_proto::methods::SpanWire {
+                text: "fn main() {}".to_owned(),
+                role: Some("title".to_owned()),
+                fg: None,
+                bg: None,
+            }]],
+            lossy: false,
+        },
+    );
+    let f = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&f)).await;
+    let mut sub = h.subscribe();
+
+    // Abrirlo es un comando del catálogo, el mismo que en la TUI.
+    ejecutar_por_paleta(&h, &mut sub, "layout.preview").await;
+    let preview_de = |s: &norte_ui_host::ViewSnapshot| {
+        s.slots.iter().find_map(|v| match v {
+            SlotView::Preview(p) => Some(p.as_ref().clone()),
+            _ => None,
+        })
+    };
+    // El cursor nace sobre `..` o sobre `docs`: primero la nota. Hasta que
+    // el listado aterriza no hay cursor, y ESA nota es otra («nada
+    // seleccionado»): se espera a la del directorio.
+    let con_nota = foto_hasta(
+        &h,
+        &mut sub,
+        "el hueco de preview sobre un directorio",
+        |s| preview_de(s).filter(|p| p.viewer.is_none() && p.note == "directorio"),
+    )
+    .await;
+    assert!(con_nota.viewer.is_none(), "{con_nota:?}");
+
+    // Bajar hasta el fichero: el hueco lo lee solo, y lo que enseña es la
+    // preview del plugin, con su fragmento y su «via».
+    for _ in 0..3 {
+        h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    }
+    let con_visor = foto_hasta(&h, &mut sub, "el hueco de preview con el fichero", |s| {
+        preview_de(s).filter(|p| p.viewer.is_some())
+    })
+    .await;
+    let visor = con_visor.viewer.expect("visor");
+    assert!(
+        visor.path_display.ends_with("main.rs"),
+        "{}",
+        visor.path_display
+    );
+    assert_eq!(visor.styled.len(), 1);
+    assert_eq!(visor.styled[0][0].role.as_deref(), Some("title"));
+    assert!(visor.preview_by.contains("Syntax"));
+    assert!(con_visor.note.is_empty());
+    // Y el ancho que se pidió es el del HUECO, no el de la ventana.
+    let anchos = f.anchos_de_preview.lock().expect("mutex").clone();
+    assert!(
+        anchos.iter().all(|a| a.is_some_and(|a| a < 120)),
+        "el previewer recibe el ancho del hueco: {anchos:?}"
+    );
+
+    // El mismo comando lo cierra, y con él se va lo que enseñaba.
+    ejecutar_por_paleta(&h, &mut sub, "layout.preview").await;
+    let cerrado = foto_hasta(&h, &mut sub, "sin hueco de preview", |s| {
+        preview_de(s).is_none().then(|| s.clone())
+    })
+    .await;
+    assert!(cerrado.viewer.is_none(), "el visor GRANDE no se abrió");
 }
 
 /// El menú se REABRE por donde iba, no por el primero.

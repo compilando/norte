@@ -803,6 +803,9 @@ preview-title = Vista
 preview-directory = directorio
 preview-empty = nada seleccionado
 preview-not-a-file = no es un fichero normal
+# La ventana (#291): la lectura falló y el hueco lo dice, en vez de dejar
+# puesto el fichero anterior como si fuera este.
+preview-unreadable = no se pudo leer
 msg-theme-applied = tema aplicado: { $name }
 msg-theme-reverted = tema sin cambios
 msg-theme-saved = tema guardado: { $name } → { $path }

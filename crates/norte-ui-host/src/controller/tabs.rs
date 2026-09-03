@@ -344,8 +344,8 @@ impl Estado {
         let hoja = match kind {
             // La hoja de atributos SIGUE al rol activo: describe lo que el
             // cursor señala, y sin la atadura describiría el hueco donde
-            // nació para siempre.
-            "metadata" => Node::slot_bound(
+            // nació para siempre. El visor acoplado (#291), por lo mismo.
+            "metadata" | super::preview::KIND => Node::slot_bound(
                 id,
                 KindId::new(kind),
                 Bindings {
@@ -365,6 +365,9 @@ impl Estado {
             // el mismo gesto —una columna de navegación al lado del listado— y
             // dos anchos distintos para lo mismo se notan.
             "tree" => (Edge::Left, Size::Fixed(24)),
+            // El visor a la derecha y a PARTES IGUALES con el listado, como
+            // lo coloca la TUI: treinta celdas no dejan leer una línea.
+            super::preview::KIND => (Edge::Right, Size::Weight(1)),
             _ => (Edge::Right, Size::Fixed(30)),
         };
         let nuevo = self
