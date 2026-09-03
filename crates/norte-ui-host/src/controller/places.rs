@@ -335,8 +335,12 @@ impl Estado {
         let seguido =
             norte_frontend::layout::resolve_follow(&self.arbol, slot, &self.roles, &mut diags)
                 .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active));
+        // Con el FOCO en la propia hoja el rol activo es ella, y seguirse a
+        // sí misma es seguir a nadie: entonces manda el listado activo, que
+        // siempre existe (mismo arreglo que el visor acoplado, #291).
         let entrada = seguido
             .and_then(|SlotId(s)| self.huecos.get(&s))
+            .or_else(|| self.huecos.get(&self.activo()))
             .and_then(|h| h.pane.selected());
         let Some(e) = entrada else {
             return crate::dto::MetadataSlotView {

@@ -5639,6 +5639,33 @@ async fn la_hoja_de_atributos_sigue_al_cursor() {
     );
 }
 
+/// Con el FOCO en la propia hoja sigue enseñando la entrada del listado
+/// activo: seguir al rol activo cuando el activo es ella misma era seguir a
+/// nadie, y la hoja se vaciaba al pulsarla (mismo fallo que el visor
+/// acoplado, #291).
+#[tokio::test]
+async fn la_hoja_de_atributos_enfocada_no_se_vacia() {
+    let (h, snap) = host_full(arbol()).await;
+    let mut sub = h.subscribe();
+    let primera = hoja(&snap).expect("la disposición `full` coloca la hoja");
+    assert!(!primera.fields.is_empty());
+    let slot = primera.slot_id;
+    let ack = h
+        .dispatch(UiAction::FocusSlot { slot_id: slot })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    let enfocada = foto_hasta(&h, &mut sub, "la hoja con el foco", |s| {
+        (s.focus == Some(slot)).then(|| s.clone())
+    })
+    .await;
+    let h2 = hoja(&enfocada).expect("sigue colocada");
+    assert!(
+        h2.note.is_empty() && h2.fields == primera.fields,
+        "la hoja enfocada sigue enseñando la entrada del listado: {h2:?}"
+    );
+}
+
 /// Un nombre hostil llega a la hoja enmascarado y MARCADO, igual que a una
 /// fila del listado.
 #[tokio::test]
