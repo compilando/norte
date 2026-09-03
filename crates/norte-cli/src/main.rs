@@ -1784,20 +1784,20 @@ async fn plugin_cmd(backend: &Backend, cmd: PluginCmd) -> anyhow::Result<ExitCod
             let dir = norte_core::connect::config_dir();
             match norte_core::plugins::install(&dir, &path, force) {
                 Ok(rep) => {
-                    let verbo = if rep.replaced {
-                        "reemplazado"
-                    } else {
-                        "instalado"
-                    };
                     // El nombre viene del manifiesto de un tercero: se pinta
-                    // saneado, como en el gestor.
+                    // saneado, como en el gestor. Texto por Fluent (#319).
                     let (nombre, _) = norte_frontend::display_name(rep.name.as_bytes());
-                    println!("{verbo}: {} ({nombre})", rep.id);
+                    let key = if rep.replaced {
+                        "cli-plugin-replaced"
+                    } else {
+                        "cli-plugin-installed"
+                    };
+                    println!(
+                        "{}",
+                        norte_i18n::ta(key, &[("id", &rep.id), ("name", &nombre)])
+                    );
                     if rep.replaced {
-                        println!(
-                            "consentimiento RETIRADO: el `.wasm` es otro y el digest del \
-                             manifiesto no lo habría notado"
-                        );
+                        println!("{}", norte_i18n::t("cli-plugin-replaced-consent"));
                     }
                     println!("{}", norte_i18n::t("cli-plugin-unapproved"));
                     Ok(ExitCode::SUCCESS)

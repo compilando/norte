@@ -329,6 +329,11 @@ cli-spool-sweep-failed = warning: could not sweep { $path }: { $error }
 # not activate, and saying only "installed" would leave the reader waiting for
 # something that is not going to happen.
 cli-plugin-unapproved = still NOT approved: approve it and switch it on in the extension manager
+cli-plugin-installed = installed: { $id } ({ $name })
+cli-plugin-replaced = replaced: { $id } ({ $name })
+# Replacing withdraws the approval: the .wasm is another one, and the manifest
+# digest alone would not have noticed.
+cli-plugin-replaced-consent = approval WITHDRAWN: the .wasm is another binary, and the manifest digest would not have noticed
 cli-plugin-uninstalled = uninstalled: { $id }
 # Uninstalling withdraws the approval too, on purpose: a plugin installed later
 # under the same id must not inherit consent given to another binary.

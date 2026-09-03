@@ -330,6 +330,11 @@ cli-spool-sweep-failed = aviso: no se pudo barrer { $path }: { $error }
 # Se imprime bajo un plugin instalado y NO aprobado: instalar no activa, y
 # decir solo «instalado» dejaría al lector esperando algo que no va a pasar.
 cli-plugin-unapproved = queda SIN aprobar: apruébalo y actívalo en el gestor de extensiones
+cli-plugin-installed = instalado: { $id } ({ $name })
+cli-plugin-replaced = reemplazado: { $id } ({ $name })
+# Reemplazar retira la aprobación: el .wasm es otro y el digest del manifiesto
+# solo no lo habría notado.
+cli-plugin-replaced-consent = consentimiento RETIRADO: el .wasm es otro binario y el digest del manifiesto no lo habría notado
 cli-plugin-uninstalled = desinstalado: { $id }
 # Desinstalar retira también la aprobación, a propósito: un plugin instalado
 # después con el mismo id no debe heredar el consentimiento dado a otro binario.
