@@ -223,10 +223,19 @@ role-colored child element in the GUI row.
 
 ## Amendment log
 
-None yet. G3's Task 4 (decorator/column HOST implementation) and Task 5 (GUI
-palette/manager) are expected to close out the plan without needing a wire
-or WIT change beyond what this ADR already locks; if either surfaces a
-protocol gap, it amends this record rather than opening a parallel one.
+- **2026-09-03 (demo D3, `org.norte.markdown`): an exact mimetype beats a
+  glob.** `resolve_previewer` chose the first consented previewer in
+  catalogue order whose declaration matched, so with `org.norte.markdown`
+  (`text/markdown`) and `org.norte.syntect` (`text/*`) both installed, who
+  painted a `.md` depended on the alphabet of the ids. Now an exact
+  declaration wins over a wildcard wherever it sits; among equals, catalogue
+  order still decides. The host also learned `text/markdown` for `.md` and
+  `.markdown` — until then they were `text/plain`, and no previewer could
+  claim Markdown without claiming all text.
+
+G3's Task 4 (decorator/column HOST implementation) and Task 5 (GUI
+palette/manager) closed out the plan without needing a wire or WIT change
+beyond what this ADR locked.
 
 ## Addendum (2026-08-16, ADR 0057): `column-values` changed shape
 

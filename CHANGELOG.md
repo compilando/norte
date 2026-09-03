@@ -24,6 +24,19 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **`org.norte.markdown`: Markdown as styled lines in the viewer.** A
+  `previewer` for `text/markdown` — headings in the theme's title role with
+  the hashes dropped, emphasis and strong in their own colours, inline and
+  fenced code in the info role with the fences replaced by a `[lang]` line,
+  bullets and numbered lists, quotes with a bar, links as `text (url)`,
+  tables as `a | b`, task-list boxes. Rendering is a pure function over the
+  CommonMark event stream (`pulldown-cmark`, no default features) with its
+  own tests; the gate installs the real guest and checks the roles and the
+  fences end to end. Two host changes came with it: `.md`/`.markdown` are
+  `text/markdown` instead of `text/plain`, and **an exact mimetype now beats
+  a glob** when two previewers match (ADR 0037 amendment) — with syntect's
+  `text/*` also installed, the Markdown plugin paints Markdown and syntect
+  keeps the rest, whatever the alphabet of their ids. `just plugin-markdown`.
 - **`org.norte.media-info`: `dims` and `duration` columns from file
   headers.** A `columns` plugin with `location = "read"` and no root marker:
   for a file whose extension claims an image (PNG, JPEG, GIF, WebP) or an

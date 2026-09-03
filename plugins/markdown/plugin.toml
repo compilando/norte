@@ -1,0 +1,16 @@
+[plugin]
+id = "org.norte.markdown"
+name = "Markdown"
+publisher = "norte"
+version = "0.1.0"
+category = "previewer"
+description = "Markdown in the viewer: headings, emphasis, code, lists, quotes and links, styled."
+
+# Exact mimetype on purpose: the host prefers an exact match over a glob, so
+# this previewer wins `text/markdown` even with a `text/*` highlighter
+# installed, and touches nothing else.
+[contributions]
+previewer = [{ mimetypes = ["text/markdown"] }]
+
+# Nothing. The host hands the previewer the file's text.
+[capabilities]

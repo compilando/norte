@@ -168,7 +168,10 @@ pub(crate) fn guess_mimetype(path: &norte_proto::VPath) -> &'static str {
         .and_then(|n| std::str::from_utf8(n).ok())
         .and_then(|n| n.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()));
     match ext.as_deref() {
-        Some("txt" | "md" | "rs" | "toml" | "log" | "csv" | "ini" | "conf") => "text/plain",
+        Some("txt" | "rs" | "toml" | "log" | "csv" | "ini" | "conf") => "text/plain",
+        // Its own type, so a Markdown previewer can claim it EXACTLY while a
+        // `text/*` highlighter keeps everything else (D3).
+        Some("md" | "markdown") => "text/markdown",
         Some("json") => "application/json",
         Some("html" | "htm") => "text/html",
         Some("xml") => "text/xml",
@@ -1005,11 +1008,17 @@ impl PluginRegistry {
         ))
     }
 
-    /// Resuelve el PRIMER previewer APROBADO y ACTIVADO cuyo mimetype declarado
-    /// case `mime`, devolviendo `(id, name, wasm_path, capabilities, settings)`;
-    /// `None` si ninguno aplica. Fail-closed: un previewer no consentido jamás
-    /// se elige. Barato: el caller lee los bytes del archivo y ejecuta fuera del
+    /// Resuelve el previewer APROBADO y ACTIVADO que declara `mime`,
+    /// devolviendo `(id, name, wasm_path, capabilities, settings)`; `None` si
+    /// ninguno aplica. Fail-closed: un previewer no consentido jamás se
+    /// elige. Barato: el caller lee los bytes del archivo y ejecuta fuera del
     /// lock.
+    ///
+    /// **Exacto antes que glob** (D3, ADR 0037 enmienda): un plugin que
+    /// declara `text/markdown` gana a uno que declara `text/*` para un
+    /// `.md`, esté donde esté en el orden del catálogo; entre iguales, el
+    /// primero por orden de catálogo (`category, id`). Sin esto, quién
+    /// pintaba un Markdown lo decidía el alfabeto de los ids.
     ///
     /// `settings` (P2 Task 4a) son los valores de `[config]` YA resueltos
     /// ([`Self::settings_of`]) — el caller debe pasarlos a
@@ -1018,6 +1027,14 @@ impl PluginRegistry {
     /// [`Self::run_command`] ya hace para los comandos.
     #[must_use]
     pub fn resolve_previewer(&self, mime: &str) -> Option<ResolvedPreviewer> {
+        // Dos pasadas: la exacta gana a la de comodín aunque venga después.
+        let exact = self.previewer_matching(|pat| pat == mime);
+        exact.or_else(|| self.previewer_matching(|pat| mimetype_matches(pat, mime)))
+    }
+
+    /// El primer previewer consentido, en orden de catálogo, con alguna
+    /// declaración de mimetype que satisfaga `casa`.
+    fn previewer_matching(&self, casa: impl Fn(&str) -> bool) -> Option<ResolvedPreviewer> {
         self.catalog.plugins.iter().find_map(|e| {
             let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
             // Fail-closed con digest vigente (issue #69): un previewer cuyo
@@ -1031,7 +1048,7 @@ impl PluginRegistry {
                 .previewer
                 .iter()
                 .flat_map(|c| c.mimetypes.iter())
-                .any(|pat| mimetype_matches(pat, mime));
+                .any(|pat| casa(pat));
             if !handles {
                 return None;
             }
@@ -2028,6 +2045,11 @@ mimetypes = ["text/*"]
     fn plugins_guess_mimetype_por_extension() {
         assert_eq!(guess_mimetype(&vpath("file:///a.txt")), "text/plain");
         assert_eq!(guess_mimetype(&vpath("file:///a.json")), "application/json");
+        assert_eq!(guess_mimetype(&vpath("file:///README.md")), "text/markdown");
+        assert_eq!(
+            guess_mimetype(&vpath("file:///a.MARKDOWN")),
+            "text/markdown"
+        );
         assert_eq!(
             guess_mimetype(&vpath("file:///a")),
             "application/octet-stream"
@@ -2090,6 +2112,43 @@ mimetypes = ["text/*"]
             reg.resolve_previewer("application/json").is_none(),
             "application/json no casa text/*"
         );
+    }
+
+    /// D3: un previewer que declara el mimetype EXACTO gana a uno que declara
+    /// el comodín, aunque el catálogo lo ordene después. Sin esto, quién
+    /// pintaba un `.md` lo decidía el alfabeto de los ids: `org.norte.md`
+    /// ganaba a `org.norte.syntect`, y `org.zzz.md` perdía.
+    #[test]
+    fn plugins_resolve_previewer_prefiere_exacto_sobre_glob() {
+        let tmp = TempDir::new().unwrap();
+        // El comodín va PRIMERO en orden de catálogo (id menor).
+        write_plugin(tmp.path(), "org.norte.prev", PREV_MANIFEST);
+        write_plugin(
+            tmp.path(),
+            "org.zzz.md",
+            r#"
+[plugin]
+id = "org.zzz.md"
+name = "MD"
+publisher = "zzz"
+version = "0.1.0"
+category = "previewer"
+[contributions]
+previewer = [{ mimetypes = ["text/markdown"] }]
+"#,
+        );
+        for id in ["org.norte.prev", "org.zzz.md"] {
+            std::fs::write(tmp.path().join("plugins").join(id).join("plugin.wasm"), b"").unwrap();
+        }
+        let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
+        for id in ["org.norte.prev", "org.zzz.md"] {
+            assert!(reg.set_approval_in_memory(id, true));
+            assert!(reg.set_enabled_in_memory(id, true));
+        }
+        let (id, ..) = reg.resolve_previewer("text/markdown").unwrap();
+        assert_eq!(id, "org.zzz.md", "exacto gana a text/* aunque vaya después");
+        let (id, ..) = reg.resolve_previewer("text/plain").unwrap();
+        assert_eq!(id, "org.norte.prev", "y el comodín sigue con el resto");
     }
 
     #[test]

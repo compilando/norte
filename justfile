@@ -502,6 +502,20 @@ plugin-media-info *ARGS:
     cp $origen/target/wasm32-wasip2/release/media_info.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
+# El previewer de Markdown (`plugins/markdown`, demo D3).
+plugin-markdown *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    flag=""; [ "{{ARGS}}" = "force" ] && flag="--force"
+    origen=plugins/markdown
+    cargo build --release --target wasm32-wasip2 --manifest-path $origen/Cargo.toml
+    stage=target/plugin-stage/markdown
+    rm -rf "$stage" && mkdir -p "$stage"
+    cp $origen/plugin.toml "$stage/plugin.toml"
+    [ -f $origen/help.md ] && cp $origen/help.md "$stage/help.md" || true
+    cp $origen/target/wasm32-wasip2/release/markdown_preview.wasm "$stage/plugin.wasm"
+    cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
+
 # Todos los plugins oficiales, de una vez. `just plugins force` reemplaza los
 # ya instalados (y retira su consentimiento, como dice `plugin install`).
 [positional-arguments]
@@ -512,6 +526,7 @@ plugins *ARGS:
     just plugin-git-status "$@"
     just plugin-file-icons "$@"
     just plugin-media-info "$@"
+    just plugin-markdown "$@"
 
 # ---------- distribución ----------
 

@@ -1,0 +1,25 @@
+# `org.norte.markdown`: Markdown rendered as styled lines in the viewer
+# (demo plugin D3). Not a workspace member, like every guest.
+[workspace]
+
+[package]
+name = "markdown-preview"
+edition = "2021"
+version = "0.1.0"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Markdown previews for norte's viewer, as a WASM previewer plugin"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+# CommonMark pull parser, pure Rust, compiles to wasm32-wasip2 unchanged.
+# `default-features = false` drops the `getopts` the crate's binary wants.
+pulldown-cmark = { version = "0.13", default-features = false }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+strip = true
