@@ -1,0 +1,32 @@
+# The smallest norte plugin that builds. Copy this directory to start yours;
+# see README.md here and docs/plugins.md in the norte repository.
+#
+# It is NOT a member of any workspace: the empty `[workspace]` below stops
+# cargo from looking upwards, so the plugin keeps its own lockfile and profile
+# and compiles to `wasm32-wasip2` on its own.
+[workspace]
+
+[package]
+name = "norte-plugin-template"
+edition = "2021"
+version = "0.1.0"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "A norte plugin: previewer and command, ready to be renamed"
+
+[lib]
+# A WASM component is a `cdylib`.
+crate-type = ["cdylib"]
+
+[dependencies]
+# Guest-side bindings, generated from the same WIT the host serves. The `wit`
+# entry next to this file is a symlink to `crates/norte-plugin-host/wit` in
+# the norte repository; outside it, copy that directory here instead.
+wit-bindgen = "0.46"
+
+[profile.release]
+# A guest that panics aborts: there is nobody to unwind to.
+panic = "abort"
+# Size over speed — the binary is loaded on every use.
+opt-level = "s"
+strip = true

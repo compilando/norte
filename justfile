@@ -453,6 +453,27 @@ plugin-syntect:
     cp $origen/target/wasm32-wasip2/release/previewer_syntect.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" "$@"
 
+# Construye e INSTALA el plugin oficial de columnas de git (`plugins/git-status`,
+# ADR 0057). Mismo montaje que `plugin-syntect`: stage en `target/plugin-stage/`
+# y `norte plugin install` desde ahí. Instalar NO aprueba.
+plugin-git-status:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    origen=plugins/git-status
+    cargo build --release --target wasm32-wasip2 --manifest-path $origen/Cargo.toml
+    stage=target/plugin-stage/git-status
+    rm -rf "$stage" && mkdir -p "$stage"
+    cp $origen/plugin.toml "$stage/plugin.toml"
+    [ -f $origen/help.md ] && cp $origen/help.md "$stage/help.md" || true
+    cp $origen/target/wasm32-wasip2/release/git_status.wasm "$stage/plugin.wasm"
+    cargo run --quiet -p norte-cli -- plugin install "$stage" "$@"
+
+# Todos los plugins oficiales, de una vez. `just plugins --force` reemplaza
+# los ya instalados (y retira su consentimiento, como dice `plugin install`).
+plugins *ARGS:
+    just plugin-syntect {{ARGS}}
+    just plugin-git-status {{ARGS}}
+
 # ---------- distribución ----------
 
 # Construye los artefactos de release para ESTA máquina.

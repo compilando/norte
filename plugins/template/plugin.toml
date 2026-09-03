@@ -1,0 +1,39 @@
+# The manifest: what this plugin is, what it contributes, and what it asks
+# for. Everything a human approves is in here, so every field matters.
+
+[plugin]
+# Reverse-DNS, unique: it names the install directory and the approval.
+id = "org.example.template"
+# Shown in the extension manager. Third-party text: norte masks it.
+name = "Template"
+publisher = "example"
+version = "0.1.0"
+# Primary kind. The `norte-plugin` world serves both `previewer` and
+# `command`; one of them is the category, the other may still contribute.
+category = "previewer"
+# Optional, 280 characters at most, NOT part of the approval digest.
+description = "The smallest plugin that builds: echoes a preview and greets."
+
+[contributions]
+# Which files this previewer handles. Globs on the mimetype norte guesses
+# from the extension (`text/*`, `application/json`, `image/png`...).
+previewer = [{ mimetypes = ["text/plain"] }]
+
+# A verb in the palette. `id` is what `norte plugin run <plugin> <id>` names.
+[[contributions.command]]
+id = "hello"
+title = "Say hello"
+
+[capabilities]
+# `scoped`: the guest reads ONLY the bytes the host already read and handed
+# it. It never opens a file. Declaring it is what lets a preview reach you.
+fs-read = "scoped"
+# There is no `exec`: a plugin can never run a program. `net`, `location`
+# and `fs-write` exist; each one shows as a badge when a human approves.
+
+# Settings the user can edit in the manager, with their defaults. The guest
+# reads them through `host-config`. Types: string, bool, int, enum.
+[config.greeting]
+type = "string"
+default = "hello"
+description = "What the `hello` command says."
