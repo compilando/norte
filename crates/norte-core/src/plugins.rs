@@ -654,6 +654,15 @@ impl PluginRegistry {
         PluginListResult { plugins, errors }
     }
 
+    /// Los directorios que NO cargaron, con su causa TIPADA (a diferencia de
+    /// [`Self::list`], que la aplana a texto para el wire). Para quien
+    /// diagnostica en local —`norte doctor`— y quiere distinguir un
+    /// manifiesto roto de un binario compilado contra otro WIT (ADR 0094).
+    #[must_use]
+    pub fn load_errors(&self) -> &[norte_plugin_host::LoadError] {
+        &self.catalog.errors
+    }
+
     /// El directorio de configuración donde vive `plugins-state.toml`. Lo usa el
     /// daemon para persistir FUERA del lock (regla 2): captura el dir bajo el
     /// lock y escribe en `spawn_blocking`.
@@ -3052,6 +3061,9 @@ pub fn install(config_dir: &Path, src: &Path, force: bool) -> Result<InstallRepo
 /// Los schemes del core, que ningún provider plugin sirve (ADR 0093). Se
 /// re-exporta para quien no depende de `norte-plugin-host` (la CLI).
 pub use norte_plugin_host::CORE_SCHEMES;
+/// Los errores de carga TIPADOS del catálogo, para quien diagnostica sin
+/// depender de `norte-plugin-host` (`norte doctor`, ADR 0094).
+pub use norte_plugin_host::{LoadError, ManifestError};
 
 /// Los schemes que declaran los provider plugins INSTALADOS bajo
 /// `config_dir`, consentidos o no, ordenados y sin repetir.

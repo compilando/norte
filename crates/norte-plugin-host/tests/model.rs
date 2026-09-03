@@ -7,6 +7,8 @@ use norte_plugin_host::{
     ConfigKeySpec, HelpPresence, Manifest, ManifestError, Scope,
 };
 
+mod support;
+
 const SYNTAX_PREVIEW: &str = r#"
 [plugin]
 id = "org.norte.syntax-preview"
@@ -1423,6 +1425,51 @@ fn un_provider_no_puede_reclamar_un_scheme_del_core() {
             ),
             "{malo:?} no es un scheme"
         );
+    }
+}
+
+/// Un guest compilado contra otra versión del WIT no se carga: se lista en
+/// `errors` con las DOS versiones (ADR 0094). Con el binario intacto entra
+/// en `plugins` y su `wit` dice contra qué se compiló. Se fabrica el viejo
+/// reescribiendo `@0.8.0` por `@0.1.0` en los bytes del guest real.
+#[test]
+fn un_guest_compilado_contra_otro_wit_se_lista_roto() {
+    let Some(wasm) = support::build_guest("previewer-demo") else {
+        return;
+    };
+    let bytes = std::fs::read(wasm).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    write_plugin(root.path(), "org.norte.syntax-preview", SYNTAX_PREVIEW);
+    let wasm_path = root.path().join("org.norte.syntax-preview/plugin.wasm");
+
+    std::fs::write(&wasm_path, &bytes).unwrap();
+    let cat = Catalog::load_dir(root.path());
+    assert!(cat.errors.is_empty(), "{:?}", cat.errors);
+    assert_eq!(cat.plugins.len(), 1);
+    assert!(
+        cat.plugins[0]
+            .wit
+            .contains(&("norte:plugin".to_owned(), "0.8.0".to_owned())),
+        "{:?}",
+        cat.plugins[0].wit
+    );
+
+    let viejo = support::rewrite_bytes(&bytes, b"@0.8.0", b"@0.1.0");
+    std::fs::write(&wasm_path, viejo).unwrap();
+    let cat = Catalog::load_dir(root.path());
+    assert!(cat.plugins.is_empty(), "no se carga");
+    assert_eq!(cat.errors.len(), 1);
+    match &cat.errors[0].error {
+        ManifestError::WitMismatch {
+            package,
+            built_against,
+            served,
+        } => {
+            assert_eq!(package, "norte:plugin");
+            assert_eq!(built_against, "0.1.0");
+            assert_eq!(served, "0.8.0");
+        }
+        otro => panic!("se esperaba WitMismatch, salió {otro:?}"),
     }
 }
 

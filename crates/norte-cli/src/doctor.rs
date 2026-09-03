@@ -484,12 +484,35 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
     };
     let snapshot = registry.state_snapshot();
     let list = registry.list();
-    for err in &list.errors {
+    for err in registry.load_errors() {
+        // Only the directory's basename, as `plugin.list` does: the absolute
+        // path would name the user's home.
+        let dir = err
+            .dir
+            .file_name()
+            .map_or_else(|| "?".to_owned(), |b| b.to_string_lossy().into_owned());
+        // A binary built against another WIT is not a broken manifest: the
+        // author has to rebuild, not edit (ADR 0094). Its own code, so the
+        // reader gets the two versions and the one verb.
+        if let norte_core::plugins::ManifestError::WitMismatch {
+            package,
+            built_against,
+            served,
+        } = &err.error
+        {
+            findings.push(Finding {
+                section: "plugins",
+                severity: Severity::Warn,
+                code: "plugin-wit-mismatch",
+                detail: format!("{dir}: {package}@{built_against} (served: @{served})"),
+            });
+            continue;
+        }
         findings.push(Finding {
             section: "plugins",
             severity: Severity::Error,
             code: "plugin-manifest-broken",
-            // security review P2 Task 4a: `err.reason` can carry untrusted
+            // security review P2 Task 4a: the reason can carry untrusted
             // text (a `config.toml` values error names the offending KEY,
             // which is user TOML and — unlike a manifest-declared key — has
             // no charset guarantee; a manifest parse error can likewise
@@ -497,7 +520,7 @@ pub fn check_plugins(config_dir: &Path) -> Vec<Finding> {
             // `plugin-config` below, not just relying on the source-side
             // fix in `ConfigValueError` (defense in depth: this loop also
             // covers `ManifestError` variants that pre-date that fix).
-            detail: format!("{}: {}", err.dir, masked_and_capped(&err.reason)),
+            detail: format!("{dir}: {}", masked_and_capped(&err.error.to_string())),
         });
     }
     for p in &list.plugins {
@@ -1345,6 +1368,96 @@ fs-read = "scoped"
             .unwrap_or_else(|| panic!("expected a no-binary finding: {findings:?}"));
         assert_eq!(warn.severity, Severity::Warn);
         assert!(warn.detail.contains("org.norte.demo"), "{}", warn.detail);
+    }
+
+    /// Builds the `previewer-demo` guest of `norte-plugin-host` (SKIP without
+    /// the `wasm32-wasip2` target) and returns its bytes.
+    fn demo_guest_bytes() -> Option<Vec<u8>> {
+        use std::process::Command;
+        let installed = Command::new("rustup")
+            .args(["target", "list", "--installed"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .is_some_and(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .any(|l| l == "wasm32-wasip2")
+            });
+        if !installed {
+            eprintln!("SKIP: target wasm32-wasip2 no instalado");
+            return None;
+        }
+        let guest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../norte-plugin-host/examples-wasm/previewer-demo");
+        // `CARGO_TARGET_TMPDIR` only exists for integration tests; this is a
+        // unit test of the binary, so the guests go under the system temp.
+        let target_dir = option_env!("CARGO_TARGET_TMPDIR").map_or_else(
+            || std::env::temp_dir().join("norte-wasm-guests"),
+            |d| std::path::PathBuf::from(d).join("wasm-guests"),
+        );
+        let status = Command::new(env!("CARGO"))
+            .current_dir(&guest_dir)
+            .args([
+                "build",
+                "--release",
+                "--target",
+                "wasm32-wasip2",
+                "--target-dir",
+            ])
+            .arg(&target_dir)
+            .status()
+            .expect("cargo build del guest");
+        assert!(status.success(), "previewer-demo no compiló");
+        let wasm = target_dir.join("wasm32-wasip2/release/previewer_demo.wasm");
+        Some(std::fs::read(wasm).expect("lee el guest"))
+    }
+
+    /// A plugin whose binary was built against another WIT is its own
+    /// finding — a warning that names the package and both versions — and
+    /// NOT the generic broken-manifest error: the author has to rebuild, not
+    /// edit (ADR 0094). Made by rewriting `@0.8.0` to `@0.1.0` in the bytes
+    /// of the real demo guest (same length, sections stay valid).
+    #[test]
+    fn un_plugin_de_otro_wit_es_un_hallazgo_propio() {
+        let Some(bytes) = demo_guest_bytes() else {
+            return;
+        };
+        let viejo: Vec<u8> = {
+            let mut out = bytes.clone();
+            let (from, to) = (b"@0.8.0", b"@0.1.0");
+            let mut i = 0;
+            while i + from.len() <= out.len() {
+                if &out[i..i + from.len()] == from {
+                    out[i..i + from.len()].copy_from_slice(to);
+                    i += from.len();
+                } else {
+                    i += 1;
+                }
+            }
+            out
+        };
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(dir.path(), "org.norte.demo", DEMO_MANIFEST);
+        std::fs::write(dir.path().join("plugins/org.norte.demo/plugin.wasm"), viejo).unwrap();
+
+        let findings = check_plugins(dir.path());
+        let f = findings
+            .iter()
+            .find(|f| f.code == "plugin-wit-mismatch")
+            .unwrap_or_else(|| panic!("expected plugin-wit-mismatch: {findings:?}"));
+        assert_eq!(f.severity, Severity::Warn);
+        assert!(f.detail.contains("org.norte.demo"), "{}", f.detail);
+        assert!(f.detail.contains("norte:plugin@0.1.0"), "{}", f.detail);
+        assert!(f.detail.contains("@0.8.0"), "{}", f.detail);
+        assert!(
+            !findings.iter().any(|f| f.code == "plugin-manifest-broken"),
+            "no es un manifiesto roto: {findings:?}"
+        );
+        assert!(
+            !findings.iter().any(|f| f.code == "plugin-ok"),
+            "no se carga: {findings:?}"
+        );
     }
 
     /// TDD: a broken manifest surfaces via `PluginLoadError` as an `Error`

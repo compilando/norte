@@ -632,6 +632,25 @@ pub enum ManifestError {
          los formatos de archivo los sirve el core, y el scheme debe ser `[a-z][a-z0-9.-]*`"
     )]
     ReservedScheme,
+    /// El `plugin.wasm` se compiló contra una versión de un paquete WIT que
+    /// este host sirve a OTRA (ADR 0094). No es un error del manifiesto,
+    /// pero es la causa por la que el catálogo no carga el plugin, y
+    /// [`crate::LoadError`] lleva una de estas: se lista como roto con las
+    /// dos versiones a la vista en vez de morir en wasmtime nombrando una
+    /// interfaz. El estado (aprobación) no se toca; un binario recompilado
+    /// es otro binario y se vuelve a aprobar (#241).
+    #[error(
+        "compilado contra `{package}@{built_against}`, este norte sirve `@{served}`: \
+         recompila el plugin contra el WIT actual"
+    )]
+    WitMismatch {
+        /// El paquete (`norte:plugin`).
+        package: String,
+        /// La versión que el binario referencia.
+        built_against: String,
+        /// La que este host sirve.
+        served: String,
+    },
     /// Dos o más directorios declaran el MISMO `plugin.id` (issue #69): se
     /// rechazan TODOS (fail-closed). Un segundo directorio no puede reclamar el
     /// id de un plugin aprobado para colar su propio `plugin.wasm`.

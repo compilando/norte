@@ -55,6 +55,11 @@ pub struct PluginEntry {
     /// se comprueba por cada previsualización y por cada página de columnas,
     /// y leer megabytes ahí sería pagar el hash en el bucle de pintado.
     pub wasm_digest: Option<String>,
+    /// Los paquetes `norte:*` que el binario nombra, con su versión, leídos
+    /// del `.wasm` al descubrir (ADR 0094, [`crate::wit_packages`]). Vacío
+    /// sin binario. Un plugin que llega aquí NO tiene mismatch: el que lo
+    /// tiene va a [`Catalog::errors`] con [`ManifestError::WitMismatch`].
+    pub wit: Vec<(String, String)>,
 }
 
 impl PluginEntry {
@@ -151,16 +156,15 @@ impl HelpPresence {
     }
 }
 
-/// Sha256 hex de `<dir>/plugin.wasm`, por la misma guarda con la que se
+/// Los bytes de `<dir>/plugin.wasm`, por la misma guarda con la que se
 /// ejecuta ([`verified_child`]) — hashear un fichero y ejecutar otro sería
 /// peor que no hashear.
 ///
 /// `None` cuando no hay binario servible: un plugin sin `.wasm` no ejecuta
 /// nada, así que no hay código que anclar.
-fn wasm_digest(dir: &Path) -> Option<String> {
+fn read_wasm(dir: &Path) -> Option<Vec<u8>> {
     let path = verified_child(dir, "plugin.wasm")?;
-    let bytes = std::fs::read(path).ok()?;
-    Some(wasm_digest_of(&bytes))
+    std::fs::read(path).ok()
 }
 
 /// El digest de un binario tal como el catálogo lo ancla en
@@ -313,21 +317,47 @@ impl Catalog {
                 // catálogo (mismo trato que `DuplicateId`): un `config.toml`
                 // que no valida excluye el plugin ENTERO, nunca carga con
                 // valores a medias.
-                match resolve_settings(&manifest, &dir) {
-                    Ok(settings) => cat.plugins.push(PluginEntry {
-                        help: help_presence(&dir),
-                        wasm_digest: wasm_digest(&dir),
-                        manifest,
+                let settings = match resolve_settings(&manifest, &dir) {
+                    Ok(settings) => settings,
+                    Err(error) => {
+                        cat.errors.push(LoadError {
+                            dir,
+                            error: ManifestError::from(error),
+                        });
+                        continue;
+                    }
+                };
+                // El binario se lee UNA vez: de esos bytes salen el digest
+                // que ancla la aprobación (#241) y los paquetes WIT que
+                // nombra (ADR 0094). Un guest compilado contra otra versión
+                // se lista como roto con las dos versiones, en vez de
+                // cargarse y morir en wasmtime nombrando una interfaz.
+                let bytes = read_wasm(&dir);
+                let wit = bytes
+                    .as_deref()
+                    .map(crate::wit_packages)
+                    .unwrap_or_default();
+                if let Some(m) = crate::wit_mismatch(&wit) {
+                    cat.errors.push(LoadError {
                         dir,
-                        enabled: false,
-                        approved: false,
-                        settings,
-                    }),
-                    Err(error) => cat.errors.push(LoadError {
-                        dir,
-                        error: ManifestError::from(error),
-                    }),
+                        error: ManifestError::WitMismatch {
+                            package: m.package,
+                            built_against: m.built_against,
+                            served: m.served,
+                        },
+                    });
+                    continue;
                 }
+                cat.plugins.push(PluginEntry {
+                    help: help_presence(&dir),
+                    wasm_digest: bytes.as_deref().map(wasm_digest_of),
+                    wit,
+                    manifest,
+                    dir,
+                    enabled: false,
+                    approved: false,
+                    settings,
+                });
             }
         }
         cat.plugins.sort_by(|a, b| {

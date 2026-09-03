@@ -1689,6 +1689,7 @@ cli-doctor-detail-conn-secret-prompt = { $detail } is not set, and the entry say
 cli-doctor-detail-conn-secret-prompt-inert = { $detail } says secret = "prompt", which does nothing with this auth method — it only applies to password and access-key
 cli-doctor-detail-connection-scheme-unserved = { $detail }: nothing serves that scheme — not the core, and no installed provider plugin declares it (a typo, or a plugin still to install)
 cli-doctor-detail-plugin-digest-stale = { $id }: manifest capabilities changed since approval; re-approval required
+cli-doctor-detail-plugin-wit-mismatch = { $detail }: built against a WIT package this norte does not serve — rebuild the plugin against the current WIT, then approve it again
 cli-doctor-detail-plugin-help-truncated = { $id }: its help.md is over the size limit and is served cut short
 cli-doctor-detail-plugin-help-lossy = { $id }: its help.md has bytes that do not decode; they render as replacement characters
 cli-doctor-detail-plugin-help-empty = { $id }: it announces a help.md that serves nothing: empty, unreadable, or a symlink pointing outside the plugin's own directory
