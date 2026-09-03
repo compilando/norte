@@ -121,7 +121,8 @@ needs neither, and both need decisions this project has not made yet.
 
 To write one, start from [`plugins/template/`](plugins/template/) and read
 the [plugin author guide](docs/plugins.md). `just plugins` builds and installs
-every official plugin under [`plugins/`](plugins/README.md).
+every official plugin under [`plugins/`](plugins/README.md); `just plugins
+force` replaces the ones already installed.
 
 ## Documentation
 

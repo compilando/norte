@@ -442,23 +442,29 @@ uninstall:
 #
 # Instalar NO aprueba: el plugin queda descubierto y sin consentir, y se
 # aprueba y activa en el gestor de extensiones (F12 en la TUI).
-plugin-syntect:
+#
+# `just plugin-syntect force` reemplaza uno ya instalado (retira su
+# consentimiento). La palabra y no `--force`: `just` toma cualquier argumento
+# que empiece por `-` como una receta más, y no hay `--` que lo evite.
+plugin-syntect *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
+    flag=""; [ "{{ARGS}}" = "force" ] && flag="--force"
     origen=crates/norte-plugin-host/examples-wasm/previewer-syntect
     cargo build --release --target wasm32-wasip2 --manifest-path $origen/Cargo.toml
     stage=target/plugin-stage/previewer-syntect
     rm -rf "$stage" && mkdir -p "$stage"
     cp $origen/plugin.toml "$stage/plugin.toml"
     cp $origen/target/wasm32-wasip2/release/previewer_syntect.wasm "$stage/plugin.wasm"
-    cargo run --quiet -p norte-cli -- plugin install "$stage" "$@"
+    cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
 # Construye e INSTALA el plugin oficial de columnas de git (`plugins/git-status`,
 # ADR 0057). Mismo montaje que `plugin-syntect`: stage en `target/plugin-stage/`
-# y `norte plugin install` desde ahí. Instalar NO aprueba.
-plugin-git-status:
+# y `norte plugin install` desde ahí. Instalar NO aprueba. `force` reemplaza.
+plugin-git-status *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
+    flag=""; [ "{{ARGS}}" = "force" ] && flag="--force"
     origen=plugins/git-status
     cargo build --release --target wasm32-wasip2 --manifest-path $origen/Cargo.toml
     stage=target/plugin-stage/git-status
@@ -466,10 +472,10 @@ plugin-git-status:
     cp $origen/plugin.toml "$stage/plugin.toml"
     [ -f $origen/help.md ] && cp $origen/help.md "$stage/help.md" || true
     cp $origen/target/wasm32-wasip2/release/git_status.wasm "$stage/plugin.wasm"
-    cargo run --quiet -p norte-cli -- plugin install "$stage" "$@"
+    cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
-# Todos los plugins oficiales, de una vez. `just plugins --force` reemplaza
-# los ya instalados (y retira su consentimiento, como dice `plugin install`).
+# Todos los plugins oficiales, de una vez. `just plugins force` reemplaza los
+# ya instalados (y retira su consentimiento, como dice `plugin install`).
 plugins *ARGS:
     just plugin-syntect {{ARGS}}
     just plugin-git-status {{ARGS}}

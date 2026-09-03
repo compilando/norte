@@ -266,8 +266,16 @@ cargo build --release --target wasm32-wasip2
 mkdir -p stage && cp plugin.toml help.md stage/
 cp target/wasm32-wasip2/release/norte_plugin_template.wasm stage/plugin.wasm
 norte plugin install stage
-norte plugin list                       # org.example.walk  previewer  NOT approved  off
+norte plugin list                       # org.example.walk  previewer  NOT approved  off  fs-read
+norte plugin run org.example.walk hello world
+# plugin run failed: not found         <- unapproved: the plugin does not exist to the runner
 ntc                                     # F12, approve, switch on
 norte plugin run org.example.walk hello world
 # hello, world
 ```
+
+Two things the first run of this taught: outside the repository the default
+toolchain is whatever `rustup default` says, and `rustup target add` applies
+to that one — the repository pins its own; and `norte plugin run` on an
+unapproved plugin answers "not found", not "not approved", because to the
+runner an unconsented plugin is indistinguishable from an absent one.

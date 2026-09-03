@@ -19,7 +19,7 @@ example guests, in `crates/norte-plugin-host/examples-wasm/previewer-syntect/`.
 
 ```sh
 just plugins            # build and install every official plugin
-just plugins --force    # replace ones already installed (withdraws their consent)
+just plugins force      # replace ones already installed (withdraws their consent)
 just plugin-git-status  # one of them
 ```
 
