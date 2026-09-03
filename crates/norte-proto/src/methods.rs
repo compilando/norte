@@ -1060,7 +1060,23 @@ use crate::{
 /// `bg` ignorando el campo (ADR 0004), así que una imagen se pinta con la
 /// mitad de sus píxeles — legible como bloques de color de arriba, sin
 /// error y sin aviso. Un cliente 0.66 contra un daemon 0.65 no negocia.
-pub const PROTOCOL_VERSION: &str = "0.66.0";
+///
+/// # 0.67.0 — el plan de un plugin `renamer` (C3, ADR 0095)
+///
+/// Un método, [`PLUGIN_RENAME_PLAN`], y un campo: [`PluginCommandInfo::kind`],
+/// que distingue en [`PluginInfo::commands`] un comando que corre de un
+/// renamer que propone. El resultado es el de [`AI_RENAME_PLAN`], porque es
+/// el mismo plan por otro productor.
+///
+/// Ventana N=0.67.x / N-1=0.66.x. Aditivo: `kind` se omite cuando es
+/// `command`, así que un `PluginInfo` sin renamers es byte a byte el de
+/// antes. La pérdida, para un **cliente 0.66 contra un daemon 0.67**: lee
+/// `kind` ignorándolo (ADR 0004) y enseña un renamer como si fuera un
+/// comando; al ejecutarlo pide `plugin.run_command` con su id, y el daemon
+/// contesta `INVALID_PARAMS` («el plugin no ejecuta comandos») ANTES de
+/// instanciar nada — la paleta enseña el error, no renombra nada. Un
+/// cliente 0.67 contra un daemon 0.66 no negocia.
+pub const PROTOCOL_VERSION: &str = "0.67.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -1999,6 +2015,22 @@ pub const PLUGIN_DECORATE: &str = "plugin.decorate";
 /// (`VERSION_MISMATCH` de handshake); `MethodNotFound`/la decisión del
 /// cliente degradan a no mostrar la columna.
 pub const PLUGIN_COLUMN_VALUES: &str = "plugin.column_values";
+/// `plugin.rename_plan` — el plan de renombrado que PROPONE un plugin
+/// `renamer` (0.67.0, C3, ADR 0095) para unos nombres de `dir`:
+/// [`PluginRenamePlanParams`] → [`AiRenamePlanResult`], el MISMO resultado
+/// que [`AI_RENAME_PLAN`] porque es el mismo plan por otro productor —
+/// se revisa, se comprueba (`fs.rename_batch_plan`) y se ejecuta igual.
+/// No muta nada. Abierto a cualquier actor que pase el gate de lectura de
+/// `dir`, como `plugin.column_values`; `names` tiene el tope de
+/// [`AI_RENAME_NAMES_MAX`].
+///
+/// Errores: `NotFound` si el plugin/renamer no está consentido;
+/// `Unsupported` si el guest REHÚSA — se reutiliza esa variante (no hay
+/// capacidad de provider por medio) porque los motivos del wire son
+/// vocabulario cerrado y la frase del guest es texto de un tercero: va al
+/// registro del daemon, no al cliente (#332 pide un canal de motivo);
+/// `Io` si el guest no corre. Un daemon 0.66 no negocia con este cliente.
+pub const PLUGIN_RENAME_PLAN: &str = "plugin.rename_plan";
 /// `plugin.get_config` — esquema `[config]` + valores EFECTIVOS de un plugin
 /// (0.28.0, G3c, ADR 0037): un elemento [`PluginConfigKeyWire`] por clave
 /// declarada, esquema y valor ACTUAL juntos (`schema+value together`) — un
@@ -7154,10 +7186,38 @@ pub struct UndoBlocked {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginCommandInfo {
     /// Id del comando dentro del plugin (estable; se pasa junto al id del
-    /// plugin a [`PLUGIN_RUN_COMMAND`]).
+    /// plugin a [`PLUGIN_RUN_COMMAND`], o a [`PLUGIN_RENAME_PLAN`] si es un
+    /// renamer).
     pub id: String,
     /// Título legible para mostrar. Texto del plugin — NO confiable.
     pub title: String,
+    /// Qué es (0.67.0, ADR 0095): un comando que corre, o un RENAMER que
+    /// propone un plan. Ausente en un peer 0.66 = comando, que es lo único
+    /// que había; omitido cuando es comando, así que el JSON de antes no se
+    /// mueve.
+    #[serde(default, skip_serializing_if = "PluginCommandKind::is_command")]
+    pub kind: PluginCommandKind,
+}
+
+/// Qué clase de entrada es un [`PluginCommandInfo`] (0.67.0, ADR 0095).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PluginCommandKind {
+    /// Corre por [`PLUGIN_RUN_COMMAND`] y devuelve texto.
+    #[default]
+    Command,
+    /// Propone un plan de renombrado por [`PLUGIN_RENAME_PLAN`], que se
+    /// revisa y se ejecuta como el de la IA.
+    Renamer,
+}
+
+impl PluginCommandKind {
+    /// Para `skip_serializing_if`: el valor de siempre no viaja.
+    #[must_use]
+    pub const fn is_command(&self) -> bool {
+        matches!(self, Self::Command)
+    }
 }
 
 /// Una columna que un plugin `columns` contribuye (elemento de
@@ -7651,6 +7711,25 @@ pub struct PluginDecorations {
 pub struct PluginDecorateResult {
     /// Un elemento por plugin `decorator` que decoró esta página.
     pub plugins: Vec<PluginDecorations>,
+}
+
+/// Params de [`PLUGIN_RENAME_PLAN`] (0.67.0, ADR 0095): qué renamer de qué
+/// plugin, sobre qué nombres de qué directorio.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginRenamePlanParams {
+    /// Qué plugin, por id reverse-DNS: ESE o ninguno.
+    pub plugin_id: String,
+    /// Qué renamer de los que declara ([`PluginCommandInfo::id`] con
+    /// [`PluginCommandKind::Renamer`]).
+    pub renamer_id: String,
+    /// El directorio de los nombres: es la ubicación que el guest puede leer
+    /// si se le aprobó, y contra la que el plan se comprobará después.
+    pub dir: VPath,
+    /// Los nombres sobre los que actúa el lote (lo marcado, o lo señalado),
+    /// como texto: un par del plan viaja UTF-8, así que un nombre que no lo
+    /// sea se aparta antes y el cliente lo dice.
+    pub names: Vec<String>,
 }
 
 /// Params de [`PLUGIN_COLUMN_VALUES`]: el id de columna declarado por el

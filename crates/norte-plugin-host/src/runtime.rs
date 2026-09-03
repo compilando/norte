@@ -602,6 +602,30 @@ impl PluginRuntime {
         })
     }
 
+    /// Instancia un guest RENAMER (world `norte-renamer`, ADR 0095) con el
+    /// MISMO sandbox y límites que [`Self::instantiate_columns_with_location`],
+    /// y el mismo resolutor de ubicación. Devuelve una [`RenamerInstance`].
+    ///
+    /// # Errors
+    /// Igual que [`Self::instantiate`].
+    pub fn instantiate_renamer_with_location(
+        &self,
+        wasm_path: &Path,
+        caps: Capabilities,
+        location: Option<Arc<dyn LocationHost>>,
+    ) -> Result<RenamerInstance, RuntimeError> {
+        use crate::bindings::renamer_world::NorteRenamer;
+        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        store.data_mut().location = location;
+        let bindings = NorteRenamer::instantiate(&mut store, &component, &linker)
+            .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
+        Ok(RenamerInstance {
+            store,
+            bindings,
+            epoch_deadline: self.epoch_deadline,
+        })
+    }
+
     /// Como [`Self::instantiate_provider`] pero desde los BYTES de un componente
     /// en memoria (ADR 0033: el guest FTP va EMBEBIDO en el binario de norte, ya
     /// que el target `wasm32-wasip2` puede faltar en el host de compilación).
@@ -1198,6 +1222,79 @@ pub use crate::bindings::columns_world::norte::location::location as location_if
 /// [`columns_iface::LocationRef`], el par (token, prefijo) de ADR 0057.
 pub use crate::bindings::columns_world::exports::norte::plugin::columns as columns_iface;
 use crate::bindings::columns_world::norte::location::location;
+
+/// Los tipos que la interfaz `renamer` (paquete `norte:renamer`, ADR 0095)
+/// pone en el cable: [`renamer_iface::LocationRef`] y
+/// [`renamer_iface::Proposal`].
+pub use crate::bindings::renamer_world::exports::norte::renamer::renamer as renamer_iface;
+
+/// Tope de pares que un renamer puede devolver en una llamada: el mismo
+/// número que el plan de la IA admite (`MAX_AI_PLAN_ENTRIES`), porque es el
+/// mismo plan por otro productor; por encima se rechaza ENTERO, fail-closed.
+pub const MAX_RENAME_PROPOSALS: usize = 10_000;
+
+/// Un guest `renamer` instanciado (world `norte-renamer`).
+pub struct RenamerInstance {
+    store: Store<HostState>,
+    bindings: crate::bindings::renamer_world::NorteRenamer,
+    /// Los ticks de época de CADA llamada. Ver [`PluginInstance::rearm`].
+    epoch_deadline: u64,
+}
+
+impl std::fmt::Debug for RenamerInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenamerInstance").finish_non_exhaustive()
+    }
+}
+
+impl RenamerInstance {
+    fn rearm(&mut self) {
+        self.store.set_epoch_deadline(self.epoch_deadline);
+    }
+
+    /// Los valores VALIDADOS de `[config]` que el guest verá. Llamar ANTES
+    /// de `plan`.
+    pub fn set_settings(&mut self, settings: BTreeMap<String, String>) {
+        self.store.data_mut().settings = settings;
+    }
+
+    /// Le pide al guest los pares para `names`. `Ok(Err(frase))` es el guest
+    /// rehusando con una frase para el lector; los topes se aplican
+    /// POST-retorno y rechazan entero.
+    ///
+    /// # Errors
+    /// - [`RuntimeError::Trap`] si el guest atrapa.
+    /// - [`RuntimeError::ReturnTooLarge`] si devuelve más pares que
+    ///   [`MAX_RENAME_PROPOSALS`] o más bytes que el tope de retorno.
+    pub fn plan(
+        &mut self,
+        id: &str,
+        location: Option<&renamer_iface::LocationRef>,
+        names: &[String],
+    ) -> Result<Result<Vec<renamer_iface::Proposal>, String>, RuntimeError> {
+        self.rearm();
+        let out = self
+            .bindings
+            .norte_renamer_renamer()
+            .call_plan(&mut self.store, id, location, names)
+            .map_err(|e| map_call_error(&e))?;
+        let Ok(pares) = out else {
+            return Ok(out);
+        };
+        if pares.len() > MAX_RENAME_PROPOSALS {
+            return Err(RuntimeError::ReturnTooLarge {
+                len: pares.len(),
+                cap: MAX_RENAME_PROPOSALS,
+            });
+        }
+        let total: usize = pares
+            .iter()
+            .map(|p| p.current.len() + p.proposed.len())
+            .sum();
+        cap_total_bytes(total)?;
+        Ok(Ok(pares))
+    }
+}
 
 /// Tipos del export `previewer` (record `Span`, alias `PreviewInput`) —
 /// re-exportados igual que [`provider_iface`]/[`decorator_iface`]: el

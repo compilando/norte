@@ -248,6 +248,10 @@ pub struct Falso {
     pub esquemas: HashMap<String, Vec<norte_proto::methods::PluginConfigKeyWire>>,
     /// Lo que contesta `ai.rename_plan`. `None` = el daemon falla.
     pub plan_ia: Option<Vec<(String, String)>>,
+    /// Lo que contesta `plugin.rename_plan` (C3). `None` = el daemon falla.
+    pub plan_renamer: Option<Vec<(String, String)>>,
+    /// Qué renamer se pidió, con qué nombres: `(plugin, renamer, nombres)`.
+    pub renamers_pedidos: std::sync::Mutex<Vec<(String, String, Vec<String>)>>,
     /// Lo que TARDA el modelo. Es lo que abre la ventana en la que el lector
     /// puede descartar la revisión antes de que llegue el plan.
     pub retraso_ia_ms: u64,
@@ -1754,6 +1758,32 @@ impl HostBackend for Falso {
             pulso.notify_waiters();
             let Some(pares) = plan else {
                 return Err(Error::Unsupported);
+            };
+            Ok(norte_proto::methods::AiRenamePlanResult {
+                entries: pares
+                    .into_iter()
+                    .map(|(from, to)| norte_proto::methods::AiRenameEntry { from, to })
+                    .collect(),
+            })
+        })
+    }
+
+    fn plugin_rename_plan(
+        &self,
+        plugin_id: String,
+        renamer_id: String,
+        _dir: VPath,
+        names: Vec<String>,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::AiRenamePlanResult, Error>> {
+        self.renamers_pedidos
+            .lock()
+            .expect("renamers")
+            .push((plugin_id, renamer_id, names));
+        self.latido();
+        let plan = self.plan_renamer.clone();
+        Box::pin(async move {
+            let Some(pares) = plan else {
+                return Err(Error::NotFound);
             };
             Ok(norte_proto::methods::AiRenamePlanResult {
                 entries: pares

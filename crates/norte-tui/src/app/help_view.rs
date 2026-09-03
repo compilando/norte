@@ -935,6 +935,7 @@ mod help_plugin_snapshot_tests {
             p.commands = vec![norte_proto::methods::PluginCommandInfo {
                 id: "greet".to_owned(),
                 title: titulo.to_owned(),
+                kind: norte_proto::methods::PluginCommandKind::Command,
             }];
             app.freeze_help_plugins(&[p]);
             let help = app.help.as_mut().expect("abierta");
@@ -1040,6 +1041,7 @@ mod help_plugin_snapshot_tests {
         bad.commands = vec![norte_proto::methods::PluginCommandInfo {
             id: "sync".to_owned(),
             title: "Sincronizar".to_owned(),
+            kind: norte_proto::methods::PluginCommandKind::Command,
         }];
         app.freeze_help_plugins(&[bad]);
         assert_eq!(

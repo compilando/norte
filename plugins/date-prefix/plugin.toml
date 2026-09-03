@@ -1,0 +1,19 @@
+[plugin]
+id = "org.norte.date-prefix"
+name = "Date prefix"
+publisher = "norte"
+version = "0.1.0"
+category = "renamer"
+description = "Proposes YYYY-MM-DD_name for the marked files, from each file's modification time."
+
+# One renamer. The palette lists it as a rename row; choosing it asks this
+# plugin for a plan over what is marked, and the plan is reviewed before
+# anything is renamed — the same review as the AI plan.
+[[contributions.renamer]]
+id = "by-date"
+title = "Prefix with modification date"
+
+# Read under the directory of the names, through an opaque token: `stat` is
+# all this plugin calls, to get the modification time. No root marker.
+[capabilities]
+location = "read"

@@ -12,7 +12,50 @@ use norte_i18n::{t, ta};
 use norte_proto::Error;
 
 use crate::app::{App, Modal, detail_for_bar, error_category};
-use crate::jobs::{InFlight, PendingAiPlan, RenameBatchRun};
+use crate::jobs::{AiRenameRun, InFlight, PendingAiPlan, RenameBatchRun};
+
+/// C3 (ADR 0095): pide su plan a un plugin `renamer` sobre lo marcado —o lo
+/// señalado— y lo deja en el MISMO run que el plan de la IA: el cosechado
+/// no distingue quién lo propuso, y por eso no hay un segundo camino de
+/// revisión. El operando es el del lote por plantilla
+/// (`rename_batch_names`): solo nombres que son texto, porque un par viaja
+/// UTF-8.
+pub fn spawn_renamer_plan(
+    app: &mut App,
+    backend: &Backend,
+    work: &mut InFlight,
+    id: &str,
+    renamer: &str,
+) {
+    let names = app.rename_batch_names();
+    if names.is_empty() {
+        app.message = Some(t("msg-rename-batch-nothing"));
+        return;
+    }
+    let dir = app.focused().dir().clone();
+    let b = backend.clone();
+    let d = dir.clone();
+    let (id, renamer) = (id.to_owned(), renamer.to_owned());
+    let handle = tokio::spawn(async move { b.plugin_rename_plan(&id, &renamer, &d, &names).await });
+    // Los nombres del directorio que se PLANEA (#275): el cinturón del
+    // cosechado exige que cada `from` exista donde se va a aplicar.
+    let del_dir: Vec<Vec<u8>> = app
+        .focused()
+        .entries()
+        .iter()
+        .filter_map(|e| e.path.file_name().map(|s| s.as_bytes().to_vec()))
+        .collect();
+    let run = AiRenameRun {
+        handle,
+        dir,
+        names: del_dir,
+    };
+    if let Some(old) = work.ai_rename.replace(run) {
+        old.handle.abort();
+    }
+    work.pending_ai_plan = None;
+    app.message = Some(t("msg-ai-rename-running"));
+}
 
 /// Lo que devuelve una petición spawneada: el error del backend por dentro,
 /// el del `join` por fuera (aborto por Esc, o pánico del future).

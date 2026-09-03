@@ -2660,6 +2660,72 @@ impl Backend {
         }
     }
 
+    /// El plan de renombrado que PROPONE un plugin `renamer` (C3, ADR 0095)
+    /// para `names` en `dir`: el mismo resultado que [`Self::ai_rename_plan`],
+    /// que es lo que hace que los frontends lo revisen y ejecuten por el
+    /// camino que ya tienen.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] si ese plugin/renamer no está consentido;
+    /// [`Error::Unsupported`] si el guest rehúsa (su frase va al registro:
+    /// los motivos del wire son vocabulario cerrado); [`Error::Io`] si el
+    /// guest no corre. En `Remote`, lo que conteste el daemon.
+    pub async fn plugin_rename_plan(
+        &self,
+        plugin_id: &str,
+        renamer_id: &str,
+        dir: &VPath,
+        names: &[String],
+    ) -> Result<norte_proto::methods::AiRenamePlanResult, Error> {
+        match self {
+            Self::Embedded(_) => {
+                let cfg = crate::connect::config_dir();
+                let (plugin_id, renamer_id) = (plugin_id.to_owned(), renamer_id.to_owned());
+                let (dir, names) = (dir.clone(), names.to_vec());
+                tokio::task::spawn_blocking(move || {
+                    let reg = crate::PluginRegistry::discover(&cfg)
+                        .map_err(|_| Error::Io { retryable: false })?;
+                    let Some(resolved) = reg.resolve_renamer(&plugin_id, &renamer_id) else {
+                        return Err(Error::NotFound);
+                    };
+                    let (runtime, _) = columnas_de_proceso()?;
+                    // Embebido: quien pide es la persona, el mismo caso que
+                    // `Actor::User` en el daemon — sube hasta el marcador.
+                    match crate::plugins::run_rename_plan(
+                        runtime,
+                        resolved,
+                        &renamer_id,
+                        Some(&dir),
+                        true,
+                        &names,
+                    ) {
+                        crate::plugins::RenamePlanOutcome::Plan(entries) => {
+                            Ok(norte_proto::methods::AiRenamePlanResult { entries })
+                        }
+                        // La frase del guest no tiene variante de error en el
+                        // wire (los motivos son vocabulario cerrado a
+                        // propósito): va al registro, que las dos superficies
+                        // enseñan, y el error dice que el plugin no pudo.
+                        crate::plugins::RenamePlanOutcome::Refused(frase) => {
+                            tracing::warn!(plugin = %plugin_id, motivo = %frase, "renamer: rehusó");
+                            Err(Error::Unsupported)
+                        }
+                        crate::plugins::RenamePlanOutcome::Failed => {
+                            Err(Error::Io { retryable: false })
+                        }
+                    }
+                })
+                .await
+                .map_err(|_| Error::Internal { panic: true })?
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => {
+                r.plugin_rename_plan(plugin_id, renamer_id, dir, names)
+                    .await
+            }
+        }
+    }
+
     /// Valores de la columna `column_id` para `paths` (G3b, ADR 0037
     /// decisión 2): a diferencia de [`Self::plugin_decorate`] (superposición
     /// de TODOS los decorators), como mucho UN plugin `columns` aporta
@@ -2955,6 +3021,10 @@ fn run_error_to_taxonomy(e: &crate::plugins::PluginRunError) -> Error {
         // disponible para ejecución. `NotFound` es la categoría honesta y NO
         // revela rutas (los mensajes de estos variantes llevan el id, no el path).
         E::Unknown(_) | E::NoBinary(_) | E::NotApproved(_) | E::Disabled(_) => Error::NotFound,
+        // Un kind sin `command`: ese plugin no tiene la capacidad que se le
+        // pide, que es lo que `Unsupported` dice (el daemon lo devuelve como
+        // `INVALID_PARAMS`, con el mismo sentido).
+        E::NotRunnable(_) => Error::Unsupported,
         // Fallo del runtime: redactado, sin filtrar el detalle al frontend.
         E::Runtime(_) => Error::Internal { panic: false },
     }

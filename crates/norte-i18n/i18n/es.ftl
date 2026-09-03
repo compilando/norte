@@ -718,6 +718,9 @@ settings-hint-gui = [↑/↓/pgup/pgdn/click] navegar · [enter/click] editar ·
 # ninguna fila built-in lo lleva, así que un plugin no puede disfrazarse de
 # comando built-in copiando su texto exacto.
 palette-plugin-prefix = extensión
+# Una fila de RENAMER (C3, ADR 0095): propone un plan de renombrado que se
+# revisa como el de la IA. Otro rótulo porque hace otra cosa.
+palette-renamer-prefix = renombrar
 theme-picker-title = Tema
 columns-picker-title = Columnas — { $target }
 columns-picker-target-default = todos los schemes

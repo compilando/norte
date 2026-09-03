@@ -709,6 +709,9 @@ settings-hint-gui = [↑/↓/pgup/pgdn/click] navigate · [enter/click] edit · 
 # built-in row ever carries it, so a plugin cannot spoof a built-in command
 # by copying its exact display text.
 palette-plugin-prefix = extension
+# A RENAMER row (C3, ADR 0095): proposes a rename plan that is reviewed like
+# the AI's. A different label because it does a different thing.
+palette-renamer-prefix = rename
 theme-picker-title = Theme
 columns-picker-title = Columns — { $target }
 columns-picker-target-default = all schemes

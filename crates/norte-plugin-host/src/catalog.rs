@@ -407,13 +407,14 @@ impl Catalog {
     /// ordenada del gestor (ADR 0022 D5). Solo categorías con algún plugin.
     #[must_use]
     pub fn by_category(&self) -> Vec<(Category, Vec<&PluginEntry>)> {
-        const ORDER: [Category; 6] = [
+        const ORDER: [Category; 7] = [
             Category::Previewer,
             Category::Provider,
             Category::Command,
             Category::Columns,
             Category::Hook,
             Category::Decorator,
+            Category::Renamer,
         ];
         ORDER
             .into_iter()

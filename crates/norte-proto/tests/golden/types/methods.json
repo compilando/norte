@@ -788,6 +788,15 @@
     ],
     "plugin_id": "org.norte.git"
   },
+  "plugin_rename_plan_params": {
+    "dir": "file:///home/user/fotos",
+    "names": [
+      "a.jpg",
+      "b.jpg"
+    ],
+    "plugin_id": "org.norte.date-prefix",
+    "renamer_id": "by-date"
+  },
   "plugin_column_values_result": {
     "values": [
       "modified",
@@ -797,6 +806,11 @@
   "plugin_command_info": {
     "id": "greet",
     "title": "Greet"
+  },
+  "plugin_command_info_renamer": {
+    "id": "by-date",
+    "kind": "renamer",
+    "title": "Rename by date"
   },
   "plugin_config_key_wire_bare": {
     "default": "hola",

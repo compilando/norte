@@ -297,6 +297,7 @@ mod palette_tests {
             commands: vec![norte_proto::methods::PluginCommandInfo {
                 id: "greet".into(),
                 title: "Greet loudly".into(),
+                kind: norte_proto::methods::PluginCommandKind::Command,
             }],
             columns: Vec::new(),
             has_help: false,

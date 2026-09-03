@@ -1177,7 +1177,9 @@ fn golden_methods() {
     // `plugin_preview_styled_params_columns`. Fixturas APARTE porque los dos
     // campos se omiten cuando faltan: las de antes prueban que el wire viejo
     // no se movió, estas que el nuevo existe.
-    assert_eq!(fixtures.len(), 198, "[methods.json] fixtures sin caso Rust");
+    // 198 → 200 en 0.67.0 (ADR 0095): + `plugin_command_info_renamer` y
+    // `plugin_rename_plan_params`.
+    assert_eq!(fixtures.len(), 200, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -2032,7 +2034,8 @@ fn check_methods_plugin_help(fixtures: &BTreeMap<String, Value>) {
 #[allow(clippy::too_many_lines)]
 fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
-        PluginColumnInfo, PluginCommandInfo, PluginInfo, PluginListResult, PluginLoadError,
+        PluginColumnInfo, PluginCommandInfo, PluginCommandKind, PluginInfo, PluginListResult,
+        PluginLoadError,
     };
     check_one(
         fixtures,
@@ -2040,6 +2043,18 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
         &PluginCommandInfo {
             id: "greet".into(),
             title: "Greet".into(),
+            kind: PluginCommandKind::Command,
+        },
+    );
+    // 0.67.0 (ADR 0095): un renamer entre los comandos, con su `kind`. La
+    // fixtura de arriba prueba que un comando sigue sin llevarlo.
+    check_one(
+        fixtures,
+        "plugin_command_info_renamer",
+        &PluginCommandInfo {
+            id: "by-date".into(),
+            title: "Rename by date".into(),
+            kind: PluginCommandKind::Renamer,
         },
     );
     check_one(
@@ -2088,10 +2103,12 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
                 PluginCommandInfo {
                     id: "greet".into(),
                     title: "Greet".into(),
+                    kind: PluginCommandKind::Command,
                 },
                 PluginCommandInfo {
                     id: "wave".into(),
                     title: "Wave".into(),
+                    kind: PluginCommandKind::Command,
                 },
             ],
             columns: vec![PluginColumnInfo {
@@ -2604,6 +2621,18 @@ fn check_methods_plugin_decorate_and_columns(fixtures: &BTreeMap<String, Value>)
             column_id: "status".into(),
             paths: vec![vpath("file:///repo/a.rs")],
             plugin_id: Some("org.norte.git".into()),
+        },
+    );
+    // 0.67.0 (ADR 0095): el plan de un renamer. El result es el de la IA y
+    // ya tiene su fixtura.
+    check_one(
+        fixtures,
+        "plugin_rename_plan_params",
+        &norte_proto::methods::PluginRenamePlanParams {
+            plugin_id: "org.norte.date-prefix".into(),
+            renamer_id: "by-date".into(),
+            dir: vpath("file:///home/user/fotos"),
+            names: vec!["a.jpg".into(), "b.jpg".into()],
         },
     );
     check_one(
@@ -3939,6 +3968,7 @@ fn method_names_frozen() {
     assert_eq!(methods::PLUGIN_PREVIEW_STYLED, "plugin.preview_styled");
     assert_eq!(methods::PLUGIN_DECORATE, "plugin.decorate");
     assert_eq!(methods::PLUGIN_COLUMN_VALUES, "plugin.column_values");
+    assert_eq!(methods::PLUGIN_RENAME_PLAN, "plugin.rename_plan");
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
     // 0.34.0 (H3e): el tope de `PluginHelpResult::markdown`. El LITERAL, no el
@@ -4257,7 +4287,7 @@ fn method_names_frozen() {
     // 0.66.0 (D4): ningún método nuevo — dos campos opcionales, `SpanWire::bg`
     // y `PluginPreviewStyledParams::columns`, para el previewer de imagen que
     // pinta medios bloques y necesita saber a cuántas celdas encoger.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.66.0");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.67.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

@@ -57,3 +57,17 @@ pub mod columns_world {
         },
     });
 }
+
+pub mod renamer_world {
+    wasmtime::component::bindgen!({
+        world: "norte:renamer/norte-renamer",
+        path: "wit",
+        with: {
+            "norte:host/host-log": crate::bindings::norte::host::host_log,
+            "norte:host/host-config": crate::bindings::norte::host::host_config,
+            // La MISMA interfaz de ubicación que el world de columnas: un
+            // solo `LocationHost` la sirve a los dos.
+            "norte:location/location": crate::bindings::columns_world::norte::location::location,
+        },
+    });
+}

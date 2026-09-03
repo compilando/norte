@@ -15,6 +15,7 @@ gate red.
 | `media-info/` | `org.norte.media-info` | columns | `dims` for PNG/JPEG/GIF/WebP and `duration` for WAV/MP3/FLAC, from at most 64 KiB of header read under the location token. |
 | `markdown/` | `org.norte.markdown` | previewer | `text/markdown` as styled lines: headings, emphasis, code, lists, quotes, links. |
 | `image-ansi/` | `org.norte.image-ansi` | previewer | PNG, JPEG and GIF as `▀` half-block cells, two pixels per cell (`fg` + `bg`), shrunk to the viewer's width. |
+| `date-prefix/` | `org.norte.date-prefix` | renamer | Proposes `YYYY-MM-DD_name` for the marked files from each one's modification time, read with `stat` under the location token; the plan is reviewed like the AI plan before anything is renamed. |
 
 The syntax-highlighting previewer (`org.norte.syntect`) lives with the host's
 example guests, in `crates/norte-plugin-host/examples-wasm/previewer-syntect/`.

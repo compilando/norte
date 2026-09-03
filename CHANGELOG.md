@@ -9,6 +9,34 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **Protocol 0.67.0, `norte:renamer@0.1.0`: a plugin can propose a batch
+  rename.** A sixth plugin kind, `renamer` (ADR 0095): the plugin gets the
+  marked names (and, with `location = "read"`, a token to `stat` or read
+  them) and returns `{ current, proposed }` pairs. It never renames: the
+  plan goes through the review the AI plan already has, in both frontends,
+  and from there through `fs.rename_batch` with the core checking every
+  target, the journal and undo. The package is its own
+  (`wit/deps/renamer/renamer.wit`, world `norte-renamer`) so adding it did
+  not move `norte:plugin` and no installed previewer needs a rebuild. On the
+  wire, `plugin.rename_plan` takes `{ plugin_id, renamer_id, dir, names }`
+  and answers the existing `AiRenamePlanResult`; a renamer appears in
+  `PluginInfo.commands` with the new `PluginCommandInfo.kind = "renamer"`,
+  omitted when `command`, so a 0.66 client lists it as a command it cannot
+  run and a 0.67 client shows it in the palette under `[rename]`. The
+  manifest gains `[[contributions.renamer]] id, title` (digest tag 6). The
+  host caps a plan at 10 000 proposals and the usual byte budget; the core
+  drops identity pairs and names it did not ask about. The demo is
+  **`org.norte.date-prefix`** (`plugins/date-prefix`, `just
+  plugin-date-prefix`): `YYYY-MM-DD_name` from each file's modification
+  time, leaving already-dated names alone, and refusing with a sentence
+  instead of guessing when it has no location. The gate installs it and
+  runs a plan over real files. Two things the protocol review added:
+  `plugin.rename_plan` caps `names` like `ai.rename_plan`, and
+  `plugin.run_command` on a plugin whose kind does not export `command`
+  (decorator, columns, provider, renamer) answers `INVALID_PARAMS` before
+  instantiating anything, where it used to burn a wasm instantiation and
+  answer "internal error". The guest's refusal sentence stays in the
+  daemon log for now (#332).
 - **Protocol 0.66.0, `norte:plugin` 0.8.0 → 0.9.0, bridge 50: a span has a
   background and the viewer says how wide it is.** `SpanWire` gains
   `bg: [r, g, b]` and `plugin.preview_styled` takes `columns`, both optional

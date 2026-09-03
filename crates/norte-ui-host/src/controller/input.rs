@@ -514,6 +514,11 @@ impl Estado {
                         None if cmd.starts_with("plugin:") => {
                             self.ejecutar_de_plugin(&cmd, backend, buzon)
                         }
+                        // Una fila de RENAMER (C3, ADR 0095): pide el plan y lo
+                        // mete en la MISMA revisión que el de la IA.
+                        None if cmd.starts_with("renamer:") => {
+                            self.ejecutar_de_renamer(&cmd, backend, buzon)
+                        }
                         None => self.no_implementado(&cmd),
                     };
                     let mut envios = vec![cierre];

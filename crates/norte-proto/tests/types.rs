@@ -1303,10 +1303,10 @@ fn version_ventana_actual() {
     // `columns`, así que el guest elige un ancho que el visor recorta. Ni
     // error ni aviso — que es la pérdida silenciosa que la ventana N/N-1
     // permite y N-2 no.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.66.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.65.0"), "N-1");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.67.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.66.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.64.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.65.9"),
         "N-2 fuera de la ventana"
     );
 }

@@ -1,0 +1,56 @@
+// `norte:renamer` (C3 del plan de plugins, ADR 0095): un plugin PROPONE
+// pares de nombres y el core los ejecuta como un lote de renombrado — la
+// misma forma que el plan de la IA (`ai.rename_plan`) y que la plantilla
+// (#310): revisión con el humano delante, `plan_hash`, journal y undo. Lo
+// que hace segura la operación no es de dónde salieron los nombres.
+//
+// Paquete propio y no una interfaz más de `norte:plugin`, por lo mismo que
+// `norte:location` (ADR 0041 decisión 4, ADR 0094): la versión del paquete
+// viaja dentro del nombre de cada interfaz, y un cambio aquí no puede
+// invalidar a los previewers de terceros. Empieza en 0.1.0 y sube por su
+// cuenta.
+package norte:renamer@0.1.0;
+
+/// Un proponente de nombres. Recibe los nombres sobre los que actúa el lote
+/// —lo marcado, o lo señalado— y devuelve los pares `(de, a)` que quiere
+/// cambiar. Solo esos: un nombre que no aparece se queda como está, y un par
+/// de identidad se descarta en el host.
+interface renamer {
+    /// La ubicación que el host abrió para esta llamada (el directorio de
+    /// los nombres), para un guest al que se le aprobó la capacidad
+    /// `location`: el token opaco con el que se lee (`norte:location`) y el
+    /// `prefix` relativo a la raíz abierta. `none` = no se le aprobó, o el
+    /// host no pudo abrirlo. Un guest que reciba `none` tiene que seguir
+    /// contestando —con lo que sepa del nombre solo— en vez de fallar.
+    record location-ref {
+        token: string,
+        prefix: list<u8>,
+    }
+
+    /// Un par: el nombre que hay y el que se propone. Texto y no bytes a
+    /// propósito: un par del plan viaja UTF-8 por protocolo, así que un
+    /// nombre que no lo sea no puede formar parte de un lote — el host lo
+    /// aparta ANTES de llamar, como hace con la plantilla. (`from` es
+    /// palabra reservada de WIT; de ahí los nombres.)
+    record proposal {
+        current: string,
+        proposed: string,
+    }
+
+    /// `id` es el renamer del manifiesto que se pidió (un plugin puede
+    /// aportar varios: «por fecha EXIF», «por título ID3»). Un `err` es
+    /// una frase para el lector: el plan no se abre y se dice por qué.
+    plan: func(id: string, location: option<location-ref>,
+               names: list<string>) -> result<list<proposal>, string>;
+}
+
+/// El world de un plugin `renamer`: importa lo mismo que `norte-columns`
+/// —el registro, la configuración y la ubicación— y exporta `renamer`.
+world norte-renamer {
+    import norte:host/host-log@0.1.0;
+    import norte:host/host-config@0.1.0;
+    // Importado SIEMPRE, como en `norte-columns`: el linker lo ofrece a todo
+    // guest y lo que decide si SIRVE algo es la capacidad aprobada.
+    import norte:location/location@0.2.0;
+    export renamer;
+}

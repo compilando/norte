@@ -96,9 +96,20 @@ pub fn plugin_rows(plugins: &[norte_proto::methods::PluginInfo]) -> Vec<Row> {
             let plugin_id = p.id.clone();
             p.commands.iter().map(move |c| {
                 let (title, masked) = crate::display_name(c.title.as_bytes());
+                // Un RENAMER (C3, ADR 0095) es otra clase de fila: su clave
+                // lleva otro prefijo, porque despacha a `plugin.rename_plan`
+                // y no a `plugin.run_command`, y su rótulo dice qué hace.
+                let (prefijo, etiqueta) = match c.kind {
+                    norte_proto::methods::PluginCommandKind::Command => {
+                        ("plugin", t("palette-plugin-prefix"))
+                    }
+                    norte_proto::methods::PluginCommandKind::Renamer => {
+                        ("renamer", t("palette-renamer-prefix"))
+                    }
+                };
                 Row {
-                    key: format!("plugin:{plugin_id}:{}", c.id),
-                    text: format!("[{}] {title}", t("palette-plugin-prefix")),
+                    key: format!("{prefijo}:{plugin_id}:{}", c.id),
+                    text: format!("[{etiqueta}] {title}"),
                     desc: desc.clone(),
                     chord: "—".to_owned(),
                     hostile: masked || desc_masked,
@@ -138,6 +149,15 @@ pub fn plugin_rows(plugins: &[norte_proto::methods::PluginInfo]) -> Vec<Row> {
 pub fn parse_plugin_key(cmd: &str) -> Option<(&str, &str)> {
     let (id, command) = cmd.strip_prefix("plugin:")?.split_once(':')?;
     (!id.is_empty()).then_some((id, command))
+}
+
+/// The `(plugin id, renamer id)` of a `renamer:{id}:{renamer}` palette key
+/// (C3, ADR 0095), or `None` for anything else — a plugin COMMAND key
+/// included: the two dispatch to different methods.
+#[must_use]
+pub fn parse_renamer_key(cmd: &str) -> Option<(&str, &str)> {
+    let (id, renamer) = cmd.strip_prefix("renamer:")?.split_once(':')?;
+    (!id.is_empty() && !renamer.is_empty()).then_some((id, renamer))
 }
 
 /// The FIRST chord (in `eff.bindings()`'s precedence order) that resolves
@@ -203,6 +223,7 @@ mod tests {
                 .map(|(cid, title)| norte_proto::methods::PluginCommandInfo {
                     id: cid.into(),
                     title: title.into(),
+                    kind: norte_proto::methods::PluginCommandKind::Command,
                 })
                 .collect(),
             columns: Vec::new(),

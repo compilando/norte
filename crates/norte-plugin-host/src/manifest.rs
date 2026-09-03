@@ -32,6 +32,10 @@ pub enum Category {
     /// Decora entradas visibles con un badge/rol tipo "git status" (ADR
     /// 0037 decisión 2, interfaz WIT `decorator`, world `norte-decorator`).
     Decorator,
+    /// Propone pares de renombrado para un lote (C3, ADR 0095, interfaz WIT
+    /// `renamer` del paquete `norte:renamer`, world `norte-renamer`). El
+    /// core los ejecuta por el mismo camino que el plan de la IA.
+    Renamer,
 }
 
 impl Category {
@@ -45,6 +49,7 @@ impl Category {
             Category::Columns => "columns",
             Category::Hook => "hook",
             Category::Decorator => "decorator",
+            Category::Renamer => "renamer",
         }
     }
 
@@ -61,6 +66,8 @@ impl Category {
             Category::Columns => 3,
             Category::Hook => 4,
             Category::Decorator => 5,
+            // Nuevo al final (ADR 0095), como `Decorator` en su día.
+            Category::Renamer => 6,
         }
     }
 }
@@ -106,6 +113,19 @@ pub struct ProviderContrib {
     /// el digest de aprobación como el scheme.
     #[serde(default, rename = "default-port")]
     pub default_port: Option<u16>,
+}
+
+/// Un renamer declarado (C3, ADR 0095): un proponente de nombres con su id
+/// y su título. Un plugin puede aportar varios («por fecha EXIF», «por
+/// título ID3»); el id es lo que viaja a `renamer.plan` y el título lo que
+/// la paleta enseña.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenamerContrib {
+    /// Id estable dentro del plugin.
+    pub id: String,
+    /// Título legible. Texto del plugin — NO confiable.
+    pub title: String,
 }
 
 /// Un hook declarado: el evento al que engancha.
@@ -158,6 +178,10 @@ pub struct Contributions {
     /// resetean por la sola introducción del campo).
     #[serde(default)]
     pub decorator: Vec<DecoratorContrib>,
+    /// Renamers (C3, ADR 0095). Aditivo y con default, como los demás: los
+    /// manifiestos anteriores no lo traen y su digest no se mueve.
+    #[serde(default)]
+    pub renamer: Vec<RenamerContrib>,
 }
 
 impl Contributions {
@@ -203,6 +227,19 @@ impl Contributions {
         h.update((self.hook.len() as u64).to_le_bytes());
         for c in &self.hook {
             update_str(h, &c.on);
+        }
+        // Los renamers, DETRÁS y solo si hay: un manifiesto sin ninguno
+        // digesta exactamente lo que digestaba antes de que existieran, y
+        // ninguna aprobación se resetea por su sola introducción. Con alguno,
+        // el separador fijo y cada par id/título, como los comandos: cambiar
+        // qué propone un plugin es cambiar lo aprobado.
+        if !self.renamer.is_empty() {
+            h.update(b"renamer:\n");
+            h.update((self.renamer.len() as u64).to_le_bytes());
+            for c in &self.renamer {
+                update_str(h, &c.id);
+                update_str(h, &c.title);
+            }
         }
     }
 }

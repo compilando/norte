@@ -15305,6 +15305,7 @@ async fn la_paleta_ejecuta_un_comando_de_extension_y_ensena_su_salida() {
     ext.commands = vec![norte_proto::methods::PluginCommandInfo {
         id: "greet".to_owned(),
         title: "Saludar".to_owned(),
+        kind: norte_proto::methods::PluginCommandKind::Command,
     }];
     let backend = arbol_con_plugins(vec![ext], &[]);
     *backend.salida_de_comando.lock().expect("salida") =
@@ -15368,6 +15369,96 @@ async fn la_paleta_ejecuta_un_comando_de_extension_y_ensena_su_salida() {
     );
 }
 
+/// C3 (ADR 0095): una fila de RENAMER en la paleta pide el plan al plugin
+/// sobre lo marcado y lo mete en la MISMA revisión que el plan de la IA —
+/// con el veredicto del core en su viaje— sin que ningún modelo entre en
+/// juego.
+#[tokio::test]
+async fn la_paleta_pide_el_plan_a_un_renamer_y_lo_revisa_como_el_de_la_ia() {
+    let pares = [("ep1.mkv", "2026-09-03_ep1.mkv")];
+    let mut ext = extension("org.norte.date-prefix", "Date prefix", false);
+    ext.commands = vec![norte_proto::methods::PluginCommandInfo {
+        id: "by-date".to_owned(),
+        title: "Rename by date".to_owned(),
+        kind: norte_proto::methods::PluginCommandKind::Renamer,
+    }];
+    let mut f = Falso::default();
+    f.pon(
+        "mem:///casa",
+        pares
+            .iter()
+            .map(|(from, _)| (from.as_bytes().to_vec(), false))
+            .collect::<Vec<_>>(),
+    );
+    f.plan_renamer = Some(
+        pares
+            .iter()
+            .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+            .collect(),
+    );
+    f.veredicto = Some(veredicto_ok(&pares));
+    *f.plugins.lock().expect("plugins") = vec![ext];
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    // Marcar el fichero: el renamer actúa sobre lo marcado.
+    por_la_paleta(&h, &mut sub, "mark.all").await;
+    h.dispatch(tecla_mod("p", true, false))
+        .await
+        .expect("host vivo");
+    let mut llego = false;
+    for _ in 0..2_000 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let p = siguiente_foto(&mut sub).await.palette.expect("abierta");
+        if p.rows.iter().any(|r| r.text.contains("Rename by date")) {
+            llego = true;
+            break;
+        }
+    }
+    assert!(llego, "la fila del renamer nunca llegó");
+    for c in "Rename by date".chars() {
+        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+    }
+    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    let p = siguiente_foto(&mut sub).await.palette.expect("abierta");
+    assert_eq!(p.rows.len(), 1, "{p:?}");
+    // El rótulo sale del catálogo GLOBAL del proceso (como el de los
+    // comandos de extensión), así que aquí vale en cualquiera de los dos.
+    assert!(
+        p.rows[0].text.starts_with("[renombrar]") || p.rows[0].text.starts_with("[rename]"),
+        "otro rótulo que un comando: {}",
+        p.rows[0].text
+    );
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+
+    let mut v = siguiente_revision(&mut sub)
+        .await
+        .expect("abre la revisión");
+    assert_eq!(v.pairs[0].from.text, "ep1.mkv");
+    assert_eq!(v.pairs[0].to.text, "2026-09-03_ep1.mkv");
+    for _ in 0..40 {
+        if v.confirmable {
+            break;
+        }
+        v = siguiente_revision(&mut sub).await.expect("sigue abierta");
+    }
+    assert!(v.confirmable, "el core dio su veredicto");
+    let pedidos = backend.renamers_pedidos.lock().expect("mutex").clone();
+    assert_eq!(
+        pedidos,
+        vec![(
+            "org.norte.date-prefix".to_owned(),
+            "by-date".to_owned(),
+            vec!["ep1.mkv".to_owned()]
+        )]
+    );
+    assert!(
+        backend.instrucciones.lock().expect("mutex").is_empty(),
+        "al modelo no se le pidió nada"
+    );
+}
+
 /// En solo lectura la paleta NO ofrece comandos de extensión.
 ///
 /// Lo que hace un comando lo decide el PLUGIN: puede escribir. Una ventana
@@ -15380,6 +15471,7 @@ async fn en_solo_lectura_no_se_ejecuta_un_comando_de_extension() {
     ext.commands = vec![norte_proto::methods::PluginCommandInfo {
         id: "greet".to_owned(),
         title: "Saludar".to_owned(),
+        kind: norte_proto::methods::PluginCommandKind::Command,
     }];
     let backend = arbol_con_plugins(vec![ext], &[]);
     let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
@@ -15482,6 +15574,7 @@ async fn la_salida_de_un_comando_no_deja_pasar_teclas() {
     ext.commands = vec![norte_proto::methods::PluginCommandInfo {
         id: "greet".to_owned(),
         title: "Saludar".to_owned(),
+        kind: norte_proto::methods::PluginCommandKind::Command,
     }];
     let backend = arbol_con_plugins(vec![ext], &[]);
     *backend.salida_de_comando.lock().expect("salida") = Some(Ok("hola".to_owned()));

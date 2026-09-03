@@ -2725,6 +2725,11 @@ async fn dispatch(
         methods::PLUGIN_COLUMN_VALUES => {
             handle_plugin_column_values(req.params, &conn.actor, shared).await
         }
+        // plugin.rename_plan (C3, ADR 0095): un plan, no una mutación —
+        // abierto con el gate de lectura sobre `dir`, como `column_values`.
+        methods::PLUGIN_RENAME_PLAN => {
+            handle_plugin_rename_plan(req.params, &conn.actor, shared).await
+        }
         // plugin.get_config (G3c): ABIERTO, mismo criterio que plugin.list.
         // plugin.set_config (G3c): SOLO humanos, mismo criterio que
         // plugin.set_approval/set_enabled — ajustes de plugin son datos de
@@ -3626,7 +3631,9 @@ fn run_error_to_rpc(e: &crate::plugins::PluginRunError) -> RpcError {
     match e {
         // Id inexistente o sin binario: error de PARÁMETRO (el cliente pidió
         // algo que no existe/no es ejecutable).
-        E::Unknown(_) | E::NoBinary(_) => RpcError::protocol(codes::INVALID_PARAMS, e.to_string()),
+        E::Unknown(_) | E::NotRunnable(_) | E::NoBinary(_) => {
+            RpcError::protocol(codes::INVALID_PARAMS, e.to_string())
+        }
         // Sin aprobar / desactivado: la petición no es válida en este estado
         // (el humano no ha consentido). INVALID_REQUEST con mensaje claro.
         E::NotApproved(_) | E::Disabled(_) => {
@@ -3862,6 +3869,63 @@ fn read_gate_all(
         read_gate(actor, path, shared)?;
     }
     Ok(())
+}
+
+/// `plugin.rename_plan` (C3, ADR 0095): el plan que PROPONE el renamer
+/// `renamer_id` del plugin `plugin_id` para `names` en `dir`. Devuelve el
+/// MISMO tipo que `ai.rename_plan`: los frontends lo revisan y lo ejecutan
+/// por `fs.rename_batch_plan` / `fs.rename_batch`, donde están la
+/// comprobación, la política y el journal. Esto no muta nada.
+///
+/// Gate de LECTURA sobre `dir` (#80): un agente sin scope no le pasa a un
+/// plugin un directorio que no puede leer, ni recibe un plan que le cuente
+/// qué hay dentro. Sin permiso de ubicación —imposible aquí, porque el
+/// gate ya cerró— el plugin correría sin token.
+#[tracing::instrument(skip_all)]
+async fn handle_plugin_rename_plan(
+    params: Option<serde_json::Value>,
+    actor: &Actor,
+    shared: &Arc<Shared>,
+) -> Result<serde_json::Value, RpcError> {
+    let p: methods::PluginRenamePlanParams = parse_params(params)?;
+    read_gate(actor, &p.dir, shared)?;
+    // El MISMO tope que `ai.rename_plan`: `names` llega de fuera, y el cap
+    // del guest (`MAX_RENAME_PROPOSALS`) acota lo que SALE, no lo que entra.
+    if p.names.len() > methods::AI_RENAME_NAMES_MAX {
+        return Err(RpcError::protocol(
+            codes::INVALID_PARAMS,
+            format!("names supera {}", methods::AI_RENAME_NAMES_MAX),
+        ));
+    }
+    let resolved = {
+        let reg = shared.plugins.lock().expect("plugins lock sano");
+        reg.resolve_renamer(&p.plugin_id, &p.renamer_id)
+    };
+    let Some(resolved) = resolved else {
+        return Err(RpcError::from(norte_proto::Error::NotFound));
+    };
+    let runtime = Arc::clone(&shared.plugin_runtime);
+    let climb = matches!(actor, Actor::User);
+    let (plugin_id, renamer_id, dir, names) = (p.plugin_id, p.renamer_id, p.dir, p.names);
+    let salida = tokio::task::spawn_blocking(move || {
+        crate::plugins::run_rename_plan(&runtime, resolved, &renamer_id, Some(&dir), climb, &names)
+    })
+    .await
+    .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "rename plan task panicked"))?;
+    match salida {
+        crate::plugins::RenamePlanOutcome::Plan(entries) => {
+            to_value(&methods::AiRenamePlanResult { entries })
+        }
+        // La frase del guest va al registro —las dos superficies lo
+        // enseñan—; el wire no tiene variante con motivo libre a propósito.
+        crate::plugins::RenamePlanOutcome::Refused(frase) => {
+            tracing::warn!(plugin = %plugin_id, motivo = %frase, "renamer: rehusó");
+            Err(RpcError::from(norte_proto::Error::Unsupported))
+        }
+        crate::plugins::RenamePlanOutcome::Failed => {
+            Err(RpcError::from(norte_proto::Error::Io { retryable: false }))
+        }
+    }
 }
 
 /// La ubicación que se le acuña a un plugin de columnas: el directorio padre

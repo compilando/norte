@@ -3123,8 +3123,12 @@
       "description": "Un comando de plugin invocable (elemento de [`PluginInfo::commands`],\nP1): espejo minimal, solo-lectura, de la contribución `command` del\nmanifiesto (`CommandContrib` en `norte-plugin-host`) — lo que un\nfrontend necesita para listar el comando (paleta, gestor de\nextensiones), no para ejecutarlo. `title` es texto suministrado por el\nplugin: NO CONFIABLE, un frontend debe enmascararlo antes de\nrenderizarlo (mismo trato que `PluginInfo::name`).\n\n```\nuse norte_proto::methods::PluginCommandInfo;\nlet c: PluginCommandInfo =\n    serde_json::from_str(r#\"{\"id\":\"greet\",\"title\":\"Greet\"}\"#).unwrap();\nassert_eq!(c.id, \"greet\");\nassert_eq!(c.title, \"Greet\");\n```",
       "properties": {
         "id": {
-          "description": "Id del comando dentro del plugin (estable; se pasa junto al id del\nplugin a [`PLUGIN_RUN_COMMAND`]).",
+          "description": "Id del comando dentro del plugin (estable; se pasa junto al id del\nplugin a [`PLUGIN_RUN_COMMAND`], o a [`PLUGIN_RENAME_PLAN`] si es un\nrenamer).",
           "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/PluginCommandKind",
+          "description": "Qué es (0.67.0, ADR 0095): un comando que corre, o un RENAMER que\npropone un plan. Ausente en un peer 0.66 = comando, que es lo único\nque había; omitido cuando es comando, así que el JSON de antes no se\nmueve."
         },
         "title": {
           "description": "Título legible para mostrar. Texto del plugin — NO confiable.",
@@ -3136,6 +3140,21 @@
         "title"
       ],
       "type": "object"
+    },
+    "PluginCommandKind": {
+      "description": "Qué clase de entrada es un [`PluginCommandInfo`] (0.67.0, ADR 0095).",
+      "oneOf": [
+        {
+          "const": "command",
+          "description": "Corre por [`PLUGIN_RUN_COMMAND`] y devuelve texto.",
+          "type": "string"
+        },
+        {
+          "const": "renamer",
+          "description": "Propone un plan de renombrado por [`PLUGIN_RENAME_PLAN`], que se\nrevisa y se ejecuta como el de la IA.",
+          "type": "string"
+        }
+      ]
     },
     "PluginConfigKeyWire": {
       "description": "Una clave `[config.<key>]` del esquema de un plugin, esquema + valor\nEFECTIVO juntos (elemento de [`PluginGetConfigResult::keys`], 0.28.0,\nG3c, ADR 0037): mismo criterio \"schema+value together\" que evita una\nsegunda ida y vuelta al wire para pintar la UI de ajustes. `kind` es\ntexto CERRADO (`\"string\"|\"bool\"|\"int\"|\"enum\"` — los cuatro únicos que\n`norte_plugin_host::ConfigKeySpec` declara); un frontend que ve un valor\ndesconocido (peer más nuevo) debe tratarlo como no-editable, jamás\nreventar. `default`/`value` viajan como `String` SIEMPRE (la MISMA\ncodificación canónica que `norte_plugin_host::resolve_settings`: `bool`\n→ `\"true\"`/`\"false\"`, `int` → decimal), coherente con\n[`PluginSetConfigParams::value`], que también es `String`.\n\n```\nuse norte_proto::methods::PluginConfigKeyWire;\nlet k: PluginConfigKeyWire = serde_json::from_str(\n    r#\"{\"key\":\"greeting\",\"kind\":\"string\",\"default\":\"hola\",\"value\":\"hola\"}\"#,\n)\n.unwrap();\nassert_eq!(k.key, \"greeting\");\nassert_eq!(k.kind, \"string\");\nassert!(k.min.is_none());\nassert!(k.values.is_empty());\n```",
@@ -3598,6 +3617,37 @@
           "type": "string"
         }
       },
+      "type": "object"
+    },
+    "PluginRenamePlanParams": {
+      "description": "Params de [`PLUGIN_RENAME_PLAN`] (0.67.0, ADR 0095): qué renamer de qué\nplugin, sobre qué nombres de qué directorio.",
+      "properties": {
+        "dir": {
+          "$ref": "#/$defs/VPath",
+          "description": "El directorio de los nombres: es la ubicación que el guest puede leer\nsi se le aprobó, y contra la que el plan se comprobará después."
+        },
+        "names": {
+          "description": "Los nombres sobre los que actúa el lote (lo marcado, o lo señalado),\ncomo texto: un par del plan viaja UTF-8, así que un nombre que no lo\nsea se aparta antes y el cliente lo dice.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "plugin_id": {
+          "description": "Qué plugin, por id reverse-DNS: ESE o ninguno.",
+          "type": "string"
+        },
+        "renamer_id": {
+          "description": "Qué renamer de los que declara ([`PluginCommandInfo::id`] con\n[`PluginCommandKind::Renamer`]).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin_id",
+        "renamer_id",
+        "dir",
+        "names"
+      ],
       "type": "object"
     },
     "PluginRunCommandParams": {
@@ -5872,6 +5922,9 @@
     "plugin_command_info": {
       "$ref": "#/$defs/PluginCommandInfo"
     },
+    "plugin_command_kind": {
+      "$ref": "#/$defs/PluginCommandKind"
+    },
     "plugin_config_key_wire": {
       "$ref": "#/$defs/PluginConfigKeyWire"
     },
@@ -5925,6 +5978,9 @@
     },
     "plugin_preview_styled_result": {
       "$ref": "#/$defs/PluginPreviewStyledResult"
+    },
+    "plugin_rename_plan_params": {
+      "$ref": "#/$defs/PluginRenamePlanParams"
     },
     "plugin_run_command_params": {
       "$ref": "#/$defs/PluginRunCommandParams"
@@ -6225,9 +6281,11 @@
     "plugin_column_values_params",
     "plugin_column_values_result",
     "plugin_command_info",
+    "plugin_command_kind",
     "plugin_config_key_wire",
     "plugin_decorate_params",
     "plugin_decorate_result",
+    "plugin_rename_plan_params",
     "plugin_decorations",
     "plugin_get_config_params",
     "plugin_get_config_result",

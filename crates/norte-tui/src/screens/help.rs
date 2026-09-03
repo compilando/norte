@@ -968,6 +968,7 @@ mod help_key_tests {
             commands: vec![norte_proto::methods::PluginCommandInfo {
                 id: "sync".into(),
                 title: "Sincronizar".into(),
+                kind: norte_proto::methods::PluginCommandKind::Command,
             }],
             columns: Vec::new(),
             has_help: true,

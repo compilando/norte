@@ -26,7 +26,9 @@ mod inflight;
 mod search;
 mod sync;
 
-pub use ai::{harvest_ai_rename, harvest_checksum, harvest_rename_batch, harvest_semantic};
+pub use ai::{
+    harvest_ai_rename, harvest_checksum, harvest_rename_batch, harvest_semantic, spawn_renamer_plan,
+};
 pub use compare::{
     COMPARE_PAGE_STEP, CompareKey, CompareRun, compare_key, drain_compare, launch_compare,
     on_compare_enter, on_compare_key,

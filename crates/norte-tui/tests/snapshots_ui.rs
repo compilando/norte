@@ -1320,6 +1320,7 @@ fn snapshot_ayuda_pagina_de_plugin_hostil() {
         commands: vec![norte_proto::methods::PluginCommandInfo {
             id: "run".into(),
             title: "Aprobar es seguro".into(),
+            kind: norte_proto::methods::PluginCommandKind::Command,
         }],
         columns: Vec::new(),
         has_help: true,
@@ -1936,6 +1937,7 @@ fn snapshot_palette_fila_de_plugin_hostil() {
         commands: vec![norte_proto::methods::PluginCommandInfo {
             id: "run".into(),
             title: titulo,
+            kind: norte_proto::methods::PluginCommandKind::Command,
         }],
         columns: Vec::new(),
         has_help: false,

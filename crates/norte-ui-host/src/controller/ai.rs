@@ -196,6 +196,72 @@ impl Estado {
         self.abrir_revision(epoca, dir, entradas, parejas, backend, buzon)
     }
 
+    /// Una fila de RENAMER de la paleta (C3, ADR 0095): le pide el plan al
+    /// plugin sobre lo marcado —o lo señalado—, y la respuesta entra por
+    /// `Fondo::PlanIa`, que es el camino del plan de la IA: misma revisión,
+    /// mismo veredicto del core, mismo `plan_hash`. Lo que hace segura la
+    /// operación no es quién propuso los nombres.
+    pub(super) fn ejecutar_de_renamer(
+        &mut self,
+        clave: &str,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some((id, renamer)) = norte_frontend::palette::parse_renamer_key(clave) else {
+            return self.no_implementado(clave);
+        };
+        if self.efectos == crate::commands::Efectos::SoloLectura {
+            // El plan acaba en un rename: una ventana sin efectos no lo pide.
+            return Self::no_muta();
+        }
+        let nombres: Vec<String> = self
+            .hueco()
+            .pane
+            .marked_paths()
+            .iter()
+            .filter_map(|p| p.file_name())
+            .filter_map(|s| String::from_utf8(s.as_bytes().to_vec()).ok())
+            .collect();
+        if nombres.is_empty() {
+            let dicho = self.decir("msg-rename-batch-nothing");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "msg-rename-batch-nothing".to_owned(),
+                },
+                dicho,
+            );
+        }
+        let dir = self.hueco().pane.dir().clone();
+        self.epoca_ia += 1;
+        let epoca = self.epoca_ia;
+        let del_dir: Vec<Vec<u8>> = self
+            .hueco()
+            .pane
+            .entries()
+            .iter()
+            .filter_map(|e| e.path.file_name().map(|s| s.as_bytes().to_vec()))
+            .collect();
+        self.ia_en_vuelo = Some((epoca, dir.clone(), del_dir));
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        let (id, renamer) = (id.to_owned(), renamer.to_owned());
+        tokio::spawn(async move {
+            let res = (tokio::time::timeout(
+                PLAZO_IA,
+                backend.plugin_rename_plan(id, renamer, dir, nombres),
+            )
+            .await)
+                .unwrap_or(Err(Error::ProviderUnavailable { retryable: true }));
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::PlanIa(
+                    epoca,
+                    Box::new(res),
+                ))))
+                .await;
+        });
+        (self.aplicada(), self.decir("host-plan-asking"))
+    }
+
     /// Le pide el plan al modelo. La respuesta vuelve al actor.
     ///
     /// Una época nueva por petición: entre pedirlo y que llegue, el lector

@@ -18,7 +18,7 @@ manifest declares, and those are what the human approves. The host mediates
 everything: it reads the file and hands you the bytes, it opens the socket,
 it confines the directory you may read under.
 
-Five kinds, one world each, chosen by `category` in the manifest:
+Six kinds, one world each, chosen by `category` in the manifest:
 
 | Kind | World | You export | It gives the user |
 | --- | --- | --- | --- |
@@ -27,6 +27,7 @@ Five kinds, one world each, chosen by `category` in the manifest:
 | `decorator` | `norte-decorator` | `decorator` | a badge and a theme role on each row of a listing |
 | `columns` | `norte-columns` | `columns` | a value per entry for a column the user adds |
 | `provider` | `norte-provider` | `provider` | a backend behind a URL scheme of your own (`webdav://…`) |
+| `renamer` | `norte-renamer` | `renamer` | a proposed new name per marked entry, reviewed before anything is renamed (ADR 0095) |
 
 The `norte-plugin` world exports both `previewer` and `command`; a plugin of
 one of those kinds implements the other as "not supported". The WIT files
@@ -41,7 +42,7 @@ id = "org.example.mine"        # reverse-DNS, 1–128 chars, your namespace
 name = "Mine"                  # shown in the manager; masked as third-party text
 publisher = "example"
 version = "0.1.0"              # informative
-category = "previewer"         # one of the five kinds
+category = "previewer"         # one of the six kinds
 description = "…"              # optional, ≤ 280 chars, not in the approval digest
 
 [contributions]                # what the plugin adds; see per kind below
@@ -79,7 +80,21 @@ header = "Dims"
 [[contributions.provider]]
 scheme = "webdav"
 default-port = 8443
+
+# renamer: each way of renaming you offer, by id, with the title the palette
+# shows under `[rename]`. `plan(id, location, names)` gets the id back.
+[[contributions.renamer]]
+id = "by-date"
+title = "Prefix with modification date"
 ```
+
+A renamer never renames. It returns `{ current, proposed }` pairs for the
+names it was given; the host drops identity pairs and anything it did not
+ask about, and the human reviews the plan in the same screen the AI plan
+uses — with the core checking every target, journaling and undo as for any
+batch rename. Reading the files (EXIF, ID3, a modification time) is what
+the `location` capability is for: without it, `plan` gets no location and
+should say so in its error rather than guess.
 
 Contributions are part of the approval digest: they say *when* and *how*
 the plugin fires, which is as much a part of what the human approves as the

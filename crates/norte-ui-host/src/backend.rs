@@ -378,6 +378,17 @@ pub trait HostBackend: Send + Sync + 'static {
         names: Vec<String>,
     ) -> BoxFuture<'static, Result<methods::AiRenamePlanResult, Error>>;
 
+    /// El plan que PROPONE un plugin `renamer` (C3, ADR 0095): el mismo
+    /// resultado que [`Self::ai_rename_plan`], por otro productor, y con la
+    /// misma disciplina al volver — se valida entero antes de enseñarlo.
+    fn plugin_rename_plan(
+        &self,
+        plugin_id: String,
+        renamer_id: String,
+        dir: VPath,
+        names: Vec<String>,
+    ) -> BoxFuture<'static, Result<methods::AiRenamePlanResult, Error>>;
+
     /// El plan REVISABLE de un lote de renombrados dentro de `dir`.
     ///
     /// Tampoco muta: lo que se manda es INTENCIÓN —parejas de nombres base—
@@ -1241,6 +1252,21 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<methods::AiRenamePlanResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.ai_rename_plan(&dir, &instruction, &names).await })
+    }
+
+    fn plugin_rename_plan(
+        &self,
+        plugin_id: String,
+        renamer_id: String,
+        dir: VPath,
+        names: Vec<String>,
+    ) -> BoxFuture<'static, Result<methods::AiRenamePlanResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move {
+            backend
+                .plugin_rename_plan(&plugin_id, &renamer_id, &dir, &names)
+                .await
+        })
     }
 
     fn rename_batch_plan(

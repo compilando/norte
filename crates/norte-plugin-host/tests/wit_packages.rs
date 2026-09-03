@@ -116,6 +116,7 @@ fn served_wit_matches_the_package_files() {
         "deps/host/host.wit",
         "deps/provider/provider.wit",
         "deps/location/location.wit",
+        "deps/renamer/renamer.wit",
     ] {
         let src = leer(fichero);
         let linea = src

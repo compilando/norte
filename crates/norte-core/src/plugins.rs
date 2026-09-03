@@ -88,6 +88,14 @@ pub enum PluginRunError {
     /// No hay ningún plugin descubierto con ese id.
     #[error("plugin desconocido: {0}")]
     Unknown(String),
+    /// El plugin existe pero su kind no exporta `command` (un decorator, unas
+    /// columnas, un provider, un renamer): no hay nada que ejecutar. Se dice
+    /// ANTES de instanciar —instanciarlo con el world `norte-plugin` fallaba
+    /// dentro de wasmtime y salía como «internal error», y un cliente 0.66
+    /// que ve un renamer como comando (0.67.0) pagaba una instanciación por
+    /// clic para recibir eso.
+    #[error("el plugin {0} no ejecuta comandos")]
+    NotRunnable(String),
     /// El plugin existe pero un humano no ha aprobado sus capabilities.
     #[error("plugin sin aprobar: {0}")]
     NotApproved(String),
@@ -546,108 +554,119 @@ impl PluginRegistry {
     /// del protocolo.
     #[must_use]
     pub fn list(&self) -> PluginListResult {
-        let plugins = self
-            .catalog
-            .plugins
-            .iter()
-            .map(|e| {
-                let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
-                PluginInfo {
-                    id: e.manifest.id.clone(),
-                    name: e.manifest.name.clone(),
-                    publisher: e.manifest.publisher.clone(),
-                    version: e.manifest.version.clone(),
-                    category: e.manifest.category.as_str().to_string(),
-                    // Las insignias del manifiesto MÁS el scheme que un
-                    // provider reclama (`provider:webdav`): es lo que aprobar
-                    // concede —ponerse delante de `webdav://`— y hasta aquí
-                    // el humano aprobaba un provider sin ver para qué scheme.
-                    capabilities: e
-                        .manifest
-                        .capabilities
-                        .badges()
-                        .into_iter()
-                        .chain(
-                            e.manifest
-                                .contributions
-                                .provider
-                                .iter()
-                                .map(|c| format!("provider:{}", c.scheme)),
-                        )
-                        .collect(),
-                    // Aprobación EFECTIVA (issue #69): `approved` en el fichero
-                    // pero con el digest de capabilities CASANDO el del manifiesto
-                    // actual. Si las capabilities cambiaron en disco tras aprobar,
-                    // la UI ve `approved = false` y vuelve a pedir consentimiento.
-                    approved: Self::approval_is_current(&st, e),
-                    enabled: st.enabled,
-                    // (P1) manifest `description` is cosmetic/untrusted, same
-                    // as `name`; `commands` mirrors `Contributions.command` in
-                    // MANIFEST ORDER (not sorted — matches how the digest
-                    // treats contribution order as significant, spec §6).
-                    description: e.manifest.description.clone(),
-                    commands: e
-                        .manifest
-                        .contributions
-                        .command
-                        .iter()
-                        .map(|c| PluginCommandInfo {
-                            id: c.id.clone(),
-                            title: c.title.clone(),
-                        })
-                        .collect(),
-                    // (G3c, 0.28.0) columns mirrors `Contributions.columns`
-                    // the SAME way `commands` mirrors `Contributions.command`
-                    // above: manifest order, discovery-only (NOT gated on
-                    // approved/enabled — a plugin's contributed columns are
-                    // metadata a human inspects BEFORE approving, same as
-                    // `commands`/`capabilities` already are).
-                    columns: e
-                        .manifest
-                        .contributions
-                        .columns
-                        .iter()
-                        .map(|c| PluginColumnInfo {
-                            id: c.id.clone(),
-                            header: c.header.clone(),
-                        })
-                        .collect(),
-                    // El ancla que el humano está MIRANDO (#282): es lo que
-                    // devuelve al confirmar, y lo que el daemon compara con la
-                    // suya antes de conceder. Cubre `category` y
-                    // `contributions` —cuándo y cómo se dispara— además de las
-                    // capabilities, o sea justo lo que la lista pintada NO
-                    // dice.
-                    manifest_digest: Some(norte_plugin_host::PluginEntry::approval_anchor(e)),
-                    // (H3e, 0.34.0) NO gateado por approved/enabled — la
-                    // documentación de un plugin es justo lo que un humano lee
-                    // ANTES de aprobarlo, mismo criterio que
-                    // `capabilities`/`commands`/`columns`.
-                    //
-                    // La bandera del WIRE es la ESTRICTA de las dos: el
-                    // `is_present` del catálogo es un `is_file` que SIGUE
-                    // enlaces (presencia, no permiso — así lo dice su propio
-                    // comentario), mientras que `is_servable` ya pasó la
-                    // MISMA guarda que aplicará el lector. Si divergen, el par
-                    // (`has_help: true`, `markdown: ""`) es exactamente el
-                    // oráculo "esa ruta existe y es un fichero regular", y las
-                    // dos mitades las lee un agente por `plugin.list` +
-                    // `plugin.help`, ninguno de los dos gateado por policy. Y
-                    // aun sin el agente, la barra lateral pintaría un nodo que
-                    // se abre en blanco.
-                    //
-                    // Se LEE, no se calcula: `list()` corre en el reactor async
-                    // y bajo el lock global de plugins (`handle_plugin_list` lo
-                    // llama síncrono desde `dispatch`), así que aplicar la
-                    // guarda aquí serían tres syscalls por plugin bloqueando a
-                    // todas las demás conexiones sobre un directorio que puede
-                    // estar en autofs o NFS — y `plugin.list` está ABIERTO a un
-                    // agente. El veredicto se calcula al DESCUBRIR, donde la
-                    // I/O ya vive fuera del reactor.
-                    has_help: e.help.is_servable(),
-                }
-            })
-            .collect();
+        let plugins =
+            self.catalog
+                .plugins
+                .iter()
+                .map(|e| {
+                    let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
+                    PluginInfo {
+                        id: e.manifest.id.clone(),
+                        name: e.manifest.name.clone(),
+                        publisher: e.manifest.publisher.clone(),
+                        version: e.manifest.version.clone(),
+                        category: e.manifest.category.as_str().to_string(),
+                        // Las insignias del manifiesto MÁS el scheme que un
+                        // provider reclama (`provider:webdav`): es lo que aprobar
+                        // concede —ponerse delante de `webdav://`— y hasta aquí
+                        // el humano aprobaba un provider sin ver para qué scheme.
+                        capabilities: e
+                            .manifest
+                            .capabilities
+                            .badges()
+                            .into_iter()
+                            .chain(
+                                e.manifest
+                                    .contributions
+                                    .provider
+                                    .iter()
+                                    .map(|c| format!("provider:{}", c.scheme)),
+                            )
+                            .collect(),
+                        // Aprobación EFECTIVA (issue #69): `approved` en el fichero
+                        // pero con el digest de capabilities CASANDO el del manifiesto
+                        // actual. Si las capabilities cambiaron en disco tras aprobar,
+                        // la UI ve `approved = false` y vuelve a pedir consentimiento.
+                        approved: Self::approval_is_current(&st, e),
+                        enabled: st.enabled,
+                        // (P1) manifest `description` is cosmetic/untrusted, same
+                        // as `name`; `commands` mirrors `Contributions.command` in
+                        // MANIFEST ORDER (not sorted — matches how the digest
+                        // treats contribution order as significant, spec §6).
+                        description: e.manifest.description.clone(),
+                        commands: e
+                            .manifest
+                            .contributions
+                            .command
+                            .iter()
+                            .map(|c| PluginCommandInfo {
+                                id: c.id.clone(),
+                                title: c.title.clone(),
+                                kind: norte_proto::methods::PluginCommandKind::Command,
+                            })
+                            // Y los renamers DETRÁS (0.67.0, ADR 0095), con su
+                            // `kind`: la paleta los lista junto a los comandos y
+                            // los despacha a `plugin.rename_plan`.
+                            .chain(e.manifest.contributions.renamer.iter().map(|r| {
+                                PluginCommandInfo {
+                                    id: r.id.clone(),
+                                    title: r.title.clone(),
+                                    kind: norte_proto::methods::PluginCommandKind::Renamer,
+                                }
+                            }))
+                            .collect(),
+                        // (G3c, 0.28.0) columns mirrors `Contributions.columns`
+                        // the SAME way `commands` mirrors `Contributions.command`
+                        // above: manifest order, discovery-only (NOT gated on
+                        // approved/enabled — a plugin's contributed columns are
+                        // metadata a human inspects BEFORE approving, same as
+                        // `commands`/`capabilities` already are).
+                        columns: e
+                            .manifest
+                            .contributions
+                            .columns
+                            .iter()
+                            .map(|c| PluginColumnInfo {
+                                id: c.id.clone(),
+                                header: c.header.clone(),
+                            })
+                            .collect(),
+                        // El ancla que el humano está MIRANDO (#282): es lo que
+                        // devuelve al confirmar, y lo que el daemon compara con la
+                        // suya antes de conceder. Cubre `category` y
+                        // `contributions` —cuándo y cómo se dispara— además de las
+                        // capabilities, o sea justo lo que la lista pintada NO
+                        // dice.
+                        manifest_digest: Some(norte_plugin_host::PluginEntry::approval_anchor(e)),
+                        // (H3e, 0.34.0) NO gateado por approved/enabled — la
+                        // documentación de un plugin es justo lo que un humano lee
+                        // ANTES de aprobarlo, mismo criterio que
+                        // `capabilities`/`commands`/`columns`.
+                        //
+                        // La bandera del WIRE es la ESTRICTA de las dos: el
+                        // `is_present` del catálogo es un `is_file` que SIGUE
+                        // enlaces (presencia, no permiso — así lo dice su propio
+                        // comentario), mientras que `is_servable` ya pasó la
+                        // MISMA guarda que aplicará el lector. Si divergen, el par
+                        // (`has_help: true`, `markdown: ""`) es exactamente el
+                        // oráculo "esa ruta existe y es un fichero regular", y las
+                        // dos mitades las lee un agente por `plugin.list` +
+                        // `plugin.help`, ninguno de los dos gateado por policy. Y
+                        // aun sin el agente, la barra lateral pintaría un nodo que
+                        // se abre en blanco.
+                        //
+                        // Se LEE, no se calcula: `list()` corre en el reactor async
+                        // y bajo el lock global de plugins (`handle_plugin_list` lo
+                        // llama síncrono desde `dispatch`), así que aplicar la
+                        // guarda aquí serían tres syscalls por plugin bloqueando a
+                        // todas las demás conexiones sobre un directorio que puede
+                        // estar en autofs o NFS — y `plugin.list` está ABIERTO a un
+                        // agente. El veredicto se calcula al DESCUBRIR, donde la
+                        // I/O ya vive fuera del reactor.
+                        has_help: e.help.is_servable(),
+                    }
+                })
+                .collect();
         let errors = self
             .catalog
             .errors
@@ -1009,6 +1028,14 @@ impl PluginRegistry {
             .iter()
             .find(|p| p.manifest.id == id)
             .ok_or_else(|| PluginRunError::Unknown(id.to_string()))?;
+        // Solo el world `norte-plugin` exporta `command`; los demás kinds no
+        // tienen nada que correr, y decirlo aquí evita instanciar para nada.
+        if !matches!(
+            entry.manifest.category,
+            norte_plugin_host::Category::Command | norte_plugin_host::Category::Previewer
+        ) {
+            return Err(PluginRunError::NotRunnable(id.to_string()));
+        }
         let st = self.state.get(id).cloned().unwrap_or_default();
         // Fail-closed: sin aprobación vigente cuyo digest CASE las capabilities
         // actuales (issue #69), se trata como sin aprobar — aunque el flag
@@ -1192,6 +1219,44 @@ impl PluginRegistry {
     #[must_use]
     pub fn resolve_columns(&self, column_id: &str) -> Option<ResolvedDecorator> {
         self.resolve_columns_of(None, column_id)
+    }
+
+    /// El plugin `renamer` consentido `plugin_id` que declara `renamer_id`
+    /// (C3, ADR 0095): ESE o ninguno, aprobado y encendido, con su `.wasm`
+    /// verificado contra el digest aprobado. Misma forma que
+    /// [`Self::resolve_columns_of`] con el plugin exigido.
+    #[must_use]
+    pub fn resolve_renamer(&self, plugin_id: &str, renamer_id: &str) -> Option<ResolvedDecorator> {
+        self.catalog.plugins.iter().find_map(|e| {
+            if e.manifest.category != norte_plugin_host::Category::Renamer
+                || e.manifest.id != plugin_id
+            {
+                return None;
+            }
+            let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
+            if !Self::approval_is_current(&st, e) || !st.enabled {
+                return None;
+            }
+            if !e
+                .manifest
+                .contributions
+                .renamer
+                .iter()
+                .any(|r| r.id == renamer_id)
+            {
+                return None;
+            }
+            let wasm = Self::verified_wasm(&e.dir)?;
+            Some((
+                e.manifest.id.clone(),
+                e.manifest.name.clone(),
+                wasm,
+                e.manifest.capabilities.clone(),
+                self.settings_of(&e.manifest.id)
+                    .cloned()
+                    .unwrap_or_default(),
+            ))
+        })
     }
 
     /// Como [`Self::resolve_columns`], pero pudiendo exigir QUÉ plugin
@@ -2221,6 +2286,36 @@ publisher = "norte"
 version = "0.1.0"
 category = "command"
 "#;
+
+    /// Un renamer (0.67.0): un cliente 0.66 lo ve como comando y pide
+    /// `run_command` con su id. La respuesta es «no ejecuta comandos», antes
+    /// de mirar consentimiento o binario, y sin instanciar nada.
+    #[test]
+    fn un_kind_que_no_exporta_command_no_es_ejecutable() {
+        let tmp = TempDir::new().unwrap();
+        write_plugin(
+            tmp.path(),
+            "org.norte.renombra",
+            r#"
+[plugin]
+id = "org.norte.renombra"
+name = "Renombra"
+publisher = "norte"
+version = "0.1.0"
+category = "renamer"
+
+[[contributions.renamer]]
+id = "by-date"
+title = "By date"
+"#,
+        );
+        let reg = PluginRegistry::discover(tmp.path()).unwrap();
+        let err = reg.resolve_runnable("org.norte.renombra").unwrap_err();
+        assert!(
+            matches!(err, PluginRunError::NotRunnable(ref id) if id == "org.norte.renombra"),
+            "{err:?}"
+        );
+    }
 
     /// El MISMO plugin, pero con capabilities AMPLIADAS (fs-read + net) que el
     /// humano nunca aprobó.
@@ -3720,6 +3815,75 @@ pub fn run_column_values_for_test(
         climb,
         entries,
         expected_len,
+    )
+}
+
+/// Lo que devuelve [`run_rename_plan`]: el plan, o por qué no lo hay.
+#[derive(Debug)]
+pub enum RenamePlanOutcome {
+    /// Los pares que el plugin propone, ya sin identidades ni nombres que no
+    /// estaban en la petición.
+    Plan(Vec<norte_proto::methods::AiRenameEntry>),
+    /// El guest rehusó con una frase para el lector. Texto de un tercero.
+    Refused(String),
+    /// El guest no instanció, atrapó, o se pasó de los topes.
+    Failed,
+}
+
+/// Le pide a un plugin `renamer` (C3, ADR 0095) su plan para `names` en
+/// `location_dir`, con la MISMA sesión de ubicación que una columna: se
+/// acuña aquí y muere al salir. El plan que sale es el de `ai.rename_plan`
+/// por otro productor, y lo que hace segura la operación viene después —
+/// la revisión, `fs.rename_batch_plan`, el journal—, así que aquí solo se
+/// limpia: fuera los pares de identidad y los `current` que no se pidieron.
+pub fn run_rename_plan(
+    runtime: &norte_plugin_host::PluginRuntime,
+    resolved: ResolvedDecorator,
+    renamer_id: &str,
+    location_dir: Option<&norte_proto::VPath>,
+    climb: bool,
+    names: &[String],
+) -> RenamePlanOutcome {
+    let (id, _name, wasm, caps, settings) = resolved;
+    let sesion = if caps.location.granted() {
+        let mint = LocationMint::new(norte_vfs_local::Bounds::default());
+        location_dir.and_then(|dir| mint.mint_for(dir, caps.location_root_marker.as_deref(), climb))
+    } else {
+        None
+    };
+    let host: Option<std::sync::Arc<dyn norte_plugin_host::LocationHost>> =
+        sesion.as_ref().map(|s| {
+            std::sync::Arc::clone(&s.mint) as std::sync::Arc<dyn norte_plugin_host::LocationHost>
+        });
+    let Ok(mut inst) = runtime.instantiate_renamer_with_location(&wasm, caps, host) else {
+        tracing::warn!(plugin = %id, "renamer: fallo al instanciar");
+        return RenamePlanOutcome::Failed;
+    };
+    inst.set_settings(settings);
+    let refe = sesion.as_ref().map(LocationSession::as_ref).map(|r| {
+        norte_plugin_host::renamer_iface::LocationRef {
+            token: r.token,
+            prefix: r.prefix,
+        }
+    });
+    let pares = match inst.plan(renamer_id, refe.as_ref(), names) {
+        Ok(Ok(p)) => p,
+        Ok(Err(frase)) => return RenamePlanOutcome::Refused(frase),
+        Err(e) => {
+            tracing::warn!(plugin = %id, error = %e, "renamer: fallo al ejecutar");
+            return RenamePlanOutcome::Failed;
+        }
+    };
+    let pedidos: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+    RenamePlanOutcome::Plan(
+        pares
+            .into_iter()
+            .filter(|p| p.current != p.proposed && pedidos.contains(p.current.as_str()))
+            .map(|p| norte_proto::methods::AiRenameEntry {
+                from: p.current,
+                to: p.proposed,
+            })
+            .collect(),
     )
 }
 

@@ -2202,6 +2202,34 @@ impl RemoteBackend {
         }
     }
 
+    /// `plugin.rename_plan` (0.67.0, C3, ADR 0095): el plan que propone un
+    /// plugin `renamer`. Un daemon 0.66 no negocia con este cliente, así
+    /// que aquí nunca llega un `MethodNotFound` por versión.
+    ///
+    /// # Errors
+    /// Los del daemon: `NotFound` si el renamer no está consentido;
+    /// `Unsupported` si el guest rehúsa (su frase queda en el registro del
+    /// daemon, no cruza: #332); `Io` si el guest no corre.
+    pub async fn plugin_rename_plan(
+        &self,
+        plugin_id: &str,
+        renamer_id: &str,
+        dir: &VPath,
+        names: &[String],
+    ) -> Result<methods::AiRenamePlanResult, Error> {
+        self.call_timed_guarded_with(
+            AI_CALL_TIMEOUT,
+            methods::PLUGIN_RENAME_PLAN,
+            &methods::PluginRenamePlanParams {
+                plugin_id: plugin_id.to_owned(),
+                renamer_id: renamer_id.to_owned(),
+                dir: dir.clone(),
+                names: names.to_vec(),
+            },
+        )
+        .await
+    }
+
     /// `plugin.column_values` contra el daemon (G3b, ADR 0037): mismo
     /// criterio de fallback que [`Self::plugin_decorate`], pero la forma
     /// "sin datos" es un vector de `None` del tamaño de `paths` (celda

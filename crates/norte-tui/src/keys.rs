@@ -398,6 +398,13 @@ pub async fn on_key(
                         run_plugin_command(app, backend, &id, &command).await;
                         return;
                     }
+                    // Una fila de RENAMER (C3, ADR 0095): pide el plan al
+                    // plugin y lo deja en el MISMO run que el de la IA.
+                    if let Some((id, renamer)) = norte_frontend::palette::parse_renamer_key(&cmd) {
+                        let (id, renamer) = (id.to_owned(), renamer.to_owned());
+                        crate::jobs::spawn_renamer_plan(app, backend, work, &id, &renamer);
+                        return;
+                    }
                     // MISMA función de despacho que el
                     // resolver del keymap invoca (#dispatch):
                     // un comando elegido en la palette corre

@@ -48,12 +48,12 @@ pub use manifest::{
     CONFIG_ENUM_MAX_VALUES, CONFIG_KEY_MAX_CHARS, CONFIG_MAX_KEYS, CONFIG_STRING_MAX_CHARS,
     CORE_SCHEMES, Category, ColumnContrib, CommandContrib, ConfigKeySpec, Contributions,
     DecoratorContrib, HookContrib, Manifest, ManifestError, PreviewerContrib, ProviderContrib,
-    is_valid_plugin_id, scheme_claimable,
+    RenamerContrib, is_valid_plugin_id, scheme_claimable,
 };
 pub use runtime::{
-    ColumnsInstance, DecoratorInstance, LocationHost, MAX_ARTIFACT_BYTES, PluginInstance,
-    PluginRuntime, ProviderInstance, RuntimeError, columns_iface, decorator_iface, location_iface,
-    previewer_iface, provider_iface,
+    ColumnsInstance, DecoratorInstance, LocationHost, MAX_ARTIFACT_BYTES, MAX_RENAME_PROPOSALS,
+    PluginInstance, PluginRuntime, ProviderInstance, RenamerInstance, RuntimeError, columns_iface,
+    decorator_iface, location_iface, previewer_iface, provider_iface, renamer_iface,
 };
 /// Handle opaco de un `writer` resource del guest (#30 stage 2b-write): el
 /// adapter host lo lleva en su `ByteSink` y lo pasa a los métodos
