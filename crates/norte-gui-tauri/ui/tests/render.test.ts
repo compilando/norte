@@ -370,6 +370,30 @@ describe("Screen", () => {
     expect(status?.textContent).toContain("2 entradas");
   });
 
+  it("una orden que el host rechaza en la frontera se ve en la barra de estado", () => {
+    // Una acción que no deserializa muere en `dispatch`, antes de que el
+    // host la vea: nadie salvo el renderer puede decirlo. Así estuvo la
+    // barra de paneles entera, con el error solo en la consola.
+    const { screen, root } = montar();
+    screen.paint(vista({}));
+    const barra = () => root.querySelectorAll(".slot")[1]?.querySelector(".statusbar");
+    screen.rejected(
+      { action: "panel_bar_activate", button: 1 },
+      new Error("unknown variant"),
+    );
+    expect(barra()?.textContent).toContain("panel_bar_activate");
+    expect(barra()?.querySelector(".banner.rejected")).not.toBeNull();
+    // Sigue viéndose en el siguiente repintado del host: el aviso es local.
+    screen.paint(vista({}));
+    expect(barra()?.textContent).toContain("panel_bar_activate");
+    // La primera orden aceptada lo retira.
+    expect(screen.accepted()).toBe(true);
+    expect(screen.accepted()).toBe(false);
+    screen.paint(vista({}));
+    expect(barra()?.textContent).not.toContain("panel_bar_activate");
+    expect(barra()?.textContent).toContain("2 entradas");
+  });
+
   it("un diálogo es modal, tiene nombre y dice cuál respuesta destruye", () => {
     const { screen } = montar();
     const v = vista({});

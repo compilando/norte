@@ -177,6 +177,10 @@ export class Screen {
   private menuBarHeight: string | null = null;
   /** Lo mismo para la barra de paneles (#324). */
   private panelBarHeight: string | null = null;
+  /** La última foto pintada: lo que se repinta cuando cambia algo local. */
+  private ultimaVista: ViewSnapshot | null = null;
+  /** Aviso local de una orden rechazada en la frontera (`rejected`). */
+  private rechazo: string | null = null;
   /** La reserva cambió: el host tiene que oír el alto nuevo. */
   private viewportSucio = false;
 
@@ -236,6 +240,36 @@ export class Screen {
     return this.catalog.strings[key] ?? key;
   }
 
+  /**
+   * Una orden que el host rechazó en la frontera (no deserializa, contrato
+   * roto): nunca llegó a su buzón, así que ningún estado del host la puede
+   * contar. Se pinta aquí, en la barra de estado, hasta la primera orden
+   * aceptada. El detalle del error va a la consola: es texto del otro
+   * extremo, y la barra dice qué orden y que no la entendió.
+   */
+  rejected(action: UiAction, error: unknown): void {
+    console.error("el host no aceptó la acción:", action.action, error);
+    this.rechazo = `${this.t("gui-msg-action-rejected")}: ${action.action}`;
+    this.repaintStatus();
+  }
+
+  /** Una orden aceptada retira el aviso; dice si había uno. */
+  accepted(): boolean {
+    if (this.rechazo === null) {
+      return false;
+    }
+    this.rechazo = null;
+    this.repaintStatus();
+    return true;
+  }
+
+  /** Vuelve a pintar el hueco de estado con la última foto, si la hay. */
+  private repaintStatus(): void {
+    if (this.ultimaVista !== null) {
+      this.paint(this.ultimaVista);
+    }
+  }
+
   /** El tamaño de una celda de layout, en píxeles reales. */
   cell(): { w: number; h: number } {
     const cs = getComputedStyle(document.documentElement);
@@ -246,6 +280,7 @@ export class Screen {
   }
 
   paint(view: ViewSnapshot): void {
+    this.ultimaVista = view;
     const cell = this.cell();
     const key = view.layout.placements
       .map((p) => `${p.slot_id}:${p.x},${p.y},${p.width},${p.height}`)
@@ -3423,7 +3458,12 @@ export class Screen {
       dom.scroller.setAttribute("role", "status");
       dom.scroller.setAttribute("aria-live", "polite");
       dom.scroller.replaceChildren(
-        ...statusNodes(view.status, view.connection.state, (k) => this.t(k)),
+        ...statusNodes(
+          view.status,
+          view.connection.state,
+          (k) => this.t(k),
+          this.rechazo,
+        ),
       );
       return;
     }
@@ -4081,8 +4121,16 @@ function statusNodes(
   status: StatusView,
   connection: string,
   tr: (k: string) => string,
+  rechazo: string | null = null,
 ): Node[] {
   const nodes: Node[] = [];
+  if (rechazo !== null) {
+    // Delante de todo: es lo único de esta barra que el host no sabe.
+    const el = document.createElement("span");
+    el.className = "banner rejected";
+    el.textContent = rechazo;
+    nodes.push(el);
+  }
   for (const b of status.banners) {
     const el = document.createElement("span");
     el.className = "banner";

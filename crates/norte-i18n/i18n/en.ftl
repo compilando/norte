@@ -516,6 +516,7 @@ msg-semantic-in-search = Semantic search is not available in a search pane
 # a superseded fetch says so instead of dropping it silently, and "failed"
 # wraps the daemon's already-flattened error text.
 gui-msg-volumes-running = Drives: loading…
+gui-msg-action-rejected = the window sent an order the core does not understand
 gui-msg-volumes-superseded = Drives: previous list discarded (new result)
 gui-msg-volumes-failed = Could not list drives: { $error }
 msg-hidden-hidden = hidden entries hidden

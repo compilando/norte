@@ -518,6 +518,7 @@ msg-semantic-in-search = la búsqueda semántica no está disponible en un pane 
 # (sin camino de aborto), una lista reemplazada lo dice en vez de perderla en
 # silencio, y "failed" envuelve el texto de error ya aplanado del daemon.
 gui-msg-volumes-running = Unidades: cargando…
+gui-msg-action-rejected = la ventana envió una orden que el núcleo no entiende
 gui-msg-volumes-superseded = Unidades: lista anterior descartada (nuevo resultado)
 gui-msg-volumes-failed = no se pudieron listar las unidades: { $error }
 msg-hidden-hidden = entradas ocultas escondidas

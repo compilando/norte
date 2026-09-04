@@ -18,6 +18,12 @@ independently through `PROTOCOL_VERSION`.
   `norte-gui-tauri` reads every `action:` literal in `types.ts` and
   requires it to be a wire name in ui-host's `actions.json` golden, so the
   next hand-typed name turns the gate red instead of a button inert.
+- **An order the host rejects at the boundary now shows in the status
+  bar.** The renderer used to log "el host no aceptó la acción" to the
+  webview console and nothing else, which is how the panel bar stayed
+  dead unnoticed. Now the status bar says "the window sent an order the
+  core does not understand: `<action>`" until the next accepted order; the
+  error detail still goes to the console.
 
 ### Changed
 

@@ -93,13 +93,19 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     cola = cola
       .then(() => port.dispatch(action))
       .then((ack) => {
+        // Aceptada (aunque sea «no disponible»): el host la entendió, y el
+        // aviso de una rechazada antes ya no cuenta nada.
+        screen.accepted();
         if (ack.status === "unavailable") {
           // Un comando atenuado no es un error: el host ya dijo por qué.
           console.info("no disponible:", screen.t(ack.reason_key));
         }
       })
       .catch((e: unknown) => {
-        console.error("el host no aceptó la acción:", e);
+        // No deserializa o el contrato está roto: el host nunca la vio, así
+        // que solo el renderer puede decirlo — en la barra, no en la consola
+        // que nadie mira.
+        screen.rejected(action, e);
       });
   };
   const screen = new Screen(

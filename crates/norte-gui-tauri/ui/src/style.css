@@ -763,6 +763,11 @@ body {
   margin-right: 8px;
 }
 
+/* Una orden rechazada en la frontera: error, no nombre hostil. */
+.banner.rejected {
+  color: var(--error-fg);
+}
+
 #fatal {
   position: fixed;
   inset: 0;
