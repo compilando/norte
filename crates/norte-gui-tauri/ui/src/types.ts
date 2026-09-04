@@ -1177,7 +1177,7 @@ export type UiAction =
   | { action: "menu_point_row"; row: number }
   | { action: "menu_activate_row"; row: number }
   | { action: "menu_close" }
-  | { action: "panelbar_activate"; button: number }
+  | { action: "panel_bar_activate"; button: number }
   | { action: "resize_slot"; slot_id: number; cells: number }
   | { action: "profile_activate_row"; row: number; generation: number }
   | { action: "resync" };

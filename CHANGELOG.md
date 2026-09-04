@@ -7,6 +7,18 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The window's panel bar did nothing on click.** The renderer sent
+  `panelbar_activate`; the host's wire name is `panel_bar_activate`
+  (`UiAction` is `snake_case`, and `PanelBar` is two words). The action
+  failed to deserialize at the Tauri boundary and the click died in the
+  console. `gui-ci` was green because the renderer's test checked what the
+  renderer said it sent, not what the host understands. A new test in
+  `norte-gui-tauri` reads every `action:` literal in `types.ts` and
+  requires it to be a wire name in ui-host's `actions.json` golden, so the
+  next hand-typed name turns the gate red instead of a button inert.
+
 ### Changed
 
 - **Protocol 0.68.0: a renamer that refuses says why (#332).**

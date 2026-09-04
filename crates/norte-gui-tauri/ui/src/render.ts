@@ -347,7 +347,7 @@ export class Screen {
         boton.append(marca);
       }
       boton.addEventListener("click", () => {
-        this.send({ action: "panelbar_activate", button: i });
+        this.send({ action: "panel_bar_activate", button: i });
       });
       fila.append(boton);
     }

@@ -1328,7 +1328,7 @@ describe("la barra de menús", () => {
     );
 
     botones[1]?.click();
-    expect(enviadas).toEqual([{ action: "panelbar_activate", button: 1 }]);
+    expect(enviadas).toEqual([{ action: "panel_bar_activate", button: 1 }]);
   });
 
   it("con la barra de paneles apagada no reserva nada", () => {

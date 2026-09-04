@@ -194,7 +194,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::MenuPointRow { .. } => "menu_point_row",
         UiAction::MenuActivateRow { .. } => "menu_activate_row",
         UiAction::MenuClose => "menu_close",
-        UiAction::PanelBarActivate { .. } => "panelbar_activate",
+        UiAction::PanelBarActivate { .. } => "panel_bar_activate",
         UiAction::ResizeSlot { .. } => "resize_slot",
         UiAction::ProfileActivateRow { .. } => "profile_activate_row",
         UiAction::Resync => "resync",
@@ -403,7 +403,7 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
         ("menu_activate_row", UiAction::MenuActivateRow { row: 3 }),
         ("menu_close", UiAction::MenuClose),
         (
-            "panelbar_activate",
+            "panel_bar_activate",
             UiAction::PanelBarActivate { button: 2 },
         ),
         (
