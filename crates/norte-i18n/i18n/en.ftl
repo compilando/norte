@@ -489,6 +489,7 @@ gui-msg-ai-rename-running = AI rename: thinking…
 # request before the human could review it — the loss is said, never silent.
 gui-msg-ai-rename-superseded = AI rename: previous plan discarded (new request)
 msg-ai-rename-empty = AI rename: the model proposed no changes
+msg-rename-plan-refused = the extension proposes nothing: { $why }
 msg-ai-rename-failed = AI rename failed: { $error }
 msg-ai-rename-invalid-plan = AI rename: invalid plan from the daemon — nothing applied
 msg-ai-rename-in-search = AI rename is not available in a search pane

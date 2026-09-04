@@ -2665,11 +2665,13 @@ impl Backend {
     /// que es lo que hace que los frontends lo revisen y ejecuten por el
     /// camino que ya tienen.
     ///
+    /// Si el guest rehúsa no es un error: `entries` vacío y `refused` con
+    /// su frase, ya enmascarada y acotada (#332).
+    ///
     /// # Errors
     /// [`Error::NotFound`] si ese plugin/renamer no está consentido;
-    /// [`Error::Unsupported`] si el guest rehúsa (su frase va al registro:
-    /// los motivos del wire son vocabulario cerrado); [`Error::Io`] si el
-    /// guest no corre. En `Remote`, lo que conteste el daemon.
+    /// [`Error::Io`] si el guest no corre. En `Remote`, lo que conteste el
+    /// daemon.
     pub async fn plugin_rename_plan(
         &self,
         plugin_id: &str,
@@ -2700,15 +2702,20 @@ impl Backend {
                         &names,
                     ) {
                         crate::plugins::RenamePlanOutcome::Plan(entries) => {
-                            Ok(norte_proto::methods::AiRenamePlanResult { entries })
+                            Ok(norte_proto::methods::AiRenamePlanResult {
+                                entries,
+                                refused: None,
+                            })
                         }
-                        // La frase del guest no tiene variante de error en el
-                        // wire (los motivos son vocabulario cerrado a
-                        // propósito): va al registro, que las dos superficies
-                        // enseñan, y el error dice que el plugin no pudo.
+                        // Rehusar no es un error (#332): es un plan vacío con
+                        // motivo, y el motivo es texto de un tercero que se
+                        // enmascara y acota antes de enseñarse.
                         crate::plugins::RenamePlanOutcome::Refused(frase) => {
-                            tracing::warn!(plugin = %plugin_id, motivo = %frase, "renamer: rehusó");
-                            Err(Error::Unsupported)
+                            tracing::info!(plugin = %plugin_id, motivo = %frase, "renamer: rehusó");
+                            Ok(norte_proto::methods::AiRenamePlanResult {
+                                entries: Vec::new(),
+                                refused: Some(crate::plugins::guest_reason(&frase)),
+                            })
                         }
                         crate::plugins::RenamePlanOutcome::Failed => {
                             Err(Error::Io { retryable: false })

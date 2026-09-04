@@ -1179,7 +1179,8 @@ fn golden_methods() {
     // no se movió, estas que el nuevo existe.
     // 198 → 200 en 0.67.0 (ADR 0095): + `plugin_command_info_renamer` y
     // `plugin_rename_plan_params`.
-    assert_eq!(fixtures.len(), 200, "[methods.json] fixtures sin caso Rust");
+    // 200 → 201 en 0.68.0 (#332): + `ai_rename_plan_result_refused`.
+    assert_eq!(fixtures.len(), 201, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -1787,6 +1788,7 @@ fn check_methods_ai(fixtures: &BTreeMap<String, Value>) {
                 from: "IMG 001.jpg".into(),
                 to: "2024-01-01-beach.jpg".into(),
             }],
+            refused: None,
         },
     );
     // Plan vacío = el modelo no propuso cambios (estado significativo, no un
@@ -1794,7 +1796,21 @@ fn check_methods_ai(fixtures: &BTreeMap<String, Value>) {
     check_one(
         fixtures,
         "ai_rename_plan_result_empty",
-        &AiRenamePlanResult { entries: vec![] },
+        &AiRenamePlanResult {
+            entries: vec![],
+            refused: None,
+        },
+    );
+    // 0.68.0 (#332): un plan vacío CON motivo — el plugin rehusó y dijo por
+    // qué. Fixture aparte: las dos de arriba prueban que el wire de 0.67 no
+    // se movió; esta, que el campo existe.
+    check_one(
+        fixtures,
+        "ai_rename_plan_result_refused",
+        &AiRenamePlanResult {
+            entries: vec![],
+            refused: Some("this renamer needs the `location` capability".into()),
+        },
     );
 }
 
@@ -4287,7 +4303,7 @@ fn method_names_frozen() {
     // 0.66.0 (D4): ningún método nuevo — dos campos opcionales, `SpanWire::bg`
     // y `PluginPreviewStyledParams::columns`, para el previewer de imagen que
     // pinta medios bloques y necesita saber a cuántas celdas encoger.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.67.0");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.68.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

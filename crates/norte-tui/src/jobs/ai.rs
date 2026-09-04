@@ -195,6 +195,13 @@ pub fn harvest_ai_rename(
 ) {
     if let Some(run) = work.ai_rename.take() {
         match res {
+            // El productor dijo POR QUÉ no propone (#332): un renamer que
+            // rehusó. La frase viene ya enmascarada y acotada por el daemon.
+            Ok(Ok(norte_proto::methods::AiRenamePlanResult {
+                refused: Some(why), ..
+            })) => {
+                app.message = Some(ta("msg-rename-plan-refused", &[("why", &why)]));
+            }
             Ok(Ok(plan)) if plan.entries.is_empty() => {
                 app.message = Some(t("msg-ai-rename-empty"));
             }

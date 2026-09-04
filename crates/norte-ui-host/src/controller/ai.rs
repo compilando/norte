@@ -373,6 +373,21 @@ impl Estado {
             Ok(p) => p,
             Err(e) => return self.decir_de_ia(epoca, norte_frontend::error::error_key(&e)),
         };
+        // El productor dijo POR QUÉ no propone (#332): un renamer que
+        // rehusó. La frase viene ya enmascarada y acotada por el daemon, y
+        // aquí se enseña, no se interpreta.
+        if let Some(why) = plan.refused {
+            self.status.message = Some(clamp_display(norte_i18n::ta_in(
+                self.lang,
+                "msg-rename-plan-refused",
+                &[("why", &why)],
+            )));
+            let mut cambios = vec![ViewChange::Status(self.status.clone())];
+            if self.revision_ia.take_if(|r| r.epoca == epoca).is_some() {
+                cambios.push(ViewChange::AiRename { ai_rename: None });
+            }
+            return vec![self.parche(cambios)];
+        }
         if plan.entries.is_empty() {
             return self.decir_de_ia(epoca, "msg-ai-rename-empty");
         }

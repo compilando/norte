@@ -3914,13 +3914,19 @@ async fn handle_plugin_rename_plan(
     .map_err(|_| RpcError::protocol(codes::INTERNAL_ERROR, "rename plan task panicked"))?;
     match salida {
         crate::plugins::RenamePlanOutcome::Plan(entries) => {
-            to_value(&methods::AiRenamePlanResult { entries })
+            to_value(&methods::AiRenamePlanResult {
+                entries,
+                refused: None,
+            })
         }
-        // La frase del guest va al registro —las dos superficies lo
-        // enseñan—; el wire no tiene variante con motivo libre a propósito.
+        // Rehusar no es un error (#332): plan vacío con motivo. La frase es
+        // de un tercero: enmascarada y acotada ANTES de cruzar el wire.
         crate::plugins::RenamePlanOutcome::Refused(frase) => {
-            tracing::warn!(plugin = %plugin_id, motivo = %frase, "renamer: rehusó");
-            Err(RpcError::from(norte_proto::Error::Unsupported))
+            tracing::info!(plugin = %plugin_id, motivo = %frase, "renamer: rehusó");
+            to_value(&methods::AiRenamePlanResult {
+                entries: Vec::new(),
+                refused: Some(crate::plugins::guest_reason(&frase)),
+            })
         }
         crate::plugins::RenamePlanOutcome::Failed => {
             Err(RpcError::from(norte_proto::Error::Io { retryable: false }))

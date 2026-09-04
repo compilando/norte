@@ -22,6 +22,10 @@
   "ai_rename_plan_result_empty": {
     "entries": []
   },
+  "ai_rename_plan_result_refused": {
+    "entries": [],
+    "refused": "this renamer needs the `location` capability"
+  },
   "archive_pack_params": {
     "base": "file:///proj",
     "dest": "file:///proj.zip",

@@ -2206,10 +2206,12 @@ impl RemoteBackend {
     /// plugin `renamer`. Un daemon 0.66 no negocia con este cliente, así
     /// que aquí nunca llega un `MethodNotFound` por versión.
     ///
+    /// Un rehúse del guest no es un error: `entries` vacío y `refused` con
+    /// la frase (0.68.0, #332).
+    ///
     /// # Errors
-    /// Los del daemon: `NotFound` si el renamer no está consentido;
-    /// `Unsupported` si el guest rehúsa (su frase queda en el registro del
-    /// daemon, no cruza: #332); `Io` si el guest no corre.
+    /// Los del daemon: `NotFound` si el renamer no está consentido; `Io` si
+    /// el guest no corre.
     pub async fn plugin_rename_plan(
         &self,
         plugin_id: &str,

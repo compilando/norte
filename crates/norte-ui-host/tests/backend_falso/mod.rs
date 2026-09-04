@@ -250,6 +250,8 @@ pub struct Falso {
     pub plan_ia: Option<Vec<(String, String)>>,
     /// Lo que contesta `plugin.rename_plan` (C3). `None` = el daemon falla.
     pub plan_renamer: Option<Vec<(String, String)>>,
+    /// Con qué frase REHÚSA el renamer (#332): gana a `plan_renamer`.
+    pub renamer_rehusa: Option<String>,
     /// Qué renamer se pidió, con qué nombres: `(plugin, renamer, nombres)`.
     pub renamers_pedidos: std::sync::Mutex<Vec<(String, String, Vec<String>)>>,
     /// Lo que TARDA el modelo. Es lo que abre la ventana en la que el lector
@@ -1764,6 +1766,7 @@ impl HostBackend for Falso {
                     .into_iter()
                     .map(|(from, to)| norte_proto::methods::AiRenameEntry { from, to })
                     .collect(),
+                refused: None,
             })
         })
     }
@@ -1781,7 +1784,14 @@ impl HostBackend for Falso {
             .push((plugin_id, renamer_id, names));
         self.latido();
         let plan = self.plan_renamer.clone();
+        let rehusa = self.renamer_rehusa.clone();
         Box::pin(async move {
+            if let Some(why) = rehusa {
+                return Ok(norte_proto::methods::AiRenamePlanResult {
+                    entries: Vec::new(),
+                    refused: Some(why),
+                });
+            }
             let Some(pares) = plan else {
                 return Err(Error::NotFound);
             };
@@ -1790,6 +1800,7 @@ impl HostBackend for Falso {
                     .into_iter()
                     .map(|(from, to)| norte_proto::methods::AiRenameEntry { from, to })
                     .collect(),
+                refused: None,
             })
         })
     }

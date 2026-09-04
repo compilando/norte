@@ -2287,6 +2287,20 @@ version = "0.1.0"
 category = "command"
 "#;
 
+    /// La frase de un guest cruza enmascarada y con tope (#332).
+    #[test]
+    fn la_frase_del_guest_cruza_sin_escapes_y_acotada() {
+        let hostile = format!("approve {}location", '\u{1b}');
+        let out = guest_reason(&hostile);
+        assert!(!out.contains('\u{1b}'), "{out}");
+        assert!(out.starts_with("approve "), "{out}");
+        let long = "x".repeat(GUEST_REASON_MAX_CHARS + 50);
+        let out = guest_reason(&long);
+        assert_eq!(out.chars().count(), GUEST_REASON_MAX_CHARS + 1);
+        assert!(out.ends_with('…'));
+        assert_eq!(guest_reason("plain"), "plain");
+    }
+
     /// Un renamer (0.67.0): un cliente 0.66 lo ve como comando y pide
     /// `run_command` con su id. La respuesta es «no ejecuta comandos», antes
     /// de mirar consentimiento o binario, y sin instanciar nada.
@@ -3816,6 +3830,24 @@ pub fn run_column_values_for_test(
         entries,
         expected_len,
     )
+}
+
+/// Cuántos caracteres de la frase de un guest cruzan el wire (#332).
+pub const GUEST_REASON_MAX_CHARS: usize = 200;
+
+/// La frase con la que un guest rehusó, lista para enseñarse (#332): texto
+/// de un TERCERO, así que se enmascaran los peligros de terminal (escapes,
+/// controles, bidi) y se recorta a [`GUEST_REASON_MAX_CHARS`]. El mismo
+/// criterio que `built_against` en `doctor`: nunca crudo, nunca sin tope.
+#[must_use]
+pub fn guest_reason(raw: &str) -> String {
+    let masked = norte_encoding::mask_terminal_hazards(raw);
+    if masked.chars().count() <= GUEST_REASON_MAX_CHARS {
+        return masked;
+    }
+    let mut cut: String = masked.chars().take(GUEST_REASON_MAX_CHARS).collect();
+    cut.push('…');
+    cut
 }
 
 /// Lo que devuelve [`run_rename_plan`]: el plan, o por qué no lo hay.

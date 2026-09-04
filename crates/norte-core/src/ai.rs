@@ -362,6 +362,7 @@ pub struct RenamePlan {
 /// SALTA, que es lo mismo que hace el validador con lo que no entiende.
 pub(crate) fn ai_plan_to_proto(plan: RenamePlan) -> norte_proto::methods::AiRenamePlanResult {
     norte_proto::methods::AiRenamePlanResult {
+        refused: None,
         entries: plan
             .entries
             .into_iter()

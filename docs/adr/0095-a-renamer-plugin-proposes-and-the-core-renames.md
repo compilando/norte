@@ -63,13 +63,16 @@ question was what the plugin is allowed to do, and where its plan goes.
 6. **Caps and errors.** `names` has the same cap as `ai.rename_plan`; a
    plan has at most 10 000 proposals and the byte budget every plugin
    return has; beyond either the run fails, it does not truncate. On the
-   wire: `NotFound` when the plugin or renamer is not consented,
-   `Unsupported` when the guest refuses, `Io` when it does not run. The
-   guest's refusal sentence does NOT cross: error reasons are a closed
-   vocabulary and the sentence is third-party text, so it goes to the
-   daemon log, which both frontends show. That is a known gap, not a
-   contract: #332 asks for an additive reason channel on a dedicated
-   result, never on `Error`.
+   wire: `NotFound` when the plugin or renamer is not consented, `Io` when
+   the guest does not run. **A refusal is not an error** (0.68.0, #332):
+   the guest's `Err(text)` becomes an empty plan with `refused: Some(text)`
+   on `AiRenamePlanResult`, additive and omitted when absent. Error
+   reasons stay a closed vocabulary; the sentence is third-party text, so
+   the core masks terminal hazards and caps it at 200 characters before
+   it crosses, and the frontends show it as a status message and never
+   interpret it. (0.67.0 shipped with the sentence in the daemon log only
+   and a bare `Unsupported`; the protocol review called that misleading
+   for the demo's "approve my `location` capability".)
 
 7. **A renamer is not runnable.** `plugin.run_command` on any plugin whose
    world does not export `command` (decorator, columns, provider, renamer)

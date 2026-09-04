@@ -134,3 +134,85 @@ fn date_prefix_proposes_from_mtime_and_skips_what_is_already_dated() {
         "a renamer the manifest does not declare is not the plugin's to answer"
     );
 }
+
+/// The same plan through the wire (`plugin.rename_plan` over a UDS daemon,
+/// `Backend::Remote`): the dated proposals come back as the AI plan's type,
+/// and a refusal is an empty plan with `refused` carrying the guest's
+/// sentence (0.68.0, #332) — not an error. A `mem://` directory the local
+/// mint cannot open is what makes the guest refuse.
+#[cfg(unix)]
+#[tokio::test]
+async fn date_prefix_over_the_wire_plans_and_refuses_with_a_reason() {
+    use std::sync::Arc;
+
+    use norte_core::Engine;
+    use norte_core::backend::Backend;
+    use norte_core::daemon::{Daemon, DaemonConfig};
+    use norte_proto::VPath;
+    use norte_proto::methods::ClientInfo;
+    use norte_vfs::Provider;
+    use norte_vfs_local::LocalProvider;
+
+    let Some(wasm) = build_plugin() else {
+        return;
+    };
+    let cfg = tempfile::tempdir().expect("tempdir");
+    let _reg = install_and_consent(cfg.path(), &wasm);
+
+    let files = tempfile::tempdir().expect("files dir");
+    touch_at(files.path(), "foto.jpg", 1_756_857_600);
+    let loc = norte_vfs_local::vpath_from_native(files.path()).expect("vpath");
+
+    let sock_dir = tempfile::tempdir().expect("tempdir daemon");
+    let socket = sock_dir.path().join("d.sock");
+    let engine = Arc::new(Engine::new());
+    engine.register_provider(Arc::new(LocalProvider::rooted(files.path())) as Arc<dyn Provider>);
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: Some(cfg.path().to_path_buf()),
+            state_dir: None,
+        },
+    )
+    .await
+    .expect("bind");
+    let _run = tokio::spawn(daemon.run());
+    let remote = norte_core::backend::remote::RemoteBackend::connect(
+        socket,
+        None,
+        ClientInfo {
+            name: "renamer-date-prefix-e2e".into(),
+            version: "0.0.0".into(),
+        },
+    )
+    .await
+    .expect("connect");
+    let backend = Backend::Remote(remote);
+
+    let names = vec!["foto.jpg".to_owned()];
+    let plan = backend
+        .plugin_rename_plan(ID, RENAMER, &loc, &names)
+        .await
+        .expect("plugin.rename_plan answers");
+    assert_eq!(plan.refused, None);
+    assert_eq!(plan.entries.len(), 1, "{plan:?}");
+    assert_eq!(plan.entries[0].from, "foto.jpg");
+    assert_eq!(plan.entries[0].to, "2025-09-03_foto.jpg");
+
+    let nowhere = VPath::parse("mem:///nowhere").expect("wire");
+    let refused = backend
+        .plugin_rename_plan(ID, RENAMER, &nowhere, &names)
+        .await
+        .expect("a refusal is not an error (0.68.0)");
+    assert!(refused.entries.is_empty(), "{refused:?}");
+    assert!(
+        refused
+            .refused
+            .as_deref()
+            .is_some_and(|w| w.contains("location")),
+        "the guest's sentence crosses the wire: {refused:?}"
+    );
+}

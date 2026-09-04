@@ -52,6 +52,13 @@
             "$ref": "#/$defs/AiRenameEntry"
           },
           "type": "array"
+        },
+        "refused": {
+          "description": "Por qué el productor NO propuso nada (0.68.0, #332): la frase de un\nplugin `renamer` que rehusó («aprueba mi capacidad `location`»).\nTexto de un TERCERO, ya enmascarado y acotado por el daemon; el\nfrontend lo enseña como mensaje, nunca lo interpreta. Regla del\nRECEPTOR: si hay motivo, `entries` no cuenta — un plan con motivo y\nparejas no lo produce ningún daemon, y el frontend se queda con el\nmotivo. Se omite cuando no hay motivo, así que el wire de 0.67 no se\nmovió; un cliente 0.67 lo ignora y ve un plan vacío.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

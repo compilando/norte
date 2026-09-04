@@ -15459,6 +15459,61 @@ async fn la_paleta_pide_el_plan_a_un_renamer_y_lo_revisa_como_el_de_la_ia() {
     );
 }
 
+/// Un renamer que REHÚSA dice por qué (#332): la frase llega a la barra de
+/// estado tal cual la acotó el daemon, no se abre revisión, y no es un
+/// error genérico — «aprueba mi capacidad» tiene que leerse.
+#[tokio::test]
+async fn un_renamer_que_rehusa_dice_por_que_en_la_barra() {
+    let mut ext = extension("org.norte.date-prefix", "Date prefix", false);
+    ext.commands = vec![norte_proto::methods::PluginCommandInfo {
+        id: "by-date".to_owned(),
+        title: "Rename by date".to_owned(),
+        kind: norte_proto::methods::PluginCommandKind::Renamer,
+    }];
+    let mut f = Falso::default();
+    f.pon("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
+    f.renamer_rehusa = Some("needs the location capability".to_owned());
+    *f.plugins.lock().expect("plugins") = vec![ext];
+    let backend = Arc::new(f);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    por_la_paleta(&h, &mut sub, "mark.all").await;
+    h.dispatch(tecla_mod("p", true, false))
+        .await
+        .expect("host vivo");
+    let mut llego = false;
+    for _ in 0..2_000 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let p = siguiente_foto(&mut sub).await.palette.expect("abierta");
+        if p.rows.iter().any(|r| r.text.contains("Rename by date")) {
+            llego = true;
+            break;
+        }
+    }
+    assert!(llego, "la fila del renamer nunca llegó");
+    for c in "Rename by date".chars() {
+        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+    }
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+
+    // La misma foto trae la frase y la ausencia de revisión: esperar OTRA
+    // foto después colgaría, porque nada más cambia.
+    let (msg, revision) = foto_hasta(&h, &mut sub, "la frase del renamer en la barra", |s| {
+        s.status
+            .message
+            .clone()
+            .filter(|m| m.contains("needs the location capability"))
+            .map(|m| (m, s.ai_rename.is_some()))
+    })
+    .await;
+    assert!(
+        !msg.contains("no soportado") && !msg.contains("not supported"),
+        "no es un error genérico: {msg}"
+    );
+    assert!(!revision, "sin plan no hay revisión");
+}
+
 /// En solo lectura la paleta NO ofrece comandos de extensión.
 ///
 /// Lo que hace un comando lo decide el PLUGIN: puede escribir. Una ventana

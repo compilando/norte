@@ -1076,7 +1076,23 @@ use crate::{
 /// contesta `INVALID_PARAMS` («el plugin no ejecuta comandos») ANTES de
 /// instanciar nada — la paleta enseña el error, no renombra nada. Un
 /// cliente 0.67 contra un daemon 0.66 no negocia.
-pub const PROTOCOL_VERSION: &str = "0.67.0";
+///
+/// # 0.68.0 — el motivo de un plan rehusado (#332)
+///
+/// Un campo: [`AiRenamePlanResult::refused`], la frase con la que un plugin
+/// `renamer` rehusó proponer, enmascarada y acotada por el daemon. Antes
+/// [`PLUGIN_RENAME_PLAN`] contestaba `Unsupported` a secas y la frase se
+/// quedaba en el registro: «aprueba mi capacidad `location`» llegaba al
+/// lector como «no soportado aquí». Un rehúse ya no es un error del wire:
+/// es un plan vacío con motivo.
+///
+/// Ventana N=0.68.x / N-1=0.67.x. Aditivo: el campo se omite cuando no hay
+/// motivo, así que todo plan que existía es byte a byte el de antes. La
+/// pérdida, para un **cliente 0.67 contra un daemon 0.68**: lee `refused`
+/// ignorándolo (ADR 0004) y enseña «el modelo no propuso cambios» donde el
+/// plugin explicó por qué — un mensaje impreciso, no un error. Un cliente
+/// 0.68 contra un daemon 0.67 no negocia.
+pub const PROTOCOL_VERSION: &str = "0.68.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2024,12 +2040,11 @@ pub const PLUGIN_COLUMN_VALUES: &str = "plugin.column_values";
 /// `dir`, como `plugin.column_values`; `names` tiene el tope de
 /// [`AI_RENAME_NAMES_MAX`].
 ///
-/// Errores: `NotFound` si el plugin/renamer no está consentido;
-/// `Unsupported` si el guest REHÚSA — se reutiliza esa variante (no hay
-/// capacidad de provider por medio) porque los motivos del wire son
-/// vocabulario cerrado y la frase del guest es texto de un tercero: va al
-/// registro del daemon, no al cliente (#332 pide un canal de motivo);
-/// `Io` si el guest no corre. Un daemon 0.66 no negocia con este cliente.
+/// Errores: `NotFound` si el plugin/renamer no está consentido; `Io` si el
+/// guest no corre. Si el guest REHÚSA no es un error: `entries` vacío y
+/// [`AiRenamePlanResult::refused`] con su frase (0.68.0, #332), que el
+/// daemon enmascara y acota antes de que cruce. Un daemon 0.66 no negocia
+/// con este cliente.
 pub const PLUGIN_RENAME_PLAN: &str = "plugin.rename_plan";
 /// `plugin.get_config` — esquema `[config]` + valores EFECTIVOS de un plugin
 /// (0.28.0, G3c, ADR 0037): un elemento [`PluginConfigKeyWire`] por clave
@@ -2588,6 +2603,16 @@ pub struct AiRenameEntry {
 pub struct AiRenamePlanResult {
     /// Parejas from→to (solo las que cambian de nombre).
     pub entries: Vec<AiRenameEntry>,
+    /// Por qué el productor NO propuso nada (0.68.0, #332): la frase de un
+    /// plugin `renamer` que rehusó («aprueba mi capacidad `location`»).
+    /// Texto de un TERCERO, ya enmascarado y acotado por el daemon; el
+    /// frontend lo enseña como mensaje, nunca lo interpreta. Regla del
+    /// RECEPTOR: si hay motivo, `entries` no cuenta — un plan con motivo y
+    /// parejas no lo produce ningún daemon, y el frontend se queda con el
+    /// motivo. Se omite cuando no hay motivo, así que el wire de 0.67 no se
+    /// movió; un cliente 0.67 lo ignora y ve un plan vacío.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
 }
 
 /// Por qué una cadena no es un [`PlanHash`].

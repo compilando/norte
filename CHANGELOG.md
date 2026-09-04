@@ -9,6 +9,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **Protocol 0.68.0: a renamer that refuses says why (#332).**
+  `AiRenamePlanResult` gains `refused: Option<String>`, omitted when
+  absent, so every plan that existed is byte-identical to 0.67. When a
+  `renamer` plugin returns `Err(text)`, `plugin.rename_plan` now answers an
+  empty plan carrying the sentence instead of a bare `Unsupported`; the
+  core masks terminal hazards and caps it at 200 characters (third-party
+  text), and both the TUI and the window show it in the status bar as
+  "the extension proposes nothing: …" without opening a review. A 0.67
+  client ignores the field and says "the model proposed no changes" —
+  imprecise, not broken. Source break for anyone building the result
+  literal: one more field.
 - **Protocol 0.67.0, `norte:renamer@0.1.0`: a plugin can propose a batch
   rename.** A sixth plugin kind, `renamer` (ADR 0095): the plugin gets the
   marked names (and, with `location = "read"`, a token to `stat` or read

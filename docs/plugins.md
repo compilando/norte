@@ -94,7 +94,10 @@ ask about, and the human reviews the plan in the same screen the AI plan
 uses — with the core checking every target, journaling and undo as for any
 batch rename. Reading the files (EXIF, ID3, a modification time) is what
 the `location` capability is for: without it, `plan` gets no location and
-should say so in its error rather than guess.
+should say so in its error rather than guess — the sentence you return in
+`Err` reaches the user's status bar (masked and capped at 200 characters),
+so write it for them: "approve the `location` capability", not a stack
+trace.
 
 Contributions are part of the approval digest: they say *when* and *how*
 the plugin fires, which is as much a part of what the human approves as the

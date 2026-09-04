@@ -490,6 +490,7 @@ gui-msg-ai-rename-running = Renombrado IA: pensando…
 # petición más nueva antes de poder revisarse — la pérdida se dice, jamás muda.
 gui-msg-ai-rename-superseded = Renombrado IA: plan anterior descartado (nueva petición)
 msg-ai-rename-empty = Renombrado IA: el modelo no propuso cambios
+msg-rename-plan-refused = la extensión no propone nada: { $why }
 msg-ai-rename-failed = el renombrado IA falló: { $error }
 msg-ai-rename-invalid-plan = renombrado IA: plan inválido del daemon — no se aplicó nada
 msg-ai-rename-in-search = el renombrado IA no está disponible en un pane de búsqueda
