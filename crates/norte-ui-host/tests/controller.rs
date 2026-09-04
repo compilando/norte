@@ -16,6 +16,16 @@ use norte_ui_host::dto::{SlotView, UiNotice, UiUpdate};
 mod backend_falso;
 use backend_falso::Falso;
 
+/// Cuánto se espera UNA actualización antes de dar el test por colgado.
+///
+/// Es un tope de socorro, no una medida: convierte un cuelgue en un fallo
+/// con mensaje. Fue 500 ms, y bajo la carga del gate entero (6.000 tests en
+/// paralelo más los e2e con red) `siguiente_revision` lo perdía de vez en
+/// cuando en el pre-push — la misma familia que `foto_hasta`, que ya
+/// esperaba quince segundos por lo mismo. Ningún test lo usa como señal de
+/// «no llega nada».
+const ESPERA_MAX: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Unos ajustes de columnas con estos ids, para todos los esquemas.
 fn columnas_de(ids: &[&str]) -> norte_frontend::columns::ColumnsSettings {
     let cfg = norte_config::ColumnsConfig {
@@ -1407,7 +1417,7 @@ async fn siguientes_tasks(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Vec<norte_ui_host::dto::TaskView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización con tasks, no un cuelgue")
             .expect("el host sigue vivo");
@@ -1437,7 +1447,7 @@ async fn siguientes_dialogos(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Vec<norte_ui_host::dto::DialogView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización con diálogos, no un cuelgue")
             .expect("el host sigue vivo");
@@ -1757,7 +1767,7 @@ async fn la_conexion_perdida_se_pinta_y_se_dice() {
     let mut vista = None;
     let mut dicho = false;
     for _ in 0..10 {
-        match tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        match tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("llega")
             .expect("el host sigue vivo")
@@ -2132,7 +2142,7 @@ async fn siguiente_visor(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::ViewerView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización con visor, no un cuelgue")
             .expect("el host sigue vivo");
@@ -2158,7 +2168,7 @@ async fn siguiente_disposicion(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> norte_ui_host::dto::LayoutView {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización con disposición, no un cuelgue")
             .expect("el host sigue vivo");
@@ -2637,7 +2647,7 @@ async fn el_panel_inactivo_se_desplaza_sin_robar_el_foco() {
 
     let mut visto = None;
     for _ in 0..10 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización antes del plazo")
             .expect("el host sigue vivo");
@@ -3773,7 +3783,7 @@ async fn siguiente_whichkey(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::WhichKeyView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización antes del plazo")
             .expect("el host sigue vivo");
@@ -3799,7 +3809,7 @@ async fn siguiente_paleta(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::PaletteView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización antes del plazo")
             .expect("el host sigue vivo");
@@ -3981,7 +3991,7 @@ async fn siguiente_ayuda(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::HelpView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización antes del plazo")
             .expect("el host sigue vivo");
@@ -4289,7 +4299,7 @@ async fn ctrl_p_cambia_la_ayuda_por_la_paleta_en_un_solo_parche() {
     let mut vio_cierre = false;
     let mut vio_paleta = false;
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización antes del plazo")
             .expect("el host sigue vivo");
@@ -4785,7 +4795,7 @@ async fn siguiente_ajustes(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::SettingsView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización antes del plazo")
             .expect("el host sigue vivo");
@@ -5028,7 +5038,7 @@ async fn siguiente_extensiones(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::ExtensionsView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización antes del plazo")
             .expect("el host sigue vivo");
@@ -5345,7 +5355,7 @@ async fn siguiente_tema(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::ThemeView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización antes del plazo")
             .expect("el host sigue vivo");
@@ -5367,7 +5377,7 @@ async fn siguiente_selector(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::PickerView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización antes del plazo")
             .expect("el host sigue vivo");
@@ -6379,7 +6389,7 @@ async fn siguiente_busqueda(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::SearchView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización antes del plazo")
             .expect("el host sigue vivo");
@@ -10033,7 +10043,7 @@ async fn siguiente_revision(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::AiRenameView> {
     for _ in 0..40 {
-        let siguiente = tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("una actualización, no un cuelgue")
             .expect("el host sigue vivo");
@@ -11211,7 +11221,7 @@ fn inyectar_task(
 /// Espera el siguiente aviso con clave, sea cual sea.
 async fn siguiente_aviso(sub: &mut norte_ui_host::controller::UiSubscription) -> String {
     for _ in 0..40 {
-        match tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        match tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("llega")
             .expect("el host sigue vivo")
@@ -11538,7 +11548,7 @@ async fn siguientes_banners(
     sub: &mut norte_ui_host::controller::UiSubscription,
 ) -> Vec<norte_ui_host::dto::BannerView> {
     for _ in 0..40 {
-        match tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        match tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("llega")
             .expect("el host sigue vivo")
@@ -12770,7 +12780,7 @@ async fn foto_hasta_notice(
     clave: &str,
 ) -> String {
     for _ in 0..40 {
-        match tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        match tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("llega")
             .expect("el host sigue vivo")
@@ -12874,8 +12884,7 @@ async fn un_relevo_no_se_lee_como_una_parada() {
     tx.send(norte_client::ConnEvent::Restored)
         .expect("el host escucha");
     for _ in 0..40 {
-        if let Ok(Some(Update::Message(m))) =
-            tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv()).await
+        if let Ok(Some(Update::Message(m))) = tokio::time::timeout(ESPERA_MAX, sub.recv()).await
             && let UiUpdate::Patch(p) = &m.payload
             && let Some(norte_ui_host::dto::ViewChange::Status(s)) = p
                 .changes
@@ -13063,8 +13072,7 @@ async fn un_empaquetado_terminado_dice_los_nombres_que_significan_otra_cosa() {
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
     for _ in 0..40 {
-        if let Ok(Some(Update::Message(m))) =
-            tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv()).await
+        if let Ok(Some(Update::Message(m))) = tokio::time::timeout(ESPERA_MAX, sub.recv()).await
             && let UiUpdate::Patch(p) = &m.payload
             && let Some(norte_ui_host::dto::ViewChange::Status(s)) = p
                 .changes
@@ -13193,8 +13201,7 @@ async fn el_aviso_de_journal_se_apaga_cuando_vuelve_a_aceptarse_una_mutacion() {
     .expect("host vivo");
 
     for _ in 0..40 {
-        if let Ok(Some(Update::Message(m))) =
-            tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv()).await
+        if let Ok(Some(Update::Message(m))) = tokio::time::timeout(ESPERA_MAX, sub.recv()).await
             && let UiUpdate::Patch(p) = &m.payload
             && let Some(norte_ui_host::dto::ViewChange::Status(s)) = p
                 .changes
@@ -14131,7 +14138,7 @@ async fn siguiente_comparacion(
     sub: &mut norte_ui_host::controller::UiSubscription,
 ) -> Option<norte_ui_host::dto::CompareView> {
     for _ in 0..40 {
-        match tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv())
+        match tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
             .expect("llega")
             .expect("el host sigue vivo")
@@ -14374,9 +14381,7 @@ async fn siguiente_sync(
     sub: &mut norte_ui_host::controller::UiSubscription,
 ) -> Option<norte_ui_host::dto::SyncView> {
     for _ in 0..40 {
-        let Ok(Some(u)) =
-            tokio::time::timeout(std::time::Duration::from_millis(500), sub.recv()).await
-        else {
+        let Ok(Some(u)) = tokio::time::timeout(ESPERA_MAX, sub.recv()).await else {
             continue;
         };
         match u {
@@ -16068,7 +16073,7 @@ async fn editar_uno_nuevo_crea_el_fichero_y_lo_abre() {
         assert_eq!(creados[0].to_wire(), "file:///casa/borrador.md");
     }
 
-    let efecto = tokio::time::timeout(std::time::Duration::from_millis(500), efectos.recv())
+    let efecto = tokio::time::timeout(ESPERA_MAX, efectos.recv())
         .await
         .expect("llega el efecto nativo")
         .expect("canal vivo");
