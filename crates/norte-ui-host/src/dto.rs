@@ -1096,6 +1096,17 @@ pub struct MetadataSlotView {
     /// No hay nada que enseñar, y esta es la frase que lo dice (el panel al
     /// que sigue está vacío). Vacía cuando sí hay campos.
     pub note: String,
+    /// La ruta del listado al que esta hoja SIGUE, ya pintable.
+    ///
+    /// «Detalles» a secas no dice de qué son los detalles: con dos listados
+    /// abiertos no había forma de saber cuál se está describiendo salvo mover
+    /// el cursor y mirar si la hoja se movía. Viaja aparte de los campos
+    /// porque no describe a la ENTRADA sino al panel, y va en el título.
+    ///
+    /// Vacía si el vínculo no resuelve a ningún listado.
+    pub follows_display: String,
+    /// La ruta de arriba DIFIERE de los bytes reales.
+    pub follows_hostile: bool,
 }
 
 /// Un campo de la hoja.

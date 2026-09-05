@@ -39,6 +39,35 @@ pub fn slot(app: &App, res: &Resolved) -> Option<SlotId> {
         .find(|id| app.layout.kind_of(*id).is_some_and(|k| k.as_str() == KIND))
 }
 
+/// El listado al que sigue la hoja del hueco `hueco`.
+///
+/// El vínculo se resuelve con el motor compartido, así que un hueco seguido
+/// que muere degrada al rol `active` con su diagnóstico en vez de quedarse
+/// mirando al vacío en silencio.
+fn seguido(app: &App, hueco: SlotId) -> Option<&crate::app::Pane> {
+    let mut diags = Vec::new();
+    let en_fila =
+        norte_frontend::layout::resolve_follow(&app.layout, hueco, &app.roles, &mut diags)
+            .or_else(|| app.roles.get(norte_frontend::layout::RoleId::Active))?;
+    app.panes.browser(en_fila)
+}
+
+/// La ruta del listado al que sigue la hoja colocada, ya pintable, para el
+/// TÍTULO del panel.
+///
+/// «Detalles» a secas no dice de qué son los detalles: con dos listados
+/// abiertos, la única forma de saber cuál se está describiendo era mover el
+/// cursor y ver si la hoja se movía. La misma respuesta que da la ventana en
+/// `MetadataSlotView::follows_display` (ADR 0077).
+#[must_use]
+pub fn follows(app: &App, res: &Resolved) -> Option<(String, bool)> {
+    let pane = seguido(app, slot(app, res)?)?;
+    Some(norte_frontend::path_display_with(
+        pane.dir(),
+        pane.name_encoding(),
+    ))
+}
+
 /// Qué toca enseñar, y en qué hueco. `None` si no hay hueco colocado.
 ///
 /// El vínculo se resuelve con el motor, así que un hueco seguido que muere
@@ -47,11 +76,7 @@ pub fn slot(app: &App, res: &Resolved) -> Option<SlotId> {
 #[must_use]
 pub fn want(app: &App, res: &Resolved) -> Option<(SlotId, Want)> {
     let hueco = slot(app, res)?;
-    let mut diags = Vec::new();
-    let in_a_row =
-        norte_frontend::layout::resolve_follow(&app.layout, hueco, &app.roles, &mut diags)
-            .or_else(|| app.roles.get(norte_frontend::layout::RoleId::Active))?;
-    let pane = app.panes.browser(in_a_row)?;
+    let pane = seguido(app, hueco)?;
     // `cursor_entry` y no `selected`: la hoja DESCRIBE lo que hay bajo el
     // cursor, y sobre la fila `..` «lo señalado» es `None` a propósito —esa
     // fila no es un operando—. Preguntando por el operando el panel salía

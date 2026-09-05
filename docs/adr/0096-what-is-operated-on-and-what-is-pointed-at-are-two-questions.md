@@ -94,7 +94,21 @@ parity harness only ever ran in the one state a reader never starts in.
    is `ntc ~/dir` over a session whose listing failed, which is exactly when
    a reader wants to go up.
 
-5. **Parity scenarios run with the row off *and* on.** The default
+5. **A panel that follows the cursor needs its own way to reach the
+   renderer, and it needs to say what it follows.** The terminal recomputes
+   every frame and gets both for free; the window speaks in patches, and a
+   panel with no probe of its own only refreshes when some *other* panel
+   forces a full snapshot. The details sheet had none — it rode along on the
+   docked viewer's — so a layout with the sheet and no viewer froze it. It
+   now has `sondear_hojas`, run beside `sondear_previews` after every
+   message.
+
+   And the title carries the followed pane's path (`follows_display`), in
+   both frontends. "Details" alone does not say what the details are *of*,
+   and with two listings open the only way to find out was to move the cursor
+   and watch which panel the sheet reacted to.
+
+6. **Parity scenarios run with the row off *and* on.** The default
    configuration is not an edge case, and a harness that never exercises it
    is measuring a product nobody runs. The index-sensitive unit tests keep
    the row off, which is why the two configurations are a loop around the

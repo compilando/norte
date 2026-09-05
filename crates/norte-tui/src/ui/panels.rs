@@ -734,6 +734,7 @@ pub(crate) fn draw_metadata(
     frame: &mut Frame<'_>,
     area: Rect,
     entry: Option<&(norte_proto::Entry, bool)>,
+    sigue: Option<&(String, bool)>,
     app: &App,
     con_teclado: bool,
 ) {
@@ -743,9 +744,25 @@ pub(crate) fn draw_metadata(
     } else {
         Role::BorderUnfocused
     };
+    // El título dice a QUÉ LISTADO sigue, no solo que es la hoja: con dos
+    // listados abiertos, «Detalles» a secas no dice de qué son los detalles,
+    // y la única forma de averiguarlo era mover el cursor y mirar si la hoja
+    // se movía. La ruta se recorta por el medio y con marca, como cualquier
+    // otra ruta de este fichero: el borde del bloque no avisa de un corte.
+    let titulo = match sigue {
+        Some((ruta, hostil)) => format!(
+            " {} · {} ",
+            t("metadata-title"),
+            norte_frontend::middle_ellipsis(
+                &with_badge(ruta, *hostil),
+                (area.width as usize).saturating_sub(t("metadata-title").chars().count() + 6),
+            )
+        ),
+        None => format!(" {} ", t("metadata-title")),
+    };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {} ", t("metadata-title")))
+        .title(titulo)
         .title_style(theme.role(Role::Title))
         .border_style(theme.role(border));
     let inner = block.inner(area);

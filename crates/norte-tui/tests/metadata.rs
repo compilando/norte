@@ -119,6 +119,26 @@ fn sobre_la_fila_de_subir_la_hoja_la_describe() {
     );
 }
 
+/// La hoja DICE a qué listado sigue, y lo dice también cuando cambia el foco.
+///
+/// La misma respuesta que da la ventana en `follows_display` (ADR 0077):
+/// «Detalles» a secas no dice de qué son los detalles, y con dos listados
+/// abiertos la única forma de saberlo era mover el cursor y mirar.
+#[test]
+fn la_hoja_dice_a_que_listado_sigue() {
+    let mut app = app_de_prueba();
+    app.toggle_metadata();
+    let res = resolver(&mut app);
+    let (ruta, hostil) = norte_tui::metadata::follows(&app, &res).expect("hay hueco colocado");
+    assert_eq!(ruta, "⟨file⟩/izq");
+    assert!(!hostil);
+
+    app.set_focus(1);
+    let res = resolver(&mut app);
+    let (otra, _) = norte_tui::metadata::follows(&app, &res).expect("sigue colocada");
+    assert_eq!(otra, "⟨file⟩/der", "sigue al ACTIVO, y lo dice");
+}
+
 /// Un hueco detrás de una pestaña no produce objetivo. Es el mismo invariante
 /// que el preview, y se prueba igual porque una fuga así solo la ve un test.
 #[test]

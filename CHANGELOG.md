@@ -20,6 +20,19 @@ independently through `PROTOCOL_VERSION`.
   included, and is documented as never an operand. On `..` the sheet says
   `..`, `folder`, and where it leads (new `metadata-target` key in both
   locales), and the viewer says `directory`.
+- **Clicking a row did not move the window's details sheet.** The sheet only
+  ever travelled inside a *full* snapshot, and a click answers with a rows
+  patch — so it rode along on the snapshot the docked *viewer* produced when
+  its note changed, and a layout with a details panel and no viewer left the
+  sheet frozen on whatever it showed at startup. It now has a probe of its
+  own, `sondear_hojas`, run after every message exactly where the viewer's
+  already was. The terminal never had this: it recomputes the sheet each
+  frame.
+- **The details panel says which listing it follows.** "Detalles" alone does
+  not say what the details are *of*, and with two listings open the only way
+  to find out was to move the cursor and watch. The title now carries the
+  followed pane's path in both frontends (`follows_display` over the bridge),
+  truncated with an ellipsis rather than clipped in silence.
 - **Opening the quick search could make the `..` row an operand.** In
   `Mode::Filter` the real cursor does not move and the filter chooses the
   row, and a filter's empty query is born selecting index 0 — so the guard

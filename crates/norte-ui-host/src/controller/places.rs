@@ -320,6 +320,60 @@ impl Estado {
             .find(|s| kind_de(&self.arbol, *s).is_some_and(|k| k.as_str() == "places"))
     }
 
+    /// Los huecos `metadata` COLOCADOS, y qué enseñaría cada uno AHORA.
+    ///
+    /// Del reparto y no del árbol, como el visor: un hueco detrás de una
+    /// pestaña existe pero no se ve.
+    fn huecos_de_hoja(&self) -> Vec<SlotId> {
+        self.reparto
+            .placements
+            .iter()
+            .map(|(s, _)| *s)
+            .filter(|s| kind_de(&self.arbol, *s).is_some_and(|k| k.as_str() == "metadata"))
+            .collect()
+    }
+
+    /// Pone al día lo que enseña cada hoja colocada, y devuelve una foto si
+    /// alguna cambió.
+    ///
+    /// La hoja SIGUE al cursor, y el cursor lo mueve cualquier mensaje: una
+    /// tecla, un clic, un listado que aterriza. La TUI lo resuelve gratis
+    /// porque recalcula en cada frame; aquí hay que preguntarlo después de
+    /// cada mensaje, exactamente como el visor acoplado (`sondear_previews`).
+    ///
+    /// Sin esto la hoja no tenía NINGÚN camino propio hasta el renderer:
+    /// viajaba de gorra en la foto entera que provocaba otro panel, así que
+    /// una disposición con hoja y sin visor la dejaba congelada en lo que
+    /// hubiera al arrancar. `SelectRow` —el clic— contesta con un parche de
+    /// filas, y ahí no va la hoja.
+    ///
+    /// No pide nada ni lanza nada: comparar cuesta lo que cuesta construir la
+    /// hoja, que sale del listado que ya está en memoria.
+    pub(super) fn sondear_hojas(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let vivos: Vec<u32> = self
+            .arbol
+            .slot_ids()
+            .into_iter()
+            .map(|SlotId(id)| id)
+            .collect();
+        self.hojas.retain(|id, _| vivos.contains(id));
+        let mut cambio = false;
+        for slot in self.huecos_de_hoja() {
+            let SlotId(id) = slot;
+            let ahora = self.hoja_de_atributos(slot);
+            if self.hojas.get(&id) != Some(&ahora) {
+                self.hojas.insert(id, ahora);
+                cambio = true;
+            }
+        }
+        if cambio {
+            let snap = self.snapshot();
+            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))]
+        } else {
+            Vec::new()
+        }
+    }
+
     /// La hoja de atributos de un hueco `metadata`.
     ///
     /// Lo que enseña sale del panel al que este hueco SIGUE, resuelto con el
@@ -351,11 +405,21 @@ impl Estado {
         // resaltaba otra fila.
         let entrada = pane.and_then(|p| p.cursor_entry());
         let fila_de_subir = pane.is_some_and(PaneState::cursor_is_parent_row);
+        // A QUÉ sigue, para el título. Con la MISMA reinterpretación de
+        // nombres que la cabecera de ese listado, que es la ruta que el
+        // lector tiene delante para comparar.
+        let (sigue, sigue_hostil) = pane.map_or_else(
+            || (String::new(), false),
+            |p| norte_frontend::path_display_with(p.dir(), p.name_encoding()),
+        );
+        let sigue = clamp_display(sigue);
         let Some(e) = entrada else {
             return crate::dto::MetadataSlotView {
                 slot_id: id,
                 fields: Vec::new(),
                 note: clamp_display(norte_i18n::t_in(self.lang, "metadata-empty")),
+                follows_display: sigue,
+                follows_hostile: sigue_hostil,
             };
         };
         // Qué filas van dentro lo decide el crate COMPARTIDO, no este host:
@@ -375,6 +439,8 @@ impl Estado {
             slot_id: id,
             fields,
             note: String::new(),
+            follows_display: sigue,
+            follows_hostile: sigue_hostil,
         }
     }
 }
