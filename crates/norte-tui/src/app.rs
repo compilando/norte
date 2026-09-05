@@ -1039,12 +1039,27 @@ impl App {
     /// la primera sesión guardada — y el lector lo veía como que el TUI no
     /// tiene fila de subir y la ventana sí.
     ///
-    /// **Solo estampa lo que no viaja en la sesión.** El orden y los ocultos
-    /// son de la sesión y los repone quien llama; la fila `..` es de la
-    /// config y la pone esto. Un campo nuevo derivado de la CONFIG va aquí, y
-    /// no en cada llamante.
-    pub fn adoptar_pane(&mut self, id: norte_frontend::layout::SlotId, mut pane: Pane) {
+    /// Estampa lo de la CONFIG (la fila `..`) y repone lo de la SESIÓN (el
+    /// orden y los ocultos), en ese orden y en un solo sitio.
+    ///
+    /// Los tres llamantes lo hacían por su cuenta y en órdenes distintos, que
+    /// es cómo uno se dejó la fila; el campo que se añada mañana se dejarían
+    /// dos. `None` en `sort`/`hidden` es «este llamante no tiene nada que
+    /// reponer», no «pon el de fábrica».
+    pub fn adoptar_pane(
+        &mut self,
+        id: norte_frontend::layout::SlotId,
+        mut pane: Pane,
+        sort: Option<norte_frontend::SortSpec>,
+        hidden: Option<bool>,
+    ) {
         pane.set_parent_row(self.parent_row);
+        if let Some(s) = sort {
+            pane.set_sort(s);
+        }
+        if let Some(h) = hidden {
+            pane.set_show_hidden(h);
+        }
         self.panes.insert_browser(id, pane);
     }
 

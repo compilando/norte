@@ -42,7 +42,15 @@ pub fn sanitize_header(header: &str) -> String {
 pub fn sanitize_cell(value: Option<&str>) -> Option<String> {
     value.and_then(|v| {
         let masked = crate::display_name(v.as_bytes()).0;
-        let truncated: String = masked.chars().take(COLUMN_VALUE_MAX_CHARS).collect();
+        let mut truncated: String = masked.chars().take(COLUMN_VALUE_MAX_CHARS).collect();
+        // El corte se MARCA. Sin la marca, un valor recortado y uno completo
+        // se pintan idénticos, y quien lee la hoja de atributos —que existe
+        // justo para ver el valor entero— no puede saber cuál está mirando.
+        // Es la regla de `truncation_twins` del corpus: lo que se debe es que
+        // el corte se vea, no que quepa.
+        if masked.chars().nth(COLUMN_VALUE_MAX_CHARS).is_some() {
+            truncated.push('…');
+        }
         (!truncated.is_empty()).then_some(truncated)
     })
 }
@@ -233,11 +241,26 @@ mod tests {
         assert_eq!(sanitize_cell(None), None);
     }
 
+    /// Trunca tras enmascarar, y MARCA el corte.
+    ///
+    /// La marca no es cosmética: la hoja de atributos existe para ver el
+    /// valor entero, y sin ella un valor recortado y uno completo se pintan
+    /// idénticos.
     #[test]
-    fn sanitize_cell_trunca_tras_enmascarar() {
+    fn sanitize_cell_trunca_tras_enmascarar_y_marca_el_corte() {
         let largo = "a".repeat(1000);
         let out = sanitize_cell(Some(&largo)).unwrap();
-        assert_eq!(out.chars().count(), COLUMN_VALUE_MAX_CHARS);
+        assert!(out.ends_with('…'), "el corte se ve: {out}");
+        assert_eq!(
+            out.chars().count(),
+            COLUMN_VALUE_MAX_CHARS + 1,
+            "los caracteres del tope más la marca"
+        );
+
+        // Uno que cabe JUSTO no se marca: no hay nada cortado que decir.
+        let justo = "a".repeat(COLUMN_VALUE_MAX_CHARS);
+        let out = sanitize_cell(Some(&justo)).unwrap();
+        assert_eq!(out, justo);
     }
 
     #[test]
@@ -2018,16 +2041,39 @@ pub fn header_label(
     style: &ColumnStyle,
     catalog: Option<&norte_proto::AttrCatalog>,
 ) -> String {
+    header_label_in(id, style, catalog, norte_i18n::active())
+}
+
+/// La cabecera de una columna en un idioma CONCRETO.
+///
+/// Existe porque quien guarda el idioma en un campo —el host de la ventana,
+/// que lo recibe al arrancar— no puede usar el global: [`norte_i18n::t`] lee
+/// la negociación del proceso, así que la mitad fija de la hoja de atributos
+/// salía en el idioma pedido y las cabeceras de los atributos en el del
+/// sistema, en la misma pantalla.
+///
+/// [`header_label`] es esto con el idioma global, que es lo que quiere un
+/// terminal: ahí los dos coinciden siempre.
+#[must_use]
+pub fn header_label_in(
+    id: &ColumnId,
+    style: &ColumnStyle,
+    catalog: Option<&norte_proto::AttrCatalog>,
+    lang: norte_i18n::Lang,
+) -> String {
     if let Some(h) = &style.header {
         return h.clone();
     }
     match id {
-        ColumnId::Builtin(b) => norte_i18n::t(match b {
-            Builtin::Name => "col-header-name",
-            Builtin::Size => "col-header-size",
-            Builtin::Mtime => "col-header-mtime",
-            Builtin::Kind => "col-header-kind",
-        }),
+        ColumnId::Builtin(b) => norte_i18n::t_in(
+            lang,
+            match b {
+                Builtin::Name => "col-header-name",
+                Builtin::Size => "col-header-size",
+                Builtin::Mtime => "col-header-mtime",
+                Builtin::Kind => "col-header-kind",
+            },
+        ),
         ColumnId::Attr(aid) => {
             // #117 review: la clave Fluent solo se deriva para namespaces
             // de PRIMERA parte — un id de provider como `posix-mode`
@@ -2036,7 +2082,7 @@ pub fn header_label(
             const FIRST_PARTY: &[&str] = &["posix.", "win.", "s3.", "archive."];
             if FIRST_PARTY.iter().any(|ns| aid.starts_with(ns)) {
                 let key = format!("col-attr-{}", aid.replace(['.', '_'], "-"));
-                let loc = norte_i18n::t(&key);
+                let loc = norte_i18n::t_in(lang, &key);
                 if loc != key {
                     return loc;
                 }

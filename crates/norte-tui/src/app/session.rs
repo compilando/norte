@@ -106,10 +106,7 @@ impl App {
         // `..` — y `set_listing` no lo cura después, porque `poner_padre` no
         // hace nada desde `Apagada`: el panel se quedaba sin ella hasta el
         // siguiente hot-reload de la config.
-        let mut nuevo = Pane::new(dir, Vec::new());
-        nuevo.set_sort(sort);
-        nuevo.set_show_hidden(hidden);
-        self.adoptar_pane(slot, nuevo);
+        self.adoptar_pane(slot, Pane::new(dir, Vec::new()), Some(sort), Some(hidden));
         self.session.cursors.remove(&slot.0);
     }
 
@@ -142,7 +139,13 @@ impl App {
         for (raw, estado) in &body.slots {
             let id = norte_frontend::layout::SlotId(*raw);
             self.session.touched.insert(*raw, estado.touched_ms);
-            if self.panes.browser(id).is_none() {
+            // «¿Tiene ESTE layout el hueco?» se le pregunta al LAYOUT, no al
+            // almacén de panes: los huérfanos siguen en el almacén, así que
+            // `browser(id).is_some()` contestaba que sí para un hueco que la
+            // disposición no coloca — y ese hueco entraba por la puerta de
+            // adopción en vez de conservarse tal cual, que es lo que promete
+            // el párrafo de abajo.
+            if !self.layout.slot_ids().contains(&id) {
                 // Un hueco que este layout no tiene NO se borra: se guarda tal
                 // cual y se vuelve a escribir. Volver a la disposición de ayer
                 // devuelve el panel donde estaba.
@@ -153,10 +156,12 @@ impl App {
             // configuración de esta sesión: el orden y los ocultos son de la
             // sesión, la fila `..` es de la config. Poniéndola a mano aquí,
             // se perdía en cada restauración.
-            let mut nuevo = Pane::new(estado.path.clone(), Vec::new());
-            nuevo.set_sort(estado.sort);
-            nuevo.set_show_hidden(estado.show_hidden);
-            self.adoptar_pane(id, nuevo);
+            self.adoptar_pane(
+                id,
+                Pane::new(estado.path.clone(), Vec::new()),
+                Some(estado.sort),
+                Some(estado.show_hidden),
+            );
             self.session.cursors.insert(*raw, estado.cursor);
             self.history
                 .for_slot_mut(id)

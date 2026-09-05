@@ -634,6 +634,9 @@ pub enum EnterAction {
     View(VPath),
     /// Nada bajo el cursor, o algo que no es ni fichero ni directorio.
     Nothing,
+    /// La fila `..`: SUBIR a este directorio, dejando el cursor sobre el que
+    /// se abandona. Es un `cd` con memoria, y por eso no es [`Self::Cd`].
+    Up(VPath),
 }
 
 /// Qué hace `nav.enter` AHORA: navegar, abrir fuera, o ver.
@@ -645,6 +648,18 @@ pub enum EnterAction {
 /// eso—, y el visor interno sigue estando en su tecla (`pane.view`).
 #[must_use]
 pub fn enter_action(app: &App) -> EnterAction {
+    // SUBIR se dice aparte de entrar, aunque las dos acaben en un `cd`: al
+    // subir el cursor tiene que aterrizar sobre el directorio del que se
+    // sale, y eso solo lo sabe quien sabe que está subiendo. Contestando
+    // `Cd(padre)` como para cualquier otra carpeta, `nav.enter` sobre `..`
+    // dejaba el cursor en la primera fila del padre mientras la tecla
+    // dedicada de subir lo dejaba bien: la misma tecla con dos resultados
+    // según por qué puerta se entrase.
+    if app.focused().cursor_is_parent_row()
+        && let Some(padre) = app.focused().parent_target().cloned()
+    {
+        return EnterAction::Up(padre);
+    }
     if let Some(dir) = crate::trail::nav_enter_target(app) {
         return EnterAction::Cd(dir);
     }
@@ -901,6 +916,44 @@ mod pane_gestures_tests {
             Pane::new(vp("file:///otro"), Vec::new()),
         );
         assert_eq!(enter_action(&vacio), EnterAction::Nothing);
+    }
+
+    /// `nav.enter` sobre `..` es SUBIR, y subir se dice con su propio verbo.
+    ///
+    /// Contestaba `Cd(padre)`, que es lo mismo que entrar en una carpeta
+    /// cualquiera, y por eso el cursor aterrizaba en la primera fila del
+    /// padre en vez de sobre el directorio del que se sale — mientras la
+    /// tecla dedicada de subir sí lo hacía. La misma tecla, dos resultados,
+    /// según por cuál de las dos puertas se pasara.
+    #[test]
+    fn enter_sobre_la_fila_de_subir_es_subir_y_no_un_cd_cualquiera() {
+        use super::{EnterAction, enter_action};
+        use norte_proto::{Entry, EntryKind};
+        let entrada = |wire: &str, kind| Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: vp(wire),
+            kind,
+            size: None,
+            mtime_ms: None,
+        };
+        let mut izq = Pane::new(
+            vp("file:///casa/dentro"),
+            vec![entrada("file:///casa/dentro/a.txt", EntryKind::File)],
+        );
+        izq.set_parent_row(true);
+        let mut app = App::new(izq, Pane::new(vp("file:///otro"), Vec::new()));
+        app.set_focus(0);
+        assert!(app.panes[0].is_parent_row(app.panes[0].cursor()));
+        assert_eq!(
+            enter_action(&app),
+            EnterAction::Up(vp("file:///casa")),
+            "sobre `..`, SUBIR — y quien lo ejecute deja el cursor en `dentro`"
+        );
+
+        // Sobre una carpeta de verdad sigue siendo un `cd` normal: entrar no
+        // recuerda de dónde vienes, porque no vienes de dentro.
+        app.panes[0].set_cursor(1);
+        assert_eq!(enter_action(&app), EnterAction::OpenExternal);
     }
 
     /// El espejo del OBJETIVO manda la carpeta bajo el cursor, y sobre

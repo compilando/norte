@@ -1482,15 +1482,16 @@ fn etiqueta_de_columna(
     r: &norte_frontend::columns_picker::PickerRow,
     esquema: &str,
     columnas: &norte_frontend::columns::ColumnsSettings,
+    lang: norte_i18n::Lang,
 ) -> (String, bool) {
-    use norte_frontend::columns::{ColumnId, header_label};
+    use norte_frontend::columns::{ColumnId, header_label_in};
     let Ok(cid) = r.id.parse::<ColumnId>() else {
         // No parsea: el id crudo es lo único que se le puede enseñar, y es
         // texto de un fichero de configuración.
         return norte_frontend::display_name(r.id.as_bytes());
     };
     let estilo = columnas.style_for_id(esquema, &cid, None);
-    norte_frontend::display_name(header_label(&cid, &estilo, None).as_bytes())
+    norte_frontend::display_name(header_label_in(&cid, &estilo, None, lang).as_bytes())
 }
 
 /// Una IDENTIDAD de texto que cruza el bridge: entera, o vacía.

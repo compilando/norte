@@ -20,6 +20,27 @@ independently through `PROTOCOL_VERSION`.
   included, and is documented as never an operand. On `..` the sheet says
   `..`, `folder`, and where it leads (new `metadata-target` key in both
   locales), and the viewer says `directory`.
+- **`Enter` on `..` now lands the cursor where you came from.** It went up in
+  both frontends but left the cursor on the first row, while the dedicated
+  "go up" command put it on the directory you had just left — the same
+  navigation, two results, depending on which door you used. The terminal
+  says so with its own verb (`EnterAction::Up`) rather than a plain `Cd`,
+  because only the caller that knows it is *going up* can set the landing
+  hint.
+- **A truncated attribute value is marked.** `sanitize_cell` cut at 32
+  characters and appended nothing, so in the details sheet — which exists to
+  show the whole value — a cut value and a complete one painted identically.
+- **The window's column headers follow the window's locale.** The details
+  sheet took an explicit language while `header_label` read the process
+  global, so `Name`/`Kind` could come out in one language and `Mode`/`Owner`
+  in another, in the same panel. `header_label_in` takes the locale; the
+  terminal keeps the global one, where the two always agree.
+- **A session slot the current layout does not place is kept, not
+  re-adopted.** The "does this layout have the slot?" question was put to the
+  pane store, which still holds orphans, so it answered yes — and the slot
+  went through the adoption door instead of being written back untouched.
+  The saved state for that panel was lost outright, so going back to
+  yesterday's layout did not return the panel where it was.
 - **Clicking a row did not move the window's details sheet.** The sheet only
   ever travelled inside a *full* snapshot, and a click answers with a rows
   patch — so it rode along on the snapshot the docked *viewer* produced when

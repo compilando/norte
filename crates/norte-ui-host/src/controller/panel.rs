@@ -341,7 +341,7 @@ impl Estado {
     /// TUI: cómo se llama una columna y si ordena no puede depender de quién
     /// pinta.
     pub(super) fn cabeceras(&self, hueco: &Hueco) -> Vec<ColumnHeader> {
-        use norte_frontend::columns::{ColumnStyle, header_label, sort_column_id};
+        use norte_frontend::columns::{ColumnStyle, header_label_in, sort_column_id};
         let spec = hueco.pane.sort();
         let catalogo = self.catalogo_de(hueco.pane.dir());
         self.columnas_de(hueco.pane.dir())
@@ -358,7 +358,10 @@ impl Estado {
                 });
                 ColumnHeader {
                     id: identidad_de_columna(id),
-                    label: clamp_display(header_label(id, &estilo, catalogo)),
+                    // Con el idioma de ESTE host, no con el del proceso: los
+                    // dos no tienen por qué coincidir, y media pantalla en
+                    // cada idioma es peor que ninguna traducción.
+                    label: clamp_display(header_label_in(id, &estilo, catalogo, self.lang)),
                     sort,
                     sortable: ordena.is_some(),
                 }

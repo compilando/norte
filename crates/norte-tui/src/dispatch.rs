@@ -323,6 +323,18 @@ pub async fn dispatch(
         // tecla no hacía nada y tampoco lo decía.
         Command::NavEnter => match enter_action(app) {
             EnterAction::Cd(dir) => cd_outcome = cd(app, backend, events, dir).await,
+            // Subir por la fila `..` deja el cursor sobre el directorio del
+            // que se sale, igual que la tecla dedicada (`NavParent`): es lo
+            // que hace que subir y bajar sea reversible, y no puede depender
+            // de con cuál de las dos se suba.
+            EnterAction::Up(padre) => {
+                let hijo = app.focused().dir().clone();
+                app.focused_mut().set_pending_focus(hijo);
+                cd_outcome = cd(app, backend, events, padre).await;
+                if matches!(cd_outcome, Cd::Failed(_)) {
+                    app.focused_mut().clear_pending_focus();
+                }
+            }
             EnterAction::OpenExternal => resolve_opener(app),
             EnterAction::View(path) => open_viewer(app, backend, events, path).await,
             EnterAction::Nothing => {}

@@ -5757,6 +5757,62 @@ async fn la_hoja_describe_la_fila_de_subir_en_vez_de_vaciarse() {
     );
 }
 
+/// Subir por la fila `..` deja el cursor sobre el directorio del que se sale.
+///
+/// Igual que `UiAction::Parent`, que es la otra puerta a la MISMA
+/// navegación. Sin esto el cursor aterrizaba en la primera fila del padre
+/// según por cuál de las dos se subiera, y subir-y-bajar dejaba de ser
+/// reversible por una de ellas.
+#[tokio::test]
+async fn subir_por_la_fila_de_subir_deja_el_cursor_donde_estabas() {
+    let (h, snap) = host_full_con_fila_de_subir(arbol()).await;
+    let mut sub = h.subscribe();
+    let listado = primer_listado(&snap);
+    let slot = listado.slot_id;
+
+    // Bajar a `docs` (la fila 1: detrás de `..`).
+    h.dispatch(UiAction::Activate {
+        slot_id: slot,
+        key: norte_ui_host::RowKey(1),
+        generation: listado.generation,
+    })
+    .await
+    .expect("host vivo");
+    let dentro = foto_hasta(&h, &mut sub, "el listado de `docs`", |s| {
+        let b = primer_listado(s);
+        b.path_display.ends_with("docs").then(|| b.clone())
+    })
+    .await;
+
+    // Y volver a subir POR LA FILA `..`, que es la primera.
+    h.dispatch(UiAction::Activate {
+        slot_id: slot,
+        key: norte_ui_host::RowKey(0),
+        generation: dentro.generation,
+    })
+    .await
+    .expect("host vivo");
+    let fuera = foto_hasta(&h, &mut sub, "de vuelta en `casa`", |s| {
+        let b = primer_listado(s);
+        b.path_display.ends_with("casa").then(|| b.clone())
+    })
+    .await;
+    let bajo_el_cursor = fuera
+        .cursor
+        .and_then(|k| fuera.rows.get(usize::try_from(k.0).unwrap_or(0)))
+        .map(|r| r.display_name.clone());
+    assert_eq!(
+        bajo_el_cursor.as_deref(),
+        Some("docs"),
+        "el cursor vuelve al directorio del que se salió, no a la fila 0: {:?}",
+        fuera
+            .rows
+            .iter()
+            .map(|r| &r.display_name)
+            .collect::<Vec<_>>()
+    );
+}
+
 /// La hoja DICE a qué listado sigue, y cambia cuando cambia el foco.
 ///
 /// «Detalles» a secas no dice de qué son los detalles: con dos listados

@@ -16,7 +16,7 @@
 use norte_i18n::{Lang, t_in};
 use norte_proto::{AttrCatalog, Entry, EntryKind};
 
-use crate::columns::{ColumnId, ColumnStyle, header_label, styled_cell};
+use crate::columns::{ColumnId, ColumnStyle, header_label_in, styled_cell};
 
 /// Una fila de la hoja: etiqueta, valor y si el valor lleva bytes que hubo
 /// que enmascarar.
@@ -153,7 +153,10 @@ pub fn sheet(
             | None => false,
         };
         fields.push(Field {
-            label: header_label(&col, &style, catalog),
+            // `_in` y no la global: quien pasa `lang` lo hace porque el suyo
+            // no tiene por qué ser el del proceso, y media hoja traducida es
+            // peor que ninguna.
+            label: header_label_in(&col, &style, catalog, lang),
             value: celda,
             hostile: hostil,
         });

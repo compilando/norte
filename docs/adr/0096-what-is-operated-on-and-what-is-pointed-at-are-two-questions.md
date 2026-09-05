@@ -127,10 +127,18 @@ parity harness only ever ran in the one state a reader never starts in.
   gap on the first run (`Enter` over `..` navigates, which the harness's
   primitives side did not model), which is the return on that cost.
 
-## Not decided here
+## Going up is not entering
 
-`Enter` over `..` goes up in both frontends but does not leave the cursor on
-the directory just left, while the dedicated "go up" command does
-(`set_pending_focus`). The two surfaces agree with each other, so it is not a
-parity defect; it is a shared gap, and it needs its own change and its own
-tests.
+`Enter` over `..` and the dedicated "go up" command are the *same*
+navigation, and they must land the cursor in the same place: on the directory
+being left, which is what makes up-and-down reversible. They did not — Enter
+answered with a plain "change directory", which is what entering any other
+folder answers, and only a caller that knows it is going up can set the
+landing hint.
+
+So the terminal says it with its own verb (`EnterAction::Up`) instead of
+overloading `Cd`, and the window checks the activated row in
+`UiAction::Activate`. This was found while writing this ADR and closed in the
+same branch; it is recorded here because "the `..` row is only good for going
+up" is the sentence that makes the row safe, and going up has to mean the
+same thing through both doors.

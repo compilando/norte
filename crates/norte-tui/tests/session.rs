@@ -198,11 +198,11 @@ fn un_listado_adoptado_llega_con_la_fila_de_subir() {
     let mut app = app_basica();
     app.set_parent_row(true);
     let slot = app.panes.slot_of(0);
-    app.adoptar_pane(slot, Pane::new(vp("file:///izq"), Vec::new()));
+    app.adoptar_pane(slot, Pane::new(vp("file:///izq"), Vec::new()), None, None);
     assert!(app.panes.browser(slot).expect("listado").is_parent_row(0));
 
     app.set_parent_row(false);
-    app.adoptar_pane(slot, Pane::new(vp("file:///izq"), Vec::new()));
+    app.adoptar_pane(slot, Pane::new(vp("file:///izq"), Vec::new()), None, None);
     assert!(
         !app.panes.browser(slot).expect("listado").is_parent_row(0),
         "y apagada tampoco se cuela"
@@ -228,6 +228,43 @@ fn un_hueco_que_el_layout_no_tiene_no_rompe_la_aplicacion() {
     body.slots.insert(99, uno);
     app.apply_session(&body);
     assert!(app.session_body().slots.contains_key(&99), "se conserva");
+}
+
+/// Un hueco HUÉRFANO —que el almacén todavía tiene y el layout ya no— se
+/// conserva tal cual, no se readopta.
+///
+/// La pregunta «¿tiene este layout el hueco?» se le hacía al almacén de
+/// panes, y los huérfanos siguen ahí: contestaba que sí, así que el hueco
+/// entraba por la puerta de adopción —perdiendo el estado que la sesión
+/// guardaba de él— en vez de volver a escribirse intacto. Volver a la
+/// disposición de ayer tiene que devolver el panel donde estaba.
+#[test]
+fn un_hueco_huerfano_del_almacen_se_conserva_en_vez_de_readoptarse() {
+    let mut app = app_basica();
+    // Un layout de un solo hueco: el segundo queda huérfano en el almacén.
+    let solo = norte_frontend::layout::presets::tree("simple").expect("preset");
+    app.set_layout(solo);
+    let fuera = SlotId(2);
+    assert!(
+        app.panes.browser(fuera).is_some(),
+        "el almacén conserva el huérfano"
+    );
+    assert!(
+        !app.layout.slot_ids().contains(&fuera),
+        "y el layout ya no lo coloca"
+    );
+
+    let mut body = app.session_body();
+    let mut estado = body.slots.values().next().expect("uno").clone();
+    estado.path = vp("file:///de-ayer");
+    body.slots.insert(fuera.0, estado);
+    app.apply_session(&body);
+
+    assert_eq!(
+        app.session_body().slots.get(&fuera.0).map(|s| &s.path),
+        Some(&vp("file:///de-ayer")),
+        "vuelve a escribirse tal cual, sin pasar por el pane"
+    );
 }
 
 /// Un cuerpo corrupto no deja pantalla en blanco: se ignora y queda el layout
