@@ -666,6 +666,69 @@ async fn mover_el_cursor_no_reenvia_las_filas() {
     );
 }
 
+/// El TOTAL llega sin pedir una foto: es la altura del scroll del renderer.
+///
+/// `total_rows` solo viajaba en la foto entera, y el drenaje paginado contesta
+/// con parches de filas —también el ÚLTIMO lote—. Así que el renderer se
+/// quedaba con el total de la PRIMERA PÁGINA (100) para siempre: pinta el
+/// canvas de scroll a `total * alto_de_celda` y publica `aria-rowcount`, o sea
+/// que un directorio de cinco mil ficheros quedaba topado en la fila 100 para
+/// la rueda, y no había forma de pedir el resto porque el rango visible se
+/// calcula del scroll.
+///
+/// El test de al lado no lo veía porque pide `Resync` en cada vuelta, que es
+/// justo lo que el renderer de verdad NO hace: solo resincroniza tras un hueco
+/// de secuencia o un `Lagged`.
+#[tokio::test]
+async fn el_total_de_un_listado_grande_llega_sin_pedir_foto() {
+    let mut falso = Falso::default();
+    let muchas: Vec<(Vec<u8>, bool)> = (0..5_000u32)
+        .map(|i| (format!("f{i:05}").into_bytes(), false))
+        .collect();
+    falso.pon("mem:///casa", muchas);
+    let (host, snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = host.subscribe();
+    assert!(
+        listado(&snap).total_rows.expect("hay total") <= 100,
+        "de partida, solo la primera página"
+    );
+
+    // SIN `Resync`: solo lo que el host manda por su cuenta mientras drena.
+    let mut ultimo_total = None;
+    let espera = async {
+        loop {
+            match sub.recv().await.expect("host vivo") {
+                Update::Message(m) => match m.payload {
+                    UiUpdate::Patch(p) => {
+                        for c in &p.changes {
+                            if let norte_ui_host::dto::ViewChange::Rows { total_rows, .. } = c {
+                                ultimo_total = *total_rows;
+                            }
+                        }
+                    }
+                    UiUpdate::Snapshot(s) => {
+                        ultimo_total = listado(&s).total_rows;
+                    }
+                    UiUpdate::Notice(_) => {}
+                },
+                // Quedarse atrás es «pide una foto», y el renderer la pide.
+                // No cuenta como que el total llegara solo.
+                Update::Lagged => {}
+            }
+            if ultimo_total == Some(5_000) {
+                return;
+            }
+        }
+    };
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(20), espera)
+            .await
+            .is_ok(),
+        "el renderer nunca se entera de que hay 5.000 filas: se queda topado \
+         en {ultimo_total:?} y no puede desplazarse más abajo"
+    );
+}
+
 /// Un listado grande: la primera página se pinta enseguida, el resto llega
 /// por detrás, y del total solo cruzan las filas visibles.
 #[tokio::test]

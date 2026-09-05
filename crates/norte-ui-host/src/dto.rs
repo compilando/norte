@@ -2516,6 +2516,16 @@ pub enum ViewChange {
         first_visible: u64,
         /// Las filas.
         rows: Vec<RowView>,
+        /// Cuántas filas tiene el listado ENTERO, no cuántas viajan.
+        ///
+        /// Viaja en el parche y no solo en la foto porque es la ALTURA del
+        /// desplazamiento del renderer (`total * alto_de_celda`, más
+        /// `aria-rowcount`), y el drenaje paginado contesta con parches
+        /// —también el último lote—. Sin esto el renderer se quedaba con el
+        /// total de la primera página para siempre: un directorio de cinco
+        /// mil ficheros topaba en la fila 100, y ni la rueda podía bajar ni
+        /// el rango visible podía pedir el resto.
+        total_rows: Option<u64>,
     },
     /// El estado de un hueco cambió (cargando, error, listo).
     SlotState {

@@ -1065,6 +1065,11 @@ export type ViewChange =
       generation: number;
       first_visible: number;
       rows: RowView[];
+      /**
+       * Cuántas filas tiene el listado ENTERO. Es la altura del
+       * desplazamiento, y el drenaje paginado solo manda parches de filas.
+       */
+      total_rows: number | null;
     }
   | { change: "slot_state"; slot_id: number; state: SlotState }
   | ({ change: "status" } & StatusView)

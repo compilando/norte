@@ -107,6 +107,13 @@ export class Session {
         slot.generation = c.generation;
         slot.first_visible = c.first_visible;
         slot.rows = c.rows;
+        // El TOTAL, que es la altura del desplazamiento. Sin esto el listado
+        // se quedaba con el de la primera página (100) durante todo el
+        // drenaje —también después, porque el último lote también es un
+        // parche—, y un directorio de cinco mil ficheros topaba ahí.
+        if (c.total_rows !== null) {
+          slot.total_rows = c.total_rows;
+        }
         const cur = c.rows.find((r) => r.selected);
         if (cur !== undefined) {
           slot.cursor = cur.key;

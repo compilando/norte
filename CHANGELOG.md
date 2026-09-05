@@ -20,6 +20,16 @@ independently through `PROTOCOL_VERSION`.
   included, and is documented as never an operand. On `..` the sheet says
   `..`, `folder`, and where it leads (new `metadata-target` key in both
   locales), and the viewer says `directory`.
+- **The window could not scroll past row 100 in a large directory.** A
+  listing arrives as a first page of 100 and then drains in batches of 500,
+  and every batch — the last one included — answers with a rows patch. But
+  `total_rows` travelled only in a full snapshot, and it is what the renderer
+  sizes its scroll canvas from (`total × cell height`, plus `aria-rowcount`).
+  So a directory of 5 000 files stayed capped at 100 rows for the wheel, with
+  no way to ask for the rest, because the visible range is computed from the
+  scroll position. The total now travels with the rows. The existing drain
+  test missed it because it dispatches `Resync` on every loop — which is
+  exactly what the real renderer does not do.
 - **`Enter` on `..` now lands the cursor where you came from.** It went up in
   both frontends but left the cursor on the first row, while the dedicated
   "go up" command put it on the directory you had just left — the same

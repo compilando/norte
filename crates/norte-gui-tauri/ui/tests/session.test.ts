@@ -27,6 +27,34 @@ describe("Session", () => {
     s.receive(env(0, snapshotPayload()));
   });
 
+  // El total es la ALTURA del desplazamiento (`total * alto_de_celda`) y el
+  // `aria-rowcount`. El drenaje paginado solo manda parches de filas —también
+  // el último lote—, así que si el parche no lo trae, el listado se queda con
+  // el de la primera página y un directorio grande topa ahí.
+  it("un parche de filas pone al día el TOTAL, no solo las filas", () => {
+    const antes = s.view()?.slots.find((x) => x.kind === "browser");
+    expect(antes?.kind).toBe("browser");
+    const out = s.receive(
+      env(1, {
+        update: "patch",
+        base_sequence: 0,
+        changes: [
+          {
+            change: "rows",
+            slot_id: 1,
+            generation: 4,
+            first_visible: 0,
+            rows: [],
+            total_rows: 5000,
+          },
+        ],
+      }),
+    );
+    expect(out.kind).toBe("applied");
+    const despues = s.view()?.slots.find((x) => x.kind === "browser");
+    expect(despues?.kind === "browser" ? despues.total_rows : null).toBe(5000);
+  });
+
   it("aplica un parche sobre su base", () => {
     const out = s.receive(
       env(1, {

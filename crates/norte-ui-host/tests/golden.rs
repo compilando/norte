@@ -1800,6 +1800,7 @@ fn actualizaciones() {
                             generation: 5,
                             first_visible: 40,
                             rows: vec![fila(41, "otro.txt", false)],
+                            total_rows: Some(120),
                         },
                         ViewChange::SlotState {
                             slot_id: 1,
@@ -2012,6 +2013,7 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
                 generation: 5,
                 first_visible: 40,
                 rows: vec![fila(41, "otro.txt", false)],
+                total_rows: Some(120),
             },
         ),
         (

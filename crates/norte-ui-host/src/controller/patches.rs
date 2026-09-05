@@ -365,15 +365,24 @@ impl Estado {
 
     /// Las filas visibles de UN hueco concreto, no del que tenga el foco.
     pub(super) fn parche_filas_de(&mut self, slot: u32) -> BridgeEnvelope<UiUpdate> {
-        let (generacion, primera, filas) = match self.huecos.get(&slot) {
-            Some(h) => (h.pane.listing_epoch(), h.primera_visible, self.filas_de(h)),
-            None => (0, 0, Vec::new()),
+        let (generacion, primera, filas, total) = match self.huecos.get(&slot) {
+            Some(h) => (
+                h.pane.listing_epoch(),
+                h.primera_visible,
+                self.filas_de(h),
+                Some(h.pane.entries().len() as u64),
+            ),
+            None => (0, 0, Vec::new(), None),
         };
         let cambio = ViewChange::Rows {
             slot_id: slot,
             generation: generacion,
             first_visible: primera,
             rows: filas,
+            // El total va CON las filas: es la altura del desplazamiento del
+            // renderer, y el drenaje paginado no manda otra cosa —tampoco en
+            // el último lote—.
+            total_rows: total,
         };
         self.parche(vec![cambio])
     }
@@ -385,6 +394,10 @@ impl Estado {
             generation: self.generacion(),
             first_visible: self.hueco().primera_visible,
             rows: self.filas_visibles(),
+            // Marcar u ocultar no cambia solo qué filas se ven: `toggle-hidden`
+            // mueve entradas dentro y fuera del listado, o sea que el total y
+            // la altura del desplazamiento se mueven con ellas.
+            total_rows: Some(self.hueco().pane.entries().len() as u64),
         };
         self.parche(vec![cambio])
     }

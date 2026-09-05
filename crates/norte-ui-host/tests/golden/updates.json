@@ -167,7 +167,8 @@
             "selected": false
           }
         ],
-        "slot_id": 1
+        "slot_id": 1,
+        "total_rows": 120
       },
       {
         "change": "slot_state",
