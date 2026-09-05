@@ -209,10 +209,15 @@ async fn main() -> Result<()> {
     // `orthodox`, que es lo que el usuario tenía antes de escribir la clave.
     // `--layout` gana a `[ui] layout`: elegir una disposición para UN arranque
     // no debe tocar tu config, que es justo lo que hace la clave.
+    //
+    // `orthodox` NO se filtra aquí. Se filtraba —el `App` ya nace con ese
+    // árbol, así que cargarlo parecía trabajo de más— y eso hacía que un
+    // `layouts/orthodox.toml` del usuario lo honrase la ventana y lo ignorase
+    // el terminal: la misma capa de configuración diciendo dos cosas según
+    // por dónde entres.
     let layout_name: Option<std::ffi::OsString> = cli_layout
         .clone()
-        .or_else(|| cfg.common.ui_layout.clone().map(std::ffi::OsString::from))
-        .filter(|n| n != std::ffi::OsStr::new("orthodox"));
+        .or_else(|| cfg.common.ui_layout.clone().map(std::ffi::OsString::from));
     if let Some(name) = layout_name {
         // El fichero se lee FUERA del runtime (regla 2), y sin directorio de
         // config no hay fichero que valga: queda el preset de ese nombre.

@@ -848,6 +848,9 @@ metadata-name = Name
 metadata-kind = Kind
 metadata-size = Size
 metadata-mtime = Modified
+# Where the `..` row leads. Only that row has it: on `..` the sheet says `..`
+# and where it goes, instead of naming itself after the parent directory.
+metadata-target = Leads to
 metadata-kind-dir = folder
 metadata-kind-file = file
 metadata-kind-symlink = link

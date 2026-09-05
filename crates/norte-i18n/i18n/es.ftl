@@ -1886,6 +1886,9 @@ metadata-name = Nombre
 metadata-kind = Clase
 metadata-size = Tamaño
 metadata-mtime = Modificado
+# A dónde lleva la fila `..`. Solo la lleva esa fila: sobre `..` la hoja dice
+# `..` y a dónde va, en vez de llamarse como el directorio padre.
+metadata-target = Destino
 metadata-kind-dir = carpeta
 metadata-kind-file = fichero
 metadata-kind-symlink = enlace

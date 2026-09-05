@@ -133,7 +133,11 @@ async fn restore_slots(app: &mut App, backend: &Backend, presupuesto: std::time:
                     .panes
                     .browser(id)
                     .map_or((None, None), |p| (Some(p.sort()), Some(p.show_hidden())));
-                app.panes.insert_browser(id, pane);
+                // Por la puerta de adopción: el orden y los ocultos son de la
+                // SESIÓN y se reponen aquí; la fila `..` es de la config y la
+                // pone `adoptar_pane`. Insertándolo a pelo, la fila se caía en
+                // cada arranque con sesión guardada.
+                app.adoptar_pane(id, pane);
                 if let Some(p) = app.panes.browser_mut(id) {
                     if let Some(s) = sort {
                         p.set_sort(s);

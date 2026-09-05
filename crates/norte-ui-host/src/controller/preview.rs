@@ -78,10 +78,14 @@ impl Estado {
         // seguirse a sí mismo es seguir a nadie: entonces manda el listado
         // activo, que siempre existe. En la TUI el teclado y el rol son dos
         // cosas distintas y esto no pasa; aquí el foco ES el rol.
+        // `cursor_entry` y no `selected`, por lo mismo que la hoja de
+        // atributos: el visor DESCRIBE lo que hay bajo el cursor. Sobre la
+        // fila `..` decía «nada seleccionado» —que es falso: hay una fila, y
+        // lleva a una carpeta— en cada arranque.
         let entrada = seguido
             .and_then(|SlotId(s)| self.huecos.get(&s))
             .or_else(|| self.huecos.get(&self.activo()))
-            .and_then(|h| h.pane.selected());
+            .and_then(|h| h.pane.cursor_entry());
         let Some(e) = entrada else {
             return Quiere::Nota("preview-empty");
         };

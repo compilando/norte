@@ -136,7 +136,11 @@ pub fn want(app: &App, res: &Resolved) -> Option<(SlotId, Want)> {
         norte_frontend::layout::resolve_follow(&app.layout, hueco, &app.roles, &mut diags)
             .or_else(|| app.roles.get(norte_frontend::layout::RoleId::Active))?;
     let pane = app.panes.browser(in_a_row)?;
-    let Some(entry) = pane.selected() else {
+    // `cursor_entry` y no `selected`, por lo mismo que la hoja de atributos:
+    // el visor DESCRIBE lo que hay bajo el cursor, y sobre la fila `..` «lo
+    // señalado» es `None` a propósito. Decía «nada seleccionado» teniendo
+    // delante una fila que lleva a una carpeta.
+    let Some(entry) = pane.cursor_entry() else {
         return Some((hueco, Want::Note("preview-empty")));
     };
     match entry.kind {

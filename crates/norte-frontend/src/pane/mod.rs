@@ -847,11 +847,6 @@ impl PaneState {
     /// mueve el cursor real), la entrada bajo el cursor.
     #[must_use]
     pub fn selected(&self) -> Option<&Entry> {
-        if let Some(q) = &self.quick
-            && q.mode() == Mode::Filter
-        {
-            return self.entries.get(q.selected_entry_index()?);
-        }
         // La fila `..` NO es un operando, y este es EL sitio donde se decide.
         //
         // Ochenta y siete llamadas preguntan por «lo señalado» para copiarlo,
@@ -861,11 +856,76 @@ impl PaneState {
         // de ser peligrosa por construcción, en vez de por acordarse.
         //
         // Subir con ella no pasa por aquí: eso es `parent_target`, y lo mira
-        // quien navega.
-        if self.is_parent_row(self.cursor) {
+        // quien navega; describirla tampoco, y eso es [`Self::cursor_entry`].
+        //
+        // La guarda es sobre el ÍNDICE SEÑALADO y no sobre `self.cursor`, y
+        // eso arregla un agujero que llevaba aquí desde el principio: en
+        // `Mode::Filter` manda la selección del quick search y el cursor real
+        // no se mueve, así que abrir el filtro —cuya query vacía nace
+        // señalando la fila 0— dejaba a `selected()` devolviendo el
+        // directorio PADRE. F8 ahí borra el padre, que es justo lo que esta
+        // fila existe para impedir.
+        if self.is_parent_row(self.indice_senalado()?) {
             return None;
         }
-        self.entries.get(self.cursor)
+        self.senalada()
+    }
+
+    /// La entrada bajo el cursor PARA DESCRIBIRLA, fila `..` incluida.
+    ///
+    /// [`Self::selected`] contesta «sobre qué se actúa» y por eso calla sobre
+    /// la fila de subir. Esta contesta «qué se está señalando», que es otra
+    /// pregunta y tiene otra respuesta: los paneles que siguen al cursor —la
+    /// hoja de atributos, el visor acoplado— DESCRIBEN lo que hay debajo.
+    ///
+    /// Preguntando la primera decían «nada bajo el cursor» teniendo una fila
+    /// delante, y como el cursor nace sobre `..`, el panel de detalles
+    /// arrancaba vacío en cada apertura y después de cada `cd`.
+    ///
+    /// **No es un operando.** Quien copie, borre, renombre o mire dentro
+    /// pregunta a [`Self::selected`]; esta solo vale para pintar.
+    #[must_use]
+    pub fn cursor_entry(&self) -> Option<&Entry> {
+        self.senalada()
+    }
+
+    /// ¿Lo señalado AHORA es la fila `..`?
+    ///
+    /// La pregunta que acompaña a [`Self::cursor_entry`]: quien la describa
+    /// necesita saber que lo es, porque la `Entry` sintética lleva la ruta
+    /// del PADRE y describirla por su `file_name` afirmaría que el cursor
+    /// está sobre el padre.
+    ///
+    /// Sale del MISMO índice que la entrada, y por eso existe: preguntando
+    /// `is_parent_row(cursor())` por separado, un filtro de quick search
+    /// —que elige por su cuenta y no mueve el cursor real— dejaba la bandera
+    /// y la entrada hablando de filas distintas.
+    #[must_use]
+    pub fn cursor_is_parent_row(&self) -> bool {
+        self.indice_senalado()
+            .is_some_and(|i| self.is_parent_row(i))
+    }
+
+    /// La fila que el cursor —o el filtro del quick search— está señalando,
+    /// sin la guarda de la fila `..`.
+    fn senalada(&self) -> Option<&Entry> {
+        self.entries.get(self.indice_senalado()?)
+    }
+
+    /// El ÍNDICE señalado: la selección del filtro cuando hay uno, y el
+    /// cursor real cuando no.
+    ///
+    /// UNA respuesta, y de ella salen las tres preguntas —«qué se opera»,
+    /// «qué se señala» y «¿es la fila de subir?»—. Tres cálculos
+    /// independientes de lo mismo es cómo dos de ellos acaban hablando de
+    /// filas distintas.
+    fn indice_senalado(&self) -> Option<usize> {
+        if let Some(q) = &self.quick
+            && q.mode() == Mode::Filter
+        {
+            return q.selected_entry_index();
+        }
+        Some(self.cursor)
     }
 
     /// Directorio listado.
@@ -1230,6 +1290,99 @@ mod tests {
         );
         p.cursor_down();
         assert!(p.selected().is_some(), "y sobre una entrada de verdad, sí");
+    }
+
+    /// Pero SÍ se puede describir: «qué se opera» y «qué se señala» son dos
+    /// preguntas, y sobre `..` tienen respuestas distintas.
+    ///
+    /// Los paneles que siguen al cursor —la hoja de atributos, el visor
+    /// acoplado— preguntaban la primera y decían «nada bajo el cursor»
+    /// teniendo una fila delante. En una ventana recién abierta el cursor
+    /// nace sobre `..`, así que el panel de detalles arrancaba vacío SIEMPRE
+    /// y parecía roto.
+    #[test]
+    fn la_fila_de_subir_no_es_un_operando_pero_si_se_puede_describir() {
+        let mut p = pane_hijo(&["a"]);
+        assert!(p.selected().is_none(), "no es operando");
+        let bajo = p.cursor_entry().expect("pero hay una fila bajo el cursor");
+        assert_eq!(
+            bajo.path,
+            VPath::parse("mem:///").unwrap(),
+            "y es la que lleva al padre"
+        );
+        assert_eq!(bajo.kind, EntryKind::Dir);
+
+        p.cursor_down();
+        assert_eq!(
+            p.cursor_entry().map(|e| &e.path),
+            p.selected().map(|e| &e.path),
+            "sobre una entrada de verdad las dos preguntas contestan lo mismo"
+        );
+    }
+
+    /// Y en un listado vacío no hay nada que describir tampoco.
+    #[test]
+    fn sin_filas_no_hay_nada_bajo_el_cursor() {
+        let p = PaneState::new(VPath::parse("mem:///casa").unwrap(), Vec::new());
+        assert!(p.cursor_entry().is_none());
+    }
+
+    /// El quick search en modo Filter TAMPOCO convierte la fila `..` en
+    /// operando.
+    ///
+    /// `QuickSearch::new` pliega `entries` ENTERO, fila sintética incluida, y
+    /// con la query vacía la selección nace en el índice 0. La guarda miraba
+    /// `self.cursor`, que en Filter no se mueve, así que abrir el filtro
+    /// bastaba para que `selected()` devolviera el directorio PADRE: F8 sobre
+    /// él borra el padre, que es exactamente lo que esta fila existe para
+    /// impedir.
+    #[test]
+    fn el_filtro_no_convierte_la_fila_de_subir_en_operando() {
+        let mut p = pane_hijo(&["a", "b"]);
+        p.quick_start(crate::nav::Mode::Filter);
+        assert!(
+            p.selected().is_none(),
+            "el filtro recién abierto señala la fila 0, que es `..`: {:?}",
+            p.selected().map(|e| e.path.to_wire())
+        );
+        // Y por ahí es por donde llegaba al borrado: sin marcas,
+        // `marked_paths()` cae en `selected()`, y F8 abre el modal con lo
+        // primero de esa lista.
+        assert!(
+            p.marked_paths().is_empty(),
+            "el padre no puede ser el operando de F8: {:?}",
+            p.marked_paths()
+        );
+        assert_eq!(
+            p.cursor_entry().map(|e| &e.path),
+            Some(&VPath::parse("mem:///").unwrap()),
+            "describirla sí"
+        );
+    }
+
+    /// Y la bandera «esto es la fila de subir» sigue a lo SEÑALADO, no al
+    /// cursor real.
+    ///
+    /// Con el filtro eligiendo una entrada de verdad y el cursor todavía en
+    /// la 0, la hoja de atributos preguntaba por el cursor y describía `..`
+    /// mientras el listado resaltaba otra fila — y el nombre hostil que el
+    /// lector estaba mirando no se marcaba.
+    #[test]
+    fn la_bandera_de_la_fila_de_subir_sigue_a_lo_senalado() {
+        let mut p = pane_hijo(&["a", "b"]);
+        assert!(p.cursor_is_parent_row(), "sin filtro, manda el cursor");
+
+        p.quick_start(crate::nav::Mode::Filter);
+        p.quick_char('b');
+        assert_eq!(p.cursor(), 0, "en Filter el cursor REAL no se mueve");
+        assert!(
+            !p.cursor_is_parent_row(),
+            "pero lo señalado es `b`, no `..`"
+        );
+        assert_eq!(
+            p.cursor_entry().and_then(|e| e.path.file_name()),
+            Some(&norte_proto::Segment::new(b"b".to_vec()).unwrap()),
+        );
     }
 
     /// Ni se puede marcar, POR NINGUNO de los caminos que marcan.

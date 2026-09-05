@@ -66,9 +66,10 @@ fn el_objetivo_lleva_el_hueco_de_la_hoja() {
     let res = resolver(&mut app);
     let (hueco, w) = want(&app, &res).expect("hay objetivo");
     assert_eq!(Some(hueco), app.metadata_slot());
-    let Want::Entry(e) = w else {
+    let Want::Entry(e, subir) = w else {
         panic!("una entrada")
     };
+    assert!(!subir, "el cursor está en una entrada de verdad");
     assert_eq!(e.path, vp("file:///izq/uno.txt"));
 }
 
@@ -82,7 +83,40 @@ fn lo_que_ensena_sale_del_listado_y_no_de_una_peticion() {
     let del_listado = app.panes[0].selected().expect("cursor").clone();
     let res = resolver(&mut app);
     let (_, w) = want(&app, &res).expect("objetivo");
-    assert_eq!(w, Want::Entry(Box::new(del_listado)));
+    assert_eq!(w, Want::Entry(Box::new(del_listado), false));
+}
+
+/// Con la fila `..` encendida —que es lo de fábrica— el cursor nace encima de
+/// ella, y la hoja la DESCRIBE en vez de vaciarse.
+///
+/// La misma regla que en la ventana, y por la misma razón: `selected()` calla
+/// sobre esa fila porque no es un operando, pero la hoja no opera, describe.
+/// Preguntando por el operando el panel salía vacío en cada arranque y
+/// después de cada `cd`, que es como se ve un panel roto.
+#[test]
+fn sobre_la_fila_de_subir_la_hoja_la_describe() {
+    let mut app = app_de_prueba();
+    app.set_parent_row(true);
+    app.toggle_metadata();
+    assert!(
+        app.panes[0].is_parent_row(app.panes[0].cursor()),
+        "el cursor nace sobre `..`"
+    );
+    let res = resolver(&mut app);
+    let (_, w) = want(&app, &res).expect("hay objetivo");
+    let Want::Entry(e, subir) = w else {
+        panic!("una entrada, no la nota de vacío")
+    };
+    assert!(subir, "y va marcada como la fila de subir");
+    assert_eq!(e.path, vp("file:///"), "su ruta es la del padre");
+
+    // Y esas filas son las mismas que pinta la ventana: la lista la decide el
+    // crate compartido, no cada renderer.
+    let filas = norte_frontend::metadata::sheet(&e, subir, None, norte_i18n::Lang::Es);
+    assert_eq!(
+        filas.iter().map(|f| f.value.as_str()).collect::<Vec<_>>(),
+        ["..", "carpeta", "⟨file⟩/"]
+    );
 }
 
 /// Un hueco detrás de una pestaña no produce objetivo. Es el mismo invariante
@@ -138,7 +172,7 @@ fn cambiar_de_listado_cambia_lo_que_ensena() {
     app.set_focus(1);
     let res = resolver(&mut app);
     let (_, b) = want(&app, &res).expect("objetivo");
-    let (Want::Entry(a), Want::Entry(b)) = (a, b) else {
+    let (Want::Entry(a, _), Want::Entry(b, _)) = (a, b) else {
         panic!("dos entradas")
     };
     assert_eq!(a.path, vp("file:///izq/uno.txt"));
@@ -158,7 +192,7 @@ fn un_nombre_no_utf8_llega_entero() {
     app.toggle_metadata();
     let res = resolver(&mut app);
     let (_, w) = want(&app, &res).expect("objetivo");
-    assert_eq!(w, Want::Entry(Box::new(hostile)));
+    assert_eq!(w, Want::Entry(Box::new(hostile), false));
 }
 
 /// La hoja NO se lleva el teclado NUNCA: sigue al cursor, y con las flechas

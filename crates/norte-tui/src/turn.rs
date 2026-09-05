@@ -616,9 +616,9 @@ pub async fn after_frame(
         // listado, así que esto es una copia, no una petición. Un hueco
         // que el reparto no colocó no produce objetivo y no se toca.
         match crate::metadata::want(app, &res) {
-            Some((slot, crate::metadata::Want::Entry(e))) => {
+            Some((slot, crate::metadata::Want::Entry(e, subir))) => {
                 if let Some(hoja) = app.panes.metadata_mut(slot) {
-                    *hoja = Some(*e);
+                    *hoja = Some((*e, subir));
                 }
             }
             Some((slot, crate::metadata::Want::Note(_))) => {

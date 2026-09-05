@@ -20,8 +20,9 @@ pub const KIND: &str = "metadata";
 /// Qué debería estar enseñando la hoja.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Want {
-    /// Esta entrada, que el listado ya tiene delante.
-    Entry(Box<Entry>),
+    /// Esta entrada, que el listado ya tiene delante. El `bool` dice si es la
+    /// fila `..`: la hoja la describe como `..` y no con el nombre del padre.
+    Entry(Box<Entry>, bool),
     /// Nada que enseñar, y esta clave Fluent dice por qué.
     Note(&'static str),
 }
@@ -51,8 +52,19 @@ pub fn want(app: &App, res: &Resolved) -> Option<(SlotId, Want)> {
         norte_frontend::layout::resolve_follow(&app.layout, hueco, &app.roles, &mut diags)
             .or_else(|| app.roles.get(norte_frontend::layout::RoleId::Active))?;
     let pane = app.panes.browser(in_a_row)?;
-    match pane.selected() {
-        Some(e) => Some((hueco, Want::Entry(Box::new(e.clone())))),
+    // `cursor_entry` y no `selected`: la hoja DESCRIBE lo que hay bajo el
+    // cursor, y sobre la fila `..` «lo señalado» es `None` a propósito —esa
+    // fila no es un operando—. Preguntando por el operando el panel salía
+    // vacío justo donde el cursor nace.
+    // La bandera sale del MISMO índice que la entrada: preguntando por
+    // `cursor()` a mano, un filtro de quick search —que elige por su cuenta y
+    // no mueve el cursor real— dejaba la hoja describiendo `..` mientras el
+    // listado resaltaba otra fila.
+    match pane.cursor_entry() {
+        Some(e) => Some((
+            hueco,
+            Want::Entry(Box::new(e.clone()), pane.cursor_is_parent_row()),
+        )),
         None => Some((hueco, Want::Note("metadata-empty"))),
     }
 }

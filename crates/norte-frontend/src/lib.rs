@@ -53,6 +53,7 @@ pub mod layout;
 pub mod layout_picker;
 pub mod logpanel;
 pub mod menu;
+pub mod metadata;
 mod modal;
 pub mod mouse;
 pub mod nav;

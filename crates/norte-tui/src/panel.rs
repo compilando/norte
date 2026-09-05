@@ -59,11 +59,14 @@ pub enum TuiPanel {
     Processes(Box<crate::processes::Processes>),
     /// El árbol de directorios (#136): sus ramas abiertas y su cursor.
     Tree(Box<crate::tree::Tree>),
-    /// La hoja de atributos (fase A): la entrada que se está enseñando.
+    /// La hoja de atributos (fase A): la entrada que se está enseñando y si
+    /// es la fila `..`.
     ///
     /// Guarda la `Entry` y no su ruta: la hoja se dibuja entera desde ella y
-    /// no hay una segunda lectura que pueda llegar tarde.
-    Metadata(Box<Option<norte_proto::Entry>>),
+    /// no hay una segunda lectura que pueda llegar tarde. La bandera va al
+    /// lado porque sobre `..` la hoja se llama `..` y dice a dónde lleva, y
+    /// eso no se puede deducir de la `Entry` sola: la suya es la del padre.
+    Metadata(Box<Option<(norte_proto::Entry, bool)>>),
     /// Un kind que este binario no conoce: se pinta como una caja con su
     /// nombre y sus `params` se conservan intactos, para que abrir el layout
     /// de la GUI en el TUI no le borre nada.
@@ -404,7 +407,7 @@ impl PaneSlots {
 
     /// Lo que enseña la hoja de atributos de un hueco, si lo hay.
     #[must_use]
-    pub fn metadata(&self, id: SlotId) -> Option<&Option<norte_proto::Entry>> {
+    pub fn metadata(&self, id: SlotId) -> Option<&Option<(norte_proto::Entry, bool)>> {
         match self.store.get(id) {
             Some(TuiPanel::Metadata(e)) => Some(e),
             _ => None,
@@ -412,7 +415,7 @@ impl PaneSlots {
     }
 
     /// La hoja de atributos de un hueco, para ponerla al día.
-    pub fn metadata_mut(&mut self, id: SlotId) -> Option<&mut Option<norte_proto::Entry>> {
+    pub fn metadata_mut(&mut self, id: SlotId) -> Option<&mut Option<(norte_proto::Entry, bool)>> {
         match self.store.get_mut(id) {
             Some(TuiPanel::Metadata(e)) => Some(e),
             _ => None,
@@ -420,7 +423,7 @@ impl PaneSlots {
     }
 
     /// Mete una hoja de atributos nueva, para un hueco recién acuñado.
-    pub fn insert_metadata(&mut self, id: SlotId, e: Option<norte_proto::Entry>) {
+    pub fn insert_metadata(&mut self, id: SlotId, e: Option<(norte_proto::Entry, bool)>) {
         self.store.insert(id, TuiPanel::Metadata(Box::new(e)));
     }
 

@@ -173,6 +173,24 @@ impl Pane {
         self.state.selected()
     }
 
+    /// La entrada bajo el cursor PARA DESCRIBIRLA, fila `..` incluida.
+    ///
+    /// La otra pregunta, la de los paneles que siguen al cursor: ver
+    /// [`norte_frontend::PaneState::cursor_entry`]. **No es un operando.**
+    #[must_use]
+    pub fn cursor_entry(&self) -> Option<&Entry> {
+        self.state.cursor_entry()
+    }
+
+    /// ¿Lo señalado AHORA es la fila `..`? Ver
+    /// [`norte_frontend::PaneState::cursor_is_parent_row`] — sale del mismo
+    /// índice que [`Self::cursor_entry`], y por eso no es
+    /// `is_parent_row(cursor())`.
+    #[must_use]
+    pub fn cursor_is_parent_row(&self) -> bool {
+        self.state.cursor_is_parent_row()
+    }
+
     /// Índices REALES visibles bajo el filtro; `None` = sin filtro (quick
     /// inactivo, o modo Jump: el listado se pinta entero).
     #[must_use]

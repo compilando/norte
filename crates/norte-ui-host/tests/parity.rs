@@ -52,10 +52,11 @@ struct Semantico {
 }
 
 /// El escenario corrido contra las primitivas compartidas, a pelo.
-fn via_primitivas(pasos: &[Paso]) -> Vec<Semantico> {
+fn via_primitivas(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
     let arbol = arbol_de_prueba();
     let inicio = VPath::parse("mem:///casa").expect("vpath");
     let mut pane = PaneState::new(inicio.clone(), entradas(&arbol, &inicio));
+    pane.set_parent_row(fila_de_subir);
     let mut historial = History::default();
     let mut salida = vec![foto_primitivas(&pane)];
 
@@ -72,11 +73,20 @@ fn via_primitivas(pasos: &[Paso]) -> Vec<Semantico> {
             }
             Paso::Marcar => pane.toggle_mark(),
             Paso::Entrar => {
-                let Some(destino) = pane
-                    .selected()
-                    .filter(|e| e.kind == EntryKind::Dir)
-                    .map(|e| e.path.clone())
-                else {
+                // Sobre `..`, Enter SUBE: es lo único que esa fila sabe
+                // hacer, y lo hacen las dos superficies —el TUI en
+                // `trail::nav_enter_target` y el host en `UiAction::Activate`,
+                // que ve la `Entry` sintética y navega a su ruta—. Modelarlo
+                // como «no hay operando, no pasa nada» mediría el arnés y no
+                // el producto.
+                let destino = if pane.is_parent_row(pane.cursor()) {
+                    pane.parent_target().cloned()
+                } else {
+                    pane.selected()
+                        .filter(|e| e.kind == EntryKind::Dir)
+                        .map(|e| e.path.clone())
+                };
+                let Some(destino) = destino else {
                     salida.push(foto_primitivas(&pane));
                     continue;
                 };
@@ -149,7 +159,15 @@ fn foto_primitivas(pane: &PaneState) -> Semantico {
         nombres: pane
             .entries()
             .iter()
-            .map(|e| {
+            .enumerate()
+            .map(|(i, e)| {
+                // La fila `..` se pinta `..` y no con el nombre del padre —el
+                // suyo es la ruta del padre, cuyo `file_name` en la raíz ni
+                // siquiera existe—. Es lo que hacen los dos renderers, y esta
+                // vía tiene que pintar igual o la comparación mide el arnés.
+                if pane.is_parent_row(i) {
+                    return "..".to_owned();
+                }
                 norte_frontend::display_name(
                     e.path
                         .file_name()
@@ -162,7 +180,7 @@ fn foto_primitivas(pane: &PaneState) -> Semantico {
 }
 
 /// El mismo escenario, contra el host, por sus acciones y sus fotos.
-async fn via_host(pasos: &[Paso]) -> Vec<Semantico> {
+async fn via_host(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
     let backend = Arc::new(arbol_de_prueba());
     let (host, primera) = UiHost::start(UiHostOptions {
         backend,
@@ -173,12 +191,13 @@ async fn via_host(pasos: &[Paso]) -> Vec<Semantico> {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        // La fila `..` apagada: estos tests razonan sobre índices de
-        // listado, y una fila más al principio los desplazaría todos sin
-        // decir nada de lo que prueban.
+        // Cada escenario se corre DOS veces, con la fila `..` apagada y
+        // encendida, y las dos vías tienen que coincidir en las dos. Correrlo
+        // solo apagada probaba el único estado en el que nadie arranca: de
+        // fábrica la fila está puesta, y el cursor nace justo encima de ella.
         settings: {
             let mut cfg = norte_ui_host::ajustes_por_defecto();
-            cfg.common.ui_parent_entry = Some(false);
+            cfg.common.ui_parent_entry = Some(fila_de_subir);
             cfg
         },
         paths: norte_ui_host::settings::HostPaths::default(),
@@ -313,18 +332,28 @@ fn foto_host(snap: &ViewSnapshot) -> Semantico {
 
 /// Corre un escenario por las dos vías y compara paso a paso.
 async fn compara(nombre: &str, pasos: &[Paso]) {
-    let esperado = via_primitivas(pasos);
-    let obtenido = via_host(pasos).await;
-    assert_eq!(
-        esperado.len(),
-        obtenido.len(),
-        "[{nombre}] distinto número de pasos observados"
-    );
-    for (i, (a, b)) in esperado.iter().zip(obtenido.iter()).enumerate() {
+    // Las dos configuraciones de la fila `..`. La encendida es la de fábrica
+    // y la que ve cualquiera que abra norte; la apagada se sigue corriendo
+    // porque es una opción de verdad y su listado tiene otros índices.
+    for fila_de_subir in [false, true] {
+        let etiqueta = if fila_de_subir {
+            "con fila `..`"
+        } else {
+            "sin fila `..`"
+        };
+        let esperado = via_primitivas(pasos, fila_de_subir);
+        let obtenido = via_host(pasos, fila_de_subir).await;
         assert_eq!(
-            a, b,
-            "[{nombre}] paso {i}: el host y las primitivas divergen"
+            esperado.len(),
+            obtenido.len(),
+            "[{nombre}, {etiqueta}] distinto número de pasos observados"
         );
+        for (i, (a, b)) in esperado.iter().zip(obtenido.iter()).enumerate() {
+            assert_eq!(
+                a, b,
+                "[{nombre}, {etiqueta}] paso {i}: el host y las primitivas divergen"
+            );
+        }
     }
 }
 

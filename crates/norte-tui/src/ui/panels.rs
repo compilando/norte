@@ -725,13 +725,15 @@ pub(crate) fn draw_processes(
 /// La hoja de atributos (fase A): lo que se sabe de la entrada bajo el cursor.
 ///
 /// Todo sale de la `Entry` que el listado ya tenía, así que esta función no
-/// puede pedir nada aunque quisiera. El tamaño va por `human_bytes_short`, que
-/// redondea hacia ABAJO y no se recorta: un tamaño cortado por la cabeza es un
-/// número FALSO, no una etiqueta truncada (la lección de L3).
+/// puede pedir nada aunque quisiera. QUÉ filas van dentro lo decide
+/// [`norte_frontend::metadata::sheet`], que es la misma que usa la ventana:
+/// esto solo las pinta. Cuando cada frontend tenía su copia de la lista ya
+/// habían divergido —el arreglo que marca un valor de atributo hostil se
+/// aplicó en una sola— y ese es exactamente el fallo que una copia produce.
 pub(crate) fn draw_metadata(
     frame: &mut Frame<'_>,
     area: Rect,
-    entry: Option<&norte_proto::Entry>,
+    entry: Option<&(norte_proto::Entry, bool)>,
     app: &App,
     con_teclado: bool,
 ) {
@@ -751,7 +753,7 @@ pub(crate) fn draw_metadata(
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let Some(e) = entry else {
+    let Some((e, fila_de_subir)) = entry else {
         frame.render_widget(
             Paragraph::new(Line::styled(t("metadata-empty"), theme.role(Role::Title))),
             inner,
@@ -759,70 +761,30 @@ pub(crate) fn draw_metadata(
         return;
     };
 
-    let mut lines: Vec<Line<'_>> = Vec::new();
-    let mut field = |clave: &str, value: String| {
-        lines.push(Line::from(vec![
-            Span::styled(format!("{} ", t(clave)), theme.role(Role::Title)),
-            Span::raw(value),
-        ]));
-    };
-
-    let nombre = e
-        .path
-        .file_name()
-        .map_or_else(Vec::new, |s| s.as_bytes().to_vec());
-    let (text, hostile) = display_name(&nombre);
-    field("metadata-name", with_badge(&text, hostile));
-    field(
-        "metadata-kind",
-        t(match e.kind {
-            norte_proto::EntryKind::Dir => "metadata-kind-dir",
-            norte_proto::EntryKind::File => "metadata-kind-file",
-            norte_proto::EntryKind::Symlink => "metadata-kind-symlink",
-            norte_proto::EntryKind::Other => "metadata-kind-other",
-        }),
-    );
-    if let Some(n) = e.size {
-        field(
-            "metadata-size",
-            format!("{} ({n})", norte_frontend::human_bytes_short(n)),
-        );
-    }
-    if let Some(ms) = e.mtime_ms {
-        field(
-            "metadata-mtime",
-            norte_frontend::columns::format_mtime(ms, norte_frontend::columns::TimeFormat::Iso, ms),
-        );
-    }
-    // Los atributos que el provider YA había traído con el listado. Se pintan
-    // por la misma puerta que la columna equivalente —`styled_cell`, con el
-    // estilo por defecto del id— para que la hoja y la columna no puedan
-    // discrepar sobre lo que vale un atributo.
     let catalog = app.attr_catalog(e.path.scheme());
-    let now = e.mtime_ms.unwrap_or(0);
-    for id in e.attrs.keys() {
-        let col: norte_frontend::columns::ColumnId =
-            norte_frontend::columns::ColumnId::Attr(id.clone());
-        let style = norte_frontend::columns::ColumnStyle::default_for_id(&col, catalog);
-        let label = norte_frontend::columns::header_label(&col, &style, catalog);
-        if let Some(celda) = norte_frontend::columns::styled_cell(e, &col, now, &style) {
-            free_field(&mut lines, theme, &label, &celda);
-        }
-    }
+    let ancho = inner.width as usize;
+    let lines: Vec<Line<'_>> =
+        norte_frontend::metadata::sheet(e, *fila_de_subir, catalog, norte_i18n::active())
+            .into_iter()
+            .map(|f| {
+                // El valor se recorta por el MEDIO y con marca. Un
+                // `Paragraph` sin wrap corta por la derecha y sin decirlo, y
+                // el campo `Destino` es una ruta entera: en un panel estrecho
+                // `⟨file⟩/home/oscar/proyectos/norte-secreto` quedaba como
+                // `⟨file⟩/home/oscar/proyectos`, que es otro directorio que
+                // además existe. Es la misma regla que el resto de las rutas
+                // de este fichero.
+                let etiqueta = format!("{} ", f.label);
+                let sitio = ancho.saturating_sub(crate::ui::text::cells(&etiqueta));
+                let valor =
+                    norte_frontend::middle_ellipsis(&with_badge(&f.value, f.hostile), sitio);
+                Line::from(vec![
+                    Span::styled(etiqueta, theme.role(Role::Title)),
+                    Span::raw(valor),
+                ])
+            })
+            .collect();
     frame.render_widget(Paragraph::new(lines), inner);
-}
-
-/// Una fila etiqueta/valor cuya etiqueta no sale de Fluent sino del catálogo.
-pub(crate) fn free_field(
-    lines: &mut Vec<Line<'static>>,
-    theme: &TuiTheme,
-    label: &str,
-    value: &str,
-) {
-    lines.push(Line::from(vec![
-        Span::styled(format!("{label} "), theme.role(Role::Title)),
-        Span::raw(value.to_owned()),
-    ]));
 }
 
 pub(crate) fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {

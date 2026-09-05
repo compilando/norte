@@ -328,8 +328,6 @@ impl Estado {
     ///
     /// No pide nada: la `Entry` ya la trajo el listado.
     pub(super) fn hoja_de_atributos(&self, slot: SlotId) -> crate::dto::MetadataSlotView {
-        use norte_frontend::columns::{ColumnId, ColumnStyle, header_label, styled_cell};
-
         let SlotId(id) = slot;
         let mut diags = Vec::new();
         let seguido =
@@ -338,10 +336,21 @@ impl Estado {
         // Con el FOCO en la propia hoja el rol activo es ella, y seguirse a
         // sí misma es seguir a nadie: entonces manda el listado activo, que
         // siempre existe (mismo arreglo que el visor acoplado, #291).
-        let entrada = seguido
+        let pane = seguido
             .and_then(|SlotId(s)| self.huecos.get(&s))
             .or_else(|| self.huecos.get(&self.activo()))
-            .and_then(|h| h.pane.selected());
+            .map(|h| &h.pane);
+        // `cursor_entry` y no `selected`: la hoja DESCRIBE lo que hay bajo el
+        // cursor, y sobre la fila `..` —donde el cursor nace— «lo señalado»
+        // es `None` a propósito. Preguntando por el operando, el panel salía
+        // vacío en cada arranque y después de cada `cd`.
+        // La bandera sale del MISMO índice que la entrada (`cursor_entry` /
+        // `cursor_is_parent_row`): preguntando por `cursor()` a mano, un
+        // filtro de quick search —que elige por su cuenta y no mueve el
+        // cursor real— dejaba la hoja describiendo `..` mientras el listado
+        // resaltaba otra fila.
+        let entrada = pane.and_then(|p| p.cursor_entry());
+        let fila_de_subir = pane.is_some_and(PaneState::cursor_is_parent_row);
         let Some(e) = entrada else {
             return crate::dto::MetadataSlotView {
                 slot_id: id,
@@ -349,86 +358,19 @@ impl Estado {
                 note: clamp_display(norte_i18n::t_in(self.lang, "metadata-empty")),
             };
         };
-        let mut fields = Vec::new();
-        let mut campo = |clave: &str, valor: String, hostile: bool| {
-            fields.push(crate::dto::MetadataFieldView {
-                label: clamp_display(norte_i18n::t_in(self.lang, clave)),
-                value: clamp_display(valor),
-                hostile,
-            });
-        };
-        let nombre = e
-            .path
-            .file_name()
-            .map_or_else(Vec::new, |s| s.as_bytes().to_vec());
-        let (pintable, hostil) = norte_frontend::display_name(&nombre);
-        campo("metadata-name", pintable, hostil);
-        campo(
-            "metadata-kind",
-            norte_i18n::t_in(
-                self.lang,
-                match e.kind {
-                    EntryKind::Dir => "metadata-kind-dir",
-                    EntryKind::File => "metadata-kind-file",
-                    EntryKind::Symlink => "metadata-kind-symlink",
-                    EntryKind::Other => "metadata-kind-other",
-                },
-            ),
-            false,
-        );
-        if let Some(n) = e.size {
-            // El humano y el exacto, los dos: «1,2 MiB» no sirve para
-            // comparar y `1258291` no sirve para leer.
-            campo(
-                "metadata-size",
-                format!("{} ({n})", norte_frontend::human_bytes_short(n)),
-                false,
-            );
-        }
-        if let Some(ms) = e.mtime_ms {
-            campo(
-                "metadata-mtime",
-                norte_frontend::columns::format_mtime(
-                    ms,
-                    norte_frontend::columns::TimeFormat::Iso,
-                    ms,
-                ),
-                false,
-            );
-        }
-        // Los atributos que el provider YA trajo. Van por la MISMA puerta que
-        // su columna equivalente, para que la hoja y la columna no puedan
-        // discrepar sobre lo que vale un atributo.
+        // Qué filas van dentro lo decide el crate COMPARTIDO, no este host:
+        // la misma hoja la pinta el TUI, y cuando cada uno tenía su copia ya
+        // divergieron (el TUI no marcaba un valor de atributo hostil).
+        // Aquí solo se acota lo que cruza el puente.
         let catalogo = self.catalogos.get(e.path.scheme());
-        let ahora = e.mtime_ms.unwrap_or(0);
-        for attr in e.attrs.keys() {
-            let col = ColumnId::Attr(attr.clone());
-            let style = ColumnStyle::default_for_id(&col, catalogo);
-            if let Some(celda) = styled_cell(e, &col, ahora, &style) {
-                // La marca se saca del valor CRUDO, no de la celda ya
-                // formateada: `styled_cell` enmascara por dentro y no
-                // devuelve la bandera, y volver a preguntársela a lo ya
-                // enmascarado no contesta nada —U+FFFD no es un peligro de
-                // terminal, así que un valor ya convertido se declara fiel—.
-                // Aquí se ponía `false` a mano, o sea que la hoja de
-                // atributos decía que todo era fiel mientras la COLUMNA
-                // equivalente sí marcaba los mismos bytes.
-                let hostil = match e.attrs.get(attr) {
-                    Some(norte_proto::AttrValue::Text(t)) => {
-                        norte_frontend::display_name(t.as_bytes()).1
-                    }
-                    Some(norte_proto::AttrValue::Bytes(b)) => norte_frontend::display_name(b).1,
-                    // Los demás son números o marcas de tiempo que formatea
-                    // norte: no hay texto de tercero que enmascarar.
-                    _ => false,
-                };
-                fields.push(crate::dto::MetadataFieldView {
-                    label: clamp_display(header_label(&col, &style, catalogo)),
-                    value: clamp_display(celda),
-                    hostile: hostil,
-                });
-            }
-        }
+        let fields = norte_frontend::metadata::sheet(e, fila_de_subir, catalogo, self.lang)
+            .into_iter()
+            .map(|f| crate::dto::MetadataFieldView {
+                label: clamp_display(f.label),
+                value: clamp_display(f.value),
+                hostile: f.hostile,
+            })
+            .collect();
         crate::dto::MetadataSlotView {
             slot_id: id,
             fields,

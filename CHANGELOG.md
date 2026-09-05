@@ -9,6 +9,53 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The details sheet and the docked viewer were empty on the `..` row.**
+  Both asked `PaneState::selected()`, which answers `None` on the parent row
+  on purpose — that row is not an operand, and this is what keeps F8 from
+  deleting the parent. But those panels do not operate, they *describe*, and
+  the cursor is born on `..`: the window's "Detalles" therefore read "nada
+  bajo el cursor" at every start and after every `cd`, which is how a working
+  panel looks broken. A second question now has a second answer:
+  `PaneState::cursor_entry()` returns the row under the cursor, `..`
+  included, and is documented as never an operand. On `..` the sheet says
+  `..`, `folder`, and where it leads (new `metadata-target` key in both
+  locales), and the viewer says `directory`.
+- **Opening the quick search could make the `..` row an operand.** In
+  `Mode::Filter` the real cursor does not move and the filter chooses the
+  row, and a filter's empty query is born selecting index 0 — so the guard
+  in `PaneState::selected()`, which tested `self.cursor`, was bypassed and
+  the parent directory came back as "what is selected". `marked_paths()`
+  falls back to `selected()` when nothing is marked, and F8 takes the first
+  of that list: two keystrokes from a fresh pane, the delete confirmation
+  named the parent directory. The guard now tests the row the screen is
+  actually pointing at, so it covers both sources. Found by review; it
+  predates this branch.
+- **The TUI silently turned `[ui] parent_entry` off after the first saved
+  session.** `App::apply_session` and `session_push::restore_slots` both
+  replaced the pane wholesale and put back only `sort` and `show_hidden`, so
+  the `..` row was lost on every restore — the same configuration produced a
+  window with the row and a terminal without it. Both now go through one
+  door, `App::adoptar_pane`, which stamps the session's configuration on any
+  listing born outside `App::nuevo_pane`.
+- **`norte-gui --layout <name>` could not open a user layout.** The window
+  looked only at the factory presets while `ntc` tried
+  `layouts/<name>.toml` first — and the same window offers those files in
+  its own layout picker. The rule now lives once, in
+  `norte_frontend::layout::config::or_preset` (user file wins; a missing one
+  falls back silently, a broken one falls back with a warning), and the
+  window keeps the name's bytes instead of rejecting a non-UTF-8 filename
+  (#246). A *broken* user layout now reports its parse error instead of
+  "value does not exist", and the warning reaches the status bar rather than
+  only the log. The TUI stopped filtering the name `orthodox` before
+  loading, which had just become a divergence: a user's
+  `layouts/orthodox.toml` was honoured by the window and ignored by the
+  terminal.
+- **A layout name in an error message is masked and marked.** It reaches
+  `norte-gui.log` and the webview, and `valid_profile_name` does not reject
+  control characters, so `--layout $'a\x1b[31mb'` put a live escape sequence
+  in the log; `$'\xff'` and `$'\xfe'` produced the same message with nothing
+  saying the text was not the bytes. The terminal already did this; the
+  window did not.
 - **The window's panel bar did nothing on click.** The renderer sent
   `panelbar_activate`; the host's wire name is `panel_bar_activate`
   (`UiAction` is `snake_case`, and `PanelBar` is two words). The action
@@ -27,6 +74,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **The details sheet's field list is shared.** It was written twice —
+  `norte-tui/src/ui/panels.rs` and `norte-ui-host/src/controller/places.rs`
+  — and the copies had already diverged: the window marked a hostile
+  attribute value and the terminal did not, while the equivalent *column*
+  marked it in both. `norte_frontend::metadata::sheet` decides the rows now
+  and the two frontends only paint them.
+- **The parity harness runs every scenario twice**, with the `..` row off
+  and on. It only ever ran with the row off, which is the one state nobody
+  starts in.
 - **Protocol 0.68.0: a renamer that refuses says why (#332).**
   `AiRenamePlanResult` gains `refused: Option<String>`, omitted when
   absent, so every plan that existed is byte-identical to 0.67. When a
