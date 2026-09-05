@@ -5907,6 +5907,90 @@ async fn host_hoja_sin_visor(backend: Arc<Falso>) -> (UiHost, norte_ui_host::Vie
     .expect("arranca")
 }
 
+/// Los kinds cuya vista sale del CURSOR del listado al que siguen.
+///
+/// Lista a mano y a propósito, como `paridad.rs::NO_APLICA`: quien añada un
+/// hueco que siga al cursor la edita, y el test de abajo le exige una sonda.
+/// Derivarla del registro de kinds no vale — «seguir» es un vínculo del
+/// hueco, no una propiedad del kind, así que el registro no lo sabe.
+const SIGUEN_AL_CURSOR: &[&str] = &["viewer", "metadata"];
+
+/// Cada uno de ellos tiene camino propio hasta el renderer (ADR 0097, D3).
+///
+/// La ventana habla por PARCHES: uno de filas escribe `generation`,
+/// `first_visible`, `rows` y `cursor`, y nada más. Un panel que se deriva del
+/// cursor y no tiene sonda propia solo se refresca cuando OTRO panel provoca
+/// una foto entera — y la disposición de fábrica (`orthodox`) no coloca
+/// ninguno de los dos, así que ese «otro» no existe para la mayoría.
+///
+/// Así se quedó congelada la hoja de atributos: viajaba de gorra en la foto
+/// del visor. Este test pone cada kind SOLO con un listado, mueve el cursor,
+/// y exige una foto SIN pedir `Resync` — que es lo único que tiene el
+/// renderer de verdad.
+#[tokio::test]
+async fn todo_hueco_que_sigue_al_cursor_tiene_sonda_propia() {
+    use norte_frontend::layout::{Bindings, Dir, Follow, KindId, Node, RoleId, SlotId};
+    for kind in SIGUEN_AL_CURSOR {
+        let arbol_layout = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot_bound(
+                    SlotId(8),
+                    KindId::new(*kind),
+                    Bindings {
+                        follows: Some(Follow::Role(RoleId::Active)),
+                    },
+                ),
+            ],
+        );
+        let h = UiHost::start(UiHostOptions {
+            backend: arbol(),
+            initial_dir: dir(),
+            locale: "es".to_owned(),
+            keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+            keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+            keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox")
+                .expect("preset"),
+            layout: arbol_layout,
+            viewport: (200, 60),
+            settings: ajustes_de_prueba(),
+            paths: norte_ui_host::settings::HostPaths::default(),
+            theme: norte_ui_host::pickers::HostTheme::default(),
+            user_layouts: Vec::new(),
+            profile: None,
+            columns: norte_ui_host::columnas_por_defecto(),
+            effects: norte_ui_host::commands::Efectos::Completo,
+            log_ring: None,
+        })
+        .await
+        .expect("arranca");
+        let (h, snap) = h;
+        let mut sub = h.subscribe();
+        let listado = primer_listado(&snap);
+
+        h.dispatch(UiAction::SelectRow {
+            slot_id: listado.slot_id,
+            key: norte_ui_host::RowKey(1),
+            generation: listado.generation,
+        })
+        .await
+        .expect("host vivo");
+        asentar().await;
+
+        tokio::time::pause();
+        let llegada =
+            tokio::time::timeout(std::time::Duration::from_secs(5), siguiente_foto(&mut sub)).await;
+        tokio::time::resume();
+        assert!(
+            llegada.is_ok(),
+            "el hueco `{kind}` sigue al cursor y no manda nada al moverlo: \
+             se queda congelado en cualquier disposición que no traiga otro \
+             panel que provoque una foto"
+        );
+    }
+}
+
 /// Pinchar una fila mueve la hoja, aunque no haya visor que arrastre la foto.
 ///
 /// Lo que veía Oscar: en una disposición con árbol, dos listados y detalles
