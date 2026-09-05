@@ -1071,6 +1071,15 @@ export type ViewChange =
        */
       total_rows: number | null;
     }
+  | {
+      change: "browser_header";
+      slot_id: number;
+      path_display: string;
+      path_hostile: boolean;
+      skipped_note: string;
+      hidden_note: string;
+      marks: number;
+    }
   | { change: "slot_state"; slot_id: number; state: SlotState }
   | ({ change: "status" } & StatusView)
   | { change: "tasks"; tasks: TaskView[] }

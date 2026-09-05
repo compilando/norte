@@ -18971,6 +18971,106 @@ async fn ciclar_el_encoding_repinta_sin_tocar_los_bytes() {
     );
 }
 
+/// Y la CABECERA se repinta con las filas, sin pedir una foto.
+///
+/// `pane.names-encoding` transcribe los nombres, y la ruta del propio
+/// directorio es un nombre más: si sus bytes no son UTF-8, la cabecera tiene
+/// que reinterpretarse igual que las filas. Contestaba con un parche de filas
+/// y un parche de estado, y la cabecera solo viaja en la foto entera — así que
+/// las filas se retranscribían y el título se quedaba con la lectura vieja,
+/// que es exactamente el medio arreglo que #57 y #293 dicen que no puede
+/// pasar: el mojibake se queda arriba y el lector no sabe si el comando hizo
+/// algo.
+///
+/// Se comprueba SIN `Resync`, que es lo único que tiene el renderer, y sin
+/// pasar por la paleta —abrirla y cerrarla manda fotos que repararían la
+/// cabecera por accidente—: la tecla del preset, como un humano.
+#[tokio::test]
+async fn ciclar_el_encoding_repinta_tambien_la_cabecera() {
+    let mut falso = Falso::default();
+    // Un directorio cuyo PROPIO nombre no es UTF-8.
+    falso.pon("mem:///caf%FF", vec![(b"a.txt".to_vec(), false)]);
+    let (h, snap) = UiHost::start(UiHostOptions {
+        backend: Arc::new(falso),
+        initial_dir: norte_proto::VPath::parse("mem:///caf%FF").expect("wire"),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+    let antes = listado(&snap).path_display.clone();
+    assert!(
+        antes.contains('\u{fffd}'),
+        "de partida, los bytes no se pueden pintar: {antes}"
+    );
+    let mut sub = h.subscribe();
+
+    // `alt+e` es `pane.names-encoding` en el preset `orthodox`. A mano y no
+    // por `tecla_mod`, que fija `alt: false`.
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "e".to_owned(),
+        ctrl: false,
+        alt: true,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+    asentar().await;
+
+    let mut cabecera = None;
+    tokio::time::pause();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Update::Message(m) = sub.recv().await.expect("host vivo") {
+                match m.payload {
+                    UiUpdate::Patch(p) => {
+                        for c in &p.changes {
+                            if let norte_ui_host::dto::ViewChange::BrowserHeader {
+                                path_display,
+                                ..
+                            } = c
+                            {
+                                cabecera = Some(path_display.clone());
+                            }
+                        }
+                    }
+                    UiUpdate::Snapshot(s) => {
+                        cabecera = Some(listado(&s).path_display.clone());
+                    }
+                    UiUpdate::Notice(_) => {}
+                }
+                if cabecera.is_some() {
+                    return;
+                }
+            }
+        }
+    })
+    .await;
+    tokio::time::resume();
+
+    let despues = cabecera.expect(
+        "ciclar el encoding no repinta la cabecera: las filas se \
+         retranscriben y el título se queda con la lectura vieja",
+    );
+    assert_ne!(
+        despues, antes,
+        "la ruta se reinterpreta igual que las filas"
+    );
+}
+
 /// `pane.refresh` vuelve a pedir TODOS los listados que se ven, no solo el
 /// enfocado: lo que cambia un directorio por debajo es un cambio en el DISCO,
 /// y un cambio en el disco no respeta el foco.

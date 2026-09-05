@@ -55,6 +55,34 @@ describe("Session", () => {
     expect(despues?.kind === "browser" ? despues.total_rows : null).toBe(5000);
   });
 
+  // `pane.names-encoding` retranscribe los nombres, y la ruta del propio
+  // directorio es un nombre más. Viajando solo en la foto, las filas se
+  // repintaban y el título se quedaba con la lectura vieja.
+  it("un parche de cabecera repinta la ruta y lo que falta del listado", () => {
+    const out = s.receive(
+      env(1, {
+        update: "patch",
+        base_sequence: 0,
+        changes: [
+          {
+            change: "browser_header",
+            slot_id: 1,
+            path_display: "⟨mem⟩/casa/café",
+            path_hostile: false,
+            skipped_note: "2 entradas se saltaron",
+            hidden_note: "3 ocultas",
+            marks: 4,
+          },
+        ],
+      }),
+    );
+    expect(out.kind).toBe("applied");
+    const slot = s.view()?.slots.find((x) => x.kind === "browser");
+    expect(slot?.kind === "browser" ? slot.path_display : null).toBe("⟨mem⟩/casa/café");
+    expect(slot?.kind === "browser" ? slot.hidden_note : null).toBe("3 ocultas");
+    expect(slot?.kind === "browser" ? slot.marks : null).toBe(4);
+  });
+
   it("aplica un parche sobre su base", () => {
     const out = s.receive(
       env(1, {

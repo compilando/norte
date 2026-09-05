@@ -2004,8 +2004,17 @@ fn cambios_de_overlay() -> Vec<(&'static str, ViewChange)> {
 /// Los que describen la PANTALLA: disposición, overlays y estado global.
 fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
     let mut casos = cambios_de_overlay();
-    casos.extend(vec![
-        ("layout", ViewChange::Layout(disposicion_de_referencia())),
+    casos.extend(cambios_de_listado());
+    casos.extend(cambios_del_resto());
+    casos
+}
+
+/// Los que describen un LISTADO: sus filas y su cabecera.
+///
+/// Aparte del resto porque `cambios_de_pantalla` se pasó de las cien líneas
+/// al añadir la cabecera, y porque estos dos viajan juntos en el mismo parche.
+fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
+    vec![
         (
             "rows",
             ViewChange::Rows {
@@ -2016,6 +2025,27 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
                 total_rows: Some(120),
             },
         ),
+        (
+            // La cabecera viaja con las filas, y sus cuatro textos son de
+            // TERCEROS —una ruta, dos frases con un número, y un nombre
+            // reinterpretado—, así que su forma de cable se fija aquí.
+            "browser_header",
+            ViewChange::BrowserHeader {
+                slot_id: 1,
+                path_display: "⟨mem⟩/casa/caf\u{fffd}".to_owned(),
+                path_hostile: true,
+                skipped_note: "2 entradas se saltaron".to_owned(),
+                hidden_note: "3 ocultas".to_owned(),
+                marks: 4,
+            },
+        ),
+    ]
+}
+
+/// Todo lo demás que puede cambiar de la pantalla.
+fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
+    vec![
+        ("layout", ViewChange::Layout(disposicion_de_referencia())),
         (
             "slot_state",
             ViewChange::SlotState {
@@ -2099,8 +2129,7 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
                 tasks: vec![task_de_referencia()],
             },
         ),
-    ]);
-    casos
+    ]
 }
 
 /// Ningún número del corpus se sale de donde un `f64` es exacto (#258).

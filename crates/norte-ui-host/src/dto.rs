@@ -2527,6 +2527,36 @@ pub enum ViewChange {
         /// el rango visible podía pedir el resto.
         total_rows: Option<u64>,
     },
+    /// La CABECERA de un listado cambió: su ruta y lo que falta de él.
+    ///
+    /// Aparte de [`ViewChange::Rows`] porque es otra parte de la pantalla —el
+    /// renderer la pinta en `paintHeader`—, y con ella porque se mueven a la
+    /// vez: `pane.names-encoding` retranscribe la ruta igual que las filas, y
+    /// `pane.toggle-hidden` mueve entradas dentro y fuera del listado, lo que
+    /// cambia cuántas se apartan.
+    ///
+    /// Antes solo viajaba en la foto entera, así que las filas se repintaban
+    /// y el título se quedaba con la lectura vieja — el mojibake arriba y el
+    /// lector sin saber si el comando hizo algo (#57, #293).
+    BrowserHeader {
+        /// Hueco.
+        slot_id: u32,
+        /// La ruta, ya pintable y con la reinterpretación vigente.
+        path_display: String,
+        /// Esa ruta DIFIERE de los bytes reales.
+        path_hostile: bool,
+        /// Lo que el provider se saltó, ya dicho. Vacío si no se saltó nada.
+        skipped_note: String,
+        /// Lo que la ocultación aparta. Vacío si no aparta nada.
+        hidden_note: String,
+        /// Cuántas entradas hay marcadas.
+        ///
+        /// Hoy el renderer no la pinta, y por eso viaja: el campo existe en
+        /// la foto y se quedaba rancio en cada gesto de marcado, así que el
+        /// día que alguien pinte «3 marcados» tendría el número mal sin haber
+        /// tocado nada.
+        marks: u64,
+    },
     /// El estado de un hueco cambió (cargando, error, listo).
     SlotState {
         /// Hueco.

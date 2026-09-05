@@ -370,24 +370,22 @@ impl Estado {
     }
 
     /// La proyección de UN listado.
-    pub(super) fn browser(&self, id: u32, hueco: &Hueco) -> BrowserSlotView {
+    /// Los campos de CABECERA de un listado, derivados UNA vez.
+    ///
+    /// Los leen la foto ([`Self::browser`]) y el parche
+    /// ([`Self::cabecera_de`]). Dos derivaciones del mismo hecho es de donde
+    /// salió media auditoría de paridad, así que aquí hay una sola.
+    pub(super) fn cabecera_de(&self, id: u32, hueco: &Hueco) -> crate::dto::ViewChange {
         // Con la MISMA reinterpretación que las filas: pintar la cabecera con
         // los bytes crudos mientras las filas van transcodificadas deja
         // `pane.names-encoding` a medias — el mojibake se queda arriba y el
         // lector no puede saber si el comando hizo algo (#57, #293).
         let (path, hostil) =
             norte_frontend::path_display_with(hueco.pane.dir(), hueco.pane.name_encoding());
-        BrowserSlotView {
+        crate::dto::ViewChange::BrowserHeader {
             slot_id: id,
-            generation: hueco.pane.listing_epoch(),
             path_display: clamp_display(path),
             path_hostile: hostil,
-            total_rows: Some(hueco.pane.entries().len() as u64),
-            first_visible: hueco.primera_visible,
-            rows: self.filas_de(hueco),
-            cursor: (!hueco.pane.entries().is_empty())
-                .then_some(RowKey(hueco.pane.cursor() as u64)),
-            marks: hueco.pane.marks_len() as u64,
             hidden_note: match hueco.pane.hidden_count() {
                 0 => String::new(),
                 n => clamp_display(norte_i18n::ta_in(
@@ -403,6 +401,35 @@ impl Estado {
                     &[("n", &n.to_string())],
                 ))
             }),
+            marks: hueco.pane.marks_len() as u64,
+        }
+    }
+
+    pub(super) fn browser(&self, id: u32, hueco: &Hueco) -> BrowserSlotView {
+        let crate::dto::ViewChange::BrowserHeader {
+            path_display,
+            path_hostile,
+            hidden_note,
+            skipped_note,
+            marks,
+            ..
+        } = self.cabecera_de(id, hueco)
+        else {
+            unreachable!("`cabecera_de` construye esa variante")
+        };
+        BrowserSlotView {
+            slot_id: id,
+            generation: hueco.pane.listing_epoch(),
+            path_display,
+            path_hostile,
+            total_rows: Some(hueco.pane.entries().len() as u64),
+            first_visible: hueco.primera_visible,
+            rows: self.filas_de(hueco),
+            cursor: (!hueco.pane.entries().is_empty())
+                .then_some(RowKey(hueco.pane.cursor() as u64)),
+            marks,
+            hidden_note,
+            skipped_note,
             columns: self.cabeceras(hueco),
             state: hueco.estado.clone(),
             quick: hueco.pane.quick().map(|q| crate::dto::QuickView {

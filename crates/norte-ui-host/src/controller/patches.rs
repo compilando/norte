@@ -384,7 +384,16 @@ impl Estado {
             // el último lote—.
             total_rows: total,
         };
-        self.parche(vec![cambio])
+        // La cabecera va CON las filas: `pane.names-encoding` retranscribe la
+        // ruta igual que los nombres, y ocultar mueve entradas dentro y fuera
+        // del listado. Mandar solo las filas dejaba el título con la lectura
+        // vieja.
+        let cabecera = self
+            .huecos
+            .get(&slot)
+            .map(|h| self.cabecera_de(slot, h))
+            .into_iter();
+        self.parche(std::iter::once(cambio).chain(cabecera).collect())
     }
 
     /// Lo que cambia una marca o un scroll: las filas visibles.
@@ -399,7 +408,8 @@ impl Estado {
             // la altura del desplazamiento se mueven con ellas.
             total_rows: Some(self.hueco().pane.entries().len() as u64),
         };
-        self.parche(vec![cambio])
+        let cabecera = self.cabecera_de(self.activo(), self.hueco());
+        self.parche(vec![cambio, cabecera])
     }
 
     pub(super) fn fila(&self, hueco: &Hueco, i: usize, e: &Entry) -> RowView {

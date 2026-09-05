@@ -20,6 +20,15 @@ independently through `PROTOCOL_VERSION`.
   included, and is documented as never an operand. On `..` the sheet says
   `..`, `folder`, and where it leads (new `metadata-target` key in both
   locales), and the viewer says `directory`.
+- **The window's panel title did not follow `pane.names-encoding`.** The
+  rows were re-transcoded and the header kept the old reading — the mojibake
+  stayed at the top and the reader could not tell whether the command had
+  done anything, which is exactly the half-fix #57 and #293 rule out. The
+  header travelled only in a full snapshot; it now travels with the rows, in
+  a `browser_header` change that also carries the "N skipped" and "N hidden"
+  notes (stale after `pane.toggle-hidden` for the same reason) and the mark
+  count (not painted yet, and wrong on every marking gesture — a trap for
+  whoever paints it).
 - **The window could not scroll past row 100 in a large directory.** A
   listing arrives as a first page of 100 and then drains in batches of 500,
   and every batch — the last one included — answers with a rows patch. But

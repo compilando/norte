@@ -62,6 +62,15 @@
     },
     "change": "ai_rename"
   },
+  "browser_header": {
+    "change": "browser_header",
+    "hidden_note": "3 ocultas",
+    "marks": 4,
+    "path_display": "⟨mem⟩/casa/caf�",
+    "path_hostile": true,
+    "skipped_note": "2 entradas se saltaron",
+    "slot_id": 1
+  },
   "columns": {
     "change": "columns",
     "columns": [

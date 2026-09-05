@@ -120,6 +120,21 @@ export class Session {
         }
         return true;
       }
+      case "browser_header": {
+        const slot = browser(s, c.slot_id);
+        if (slot === null) {
+          return true;
+        }
+        // La cabecera se movía solo con la foto entera, así que
+        // `pane.names-encoding` retranscribía las filas y dejaba el título
+        // con la lectura vieja.
+        slot.path_display = c.path_display;
+        slot.path_hostile = c.path_hostile;
+        slot.skipped_note = c.skipped_note;
+        slot.hidden_note = c.hidden_note;
+        slot.marks = c.marks;
+        return true;
+      }
       case "slot_state": {
         const slot = browser(s, c.slot_id);
         if (slot !== null) {
