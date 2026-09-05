@@ -744,6 +744,10 @@ plugin-output-truncated = the output was cut: it was longer than fits
 # The output of a program the window ran and waited for (#312).
 program-output-title = Program output
 program-output-compare = Compare two files
+# What a program launched by `openers.toml` or `[ui] editor` printed, when the
+# rule says to wait for it rather than let it go.
+program-output-open = Open
+program-output-edit = Edit
 program-output-failed = the program did not run, or ran out of time
 # The `[ui] diff` program (or `diff`) is not on the PATH.
 host-program-missing = no program to do it with: it is not on the PATH

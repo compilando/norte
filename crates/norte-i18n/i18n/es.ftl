@@ -753,6 +753,10 @@ plugin-output-truncated = la salida se cortó: era más larga de lo que cabe
 # La salida de un programa que la ventana corrió esperándolo (#312).
 program-output-title = Salida del programa
 program-output-compare = Comparar dos ficheros
+# Lo que imprime un programa lanzado por `openers.toml` o por `[ui] editor`,
+# cuando la regla dice que se le espera en vez de soltarlo.
+program-output-open = Abrir
+program-output-edit = Editar
 program-output-failed = el programa no llegó a correr, o se pasó del plazo
 # El programa de `[ui] diff` (o `diff`) no está en el PATH.
 host-program-missing = no hay programa con el que hacerlo: no está en el PATH

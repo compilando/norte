@@ -10675,6 +10675,109 @@ async fn el_lote_por_plantilla_se_revisa_como_el_de_la_ia() {
     );
 }
 
+/// `openers.toml` manda también en la VENTANA (#28).
+///
+/// La tabla de openers la leía solo el terminal: la ventana entregaba todo al
+/// manejador del escritorio, así que una regla que dice «los PDF con zathura»
+/// valía en `ntc` y no valía en `norte-gui`. Es una feature documentada
+/// entera honrada por una sola superficie.
+#[tokio::test]
+async fn un_opener_declarado_manda_en_la_ventana() {
+    let mut falso = Falso::default();
+    falso.pon("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let mut cfg = ajustes_de_prueba();
+    cfg.openers = norte_frontend::openers::OpenersConfig::parse(
+        "[[opener]]\nmime = \"text/*\"\ncommand = [\"cat\", \"%f\"]\ndetached = false\n",
+    )
+    .expect("config de test");
+    let (h, _snap) = host_en_con(Arc::new(falso), "file:///casa", cfg).await;
+    let mut sub = h.subscribe();
+    let mut efectos = h.native_effects();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.open").await;
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), efectos.recv())
+        .await
+        .expect("sale el efecto")
+        .expect("canal vivo");
+    let norte_ui_host::dto::NativeEffect::RunProgram { argv, cwd, .. } = efecto else {
+        panic!("con una regla declarada se corre ESE programa, no el del escritorio: {efecto:?}");
+    };
+    let como_texto: Vec<String> = argv
+        .iter()
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect();
+    assert!(
+        como_texto[0].ends_with("/cat"),
+        "el programa va resuelto a ruta absoluta ANTES de darle cwd (ADR 0082): {como_texto:?}"
+    );
+    assert!(
+        como_texto[1].ends_with("/casa/notas.txt"),
+        "y `%f` es el fichero señalado: {como_texto:?}"
+    );
+    assert_eq!(
+        cwd.map(|c| String::from_utf8_lossy(&c).into_owned()),
+        Some("/casa".to_owned()),
+        "el hijo abre en el directorio que se está mirando (#144)"
+    );
+}
+
+/// Sin regla para ese mimetype queda el manejador del ESCRITORIO.
+///
+/// El último recurso es el de siempre: escribir configuración no puede ser
+/// requisito para abrir un PDF.
+#[tokio::test]
+async fn sin_regla_declarada_abre_con_el_escritorio() {
+    let mut falso = Falso::default();
+    falso.pon("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let (h, _snap) = host_en(Arc::new(falso), "file:///casa").await;
+    let mut sub = h.subscribe();
+    let mut efectos = h.native_effects();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.open").await;
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), efectos.recv())
+        .await
+        .expect("sale el efecto")
+        .expect("canal vivo");
+    assert!(
+        matches!(efecto, norte_ui_host::dto::NativeEffect::OpenPath { .. }),
+        "sin regla, el escritorio: {efecto:?}"
+    );
+}
+
+/// `[ui] editor` manda en F4, y si no hay, el manejador del escritorio.
+///
+/// La ventana mandaba `pane.edit` al mismo sitio que `pane.open` SIEMPRE. La
+/// parte deliberada de esa decisión es no lanzar `$EDITOR` —un editor de
+/// terminal dentro de una ventana que no tiene terminal—, y sigue en pie.
+/// Lo que no era deliberado es ignorar `[ui] editor`, que nombra un programa
+/// explícito y puede perfectamente ser gráfico: su clave hermana `[ui] diff`
+/// SÍ la honra esta ventana.
+#[tokio::test]
+async fn el_editor_configurado_manda_en_la_ventana() {
+    let mut falso = Falso::default();
+    falso.pon("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let mut cfg = ajustes_de_prueba();
+    cfg.common.ui_editor = Some(vec!["cat".to_owned(), "%f".to_owned()]);
+    let (h, _snap) = host_en_con(Arc::new(falso), "file:///casa", cfg).await;
+    let mut sub = h.subscribe();
+    let mut efectos = h.native_effects();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.edit").await;
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), efectos.recv())
+        .await
+        .expect("sale el efecto")
+        .expect("canal vivo");
+    let norte_ui_host::dto::NativeEffect::RunProgram { argv, .. } = efecto else {
+        panic!("con `[ui] editor` puesto se corre ESE editor: {efecto:?}");
+    };
+    let como_texto: Vec<String> = argv
+        .iter()
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect();
+    assert!(como_texto[0].ends_with("/cat"), "{como_texto:?}");
+    assert!(como_texto[1].ends_with("/casa/notas.txt"), "{como_texto:?}");
+}
+
 /// #312: comparar dos ficheros desde la ventana. El operando y el programa
 /// son las decisiones compartidas con la TUI (`diffpair`, `[ui] diff`,
 /// `diff -u` por defecto); lo que cambia es que quien hospeda corre el
@@ -16640,6 +16743,35 @@ async fn editar_uno_nuevo_no_se_ofrece_en_un_panel_remoto() {
 }
 
 /// Un host que arranca en un directorio concreto.
+/// Como [`host_en`], pero con una configuración a medida: los openers y el
+/// editor son claves que la ventana ignoraba, así que los tests las traen.
+async fn host_en_con(
+    backend: Arc<Falso>,
+    inicio: &str,
+    cfg: norte_frontend::config::FrontendConfig,
+) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: VPath::parse(inicio).expect("vpath"),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: cfg,
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca")
+}
+
 async fn host_en(backend: Arc<Falso>, inicio: &str) -> (UiHost, norte_ui_host::ViewSnapshot) {
     UiHost::start(UiHostOptions {
         backend,

@@ -20,6 +20,18 @@ independently through `PROTOCOL_VERSION`.
   included, and is documented as never an operand. On `..` the sheet says
   `..`, `folder`, and where it leads (new `metadata-target` key in both
   locales), and the viewer says `directory`.
+- **`openers.toml` now applies in the window too (#28).** The table was read
+  only by the terminal, so a rule saying "PDFs open in zathura" held in `ntc`
+  and was skipped in `norte-gui`, which handed everything to the desktop
+  handler — a whole documented feature honoured by one surface. The desktop
+  handler stays as the last resort: writing configuration cannot be a
+  requirement for opening a PDF.
+- **`[ui] editor` now applies in the window (F4).** `pane.edit` was mapped to
+  `pane.open` unconditionally. The deliberate half of that — not launching
+  `$EDITOR`, a terminal editor in a window that has no terminal (#290) —
+  stands. Ignoring `[ui] editor` was not deliberate: it names an explicit
+  program that can perfectly well be graphical, and its sibling key
+  `[ui] diff` was already honoured here by the same machinery.
 - **The window's panel title did not follow `pane.names-encoding`.** The
   rows were re-transcoded and the header kept the old reading — the mojibake
   stayed at the top and the reader could not tell whether the command had

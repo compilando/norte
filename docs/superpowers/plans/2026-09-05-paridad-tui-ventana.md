@@ -31,8 +31,8 @@ La clase más barata de arreglar y la más visible: el usuario escribe algo en
 
 | clave | terminal | ventana | conf |
 | --- | --- | --- | --- |
-| `openers.toml` (entero) | sí, con recarga en caliente | **no lo lee nadie**: siempre `xdg-open` | **V** |
-| `[ui] editor` / `editor_detached` | sí (F4 lanza tu editor) | **no**: `pane.edit` es `pane.open` | A |
+| ~~`openers.toml` (entero)~~ | sí, con recarga en caliente | ~~**no lo lee nadie**: siempre `xdg-open`~~ **HECHO** | **V** |
+| ~~`[ui] editor` / `editor_detached`~~ | sí (F4 lanza tu editor) | ~~**no**: `pane.edit` es `pane.open`~~ **HECHO** (`$EDITOR` sigue fuera, y es deliberado) | A |
 | `[ui] quick_search` | sí | **no**: `Filter` a fuego | A |
 | `[ui] confirm_quit` | sí | **no**: la X cierra sin preguntar | A |
 | `[ui] theme` como RUTA a un `.toml` | sí (ADR 0020) | **no**: solo presets, y calla | A |

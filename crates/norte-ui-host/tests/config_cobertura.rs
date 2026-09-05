@@ -54,17 +54,21 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         //     defecto y no se dice. Plan, fase 3.
         ui_theme: _,
 
+        // ─── El host las lee para lanzar un programa: `openers.toml` manda en
+        //     `pane.open` y `[ui] editor` en `pane.edit`, con el manejador del
+        //     escritorio como último recurso en los dos.
+        //
+        //     Lo que sigue FUERA es `$EDITOR`, y es deliberado (#290): es un
+        //     editor de terminal y esta ventana no tiene uno donde ponerlo.
+        ui_editor: _,
+        ui_editor_detached: _,
+
         // ─── NO las lee la ventana, y no es una decisión: es la deuda que la
         //     auditoría de paridad puso nombre. Plan, fase 3.
         //
-        //     `openers`/`ui_editor`: `pane.edit` es `pane.open`, o sea el
-        //     manejador del escritorio, así que ni la tabla de openers ni el
-        //     editor configurado se consultan.
         //     `quick_search`: el host arranca el buscador incremental en
         //     `Filter` a fuego.
         //     `ui_confirm_quit`: cerrar la ventana no pregunta nunca.
-        ui_editor: _,
-        ui_editor_detached: _,
         quick_search: _,
         ui_confirm_quit: _,
 
@@ -116,4 +120,34 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         profile_warnings: _,
         profile_title: _,
     } = c;
+}
+
+/// Y lo que NO es `CommonConfig` también.
+///
+/// El guarda de arriba destructuraba solo los escalares, y `openers.toml`
+/// —una feature documentada entera— no es uno: vive en `FrontendConfig`. O
+/// sea que el propio guarda tenía el hueco por el que se había colado la cosa
+/// que vino a vigilar. Aquí se cierra.
+#[test]
+fn todo_campo_de_frontend_config_esta_clasificado_para_la_ventana() {
+    let cfg = norte_ui_host::ajustes_por_defecto();
+    let norte_frontend::config::FrontendConfig {
+        // Los escalares, con su propio guarda arriba.
+        common: _,
+
+        // ─── Las lee la cáscara al arrancar (`startup.rs::keymaps`) y viajan
+        //     fusionadas en `UiHostOptions`; el editor de atajos las vuelve a
+        //     mirar para saber en qué capa escribe.
+        keymap_layers: _,
+        keymap_layer_kinds: _,
+        keymap_layer_dirs: _,
+
+        // ─── El host la lee: `pane.open` resuelve por mimetype antes de caer
+        //     en el manejador del escritorio.
+        openers: _,
+
+        // ─── NO la lee la ventana: el buscador incremental arranca en
+        //     `Filter` a fuego. Plan, fase 3.
+        quick_search_mode: _,
+    } = cfg;
 }

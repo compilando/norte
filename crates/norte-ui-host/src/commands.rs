@@ -497,6 +497,9 @@ pub enum Efecto {
     CopiarRuta,
     /// Abre lo señalado con la aplicación que el escritorio elija.
     AbrirExterno,
+    /// Edita lo señalado con el editor que `[ui] editor` nombre; sin él, lo
+    /// mismo que [`Efecto::AbrirExterno`].
+    EditarExterno,
     /// Compara DOS ficheros (#312) con el programa de `[ui] diff` —o
     /// `diff -u`—, lanzado por quien hospeda: suelto si abre ventana,
     /// esperándolo y capturando su salida si no.
@@ -785,12 +788,17 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "app.extensions" => Efecto::Extensiones,
         "app.agents" => Efecto::Agentes,
         "pane.copy-path" => Efecto::CopiarRuta,
-        // F4 abre con la aplicación del ESCRITORIO, igual que `pane.open`
-        // (#290). El TUI lanza `$EDITOR` porque ya está dentro de un
-        // terminal; esta ventana no tiene uno, y abrir uno encima para editar
-        // un fichero es más ruido que ayuda. Lo que se pierde es respetar
-        // `$EDITOR`: aquí decide el escritorio, y puede abrir un visor.
-        "pane.open" | "pane.edit" => Efecto::AbrirExterno,
+        // F4 lanza el editor que `[ui] editor` nombre, y si no hay ninguno
+        // cae en `pane.open` — o sea en `openers.toml` y, en último término,
+        // en la aplicación del ESCRITORIO.
+        //
+        // Lo que sigue fuera es `$EDITOR` (#290), y sigue siendo deliberado:
+        // el TUI lo lanza porque ya está dentro de un terminal, y esta
+        // ventana no tiene uno donde ponerlo. `[ui] editor` es otra cosa —un
+        // programa que el lector nombra, y que puede ser gráfico— y su clave
+        // hermana `[ui] diff` ya la honra esta ventana.
+        "pane.open" => Efecto::AbrirExterno,
+        "pane.edit" => Efecto::EditarExterno,
         "pane.compare-files" => Efecto::CompararFicheros,
         "app.terminal" => Efecto::Terminal,
         "app.theme" => Efecto::Tema,
