@@ -5472,6 +5472,7 @@ dependencies = [
  "norte-proto",
  "norte-testkit",
  "norte-theme",
+ "norte-tui",
  "norte-vfs",
  "serde",
  "serde_json",

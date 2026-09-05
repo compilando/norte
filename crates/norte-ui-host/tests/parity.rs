@@ -1,15 +1,30 @@
-//! Paridad: el host y las primitivas compartidas hacen LO MISMO.
+//! Paridad: el TERMINAL y la VENTANA hacen lo mismo, y las dos hacen lo que
+//! dicen las primitivas compartidas.
 //!
-//! El host no debe reimplementar ninguna regla de presentación. Eso es fácil
+//! Ningún frontend debe reimplementar una regla de presentación. Eso es fácil
 //! de decir en un comentario y difícil de mantener: basta un `sort` propio,
 //! un clamp de cursor a mano o un «esto es más cómodo así» para que dos
 //! superficies empiecen a leerse distinto sin que nada se ponga rojo.
 //!
-//! Este arnés lo convierte en un test. Cada escenario se ejecuta DOS veces
-//! —una contra `norte_frontend::PaneState` + `nav::History` directamente, y
-//! otra contra el host por sus acciones y sus fotos— y se compara el estado
-//! SEMÁNTICO paso a paso: dónde está el cursor, qué hay marcado, qué
+//! Cada escenario se ejecuta TRES veces —contra `norte_frontend::PaneState` +
+//! `nav::History` a pelo, contra el host por sus acciones y sus fotos, y
+//! contra `norte-tui` por sus propias funciones de decisión— y se compara el
+//! estado SEMÁNTICO paso a paso: dónde está el cursor, qué hay marcado, qué
 //! directorio se ve y con qué nombres. Nunca píxeles.
+//!
+//! **La tercera pata es la que guarda algo, y faltaba** (ADR 0097, D1). Las
+//! dos primeras miden el host contra un arnés escrito con las reglas DEL
+//! HOST: su paso `Entrar` era `selected().filter(|e| e.kind == Dir)`, que es
+//! lo que hace la ventana y no lo que hace el terminal, así que la
+//! comparación no podía fallar. La auditoría de paridad del 2026-09-05
+//! encontró diecisiete decisiones ya divergidas por debajo de este fichero.
+//!
+//! Lo que todavía NO alcanza: el árbol de prueba solo tiene directorios y
+//! ficheros, así que los escenarios no pueden tocar la divergencia número uno
+//! del inventario —`Enter` sobre un `.zip` o sobre un symlink, donde el
+//! terminal navega y la ventana llama a `xdg-open`—. Hace falta que
+//! `Falso::pon` sepa de kinds; está en la fase 4 del plan
+//! `docs/superpowers/plans/2026-09-05-paridad-tui-ventana.md`.
 
 use std::sync::Arc;
 
@@ -128,6 +143,129 @@ fn via_primitivas(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
         salida.push(foto_primitivas(&pane));
     }
     salida
+}
+
+/// El mismo escenario, contra el TERMINAL, por sus propias decisiones.
+///
+/// Ésta es la pata que faltaba (ADR 0097, D1). Las otras dos comparan el host
+/// contra las primitivas, y el arnés de las primitivas está escrito con las
+/// reglas del host —su `Entrar` era `selected().filter(|e| e.kind == Dir)`,
+/// que es lo que hace la ventana y no lo que hace el terminal—, así que esa
+/// comparación no podía fallar por construcción.
+///
+/// Aquí los pasos pasan por las funciones de decisión del TUI: `enter_action`
+/// para Enter y `nav_enter_target` por debajo, que es donde el terminal
+/// decide que un `.zip` se navega y un symlink se sigue.
+fn via_tui(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
+    use norte_tui::app::{App, Pane};
+
+    let arbol = arbol_de_prueba();
+    let inicio = VPath::parse("mem:///casa").expect("vpath");
+    let mut app = App::new(
+        Pane::new(inicio.clone(), entradas(&arbol, &inicio)),
+        Pane::new(inicio.clone(), Vec::new()),
+    );
+    app.set_parent_row(fila_de_subir);
+    app.set_focus(0);
+    let mut salida = vec![foto_tui(&app)];
+
+    for paso in pasos {
+        match paso {
+            Paso::Cursor(delta) => {
+                for _ in 0..delta.unsigned_abs() {
+                    if *delta < 0 {
+                        app.focused_mut().move_up(1);
+                    } else {
+                        app.focused_mut().move_down(1);
+                    }
+                }
+            }
+            Paso::Marcar => app.focused_mut().toggle_mark(),
+            Paso::Entrar => {
+                // La decisión del TERMINAL, no una copia de ella.
+                match norte_tui::gestures::enter_action(&app) {
+                    norte_tui::gestures::EnterAction::Cd(dir) => cd_tui(&mut app, &dir, &arbol),
+                    norte_tui::gestures::EnterAction::Up(padre) => {
+                        let hijo = app.focused().dir().clone();
+                        app.focused_mut().set_pending_focus(hijo);
+                        cd_tui(&mut app, &padre, &arbol);
+                    }
+                    // Abrir fuera o ver no mueve el listado: el escenario
+                    // observa el listado, así que esto es un paso quieto.
+                    _ => {}
+                }
+            }
+            Paso::Subir => {
+                let actual = app.focused().dir().clone();
+                let Some(padre) = actual.parent() else {
+                    salida.push(foto_tui(&app));
+                    continue;
+                };
+                app.focused_mut().set_pending_focus(actual);
+                cd_tui(&mut app, &padre, &arbol);
+            }
+            Paso::Atras | Paso::Adelante => {
+                let actual = app.focused().dir().clone();
+                let slot = app.panes.slot_of(app.focus());
+                let destino = {
+                    let h = app.history.for_slot_mut(slot);
+                    if matches!(paso, Paso::Atras) {
+                        h.step_back(actual)
+                    } else {
+                        h.step_forward(actual)
+                    }
+                };
+                let Some(destino) = destino else {
+                    salida.push(foto_tui(&app));
+                    continue;
+                };
+                let filas = entradas(&arbol, &destino);
+                // `begin_listing` es el cd de VERDAD del terminal: graba el
+                // cursor del dir viejo antes de reemplazar el listado.
+                app.focused_mut().begin_listing(destino, filas, false, None);
+            }
+        }
+        salida.push(foto_tui(&app));
+    }
+    salida
+}
+
+/// Un `cd` del terminal: registrar el paso, recordar el cursor, listar.
+fn cd_tui(app: &mut norte_tui::app::App, destino: &VPath, arbol: &Falso) {
+    let anterior = app.focused().dir().clone();
+    let slot = app.panes.slot_of(app.focus());
+    if anterior != *destino {
+        app.history.for_slot_mut(slot).record(anterior);
+    }
+    let filas = entradas(arbol, destino);
+    app.focused_mut()
+        .begin_listing(destino.clone(), filas, false, None);
+}
+
+/// La misma foto semántica, leída del terminal.
+fn foto_tui(app: &norte_tui::app::App) -> Semantico {
+    let pane = app.focused();
+    Semantico {
+        dir: norte_frontend::path_display(pane.dir()).0,
+        cursor: pane.cursor(),
+        marcas: pane.marks_len(),
+        nombres: pane
+            .entries()
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                if pane.is_parent_row(i) {
+                    return "..".to_owned();
+                }
+                norte_frontend::display_name(
+                    e.path
+                        .file_name()
+                        .map_or(&[][..], norte_proto::Segment::as_bytes),
+                )
+                .0
+            })
+            .collect(),
+    }
 }
 
 /// El mismo ritual de navegación que el host: registrar el paso si no es el
@@ -352,6 +490,22 @@ async fn compara(nombre: &str, pasos: &[Paso]) {
             assert_eq!(
                 a, b,
                 "[{nombre}, {etiqueta}] paso {i}: el host y las primitivas divergen"
+            );
+        }
+
+        // Y la comparación que de verdad guarda algo: los DOS frontends, uno
+        // contra otro. Las de arriba miden al host contra un arnés escrito
+        // con las reglas del host.
+        let terminal = via_tui(pasos, fila_de_subir);
+        assert_eq!(
+            terminal.len(),
+            obtenido.len(),
+            "[{nombre}, {etiqueta}] el terminal y la ventana observan distinto número de pasos"
+        );
+        for (i, (a, b)) in terminal.iter().zip(obtenido.iter()).enumerate() {
+            assert_eq!(
+                a, b,
+                "[{nombre}, {etiqueta}] paso {i}: el TERMINAL y la VENTANA divergen"
             );
         }
     }
