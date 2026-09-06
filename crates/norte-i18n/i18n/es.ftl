@@ -1919,6 +1919,13 @@ err-checksum-sums-utf16 = el fichero de sumas está en UTF-16; guárdalo en UTF-
 err-checksum-partial = el lote no terminó: lo calculado está a medias y no se compara
 err-checksum-failed = el cálculo de sumas falló
 dialog-cancel = Cancelar
+# Cerrar la ventana con `[ui] confirm_quit` pidiendo confirmación.
+dialog-quit = Cerrar
+modal-quit-title = ¿Cerrar norte?
+modal-quit-pending = { $n ->
+    [one] queda una operación en marcha; cerrar la deja a medias
+   *[other] quedan { $n } operaciones en marcha; cerrar las deja a medias
+}
 dialog-approve = Aprobar
 dialog-deny = Denegar
 dialog-overwrite = Sobrescribir

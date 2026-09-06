@@ -1891,6 +1891,13 @@ err-checksum-sums-utf16 = the sums file is UTF-16; save it as UTF-8
 err-checksum-partial = the batch did not finish: what was computed is partial and is not compared
 err-checksum-failed = computing the sums failed
 dialog-cancel = Cancel
+# Closing the window with `[ui] confirm_quit` asking for confirmation.
+dialog-quit = Close
+modal-quit-title = Close norte?
+modal-quit-pending = { $n ->
+    [one] one operation is still running; closing leaves it half done
+   *[other] { $n } operations are still running; closing leaves them half done
+}
 dialog-approve = Approve
 dialog-deny = Deny
 dialog-overwrite = Overwrite

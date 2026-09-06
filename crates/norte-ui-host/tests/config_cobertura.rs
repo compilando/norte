@@ -66,10 +66,10 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         ui_editor: _,
         ui_editor_detached: _,
 
-        // ─── NO las lee la ventana, y no es una decisión: es la deuda que la
-        //     auditoría de paridad puso nombre. Plan, fase 3.
-        //
-        //     `ui_confirm_quit`: cerrar la ventana no pregunta nunca.
+        // ─── El host la lee al pedir cerrar (`UiAction::RequestQuit`): la
+        //     decisión de si preguntar es la compartida
+        //     (`settings::quit_needs_confirm`), y «queda trabajo» aquí es que
+        //     haya alguna task viva.
         ui_confirm_quit: _,
 
         // ─── De la TERMINAL, y con motivo.

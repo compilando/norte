@@ -213,10 +213,23 @@ fn main() -> ExitCode {
                 // El host va también, y no solo el canal: el selector de
                 // carpeta le CONTESTA (#284), y esa respuesta entra por
                 // `dispatch` como cualquier otra acción.
+                // Y cerrar: el host lo pide cuando `[ui] confirm_quit` ya no
+                // tiene nada que preguntar. `CONFIRMADO` deja pasar el
+                // siguiente `CloseRequested` sin volver a preguntar — sin él
+                // la ventana no se cerraría nunca, que es peor que no
+                // preguntar.
+                let mando_cierre = app.handle().clone();
+                let cerrar = move || {
+                    CONFIRMADO.store(true, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(v) = mando_cierre.get_webview_window("main") {
+                        let _ = v.close();
+                    }
+                };
                 tauri::async_runtime::spawn(norte_gui_tauri::nativo::bombear(
                     nativos,
                     bridge.host_compartido(),
                     aplicar_tema,
+                    cerrar,
                 ));
             }
             Ok(())
@@ -262,6 +275,14 @@ fn guardia_de_navegacion<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 
 /// Lo que se espera al apagar antes de cerrar la ventana de todas formas.
 const PLAZO_APAGADO: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// El cierre ya está confirmado: el siguiente `CloseRequested` no pregunta.
+///
+/// Lo pone el efecto `CloseWindow` del host, que es lo que llega cuando el
+/// lector contesta que sí —o cuando `[ui] confirm_quit` dice que no hay nada
+/// que preguntar—. Sin esta marca, cerrar volvería a preguntar en bucle y la
+/// ventana no se cerraría nunca.
+static CONFIRMADO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Los eventos de la VENTANA que el host necesita saber.
 ///
@@ -310,8 +331,36 @@ fn al_evento_de_ventana(window: &tauri::Window, event: &tauri::WindowEvent) {
             });
         }
     }
-    if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
         let estado: tauri::State<'_, AppState> = window.state();
+        // `[ui] confirm_quit`: preguntar es del HOST, que es quien tiene la
+        // configuración y el tablero de tasks. Cerrar no preguntaba nunca, y
+        // `always` es justo el valor que pide la guarda.
+        //
+        // Solo la PRIMERA vez: cuando el lector confirma, el host contesta
+        // con `CloseWindow`, que marca `CONFIRMADO` y vuelve a cerrar. Sin esa
+        // marca la ventana no se cerraría nunca.
+        if !CONFIRMADO.swap(false, std::sync::atomic::Ordering::SeqCst)
+            && let Ok(bridge) = estado.bridge()
+        {
+            let host = bridge.host_compartido();
+            let ack = tauri::async_runtime::block_on(async {
+                tokio::time::timeout(
+                    PLAZO_APAGADO,
+                    host.dispatch(norte_ui_host::UiAction::RequestQuit),
+                )
+                .await
+            });
+            // Si el host contestó, él decide: o abrió el diálogo o pidió
+            // cerrar, y en los dos casos este gesto se detiene aquí. Si NO
+            // contestó —socket atascado, host muerto— se cierra igual: una
+            // ventana que no se puede cerrar es peor que una que no pregunta.
+            if ack.is_ok() {
+                api.prevent_close();
+                return;
+            }
+            tracing::warn!("el host no contestó a la pregunta de cerrar: se cierra igual");
+        }
         if let Ok(bridge) = estado.bridge() {
             // Cerrar vuelca la sesión: es la única oportunidad de
             // guardar dónde estaba cada panel, y hacerlo en un hilo

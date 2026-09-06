@@ -1784,6 +1784,8 @@ enum Pendiente {
     /// Preguntar al índice por SIGNIFICADO. Lo que se teclea es la consulta,
     /// y no lleva más operandos: el alcance es el índice entero.
     ConsultaSemantica,
+    /// CERRAR la ventana, ya confirmado (`[ui] confirm_quit`).
+    Salir,
     /// Entregar el secreto de una conexión y REINTENTAR la navegación que
     /// `Error::SecretNeeded` interrumpió (#325/#327).
     ///
@@ -3450,6 +3452,7 @@ impl Estado {
                 self.decidir_revision_ia(*approve, backend, buzon)
             }
             UiAction::Resync => self.responde_con_foto(),
+            UiAction::RequestQuit => self.pedir_salir(),
             UiAction::MenuOpen { menu } => self.desplegar_menu(*menu),
             UiAction::MenuPointRow { row } => self.apuntar_en_menu(*row),
             UiAction::MenuActivateRow { row } => self.activar_del_menu(*row, backend, buzon),

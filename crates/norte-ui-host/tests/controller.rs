@@ -10762,6 +10762,75 @@ async fn el_lote_por_plantilla_se_revisa_como_el_de_la_ia() {
     );
 }
 
+/// `[ui] confirm_quit` también pregunta en la VENTANA.
+///
+/// Cerrarla no preguntaba NUNCA: el manejador de `CloseRequested` volcaba la
+/// sesión y cerraba. Con `confirm_quit = "always"` el terminal guarda F10 y la
+/// ventana se iba con una copia a medias sin decir nada — y `always` es
+/// justo el valor que pide la guarda.
+///
+/// La decisión de si hay que preguntar es la COMPARTIDA
+/// (`settings::quit_needs_confirm`), cuyo rustdoc ya nombraba a un
+/// `confirm_quit_should_open` de la ventana que no existía.
+#[tokio::test]
+async fn cerrar_la_ventana_pregunta_si_la_config_lo_dice() {
+    let mut cfg = ajustes_de_prueba();
+    cfg.common.ui_confirm_quit = norte_config::ConfirmQuit::Always;
+    let (h, _snap) = host_en_con(arbol(), "mem:///casa", cfg).await;
+    let mut sub = h.subscribe();
+    let mut efectos = h.native_effects();
+
+    let ack = h.dispatch(UiAction::RequestQuit).await.expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    let dialogo = foto_hasta(&h, &mut sub, "el diálogo de salir", |s| {
+        s.dialogs.first().cloned()
+    })
+    .await;
+    assert_eq!(dialogo.title_key, "modal-quit-title");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), efectos.recv())
+            .await
+            .is_err(),
+        "preguntar NO cierra: el efecto de cerrar sale al confirmar"
+    );
+
+    // Y al confirmar, ahí sí.
+    h.dispatch(UiAction::Dialog {
+        id: dialogo.id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), efectos.recv())
+        .await
+        .expect("sale el efecto")
+        .expect("canal vivo");
+    assert!(
+        matches!(efecto, norte_ui_host::dto::NativeEffect::CloseWindow),
+        "{efecto:?}"
+    );
+}
+
+/// Con `confirm_quit = "never"` no se pregunta: se cierra y ya.
+#[tokio::test]
+async fn sin_confirmacion_cerrar_no_abre_nada() {
+    let mut cfg = ajustes_de_prueba();
+    cfg.common.ui_confirm_quit = norte_config::ConfirmQuit::Never;
+    let (h, _snap) = host_en_con(arbol(), "mem:///casa", cfg).await;
+    let mut efectos = h.native_effects();
+
+    h.dispatch(UiAction::RequestQuit).await.expect("host vivo");
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), efectos.recv())
+        .await
+        .expect("sale el efecto")
+        .expect("canal vivo");
+    assert!(
+        matches!(efecto, norte_ui_host::dto::NativeEffect::CloseWindow),
+        "{efecto:?}"
+    );
+}
+
 /// `[ui] quick_search` elige el modo también en la VENTANA.
 ///
 /// El host arrancaba el buscador incremental en `Filter` a fuego, así que

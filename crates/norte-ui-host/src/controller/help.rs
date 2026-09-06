@@ -188,10 +188,13 @@ impl Estado {
                 // son otras (`dialog.overwrite`, `dialog.skip`…), y mandar al
                 // lector a la de confirmar le enseñaría las que no valen.
                 Some(Pendiente::Reintentar { .. }) => "dialog.collision",
+                // Cerrar cae aquí por lo mismo: es «responde antes de que
+                // algo se pierda», y lo que se pierde es una copia a medias.
                 Some(
                     Pendiente::Borrar { .. }
                     | Pendiente::Transferir { .. }
-                    | Pendiente::Soltar { .. },
+                    | Pendiente::Soltar { .. }
+                    | Pendiente::Salir,
                 ) => "dialog.confirm",
                 Some(
                     Pendiente::Decidir { .. }

@@ -20,6 +20,15 @@ independently through `PROTOCOL_VERSION`.
   included, and is documented as never an operand. On `..` the sheet says
   `..`, `folder`, and where it leads (new `metadata-target` key in both
   locales), and the viewer says `directory`.
+- **`[ui] confirm_quit` asks in the window too.** Closing it never asked: the
+  `CloseRequested` handler dumped the session and closed. With
+  `confirm_quit = "always"` the terminal guards F10 and the window walked away
+  from a half-finished copy without a word — and `always` is precisely the
+  value that asks for the guard. The three-way decision is the shared one
+  (`settings::quit_needs_confirm`), whose rustdoc already named a
+  `confirm_quit_should_open` on the window side that did not exist; what each
+  frontend computes for itself is what counts as pending work, and here it is
+  a live task on the board. The dialog says how many.
 - **`[ui] quick_search` picks the mode in the window too.** The host started
   the incremental search hard-wired to `filter`, so `quick_search = "jump"`
   moved the cursor in `ntc` and narrowed the listing in the window — one key,

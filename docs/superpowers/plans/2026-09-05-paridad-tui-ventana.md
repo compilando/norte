@@ -34,7 +34,7 @@ La clase más barata de arreglar y la más visible: el usuario escribe algo en
 | ~~`openers.toml` (entero)~~ | sí, con recarga en caliente | ~~**no lo lee nadie**: siempre `xdg-open`~~ **HECHO** | **V** |
 | ~~`[ui] editor` / `editor_detached`~~ | sí (F4 lanza tu editor) | ~~**no**: `pane.edit` es `pane.open`~~ **HECHO** (`$EDITOR` sigue fuera, y es deliberado) | A |
 | ~~`[ui] quick_search`~~ | sí | ~~**no**: `Filter` a fuego~~ **HECHO** | A |
-| `[ui] confirm_quit` | sí | **no**: la X cierra sin preguntar | A |
+| ~~`[ui] confirm_quit`~~ | sí | ~~**no**: la X cierra sin preguntar~~ **HECHO** | A |
 | ~~`[ui] theme` como RUTA~~ | sí (ADR 0020) | **HECHO en el arranque**; al cambiar de PERFIL sigue siendo solo presets (pide I/O fuera del actor) | A |
 | ~~`[ui] lang` vs `NORTE_LANG`~~ | gana el ENTORNO | ~~gana la CONFIG~~ **HECHO**: manda la regla del terminal | **V** |
 | ~~`[ui.columns]` estilo por columna~~ | sí (`style_for_id`) | ~~**no**: `default_for_id` en celdas Y cabeceras~~ **HECHO** | **V** |

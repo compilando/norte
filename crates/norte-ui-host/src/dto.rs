@@ -2864,6 +2864,14 @@ pub enum NativeEffect {
         /// Cómo se llama el tema que hay que resolver.
         name: String,
     },
+    /// Ciérrate: el lector lo pidió y, si había que preguntar, ya se
+    /// preguntó.
+    ///
+    /// Quien hospeda vuelca la sesión y destruye la ventana. Va por aquí y no
+    /// por el gesto del gestor de ventanas porque la pregunta la decide el
+    /// host: `[ui] confirm_quit` es configuración, y una ventana que se
+    /// cierra sola con una copia a medias no es una ventana que obedece.
+    CloseWindow,
 }
 
 /// Lo que el host manda al renderer.

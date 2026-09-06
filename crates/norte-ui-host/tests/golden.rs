@@ -198,6 +198,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::ResizeSlot { .. } => "resize_slot",
         UiAction::ProfileActivateRow { .. } => "profile_activate_row",
         UiAction::Resync => "resync",
+        UiAction::RequestQuit => "request_quit",
     }
 }
 
@@ -475,6 +476,7 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             UiAction::AiRenameDecide { approve: true },
         ),
         ("resync", UiAction::Resync),
+        ("request_quit", UiAction::RequestQuit),
         (
             "select_row",
             UiAction::SelectRow {
