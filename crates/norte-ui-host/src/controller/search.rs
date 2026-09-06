@@ -654,12 +654,16 @@ impl Estado {
     /// Abre el prompt de crear directorio, con su campo de texto vacío.
     /// Arranca el buscador incremental del listado.
     ///
-    /// Filtrar es el modo por defecto: es el que no mueve el listado bajo el
-    /// cursor mientras se teclea.
+    /// Filtrar es el modo por DEFECTO —el que no mueve el listado bajo el
+    /// cursor mientras se teclea—, pero lo elige `[ui] quick_search`, igual
+    /// que en el terminal.
     pub(super) fn buscar_rapido(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.hueco_mut()
-            .pane
-            .quick_start(norte_frontend::nav::Mode::Filter);
+        // El modo lo dice `[ui] quick_search`, como en el terminal. Estaba a
+        // fuego en `Filter`, así que `quick_search = "jump"` movía el cursor
+        // en `ntc` y acotaba el listado en la ventana: la misma clave con dos
+        // comportamientos.
+        let modo = self.config.quick_search_mode;
+        self.hueco_mut().pane.quick_start(modo);
         (self.aplicada(), vec![self.parche_filas()])
     }
 }

@@ -20,6 +20,23 @@ independently through `PROTOCOL_VERSION`.
   included, and is documented as never an operand. On `..` the sheet says
   `..`, `folder`, and where it leads (new `metadata-target` key in both
   locales), and the viewer says `directory`.
+- **`[ui] quick_search` picks the mode in the window too.** The host started
+  the incremental search hard-wired to `filter`, so `quick_search = "jump"`
+  moved the cursor in `ntc` and narrowed the listing in the window — one key,
+  two behaviours. The DTO already knew how to report both modes; what was
+  missing was reading the key.
+- **`[ui] theme` accepts a path to a `.toml` in the window (ADR 0020).** It
+  called `Theme::preset` alone, so a theme of your own themed the terminal and
+  left the window on the default palette without saying anything — the same
+  shape as the `--layout` bug. Startup now goes through the shared resolver;
+  a profile switch still applies presets only, and that is written down where
+  it happens.
+- **`NORTE_LANG` beats `[ui] lang` in the window, as in the terminal.** Both
+  surfaces documented *opposite* rules and both obeyed their own, so with
+  `NORTE_LANG=en` and `lang = "es"` set, `ntc` came up in English and
+  `norte-gui` in Spanish. The terminal's rule wins: `NORTE_LANG` is
+  norte-specific and set for one run, the same class of thing as `--layout`,
+  which beats `[ui] layout`.
 - **`[ui.columns]` styles the window's columns too (#108).** The window asked
   for `ColumnStyle::default_for_id` — the factory style — in both the header
   and the cells, so only the column list and its order survived from the

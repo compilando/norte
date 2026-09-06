@@ -38,6 +38,7 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
 
         // ─── El host las lee de `self.config`, en caliente respecto a su
         //     propio estado (un hueco nuevo las relee).
+        quick_search: _,
         ui_show_hidden: _,
         ui_parent_entry: _,
         ui_menu_bar: _,
@@ -47,11 +48,13 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         ui_diff: _,
         ui_diff_detached: _,
 
-        // ─── El host las lee, pero SOLO EN PARTE, y eso es deuda con nombre.
+        // ─── La lee la cáscara al ARRANCAR con el resolutor compartido, así
+        //     que acepta un preset o la ruta a un `.toml` (ADR 0020).
         //
-        //     `ui_theme`: solo como nombre de preset. Una RUTA a un `.toml`
-        //     —que el terminal acepta desde la ADR 0020— se cae al tema por
-        //     defecto y no se dice. Plan, fase 3.
+        //     Sigue habiendo media deuda, y con nombre: al CAMBIAR DE PERFIL
+        //     el host aplica solo presets (`aplicar_tema`), porque resolver
+        //     una ruta pide leer un fichero y eso corre dentro del actor
+        //     (regla 2). Plan, fase 3.
         ui_theme: _,
 
         // ─── El host las lee para lanzar un programa: `openers.toml` manda en
@@ -66,10 +69,7 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         // ─── NO las lee la ventana, y no es una decisión: es la deuda que la
         //     auditoría de paridad puso nombre. Plan, fase 3.
         //
-        //     `quick_search`: el host arranca el buscador incremental en
-        //     `Filter` a fuego.
         //     `ui_confirm_quit`: cerrar la ventana no pregunta nunca.
-        quick_search: _,
         ui_confirm_quit: _,
 
         // ─── De la TERMINAL, y con motivo.
@@ -146,8 +146,8 @@ fn todo_campo_de_frontend_config_esta_clasificado_para_la_ventana() {
         //     en el manejador del escritorio.
         openers: _,
 
-        // ─── NO la lee la ventana: el buscador incremental arranca en
-        //     `Filter` a fuego. Plan, fase 3.
+        // ─── El host la lee: `pane.quick-search` arranca en el modo que
+        //     diga la clave, como en el terminal.
         quick_search_mode: _,
     } = cfg;
 }

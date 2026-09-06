@@ -407,6 +407,15 @@ impl Estado {
     /// volver a resolver lo suyo —las variables CSS de la webview— porque las
     /// resolvió una vez al arrancar. Un nombre que no existe deja el tema como
     /// estaba en vez de dejar la pantalla sin colores.
+    ///
+    /// **Solo presets, y aquí sí es una limitación conocida.** El selector
+    /// ofrece presets, así que por esa puerta es exacto; por la del CAMBIO DE
+    /// PERFIL no, porque un perfil puede traer `theme = "…/mio.toml"` y eso
+    /// se queda sin aplicar en silencio. Resolverlo pide leer un fichero, y
+    /// esto corre DENTRO del actor (regla 2). El arranque sí lo resuelve
+    /// —`startup::tema` usa el resolutor compartido—; lo que falta es traerlo
+    /// por el buzón como se hace con `persistir_tema`. Plan de paridad,
+    /// fase 3.
     pub(super) fn aplicar_tema(&mut self, nombre: &str) {
         let Ok(Some(tema)) = norte_theme::Theme::preset(nombre) else {
             return;

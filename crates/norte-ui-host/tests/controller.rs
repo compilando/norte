@@ -10762,6 +10762,27 @@ async fn el_lote_por_plantilla_se_revisa_como_el_de_la_ia() {
     );
 }
 
+/// `[ui] quick_search` elige el modo también en la VENTANA.
+///
+/// El host arrancaba el buscador incremental en `Filter` a fuego, así que
+/// `quick_search = "jump"` movía el cursor en `ntc` y acotaba el listado en la
+/// ventana: la misma clave con dos comportamientos. El DTO ya sabía decir los
+/// dos modos; lo que faltaba era leer la clave.
+#[tokio::test]
+async fn el_modo_del_buscador_rapido_sale_de_la_config() {
+    let mut cfg = ajustes_de_prueba();
+    cfg.quick_search_mode = norte_frontend::nav::Mode::Jump;
+    let (h, _snap) = host_en_con(arbol(), "mem:///casa", cfg).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.quick-search").await;
+    let modo = foto_hasta(&h, &mut sub, "el buscador abierto", |s| {
+        listado(s).quick.as_ref().map(|q| q.mode.clone())
+    })
+    .await;
+    assert_eq!(modo, "jump", "el modo lo dice la configuración");
+}
+
 /// `[ui.columns]` estiliza las columnas también en la VENTANA (#108).
 ///
 /// La ventana pedía el estilo con `ColumnStyle::default_for_id`, o sea el de
