@@ -28,6 +28,32 @@ independently through `PROTOCOL_VERSION`.
   prevent. The window already knew `archive_root_for`: it uses it to unpack
   and to test a container, just not to open one. The decision now lives once,
   in `norte_frontend::nav::enter_target`.
+- **The window's help knew nothing about a location that refuses writes.**
+  `source_read_only` and `dest_read_only` were wired to `false`, with a
+  comment declaring that the host does not keep that count. It does keep it —
+  since #268 it asks each slot for `capabilities` when a listing lands — and
+  it threw everything away but the fold mode, with the `READ_ONLY` flag one
+  field away. Inside a container the terminal dimmed F5/F8 and the window
+  offered them lit: help that invites writes the backend will refuse. The
+  slot now keeps the whole `Capabilities`, `source_read_only` asks the active
+  slot and `dest_read_only` the one holding the target role, and the flag
+  falls back to the scheme the way `App::pane_read_only` does — through one
+  shared `availability::read_only`, since two spellings of that two-step
+  answer is exactly the shape ADR 0077 exists to stop. The startup listing
+  never asked at all, so the first directory of every slot was uncharted
+  until the reader navigated somewhere else — the fold check of #268 was
+  quietly missing there too. And the answer is now tied to the path it was
+  asked about instead of being dropped whenever another one is requested: a
+  landing re-freezes the help's facts three lines after asking, so every
+  re-listing under an open help read "not known" and lit the row back up.
+- **`enterable` said "directory" in the two places that navigate more.**
+  The terminal open-coded the same list `nav::enter_target` decides and the
+  window asked `kind == Dir`, so with the cursor on a `.zip` the archives
+  page — whose first sentence is "Enter on a compressed archive enters it" —
+  offered that very row greyed out. The terminal also asked through
+  `selected()`, which answers `None` on the `..` row on purpose, so the help
+  dimmed `Enter` exactly where the cursor is born after every `cd`; it now
+  asks `nav_enter_target`, which is the predicate that actually runs.
 - **`[ui] confirm_quit` asks in the window too.** Closing it never asked: the
   `CloseRequested` handler dumped the session and closed. With
   `confirm_quit = "always"` the terminal guards F10 and the window walked away

@@ -10762,6 +10762,248 @@ async fn el_lote_por_plantilla_se_revisa_como_el_de_la_ia() {
     );
 }
 
+/// Sobre una ubicación que rehúsa escribir, la ventana ATENÚA el borrado.
+///
+/// `source_read_only` y `dest_read_only` estaban cableados a `false` con un
+/// comentario que declaraba que el host no lleva esa cuenta. Sí la puede
+/// llevar: PIDE `capabilities` de cada hueco al aterrizar —lo hace desde
+/// #268— y tiraba todo menos el modo de plegado, con el flag `READ_ONLY` a un
+/// campo de distancia. El terminal sí lo mira (`App::pane_read_only`), así que
+/// dentro de un zip el terminal atenuaba F5/F8 y la ventana los ofrecía
+/// encendidos: la ayuda invitaba a escrituras imposibles.
+///
+/// Se miran las filas EJECUTABLES de la página del corpus, que es donde estos
+/// hechos llegan. La hoja de teclado no vale para esto y conviene no
+/// confundirlas: su `avail` es de BUILD —«este frontend implementa el
+/// comando»— y no cambia con el sitio en el que esté el lector.
+///
+/// La prueba usa el FLAG y no el esquema a propósito. `scheme_is_read_only`
+/// contesta que sí a un `zip+file://` sin preguntarle a nadie, así que un
+/// test montado sobre un contenedor pasaría con el respaldo sintáctico puesto
+/// y las capacidades seguidas tirándose. Un `mem:///` que anuncia `READ_ONLY`
+/// —un export SFTP de solo lectura, un montaje `ro`— solo se sabe por el
+/// flag.
+#[tokio::test]
+async fn una_ubicacion_que_rehusa_escribir_atenua_el_borrado() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    falso.capacidades.insert(
+        "mem:///casa".to_owned(),
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::READ_ONLY,
+            max_path: None,
+        },
+    );
+    let (h, _snap) = host_en(Arc::new(falso), "mem:///casa").await;
+    let mut sub = h.subscribe();
+    // Las capacidades se piden al aterrizar el listado y vuelven por su
+    // cuenta: la ayuda congela los hechos AL ABRIRSE, así que abrirla antes
+    // de que lleguen congelaría el «no consta» de siempre.
+    asentar().await;
+
+    // F8 borra en el hueco ACTIVO, que es el origen: es la tecla que
+    // pregunta por `source_read_only` y solo por él.
+    let pagina = pagina_de_copiado(&h, &mut sub).await;
+    let fila = accion(&pagina, "F8");
+    assert!(
+        !fila.enabled,
+        "aquí no se puede borrar y la página lo ofrece apagado: {fila:?}"
+    );
+    assert_eq!(
+        fila.reason,
+        norte_i18n::t_in(norte_i18n::Lang::Es, "reason-read-only"),
+        "y dice POR QUÉ, no solo que no: {fila:?}"
+    );
+}
+
+/// Y un re-listado por debajo NO devuelve la ayuda al «no consta».
+///
+/// Las capacidades se BORRABAN al pedirlas, y el aterrizaje re-congela los
+/// hechos de la ayuda tres líneas después: o sea que toda re-congelación que
+/// saliera de un listado leía `None` —siempre, no a veces— y la fila volvía a
+/// encenderse. Con la ayuda delante basta con que termine una tarea o que
+/// salte el watcher para que F8 pase de atenuada a encendida sin que el sitio
+/// haya cambiado.
+///
+/// Ahora la respuesta va ATADA a su ruta y no se tira al pedir otra: solo un
+/// cambio de directorio la invalida, que es lo único que de verdad la
+/// invalida.
+#[tokio::test]
+async fn un_relistado_no_reenciende_lo_que_el_sitio_sigue_rehusando() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    falso.capacidades.insert(
+        "mem:///casa".to_owned(),
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::READ_ONLY,
+            max_path: None,
+        },
+    );
+    let (h, _snap) = host_en(Arc::new(falso), "mem:///casa").await;
+    let mut sub = h.subscribe();
+    asentar().await;
+    let antes = pagina_de_copiado(&h, &mut sub).await;
+    assert!(
+        !accion(&antes, "F8").enabled,
+        "la premisa: con las capacidades puestas, apagada"
+    );
+
+    // Un re-listado del hueco, que es lo que hace por debajo el fin de una
+    // tarea o el watcher mientras la ayuda sigue abierta.
+    h.dispatch(UiAction::RefreshSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    asentar().await;
+
+    let despues = foto_hasta(&h, &mut sub, "la ayuda tras el re-listado", |s| {
+        s.help.clone()
+    })
+    .await;
+    assert!(
+        !accion(&despues, "F8").enabled,
+        "el sitio no ha cambiado: re-listar no puede encender lo que rehúsa \
+         escribir ({:?})",
+        accion(&despues, "F8")
+    );
+}
+
+/// Y el DESTINO se pregunta al hueco del destino, no al que tiene el foco.
+///
+/// La otra mitad del hecho, y la que un solo hueco no puede probar: con el
+/// origen escribible y el destino de solo lectura, F5 —que escribe allí— se
+/// apaga y F8 —que escribe aquí— sigue encendida. Un `source_read_only`
+/// copiado al `dest_read_only` pasaría el test de arriba y fallaría éste.
+#[tokio::test]
+async fn el_destino_de_solo_lectura_atenua_la_copia_y_no_el_borrado() {
+    let mut falso = Falso::default();
+    falso.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)],
+    );
+    falso.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
+    falso.capacidades.insert(
+        "mem:///casa/docs".to_owned(),
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::READ_ONLY,
+            max_path: None,
+        },
+    );
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    // El helper deja el foco en el hueco que navegó. El caso es el otro: el
+    // lector está en `/casa`, que escribe, mirando a `/casa/docs`, que no.
+    h.dispatch(UiAction::FocusSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    asentar().await;
+
+    let pagina = pagina_de_copiado(&h, &mut sub).await;
+    let copiar = accion(&pagina, "F5");
+    assert!(!copiar.enabled, "el destino no acepta la copia: {copiar:?}");
+    assert_eq!(
+        copiar.reason,
+        norte_i18n::t_in(norte_i18n::Lang::Es, "reason-read-only"),
+        "{copiar:?}"
+    );
+
+    let borrar = accion(&pagina, "F8");
+    assert!(
+        borrar.enabled,
+        "borrar es en el ORIGEN, que sí escribe: atenuarlo sería contar el \
+         impedimento del hueco equivocado ({borrar:?})"
+    );
+}
+
+/// Con el cursor sobre un `.zip`, la ayuda ofrece `Enter`: es lo que hace.
+///
+/// El otro hecho que decía otra cosa que la tecla. `enterable` preguntaba
+/// `kind == Dir`, así que la página de archivos —cuya primera frase es
+/// literalmente «Enter sobre un archivo comprimido entra en él»— ofrecía esa
+/// misma fila apagada y con «no aplica a esto». Ahora lo contesta el sitio
+/// compartido, que es el mismo que navega (ADR 0077).
+#[tokio::test]
+async fn con_el_cursor_en_un_zip_la_ayuda_ofrece_entrar() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"cosas.zip".to_vec(), false)]);
+    let (h, snap) = host_en(Arc::new(falso), "mem:///casa").await;
+    let mut sub = h.subscribe();
+    let b = listado_de(&snap, 1);
+    let zip = b
+        .rows
+        .iter()
+        .find(|r| r.display_name == "cosas.zip")
+        .expect("el archivo está");
+    h.dispatch(UiAction::SelectRow {
+        slot_id: 1,
+        key: zip.key,
+        generation: b.generation,
+    })
+    .await
+    .expect("host vivo");
+
+    let pagina = pagina_de_ayuda(&h, &mut sub, "archives").await;
+    let entrar = accion(&pagina, "Enter");
+    assert!(
+        entrar.enabled,
+        "la página dice que Enter entra en un comprimido, y la fila lo \
+         ofrecía apagada: {entrar:?}"
+    );
+}
+
+/// Abre la ayuda en la página de copiar, borrar y renombrar.
+///
+/// Es la página del corpus que documenta las cuatro teclas que estos hechos
+/// atenúan, y sus filas EJECUTABLES son donde los hechos congelados llegan
+/// —lo que el lector ve—. La hoja de teclado no sirve: su `avail` es de
+/// build, no del sitio en el que está el lector.
+async fn pagina_de_copiado(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+) -> norte_ui_host::dto::HelpView {
+    pagina_de_ayuda(h, sub, "copying").await
+}
+
+/// Abre la ayuda y recorre la lateral hasta una página, como el lector.
+async fn pagina_de_ayuda(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+    topico: &str,
+) -> norte_ui_host::dto::HelpView {
+    let mut pagina = abrir_ayuda(h, sub).await;
+    let mut row = 0;
+    // Sobre la longitud VIGENTE: la lateral crece cuando aterriza el catálogo
+    // de extensiones, así que la de la primera foto se queda corta.
+    while row < u32::try_from(pagina.sidebar.len()).expect("cabe") {
+        if pagina.topic_id == topico {
+            return pagina;
+        }
+        h.dispatch(UiAction::HelpSelectTopic { row })
+            .await
+            .expect("host vivo");
+        pagina = siguiente_ayuda(sub).await.expect("sigue abierta");
+        row += 1;
+    }
+    assert_eq!(pagina.topic_id, topico, "la lateral trae la página");
+    pagina
+}
+
+/// La fila ejecutable de un acorde en una página ya abierta.
+fn accion<'p>(
+    pagina: &'p norte_ui_host::dto::HelpView,
+    chord: &str,
+) -> &'p norte_ui_host::dto::HelpActionView {
+    pagina
+        .actions
+        .iter()
+        .find(|a| !a.opens_topic && a.chord == chord)
+        .unwrap_or_else(|| {
+            panic!(
+                "la página `{}` documenta {chord}: {:?}",
+                pagina.topic_id, pagina.actions
+            )
+        })
+}
+
 /// `Enter` sobre un ARCHIVO comprimido entra en él, no lo abre fuera.
 ///
 /// La divergencia número uno del inventario de paridad: el terminal navega al

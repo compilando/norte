@@ -69,12 +69,7 @@ impl Estado {
     /// aterrizar, o el daemon no contestó) no se pliega: esto es una cortesía
     /// del cliente y la autoridad es el core.
     pub(super) fn dos_marcas_pliegan_igual(&self, paths: &[VPath]) -> bool {
-        let Some(modo) = self
-            .hueco_destino()
-            .ok()
-            .and_then(|id| self.huecos.get(&id))
-            .and_then(|h| h.pliegue)
-        else {
+        let Some(modo) = self.hueco_destino().ok().and_then(|id| self.pliegue_de(id)) else {
             return false;
         };
         if modo == norte_encoding::FoldMode::None {

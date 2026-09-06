@@ -556,9 +556,10 @@ enum Mensaje {
     /// Una Task recién encolada, con su progreso, su cancelación y los
     /// directorios que dejará distintos.
     TaskNueva(Box<(crate::backend::HostTask, Vec<VPath>, Option<Reintento>)>),
+    /// Qué acepta la ubicación de un hueco: cómo pliega nombres (#268) y si
+    /// rehúsa escribir.
+    Capacidades(u32, VPath, norte_proto::Capabilities),
     /// Encolarla falló. El usuario tiene que enterarse: pidió un borrado.
-    /// Cómo pliega nombres la ubicación de un hueco (#268).
-    Pliegue(u32, VPath, norte_encoding::FoldMode),
     TaskFallida(Box<Error>),
     /// Un rechazo al encolar UNA entrada de un lote (#271). Separado de
     /// [`Self::TaskFallida`] a propósito: aquél lo manda todo el que encola
@@ -1180,8 +1181,10 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Pliegue(slot, dir, modo) => {
-                estado.aplicar_pliegue(slot, &dir, modo);
+            Mensaje::Capacidades(slot, dir, caps) => {
+                if let Some(u) = estado.aplicar_capacidades(slot, &dir, caps) {
+                    let _ = updates.send(u);
+                }
             }
             Mensaje::TaskFallida(e) => {
                 for u in estado.task_fallida(&e) {
@@ -1552,7 +1555,27 @@ struct Hueco {
     /// la tecla que más se pulsa. `None` = todavía no ha llegado, y entonces no
     /// se pliega nada — la comprobación es una cortesía y el core es la
     /// autoridad.
-    pliegue: Option<norte_encoding::FoldMode>,
+    ///
+    /// Se guardan ENTERAS y no ya destiladas a un `FoldMode`. La respuesta
+    /// costó una ronda al daemon y trae más de una cosa que este frontend
+    /// necesita: el plegado del destino y, desde la nivelación de la ayuda,
+    /// el `READ_ONLY` con el que se atenúa lo que esta ubicación no va a
+    /// aceptar. Quedarse solo con lo primero es lo que dejó la ayuda de la
+    /// ventana declarando que se puede escribir en cualquier sitio.
+    ///
+    /// Y van ATADAS a la ruta de la que se preguntaron, en vez de borrarse
+    /// cada vez que se piden otras. Lo que las invalida es cambiar de
+    /// DIRECTORIO, no volver a listar el mismo: borrarlas al pedir dejaba una
+    /// ventana determinista —el aterrizaje re-congela los hechos de la ayuda
+    /// tres líneas después de pedirlas— en la que el hueco decía «no consta»
+    /// de un sitio que ya había contestado. Casar por ruta también hace
+    /// inofensiva una respuesta que llega tarde: si es de otro directorio, no
+    /// se lee.
+    ///
+    /// `None`, o una ruta que no casa, significa «todavía no consta», y
+    /// entonces el plegado no se aplica y el solo-lectura lo contesta el
+    /// esquema (`norte_frontend::availability::read_only`).
+    caps: Option<(VPath, norte_proto::Capabilities)>,
     /// El esquema cuyo orden lleva puesto `pane` ahora mismo (#108).
     ///
     /// `[ui.columns] sort` puede dar un orden POR ESQUEMA, y se reaplica
@@ -2784,7 +2807,7 @@ impl Hueco {
         pane.set_parent_row(fila_de_subir);
         Self {
             pane,
-            pliegue: None,
+            caps: None,
             esquema_del_orden: esquema,
             historial: History::default(),
             primera_visible: 0,
@@ -3241,6 +3264,13 @@ impl Estado {
             let stream = backend.list(dir.clone(), self.attrs_de(&dir)).await;
             let res = Self::primera_pagina(stream, id, token, buzon.clone()).await;
             self.aterriza_en(id, dir, res);
+            // Lo mismo que hace el aterrizaje de una navegación, y que este
+            // camino no hacía: el PRIMER directorio de un hueco se quedaba sin
+            // capacidades hasta que el lector navegara a otro sitio. O sea que
+            // la ventana que se acaba de abrir dentro de un contenedor
+            // ofrecía escrituras que ese contenedor no acepta —y el plegado
+            // del destino tampoco constaba (#268) mientras nadie se moviera.
+            self.pedir_capacidades(id, backend_arc, buzon);
         }
     }
 

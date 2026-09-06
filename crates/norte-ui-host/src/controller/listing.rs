@@ -11,7 +11,8 @@
 use super::*;
 
 impl Estado {
-    /// Pregunta cómo pliega nombres el directorio de un hueco (#268).
+    /// Pregunta qué acepta el directorio de un hueco: cómo pliega nombres
+    /// (#268) y si rehúsa escribir.
     ///
     /// Se pide al ATERRIZAR y no delante de cada diálogo: hacerlo al copiar
     /// metería un viaje al daemon en el camino de F5, que es la tecla que más
@@ -19,47 +20,94 @@ impl Estado {
     /// costó una ronda, y la respuesta sirve para todas las copias que salgan
     /// de ese directorio.
     ///
-    /// Un fallo no dice nada y no rompe nada: sin respuesta no se pliega, que
-    /// es exactamente lo que se hacía antes de #268.
-    pub(super) fn pedir_pliegue(
+    /// Y viaja ENTERA. Destilarla a un `FoldMode` aquí es lo que dejó a la
+    /// ayuda de la ventana declarando `source_read_only: false` en todas
+    /// partes: la respuesta que contesta esa pregunta ya estaba pedida y se
+    /// tiraba a un campo de distancia.
+    ///
+    /// Un fallo no dice nada y no rompe nada: sin respuesta no se pliega ni se
+    /// atenúa, que es exactamente lo que se hacía antes.
+    pub(super) fn pedir_capacidades(
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
-        let Some(hueco) = self.huecos.get_mut(&slot) else {
+        let Some(hueco) = self.huecos.get(&slot) else {
             return;
         };
         let dir = hueco.pane.dir().clone();
-        // El de antes ya no vale: es de otro sitio.
-        hueco.pliegue = None;
+        // Las de antes NO se borran: van atadas a su ruta, así que las de otro
+        // sitio ya no se leen y las de éste siguen valiendo. Borrarlas aquí
+        // dejaba a la ayuda leyendo «no consta» en cada re-listado, porque el
+        // aterrizaje la re-congela justo después de esta llamada.
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
             let Ok(caps) = backend.capabilities(dir.clone()).await else {
                 return;
             };
-            let modo = norte_vfs::fold_mode_of(caps);
-            let _ = buzon.send(Mensaje::Pliegue(slot, dir, modo)).await;
+            let _ = buzon.send(Mensaje::Capacidades(slot, dir, caps)).await;
         });
     }
 
-    /// Guarda el modo de plegado, si el hueco sigue donde estaba.
+    /// Guarda lo que la ubicación acepta, si el hueco sigue donde estaba.
     ///
     /// La comprobación del directorio no es paranoia: entre pedir y contestar
-    /// cabe una navegación entera, y guardar el pliegue de otro sitio haría
-    /// que la comprobación del lote mintiera en la dirección permisiva.
-    pub(super) fn aplicar_pliegue(
+    /// cabe una navegación entera, y guardar las capacidades de otro sitio
+    /// haría que la comprobación del lote mintiera en la dirección permisiva
+    /// —y que la ayuda atenuara, o dejara de atenuar, por un sitio en el que
+    /// el lector ya no está.
+    /// Y RE-CONGELA los hechos de la ayuda, que es lo que hace que la
+    /// respuesta se vea: la ayuda los congela al abrirse (#262), así que una
+    /// que se abrió antes de que llegaran seguiría ofreciendo, toda su vida,
+    /// escrituras que este sitio rehúsa. `None` = no había nada que decir.
+    pub(super) fn aplicar_capacidades(
         &mut self,
         slot: u32,
         dir: &VPath,
-        modo: norte_encoding::FoldMode,
-    ) {
-        if let Some(h) = self.huecos.get_mut(&slot)
-            && h.pane.dir() == dir
-        {
-            h.pliegue = Some(modo);
+        caps: norte_proto::Capabilities,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        let h = self.huecos.get_mut(&slot)?;
+        if h.pane.dir() != dir {
+            return None;
         }
+        h.caps = Some((dir.clone(), caps));
+        self.recongelar_ayuda()
+    }
+
+    /// Lo que la ubicación de un hueco acepta, si consta y es de AHÍ.
+    ///
+    /// La comprobación de la ruta es la que hace inofensiva una respuesta que
+    /// llega tarde o que sobrevive a un `cd`: unas capacidades de otro
+    /// directorio no son un dato viejo, son un dato de otra cosa.
+    fn caps_de(&self, slot: u32) -> Option<norte_proto::Capabilities> {
+        let h = self.huecos.get(&slot)?;
+        let (dir, caps) = h.caps.as_ref()?;
+        (dir == h.pane.dir()).then_some(*caps)
+    }
+
+    /// Si la ubicación de un hueco REHÚSA que se escriba en ella.
+    ///
+    /// El par de respuestas —el flag si consta, el esquema si no— lo decide
+    /// el sitio COMPARTIDO, que es el mismo que contesta a
+    /// `norte_tui::app::App::pane_read_only`: escribirlo aquí otra vez es la
+    /// forma que tiene una decisión de divergir sin que nadie lo note (ADR
+    /// 0077).
+    ///
+    /// Un hueco que no existe no impide nada: es la respuesta permisiva, y
+    /// quien pregunte por un destino que no está se lo va a encontrar
+    /// rechazado por su nombre (`host-no-other-slot`).
+    pub(super) fn solo_lectura(&self, slot: u32) -> bool {
+        let Some(h) = self.huecos.get(&slot) else {
+            return false;
+        };
+        norte_frontend::availability::read_only(self.caps_de(slot), h.pane.dir().scheme())
+    }
+
+    /// Cómo pliega nombres la ubicación de un hueco, si consta (#268).
+    pub(super) fn pliegue_de(&self, slot: u32) -> Option<norte_encoding::FoldMode> {
+        self.caps_de(slot).map(norte_vfs::fold_mode_of)
     }
 
     /// Un listado que se pidió antes acaba de volver.
@@ -96,7 +144,7 @@ impl Estado {
             return fuera;
         }
         self.aterriza_en(slot, dir, res);
-        self.pedir_pliegue(slot, backend, buzon);
+        self.pedir_capacidades(slot, backend, buzon);
         self.sondear(slot, backend, buzon);
         self.adornar(slot, backend, buzon);
         // Los hechos de la ayuda describen la entrada bajo el CURSOR, y este
