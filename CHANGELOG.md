@@ -20,6 +20,14 @@ independently through `PROTOCOL_VERSION`.
   included, and is documented as never an operand. On `..` the sheet says
   `..`, `folder`, and where it leads (new `metadata-target` key in both
   locales), and the viewer says `directory`.
+- **`Enter` on an archive or a symlink navigates in the window too.** The
+  terminal browsed into `zip+file://…/!/` and followed a link; the window
+  looked at `kind != Dir` and handed both to `xdg-open` — while its own
+  comment, three lines below, claimed to be making "the same decision as the
+  TUI" (ADR 0077), which is exactly the false claim that ADR exists to
+  prevent. The window already knew `archive_root_for`: it uses it to unpack
+  and to test a container, just not to open one. The decision now lives once,
+  in `norte_frontend::nav::enter_target`.
 - **`[ui] confirm_quit` asks in the window too.** Closing it never asked: the
   `CloseRequested` handler dumped the session and closed. With
   `confirm_quit = "always"` the terminal guards F10 and the window walked away

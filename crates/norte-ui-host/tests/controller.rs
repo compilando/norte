@@ -10762,6 +10762,80 @@ async fn el_lote_por_plantilla_se_revisa_como_el_de_la_ia() {
     );
 }
 
+/// `Enter` sobre un ARCHIVO comprimido entra en él, no lo abre fuera.
+///
+/// La divergencia número uno del inventario de paridad: el terminal navega al
+/// `zip+file://…/!/` y la ventana se lo daba a `xdg-open`. El host miraba
+/// `kind != Dir` y ahí se acababa la pregunta — mientras su propio comentario
+/// afirmaba que hacía «la misma decisión que el TUI» (ADR 0077), que es
+/// exactamente la afirmación falsa que esa ADR existe para impedir.
+///
+/// La ventana YA conocía `archive_root_for`: la usa para desempaquetar y para
+/// comprobar un contenedor. Lo que faltaba era preguntársela al abrir.
+#[tokio::test]
+async fn entrar_en_un_archivo_comprimido_navega_dentro() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"cosas.zip".to_vec(), false)]);
+    let (h, snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    let primero = listado(&snap);
+
+    h.dispatch(UiAction::Activate {
+        slot_id: primero.slot_id,
+        key: norte_ui_host::RowKey(0),
+        generation: primero.generation,
+    })
+    .await
+    .expect("host vivo");
+
+    let dentro = foto_hasta(&h, &mut sub, "el listado dentro del archivo", |s| {
+        let b = listado(s);
+        b.path_display
+            .contains("zip")
+            .then(|| b.path_display.clone())
+    })
+    .await;
+    assert!(
+        dentro.contains("cosas.zip"),
+        "se entra en el contenedor, no se entrega al escritorio: {dentro}"
+    );
+}
+
+/// Y sobre un SYMLINK se navega, como en el terminal.
+///
+/// La otra mitad de la misma divergencia: el host lo trataba como «no es un
+/// directorio», o sea como un fichero, así que un enlace a una carpeta se
+/// entregaba al escritorio en vez de entrar en ella.
+#[tokio::test]
+async fn entrar_en_un_symlink_navega_como_en_el_terminal() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"atajo".to_vec(), false)]);
+    falso.pon_kind("mem:///casa/atajo", norte_proto::EntryKind::Symlink);
+    falso.pon("mem:///casa/atajo", vec![(b"dentro.txt".to_vec(), false)]);
+    let (h, snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    let primero = listado(&snap);
+
+    let ack = h
+        .dispatch(UiAction::Activate {
+            slot_id: primero.slot_id,
+            key: norte_ui_host::RowKey(0),
+            generation: primero.generation,
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "ack fue {ack:?}");
+
+    let dentro = foto_hasta(&h, &mut sub, "el listado del enlace", |s| {
+        let b = listado(s);
+        b.path_display
+            .ends_with("atajo")
+            .then(|| b.path_display.clone())
+    })
+    .await;
+    assert!(dentro.ends_with("atajo"), "{dentro}");
+}
+
 /// `[ui] confirm_quit` también pregunta en la VENTANA.
 ///
 /// Cerrarla no preguntaba NUNCA: el manejador de `CloseRequested` volcaba la

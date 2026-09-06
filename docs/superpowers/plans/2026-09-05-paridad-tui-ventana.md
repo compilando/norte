@@ -80,11 +80,10 @@ tres XDG en el sandbox y socket en `/run/user/1000/…`.
 Ordenadas por lo que se nota. Todas con `file:line` en los dos lados en el
 informe original; **A** salvo donde se diga.
 
-1. **`Enter` sobre un archivo comprimido o un symlink.** El terminal entra en
-   el `zip+file://`; la ventana se lo da a `xdg-open`. Un symlink a
-   directorio: el terminal navega, la ventana lo trata como fichero. Y el
-   comentario de la ventana afirma que hace «la misma decisión que el TUI».
-   La ventana ya conoce `archive_root_for`: lo usa para desempaquetar.
+1. ~~**`Enter` sobre un archivo comprimido o un symlink.**~~ **HECHO**: la
+   decisión vive en `norte_frontend::nav::enter_target` y la llaman los dos.
+   Y el doble de test ya sabe fabricar un symlink (`Falso::pon_kind`), que es
+   lo que faltaba para poder escribirlo.
 2. **Aviso de espacio y de confinamiento antes de copiar.** El terminal dice
    «no cabe» y «no puedo confinar» antes de que confirmes. La ventana no
    tiene esas líneas: te enteras por una task fallida.

@@ -12,11 +12,10 @@
 
 use norte_core::backend::Backend;
 use norte_i18n::t;
-use norte_proto::{EntryKind, Error, VPath};
+use norte_proto::{Error, VPath};
 
 use crate::app::{App, Trail, TrailStep};
 use crate::keymap::Command;
-use crate::nav;
 use crate::navigate::{Cd, cd_in};
 
 /// One step back for the focused pane, or `None` when the trail is empty.
@@ -71,7 +70,8 @@ pub fn untake_step(app: &mut App, pane: usize, step: TrailStep, target: VPath) {
 ///
 /// The WHOLE policy of `walk_trail`, in one value the tests can ask for
 /// directly. It used to live inline in `walk_trail`, where the only way to
-/// pin it was to re-enact the effect in the test — which pins [`nav::History`],
+/// pin it was to re-enact the effect in the test — which pins
+/// [`norte_frontend::nav::History`],
 /// not the policy: `walk_trail` could stop rewinding altogether and every
 /// test stayed green.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,8 +210,7 @@ pub fn nav_enter_target(app: &App) -> Option<VPath> {
     if pane.cursor_is_parent_row() {
         return pane.parent_target().cloned();
     }
-    pane.selected()
-        .filter(|e| matches!(e.kind, EntryKind::Dir | EntryKind::Symlink))
-        .map(|e| e.path.clone())
-        .or_else(|| app.focused().selected().and_then(nav::archive_root_for))
+    // Qué se puede navegar lo dice el crate COMPARTIDO: la ventana contestaba
+    // esta misma pregunta por su cuenta y con otra respuesta (ADR 0077).
+    pane.selected().and_then(norte_frontend::nav::enter_target)
 }

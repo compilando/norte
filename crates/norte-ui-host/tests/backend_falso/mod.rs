@@ -79,6 +79,9 @@ pub struct Falso {
     pub pulso: Arc<tokio::sync::Notify>,
     /// `wire del dir` → `(nombre, es_dir)`.
     pub arbol: HashMap<String, Vec<(Vec<u8>, bool)>>,
+    /// El kind EXACTO de una entrada, por su ruta de cable. Ver
+    /// [`Falso::pon_kind`]: `arbol` solo sabe de directorios y ficheros.
+    pub kinds: HashMap<String, EntryKind>,
     pub listados: AtomicUsize,
     /// Lecturas PEDIDAS y ya SERVIDAS: listados, sondeos y contenidos.
     ///
@@ -469,6 +472,16 @@ impl Falso {
             .insert(dir.to_owned(), entradas.into_iter().collect());
     }
 
+    /// El KIND exacto de una entrada, cuando «directorio o fichero» no basta.
+    ///
+    /// `pon` solo distingue esas dos cosas, que es lo que casi todo test
+    /// necesita. Un SYMLINK es otra: `Enter` sobre él no significa lo mismo
+    /// que sobre un fichero, y sin poder fabricar uno esa divergencia entre
+    /// frontends no se podía escribir como test.
+    pub fn pon_kind(&mut self, wire: &str, kind: EntryKind) {
+        self.kinds.insert(wire.to_owned(), kind);
+    }
+
     /// Arma la SIGUIENTE respuesta de `log.tail` (#328).
     ///
     /// A partir de aquí el doble sabe de registro: las vueltas posteriores a
@@ -663,18 +676,26 @@ impl Falso {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .map(|(nombre, es_dir)| Entry {
-                path: dir.join(norte_proto::Segment::new(nombre).expect("segmento")),
-                kind: if es_dir {
-                    EntryKind::Dir
-                } else {
-                    EntryKind::File
-                },
-                // Un directorio no tiene tamaño, como en la vida real: es lo
-                // que hace que la AUSENCIA de celda se pueda probar.
-                size: if es_dir || self.lazy { None } else { Some(1) },
-                mtime_ms: None,
-                attrs: std::collections::BTreeMap::new(),
+            .map(|(nombre, es_dir)| {
+                let path = dir.join(norte_proto::Segment::new(nombre).expect("segmento"));
+                let kind = self
+                    .kinds
+                    .get(&path.to_wire())
+                    .copied()
+                    .unwrap_or(if es_dir {
+                        EntryKind::Dir
+                    } else {
+                        EntryKind::File
+                    });
+                Entry {
+                    kind,
+                    path,
+                    // Un directorio no tiene tamaño, como en la vida real: es
+                    // lo que hace que la AUSENCIA de celda se pueda probar.
+                    size: if es_dir || self.lazy { None } else { Some(1) },
+                    mtime_ms: None,
+                    attrs: std::collections::BTreeMap::new(),
+                }
             })
             .collect();
         norte_frontend::sort_entries(&mut out);
@@ -1626,26 +1647,38 @@ impl HostBackend for Falso {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .map(|(nombre, es_dir)| Entry {
-                path: padre.join(norte_proto::Segment::new(nombre).expect("segmento")),
-                kind: if es_dir {
-                    EntryKind::Dir
-                } else {
-                    EntryKind::File
-                },
-                // Un directorio no tiene tamaño, como en la vida real: es lo
-                // que hace que la AUSENCIA de celda se pueda probar. Con
-                // `lazy`, tampoco lo tiene un fichero: es el listado del
-                // provider local (#52), donde el tamaño se sondea aparte.
-                size: if es_dir || lazy { None } else { Some(1) },
-                mtime_ms: None,
-                attrs: {
-                    let mut m = std::collections::BTreeMap::new();
-                    // 0o100644: lo que un provider POSIX manda de verdad, y
-                    // lo que sin catálogo se pintaría como «33188».
-                    m.insert("posix.mode".to_owned(), norte_proto::AttrValue::Uint(33188));
-                    m
-                },
+            .map(|(nombre, es_dir)| {
+                let path = padre.join(norte_proto::Segment::new(nombre).expect("segmento"));
+                // El kind exacto, si alguien lo fijó (`pon_kind`). Este doble
+                // construye entradas en DOS sitios —aquí y en `entradas_de`—
+                // y el override tiene que estar en los dos: parchear uno solo
+                // deja el test mirando un listado que el host nunca ve.
+                let kind = self
+                    .kinds
+                    .get(&path.to_wire())
+                    .copied()
+                    .unwrap_or(if es_dir {
+                        EntryKind::Dir
+                    } else {
+                        EntryKind::File
+                    });
+                Entry {
+                    kind,
+                    path,
+                    // Un directorio no tiene tamaño, como en la vida real: es lo
+                    // que hace que la AUSENCIA de celda se pueda probar. Con
+                    // `lazy`, tampoco lo tiene un fichero: es el listado del
+                    // provider local (#52), donde el tamaño se sondea aparte.
+                    size: if es_dir || lazy { None } else { Some(1) },
+                    mtime_ms: None,
+                    attrs: {
+                        let mut m = std::collections::BTreeMap::new();
+                        // 0o100644: lo que un provider POSIX manda de verdad,
+                        // y lo que sin catálogo se pintaría como «33188».
+                        m.insert("posix.mode".to_owned(), norte_proto::AttrValue::Uint(33188));
+                        m
+                    },
+                }
             })
             .filter(|e| !idos.contains(&e.path.to_wire()))
             .collect();

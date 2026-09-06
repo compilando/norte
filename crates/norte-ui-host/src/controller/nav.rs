@@ -34,20 +34,28 @@ impl Estado {
                 let Some(entrada) = self.hueco().pane.entries().get(i) else {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 };
-                if entrada.kind != EntryKind::Dir {
+                // Qué se puede navegar lo dice el crate COMPARTIDO: un
+                // directorio, un enlace y un CONTENEDOR, que se abre por
+                // dentro. Aquí se miraba `kind != Dir`, así que un `.zip` y un
+                // symlink se entregaban al escritorio mientras el terminal
+                // entraba en ellos — con un comentario, tres líneas más
+                // abajo, afirmando que la decisión era la misma.
+                let navegable = norte_frontend::nav::enter_target(entrada);
+                if navegable.is_none() {
                     // Un FICHERO se abre, que es lo que hace un gestor
                     // ortodoxo: con el programa que el escritorio le asocie si
                     // está en este disco, y con el visor INTERNO si no —a
                     // `xdg-open` no se le puede dar un `sftp://`, y ahí el
-                    // visor es lo único que se puede hacer—. La misma decisión
-                    // que toma el TUI en `gestures::enter_action` (ADR 0077).
+                    // visor es lo único que se puede hacer—. La misma
+                    // decisión que toma el TUI, y ahora de verdad: sale de la
+                    // misma función (ADR 0077).
                     return if norte_frontend::shell::is_local(&entrada.path) {
                         self.abrir_externo()
                     } else {
                         self.pedir_visor(backend, buzon)
                     };
                 }
-                let destino = entrada.path.clone();
+                let destino = navegable.unwrap_or_else(|| entrada.path.clone());
                 // Activar la fila `..` es SUBIR, y al subir el cursor
                 // aterriza sobre el directorio del que se sale — lo mismo que
                 // hace `UiAction::Parent` unas líneas más abajo. Sin esto, la
