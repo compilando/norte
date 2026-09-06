@@ -56,6 +56,7 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
     UiHost::start(UiHostOptions {
         backend: Falso::con(&nombres),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -278,6 +279,7 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -832,6 +834,7 @@ async fn el_contador_lo_resuelve_el_host() {
     let (host, _snap) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         // `vim` es el preset que habilita contadores.
         keymap: norte_ui_host::keys::keymap_de_preset("vim").expect("preset"),
@@ -893,6 +896,7 @@ async fn un_comando_que_el_host_no_hace_no_dispara_nada() {
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("norton").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("norton").expect("preset"),
@@ -970,6 +974,7 @@ async fn host_con_layout(
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -1168,6 +1173,66 @@ async fn la_sesion_coloca_los_huecos() {
     assert!(
         listado(&snap).path_display.ends_with("/casa/docs"),
         "arrancó donde lo dejó la sesión: {}",
+        listado(&snap).path_display
+    );
+}
+
+/// Un directorio ESCRITO en la línea de órdenes gana a la sesión.
+///
+/// `norte-gui /usr/bin` con una sesión guardada abría donde estuvieras ayer y
+/// se comía el argumento sin decir nada: `aplicar_sesion` escribe el dir de
+/// TODOS los huecos, y no había nada que dijera «éste lo acaba de teclear un
+/// humano». El terminal cerró lo mismo en `eb237c61` con `pin_start_dir`, y a
+/// la ventana no llegó.
+///
+/// Gana en el panel ACTIVO y solo ahí: el otro sigue donde la sesión lo dejó,
+/// que es media pantalla de memoria que nadie pidió tirar.
+#[tokio::test]
+async fn el_dir_de_la_linea_de_ordenes_gana_a_la_sesion() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    falso.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+    let (_h, snap) = UiHost::start(UiHostOptions {
+        backend: Arc::new(falso),
+        // Lo que el humano tecleó, que NO es donde lo dejó la sesión.
+        initial_dir: VPath::parse("mem:///casa").expect("vpath"),
+        initial_dir_pedido: true,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+    assert!(
+        listado(&snap).path_display.ends_with("/casa"),
+        "manda lo que se tecleó, no lo que guardó la sesión: {}",
+        listado(&snap).path_display
+    );
+}
+
+/// Y sin argumento, la sesión sigue mandando: es lo de siempre.
+#[tokio::test]
+async fn sin_argumento_la_sesion_sigue_mandando() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    falso.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+    let (_h, snap) = host_arbol(Arc::new(falso)).await;
+    assert!(
+        listado(&snap).path_display.ends_with("/casa/docs"),
+        "sin nada tecleado, donde lo dejaste: {}",
         listado(&snap).path_display
     );
 }
@@ -2155,6 +2220,7 @@ async fn el_catalogo_da_sentido_a_un_attr() {
     let (host, _snap) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -2872,6 +2938,7 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap,
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -3116,6 +3183,7 @@ async fn host_solo_lectura(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewS
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset_con(
             "orthodox",
@@ -3548,6 +3616,7 @@ async fn dos_columnas_que_se_enmascaran_igual_siguen_siendo_dos() {
     let (h, snap) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -3660,6 +3729,7 @@ async fn una_disposicion_sin_listado_no_arranca() {
     let salida = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -3710,6 +3780,7 @@ async fn las_columnas_de_otro_esquema_no_estan_muertas() {
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -3790,6 +3861,7 @@ prepend_keymap = [
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap,
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -4880,6 +4952,7 @@ async fn host_con_rutas(paths: norte_ui_host::settings::HostPaths) -> UiHost {
     UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -5462,6 +5535,7 @@ async fn host_con_tema(theme: norte_ui_host::pickers::HostTheme) -> UiHost {
     UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -5660,6 +5734,7 @@ async fn host_full(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot)
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -5771,6 +5846,7 @@ async fn host_full_con_fila_de_subir(backend: Arc<Falso>) -> (UiHost, norte_ui_h
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -5951,6 +6027,7 @@ async fn host_hoja_sin_visor(backend: Arc<Falso>) -> (UiHost, norte_ui_host::Vie
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -6010,6 +6087,7 @@ async fn todo_hueco_que_sigue_al_cursor_tiene_sonda_propia() {
         let h = UiHost::start(UiHostOptions {
             backend: arbol(),
             initial_dir: dir(),
+            initial_dir_pedido: false,
             locale: "es".to_owned(),
             keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
             keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -6409,6 +6487,7 @@ async fn un_click_en_la_barra_no_navega_a_otro_sitio_si_la_lista_cambio() {
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(f),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -6515,6 +6594,7 @@ async fn un_favorito_roto_se_ve_y_dice_por_que() {
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(f),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -6722,6 +6802,7 @@ async fn una_disposicion_rota_se_ve_y_no_se_aplica() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -6800,6 +6881,7 @@ async fn una_disposicion_que_esconde_el_listado_deja_el_hueco_vivo() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -7386,6 +7468,7 @@ async fn ninguna_superficie_enmascara_en_silencio() {
         let (h, snap) = UiHost::start(UiHostOptions {
             backend: Arc::new(f),
             initial_dir: dir(),
+            initial_dir_pedido: false,
             locale: "es".to_owned(),
             keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
             keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -7529,6 +7612,7 @@ async fn a_los_plugins_solo_se_les_pregunta_por_la_ventana() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -7598,6 +7682,7 @@ async fn la_insignia_de_un_plugin_llega_a_la_fila() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -7805,6 +7890,7 @@ async fn encender_una_columna_attr_vuelve_a_listar() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -9812,6 +9898,7 @@ kind = "status"
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -12228,6 +12315,7 @@ async fn host_con_backend_y_anillo(
     let h = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -14264,6 +14352,7 @@ async fn en_solo_lectura_no_se_para_la_task_de_otro() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(falso),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -14435,6 +14524,7 @@ async fn un_kind_desconocido_con_nombre_alterado_va_marcado() {
     let (_h, snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -14604,6 +14694,7 @@ async fn en_solo_lectura_no_hay_busqueda_semantica() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::backend::HostBackend>,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset_con(
             "orthodox",
@@ -16556,6 +16647,7 @@ async fn las_teclas_de_un_dialogo_las_pone_el_preset() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("vim").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("vim").expect("preset"),
@@ -16753,6 +16845,7 @@ async fn host_en_con(
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: VPath::parse(inicio).expect("vpath"),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -16776,6 +16869,7 @@ async fn host_en(backend: Arc<Falso>, inicio: &str) -> (UiHost, norte_ui_host::V
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: VPath::parse(inicio).expect("vpath"),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -17548,6 +17642,7 @@ async fn una_tecla_reatada_contesta_el_dialogo() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::backend::HostBackend>,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -17917,6 +18012,7 @@ async fn host_con_capas_y_favoritos(
     UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -18138,6 +18234,7 @@ async fn con_la_fila_de_subir_el_listado_la_lleva_primera() {
         // Un SUBdirectorio: en una raíz no hay a dónde subir y la fila no
         // aparece por mucho que la configuración la encienda.
         initial_dir: norte_proto::VPath::parse("mem:///casa").expect("wire"),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -19125,6 +19222,7 @@ async fn ciclar_el_encoding_repinta_tambien_la_cabecera() {
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(falso),
         initial_dir: norte_proto::VPath::parse("mem:///caf%FF").expect("wire"),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -19630,6 +19728,7 @@ async fn un_favorito_invalido_se_queda_y_se_dice() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -19816,6 +19915,7 @@ async fn la_config_siembra_la_ocultacion() {
     let (_h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(f),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),

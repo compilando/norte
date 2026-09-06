@@ -323,6 +323,7 @@ async fn via_host(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
     let (host, primera) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),

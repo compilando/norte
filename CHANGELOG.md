@@ -20,6 +20,13 @@ independently through `PROTOCOL_VERSION`.
   included, and is documented as never an operand. On `..` the sheet says
   `..`, `folder`, and where it leads (new `metadata-target` key in both
   locales), and the viewer says `directory`.
+- **`norte-gui <DIR>` no longer loses to the saved session.** The directory
+  typed on the command line was overwritten by `aplicar_sesion`, which writes
+  the location of every slot, so the window opened where you were yesterday
+  and ate the argument without saying anything. The terminal closed the same
+  hole in `eb237c61` with `pin_start_dir`; the window never got it. It wins in
+  the active panel only — the other stays where the session left it, which is
+  half a screen of memory nobody asked to throw away.
 - **`openers.toml` now applies in the window too (#28).** The table was read
   only by the terminal, so a rule saying "PDFs open in zathura" held in `ntc`
   and was skipped in `norte-gui`, which handed everything to the desktop

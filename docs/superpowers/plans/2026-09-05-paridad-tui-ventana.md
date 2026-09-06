@@ -38,7 +38,7 @@ La clase más barata de arreglar y la más visible: el usuario escribe algo en
 | `[ui] theme` como RUTA a un `.toml` | sí (ADR 0020) | **no**: solo presets, y calla | A |
 | `[ui] lang` vs `NORTE_LANG` | gana el ENTORNO | gana la CONFIG | **V** |
 | `[ui.columns]` estilo por columna | sí (`style_for_id`) | **no**: `default_for_id` en celdas Y cabeceras, así que `time-format`, `header`, `align` y `width` están muertos | **V** |
-| `[DIR]` de la línea de órdenes | gana a la sesión (`pin_start_dir`) | **la sesión lo pisa**: `aplicar_sesion` escribe el dir de todos los huecos | **V** |
+| ~~`[DIR]` de la línea de órdenes~~ | gana a la sesión (`pin_start_dir`) | ~~**la sesión lo pisa**~~ **HECHO** (gana en el panel activo) | **V** |
 | recarga en caliente (todas) | sí, `norte_config::watch` | **no hay watcher**: todo es de arranque | A |
 | `[ui] font`, `mono_font`, `font_size`, `reduce_motion` | — | — | **muertas en los dos** | A |
 | `[profile.start]` | la escribe | la escribe | **no la lee nadie**, y dos ficheros prometen que sí | **V** |

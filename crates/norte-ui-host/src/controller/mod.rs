@@ -303,6 +303,17 @@ pub struct UiHostOptions {
     pub backend: Arc<dyn HostBackend>,
     /// Dónde empieza el listado.
     pub initial_dir: VPath,
+    /// [`Self::initial_dir`] lo ESCRIBIÓ un humano en la línea de órdenes.
+    ///
+    /// Con `false` es el directorio actual del proceso, o sea un valor por
+    /// defecto que la sesión tiene todo el derecho a pisar. Con `true` es una
+    /// intención, y gana: `norte-gui /usr/bin` con una sesión guardada abría
+    /// donde estuvieras ayer y se comía el argumento sin decir nada.
+    ///
+    /// Solo el panel ACTIVO. El otro se queda donde la sesión lo dejó: media
+    /// pantalla de memoria que nadie pidió tirar. Es la misma regla que
+    /// `App::pin_start_dir` en el terminal.
+    pub initial_dir_pedido: bool,
     /// Idioma ya negociado, para que el renderer pida su catálogo.
     pub locale: String,
     /// El keymap EFECTIVO de la pantalla de listado, ya fusionado
@@ -2655,6 +2666,13 @@ struct Estado {
     /// si el esquema que hay guardado es de una versión que este host no
     /// entiende (ADR 0059).
     sesion: Sesion,
+    /// El directorio que un humano ESCRIBIÓ al arrancar, si escribió alguno.
+    ///
+    /// Se guarda porque la sesión se lee después de montar los huecos y pisa
+    /// el sitio de todos: sin esto, `norte-gui /usr/bin` acababa donde
+    /// estuvieras ayer. Lo consume [`Self::leer_sesion`] y no vuelve a hacer
+    /// falta — una intención de arranque vale una vez.
+    dir_pedido: Option<VPath>,
     status: StatusView,
     conexion: ConnectionView,
     /// Las sesiones de provider que viajan sin cifrar (#44), acotadas por el
@@ -2863,6 +2881,7 @@ impl Estado {
         let UiHostOptions {
             backend,
             initial_dir,
+            initial_dir_pedido,
             locale,
             keymap,
             keymap_viewer: keymap_visor,
@@ -2978,6 +2997,7 @@ impl Estado {
                 policy: norte_frontend::session::PushPolicy::new(30),
                 leida: norte_frontend::session::SessionBody::default(),
             },
+            dir_pedido: initial_dir_pedido.then(|| initial_dir.clone()),
             status: StatusView::default(),
             conexion: ConnectionView::Connected,
             degradadas: norte_frontend::banners::DegradedSet::default(),

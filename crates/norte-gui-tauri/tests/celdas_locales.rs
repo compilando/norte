@@ -64,6 +64,7 @@ async fn el_tamano_y_la_fecha_no_van_en_blanco() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(backend),
         initial_dir: inicio,
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),

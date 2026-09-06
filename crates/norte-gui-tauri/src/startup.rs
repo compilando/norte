@@ -718,6 +718,9 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     let (host, snapshot) = UiHost::start(UiHostOptions {
         backend: Arc::new(backend),
         initial_dir: inicio,
+        // Lo escribió un humano, así que gana a la sesión en el panel activo
+        // — la misma regla que el terminal cerró en `eb237c61`.
+        initial_dir_pedido: cli.dir.is_some(),
         locale: match lang {
             Lang::Es => "es".to_owned(),
             Lang::En => "en".to_owned(),
