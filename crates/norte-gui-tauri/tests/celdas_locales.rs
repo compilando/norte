@@ -17,6 +17,31 @@ use norte_ui_host::dto::SlotView;
 use norte_ui_host::{UiHost, UiHostOptions};
 use norte_vfs::Provider;
 
+/// `[ui.columns]` con `size` en formato EXACTO.
+///
+/// La otra mitad de #108 que esta ventana ignoraba: pedía el estilo de
+/// fábrica, así que un `format` configurado no hacía nada aquí mientras el
+/// terminal sí lo honraba. Se elige `exact` porque su respuesta es un número
+/// comprobable —`12`— y la de fábrica para `size` es `iec`, o sea «12 B»: si
+/// el estilo no se aplicara, el test lo diría en vez de agotar su bucle.
+fn columnas_con_tamano_exacto() -> norte_frontend::columns::ColumnsSettings {
+    let cfg = norte_config::ColumnsConfig {
+        specs: [(
+            "size".to_owned(),
+            norte_config::ColumnSpec {
+                width: None,
+                align: None,
+                format: Some("exact".to_owned()),
+                header: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..norte_config::ColumnsConfig::default()
+    };
+    norte_frontend::columns::ColumnsSettings::resolve(&cfg)
+}
+
 /// Las celdas de tamaño y fecha traen valor sobre ficheros de verdad.
 #[tokio::test]
 async fn el_tamano_y_la_fecha_no_van_en_blanco() {
@@ -78,7 +103,7 @@ async fn el_tamano_y_la_fecha_no_van_en_blanco() {
         // Sin perfil: este test mira las celdas de un listado local, y un
         // perfil activo no cambia lo que un `stat` devuelve.
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
+        columns: columnas_con_tamano_exacto(),
         effects: norte_ui_host::commands::Efectos::Completo,
         log_ring: None,
     })
@@ -116,9 +141,18 @@ async fn el_tamano_y_la_fecha_no_van_en_blanco() {
             .iter()
             .find(|c| c.column == "size")
             .expect("size configurada");
-        if size.text.as_deref() == Some("12 B") {
+        // `12` y no «12 B»: con `format = "exact"` puesto, la celda tiene que
+        // salir en exacto. Si el estilo configurado no se aplicara, aquí
+        // llegaría el de fábrica (`iec`) y este bucle se agotaría.
+        if size.text.as_deref() == Some("12") {
             return;
         }
+        assert_ne!(
+            size.text.as_deref(),
+            Some("12 B"),
+            "la celda salió con el formato de FÁBRICA: `[ui.columns]` no se \
+             está aplicando en la ventana"
+        );
     }
     panic!("el tamaño de un fichero real nunca llegó a la celda");
 }

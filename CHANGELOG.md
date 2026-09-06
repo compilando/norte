@@ -20,6 +20,14 @@ independently through `PROTOCOL_VERSION`.
   included, and is documented as never an operand. On `..` the sheet says
   `..`, `folder`, and where it leads (new `metadata-target` key in both
   locales), and the viewer says `directory`.
+- **`[ui.columns]` styles the window's columns too (#108).** The window asked
+  for `ColumnStyle::default_for_id` — the factory style — in both the header
+  and the cells, so only the column list and its order survived from the
+  config: a custom `header`, `format`, `align` and `width` were dead here
+  while the terminal honoured them. As a side effect this unblocks the
+  configurable half of a separate debt: the date cell is translated with the
+  process locale, and until now you could not even sidestep it with
+  `format = "iso"`, because the key did nothing.
 - **`norte-gui <DIR>` no longer loses to the saved session.** The directory
   typed on the command line was overwritten by `aplicar_sesion`, which writes
   the location of every slot, so the window opened where you were yesterday

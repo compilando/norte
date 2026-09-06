@@ -10762,6 +10762,78 @@ async fn el_lote_por_plantilla_se_revisa_como_el_de_la_ia() {
     );
 }
 
+/// `[ui.columns]` estiliza las columnas también en la VENTANA (#108).
+///
+/// La ventana pedía el estilo con `ColumnStyle::default_for_id`, o sea el de
+/// FÁBRICA, en la cabecera y en las celdas. Así que la lista de columnas y su
+/// orden salían de la configuración y todo lo demás —`header` propia,
+/// `format`, `align`, `width`— estaba muerto: un bloque de configuración
+/// entero vivo en el terminal y sin efecto aquí.
+///
+/// Se comprueban las dos puertas a la vez, que son las dos que estaban mal:
+/// la cabecera con un rótulo propio y la celda con `format = "iso"`.
+#[tokio::test]
+async fn el_estilo_por_columna_manda_en_la_ventana() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    let cfg = norte_config::ColumnsConfig {
+        default_columns: Some(vec!["name".to_owned(), "mtime".to_owned()]),
+        specs: [(
+            "mtime".to_owned(),
+            norte_config::ColumnSpec {
+                width: None,
+                align: None,
+                format: Some("iso".to_owned()),
+                header: Some("Cuándo".to_owned()),
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..norte_config::ColumnsConfig::default()
+    };
+    let columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
+    let (h, snap) = UiHost::start(UiHostOptions {
+        backend: Arc::new(falso),
+        initial_dir: dir(),
+        initial_dir_pedido: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: columnas,
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+
+    let cabecera = listado(&snap)
+        .columns
+        .iter()
+        .find(|c| c.id == "mtime")
+        .expect("la columna está")
+        .clone();
+    assert_eq!(
+        cabecera.label, "Cuándo",
+        "el rótulo propio manda sobre el de fábrica"
+    );
+
+    // La otra mitad del arreglo —el `format` de una CELDA— se comprueba en
+    // `norte-gui-tauri/tests/celdas_locales.rs`: aquí el backend falso no
+    // trae fecha en el listado (#52, el listado es perezoso) y hidratarla
+    // pedía montar medio sondeo para probar un formato. Allí hay ficheros de
+    // verdad, que es donde esa pregunta se contesta sola.
+    let _ = (&h, &mut sub);
+}
+
 /// `openers.toml` manda también en la VENTANA (#28).
 ///
 /// La tabla de openers la leía solo el terminal: la ventana entregaba todo al

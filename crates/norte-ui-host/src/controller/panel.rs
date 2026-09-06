@@ -341,13 +341,18 @@ impl Estado {
     /// TUI: cómo se llama una columna y si ordena no puede depender de quién
     /// pinta.
     pub(super) fn cabeceras(&self, hueco: &Hueco) -> Vec<ColumnHeader> {
-        use norte_frontend::columns::{ColumnStyle, header_label_in, sort_column_id};
+        use norte_frontend::columns::{header_label_in, sort_column_id};
         let spec = hueco.pane.sort();
         let catalogo = self.catalogo_de(hueco.pane.dir());
+        let esquema = hueco.pane.dir().scheme().to_owned();
         self.columnas_de(hueco.pane.dir())
             .iter()
             .map(|id| {
-                let estilo = ColumnStyle::default_for_id(id, catalogo);
+                // El estilo CONFIGURADO, no el de fábrica: `[ui.columns]`
+                // deja poner rótulo propio, formato, alineación y ancho por
+                // columna, y pidiendo `default_for_id` todo eso estaba muerto
+                // en esta ventana mientras el terminal lo honraba.
+                let estilo = self.columnas.style_for_id(&esquema, id, catalogo);
                 let ordena = sort_column_id(id);
                 let sort = ordena.filter(|c| *c == spec.column).map(|_| {
                     match spec.dir {

@@ -471,8 +471,9 @@ impl Estado {
     /// tamaño, un atributo que el provider no mandó— y viaja como tal: jamás
     /// un `0` fabricado.
     pub(super) fn celdas(&self, hueco: &Hueco, e: &Entry) -> Vec<crate::dto::CellView> {
-        use norte_frontend::columns::{ColumnId, ColumnStyle, styled_cell};
+        use norte_frontend::columns::{ColumnId, styled_cell};
         let ahora = ahora_ms();
+        let esquema = hueco.pane.dir().scheme().to_owned();
         self.columnas_de(hueco.pane.dir())
             .iter()
             .filter(|c| !matches!(c, ColumnId::Builtin(norte_frontend::columns::Builtin::Name)))
@@ -484,11 +485,17 @@ impl Estado {
                         &norte_frontend::columns::plugin_display_id(plugin, column),
                         &e.path,
                     ),
+                    // El estilo CONFIGURADO, igual que la cabecera: con
+                    // `default_for_id` un `format = "iso"` no hacía nada aquí
+                    // mientras el terminal sí lo honraba, y la fecha salía
+                    // siempre relativa.
                     otra => styled_cell(
                         e,
                         otra,
                         ahora,
-                        &ColumnStyle::default_for_id(otra, self.catalogo_de(&e.path)),
+                        &self
+                            .columnas
+                            .style_for_id(&esquema, otra, self.catalogo_de(&e.path)),
                     ),
                 };
                 crate::dto::CellView {
