@@ -84,20 +84,27 @@ informe original; **A** salvo donde se diga.
    decisión vive en `norte_frontend::nav::enter_target` y la llaman los dos.
    Y el doble de test ya sabe fabricar un symlink (`Falso::pon_kind`), que es
    lo que faltaba para poder escribirlo.
-2. **Aviso de espacio y de confinamiento antes de copiar.** El terminal dice
-   «no cabe» y «no puedo confinar» antes de que confirmes. La ventana no
-   tiene esas líneas: te enteras por una task fallida.
+2. ~~**Aviso de espacio y de confinamiento antes de copiar.**~~ **HECHO**: el
+   diálogo nace sin ellos y una task los rellena, que es el reparto del
+   terminal. La regla del total —todo o nada— vive ahora en
+   `norte_frontend::space::total_to_write`, donde estaba a medias: los dos
+   helpers de las frases ya eran compartidos y solo el cálculo era privado
+   del TUI. `DialogView.warnings` es el campo nuevo del bridge.
 3. **Borrado permanente.** «⚠ aquí NO hay papelera: esto no se deshace» es
    solo del terminal. La ventana compensa con un botón destructivo; ninguna
    de las dos tiene la señal de la otra.
 4. **Una búsqueda que FALLÓ se lee como una terminada con 0 resultados.** El
    host marca cualquier estado terminal como «no viva» y pinta
    `search-status-done`. Es una afirmación falsa sobre el disco.
-5. **`availability::Facts`: 6 de 8 campos distintos.** El peor par:
-   `source_read_only`/`dest_read_only` están cableados a `false` en la
-   ventana, así que dentro de un ZIP el terminal apaga F5/F8 y la ventana los
-   ofrece encendidos. El host ya recibe `capabilities` y tira todo menos
-   `fold_mode`.
+5. ~~**`availability::Facts`: 6 de 8 campos distintos.**~~ **HECHO** el peor
+   par y uno más. `source_read_only`/`dest_read_only` salen ya de las
+   capacidades del hueco, por `availability::read_only`, que es de los dos;
+   y `enterable` de `nav::enter_target`, también de los dos. De paso salieron
+   dos bugs que nadie buscaba: el listado de ARRANQUE no pedía capacidades
+   —o sea que el primer directorio de cada hueco estaba a ciegas, y con él el
+   plegado de #268— y las capacidades se BORRABAN al pedir otras, tres líneas
+   antes de que el aterrizaje re-congelara los hechos de la ayuda. Quedan los
+   campos que no son un impedimento real (`degraded`, `journalled`).
 6. **Entradas omitidas.** El terminal: «⚠ N omitidas (nombres hostiles /
    límites)». La ventana: «N entradas se saltaron», sin ⚠ y **también cuando
    N es 0**.

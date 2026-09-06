@@ -631,6 +631,7 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id: modal,
@@ -1241,6 +1242,7 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         let caidos = self.apilar_dialogo(Dialogo {
             id,

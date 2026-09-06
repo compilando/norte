@@ -87,6 +87,20 @@ impl Estado {
         (dir == h.pane.dir()).then_some(*caps)
     }
 
+    /// Lo que se sepa de una RUTA, la tenga el hueco que la tenga.
+    ///
+    /// Por ubicación y no por hueco porque quien pregunta no siempre habla de
+    /// un hueco: el destino de una transferencia puede ser un directorio que
+    /// el lector eligió en el escritorio (#284). Lo que hace válida la
+    /// respuesta es que sea de ESA ruta, y eso ya lo lleva puesto lo guardado.
+    pub(super) fn caps_de_ruta(&self, dir: &VPath) -> Option<norte_proto::Capabilities> {
+        self.huecos
+            .values()
+            .filter_map(|h| h.caps.as_ref())
+            .find(|(p, _)| p == dir)
+            .map(|(_, c)| *c)
+    }
+
     /// Si la ubicación de un hueco REHÚSA que se escriba en ella.
     ///
     /// El par de respuestas —el flag si consta, el esquema si no— lo decide

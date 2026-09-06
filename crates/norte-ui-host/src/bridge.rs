@@ -185,7 +185,15 @@ use serde::{Deserialize, Serialize};
 /// - **53**: el renderer declara cuántas COLUMNAS tiene el cuerpo del visor
 ///   (`SetViewerCols`), como ya declaraba las filas: es el ancho que el
 ///   previewer recibe.
-pub const BRIDGE_VERSION: u32 = 53;
+/// - **54**: un diálogo de transferencia dice en qué punto está la
+///   COMPROBACIÓN DE SU DESTINO ([`crate::dto::DestCheckView`]): si cabe
+///   (#149) y si sabe sujetar sus escrituras (#164). Sube el número aunque el
+///   campo lleve `serde(default)`, y esa es la razón de subirlo: un renderer
+///   viejo emparejado con este host no conoce el campo, no pintaría la línea
+///   de #164 y no lo diría — y la ausencia de esa línea SIGNIFICA que el
+///   destino confina. El webview va embebido en el binario, así que ese
+///   emparejamiento es lo que sale de olvidarse de `just link-gui`.
+pub const BRIDGE_VERSION: u32 = 54;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

@@ -73,6 +73,7 @@ impl Estado {
                 .aplicar_ficha(&id, res.as_ref().ok())
                 .into_iter()
                 .collect(),
+            Fondo::AvisosDeDestino(id, avisos) => self.avisos_de_destino(id, avisos),
             Fondo::UndoDeSesion(task_id, sesion) => {
                 self.agencia.undos.insert(task_id, sesion);
                 Vec::new()
@@ -687,6 +688,7 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id: modal,

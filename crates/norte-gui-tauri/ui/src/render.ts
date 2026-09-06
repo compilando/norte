@@ -3915,6 +3915,31 @@ export class Screen {
       nota.textContent = top.overflow_note;
       box.append(nota);
     }
+    const chequeo = top.dest_check ?? { state: "not_asked" };
+    if (chequeo.state === "checking") {
+      // Se DICE que se está preguntando, y el sitio queda reservado: un aviso
+      // que aterriza de golpe encima de los botones los mueve bajo el
+      // puntero de quien ya iba a pulsar. Y sobre todo, mientras esto se lea
+      // «comprobando», la ausencia de la línea de #164 no se puede leer como
+      // «este destino confina».
+      const espera = document.createElement("p");
+      espera.className = "dialog-checking";
+      espera.textContent = this.t("dialog-checking-destination");
+      box.append(espera);
+    }
+    if (chequeo.state === "done") {
+      for (const aviso of chequeo.warnings) {
+        // Del DESTINO: que no cabe, que no sabe confinar. Ya traducidos y sin
+        // una sola cadena que controle un tercero, así que van en su propio
+        // bloque y no entre las líneas del cuerpo — donde un nombre de
+        // fichero los podría suplantar.
+        const linea = document.createElement("p");
+        linea.className = "dialog-warning";
+        linea.setAttribute("role", "alert");
+        linea.textContent = aviso;
+        box.append(linea);
+      }
+    }
     if (top.input_hostile) {
       // Es la ÚNICA superficie donde se aprueba un nombre: si lo que se pinta
       // difiere de lo que se creará, se dice aquí.

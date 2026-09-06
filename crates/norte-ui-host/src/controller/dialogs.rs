@@ -137,6 +137,7 @@ impl Estado {
                 input: None,
                 input_hostile: false,
                 input_secret: false,
+                dest_check: crate::dto::DestCheckView::NotAsked,
             },
             tecleado: Tecleado::Texto(String::new()),
             al_confirmar: Some(Pendiente::Salir),

@@ -66,6 +66,7 @@ impl Estado {
                 input: Some(String::new()),
                 input_hostile: false,
                 input_secret: false,
+                dest_check: crate::dto::DestCheckView::NotAsked,
             },
             tecleado: Tecleado::Texto(String::new()),
             al_confirmar: Some(Pendiente::Patron { marcar }),
@@ -136,6 +137,7 @@ impl Estado {
                 input: Some(String::new()),
                 input_hostile: false,
                 input_secret: false,
+                dest_check: crate::dto::DestCheckView::NotAsked,
             },
             tecleado: Tecleado::Texto(String::new()),
             al_confirmar: Some(Pendiente::Buscar { root }),
@@ -505,6 +507,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,

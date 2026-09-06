@@ -312,6 +312,9 @@
         ],
         "deadline": "caduca en 30 s",
         "deadline_at_ms": 1700000030000,
+        "dest_check": {
+          "state": "not_asked"
+        },
         "destination": {
           "hostile": false,
           "text": "/home/oscar/destino"

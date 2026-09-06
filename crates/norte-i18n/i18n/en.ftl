@@ -1879,6 +1879,12 @@ gui-msg-shortcut-saved-not-applied = saved, but this window kept the previous ke
 # the dialog where a human approves an agent's mutation.
 dialog-body-truncated = … showing { $shown } of { $total }
 dialog-destination = Destination:
+# While the destination is being asked whether it has room (#149) and whether
+# it can hold its writes down (#164). It SAYS so instead of leaving the space
+# blank: without this line "I do not know yet" reads exactly like "I asked and
+# there is nothing to say", and the second is a claim about the destination's
+# safety.
+dialog-checking-destination = checking the destination…
 dialog-confirm = Confirm
 # Checksums in the window (#311). The dialog is read-only: copying is the only
 # thing you can do with a list of digests, and a verification has none.

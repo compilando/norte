@@ -2308,6 +2308,13 @@ pub struct DialogView {
     /// un renderer no traduce ni sustituye números, y un aviso metido entre
     /// las líneas del cuerpo lo podría suplantar un nombre de fichero.
     pub overflow_note: String,
+    /// En qué punto está la comprobación del DESTINO: si cabe (#149) y si
+    /// sabe sujetar lo que se escriba en él (#164).
+    ///
+    /// `#[serde(default)]`: un renderer de un puente anterior no lo manda, y
+    /// su ausencia es [`DestCheckView::NotAsked`], que es lo que era antes.
+    #[serde(default)]
+    pub dest_check: DestCheckView,
     /// Lo que se puede responder.
     pub choices: Vec<DialogChoice>,
     /// El diálogo pide texto libre, y esto es lo tecleado hasta ahora, YA
@@ -2336,6 +2343,45 @@ pub struct DialogView {
     /// su ausencia significa «no es un secreto», que es lo que era antes.
     #[serde(default)]
     pub input_secret: bool,
+}
+
+/// Qué se sabe del DESTINO de una transferencia mientras se pregunta.
+///
+/// **Tres estados y no una lista de avisos, porque el silencio tenía que
+/// significar una sola cosa.** Las dos preguntas —¿cabe?, ¿sabe confinar?—
+/// son I/O, así que el diálogo se pinta antes de que vuelvan; con un solo
+/// `Vec` vacío, «todavía no lo he preguntado» y «lo pregunté y no hay nada
+/// que decir» llegaban idénticos, y el humano puede confirmar en ese hueco.
+/// La ausencia de la línea de #164 SIGNIFICA «este destino sujeta sus
+/// escrituras», así que dejarla ambigua es afirmarlo sin saberlo.
+///
+/// El terminal no tiene este problema: pregunta en la cabecera de la vuelta,
+/// antes de pintar, así que su modal nunca se ve sin las respuestas puestas
+/// (`norte_tui::turn`). Esperarlas aquí dejaría F5 sin pintar nada contra un
+/// SFTP lento, que es peor: lo que el humano tiene delante mientras tanto es
+/// la lista de lo que va a copiar, que es lo que vino a leer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum DestCheckView {
+    /// Este diálogo no tiene destino que comprobar. Lo son todos menos los
+    /// de transferencia, y es el valor por defecto.
+    #[default]
+    NotAsked,
+    /// Se preguntó y no ha vuelto. El renderer lo DICE y reserva el sitio:
+    /// una línea que aparece de golpe encima de los botones los mueve bajo
+    /// el puntero de quien iba a pulsar.
+    Checking,
+    /// Volvió. La lista vacía es la respuesta normal y no se pinta: que
+    /// quepa y que confine NO se anuncian, porque una línea en cada copia es
+    /// ruido y el ruido enseña a saltarse la línea el día que dice algo.
+    ///
+    /// Ya traducidas y sin una sola cadena que controle un tercero. Van
+    /// aquí y no entre las líneas del cuerpo por eso mismo: ahí un nombre de
+    /// fichero las podría suplantar.
+    Done {
+        /// Lo que hay que saber antes de decir que sí. Vacío = nada.
+        warnings: Vec<String>,
+    },
 }
 
 /// Una línea del cuerpo de un diálogo.

@@ -1907,6 +1907,11 @@ metadata-kind-other = otro
 # mutación de un agente incluidos.
 dialog-body-truncated = … se enseñan { $shown } de { $total }
 dialog-destination = Destino:
+# Mientras se pregunta si el destino tiene sitio (#149) y si sabe sujetar sus
+# escrituras (#164). Se DICE, en vez de dejar el hueco vacío: sin esta línea,
+# «todavía no lo sé» se lee igual que «lo pregunté y no hay nada que decir», y
+# lo segundo es una afirmación sobre la seguridad del destino.
+dialog-checking-destination = comprobando el destino…
 dialog-confirm = Confirmar
 # Sumas en la ventana (#311). El diálogo es de LECTURA: copiar es lo único que
 # se puede hacer con una lista de digests, y una comprobación no los trae.

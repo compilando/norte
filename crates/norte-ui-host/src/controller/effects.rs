@@ -192,7 +192,7 @@ impl Estado {
             | Efecto::RenameIa
             | Efecto::RenameLote
             | Efecto::Permisos
-            | Efecto::BuscarSemantica => self.efecto_que_muta(efecto),
+            | Efecto::BuscarSemantica => self.efecto_que_muta(efecto, backend, buzon),
         }
     }
 
@@ -728,12 +728,17 @@ impl Estado {
     pub(super) fn efecto_que_muta(
         &mut self,
         efecto: Efecto,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match efecto {
             Efecto::CrearDirectorio => self.pedir_mkdir(),
             Efecto::CrearFichero => self.pedir_fichero_nuevo(),
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
-            Efecto::Transferir { mover } => self.pedir_transferencia(mover),
+            // Con el backend porque, como comparar, sale a preguntar en
+            // cuanto se abre: el diálogo nace sin los avisos del destino y
+            // ellos llegan detrás.
+            Efecto::Transferir { mover } => self.pedir_transferencia(mover, backend, buzon),
             Efecto::Renombrar => self.pedir_rename(),
             Efecto::RenameIa => self.pedir_instruccion_ia(),
             Efecto::RenameLote => self.pedir_plantilla_de_lote(None),

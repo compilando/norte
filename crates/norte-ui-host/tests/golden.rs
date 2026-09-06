@@ -582,6 +582,7 @@ fn dialogo_de_referencia() -> DialogView {
         input: Some(String::new()),
         input_hostile: false,
         input_secret: false,
+        dest_check: norte_ui_host::dto::DestCheckView::NotAsked,
     }
 }
 
@@ -2241,6 +2242,38 @@ mod variantes {
     /// queje: un `None` se pinta igual que un campo que no llegó.
     fn formas_vacias() -> Vec<(&'static str, serde_json::Value)> {
         vec![
+            // Los tres estados de la comprobación del destino, y los tres en
+            // el corpus a propósito: son la única cosa del diálogo donde la
+            // AUSENCIA de una línea afirma algo (que el destino confina), así
+            // que un renderer que confundiera `checking` con `done` sin
+            // avisos lo haría en silencio. La variante llena clava además el
+            // nombre de wire del vector, que con todas las fixtures vacías no
+            // aparecía en el corpus.
+            (
+                "dest_check_not_asked",
+                serde_json::to_value(norte_ui_host::dto::DestCheckView::NotAsked).expect("json"),
+            ),
+            (
+                "dest_check_checking",
+                serde_json::to_value(norte_ui_host::dto::DestCheckView::Checking).expect("json"),
+            ),
+            (
+                "dest_check_done_vacio",
+                serde_json::to_value(norte_ui_host::dto::DestCheckView::Done {
+                    warnings: Vec::new(),
+                })
+                .expect("json"),
+            ),
+            (
+                "dest_check_done_con_avisos",
+                serde_json::to_value(norte_ui_host::dto::DestCheckView::Done {
+                    warnings: vec![
+                        "4,2 GB a escribir y 1,1 GB libres en el destino".to_owned(),
+                        "este destino no puede confinar las escrituras".to_owned(),
+                    ],
+                })
+                .expect("json"),
+            ),
             (
                 "cell_text_none",
                 serde_json::to_value(CellView {
@@ -2304,6 +2337,7 @@ mod variantes {
                     input: None,
                     input_hostile: false,
                     input_secret: false,
+                    dest_check: norte_ui_host::dto::DestCheckView::NotAsked,
                 })
                 .expect("json"),
             ),

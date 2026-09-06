@@ -728,6 +728,21 @@ body {
   margin-top: 6px;
 }
 
+/* Del DESTINO: que no cabe (#149), que no sabe confinar (#164). Mismo peso
+   visual que el recorte y por el mismo motivo: las tres frases dicen que lo
+   que se va a hacer no es exactamente lo que se lee. */
+.dialog-warning {
+  color: var(--warning-fg);
+  margin-top: 6px;
+}
+
+/* Todavía se está preguntando. Ocupa el mismo alto que un aviso para que la
+   respuesta no empuje los botones bajo el puntero al llegar. */
+.dialog-checking {
+  color: var(--title-fg);
+  margin-top: 6px;
+}
+
 .dialog input {
   width: 100%;
   background: var(--bg);

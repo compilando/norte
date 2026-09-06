@@ -519,6 +519,7 @@ impl Estado {
             input: Some(clamp_display(sugerido.clone())),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,
@@ -621,6 +622,7 @@ impl Estado {
             input: Some(clamp_display(sugerido.clone())),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,
@@ -1105,6 +1107,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: true,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         let mut fuera = self.apilar_dialogo(Dialogo {
             id,

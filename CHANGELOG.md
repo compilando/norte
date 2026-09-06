@@ -28,6 +28,25 @@ independently through `PROTOCOL_VERSION`.
   prevent. The window already knew `archive_root_for`: it uses it to unpack
   and to test a container, just not to open one. The decision now lives once,
   in `norte_frontend::nav::enter_target`.
+- **The window's copy dialog never said "this will not fit" or "this
+  destination cannot confine writes".** Both lines are the terminal's since
+  #149 and #164 and the window had neither: you found out from a failed task,
+  or you did not find out. The dialog now opens without them and a task fills
+  them in — the same split the terminal makes — and the two fail differently
+  on purpose: not being able to enumerate volumes says nothing (silence is
+  the honest answer), while not being able to read the destination's
+  capabilities *warns*, because there the silence would mean "this place holds
+  its writes down" and swallowing the failure would assert it without knowing.
+  That same reasoning is why the dialog says **"checking the destination…"**
+  while it waits (bridge 54, `DestCheckView` — three states, not a list of
+  warnings): with only an empty list, "I have not asked yet" and "I asked and
+  there is nothing to say" reach the renderer identically, and the human can
+  confirm in that gap. The files-dropped dialog asks too, and it is the path
+  that can least afford not to: its operand list is composed by another
+  process. The all-or-nothing rule for the total moved to
+  `norte_frontend::space::total_to_write`: the two sentences were already
+  shared and only the arithmetic behind them was private to the terminal,
+  which is how a warning ends up appearing in one frontend and not the other.
 - **The window's help knew nothing about a location that refuses writes.**
   `source_read_only` and `dest_read_only` were wired to `false`, with a
   comment declaring that the host does not keep that count. It does keep it —

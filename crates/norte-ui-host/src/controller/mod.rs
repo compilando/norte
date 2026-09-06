@@ -688,6 +688,15 @@ enum Fondo {
         u64,
         Result<norte_proto::methods::PluginListResult, Error>,
     ),
+    /// Lo que hay que saber del DESTINO de una transferencia antes de que el
+    /// humano diga que sí: si cabe (#149) y si sabe sujetar sus escrituras
+    /// (#164). Lleva el modal al que pertenece, porque llega tarde.
+    ///
+    /// Las dos van juntas porque son la misma pregunta hecha al mismo sitio
+    /// en el mismo momento, y separarlas costaría dos rondas de I/O por
+    /// diálogo para pintar dos líneas contiguas — el mismo reparto que hace
+    /// el terminal en `DestCheck`.
+    AvisosDeDestino(ModalId, Vec<String>),
     /// La task de un `policy.undo_session` ya tiene id: se ata a su sesión.
     UndoDeSesion(u64, String),
     /// Los perfiles que hay en `profiles/`, ya leídos, y qué se hace con
@@ -3527,7 +3536,9 @@ impl Estado {
             // (crear directorio, renombrar). Decirlo es más honesto que
             // aceptar texto que nadie va a leer.
             UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
-            UiAction::DirectoryPicked { path } => self.destino_elegido(path.clone()),
+            UiAction::DirectoryPicked { path } => {
+                self.destino_elegido(path.clone(), backend, buzon)
+            }
             UiAction::ProgramFinished {
                 title_key,
                 command,
@@ -3535,7 +3546,7 @@ impl Estado {
                 truncated,
                 failed,
             } => self.programa_terminado(title_key, command, output, *truncated, *failed),
-            UiAction::FilesDropped { paths } => self.soltados(paths),
+            UiAction::FilesDropped { paths } => self.soltados(paths, backend, buzon),
             UiAction::WindowFocus { focused } => {
                 self.enfocada = *focused;
                 (self.aplicada(), Vec::new())

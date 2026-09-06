@@ -424,6 +424,70 @@ describe("Screen", () => {
     expect(destructivo).not.toBeNull();
   });
 
+  it("un destino a medio comprobar lo DICE, y sus avisos salen antes de los botones", () => {
+    const { screen } = montar();
+    const base = {
+      id: 4,
+      title_key: "modal-copy-title",
+      subject: null,
+      asker: null,
+      deadline: null,
+      destination: { text: "/casa/docs", hostile: false },
+      body: [{ text: "a.txt", hostile: false }],
+      overflow_note: "",
+      choices: [
+        { id: "confirm", label_key: "dialog-confirm", destructive: false },
+        { id: "cancel", label_key: "dialog-cancel", destructive: false },
+      ],
+      input: null,
+      input_hostile: false,
+      input_secret: false,
+    };
+
+    // Mientras se pregunta se DICE. Sin esta línea la ausencia de la de #164
+    // se leería como «este destino confina», que es una afirmación.
+    const preguntando = vista({});
+    preguntando.dialogs = [{ ...base, dest_check: { state: "checking" } }];
+    screen.paint(preguntando);
+    expect(document.querySelector(".dialog-checking")).not.toBeNull();
+    expect(document.querySelectorAll(".dialog-warning")).toHaveLength(0);
+
+    // Contestado y con avisos: uno por línea, cada uno como alerta.
+    const conAvisos = vista({});
+    conAvisos.dialogs = [
+      {
+        ...base,
+        dest_check: {
+          state: "done",
+          warnings: ["no cabe", "no puede confinar"],
+        },
+      },
+    ];
+    screen.paint(conAvisos);
+    const avisos = Array.from(document.querySelectorAll(".dialog-warning"));
+    expect(avisos).toHaveLength(2);
+    const primero = avisos[0] as HTMLElement;
+    expect(primero.textContent).toBe("no cabe");
+    expect(primero.getAttribute("role")).toBe("alert");
+    expect(document.querySelector(".dialog-checking")).toBeNull();
+    // Y ANTES de los botones: un aviso que aterrizara debajo movería lo que
+    // hay bajo el puntero de quien ya iba a pulsar.
+    const dialogo = document.querySelector('[role="dialog"]') as HTMLElement;
+    const clases = Array.from(dialogo.children).map((n) => n.className);
+    const ultimoAviso = clases.lastIndexOf("dialog-warning");
+    const botones = clases.indexOf("choices");
+    expect(ultimoAviso).toBeGreaterThanOrEqual(0);
+    expect(botones).toBeGreaterThan(ultimoAviso);
+
+    // Contestado y limpio: ni una línea. Que quepa y que confine no se
+    // anuncian — una línea en cada copia enseña a saltarse la línea.
+    const limpio = vista({});
+    limpio.dialogs = [{ ...base, dest_check: { state: "done", warnings: [] } }];
+    screen.paint(limpio);
+    expect(document.querySelectorAll(".dialog-warning")).toHaveLength(0);
+    expect(document.querySelector(".dialog-checking")).toBeNull();
+  });
+
   it("responder un diálogo manda su id, no una posición", () => {
     const { screen, enviadas } = montar();
     const v = vista({});

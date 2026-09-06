@@ -298,6 +298,12 @@ pub struct Falso {
     pub deshechas: std::sync::Mutex<Vec<String>>,
     /// Cuántas veces se ha pedido el catálogo de extensiones.
     pub catalogos_pedidos: std::sync::atomic::AtomicU64,
+    /// Cuántas veces se han enumerado los volúmenes.
+    ///
+    /// Lo cuenta para poder anclar un test NEGATIVO: «el diálogo no dice
+    /// nada» sigue verde si nadie preguntó, y entonces no prueba que callar
+    /// sea la respuesta — solo que no hubo pregunta.
+    pub volumenes_pedidos: std::sync::atomic::AtomicU64,
     /// Los cambios de gobierno pedidos, en orden (`approval:id:true`…).
     pub gobierno: std::sync::Mutex<Vec<String>>,
     /// Con qué falla un cambio de gobierno, si falla.
@@ -966,6 +972,8 @@ impl HostBackend for Falso {
     }
 
     fn volumes(&self) -> BoxFuture<'static, Result<Vec<norte_proto::methods::Volume>, Error>> {
+        self.volumenes_pedidos
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let vols = self.volumenes.clone();
         Box::pin(async move { Ok(vols) })
     }

@@ -230,6 +230,7 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,
@@ -315,6 +316,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,
@@ -384,6 +386,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,
@@ -582,6 +585,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,
@@ -660,6 +664,7 @@ impl Estado {
             input: Some(modo.clone()),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,
@@ -771,6 +776,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,

@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 53;
+export const BRIDGE_VERSION = 54;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -338,6 +338,15 @@ export interface DialogChoice {
   destructive: boolean;
 }
 
+/** Qué se sabe del DESTINO de una transferencia mientras se pregunta.
+ *
+ *  Tres estados y no una lista de avisos porque el silencio tiene que
+ *  significar UNA cosa: la ausencia de la línea de #164 significa «este
+ *  destino sujeta sus escrituras», así que «todavía no lo sé» no se puede
+ *  pintar igual que «lo pregunté y está limpio». */
+export type DestCheck =
+  { state: "not_asked" } | { state: "checking" } | { state: "done"; warnings: string[] };
+
 /** Una línea del cuerpo de un diálogo: lo que se pinta, y si difiere de lo real. */
 export interface DialogLine {
   text: string;
@@ -366,6 +375,9 @@ export interface DialogView {
   body: DialogLine[];
   /** El cuerpo enseña menos de lo que la operación toca, ya traducido. */
   overflow_note: string;
+  /** En qué punto está la comprobación del DESTINO. Ausente en un puente
+   *  anterior, y entonces es `not_asked`. */
+  dest_check?: DestCheck;
   choices: DialogChoice[];
   input: string | null;
   input_hostile: boolean;

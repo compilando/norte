@@ -8620,6 +8620,264 @@ async fn dos_paneles_con_destino_aparte(
     (h, despues)
 }
 
+/// El diálogo de copiar dice si NO CABE y si el destino no sabe confinar.
+///
+/// Las dos líneas son del terminal desde #149 y #164 y la ventana no tenía
+/// ninguna: te enterabas por una task fallida, o no te enterabas. Las dos
+/// preguntas son I/O, así que el diálogo se abre sin ellas y se rellenan
+/// cuando vuelven — el mismo reparto que hace el terminal en su bucle.
+///
+/// Fallan DISTINTO, y es deliberado: el espacio se traga el fallo («no lo sé»
+/// se dice callando) y el confinamiento no, porque ahí el silencio SIGNIFICA
+/// «este destino sujeta sus escrituras» y tragárselo sería afirmarlo sin
+/// saberlo.
+#[tokio::test]
+async fn el_dialogo_de_copia_avisa_de_espacio_y_de_confinamiento() {
+    let (h, mut sub, _b) = Box::pin(dos_paneles_en_disco(volumen_lleno(), sin_confinar())).await;
+    marca_los_ficheros(&h, &mut sub, 1).await;
+
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let _ = siguientes_dialogos(&mut sub).await;
+    asentar().await;
+
+    let avisos = foto_hasta(&h, &mut sub, "el diálogo con sus avisos", |s| {
+        // El ÚLTIMO, que es el que el renderer pinta: con uno solo coinciden,
+        // y así siguen coincidiendo el día que se apilen.
+        match &s.dialogs.last()?.dest_check {
+            norte_ui_host::dto::DestCheckView::Done { warnings } if !warnings.is_empty() => {
+                Some(warnings.clone())
+            }
+            _ => None,
+        }
+    })
+    .await;
+    assert_eq!(avisos.len(), 2, "las dos líneas: {avisos:?}");
+    assert!(
+        avisos[0].contains("libres"),
+        "la del espacio lleva los dos números: {avisos:?}"
+    );
+    assert!(
+        avisos[1].contains("symlink"),
+        "la del confinamiento dice de qué protege: {avisos:?}"
+    );
+}
+
+/// Y un destino que SÍ cabe y SÍ confina no dice nada.
+///
+/// La mitad del contrato que se olvida: una línea en cada copia es ruido, y
+/// el ruido enseña a saltarse la línea justo el día que dice algo.
+#[tokio::test]
+async fn un_destino_que_cabe_y_confina_no_dice_nada() {
+    let (h, mut sub, backend) =
+        Box::pin(dos_paneles_en_disco(volumen_de_sobra(), confinando())).await;
+    marca_los_ficheros(&h, &mut sub, 1).await;
+
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogos.len(), 1, "el diálogo se abre igual");
+    asentar().await;
+
+    let d = foto_hasta(&h, &mut sub, "el destino ya comprobado", |s| {
+        let d = s.dialogs.last()?;
+        matches!(d.dest_check, norte_ui_host::dto::DestCheckView::Done { .. }).then(|| d.clone())
+    })
+    .await;
+    assert_eq!(
+        d.dest_check,
+        norte_ui_host::dto::DestCheckView::Done {
+            warnings: Vec::new()
+        },
+        "nada que avisar, así que nada que decir"
+    );
+    // Y se PREGUNTÓ. Sin esto el test sigue verde si alguien borra el
+    // sondeo: callar por no tener nada que decir y callar por no haber
+    // mirado se pintan igual, que es justo lo que este campo separa.
+    assert!(
+        backend
+            .volumenes_pedidos
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 0,
+        "el silencio es una RESPUESTA, no una omisión"
+    );
+}
+
+/// Un volumen que no contesta no es un volumen lleno.
+///
+/// `free_bytes: None` significa «no contestó a tiempo», JAMÁS cero:
+/// confundirlos convierte cada montaje lento en una falsa alarma. La línea de
+/// confinamiento sí sale, que es la que no depende de esto.
+#[tokio::test]
+async fn un_volumen_que_no_contesta_no_inventa_una_alarma() {
+    let (h, mut sub, _b) = Box::pin(dos_paneles_en_disco(volumen_mudo(), sin_confinar())).await;
+    marca_los_ficheros(&h, &mut sub, 1).await;
+
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let _ = siguientes_dialogos(&mut sub).await;
+    asentar().await;
+
+    let avisos = foto_hasta(&h, &mut sub, "el diálogo con su aviso", |s| {
+        // El ÚLTIMO, que es el que el renderer pinta: con uno solo coinciden,
+        // y así siguen coincidiendo el día que se apilen.
+        match &s.dialogs.last()?.dest_check {
+            norte_ui_host::dto::DestCheckView::Done { warnings } if !warnings.is_empty() => {
+                Some(warnings.clone())
+            }
+            _ => None,
+        }
+    })
+    .await;
+    assert_eq!(
+        avisos.len(),
+        1,
+        "solo la de confinar: del espacio no consta nada ({avisos:?})"
+    );
+    assert!(avisos[0].contains("symlink"), "{avisos:?}");
+}
+
+fn volumen_de_disco(free: Option<u64>) -> Vec<norte_proto::methods::Volume> {
+    vec![norte_proto::methods::Volume {
+        mount: VPath::parse("file:///").expect("wire"),
+        label: None,
+        fs_type: "ext4".to_owned(),
+        kind: norte_proto::methods::VolumeKind::Fixed,
+        total_bytes: Some(1_000_000),
+        free_bytes: free,
+        read_only: false,
+    }]
+}
+
+/// Un disco sin sitio: los ficheros del doble ocupan un byte cada uno, así
+/// que cero libres es «no cabe» sin necesidad de fabricar gigas.
+fn volumen_lleno() -> Vec<norte_proto::methods::Volume> {
+    volumen_de_disco(Some(0))
+}
+
+fn volumen_de_sobra() -> Vec<norte_proto::methods::Volume> {
+    volumen_de_disco(Some(1_000_000))
+}
+
+fn volumen_mudo() -> Vec<norte_proto::methods::Volume> {
+    volumen_de_disco(None)
+}
+
+fn sin_confinar() -> norte_proto::Capabilities {
+    norte_proto::Capabilities {
+        flags: norte_proto::CapabilityFlags::CASE_SENSITIVE,
+        max_path: None,
+    }
+}
+
+fn confinando() -> norte_proto::Capabilities {
+    norte_proto::Capabilities {
+        flags: norte_proto::CapabilityFlags::CASE_SENSITIVE
+            | norte_proto::CapabilityFlags::CONFINED_WRITES,
+        max_path: None,
+    }
+}
+
+/// Dos listados sobre `file://`, que es el único esquema que cuelga de un
+/// volumen de esta máquina: un `mem://` no tiene espacio libre que mirar, así
+/// que estos tests no se pueden escribir sobre el árbol de siempre.
+async fn dos_paneles_en_disco(
+    volumenes: Vec<norte_proto::methods::Volume>,
+    caps_destino: norte_proto::Capabilities,
+) -> (UiHost, norte_ui_host::UiSubscription, Arc<Falso>) {
+    let mut f = Falso::default();
+    f.pon(
+        "file:///casa",
+        vec![
+            (b"docs".to_vec(), true),
+            (b"uno".to_vec(), false),
+            (b"dos".to_vec(), false),
+        ],
+    );
+    f.pon("file:///casa/docs", Vec::new());
+    f.volumenes = volumenes;
+    f.capacidades
+        .insert("file:///casa/docs".to_owned(), caps_destino);
+    let backend = Arc::new(f);
+    let (h, snap) = host_ortodoxo_en(Arc::clone(&backend), "file:///casa").await;
+    let mut sub = h.subscribe();
+    // El hueco 2 baja a `docs`, que es el destino del rol.
+    let b2 = listado_de(&snap, 2);
+    let docs = b2
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("el directorio está");
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Activate {
+        slot_id: 2,
+        key: docs.key,
+        generation: b2.generation,
+    })
+    .await
+    .expect("host vivo");
+    esperar_foto(&h, &mut sub, "el destino aterriza en docs", |f| {
+        listado_de(f, 2).path_display.ends_with("/casa/docs")
+    })
+    .await;
+    h.dispatch(UiAction::FocusSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    (h, sub, backend)
+}
+
+/// Marca los FICHEROS de un hueco y deja el directorio fuera: con un
+/// directorio dentro no hay total que sumar (no dice cuánto ocupa) y la
+/// pregunta del espacio no llega a hacerse.
+async fn marca_los_ficheros(h: &UiHost, sub: &mut norte_ui_host::UiSubscription, slot: u32) {
+    let foto = foto(h, sub).await;
+    let b = listado_de(&foto, slot);
+    let claves: Vec<_> = b
+        .rows
+        .iter()
+        .filter(|r| r.display_name == "uno" || r.display_name == "dos")
+        .map(|r| r.key)
+        .collect();
+    assert!(!claves.is_empty(), "hay ficheros que marcar");
+    for key in claves {
+        h.dispatch(UiAction::ToggleMark {
+            slot_id: slot,
+            key,
+            generation: b.generation,
+        })
+        .await
+        .expect("host vivo");
+    }
+}
+
+/// Como [`host_con_layout`] con `orthodox`, pero arrancando donde se diga:
+/// los volúmenes solo responden por `file://`.
+async fn host_ortodoxo_en(
+    backend: Arc<Falso>,
+    inicio: &str,
+) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: VPath::parse(inicio).expect("vpath"),
+        initial_dir_pedido: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca")
+}
+
 /// F5 no copia: abre la confirmación, y esa confirmación DICE a dónde va.
 ///
 /// En una ventana con dos listados el destino no es evidente —no hay «el
