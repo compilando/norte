@@ -178,10 +178,13 @@ fn pane_title(
     // listado incompleto jamás es silencioso.
     if pane.loading() {
         use std::fmt::Write as _;
+        // La FRASE la redacta el crate compartido, que es de donde la coge
+        // también la cabecera de la ventana; los corchetes son de esta
+        // cabecera y se quedan aquí.
         let _ = write!(
             title,
             " [{}]",
-            norte_i18n::ta("pane-loading", &[("n", &pane.entries().len().to_string())])
+            norte_frontend::notes::filling(true, pane.entries().len(), norte_i18n::active())
         );
     }
     // Un pane que NO se pudo listar al restaurar la sesión lo dice mientras
@@ -190,7 +193,11 @@ fn pane_title(
     // misma razón — un listado que no es el listado jamás es silencioso.
     if pane.unlisted {
         use std::fmt::Write as _;
-        let _ = write!(title, " [{}]", norte_i18n::t("pane-unlisted"));
+        let _ = write!(
+            title,
+            " [{}]",
+            norte_frontend::notes::unlisted(true, norte_i18n::active())
+        );
     }
     // El DESTINO se marca en el cromo, y solo cuando hace falta: con dos
     // paneles el destino es el otro y nadie necesita que se lo digan, pero a

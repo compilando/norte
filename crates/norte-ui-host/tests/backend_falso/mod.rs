@@ -298,6 +298,19 @@ pub struct Falso {
     pub deshechas: std::sync::Mutex<Vec<String>>,
     /// Cuántas veces se ha pedido el catálogo de extensiones.
     pub catalogos_pedidos: std::sync::atomic::AtomicU64,
+    /// Con qué DESENLACE termina una búsqueda.
+    ///
+    /// El doble siempre las completaba, así que «falló» y «se canceló» no se
+    /// podían escribir como test — que es exactamente por lo que la ventana
+    /// pintaba las tres igual («N hallazgos») sin que nada se quejara.
+    pub desenlace_de_busqueda: Option<norte_proto::TaskState>,
+    /// La búsqueda ni siquiera se ENCOLA, y con este error.
+    ///
+    /// Es otro camino que el anterior: ahí hay Task y su progreso trae el
+    /// desenlace; aquí no hay Task, así que no hay progreso que lo traiga —
+    /// y sin este mando ese camino no se podía escribir como test, que es
+    /// por lo que la vista se quedaba diciendo «buscando…» para siempre.
+    pub error_de_busqueda: Option<Error>,
     /// Cuántas veces se han enumerado los volúmenes.
     ///
     /// Lo cuenta para poder anclar un test NEGATIVO: «el diálogo no dice
@@ -831,7 +844,14 @@ impl HostBackend for Falso {
             .expect("mutex de búsquedas")
             .push(patron.clone());
         self.latido();
+        if let Some(e) = self.error_de_busqueda.clone() {
+            return Box::pin(async move { Err(e) });
+        }
         let hallazgos = self.hallazgos.get(&patron).cloned().unwrap_or_default();
+        let desenlace = self
+            .desenlace_de_busqueda
+            .clone()
+            .unwrap_or(norte_proto::TaskState::Completed);
         let cancelaciones = Arc::clone(&self.cancelaciones);
         Box::pin(async move {
             let id = norte_proto::TaskId::new(77);
@@ -873,11 +893,13 @@ impl HostBackend for Falso {
                         })
                         .await;
                 }
-                // Y termina: la vista deja de decir «buscando…».
+                // Y termina: la vista deja de decir «buscando…». CON su
+                // desenlace, que no es cosmética — «terminó», «la pararon» y
+                // «se rompió» dicen tres cosas distintas sobre el disco.
                 let _ = ptx.send(norte_proto::TaskProgress {
                     task_id: id,
                     kind: norte_proto::TaskKind::Search,
-                    state: norte_proto::TaskState::Completed,
+                    state: desenlace,
                     bytes_done: 0,
                     bytes_total: None,
                     entries_done: 1,

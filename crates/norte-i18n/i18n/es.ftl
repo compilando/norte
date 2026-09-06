@@ -1518,10 +1518,11 @@ hostile-name = ⚠ nombre alterado
 # mensajes porque contestan preguntas distintas: un directorio sin
 # entradas, y un filtro que no casó ninguna.
 listing-empty = vacío
-# El provider no pudo con todas: sin permiso para statearlas, o por
-# encima de un tope suyo. Se DICE, porque lo que falta no está y no hay
-# ninguna fila donde el lector pueda tropezarse con ello.
-listing-skipped = se saltaron { $n } entradas
+# Lo que el provider se saltó lo dice `status-archive-skipped`, que es de los
+# dos frontends (`norte_frontend::notes::skipped`). Aquí hubo una segunda
+# redacción, sin el ⚠ que la hace leerse como aviso, y era la que pintaba la
+# ventana: dos claves para un hecho es cómo dos superficies acaban diciendo
+# cosas distintas de lo mismo.
 palette-empty = nada casa con lo que has tecleado
 gui-menu-acts-on = actúa sobre { $target }
 gui-menu-target-marks = { $n } elementos marcados

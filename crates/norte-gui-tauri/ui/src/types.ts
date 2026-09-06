@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 54;
+export const BRIDGE_VERSION = 55;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -46,6 +46,10 @@ export interface LayoutView {
    *  aun así hay que enseñar que está: una ventana con tres pestañas que solo
    *  muestra la de delante esconde trabajo abierto. */
   tabs: TabGroupView[];
+  /** Si la marca de DESTINO dice algo con los listados que hay a la vista.
+   *  Que el rol exista y que se pinte son dos preguntas: `role` es el modelo
+   *  y esto es la pintura, calculada en Rust para no repetir el umbral. */
+  mark_target?: boolean;
 }
 
 export interface TabGroupView {
@@ -131,6 +135,16 @@ export interface BrowserSlotView {
    * hay no puede quedarse mudo en cuanto el lector cambie de tecla.
    */
   hidden_note: string;
+  /** Los nombres se REINTERPRETAN con otra codificacion (#57). Vacio = no.
+   *  Permanente mientras dure: lo que se pinta no son los bytes que hay en el
+   *  disco, y eso hay que poder saberlo al decidir copiar o borrar algo. */
+  names_note?: string;
+  /** El listado se esta RELLENANDO todavia, y cuantas van. Vacio = entero. */
+  filling_note?: string;
+  /** Marcas que el ultimo refresco descarto porque su entrada ya no esta. */
+  pruned_note?: string;
+  /** Cuantas hay marcadas y cuanto pesan, ya dicho. Vacio = sin marcas. */
+  marked_note?: string;
   columns: ColumnHeader[];
   state: SlotState;
   quick: QuickView | null;
@@ -1090,6 +1104,10 @@ export type ViewChange =
       path_hostile: boolean;
       skipped_note: string;
       hidden_note: string;
+      names_note?: string;
+      filling_note?: string;
+      pruned_note?: string;
+      marked_note?: string;
       marks: number;
     }
   | { change: "slot_state"; slot_id: number; state: SlotState }

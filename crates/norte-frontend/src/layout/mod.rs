@@ -37,7 +37,7 @@ pub use by_slot::BySlot;
 pub use focus::{focus_next, focus_prev};
 pub use kinds::{KindDecl, KindRegistry};
 pub use resolve::{Resolved, has_room_to_split, resolve};
-pub use roles::{Roles, resolve_follow};
+pub use roles::{Roles, resolve_follow, target_worth_marking};
 pub use store::SlotStore;
 pub use tree::{Bindings, Dir, Edge, Follow, KindId, Node, Params, Rect, RoleId, Size, SlotId};
 

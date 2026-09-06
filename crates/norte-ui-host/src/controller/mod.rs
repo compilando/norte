@@ -814,6 +814,13 @@ enum Fondo {
     /// Llega por su cuenta y no dentro del primer lote porque puede no haber
     /// primer lote: el core no manda lotes vacíos.
     BusquedaViva(u64, norte_proto::TaskId),
+    /// La búsqueda de esta época NO llegó a encolarse, y con qué error.
+    ///
+    /// Ahí no hay Task, así que el desenlace no puede llegar por el progreso:
+    /// sin esto la vista se quedaba diciendo «buscando…» para siempre sobre
+    /// una búsqueda que no existe, mientras el error pasaba por la barra y se
+    /// lo llevaba la siguiente tecla.
+    BusquedaRota(u64, Box<Error>),
     /// Los volúmenes, pedidos por la BARRA LATERAL.
     ///
     /// Aparte de los del selector por el mismo motivo que los dos catálogos
@@ -1687,11 +1694,25 @@ struct Busqueda {
     semantica: bool,
     /// Dónde está el cursor.
     cursor: usize,
-    /// Sigue corriendo.
-    viva: bool,
+    /// En qué acabó, o que sigue corriendo.
+    ///
+    /// Un `bool` decía solo si sigue viva, y entonces TODO desenlace se
+    /// pintaba «N hallazgos» — o sea que una búsqueda que falló al segundo
+    /// directorio y otra que recorrió el árbol entero se leían igual. Eso no
+    /// es una imprecisión de la interfaz: es una afirmación falsa sobre el
+    /// disco, y quien la lee deja de buscar.
+    ///
+    /// El tipo es del crate COMPARTIDO, y con él la precedencia de las
+    /// frases: los dos frontends la decidían aparte y ya discrepaban en el
+    /// par «cancelada justo en el tope» (ADR 0077).
+    desenlace: Desenlace,
     /// El tope que se pidió: alcanzarlo significa que hay más.
     tope: u32,
 }
+
+/// En qué acabó una búsqueda. El tipo y la precedencia de sus frases son del
+/// crate compartido: aquí estaban escritos aparte y ya discrepaban.
+use norte_frontend::search_status::Outcome as Desenlace;
 
 /// Un diálogo abierto y lo que hará si se confirma.
 struct Dialogo {

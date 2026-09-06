@@ -235,6 +235,68 @@ describe("Screen", () => {
     expect(primero.dataset["role"]).toBe("active");
   });
 
+  it("marca el destino solo cuando el host dice que dice algo", () => {
+    const { screen, root } = montar();
+    // El UMBRAL lo decide Rust (`layout::target_worth_marking`) y llega en
+    // `mark_target`: contarlo aquí sería repetir en TypeScript un número que
+    // ya vive en el crate compartido, o sea la misma decisión en dos sitios.
+    // Lo que este test fija es que el renderer OBEDECE la bandera y no se
+    // inventa el rol a partir de `role`.
+    const conBandera = (marcar: boolean): ViewSnapshot => {
+      const v = vista({});
+      v.layout.mark_target = marcar;
+      v.layout.placements = [
+        { slot_id: 1, x: 0, y: 0, width: 20, height: 10, role: "active", focus_index: 0 },
+        { slot_id: 4, x: 0, y: 0, width: 20, height: 10, role: "target", focus_index: 1 },
+      ];
+      return v;
+    };
+
+    // El rol viaja igual —es el modelo— y aun así no se pinta: con dos
+    // listados el destino es «el otro», y una marca que sale siempre deja de
+    // leerse justo el día que hay tres y hace falta (ADR 0058 D7).
+    screen.paint(conBandera(false));
+    expect(root.querySelectorAll('[data-role="target"]')).toHaveLength(0);
+    expect(root.querySelectorAll('[data-role="active"]')).toHaveLength(1);
+
+    screen.paint(conBandera(true));
+    expect(root.querySelectorAll('[data-role="target"]')).toHaveLength(1);
+  });
+
+  it("apila en la cabecera todo lo que dice que el listado no es lo que parece", () => {
+    const { screen, root } = montar();
+    screen.paint(
+      vista({
+        filling_note: "cargando… (3)",
+        skipped_note: "⚠ 2 entradas omitidas",
+        names_note: "nombres: cp866",
+        pruned_note: "1 marca caída",
+        hidden_note: "3 ocultas",
+        marked_note: "2 marcadas, 4,0 kB",
+      }),
+    );
+    const notas = Array.from(
+      root.querySelectorAll(
+        ".slot-filling, .slot-skipped, .slot-names, .slot-pruned, .slot-hidden, .slot-marked",
+      ),
+    );
+    expect(notas).toHaveLength(6);
+    // Cada una en SU nodo: pegadas en uno solo, un lector de pantalla lee una
+    // frase sola y el recorte se las lleva todas juntas.
+    expect(notas.map((n) => n.className)).toEqual([
+      "slot-filling",
+      "slot-skipped",
+      "slot-names",
+      "slot-pruned",
+      "slot-hidden",
+      "slot-marked",
+    ]);
+    // El ORDEN es la decisión: los AVISOS antes que el CONTADOR de marcas. El
+    // sitio se acaba, y un aviso recortado deja de avisar mientras que un
+    // contador recortado solo deja de contar.
+    expect(notas[notas.length - 1]?.className).toBe("slot-marked");
+  });
+
   it("no pinta cien mil filas para enseñar cuarenta", () => {
     const { screen, root } = montar();
     const rows = Array.from({ length: 40 }, (_, i) =>

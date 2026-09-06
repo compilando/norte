@@ -391,33 +391,58 @@ impl Estado {
             slot_id: id,
             path_display: clamp_display(path),
             path_hostile: hostil,
-            hidden_note: match hueco.pane.hidden_count() {
-                0 => String::new(),
-                n => clamp_display(norte_i18n::ta_in(
-                    self.lang,
-                    "status-hidden",
-                    &[("n", &n.to_string())],
-                )),
-            },
-            skipped_note: hueco.pane.skipped().map_or_else(String::new, |n| {
-                clamp_display(norte_i18n::ta_in(
-                    self.lang,
-                    "listing-skipped",
-                    &[("n", &n.to_string())],
-                ))
-            }),
+            // Las seis las REDACTA el crate compartido, que es donde el
+            // terminal las coge también. Aquí estaban escritas a mano y ya
+            // habían divergido: la de omitidas usaba otra clave, sin el ⚠ que
+            // la hace leerse como aviso, y salía TAMBIÉN con cero — o sea que
+            // anunciaba un listado incompleto que estaba completo, gastando la
+            // única señal que hay para cuando de verdad falta algo.
+            hidden_note: clamp_display(norte_frontend::notes::hidden(
+                hueco.pane.hidden_count(),
+                self.lang,
+            )),
+            skipped_note: clamp_display(norte_frontend::notes::skipped(
+                hueco.pane.skipped(),
+                self.lang,
+            )),
+            names_note: clamp_display(norte_frontend::notes::names_encoding(
+                hueco.pane.name_encoding(),
+                self.lang,
+            )),
+            filling_note: clamp_display(norte_frontend::notes::filling(
+                hueco.pane.loading(),
+                hueco.pane.entries().len(),
+                self.lang,
+            )),
+            pruned_note: clamp_display(norte_frontend::notes::pruned_marks(
+                hueco.pane.pruned_marks(),
+                self.lang,
+            )),
+            marked_note: clamp_display(norte_frontend::notes::marked(
+                hueco.pane.marks_len(),
+                hueco.pane.marked_bytes(),
+                hueco.pane.marked_dirs(),
+                self.lang,
+            )),
             marks: hueco.pane.marks_len() as u64,
         }
     }
 
     pub(super) fn browser(&self, id: u32, hueco: &Hueco) -> BrowserSlotView {
+        // SIN `..`: la foto tiene que llevar lo mismo que el parche, y un
+        // comodín aquí es exactamente cómo un campo nuevo de la cabecera se
+        // queda fuera del primer pintado sin que nada se queje.
         let crate::dto::ViewChange::BrowserHeader {
+            slot_id: _,
             path_display,
             path_hostile,
             hidden_note,
             skipped_note,
+            names_note,
+            filling_note,
+            pruned_note,
+            marked_note,
             marks,
-            ..
         } = self.cabecera_de(id, hueco)
         else {
             unreachable!("`cabecera_de` construye esa variante")
@@ -435,6 +460,10 @@ impl Estado {
             marks,
             hidden_note,
             skipped_note,
+            names_note,
+            filling_note,
+            pruned_note,
+            marked_note,
             columns: self.cabeceras(hueco),
             state: hueco.estado.clone(),
             quick: hueco.pane.quick().map(|q| crate::dto::QuickView {

@@ -2370,6 +2370,43 @@ body {
   margin-left: 8px;
 }
 
+/* Las otras cuatro notas de la cabecera, con la misma forma que las dos de
+   arriba. Sin regla propia eran items flex sin separación —«⚠ 2 entradas
+   omitidasnombres: cp866»— y encogibles, o sea que se recortaban antes que
+   la ruta, que es justo al revés de lo que hay que hacer.
+
+   `flex: none` es la mitad importante: LA RUTA es lo único que cede
+   (`.title-path` es el único `flex: 0 1 auto`), porque un aviso recortado
+   deja de avisar mientras que una ruta recortada sigue diciendo dónde estás.
+   Y `text-overflow` para que, cuando ya no quepa ni así, se vea que se cortó
+   en vez de desaparecer en silencio. */
+.slot-filling,
+.slot-names,
+.slot-pruned,
+.slot-marked {
+  flex: none;
+  margin-left: 8px;
+  unicode-bidi: isolate;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Reinterpretación de nombres y marcas caídas van en el color de AVISO. Lo
+   que se pinta no son los bytes que hay en el disco, y una selección que se
+   vació redirige la siguiente operación en masa al cursor: las dos dicen que
+   la pantalla no describe lo que el lector cree. */
+.slot-names,
+.slot-pruned {
+  color: var(--warning-fg);
+}
+
+/* Rellenando y lo marcado son informativos: uno es temporal y el otro es un
+   contador de algo que el lector acaba de hacer. */
+.slot-filling,
+.slot-marked {
+  color: var(--title-fg);
+}
+
 /* --- El selector de columnas ------------------------------------------- */
 
 #columns[data-open="true"] {

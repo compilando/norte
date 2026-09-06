@@ -1469,6 +1469,24 @@ pub struct LayoutView {
     /// ventana con tres pestañas que solo muestra la de delante y no dice que
     /// hay otras dos es una ventana que esconde trabajo abierto.
     pub tabs: Vec<TabGroupView>,
+    /// Si la marca de DESTINO dice algo con los listados que hay a la vista.
+    ///
+    /// Que el rol EXISTA y que se PINTE son dos preguntas. La primera la
+    /// contesta [`SlotPlacement::role`], que es el modelo; ésta es la
+    /// segunda, y viaja calculada porque la decide el crate compartido
+    /// (`layout::target_worth_marking`) y no el renderer: escrita allí era un
+    /// número repetido en TypeScript, o sea la misma decisión en dos sitios
+    /// que esta rama existe para dejar de tener (ADR 0077).
+    ///
+    /// Con dos listados el destino es «el otro» y nadie necesita que se lo
+    /// digan; una marca que sale siempre deja de leerse, y entonces no está
+    /// el día que hay tres y una copia hacia el que el motor desempate solo
+    /// es pérdida de datos silenciosa (ADR 0058 D7).
+    ///
+    /// `#[serde(default)]`: ausente = `false`, que es no marcar. La dirección
+    /// segura, porque la marca de más es la que enseña a ignorarla.
+    #[serde(default)]
+    pub mark_target: bool,
 }
 
 /// Un grupo de pestañas y cuál está delante.
@@ -1806,6 +1824,30 @@ pub struct BrowserSlotView {
     /// y traducido aquí por lo mismo — «1 oculta» y «3 ocultas» no se dicen
     /// igual en todos los idiomas.
     pub hidden_note: String,
+    /// Los nombres se REINTERPRETAN con otra codificación (#57). Vacío = no.
+    ///
+    /// La misma disciplina que las dos de arriba, y por eso está aquí y no en
+    /// la barra: lo que se pinta no son los bytes que hay en el disco, y eso
+    /// hay que poder saberlo en el momento de decidir copiar o borrar algo.
+    /// El mensaje del toggle se lo lleva la siguiente tecla.
+    ///
+    /// `#[serde(default)]` NO promete compatibilidad con un puente anterior
+    /// —el renderer rechaza cualquier versión que no sea la suya—: está para
+    /// que las fixtures y los round-trips no tengan que enumerar campos que
+    /// casi siempre van vacíos.
+    #[serde(default)]
+    pub names_note: String,
+    /// El listado se está RELLENANDO todavía, y cuántas van. Vacío = entero.
+    #[serde(default)]
+    pub filling_note: String,
+    /// Marcas que el último refresco descartó porque su entrada ya no está.
+    /// Vacío = no cayó ninguna.
+    #[serde(default)]
+    pub pruned_note: String,
+    /// Cuántas entradas hay marcadas y cuánto pesan, ya dicho. Vacío = sin
+    /// marcas.
+    #[serde(default)]
+    pub marked_note: String,
     /// Las cabeceras de las columnas configuradas, en su orden. Incluye el
     /// nombre, que en las filas viaja aparte (`display_name`).
     pub columns: Vec<ColumnHeader>,
@@ -2595,12 +2637,38 @@ pub enum ViewChange {
         skipped_note: String,
         /// Lo que la ocultación aparta. Vacío si no aparta nada.
         hidden_note: String,
-        /// Cuántas entradas hay marcadas.
+        /// Los nombres se REINTERPRETAN con otra codificación (#57). Vacío si
+        /// no.
         ///
-        /// Hoy el renderer no la pinta, y por eso viaja: el campo existe en
-        /// la foto y se quedaba rancio en cada gesto de marcado, así que el
-        /// día que alguien pinte «3 marcados» tendría el número mal sin haber
-        /// tocado nada.
+        /// Permanente mientras dure, como en el terminal: lo que se pinta no
+        /// son los bytes que hay en el disco, y eso hay que poder saberlo en
+        /// el momento de decidir copiar o borrar algo — no solo en el mensaje
+        /// del toggle, que la siguiente tecla se lleva.
+        names_note: String,
+        /// El listado se está RELLENANDO todavía, y cuántas van. Vacío si ya
+        /// está entero.
+        ///
+        /// Un listado incompleto jamás es silencioso: sin esto la pantalla
+        /// afirma que eso es todo lo que hay, que es precisamente lo que
+        /// todavía no se sabe.
+        filling_note: String,
+        /// Marcas que el último refresco descartó porque su entrada ya no
+        /// está. Vacío si no cayó ninguna.
+        ///
+        /// El más grave de los avisos de esta cabecera: con la selección
+        /// vacía el embudo del operando cae al CURSOR, así que callarlo
+        /// redirige la siguiente operación en masa a algo que nadie marcó.
+        pruned_note: String,
+        /// Cuántas entradas hay marcadas y cuánto pesan, ya dicho. Vacío sin
+        /// marcas: quien no marca no gana ruido.
+        marked_note: String,
+        /// Cuántas entradas hay marcadas, en crudo.
+        ///
+        /// Sigue viajando al lado de [`Self::BrowserHeader::marked_note`] y
+        /// no es una duplicación: la frase es para PINTAR y este número es
+        /// para decidir (un renderer que quiera marcar el hueco, contar, o
+        /// habilitar algo), y derivar un número de una frase traducida es lo
+        /// que este DTO existe para no obligar a nadie a hacer.
         marks: u64,
     },
     /// El estado de un hueco cambió (cargando, error, listo).

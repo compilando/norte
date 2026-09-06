@@ -15,40 +15,22 @@ use norte_i18n::{t, ta};
 /// Extraído de `draw_status` (que ya rozaba `too_many_lines`) — pura
 /// composición de texto, sin efecto de render.
 pub(crate) fn marks_status_segments(pane: &Pane) -> (String, String) {
-    // Un refresh que se comió marcas JAMÁS es silencioso: con la selección
-    // vacía, `marked_paths` cae al cursor, así que callarlo redirigiría la
-    // siguiente op en masa a algo que nadie marcó.
-    let pruned = if pane.pruned_marks() == 0 {
-        String::new()
-    } else {
-        format!(
-            "  {}",
-            ta(
-                "status-marks-pruned",
-                &[("n", &pane.pruned_marks().to_string())]
-            )
-        )
-    };
-    // Cuántas marcas y cuánto pesan. Se calla con 0 marcas — la barra no
-    // gana ruido para quien no marca nada.
-    let marked = if pane.marks_len() == 0 {
-        String::new()
-    } else {
-        let n = pane.marks_len().to_string();
-        let size = norte_frontend::human_bytes(pane.marked_bytes());
-        let dirs = pane.marked_dirs();
-        if dirs == 0 {
-            format!("  {}", ta("status-marked", &[("n", &n), ("size", &size)]))
-        } else {
-            format!(
-                "  {}",
-                ta(
-                    "status-marked-with-dirs",
-                    &[("n", &n), ("size", &size), ("dirs", &dirs.to_string())],
-                )
-            )
-        }
-    };
+    // Las dos frases las REDACTA el crate compartido: la ventana pone las
+    // mismas en su cabecera, y dos redacciones del mismo hecho es de donde
+    // salió media auditoría de paridad (ADR 0077). Aquí queda el espaciado,
+    // que sí es de esta barra.
+    let sangrado = |s: String| if s.is_empty() { s } else { format!("  {s}") };
+    let lang = norte_i18n::active();
+    let pruned = sangrado(norte_frontend::notes::pruned_marks(
+        pane.pruned_marks(),
+        lang,
+    ));
+    let marked = sangrado(norte_frontend::notes::marked(
+        pane.marks_len(),
+        pane.marked_bytes(),
+        pane.marked_dirs(),
+        lang,
+    ));
     (marked, pruned)
 }
 
@@ -161,32 +143,23 @@ pub(crate) fn draw_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         // #93: el contenedor omitió entradas de su índice — el listado que
         // se ve NO es todo lo que el archivo contiene. Persistente mientras
         // el pane esté dentro (paralelo del badge hostil, jamás silencioso).
-        let omitidas = match pane.skipped() {
-            Some(n) if n > 0 => {
-                format!(
-                    "  {}",
-                    ta("status-archive-skipped", &[("n", &n.to_string())])
-                )
-            }
-            _ => String::new(),
-        };
+        let sangrado = |s: String| if s.is_empty() { s } else { format!("  {s}") };
+        let lang = norte_i18n::active();
+        let omitidas = sangrado(norte_frontend::notes::skipped(pane.skipped(), lang));
         // #57: modo de reinterpretación activo — PERSISTENTE mientras dure
         // (los nombres pintados no son los bytes; el usuario debe saberlo
         // en todo momento, no solo en el mensaje del toggle).
-        let nombres = match pane.name_encoding() {
-            Some(enc) => format!("  {}", ta("status-names-encoding", &[("enc", enc.label())])),
-            None => String::new(),
-        };
+        let nombres = sangrado(norte_frontend::notes::names_encoding(
+            pane.name_encoding(),
+            lang,
+        ));
         // #107: ocultación activa con entradas apartadas — misma disciplina
         // que `omitidas`: un listado que enseña menos de lo que hay jamás
         // es silencioso. Se calla con 0 apartadas (dir sin dotfiles) y con
         // la ocultación apagada. Va DETRÁS de `pruned` en la línea (#107
         // review MINOR-3): ocultar con marcas produce ambos, y el aviso de
         // poda es el que no puede recortarse primero.
-        let ocultas = match pane.hidden_count() {
-            0 => String::new(),
-            n => format!("  {}", ta("status-hidden", &[("n", &n.to_string())])),
-        };
+        let ocultas = sangrado(norte_frontend::notes::hidden(pane.hidden_count(), lang));
         // Review MAJOR M3: los AVISOS (`omitidas` — listado incompleto,
         // "jamás silencioso" — y `nombres` — el badge de reinterpretación,
         // "el usuario debe saberlo en todo momento") van ANTES que el

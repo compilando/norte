@@ -193,7 +193,13 @@ use serde::{Deserialize, Serialize};
 ///   de #164 y no lo diría — y la ausencia de esa línea SIGNIFICA que el
 ///   destino confina. El webview va embebido en el binario, así que ese
 ///   emparejamiento es lo que sale de olvidarse de `just link-gui`.
-pub const BRIDGE_VERSION: u32 = 54;
+/// - **55**: la cabecera de un listado lleva las CUATRO marcas que le
+///   faltaban y que el terminal tiene desde siempre: que se está rellenando
+///   —y cuántas van—, que los nombres se reinterpretan (#57), que un refresco
+///   se comió marcas, y cuántas hay marcadas y cuánto pesan. Todas bajo la
+///   misma regla: un listado que enseña menos de lo que hay, o que no enseña
+///   lo que hay, jamás es silencioso.
+pub const BRIDGE_VERSION: u32 = 55;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

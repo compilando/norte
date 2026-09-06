@@ -132,6 +132,13 @@ export class Session {
         slot.path_hostile = c.path_hostile;
         slot.skipped_note = c.skipped_note;
         slot.hidden_note = c.hidden_note;
+        // Las cuatro nuevas por el mismo camino: una cabecera que solo se
+        // moviera con la foto entera dejaria el aviso con la lectura vieja,
+        // que es el bug que este parche existe para no repetir.
+        slot.names_note = c.names_note ?? "";
+        slot.filling_note = c.filling_note ?? "";
+        slot.pruned_note = c.pruned_note ?? "";
+        slot.marked_note = c.marked_note ?? "";
         slot.marks = c.marks;
         return true;
       }

@@ -28,6 +28,35 @@ independently through `PROTOCOL_VERSION`.
   prevent. The window already knew `archive_root_for`: it uses it to unpack
   and to test a container, just not to open one. The decision now lives once,
   in `norte_frontend::nav::enter_target`.
+- **A search that FAILED read as one that finished with no hits.** The host
+  marked every terminal state as "no longer running" and painted
+  `search-status-done`, so a search that broke on the second directory and one
+  that walked the whole tree said the same thing: "0 hits". That is not an
+  imprecision in the UI — it is a false claim about the disk, and whoever
+  reads it stops looking. The outcome is now a four-state value and the
+  sentence comes from the terminal's own family, failure and cancellation
+  included. A search that never got queued at all is fixed on the way: with no
+  task there is no progress to carry the outcome, so the view sat on
+  "searching…" forever while the error went past in the status bar.
+- **Everything that says a listing is not what it looks like now lives in one
+  place** (`norte_frontend::notes`): entries the provider skipped, names being
+  reinterpreted, marks a refresh dropped, what is marked, a listing still
+  filling, what hiding puts aside. Each frontend wrote its own wording and
+  they had already drifted — the window used a key of its own ("N entries were
+  skipped", without the ⚠ that makes it read as a warning) and painted it
+  **also when N was zero**, announcing an incomplete listing that was
+  complete and spending the one signal there is for when something really is
+  missing. The window's header gains the four notes it never had (bridge 55),
+  in the terminal's order: the warnings before the counter, because a
+  truncated warning stops warning while a truncated counter only stops
+  counting.
+- **The destination badge is back to meaning something.** With two panes the
+  destination is "the other one" and the window marked it anyway; a mark that
+  shows up always stops being read, and then it is not there with three panes,
+  where a copy toward whichever slot the engine breaks the tie on is silent
+  data loss (ADR 0058 D7). The count is now one shared decision, applied by
+  the renderer — the DTO's role stays the model, and telling the host to lie
+  about it broke three tests that read it as one.
 - **The window's copy dialog never said "this will not fit" or "this
   destination cannot confine writes".** Both lines are the terminal's since
   #149 and #164 and the window had neither: you found out from a failed task,

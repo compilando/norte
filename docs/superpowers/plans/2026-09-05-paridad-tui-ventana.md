@@ -93,9 +93,11 @@ informe original; **A** salvo donde se diga.
 3. **Borrado permanente.** «⚠ aquí NO hay papelera: esto no se deshace» es
    solo del terminal. La ventana compensa con un botón destructivo; ninguna
    de las dos tiene la señal de la otra.
-4. **Una búsqueda que FALLÓ se lee como una terminada con 0 resultados.** El
-   host marca cualquier estado terminal como «no viva» y pinta
-   `search-status-done`. Es una afirmación falsa sobre el disco.
+4. ~~**Una búsqueda que FALLÓ se lee como una terminada con 0 resultados.**~~
+   **HECHO**: `Busqueda.viva: bool` pasa a un `Desenlace` de cuatro estados y
+   la frase sale de la familia del terminal, fallo incluido. De paso: una
+   búsqueda que ni llegaba a encolarse se quedaba diciendo «buscando…» para
+   siempre, porque sin Task no hay progreso que traiga el desenlace.
 5. ~~**`availability::Facts`: 6 de 8 campos distintos.**~~ **HECHO** el peor
    par y uno más. `source_read_only`/`dest_read_only` salen ya de las
    capacidades del hueco, por `availability::read_only`, que es de los dos;
@@ -105,12 +107,11 @@ informe original; **A** salvo donde se diga.
    plegado de #268— y las capacidades se BORRABAN al pedir otras, tres líneas
    antes de que el aterrizaje re-congelara los hechos de la ayuda. Quedan los
    campos que no son un impedimento real (`degraded`, `journalled`).
-6. **Entradas omitidas.** El terminal: «⚠ N omitidas (nombres hostiles /
-   límites)». La ventana: «N entradas se saltaron», sin ⚠ y **también cuando
-   N es 0**.
-7. **La marca persistente de reinterpretación de nombres** solo existe en el
-   terminal. La ventana transcribe y no lo dice más allá del mensaje del
-   toggle.
+6. ~~**Entradas omitidas.**~~ y 7. ~~**La marca de reinterpretación de
+   nombres.**~~ **HECHOS**, con 17, en `norte_frontend::notes`: las SEIS
+   frases que dicen que un listado no está completo se redactaban una vez por
+   frontend y ahora se redactan una vez. La cabecera de la ventana gana
+   `names_note`, `filling_note`, `pruned_note` y `marked_note` (puente 55).
 8. **Decirte que está esperando.** El terminal: nada antes de 250 ms, luego
    spinner, a dónde va y «Esc cancela». La ventana: `aria-busy="true"` y
    **ninguna regla CSS que lo pinte**. Un SFTP lento no da señal ninguna.
@@ -120,9 +121,10 @@ informe original; **A** salvo donde se diga.
     ya metió U+FFFD, así que `display_name` lo declara fiel) **y la
     reinterpretación del panel** (en un panel cp866 el terminal pregunta por
     `Папка` y la ventana por `??????`).
-11. **La marca de destino `→`** se enciende siempre en la ventana con dos
-    paneles; el terminal la reserva para tres o más, que es lo que el crate
-    compartido documenta.
+11. ~~**La marca de destino `→`**~~ **HECHO**:
+    `layout::target_worth_marking`, y la aplica el RENDERER — el rol del DTO
+    es el modelo y decirle al host que mienta rompía tres tests que lo leen
+    como tal. Que el rol EXISTA y que se PINTE son dos preguntas.
 12. **El panel de registro habla tres vocabularios**: `TRACE` / `trace` /
     `traza` — y los tres a la vez en pantalla, porque los botones de nivel de
     la ventana usan el catálogo y su chip usa el nombre de cable. Hay tests
@@ -138,10 +140,10 @@ informe original; **A** salvo donde se diga.
     con lo tecleado; la ventana ya se comió el diálogo y lo dice en la barra.
     El caso gemelo (consulta semántica) se arregló a conciencia tres ficheros
     más allá.
-17. **Marcas de cabecera que la ventana no tiene**: «rellenando, N por
-    ahora», «no listado» (#235), quick-search parcial, y el resumen de lo
-    marcado. Las cuatro escritas bajo la regla «un listado incompleto jamás
-    es silencioso».
+17. ~~**Marcas de cabecera que la ventana no tiene**~~ **HECHO** con 6 y 7,
+    salvo «no listado» (#235): la ventana ya lo dice por `SlotState::Error`,
+    que es su forma de la misma frase. `norte_frontend::notes::unlisted`
+    queda escrita para quien la necesite.
 
 ## D. Fugas de idioma en la ventana
 

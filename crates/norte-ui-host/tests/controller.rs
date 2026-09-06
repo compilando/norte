@@ -7054,6 +7054,174 @@ async fn buscar_abre_su_vista_y_los_hallazgos_llegan_en_lotes() {
     );
 }
 
+/// Cero omitidas NO es un aviso, y las que hay se leen como aviso.
+///
+/// La ventana usaba una clave propia —«se saltaron N entradas», sin la marca
+/// que la hace leerse como aviso— y la pintaba TAMBIÉN con N igual a cero: o
+/// sea que anunciaba un listado incompleto que estaba completo, gastando la
+/// única señal que hay para cuando de verdad falta algo.
+#[tokio::test]
+async fn el_aviso_de_omitidas_calla_con_cero_y_va_marcado_con_mas() {
+    for (omitidas, espera_aviso) in [(None, false), (Some(0), false), (Some(2), true)] {
+        let mut f = Falso::default();
+        f.arbol.clone_from(&arbol().arbol);
+        f.omitidas = omitidas;
+        let (_h, snap) = host_arbol(Arc::new(f)).await;
+        let nota = &listado_de(&snap, 1).skipped_note;
+
+        assert_eq!(
+            !nota.is_empty(),
+            espera_aviso,
+            "con {omitidas:?} omitidas la nota fue {nota:?}"
+        );
+        if espera_aviso {
+            assert!(
+                nota.contains('⚠'),
+                "un aviso sin marca se lee como un contador: {nota:?}"
+            );
+            assert!(nota.contains('2'), "{nota:?}");
+        }
+    }
+}
+
+/// Y la cabecera dice las otras tres cosas que solo decía el terminal.
+///
+/// Las tres bajo la misma regla: un listado que enseña menos de lo que hay
+/// —o que no enseña lo que hay— jamás es silencioso. La de los NOMBRES es la
+/// que más costaba: la ventana transcribía con otra codificación y no lo
+/// decía en ninguna parte salvo el mensaje del toggle, que se lleva la
+/// siguiente tecla.
+#[tokio::test]
+async fn la_cabecera_dice_que_los_nombres_se_reinterpretan_y_cuanto_hay_marcado() {
+    let (h, snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let antes = listado_de(&snap, 1);
+    assert_eq!(antes.names_note, "", "sin reinterpretar no dice nada");
+    assert_eq!(antes.marked_note, "", "quien no marca no gana ruido");
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.names-encoding").await;
+    let con_nombres = foto_hasta(&h, &mut sub, "la cabecera con la codificación", |s| {
+        let b = listado_de(s, 1);
+        (!b.names_note.is_empty()).then(|| b.names_note.clone())
+    })
+    .await;
+    assert!(
+        !con_nombres.contains("status-names"),
+        "traducida, no la clave: {con_nombres}"
+    );
+
+    marca_todo(&h, &mut sub, 1).await;
+    let marcado = foto_hasta(&h, &mut sub, "la cabecera con lo marcado", |s| {
+        let b = listado_de(s, 1);
+        (!b.marked_note.is_empty()).then(|| b.marked_note.clone())
+    })
+    .await;
+    assert!(
+        !marcado.contains("status-marked"),
+        "traducida, no la clave: {marcado}"
+    );
+}
+
+/// Una búsqueda que FALLÓ no se lee como una que terminó sin hallazgos.
+///
+/// El host marcaba cualquier estado terminal como «ya no está viva» y pintaba
+/// `search-status-done`, así que una búsqueda que se rompió al segundo
+/// directorio y otra que recorrió el árbol entero decían lo mismo: «0
+/// hallazgos». Eso no es una imprecisión de la interfaz — es una afirmación
+/// falsa sobre el disco, y quien la lee deja de buscar.
+#[tokio::test]
+async fn una_busqueda_que_fallo_lo_dice_y_no_finge_cero_hallazgos() {
+    let mut f = Falso::default();
+    f.arbol.clone_from(&arbol().arbol);
+    f.desenlace_de_busqueda = Some(norte_proto::TaskState::Failed {
+        error: norte_proto::Error::PermissionDenied,
+    });
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    let _ = buscar(&h, &mut sub, "*.txt").await;
+    let vista = foto_hasta(&h, &mut sub, "la búsqueda con su desenlace", |s| {
+        s.search.clone().filter(|b| !b.running)
+    })
+    .await;
+
+    let cero_hallazgos =
+        norte_i18n::ta_in(norte_i18n::Lang::Es, "search-status-done", &[("n", "0")]);
+    assert_ne!(
+        vista.status, cero_hallazgos,
+        "una búsqueda rota NO es una búsqueda sin resultados"
+    );
+    assert!(
+        vista
+            .status
+            .contains(&norte_frontend::error::error_category_in(
+                norte_i18n::Lang::Es,
+                &norte_proto::Error::PermissionDenied
+            )),
+        "y dice POR QUÉ se rompió: {}",
+        vista.status
+    );
+}
+
+/// Y una que ni llegó a ENCOLARSE deja de decir que busca.
+///
+/// El otro camino, y el que no tenía test: ahí no hay Task, así que no hay
+/// progreso que traiga el desenlace. La vista se quedaba en «buscando…» para
+/// siempre mientras el error pasaba por la barra y se lo llevaba la siguiente
+/// tecla.
+#[tokio::test]
+async fn una_busqueda_que_ni_se_encola_deja_de_decir_que_busca() {
+    let mut f = Falso::default();
+    f.arbol.clone_from(&arbol().arbol);
+    f.error_de_busqueda = Some(norte_proto::Error::ProviderUnavailable { retryable: false });
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    let _ = buscar(&h, &mut sub, "*.txt").await;
+    let vista = foto_hasta(&h, &mut sub, "la búsqueda que no arrancó", |s| {
+        s.search.clone().filter(|b| !b.running)
+    })
+    .await;
+
+    assert!(
+        vista
+            .status
+            .contains(&norte_frontend::error::error_category_in(
+                norte_i18n::Lang::Es,
+                &norte_proto::Error::ProviderUnavailable { retryable: false }
+            )),
+        "dice por qué no arrancó, y de forma persistente: {}",
+        vista.status
+    );
+}
+
+/// Y una que CANCELÓ el lector tampoco: lo encontrado vale, lo que falta no
+/// se llegó a mirar.
+#[tokio::test]
+async fn una_busqueda_cancelada_no_se_lee_como_terminada() {
+    let mut f = Falso::default();
+    f.arbol.clone_from(&arbol().arbol);
+    f.desenlace_de_busqueda = Some(norte_proto::TaskState::Cancelled);
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    let _ = buscar(&h, &mut sub, "*.txt").await;
+    let vista = foto_hasta(&h, &mut sub, "la búsqueda cancelada", |s| {
+        s.search.clone().filter(|b| !b.running)
+    })
+    .await;
+
+    assert_eq!(
+        vista.status,
+        norte_i18n::ta_in(
+            norte_i18n::Lang::Es,
+            "search-status-cancelled",
+            &[("n", &vista.rows.len().to_string())]
+        ),
+        "cancelada tiene su propia frase, y la del terminal"
+    );
+}
+
 /// Lanza la búsqueda `patron` por el prompt y devuelve su primera vista.
 async fn buscar(
     h: &UiHost,

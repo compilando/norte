@@ -636,6 +636,10 @@ fn task_de_referencia() -> TaskView {
 fn disposicion_de_referencia() -> LayoutView {
     LayoutView {
         cells: (120, 40),
+        // La referencia lleva TRES listados, así que la marca de destino dice
+        // algo: con dos es «el otro» y no se pinta. Es la mitad del contrato
+        // que un corpus con `false` no fijaría.
+        mark_target: true,
         // Un grupo de PESTAÑAS, con una cuyo nombre se pinta distinto de lo
         // que es: un directorio hostil dentro de una pestaña es tan hostil
         // como dentro de un listado.
@@ -826,14 +830,25 @@ fn slots_de_referencia() -> Vec<SlotView> {
                 fila_adornada(3, "cambiado.rs"),
             ],
             cursor: Some(RowKey(1)),
-            marks: 0,
+            // DOS, como dice `marked_note`: el número y la frase son dos
+            // vistas de un mismo hecho, y una referencia que las contradice
+            // enseña justo lo contrario de lo que el DTO promete.
+            marks: 2,
             // El provider se saltó dos: se DICE. Un listado al que le faltan
             // entradas y no lo avisa miente por omisión.
-            skipped_note: "se saltaron 2 entradas".to_owned(),
+            skipped_note: "⚠ 2 entradas omitidas (nombres hostiles/límites)".to_owned(),
             // Los dos avisos a la vez, que es el caso real: un provider que
             // se saltó entradas Y una ocultación activa. Si el renderer los
             // pegara en el mismo nodo, esta fixture lo enseñaría.
             hidden_note: "3 ocultas".to_owned(),
+            // Y las cuatro que la ventana no tenía, TODAS a la vez y en la
+            // misma foto: es el caso que el renderer tiene que saber apilar
+            // sin pegarlas en un solo nodo, y el que fija en qué ORDEN van —
+            // los avisos antes que el contador de marcas.
+            names_note: "nombres: cp866".to_owned(),
+            filling_note: "cargando… (3)".to_owned(),
+            pruned_note: "2 marcas caídas, sus entradas ya no están".to_owned(),
+            marked_note: "2 marcadas, 4,0 kB".to_owned(),
             columns: vec![
                 ColumnHeader {
                     id: "name".to_owned(),
@@ -2037,8 +2052,12 @@ fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
                 slot_id: 1,
                 path_display: "⟨mem⟩/casa/caf\u{fffd}".to_owned(),
                 path_hostile: true,
-                skipped_note: "2 entradas se saltaron".to_owned(),
+                skipped_note: "⚠ 2 entradas omitidas (nombres hostiles/límites)".to_owned(),
                 hidden_note: "3 ocultas".to_owned(),
+                names_note: "nombres: cp866".to_owned(),
+                filling_note: "cargando… (3)".to_owned(),
+                pruned_note: "2 marcas caídas, sus entradas ya no están".to_owned(),
+                marked_note: "2 marcadas, 4,0 kB".to_owned(),
                 marks: 4,
             },
         ),

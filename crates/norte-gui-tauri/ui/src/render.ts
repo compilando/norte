@@ -289,13 +289,19 @@ export class Screen {
       this.rebuild(view, cell);
       this.placementsKey = key;
     }
+    // Que el rol EXISTA y que se MARQUE son dos preguntas. La segunda llega
+    // CALCULADA del host (`layout.mark_target`): la decide el crate
+    // compartido, y contarla aquí era repetir en TypeScript un número que ya
+    // vive en Rust — la misma decisión en dos sitios.
+    const marcarDestino = view.layout.mark_target ?? false;
     for (const p of view.layout.placements) {
       const dom = this.slots.get(p.slot_id);
       const slot = view.slots.find((s) => s.slot_id === p.slot_id);
       if (dom === undefined || slot === undefined) {
         continue;
       }
-      dom.root.dataset["role"] = p.role ?? "";
+      const rol = p.role === "target" && !marcarDestino ? null : p.role;
+      dom.root.dataset["role"] = rol ?? "";
       dom.root.setAttribute("aria-current", p.role === "active" ? "true" : "false");
       this.paintTabs(
         dom,
@@ -3527,24 +3533,40 @@ export class Screen {
     if (slot.path_hostile) {
       ruta.append(badge(this.t("hostile-name")));
     }
-    if (slot.skipped_note !== "") {
-      // Lo que el provider se SALTÓ, ya dicho en Rust. Va en la CABECERA y no
-      // al final de la lista: lo que falta no está, así que no hay ninguna
-      // fila donde el lector pueda tropezarse con ello.
-      const aviso = document.createElement("span");
-      aviso.className = "slot-skipped";
-      aviso.setAttribute("role", "status");
-      aviso.textContent = slot.skipped_note;
-      dom.title.append(aviso);
-    }
-    if (slot.hidden_note !== "") {
-      // Lo que la OCULTACIÓN aparta, por la misma razón y en el mismo sitio:
-      // no hay ninguna fila donde tropezarse con lo que no se pinta.
-      const ocultas = document.createElement("span");
-      ocultas.className = "slot-hidden";
-      ocultas.setAttribute("role", "status");
-      ocultas.textContent = slot.hidden_note;
-      dom.title.append(ocultas);
+    // Todo lo que dice que el listado NO es lo que parece, ya redactado en
+    // Rust. Va en la CABECERA y no al final de la lista: lo que falta no
+    // está, así que no hay ninguna fila donde el lector pueda tropezarse con
+    // ello.
+    //
+    // El ORDEN es la decisión, y es el mismo que la barra del terminal: los
+    // AVISOS —el listado incompleto, la reinterpretación de nombres, las
+    // marcas que se cayeron— van antes que el CONTADOR de lo marcado. El
+    // sitio se acaba, y un aviso recortado deja de avisar mientras que un
+    // contador recortado solo deja de contar.
+    //
+    // `role="status"` solo en los AVISOS. Lo marcado y el relleno son
+    // contadores de algo que el lector acaba de hacer o que está pasando a la
+    // vista: anunciarlos por voz en cada tecla convierte la región viva en
+    // ruido, y entonces el aviso que sí importa llega dentro del ruido.
+    const notas: [string, string, boolean][] = [
+      ["slot-filling", slot.filling_note ?? "", false],
+      ["slot-skipped", slot.skipped_note, true],
+      ["slot-names", slot.names_note ?? "", true],
+      ["slot-pruned", slot.pruned_note ?? "", true],
+      ["slot-hidden", slot.hidden_note, true],
+      ["slot-marked", slot.marked_note ?? "", false],
+    ];
+    for (const [clase, texto, esAviso] of notas) {
+      if (texto === "") {
+        continue;
+      }
+      const nota = document.createElement("span");
+      nota.className = clase;
+      if (esAviso) {
+        nota.setAttribute("role", "status");
+      }
+      nota.textContent = texto;
+      dom.title.append(nota);
     }
     dom.root.setAttribute("aria-label", slot.path_display);
     dom.generation = slot.generation;

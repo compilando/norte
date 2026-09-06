@@ -429,12 +429,24 @@ impl Estado {
         // Si la que acaba de terminar es LA búsqueda, su vista deja de decir
         // «buscando…»: una lista que ya no crece y una que sigue creciendo se
         // leen igual si nadie las distingue.
-        let termino = !matches!(p.state, norte_proto::TaskState::Running);
-        if termino
+        // CON el desenlace, no solo «ya no está viva»: una búsqueda que falló
+        // al segundo directorio y otra que recorrió el árbol entero se
+        // pintaban las dos como «N hallazgos», que es una afirmación falsa
+        // sobre el disco — y quien la lee deja de buscar.
+        //
+        // Y quién es un desenlace lo dice el crate compartido, no un
+        // `!= Running`: `Pending`, `Paused` y `Unknown` tampoco lo son, y con
+        // aquel predicado una búsqueda encolada —o una de un daemon más
+        // nuevo— se anunciaba terminada sin hallazgos.
+        let lang = self.lang;
+        let desenlace = norte_frontend::search_status::outcome_of(&p.state, |e| {
+            clamp_display(norte_frontend::error::error_category_in(lang, e))
+        });
+        if let Some(desenlace) = desenlace
             && let Some(b) = self.busqueda.as_mut()
             && b.task == p.task_id
         {
-            b.viva = false;
+            b.desenlace = desenlace;
             cambios.push(ViewChange::Search {
                 search: self.vista_busqueda(),
             });

@@ -64,11 +64,15 @@
   },
   "browser_header": {
     "change": "browser_header",
+    "filling_note": "cargando… (3)",
     "hidden_note": "3 ocultas",
+    "marked_note": "2 marcadas, 4,0 kB",
     "marks": 4,
+    "names_note": "nombres: cp866",
     "path_display": "⟨mem⟩/casa/caf�",
     "path_hostile": true,
-    "skipped_note": "2 entradas se saltaron",
+    "pruned_note": "2 marcas caídas, sus entradas ya no están",
+    "skipped_note": "⚠ 2 entradas omitidas (nombres hostiles/límites)",
     "slot_id": 1
   },
   "columns": {
@@ -459,6 +463,7 @@
       40
     ],
     "change": "layout",
+    "mark_target": true,
     "placements": [
       {
         "focus_index": 0,
