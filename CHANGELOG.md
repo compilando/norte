@@ -28,6 +28,24 @@ independently through `PROTOCOL_VERSION`.
   prevent. The window already knew `archive_root_for`: it uses it to unpack
   and to test a container, just not to open one. The decision now lives once,
   in `norte_frontend::nav::enter_target`.
+- **The panel bar read backwards.** A *closed* panel was styled with
+  `Role::StatusBar` — which in half the presets is a live background with dark
+  text — while the bar itself is cleared with the base background. So closed
+  buttons came out as lit blocks and open ones as plain text: the visual
+  weight inverted, and looking at the bar answered the opposite of what you
+  were asking. Closed is now the bar's own text, dimmed. The state was always
+  derived correctly from the resolved layout on every frame; what was wrong
+  was which state got the loud style.
+- **You could not resize panes in the window.** The drag handles are
+  `position: absolute` and were inserted *before* the panes, which are
+  absolute too — and this stylesheet uses no `z-index` anywhere on purpose, so
+  stacking follows document order. Every pane covered the handles and the
+  `pointerdown` never reached them. They are built last now. A second bug in
+  the same feature: a horizontal drag sent `clientY` straight through, without
+  subtracting the menu and panel bars that `#screen` is pushed down by, so the
+  border jumped by the height of the chrome the moment you grabbed it. The X
+  axis matched by coincidence — the board starts at column 0 — which is why
+  only horizontal borders looked broken.
 - **The window painted in the process's language, not its own.** `norte-ui-host`
   itself was clean — all 131 of its calls pass `self.lang` — and every leak was
   a *shared* helper translating through the global. The worst was the date:

@@ -2699,9 +2699,17 @@ export class Screen {
           if (!el.hasPointerCapture(e.pointerId)) {
             return;
           }
+          // Contra el ORIGEN del tablero, no contra la ventana. `#screen`
+          // baja lo que midan la barra de menú y la de paneles
+          // (`margin-top`), así que un `clientY` crudo le daba al host una
+          // fila de más por cada fila de cromo: el borde saltaba al empezar a
+          // arrastrarlo. En el eje X coincidían por casualidad —el tablero
+          // empieza en la columna 0— y por eso solo se notaba en los bordes
+          // horizontales.
+          const origen = this.root.getBoundingClientRect();
           const cells = vertical
-            ? Math.round(e.clientX / cell.w)
-            : Math.round(e.clientY / cell.h);
+            ? Math.round((e.clientX - origen.left) / cell.w)
+            : Math.round((e.clientY - origen.top) / cell.h);
           this.send({ action: "resize_slot", slot_id: slot, cells });
         });
         this.root.append(el);
@@ -2712,7 +2720,6 @@ export class Screen {
   private rebuild(view: ViewSnapshot, cell: { w: number; h: number }): void {
     this.root.replaceChildren();
     this.slots.clear();
-    this.buildHandles(view, cell);
     for (const p of view.layout.placements) {
       const el = document.createElement("section");
       el.className = "slot";
@@ -2757,6 +2764,15 @@ export class Screen {
       this.slots.set(p.slot_id, dom);
       this.wire(p.slot_id, dom);
     }
+    // Los tiradores, DESPUÉS de los huecos y por eso al final.
+    //
+    // Esta hoja de estilos no usa `z-index` en ninguna parte a propósito —lo
+    // dice ella misma en el velo del menú—, así que el apilado lo decide el
+    // ORDEN del documento. Se construían primero, y como un hueco también es
+    // `absolute`, cada panel los tapaba: el `pointerdown` no les llegaba
+    // nunca y no se podía redimensionar con el ratón. Un tirador
+    // transparente de seis píxeles debajo de un panel no es un tirador.
+    this.buildHandles(view, cell);
   }
 
   private wire(slotId: number, dom: SlotDom): void {

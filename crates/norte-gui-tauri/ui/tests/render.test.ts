@@ -235,6 +235,31 @@ describe("Screen", () => {
     expect(primero.dataset["role"]).toBe("active");
   });
 
+  it("los tiradores de los bordes quedan POR ENCIMA de los huecos", () => {
+    const { screen, root } = montar();
+    const v = vista({});
+    v.layout.placements = [
+      { slot_id: 1, x: 0, y: 0, width: 60, height: 38, role: "active", focus_index: 0 },
+      { slot_id: 2, x: 60, y: 0, width: 60, height: 38, role: null, focus_index: 1 },
+    ];
+    v.slots = [v.slots[0]!, { ...(v.slots[0] as BrowserSlotView), slot_id: 2 }];
+    screen.paint(v);
+
+    const tiradores = [...root.querySelectorAll(".resize-handle")];
+    expect(tiradores.length).toBeGreaterThan(0);
+
+    // Esta hoja de estilos no usa `z-index` en ninguna parte a propósito: el
+    // apilado lo da el ORDEN del documento. Los tiradores se insertaban ANTES
+    // que los huecos, así que cada panel —que también es `absolute`— los
+    // tapaba y el `pointerdown` no les llegaba nunca. O sea que no se podía
+    // redimensionar con el ratón.
+    const clases = Array.from(root.children).map((n) => n.className);
+    const ultimoHueco = clases.lastIndexOf("slot");
+    const primerTirador = clases.findIndex((c) => c.startsWith("resize-handle"));
+    expect(ultimoHueco).toBeGreaterThanOrEqual(0);
+    expect(primerTirador).toBeGreaterThan(ultimoHueco);
+  });
+
   it("marca el destino solo cuando el host dice que dice algo", () => {
     const { screen, root } = montar();
     // El UMBRAL lo decide Rust (`layout::target_worth_marking`) y llega en

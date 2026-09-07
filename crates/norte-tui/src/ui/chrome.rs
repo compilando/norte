@@ -327,7 +327,23 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
         let estilo = match b.state {
             PanelState::Focused => app.theme.role(Role::Selection),
             PanelState::Open => app.theme.role(Role::Title),
-            PanelState::Closed => app.theme.role(Role::StatusBar),
+            // APAGADO, no otro color: el texto base de la barra atenuado.
+            //
+            // Era `Role::StatusBar`, que es el estilo de la BARRA DE ESTADO —
+            // en la mitad de los temas, fondo vivo y texto oscuro. Esta barra
+            // se limpia con el fondo base, así que los botones CERRADOS
+            // salían como bloques encendidos sobre ella y los ABIERTOS como
+            // texto normal: el peso visual, exactamente al revés. Mirarla
+            // contestaba lo contrario de lo que preguntas, que es lo que hace
+            // que parezca que el estado va por libre.
+            //
+            // El menú de al lado nunca cayó en esto: usa `Title` para lo que
+            // no está abierto y `Selection` para lo que sí, y jamás el rol de
+            // otra superficie.
+            PanelState::Closed => app
+                .theme
+                .role(Role::Regular)
+                .add_modifier(ratatui::style::Modifier::DIM),
         };
         // La letra conserva SIEMPRE el estilo de su estado, y la marca de
         // novedad es un span aparte. Pintar el botón entero de aviso —como
