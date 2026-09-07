@@ -28,6 +28,15 @@ independently through `PROTOCOL_VERSION`.
   prevent. The window already knew `archive_root_for`: it uses it to unpack
   and to test a container, just not to open one. The decision now lives once,
   in `norte_frontend::nav::enter_target`.
+- **The panel bar now follows the screen.** Open panels come in the order they
+  are laid out — top to bottom, and left to right within a row — and closed
+  ones trail in registry order, because they have no position and inventing
+  one would say where something is that is nowhere. Before, the row was the
+  registry's order and you had to translate between two lists every time you
+  looked. The *letter* is deliberately resolved before the sort: it de-dupes
+  against the letters already handed out, so if it depended on the order,
+  opening one panel could change another's letter and the row would stop being
+  learnable.
 - **The panel bar read backwards.** A *closed* panel was styled with
   `Role::StatusBar` — which in half the presets is a live background with dark
   text — while the bar itself is cleared with the base background. So closed

@@ -3,7 +3,7 @@ source: crates/norte-tui/tests/layout_anchor.rs
 expression: "lines.join(\"\\n\")"
 ---
  Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         
- S  V  P  D  Á  R                                                               
+ S  V  D  P  Á  R                                                               
 ┌ Sitios ──────┐┌⟨file⟩/casa────┐┌⟨file⟩/casa────┐┌ Vista ─────────────────────┐
 │▾ Unidades    ││Nombre▲        ││Nombre▲        ││                            │
 │▾ Favoritos   ││   f00         ││   f00         ││                            │

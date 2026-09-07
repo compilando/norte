@@ -67,7 +67,12 @@ pub struct PanelButton {
 /// Lo que la barra necesita saber del momento.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PanelBarInput<'a> {
-    /// Kinds que están colocados en la disposición.
+    /// Kinds que están colocados en la disposición, **en orden de pantalla**:
+    /// de arriba abajo y, a igual altura, de izquierda a derecha.
+    ///
+    /// El orden importa porque es el de los botones (ver [`buttons`]). Lo
+    /// ordena quien llama, que es quien tiene los rectángulos; aquí solo se
+    /// respeta.
     pub open: &'a [&'a str],
     /// El kind que tiene el teclado, si es un panel.
     pub focused: Option<&'a str>,
@@ -75,11 +80,23 @@ pub struct PanelBarInput<'a> {
     pub attention: &'a [&'a str],
 }
 
-/// Los botones de la barra, en el orden del registro.
+/// Los botones de la barra: los ABIERTOS en el orden en que están en
+/// pantalla, y los cerrados detrás en el orden del registro.
 ///
-/// De serie primero —el registro los declara antes— y lo que aporte un plugin
-/// detrás, según se instale. La posición de los de siempre no baila nunca, que
-/// es lo que permite aprenderla con el dedo.
+/// Que la fila siga a la pantalla es lo que hace que la barra se lea de un
+/// vistazo: el botón del panel de la izquierda a la izquierda, el del de
+/// abajo al final. Con el orden del registro había que traducir mentalmente
+/// entre dos listas cada vez.
+///
+/// Los cerrados van después porque no tienen posición: inventarles una sería
+/// decir dónde están cuando no están en ninguna parte. Entre ellos mandan el
+/// registro —los de serie antes que lo que aporte un plugin— así que su
+/// posición relativa no baila.
+///
+/// **La LETRA no depende del orden**, y eso es la mitad de la decisión: se
+/// resuelve recorriendo el registro, antes de ordenar. Si dependiera, abrir
+/// un panel podría cambiarle la letra a otro —el desempate mira las que ya
+/// se han dado— y la barra dejaría de poder aprenderse.
 #[must_use]
 pub fn buttons(reg: &KindRegistry, input: PanelBarInput<'_>) -> Vec<PanelButton> {
     buttons_con(reg, input, norte_i18n::t)
@@ -129,6 +146,17 @@ fn buttons_con(
             attention: input.attention.contains(&id),
         });
     }
+    // Y AHORA se ordena, con las letras ya repartidas: primero lo que está en
+    // pantalla, en el orden en que está, y detrás lo cerrado tal y como lo
+    // declara el registro. `sort_by_key` es estable, así que los cerrados
+    // conservan ese orden entre ellos sin decir nada más.
+    out.sort_by_key(|b| {
+        input
+            .open
+            .iter()
+            .position(|k| *k == b.kind)
+            .unwrap_or(usize::MAX)
+    });
     out
 }
 
@@ -263,6 +291,68 @@ mod tests {
                 "«{fuera}» no es un panel que se abra: {kinds:?}"
             );
         }
+    }
+
+    /// Los ABIERTOS salen en el orden en que están en pantalla.
+    ///
+    /// La fila se lee de un vistazo si sigue a la pantalla: el botón del
+    /// panel de la izquierda, a la izquierda. Con el orden del registro había
+    /// que traducir entre dos listas cada vez que mirabas.
+    #[test]
+    fn los_abiertos_salen_en_el_orden_de_la_pantalla() {
+        // `log` abajo del todo y `places` a la izquierda: en el registro van
+        // al revés, así que si se respetara aquél saldrían al revés.
+        let abiertos = ["log", "places"];
+        let b = buttons(
+            &registro(),
+            PanelBarInput {
+                open: &abiertos,
+                ..PanelBarInput::default()
+            },
+        );
+        let kinds: Vec<&str> = b.iter().map(|x| x.kind.as_str()).collect();
+        assert_eq!(
+            &kinds[..2],
+            &["log", "places"],
+            "los abiertos van en el orden de la pantalla, no en el del registro"
+        );
+        // Y lo cerrado, detrás y en el orden del registro: no tiene posición
+        // que respetar, e inventarle una sería decir dónde está algo que no
+        // está en ninguna parte.
+        assert_eq!(
+            &kinds[2..],
+            &["viewer", "processes", "metadata", "tree"],
+            "los cerrados conservan el orden del registro: {kinds:?}"
+        );
+    }
+
+    /// Y la LETRA no depende del orden.
+    ///
+    /// Se reparte recorriendo el registro, ANTES de ordenar. Si dependiera,
+    /// abrir un panel podría cambiarle la letra a otro —el desempate mira las
+    /// que ya se han dado— y la barra dejaría de poder aprenderse con el dedo,
+    /// que es justo para lo que existe.
+    #[test]
+    fn la_letra_no_cambia_al_reordenar() {
+        let letra_de = |abiertos: &[&str]| -> Vec<(String, char)> {
+            let mut v: Vec<(String, char)> = buttons(
+                &registro(),
+                PanelBarInput {
+                    open: abiertos,
+                    ..PanelBarInput::default()
+                },
+            )
+            .into_iter()
+            .map(|b| (b.kind, b.letter))
+            .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            letra_de(&[]),
+            letra_de(&["log", "places"]),
+            "abrir paneles le cambió la letra a alguien"
+        );
     }
 
     /// Un kind aportado DESPUÉS —lo que haría un plugin— sale solo, y al

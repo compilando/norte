@@ -361,9 +361,14 @@ impl Estado {
 
     /// Los botones de la barra, con su comando: lo que un click resuelve.
     pub(super) fn botones_de_paneles(&self) -> Vec<norte_frontend::panelbar::PanelButton> {
-        let colocados: Vec<String> = self
-            .reparto
-            .placements
+        // En ORDEN DE PANTALLA, que es el de los botones: de arriba abajo y,
+        // a igual altura, de izquierda a derecha. El reparto los da en el
+        // orden en que recorre el árbol, que casi siempre coincide y no lo
+        // garantiza — y «casi siempre» no vale para una fila que se aprende
+        // con el dedo.
+        let mut placements: Vec<_> = self.reparto.placements.iter().collect();
+        placements.sort_by_key(|(_, r)| (r.y, r.x));
+        let colocados: Vec<String> = placements
             .iter()
             .filter_map(|(id, _)| kind_de(&self.arbol, *id))
             .map(|k| k.as_str().to_owned())

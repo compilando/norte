@@ -231,8 +231,13 @@ pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::Pan
     // Cuesta un reparto más por frame, como `tab_zones` y sus vecinas: es el
     // precio de que el cromo diga la verdad sobre un cuerpo que ya se repartió.
     let res = crate::ui::geometry::resolved_frame(app, area);
-    let abiertos: Vec<&str> = res
-        .placements
+    // En ORDEN DE PANTALLA, que es el de los botones: de arriba abajo y, a
+    // igual altura, de izquierda a derecha. El reparto los da en el orden en
+    // que recorre el árbol, que casi siempre coincide y no lo garantiza; y
+    // «casi siempre» en una fila que se aprende con el dedo no vale.
+    let mut colocados: Vec<_> = res.placements.iter().collect();
+    colocados.sort_by_key(|(_, r)| (r.y, r.x));
+    let abiertos: Vec<&str> = colocados
         .iter()
         .map(|(id, _)| *id)
         .filter_map(|id| {
