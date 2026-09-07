@@ -41,9 +41,12 @@ pub enum Resultado {
 pub async fn bombear(
     mut rx: tokio::sync::broadcast::Receiver<NativeEffect>,
     host: std::sync::Arc<norte_ui_host::UiHost>,
-    tema: impl Fn(&str) + Send + 'static,
+    tema: impl Fn(&str) + Send + Sync + 'static,
     cerrar: impl Fn() + Send + 'static,
 ) {
+    // `Sync` y en `Arc` para poder mandarla a un hilo bloqueante: un tema que
+    // es una RUTA se lee, y leer en el ejecutor async es la regla 2 rota.
+    let tema = std::sync::Arc::new(tema);
     loop {
         match rx.recv().await {
             // CERRAR tampoco se «ejecuta»: destruir la ventana es de este
@@ -53,11 +56,21 @@ pub async fn bombear(
             Ok(NativeEffect::CloseWindow) => cerrar(),
             // El TEMA no se «ejecuta»: se vuelve a resolver aquí, porque los
             // colores cruzan a la webview convertidos en variables CSS y esa
-            // conversión es de este proceso. Va sin `spawn_blocking` a
-            // propósito: resolver un preset es aritmética sobre colores, no
-            // I/O, y mandarlo a otro hilo solo añadiría un frame de retraso a
-            // algo que el lector está viendo cambiar bajo el cursor.
-            Ok(NativeEffect::ThemeChanged { name }) => tema(&name),
+            // conversión es de este proceso.
+            //
+            // Un PRESET va en el sitio, a propósito: es aritmética sobre
+            // colores, y mandarlo a otro hilo añadiría un frame de retraso a
+            // algo que el lector está viendo cambiar bajo el cursor. Una RUTA
+            // (ADR 0020) se LEE, así que va a un hilo bloqueante — con un tema
+            // en un montaje caído, hacerlo aquí congela el ejecutor.
+            Ok(NativeEffect::ThemeChanged { name }) => {
+                if norte_frontend::theme::is_preset(Some(&name)) {
+                    tema(&name);
+                } else {
+                    let tema = std::sync::Arc::clone(&tema);
+                    tokio::task::spawn_blocking(move || tema(&name));
+                }
+            }
             // El selector de carpeta es el único que CONTESTA (#284): los
             // demás se lanzan y se olvidan, pero de este el host espera una
             // ruta, así que su respuesta vuelve por `dispatch` como cualquier

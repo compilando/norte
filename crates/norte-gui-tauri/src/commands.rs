@@ -57,8 +57,13 @@ impl Bridge {
     /// Un nombre que no resuelve NO deja la ventana sin colores: se queda el
     /// catálogo que había. Devuelve si cambió algo, para que quien avisa al
     /// renderer no le mande a repintar por nada.
+    /// **Puede leer un fichero**: `[ui] theme` es un preset o una RUTA
+    /// (ADR 0020), así que quien la llame decide dónde corre — el bombeo de
+    /// efectos nativos la manda a `spawn_blocking` cuando no es un preset.
+    /// Antes solo miraba presets, y un perfil con `theme = "…/mio.toml"` se
+    /// quedaba sin colores nuevos en silencio.
     pub fn cambiar_tema(&self, nombre: &str) -> bool {
-        let Ok(Some(tema)) = norte_theme::Theme::preset(nombre) else {
+        let Ok(tema) = norte_frontend::theme::resolve_theme(Some(nombre)) else {
             return false;
         };
         let mut nuevo = crate::catalog::catalogo(self.host.instance(), self.lang, &tema);

@@ -1986,6 +1986,8 @@ host-no-other-slot = no hay otro panel
 # usuario. Se dice en vez de tragarse el guardado, que es lo que separa
 # «elegido» de «guardado».
 host-no-config-dir = no hay dónde guardar la configuración
+host-theme-unreadable = el fichero de tema no se pudo leer; se queda el tema anterior
+host-theme-invalid = el fichero de tema no vale; se queda el tema anterior
 # No hay directorio de usuario donde buscar `profiles/`.
 host-no-profiles = no hay dónde buscar perfiles
 # `profile.next`/`prev` sin a dónde ir: ni perfiles, o solo el que ya está.
