@@ -226,11 +226,47 @@ Sin esto, arreglar la lista es barrer hacia la puerta.
    direcciones: un panel declarado ahí que empiece a seguir al cursor falla
    igual, porque entonces el motivo escrito es falso.
 
-### F2 — Lo que se queda congelado (clase B)
+### F2 — Lo que se queda congelado (clase B) — **HECHA**
 
-Empezar por `total_rows`: comprobarlo en pantalla, y decidir entre meterlo en
-el parche de filas o darle sonda. `hidden_note`, `path_display` y el cursor
-de procesos salen por el mismo camino. Con F1.3 puesto, esta fase no vuelve.
+`total_rows` viaja en el parche de filas y `path_display`, `hidden_note` y
+las cuatro marcas de la cabecera en `ViewChange::BrowserHeader`: eso cayó ya
+en las fases 4 y 5, así que al llegar aquí la lista era más corta de lo que
+la tabla de arriba dice.
+
+Quedaba el **cursor del panel de procesos**, y se resolvió por el mismo
+camino que `total_rows`: viaja DENTRO de `ViewChange::Tasks` (puente 57), que
+es donde va lo que se mueve con el tablero. Una task caduca a los diez
+segundos, su fila se va y desplaza al resto; el cursor solo viajaba en la foto
+entera, así que el renderer resaltaba la fila N —ya otra tarea, o ninguna—
+mientras la tecla de cancelar actuaba sobre la que el host tiene acotada.
+Resaltar una y parar otra, que es peor que ir con retraso.
+
+Y de paso la mitad de paridad, que era la causa: la regla de cómo el cursor
+del panel sobrevive a un tablero que se mueve estaba escrita en `norte-tui` y
+a mano en cinco sitios del host. Ahora es
+`norte_frontend::processes::Processes`, de los dos. Ya había empezado a
+separarse: `up()` restaba sobre el número GUARDADO, así que con el tablero
+encogido subir no movía nada visible y la tecla parecía rota.
+
+**Y la revisión encontró que la regla misma estaba mal en los dos.** Las dos
+superficies guardaban la POSICIÓN y la acotaban al leer. Eso sobrevive a un
+tablero que encoge, pero no a una fila que se va por ENCIMA: la fila 1 pasa a
+nombrar otra tarea sin que el lector toque nada, y cancelar para una copia que
+nadie eligió — que es la misma avería, un paso más adentro. Lo que se guarda
+ahora es la IDENTIDAD de la elegida, con la posición de respaldo para cuando
+esa tarea ya no está. Es la distinción que el listado ya hace entre una
+`RowKey` y un índice.
+
+`marks` sigue sin viajar en un parche y sigue sin importar: el renderer no
+pinta contador. El número está en `BrowserHeader.marks` el día que lo pinte.
+
+**Un MINOR que se deja anotado y no hecho:** nada obliga a subir
+`BRIDGE_VERSION` cuando cambia la forma del corpus. El test de contrato
+compara la constante de Rust con la de TypeScript, así que caza que se
+separen, pero no caza re-bendecir `changes.json` sin bump — y en este puente
+toda forma nueva es incompatible, porque la versión se compara por igualdad
+exacta. Un digest del corpus bendecido al lado de la versión lo cerraría. Es
+infraestructura de test aparte, no de esta rama.
 
 ### F3 — Las claves que solo honra un frontend (clase A)
 

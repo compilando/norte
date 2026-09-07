@@ -761,20 +761,21 @@ impl App {
 
     /// Sube el cursor del panel de procesos. No-op si no está abierto.
     pub fn processes_up(&mut self) {
+        let ids = self.board.task_ids();
         if let Some(id) = self.processes_slot()
             && let Some(p) = self.panes.processes_mut(id)
         {
-            p.up();
+            p.up(&ids);
         }
     }
 
     /// Baja el cursor del panel de procesos, sin pasarse de la última fila.
     pub fn processes_down(&mut self) {
-        let rows = self.board.rows().len();
+        let ids = self.board.task_ids();
         if let Some(id) = self.processes_slot()
             && let Some(p) = self.panes.processes_mut(id)
         {
-            p.down(rows);
+            p.down(&ids);
         }
     }
 
@@ -790,8 +791,8 @@ impl App {
         let Some(id) = self.processes_slot() else {
             return false;
         };
-        let rows = self.board.rows().len();
-        let Some(cursor) = self.panes.processes(id).map(|p| p.cursor(rows)) else {
+        let ids = self.board.task_ids();
+        let Some(cursor) = self.panes.processes(id).and_then(|p| p.fila(&ids)) else {
             return false;
         };
         self.board.cancel_at(cursor)

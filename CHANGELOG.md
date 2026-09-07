@@ -9,6 +9,31 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The processes panel highlighted one task and cancelled another.** A
+  finished task leaves the board on its own after ten seconds, which shifts
+  every row below it. The window speaks in patches, and the panel's cursor was
+  not in any of them — it travelled only in a full snapshot, so the renderer
+  kept the highlight on row *N* (by then a different task, or none) while the
+  host clamped and cancelled something else. The cursor now rides inside
+  `ViewChange::Tasks` (bridge 57), for the same reason `total_rows` rides
+  inside the row patch: it is the extent of what travels beside it, and the two
+  move together. The bridge does not tolerate version skew — a mismatch is a
+  fatal screen, not a half-parse — so the field always travels, and `null`
+  means "no row selected", which is what an empty board says.
+- **Choosing a task by position let the selection slide onto another one.**
+  Both frontends stored *the row number* and clamped it when reading. That
+  survives a shrinking board, but not a row leaving from **above**: row 1
+  quietly became a different task while the reader watched, and the cancel key
+  stopped a copy nobody chose. `Processes` now remembers the selected task's
+  **id** and falls back to the remembered position only once that task is gone
+  — the same distinction the listing draws between a `RowKey` and an index.
+- **The rule underneath was written twice.** How the processes cursor survives
+  a moving board lived in `norte-tui` and by hand in five places in the window.
+  It is now `norte_frontend::processes::Processes`, shared (ADR 0077). The two
+  copies had already started to drift: `up()` subtracted from the *stored*
+  index, so once the board had shrunk, pressing Up moved nothing visible and
+  the key looked dead.
+
 - **The details sheet and the docked viewer were empty on the `..` row.**
   Both asked `PaneState::selected()`, which answers `None` on the parent row
   on purpose — that row is not an operand, and this is what keeps F8 from
@@ -434,6 +459,22 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A test that every panel following the cursor can reach the renderer on its
+  own** (`crates/norte-ui-host/tests/sondas.rs`). It opens each panel the bar
+  offers, moves the listing cursor, and checks whether that panel's view
+  changed; if it did, the change must have arrived unprompted. The docked
+  viewer (#291) and the details sheet both shipped frozen once, riding along in
+  whatever full snapshot another panel happened to trigger — this is the guard
+  for the third one. A new panel is covered without touching the file, since
+  the enumeration comes from the panel bar.
+- **The parity harness can now enter an archive and a symlink.** Its own header
+  named the gap: the test tree held only directories and files, so the
+  scenarios could not touch the inventory's number-one divergence. The
+  primitives leg also carried the *window's* rule written out by hand, so that
+  comparison could not fail; all three legs now ask
+  `norte_frontend::nav::enter_target`. A parity harness catches divergence, not
+  shared error: verifying a new scenario means sabotaging one leg, since
+  narrowing the shared primitive narrows all three.
 - **The window's viewer asks the previewer for its measured width
   (bridge 53).** It sent the whole viewport, which counts the chrome, so
   a picture shrunk to it ran off the right edge; the renderer now reports

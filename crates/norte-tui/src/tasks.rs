@@ -249,6 +249,16 @@ impl TaskBoard {
         &self.rows
     }
 
+    /// Los ids de las filas visibles, en el orden en que se pintan.
+    ///
+    /// Lo pide el cursor del panel de procesos, que guarda la IDENTIDAD de la
+    /// tarea elegida y no su posición: el tablero se mueve solo, y una fila
+    /// que se va por encima haría que la misma posición nombrara otra tarea.
+    #[must_use]
+    pub fn task_ids(&self) -> Vec<u64> {
+        self.rows.iter().map(|r| r.last.task_id.get()).collect()
+    }
+
     /// `true` si alguna fila del panel sigue EN VUELO (S2, `[ui]
     /// confirm_quit` modo `auto`): consulta el estado EN VIVO de cada task,
     /// mismo criterio que [`Self::cancel_last_running`] — el snapshot del

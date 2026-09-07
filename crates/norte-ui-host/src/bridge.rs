@@ -204,7 +204,15 @@ use serde::{Deserialize, Serialize};
 ///   propósito, para que un fallo deje al lector donde estaba—, y sin el
 ///   destino esa mezcla no se puede leer. El umbral de 250 ms lo pone el
 ///   renderer, que es donde un retardo puramente visual no cuesta nada.
-pub const BRIDGE_VERSION: u32 = 56;
+/// - **57**: el parche del tablero de tasks lleva TAMBIÉN qué fila del panel
+///   de procesos está elegida. Viaja con el tablero por lo mismo que
+///   `total_rows` viaja con las filas de un listado: es la extensión de lo que
+///   va al lado y las dos se mueven a la vez. Una task que caduca a los diez
+///   segundos quita una fila y desplaza el resto, y antes ese cursor solo
+///   viajaba en la foto entera — o sea que el panel resaltaba la fila N, que
+///   ya era otra tarea o ninguna, mientras la tecla de cancelar actuaba sobre
+///   la que el host tiene acotada. Resaltar una y parar otra es la avería.
+pub const BRIDGE_VERSION: u32 = 57;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

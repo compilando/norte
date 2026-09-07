@@ -2582,10 +2582,13 @@ struct Estado {
     abrir_al_crear: Option<Creacion>,
     /// El cursor del panel de procesos.
     ///
-    /// Se acota al LEER y no al mover: las filas aparecen y desaparecen
-    /// solas —una tarea termina y se barre—, así que un cursor guardado
-    /// siempre puede haberse quedado fuera.
-    cursor_procesos: usize,
+    /// El MISMO tipo que usa la TUI, con su regla dentro: se acota al LEER y
+    /// no al mover, porque las filas aparecen y desaparecen solas —una tarea
+    /// termina y se barre a los diez segundos—, así que un cursor guardado
+    /// siempre puede haberse quedado fuera. Aquí estaba escrito a mano en
+    /// cinco sitios, que es la misma decisión duplicada que la ADR 0077
+    /// existe para no tener.
+    cursor_procesos: norte_frontend::processes::Processes,
     /// El estado del panel de registro: nivel, filtro y seguimiento (#326).
     ///
     /// El MISMO tipo que usa la TUI, con su regla de los dos niveles dentro
@@ -2993,7 +2996,7 @@ impl Estado {
             perfil_activo: perfil_de_arranque,
             selector_perfil: None,
             gen_perfiles: 0,
-            cursor_procesos: 0,
+            cursor_procesos: norte_frontend::processes::Processes::default(),
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             log_ring,
             // Uno hasta que el primer frame diga la verdad: nunca cero, para

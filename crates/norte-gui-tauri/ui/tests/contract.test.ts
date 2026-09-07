@@ -155,6 +155,10 @@ describe("el contrato con el host", () => {
       "status",
       "sync",
       "tasks",
+      // Dos casos de `tasks`, no dos variantes: esta lista son los NOMBRES de
+      // los casos del corpus, y el tablero vacío es la única forma en la que
+      // su cursor sale `null`.
+      "tasks_vacio",
       "theme",
       "viewer",
       "which_key",

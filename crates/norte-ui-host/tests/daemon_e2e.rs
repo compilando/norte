@@ -318,7 +318,7 @@ async fn una_task_de_otro_cliente_se_ve_y_se_puede_parar() {
                     .changes
                     .iter()
                     .find_map(|c| match c {
-                        norte_ui_host::dto::ViewChange::Tasks { tasks } => Some(tasks.clone()),
+                        norte_ui_host::dto::ViewChange::Tasks { tasks, .. } => Some(tasks.clone()),
                         _ => None,
                     })
                     .unwrap_or_default(),

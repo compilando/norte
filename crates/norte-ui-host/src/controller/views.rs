@@ -91,8 +91,7 @@ impl Estado {
                     // Índice sobre las filas PINTADAS, que es lo que el
                     // renderer resalta. Sobre el mapa entero, con el tablero
                     // recortado, señalaba a otra.
-                    cursor: (self.filas_de_tablero() > 0)
-                        .then(|| self.cursor_procesos.min(self.filas_de_tablero() - 1) as u64),
+                    cursor: self.cursor_del_tablero(),
                 }),
                 _ => {
                     let nombre =

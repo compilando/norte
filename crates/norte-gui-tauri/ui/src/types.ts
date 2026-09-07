@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 56;
+export const BRIDGE_VERSION = 57;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -1134,7 +1134,11 @@ export type ViewChange =
     }
   | { change: "slot_state"; slot_id: number; state: SlotState }
   | ({ change: "status" } & StatusView)
-  | { change: "tasks"; tasks: TaskView[] }
+  /** El tablero, y con él qué fila del panel de procesos está elegida: una
+   *  task que caduca quita una fila y desplaza el resto. `null` = ninguna,
+   *  que es lo que dice un tablero vacío. Nunca falta: este puente no tolera
+   *  versiones distintas, las rechaza. */
+  | { change: "tasks"; tasks: TaskView[]; cursor: number | null }
   | { change: "dialogs"; dialogs: DialogView[] }
   | ({ change: "connection" } & ConnectionView)
   | ({ change: "layout" } & LayoutView)

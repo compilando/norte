@@ -117,23 +117,47 @@ fn vista_de(snap: &ViewSnapshot, kind: &str) -> Option<SlotView> {
         .cloned()
 }
 
-/// Todo lo que el host manda por su cuenta hasta que se calla.
+/// Vacía la cola de lo que haya pendiente, sin esperar a nada.
 ///
-/// El plazo de silencio es el presupuesto: una sonda que lee un fichero
-/// contesta en otro mensaje, y cortar en el primer hueco la daría por ausente.
-async fn recoge(sub: &mut UiSubscription) -> Vec<UiUpdate> {
-    let mut out = Vec::new();
-    for _ in 0..40 {
-        match tokio::time::timeout(Duration::from_millis(150), sub.recv()).await {
-            Err(_) => break,
-            Ok(recibido) => {
-                if let Update::Message(m) = recibido.expect("el host sigue vivo") {
-                    out.push(m.payload);
-                }
-            }
+/// Solo para ponerse al día tras abrir un panel o mover el foco: aquí no se
+/// decide nada, así que un mensaje que llegue tarde no rompe el test — lo verá
+/// la espera de después.
+async fn vacia(sub: &mut UiSubscription) {
+    while let Ok(recibido) = tokio::time::timeout(Duration::from_millis(50), sub.recv()).await {
+        let _ = recibido.expect("el host sigue vivo");
+    }
+}
+
+/// Espera a que llegue SOLA una foto en la que la vista de `kind` ya no es
+/// `antes`, o `None` si en todo el plazo no llega ninguna.
+///
+/// Un plazo de silencio no vale para esto. «No ha llegado nada en 150 ms» y
+/// «este panel no sigue al cursor» se ven igual, y bajo la carga del gate una
+/// sonda que lee un fichero tarda más que eso: el test se pondría rojo
+/// diciendo «panel congelado» por una carrera perdida, que es exactamente la
+/// clase de rojo intermitente que este repositorio trata como un bug.
+///
+/// Así el camino verde es inmediato —la foto ya está esperando— y el plazo
+/// largo solo se gasta en los paneles que de verdad no cambian, donde su
+/// respuesta es la correcta.
+async fn espera_cambio(sub: &mut UiSubscription, kind: &str, antes: &SlotView) -> Option<SlotView> {
+    let hasta = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let queda = hasta.saturating_duration_since(tokio::time::Instant::now());
+        if queda.is_zero() {
+            return None;
+        }
+        let Ok(recibido) = tokio::time::timeout(queda, sub.recv()).await else {
+            return None;
+        };
+        if let Update::Message(m) = recibido.expect("el host sigue vivo")
+            && let UiUpdate::Snapshot(s) = m.payload
+            && let Some(ahora) = vista_de(&s, kind)
+            && &ahora != antes
+        {
+            return Some(ahora);
         }
     }
-    out
 }
 
 /// Pide una foto entera y espera a que llegue.
@@ -196,7 +220,7 @@ async fn observa(kind: &str) -> Observacion {
     })
     .await
     .expect("host vivo");
-    let _ = recoge(&mut sub).await;
+    vacia(&mut sub).await;
 
     // El foco vuelve al listado: abrir un panel que se enfoca se lo lleva, y
     // `MoveCursor` sobre un hueco que no es el activo se contesta `Stale` —
@@ -205,7 +229,7 @@ async fn observa(kind: &str) -> Observacion {
     host.dispatch(UiAction::FocusSlot { slot_id: 1 })
         .await
         .expect("host vivo");
-    let _ = recoge(&mut sub).await;
+    vacia(&mut sub).await;
 
     let foto = pide_foto(&host, &mut sub).await;
     let delta = hasta(&foto, FICHERO);
@@ -214,18 +238,24 @@ async fn observa(kind: &str) -> Observacion {
     host.dispatch(UiAction::MoveCursor { slot_id: 1, delta })
         .await
         .expect("host vivo");
-    let solas = recoge(&mut sub).await;
 
+    // Primero, la pregunta que de verdad se hace: ¿llegó SOLO un cambio de
+    // este panel? Si llegó, ya está contestado todo y no hay plazo que gastar.
+    if espera_cambio(&mut sub, kind, &antes).await.is_some() {
+        return Observacion {
+            cambia: true,
+            viaja: true,
+        };
+    }
+
+    // No llegó nada. Ahora se distingue el panel que no sigue al cursor —lo
+    // correcto— del panel congelado: se PIDE la foto y se mira si su vista era
+    // otra todo este rato.
     let despues = pide_foto(&host, &mut sub).await;
     let despues = vista_de(&despues, kind).unwrap_or_else(|| panic!("`{kind}` sigue abierto"));
-
-    let viaja = solas.iter().any(|u| match u {
-        UiUpdate::Snapshot(s) => vista_de(s, kind).as_ref() == Some(&despues),
-        _ => false,
-    });
     Observacion {
         cambia: antes != despues,
-        viaja,
+        viaja: false,
     }
 }
 
