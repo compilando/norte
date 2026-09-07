@@ -1051,9 +1051,33 @@ async fn cambia_de_perfil(
     // `refresh_panes` justo después, que es el camino que ya usa la recarga
     // cuando los attrs de un pane cambian.
     let _ = app.apply_session(&saliente);
+    // Y `[profile.start]`, que es lo que hace útil un perfil recién creado o
+    // uno que llega de otra máquina: dónde abre cada hueco la primera vez. Va
+    // DESPUÉS de la sesión porque la sesión gana — un perfil es un espacio de
+    // trabajo, no un marcador que te devuelve al principio cada vez.
+    //
+    // El veto NO es `saliente`: ése es `session_body()`, la pantalla de AHORA,
+    // que nombra todos los huecos vivos y por tanto no dejaría sembrar nunca.
+    // Lo pone el propio método, con lo leído del disco y lo ya sembrado.
+    let _ = app.seed_profile_start(&cfg.common.profile_start);
     let _ = crate::refresh::refresh_panes(app, backend, events).await;
     let fuera = crate::app::profile::no_aplicable_en_caliente(&antes, &cfg.common);
-    app.message = Some(if fuera.is_empty() {
+    // Lo que el FICHERO del perfil trae y no se entiende gana a los otros dos
+    // mensajes: «no se pudo aplicar en caliente» describe un límite de este
+    // proceso, y esto describe líneas que no van a hacer nada nunca. Callarlas
+    // es lo que convertía `[profile.start]` en una trampa.
+    for aviso in &cfg.common.profile_warnings {
+        tracing::warn!(motivo = %aviso, "línea del perfil ignorada");
+    }
+    app.message = Some(if !cfg.common.profile_warnings.is_empty() {
+        ta(
+            "msg-profile-config-ignored",
+            &[
+                ("profile", &nombre.to_string_lossy()),
+                ("n", &cfg.common.profile_warnings.len().to_string()),
+            ],
+        )
+    } else if fuera.is_empty() {
         ta(
             "msg-profile-switched",
             &[("profile", &nombre.to_string_lossy())],

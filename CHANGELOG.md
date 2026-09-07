@@ -9,6 +9,39 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **`[profile.start]` finally does something** (ADR 0098). Both frontends
+  *wrote* it — `save_profile` records where every slot sits — and two files
+  promised it is what makes a freshly saved profile useful. Neither frontend
+  read it, so entering a profile left both panels where they were and the
+  profile changed the colours and nothing else. Because nothing read it,
+  nobody had noticed the two ends disagreed about the type either: the writer
+  emits a `VPath` in wire form and the loader parsed a `std::path::PathBuf`,
+  with a paragraph of rustdoc reasoning about `~` and relative paths that
+  never occur. The values are wire-form `VPath`s now — a profile's slot may
+  sit on sftp or inside a container — and the **session wins over them**:
+  `[profile.start]` is where a slot opens the first time, not every time.
+- **A profile's unparseable lines are now said out loud.** `profile_warnings`
+  was computed since profiles existed and displayed by nobody. That is the
+  other half of the same defect: being strict about `[profile.start]` without
+  it would be a trap — you write `/tmp`, the slot opens wherever it likes, and
+  nothing tells you. The count goes to the status bar and each reason to the
+  log, in both frontends, at startup and on every profile switch.
+- **`[ui] font`, `mono_font`, `font_size` and `reduce_motion` were dead in
+  both frontends** — loaded, validated, offered in the settings screen with
+  "applies live", and read by nobody. Deleting them was the wrong answer:
+  `reduce_motion` is an accessibility commitment from spec §17, and the other
+  three land directly on a webview. They now travel in the window's startup
+  catalogue, the same package the theme rides in, and the renderer plugs them
+  in as CSS variables. Two things that were not obvious: the size also moves
+  the **grid** — this window is laid out in cells, so a bigger letter inside a
+  row of the same height overflows it — and the cell *width* is measured with
+  the font in place, because a monospace advance is not a fixed fraction of
+  its size and a wrong width skews every column. `reduce_motion` can only
+  **add** the request: `false` does not switch off the desktop's own
+  `prefers-reduced-motion`. A terminal applies none of the four and says so.
+- **Two schema comments claimed the window ignores keys it reads.**
+  `[ui] menu_bar` and `[ui] panel_bar` both reach the window (`MenuView.bar`,
+  `PanelBarView.bar`). A comment that lies is what the next audit believes.
 - **The processes panel highlighted one task and cancelled another.** A
   finished task leaves the board on its own after ten seconds, which shifts
   every row below it. The window speaks in patches, and the panel's cursor was

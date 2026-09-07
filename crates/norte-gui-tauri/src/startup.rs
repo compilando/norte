@@ -280,6 +280,10 @@ pub struct Boot {
     pub lang: Lang,
     /// El tema resuelto.
     pub theme: Theme,
+    /// Fuentes y movimiento, de `[ui]`: lo que esta ventana pinta y no es
+    /// color. Va aquí y no se relee en `main` porque la configuración ya está
+    /// cargada y volver a mirarla sería una segunda lectura que puede diferir.
+    pub appearance: crate::catalog::Appearance,
 }
 
 /// Las disposiciones que el usuario tiene guardadas, YA leídas.
@@ -452,6 +456,7 @@ fn aviso_de_arranque(
     cfg: &norte_frontend::config::FrontendConfig,
     lang: Lang,
     lua_descartadas: usize,
+    perfil: Option<&std::ffi::OsStr>,
 ) -> Option<String> {
     let mut msg = None;
     if !cfg.common.project_warnings.is_empty() {
@@ -462,6 +467,28 @@ fn aviso_de_arranque(
             lang,
             "msg-project-config-skipped",
             &[("n", &cfg.common.project_warnings.len().to_string())],
+        ));
+    }
+    // Las líneas del PERFIL que no se entienden, con el mismo reparto: el
+    // conteo a la barra y el motivo al registro. Sin esto, ser estricto con
+    // `[profile.start]` era una trampa — se escribe `/tmp`, la línea se tira y
+    // el hueco abre donde le parece sin que nada lo diga (ADR 0098, D5).
+    if !cfg.common.profile_warnings.is_empty() {
+        for aviso in &cfg.common.profile_warnings {
+            tracing::warn!(motivo = %aviso, "línea del perfil ignorada");
+        }
+        msg = Some(norte_i18n::ta_in(
+            lang,
+            "msg-profile-config-ignored",
+            &[
+                (
+                    "profile",
+                    &perfil
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                ),
+                ("n", &cfg.common.profile_warnings.len().to_string()),
+            ],
         ));
     }
     if lua_descartadas > 0 {
@@ -771,13 +798,14 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // El de la disposición va PRIMERO si lo hay: los otros dos avisan de una
     // capa ignorada, y éste de que la pantalla que se está mirando no es la
     // pedida — que es lo que el lector no puede deducir solo.
-    snapshot.status.message =
-        aviso_layout.or_else(|| aviso_de_arranque(&cfg, lang, capas_lua_descartadas));
+    snapshot.status.message = aviso_layout
+        .or_else(|| aviso_de_arranque(&cfg, lang, capas_lua_descartadas, cli.profile.as_deref()));
     Ok(Boot {
         host,
         snapshot,
         lang,
         theme,
+        appearance: crate::catalog::Appearance::de(&cfg.common),
     })
 }
 

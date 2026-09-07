@@ -1460,12 +1460,16 @@ pub struct CommonConfig {
     /// `[profile.start]` ya parseado: dónde abre cada hueco cuando el perfil
     /// todavía no tiene estado guardado.
     ///
-    /// Las claves son ids de hueco de la disposición DEL PERFIL. Una clave que
-    /// no parsea como id se tira y se dice en [`Self::profile_warnings`]. Las
-    /// rutas vienen sin expandir: `~` y lo relativo necesitan un directorio de
-    /// trabajo, y resolverlo aquí metería el `$HOME` de este proceso en un
-    /// valor que puede leer el daemon.
-    pub profile_start: std::collections::BTreeMap<u32, std::path::PathBuf>,
+    /// Las claves son ids de hueco de la disposición DEL PERFIL; los valores,
+    /// [`VPath`]s en forma de CABLE, que es lo que escribe
+    /// [`crate::save_profile`]. Lo que no parsea —ni la clave como id, ni el
+    /// valor como ruta— se tira y se dice en [`Self::profile_warnings`].
+    ///
+    /// Un [`VPath`] y no una `PathBuf`: un hueco de un perfil puede estar en
+    /// sftp o dentro de un contenedor, y esto se escribió durante meses en
+    /// forma de cable mientras se leía como ruta del sistema, sin que nadie lo
+    /// notara porque no lo leía nadie.
+    pub profile_start: std::collections::BTreeMap<u32, norte_proto::VPath>,
 }
 
 /// Merges one layer's `[ai]` section (already filtered to non-Project by the
@@ -2013,12 +2017,12 @@ fn profile_carve_out_warnings(parsed: &NorteToml, path: &std::path::Path) -> Vec
 /// Funde el `[profile]` de una capa de PERFIL (spec 2026-08-26, D3).
 ///
 /// Last-wins como todo lo demás. Una clave de `start` que no parsea como id de
-/// hueco se TIRA con su aviso, en vez de tumbar el arranque: el fichero es del
-/// usuario, pero un dedazo en un id no vale una negativa a arrancar, y la capa
-/// entera se perdería por una línea.
+/// hueco —o un valor que no parsea como [`VPath`]— se TIRA con su aviso, en vez
+/// de tumbar el arranque: el fichero es del usuario, pero un dedazo en un id no
+/// vale una negativa a arrancar, y la capa entera se perdería por una línea.
 fn merge_profile_section(
     title: &mut Option<String>,
-    start: &mut std::collections::BTreeMap<u32, std::path::PathBuf>,
+    start: &mut std::collections::BTreeMap<u32, norte_proto::VPath>,
     section: &crate::schema::ProfileSection,
     path: &std::path::Path,
     avisos: &mut Vec<String>,
@@ -2027,12 +2031,30 @@ fn merge_profile_section(
         *title = Some(t.clone());
     }
     for (clave, valor) in &section.start {
-        match clave.parse::<u32>() {
-            Ok(id) => {
-                start.insert(id, std::path::PathBuf::from(valor));
-            }
-            Err(_) => avisos.push(format!(
+        let Ok(id) = clave.parse::<u32>() else {
+            avisos.push(format!(
                 "{}: [profile.start] «{clave}» no es un id de hueco",
+                path.display()
+            ));
+            continue;
+        };
+        // Un VPath en forma de CABLE, que es lo que escribe `save_profile`. No
+        // una ruta del sistema: un hueco de un perfil puede estar en sftp o
+        // dentro de un contenedor, y una `PathBuf` no sabe decirlo. Además
+        // quita de en medio la pregunta de contra qué se resuelve un `~` o un
+        // relativo — un perfil se usa en varias máquinas y en varios días, y
+        // «depende de desde dónde lo lanzaste» no es una respuesta.
+        match norte_proto::VPath::parse(valor) {
+            Ok(v) => {
+                start.insert(id, v);
+            }
+            // Se dice QUÉ hueco se queda sin sembrar, que es lo accionable, y
+            // no el valor: repetirlo no ayuda a arreglarlo —quien lo escribió
+            // lo tiene delante— y estas cadenas acaban en el panel de registro,
+            // donde una ruta de más es una ruta de más. A la barra de mensajes
+            // solo llega el CONTEO, que es lo que #73 acota.
+            Err(_) => avisos.push(format!(
+                "{}: [profile.start] el hueco {id} no trae una ruta válida",
                 path.display()
             )),
         }
@@ -2081,7 +2103,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut project_warnings: Vec<String> = Vec::new();
     let mut profile_warnings: Vec<String> = Vec::new();
     let mut profile_title: Option<String> = None;
-    let mut profile_start: std::collections::BTreeMap<u32, std::path::PathBuf> =
+    let mut profile_start: std::collections::BTreeMap<u32, norte_proto::VPath> =
         std::collections::BTreeMap::new();
     for (dir, kind) in &layers.dirs {
         let norte = dir.join("norte.toml");
@@ -4618,13 +4640,16 @@ path = "/home/u/src"
 
     /// D3: `[profile.start]` es lo que hace útil un perfil recién creado. Las
     /// claves son ids de hueco TAL Y COMO los escribe la disposición del
-    /// perfil.
+    /// perfil, y los valores son [`VPath`]s en forma de cable — que es lo que
+    /// escribe `save_profile`, y lo que permite que un hueco de un perfil
+    /// abra en sftp o dentro de un contenedor.
     #[test]
     fn profile_start_se_lee_con_sus_ids() {
         let perfil = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             perfil.path().join("norte.toml"),
-            "[profile]\ntitle = \"Trabajo\"\n\n[profile.start]\n1 = \"/home/u/src\"\n2 = \"/tmp\"\n",
+            "[profile]\ntitle = \"Trabajo\"\n\n[profile.start]\n\
+             1 = \"file:///home/u/src\"\n2 = \"sftp://maquina/srv\"\n",
         )
         .expect("write");
         let layers = Layers {
@@ -4633,10 +4658,49 @@ path = "/home/u/src"
         let cfg = load(&layers).expect("carga");
         assert_eq!(cfg.profile_title.as_deref(), Some("Trabajo"));
         assert_eq!(
-            cfg.profile_start.get(&1).map(std::path::PathBuf::as_path),
-            Some(std::path::Path::new("/home/u/src"))
+            cfg.profile_start.get(&1).map(norte_proto::VPath::to_wire),
+            Some("file:///home/u/src".to_owned())
+        );
+        assert_eq!(
+            cfg.profile_start.get(&2).map(|v| v.scheme().to_owned()),
+            Some("sftp".to_owned()),
+            "un hueco de un perfil no tiene por qué ser local"
         );
         assert_eq!(cfg.profile_start.len(), 2);
+    }
+
+    /// Una ruta SIN esquema se tira con su aviso, igual que una clave mala.
+    ///
+    /// Ese aviso llega a la pantalla (`profile_warnings`), que es lo que hace
+    /// que esto sea una regla y no una trampa: quien escriba `/tmp` a mano lo
+    /// ve, en vez de quedarse con un hueco que abre donde le parece.
+    #[test]
+    fn una_ruta_de_start_sin_esquema_se_avisa_y_se_tira() {
+        let perfil = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            perfil.path().join("norte.toml"),
+            // Un valor con una palabra que no puede salir de ninguna otra
+            // parte del aviso: el `tempdir` de este test vive DENTRO de /tmp,
+            // así que buscar «/tmp» habría dado un falso positivo con la ruta
+            // del propio fichero.
+            "[profile.start]\n1 = \"/secreto-del-lector\"\n2 = \"file:///home/u\"\n",
+        )
+        .expect("write");
+        let layers = Layers {
+            dirs: vec![(perfil.path().to_path_buf(), Layer::Profile)],
+        };
+        let cfg = load(&layers).expect("carga");
+        assert_eq!(cfg.profile_start.len(), 1, "el bueno sobrevive");
+        assert!(cfg.profile_start.contains_key(&2));
+        let aviso = cfg.profile_warnings.join(" ");
+        assert!(
+            aviso.contains("hueco 1"),
+            "se dice qué hueco se quedó sin sembrar: {aviso}"
+        );
+        assert!(
+            !aviso.contains("secreto-del-lector"),
+            "y NO se cita el valor, que es una ruta y esto va a la barra: {aviso}"
+        );
     }
 
     /// Una clave que no es un id de hueco no rompe el arranque: se tira y se
@@ -4647,7 +4711,7 @@ path = "/home/u/src"
         let perfil = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             perfil.path().join("norte.toml"),
-            "[profile.start]\nizquierda = \"/tmp\"\n1 = \"/home/u\"\n",
+            "[profile.start]\nizquierda = \"file:///tmp\"\n1 = \"file:///home/u\"\n",
         )
         .expect("write");
         let layers = Layers {

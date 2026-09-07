@@ -31,9 +31,17 @@ body {
   overflow: hidden;
   background: var(--bg);
   color: var(--fg);
-  font-family:
-    ui-monospace, "DejaVu Sans Mono", "Cascadia Mono", "Liberation Mono", monospace;
-  font-size: 13px;
+  /* `[ui] font` y `[ui] font_size`, si la configuración los dice. El
+     fallback es la pila de siempre: una clave ausente no cambia nada. */
+  font-family: var(
+    --ui-font,
+    ui-monospace,
+    "DejaVu Sans Mono",
+    "Cascadia Mono",
+    "Liberation Mono",
+    monospace
+  );
+  font-size: var(--ui-font-size, 13px);
   line-height: var(--cell-h);
 }
 
@@ -2450,12 +2458,22 @@ body {
 
 /* Quien pide menos movimiento no ve la animación, y entonces el retardo no
    puede depender de ella: se ve desde el principio, que es lo honesto — un
-   parpadeo molesta menos que no saber que se está esperando. */
+   parpadeo molesta menos que no saber que se está esperando.
+
+   Dos formas de pedirlo y las dos valen: el escritorio
+   (`prefers-reduced-motion`) y `[ui] reduce_motion`, que solo puede AÑADIR la
+   petición — `false` no apaga la del sistema, porque una configuración no
+   contradice a quien ya lo pidió en su escritorio (spec §17). */
 @media (prefers-reduced-motion: reduce) {
   .slot-busy {
     opacity: 1;
     animation: none;
   }
+}
+
+:root[data-reduce-motion="true"] .slot-busy {
+  opacity: 1;
+  animation: none;
 }
 
 /* --- El selector de columnas ------------------------------------------- */

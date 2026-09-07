@@ -101,3 +101,6 @@ edits.
 | [0093](0093-a-provider-plugin-serves-the-scheme-it-declares.md) | A provider plugin serves the scheme it declares | accepted |
 | [0094](0094-a-plugin-says-which-wit-it-was-built-against.md) | A plugin says which WIT it was built against, and the host says whether it serves it | accepted |
 | [0095](0095-a-renamer-plugin-proposes-and-the-core-renames.md) | A renamer plugin proposes, and the core renames | accepted |
+| [0096](0096-what-is-operated-on-and-what-is-pointed-at-are-two-questions.md) | What is operated on and what is pointed at are two questions | accepted |
+| [0097](0097-parity-between-the-terminal-and-the-window-is-a-test.md) | Parity between the terminal and the window is a test, not a convention | accepted |
+| [0098](0098-profile-start-is-a-seed-and-the-session-wins.md) | `[profile.start]` is a seed in wire form, and the session wins | accepted |

@@ -82,9 +82,14 @@ pub enum SettingKind {
 /// renders under, its editing widget, and whether a live edit takes effect
 /// without restarting. `applies_live` is written from the TUI's point of
 /// view (S3: every entry here hot-reloads there); the GUI (S4) interprets
-/// it per-frontend — e.g. fonts resolve once at GUI startup, so the GUI
-/// marks them "restart required" even though this flag says `true`. That
-/// split is documented per-entry below where it applies.
+/// it per-frontend, and that split is documented per-entry below where it
+/// applies.
+///
+/// The fonts used to be the example here — "they resolve once at GUI startup,
+/// so the GUI marks them restart-required". They did not resolve at all: no
+/// frontend read them. They now cross in the window's startup catalogue and
+/// re-apply whenever it is rebuilt, which is the same path the theme takes.
+/// A terminal still applies none of the four, and says so.
 #[derive(Debug, Clone, Copy)]
 pub struct SettingDef {
     /// Stable id (`section.key`, dashed — e.g. `ui.confirm-quit`), stable

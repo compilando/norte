@@ -16,7 +16,13 @@ const FIXTURE: &str = r##"{
   "strings": { "hostile-name": "nombre alterado" },
   "theme": { "bg": "#101216" },
   "measure": false,
-  "busy_threshold_ms": 250
+  "busy_threshold_ms": 250,
+  "appearance": {
+    "font": "Inter",
+    "mono_font": "Iosevka",
+    "font_size": 15.0,
+    "reduce_motion": true
+  }
 }"##;
 
 /// Ida y vuelta: los nombres del JSON son el contrato, no los de Rust.
@@ -35,6 +41,14 @@ fn el_catalogo_va_y_vuelve_con_los_mismos_campos() {
         norte_frontend::busy::THRESHOLD.as_millis(),
         "el catálogo lleva el umbral COMPARTIDO, no una copia"
     );
+
+    // Las cuatro claves de `[ui]` que se cargaban, se validaban, se ofrecían
+    // en la pantalla de ajustes y no leía nadie. `reduce_motion` además es un
+    // compromiso de accesibilidad de la spec §17.
+    assert_eq!(leido.appearance.font.as_deref(), Some("Inter"));
+    assert_eq!(leido.appearance.mono_font.as_deref(), Some("Iosevka"));
+    assert_eq!(leido.appearance.font_size, Some(15.0));
+    assert_eq!(leido.appearance.reduce_motion, Some(true));
 
     let vuelta: serde_json::Value = serde_json::to_value(&leido).expect("serializa");
     let esperado: serde_json::Value = serde_json::from_str(FIXTURE).expect("json");

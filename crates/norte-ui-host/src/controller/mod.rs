@@ -870,6 +870,21 @@ impl UiHost {
         // La sesión primero: dice DÓNDE estaba cada hueco, y listar antes
         // sería traer un directorio para tirarlo.
         estado.leer_sesion(backend.as_ref()).await;
+        // Y después `[profile.start]`, FUERA de `leer_sesion` a propósito: esa
+        // vuelve pronto por cuatro caminos —sin sesión, de una versión futura,
+        // revisión 0, cuerpo ilegible— y tres de ellos son justo el caso para
+        // el que la clave existe: una instalación nueva, o un perfil copiado de
+        // otra máquina (ADR 0098). Dentro no se sembraba nunca.
+        //
+        // El orden ES la precedencia: la sesión, después lo que el perfil dice
+        // de los huecos que ella no conoce, y encima el directorio que un
+        // humano acaba de teclear.
+        for (id, destino) in estado.siembra_de_perfil() {
+            if let Some(hueco) = estado.huecos.get_mut(&id) {
+                hueco.pane.begin_loading(destino);
+            }
+        }
+        estado.fijar_dir_pedido();
         // El primer listado se pide ANTES de publicar nada: el snapshot 0
         // describe una pantalla que ya existe, no una promesa.
         estado.listar_inicial(&backend, &tx2).await;
@@ -2320,10 +2335,17 @@ struct SeleccionDeTema {
 /// Qué de un perfil NO se puede aplicar sin reiniciar ESTA VENTANA.
 ///
 /// Medido, no supuesto, y distinto de la lista del terminal — por eso no se
-/// comparte. Aquí el tema SÍ se aplica (el catálogo vuelve a cruzar), y en
-/// cambio las FUENTES no: viajan en el catálogo del arranque y la hoja de
-/// estilos las lee una vez. `[ui] lang` tampoco: `norte_i18n::force` corre una
-/// vez por proceso.
+/// comparte. Aquí el tema SÍ se aplica: el catálogo vuelve a cruzar cuando
+/// cambia, y el renderer reenchufa sus variables CSS.
+///
+/// Las FUENTES y `reduce_motion` viajan por ese mismo catálogo y se aplican al
+/// ARRANCAR, pero no en un cambio de perfil: lo único que provoca un catálogo
+/// nuevo es el tema, y ese camino conserva la apariencia que había en vez de
+/// releerla. Hacerlas calientes es la pregunta de si esta ventana recarga su
+/// configuración en caliente, que tiene ADR propia pendiente — así que hasta
+/// entonces se DICE, que es lo que esta lista existe para hacer.
+///
+/// `[ui] lang` tampoco: `norte_i18n::force` corre una vez por proceso.
 ///
 /// Un cambio que se callara esto sería un cambio que miente (ADR 0079, D8).
 fn fuera_de_alcance_en_caliente(
@@ -2818,6 +2840,19 @@ struct Sesion {
     /// guardadas— en vez de conservarlo. La ola #229–#234 puso «conserva lo
     /// ajeno en un relevo» exactamente por esto, y esta ventana no lo hacía.
     leida: norte_frontend::session::SessionBody,
+    /// De qué huecos SABÍA lo leído del disco.
+    ///
+    /// El veto de `[profile.start]` (ADR 0098). Aparte de [`Self::leida`] y no
+    /// derivado de ella al vuelo porque son dos preguntas: aquélla es lo que
+    /// hay que volver a escribir, y esto es lo que la sesión ya conocía —y no
+    /// puede moverse cuando el proceso empieza a guardar lo suyo.
+    conocidos: std::collections::BTreeSet<u32>,
+    /// Los huecos que este proceso ya sembró desde `[profile.start]`.
+    ///
+    /// Sembrar es de la PRIMERA vez. Sin esta cuenta, un lector sin sesión
+    /// guardada volvía al directorio de arranque del perfil cada vez que
+    /// entraba y salía de él: para él [`Self::conocidos`] está siempre vacío.
+    sembrados: std::collections::BTreeSet<u32>,
 }
 
 impl Hueco {
@@ -3065,6 +3100,8 @@ impl Estado {
                 // momento y entonces alguien tiene que recogerla.
                 policy: norte_frontend::session::PushPolicy::new(30),
                 leida: norte_frontend::session::SessionBody::default(),
+                conocidos: std::collections::BTreeSet::new(),
+                sembrados: std::collections::BTreeSet::new(),
             },
             dir_pedido: initial_dir_pedido.then(|| initial_dir.clone()),
             status: StatusView::default(),

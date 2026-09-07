@@ -1279,4 +1279,19 @@ export interface HostCatalog {
    *  terminal (`norte_frontend::busy::THRESHOLD`), y un número repetido en
    *  una hoja de estilos es el tercer sitio donde cambiarlo. */
   busy_threshold_ms?: number;
+  /** `[ui] font`, `mono_font`, `font_size` y `reduce_motion`. */
+  appearance?: Appearance;
+}
+
+/** Lo que esta ventana pinta y no es color. Cada campo `null` = no lo dice la
+ *  configuración, y entonces manda lo que ya hay (la hoja de estilos, o el
+ *  escritorio en el caso del movimiento). */
+export interface Appearance {
+  font: string | null;
+  mono_font: string | null;
+  /** En px, ya validado a [8, 32] en Rust. Mueve TAMBIÉN la rejilla: esta
+   *  ventana se reparte en celdas, así que un tamaño que solo cambiara la
+   *  letra la dejaría desbordando su fila. */
+  font_size: number | null;
+  reduce_motion: boolean | null;
 }

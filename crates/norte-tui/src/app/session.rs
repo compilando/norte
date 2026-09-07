@@ -171,6 +171,54 @@ impl App {
         ask
     }
 
+    /// Siembra los huecos que `[profile.start]` nombra y la sesión no conoce.
+    ///
+    /// Se llama DESPUÉS de [`Self::apply_session`]. Quién gana lo decide
+    /// [`norte_frontend::config::profile_start_seeds`], que es la función de
+    /// los dos frontends, y la respuesta es que la sesión gana:
+    /// `[profile.start]` es dónde abre un hueco la primera vez, no un marcador
+    /// que te devuelve al principio cada vez que entras al perfil.
+    ///
+    /// **Los dos vetos los pone este método, no el llamante.** Es lo leído del
+    /// disco y lo ya sembrado por este proceso, y ninguna de las dos cosas se
+    /// puede pasar por parámetro sin equivocarse: dándole
+    /// `App::session_body()` —la pantalla de AHORA— el filtro nombra todos los
+    /// huecos vivos y no se siembra nunca.
+    ///
+    /// Solo se siembran huecos de LISTADO que esta disposición COLOCA. Al
+    /// almacén de panes no se le pregunta: guarda huérfanos y `insert` los
+    /// revive, así que un id que el perfil nombre y este layout no coloque
+    /// pisaría el pane que ese hueco tiene guardado para cuando se vuelva a
+    /// su disposición. Es la misma trampa que [`Self::apply_session`]
+    /// documenta treinta líneas más arriba.
+    ///
+    /// Devuelve los sembrados. El llamante los relista con `refresh_panes`,
+    /// que solo recorre los VISIBLES: un hueco sembrado detrás de una pestaña
+    /// oculta se queda frío hasta que se mire, igual que uno restaurado de la
+    /// sesión por ese mismo camino.
+    pub fn seed_profile_start(
+        &mut self,
+        start: &std::collections::BTreeMap<u32, norte_proto::VPath>,
+    ) -> Vec<norte_frontend::layout::SlotId> {
+        let colocados: std::collections::BTreeSet<u32> =
+            self.layout.slot_ids().into_iter().map(|s| s.0).collect();
+        let mut ask = Vec::new();
+        for (raw, path) in norte_frontend::config::profile_start_seeds(
+            start,
+            &self.session.read,
+            &self.session.seeded,
+        ) {
+            let id = norte_frontend::layout::SlotId(raw);
+            if !colocados.contains(&raw) || self.panes.browser(id).is_none() {
+                continue;
+            }
+            self.adoptar_pane(id, Pane::new(path, Vec::new()), None, None);
+            self.session.seeded.insert(raw);
+            ask.push(id);
+        }
+        ask
+    }
+
     /// Coloca el cursor que traía la sesión, ahora que el listado ya está.
     ///
     /// Se consume: es de UNA vez, la del arranque. Fuera del listado se clampa
@@ -234,6 +282,11 @@ impl App {
                 if self.active_profile.is_none() && !body.active.is_empty() {
                     self.pending_profile = Some(std::ffi::OsString::from(&body.active));
                 }
+                // De qué huecos SABE lo guardado, antes de aplicarlo: es el
+                // veto de `[profile.start]`, y tiene que salir de aquí porque
+                // es el único sitio del terminal donde se ve el documento tal
+                // y como vino del disco.
+                self.session.read = body.slots.keys().copied().collect();
                 self.apply_session(&body);
             }
             // Un cuerpo de una versión MÁS NUEVA no se lee y tampoco se pisa:

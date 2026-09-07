@@ -28,11 +28,27 @@ use crate::listing::initial_pane;
 ///
 /// `start` es el DIR de la línea de órdenes cuando lo hubo: gana a la sesión
 /// en el panel activo ([`App::pin_start_dir`]), y se lista con los demás.
-pub async fn restore_session(app: &mut App, backend: &Backend, start: Option<&VPath>) {
+pub async fn restore_session(
+    app: &mut App,
+    backend: &Backend,
+    start: Option<&VPath>,
+    profile_start: &std::collections::BTreeMap<u32, VPath>,
+) {
+    // La siembra de `[profile.start]` va en TODOS los caminos, incluidos los
+    // que no tienen sesión que aplicar: una instalación nueva —o un perfil
+    // copiado de otra máquina— es justo el caso para el que la clave existe, y
+    // dejándola detrás de estos `return` no se sembraba nunca (ADR 0098).
+    let sembrar = |app: &mut App| {
+        let _ = app.seed_profile_start(profile_start);
+    };
     let (sesion, dueña) = match backend.session_get().await {
         Ok(v) => v,
         Err(e) => {
             tracing::debug!(error = %e, "sin sesión guardada");
+            sembrar(app);
+            if let Some(dir) = start {
+                app.pin_start_dir(dir.clone());
+            }
             return;
         }
     };
@@ -44,6 +60,11 @@ pub async fn restore_session(app: &mut App, backend: &Backend, start: Option<&VP
     // Revisión 0 es «nadie la ha escrito todavía»: no hay nada que aplicar y
     // tampoco nada roto que contar.
     if sesion.revision == 0 {
+        sembrar(app);
+        if let Some(dir) = start {
+            app.pin_start_dir(dir.clone());
+        }
+        restore_slots(app, backend, RESTORE_BUDGET).await;
         return;
     }
     // La versión del SOBRE, que es la que el protocolo documenta (#247): el
@@ -51,6 +72,10 @@ pub async fn restore_session(app: &mut App, backend: &Backend, start: Option<&VP
     // que un cliente ajeno que hiciera lo que dice el contrato tenía su cuerpo
     // interpretado como si fuera de la versión 0.
     app.apply_session_value(sesion.version, &sesion.body);
+    // El orden ES la precedencia: la sesión, después lo que el perfil dice de
+    // los huecos que ella no conoce, y encima de todo el directorio que un
+    // humano acaba de teclear.
+    sembrar(app);
     if let Some(dir) = start {
         app.pin_start_dir(dir.clone());
     }

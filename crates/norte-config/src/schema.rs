@@ -62,13 +62,23 @@ pub struct ProfileSection {
     /// Where each slot opens when this profile has no saved state yet.
     ///
     /// Keys are slot ids of the profile's own layout, as text — TOML has no
-    /// numeric keys. A key that is not a slot id is dropped with a warning
-    /// rather than refusing to start: the file is the reader's, but a typo in
-    /// an id does not earn a refusal to run.
+    /// numeric keys. Values are `VPath`s in WIRE form (`file:///home/u/src`,
+    /// `sftp://host/srv`), which is what [`crate::save_profile`] writes: a
+    /// slot of a profile may sit on sftp or inside a container, and a native
+    /// path cannot say so. It also removes the question of what a `~` or a
+    /// relative path would resolve against — a profile is used across machines
+    /// and across days, and "wherever you launched it from" is not an answer.
     ///
-    /// Values are NOT expanded here (`~`, relative paths): that needs a
-    /// working directory, and resolving it in the loader would bake this
-    /// process's `$HOME` into a value the daemon might read.
+    /// Anything that does not parse — a key that is not a slot id, a value
+    /// that is not a `VPath` — is dropped with a warning rather than refusing
+    /// to start: the file is the reader's, but a typo does not earn a refusal
+    /// to run. Those warnings reach the screen
+    /// ([`crate::CommonConfig::profile_warnings`]); that is what keeps the
+    /// strictness from being a trap.
+    ///
+    /// The SESSION wins over this. `[profile.start]` says where a slot opens
+    /// the first time, not every time: a profile is a workspace, not a
+    /// bookmark that drags you back to the start whenever you enter it.
     pub start: std::collections::BTreeMap<String, String>,
 }
 
@@ -250,7 +260,9 @@ pub struct UiSection {
     /// It costs one row, and `menu_bar = false` gives it back — the menu still
     /// opens with its key, drawn over the top row as it always was.
     ///
-    /// The GUI has its own chrome and ignores this key.
+    /// **Both frontends honour it.** This used to say the GUI ignored the key;
+    /// it reads it (`MenuView.bar`), and a comment that lies is what the next
+    /// audit believes.
     #[serde(default)]
     pub menu_bar: Option<bool>,
     /// Whether the panel bar is pinned under the menu bar. Absent = `true`.
@@ -264,7 +276,8 @@ pub struct UiSection {
     /// It costs one row, and `panel_bar = false` gives it back — every panel
     /// still opens by its own key and from the menu.
     ///
-    /// The GUI has its own chrome and ignores this key.
+    /// **Both frontends honour it.** This used to say the GUI ignored the key;
+    /// it reads it (`PanelBarView.bar`).
     #[serde(default)]
     pub panel_bar: Option<bool>,
     /// Whether every listing carries a `..` row at the top. Absent = `true`.

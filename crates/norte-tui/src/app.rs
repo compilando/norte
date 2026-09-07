@@ -331,6 +331,20 @@ pub struct SessionUi {
     /// colocar: sobre un pane vacío, poner el cursor en la fila 12 es ponerlo
     /// en la 0.
     cursors: std::collections::HashMap<u32, u64>,
+    /// De qué huecos SABÍA la sesión guardada, tal y como se leyó del disco.
+    ///
+    /// La necesita `[profile.start]`, que solo siembra el hueco del que la
+    /// sesión no sabe nada (ADR 0098). Y tiene que ser lo LEÍDO y no
+    /// `App::session_body()`, que es la pantalla de AHORA: aquélla nombra todos
+    /// los huecos vivos, así que preguntándole el perfil no sembraba nunca.
+    read: std::collections::BTreeSet<u32>,
+    /// Los huecos que este proceso ya sembró desde `[profile.start]`.
+    ///
+    /// Sembrar es de la PRIMERA vez, y sin esta cuenta un lector sin sesión
+    /// guardada —una instalación nueva— volvía al directorio de arranque del
+    /// perfil cada vez que entraba y salía de él, que es la decisión 2 de la
+    /// ADR 0098 puesta del revés.
+    seeded: std::collections::BTreeSet<u32>,
 }
 
 /// Filas que salta `cursor.page-up/down` (fijo hasta que el alto real del

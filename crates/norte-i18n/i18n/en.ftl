@@ -240,6 +240,7 @@ msg-view-error = view: { $error }
 msg-config-reloaded = config reloaded
 msg-profile-switched = profile: { $profile }
 msg-profile-switched-partial = profile: { $profile } — needs a restart to apply: { $keys }
+msg-profile-config-ignored = profile: { $profile } — { $n } line(s) of the profile are not understood and were ignored; see the log
 msg-profile-not-applied = the profile { $profile } could not be applied
 # #306: saving the workspace as a profile.
 msg-profile-saved = profile saved: { $name }

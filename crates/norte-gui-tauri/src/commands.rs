@@ -61,7 +61,14 @@ impl Bridge {
         let Ok(Some(tema)) = norte_theme::Theme::preset(nombre) else {
             return false;
         };
-        let nuevo = crate::catalog::catalogo(self.host.instance(), self.lang, &tema);
+        let mut nuevo = crate::catalog::catalogo(self.host.instance(), self.lang, &tema);
+        // La apariencia se CONSERVA: este camino cambia colores, y rehacer el
+        // catálogo desde cero devolvería las fuentes a las del sistema sin que
+        // nadie lo pidiera. Es el mismo catálogo con otro tema.
+        nuevo.appearance = match self.catalog.read() {
+            Ok(guard) => guard.appearance.clone(),
+            Err(env) => env.into_inner().appearance.clone(),
+        };
         // Un lock envenenado significa que otro hilo panicó CON el catálogo en
         // la mano. Se sigue: lo que hay dentro es un `Arc` entero y válido, y
         // dejar la ventana sin poder cambiar de tema por eso sería peor.
