@@ -314,10 +314,15 @@ recognise the format of the input file" that never mentions strip. The real fix
 is building on the oldest supported glibc/WebKitGTK baseline, which phase 7
 asks for anyway.
 
-**The packages ship `norte-gui` alone, not `norte`** — so on a clean install
-the window cannot start its daemon. Whether GUI and CLI/daemon ship as one
-bundle or as coordinated packages is an open question phase 7 has to answer
-(#256).
+**The packages ship all three binaries, in ONE bundle** — `norte-gui` plus
+`norte` and `ntc` as Tauri sidecars (`externalBin` in `tauri.conf.json`, copied
+by `gui-package` for the host triple). That was #256's open question and it is
+answered: one bundle, because the window starts its own daemon and a clean
+install where it cannot is a window that opens to an error. `just gui-smoke`
+installs the built package in a clean container and checks exactly that — the
+three binaries, the first listing, and the window coming up under Xvfb. It
+needs Docker and a prior `gui-package`, and deliberately not CI: a clean-install
+failure should not depend on who pressed the button.
 
 ## Workspace map
 
