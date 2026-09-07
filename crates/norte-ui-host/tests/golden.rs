@@ -2242,6 +2242,86 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
     );
 }
 
+/// La FORMA del corpus, resumida en un número, y ese número vive al lado de
+/// `BRIDGE_VERSION`.
+///
+/// El test de contrato del renderer ya caza que las dos constantes de versión
+/// —la de Rust y la de TypeScript— se separen. Lo que nadie cazaba es
+/// re-bendecir el corpus SIN subir ninguna de las dos: en este puente toda
+/// forma nueva es incompatible, porque la versión se compara por igualdad
+/// exacta y un renderer de otra queda fuera con una pantalla fatal. Así que un
+/// campo añadido, renombrado o quitado sin bump es un renderer viejo leyendo
+/// `undefined` en silencio.
+///
+/// Se resume la FORMA y no el contenido: el conjunto de rutas de claves, con
+/// los índices de array aplanados. Un valor que cambia —otro nombre de
+/// fichero de ejemplo, otro número— no obliga a nada; un campo que aparece o
+/// se va, sí.
+///
+/// Cuando esto se pone rojo, el arreglo NO es actualizar el número a secas:
+/// es subir `BRIDGE_VERSION` (y su espejo en `ui/src/types.ts`), escribir qué
+/// cambió en el registro de versiones de `bridge.rs`, y entonces actualizarlo.
+#[test]
+fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
+    /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
+    /// bump, que es justo la parada que este test existe para forzar.
+    const FORMA: u64 = 256_773_043_671_963_694;
+
+    let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {
+        for (caso, valor) in load(fichero) {
+            // El nombre del CASO no entra: añadir un caso más de una forma que
+            // ya se conoce no cambia el contrato con el renderer.
+            let _ = caso;
+            formas(&valor, fichero, &mut rutas);
+        }
+    }
+    let calculada = resumen(&rutas);
+    assert_eq!(
+        calculada, FORMA,
+        "la forma del corpus cambió. Si es un campo nuevo del puente: sube \
+         `BRIDGE_VERSION` y su espejo en `ui/src/types.ts`, escribe el porqué \
+         en el registro de `bridge.rs`, y pon {calculada} aquí."
+    );
+}
+
+/// Todas las rutas de clave de un JSON, con los índices de array aplanados.
+fn formas(v: &Value, prefijo: &str, out: &mut std::collections::BTreeSet<String>) {
+    match v {
+        Value::Object(m) => {
+            for (k, hijo) in m {
+                let ruta = format!("{prefijo}.{k}");
+                out.insert(ruta.clone());
+                formas(hijo, &ruta, out);
+            }
+        }
+        Value::Array(xs) => {
+            for x in xs {
+                formas(x, &format!("{prefijo}[]"), out);
+            }
+        }
+        // Un escalar no aporta forma: su RUTA ya se apuntó arriba.
+        _ => {}
+    }
+}
+
+/// Un resumen estable de un conjunto de cadenas. FNV-1a: no hace falta que
+/// sea criptográfico —esto detecta despistes, no ataques— y sí que dé el
+/// mismo número en cualquier máquina y versión de Rust, que es lo que
+/// `DefaultHasher` no promete.
+fn resumen(rutas: &std::collections::BTreeSet<String>) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for r in rutas {
+        for b in r.as_bytes() {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h ^= u64::from(b'\n');
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
 /// Cada VARIANTE de los enums del puente cruza al menos una vez (#257).
 ///
 /// La cobertura de `UiAction` ya la vigila el compilador (`tag_de_accion` es

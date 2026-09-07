@@ -74,6 +74,25 @@ impl Estado {
         for (id, _) in &siembra {
             self.sesion.sembrados.insert(*id);
         }
+        // Un id que el perfil nombra y esta disposición no coloca no tiene
+        // dónde abrir. Se DICE, como en el terminal: callarlo es la misma
+        // clase de silencio que la clave entera tenía antes de la ADR 0098.
+        let colocados: std::collections::BTreeSet<u32> = self.huecos.keys().copied().collect();
+        let huerfanos = norte_frontend::config::profile_start_huerfanos(
+            &self.config.common.profile_start,
+            &colocados,
+        );
+        if !huerfanos.is_empty() {
+            let ids: Vec<String> = huerfanos.iter().map(u32::to_string).collect();
+            self.status.message = Some(clamp_display(norte_i18n::ta_in(
+                self.lang,
+                "msg-profile-start-orphans",
+                &[
+                    ("n", &huerfanos.len().to_string()),
+                    ("ids", &ids.join(", ")),
+                ],
+            )));
+        }
         siembra
     }
 

@@ -39,6 +39,10 @@ independently through `PROTOCOL_VERSION`.
   its size and a wrong width skews every column. `reduce_motion` can only
   **add** the request: `false` does not switch off the desktop's own
   `prefers-reduced-motion`. A terminal applies none of the four and says so.
+- **A `[profile.start]` naming a slot no layout places is now said out loud.**
+  It used to fall through in silence — the same shape of defect as the key
+  itself before ADR 0098: you write something in the profile file and nothing
+  happens, with nothing explaining why.
 - **Copying a single file now warns about the destination in the terminal
   too** (#343). The terminal split by item count: several items opened the
   confirmation dialog and armed the destination check, one item opened the
@@ -522,6 +526,15 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A guard that the golden corpus cannot change shape without a bridge bump.**
+  The contract test already caught the Rust and TypeScript version constants
+  drifting apart; nothing caught re-blessing the corpus with neither of them
+  moving. On this bridge every shape change is breaking — the version is
+  compared for exact equality and a renderer of another one gets a fatal
+  screen — so a field added, renamed or removed without a bump is a stale
+  renderer reading `undefined` in silence. The guard summarises the *shape*
+  (the set of key paths), not the values, so a different example filename
+  costs nothing and a new field stops the build.
 - **A test that every panel following the cursor can reach the renderer on its
   own** (`crates/norte-ui-host/tests/sondas.rs`). It opens each panel the bar
   offers, moves the listing cursor, and checks whether that panel's view

@@ -367,6 +367,13 @@ el host llama.
 
 ## Lo que NO entra aquí
 
-Si la ventana debe recargar la configuración en caliente. Hoy no lo hace y no
-es un defecto de paridad: es una pregunta de diseño sobre qué le debe una
-ventana de escritorio a un fichero de configuración. ADR aparte.
+~~Si la ventana debe recargar la configuración en caliente.~~ **DECIDIDO**:
+ADR 0099. Sigue sin ser un ítem de esta lista —es una pregunta de diseño y no
+una divergencia que arreglar— pero era la última abierta del frontend, y
+dejarla así había pasado de proteger a producir divergencia: las cuatro claves
+de apariencia se aplican al arrancar y no al cambiar de perfil precisamente
+porque solo el tema rehace el catálogo.
+
+La decisión: la ventana recarga **por la misma puerta que un cambio de
+perfil**, con el vigilante compartido, y dice por su nombre lo que no puede
+aplicar. La implementación va aparte de este plan.

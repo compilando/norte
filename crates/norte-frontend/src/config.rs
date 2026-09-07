@@ -309,6 +309,41 @@ pub fn profile_start_seeds(
         .collect()
 }
 
+/// Los huecos que `[profile.start]` nombra y esta DISPOSICIÓN no coloca.
+///
+/// No tienen dónde abrir, así que se caen — y eso hay que decirlo. Es la misma
+/// clase de silencio que la clave entera tenía antes de ADR 0098: se escribe
+/// algo en el fichero del perfil y no pasa nada, sin que nada explique por
+/// qué. Ocurre editando a mano o cambiando la disposición del perfil sin
+/// reguardarlo; `save_profile` siempre escribe ids que su propia disposición
+/// coloca.
+///
+/// Devuelve los ids EN ORDEN, para que el mensaje sea el mismo en las dos
+/// superficies.
+///
+/// ```
+/// use std::collections::{BTreeMap, BTreeSet};
+/// use norte_proto::VPath;
+/// use norte_frontend::config::profile_start_huerfanos;
+///
+/// let mut start = BTreeMap::new();
+/// start.insert(1, VPath::parse("file:///src").unwrap());
+/// start.insert(9, VPath::parse("file:///tmp").unwrap());
+/// let colocados = BTreeSet::from([1, 2]);
+/// assert_eq!(profile_start_huerfanos(&start, &colocados), vec![9]);
+/// ```
+#[must_use]
+pub fn profile_start_huerfanos(
+    start: &std::collections::BTreeMap<u32, norte_proto::VPath>,
+    colocados: &std::collections::BTreeSet<u32>,
+) -> Vec<u32> {
+    start
+        .keys()
+        .filter(|id| !colocados.contains(id))
+        .copied()
+        .collect()
+}
+
 /// Lee todos los perfiles de `<dir>/profiles/`, con su título y su motivo si
 /// no cargan.
 ///
