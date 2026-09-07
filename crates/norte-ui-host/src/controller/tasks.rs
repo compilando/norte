@@ -628,6 +628,7 @@ impl Estado {
                 hostile: false,
             }],
             overflow_note: String::new(),
+            overflow_hostile: false,
             // Las MISMAS cuatro que el TUI, y en el mismo orden: es la tabla
             // de `dialog.*` del catálogo compartido, no una lista inventada
             // aquí.
@@ -1268,6 +1269,7 @@ impl Estado {
             deadline_at_ms: None,
             body: cuerpo,
             overflow_note: String::new(),
+            overflow_hostile: false,
             choices: vec![DialogChoice {
                 id: "ok".to_owned(),
                 label_key: "dialog-ok".to_owned(),

@@ -116,7 +116,15 @@ pub async fn drain_pending(
                 norte_i18n::active(),
             ),
         };
-        if let Some(Modal::ConfirmTransfer { space, confine, .. }) = app.modal.as_mut() {
+        // Los DOS diálogos, que son los dos caminos de una transferencia: con
+        // varios ítems se confirma y con uno se teclea el nombre. Repartir el
+        // aviso por cuál de los dos salió es lo que dejaba a un fichero suelto
+        // copiándose sin decir nada (#343).
+        if let Some(
+            Modal::ConfirmTransfer { space, confine, .. }
+            | Modal::TransferName { space, confine, .. },
+        ) = app.modal.as_mut()
+        {
             *space = space_notice;
             *confine = confinement_notice;
         }

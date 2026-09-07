@@ -518,6 +518,74 @@ pub fn approval_ready(plan_confirmable: bool, visto: usize, total: usize) -> boo
     plan_confirmable && visto >= total
 }
 
+/// ¿Alguna de las rutas que NO se enseñan se pintaría alterada?
+///
+/// El badge de una ruta visible dice «lo que lees no son los bytes que hay».
+/// Sobre lo recortado no se puede decir eso —no está delante para mirarlo—,
+/// pero sí que ahí fuera hay algo así, que es lo que decide si merece la pena
+/// ampliar antes de aprobar. `saltar` es cuántas se enseñan.
+///
+/// De los dos frontends porque es la misma pregunta sobre las mismas rutas y
+/// sobre la superficie donde equivocarse sale más caro: el terminal lo decía
+/// desde siempre y la ventana no (ADR 0077).
+///
+/// ```
+/// use norte_proto::VPath;
+/// use norte_frontend::overflow_hostile;
+///
+/// let limpia = VPath::parse("file:///casa/a.txt").unwrap();
+/// let rara = VPath::parse("file:///casa/a%E2%80%AE.txt").unwrap();
+///
+/// // La hostil se ENSEÑA: el badge es suyo, no del resumen.
+/// assert!(!overflow_hostile(&[rara.clone(), limpia.clone()], 2));
+/// // La hostil se queda fuera: el resumen lo dice.
+/// assert!(overflow_hostile(&[limpia.clone(), rara], 1));
+/// // Nada recortado, nada que decir.
+/// assert!(!overflow_hostile(&[limpia], 9));
+/// ```
+#[must_use]
+pub fn overflow_hostile(rutas: &[VPath], saltar: usize) -> bool {
+    rutas.iter().skip(saltar).any(|p| crate::path_display(p).1)
+}
+
+/// ¿Este texto YA REDACTADO se pintaría alterado?
+///
+/// Para las rutas que llegan como TEXTO y no como [`VPath`] — las de una
+/// petición de aprobación, que el daemon manda redactadas porque los bytes
+/// originales no salen de ahí.
+///
+/// Dos motivos para marcar, y el segundo es el que se olvida: comparar contra
+/// el original no detecta nada, porque el daemon ya pasó los bytes por su
+/// `display_lossy` y los controles, los overrides bidi y los bytes inválidos
+/// YA son `U+FFFD`. Ese carácter ES la señal de que lo que se lee no es lo que
+/// hay; no se puede recuperar qué había, pero sí decir que no es fiel.
+///
+/// ```
+/// use norte_frontend::redacted_hostile;
+/// assert!(!redacted_hostile("casa/a.txt"));
+/// // Lo que el daemon ya sustituyó.
+/// assert!(redacted_hostile("casa/a\u{FFFD}.txt"));
+/// // Y lo que llega entero y hay que enmascarar aquí.
+/// assert!(redacted_hostile("casa/a\u{200B}.txt"));
+/// ```
+#[must_use]
+pub fn redacted_hostile(texto: &str) -> bool {
+    norte_encoding::mask_terminal_hazards(texto) != texto || texto.contains('\u{FFFD}')
+}
+
+/// [`overflow_hostile`] para rutas que llegan como texto redactado.
+///
+/// ```
+/// use norte_frontend::overflow_hostile_redacted;
+/// let rutas = ["a.txt".to_owned(), "b\u{FFFD}.txt".to_owned()];
+/// assert!(overflow_hostile_redacted(&rutas, 1), "la rara se queda fuera");
+/// assert!(!overflow_hostile_redacted(&rutas, 2), "se enseñan las dos");
+/// ```
+#[must_use]
+pub fn overflow_hostile_redacted(rutas: &[String], saltar: usize) -> bool {
+    rutas.iter().skip(saltar).any(|p| redacted_hostile(p))
+}
+
 /// Badge por defecto de [`item_lines`]: el aviso que ya usaba el modal de la
 /// GUI. Los frontends con un badge propio (el TUI usa `!`, ASCII, por los
 /// terminales que no pintan `⚠`) pasan el suyo a [`item_lines_with`] — el

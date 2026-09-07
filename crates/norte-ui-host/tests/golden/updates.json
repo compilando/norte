@@ -327,6 +327,7 @@
         "input": "",
         "input_hostile": false,
         "input_secret": false,
+        "overflow_hostile": true,
         "overflow_note": "… se enseñan 1 de 3",
         "subject": {
           "hostile": false,

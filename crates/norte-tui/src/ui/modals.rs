@@ -360,8 +360,21 @@ pub(crate) fn modal_title_body(
             name,
             error,
             enc,
+            space,
+            confine,
             ..
-        } => transfer_name_modal_text(*kind, from, to_dir, name, error.as_deref(), *enc),
+        } => transfer_name_modal_text(
+            *kind,
+            from,
+            to_dir,
+            name,
+            error.as_deref(),
+            *enc,
+            DestNotices {
+                space: space.as_deref(),
+                confine: confine.as_deref(),
+            },
+        ),
     }
 }
 
@@ -383,7 +396,17 @@ pub(crate) fn modal_height(modal: &crate::app::Modal) -> u16 {
             let total = usize::try_from(req.paths_total)
                 .unwrap_or(usize::MAX)
                 .max(req.paths.len());
-            let lines = 1 + shown + usize::from(total > shown) + 1;
+            // Cuerpo + plazo + las opcionales del detalle + las rutas +
+            // resumen + teclas. El plazo va SIEMPRE (desconocido también se
+            // dice), y las de modo y alcance son las que este cómputo se
+            // dejaba: un `set-mode` recursivo perdía su última línea.
+            let lines = 1
+                + 1
+                + usize::from(req.detail.mode.is_some())
+                + usize::from(req.detail.recursive)
+                + shown
+                + usize::from(total > shown)
+                + 1;
             // `+ 2` (los bordes), no el `+ 3` de ConfirmDelete: este modal
             // siempre ajustó exacto y acotar la lista no es motivo para
             // moverle la caja una fila.
@@ -400,16 +423,30 @@ pub(crate) fn modal_height(modal: &crate::app::Modal) -> u16 {
             u16::try_from(listed).unwrap_or(u16::MAX).saturating_add(5)
         }
         // TrustHostKey: host + algo + fingerprint + nota + teclas (5 líneas)
-        // + bordes. TransferName con error (#105): origen + dir destino +
-        // campo + hint + teclas + error (6 líneas), +3.
-        Modal::TrustHostKey { .. } | Modal::TransferName { error: Some(_), .. } => 9,
+        // + bordes.
+        Modal::TrustHostKey { .. } => 9,
+        // TransferName: origen + dir destino + campo + hint + teclas son 5
+        // líneas, +3; y una más por cada aviso del destino y por el error.
+        // SE CUENTAN en vez de ir fijas porque los avisos aparecen y
+        // desaparecen (#343): un alto fijo dejaba la última línea —la de las
+        // teclas, o el propio aviso— fuera de la caja.
+        Modal::TransferName {
+            error,
+            space,
+            confine,
+            ..
+        } => {
+            let extras = usize::from(error.is_some())
+                + usize::from(space.is_some())
+                + usize::from(confine.is_some());
+            u16::try_from(extras).unwrap_or(u16::MAX).saturating_add(8)
+        }
         // TrustLuaInit: un mensaje largo con wrap (~4 líneas a 58 cols) +
-        // bordes. TransferName sin error: 5 líneas de cuerpo (origen y dir
-        // destino incluidos), +3.
+        // bordes.
         // #325 `AskSecret`: conexión + destino + campo de puntos + nota +
         // teclas son 5 líneas, +3. La caja NO cambia de alto al teclear — el
         // campo pinta siempre una línea, llena o vacía.
-        Modal::TrustLuaInit { .. } | Modal::TransferName { .. } | Modal::AskSecret { .. } => 8,
+        Modal::TrustLuaInit { .. } | Modal::AskSecret { .. } => 8,
         // Patrón/mkdir + hint + teclas (3 líneas) o + la línea de error (4),
         // más bordes (#103 T9: mismo cómputo `body_lines + 3` que el resto).
         // Sin error caen al comodín `6` de abajo (match_same_arms).
@@ -549,6 +586,23 @@ pub(crate) fn approval_modal_text(
         "modal-approval-body",
         &[("session", &session), ("op", &op)],
     )];
+    // Cuánto le queda. Una decisión con fecha de caducidad que no la enseña se
+    // lee como una que espera para siempre, y quien vuelve al rato pulsa
+    // aprobar sobre algo que el daemon ya denegó. La ventana lo decía y este
+    // terminal no, con las mismas claves delante.
+    //
+    // `ttl_ms == 0` es DESCONOCIDO —una pendiente reconstruida por el resync
+    // de `policy.pending` no transporta el plazo restante— y se dice, en vez
+    // de callar: callar deja el diálogo delante invitando a aprobar sobre un
+    // id que el daemon puede haber reapado hace rato.
+    lines.push(if req.ttl_ms > 0 {
+        ta(
+            "modal-approval-ttl",
+            &[("s", &req.ttl_ms.div_ceil(1000).to_string())],
+        )
+    } else {
+        t("modal-approval-ttl-unknown")
+    });
     // #314: lo que la op AÑADE a la pregunta. Para todas menos una no hay
     // nada: la op y las rutas son la decisión. Un `set-mode` sí, porque dos
     // con las mismas rutas y modos distintos significan cosas opuestas, y sin
@@ -597,11 +651,11 @@ pub(crate) fn approval_modal_text(
         // El badge solo puede hablar de lo que se PUEDE mirar: las rutas que
         // el server recortó no están aquí para inspeccionarlas. Lo que no se
         // calla es el NÚMERO, que es lo que decide el consentimiento.
-        let hidden_hostile = req
-            .paths
-            .iter()
-            .skip(shown)
-            .any(|p| display_name(p.as_bytes()).1);
+        //
+        // La pregunta la contesta el crate COMPARTIDO: la ventana no la hacía
+        // sobre las mismas rutas, y una decisión de seguridad escrita en un
+        // solo frontend es la mitad del producto sin ella (ADR 0077).
+        let hidden_hostile = norte_frontend::overflow_hostile_redacted(&req.paths, shown);
         // Clave COMPARTIDA con `item_lines_with` (la de ConfirmDelete): el
         // resumen dice lo mismo en los dos sitios o el lector aprende dos
         // frases para un solo hecho.
@@ -1087,6 +1141,18 @@ pub(crate) fn semantic_hits_modal_text(
 /// diagnóstico son texto/bytes de usuario. El dir va en su propia línea
 /// (jamás un joiner in-band con el nombre — disciplina de los modales de
 /// #103).
+/// Lo que se sabe del DESTINO de una transferencia, para pintarlo.
+///
+/// Las dos juntas porque son la misma clase de línea —un hecho del destino que
+/// conviene saber antes de decir que sí— y porque van seguidas, en ese orden.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct DestNotices<'a> {
+    /// «No cabe» (#149). `None` = cabe, o no se sabe cuánto ocupa.
+    pub space: Option<&'a str>,
+    /// «Este destino no puede confinar las escrituras» (#164, #219).
+    pub confine: Option<&'a str>,
+}
+
 pub(crate) fn transfer_name_modal_text(
     kind: crate::app::TransferKind,
     from: &norte_proto::VPath,
@@ -1094,6 +1160,7 @@ pub(crate) fn transfer_name_modal_text(
     name: &str,
     error: Option<&str>,
     enc: Option<norte_encoding::NameEncoding>,
+    destino: DestNotices<'_>,
 ) -> (String, String) {
     let (masked, hostile) = display_name(name.as_bytes());
     let field = if hostile {
@@ -1119,13 +1186,16 @@ pub(crate) fn transfer_name_modal_text(
             line
         }
     };
-    let mut lines = vec![
-        badge_line(from),
-        format!("→ {}", badge_line(to_dir)),
-        field,
-        t("modal-transfer-name-hint"),
-        t("modal-mark-pattern-keys"),
-    ];
+    let mut lines = vec![badge_line(from), format!("→ {}", badge_line(to_dir)), field];
+    // Los dos avisos del destino, en el mismo sitio y en el mismo orden que en
+    // `ConfirmTransfer`: debajo del destino y encima de las teclas, que es lo
+    // último que se lee antes de decidir (#149, #164). Copiar UN fichero no
+    // los tenía, y por eso una hoja suelta se copiaba sin saber si el destino
+    // sujeta sus escrituras (#343).
+    lines.extend(destino.space.map(str::to_owned));
+    lines.extend(destino.confine.map(str::to_owned));
+    lines.push(t("modal-transfer-name-hint"));
+    lines.push(t("modal-mark-pattern-keys"));
     if let Some(err) = error {
         let (masked_err, _) = display_name(err.as_bytes());
         lines.push(masked_err);
@@ -1159,6 +1229,7 @@ mod transfer_name_modal_text_tests {
             hostile,
             Some(hostile),
             None,
+            super::DestNotices::default(),
         );
         assert!(!body.contains('\u{202E}'), "{body:?}");
         assert!(
@@ -2128,16 +2199,16 @@ mod approval_modal_tests {
         r.paths_total = 8192;
         let (_, body) = approval_modal_text(&r, "PIE");
         let lines: Vec<&str> = body.lines().collect();
-        // cabecera + 3 rutas + resumen + pie.
-        assert_eq!(lines.len(), 6, "{body:?}");
+        // cabecera + plazo + 3 rutas + resumen + pie.
+        assert_eq!(lines.len(), 7, "{body:?}");
         assert!(
-            lines[4].contains(&(8192 - 3).to_string()),
+            lines[5].contains(&(8192 - 3).to_string()),
             "el resumen cuenta las que la DECISIÓN cubre y no se ven: {body:?}"
         );
-        assert_eq!(lines[5], "PIE", "y el pie sigue siendo la última: {body:?}");
+        assert_eq!(lines[6], "PIE", "y el pie sigue siendo la última: {body:?}");
         assert_eq!(
             modal_height(&crate::app::Modal::ApproveAgentOp { req: r }),
-            8,
+            9,
             "el alto cuenta la línea de resumen que acaba de aparecer",
         );
     }
@@ -2151,8 +2222,8 @@ mod approval_modal_tests {
         let (_, body) = approval_modal_text(&r, "PIE");
         assert_eq!(
             body.lines().count(),
-            4,
-            "cabecera + 2 rutas + pie: {body:?}"
+            5,
+            "cabecera + plazo + 2 rutas + pie: {body:?}"
         );
     }
 
@@ -2171,11 +2242,11 @@ mod approval_modal_tests {
         let (_, body) = approval_modal_text(&req(rutas(total)), "PIE-DEL-MODAL");
         let lines: Vec<&str> = body.lines().collect();
 
-        // cabecera + LIMITE rutas + resumen + pie.
-        assert_eq!(lines.len(), limit + 3, "{body:?}");
-        assert!(lines[1].contains("f1.txt"), "{body:?}");
+        // cabecera + plazo + LIMITE rutas + resumen + pie.
+        assert_eq!(lines.len(), limit + 4, "{body:?}");
+        assert!(lines[2].contains("f1.txt"), "{body:?}");
         assert!(
-            lines[limit].contains(&format!("f{limit}.txt")),
+            lines[limit + 1].contains(&format!("f{limit}.txt")),
             "la última ruta de la ventana: {body:?}"
         );
         assert!(
@@ -2183,11 +2254,11 @@ mod approval_modal_tests {
             "la cola NO se pinta: {body:?}"
         );
         assert!(
-            lines[limit + 1].contains(&(total - limit).to_string()),
+            lines[limit + 2].contains(&(total - limit).to_string()),
             "el resumen dice cuántas quedan fuera: {body:?}"
         );
         assert_eq!(
-            lines[limit + 2],
+            lines[limit + 3],
             "PIE-DEL-MODAL",
             "y el pie es la ÚLTIMA línea, siempre presente: {body:?}"
         );
@@ -2200,12 +2271,12 @@ mod approval_modal_tests {
         let height = modal_height(&modal);
         assert_eq!(
             height,
-            u16::try_from(limit + 3).expect("cabe") + 2,
+            u16::try_from(limit + 4).expect("cabe") + 2,
             "{height}"
         );
         assert_eq!(
             modal_height(&crate::app::Modal::ApproveAgentOp { req: req(rutas(1)) }),
-            5,
+            6,
             "un lote que cabe conserva su alto de siempre: acotar la lista no \
              le mueve la caja"
         );
@@ -2224,9 +2295,11 @@ mod approval_modal_tests {
     fn un_lote_que_cabe_no_lleva_resumen() {
         let (_, body) = approval_modal_text(&req(rutas(2)), "PIE");
         let lines: Vec<&str> = body.lines().collect();
-        assert_eq!(lines.len(), 4, "{body:?}"); // cabecera + 2 rutas + pie
+        // Cabecera + PLAZO + 2 rutas + pie. El plazo va siempre desde que este
+        // modal dice cuánto le queda, como el de la ventana.
+        assert_eq!(lines.len(), 5, "{body:?}");
         assert!(body.contains("f2.txt"), "{body:?}");
-        assert_eq!(lines[3], "PIE", "{body:?}");
+        assert_eq!(lines[4], "PIE", "{body:?}");
     }
 
     /// Y lo ESCONDIDO no se cuela limpio (misma doctrina que el plan IA y los
@@ -2239,7 +2312,7 @@ mod approval_modal_tests {
         let mut paths = rutas(limit + 2);
         paths[limit + 1] = "mem:///proj/x\u{202e}y.txt".to_owned();
         let (_, body) = approval_modal_text(&req(paths), "PIE");
-        let summary = body.lines().nth(limit + 1).expect("resumen");
+        let summary = body.lines().nth(limit + 2).expect("resumen");
         assert!(
             summary.starts_with(HOSTILE_BADGE),
             "el resumen delata la hostil oculta: {body:?}"
@@ -2247,7 +2320,7 @@ mod approval_modal_tests {
 
         // Con TODAS las ocultas limpias, no marca (o el badge no diría nada).
         let (_, clean) = approval_modal_text(&req(rutas(limit + 2)), "PIE");
-        let clean_summary = clean.lines().nth(limit + 1).expect("resumen");
+        let clean_summary = clean.lines().nth(limit + 2).expect("resumen");
         assert!(!clean_summary.starts_with(HOSTILE_BADGE), "{clean:?}");
     }
 }

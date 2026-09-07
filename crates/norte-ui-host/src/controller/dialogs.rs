@@ -120,6 +120,7 @@ impl Estado {
                 deadline_at_ms: None,
                 body: cuerpo,
                 overflow_note: String::new(),
+                overflow_hostile: false,
                 choices: vec![
                     DialogChoice {
                         id: "confirm".to_owned(),

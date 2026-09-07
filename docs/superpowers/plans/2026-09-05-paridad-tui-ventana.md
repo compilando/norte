@@ -148,8 +148,20 @@ informe original; **A** salvo donde se diga.
     pueden estar en la fila ciento ochenta. `approval_ready` lo decide para
     los dos, sobre una marca de agua ALTA: volver arriba no des-lee lo ya
     leído.
-14. **El diálogo de aprobación de un agente**: el TTL solo lo enseña la
-    ventana; la insignia de hostil en las rutas ocultas solo el terminal.
+14. ~~**El diálogo de aprobación de un agente**: el TTL solo lo enseña la
+    ventana; la insignia de hostil en las rutas ocultas solo el terminal.~~
+    **HECHO**, las dos mitades. El plazo va ahora también en el terminal, con
+    las mismas claves y con el mismo «desconocido» cuando la pendiente llega
+    reconstruida por un resync. Y la insignia del resumen viaja al renderer
+    (`DialogView::overflow_hostile`, puente 58): dice que ahí fuera hay algo
+    que se pintaría alterado, sin poder señalar cuál — lo recortado no está
+    delante para mirarlo.
+
+    La REGLA de cuándo una ruta redactada es hostil se subió al crate
+    compartido (`redacted_hostile`): las dos superficies la contestaban con
+    funciones distintas sobre las mismas rutas. Y el cómputo del alto del modal
+    del terminal se dejaba las líneas de modo y alcance, así que un `set-mode`
+    recursivo perdía la última.
 15. ~~**La fila de un volumen.**~~ **HECHO**: una sola redacción
     (`PlacesState::volume_detail`). Las tres decían «desconocido» cuando lo
     único que faltaba era el TOTAL, tirando el dato que sí había — y cuánto
@@ -192,10 +204,11 @@ la lista vuelva a crecer, después lo que el usuario nota.
 
 Sin esto, arreglar la lista es barrer hacia la puerta.
 
-1. **Exhaustividad de config en la ventana.** Un destructuring de
-   `CommonConfig` sin `..` en el lado del host/arranque, como el que ya tiene
-   el terminal en `App::desde_config`. Cada clave: la lee, la ignora a
-   propósito (con motivo), o es de otro proceso.
+1. ~~**Exhaustividad de config en la ventana.**~~ **HECHO**:
+   `crates/norte-ui-host/tests/config_cobertura.rs` destructura `CommonConfig`
+   sin `..`, así que una clave nueva no COMPILA hasta que alguien diga qué hace
+   la ventana con ella: la lee, la ignora a propósito (con motivo), o es de
+   otro proceso.
 2. ~~**El arnés de paridad compara FRONTEND con FRONTEND.**~~ **HECHO**:
    `crates/norte-ui-host/tests/parity.rs` corre cada escenario TRES veces
    —primitivas, host, `norte-tui`— y compara el estado semántico paso a paso.

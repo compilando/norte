@@ -200,6 +200,7 @@ impl Estado {
             deadline_at_ms: None,
             body,
             overflow_note: String::new(),
+            overflow_hostile: false,
             choices,
             input: None,
             input_hostile: false,

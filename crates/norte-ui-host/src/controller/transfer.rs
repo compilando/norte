@@ -327,6 +327,7 @@ impl Estado {
         // convertir: «se enseñan 16 de 40» tiene que seguir siendo cierto
         // cuando cuatro de esas 40 se cayeron por el camino.
         let nota = self.nota_de_recorte(cuerpo.len(), llegaron.max(usables.len()));
+        let hostil_fuera = norte_frontend::overflow_hostile(&usables, cuerpo.len());
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
@@ -339,6 +340,7 @@ impl Estado {
             deadline_at_ms: None,
             body: cuerpo,
             overflow_note: nota,
+            overflow_hostile: hostil_fuera,
             choices: vec![
                 DialogChoice {
                     id: "confirm".to_owned(),
@@ -505,6 +507,7 @@ impl Estado {
             .map(Self::linea_de_ruta)
             .collect();
         let nota = self.nota_de_recorte(cuerpo.len(), paths.len());
+        let hostil_fuera = norte_frontend::overflow_hostile(&paths, cuerpo.len());
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
@@ -522,6 +525,7 @@ impl Estado {
             deadline_at_ms: None,
             body: cuerpo,
             overflow_note: nota,
+            overflow_hostile: hostil_fuera,
             choices: vec![
                 DialogChoice {
                     id: "confirm".to_owned(),

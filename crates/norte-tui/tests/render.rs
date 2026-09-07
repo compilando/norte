@@ -1110,6 +1110,8 @@ fn el_modal_de_nombre_en_destino_elide_las_rutas() {
         from_marks: false,
         enc: None,
         error: None,
+        space: None,
+        confine: None,
     });
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");

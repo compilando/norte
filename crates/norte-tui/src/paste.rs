@@ -389,6 +389,8 @@ mod paste_tests {
             from_marks: false,
             enc: None,
             error: None,
+            space: None,
+            confine: None,
         });
         route_paste(&mut a, "renamed\ntail");
         assert!(matches!(

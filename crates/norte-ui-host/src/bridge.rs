@@ -212,7 +212,13 @@ use serde::{Deserialize, Serialize};
 ///   viajaba en la foto entera — o sea que el panel resaltaba la fila N, que
 ///   ya era otra tarea o ninguna, mientras la tecla de cancelar actuaba sobre
 ///   la que el host tiene acotada. Resaltar una y parar otra es la avería.
-pub const BRIDGE_VERSION: u32 = 57;
+/// - **58**: un diálogo con la lista recortada dice si alguna de las que NO
+///   enseña se pintaría alterada. El badge de una ruta visible dice «lo que
+///   lees no son los bytes que hay»; sobre lo recortado no se puede decir eso
+///   —no está delante—, pero sí que ahí fuera hay algo así, que es lo que
+///   decide si merece la pena ampliar antes de aprobar. El terminal lo decía
+///   en su resumen desde siempre y esta ventana no, sobre las mismas rutas.
+pub const BRIDGE_VERSION: u32 = 58;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

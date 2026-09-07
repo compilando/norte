@@ -161,6 +161,21 @@ impl App {
             (Some(e), Err(_)) => norte_encoding::decode_name(&original, e),
             (None, Err(_)) => String::from_utf8_lossy(&original).into_owned(),
         };
+        // Las dos líneas del destino se piden IGUAL que con varios ítems
+        // (#343): el reparto por número de ítems dejaba sin avisar justo al
+        // caso más común, copiar un fichero suelto. Nacen vacías y las rellena
+        // la cabecera de vuelta del bucle, que es donde se puede preguntar.
+        //
+        // El total es el de ESTE fichero, con la misma regla de todo o nada
+        // que la de varios: si el listado no trae su tamaño, no hay número que
+        // enseñar y el aviso de espacio calla.
+        self.pending_dest_check = Some(crate::app::DestCheck {
+            to: to_dir.clone(),
+            total: norte_frontend::space::total_to_write(
+                self.panes[from_pane].entries(),
+                std::slice::from_ref(&from),
+            ),
+        });
         self.modal = Some(Modal::TransferName {
             kind,
             from,
@@ -171,6 +186,8 @@ impl App {
             from_marks,
             enc,
             error: None,
+            space: None,
+            confine: None,
         });
     }
 
