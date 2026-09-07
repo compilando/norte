@@ -104,3 +104,4 @@ edits.
 | [0096](0096-what-is-operated-on-and-what-is-pointed-at-are-two-questions.md) | What is operated on and what is pointed at are two questions | accepted |
 | [0097](0097-parity-between-the-terminal-and-the-window-is-a-test.md) | Parity between the terminal and the window is a test, not a convention | accepted |
 | [0098](0098-profile-start-is-a-seed-and-the-session-wins.md) | `[profile.start]` is a seed in wire form, and the session wins | accepted |
+| [0099](0099-the-window-reloads-what-a-profile-switch-reloads.md) | The window reloads what a profile switch reloads, and says the rest | accepted |

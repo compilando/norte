@@ -202,6 +202,21 @@ impl App {
     ) -> Vec<norte_frontend::layout::SlotId> {
         let colocados: std::collections::BTreeSet<u32> =
             self.layout.slot_ids().into_iter().map(|s| s.0).collect();
+        // Un id que el perfil nombra y esta disposición no coloca no tiene
+        // dónde abrir. Se DICE: callarlo es la misma clase de silencio que la
+        // clave entera tenía antes de la ADR 0098 — escribes algo en el
+        // fichero y no pasa nada, sin que nada explique por qué.
+        let huerfanos = norte_frontend::config::profile_start_huerfanos(start, &colocados);
+        if !huerfanos.is_empty() {
+            let ids: Vec<String> = huerfanos.iter().map(u32::to_string).collect();
+            self.message = Some(ta(
+                "msg-profile-start-orphans",
+                &[
+                    ("n", &huerfanos.len().to_string()),
+                    ("ids", &ids.join(", ")),
+                ],
+            ));
+        }
         let mut ask = Vec::new();
         for (raw, path) in norte_frontend::config::profile_start_seeds(
             start,
