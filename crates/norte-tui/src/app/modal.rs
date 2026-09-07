@@ -309,6 +309,17 @@ pub enum Modal {
         enc: Option<norte_encoding::NameEncoding>,
         /// Diagnóstico del último intento inválido.
         error: Option<String>,
+        /// «No cabe» (#149), o `None` si cabe o no se sabe cuánto ocupa.
+        ///
+        /// Las MISMAS dos líneas que [`Self::ConfirmTransfer`], y por eso
+        /// están aquí: este diálogo es el que sale al copiar UN fichero, y
+        /// repartir los avisos por número de ítems hacía que copiar uno suelto
+        /// no dijera nada (#343). El silencio del espacio significa «cabe o no
+        /// lo sé»; el del confinamiento significa «este destino SUJETA sus
+        /// escrituras», que es una afirmación, no una ausencia.
+        space: Option<String>,
+        /// «Este destino no puede confinar las escrituras» (#164, #219).
+        confine: Option<String>,
     },
     /// Destino TECLEADO de una transferencia: F5/F6 cuando no hay «el otro
     /// panel» al que copiar.
@@ -939,6 +950,8 @@ mod tests {
             from_marks: false,
             enc: None,
             error: None,
+            space: None,
+            confine: None,
         }
     }
 

@@ -39,6 +39,24 @@ independently through `PROTOCOL_VERSION`.
   its size and a wrong width skews every column. `reduce_motion` can only
   **add** the request: `false` does not switch off the desktop's own
   `prefers-reduced-motion`. A terminal applies none of the four and says so.
+- **Copying a single file now warns about the destination in the terminal
+  too** (#343). The terminal split by item count: several items opened the
+  confirmation dialog and armed the destination check, one item opened the
+  *name* dialog and armed nothing. So copying a lone file said neither "it
+  does not fit" nor "this destination cannot confine its writes", while the
+  window said both. The second one is the one that matters: its **absence
+  means** the destination does hold its writes, so staying quiet asserts
+  something nobody checked — and since #219 that reaches a single leaf too.
+- **The agent approval dialog says the same thing on both surfaces.** The
+  deadline was shown only by the window — a decision with an expiry that does
+  not show it reads like one that waits forever, and whoever comes back later
+  hits approve on something the daemon already denied. The badge for a hostile
+  path *outside* the shown window was only in the terminal: it cannot point at
+  a specific path (that one is not on screen) but it can say something out
+  there would be painted altered, which is what decides whether to expand
+  before approving. Both now cross the bridge (58), and the rule for when a
+  redacted path counts as hostile moved to `norte-frontend` — the two surfaces
+  were answering it with different functions over the same paths.
 - **A profile's `[ui] theme` can be a path in the window too** (ADR 0020). It
   worked at startup and nowhere else: both places the window resolves a theme
   — the host, which keeps it for its own theme screen, and the process that

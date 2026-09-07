@@ -4007,6 +4007,13 @@ export class Screen {
       nota.className = "dialog-overflow";
       nota.setAttribute("role", "alert");
       nota.textContent = top.overflow_note;
+      // Y si algo de lo que NO se enseña se pintaría alterado. El badge no
+      // puede hablar de una ruta concreta —esa no está delante— pero sí decir
+      // que ahí fuera hay algo así, que es lo que decide si merece la pena
+      // ampliar antes de aprobar. El terminal lo decía y esta ventana no.
+      if (top.overflow_hostile === true) {
+        nota.append(" ", badge(this.t("hostile-name")));
+      }
       box.append(nota);
     }
     const chequeo = top.dest_check ?? { state: "not_asked" };

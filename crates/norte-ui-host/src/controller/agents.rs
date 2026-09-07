@@ -164,6 +164,7 @@ impl Estado {
                 hostile: false,
             }],
             overflow_note: String::new(),
+            overflow_hostile: false,
             choices: vec![
                 DialogChoice {
                     id: "confirm".to_owned(),

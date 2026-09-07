@@ -49,6 +49,7 @@
     "input": null,
     "input_hostile": false,
     "input_secret": false,
+    "overflow_hostile": false,
     "overflow_note": "",
     "subject": null,
     "title_key": "modal-delete-title"

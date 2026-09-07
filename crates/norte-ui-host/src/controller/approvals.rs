@@ -162,7 +162,11 @@ impl Estado {
             // El carácter de sustitución ES la señal de que lo que se lee no
             // es lo que hay. No se puede recuperar qué había —por eso el
             // daemon manda texto y no `VPath`— pero sí decir que no es fiel.
-            let hostil = enmascarado != texto || texto.contains('\u{FFFD}');
+            // La REGLA vive en el crate compartido desde que el resumen de
+            // recorte la necesita también: el terminal contestaba lo mismo con
+            // otra función, que es cómo dos superficies acaban marcando cosas
+            // distintas sobre las mismas rutas.
+            let hostil = norte_frontend::redacted_hostile(texto);
             crate::dto::DialogLine {
                 text: clamp_display(enmascarado),
                 hostile: hostil,
@@ -236,6 +240,10 @@ impl Estado {
             deadline_at_ms: vence_en,
             body: cuerpo,
             overflow_note: nota,
+            // Y si algo de lo RECORTADO se pintaría alterado. El terminal lo
+            // decía en su resumen desde siempre y esta ventana no, sobre las
+            // mismas rutas: la respuesta es ahora la misma función.
+            overflow_hostile: norte_frontend::overflow_hostile_redacted(&req.paths, mostrados),
             choices: Self::aprobar_o_denegar(),
             input: None,
             input_hostile: false,

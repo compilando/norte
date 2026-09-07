@@ -821,6 +821,8 @@ mod help_key_tests {
                 from_marks: false,
                 enc: None,
                 error: None,
+                space: None,
+                confine: None,
             },
         ];
         for modal in intercepted {

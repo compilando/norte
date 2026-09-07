@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 57;
+export const BRIDGE_VERSION = 58;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -411,6 +411,9 @@ export interface DialogView {
   body: DialogLine[];
   /** El cuerpo enseña menos de lo que la operación toca, ya traducido. */
   overflow_note: string;
+  /** Alguna de las que NO se enseñan se pintaría alterada. Ausente = `false`,
+   *  que es no marcar: un badge de más sobre un recorte enseña a ignorarlo. */
+  overflow_hostile?: boolean;
   /** En qué punto está la comprobación del DESTINO. Ausente en un puente
    *  anterior, y entonces es `not_asked`. */
   dest_check?: DestCheck;

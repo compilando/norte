@@ -338,6 +338,8 @@ mod tests {
                 from_marks: false,
                 enc: None,
                 error: None,
+                space: None,
+                confine: None,
             },
             Modal::Mkdir {
                 name: "nuevo".into(),

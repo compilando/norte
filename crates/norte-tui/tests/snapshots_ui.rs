@@ -216,6 +216,107 @@ fn el_modal_de_transferencia_pinta_el_aviso_de_confinamiento() {
     );
 }
 
+/// #343, la otra mitad: copiar UN fichero PIDE las dos comprobaciones.
+///
+/// Pintarlas no sirve si nadie las arma. El reparto por número de ítems dejaba
+/// `pending_dest_check` sin poner en el camino de un solo fichero, así que el
+/// bucle no tenía a quién preguntar y las dos líneas nunca se llenaban.
+#[test]
+fn copiar_un_solo_fichero_pide_la_comprobacion_del_destino() {
+    let dir = vp("file:///casa");
+    let entrada = entry(&dir, b"a.bin", EntryKind::File, Some(4_200_000_000));
+    let mut app = App::new(
+        Pane::new(dir.clone(), vec![entrada]),
+        Pane::new(vp("file:///medios"), Vec::new()),
+    );
+    app.panes[0].set_cursor(0);
+
+    app.open_transfer_to_dir(TransferKind::Copy, 0, vp("file:///medios"), Some(0));
+
+    let check = app
+        .pending_dest_check
+        .as_ref()
+        .expect("un fichero suelto también pregunta por su destino");
+    assert_eq!(check.to, vp("file:///medios"));
+    assert_eq!(
+        check.total,
+        Some(4_200_000_000),
+        "y con el tamaño de ESE fichero, para poder decir si cabe"
+    );
+    assert!(matches!(app.modal, Some(Modal::TransferName { .. })));
+}
+
+/// #343: copiar UN SOLO fichero avisa igual que copiar varios.
+///
+/// El terminal repartía por número de ítems: con varios abría
+/// `ConfirmTransfer` y armaba la comprobación del destino, y con uno solo
+/// abría el diálogo de NOMBRE y no armaba nada. Así que copiar un fichero
+/// suelto no decía ni «no cabe» ni «este destino no sujeta sus escrituras»,
+/// mientras la ventana sí lo decía.
+///
+/// La del confinamiento es la que más molesta que falte: su ausencia
+/// SIGNIFICA que el destino sujeta sus escrituras, así que callarla afirma
+/// algo que nadie ha comprobado. Y desde #219 eso alcanza también a una hoja
+/// suelta.
+#[test]
+fn el_modal_de_nombre_pinta_los_avisos_del_destino() {
+    let dir = vp("file:///casa");
+    let pintar = |space: Option<String>, confine: Option<String>| {
+        let mut app = App::new(
+            Pane::new(dir.clone(), Vec::new()),
+            Pane::new(dir.clone(), Vec::new()),
+        );
+        app.dialog_hints = default_dialog_hints();
+        app.modal = Some(Modal::TransferName {
+            kind: TransferKind::Copy,
+            from: vp("file:///casa/a.bin"),
+            to_dir: vp("sftp://host/medios"),
+            name: "a.bin".to_owned(),
+            original: b"a.bin".to_vec(),
+            touched: false,
+            from_marks: false,
+            enc: None,
+            error: None,
+            space,
+            confine,
+        });
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+        terminal.backend().to_string()
+    };
+
+    let sin_confinar = norte_frontend::confine::warning(
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::empty(),
+            max_path: None,
+        },
+        norte_i18n::active(),
+    )
+    .expect("un destino que no confina lo dice");
+    let espacio = norte_frontend::space::warning(
+        Some(4_200_000_000),
+        Some(1_100_000_000),
+        norte_i18n::active(),
+    )
+    .expect("no cabe: hay aviso");
+
+    let con = pintar(Some(espacio.clone()), Some(sin_confinar));
+    assert!(
+        con.contains(espacio.split_whitespace().next().expect("palabra")),
+        "el aviso de espacio sale con un solo fichero:\n{con}"
+    );
+    assert!(
+        con.contains("symlink"),
+        "y el de confinamiento también:\n{con}"
+    );
+
+    let sin = pintar(None, None);
+    assert!(
+        !sin.contains("symlink"),
+        "y cuando no hay nada que decir, no se dice:\n{sin}"
+    );
+}
+
 #[test]
 fn la_barra_de_estado_recorta_la_ruta_y_no_el_contador() {
     let hondo = vp(&format!(

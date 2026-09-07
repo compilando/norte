@@ -675,6 +675,9 @@ impl Estado {
             deadline_at_ms: None,
             body: cuerpo,
             overflow_note: nota,
+            // Este diálogo no recorta nada: su cuerpo son las líneas que le
+            // dan hechas, no una lista de rutas que se acote.
+            overflow_hostile: false,
             choices: vec![
                 DialogChoice {
                     id: "approve".to_owned(),

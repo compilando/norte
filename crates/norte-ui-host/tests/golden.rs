@@ -567,6 +567,9 @@ fn dialogo_de_referencia() -> DialogView {
             hostile: true,
         }],
         overflow_note: "… se enseñan 1 de 3".to_owned(),
+        // Y que alguna de las DOS que no se enseñan se pintaría alterada: el
+        // corpus fija el caso interesante, no el vacío.
+        overflow_hostile: true,
         choices: vec![
             DialogChoice {
                 id: "confirm".to_owned(),
@@ -2380,6 +2383,7 @@ mod variantes {
                     deadline_at_ms: None,
                     body: Vec::new(),
                     overflow_note: String::new(),
+                    overflow_hostile: false,
                     choices: vec![DialogChoice {
                         id: "cancel".to_owned(),
                         label_key: "choice-cancel".to_owned(),

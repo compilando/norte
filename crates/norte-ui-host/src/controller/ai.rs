@@ -43,6 +43,7 @@ impl Estado {
             deadline_at_ms: None,
             body: vec![Self::linea_de_ruta(&dir)],
             overflow_note: String::new(),
+            overflow_hostile: false,
             choices: vec![
                 DialogChoice {
                     id: "confirm".to_owned(),
@@ -122,6 +123,7 @@ impl Estado {
                 },
             ],
             overflow_note: String::new(),
+            overflow_hostile: false,
             choices: vec![
                 DialogChoice {
                     id: "confirm".to_owned(),
@@ -873,6 +875,7 @@ impl Estado {
             deadline_at_ms: None,
             body: vec![Self::linea_de_ruta(&from)],
             overflow_note: String::new(),
+            overflow_hostile: false,
             choices: vec![
                 DialogChoice {
                     id: "confirm".to_owned(),

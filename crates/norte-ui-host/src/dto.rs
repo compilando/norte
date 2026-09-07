@@ -2408,6 +2408,20 @@ pub struct DialogView {
     /// un renderer no traduce ni sustituye números, y un aviso metido entre
     /// las líneas del cuerpo lo podría suplantar un nombre de fichero.
     pub overflow_note: String,
+    /// Alguna de las que NO se enseñan se pintaría alterada.
+    ///
+    /// El badge de hostil solo puede hablar de lo que se puede mirar, y lo
+    /// recortado no está aquí para inspeccionarlo — pero que ahí fuera haya
+    /// algo con bidi o invisibles sí se puede decir, y es lo que decide si
+    /// merece la pena ampliar antes de aprobar. El terminal lo dice desde
+    /// siempre en su resumen; esta ventana no, y eran las mismas rutas.
+    ///
+    /// `#[serde(default)]`: ausente = `false`, que es no marcar. La dirección
+    /// segura es la contraria a la del badge de una ruta VISIBLE —allí callar
+    /// esconde algo que se está mirando— porque aquí un badge de más sobre un
+    /// recorte enseña a ignorarlo.
+    #[serde(default)]
+    pub overflow_hostile: bool,
     /// En qué punto está la comprobación del DESTINO: si cabe (#149) y si
     /// sabe sujetar lo que se escriba en él (#164).
     ///

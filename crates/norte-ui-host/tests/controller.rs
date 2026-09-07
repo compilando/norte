@@ -2234,6 +2234,13 @@ async fn una_aprobacion_abre_su_dialogo() {
         !d.overflow_note.is_empty(),
         "y que la lista viene recortada, en su propio campo: {d:?}"
     );
+    // La única ruta que llega SE ENSEÑA, así que el resumen no marca nada: el
+    // badge del recorte habla de lo que NO se puede mirar, y aquí lo recortado
+    // lo recortó el server y no llegó.
+    assert!(
+        !d.overflow_hostile,
+        "sin rutas ocultas que mirar, el resumen no marca: {d:?}"
+    );
     // Y dice cuánto le queda, en su propio campo: una decisión con fecha de
     // caducidad que no la enseña se lee como una que espera para siempre, y
     // entre las rutas la podría suplantar un nombre de fichero.
@@ -2242,6 +2249,58 @@ async fn una_aprobacion_abre_su_dialogo() {
         Some(
             norte_i18n::ta_in(norte_i18n::Lang::Es, "modal-approval-ttl", &[("s", "30")]).as_str()
         )
+    );
+}
+
+/// Y una ruta hostil que se queda FUERA de lo que se enseña se dice.
+///
+/// El badge de una ruta visible dice «lo que lees no son los bytes que hay».
+/// Sobre lo recortado no se puede decir eso —no está delante para mirarlo—
+/// pero sí que ahí fuera hay algo así, y eso es lo que decide si merece la
+/// pena ampliar antes de aprobar. El terminal lo decía en su resumen desde
+/// siempre y esta ventana no, sobre las mismas rutas (plan de paridad, 14).
+#[tokio::test]
+async fn el_resumen_de_una_aprobacion_delata_una_ruta_hostil_escondida() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let backend = Arc::new(falso);
+    let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = host.subscribe();
+
+    // Más rutas de las que el diálogo enseña, y la hostil en la COLA. El tope
+    // es del host y no se exporta; treinta pasa de largo de cualquier valor
+    // razonable, que es lo que hace falta.
+    let mut paths: Vec<String> = (0..30).map(|i| format!("mem:///casa/f{i}")).collect();
+    let ultima = paths.len() - 1;
+    paths[ultima] = "mem:///casa/x\u{202E}y".to_owned();
+    let total = paths.len() as u64;
+
+    tx.send(norte_proto::methods::PolicyApprovalRequired {
+        approval_id: 7,
+        session: Some("agente-1".to_owned()),
+        op: "delete".to_owned(),
+        paths,
+        paths_total: total,
+        ttl_ms: 30_000,
+        detail: norte_proto::methods::ApprovalDetail::default(),
+    })
+    .expect("el host escucha");
+
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let d = &dialogos[0];
+    assert!(
+        !d.overflow_note.is_empty(),
+        "la lista viene recortada: {d:?}"
+    );
+    assert!(
+        d.body.iter().all(|l| !l.hostile),
+        "las que SE ENSEÑAN son todas limpias, así que el badge no viene de ahí: {:?}",
+        d.body
+    );
+    assert!(
+        d.overflow_hostile,
+        "y el resumen delata la que no se ve: {d:?}"
     );
 }
 
