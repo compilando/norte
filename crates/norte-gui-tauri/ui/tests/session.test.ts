@@ -55,6 +55,49 @@ describe("Session", () => {
     expect(despues?.kind === "browser" ? despues.total_rows : null).toBe(5000);
   });
 
+  // Una task caduca a los diez segundos y su fila se va: eso desplaza el
+  // resto. El cursor del panel de procesos viajaba solo en la foto entera, así
+  // que el renderer se quedaba resaltando la fila N —ya otra tarea, o
+  // ninguna— mientras la tecla de cancelar actuaba sobre la que el host tiene
+  // acotada. Resaltar una y parar otra es la avería, no el retraso.
+  it("un parche de tablero mueve también el cursor del panel de procesos", () => {
+    const antes = s.view()?.slots.find((x) => x.kind === "processes");
+    expect(antes?.kind, "el corpus trae un panel de procesos").toBe("processes");
+    const out = s.receive(
+      env(1, {
+        update: "patch",
+        base_sequence: 0,
+        changes: [{ change: "tasks", tasks: [], cursor: 1 }],
+      }),
+    );
+    expect(out.kind).toBe("applied");
+    const despues = s.view()?.slots.find((x) => x.kind === "processes");
+    expect(despues?.kind === "processes" ? despues.cursor : null).toBe(1);
+  });
+
+  // El tablero se queda vacío: `null`, no «lo de antes». Un resalte sobre la
+  // nada señala una fila que no está, y la tecla de cancelar promete algo que
+  // no puede cumplir.
+  it("un tablero vacío apaga el resalte del panel de procesos", () => {
+    s.receive(
+      env(1, {
+        update: "patch",
+        base_sequence: 0,
+        changes: [{ change: "tasks", tasks: [], cursor: 2 }],
+      }),
+    );
+    const out = s.receive(
+      env(2, {
+        update: "patch",
+        base_sequence: 1,
+        changes: [{ change: "tasks", tasks: [], cursor: null }],
+      }),
+    );
+    expect(out.kind).toBe("applied");
+    const despues = s.view()?.slots.find((x) => x.kind === "processes");
+    expect(despues?.kind === "processes" ? despues.cursor : 99).toBeNull();
+  });
+
   // `pane.names-encoding` retranscribe los nombres, y la ruta del propio
   // directorio es un nombre más. Viajando solo en la foto, las filas se
   // repintaban y el título se quedaba con la lectura vieja.

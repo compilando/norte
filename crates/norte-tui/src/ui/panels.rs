@@ -631,7 +631,9 @@ pub(crate) fn draw_tree(
 pub(crate) fn draw_processes(
     frame: &mut Frame<'_>,
     area: Rect,
-    processes: &crate::processes::Processes,
+    // Por VALOR: desde que el tipo vive en `norte-frontend` es un `usize` con
+    // nombre, y ocho bytes se copian más barato que se referencian.
+    processes: crate::processes::Processes,
     app: &App,
     con_teclado: bool,
 ) {
@@ -673,7 +675,7 @@ pub(crate) fn draw_processes(
         );
         return;
     }
-    let cursor = processes.cursor(rows.len());
+    let cursor = processes.fila_o_cero(&app.board.task_ids());
     let items: Vec<ListItem<'_>> = rows
         .iter()
         .enumerate()

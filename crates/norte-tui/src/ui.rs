@@ -212,7 +212,7 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
         );
     }
     if let Some((id, rect)) = placed_of_kind(&res, &app.layout, crate::processes::KIND)
-        && let Some(p) = app.panes.processes(id)
+        && let Some(&p) = app.panes.processes(id)
     {
         draw_processes(
             frame,

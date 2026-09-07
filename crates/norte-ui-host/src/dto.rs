@@ -2756,6 +2756,21 @@ pub enum ViewChange {
     Tasks {
         /// El tablero entero.
         tasks: Vec<TaskView>,
+        /// Qué fila del panel de procesos está elegida, sobre estas filas.
+        ///
+        /// Viaja CON el tablero y no en un `ViewChange` propio, por lo mismo
+        /// que `total_rows` viaja con las filas de un listado: es la extensión
+        /// de lo que va al lado, y las dos se mueven a la vez. Una tarea que
+        /// caduca a los diez segundos quita una fila y desplaza el resto; sin
+        /// esto, el cursor solo viajaba en la foto entera, así que el panel
+        /// seguía resaltando la fila N —que ya es otra tarea, o ninguna—
+        /// mientras la tecla de cancelar actuaba sobre la que el host tiene
+        /// acotada. Resaltar una y parar otra es la avería, no el retraso.
+        ///
+        /// `None` con el tablero vacío: un índice sin fila detrás resalta la
+        /// nada.
+        #[serde(default)]
+        cursor: Option<u64>,
     },
     /// Los diálogos abiertos cambiaron. Struct por el mismo motivo que
     /// [`ViewChange::Tasks`].

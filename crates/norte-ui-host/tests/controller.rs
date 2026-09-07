@@ -1553,7 +1553,7 @@ async fn siguientes_tasks(
             Update::Message(m) => {
                 if let UiUpdate::Patch(p) = &m.payload {
                     for c in &p.changes {
-                        if let norte_ui_host::dto::ViewChange::Tasks { tasks: t } = c {
+                        if let norte_ui_host::dto::ViewChange::Tasks { tasks: t, .. } = c {
                             return t.clone();
                         }
                     }
@@ -13139,6 +13139,119 @@ async fn con_el_panel_enfocado_se_cancela_la_del_cursor() {
         *canceladas.lock().expect("canceladas"),
         vec![12],
         "la del cursor, no la última"
+    );
+}
+
+/// Espera el siguiente PARCHE de tablero, con su cursor.
+///
+/// Solo el parche: la foto entera no vale para lo que este test mira, que es
+/// justo lo que el renderer sabe cuando NADIE le manda una foto.
+async fn siguiente_parche_de_tablero(
+    sub: &mut norte_ui_host::UiSubscription,
+) -> (Vec<norte_ui_host::dto::TaskView>, Option<u64>) {
+    for _ in 0..20 {
+        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+            .await
+            .expect("un parche de tablero, no un cuelgue")
+            .expect("el host sigue vivo");
+        if let Update::Message(m) = siguiente
+            && let UiUpdate::Patch(p) = &m.payload
+        {
+            for c in &p.changes {
+                if let norte_ui_host::dto::ViewChange::Tasks { tasks, cursor } = c {
+                    return (tasks.clone(), *cursor);
+                }
+            }
+        }
+    }
+    panic!("no llegó ningún parche de tablero");
+}
+
+/// Una task que CADUCA se lleva su fila, y el cursor del panel viaja con ella.
+///
+/// El tablero se encoge solo —una terminada se va a los diez segundos— y eso
+/// desplaza el resto. Dos averías, y el test cubre las dos:
+///
+/// - El cursor viajaba únicamente en la foto entera, así que el renderer se
+///   quedaba resaltando la fila N mientras la tecla de cancelar actuaba sobre
+///   la que el host tiene acotada.
+/// - Y lo que se guardaba era la POSICIÓN. Cuando la que se va está ENCIMA de
+///   la elegida, acotar no basta: la fila 1 pasa a nombrar otra tarea sin que
+///   el lector toque nada, y cancelar para una copia que nadie eligió.
+///
+/// Reloj VIRTUAL, y se adelanta A MANO por lo mismo que en
+/// [`una_task_terminada_se_va_del_tablero_sola`]: el salto automático de tokio
+/// va al temporizador más cercano, que aquí sería el plazo de los ayudantes.
+#[tokio::test(start_paused = true)]
+async fn una_task_que_caduca_arrastra_el_cursor_del_panel() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    let (h, _snap) = host_con_layout(Arc::new(falso), "full", (200, 60)).await;
+    let mut sub = h.subscribe();
+    let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let primera = inyectar_task(&tx, 11, &canceladas);
+    let _b = inyectar_task(&tx, 12, &canceladas);
+    let _c = inyectar_task(&tx, 13, &canceladas);
+    let _d = inyectar_task(&tx, 14, &canceladas);
+    for _ in 0..5 {
+        if siguientes_tasks(&mut sub).await.len() == 4 {
+            break;
+        }
+    }
+
+    // El cursor en la SEGUNDA fila de cuatro, que es la task 12. Ni la
+    // primera ni la última, y ahí está el filo: la que va a caducar queda
+    // ENCIMA, así que una implementación que guarde la POSICIÓN y la acote
+    // deja el 1 —o sea la task 13— y una que guarde la IDENTIDAD baja al 0
+    // con la 12. Con el cursor en la última fila las dos dan lo mismo y el
+    // test no distinguiría nada.
+    h.dispatch(UiAction::FocusSlot { slot_id: 7 })
+        .await
+        .expect("host vivo");
+    h.dispatch(tecla("Down")).await.expect("host vivo");
+
+    // La primera termina y, diez segundos después, se va del tablero.
+    primera.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    for _ in 0..4 {
+        if siguientes_tasks(&mut sub)
+            .await
+            .iter()
+            .any(|t| t.state == norte_ui_host::dto::TaskStateView::Done)
+        {
+            break;
+        }
+    }
+    tokio::time::advance(std::time::Duration::from_secs(11)).await;
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+
+    let mut visto = None;
+    for _ in 0..5 {
+        let (tasks, cursor) = siguiente_parche_de_tablero(&mut sub).await;
+        if tasks.len() == 3 {
+            visto = Some(cursor);
+            break;
+        }
+    }
+    assert_eq!(
+        visto,
+        Some(Some(0)),
+        "la elegida sigue siendo la 12, que ahora es la primera fila: el parche \
+         que quita la fila tiene que decir dónde queda el cursor"
+    );
+
+    // Y lo que se cancelaría es esa misma. El resalte y la tecla no pueden
+    // apuntar a filas distintas, que es la avería entera; con una posición
+    // acotada aquí se pararía la 13.
+    h.dispatch(tecla_mod("k", true, false))
+        .await
+        .expect("host vivo");
+    assert_eq!(
+        *canceladas.lock().expect("canceladas"),
+        vec![12],
+        "la resaltada y la que para son la misma"
     );
 }
 

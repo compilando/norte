@@ -2163,6 +2163,24 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
             "tasks",
             ViewChange::Tasks {
                 tasks: vec![task_de_referencia()],
+                // El cursor del panel de procesos viaja CON el tablero: una
+                // fila que caduca desplaza al resto, y el corpus tiene que
+                // fijar los dos juntos.
+                cursor: Some(0),
+            },
+        ),
+        // El tablero VACÍO, que es la única forma en la que ese cursor sale
+        // `null`. Va aparte y no es duplicado: `null` es lo que el renderer
+        // tiene que distinguir de «no me lo han dicho», y sin un caso que lo
+        // fije, poner un `skip_serializing_if = "Option::is_none"` —una
+        // limpieza de lo más natural— convertiría todo tablero vacío en un
+        // campo AUSENTE y dejaría el resalte encendido sobre la nada, con la
+        // suite entera en verde.
+        (
+            "tasks_vacio",
+            ViewChange::Tasks {
+                tasks: Vec::new(),
+                cursor: None,
             },
         ),
     ]

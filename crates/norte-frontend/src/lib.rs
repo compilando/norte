@@ -65,6 +65,7 @@ mod pane;
 pub mod panelbar;
 pub mod places;
 pub mod plugin_config;
+pub mod processes;
 pub mod profile_picker;
 pub mod rename_pattern;
 pub mod search_status;

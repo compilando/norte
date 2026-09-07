@@ -52,6 +52,7 @@ impl Estado {
         self.tasks.remove(&id);
         vec![self.parche(vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
+            cursor: self.cursor_del_tablero(),
         }])]
     }
 
@@ -182,6 +183,31 @@ impl Estado {
         }
     }
 
+    /// Conserva el detalle que un REANUNCIO no trae.
+    ///
+    /// El SDK vuelve a ofrecer las tasks al reconectar, y ese progreso no sabe
+    /// nada del informe que ya se pidió por esta task. Proyectarlo tal cual
+    /// borraba del tablero la única señal de que el directorio se quedó a
+    /// medias, justo cuando la conexión se recupera y el lector vuelve a
+    /// mirarlo.
+    ///
+    /// Solo se hereda de la MISMA época: tras un relevo del daemon el id
+    /// vuelve a empezar en 1, y lo que había con ese número era otra task.
+    fn heredar_detalle(&self, id: u64, vista: &mut crate::dto::TaskView) {
+        let Some(anterior) = self
+            .tasks
+            .get(&id)
+            .filter(|t| t.epoca == self.epoca_conexion)
+        else {
+            return;
+        };
+        if anterior.informe_pedido && Self::terminal(vista.state) && anterior.vista.detail.is_some()
+        {
+            vista.detail.clone_from(&anterior.vista.detail);
+            vista.detail_hostile = anterior.vista.detail_hostile;
+        }
+    }
+
     /// Mete una Task recién encolada en el tablero y deja su progreso
     /// bombeando hacia el actor.
     pub(super) fn registrar_task(
@@ -234,25 +260,7 @@ impl Estado {
         }
         let mut vista = Self::vista_de(&nacio);
         vista.foreign = ajena;
-        // Un REANUNCIO —el SDK vuelve a ofrecer las tasks al reconectar— trae
-        // un progreso que no sabe nada del informe que ya se pidió por esta
-        // task. Proyectarlo tal cual borraba del tablero la única señal de
-        // que el directorio se quedó a medias, justo cuando la conexión se
-        // recupera y el lector vuelve a mirarlo.
-        // Solo se hereda de la MISMA época: tras un relevo del daemon el id
-        // vuelve a empezar en 1, y lo que había con ese número era otra task.
-        let anterior_de_esta_epoca = self
-            .tasks
-            .get(&id)
-            .filter(|t| t.epoca == self.epoca_conexion);
-        if let Some(anterior) = anterior_de_esta_epoca
-            && anterior.informe_pedido
-            && Self::terminal(vista.state)
-            && anterior.vista.detail.is_some()
-        {
-            vista.detail.clone_from(&anterior.vista.detail);
-            vista.detail_hostile = anterior.vista.detail_hostile;
-        }
+        self.heredar_detalle(id, &mut vista);
         // Si esta task YA estaba en el tablero —una reconexión la reanuncia
         // por el canal de ajenas— lo que llega no sabe qué directorios tocaba,
         // así que se conserva lo apuntado: sustituirlo por una lista vacía
@@ -329,6 +337,7 @@ impl Estado {
         // tarea 5.1 nombra literalmente.
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
+            cursor: self.cursor_del_tablero(),
         }];
         if apaga_el_aviso {
             cambios.push(self.cambio_de_banners());
@@ -407,6 +416,7 @@ impl Estado {
         }
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
+            cursor: self.cursor_del_tablero(),
         }];
         // El desenlace entra en la cuenta del lote (#271). Solo cuando el lote
         // queda RESUELTO viaja algo: doscientas frases de «una más» no dicen
@@ -969,6 +979,7 @@ impl Estado {
         }
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
+            cursor: self.cursor_del_tablero(),
         }];
         let hay_que_decirlo = match resultado {
             Ok(r) => !Self::undo_limpio(r),
@@ -1107,6 +1118,7 @@ impl Estado {
         }
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
+            cursor: self.cursor_del_tablero(),
         }];
         // Se abre por lo que el INFORME dice, no por cómo terminó la Task:
         // un lote `Completed` con un paso atascado es exactamente el caso
@@ -1320,19 +1332,20 @@ impl Estado {
         &mut self,
         atras: bool,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let filas = self.filas_de_tablero();
-        if filas == 0 {
+        let ids = self.ids_del_tablero();
+        if ids.is_empty() {
             return (self.aplicada(), self.decir("msg-no-tasks"));
         }
-        let actual = self.cursor_procesos.min(filas - 1);
-        self.cursor_procesos = if atras {
-            actual.saturating_sub(1)
+        if atras {
+            self.cursor_procesos.up(&ids);
         } else {
-            (actual + 1).min(filas - 1)
-        };
-        // Foto y no parche, por lo mismo que el cursor del panel de procesos:
-        // no hay `ViewChange` para un hueco que no es un listado, y añadir
-        // contrato por un índice es contrato para nada.
+            self.cursor_procesos.down(&ids);
+        }
+        // FOTO y no parche. Desde el puente 57 el cursor sí tiene por dónde
+        // viajar (`ViewChange::Tasks`), así que esto ya no es «no hay
+        // contrato»: es que una tecla que solo mueve la elección no necesita
+        // reenviar el tablero entero, y la foto es lo que este camino lleva
+        // haciendo sin queja. Cambiarlo es una optimización, no un arreglo.
         let snap = self.snapshot();
         (
             self.aplicada(),
@@ -1346,11 +1359,11 @@ impl Estado {
     /// vista algo que sigue escribiendo en el disco es perder de vista
     /// justo lo que hay que mirar.
     pub(super) fn descartar_task(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let filas = self.filas_de_tablero();
-        if filas == 0 {
+        let ids = self.ids_del_tablero();
+        if ids.is_empty() {
             return (self.aplicada(), self.decir("msg-no-tasks"));
         }
-        let i = self.cursor_procesos.min(filas - 1);
+        let i = self.cursor_procesos.fila_o_cero(&ids);
         let Some((&id, viva)) = self.tasks_visibles().nth(i) else {
             return (self.aplicada(), self.decir("msg-no-tasks"));
         };
@@ -1364,12 +1377,15 @@ impl Estado {
         }
         self.tasks.remove(&id);
         self.undos_sin_task(id);
-        // El cursor se queda donde estaba, clampado: descartar la última deja
-        // la selección en la que ahora es la última, no en la primera.
-        let filas = self.filas_de_tablero();
-        self.cursor_procesos = self.cursor_procesos.min(filas.saturating_sub(1));
+        // El cursor NO se re-acota aquí, y antes sí: la regla del tipo
+        // compartido es leer la fila por la IDENTIDAD de la elegida y caer a
+        // la posición recordada solo si esa ya no está. Descartar la última
+        // deja la selección en la que ahora es la última —igual que antes— y,
+        // a diferencia de antes, si el tablero vuelve a crecer la elección
+        // vuelve a donde estaba en vez de haberse quedado pegada.
         let mut fuera = vec![self.parche(vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
+            cursor: self.cursor_del_tablero(),
         }])];
         let snap = self.snapshot();
         fuera.push(self.sobre(UiUpdate::Snapshot(Box::new(snap))));
@@ -1394,10 +1410,10 @@ impl Estado {
             // mirándola. Si ya terminó se DICE, en vez de saltar a otra —
             // cancelar una task que no es la señalada es peor que no
             // cancelar nada.
-            let Some((id, viva)) = self.tasks_visibles().nth(
-                self.cursor_procesos
-                    .min(self.filas_de_tablero().saturating_sub(1)),
-            ) else {
+            let Some((id, viva)) = self
+                .tasks_visibles()
+                .nth(self.cursor_procesos.fila_o_cero(&self.ids_del_tablero()))
+            else {
                 return Objetivo::Ninguna;
             };
             return if Self::sigue_viva(viva) {
@@ -1531,6 +1547,26 @@ impl Estado {
     /// Cuántas filas tiene el tablero PINTADO.
     pub(super) fn filas_de_tablero(&self) -> usize {
         self.tasks.len().min(MAX_TASKS)
+    }
+
+    /// Los ids de las tasks PINTADAS, en el orden en que se pintan.
+    ///
+    /// Es lo que el cursor del panel necesita: guarda la IDENTIDAD de la
+    /// elegida, no su posición, porque el tablero se mueve solo y una fila que
+    /// caduca por encima haría que la misma posición nombrara otra tarea.
+    pub(super) fn ids_del_tablero(&self) -> Vec<u64> {
+        self.tasks_visibles().map(|(id, _)| *id).collect()
+    }
+
+    /// Qué fila del tablero está elegida, sobre las filas PINTADAS.
+    ///
+    /// Índice sobre lo que el renderer resalta, no sobre el mapa entero: con
+    /// el tablero recortado por el tope señalaba a otra. `None` con cero
+    /// filas, porque un índice sin fila detrás resalta la nada.
+    pub(super) fn cursor_del_tablero(&self) -> Option<u64> {
+        self.cursor_procesos
+            .fila(&self.ids_del_tablero())
+            .and_then(|i| u64::try_from(i).ok())
     }
 
     pub(super) fn terminal(estado: TaskStateView) -> bool {

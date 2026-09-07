@@ -324,28 +324,29 @@ impl Estado {
         ) {
             return None;
         }
-        let filas = self.filas_de_tablero();
-        if filas == 0 {
+        let ids = self.ids_del_tablero();
+        if ids.is_empty() {
             return Some((self.aplicada(), Vec::new()));
         }
-        let total = i64::try_from(filas).unwrap_or(i64::MAX);
+        let total = i64::try_from(ids.len()).unwrap_or(i64::MAX);
         let paso = |n: i64| -> i64 { n.clamp(-total, total) };
-        let actual = i64::try_from(self.cursor_procesos.min(filas - 1)).unwrap_or(0);
-        let destino = match efecto {
-            Efecto::Cursor(n) => actual.saturating_add(paso(n)),
+        let actual = i64::try_from(self.cursor_procesos.fila_o_cero(&ids)).unwrap_or(i64::MAX);
+        let delta = match efecto {
+            Efecto::Cursor(n) => paso(n),
             // Una página del panel de procesos son sus filas: no hay ventana
             // declarada para él, y saltar más de lo que hay no significa nada.
-            Efecto::Pagina(n) => actual.saturating_add(paso(n).saturating_mul(total)),
-            Efecto::Extremo { al_final: false } => 0,
-            Efecto::Extremo { al_final: true } => total - 1,
+            Efecto::Pagina(n) => paso(n).saturating_mul(total),
+            Efecto::Extremo { al_final: false } => -actual,
+            Efecto::Extremo { al_final: true } => total - 1 - actual,
             // Los tres de arriba son los únicos que llegan aquí: el filtro
             // está en la guarda de la entrada.
             _ => return None,
         };
-        self.cursor_procesos = usize::try_from(destino.max(0)).unwrap_or(0).min(filas - 1);
-        // Va como FOTO y no como parche: no hay un `ViewChange` para un hueco
-        // que no es un listado, y añadir uno por un cursor de tres dígitos es
-        // contrato nuevo para nada. Es una tecla, no un scroll continuo.
+        self.cursor_procesos.mover(delta, &ids);
+        // FOTO y no parche. Desde el puente 57 el cursor tiene por dónde
+        // viajar (`ViewChange::Tasks`), así que esto ya no es «no hay
+        // contrato»: es que una tecla que solo mueve la elección no necesita
+        // reenviar el tablero entero. Cambiarlo es una optimización.
         let snap = self.snapshot();
         Some((
             self.aplicada(),

@@ -153,9 +153,25 @@ export class Session {
         s.status = { message: c.message, banners: c.banners, pending: c.pending };
         return true;
       }
-      case "tasks":
+      case "tasks": {
         s.tasks = c.tasks;
+        // El cursor del panel de procesos viaja con el tablero: una task que
+        // caduca quita una fila y desplaza el resto, y sin esto el panel
+        // seguía resaltando la fila N mientras la tecla de cancelar actuaba
+        // sobre otra.
+        //
+        // SIN tolerancia a que falte, y no por descuido: el campo siempre
+        // viaja —`Option<u64>` sin `skip_serializing_if` escribe `null`— y un
+        // host de otro puente ni llega aquí, porque la versión se compara
+        // arriba y no coincidir es pantalla fatal. `null` es «ninguna fila
+        // elegida», que es lo que dice un tablero vacío.
+        for (const slot of s.slots) {
+          if (slot.kind === "processes") {
+            slot.cursor = c.cursor;
+          }
+        }
         return true;
+      }
       case "dialogs":
         s.dialogs = c.dialogs;
         return true;

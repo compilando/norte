@@ -936,6 +936,7 @@
   },
   "tasks": {
     "change": "tasks",
+    "cursor": 0,
     "tasks": [
       {
         "detail": "notas.txt",
@@ -947,6 +948,11 @@
         "task_id": 7
       }
     ]
+  },
+  "tasks_vacio": {
+    "change": "tasks",
+    "cursor": null,
+    "tasks": []
   },
   "theme": {
     "change": "theme",

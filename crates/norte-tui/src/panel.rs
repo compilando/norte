@@ -56,7 +56,11 @@ pub enum TuiPanel {
     Places(Box<norte_frontend::places::PlacesState>),
     /// El panel de procesos (fase A): su cursor. Las filas son del
     /// `TaskBoard`, que es de `App`: aquí no hay una segunda copia.
-    Processes(Box<crate::processes::Processes>),
+    ///
+    /// SIN caja, al contrario que sus vecinas: son dos palabras —una posición
+    /// y el id de la elegida— y no son las que fijan el tamaño de este enum,
+    /// así que la indirección solo añadía una asignación.
+    Processes(crate::processes::Processes),
     /// El árbol de directorios (#136): sus ramas abiertas y su cursor.
     Tree(Box<crate::tree::Tree>),
     /// La hoja de atributos (fase A): la entrada que se está enseñando y si
@@ -402,7 +406,7 @@ impl PaneSlots {
 
     /// Mete el panel de procesos en un hueco.
     pub fn insert_processes(&mut self, id: SlotId, p: crate::processes::Processes) {
-        self.store.insert(id, TuiPanel::Processes(Box::new(p)));
+        self.store.insert(id, TuiPanel::Processes(p));
     }
 
     /// Lo que enseña la hoja de atributos de un hueco, si lo hay.
