@@ -378,7 +378,7 @@ impl Estado {
                     return (self.aplicada(), Vec::new());
                 };
                 self.tema_elegido = None;
-                self.aplicar_tema(&elegido);
+                self.aplicar_tema(&elegido, buzon);
                 // Y se GUARDA, que es lo que separa elegir un tema de mirarlo.
                 // Al perfil activo si lo hay: escribirlo en la capa del
                 // usuario mientras un perfil fija el suyo lo deja tapado
@@ -392,7 +392,7 @@ impl Estado {
         // Preview EN VIVO: moverse por la lista enseña el tema, no su nombre.
         let bajo_el_cursor = sel.nombres.get(sel.cursor).cloned();
         if let Some(nombre) = bajo_el_cursor {
-            self.aplicar_tema(&nombre);
+            self.aplicar_tema(&nombre, buzon);
         }
         let cambio = ViewChange::Theme {
             theme: self.vista_tema(),
@@ -408,19 +408,42 @@ impl Estado {
     /// resolvió una vez al arrancar. Un nombre que no existe deja el tema como
     /// estaba en vez de dejar la pantalla sin colores.
     ///
-    /// **Solo presets, y aquí sí es una limitación conocida.** El selector
-    /// ofrece presets, así que por esa puerta es exacto; por la del CAMBIO DE
-    /// PERFIL no, porque un perfil puede traer `theme = "…/mio.toml"` y eso
-    /// se queda sin aplicar en silencio. Resolverlo pide leer un fichero, y
-    /// esto corre DENTRO del actor (regla 2). El arranque sí lo resuelve
-    /// —`startup::tema` usa el resolutor compartido—; lo que falta es traerlo
-    /// por el buzón como se hace con `persistir_tema`. Plan de paridad,
-    /// fase 3.
-    pub(super) fn aplicar_tema(&mut self, nombre: &str) {
-        let Ok(Some(tema)) = norte_theme::Theme::preset(nombre) else {
+    /// Un PRESET se aplica aquí mismo; una RUTA se va a leer fuera.
+    ///
+    /// El corte lo decide `norte_frontend::theme::is_preset`, que es de los
+    /// dos frontends: resolver un preset es aritmética sobre colores y
+    /// mandarlo a otro hilo añadiría un frame de retraso a algo que el lector
+    /// ve cambiar bajo el cursor, mientras que leer un fichero dentro del
+    /// actor es la regla 2 rota — y con un tema en un montaje caído congela la
+    /// ventana entera.
+    ///
+    /// Antes solo se aplicaban presets. El selector ofrece presets, así que
+    /// por esa puerta daba igual; por la del CAMBIO DE PERFIL no, porque un
+    /// perfil puede traer `theme = "…/mio.toml"` (ADR 0020) y eso se quedaba
+    /// sin aplicar en silencio, con el terminal aplicándolo.
+    pub(super) fn aplicar_tema(&mut self, nombre: &str, buzon: &mpsc::Sender<Mensaje>) {
+        if let Ok(Some(tema)) = norte_theme::Theme::preset(nombre) {
+            self.tema_puesto(nombre, &tema);
             return;
-        };
-        self.tema = crate::pickers::HostTheme::de(nombre, &tema);
+        }
+        let spec = nombre.to_owned();
+        let buzon = buzon.clone();
+        tokio::task::spawn_blocking(move || {
+            let resuelto = norte_frontend::theme::resolve_theme(Some(&spec));
+            // El error NO viaja: lleva el spec dentro, que es una ruta, y lo
+            // que la barra dice sale del catálogo (#73). La clave dice si el
+            // fichero no se pudo leer o si no valida, que es lo accionable.
+            let salida = resuelto.map_err(|e| match e {
+                norte_frontend::theme::ResolveError::Io { .. } => "host-theme-unreadable",
+                norte_frontend::theme::ResolveError::Parse { .. } => "host-theme-invalid",
+            });
+            let _ = buzon.blocking_send(Mensaje::TemaResuelto(Box::new((spec, salida))));
+        });
+    }
+
+    /// El tema ya resuelto pasa a ser el vigente, y se le dice a quien hospeda.
+    pub(super) fn tema_puesto(&mut self, nombre: &str, tema: &norte_theme::Theme) {
+        self.tema = crate::pickers::HostTheme::de(nombre, tema);
         self.nativo(crate::dto::NativeEffect::ThemeChanged {
             name: nombre.to_owned(),
         });

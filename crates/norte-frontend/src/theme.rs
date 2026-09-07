@@ -32,6 +32,31 @@ pub enum ResolveError {
     },
 }
 
+/// ¿Este spec es un preset EMBEBIDO, o sea que resolverlo no toca el disco?
+///
+/// La usan los dos frontends para partir el camino: un preset se resuelve en
+/// el sitio —es aritmética sobre colores, y mandarlo a otro hilo añadiría un
+/// frame de retraso a algo que el lector ve cambiar bajo el cursor— y una RUTA
+/// se lee, así que va por `spawn_blocking` (regla 2). Sin esta pregunta, las
+/// dos superficies elegían «solo presets» y un `[ui] theme` que nombra un
+/// fichero se caía en silencio al cambiar de perfil.
+///
+/// `None` cuenta como preset: es el de fábrica, y tampoco toca el disco.
+///
+/// ```
+/// use norte_frontend::theme::is_preset;
+/// assert!(is_preset(None));
+/// assert!(is_preset(Some("nord")));
+/// assert!(!is_preset(Some("/home/u/.config/norte/mio.toml")));
+/// ```
+#[must_use]
+pub fn is_preset(spec: Option<&str>) -> bool {
+    match spec {
+        None => true,
+        Some(s) => matches!(Theme::preset(s), Ok(Some(_))),
+    }
+}
+
 /// Resolves the `[ui].theme` spec: an embedded preset name or a path to a
 /// `.toml` theme file. `None` = the default preset. SYNC (startup):
 /// wrap in `spawn_blocking` from async contexts.

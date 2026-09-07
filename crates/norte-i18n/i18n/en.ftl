@@ -1959,6 +1959,8 @@ host-no-other-slot = there is no other panel
 # directory. Said out loud rather than swallowed — it is what separates
 # "chosen" from "saved".
 host-no-config-dir = there is nowhere to save the configuration
+host-theme-unreadable = the theme file could not be read; keeping the previous theme
+host-theme-invalid = the theme file is not valid; keeping the previous theme
 # No user directory in which to look for `profiles/`.
 host-no-profiles = there is nowhere to look for profiles
 # `profile.next`/`prev` with nowhere to go: no profiles, or only the current one.

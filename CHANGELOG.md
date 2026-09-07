@@ -39,6 +39,18 @@ independently through `PROTOCOL_VERSION`.
   its size and a wrong width skews every column. `reduce_motion` can only
   **add** the request: `false` does not switch off the desktop's own
   `prefers-reduced-motion`. A terminal applies none of the four and says so.
+- **A profile's `[ui] theme` can be a path in the window too** (ADR 0020). It
+  worked at startup and nowhere else: both places the window resolves a theme
+  — the host, which keeps it for its own theme screen, and the process that
+  turns it into CSS variables — looked only at bundled presets, so a profile
+  carrying `theme = "…/mio.toml"` silently kept the old colours while the
+  terminal applied the new ones. Resolving reads a file, and neither the
+  host's actor nor the native-effect pump may read where they run, so the
+  split is now `norte_frontend::theme::is_preset` — shared — and the path
+  branch goes to a blocking thread and comes back through the mailbox, the way
+  saving a theme already did. A file that cannot be read does not leave the
+  window colourless: the previous theme stays and the status bar says which of
+  the two things went wrong.
 - **Two schema comments claimed the window ignores keys it reads.**
   `[ui] menu_bar` and `[ui] panel_bar` both reach the window (`MenuView.bar`,
   `PanelBarView.bar`). A comment that lies is what the next audit believes.

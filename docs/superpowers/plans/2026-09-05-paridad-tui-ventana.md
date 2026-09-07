@@ -35,7 +35,7 @@ La clase más barata de arreglar y la más visible: el usuario escribe algo en
 | ~~`[ui] editor` / `editor_detached`~~ | sí (F4 lanza tu editor) | ~~**no**: `pane.edit` es `pane.open`~~ **HECHO** (`$EDITOR` sigue fuera, y es deliberado) | A |
 | ~~`[ui] quick_search`~~ | sí | ~~**no**: `Filter` a fuego~~ **HECHO** | A |
 | ~~`[ui] confirm_quit`~~ | sí | ~~**no**: la X cierra sin preguntar~~ **HECHO** | A |
-| ~~`[ui] theme` como RUTA~~ | sí (ADR 0020) | **HECHO en el arranque**; al cambiar de PERFIL sigue siendo solo presets (pide I/O fuera del actor) | A |
+| ~~`[ui] theme` como RUTA~~ | sí (ADR 0020) | ~~**HECHO en el arranque**; al cambiar de PERFIL sigue siendo solo presets~~ **HECHO también al cambiar de perfil** | A |
 | ~~`[ui] lang` vs `NORTE_LANG`~~ | gana el ENTORNO | ~~gana la CONFIG~~ **HECHO**: manda la regla del terminal | **V** |
 | ~~`[ui.columns]` estilo por columna~~ | sí (`style_for_id`) | ~~**no**: `default_for_id` en celdas Y cabeceras~~ **HECHO** | **V** |
 | ~~`[DIR]` de la línea de órdenes~~ | gana a la sesión (`pin_start_dir`) | ~~**la sesión lo pisa**~~ **HECHO** (gana en el panel activo) | **V** |
@@ -268,13 +268,27 @@ toda forma nueva es incompatible, porque la versión se compara por igualdad
 exacta. Un digest del corpus bendecido al lado de la versión lo cerraría. Es
 infraestructura de test aparte, no de esta rama.
 
-### F3 — Las claves que solo honra un frontend (clase A)
+### F3 — Las claves que solo honra un frontend (clase A) — **HECHA**
 
-`openers.toml` y `[ui] editor` primero: son features documentadas enteras.
-Luego `[DIR]` contra la sesión (el terminal ya tiene `pin_start_dir`; es
-portarlo), el tema como ruta, `quick_search`, `confirm_quit`, y el estilo por
-columna. Decidir de una vez la precedencia de `[ui] lang` y escribirla en los
-dos comentarios, que hoy se contradicen.
+`openers.toml`, `[ui] editor`, `[DIR]` contra la sesión, `quick_search`,
+`confirm_quit`, el estilo por columna y la precedencia de `[ui] lang` cayeron
+en las fases 4 y 5. Lo que quedaba está arriba, en la tabla, y se cerró en dos
+tramos: `[profile.start]` + `profile_warnings` + las cuatro claves de fuente
+(ADR 0098), y el **tema como RUTA al cambiar de perfil**.
+
+Ese último tenía la misma forma que todos los demás: la ventana solo miraba
+presets, en sus DOS sitios —el host, que guarda el tema para su propio
+selector, y el proceso que lo convierte en variables CSS—, así que un perfil
+con `theme = "…/mio.toml"` se quedaba sin colores nuevos en silencio mientras
+el terminal lo aplicaba. Resolverlo lee un fichero, y ni el actor del host ni
+el bombeo de efectos nativos pueden leer donde están (regla 2): el corte lo
+decide ahora `norte_frontend::theme::is_preset` —de los dos— y la rama de ruta
+se va a un hilo bloqueante y vuelve por el buzón, como el guardado del tema. Un
+fichero que no se puede leer no deja la ventana sin colores: se queda el que
+había y se dice cuál de las dos cosas pasó.
+
+Queda solo, y fuera de esta fase por decisión: la recarga en caliente de la
+configuración en la ventana, que pide ADR propia.
 
 ~~Aparte y explícito: borrar `font`/`mono_font`/`font_size`/`reduce_motion` del
 catálogo de ajustes o implementarlas.~~ **HECHO: implementadas.** Borrarlas era

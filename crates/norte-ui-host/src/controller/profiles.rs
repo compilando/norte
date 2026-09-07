@@ -39,7 +39,7 @@ impl Estado {
         // El TEMA. Se pone por nombre, y el aviso al que hospeda sale de aquí:
         // es la mitad de para lo que existe un perfil.
         if let Some(tema) = cfg.common.ui_theme.clone() {
-            self.aplicar_tema(&tema);
+            self.aplicar_tema(&tema, buzon);
         }
         // El KEYMAP entero, con las capas del perfil dentro. Si no se puede
         // construir se queda el que había: un perfil con un `keymap.toml`

@@ -19467,6 +19467,60 @@ async fn el_selector_de_perfiles_enseña_y_lo_elegido_se_aplica() {
     assert_eq!(name, "nord", "el tema del PERFIL, no el de antes");
 }
 
+/// Y el tema de un perfil puede ser una RUTA, no solo un preset (ADR 0020).
+///
+/// La ventana solo miraba presets, así que un perfil con
+/// `theme = "…/mio.toml"` se quedaba sin colores nuevos EN SILENCIO — con el
+/// terminal aplicándolo, que es la divergencia. Resolverlo lee un fichero, y
+/// esta ventana no puede leer dentro del actor (regla 2): se va fuera y vuelve
+/// por el buzón, como el guardado del tema.
+#[tokio::test]
+async fn el_tema_de_un_perfil_puede_ser_una_ruta() {
+    use norte_ui_host::dto::NativeEffect;
+    let raiz = tempfile::tempdir().expect("temp");
+    let mio = raiz.path().join("mio.toml");
+    std::fs::write(&mio, "name = \"mio\"\n").expect("escribir tema");
+    let fotos = raiz.path().join("profiles").join("fotos");
+    std::fs::create_dir_all(&fotos).expect("mkdir");
+    std::fs::write(
+        fotos.join("norte.toml"),
+        format!(
+            "[profile]\ntitle = \"Fotos\"\n\n[ui]\ntheme = \"{}\"\n",
+            mio.display()
+        ),
+    )
+    .expect("escribir");
+
+    let (h, _snap) = host_con_capas(raiz.path()).await;
+    let mut sub = h.subscribe();
+    let mut nativos = h.native_effects();
+
+    ejecutar_por_paleta(&h, &mut sub, "profile.pick").await;
+    let mut abierto = false;
+    for _ in 0..100 {
+        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        if siguiente_foto(&mut sub).await.profiles.is_some() {
+            abierto = true;
+            break;
+        }
+    }
+    assert!(abierto, "el selector se abrió con la lista");
+
+    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+        .await
+        .expect("sale el aviso de tema")
+        .expect("canal vivo");
+    let NativeEffect::ThemeChanged { name } = efecto else {
+        panic!("el aviso es el del tema: {efecto:?}");
+    };
+    assert_eq!(
+        name,
+        mio.display().to_string(),
+        "el tema del perfil era un fichero, y se aplicó"
+    );
+}
+
 /// **La ventana AÑADE un favorito, no solo abre la lista** (#309).
 ///
 /// Y el nombre viene sugerido por el modelo COMPARTIDO: guardar REEMPLAZA el

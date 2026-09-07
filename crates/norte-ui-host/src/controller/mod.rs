@@ -501,6 +501,15 @@ enum Mensaje {
     /// mensaje por cada Enter en una pantalla cuyo resultado ya se ve: los
     /// colores cambiaron.
     TemaPersistido(Option<&'static str>),
+    /// Un `[ui] theme` que era una RUTA, ya leído fuera del actor.
+    ///
+    /// Lleva el spec para poder nombrarlo en el efecto nativo —quien hospeda
+    /// vuelve a resolverlo por su cuenta, porque los colores cruzan a la
+    /// webview convertidos en variables CSS y esa conversión no es del host—
+    /// y, en caja, porque un `Theme` es grande al lado del resto del enum.
+    ///
+    /// El error es una CLAVE, no el error: el suyo lleva la ruta dentro (#73).
+    TemaResuelto(Box<(String, Result<norte_theme::Theme, &'static str>)>),
     /// A esta task TERMINADA se le acabó su rato en el tablero
     /// ([`TTL_TASK_TERMINAL`]). Lleva la ÉPOCA de conexión en la que se
     /// registró: tras un relevo del daemon los ids vuelven a empezar en 1, y
@@ -1241,6 +1250,26 @@ async fn actor(
                 if let Some(clave) = fallo {
                     for u in estado.decir(clave) {
                         let _ = updates.send(u);
+                    }
+                }
+            }
+            Mensaje::TemaResuelto(datos) => {
+                let (spec, resultado) = *datos;
+                match resultado {
+                    Ok(tema) => {
+                        estado.tema_puesto(&spec, &tema);
+                        // Foto y no parche: cambiar de tema mueve los colores
+                        // de TODA la pantalla, y el renderer los reenchufa
+                        // desde el catálogo, no desde un campo de la vista.
+                        let snap = estado.snapshot();
+                        let _ = updates.send(estado.sobre(UiUpdate::Snapshot(Box::new(snap))));
+                    }
+                    // Un tema que no se puede leer NO deja la ventana sin
+                    // colores: se queda el que había y se dice por qué.
+                    Err(clave) => {
+                        for u in estado.decir(clave) {
+                            let _ = updates.send(u);
+                        }
                     }
                 }
             }
