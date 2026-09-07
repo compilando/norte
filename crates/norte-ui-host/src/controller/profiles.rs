@@ -78,10 +78,52 @@ impl Estado {
             // completa, y mandar dos seguidas es mandar la primera para nada.
             let _ = self.aplicar_disposicion(arbol, backend, buzon);
         }
+        // Y `[profile.start]`: dónde abre cada hueco del que la sesión no sabe
+        // nada. Es lo que hace útil un perfil recién creado o uno que llega de
+        // otra máquina — sin esto, entrar en «trabajo» dejaba los dos paneles
+        // donde estaban y el perfil solo cambiaba los colores.
+        //
+        // Va DESPUÉS de la disposición porque el hueco tiene que existir para
+        // poder sembrarlo, y por `navegar_hueco` porque ahí ya puede haber una
+        // petición en vuelo del listado anterior: un testigo nuevo la releva,
+        // y poner el dir a mano dejaría aterrizar la vieja encima.
+        //
+        // `Seed` y no `Record`: sembrar no es un paso que el lector anduvo, y
+        // meter en el «atrás» de este perfil el directorio del anterior es
+        // ofrecer una vuelta a un sitio del que nunca se vino. Es además lo
+        // que hace el terminal, que siembra construyendo el pane de cero.
+        //
+        // Los parches que `navegar_hueco` devuelve se DESCARTAN, igual que los
+        // de la disposición y por lo mismo: esto acaba en una foto entera. Se
+        // gastan números de secuencia que el renderer no llega a ver, y no es
+        // un agujero — una foto cierra cualquier hueco de la secuencia, que es
+        // justo para lo que existe.
+        for (id, destino) in self.siembra_de_perfil() {
+            let _ = self.navegar_hueco(id, &destino, Trail::Seed, backend, buzon);
+        }
         // Lo que NO se puede aplicar sin reiniciar se dice por su nombre: un
         // cambio que se callara esto sería un cambio que miente (D8).
         let fuera = fuera_de_alcance_en_caliente(&antes, &self.config.common);
-        if fuera.is_empty() {
+        // Y lo que el FICHERO del perfil trae y no se entiende, que gana a los
+        // otros dos mensajes: «no se pudo aplicar en caliente» describe un
+        // límite de este proceso, y esto describe líneas que no van a hacer
+        // nada nunca. Callarlas es lo que convirtió `[profile.start]` en una
+        // trampa — una ruta sin esquema se tiraba y el hueco abría donde le
+        // parecía, sin que nada lo dijera.
+        let avisos = self.config.common.profile_warnings.len();
+        for aviso in &self.config.common.profile_warnings {
+            tracing::warn!(motivo = %aviso, "línea del perfil ignorada");
+        }
+        if avisos > 0 {
+            self.status.message = Some(clamp_display(norte_i18n::ta_in(
+                self.lang,
+                "msg-profile-config-ignored",
+                &[
+                    ("profile", &nombre.to_string_lossy()),
+                    ("n", &avisos.to_string()),
+                ],
+            )));
+        } else if fuera.is_empty() {
             self.status.message = Some(clamp_display(norte_i18n::ta_in(
                 self.lang,
                 "msg-profile-switched",

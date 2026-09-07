@@ -45,8 +45,36 @@ impl Estado {
             return;
         };
         self.aplicar_sesion(&body);
+        self.sesion.conocidos = body.slots.keys().copied().collect();
         self.sesion.leida = body;
-        self.fijar_dir_pedido();
+    }
+
+    /// Los huecos que `[profile.start]` siembra, ya filtrados a los que ESTA
+    /// pantalla tiene.
+    ///
+    /// Quién gana lo decide [`norte_frontend::config::profile_start_seeds`],
+    /// que es de los dos frontends: la sesión manda, y el perfil solo dice
+    /// dónde abre un hueco del que la sesión no sabe nada. Un id que el perfil
+    /// nombre y esta disposición no coloque no tiene dónde abrir, así que se
+    /// cae aquí.
+    ///
+    /// Apunta lo sembrado. Sin esa cuenta, un lector sin sesión guardada
+    /// —instalación nueva, o un `session_get` que ni se pudo leer— volvía al
+    /// directorio de arranque del perfil cada vez que entraba y salía de él:
+    /// para él la sesión no sabe nunca nada, así que el veto de arriba no veta.
+    pub(super) fn siembra_de_perfil(&mut self) -> Vec<(u32, VPath)> {
+        let siembra: Vec<(u32, VPath)> = norte_frontend::config::profile_start_seeds(
+            &self.config.common.profile_start,
+            &self.sesion.conocidos,
+            &self.sesion.sembrados,
+        )
+        .into_iter()
+        .filter(|(id, _)| self.huecos.contains_key(id))
+        .collect();
+        for (id, _) in &siembra {
+            self.sesion.sembrados.insert(*id);
+        }
+        siembra
     }
 
     /// Devuelve el panel ACTIVO al directorio que se escribió al arrancar.
@@ -59,7 +87,7 @@ impl Estado {
     ///
     /// Solo el activo: el otro panel se queda donde la sesión lo dejó. Y solo
     /// el SITIO — el orden y los ocultos son preferencias, y no se tocan.
-    fn fijar_dir_pedido(&mut self) {
+    pub(super) fn fijar_dir_pedido(&mut self) {
         let Some(dir) = self.dir_pedido.take() else {
             return;
         };

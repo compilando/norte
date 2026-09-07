@@ -162,8 +162,9 @@ fn main() -> ExitCode {
     let arranque = tauri::async_runtime::block_on(startup::boot(&cli));
     let state = match arranque {
         Ok(boot) => {
-            let cat =
+            let mut cat =
                 norte_gui_tauri::catalog::catalogo(boot.host.instance(), boot.lang, &boot.theme);
+            cat.appearance = boot.appearance;
             AppState::Ready(Box::new(Bridge::new(
                 boot.host,
                 boot.snapshot,

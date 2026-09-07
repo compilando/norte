@@ -89,28 +89,31 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         archive_rar_delegate: _,
         ai: _,
 
-        // ─── MUERTAS en todo el workspace: no las lee nadie, ni aquí ni en
-        //     el terminal. Están en el catálogo de ajustes, así que hoy la
-        //     pantalla de Ajustes afirma algo falso. Plan, fase 3: se
-        //     implementan o se quitan del catálogo.
+        // ─── Del CATÁLOGO de arranque, no de la foto: las cuatro cruzan en
+        //     `HostCatalog::appearance` y el renderer las enchufa como
+        //     variables CSS. El tamaño mueve también la rejilla —esta ventana
+        //     se reparte en celdas— y `reduce_motion` solo puede AÑADIR la
+        //     petición del escritorio, nunca contradecirla (spec §17).
         //
-        //     Ojo con `ui_font*` y `ui_reduce_motion`: la lista de exclusión
-        //     del cambio de perfil dice que «viajan en el catálogo del
-        //     arranque y la hoja de estilos las lee una vez», y no es cierto
-        //     —`style.css` fija la familia y el tamaño a mano—, así que el
-        //     aviso da a entender que se aplicaron al arrancar.
+        //     Una terminal no elige su fuente ni anima nada, así que en el
+        //     terminal siguen sin aplicar y eso está dicho en su lista de
+        //     exclusión.
         ui_font: _,
         ui_mono_font: _,
         ui_font_size: _,
         ui_reduce_motion: _,
+
+        // ─── Se lee en el ARRANQUE y en el cambio de perfil, no en la foto:
+        //     `Estado::siembra_de_perfil` coloca el hueco del que la sesión no
+        //     sabe nada, una vez (ADR 0098).
         profile_start: _,
 
         // ─── Diagnóstico de la CARGA, no ajustes.
         //
-        //     `project_warnings` sí se enseña (`aviso_de_arranque`).
-        //     `profile_warnings` no lo enseña ninguno de los dos, y
-        //     `norte-config` argumenta largo que callarlas es el fallo grave.
-        //     Plan, fase 3.
+        //     `project_warnings` y `profile_warnings` se enseñan los dos, y
+        //     por el mismo camino: el conteo a la barra desde
+        //     `aviso_de_arranque` y cada motivo al registro. El de perfil
+        //     además se repite en cada cambio de perfil.
         //     `sources` es para el vigilante de config, que la ventana no
         //     tiene: su vista de «dónde vive esto» se construye de `capas`.
         //     `profile_title` lo relee el selector de perfiles del fichero,

@@ -385,6 +385,141 @@ fn el_directorio_y_el_orden_vuelven() {
     assert!(!other.panes[0].show_hidden());
 }
 
+/// `[profile.start]` abre el hueco del que la sesión no sabe nada.
+///
+/// Es lo que hace útil un perfil recién creado, o uno que llega de otra
+/// máquina. La clave la escribían los dos frontends y no la leía NINGUNO, con
+/// dos ficheros prometiendo que sí.
+#[test]
+fn profile_start_siembra_un_hueco_sin_sesion() {
+    let mut app = app_basica();
+    let body = norte_frontend::session::SessionBody::default();
+    // Por `apply_session_value`, que es el camino de verdad: es donde el
+    // terminal apunta de qué huecos SABE lo guardado, y ese apunte es el veto.
+    // Llamando al sembrador con un cuerpo a mano se probaba el arnés.
+    app.apply_session_value(norte_frontend::session::SCHEMA_VERSION, &body.to_value());
+    let start = std::collections::BTreeMap::from([(1, vp("file:///fotos"))]);
+
+    let sembrados = app.seed_profile_start(&start);
+
+    assert_eq!(sembrados, vec![SlotId(1)]);
+    assert_eq!(
+        app.panes.browser(SlotId(1)).expect("hay listado").dir(),
+        &vp("file:///fotos")
+    );
+}
+
+/// Y solo la PRIMERA vez. Sin sesión guardada —una instalación nueva— la
+/// sesión no sabe nunca nada de ningún hueco, así que sin llevar la cuenta de
+/// lo sembrado, entrar y salir del perfil sacaba al lector de donde estaba en
+/// cada vuelta: la decisión 2 de la ADR 0098 puesta del revés.
+#[test]
+fn un_hueco_ya_sembrado_no_se_vuelve_a_sembrar() {
+    let mut app = app_basica();
+    let body = norte_frontend::session::SessionBody::default();
+    app.apply_session_value(norte_frontend::session::SCHEMA_VERSION, &body.to_value());
+    let start = std::collections::BTreeMap::from([(1, vp("file:///fotos"))]);
+    assert_eq!(app.seed_profile_start(&start), vec![SlotId(1)]);
+
+    // El lector se va a otro sitio y vuelve a entrar al perfil.
+    app.adoptar_pane(
+        SlotId(1),
+        Pane::new(vp("file:///trabajo"), Vec::new()),
+        None,
+        None,
+    );
+
+    assert!(app.seed_profile_start(&start).is_empty());
+    assert_eq!(
+        app.panes.browser(SlotId(1)).expect("hay listado").dir(),
+        &vp("file:///trabajo"),
+        "sembrar es de la primera vez"
+    );
+}
+
+/// Y la SESIÓN gana: `[profile.start]` dice dónde abre un hueco la primera
+/// vez, no cada vez.
+///
+/// Un perfil es un espacio de trabajo, no un marcador que te devuelve al
+/// principio: si cada entrada te sacara de donde estabas, sería inservible
+/// justo para quien lo usa a diario.
+#[test]
+fn la_sesion_gana_a_profile_start() {
+    let mut app = app_basica();
+    let mut body = norte_frontend::session::SessionBody::default();
+    body.slots.insert(
+        1,
+        norte_frontend::session::SlotState {
+            path: vp("file:///donde/lo/dejaste"),
+            cursor: 0,
+            back: Vec::new(),
+            forward: Vec::new(),
+            sort: norte_frontend::SortSpec::default(),
+            columns: Vec::new(),
+            show_hidden: false,
+            touched_ms: 0,
+        },
+    );
+    app.apply_session_value(norte_frontend::session::SCHEMA_VERSION, &body.to_value());
+    let start = std::collections::BTreeMap::from([(1, vp("file:///fotos"))]);
+
+    assert!(
+        app.seed_profile_start(&start).is_empty(),
+        "no se siembra un hueco que la sesión ya coloca"
+    );
+    assert_eq!(
+        app.panes.browser(SlotId(1)).expect("hay listado").dir(),
+        &vp("file:///donde/lo/dejaste")
+    );
+}
+
+/// Un id que el perfil nombra y esta disposición no coloca no tiene dónde
+/// abrir: se cae en silencio en vez de acuñar un hueco que nadie pidió.
+#[test]
+fn profile_start_no_inventa_un_hueco_que_el_layout_no_tiene() {
+    let mut app = app_basica();
+    let start = std::collections::BTreeMap::from([(4242, vp("file:///fotos"))]);
+    assert!(app.seed_profile_start(&start).is_empty());
+    assert!(app.panes.browser(SlotId(4242)).is_none());
+}
+
+/// Y tampoco pisa un hueco HUÉRFANO: uno que el almacén guarda y esta
+/// disposición no coloca.
+///
+/// Al almacén no se le puede preguntar «¿existe?»: guarda los huérfanos para
+/// cuando se vuelva a su disposición, y `insert` los REVIVE. Sembrando ahí, el
+/// lector vuelve a aquella disposición y se encuentra el panel en el
+/// directorio de arranque del perfil en vez de donde lo dejó — que es la
+/// promesa que el almacén tiene escrita. Se le pregunta al LAYOUT, que es la
+/// misma corrección que `apply_session` documenta treinta líneas más arriba.
+#[test]
+fn profile_start_no_revive_un_hueco_huerfano() {
+    let mut app = app_basica();
+    // El hueco 3 existe en el almacén y NO en la disposición.
+    app.set_layout(Node::split(
+        norte_frontend::layout::Dir::Vertical,
+        vec![
+            Node::slot(SlotId(1), KindId::browser()),
+            Node::slot(SlotId(3), KindId::browser()),
+        ],
+    ));
+    app.adoptar_pane(
+        SlotId(3),
+        Pane::new(vp("file:///lo/de/ayer"), Vec::new()),
+        None,
+        None,
+    );
+    app.set_layout(Node::slot(SlotId(1), KindId::browser()));
+
+    let start = std::collections::BTreeMap::from([(3, vp("file:///fotos"))]);
+    assert!(app.seed_profile_start(&start).is_empty());
+    assert_eq!(
+        app.panes.browser(SlotId(3)).map(Pane::dir),
+        Some(&vp("file:///lo/de/ayer")),
+        "el huérfano sigue donde estaba, para cuando se vuelva a su disposición"
+    );
+}
+
 /// Un layout que este binario no sabe pintar viaja igual: la sesión guarda el
 /// árbol, no lo interpreta.
 #[test]

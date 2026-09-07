@@ -247,6 +247,68 @@ pub fn profile_snapshot(
     }
 }
 
+/// Qué huecos siembra `[profile.start]` al entrar en un perfil.
+///
+/// **La SESIÓN gana.** `[profile.start]` dice dónde abre un hueco «la primera
+/// vez»: en cuanto ese hueco tiene estado guardado, lo que manda es dónde lo
+/// dejaste, porque un perfil es un espacio de trabajo y no un marcador que te
+/// devuelve al principio cada vez que entras.
+///
+/// Dos vetos, y hacen falta los dos:
+///
+/// - `conocidos` son los huecos de los que la sesión GUARDADA sabe algo. Tiene
+///   que ser lo leído del disco, no la pantalla de ahora: ésta nombra todos los
+///   huecos vivos, así que preguntándole el perfil no sembraría nunca.
+/// - `sembrados` son los que este proceso ya sembró. Sin ellos, un lector sin
+///   sesión guardada —una instalación nueva— volvería al directorio de arranque
+///   del perfil cada vez que entra y sale de él, porque para él la sesión no
+///   sabe nunca nada de nada.
+///
+/// Se devuelven en el orden del mapa —por id de hueco— para que sembrar sea
+/// determinista: dos huecos que se siembran en distinto orden acaban con el
+/// mismo contenido pero con el foco en sitios distintos.
+///
+/// Vive en este crate porque los dos frontends contestan la misma pregunta, y
+/// esa es exactamente la clase de decisión que escrita dos veces diverge
+/// (ADR 0077). No hace I/O: decide, y quien llame lista.
+///
+/// ```
+/// use std::collections::{BTreeMap, BTreeSet};
+/// use norte_proto::VPath;
+/// use norte_frontend::config::profile_start_seeds;
+///
+/// let mut start = BTreeMap::new();
+/// start.insert(1, VPath::parse("file:///src").unwrap());
+/// start.insert(2, VPath::parse("file:///tmp").unwrap());
+/// let nada = BTreeSet::new();
+///
+/// // Sin sesión y sin haber sembrado, van los dos.
+/// assert_eq!(profile_start_seeds(&start, &nada, &nada).len(), 2);
+///
+/// // El hueco 1 lo conoce la sesión: ese lo manda ella.
+/// let conocidos = BTreeSet::from([1]);
+/// let siembra = profile_start_seeds(&start, &conocidos, &nada);
+/// assert_eq!(siembra.len(), 1);
+/// assert_eq!(siembra[0].0, 2);
+///
+/// // Y lo ya sembrado no se vuelve a sembrar: entrar y salir del perfil no
+/// // te saca de donde estabas.
+/// let sembrados = BTreeSet::from([2]);
+/// assert!(profile_start_seeds(&start, &conocidos, &sembrados).is_empty());
+/// ```
+#[must_use]
+pub fn profile_start_seeds(
+    start: &std::collections::BTreeMap<u32, norte_proto::VPath>,
+    conocidos: &std::collections::BTreeSet<u32>,
+    sembrados: &std::collections::BTreeSet<u32>,
+) -> Vec<(u32, norte_proto::VPath)> {
+    start
+        .iter()
+        .filter(|(id, _)| !conocidos.contains(id) && !sembrados.contains(id))
+        .map(|(id, v)| (*id, v.clone()))
+        .collect()
+}
+
 /// Lee todos los perfiles de `<dir>/profiles/`, con su título y su motivo si
 /// no cargan.
 ///

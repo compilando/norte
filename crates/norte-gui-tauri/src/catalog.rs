@@ -25,7 +25,11 @@ use serde::{Deserialize, Serialize};
 /// renderer sobre el sobre que está a punto de interpretar
 /// (`session.ts`), que ya lleva la suya: confiar para eso en un mensaje
 /// lateral sería creerse un número que no acompaña a los datos.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// `PartialEq` sin `Eq`: `font_size` es un `f32` porque la configuración acepta
+// una parte fraccionaria a propósito (un `14.5` escrito a mano se puede editar
+// desde la pantalla de ajustes), y un float no es `Eq`. Aquí solo se compara
+// en tests.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostCatalog {
     /// La versión del contrato que habla este host, para diagnóstico.
     ///
@@ -55,6 +59,59 @@ pub struct HostCatalog {
     /// una hoja de estilos es el tercer sitio donde cambiarlo y el primero
     /// donde olvidarse.
     pub busy_threshold_ms: u64,
+    /// Lo que esta ventana pinta y no es color: fuentes y movimiento.
+    pub appearance: Appearance,
+}
+
+/// `[ui] font`, `mono_font`, `font_size` y `reduce_motion`, para el renderer.
+///
+/// Las cuatro se cargaban, se validaban, se ofrecían en la pantalla de ajustes
+/// —con `applies_live: true`— y no las leía NADIE: en el terminal no aplican
+/// (una terminal no elige su fuente) y en la ventana no llegaban a cruzar.
+/// `reduce_motion` además es un compromiso de accesibilidad de la spec §17.
+///
+/// Viajan en el CATÁLOGO y no en la foto porque no son estado de pantalla:
+/// son de arranque y de recarga, como el tema, y por el mismo camino se
+/// aplican en caliente al cambiar de perfil.
+///
+/// Ningún campo lleva `skip_serializing_if`: ausente y `null` tienen que
+/// significar lo mismo aquí —«no lo dice la configuración»— y la única forma
+/// de garantizarlo es que el campo viaje siempre.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Appearance {
+    /// Familia para el texto de interfaz. `None` = la del sistema.
+    #[serde(default)]
+    pub font: Option<String>,
+    /// Familia monoespaciada, para lo que se alinea en columnas. `None` = la
+    /// que trae la hoja de estilos.
+    #[serde(default)]
+    pub mono_font: Option<String>,
+    /// Tamaño base en px, ya validado a `[8, 32]` por la configuración.
+    ///
+    /// No es solo texto más grande: la rejilla de esta ventana se reparte en
+    /// CELDAS, así que el alto de fila y el ancho de columna salen de aquí. Un
+    /// tamaño que solo cambiara la letra la dejaría desbordando su fila.
+    #[serde(default)]
+    pub font_size: Option<f32>,
+    /// Quien pide menos movimiento no ve animaciones. `None` = manda lo que
+    /// diga el sistema (`prefers-reduced-motion`), que es el default correcto:
+    /// la configuración solo puede AÑADIR la petición, nunca contradecir a
+    /// quien ya la hizo en su escritorio.
+    #[serde(default)]
+    pub reduce_motion: Option<bool>,
+}
+
+impl Appearance {
+    /// Los cuatro escalares de `[ui]`, tal y como los dejó la configuración.
+    #[must_use]
+    pub fn de(cfg: &norte_config::CommonConfig) -> Self {
+        Self {
+            font: cfg.ui_font.clone(),
+            mono_font: cfg.ui_mono_font.clone(),
+            font_size: cfg.ui_font_size,
+            reduce_motion: cfg.ui_reduce_motion,
+        }
+    }
 }
 
 /// Construye el paquete para esta instancia, este idioma y este tema.
@@ -77,6 +134,21 @@ pub fn catalogo(instance: &InstanceId, lang: Lang, theme: &Theme) -> HostCatalog
         measure: std::env::var_os("NORTE_GUI_MEASURE").is_some_and(|v| v == "1"),
         busy_threshold_ms: u64::try_from(norte_frontend::busy::THRESHOLD.as_millis())
             .unwrap_or(250),
+        appearance: Appearance::default(),
+    }
+}
+
+impl HostCatalog {
+    /// El mismo catálogo con la apariencia que dice la configuración.
+    ///
+    /// Aparte de [`catalogo`] y no un parámetro más porque los sitios que
+    /// construyen un catálogo sin configuración son casi todos —los tests— y
+    /// un cuarto argumento que la mitad de los llamantes rellena con un
+    /// `Default` es un argumento que se olvida en el que importa.
+    #[must_use]
+    pub fn con_apariencia(mut self, cfg: &norte_config::CommonConfig) -> Self {
+        self.appearance = Appearance::de(cfg);
+        self
     }
 }
 

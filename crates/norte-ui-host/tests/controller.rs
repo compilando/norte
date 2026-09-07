@@ -1177,6 +1177,89 @@ async fn la_sesion_coloca_los_huecos() {
     );
 }
 
+/// Arranca como [`host_arbol`], con `[profile.start]` puesto.
+async fn host_con_start(
+    backend: Arc<Falso>,
+    start: &[(u32, &str)],
+) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    let mut settings = ajustes_de_prueba();
+    settings.common.profile_start = start
+        .iter()
+        .map(|(id, wire)| (*id, VPath::parse(wire).expect("vpath")))
+        .collect();
+    UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: dir(),
+        initial_dir_pedido: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings,
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca")
+}
+
+/// `[profile.start]` abre el hueco del que la sesión no sabe nada.
+///
+/// Es lo que hace útil un perfil recién creado, o uno que llega de otra
+/// máquina: la clave la escribían los dos frontends y no la leía NINGUNO, así
+/// que entrar en un perfil dejaba los paneles donde estaban y el perfil solo
+/// cambiaba los colores. Dos ficheros prometían que sí.
+#[tokio::test]
+async fn profile_start_siembra_un_hueco_sin_sesion() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    falso.pon("mem:///casa/fotos", vec![(b"gato.png".to_vec(), false)]);
+    // Sesión legible y VACÍA: nadie ha guardado el hueco 1 todavía.
+    *falso.sesion.lock().expect("sesión") = (
+        norte_proto::methods::Session {
+            version: 1,
+            revision: 7,
+            body: serde_json::to_value(norte_frontend::session::SessionBody::default())
+                .expect("json"),
+        },
+        true,
+    );
+    let (_h, snap) = host_con_start(Arc::new(falso), &[(1, "mem:///casa/fotos")]).await;
+    assert!(
+        listado(&snap).path_display.ends_with("/casa/fotos"),
+        "abrió donde dice el perfil: {}",
+        listado(&snap).path_display
+    );
+}
+
+/// Y la SESIÓN gana: `[profile.start]` dice dónde abre un hueco la primera
+/// vez, no cada vez.
+///
+/// Un perfil es un espacio de trabajo, no un marcador que te devuelve al
+/// principio: si cada entrada al perfil te sacara de donde estabas, el perfil
+/// sería inservible justo para quien lo usa a diario.
+#[tokio::test]
+async fn la_sesion_gana_a_profile_start() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    falso.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    falso.pon("mem:///casa/fotos", vec![(b"gato.png".to_vec(), false)]);
+    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+    let (_h, snap) = host_con_start(Arc::new(falso), &[(1, "mem:///casa/fotos")]).await;
+    assert!(
+        listado(&snap).path_display.ends_with("/casa/docs"),
+        "manda dónde lo dejaste, no dónde nace el perfil: {}",
+        listado(&snap).path_display
+    );
+}
+
 /// Un directorio ESCRITO en la línea de órdenes gana a la sesión.
 ///
 /// `norte-gui /usr/bin` con una sesión guardada abría donde estuvieras ayer y

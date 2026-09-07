@@ -40,13 +40,13 @@ La clase más barata de arreglar y la más visible: el usuario escribe algo en
 | ~~`[ui.columns]` estilo por columna~~ | sí (`style_for_id`) | ~~**no**: `default_for_id` en celdas Y cabeceras~~ **HECHO** | **V** |
 | ~~`[DIR]` de la línea de órdenes~~ | gana a la sesión (`pin_start_dir`) | ~~**la sesión lo pisa**~~ **HECHO** (gana en el panel activo) | **V** |
 | recarga en caliente (todas) | sí, `norte_config::watch` | **no hay watcher**: todo es de arranque | A |
-| `[ui] font`, `mono_font`, `font_size`, `reduce_motion` | — | — | **muertas en los dos** | A |
-| `[profile.start]` | la escribe | la escribe | **no la lee nadie**, y dos ficheros prometen que sí | **V** |
-| `profile_warnings` | — | — | no se enseñan; `load.rs` argumenta largo que callarlas sería el fallo grave | A |
+| ~~`[ui] font`, `mono_font`, `font_size`, `reduce_motion`~~ | no aplican (una terminal no elige fuente) | ~~—~~ **HECHO**: `HostCatalog::appearance` | ~~**muertas en los dos**~~ | A |
+| ~~`[profile.start]`~~ | la escribe | la escribe | ~~**no la lee nadie**, y dos ficheros prometen que sí~~ **HECHO** (ADR 0098) | **V** |
+| ~~`profile_warnings`~~ | — | — | ~~no se enseñan~~ **HECHO**: conteo a la barra, motivo al registro | A |
 
-Dos comentarios de `schema.rs` (`menu_bar`, `panel_bar`) dicen que la ventana
-ignora esas claves. Las lee. Un comentario que miente es lo que la próxima
-auditoría se creerá.
+~~Dos comentarios de `schema.rs` (`menu_bar`, `panel_bar`) dicen que la ventana
+ignora esas claves. Las lee.~~ **HECHO**. Un comentario que miente es lo que la
+próxima auditoría se creerá.
 
 ## B. Estado que se queda congelado en la ventana
 
@@ -276,9 +276,54 @@ portarlo), el tema como ruta, `quick_search`, `confirm_quit`, y el estilo por
 columna. Decidir de una vez la precedencia de `[ui] lang` y escribirla en los
 dos comentarios, que hoy se contradicen.
 
-Aparte y explícito: borrar `font`/`mono_font`/`font_size`/`reduce_motion` del
-catálogo de ajustes o implementarlas; e implementar `[profile.start]` o quitar
-las dos promesas que la mencionan.
+~~Aparte y explícito: borrar `font`/`mono_font`/`font_size`/`reduce_motion` del
+catálogo de ajustes o implementarlas.~~ **HECHO: implementadas.** Borrarlas era
+la respuesta equivocada — `reduce_motion` es un compromiso de accesibilidad de
+la spec §17, y las tres de fuente caen directas en una webview. Viajan en
+`HostCatalog::appearance`, que es el paquete de arranque y ya se vuelve a pedir
+cuando cambia el tema; el renderer las enchufa como variables CSS.
+
+Dos cosas que no eran obvias: el tamaño mueve TAMBIÉN la rejilla —esta ventana
+se reparte en celdas, así que una letra más grande dentro de una fila del mismo
+alto se sale de su fila— y el ancho de celda se **mide** con la fuente puesta,
+porque el avance de una monoespaciada no es una fracción fija de su tamaño y
+una columna calculada con el ancho equivocado desalinea el listado entero. Y
+`reduce_motion` solo puede AÑADIR la petición: un `false` no apaga el
+`prefers-reduced-motion` del escritorio.
+
+En el terminal siguen sin aplicar —una terminal no elige su fuente— y eso ya
+estaba dicho en su lista de exclusión. En la ventana se aplican al arrancar y
+**no** en un cambio de perfil; eso queda dicho en la suya, y hacerlo caliente
+es la pregunta de la recarga en caliente, que tiene ADR propia pendiente.
+
+~~e implementar `[profile.start]` o quitar las dos promesas que la
+mencionan.~~ **HECHO** (ADR 0098), y era peor de lo que la tabla decía: no es
+que la leyera un frontend y el otro no, es que **no la leía ninguno** mientras
+los dos la escribían. Y como no la leía nadie, tampoco se había notado que los
+dos extremos discrepaban del TIPO: el escritor pone un `VPath` en forma de
+cable y el lector lo parseaba como `PathBuf`, con un párrafo de rustdoc
+razonando sobre `~` y rutas relativas que no ocurren nunca.
+
+Ahora: valores en forma de cable, la SESIÓN gana (es dónde abre un hueco la
+primera vez, no cada vez), qué huecos se siembran lo decide una función de los
+dos (`profile_start_seeds`), y sembrar no entra en el rastro — para lo que hizo
+falta un `Trail::Seed`, porque el terminal sembraba construyendo el pane de
+cero y la ventana pasa por `navegar_hueco`, que registra.
+
+~~`profile_warnings` — no se enseñan.~~ **HECHO**, y es la otra mitad de lo
+mismo: sin enseñarlas, ser estricto con `[profile.start]` sería una trampa
+—escribes `/tmp`, el hueco abre donde le parece y nada lo dice—. El conteo va
+a la barra y cada motivo al registro, en los dos frontends, al arrancar y en
+cada cambio de perfil.
+
+Y los dos comentarios de `schema.rs` que decían que la ventana ignora
+`menu_bar`/`panel_bar`: los lee (`MenuView.bar`, `PanelBarView.bar`).
+Corregidos.
+
+**Un MINOR anotado y no hecho:** un id que `[profile.start]` nombre y la
+disposición del perfil no coloque se cae en silencio. Como la clave la escribe
+`save_profile` desde la disposición del propio perfil, solo pasa editando a
+mano; decirlo costaría una clave más en dos idiomas y dos frontends.
 
 ### F4 — Las decisiones ya divergidas (clase C)
 

@@ -174,6 +174,11 @@ mod tests {
             // — Llegan por los pasos 4 y 5 (disposición y siembra de huecos).
             ui_layout: _,
             ui_show_hidden: _,
+            // — NO se aplica en una recarga, y esa es su semántica: dice dónde
+            //   abre un hueco la PRIMERA vez, así que se siembra al entrar en
+            //   el perfil (`seed_profile_start`, paso 3) y solo para los huecos
+            //   de los que la sesión no sabe nada. Reaplicarlo en cada recarga
+            //   te devolvería al principio cada vez que se toca el fichero.
             profile_start: _,
             // — SE ANUNCIA: `norte_i18n::force` corre una vez por proceso.
             ui_lang: _,

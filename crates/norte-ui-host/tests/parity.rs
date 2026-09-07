@@ -690,3 +690,88 @@ async fn las_marcas_no_sobreviven_a_un_cd() {
     )
     .await;
 }
+
+/// `[profile.start]` abre el mismo directorio en las dos superficies, y solo
+/// la primera vez en las dos (ADR 0098).
+///
+/// Fuera del arnés de `Paso` porque no es una navegación: es el ARRANQUE de
+/// cada frontend con la misma configuración y sin sesión. Y hace falta que sea
+/// una comparación y no dos tests sueltos, porque las dos averías que la
+/// revisión encontró eran exactamente de esta forma —el terminal no sembraba
+/// nunca y la ventana sembraba de más— y cada frontend por su lado se veía
+/// verde: los dos llamaban bien a la función compartida y la llamaban en el
+/// sitio equivocado.
+#[tokio::test]
+async fn profile_start_abre_lo_mismo_en_las_dos() {
+    let start =
+        std::collections::BTreeMap::from([(1, VPath::parse("mem:///casa/fotos").expect("vpath"))]);
+
+    // La VENTANA: arranca con la configuración y sin sesión que leer.
+    let backend = Arc::new(arbol_de_prueba());
+    let (host, primera) = UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: VPath::parse("mem:///casa").expect("vpath"),
+        initial_dir_pedido: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: {
+            let mut cfg = norte_ui_host::ajustes_por_defecto();
+            cfg.common.profile_start = start.clone();
+            cfg
+        },
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+    let ventana = listado_de(&primera).path_display.clone();
+    drop(host);
+
+    // El TERMINAL: el mismo arranque, por su propio camino.
+    let arbol = arbol_de_prueba();
+    let inicio = VPath::parse("mem:///casa").expect("vpath");
+    let mut app = norte_tui::app::App::new(
+        norte_tui::app::Pane::new(inicio.clone(), entradas(&arbol, &inicio)),
+        norte_tui::app::Pane::new(inicio, Vec::new()),
+    );
+    app.apply_session_value(
+        norte_frontend::session::SCHEMA_VERSION,
+        &norte_frontend::session::SessionBody::default().to_value(),
+    );
+    app.seed_profile_start(&start);
+    let terminal = norte_frontend::path_display(
+        app.panes
+            .browser(norte_frontend::layout::SlotId(1))
+            .expect("hay listado")
+            .dir(),
+    )
+    .0;
+
+    assert!(
+        ventana.ends_with("/casa/fotos"),
+        "la ventana abre donde dice el perfil: {ventana}"
+    );
+    assert_eq!(terminal, ventana, "y el terminal abre lo mismo");
+
+    // Y las dos solo la PRIMERA vez: volver a entrar al perfil no saca al
+    // lector de donde estaba.
+    app.adoptar_pane(
+        norte_frontend::layout::SlotId(1),
+        norte_tui::app::Pane::new(VPath::parse("mem:///casa/docs").expect("vpath"), Vec::new()),
+        None,
+        None,
+    );
+    assert!(
+        app.seed_profile_start(&start).is_empty(),
+        "sembrar es de la primera vez, también en el terminal"
+    );
+}

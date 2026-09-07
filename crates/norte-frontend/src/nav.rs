@@ -783,16 +783,31 @@ pub enum Trail {
     /// `Record` con sentido, o un `Replay` sin él, serían estados que alguien
     /// tendría que acordarse de no construir.
     Replay(TrailStep),
+    /// Alguien COLOCA el hueco donde toca, y no es un paso que el lector diera.
+    ///
+    /// Hoy la siembra de `[profile.start]` al entrar en un perfil. No entra en
+    /// el rastro —un «atrás» que lleva al directorio del perfil anterior
+    /// ofrece volver a un sitio del que nunca se vino— y no hay nada que
+    /// rebobinar si el listado falla, porque no se abandonó ningún sitio al
+    /// que devolver al lector.
+    ///
+    /// Existe como variante y no como un `Record` que da igual porque los dos
+    /// frontends tienen que hacer lo MISMO: el terminal siembra construyendo
+    /// el pane de cero, sin rastro; la ventana pasa por su `navegar_hueco`,
+    /// que registra. Sin una forma de decir «esto no es un paso», las dos
+    /// superficies acababan con historiales distintos (ADR 0077).
+    Seed,
 }
 
 impl Trail {
     /// El paso del rastro que esta navegación está dando, si es que está
     /// dando alguno. `None` para un [`Trail::Record`]: no salió del rastro,
-    /// así que no hay nada que rebobinar si acaba mal.
+    /// así que no hay nada que rebobinar si acaba mal. `None` también para
+    /// [`Trail::Seed`], por lo mismo.
     #[must_use]
     pub fn step(self) -> Option<TrailStep> {
         match self {
-            Self::Record => None,
+            Self::Record | Self::Seed => None,
             Self::Replay(step) => Some(step),
         }
     }

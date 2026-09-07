@@ -242,6 +242,7 @@ msg-view-error = view: { $error }
 msg-config-reloaded = config recargada
 msg-profile-switched = perfil: { $profile }
 msg-profile-switched-partial = perfil: { $profile } — hace falta reiniciar para aplicar: { $keys }
+msg-profile-config-ignored = perfil: { $profile } — { $n } línea(s) del perfil no se entienden y se ignoran; mira el registro
 msg-profile-not-applied = no se ha podido aplicar el perfil { $profile }
 # #306: guardar el espacio de trabajo como perfil.
 msg-profile-saved = perfil guardado: { $name }

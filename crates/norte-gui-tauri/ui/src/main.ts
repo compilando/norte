@@ -7,7 +7,7 @@ import { esParaElCampo, keyAction, keyInputOf } from "./keys";
 import { Screen } from "./render";
 import { Session } from "./session";
 import { BRIDGE_VERSION } from "./types";
-import type { UiAction } from "./types";
+import type { Appearance, UiAction } from "./types";
 
 /** Medidas del spike: latencia tecla→pintado. Las lee el arnés de la 3.6. */
 export interface Metrics {
@@ -72,6 +72,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const session = new Session();
   const catalog = await port.catalog();
   applyTheme(doc, catalog.theme);
+  applyAppearance(doc, catalog.appearance);
   // El umbral de «te estoy haciendo esperar» viene del host, que lo saca del
   // crate compartido con el terminal. Aquí solo se enchufa como variable CSS:
   // escribirlo en la hoja de estilos sería un tercer sitio donde vive el
@@ -214,6 +215,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
       .catalog()
       .then((cat) => {
         applyTheme(doc, cat.theme);
+        applyAppearance(doc, cat.appearance);
       })
       .catch((e: unknown) => {
         console.error("no se pudo releer el catálogo:", e);
@@ -384,6 +386,79 @@ function sendViewport(send: (a: UiAction) => void, screen: Screen, doc: Document
 function applyTheme(doc: Document, theme: Record<string, string>): void {
   for (const [name, value] of Object.entries(theme)) {
     doc.documentElement.style.setProperty(`--${name}`, value);
+  }
+}
+
+/** La proporción alto/tamaño de una fila. 20px de fila para 13px de letra es
+ *  lo que la hoja de estilos lleva desde el principio; se conserva al escalar
+ *  para que una fila siga teniendo el mismo aire con cualquier tamaño. */
+const FILA_POR_TAMANO = 20 / 13;
+
+/**
+ * Fuentes y movimiento (`[ui] font`, `mono_font`, `font_size`,
+ * `reduce_motion`).
+ *
+ * Las cuatro se cargaban, se validaban y se ofrecían en la pantalla de ajustes
+ * sin que las leyera nadie. Un campo `null` NO se escribe: entonces manda lo
+ * que ya hay, que para el movimiento es lo que diga el escritorio.
+ *
+ * El tamaño mueve también `--cell-h`, y eso no es un extra: esta ventana se
+ * reparte en CELDAS, así que una letra más grande dentro de una fila del mismo
+ * alto se sale de su fila. `--cell-w` se MIDE con la fuente puesta, porque el
+ * ancho de una monoespaciada no es una proporción del tamaño: depende de la
+ * familia, y una columna calculada con el ancho equivocado desalinea el
+ * listado entero.
+ */
+function applyAppearance(doc: Document, ap: Appearance | undefined): void {
+  if (ap === undefined) {
+    return;
+  }
+  const raiz = doc.documentElement;
+  if (ap.font !== null) {
+    raiz.style.setProperty("--ui-font", ap.font);
+  }
+  if (ap.mono_font !== null) {
+    raiz.style.setProperty("--mono", ap.mono_font);
+  }
+  if (ap.font_size !== null) {
+    raiz.style.setProperty("--ui-font-size", `${String(ap.font_size)}px`);
+    raiz.style.setProperty(
+      "--cell-h",
+      `${String(Math.round(ap.font_size * FILA_POR_TAMANO))}px`,
+    );
+  }
+  // Solo se AÑADE la petición: la configuración no puede contradecir a quien
+  // ya pidió menos movimiento en su escritorio, así que `false` no apaga el
+  // `prefers-reduced-motion` del sistema — deja de forzarlo y nada más.
+  if (ap.reduce_motion === true) {
+    raiz.dataset["reduceMotion"] = "true";
+  } else {
+    delete raiz.dataset["reduceMotion"];
+  }
+  medirCelda(doc);
+}
+
+/**
+ * Mide el ancho de una celda con la fuente que hay AHORA puesta.
+ *
+ * Un carácter de una monoespaciada no ocupa una fracción fija de su tamaño:
+ * cada familia tiene su avance. Con el ancho equivocado, cada columna del
+ * listado cae un poco más lejos de donde el host la repartió, y al final de la
+ * fila el error es de varios caracteres.
+ *
+ * Se miden VARIOS caracteres y se divide: uno solo redondea al pixel y el
+ * error se multiplica por el número de columnas.
+ */
+function medirCelda(doc: Document): void {
+  const regla = doc.createElement("span");
+  regla.textContent = "M".repeat(50);
+  regla.style.cssText =
+    "position:absolute;visibility:hidden;white-space:pre;font-family:var(--mono, monospace);font-size:var(--ui-font-size, 13px)";
+  doc.body.append(regla);
+  const ancho = regla.getBoundingClientRect().width / 50;
+  regla.remove();
+  if (ancho > 0) {
+    doc.documentElement.style.setProperty("--cell-w", `${String(ancho)}px`);
   }
 }
 

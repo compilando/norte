@@ -238,7 +238,13 @@ async fn main() -> Result<()> {
     // una sesión guardada es más específica que una preferencia de config, y
     // es la que gana— y antes del tema, que no depende de ninguna de las dos.
     // Un fallo NO tumba el arranque: se sigue con la pantalla de la config.
-    restore_session(&mut app, &backend, explicit_dir.then_some(&start)).await;
+    restore_session(
+        &mut app,
+        &backend,
+        explicit_dir.then_some(&start),
+        &cfg.common.profile_start,
+    )
+    .await;
     apply_theme(&mut app, &cfg);
     // Copia de la hotlist en el App (spec 2026-07-18): la fuente del popup
     // `Ctrl+D`; se refresca en cada hot-reload OK (`reload_config`).
@@ -354,6 +360,33 @@ async fn main() -> Result<()> {
         ));
         for aviso in &cfg.common.project_warnings {
             tracing::warn!(motivo = %aviso, "capa de proyecto ignorada");
+        }
+    }
+    // Y las líneas del PERFIL que no se entienden, con el mismo reparto: el
+    // conteo a la barra, el motivo al registro. Se calculaban desde que hay
+    // perfiles y no las enseñaba nadie, que es lo que dejaba a un
+    // `[profile.start]` mal escrito sin sembrar y sin decirlo.
+    //
+    // DESPUÉS del de proyecto y ANTES del de Lua, que es el orden de la
+    // ventana y el mismo criterio: el último gana, y el de seguridad —un
+    // repositorio ajeno eligiendo qué código corre una tecla— es el que no
+    // puede quedar pisado.
+    if !cfg.common.profile_warnings.is_empty() {
+        app.message = Some(ta(
+            "msg-profile-config-ignored",
+            &[
+                (
+                    "profile",
+                    &app.active_profile
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                ),
+                ("n", &cfg.common.profile_warnings.len().to_string()),
+            ],
+        ));
+        for aviso in &cfg.common.profile_warnings {
+            tracing::warn!(motivo = %aviso, "línea del perfil ignorada");
         }
     }
     // DESPUÉS del aviso de polling: el de seguridad no debe quedar pisado.

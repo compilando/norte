@@ -282,7 +282,7 @@
             "type": "string"
           },
           "default": {},
-          "description": "Where each slot opens when this profile has no saved state yet.\n\nKeys are slot ids of the profile's own layout, as text — TOML has no\nnumeric keys. A key that is not a slot id is dropped with a warning\nrather than refusing to start: the file is the reader's, but a typo in\nan id does not earn a refusal to run.\n\nValues are NOT expanded here (`~`, relative paths): that needs a\nworking directory, and resolving it in the loader would bake this\nprocess's `$HOME` into a value the daemon might read.",
+          "description": "Where each slot opens when this profile has no saved state yet.\n\nKeys are slot ids of the profile's own layout, as text — TOML has no\nnumeric keys. Values are `VPath`s in WIRE form (`file:///home/u/src`,\n`sftp://host/srv`), which is what [`crate::save_profile`] writes: a\nslot of a profile may sit on sftp or inside a container, and a native\npath cannot say so. It also removes the question of what a `~` or a\nrelative path would resolve against — a profile is used across machines\nand across days, and \"wherever you launched it from\" is not an answer.\n\nAnything that does not parse — a key that is not a slot id, a value\nthat is not a `VPath` — is dropped with a warning rather than refusing\nto start: the file is the reader's, but a typo does not earn a refusal\nto run. Those warnings reach the screen\n([`crate::CommonConfig::profile_warnings`]); that is what keeps the\nstrictness from being a trap.\n\nThe SESSION wins over this. `[profile.start]` says where a slot opens\nthe first time, not every time: a profile is a workspace, not a\nbookmark that drags you back to the start whenever you enter it.",
           "type": "object"
         },
         "title": {
@@ -511,7 +511,7 @@
         },
         "menu_bar": {
           "default": null,
-          "description": "Whether the menu bar is pinned to the top row. Absent = `true`.\n\nOn by default because the menu was the only way to reach several\ncommands and there was nothing on screen saying it existed: a reader\nwho does not already know `Alt+M` cannot find what they cannot see.\nIt costs one row, and `menu_bar = false` gives it back — the menu still\nopens with its key, drawn over the top row as it always was.\n\nThe GUI has its own chrome and ignores this key.",
+          "description": "Whether the menu bar is pinned to the top row. Absent = `true`.\n\nOn by default because the menu was the only way to reach several\ncommands and there was nothing on screen saying it existed: a reader\nwho does not already know `Alt+M` cannot find what they cannot see.\nIt costs one row, and `menu_bar = false` gives it back — the menu still\nopens with its key, drawn over the top row as it always was.\n\n**Both frontends honour it.** This used to say the GUI ignored the key;\nit reads it (`MenuView.bar`), and a comment that lies is what the next\naudit believes.",
           "type": [
             "boolean",
             "null"
@@ -535,7 +535,7 @@
         },
         "panel_bar": {
           "default": null,
-          "description": "Whether the panel bar is pinned under the menu bar. Absent = `true`.\n\nOn for the same reason the menu bar is: the side panels — places, tree,\njobs, details, the log — were reachable by shortcut, by menu and by the\npalette, and all three require knowing the panel exists. Nothing on\nscreen said so, which also means a panel contributed by a plugin was\ninvisible to anyone who did not go looking.\n\nIt costs one row, and `panel_bar = false` gives it back — every panel\nstill opens by its own key and from the menu.\n\nThe GUI has its own chrome and ignores this key.",
+          "description": "Whether the panel bar is pinned under the menu bar. Absent = `true`.\n\nOn for the same reason the menu bar is: the side panels — places, tree,\njobs, details, the log — were reachable by shortcut, by menu and by the\npalette, and all three require knowing the panel exists. Nothing on\nscreen said so, which also means a panel contributed by a plugin was\ninvisible to anyone who did not go looking.\n\nIt costs one row, and `panel_bar = false` gives it back — every panel\nstill opens by its own key and from the menu.\n\n**Both frontends honour it.** This used to say the GUI ignored the key;\nit reads it (`PanelBarView.bar`).",
           "type": [
             "boolean",
             "null"
