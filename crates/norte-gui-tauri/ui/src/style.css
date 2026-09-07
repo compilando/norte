@@ -2407,6 +2407,57 @@ body {
   color: var(--title-fg);
 }
 
+/* Esperando un listado (#323).
+
+   El UMBRAL vive aquí, y es el sitio correcto: nada se ve antes de 250 ms
+   porque por debajo la operación acaba antes de que el ojo la registre y lo
+   único que queda es un parpadeo. En CSS eso es un `animation-delay` y no
+   cuesta ni un temporizador ni un mensaje, así que el nodo se puede crear ya.
+
+   `opacity: 0` de salida y la animación lo levanta: sin eso, el texto se
+   vería desde el primer frame y el retardo no serviría de nada. */
+@keyframes norte-aparece {
+  to {
+    opacity: 1;
+  }
+}
+
+.slot-busy {
+  /* Encoge ANTES que la ruta no: la ruta es lo único que cede en esta
+     cabecera (`.title-path`), así que este aviso se recorta con puntos
+     suspensivos en vez de desbordar. `nowrap` es lo que hace que
+     `text-overflow` signifique algo. */
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: 8px;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--info-fg, var(--title-fg));
+  opacity: 0;
+  /* El retardo lo pone el host (`--busy-delay`), que lo saca del crate
+     compartido con el terminal. El 250ms de aquí es solo el respaldo para el
+     instante anterior a que llegue el catálogo. */
+  animation: norte-aparece 120ms linear var(--busy-delay, 250ms) forwards;
+}
+
+/* La RUTA a la que se va, en su propio nodo: pegada dentro de la frase se
+   leería como parte de ella, y un directorio puede llamarse «yendo a /otro». */
+.slot-busy-target {
+  unicode-bidi: isolate;
+}
+
+/* Quien pide menos movimiento no ve la animación, y entonces el retardo no
+   puede depender de ella: se ve desde el principio, que es lo honesto — un
+   parpadeo molesta menos que no saber que se está esperando. */
+@media (prefers-reduced-motion: reduce) {
+  .slot-busy {
+    opacity: 1;
+    animation: none;
+  }
+}
+
 /* --- El selector de columnas ------------------------------------------- */
 
 #columns[data-open="true"] {

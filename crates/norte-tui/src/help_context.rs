@@ -358,6 +358,7 @@ mod tests {
                     to: "b".into(),
                 }],
                 offset: 0,
+                seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
                 plan: norte_frontend::BatchPlan::Pending,
             },
             Modal::SemanticQuery {

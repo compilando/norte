@@ -485,6 +485,39 @@ pub fn validate_semantic_hits(
     .then_some(hits)
 }
 
+/// Si un plan se puede APROBAR: el core lo acepta **y** el lector ha llegado
+/// al final.
+///
+/// Dos preguntas, y ninguna de las dos puede contestar la otra. Que el plan
+/// sea ejecutable lo sabe el core y no el lector; que el lector lo haya visto
+/// no lo sabe el core. Una aprobación es una firma, y la firma de algo que no
+/// se ha leído no es una aprobación — con un plan de doscientos renombrados,
+/// los que importan pueden estar en la fila ciento ochenta.
+///
+/// Vivía solo en la ventana: el terminal dejaba aprobar sin bajar, así que la
+/// misma pregunta tenía dos respuestas en la superficie donde más caro sale
+/// (ADR 0077). Aquí la respuesta es una.
+///
+/// `visto` es la marca de agua ALTA —hasta dónde se ha llegado alguna vez—,
+/// no la posición actual: volver arriba no des-lee lo que ya se leyó.
+///
+/// ```
+/// use norte_frontend::approval_ready;
+///
+/// // Visto entero y el core lo acepta.
+/// assert!(approval_ready(true, 20, 20));
+/// // Visto entero pero el core lo rechaza: no hay hash que mandar.
+/// assert!(!approval_ready(false, 20, 20));
+/// // El core lo acepta y el lector se ha quedado a mitad.
+/// assert!(!approval_ready(true, 10, 20));
+/// // Un plan vacío está visto por definición.
+/// assert!(approval_ready(true, 0, 0));
+/// ```
+#[must_use]
+pub fn approval_ready(plan_confirmable: bool, visto: usize, total: usize) -> bool {
+    plan_confirmable && visto >= total
+}
+
 /// Badge por defecto de [`item_lines`]: el aviso que ya usaba el modal de la
 /// GUI. Los frontends con un badge propio (el TUI usa `!`, ASCII, por los
 /// terminales que no pintan `⚠`) pasan el suyo a [`item_lines_with`] — el

@@ -242,6 +242,12 @@ pub struct Falso {
     /// doble podía fingir un APFS, un NTFS o un exFAT, y las fixtures de
     /// gemelos de caja del corpus no tenían contra qué correr.
     pub capacidades: std::collections::HashMap<String, norte_proto::Capabilities>,
+    /// `fs.capabilities` FALLA, así que el hueco no llega a tener ninguna.
+    ///
+    /// Es el estado que pierde datos si alguien lo confunde con «no hay
+    /// papelera», y sin este mando no se podía escribir: el doble siempre
+    /// contestaba algo.
+    pub error_de_capacidades: bool,
     /// Directorios de plugin que no cargaron: `(dir, motivo)`.
     pub errores_de_carga: Vec<(String, String)>,
     /// Los BYTES del directorio de un error de carga (#265), por su cadena.
@@ -763,6 +769,9 @@ impl HostBackend for Falso {
         &self,
         path: VPath,
     ) -> BoxFuture<'static, Result<norte_proto::Capabilities, Error>> {
+        if self.error_de_capacidades {
+            return Box::pin(async move { Err(Error::ProviderUnavailable { retryable: true }) });
+        }
         // Por UBICACIÓN, no por provider: se busca el directorio exacto y, si
         // no está, su padre — que es lo que hace un mount de verdad.
         let caps = self

@@ -222,7 +222,14 @@ impl Estado {
         }
         h.en_vuelo = Some(token);
         h.drenando = Some(token);
-        h.estado = SlotState::Loading;
+        // CON el destino cuando lo hay. Esta función documenta tres líneas
+        // más arriba que conserva el destino de la petición vieja, y luego lo
+        // tiraba: intercambiar dos paneles mientras uno navega degradaba
+        // «yendo a X» a «cargando…» sobre un cuerpo que sigue enseñando el
+        // directorio ANTERIOR — la mezcla ilegible que esto existe para
+        // evitar.
+        let enc = h.pane.name_encoding();
+        h.estado = Self::cargando_hacia(navegando.then_some(&dir), enc);
         self.pedir_listado(slot, &dir, token, backend, buzon);
     }
 

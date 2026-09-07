@@ -175,7 +175,10 @@
         "change": "slot_state",
         "slot_id": 1,
         "state": {
-          "state": "loading"
+          "state": "loading",
+          "target_display": "⟨mem⟩/casa/docs",
+          "target_hostile": false,
+          "verb_key": "busy-listing"
         }
       }
     ],
@@ -1048,10 +1051,12 @@
         "following": false,
         "kind": "log",
         "level": "info",
+        "level_label": "INFO",
         "lines": [
           {
             "hostile": false,
             "level": "error",
+            "level_label": "ERROR",
             "message": "no se pudo conectar",
             "source": "daemon",
             "target": "norte_core::connect",
@@ -1060,6 +1065,7 @@
           {
             "hostile": true,
             "level": "info",
+            "level_label": "INFO",
             "message": "abriendo caf�.txt",
             "source": "window",
             "target": "norte_ui_host",

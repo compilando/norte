@@ -1653,6 +1653,10 @@ pub struct LogSlotView {
     /// frases traducidas para eso obligaría al renderer a conocer el idioma
     /// del host.
     pub level: String,
+    /// Ese mismo nivel tal y como se PINTA (`TRACE`). Ver
+    /// [`LogLineView::level_label`]: el de arriba se compara, éste se lee.
+    #[serde(default)]
+    pub level_label: String,
     /// El filtro de texto vigente, enmascarado y acotado. Vacío = todo.
     ///
     /// Lo teclea el lector, así que puede traer controles y marcas de
@@ -1758,7 +1762,29 @@ pub struct LogLineView {
     /// mientras sea el mismo.
     pub time: String,
     /// El nivel, en su forma de wire — el renderer lo colorea por esto.
+    ///
+    /// Es una IDENTIDAD, no un texto: se compara, no se pinta. Lo que se
+    /// pinta es [`Self::level_label`].
     pub level: String,
+    /// El nivel tal y como se PINTA (`TRACE`), que es lo que pinta el
+    /// terminal.
+    ///
+    /// Separado del de arriba porque son dos cosas: una identidad estable que
+    /// el renderer usa para colorear y una etiqueta que se lee. Pintar la
+    /// identidad es lo que tenía a la ventana enseñando `trace` en las líneas,
+    /// `trace` en el chip del título y «traza» en sus botones — tres
+    /// vocabularios del mismo nivel, los tres a la vez en pantalla.
+    ///
+    /// NO se traduce, y eso es la decisión: `TRACE` es lo que se escribe en
+    /// `RUST_LOG`, lo que sale en un pegado de un informe de fallo y lo que
+    /// alguien va a buscar con la vista en una lista larga. Los BOTONES de
+    /// nivel de la ventana sí van traducidos: son un mando, no un dato, y el
+    /// terminal no tiene ninguno con el que discrepar.
+    ///
+    /// `#[serde(default)]`: vacío = un puente anterior, y entonces el
+    /// renderer cae a la identidad, que es lo que pintaba antes.
+    #[serde(default)]
+    pub level_label: String,
     /// El módulo que la emitió, enmascarado y acotado.
     pub target: String,
     /// El mensaje, enmascarado y acotado.
@@ -1877,7 +1903,39 @@ pub enum SlotState {
     /// Listado completo y quieto.
     Ready,
     /// Pidiendo la primera página, o rellenando el resto.
-    Loading,
+    ///
+    /// Lleva A DÓNDE va, que es la mitad que faltaba. El cuerpo sigue
+    /// enseñando el listado ANTERIOR —a propósito: si la conexión falla, el
+    /// lector se queda donde estaba— y sin el destino esa mezcla no se puede
+    /// leer: la pantalla enseña un sitio mientras trabaja en otro, y no dice
+    /// cuál. El terminal pone el destino en la cabecera junto al spinner
+    /// desde #323.
+    ///
+    /// El UMBRAL —nada antes de 250 ms, porque por debajo la operación
+    /// termina antes de que el ojo lo registre y lo único que se ve es un
+    /// parpadeo— es cosa del renderer, y es donde tiene que estar: es un
+    /// retardo puramente visual, y en CSS no cuesta ni un temporizador ni un
+    /// mensaje.
+    Loading {
+        /// La clave Fluent del VERBO, del vocabulario CERRADO compartido
+        /// (`norte_frontend::busy::BusyKind`): `busy-connecting`,
+        /// `busy-listing`, `busy-opening`.
+        ///
+        /// De ahí y no de una clave propia porque ese módulo existe desde
+        /// #323 justamente para que los dos frontends no digan cosas
+        /// distintas de la misma espera — y esta ventana decía «cargando…»
+        /// hasta para una conexión remota, que es el caso que lo destapó.
+        #[serde(default)]
+        verb_key: String,
+        /// La ruta a la que va, ya pintable y con la reinterpretación
+        /// vigente. Vacía = un relleno del sitio en el que ya se está, que no
+        /// va a ninguna parte.
+        #[serde(default)]
+        target_display: String,
+        /// Esa ruta DIFIERE de los bytes reales.
+        #[serde(default)]
+        target_hostile: bool,
+    },
     /// El listado falló. La clave Fluent dice por qué; el detalle ya viene
     /// saneado y acotado.
     Error {
@@ -2387,7 +2445,15 @@ pub struct DialogView {
     pub input_secret: bool,
 }
 
-/// Qué se sabe del DESTINO de una transferencia mientras se pregunta.
+/// Qué se sabe de A DÓNDE VAN LOS BYTES, mientras se pregunta.
+///
+/// De una transferencia es el directorio destino; de un borrado es la
+/// papelera, o su ausencia — que es el mismo tipo de hecho y por eso comparte
+/// canal: «⚠ SIN papelera: esto no se puede deshacer» responde a la misma
+/// pregunta que «no cabe» y «este destino no confina». Un canal y no tres
+/// también porque el renderer los pinta en un bloque que un nombre de fichero
+/// no puede suplantar, y tres bloques serían tres sitios donde olvidarse de
+/// esa propiedad.
 ///
 /// **Tres estados y no una lista de avisos, porque el silencio tenía que
 /// significar una sola cosa.** Las dos preguntas —¿cabe?, ¿sabe confinar?—
@@ -2405,8 +2471,8 @@ pub struct DialogView {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "state")]
 pub enum DestCheckView {
-    /// Este diálogo no tiene destino que comprobar. Lo son todos menos los
-    /// de transferencia, y es el valor por defecto.
+    /// Este diálogo no tiene nada que comprobar sobre a dónde van los bytes,
+    /// y es el valor por defecto. Los que sí: transferir, soltar y borrar.
     #[default]
     NotAsked,
     /// Se preguntó y no ha vuelto. El renderer lo DICE y reserva el sitio:

@@ -663,7 +663,11 @@ impl Estado {
             total: paths.len(),
             ..Lote::default()
         });
-        Self::lanzar_transferencia(paths, origen_dir, destino, mover, backend, buzon);
+        // La reinterpretación se captura AQUÍ, con el hueco todavía delante:
+        // una colisión llega asíncrona y encima de lo que el lector esté
+        // haciendo, así que leerla al llegar puede dar la de otro sitio.
+        let enc = self.hueco().pane.name_encoding();
+        Self::lanzar_transferencia(paths, origen_dir, destino, mover, enc, backend, buzon);
     }
 
     pub(super) fn lanzar_transferencia(
@@ -671,6 +675,7 @@ impl Estado {
         origen_dir: &VPath,
         destino: &VPath,
         mover: bool,
+        enc: Option<norte_encoding::NameEncoding>,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
@@ -722,6 +727,7 @@ impl Estado {
                     from: from.clone(),
                     to: to.clone(),
                     mover,
+                    enc,
                 };
                 let encolada = if mover {
                     backend

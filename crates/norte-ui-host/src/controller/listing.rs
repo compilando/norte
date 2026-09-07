@@ -87,6 +87,42 @@ impl Estado {
         (dir == h.pane.dir()).then_some(*caps)
     }
 
+    /// «Cargando», diciendo A DÓNDE.
+    ///
+    /// `None` = un refresco: se recarga el sitio en el que ya se está, así
+    /// que no hay destino que anunciar. Con destino, el renderer puede decir
+    /// «yendo aquí» junto al spinner, que es lo que hace legible que el
+    /// cuerpo siga enseñando el listado ANTERIOR mientras tanto.
+    pub(super) fn cargando_hacia(
+        destino: Option<&VPath>,
+        enc: Option<norte_encoding::NameEncoding>,
+    ) -> SlotState {
+        // El VERBO sale del vocabulario cerrado compartido, que existe desde
+        // #323 para esto mismo: la ventana decía «cargando…» hasta para una
+        // conexión remota, que es el caso que destapó aquello y que el
+        // terminal nombra «conectando…». Un destino con autoridad es un
+        // remoto al que hay que llegar; el resto, un listado.
+        let kind = destino.map_or(norte_frontend::busy::BusyKind::Listing, |d| {
+            if d.authority().is_some() {
+                norte_frontend::busy::BusyKind::Connecting
+            } else {
+                norte_frontend::busy::BusyKind::Listing
+            }
+        });
+        let (target_display, target_hostile) = destino.map_or_else(
+            || (String::new(), false),
+            |d| {
+                let (t, h) = norte_frontend::path_display_with(d, enc);
+                (clamp_display(t), h)
+            },
+        );
+        SlotState::Loading {
+            verb_key: kind.key().to_owned(),
+            target_display,
+            target_hostile,
+        }
+    }
+
     /// Lo que se sepa de una RUTA, la tenga el hueco que la tenga.
     ///
     /// Por ubicación y no por hueco porque quien pregunta no siempre habla de
@@ -412,11 +448,11 @@ impl Estado {
                 // directorio de destino enseñaba un listado anterior a la
                 // copia hasta que alguien navegara a mano.
                 if let Some(h) = self.huecos.get_mut(&slot) {
-                    h.estado = SlotState::Loading;
+                    h.estado = Self::cargando_hacia(None, None);
                 }
                 cambios.push(ViewChange::SlotState {
                     slot_id: slot,
-                    state: SlotState::Loading,
+                    state: Self::cargando_hacia(None, None),
                 });
                 continue;
             }
@@ -473,13 +509,13 @@ impl Estado {
             Vec::new()
         };
         let dir = hueco.pane.dir().clone();
-        hueco.estado = SlotState::Loading;
+        hueco.estado = Self::cargando_hacia(None, None);
         hueco.en_vuelo = Some(token);
         hueco.drenando = Some(token);
         self.pedir_listado(slot, &dir, token, backend, buzon);
         vec![ViewChange::SlotState {
             slot_id: slot,
-            state: SlotState::Loading,
+            state: Self::cargando_hacia(None, None),
         }]
     }
 

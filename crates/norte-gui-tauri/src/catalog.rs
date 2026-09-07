@@ -46,6 +46,15 @@ pub struct HostCatalog {
     /// por el comando `metrics` (que solo existe con la feature del mismo
     /// nombre, o sea, no en el binario que se publica).
     pub measure: bool,
+    /// Cuánto se espera antes de ENSEÑAR que se está esperando, en ms.
+    ///
+    /// Viaja en vez de estar escrito en el CSS porque es una decisión
+    /// compartida con el terminal: `norte_frontend::busy::THRESHOLD`, con su
+    /// razonamiento —por debajo la operación acaba antes de que el ojo la
+    /// registre y lo único que queda es un parpadeo—. Un número repetido en
+    /// una hoja de estilos es el tercer sitio donde cambiarlo y el primero
+    /// donde olvidarse.
+    pub busy_threshold_ms: u64,
 }
 
 /// Construye el paquete para esta instancia, este idioma y este tema.
@@ -66,6 +75,8 @@ pub fn catalogo(instance: &InstanceId, lang: Lang, theme: &Theme) -> HostCatalog
         strings,
         theme: variables(theme),
         measure: std::env::var_os("NORTE_GUI_MEASURE").is_some_and(|v| v == "1"),
+        busy_threshold_ms: u64::try_from(norte_frontend::busy::THRESHOLD.as_millis())
+            .unwrap_or(250),
     }
 }
 

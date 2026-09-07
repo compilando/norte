@@ -170,7 +170,12 @@ impl Estado {
         // La memoria del cursor se toma con el dir que se ABANDONA todavía
         // puesto (contrato de `remember_cursor`).
         hueco.pane.remember_cursor();
-        hueco.estado = SlotState::Loading;
+        // CON el destino: el cuerpo va a seguir enseñando el listado anterior
+        // hasta que llegue el nuevo —a propósito, para que un fallo deje al
+        // lector donde estaba—, y sin decir a dónde va esa mezcla no se puede
+        // leer.
+        let enc = hueco.pane.name_encoding();
+        hueco.estado = Self::cargando_hacia(Some(&destino), enc);
         hueco.en_vuelo = Some(token);
         // El drenaje vive MÁS que la primera página: se marca aquí y solo lo
         // releva otra navegación del mismo hueco.
@@ -180,7 +185,7 @@ impl Estado {
 
         let cambio = ViewChange::SlotState {
             slot_id: slot,
-            state: SlotState::Loading,
+            state: Self::cargando_hacia(Some(&destino), enc),
         };
         vec![self.parche(vec![cambio])]
     }

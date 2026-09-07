@@ -28,6 +28,55 @@ independently through `PROTOCOL_VERSION`.
   prevent. The window already knew `archive_root_for`: it uses it to unpack
   and to test a container, just not to open one. The decision now lives once,
   in `norte_frontend::nav::enter_target`.
+- **The collision dialog dropped the badge on an altered name, on the one
+  screen where overwriting a file is approved.** It masked over
+  `display_lossy()`, which had already put the U+FFFD in — so `display_name`
+  received impeccable UTF-8 and declared the name *faithful*. It also ignored
+  `pane.names-encoding`: in a cp866 pane the terminal asks about `Папка` and
+  the window asked about `??????`. Approving a name that is not the one you
+  have been looking at is not approving. The encoding is now captured **when
+  the operation is launched**, not read when the answer arrives: a collision
+  turns up asynchronously, on top of whatever the reader is doing, and between
+  the send and the question there is room to change slots — which is why the
+  terminal has carried it in its `RetrySpec` since #98.
+- **With no trash, the window deleted permanently without saying so.** The
+  warning was the terminal's alone; the window offered a destructive button,
+  which says that answer deletes, not that there is no way back. It now reads
+  the slot's cached capabilities — and with **three** states, not two. "Not
+  known yet" is not "there is no trash": capabilities arrive behind the
+  listing and on their own, so there is a window (and, if the request fails,
+  a whole session) in which nothing is known, and turning that into "no trash"
+  really deleted in a place that has one. Only an explicit *no* makes the
+  delete permanent; guessing trash where there is none costs an `Unsupported`
+  and a `shift+F8`, and guessing the other way costs the bytes.
+- **An AI rename plan can no longer be approved unread.** The window already
+  required reaching the end and the terminal did not, so a plan of two hundred
+  renames could be signed having seen the first ten — and the ones that matter
+  can be on row a hundred and eighty. The strict rule was the right one, so
+  the terminal moved: one shared `approval_ready`, over a *high-water mark*,
+  because scrolling back up does not un-read what was read.
+- **A slow listing gave the window no signal at all** (#323): `aria-busy` and
+  not one CSS rule painting it. A waiting slot now says what it is doing and
+  where it is going — the verb from the closed vocabulary the two frontends
+  share, so a remote connect says "connecting", not "loading". The 250 ms
+  threshold travels from `busy::THRESHOLD` instead of being a number in a
+  stylesheet. There is deliberately **no "Esc cancels"**: nothing in the
+  window aborts an in-flight listing, and the repo has that doctrine written
+  three times — never a false affordance.
+- **The log panel spoke three vocabularies at once** — `TRACE`, `trace` and
+  «traza», all on screen together. The wire id is an identity that gets
+  compared and the label is what gets read; both travel now. `TRACE` stays
+  untranslated on purpose: it is what you write in `RUST_LOG` and what you
+  scan for in a long list. The level buttons stay translated — they are a
+  control, and the terminal has none to disagree with.
+- **A volume row was written three times, two of them in the same crate**, and
+  all three said "unknown" when the only thing missing was the *total* —
+  throwing away the one number there was. How much is left is the half you
+  look at before copying.
+- **An empty AI instruction ate the dialog.** The terminal leaves the modal
+  open with the error underneath; the window put the message in the status bar
+  over a screen with nowhere left to type. Its twin, the semantic query, had
+  been fixed carefully three files away.
 - **A search that FAILED read as one that finished with no hits.** The host
   marked every terminal state as "no longer running" and painted
   `search-status-done`, so a search that broke on the second directory and one

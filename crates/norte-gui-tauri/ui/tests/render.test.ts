@@ -263,6 +263,39 @@ describe("Screen", () => {
     expect(root.querySelectorAll('[data-role="target"]')).toHaveLength(1);
   });
 
+  it("esperando: dice el verbo, a dónde va, y marca una ruta alterada", () => {
+    const { screen, root } = montar();
+    // Un refresco: no va a ninguna parte, así que no se inventa un sitio.
+    screen.paint(vista({ state: { state: "loading", verb_key: "busy-listing" } }));
+    const aviso = root.querySelector(".slot-busy") as HTMLElement;
+    expect(aviso.hidden).toBe(false);
+    expect(aviso.querySelector(".slot-busy-target")).toBeNull();
+
+    // Yendo a un sitio, y con la ruta pintada distinta de lo que es: es la
+    // que el lector mira mientras espera.
+    screen.paint(
+      vista({
+        state: {
+          state: "loading",
+          verb_key: "busy-connecting",
+          target_display: "⟨sftp⟩casa/caf�",
+          target_hostile: true,
+        },
+      }),
+    );
+    const destino = root.querySelector(".slot-busy-target");
+    expect(destino?.textContent).toBe("⟨sftp⟩casa/caf�");
+    expect(root.querySelector(".slot-busy .hostile-badge")).not.toBeNull();
+
+    // Con el listado ya puesto se ESCONDE, y es el MISMO nodo: su umbral es
+    // un `animation-delay`, y recrearlo lo reiniciaría en cada pintada hasta
+    // no aparecer nunca — que es justo en los casos lentos.
+    const antes = root.querySelector(".slot-busy");
+    screen.paint(vista({}));
+    expect((root.querySelector(".slot-busy") as HTMLElement).hidden).toBe(true);
+    expect(root.querySelector(".slot-busy")).toBe(antes);
+  });
+
   it("apila en la cabecera todo lo que dice que el listado no es lo que parece", () => {
     const { screen, root } = montar();
     screen.paint(
@@ -2651,6 +2684,32 @@ describe("el panel de registro", () => {
     expect((filas[0] as HTMLElement).dataset["level"]).toBe("error");
     expect((filas[1] as HTMLElement).dataset["level"]).toBe("info");
     expect(filas[0]?.textContent).toContain("no se pudo conectar");
+  });
+
+  it("el nivel se PINTA con la etiqueta y se COMPARA con la identidad", () => {
+    const { screen } = montar();
+    const v = conRegistro();
+    const log = v.slots.find((s) => s.kind === "log");
+    if (log?.kind !== "log") {
+      throw new Error("la fixture trae el panel de registro");
+    }
+    log.level_label = "INFO";
+    log.lines[0]!.level_label = "ERROR";
+    log.lines[1]!.level_label = "INFO";
+    screen.paint(v);
+
+    // La ventana pintaba `error` en la línea, `info` en el chip del título y
+    // «info» traducido en los botones: tres vocabularios del mismo nivel, los
+    // tres a la vez en pantalla. Lo que se lee es la etiqueta, que es la que
+    // pinta el terminal y la que se escribe en `RUST_LOG`.
+    const etiquetas = [...document.querySelectorAll(".log-level")].map(
+      (n) => n.textContent,
+    );
+    expect(etiquetas).toEqual(["ERROR", "INFO"]);
+    // Y la IDENTIDAD sigue siendo la de cable: es con la que se colorea y con
+    // la que se marca qué botón está puesto, y traducirla rompería las dos.
+    const filas = [...document.querySelectorAll(".log-line")];
+    expect((filas[0] as HTMLElement).dataset["level"]).toBe("error");
   });
 
   it("dice de qué PROCESO son las líneas", () => {

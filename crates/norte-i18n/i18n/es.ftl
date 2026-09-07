@@ -784,6 +784,10 @@ picker-history-empty = este panel no ha estado en ningún otro sitio
 picker-hotlist-title = Favoritos
 picker-hotlist-empty = no hay favoritos configurados
 picker-volume-space = {$free} libres de {$total}
+# Se sabe cuánto queda pero no de cuánto. Pasa —un montaje que contesta a
+# medias— y decir «desconocido» ahí tira el único número que hay: cuánto
+# queda es la mitad que se mira antes de copiar.
+picker-volume-free = {$free} libres
 picker-volume-read-only = solo lectura
 theme-title = Tema
 theme-roles = Con qué se pinta cada papel
@@ -1861,6 +1865,11 @@ processes-has-keyboard = este panel tiene el teclado · Esc lo devuelve
 # filtrando fuera».
 log-title = Registro
 slot-retry = reintentar
+# Esperando un listado (#323). Tres piezas y no una frase: el renderer las
+# compone con la RUTA en su propio nodo, porque una ruta pegada dentro de la
+# frase se lee como parte de ella — y aquí además se ofrece cancelar.
+slot-busy = cargando…
+slot-busy-to = yendo a
 log-keys = e/w/i/d/t nivel · / filtrar · Fin al final · Esc devuelve el teclado
 # Solo se ofrece cuando el daemon sirve su registro (#328): anunciar un mando
 # que recorrería tres vistas del MISMO anillo es prometer algo que no existe.

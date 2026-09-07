@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 55;
+export const BRIDGE_VERSION = 56;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -97,7 +97,20 @@ export interface RowView {
 
 export type SlotState =
   | { state: "ready" }
-  | { state: "loading" }
+  /** Con A DÓNDE va: el cuerpo sigue enseñando el listado ANTERIOR hasta que
+   *  llegue el nuevo —a propósito, para que un fallo deje al lector donde
+   *  estaba—, y sin decir a dónde va esa mezcla no se puede leer. Vacío = un
+   *  refresco, que no va a ninguna parte. */
+  | {
+      state: "loading";
+      /** La clave Fluent del VERBO, del vocabulario cerrado que la ventana
+       *  comparte con el terminal: `busy-connecting`, `busy-listing`,
+       *  `busy-opening`. «Conectando» y «cargando» no son lo mismo, y el caso
+       *  que destapó #323 era el primero. */
+      verb_key?: string;
+      target_display?: string;
+      target_hostile?: boolean;
+    }
   | { state: "error"; reason_key: string; detail: string | null };
 
 export interface QuickView {
@@ -197,8 +210,14 @@ export interface ProcessesSlotView {
 export interface LogLineView {
   /** `HH:MM:SS`, en UTC — este árbol no lleva base de datos de husos. */
   time: string;
-  /** Vocabulario CERRADO: error, warn, info, debug, trace. Se colorea por él. */
+  /** Vocabulario CERRADO: error, warn, info, debug, trace. Se colorea por él.
+   *  Es una IDENTIDAD: se compara, no se pinta. */
   level: string;
+  /** Ese nivel tal y como se PINTA (`TRACE`), que es lo que pinta el terminal.
+   *  Sin traducir a propósito: es lo que se escribe en `RUST_LOG` y lo que se
+   *  busca con la vista. Los BOTONES de nivel sí van traducidos — son un
+   *  mando, no un dato. */
+  level_label?: string;
   target: string;
   message: string;
   /** Lo pintado difiere de lo que hay, en el módulo o en el mensaje. */
@@ -214,7 +233,10 @@ export interface LogSlotView {
   slot_id: number;
   /** Solo la VENTANA visible, nunca el anillo entero. */
   lines: LogLineView[];
+  /** Identidad: el renderer marca con ella qué botón está puesto. */
   level: string;
+  /** Ese mismo nivel tal y como se pinta (`TRACE`). */
+  level_label?: string;
   filter: string;
   /** Pegado al final y siguiendo lo que llega. */
   following: boolean;
@@ -1248,4 +1270,9 @@ export interface HostCatalog {
   theme: Record<string, string>;
   /** Pasada de medición de la tarea 3.6 (`NORTE_GUI_MEASURE=1`). */
   measure: boolean;
+  /** Cuánto se espera antes de ENSEÑAR que se está esperando, en ms. Viaja en
+   *  vez de estar escrito en el CSS porque es una decisión compartida con el
+   *  terminal (`norte_frontend::busy::THRESHOLD`), y un número repetido en
+   *  una hoja de estilos es el tercer sitio donde cambiarlo. */
+  busy_threshold_ms?: number;
 }

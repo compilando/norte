@@ -9316,6 +9316,184 @@ async fn comprobar_un_archivo_exige_que_lo_sea() {
     );
 }
 
+/// Un hueco que espera dice A DÓNDE va.
+///
+/// El cuerpo sigue enseñando el listado ANTERIOR hasta que llegue el nuevo —a
+/// propósito: si la conexión falla, el lector se queda donde estaba—, y sin
+/// el destino esa mezcla no se puede leer. La ventana solo ponía
+/// `aria-busy="true"`, sin una sola regla que lo pintara: contra un SFTP
+/// lento no daba señal ninguna.
+#[tokio::test]
+async fn un_hueco_que_espera_dice_a_donde_va() {
+    let mut f = Falso::default();
+    f.arbol.clone_from(&arbol().arbol);
+    // Con retraso: sin él, el listado aterriza antes de que se pueda mirar el
+    // estado, y el test comprobaría el `Ready` de después.
+    f.retraso_ms = 50;
+    let (h, snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+    let b = listado_de(&snap, 1);
+    let docs = b
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("el directorio está");
+
+    h.dispatch(UiAction::Activate {
+        slot_id: 1,
+        key: docs.key,
+        generation: b.generation,
+    })
+    .await
+    .expect("host vivo");
+
+    let estado = foto_hasta(&h, &mut sub, "el hueco esperando", |s| {
+        match &listado_de(s, 1).state {
+            norte_ui_host::dto::SlotState::Loading { target_display, .. }
+                if !target_display.is_empty() =>
+            {
+                Some(target_display.clone())
+            }
+            _ => None,
+        }
+    })
+    .await;
+    assert!(
+        estado.ends_with("/casa/docs"),
+        "dice a dónde va, no dónde está: {estado}"
+    );
+}
+
+/// Sin papelera, el borrado lo DICE y se hace permanente.
+///
+/// «⚠ SIN papelera: esto no se puede deshacer» era solo del terminal. La
+/// ventana compensaba con un botón destructivo, que dice que esa respuesta
+/// borra — no que no haya vuelta. Son dos cosas distintas, y la segunda es la
+/// que decide si alguien pulsa.
+///
+/// La respuesta sale de la caché de capacidades del hueco, que llega con el
+/// listado: sin ella se supone que NO hay papelera, que es la dirección en la
+/// que equivocarse solo cuesta un susto.
+#[tokio::test]
+async fn sin_papelera_el_borrado_avisa_de_que_no_hay_vuelta() {
+    // El tercer caso es el que pierde datos: NO CONSTA. Las capacidades
+    // llegan detrás del listado y por su cuenta, así que hay una ventana
+    // entera —y toda la sesión, si la petición falla— en la que no hay
+    // respuesta. Tratar eso como «no hay papelera» borra de verdad en un
+    // sitio que sí la tiene.
+    for (papelera, avisa) in [(Some(true), false), (Some(false), true), (None, false)] {
+        let mut f = Falso::default();
+        f.arbol.clone_from(&arbol().arbol);
+        if let Some(hay) = papelera {
+            let mut flags = norte_proto::CapabilityFlags::CASE_SENSITIVE;
+            if hay {
+                flags |= norte_proto::CapabilityFlags::TRASH;
+            }
+            f.capacidades.insert(
+                "mem:///casa".to_owned(),
+                norte_proto::Capabilities {
+                    flags,
+                    max_path: None,
+                },
+            );
+        } else {
+            // Ni siquiera contesta: el hueco se queda sin capacidades.
+            f.error_de_capacidades = true;
+        }
+        let (h, _snap) = host_arbol(Arc::new(f)).await;
+        let mut sub = h.subscribe();
+        asentar().await;
+
+        h.dispatch(tecla("F8")).await.expect("host vivo");
+        let d = siguientes_dialogos(&mut sub).await;
+        let borrado = d.last().expect("el diálogo de borrado");
+        let norte_ui_host::dto::DestCheckView::Done { warnings } = &borrado.dest_check else {
+            panic!("un borrado no espera a nadie: {:?}", borrado.dest_check)
+        };
+        assert_eq!(
+            !warnings.is_empty(),
+            avisa,
+            "con papelera={papelera:?} los avisos fueron {warnings:?}"
+        );
+        if avisa {
+            assert!(warnings[0].contains('⚠'), "{warnings:?}");
+            assert_eq!(
+                borrado.title_key, "modal-delete-permanent-title",
+                "y el título lo dice también: sin papelera, esto es permanente"
+            );
+        } else {
+            assert_eq!(
+                borrado.title_key, "modal-delete-title",
+                "con papelera —o sin saberlo— esto NO es un borrado permanente"
+            );
+        }
+    }
+}
+
+/// El diálogo de colisión NO pierde la insignia de un nombre alterado.
+///
+/// Se enmascaraba sobre `display_lossy()`, que YA había metido los U+FFFD:
+/// `display_name` recibía entonces UTF-8 impecable y declaraba el nombre
+/// FIEL. O sea que en la única pantalla donde se aprueba SOBRESCRIBIR un
+/// fichero, el nombre que difiere de los bytes se pintaba como si no
+/// difiriera.
+#[tokio::test]
+async fn el_dialogo_de_colision_marca_el_nombre_alterado() {
+    let backend = arbol();
+    let (h, _snap) = Box::pin(dos_paneles_con_destino_aparte(Arc::clone(&backend))).await;
+    let mut sub = h.subscribe();
+    // El cursor, sobre la entrada cuyo nombre no es UTF-8.
+    let foto = foto(&h, &mut sub).await;
+    let b = listado_de(&foto, 1);
+    let raro = b
+        .rows
+        .iter()
+        .find(|r| r.hostile)
+        .expect("el árbol trae un nombre alterado");
+    h.dispatch(UiAction::SelectRow {
+        slot_id: 1,
+        key: raro.key,
+        generation: b.generation,
+    })
+    .await
+    .expect("host vivo");
+
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    let _ = siguientes_tasks(&mut sub).await;
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| {
+        p.state = norte_proto::TaskState::Failed {
+            error: norte_proto::Error::Conflict {
+                conflict: norte_proto::ConflictKind::Exists,
+            },
+        };
+    });
+
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let colision = dialogos.last().expect("el diálogo de colisión");
+    let destino = colision
+        .destination
+        .as_ref()
+        .expect("dice sobre qué fichero pregunta");
+    assert!(
+        destino.hostile,
+        "lo pintado no son los bytes, y esto es lo que se aprueba: {destino:?}"
+    );
+}
+
 /// **Una transferencia que CHOCA tiene salida** (#274).
 ///
 /// La ventana manda siempre `CollisionPolicy::Fail`, que es el default seguro,
@@ -15589,6 +15767,41 @@ async fn una_consulta_semantica_vacia_no_se_manda() {
     );
 }
 
+/// Una instrucción de IA vacía deja el campo DELANTE, como su gemela.
+///
+/// El terminal deja el modal abierto con el error debajo. La ventana ya se
+/// había comido el diálogo y ponía el mensaje en la barra: un «escribe una
+/// instrucción» sobre una pantalla sin dónde escribirla no es una negativa,
+/// es un callejón. La consulta semántica —el mismo caso, tres ficheros más
+/// allá— ya se había arreglado así.
+#[tokio::test]
+async fn una_instruccion_de_ia_vacia_devuelve_el_campo() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "pane.ai-rename").await;
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    asentar().await;
+
+    let foto = foto(&h, &mut sub).await;
+    assert!(
+        foto.dialogs.iter().any(|d| d.input.is_some()),
+        "el campo vuelve: {:?}",
+        foto.dialogs
+    );
+    assert!(
+        backend.instrucciones.lock().expect("pedidas").is_empty(),
+        "y nada sale hacia el proveedor de IA"
+    );
+}
+
 /// En SOLO LECTURA no se pregunta: la consulta sale del proceso hacia el
 /// proveedor de IA, igual que el plan de renombrado.
 #[tokio::test]
@@ -20421,8 +20634,8 @@ async fn el_intercambio_repide_la_navegacion_en_vuelo() {
     .await;
     let (izq, der) = (listado_de(&f, 1), listado_de(&f, 2));
     assert!(
-        !matches!(izq.state, norte_ui_host::dto::SlotState::Loading)
-            && !matches!(der.state, norte_ui_host::dto::SlotState::Loading),
+        !matches!(izq.state, norte_ui_host::dto::SlotState::Loading { .. })
+            && !matches!(der.state, norte_ui_host::dto::SlotState::Loading { .. }),
         "ningún panel se queda cargando: {:?} {:?}",
         izq.state,
         der.state

@@ -90,9 +90,10 @@ informe original; **A** salvo donde se diga.
    `norte_frontend::space::total_to_write`, donde estaba a medias: los dos
    helpers de las frases ya eran compartidos y solo el cálculo era privado
    del TUI. `DialogView.warnings` es el campo nuevo del bridge.
-3. **Borrado permanente.** «⚠ aquí NO hay papelera: esto no se deshace» es
-   solo del terminal. La ventana compensa con un botón destructivo; ninguna
-   de las dos tiene la señal de la otra.
+3. ~~**Borrado permanente.**~~ **HECHO**: la ventana lo saca de la caché de
+   capacidades del hueco. Con TRES estados, no dos — «no consta» no es «no hay
+   papelera», y convertir lo uno en lo otro borraba de verdad en un sitio que
+   sí la tiene.
 4. ~~**Una búsqueda que FALLÓ se lee como una terminada con 0 resultados.**~~
    **HECHO**: `Busqueda.viva: bool` pasa a un `Desenlace` de cuatro estados y
    la frase sale de la familia del terminal, fallo incluido. De paso: una
@@ -112,34 +113,41 @@ informe original; **A** salvo donde se diga.
    frases que dicen que un listado no está completo se redactaban una vez por
    frontend y ahora se redactan una vez. La cabecera de la ventana gana
    `names_note`, `filling_note`, `pruned_note` y `marked_note` (puente 55).
-8. **Decirte que está esperando.** El terminal: nada antes de 250 ms, luego
-   spinner, a dónde va y «Esc cancela». La ventana: `aria-busy="true"` y
-   **ninguna regla CSS que lo pinte**. Un SFTP lento no da señal ninguna.
+8. ~~**Decirte que está esperando.**~~ **HECHO**, salvo el «Esc cancela», que
+   se deja fuera A PROPÓSITO: la ventana no tiene camino para abortar un
+   listado en vuelo, y el repo tiene esa doctrina escrita tres veces —jamás
+   una affordance falsa—. El verbo sale del vocabulario cerrado compartido
+   (`busy::BusyKind`: «conectando» no es «cargando») y el umbral viaja en el
+   catálogo desde `busy::THRESHOLD`, en vez de ser un número en el CSS.
 9. **Listas de ficheros en los diálogos:** basename/tope 10/«y 2 más» contra
    ruta entera/tope 16/«mostrando 16 de 200».
-10. **El diálogo de colisión pierde la insignia de hostil** (`display_lossy`
-    ya metió U+FFFD, así que `display_name` lo declara fiel) **y la
-    reinterpretación del panel** (en un panel cp866 el terminal pregunta por
-    `Папка` y la ventana por `??????`).
+10. ~~**El diálogo de colisión pierde la insignia de hostil y la
+    reinterpretación del panel.**~~ **HECHO**. Y la codificación se captura AL
+    LANZAR, no al llegar: la colisión aparece asíncrona y entre el envío y la
+    pregunta cabe cambiar de hueco — el terminal lo lleva así en su
+    `RetrySpec` desde #98.
 11. ~~**La marca de destino `→`**~~ **HECHO**:
     `layout::target_worth_marking`, y la aplica el RENDERER — el rol del DTO
     es el modelo y decirle al host que mienta rompía tres tests que lo leen
     como tal. Que el rol EXISTA y que se PINTE son dos preguntas.
-12. **El panel de registro habla tres vocabularios**: `TRACE` / `trace` /
-    `traza` — y los tres a la vez en pantalla, porque los botones de nivel de
-    la ventana usan el catálogo y su chip usa el nombre de cable. Hay tests
-    en los dos lados FIJANDO la divergencia.
-13. **El plan de renombrado de la IA** es aplicable en el terminal e inerte
-    en la ventana hasta que bajas hasta el final.
+12. ~~**El panel de registro habla tres vocabularios.**~~ **HECHO**: el id de
+    cable se COMPARA y la etiqueta se LEE, y viajan las dos. `TRACE` no se
+    traduce —es lo que se escribe en `RUST_LOG`—; los botones de nivel sí,
+    porque son un mando y el terminal no tiene ninguno con el que discrepar.
+13. ~~**El plan de renombrado de la IA.**~~ **HECHO**, y moviendo el
+    TERMINAL: la regla estricta era la buena. Una firma sobre algo que no se
+    ha leído no es una firma, y con doscientos renombrados los que importan
+    pueden estar en la fila ciento ochenta. `approval_ready` lo decide para
+    los dos, sobre una marca de agua ALTA: volver arriba no des-lee lo ya
+    leído.
 14. **El diálogo de aprobación de un agente**: el TTL solo lo enseña la
     ventana; la insignia de hostil en las rutas ocultas solo el terminal.
-15. **La fila de un volumen** en la barra de sitios: tres implementaciones,
-    una de ellas dentro del propio host, y la de la ventana pierde el dato
-    que sí tiene cuando el total es desconocido.
-16. **Instrucción de IA vacía**: el terminal deja el error dentro del modal
-    con lo tecleado; la ventana ya se comió el diálogo y lo dice en la barra.
-    El caso gemelo (consulta semántica) se arregló a conciencia tres ficheros
-    más allá.
+15. ~~**La fila de un volumen.**~~ **HECHO**: una sola redacción
+    (`PlacesState::volume_detail`). Las tres decían «desconocido» cuando lo
+    único que faltaba era el TOTAL, tirando el dato que sí había — y cuánto
+    queda es la mitad que se mira antes de copiar.
+16. ~~**Instrucción de IA vacía.**~~ **HECHO**: el campo vuelve, como en su
+    caso gemelo.
 17. ~~**Marcas de cabecera que la ventana no tiene**~~ **HECHO** con 6 y 7,
     salvo «no listado» (#235): la ventana ya lo dice por `SlotState::Error`,
     que es su forma de la misma frase. `norte_frontend::notes::unlisted`

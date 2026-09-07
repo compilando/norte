@@ -293,22 +293,11 @@ impl Estado {
         total: Option<u64>,
         read_only: bool,
     ) -> String {
-        let mut trozos = Vec::new();
-        match (free, total) {
-            (Some(f), Some(t)) => trozos.push(norte_i18n::ta_in(
-                self.lang,
-                "picker-volume-space",
-                &[
-                    ("free", &norte_frontend::human_bytes_short(f)),
-                    ("total", &norte_frontend::human_bytes_short(t)),
-                ],
-            )),
-            _ => trozos.push(norte_i18n::t_in(self.lang, "volumes-size-unknown")),
-        }
-        if read_only {
-            trozos.push(norte_i18n::t_in(self.lang, "picker-volume-read-only"));
-        }
-        trozos.join(" · ")
+        // La frase la redacta el crate COMPARTIDO. Había tres versiones —dos
+        // en este mismo crate—, ya diferían en cómo escriben los números, y
+        // las tres decían «desconocido» cuando lo único que faltaba era el
+        // total, tirando el dato que sí había.
+        norte_frontend::places::PlacesState::volume_detail(free, total, read_only, true, self.lang)
     }
 
     /// El hueco que ocupa la barra lateral, si la disposición coloca una.

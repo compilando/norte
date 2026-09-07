@@ -72,6 +72,14 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const session = new Session();
   const catalog = await port.catalog();
   applyTheme(doc, catalog.theme);
+  // El umbral de «te estoy haciendo esperar» viene del host, que lo saca del
+  // crate compartido con el terminal. Aquí solo se enchufa como variable CSS:
+  // escribirlo en la hoja de estilos sería un tercer sitio donde vive el
+  // mismo número, y el primero donde olvidarse de cambiarlo.
+  doc.documentElement.style.setProperty(
+    "--busy-delay",
+    `${String(catalog.busy_threshold_ms ?? 250)}ms`,
+  );
 
   // Lo que se está esperando pintar, y desde cuándo. La medida es del gesto
   // al frame que lo enseña: cualquier cosa más corta mide otra cosa.

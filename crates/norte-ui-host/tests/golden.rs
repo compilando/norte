@@ -966,6 +966,10 @@ fn slots_de_referencia() -> Vec<SlotView> {
                 norte_ui_host::dto::LogLineView {
                     time: "12:00:00".to_owned(),
                     level: "error".to_owned(),
+                    // La etiqueta va al lado del id, y con OTRA forma: es lo
+                    // que hace visible en el corpus que son dos cosas — una
+                    // se compara y la otra se lee.
+                    level_label: "ERROR".to_owned(),
                     target: "norte_core::connect".to_owned(),
                     message: "no se pudo conectar".to_owned(),
                     hostile: false,
@@ -974,6 +978,7 @@ fn slots_de_referencia() -> Vec<SlotView> {
                 norte_ui_host::dto::LogLineView {
                     time: "12:00:01".to_owned(),
                     level: "info".to_owned(),
+                    level_label: "INFO".to_owned(),
                     target: "norte_ui_host".to_owned(),
                     // Con el reemplazo canónico y MARCADA: un mensaje de
                     // registro puede llevar dentro un nombre que alguien
@@ -985,6 +990,7 @@ fn slots_de_referencia() -> Vec<SlotView> {
             ],
             // El que se ENSEÑA, siempre: es el que los botones controlan.
             level: "info".to_owned(),
+            level_label: "INFO".to_owned(),
             filter: "connect".to_owned(),
             following: false,
             total: 2,
@@ -1822,7 +1828,11 @@ fn actualizaciones() {
                         },
                         ViewChange::SlotState {
                             slot_id: 1,
-                            state: SlotState::Loading,
+                            state: SlotState::Loading {
+                                verb_key: "busy-listing".to_owned(),
+                                target_display: "⟨mem⟩/casa/docs".to_owned(),
+                                target_hostile: false,
+                            },
                         },
                     ],
                 }),
@@ -2072,7 +2082,11 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
             "slot_state",
             ViewChange::SlotState {
                 slot_id: 1,
-                state: SlotState::Loading,
+                state: SlotState::Loading {
+                    verb_key: "busy-listing".to_owned(),
+                    target_display: "⟨mem⟩/casa/docs".to_owned(),
+                    target_hostile: false,
+                },
             },
         ),
         (
@@ -2225,7 +2239,7 @@ mod variantes {
     fn nombre_estado(s: &SlotState) -> &'static str {
         match s {
             SlotState::Ready => "slot_state_ready",
-            SlotState::Loading => "slot_state_loading",
+            SlotState::Loading { .. } => "slot_state_loading",
             SlotState::Error { .. } => "slot_state_error",
         }
     }
@@ -2367,7 +2381,13 @@ mod variantes {
     fn cada_variante_de_enum_tiene_su_fixture() {
         let estados = vec![
             SlotState::Ready,
-            SlotState::Loading,
+            // CON destino, que es la mitad que hace legible que el cuerpo
+            // siga enseñando el listado anterior mientras se espera.
+            SlotState::Loading {
+                verb_key: "busy-listing".to_owned(),
+                target_display: "⟨mem⟩/casa/docs".to_owned(),
+                target_hostile: false,
+            },
             SlotState::Error {
                 reason_key: "err-permission-denied".to_owned(),
                 detail: Some("EACCES".to_owned()),

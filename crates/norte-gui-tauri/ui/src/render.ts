@@ -132,6 +132,14 @@ interface SlotDom {
   scroller: HTMLElement;
   canvas: HTMLElement;
   rows: Map<number, HTMLElement>;
+  /**
+   * El aviso de «esperando», ESTABLE. No se crea en cada pintada porque su
+   * umbral es un `animation-delay`, y una animación que empieza de cero cada
+   * vez que su nodo nace nunca llega a los 250 ms: `paint()` repinta todos
+   * los huecos en cada actualización, así que el aviso no habría aparecido
+   * jamás en los casos lentos, que son para los que existe.
+   */
+  busy: HTMLElement;
   lastRange: { first: number; count: number } | null;
   /**
    * La generación que se PINTÓ. Toda acción de fila la lleva: sin ella la
@@ -2731,6 +2739,9 @@ export class Screen {
       scroller.append(canvas);
       el.append(tabs, title, header, scroller);
       this.root.append(el);
+      const busy = document.createElement("p");
+      busy.className = "slot-busy";
+      busy.hidden = true;
       const dom: SlotDom = {
         root: el,
         tabs,
@@ -2738,6 +2749,7 @@ export class Screen {
         header,
         scroller,
         canvas,
+        busy,
         rows: new Map(),
         lastRange: null,
         generation: 0,
@@ -3295,7 +3307,11 @@ export class Screen {
     dom.scroller.className = "log";
     dom.title.replaceChildren(
       document.createTextNode(this.t("log-title")),
-      chip(`${this.t("log-level")}: ${slot.level}`),
+      // La ETIQUETA, no el id de cable: el chip decía `trace` mientras los
+      // botones de al lado decían «traza» y cada línea decía `trace` otra
+      // vez. `TRACE` es lo que pinta el terminal, lo que se escribe en
+      // `RUST_LOG` y lo que alguien busca con la vista en una lista larga.
+      chip(`${this.t("log-level")}: ${slot.level_label ?? slot.level}`),
       ...(slot.filter === "" ? [] : [chip(`/${slot.filter}`)]),
       ...(slot.following ? [] : [chip(this.t("log-detached"))]),
       // Se está guardando MÁS de lo que se ve: quien mira tiene derecho a
@@ -3354,7 +3370,7 @@ export class Screen {
       hora.textContent = l.time;
       const nivel = document.createElement("span");
       nivel.className = "log-level";
-      nivel.textContent = l.level;
+      nivel.textContent = l.level_label ?? l.level;
       const target = document.createElement("span");
       target.className = "log-target";
       target.textContent = l.target;
@@ -3582,6 +3598,46 @@ export class Screen {
       "aria-busy",
       slot.state.state === "loading" ? "true" : "false",
     );
+    // Esperando (#323). Hasta aquí solo estaba el `aria-busy`, y NINGUNA
+    // regla que lo pintara: contra un SFTP lento la ventana no daba señal.
+    //
+    // El nodo es ESTABLE y se esconde con un atributo, no se crea en cada
+    // pintada. El umbral es un `animation-delay`, y una animación que empieza
+    // de cero cada vez que su nodo nace nunca llega a los 250 ms: `paint()`
+    // repinta todos los huecos en CADA actualización, así que con un listado
+    // grande llegando por páginas —o con el otro panel trabajando— el aviso
+    // no habría aparecido jamás, que es justo el caso para el que existe.
+    //
+    // El VERBO viene del host, del vocabulario cerrado que comparte con el
+    // terminal: «conectando…» y «cargando…» no son lo mismo, y el caso que
+    // destapó #323 era el primero.
+    //
+    // SIN «Esc cancela». La ventana no tiene camino para abortar un listado
+    // en vuelo —nada limpia `en_vuelo`/`drenando` desde una tecla—, y el repo
+    // tiene esa doctrina escrita tres veces en los `.ftl`: jamás una
+    // affordance falsa. El día que exista el aborto, con su test de
+    // cancelación limpia, la frase vuelve.
+    const cargando = slot.state.state === "loading";
+    dom.busy.hidden = !cargando;
+    if (slot.state.state === "loading") {
+      const destino = slot.state.target_display ?? "";
+      const verbo = this.t(slot.state.verb_key ?? "busy-listing");
+      if (destino === "") {
+        // Un refresco: no va a ninguna parte, así que no se inventa un sitio.
+        dom.busy.replaceChildren(verbo);
+      } else {
+        const yendo = document.createElement("span");
+        yendo.className = "slot-busy-target";
+        yendo.textContent = destino;
+        dom.busy.replaceChildren(verbo, " ", yendo);
+        if (slot.state.target_hostile === true) {
+          // La ruta a la que se va se pinta distinta de lo que es. Es la que
+          // el lector está mirando mientras espera, así que va marcada.
+          dom.busy.append(badge(this.t("hostile-name")));
+        }
+      }
+    }
+    dom.title.append(dom.busy);
 
     if (slot.state.state === "error") {
       // Con un REINTENTO, y no solo la frase. Un hueco en error es lo que

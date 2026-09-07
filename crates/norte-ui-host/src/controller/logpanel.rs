@@ -208,6 +208,11 @@ impl Estado {
             // leía como muerto. El nivel del daemon se dice en `capturing`,
             // que es el sitio que ya significa «se recoge más de lo que se ve».
             level: self.log_panel.level().wire().to_owned(),
+            // El chip del título pintaba el id de cable; el terminal pinta la
+            // etiqueta (`Registro · TRACE`). Misma pareja que en cada línea:
+            // el id se compara —el renderer marca qué botón está puesto— y la
+            // etiqueta se lee.
+            level_label: self.log_panel.level().label().trim().to_owned(),
             // El filtro lo TECLEA el lector, así que se pinta como cualquier
             // otro texto de fuera: enmascarado y acotado.
             filter: clamp_display(
@@ -395,6 +400,13 @@ impl Estado {
         crate::dto::LogLineView {
             time: norte_frontend::format::hora_utc(l.epoch_ms),
             level: l.level.wire().to_owned(),
+            // Lo que se PINTA, que no es el id de cable. El renderer pintaba
+            // `trace` mientras el terminal pinta `TRACE` y sus propios botones
+            // decían «traza»: tres vocabularios del mismo nivel, y los tres a
+            // la vez en pantalla. La etiqueta es la de `LogLevel::label`, que
+            // es de donde la saca el terminal — sin el relleno de columnas,
+            // que es cosa de un ancho fijo que la ventana no tiene.
+            level_label: l.level.label().trim().to_owned(),
             target: clamp_display(target),
             message: clamp_display(mensaje),
             hostile: t_hostil || m_hostil,

@@ -15,7 +15,8 @@ const FIXTURE: &str = r##"{
   "locale": "es",
   "strings": { "hostile-name": "nombre alterado" },
   "theme": { "bg": "#101216" },
-  "measure": false
+  "measure": false,
+  "busy_threshold_ms": 250
 }"##;
 
 /// Ida y vuelta: los nombres del JSON son el contrato, no los de Rust.
@@ -27,6 +28,13 @@ fn el_catalogo_va_y_vuelve_con_los_mismos_campos() {
     assert_eq!(leido.strings["hostile-name"], "nombre alterado");
     assert_eq!(leido.theme["bg"], "#101216");
     assert!(!leido.measure);
+    // El umbral de la espera viaja: escribirlo en el CSS sería un tercer
+    // sitio donde vive el mismo número, y el primero donde olvidarse.
+    assert_eq!(
+        u128::from(leido.busy_threshold_ms),
+        norte_frontend::busy::THRESHOLD.as_millis(),
+        "el catálogo lleva el umbral COMPARTIDO, no una copia"
+    );
 
     let vuelta: serde_json::Value = serde_json::to_value(&leido).expect("serializa");
     let esperado: serde_json::Value = serde_json::from_str(FIXTURE).expect("json");

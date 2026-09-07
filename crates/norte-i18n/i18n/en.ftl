@@ -774,6 +774,10 @@ picker-history-empty = this panel has not been anywhere else yet
 picker-hotlist-title = Favorites
 picker-hotlist-empty = no favorites configured
 picker-volume-space = {$free} free of {$total}
+# How much is left is known, but not of how much. It happens — a mount that
+# half answers — and saying "unknown" there throws away the one number there
+# is: how much is left is the half you look at before copying.
+picker-volume-free = {$free} free
 picker-volume-read-only = read-only
 theme-title = Theme
 theme-roles = What each role is painted with
@@ -821,6 +825,11 @@ processes-has-keyboard = this panel has the keyboard · Esc returns it
 # empty has to tell "nothing happened" apart from "you are filtering it out".
 log-title = Log
 slot-retry = retry
+# Waiting for a listing (#323). Three pieces and not one sentence: the renderer
+# composes them with the PATH in its own node, because a path glued inside the
+# sentence reads as part of it — and this is also where cancelling is offered.
+slot-busy = loading…
+slot-busy-to = going to
 log-keys = e/w/i/d/t level · / filter · End to follow · Esc returns the keyboard
 # Only offered when the daemon serves its log (#328): announcing a control that
 # would cycle three views of the SAME ring promises something that is not there.

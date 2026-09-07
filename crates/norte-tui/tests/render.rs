@@ -501,6 +501,7 @@ fn modal_de_plan_ai_enmascara_y_no_oculta_el_destino() {
             to: "destino-final.txt".into(),
         }],
         offset: 0,
+        seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
         plan: norte_frontend::BatchPlan::Ready(Box::new(
             norte_proto::methods::FsRenameBatchPlanResult {
                 steps: Vec::new(),
@@ -611,6 +612,7 @@ fn el_veredicto_del_lote_sobrevive_a_un_terminal_corto() {
         dir,
         entries,
         offset: 0,
+        seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
         plan: norte_frontend::BatchPlan::Ready(Box::new(
             norte_proto::methods::FsRenameBatchPlanResult {
                 steps: Vec::new(),

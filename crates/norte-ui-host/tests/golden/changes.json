@@ -851,7 +851,10 @@
     "change": "slot_state",
     "slot_id": 1,
     "state": {
-      "state": "loading"
+      "state": "loading",
+      "target_display": "⟨mem⟩/casa/docs",
+      "target_hostile": false,
+      "verb_key": "busy-listing"
     }
   },
   "status": {

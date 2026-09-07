@@ -332,6 +332,9 @@ pub(crate) fn modal_title_body(
             entries,
             offset,
             plan,
+            // Lo visto NO cambia lo que se pinta: gatea el confirmar
+            // (`dialog_action`) y lo dice el pie.
+            seen: _,
         } => ai_rename_plan_modal_text(dir, entries, *offset, hints, plan),
         // M4-IA-2: mismo enmascarado que la instrucción IA — consulta y
         // error son texto de usuario.
@@ -1619,6 +1622,7 @@ mod ai_rename_plan_modal_tests {
             dir: dir(),
             entries,
             offset: 0,
+            seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
             plan: plan_ok(),
         };
         assert_eq!(modal_height(&modal), 17);
@@ -1793,6 +1797,7 @@ mod ai_rename_plan_modal_tests {
             dir: dir(),
             entries: vec![entry("a", "b")],
             offset: 0,
+            seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
             plan: norte_frontend::BatchPlan::Pending,
         };
         assert_eq!(modal_height(&modal), 8);

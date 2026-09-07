@@ -199,7 +199,12 @@ use serde::{Deserialize, Serialize};
 ///   se comió marcas, y cuántas hay marcadas y cuánto pesan. Todas bajo la
 ///   misma regla: un listado que enseña menos de lo que hay, o que no enseña
 ///   lo que hay, jamás es silencioso.
-pub const BRIDGE_VERSION: u32 = 55;
+/// - **56**: un hueco que está CARGANDO dice a dónde va (#323). El cuerpo
+///   sigue enseñando el listado anterior hasta que llegue el nuevo —a
+///   propósito, para que un fallo deje al lector donde estaba—, y sin el
+///   destino esa mezcla no se puede leer. El umbral de 250 ms lo pone el
+///   renderer, que es donde un retardo puramente visual no cuesta nada.
+pub const BRIDGE_VERSION: u32 = 56;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

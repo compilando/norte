@@ -543,10 +543,21 @@ impl Estado {
         };
         // Qué fichero iba, si el progreso lo dice. `current` es una ruta del
         // otro extremo: se enmascara y se acorta igual que una fila.
+        //
+        // Sobre los bytes CRUDOS del último segmento, no sobre
+        // `display_lossy()`: ahí los U+FFFD ya están puestos, y enmascarar un
+        // texto que ya es UTF-8 impecable devuelve «fiel» siempre. Aquí el
+        // veredicto no se usa —una notificación del escritorio no tiene dónde
+        // poner una insignia— pero el ENMASCARADO sí, y sobre el lossy no
+        // hacía nada: es el mismo error que se acaba de arreglar en el
+        // diálogo de colisión, dos funciones más abajo.
         let detalle = p.current.as_ref().map_or_else(
             || cuenta.to_string(),
             |path| {
-                let (texto, _) = norte_frontend::display_name(path.display_lossy().as_bytes());
+                let bytes = path
+                    .file_name()
+                    .map_or_else(Vec::new, |s| s.as_bytes().to_vec());
+                let (texto, _) = norte_frontend::display_name(&bytes);
                 clamp_display(texto)
             },
         );
@@ -587,18 +598,17 @@ impl Estado {
         };
         // El destino, en su propio campo y enmascarado: es un nombre de
         // fichero del otro extremo, y es LO que el lector tiene que mirar para
-        // decidir si sobrescribe.
-        let (destino, destino_hostil) =
-            norte_frontend::display_name(con.to.display_lossy().as_bytes());
+        // decidir si sobrescribe. Por el embudo, que enmascara los bytes
+        // CRUDOS: sobre `display_lossy()` los U+FFFD ya estaban puestos y el
+        // veredicto salía «fiel» — sin insignia, en la única pantalla donde
+        // se aprueba sobrescribir.
+        let destino = Self::linea_con_encoding(&con.to, con.enc);
         let modal = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
             id: modal,
             title_key: "modal-collision-title".to_owned(),
-            destination: Some(crate::dto::DialogLine {
-                text: clamp_display(destino),
-                hostile: destino_hostil,
-            }),
+            destination: Some(destino),
             subject: None,
             asker: None,
             deadline: None,

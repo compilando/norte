@@ -980,7 +980,10 @@ impl App {
     /// de su allowlist de decisión) y el run loop enruta esos comandos aquí.
     pub fn ai_plan_scroll(&mut self, down: bool) {
         if let Some(Modal::AiRenamePlan {
-            entries, offset, ..
+            entries,
+            offset,
+            seen,
+            ..
         }) = &mut self.modal
         {
             let max = entries.len().saturating_sub(AI_RENAME_PAIR_LIMIT);
@@ -989,6 +992,10 @@ impl App {
             } else {
                 offset.saturating_sub(1)
             };
+            // Marca de agua ALTA: volver arriba no des-lee lo ya leído, y sin
+            // esto aprobar dependería de dónde te hayas quedado y no de hasta
+            // dónde hayas llegado.
+            *seen = (*seen).max((*offset + AI_RENAME_PAIR_LIMIT).min(entries.len()));
         }
     }
 

@@ -19,6 +19,18 @@ impl Estado {
     /// disco.
     pub(super) fn pedir_instruccion_ia(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let dir = self.hueco().pane.dir().clone();
+        self.pedir_instruccion_ia_sobre(dir)
+    }
+
+    /// Como [`Self::pedir_instruccion_ia`], pero sobre un directorio DADO.
+    ///
+    /// Existe para reabrir el campo tras una instrucción vacía: ahí el
+    /// operando ya está en la mano, y volver a derivarlo del hueco activo
+    /// sería reabrir sobre otro sitio si algo lo movió por debajo.
+    pub(super) fn pedir_instruccion_ia_sobre(
+        &mut self,
+        dir: VPath,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
@@ -281,8 +293,17 @@ impl Estado {
                 self.lang,
                 "modal-ai-rename-empty-instruction",
             )));
+            // Y el campo VUELVE. El terminal deja el modal abierto con el
+            // error debajo; aquí el diálogo ya se había ido de la pila, así
+            // que un mensaje pidiendo que escribas una instrucción sobre una
+            // pantalla sin dónde escribirla no era una negativa: era un
+            // callejón. El campo estaba vacío, así que no se pierde nada al
+            // rehacerlo — y esto es exactamente lo que su caso gemelo, la
+            // consulta semántica, ya hacía tres ficheros más allá.
+            let (_, mut fuera) = self.pedir_instruccion_ia_sobre(dir);
             let cambio = ViewChange::Status(self.status.clone());
-            return vec![self.parche(vec![cambio])];
+            fuera.push(self.parche(vec![cambio]));
+            return fuera;
         }
         self.epoca_ia += 1;
         let epoca = self.epoca_ia;
@@ -544,8 +565,12 @@ impl Estado {
                 .collect(),
             // Aprobar exige las DOS cosas: que el core lo acepte y que el
             // lector haya llegado al final. Lo segundo no lo puede saber el
-            // core y lo primero no lo puede saber el lector.
-            confirmable: r.plan.confirmable() && r.visto_hasta >= total,
+            // core y lo primero no lo puede saber el lector. La regla vive en
+            // el crate COMPARTIDO desde que se vio que el terminal solo pedía
+            // la primera: una firma sobre algo que no se ha leído no es una
+            // firma, y con doscientos renombrados los que importan pueden
+            // estar en la fila ciento ochenta.
+            confirmable: norte_frontend::approval_ready(r.plan.confirmable(), r.visto_hasta, total),
             real_steps_note: if r.plan.ready().is_none() {
                 String::new()
             } else {

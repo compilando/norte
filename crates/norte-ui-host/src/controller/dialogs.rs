@@ -594,6 +594,41 @@ impl Estado {
         }
     }
 
+    /// Como [`Self::linea_de_ruta`], pero con una REINTERPRETACIÓN concreta:
+    /// la que había cuando se lanzó la operación por la que se pregunta.
+    ///
+    /// Dos cosas que se hacían mal donde se pregunta por una colisión, y las
+    /// dos hacen que se apruebe otra cosa:
+    ///
+    /// - se enmascaraba sobre `display_lossy()`, que YA había metido los
+    ///   U+FFFD. `display_name` recibía entonces UTF-8 impecable y declaraba
+    ///   la ruta FIEL, así que la insignia de hostil no salía — en la única
+    ///   pantalla donde se aprueba sobrescribir un fichero;
+    /// - no se aplicaba `pane.names-encoding`, así que en un panel cp866 el
+    ///   terminal preguntaba por `Папка` y la ventana por `??????`. Aprobar
+    ///   un nombre que no es el que llevas viendo no es aprobar.
+    ///
+    /// La codificación llega por PARÁMETRO y no se lee del hueco activo: la
+    /// colisión aparece asíncrona, encima de lo que sea que el lector esté
+    /// haciendo, y entre el envío y la pregunta cabe cambiar de hueco o
+    /// ciclar la codificación. Quien lanza la captura (`Reintento::enc`).
+    ///
+    /// Y la ruta ENTERA, no el nombre: «notas.txt» no dice CUÁL notas.txt, y
+    /// con dos paneles y un lote esa es justo la pregunta.
+    pub(super) fn linea_con_encoding(
+        p: &VPath,
+        enc: Option<norte_encoding::NameEncoding>,
+    ) -> crate::dto::DialogLine {
+        let (texto, hostil) = norte_frontend::path_display_with(p, enc);
+        // El RECORTE también altera lo pintado, y la elipsis es un carácter
+        // legal en un nombre: mismo razonamiento que `linea_de_ruta`.
+        let recortado = texto.len() > crate::bridge::MAX_STRING_BYTES;
+        crate::dto::DialogLine {
+            text: clamp_display(texto),
+            hostile: hostil || recortado,
+        }
+    }
+
     pub(super) fn vistas_de_dialogos(&self) -> Vec<DialogView> {
         self.dialogos.iter().map(|d| d.vista.clone()).collect()
     }

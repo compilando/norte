@@ -2288,6 +2288,15 @@ pub struct Reintento {
     /// Mover en vez de copiar: el reintento tiene que repetir el mismo verbo,
     /// o un «sobrescribir» sobre una copia se convertiría en un movimiento.
     mover: bool,
+    /// La reinterpretación de nombres que había AL LANZAR.
+    ///
+    /// Se captura aquí y no se lee al llegar, y ese es el punto: la colisión
+    /// llega ASÍNCRONA, encima de lo que el lector esté haciendo, y entre el
+    /// envío y la pregunta cabe cambiar de hueco o ciclar la codificación. El
+    /// diálogo tiene que pintar el MISMO texto por el que se navegó, o se
+    /// está aprobando un nombre distinto del que se vio. El terminal lo lleva
+    /// en su `RetrySpec` desde #98 y lo dice ahí con estas palabras.
+    enc: Option<norte_encoding::NameEncoding>,
 }
 
 /// El selector de tema abierto.
@@ -2849,7 +2858,9 @@ impl Hueco {
             drenando: None,
             sondeando: false,
             cancelar_sondeo: std::sync::Arc::default(),
-            estado: SlotState::Loading,
+            // Sin destino: un hueco recién nacido no va a ninguna parte, ya
+            // está donde va a estar.
+            estado: Estado::cargando_hacia(None, None),
             sondeados: std::collections::HashSet::new(),
             adornos: std::collections::HashMap::new(),
             celdas_plugin: std::collections::HashMap::new(),
@@ -3183,7 +3194,9 @@ impl Estado {
             .huecos
             .iter()
             .filter(|(id, h)| {
-                !self.oculto(**id) && h.en_vuelo.is_none() && matches!(h.estado, SlotState::Loading)
+                !self.oculto(**id)
+                    && h.en_vuelo.is_none()
+                    && matches!(h.estado, SlotState::Loading { .. })
             })
             .map(|(id, _)| *id)
             .collect();

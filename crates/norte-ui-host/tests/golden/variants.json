@@ -150,7 +150,10 @@
     "state": "error"
   },
   "slot_state_loading": {
-    "state": "loading"
+    "state": "loading",
+    "target_display": "⟨mem⟩/casa/docs",
+    "target_hostile": false,
+    "verb_key": "busy-listing"
   },
   "slot_state_ready": {
     "state": "ready"
