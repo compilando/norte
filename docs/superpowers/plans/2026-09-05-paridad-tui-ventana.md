@@ -196,11 +196,20 @@ Sin esto, arreglar la lista es barrer hacia la puerta.
    `CommonConfig` sin `..` en el lado del host/arranque, como el que ya tiene
    el terminal en `App::desde_config`. Cada clave: la lee, la ignora a
    propósito (con motivo), o es de otro proceso.
-2. **El arnés de paridad compara FRONTEND con FRONTEND.** Hoy compara el host
-   contra las primitivas con una regla que es la del host. Escenario
-   semántico → se corre contra `norte-tui` y contra `norte-ui-host` → se
-   comparan las respuestas. Lista de excepciones nombradas, como
-   `paridad.rs::NO_APLICA`.
+2. ~~**El arnés de paridad compara FRONTEND con FRONTEND.**~~ **HECHO**:
+   `crates/norte-ui-host/tests/parity.rs` corre cada escenario TRES veces
+   —primitivas, host, `norte-tui`— y compara el estado semántico paso a paso.
+   La tercera pata es la que guarda algo: las dos primeras medían el host
+   contra un arnés escrito con las reglas del host.
+
+   Cerrado después el hueco que su propia cabecera nombraba: el árbol de
+   prueba solo tenía directorios y ficheros, así que no podía tocar la
+   divergencia número uno (`Enter` sobre un `.zip` o un symlink). Ahora trae
+   `cosas.zip` y `atajo`, y las tres patas preguntan por `nav::enter_target`.
+
+   **Un arnés de paridad caza divergencia, no error compartido.** Al añadir
+   un escenario, sabotea UNA pata y compruébalo rojo: estrechar la primitiva
+   estrecha las tres y sale verde igual.
 3. **Un test que enumere los huecos con sonda.** Cada kind que sigue al
    cursor tiene sonda o está en una lista de «solo foto, a propósito».
 

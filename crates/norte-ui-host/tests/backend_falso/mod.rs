@@ -754,6 +754,14 @@ pub fn arbol_de_prueba() -> Falso {
             (b"fotos".to_vec(), true),
             (b"notas.txt".to_vec(), false),
             (vec![0x63, 0x61, 0x66, 0xC3, 0x28], false),
+            // Un COMPRIMIDO y un ENLACE, que son las dos entradas sobre las
+            // que `Enter` significa algo distinto de «es un fichero, no
+            // pasa nada». El arnés de paridad no podía tocar la divergencia
+            // número uno del inventario porque este árbol solo tenía
+            // directorios y ficheros; su propia cabecera lo decía y apuntaba
+            // a que hacía falta que el doble supiera de kinds. Ya lo sabe.
+            (b"cosas.zip".to_vec(), false),
+            (b"atajo".to_vec(), false),
         ],
     );
     f.pon(
@@ -761,6 +769,16 @@ pub fn arbol_de_prueba() -> Falso {
         vec![(b"a.md".to_vec(), false), (b"b.md".to_vec(), false)],
     );
     f.pon("mem:///casa/fotos", vec![(b"gato.png".to_vec(), false)]);
+    // El enlace apunta a un directorio que SÍ se lista: un enlace a un
+    // fichero no se resuelve —el `cd` falla y se absorbe—, y eso es otro
+    // caso, no el que este árbol tiene que poder describir.
+    f.pon_kind("mem:///casa/atajo", EntryKind::Symlink);
+    f.pon("mem:///casa/atajo", vec![(b"dentro.md".to_vec(), false)]);
+    // Y la raíz virtual del contenedor, que es a donde compone `Enter`.
+    f.pon(
+        "zip+mem:///casa/cosas.zip!/",
+        vec![(b"leeme.txt".to_vec(), false)],
+    );
     f
 }
 

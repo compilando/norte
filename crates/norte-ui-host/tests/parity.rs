@@ -19,18 +19,23 @@
 //! comparación no podía fallar. La auditoría de paridad del 2026-09-05
 //! encontró diecisiete decisiones ya divergidas por debajo de este fichero.
 //!
-//! Lo que todavía NO alcanza: el árbol de prueba solo tiene directorios y
-//! ficheros, así que los escenarios no pueden tocar la divergencia número uno
-//! del inventario —`Enter` sobre un `.zip` o sobre un symlink, donde el
-//! terminal navega y la ventana llama a `xdg-open`—. Hace falta que
-//! `Falso::pon` sepa de kinds; está en la fase 4 del plan
-//! `docs/superpowers/plans/2026-09-05-paridad-tui-ventana.md`.
+//! El árbol de prueba ya trae un `.zip` y un symlink, que era la divergencia
+//! número uno del inventario: `Enter` sobre uno de los dos navegaba en el
+//! terminal y llamaba a `xdg-open` en la ventana. Las tres patas preguntan
+//! ahora por `norte_frontend::nav::enter_target`, así que la pregunta «¿esto
+//! se entra?» tiene UNA respuesta y los escenarios pueden ejercitarla.
+//!
+//! Lo que todavía NO alcanza: un arnés de paridad caza DIVERGENCIA, no error
+//! compartido. Si las dos superficies se equivocan igual —porque las dos leen
+//! la misma primitiva— aquí sale verde. Al añadir un escenario, sabotea una
+//! sola de las patas y compruébalo rojo; estrechar la primitiva estrecha las
+//! tres y no demuestra nada.
 
 use std::sync::Arc;
 
 use norte_frontend::PaneState;
 use norte_frontend::nav::{History, Trail};
-use norte_proto::{Entry, EntryKind, VPath};
+use norte_proto::{Entry, VPath};
 use norte_ui_host::action::UiAction;
 use norte_ui_host::dto::SlotView;
 use norte_ui_host::{UiHost, UiHostOptions, UiSubscription, Update, ViewSnapshot, dto::UiUpdate};
@@ -45,6 +50,13 @@ use backend_falso::{Falso, arbol_de_prueba};
 enum Paso {
     /// Mueve el cursor tantas filas.
     Cursor(i64),
+    /// Pone el cursor en la fila que se llama así, bajando desde arriba.
+    ///
+    /// Por NOMBRE y no por índice porque `compara` corre cada escenario con
+    /// la fila `..` puesta y quitada, y el índice de la misma entrada no es
+    /// el mismo en las dos. Cada superficie lo hace con sus propias teclas de
+    /// cursor: lo que se compara sigue siendo dónde acaba.
+    CursorA(&'static str),
     /// Marca o desmarca la fila del cursor.
     Marcar,
     /// Entra en el directorio bajo el cursor.
@@ -86,6 +98,19 @@ fn via_primitivas(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
                     }
                 }
             }
+            Paso::CursorA(nombre) => {
+                for _ in 0..pane.entries().len() {
+                    pane.cursor_up();
+                }
+                for _ in 0..pane.entries().len() {
+                    if foto_primitivas(&pane).nombres.get(pane.cursor())
+                        == Some(&(*nombre).to_owned())
+                    {
+                        break;
+                    }
+                    pane.cursor_down();
+                }
+            }
             Paso::Marcar => pane.toggle_mark(),
             Paso::Entrar => {
                 // Sobre `..`, Enter SUBE: es lo único que esa fila sabe
@@ -94,12 +119,18 @@ fn via_primitivas(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
                 // que ve la `Entry` sintética y navega a su ruta—. Modelarlo
                 // como «no hay operando, no pasa nada» mediría el arnés y no
                 // el producto.
+                //
+                // Y qué es «entrable» lo contesta `nav::enter_target`, que es
+                // la función COMPARTIDA que usan las dos superficies. Aquí
+                // había un `selected().filter(kind == Dir)` escrito a mano —o
+                // sea la regla de la ventana— y por eso esta comparación no
+                // podía fallar sobre un `.zip` o un enlace: medía el arnés y
+                // no el producto. Es la avería que la cabecera de este fichero
+                // describe, y ya se puede quitar.
                 let destino = if pane.is_parent_row(pane.cursor()) {
                     pane.parent_target().cloned()
                 } else {
-                    pane.selected()
-                        .filter(|e| e.kind == EntryKind::Dir)
-                        .map(|e| e.path.clone())
+                    pane.selected().and_then(norte_frontend::nav::enter_target)
                 };
                 let Some(destino) = destino else {
                     salida.push(foto_primitivas(&pane));
@@ -178,6 +209,18 @@ fn via_tui(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
                     } else {
                         app.focused_mut().move_down(1);
                     }
+                }
+            }
+            Paso::CursorA(nombre) => {
+                let filas = app.focused().entries().len();
+                app.focused_mut().move_up(filas);
+                for _ in 0..filas {
+                    if foto_tui(&app).nombres.get(app.focused().cursor())
+                        == Some(&(*nombre).to_owned())
+                    {
+                        break;
+                    }
+                    app.focused_mut().move_down(1);
                 }
             }
             Paso::Marcar => app.focused_mut().toggle_mark(),
@@ -365,6 +408,20 @@ async fn via_host(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
                 },
                 false,
             ),
+            Paso::CursorA(nombre) => {
+                // De una sola acción: esta superficie mueve el cursor por
+                // DELTA, así que la fila buscada se convierte en uno. Lo que
+                // se compara es dónde acaba, no cuántas teclas costó.
+                let actual = salida.last().expect("hay foto");
+                let destino = actual
+                    .nombres
+                    .iter()
+                    .position(|n| n == nombre)
+                    .unwrap_or(actual.cursor);
+                let delta =
+                    i64::try_from(destino).unwrap_or(0) - i64::try_from(actual.cursor).unwrap_or(0);
+                (UiAction::MoveCursor { slot_id: 1, delta }, false)
+            }
             Paso::Marcar => {
                 let actual = salida.last().expect("hay foto");
                 (
@@ -407,16 +464,47 @@ async fn via_host(pasos: &[Paso], fila_de_subir: bool) -> Vec<Semantico> {
         // Una navegación que no se puede hacer (raíz, rastro agotado, fila
         // que no es directorio) deja la pantalla como estaba: es el MISMO
         // desenlace que en las primitivas.
-        let hubo_cd = navega && matches!(ack, norte_ui_host::ActionAck::Applied { .. });
-        let foto = if hubo_cd {
-            espera_foto(&mut sub).await
-        } else {
-            pide_foto(&host, &mut sub).await
+        // Sin adivinar si va a llegar una foto: se espera un momento por si
+        // la pantalla se mueve sola —un `cd` la mueve— y, si no se mueve, se
+        // pide.
+        //
+        // Antes se deducía del acuse (`navega && Applied`), y eso era el
+        // arnés encodificando una regla del producto: `Activate` sobre un
+        // fichero contesta `Applied` porque LO ABRE FUERA, así que el
+        // escenario se quedaba esperando un listado que nunca iba a existir.
+        // Deducirlo es además justo lo que este fichero no puede hacer: si
+        // supiera qué navega, no estaría midiendo si las dos superficies
+        // están de acuerdo en qué navega.
+        let _ = (navega, &ack);
+        let foto = match espera_foto_opcional(&mut sub).await {
+            Some(f) => f,
+            None => pide_foto(&host, &mut sub).await,
         };
         epoca = listado_de(&foto).generation;
         salida.push(foto_host(&foto));
     }
     salida
+}
+
+/// Una foto que llegue SOLA, o `None` si la pantalla no se movió.
+///
+/// El plazo es el presupuesto de FALLO: en el camino verde —un `cd`— la foto
+/// ya está esperando, y en el que no se mueve nada este plazo se gasta entero
+/// una vez por paso.
+async fn espera_foto_opcional(sub: &mut UiSubscription) -> Option<ViewSnapshot> {
+    for _ in 0..20 {
+        let siguiente =
+            tokio::time::timeout(std::time::Duration::from_millis(100), sub.recv()).await;
+        let Ok(recibido) = siguiente else {
+            return None;
+        };
+        if let Update::Message(m) = recibido.expect("el host sigue vivo")
+            && let UiUpdate::Snapshot(s) = m.payload
+        {
+            return Some(*s);
+        }
+    }
+    None
 }
 
 async fn espera_foto(sub: &mut UiSubscription) -> ViewSnapshot {
@@ -545,6 +633,49 @@ async fn entrar_atras_adelante_subir() {
             Paso::Subir,
             Paso::Atras,
         ],
+    )
+    .await;
+}
+
+/// `Enter` sobre un COMPRIMIDO entra en él, en las dos superficies.
+///
+/// La divergencia número uno del inventario, y la que este arnés no podía
+/// tocar: su árbol solo tenía directorios y ficheros, así que el paso
+/// `Entrar` nunca se encontraba con nada sobre lo que las dos pudieran
+/// contestar distinto. El terminal navegaba al `zip+…!/` y la ventana se lo
+/// daba a `xdg-open`, y esta comparación pasaba verde por debajo.
+#[tokio::test]
+async fn entrar_en_un_comprimido_es_lo_mismo_en_las_dos() {
+    compara(
+        "cursor al zip → entrar → atrás",
+        &[Paso::CursorA("cosas.zip"), Paso::Entrar, Paso::Atras],
+    )
+    .await;
+}
+
+/// Y sobre un ENLACE, igual: se sigue sin resolver a dónde apunta.
+///
+/// Que el provider liste o falle es cosa suya; lo que se compara es que las
+/// dos superficies hagan la MISMA pregunta. Aquí el enlace lleva a un
+/// directorio que sí se lista, que es el caso en el que un desacuerdo se ve.
+#[tokio::test]
+async fn entrar_en_un_enlace_es_lo_mismo_en_las_dos() {
+    compara(
+        "cursor al enlace → entrar → subir",
+        &[Paso::CursorA("atajo"), Paso::Entrar, Paso::Subir],
+    )
+    .await;
+}
+
+/// Y sobre un FICHERO corriente, `Enter` no navega en ninguna de las dos.
+///
+/// La otra mitad del contrato: si `enter_target` se volviera permisivo, los
+/// dos tests de arriba seguirían verdes y este se pondría rojo.
+#[tokio::test]
+async fn entrar_en_un_fichero_no_navega_en_ninguna() {
+    compara(
+        "cursor a un fichero → entrar",
+        &[Paso::CursorA("notas.txt"), Paso::Entrar],
     )
     .await;
 }
