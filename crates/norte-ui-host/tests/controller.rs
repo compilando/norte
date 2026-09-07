@@ -9364,6 +9364,59 @@ async fn un_hueco_que_espera_dice_a_donde_va() {
     );
 }
 
+/// La ventana pinta en SU idioma, no en el del proceso.
+///
+/// `norte-ui-host` estaba limpio —sus llamadas pasan `self.lang`— y todas las
+/// fugas venían de helpers COMPARTIDOS que traducían con el global. La peor
+/// era la fecha: cada celda del listado salía en el idioma del proceso bajo
+/// una cabecera en el del host, y no se podía esquivar con configuración
+/// porque la ventana ignora `time-format`, así que la rama relativa está
+/// siempre viva.
+///
+/// Los ajustes de la ventana salen ENTEROS en el idioma del host.
+///
+/// Los títulos de sección ya iban con el suyo y el nombre y la descripción de
+/// cada opción con el del PROCESO, así que la pantalla salía a medias en dos
+/// idiomas. Se comprueba desde fuera —lo que cruza el puente— y no llamando
+/// al helper: lo que se arregló es que la ventana le pase su `lang`, y un
+/// test sobre el helper seguiría verde si dejara de pasárselo.
+#[tokio::test]
+async fn los_ajustes_salen_enteros_en_el_idioma_del_host() {
+    // El PROCESO en inglés y el host en español: lo que se escape sale en
+    // inglés y se ve aquí.
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "app.settings").await;
+    let ajustes = foto_hasta(&h, &mut sub, "la pantalla de ajustes", |s| {
+        s.settings.clone()
+    })
+    .await;
+    let filas: Vec<norte_ui_host::dto::SettingRowView> = ajustes
+        .sections
+        .iter()
+        .filter_map(|s| match s {
+            norte_ui_host::dto::SettingsSectionView::Settings { rows, .. } => Some(rows.clone()),
+            norte_ui_host::dto::SettingsSectionView::Paths { .. } => None,
+        })
+        .flatten()
+        .collect();
+    assert!(!filas.is_empty(), "hay opciones que enseñar");
+
+    let en_español = norte_i18n::t_in(norte_i18n::Lang::Es, "setting-ui-theme-name");
+    let en_ingles = norte_i18n::t_in(norte_i18n::Lang::En, "setting-ui-theme-name");
+    assert_ne!(en_español, en_ingles, "la premisa: la clave se traduce");
+    let fila = filas
+        .iter()
+        .find(|r| r.name == en_español || r.name == en_ingles)
+        .expect("la opción está en el catálogo");
+    assert_eq!(
+        fila.name, en_español,
+        "la fila salió en el idioma del PROCESO, no en el del host"
+    );
+}
+
 /// Sin papelera, el borrado lo DICE y se hace permanente.
 ///
 /// «⚠ SIN papelera: esto no se puede deshacer» era solo del terminal. La

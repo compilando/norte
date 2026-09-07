@@ -444,13 +444,13 @@ impl Row {
 /// [`SettingsState::activate`]). An EMPTY `summaries` (no approved+enabled
 /// plugin declares any `[config]` key) falls back to a single
 /// informational row, same shape as before G3c.
-fn plugin_summary_rows(summaries: &[PluginConfigSummary]) -> Vec<Row> {
+fn plugin_summary_rows(summaries: &[PluginConfigSummary], lang: norte_i18n::Lang) -> Vec<Row> {
     if summaries.is_empty() {
         return vec![Row {
             def_index: None,
             plugin_id: None,
-            name: t("settings-plugins-name"),
-            desc: t("settings-plugins-note"),
+            name: norte_i18n::t_in(lang, "settings-plugins-name"),
+            desc: norte_i18n::t_in(lang, "settings-plugins-note"),
             value: String::new(),
         }];
     }
@@ -460,8 +460,9 @@ fn plugin_summary_rows(summaries: &[PluginConfigSummary]) -> Vec<Row> {
             def_index: None,
             plugin_id: Some(s.plugin_id.clone()),
             name: s.name.clone(),
-            desc: t("settings-plugins-open-hint"),
-            value: norte_i18n::ta(
+            desc: norte_i18n::t_in(lang, "settings-plugins-open-hint"),
+            value: norte_i18n::ta_in(
+                lang,
                 "settings-plugins-key-count",
                 &[("count", &s.key_count.to_string())],
             ),
@@ -479,18 +480,32 @@ fn plugin_summary_rows(summaries: &[PluginConfigSummary]) -> Vec<Row> {
 /// wholesale, never mutated row by row.
 #[must_use]
 pub fn build_rows(cfg: &FrontendConfig, plugin_summaries: &[PluginConfigSummary]) -> Vec<Row> {
+    build_rows_in(cfg, plugin_summaries, norte_i18n::active())
+}
+
+/// [`build_rows`] en un idioma DADO.
+///
+/// La pantalla de ajustes traducía los títulos de sección con el idioma del
+/// HOST y el nombre y la descripción de cada opción con el del PROCESO, así
+/// que salía a medias en dos idiomas.
+#[must_use]
+pub fn build_rows_in(
+    cfg: &FrontendConfig,
+    plugin_summaries: &[PluginConfigSummary],
+    lang: norte_i18n::Lang,
+) -> Vec<Row> {
     let mut rows: Vec<Row> = catalog()
         .iter()
         .enumerate()
         .map(|(i, def)| Row {
             def_index: Some(i),
             plugin_id: None,
-            name: t(&fluent_name_id(def.id)),
-            desc: t(&fluent_desc_id(def.id)),
+            name: norte_i18n::t_in(lang, &fluent_name_id(def.id)),
+            desc: norte_i18n::t_in(lang, &fluent_desc_id(def.id)),
             value: current_value(def, cfg),
         })
         .collect();
-    rows.extend(plugin_summary_rows(plugin_summaries));
+    rows.extend(plugin_summary_rows(plugin_summaries, lang));
     rows
 }
 

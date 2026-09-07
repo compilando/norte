@@ -155,8 +155,11 @@ informe original; **A** salvo donde se diga.
 
 ## D. Fugas de idioma en la ventana
 
-`norte-ui-host` está limpio: sus 131 llamadas pasan `self.lang`. Todas las
-fugas son helpers compartidos que traducen con el global.
+**HECHA.** `norte-ui-host` ya estaba limpio —sus 131 llamadas pasan
+`self.lang`— y las cinco fugas eran helpers COMPARTIDOS que traducían con el
+global. Cada uno gana su variante `_in(lang)` y la ambiente delega, que es el
+patrón que `header_label` ya usaba en este mismo crate; la ventana pasa el
+suyo. Lo que queda abajo es el inventario de lo que había.
 
 | helper | qué se ve | conf |
 | --- | --- | --- |

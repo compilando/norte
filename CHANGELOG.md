@@ -28,6 +28,19 @@ independently through `PROTOCOL_VERSION`.
   prevent. The window already knew `archive_root_for`: it uses it to unpack
   and to test a container, just not to open one. The decision now lives once,
   in `norte_frontend::nav::enter_target`.
+- **The window painted in the process's language, not its own.** `norte-ui-host`
+  itself was clean — all 131 of its calls pass `self.lang` — and every leak was
+  a *shared* helper translating through the global. The worst was the date:
+  every cell of the listing came out in the process's language under a header
+  in the host's, and configuration could not dodge it because the window
+  ignores `time-format`, so the relative branch is always live. Four more:
+  the settings screen (section titles in one language, each option's name and
+  description in the other), the status bar's "this build does not do that"
+  sentence, the palette's `[Extension]`/`[Renamer]` prefixes — which is what
+  breaks the disguise of a plugin titling itself like a built-in, so it cannot
+  read as part of the title — and the `Folder`/`Yes` cells. Each helper gained
+  an `_in(lang)` variant with the ambient one delegating, which is the pattern
+  `header_label` already used in that crate.
 - **The collision dialog dropped the badge on an altered name, on the one
   screen where overwriting a file is approved.** It masked over
   `display_lossy()`, which had already put the U+FFFD in — so `display_name`

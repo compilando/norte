@@ -1385,10 +1385,11 @@ impl Estado {
                         mtime: f
                             .mtime_ms
                             .map(|ms| {
-                                norte_frontend::columns::format_mtime(
+                                norte_frontend::columns::format_mtime_in(
                                     ms,
                                     norte_frontend::columns::TimeFormat::Iso,
                                     ahora,
+                                    self.lang,
                                 )
                             })
                             .unwrap_or_default(),

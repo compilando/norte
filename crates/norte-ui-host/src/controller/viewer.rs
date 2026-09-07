@@ -45,8 +45,11 @@ impl Estado {
         let Some(efecto) = crate::commands::efecto_visor_de(&command, count.times()) else {
             // En el catálogo y ligado a esta pantalla, pero este host no lo
             // hace: se dice, con la misma frase que el TUI.
-            let frase =
-                norte_frontend::keymap::unavailable_message(&command, Availability::NotHere);
+            let frase = norte_frontend::keymap::unavailable_message_in(
+                &command,
+                Availability::NotHere,
+                self.lang,
+            );
             self.status.message = Some(clamp_display(frase));
             let cambio = ViewChange::Status(self.status.clone());
             return (

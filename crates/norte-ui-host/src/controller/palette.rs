@@ -105,7 +105,7 @@ impl Estado {
         // encendidas —la misma puerta que `plugin.run_command` exige por su
         // cuenta—, en orden de manifiesto, y con el prefijo que impide que
         // un comando de tercero se disfrace de uno propio.
-        let mut filas = norte_frontend::palette::plugin_rows(&catalogo);
+        let mut filas = norte_frontend::palette::plugin_rows_in(&catalogo, self.lang);
         // Y un tope de FILAS: el manifiesto no acota cuántos comandos declara
         // un plugin, así que uno aprobado con doscientos mil convertía cada
         // `ctrl+p` en un mensaje de cientos de megas.

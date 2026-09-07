@@ -613,14 +613,33 @@ pub fn format_size(n: u64, fmt: SizeFormat) -> String {
 
 /// Tiempo según formato (#108). `now_ms` lo aporta el caller (fn pura —
 /// testeable y estable en snapshots); negativos pre-1970 válidos.
+///
+/// En la lengua AMBIENTE. Envoltorio de [`format_mtime_in`] para quien no
+/// tiene un `lang` que pasar; **una ventana siempre lo tiene**, y llamar a
+/// ésta desde ella pintaba cada celda de fecha del listado en el idioma del
+/// PROCESO, bajo una cabecera en el del host.
 #[must_use]
 pub fn format_mtime(mtime_ms: i64, fmt: TimeFormat, now_ms: i64) -> String {
+    format_mtime_in(mtime_ms, fmt, now_ms, norte_i18n::active())
+}
+
+/// [`format_mtime`] en un idioma DADO.
+///
+/// La rama relativa es la que traduce, y no se puede esquivar con
+/// configuración: la ventana ignora `time-format`, así que está siempre viva.
+#[must_use]
+pub fn format_mtime_in(
+    mtime_ms: i64,
+    fmt: TimeFormat,
+    now_ms: i64,
+    lang: norte_i18n::Lang,
+) -> String {
     match fmt {
         TimeFormat::Iso => iso_utc_minutes(mtime_ms),
         TimeFormat::Relative => {
             let delta_s = (now_ms.saturating_sub(mtime_ms)) / 1000;
             if delta_s < 60 {
-                return norte_i18n::t("col-time-now");
+                return norte_i18n::t_in(lang, "col-time-now");
             }
             let (n, key) = if delta_s < 3600 {
                 (delta_s / 60, "col-time-min")
@@ -631,7 +650,7 @@ pub fn format_mtime(mtime_ms: i64, fmt: TimeFormat, now_ms: i64) -> String {
             } else {
                 (delta_s / (365 * 86_400), "col-time-year")
             };
-            norte_i18n::ta(key, &[("n", &n.to_string())])
+            norte_i18n::ta_in(lang, key, &[("n", &n.to_string())])
         }
     }
 }
@@ -1944,24 +1963,43 @@ pub fn styled_cell(
     now_ms: i64,
     style: &ColumnStyle,
 ) -> Option<String> {
+    styled_cell_in(entry, col, now_ms, style, norte_i18n::active())
+}
+
+/// [`styled_cell`] en un idioma DADO.
+///
+/// Tres de sus celdas traducen —la clase, un booleano y la fecha relativa— y
+/// las tres salían en el idioma del PROCESO cuando quien pintaba era la
+/// ventana: media pantalla en cada idioma es peor que ninguna traducción.
+#[must_use]
+pub fn styled_cell_in(
+    entry: &norte_proto::Entry,
+    col: &ColumnId,
+    now_ms: i64,
+    style: &ColumnStyle,
+    lang: norte_i18n::Lang,
+) -> Option<String> {
     match col {
         ColumnId::Builtin(b) => match b {
             Builtin::Name => None, // el nombre lo pinta el frontend
-            Builtin::Kind => Some(norte_i18n::t(match entry.kind {
-                norte_proto::EntryKind::Dir => "col-kind-dir",
-                norte_proto::EntryKind::File => "col-kind-file",
-                norte_proto::EntryKind::Symlink => "col-kind-symlink",
-                norte_proto::EntryKind::Other => "col-kind-other",
-            })),
+            Builtin::Kind => Some(norte_i18n::t_in(
+                lang,
+                match entry.kind {
+                    norte_proto::EntryKind::Dir => "col-kind-dir",
+                    norte_proto::EntryKind::File => "col-kind-file",
+                    norte_proto::EntryKind::Symlink => "col-kind-symlink",
+                    norte_proto::EntryKind::Other => "col-kind-other",
+                },
+            )),
             Builtin::Size => entry.size.map(|n| format_size(n, style.size_format)),
             Builtin::Mtime => entry
                 .mtime_ms
-                .map(|ms| format_mtime(ms, style.time_format, now_ms)),
+                .map(|ms| format_mtime_in(ms, style.time_format, now_ms, lang)),
         },
         ColumnId::Attr(id) => entry
             .attrs
             .get(id)
-            .and_then(|v| attr_cell(v, style, now_ms)),
+            .and_then(|v| attr_cell(v, style, now_ms, lang)),
         ColumnId::Plugin { .. } => None,
     }
 }
@@ -1983,7 +2021,12 @@ pub fn builtin_cell(entry: &norte_proto::Entry, col: Builtin, now_ms: i64) -> Op
 /// numéricos. Text/Bytes son de TERCEROS: enmascarados y capados por
 /// [`sanitize_cell`]; Bytes pasa antes por el lossy MARCADO de
 /// [`crate::display_name`] (regla 1: los bytes originales no se tocan).
-fn attr_cell(v: &norte_proto::AttrValue, style: &ColumnStyle, now_ms: i64) -> Option<String> {
+fn attr_cell(
+    v: &norte_proto::AttrValue,
+    style: &ColumnStyle,
+    now_ms: i64,
+    lang: norte_i18n::Lang,
+) -> Option<String> {
     use norte_proto::attrs::{AttrHint, AttrValue};
     match v {
         AttrValue::Uint(n) => Some(match style.hint {
@@ -2007,11 +2050,10 @@ fn attr_cell(v: &norte_proto::AttrValue, style: &ColumnStyle, now_ms: i64) -> Op
             let (shown, _hostil) = crate::display_name(b);
             sanitize_cell(Some(&shown)).or_else(|| Some("?".to_owned()))
         }
-        AttrValue::Bool(b) => Some(norte_i18n::t(if *b {
-            "col-cell-yes"
-        } else {
-            "col-cell-no"
-        })),
+        AttrValue::Bool(b) => Some(norte_i18n::t_in(
+            lang,
+            if *b { "col-cell-yes" } else { "col-cell-no" },
+        )),
         // Una celda mala cuesta una celda: visible, jamás blanco (blanco =
         // AUSENTE).
         AttrValue::Unknown => Some("?".to_owned()),

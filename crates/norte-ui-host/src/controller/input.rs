@@ -328,9 +328,10 @@ impl Estado {
                 let Some(efecto) = efecto_de(&command, veces) else {
                     // En el catálogo, ligada, y este host no la hace. Se
                     // dice con la MISMA frase que el TUI.
-                    let frase = norte_frontend::keymap::unavailable_message(
+                    let frase = norte_frontend::keymap::unavailable_message_in(
                         &command,
                         Availability::NotHere,
+                        self.lang,
                     );
                     self.status.message = Some(clamp_display(frase));
                     self.status.pending = None;
@@ -378,7 +379,8 @@ impl Estado {
                 (self.aplicada(), vec![self.parche(cambios)])
             }
             Resolution::Unavailable { command, why } => {
-                let frase = norte_frontend::keymap::unavailable_message(&command, why);
+                let frase =
+                    norte_frontend::keymap::unavailable_message_in(&command, why, self.lang);
                 self.status.message = Some(clamp_display(frase));
                 self.status.pending = None;
                 self.whichkey = None;
@@ -553,7 +555,8 @@ impl Estado {
         &mut self,
         cmd: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let frase = norte_frontend::keymap::unavailable_message(cmd, Availability::NotHere);
+        let frase =
+            norte_frontend::keymap::unavailable_message_in(cmd, Availability::NotHere, self.lang);
         self.status.message = Some(clamp_display(frase));
         let cambio = ViewChange::Status(self.status.clone());
         (

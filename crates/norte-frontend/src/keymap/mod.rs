@@ -253,21 +253,31 @@ pub fn preset_commands(screen: Screen) -> Vec<String> {
 /// ```
 #[must_use]
 pub fn unavailable_message(command: &str, why: Availability) -> String {
+    unavailable_message_in(command, why, norte_i18n::active())
+}
+
+/// [`unavailable_message`] en un idioma DADO.
+///
+/// La barra de estado de la ventana cambiaba de idioma según qué mensaje le
+/// tocara: los suyos salen con el del host y éste salía con el del proceso.
+#[must_use]
+pub fn unavailable_message_in(command: &str, why: Availability, lang: norte_i18n::Lang) -> String {
     match why {
         Availability::Here => String::new(),
         // `reason` is a Fluent ID, not prose (see the catalogue): translate it
         // first, then interpolate. Interpolating the id would print English
         // inside a Spanish sentence.
-        Availability::NotBuilt { reason, issue } => norte_i18n::ta(
+        Availability::NotBuilt { reason, issue } => norte_i18n::ta_in(
+            lang,
             "keymap-unavailable-not-built",
             &[
                 ("command", command),
-                ("reason", &norte_i18n::t(reason)),
+                ("reason", &norte_i18n::t_in(lang, reason)),
                 ("issue", &issue.to_string()),
             ],
         ),
         Availability::NotHere => {
-            norte_i18n::ta("keymap-unavailable-not-here", &[("command", command)])
+            norte_i18n::ta_in(lang, "keymap-unavailable-not-here", &[("command", command)])
         }
     }
 }

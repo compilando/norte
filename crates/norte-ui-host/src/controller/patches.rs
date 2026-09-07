@@ -471,7 +471,7 @@ impl Estado {
     /// tamaño, un atributo que el provider no mandó— y viaja como tal: jamás
     /// un `0` fabricado.
     pub(super) fn celdas(&self, hueco: &Hueco, e: &Entry) -> Vec<crate::dto::CellView> {
-        use norte_frontend::columns::{ColumnId, styled_cell};
+        use norte_frontend::columns::{ColumnId, styled_cell_in};
         let ahora = ahora_ms();
         let esquema = hueco.pane.dir().scheme().to_owned();
         self.columnas_de(hueco.pane.dir())
@@ -489,13 +489,19 @@ impl Estado {
                     // `default_for_id` un `format = "iso"` no hacía nada aquí
                     // mientras el terminal sí lo honraba, y la fecha salía
                     // siempre relativa.
-                    otra => styled_cell(
+                    //
+                    // Y con el IDIOMA del host: la clase, un booleano y la
+                    // fecha relativa traducen, y salían en el del proceso —
+                    // cada celda de fecha del listado bajo una cabecera en
+                    // otro idioma.
+                    otra => styled_cell_in(
                         e,
                         otra,
                         ahora,
                         &self
                             .columnas
                             .style_for_id(&esquema, otra, self.catalogo_de(&e.path)),
+                        self.lang,
                     ),
                 };
                 crate::dto::CellView {

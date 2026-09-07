@@ -16,7 +16,7 @@
 
 use std::path::PathBuf;
 
-use norte_frontend::settings::{Row, build_rows};
+use norte_frontend::settings::{Row, build_rows_in};
 use norte_i18n::Lang;
 
 use crate::bridge::clamp_display;
@@ -116,7 +116,10 @@ impl Ajustes {
         paths: &HostPaths,
         lang: Lang,
     ) -> Self {
-        let filas = build_rows(cfg, &[])
+        // Con el idioma del HOST. Los títulos de sección ya iban con él y el
+        // nombre y la descripción de cada opción con el del proceso: media
+        // pantalla en cada idioma es peor que ninguna traducción.
+        let filas = build_rows_in(cfg, &[], lang)
             .into_iter()
             .filter(|r| !r.is_plugins_note())
             .collect();

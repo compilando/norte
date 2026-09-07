@@ -11,8 +11,6 @@
 //! hoisted twin — TUI now re-exports these names for source compatibility
 //! (same pattern [`crate::settings`] already established).
 
-use norte_i18n::t;
-
 use crate::keymap::Effective;
 
 /// Cosmetic cap on a plugin `description`/`title`'s rendered length
@@ -76,6 +74,19 @@ pub struct Row {
 /// plus the fact a built-in never carries it, breaks the disguise.
 #[must_use]
 pub fn plugin_rows(plugins: &[norte_proto::methods::PluginInfo]) -> Vec<Row> {
+    plugin_rows_in(plugins, norte_i18n::active())
+}
+
+/// [`plugin_rows`] en un idioma DADO.
+///
+/// El prefijo es lo que rompe el disfraz de un plugin que se titula como un
+/// comando de casa, así que no puede salir en un idioma distinto del resto de
+/// la paleta: ahí es donde se leería como parte del título.
+#[must_use]
+pub fn plugin_rows_in(
+    plugins: &[norte_proto::methods::PluginInfo],
+    lang: norte_i18n::Lang,
+) -> Vec<Row> {
     plugins
         .iter()
         .filter(|p| p.approved && p.enabled)
@@ -101,10 +112,10 @@ pub fn plugin_rows(plugins: &[norte_proto::methods::PluginInfo]) -> Vec<Row> {
                 // y no a `plugin.run_command`, y su rótulo dice qué hace.
                 let (prefijo, etiqueta) = match c.kind {
                     norte_proto::methods::PluginCommandKind::Command => {
-                        ("plugin", t("palette-plugin-prefix"))
+                        ("plugin", norte_i18n::t_in(lang, "palette-plugin-prefix"))
                     }
                     norte_proto::methods::PluginCommandKind::Renamer => {
-                        ("renamer", t("palette-renamer-prefix"))
+                        ("renamer", norte_i18n::t_in(lang, "palette-renamer-prefix"))
                     }
                 };
                 Row {
@@ -360,7 +371,7 @@ mod tests {
     /// or merged with the original.
     #[test]
     fn prefijo_doblado_por_titulo_hostil_nunca_se_elimina() {
-        let prefix = t("palette-plugin-prefix");
+        let prefix = norte_i18n::t("palette-plugin-prefix");
         let payload = format!("{prefix}] app.quit");
         let plugins = vec![plugin_info(
             "org.evil.x",
