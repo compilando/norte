@@ -31,14 +31,14 @@ La clase más barata de arreglar y la más visible: el usuario escribe algo en
 
 | clave | terminal | ventana | conf |
 | --- | --- | --- | --- |
-| `openers.toml` (entero) | sí, con recarga en caliente | **no lo lee nadie**: siempre `xdg-open` | **V** |
-| `[ui] editor` / `editor_detached` | sí (F4 lanza tu editor) | **no**: `pane.edit` es `pane.open` | A |
-| `[ui] quick_search` | sí | **no**: `Filter` a fuego | A |
-| `[ui] confirm_quit` | sí | **no**: la X cierra sin preguntar | A |
-| `[ui] theme` como RUTA a un `.toml` | sí (ADR 0020) | **no**: solo presets, y calla | A |
-| `[ui] lang` vs `NORTE_LANG` | gana el ENTORNO | gana la CONFIG | **V** |
-| `[ui.columns]` estilo por columna | sí (`style_for_id`) | **no**: `default_for_id` en celdas Y cabeceras, así que `time-format`, `header`, `align` y `width` están muertos | **V** |
-| `[DIR]` de la línea de órdenes | gana a la sesión (`pin_start_dir`) | **la sesión lo pisa**: `aplicar_sesion` escribe el dir de todos los huecos | **V** |
+| ~~`openers.toml` (entero)~~ | sí, con recarga en caliente | ~~**no lo lee nadie**: siempre `xdg-open`~~ **HECHO** | **V** |
+| ~~`[ui] editor` / `editor_detached`~~ | sí (F4 lanza tu editor) | ~~**no**: `pane.edit` es `pane.open`~~ **HECHO** (`$EDITOR` sigue fuera, y es deliberado) | A |
+| ~~`[ui] quick_search`~~ | sí | ~~**no**: `Filter` a fuego~~ **HECHO** | A |
+| ~~`[ui] confirm_quit`~~ | sí | ~~**no**: la X cierra sin preguntar~~ **HECHO** | A |
+| ~~`[ui] theme` como RUTA~~ | sí (ADR 0020) | **HECHO en el arranque**; al cambiar de PERFIL sigue siendo solo presets (pide I/O fuera del actor) | A |
+| ~~`[ui] lang` vs `NORTE_LANG`~~ | gana el ENTORNO | ~~gana la CONFIG~~ **HECHO**: manda la regla del terminal | **V** |
+| ~~`[ui.columns]` estilo por columna~~ | sí (`style_for_id`) | ~~**no**: `default_for_id` en celdas Y cabeceras~~ **HECHO** | **V** |
+| ~~`[DIR]` de la línea de órdenes~~ | gana a la sesión (`pin_start_dir`) | ~~**la sesión lo pisa**~~ **HECHO** (gana en el panel activo) | **V** |
 | recarga en caliente (todas) | sí, `norte_config::watch` | **no hay watcher**: todo es de arranque | A |
 | `[ui] font`, `mono_font`, `font_size`, `reduce_motion` | — | — | **muertas en los dos** | A |
 | `[profile.start]` | la escribe | la escribe | **no la lee nadie**, y dos ficheros prometen que sí | **V** |
@@ -80,67 +80,94 @@ tres XDG en el sandbox y socket en `/run/user/1000/…`.
 Ordenadas por lo que se nota. Todas con `file:line` en los dos lados en el
 informe original; **A** salvo donde se diga.
 
-1. **`Enter` sobre un archivo comprimido o un symlink.** El terminal entra en
-   el `zip+file://`; la ventana se lo da a `xdg-open`. Un symlink a
-   directorio: el terminal navega, la ventana lo trata como fichero. Y el
-   comentario de la ventana afirma que hace «la misma decisión que el TUI».
-   La ventana ya conoce `archive_root_for`: lo usa para desempaquetar.
-2. **Aviso de espacio y de confinamiento antes de copiar.** El terminal dice
-   «no cabe» y «no puedo confinar» antes de que confirmes. La ventana no
-   tiene esas líneas: te enteras por una task fallida.
-3. **Borrado permanente.** «⚠ aquí NO hay papelera: esto no se deshace» es
-   solo del terminal. La ventana compensa con un botón destructivo; ninguna
-   de las dos tiene la señal de la otra.
-4. **Una búsqueda que FALLÓ se lee como una terminada con 0 resultados.** El
-   host marca cualquier estado terminal como «no viva» y pinta
-   `search-status-done`. Es una afirmación falsa sobre el disco.
-5. **`availability::Facts`: 6 de 8 campos distintos.** El peor par:
-   `source_read_only`/`dest_read_only` están cableados a `false` en la
-   ventana, así que dentro de un ZIP el terminal apaga F5/F8 y la ventana los
-   ofrece encendidos. El host ya recibe `capabilities` y tira todo menos
-   `fold_mode`.
-6. **Entradas omitidas.** El terminal: «⚠ N omitidas (nombres hostiles /
-   límites)». La ventana: «N entradas se saltaron», sin ⚠ y **también cuando
-   N es 0**.
-7. **La marca persistente de reinterpretación de nombres** solo existe en el
-   terminal. La ventana transcribe y no lo dice más allá del mensaje del
-   toggle.
-8. **Decirte que está esperando.** El terminal: nada antes de 250 ms, luego
-   spinner, a dónde va y «Esc cancela». La ventana: `aria-busy="true"` y
-   **ninguna regla CSS que lo pinte**. Un SFTP lento no da señal ninguna.
+1. ~~**`Enter` sobre un archivo comprimido o un symlink.**~~ **HECHO**: la
+   decisión vive en `norte_frontend::nav::enter_target` y la llaman los dos.
+   Y el doble de test ya sabe fabricar un symlink (`Falso::pon_kind`), que es
+   lo que faltaba para poder escribirlo.
+2. ~~**Aviso de espacio y de confinamiento antes de copiar.**~~ **HECHO**: el
+   diálogo nace sin ellos y una task los rellena, que es el reparto del
+   terminal. La regla del total —todo o nada— vive ahora en
+   `norte_frontend::space::total_to_write`, donde estaba a medias: los dos
+   helpers de las frases ya eran compartidos y solo el cálculo era privado
+   del TUI. `DialogView.warnings` es el campo nuevo del bridge.
+3. ~~**Borrado permanente.**~~ **HECHO**: la ventana lo saca de la caché de
+   capacidades del hueco. Con TRES estados, no dos — «no consta» no es «no hay
+   papelera», y convertir lo uno en lo otro borraba de verdad en un sitio que
+   sí la tiene.
+4. ~~**Una búsqueda que FALLÓ se lee como una terminada con 0 resultados.**~~
+   **HECHO**: `Busqueda.viva: bool` pasa a un `Desenlace` de cuatro estados y
+   la frase sale de la familia del terminal, fallo incluido. De paso: una
+   búsqueda que ni llegaba a encolarse se quedaba diciendo «buscando…» para
+   siempre, porque sin Task no hay progreso que traiga el desenlace.
+5. ~~**`availability::Facts`: 6 de 8 campos distintos.**~~ **HECHO** el peor
+   par y uno más. `source_read_only`/`dest_read_only` salen ya de las
+   capacidades del hueco, por `availability::read_only`, que es de los dos;
+   y `enterable` de `nav::enter_target`, también de los dos. De paso salieron
+   dos bugs que nadie buscaba: el listado de ARRANQUE no pedía capacidades
+   —o sea que el primer directorio de cada hueco estaba a ciegas, y con él el
+   plegado de #268— y las capacidades se BORRABAN al pedir otras, tres líneas
+   antes de que el aterrizaje re-congelara los hechos de la ayuda. Quedan los
+   campos que no son un impedimento real (`degraded`, `journalled`).
+6. ~~**Entradas omitidas.**~~ y 7. ~~**La marca de reinterpretación de
+   nombres.**~~ **HECHOS**, con 17, en `norte_frontend::notes`: las SEIS
+   frases que dicen que un listado no está completo se redactaban una vez por
+   frontend y ahora se redactan una vez. La cabecera de la ventana gana
+   `names_note`, `filling_note`, `pruned_note` y `marked_note` (puente 55).
+8. ~~**Decirte que está esperando.**~~ **HECHO**, salvo el «Esc cancela», que
+   se deja fuera A PROPÓSITO: la ventana no tiene camino para abortar un
+   listado en vuelo, y el repo tiene esa doctrina escrita tres veces —jamás
+   una affordance falsa—. El verbo sale del vocabulario cerrado compartido
+   (`busy::BusyKind`: «conectando» no es «cargando») y el umbral viaja en el
+   catálogo desde `busy::THRESHOLD`, en vez de ser un número en el CSS.
 9. **Listas de ficheros en los diálogos:** basename/tope 10/«y 2 más» contra
-   ruta entera/tope 16/«mostrando 16 de 200».
-10. **El diálogo de colisión pierde la insignia de hostil** (`display_lossy`
-    ya metió U+FFFD, así que `display_name` lo declara fiel) **y la
-    reinterpretación del panel** (en un panel cp866 el terminal pregunta por
-    `Папка` y la ventana por `??????`).
-11. **La marca de destino `→`** se enciende siempre en la ventana con dos
-    paneles; el terminal la reserva para tres o más, que es lo que el crate
-    compartido documenta.
-12. **El panel de registro habla tres vocabularios**: `TRACE` / `trace` /
-    `traza` — y los tres a la vez en pantalla, porque los botones de nivel de
-    la ventana usan el catálogo y su chip usa el nombre de cable. Hay tests
-    en los dos lados FIJANDO la divergencia.
-13. **El plan de renombrado de la IA** es aplicable en el terminal e inerte
-    en la ventana hasta que bajas hasta el final.
+   ruta entera/tope 16/«mostrando 16 de 200». **Se queda, y es una decisión.**
+   Es el único de los diecisiete en el que ninguna de las dos superficies
+   afirma nada falso: las dos frases son completas —10 + «y 190 más» y «se
+   enseñan 16 de 200» dicen lo mismo— y los dos topes son de LEGIBILIDAD,
+   sobre superficies de anchos distintos. Unificarlo costaría un campo de
+   puente y veinticuatro sitios de construcción para que dos pantallas que ya
+   dicen la verdad la digan con las mismas palabras. Si algún día se toca, lo
+   que hay que compartir es la FRASE —para que no puedan divergir hacia decir
+   cosas distintas— y no el tope.
+10. ~~**El diálogo de colisión pierde la insignia de hostil y la
+    reinterpretación del panel.**~~ **HECHO**. Y la codificación se captura AL
+    LANZAR, no al llegar: la colisión aparece asíncrona y entre el envío y la
+    pregunta cabe cambiar de hueco — el terminal lo lleva así en su
+    `RetrySpec` desde #98.
+11. ~~**La marca de destino `→`**~~ **HECHO**:
+    `layout::target_worth_marking`, y la aplica el RENDERER — el rol del DTO
+    es el modelo y decirle al host que mienta rompía tres tests que lo leen
+    como tal. Que el rol EXISTA y que se PINTE son dos preguntas.
+12. ~~**El panel de registro habla tres vocabularios.**~~ **HECHO**: el id de
+    cable se COMPARA y la etiqueta se LEE, y viajan las dos. `TRACE` no se
+    traduce —es lo que se escribe en `RUST_LOG`—; los botones de nivel sí,
+    porque son un mando y el terminal no tiene ninguno con el que discrepar.
+13. ~~**El plan de renombrado de la IA.**~~ **HECHO**, y moviendo el
+    TERMINAL: la regla estricta era la buena. Una firma sobre algo que no se
+    ha leído no es una firma, y con doscientos renombrados los que importan
+    pueden estar en la fila ciento ochenta. `approval_ready` lo decide para
+    los dos, sobre una marca de agua ALTA: volver arriba no des-lee lo ya
+    leído.
 14. **El diálogo de aprobación de un agente**: el TTL solo lo enseña la
     ventana; la insignia de hostil en las rutas ocultas solo el terminal.
-15. **La fila de un volumen** en la barra de sitios: tres implementaciones,
-    una de ellas dentro del propio host, y la de la ventana pierde el dato
-    que sí tiene cuando el total es desconocido.
-16. **Instrucción de IA vacía**: el terminal deja el error dentro del modal
-    con lo tecleado; la ventana ya se comió el diálogo y lo dice en la barra.
-    El caso gemelo (consulta semántica) se arregló a conciencia tres ficheros
-    más allá.
-17. **Marcas de cabecera que la ventana no tiene**: «rellenando, N por
-    ahora», «no listado» (#235), quick-search parcial, y el resumen de lo
-    marcado. Las cuatro escritas bajo la regla «un listado incompleto jamás
-    es silencioso».
+15. ~~**La fila de un volumen.**~~ **HECHO**: una sola redacción
+    (`PlacesState::volume_detail`). Las tres decían «desconocido» cuando lo
+    único que faltaba era el TOTAL, tirando el dato que sí había — y cuánto
+    queda es la mitad que se mira antes de copiar.
+16. ~~**Instrucción de IA vacía.**~~ **HECHO**: el campo vuelve, como en su
+    caso gemelo.
+17. ~~**Marcas de cabecera que la ventana no tiene**~~ **HECHO** con 6 y 7,
+    salvo «no listado» (#235): la ventana ya lo dice por `SlotState::Error`,
+    que es su forma de la misma frase. `norte_frontend::notes::unlisted`
+    queda escrita para quien la necesite.
 
 ## D. Fugas de idioma en la ventana
 
-`norte-ui-host` está limpio: sus 131 llamadas pasan `self.lang`. Todas las
-fugas son helpers compartidos que traducen con el global.
+**HECHA.** `norte-ui-host` ya estaba limpio —sus 131 llamadas pasan
+`self.lang`— y las cinco fugas eran helpers COMPARTIDOS que traducían con el
+global. Cada uno gana su variante `_in(lang)` y la ambiente delega, que es el
+patrón que `header_label` ya usaba en este mismo crate; la ventana pasa el
+suyo. Lo que queda abajo es el inventario de lo que había.
 
 | helper | qué se ve | conf |
 | --- | --- | --- |

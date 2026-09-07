@@ -429,12 +429,24 @@ impl Estado {
         // Si la que acaba de terminar es LA búsqueda, su vista deja de decir
         // «buscando…»: una lista que ya no crece y una que sigue creciendo se
         // leen igual si nadie las distingue.
-        let termino = !matches!(p.state, norte_proto::TaskState::Running);
-        if termino
+        // CON el desenlace, no solo «ya no está viva»: una búsqueda que falló
+        // al segundo directorio y otra que recorrió el árbol entero se
+        // pintaban las dos como «N hallazgos», que es una afirmación falsa
+        // sobre el disco — y quien la lee deja de buscar.
+        //
+        // Y quién es un desenlace lo dice el crate compartido, no un
+        // `!= Running`: `Pending`, `Paused` y `Unknown` tampoco lo son, y con
+        // aquel predicado una búsqueda encolada —o una de un daemon más
+        // nuevo— se anunciaba terminada sin hallazgos.
+        let lang = self.lang;
+        let desenlace = norte_frontend::search_status::outcome_of(&p.state, |e| {
+            clamp_display(norte_frontend::error::error_category_in(lang, e))
+        });
+        if let Some(desenlace) = desenlace
             && let Some(b) = self.busqueda.as_mut()
             && b.task == p.task_id
         {
-            b.viva = false;
+            b.desenlace = desenlace;
             cambios.push(ViewChange::Search {
                 search: self.vista_busqueda(),
             });
@@ -531,10 +543,21 @@ impl Estado {
         };
         // Qué fichero iba, si el progreso lo dice. `current` es una ruta del
         // otro extremo: se enmascara y se acorta igual que una fila.
+        //
+        // Sobre los bytes CRUDOS del último segmento, no sobre
+        // `display_lossy()`: ahí los U+FFFD ya están puestos, y enmascarar un
+        // texto que ya es UTF-8 impecable devuelve «fiel» siempre. Aquí el
+        // veredicto no se usa —una notificación del escritorio no tiene dónde
+        // poner una insignia— pero el ENMASCARADO sí, y sobre el lossy no
+        // hacía nada: es el mismo error que se acaba de arreglar en el
+        // diálogo de colisión, dos funciones más abajo.
         let detalle = p.current.as_ref().map_or_else(
             || cuenta.to_string(),
             |path| {
-                let (texto, _) = norte_frontend::display_name(path.display_lossy().as_bytes());
+                let bytes = path
+                    .file_name()
+                    .map_or_else(Vec::new, |s| s.as_bytes().to_vec());
+                let (texto, _) = norte_frontend::display_name(&bytes);
                 clamp_display(texto)
             },
         );
@@ -575,18 +598,17 @@ impl Estado {
         };
         // El destino, en su propio campo y enmascarado: es un nombre de
         // fichero del otro extremo, y es LO que el lector tiene que mirar para
-        // decidir si sobrescribe.
-        let (destino, destino_hostil) =
-            norte_frontend::display_name(con.to.display_lossy().as_bytes());
+        // decidir si sobrescribe. Por el embudo, que enmascara los bytes
+        // CRUDOS: sobre `display_lossy()` los U+FFFD ya estaban puestos y el
+        // veredicto salía «fiel» — sin insignia, en la única pantalla donde
+        // se aprueba sobrescribir.
+        let destino = Self::linea_con_encoding(&con.to, con.enc);
         let modal = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
             id: modal,
             title_key: "modal-collision-title".to_owned(),
-            destination: Some(crate::dto::DialogLine {
-                text: clamp_display(destino),
-                hostile: destino_hostil,
-            }),
+            destination: Some(destino),
             subject: None,
             asker: None,
             deadline: None,
@@ -631,6 +653,7 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id: modal,
@@ -1241,6 +1264,7 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         let caidos = self.apilar_dialogo(Dialogo {
             id,

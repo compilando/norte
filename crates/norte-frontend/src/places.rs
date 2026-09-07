@@ -144,6 +144,76 @@ impl PlacesState {
         s
     }
 
+    /// Lo que se dice del ESPACIO de un volumen, y si es de solo lectura.
+    ///
+    /// Una sola función porque había tres —dos de ellas en el mismo crate—, y
+    /// ya diferían en cómo escriben los números. Peor: con `free` conocido y
+    /// `total` desconocido las tres decían «desconocido», tirando el único
+    /// dato que había. Y cuánto QUEDA es justo la mitad que se mira antes de
+    /// copiar; de cuánto es el disco no la mira nadie.
+    ///
+    /// Un tamaño que el sistema no contestó se DICE, y jamás se sustituye por
+    /// un cero: un cero se lee como «lleno», que es lo contrario de «no lo
+    /// sé».
+    ///
+    /// `corto` elige la escala de los números, y esa diferencia sí es real:
+    /// la barra lateral tiene la mitad de ancho que un selector a pantalla
+    /// completa.
+    ///
+    /// ```
+    /// use norte_frontend::places::PlacesState;
+    /// use norte_i18n::Lang;
+    ///
+    /// // Lo normal: los dos números.
+    /// let d = PlacesState::volume_detail(Some(1_000), Some(4_000), false, false, Lang::En);
+    /// assert!(d.contains("free of"));
+    /// // Solo lo que queda: se dice lo que se sabe, en vez de «desconocido».
+    /// let medio = PlacesState::volume_detail(Some(1_000), None, false, false, Lang::En);
+    /// assert!(medio.contains("free") && !medio.contains("unknown"));
+    /// // Nada: entonces sí.
+    /// assert!(PlacesState::volume_detail(None, None, false, false, Lang::En).contains("unknown"));
+    /// // Y lo de solo lectura se añade, no sustituye.
+    /// let ro = PlacesState::volume_detail(None, None, true, false, Lang::En);
+    /// assert!(ro.contains("read-only") && ro.contains("unknown"));
+    /// ```
+    #[must_use]
+    pub fn volume_detail(
+        free: Option<u64>,
+        total: Option<u64>,
+        read_only: bool,
+        corto: bool,
+        lang: norte_i18n::Lang,
+    ) -> String {
+        let bytes = |n: u64| {
+            if corto {
+                crate::human_bytes_short(n)
+            } else {
+                crate::human_bytes(n)
+            }
+        };
+        let mut trozos = Vec::new();
+        match (free, total) {
+            (Some(f), Some(t)) => trozos.push(norte_i18n::ta_in(
+                lang,
+                "picker-volume-space",
+                &[("free", &bytes(f)), ("total", &bytes(t))],
+            )),
+            // Lo que se sabe, aunque sea la mitad.
+            (Some(f), None) => trozos.push(norte_i18n::ta_in(
+                lang,
+                "picker-volume-free",
+                &[("free", &bytes(f))],
+            )),
+            // Con el total solo, no hay nada útil que decir: de cuánto es el
+            // disco no cambia ninguna decisión.
+            _ => trozos.push(norte_i18n::t_in(lang, "volumes-size-unknown")),
+        }
+        if read_only {
+            trozos.push(norte_i18n::t_in(lang, "picker-volume-read-only"));
+        }
+        trozos.join(" · ")
+    }
+
     /// Sustituye los volúmenes por los que acaba de contestar el host.
     ///
     /// Sustituye, no fusiona: la lista de montajes es una FOTO, y conservar

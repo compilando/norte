@@ -69,12 +69,7 @@ impl Estado {
     /// aterrizar, o el daemon no contestó) no se pliega: esto es una cortesía
     /// del cliente y la autoridad es el core.
     pub(super) fn dos_marcas_pliegan_igual(&self, paths: &[VPath]) -> bool {
-        let Some(modo) = self
-            .hueco_destino()
-            .ok()
-            .and_then(|id| self.huecos.get(&id))
-            .and_then(|h| h.pliegue)
-        else {
+        let Some(modo) = self.hueco_destino().ok().and_then(|id| self.pliegue_de(id)) else {
             return false;
         };
         if modo == norte_encoding::FoldMode::None {
@@ -124,9 +119,10 @@ impl Estado {
             //
             // BYTE A BYTE a propósito (#269): en un volumen que pliega,
             // `/casa/docs` y `/casa/DOCS` son el mismo sitio y este atajo NO
-            // los ve. Saberlo cuesta un `fs.capabilities` —o sea un viaje al
-            // daemon delante de CADA diálogo de copia—, y el error de este
-            // lado solo puede ser por PERMISIVO: la autoridad es
+            // los ve. Saberlo cuesta un `fs.capabilities`, y aquí es ANTES de
+            // abrir nada: el que sondea el destino sale detrás del diálogo,
+            // así que no sirve. El error de este lado solo puede ser por
+            // PERMISIVO: la autoridad es
             // `norte_core::ops`, que sí pliega (#215) y devuelve
             // `InvalidPath`. Ser más estricto aquí sí rompería algo: negaría
             // una operación legítima en un volumen sensible a la caja.
@@ -171,9 +167,11 @@ impl Estado {
     pub(super) fn pedir_transferencia(
         &mut self,
         mover: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match self.directorio_destino() {
-            Ok(destino) => self.confirmar_transferencia(&destino, mover),
+            Ok(destino) => self.confirmar_transferencia(&destino, mover, backend, buzon),
             // Sin OTRO hueco al que apuntar: lo elige el lector fuera.
             Err("host-no-other-slot") => self.pedir_destino_al_escritorio(mover),
             Err(reason_key) => (
@@ -233,6 +231,8 @@ impl Estado {
     pub(super) fn destino_elegido(
         &mut self,
         path: Option<String>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(mover) = self.destino_pendiente.take() else {
             // Nadie pidió un destino: una respuesta que no contesta a ninguna
@@ -251,7 +251,7 @@ impl Estado {
                 fuera,
             );
         };
-        self.confirmar_transferencia(&destino, mover)
+        self.confirmar_transferencia(&destino, mover, backend, buzon)
     }
 
     /// Llegaron ficheros soltados desde el escritorio (#283).
@@ -266,6 +266,8 @@ impl Estado {
     pub(super) fn soltados(
         &mut self,
         paths: &[String],
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let llegaron = paths.len();
         let usables: Vec<VPath> = paths
@@ -352,6 +354,7 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::Checking,
         };
         self.dialogos.push(Dialogo {
             id,
@@ -360,13 +363,111 @@ impl Estado {
             reconocido: true,
             al_confirmar: Some(Pendiente::Soltar {
                 paths: usables,
-                destino,
+                destino: destino.clone(),
             }),
         });
+        // También aquí, y es el camino que MENOS se lo puede permitir: la
+        // lista de operandos la compone otro proceso, y la caja tiene el
+        // mismo aspecto que la de una copia sondeada — así que la ausencia de
+        // la línea se leería igual. Sin total: lo soltado no está en ningún
+        // listado, así que solo puede salir la de confinar, que es la que
+        // importa por aquí.
+        self.sondear_destino(id, destino, None, backend, buzon);
         let cambio = ViewChange::Dialogs {
             dialogs: self.vistas_de_dialogos(),
         };
         (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
+    /// Pregunta por el DESTINO lo que hay que saber antes de decir que sí:
+    /// si cabe (#149) y si sabe sujetar lo que se escriba en él (#164).
+    ///
+    /// Las dos son I/O, así que el diálogo se abre SIN ellas y esto las
+    /// rellena cuando vuelven. Esperarlas dejaría F5 sin pintar nada contra
+    /// un SFTP lento, que es peor que una línea que aparece medio segundo
+    /// tarde: lo que el humano tiene delante mientras tanto es la lista de lo
+    /// que va a copiar, que es lo que vino a leer.
+    ///
+    /// **Las dos fallan distinto, y es deliberado.** El espacio se traga el
+    /// fallo: no poder enumerar volúmenes no puede pintar una alarma, y «no
+    /// lo sé» se dice callando — el contrato de `space::warning`. El
+    /// confinamiento no: ahí el silencio SIGNIFICA «este destino sujeta sus
+    /// escrituras», así que tragarse el fallo sería afirmarlo sin saberlo,
+    /// que es fail-open en una línea de seguridad. Si no se sabe, se avisa.
+    ///
+    /// Las capacidades salen de la CACHÉ del hueco cuando la ruta casa, y de
+    /// una ronda cuando no. No por ahorrarse el RPC: por acortar la ventana
+    /// en la que el diálogo está pintado sin la respuesta. En el caso normal
+    /// —dos paneles, F5— el destino es un hueco que ya las tiene, así que la
+    /// línea sale en la PRIMERA pintada. La ronda hace falta igual porque el
+    /// destino no siempre es un hueco: con un solo listado lo elige el lector
+    /// en el escritorio (#284).
+    ///
+    /// Y manda el `Fondo` SIEMPRE, también con la lista vacía. Callar cuando
+    /// no hay nada que decir dejaría el diálogo diciendo «comprobando» para
+    /// siempre, y entonces «lo pregunté y está limpio» volvería a ser
+    /// indistinguible de «todavía no lo he preguntado» — que es justo lo que
+    /// [`crate::dto::DestCheckView`] existe para separar.
+    fn sondear_destino(
+        &self,
+        id: ModalId,
+        destino: VPath,
+        total: Option<u64>,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
+    ) {
+        let backend = Arc::clone(backend);
+        let buzon = buzon.clone();
+        let lang = self.lang;
+        let sabidas = self.caps_de_ruta(&destino);
+        tokio::spawn(async move {
+            let libre = match total {
+                // Sin total no hay pregunta de espacio que hacer, y enumerar
+                // volúmenes para tirar la respuesta es I/O por nada.
+                None => None,
+                Some(_) => backend
+                    .volumes()
+                    .await
+                    .ok()
+                    .and_then(|vols| norte_frontend::space::free_for(&destino, &vols)),
+            };
+            let caps = match sabidas {
+                Some(c) => c,
+                None => backend.capabilities(destino.clone()).await.unwrap_or(
+                    norte_proto::Capabilities {
+                        flags: norte_proto::CapabilityFlags::empty(),
+                        max_path: None,
+                    },
+                ),
+            };
+            let avisos: Vec<String> = norte_frontend::space::warning(total, libre, lang)
+                .into_iter()
+                .chain(norte_frontend::confine::warning(caps, lang))
+                .collect();
+            let _ = buzon
+                .send(Mensaje::Fondo(Box::new(Fondo::AvisosDeDestino(id, avisos))))
+                .await;
+        });
+    }
+
+    /// Cuelga los avisos del diálogo al que pertenecen, si sigue abierto.
+    ///
+    /// Por id y no «el de arriba»: entre preguntar y contestar cabe un `esc`
+    /// y otro diálogo, y colgar el aviso de un destino en la pregunta de otra
+    /// cosa es peor que no avisar.
+    pub(super) fn avisos_de_destino(
+        &mut self,
+        id: ModalId,
+        avisos: Vec<String>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(d) = self.dialogos.iter_mut().find(|d| d.id == id) else {
+            return Vec::new();
+        };
+        d.vista.dest_check = crate::dto::DestCheckView::Done { warnings: avisos };
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        vec![self.parche(vec![cambio])]
     }
 
     /// La confirmación propiamente dicha, con el destino ya resuelto.
@@ -374,6 +475,8 @@ impl Estado {
         &mut self,
         destino: &VPath,
         mover: bool,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let activo = self.activo();
         let destino = destino.clone();
@@ -439,7 +542,12 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::Checking,
         };
+        // Lo que se va a escribir, con la regla COMPARTIDA: es todo o nada,
+        // porque un directorio no trae tamaño en el listado y sumar solo lo
+        // que sí lo trae avisaría con un número menor que el real.
+        let total = norte_frontend::space::total_to_write(self.hueco().pane.entries(), &paths);
         self.dialogos.push(Dialogo {
             id,
             vista: vista.clone(),
@@ -449,10 +557,11 @@ impl Estado {
                 origen: activo,
                 origen_dir,
                 paths,
-                destino,
+                destino: destino.clone(),
                 mover,
             }),
         });
+        self.sondear_destino(id, destino, total, backend, buzon);
         let cambio = ViewChange::Dialogs {
             dialogs: self.vistas_de_dialogos(),
         };
@@ -554,7 +663,11 @@ impl Estado {
             total: paths.len(),
             ..Lote::default()
         });
-        Self::lanzar_transferencia(paths, origen_dir, destino, mover, backend, buzon);
+        // La reinterpretación se captura AQUÍ, con el hueco todavía delante:
+        // una colisión llega asíncrona y encima de lo que el lector esté
+        // haciendo, así que leerla al llegar puede dar la de otro sitio.
+        let enc = self.hueco().pane.name_encoding();
+        Self::lanzar_transferencia(paths, origen_dir, destino, mover, enc, backend, buzon);
     }
 
     pub(super) fn lanzar_transferencia(
@@ -562,6 +675,7 @@ impl Estado {
         origen_dir: &VPath,
         destino: &VPath,
         mover: bool,
+        enc: Option<norte_encoding::NameEncoding>,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
@@ -613,6 +727,7 @@ impl Estado {
                     from: from.clone(),
                     to: to.clone(),
                     mover,
+                    enc,
                 };
                 let encolada = if mover {
                     backend

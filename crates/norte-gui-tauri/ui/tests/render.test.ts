@@ -235,6 +235,126 @@ describe("Screen", () => {
     expect(primero.dataset["role"]).toBe("active");
   });
 
+  it("los tiradores de los bordes quedan POR ENCIMA de los huecos", () => {
+    const { screen, root } = montar();
+    const v = vista({});
+    v.layout.placements = [
+      { slot_id: 1, x: 0, y: 0, width: 60, height: 38, role: "active", focus_index: 0 },
+      { slot_id: 2, x: 60, y: 0, width: 60, height: 38, role: null, focus_index: 1 },
+    ];
+    v.slots = [v.slots[0]!, { ...(v.slots[0] as BrowserSlotView), slot_id: 2 }];
+    screen.paint(v);
+
+    const tiradores = [...root.querySelectorAll(".resize-handle")];
+    expect(tiradores.length).toBeGreaterThan(0);
+
+    // Esta hoja de estilos no usa `z-index` en ninguna parte a propósito: el
+    // apilado lo da el ORDEN del documento. Los tiradores se insertaban ANTES
+    // que los huecos, así que cada panel —que también es `absolute`— los
+    // tapaba y el `pointerdown` no les llegaba nunca. O sea que no se podía
+    // redimensionar con el ratón.
+    const clases = Array.from(root.children).map((n) => n.className);
+    const ultimoHueco = clases.lastIndexOf("slot");
+    const primerTirador = clases.findIndex((c) => c.startsWith("resize-handle"));
+    expect(ultimoHueco).toBeGreaterThanOrEqual(0);
+    expect(primerTirador).toBeGreaterThan(ultimoHueco);
+  });
+
+  it("marca el destino solo cuando el host dice que dice algo", () => {
+    const { screen, root } = montar();
+    // El UMBRAL lo decide Rust (`layout::target_worth_marking`) y llega en
+    // `mark_target`: contarlo aquí sería repetir en TypeScript un número que
+    // ya vive en el crate compartido, o sea la misma decisión en dos sitios.
+    // Lo que este test fija es que el renderer OBEDECE la bandera y no se
+    // inventa el rol a partir de `role`.
+    const conBandera = (marcar: boolean): ViewSnapshot => {
+      const v = vista({});
+      v.layout.mark_target = marcar;
+      v.layout.placements = [
+        { slot_id: 1, x: 0, y: 0, width: 20, height: 10, role: "active", focus_index: 0 },
+        { slot_id: 4, x: 0, y: 0, width: 20, height: 10, role: "target", focus_index: 1 },
+      ];
+      return v;
+    };
+
+    // El rol viaja igual —es el modelo— y aun así no se pinta: con dos
+    // listados el destino es «el otro», y una marca que sale siempre deja de
+    // leerse justo el día que hay tres y hace falta (ADR 0058 D7).
+    screen.paint(conBandera(false));
+    expect(root.querySelectorAll('[data-role="target"]')).toHaveLength(0);
+    expect(root.querySelectorAll('[data-role="active"]')).toHaveLength(1);
+
+    screen.paint(conBandera(true));
+    expect(root.querySelectorAll('[data-role="target"]')).toHaveLength(1);
+  });
+
+  it("esperando: dice el verbo, a dónde va, y marca una ruta alterada", () => {
+    const { screen, root } = montar();
+    // Un refresco: no va a ninguna parte, así que no se inventa un sitio.
+    screen.paint(vista({ state: { state: "loading", verb_key: "busy-listing" } }));
+    const aviso = root.querySelector(".slot-busy") as HTMLElement;
+    expect(aviso.hidden).toBe(false);
+    expect(aviso.querySelector(".slot-busy-target")).toBeNull();
+
+    // Yendo a un sitio, y con la ruta pintada distinta de lo que es: es la
+    // que el lector mira mientras espera.
+    screen.paint(
+      vista({
+        state: {
+          state: "loading",
+          verb_key: "busy-connecting",
+          target_display: "⟨sftp⟩casa/caf�",
+          target_hostile: true,
+        },
+      }),
+    );
+    const destino = root.querySelector(".slot-busy-target");
+    expect(destino?.textContent).toBe("⟨sftp⟩casa/caf�");
+    expect(root.querySelector(".slot-busy .hostile-badge")).not.toBeNull();
+
+    // Con el listado ya puesto se ESCONDE, y es el MISMO nodo: su umbral es
+    // un `animation-delay`, y recrearlo lo reiniciaría en cada pintada hasta
+    // no aparecer nunca — que es justo en los casos lentos.
+    const antes = root.querySelector(".slot-busy");
+    screen.paint(vista({}));
+    expect((root.querySelector(".slot-busy") as HTMLElement).hidden).toBe(true);
+    expect(root.querySelector(".slot-busy")).toBe(antes);
+  });
+
+  it("apila en la cabecera todo lo que dice que el listado no es lo que parece", () => {
+    const { screen, root } = montar();
+    screen.paint(
+      vista({
+        filling_note: "cargando… (3)",
+        skipped_note: "⚠ 2 entradas omitidas",
+        names_note: "nombres: cp866",
+        pruned_note: "1 marca caída",
+        hidden_note: "3 ocultas",
+        marked_note: "2 marcadas, 4,0 kB",
+      }),
+    );
+    const notas = Array.from(
+      root.querySelectorAll(
+        ".slot-filling, .slot-skipped, .slot-names, .slot-pruned, .slot-hidden, .slot-marked",
+      ),
+    );
+    expect(notas).toHaveLength(6);
+    // Cada una en SU nodo: pegadas en uno solo, un lector de pantalla lee una
+    // frase sola y el recorte se las lleva todas juntas.
+    expect(notas.map((n) => n.className)).toEqual([
+      "slot-filling",
+      "slot-skipped",
+      "slot-names",
+      "slot-pruned",
+      "slot-hidden",
+      "slot-marked",
+    ]);
+    // El ORDEN es la decisión: los AVISOS antes que el CONTADOR de marcas. El
+    // sitio se acaba, y un aviso recortado deja de avisar mientras que un
+    // contador recortado solo deja de contar.
+    expect(notas[notas.length - 1]?.className).toBe("slot-marked");
+  });
+
   it("no pinta cien mil filas para enseñar cuarenta", () => {
     const { screen, root } = montar();
     const rows = Array.from({ length: 40 }, (_, i) =>
@@ -422,6 +542,70 @@ describe("Screen", () => {
     expect(dialog.getAttribute("aria-labelledby")).toBeTruthy();
     const destructivo = dialog.querySelector('button[data-destructive="true"]');
     expect(destructivo).not.toBeNull();
+  });
+
+  it("un destino a medio comprobar lo DICE, y sus avisos salen antes de los botones", () => {
+    const { screen } = montar();
+    const base = {
+      id: 4,
+      title_key: "modal-copy-title",
+      subject: null,
+      asker: null,
+      deadline: null,
+      destination: { text: "/casa/docs", hostile: false },
+      body: [{ text: "a.txt", hostile: false }],
+      overflow_note: "",
+      choices: [
+        { id: "confirm", label_key: "dialog-confirm", destructive: false },
+        { id: "cancel", label_key: "dialog-cancel", destructive: false },
+      ],
+      input: null,
+      input_hostile: false,
+      input_secret: false,
+    };
+
+    // Mientras se pregunta se DICE. Sin esta línea la ausencia de la de #164
+    // se leería como «este destino confina», que es una afirmación.
+    const preguntando = vista({});
+    preguntando.dialogs = [{ ...base, dest_check: { state: "checking" } }];
+    screen.paint(preguntando);
+    expect(document.querySelector(".dialog-checking")).not.toBeNull();
+    expect(document.querySelectorAll(".dialog-warning")).toHaveLength(0);
+
+    // Contestado y con avisos: uno por línea, cada uno como alerta.
+    const conAvisos = vista({});
+    conAvisos.dialogs = [
+      {
+        ...base,
+        dest_check: {
+          state: "done",
+          warnings: ["no cabe", "no puede confinar"],
+        },
+      },
+    ];
+    screen.paint(conAvisos);
+    const avisos = Array.from(document.querySelectorAll(".dialog-warning"));
+    expect(avisos).toHaveLength(2);
+    const primero = avisos[0] as HTMLElement;
+    expect(primero.textContent).toBe("no cabe");
+    expect(primero.getAttribute("role")).toBe("alert");
+    expect(document.querySelector(".dialog-checking")).toBeNull();
+    // Y ANTES de los botones: un aviso que aterrizara debajo movería lo que
+    // hay bajo el puntero de quien ya iba a pulsar.
+    const dialogo = document.querySelector('[role="dialog"]') as HTMLElement;
+    const clases = Array.from(dialogo.children).map((n) => n.className);
+    const ultimoAviso = clases.lastIndexOf("dialog-warning");
+    const botones = clases.indexOf("choices");
+    expect(ultimoAviso).toBeGreaterThanOrEqual(0);
+    expect(botones).toBeGreaterThan(ultimoAviso);
+
+    // Contestado y limpio: ni una línea. Que quepa y que confine no se
+    // anuncian — una línea en cada copia enseña a saltarse la línea.
+    const limpio = vista({});
+    limpio.dialogs = [{ ...base, dest_check: { state: "done", warnings: [] } }];
+    screen.paint(limpio);
+    expect(document.querySelectorAll(".dialog-warning")).toHaveLength(0);
+    expect(document.querySelector(".dialog-checking")).toBeNull();
   });
 
   it("responder un diálogo manda su id, no una posición", () => {
@@ -2525,6 +2709,32 @@ describe("el panel de registro", () => {
     expect((filas[0] as HTMLElement).dataset["level"]).toBe("error");
     expect((filas[1] as HTMLElement).dataset["level"]).toBe("info");
     expect(filas[0]?.textContent).toContain("no se pudo conectar");
+  });
+
+  it("el nivel se PINTA con la etiqueta y se COMPARA con la identidad", () => {
+    const { screen } = montar();
+    const v = conRegistro();
+    const log = v.slots.find((s) => s.kind === "log");
+    if (log?.kind !== "log") {
+      throw new Error("la fixture trae el panel de registro");
+    }
+    log.level_label = "INFO";
+    log.lines[0]!.level_label = "ERROR";
+    log.lines[1]!.level_label = "INFO";
+    screen.paint(v);
+
+    // La ventana pintaba `error` en la línea, `info` en el chip del título y
+    // «info» traducido en los botones: tres vocabularios del mismo nivel, los
+    // tres a la vez en pantalla. Lo que se lee es la etiqueta, que es la que
+    // pinta el terminal y la que se escribe en `RUST_LOG`.
+    const etiquetas = [...document.querySelectorAll(".log-level")].map(
+      (n) => n.textContent,
+    );
+    expect(etiquetas).toEqual(["ERROR", "INFO"]);
+    // Y la IDENTIDAD sigue siendo la de cable: es con la que se colorea y con
+    // la que se marca qué botón está puesto, y traducirla rompería las dos.
+    const filas = [...document.querySelectorAll(".log-line")];
+    expect((filas[0] as HTMLElement).dataset["level"]).toBe("error");
   });
 
   it("dice de qué PROCESO son las líneas", () => {

@@ -367,12 +367,24 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         // (cancelar sigue vivo), y el pie del modal deja de ofrecerla
         // (`modal-rename-batch-plan-hint-blocked`). La decisión de si un plan
         // se puede ejecutar es del core: aquí solo se lee `executable`.
-        Modal::AiRenamePlan { plan, .. } => {
+        Modal::AiRenamePlan {
+            plan,
+            seen,
+            entries,
+            ..
+        } => {
             if !ALLOW_CONFIRM.contains(&cmd) {
                 return None;
             }
             let confirms = matches!(cmd, "dialog.approve" | "dialog.confirm");
-            if confirms && !plan.confirmable() {
+            // Y que el lector HAYA LLEGADO AL FINAL, que es la mitad que
+            // faltaba aquí: se podía aprobar un plan de doscientos
+            // renombrados habiendo visto los diez primeros. La regla vive en
+            // el crate compartido porque la ventana ya la exigía, y una
+            // aprobación con dos criterios distintos según la superficie es
+            // la peor clase de divergencia (ADR 0077).
+            if confirms && !norte_frontend::approval_ready(plan.confirmable(), *seen, entries.len())
+            {
                 return None;
             }
             Some(if confirms {

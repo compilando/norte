@@ -426,6 +426,7 @@ pub fn open_retained_modals(app: &mut App, work: &mut InFlight) {
             dir: pendiente.dir,
             entries: pendiente.entries,
             offset: 0,
+            seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
             plan: pendiente.plan,
         });
     }

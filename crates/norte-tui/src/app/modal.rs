@@ -505,6 +505,15 @@ pub enum Modal {
         /// esto, la cola de un plan > [`crate::app::AI_RENAME_PAIR_LIMIT`] se aplicaba
         /// sin poder verse.
         offset: usize,
+        /// Hasta dónde ha llegado el lector alguna vez.
+        ///
+        /// Marca de agua ALTA y no la posición actual: volver arriba no
+        /// des-lee lo que ya se leyó. Sin esto se podía aprobar un plan de
+        /// doscientos renombrados habiendo visto los diez primeros, y los que
+        /// importan pueden estar en la fila ciento ochenta. La ventana lo
+        /// exigía y el terminal no: la misma pregunta con dos respuestas, en
+        /// la superficie donde más caro sale (ADR 0077).
+        seen: usize,
         /// El plan del LOTE que contestó `fs.rename_batch_plan` (spec §17,
         /// ADR 0042): veredictos, si es aplicable y el `plan_hash` que hay
         /// que devolver para ejecutar EXACTAMENTE lo que se enseñó.

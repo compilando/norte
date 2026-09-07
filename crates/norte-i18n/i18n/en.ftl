@@ -744,6 +744,10 @@ plugin-output-truncated = the output was cut: it was longer than fits
 # The output of a program the window ran and waited for (#312).
 program-output-title = Program output
 program-output-compare = Compare two files
+# What a program launched by `openers.toml` or `[ui] editor` printed, when the
+# rule says to wait for it rather than let it go.
+program-output-open = Open
+program-output-edit = Edit
 program-output-failed = the program did not run, or ran out of time
 # The `[ui] diff` program (or `diff`) is not on the PATH.
 host-program-missing = no program to do it with: it is not on the PATH
@@ -770,6 +774,10 @@ picker-history-empty = this panel has not been anywhere else yet
 picker-hotlist-title = Favorites
 picker-hotlist-empty = no favorites configured
 picker-volume-space = {$free} free of {$total}
+# How much is left is known, but not of how much. It happens — a mount that
+# half answers — and saying "unknown" there throws away the one number there
+# is: how much is left is the half you look at before copying.
+picker-volume-free = {$free} free
 picker-volume-read-only = read-only
 theme-title = Theme
 theme-roles = What each role is painted with
@@ -817,6 +825,11 @@ processes-has-keyboard = this panel has the keyboard · Esc returns it
 # empty has to tell "nothing happened" apart from "you are filtering it out".
 log-title = Log
 slot-retry = retry
+# Waiting for a listing (#323). Three pieces and not one sentence: the renderer
+# composes them with the PATH in its own node, because a path glued inside the
+# sentence reads as part of it — and this is also where cancelling is offered.
+slot-busy = loading…
+slot-busy-to = going to
 log-keys = e/w/i/d/t level · / filter · End to follow · Esc returns the keyboard
 # Only offered when the daemon serves its log (#328): announcing a control that
 # would cycle three views of the SAME ring promises something that is not there.
@@ -1553,10 +1566,11 @@ hostile-name = ⚠ altered name
 # separate messages because they answer different questions: a directory
 # with no entries, and a filter that matched none.
 listing-empty = empty
-# El provider no pudo con todas: sin permiso para statearlas, o por
-# encima de un tope suyo. Se DICE, porque lo que falta no está y no hay
-# ninguna fila donde el lector pueda tropezarse con ello.
-listing-skipped = { $n } entries were skipped
+# What the provider skipped is `status-archive-skipped`, shared by both
+# frontends (`norte_frontend::notes::skipped`). A second wording lived here,
+# without the ⚠ that makes it read as a warning, and it was the one the window
+# painted: two keys for one fact is how two surfaces end up saying different
+# things about the same thing.
 palette-empty = nothing matches what you typed
 gui-menu-acts-on = acts on { $target }
 gui-menu-target-marks = { $n } marked items
@@ -1875,6 +1889,12 @@ gui-msg-shortcut-saved-not-applied = saved, but this window kept the previous ke
 # the dialog where a human approves an agent's mutation.
 dialog-body-truncated = … showing { $shown } of { $total }
 dialog-destination = Destination:
+# While the destination is being asked whether it has room (#149) and whether
+# it can hold its writes down (#164). It SAYS so instead of leaving the space
+# blank: without this line "I do not know yet" reads exactly like "I asked and
+# there is nothing to say", and the second is a claim about the destination's
+# safety.
+dialog-checking-destination = checking the destination…
 dialog-confirm = Confirm
 # Checksums in the window (#311). The dialog is read-only: copying is the only
 # thing you can do with a list of digests, and a verification has none.
@@ -1887,6 +1907,13 @@ err-checksum-sums-utf16 = the sums file is UTF-16; save it as UTF-8
 err-checksum-partial = the batch did not finish: what was computed is partial and is not compared
 err-checksum-failed = computing the sums failed
 dialog-cancel = Cancel
+# Closing the window with `[ui] confirm_quit` asking for confirmation.
+dialog-quit = Close
+modal-quit-title = Close norte?
+modal-quit-pending = { $n ->
+    [one] one operation is still running; closing leaves it half done
+   *[other] { $n } operations are still running; closing leaves them half done
+}
 dialog-approve = Approve
 dialog-deny = Deny
 dialog-overwrite = Overwrite

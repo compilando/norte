@@ -341,13 +341,18 @@ impl Estado {
     /// TUI: cómo se llama una columna y si ordena no puede depender de quién
     /// pinta.
     pub(super) fn cabeceras(&self, hueco: &Hueco) -> Vec<ColumnHeader> {
-        use norte_frontend::columns::{ColumnStyle, header_label_in, sort_column_id};
+        use norte_frontend::columns::{header_label_in, sort_column_id};
         let spec = hueco.pane.sort();
         let catalogo = self.catalogo_de(hueco.pane.dir());
+        let esquema = hueco.pane.dir().scheme().to_owned();
         self.columnas_de(hueco.pane.dir())
             .iter()
             .map(|id| {
-                let estilo = ColumnStyle::default_for_id(id, catalogo);
+                // El estilo CONFIGURADO, no el de fábrica: `[ui.columns]`
+                // deja poner rótulo propio, formato, alineación y ancho por
+                // columna, y pidiendo `default_for_id` todo eso estaba muerto
+                // en esta ventana mientras el terminal lo honraba.
+                let estilo = self.columnas.style_for_id(&esquema, id, catalogo);
                 let ordena = sort_column_id(id);
                 let sort = ordena.filter(|c| *c == spec.column).map(|_| {
                     match spec.dir {
@@ -370,39 +375,95 @@ impl Estado {
     }
 
     /// La proyección de UN listado.
-    pub(super) fn browser(&self, id: u32, hueco: &Hueco) -> BrowserSlotView {
+    /// Los campos de CABECERA de un listado, derivados UNA vez.
+    ///
+    /// Los leen la foto ([`Self::browser`]) y el parche
+    /// ([`Self::cabecera_de`]). Dos derivaciones del mismo hecho es de donde
+    /// salió media auditoría de paridad, así que aquí hay una sola.
+    pub(super) fn cabecera_de(&self, id: u32, hueco: &Hueco) -> crate::dto::ViewChange {
         // Con la MISMA reinterpretación que las filas: pintar la cabecera con
         // los bytes crudos mientras las filas van transcodificadas deja
         // `pane.names-encoding` a medias — el mojibake se queda arriba y el
         // lector no puede saber si el comando hizo algo (#57, #293).
         let (path, hostil) =
             norte_frontend::path_display_with(hueco.pane.dir(), hueco.pane.name_encoding());
+        crate::dto::ViewChange::BrowserHeader {
+            slot_id: id,
+            path_display: clamp_display(path),
+            path_hostile: hostil,
+            // Las seis las REDACTA el crate compartido, que es donde el
+            // terminal las coge también. Aquí estaban escritas a mano y ya
+            // habían divergido: la de omitidas usaba otra clave, sin el ⚠ que
+            // la hace leerse como aviso, y salía TAMBIÉN con cero — o sea que
+            // anunciaba un listado incompleto que estaba completo, gastando la
+            // única señal que hay para cuando de verdad falta algo.
+            hidden_note: clamp_display(norte_frontend::notes::hidden(
+                hueco.pane.hidden_count(),
+                self.lang,
+            )),
+            skipped_note: clamp_display(norte_frontend::notes::skipped(
+                hueco.pane.skipped(),
+                self.lang,
+            )),
+            names_note: clamp_display(norte_frontend::notes::names_encoding(
+                hueco.pane.name_encoding(),
+                self.lang,
+            )),
+            filling_note: clamp_display(norte_frontend::notes::filling(
+                hueco.pane.loading(),
+                hueco.pane.entries().len(),
+                self.lang,
+            )),
+            pruned_note: clamp_display(norte_frontend::notes::pruned_marks(
+                hueco.pane.pruned_marks(),
+                self.lang,
+            )),
+            marked_note: clamp_display(norte_frontend::notes::marked(
+                hueco.pane.marks_len(),
+                hueco.pane.marked_bytes(),
+                hueco.pane.marked_dirs(),
+                self.lang,
+            )),
+            marks: hueco.pane.marks_len() as u64,
+        }
+    }
+
+    pub(super) fn browser(&self, id: u32, hueco: &Hueco) -> BrowserSlotView {
+        // SIN `..`: la foto tiene que llevar lo mismo que el parche, y un
+        // comodín aquí es exactamente cómo un campo nuevo de la cabecera se
+        // queda fuera del primer pintado sin que nada se queje.
+        let crate::dto::ViewChange::BrowserHeader {
+            slot_id: _,
+            path_display,
+            path_hostile,
+            hidden_note,
+            skipped_note,
+            names_note,
+            filling_note,
+            pruned_note,
+            marked_note,
+            marks,
+        } = self.cabecera_de(id, hueco)
+        else {
+            unreachable!("`cabecera_de` construye esa variante")
+        };
         BrowserSlotView {
             slot_id: id,
             generation: hueco.pane.listing_epoch(),
-            path_display: clamp_display(path),
-            path_hostile: hostil,
+            path_display,
+            path_hostile,
             total_rows: Some(hueco.pane.entries().len() as u64),
             first_visible: hueco.primera_visible,
             rows: self.filas_de(hueco),
             cursor: (!hueco.pane.entries().is_empty())
                 .then_some(RowKey(hueco.pane.cursor() as u64)),
-            marks: hueco.pane.marks_len() as u64,
-            hidden_note: match hueco.pane.hidden_count() {
-                0 => String::new(),
-                n => clamp_display(norte_i18n::ta_in(
-                    self.lang,
-                    "status-hidden",
-                    &[("n", &n.to_string())],
-                )),
-            },
-            skipped_note: hueco.pane.skipped().map_or_else(String::new, |n| {
-                clamp_display(norte_i18n::ta_in(
-                    self.lang,
-                    "listing-skipped",
-                    &[("n", &n.to_string())],
-                ))
-            }),
+            marks,
+            hidden_note,
+            skipped_note,
+            names_note,
+            filling_note,
+            pruned_note,
+            marked_note,
             columns: self.cabeceras(hueco),
             state: hueco.estado.clone(),
             quick: hueco.pane.quick().map(|q| crate::dto::QuickView {

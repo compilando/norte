@@ -482,20 +482,15 @@ fn detalle_de(v: &norte_proto::methods::Volume, lang: Lang) -> (String, bool) {
     if !v.fs_type.is_empty() {
         trozos.push(norte_frontend::display_name(v.fs_type.as_bytes()).0);
     }
-    match (v.free_bytes, v.total_bytes) {
-        (Some(free), Some(total)) => trozos.push(norte_i18n::ta_in(
-            lang,
-            "picker-volume-space",
-            &[
-                ("free", &norte_frontend::human_bytes(free)),
-                ("total", &norte_frontend::human_bytes(total)),
-            ],
-        )),
-        _ => trozos.push(norte_i18n::t_in(lang, "volumes-size-unknown")),
-    }
-    if v.read_only {
-        trozos.push(norte_i18n::t_in(lang, "picker-volume-read-only"));
-    }
+    // El espacio y el solo-lectura, por el crate COMPARTIDO: aquí y en la
+    // barra lateral estaban escritos aparte y ya diferían.
+    trozos.push(norte_frontend::places::PlacesState::volume_detail(
+        v.free_bytes,
+        v.total_bytes,
+        v.read_only,
+        false,
+        lang,
+    ));
     // La etiqueta que da el sistema son BYTES —ninguna plataforma promete
     // UTF-8— así que entra por el mismo camino que un nombre de fichero.
     let mut hostil = false;

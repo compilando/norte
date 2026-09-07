@@ -36,6 +36,7 @@
           40
         ],
         "change": "layout",
+        "mark_target": true,
         "placements": [
           {
             "focus_index": 0,
@@ -167,13 +168,17 @@
             "selected": false
           }
         ],
-        "slot_id": 1
+        "slot_id": 1,
+        "total_rows": 120
       },
       {
         "change": "slot_state",
         "slot_id": 1,
         "state": {
-          "state": "loading"
+          "state": "loading",
+          "target_display": "⟨mem⟩/casa/docs",
+          "target_hostile": false,
+          "verb_key": "busy-listing"
         }
       }
     ],
@@ -311,6 +316,9 @@
         ],
         "deadline": "caduca en 30 s",
         "deadline_at_ms": 1700000030000,
+        "dest_check": {
+          "state": "not_asked"
+        },
         "destination": {
           "hostile": false,
           "text": "/home/oscar/destino"
@@ -527,6 +535,7 @@
         120,
         40
       ],
+      "mark_target": true,
       "placements": [
         {
           "focus_index": 0,
@@ -872,13 +881,17 @@
           }
         ],
         "cursor": 1,
+        "filling_note": "cargando… (3)",
         "first_visible": 0,
         "generation": 4,
         "hidden_note": "3 ocultas",
         "kind": "browser",
-        "marks": 0,
+        "marked_note": "2 marcadas, 4,0 kB",
+        "marks": 2,
+        "names_note": "nombres: cp866",
         "path_display": "⟨file⟩/home/oscar",
         "path_hostile": false,
+        "pruned_note": "2 marcas caídas, sus entradas ya no están",
         "quick": {
           "matches": 1,
           "mode": "filter",
@@ -937,7 +950,7 @@
             "selected": false
           }
         ],
-        "skipped_note": "se saltaron 2 entradas",
+        "skipped_note": "⚠ 2 entradas omitidas (nombres hostiles/límites)",
         "slot_id": 1,
         "state": {
           "state": "ready"
@@ -1038,10 +1051,12 @@
         "following": false,
         "kind": "log",
         "level": "info",
+        "level_label": "INFO",
         "lines": [
           {
             "hostile": false,
             "level": "error",
+            "level_label": "ERROR",
             "message": "no se pudo conectar",
             "source": "daemon",
             "target": "norte_core::connect",
@@ -1050,6 +1065,7 @@
           {
             "hostile": true,
             "level": "info",
+            "level_label": "INFO",
             "message": "abriendo caf�.txt",
             "source": "window",
             "target": "norte_ui_host",

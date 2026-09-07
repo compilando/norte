@@ -48,6 +48,16 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+# El arnés de paridad compara los DOS frontends (ADR 0097, D1). Hasta ahora
+# comparaba este host contra las primitivas compartidas con un arnés cuyos
+# pasos codificaban la respuesta DEL HOST, o sea que no podía fallar; la
+# auditoría del 2026-09-05 encontró diecisiete decisiones ya divergidas que
+# pasaron por debajo. Para comparar hace falta ver el otro lado.
+#
+# DEV-dependency y solo eso: el árbol de release de este crate no puede
+# contener un frontend, y `tests/dependency_boundary.rs` lo comprueba ahí. No
+# entra nada nuevo a compilar — el gate ya construye el workspace entero.
+norte-tui.workspace = true
 # El e2e levanta un daemon REAL y conecta el SDK contra él. Son
 # dev-dependencies: el test de frontera solo mira el árbol de release, que es
 # donde el core no puede estar.

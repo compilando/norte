@@ -79,6 +79,9 @@ pub struct Falso {
     pub pulso: Arc<tokio::sync::Notify>,
     /// `wire del dir` → `(nombre, es_dir)`.
     pub arbol: HashMap<String, Vec<(Vec<u8>, bool)>>,
+    /// El kind EXACTO de una entrada, por su ruta de cable. Ver
+    /// [`Falso::pon_kind`]: `arbol` solo sabe de directorios y ficheros.
+    pub kinds: HashMap<String, EntryKind>,
     pub listados: AtomicUsize,
     /// Lecturas PEDIDAS y ya SERVIDAS: listados, sondeos y contenidos.
     ///
@@ -239,6 +242,12 @@ pub struct Falso {
     /// doble podía fingir un APFS, un NTFS o un exFAT, y las fixtures de
     /// gemelos de caja del corpus no tenían contra qué correr.
     pub capacidades: std::collections::HashMap<String, norte_proto::Capabilities>,
+    /// `fs.capabilities` FALLA, así que el hueco no llega a tener ninguna.
+    ///
+    /// Es el estado que pierde datos si alguien lo confunde con «no hay
+    /// papelera», y sin este mando no se podía escribir: el doble siempre
+    /// contestaba algo.
+    pub error_de_capacidades: bool,
     /// Directorios de plugin que no cargaron: `(dir, motivo)`.
     pub errores_de_carga: Vec<(String, String)>,
     /// Los BYTES del directorio de un error de carga (#265), por su cadena.
@@ -295,6 +304,25 @@ pub struct Falso {
     pub deshechas: std::sync::Mutex<Vec<String>>,
     /// Cuántas veces se ha pedido el catálogo de extensiones.
     pub catalogos_pedidos: std::sync::atomic::AtomicU64,
+    /// Con qué DESENLACE termina una búsqueda.
+    ///
+    /// El doble siempre las completaba, así que «falló» y «se canceló» no se
+    /// podían escribir como test — que es exactamente por lo que la ventana
+    /// pintaba las tres igual («N hallazgos») sin que nada se quejara.
+    pub desenlace_de_busqueda: Option<norte_proto::TaskState>,
+    /// La búsqueda ni siquiera se ENCOLA, y con este error.
+    ///
+    /// Es otro camino que el anterior: ahí hay Task y su progreso trae el
+    /// desenlace; aquí no hay Task, así que no hay progreso que lo traiga —
+    /// y sin este mando ese camino no se podía escribir como test, que es
+    /// por lo que la vista se quedaba diciendo «buscando…» para siempre.
+    pub error_de_busqueda: Option<Error>,
+    /// Cuántas veces se han enumerado los volúmenes.
+    ///
+    /// Lo cuenta para poder anclar un test NEGATIVO: «el diálogo no dice
+    /// nada» sigue verde si nadie preguntó, y entonces no prueba que callar
+    /// sea la respuesta — solo que no hubo pregunta.
+    pub volumenes_pedidos: std::sync::atomic::AtomicU64,
     /// Los cambios de gobierno pedidos, en orden (`approval:id:true`…).
     pub gobierno: std::sync::Mutex<Vec<String>>,
     /// Con qué falla un cambio de gobierno, si falla.
@@ -467,6 +495,16 @@ impl Falso {
     pub fn pon(&mut self, dir: &str, entradas: impl IntoIterator<Item = (Vec<u8>, bool)>) {
         self.arbol
             .insert(dir.to_owned(), entradas.into_iter().collect());
+    }
+
+    /// El KIND exacto de una entrada, cuando «directorio o fichero» no basta.
+    ///
+    /// `pon` solo distingue esas dos cosas, que es lo que casi todo test
+    /// necesita. Un SYMLINK es otra: `Enter` sobre él no significa lo mismo
+    /// que sobre un fichero, y sin poder fabricar uno esa divergencia entre
+    /// frontends no se podía escribir como test.
+    pub fn pon_kind(&mut self, wire: &str, kind: EntryKind) {
+        self.kinds.insert(wire.to_owned(), kind);
     }
 
     /// Arma la SIGUIENTE respuesta de `log.tail` (#328).
@@ -663,18 +701,26 @@ impl Falso {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .map(|(nombre, es_dir)| Entry {
-                path: dir.join(norte_proto::Segment::new(nombre).expect("segmento")),
-                kind: if es_dir {
-                    EntryKind::Dir
-                } else {
-                    EntryKind::File
-                },
-                // Un directorio no tiene tamaño, como en la vida real: es lo
-                // que hace que la AUSENCIA de celda se pueda probar.
-                size: if es_dir || self.lazy { None } else { Some(1) },
-                mtime_ms: None,
-                attrs: std::collections::BTreeMap::new(),
+            .map(|(nombre, es_dir)| {
+                let path = dir.join(norte_proto::Segment::new(nombre).expect("segmento"));
+                let kind = self
+                    .kinds
+                    .get(&path.to_wire())
+                    .copied()
+                    .unwrap_or(if es_dir {
+                        EntryKind::Dir
+                    } else {
+                        EntryKind::File
+                    });
+                Entry {
+                    kind,
+                    path,
+                    // Un directorio no tiene tamaño, como en la vida real: es
+                    // lo que hace que la AUSENCIA de celda se pueda probar.
+                    size: if es_dir || self.lazy { None } else { Some(1) },
+                    mtime_ms: None,
+                    attrs: std::collections::BTreeMap::new(),
+                }
             })
             .collect();
         norte_frontend::sort_entries(&mut out);
@@ -723,6 +769,9 @@ impl HostBackend for Falso {
         &self,
         path: VPath,
     ) -> BoxFuture<'static, Result<norte_proto::Capabilities, Error>> {
+        if self.error_de_capacidades {
+            return Box::pin(async move { Err(Error::ProviderUnavailable { retryable: true }) });
+        }
         // Por UBICACIÓN, no por provider: se busca el directorio exacto y, si
         // no está, su padre — que es lo que hace un mount de verdad.
         let caps = self
@@ -804,7 +853,14 @@ impl HostBackend for Falso {
             .expect("mutex de búsquedas")
             .push(patron.clone());
         self.latido();
+        if let Some(e) = self.error_de_busqueda.clone() {
+            return Box::pin(async move { Err(e) });
+        }
         let hallazgos = self.hallazgos.get(&patron).cloned().unwrap_or_default();
+        let desenlace = self
+            .desenlace_de_busqueda
+            .clone()
+            .unwrap_or(norte_proto::TaskState::Completed);
         let cancelaciones = Arc::clone(&self.cancelaciones);
         Box::pin(async move {
             let id = norte_proto::TaskId::new(77);
@@ -846,11 +902,13 @@ impl HostBackend for Falso {
                         })
                         .await;
                 }
-                // Y termina: la vista deja de decir «buscando…».
+                // Y termina: la vista deja de decir «buscando…». CON su
+                // desenlace, que no es cosmética — «terminó», «la pararon» y
+                // «se rompió» dicen tres cosas distintas sobre el disco.
                 let _ = ptx.send(norte_proto::TaskProgress {
                     task_id: id,
                     kind: norte_proto::TaskKind::Search,
-                    state: norte_proto::TaskState::Completed,
+                    state: desenlace,
                     bytes_done: 0,
                     bytes_total: None,
                     entries_done: 1,
@@ -945,6 +1003,8 @@ impl HostBackend for Falso {
     }
 
     fn volumes(&self) -> BoxFuture<'static, Result<Vec<norte_proto::methods::Volume>, Error>> {
+        self.volumenes_pedidos
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let vols = self.volumenes.clone();
         Box::pin(async move { Ok(vols) })
     }
@@ -1626,26 +1686,38 @@ impl HostBackend for Falso {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .map(|(nombre, es_dir)| Entry {
-                path: padre.join(norte_proto::Segment::new(nombre).expect("segmento")),
-                kind: if es_dir {
-                    EntryKind::Dir
-                } else {
-                    EntryKind::File
-                },
-                // Un directorio no tiene tamaño, como en la vida real: es lo
-                // que hace que la AUSENCIA de celda se pueda probar. Con
-                // `lazy`, tampoco lo tiene un fichero: es el listado del
-                // provider local (#52), donde el tamaño se sondea aparte.
-                size: if es_dir || lazy { None } else { Some(1) },
-                mtime_ms: None,
-                attrs: {
-                    let mut m = std::collections::BTreeMap::new();
-                    // 0o100644: lo que un provider POSIX manda de verdad, y
-                    // lo que sin catálogo se pintaría como «33188».
-                    m.insert("posix.mode".to_owned(), norte_proto::AttrValue::Uint(33188));
-                    m
-                },
+            .map(|(nombre, es_dir)| {
+                let path = padre.join(norte_proto::Segment::new(nombre).expect("segmento"));
+                // El kind exacto, si alguien lo fijó (`pon_kind`). Este doble
+                // construye entradas en DOS sitios —aquí y en `entradas_de`—
+                // y el override tiene que estar en los dos: parchear uno solo
+                // deja el test mirando un listado que el host nunca ve.
+                let kind = self
+                    .kinds
+                    .get(&path.to_wire())
+                    .copied()
+                    .unwrap_or(if es_dir {
+                        EntryKind::Dir
+                    } else {
+                        EntryKind::File
+                    });
+                Entry {
+                    kind,
+                    path,
+                    // Un directorio no tiene tamaño, como en la vida real: es lo
+                    // que hace que la AUSENCIA de celda se pueda probar. Con
+                    // `lazy`, tampoco lo tiene un fichero: es el listado del
+                    // provider local (#52), donde el tamaño se sondea aparte.
+                    size: if es_dir || lazy { None } else { Some(1) },
+                    mtime_ms: None,
+                    attrs: {
+                        let mut m = std::collections::BTreeMap::new();
+                        // 0o100644: lo que un provider POSIX manda de verdad,
+                        // y lo que sin catálogo se pintaría como «33188».
+                        m.insert("posix.mode".to_owned(), norte_proto::AttrValue::Uint(33188));
+                        m
+                    },
+                }
             })
             .filter(|e| !idos.contains(&e.path.to_wire()))
             .collect();

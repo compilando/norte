@@ -13,6 +13,23 @@
   "connection_reconnecting": {
     "state": "reconnecting"
   },
+  "dest_check_checking": {
+    "state": "checking"
+  },
+  "dest_check_done_con_avisos": {
+    "state": "done",
+    "warnings": [
+      "4,2 GB a escribir y 1,1 GB libres en el destino",
+      "este destino no puede confinar las escrituras"
+    ]
+  },
+  "dest_check_done_vacio": {
+    "state": "done",
+    "warnings": []
+  },
+  "dest_check_not_asked": {
+    "state": "not_asked"
+  },
   "dialog_input_none": {
     "asker": null,
     "body": [],
@@ -24,6 +41,9 @@
       }
     ],
     "deadline": null,
+    "dest_check": {
+      "state": "not_asked"
+    },
     "destination": null,
     "id": 1,
     "input": null,
@@ -130,7 +150,10 @@
     "state": "error"
   },
   "slot_state_loading": {
-    "state": "loading"
+    "state": "loading",
+    "target_display": "⟨mem⟩/casa/docs",
+    "target_hostile": false,
+    "verb_key": "busy-listing"
   },
   "slot_state_ready": {
     "state": "ready"

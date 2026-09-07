@@ -826,6 +826,45 @@ impl TrailStep {
     }
 }
 
+/// A dónde NAVEGA `nav.enter` sobre esta entrada, si es que navega.
+///
+/// Tres cosas se pueden abrir entrando: un directorio, un enlace —M0 no lo
+/// sigue para decidir el destino de una copia, pero Enter sí lo intenta, que
+/// es lo que hace un gestor ortodoxo— y un CONTENEDOR, que se navega por
+/// dentro ([`archive_root_for`]). Cualquier otra cosa es un fichero, y con un
+/// fichero Enter hace otra cosa: abrirlo.
+///
+/// Vive aquí porque la contestaban los dos frontends por su cuenta y con
+/// respuestas DISTINTAS: el terminal entraba en un `.zip` y seguía un enlace,
+/// y la ventana miraba `kind != Dir` y se lo daba al escritorio — con un
+/// comentario que afirmaba estar haciendo «la misma decisión que el TUI»
+/// (ADR 0077). La fila `..` no entra aquí: subir no es una propiedad de la
+/// entrada, y lo pregunta quien sabe que el cursor está sobre esa fila.
+///
+/// ```
+/// use norte_proto::{Entry, EntryKind, VPath};
+/// let zip = Entry {
+///     path: VPath::parse("file:///casa/cosas.zip").unwrap(),
+///     kind: EntryKind::File,
+///     size: None,
+///     mtime_ms: None,
+///     attrs: std::collections::BTreeMap::new(),
+/// };
+/// // Un contenedor se navega por dentro…
+/// assert!(norte_frontend::nav::enter_target(&zip).is_some());
+/// // …y un fichero normal no se navega: Enter lo abre.
+/// let txt = Entry { path: VPath::parse("file:///casa/a.txt").unwrap(), ..zip };
+/// assert!(norte_frontend::nav::enter_target(&txt).is_none());
+/// ```
+#[must_use]
+pub fn enter_target(e: &norte_proto::Entry) -> Option<norte_proto::VPath> {
+    use norte_proto::EntryKind;
+    if matches!(e.kind, EntryKind::Dir | EntryKind::Symlink) {
+        return Some(e.path.clone());
+    }
+    archive_root_for(e)
+}
+
 /// Si la entrada es un contenedor navegable (`.<formato>` de la whitelist de
 /// proto, extensión ASCII case-insensitive), la raíz de su interior (ADR
 /// 0018). El mapa extensión→formato es azúcar de presentación; la validación

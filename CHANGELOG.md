@@ -20,6 +20,249 @@ independently through `PROTOCOL_VERSION`.
   included, and is documented as never an operand. On `..` the sheet says
   `..`, `folder`, and where it leads (new `metadata-target` key in both
   locales), and the viewer says `directory`.
+- **`Enter` on an archive or a symlink navigates in the window too.** The
+  terminal browsed into `zip+file://…/!/` and followed a link; the window
+  looked at `kind != Dir` and handed both to `xdg-open` — while its own
+  comment, three lines below, claimed to be making "the same decision as the
+  TUI" (ADR 0077), which is exactly the false claim that ADR exists to
+  prevent. The window already knew `archive_root_for`: it uses it to unpack
+  and to test a container, just not to open one. The decision now lives once,
+  in `norte_frontend::nav::enter_target`.
+- **The panel bar now follows the screen.** Open panels come in the order they
+  are laid out — top to bottom, and left to right within a row — and closed
+  ones trail in registry order, because they have no position and inventing
+  one would say where something is that is nowhere. Before, the row was the
+  registry's order and you had to translate between two lists every time you
+  looked. The *letter* is deliberately resolved before the sort: it de-dupes
+  against the letters already handed out, so if it depended on the order,
+  opening one panel could change another's letter and the row would stop being
+  learnable.
+- **The panel bar read backwards.** A *closed* panel was styled with
+  `Role::StatusBar` — which in half the presets is a live background with dark
+  text — while the bar itself is cleared with the base background. So closed
+  buttons came out as lit blocks and open ones as plain text: the visual
+  weight inverted, and looking at the bar answered the opposite of what you
+  were asking. Closed is now the bar's own text, dimmed. The state was always
+  derived correctly from the resolved layout on every frame; what was wrong
+  was which state got the loud style.
+- **You could not resize panes in the window.** The drag handles are
+  `position: absolute` and were inserted *before* the panes, which are
+  absolute too — and this stylesheet uses no `z-index` anywhere on purpose, so
+  stacking follows document order. Every pane covered the handles and the
+  `pointerdown` never reached them. They are built last now. A second bug in
+  the same feature: a horizontal drag sent `clientY` straight through, without
+  subtracting the menu and panel bars that `#screen` is pushed down by, so the
+  border jumped by the height of the chrome the moment you grabbed it. The X
+  axis matched by coincidence — the board starts at column 0 — which is why
+  only horizontal borders looked broken.
+- **The window painted in the process's language, not its own.** `norte-ui-host`
+  itself was clean — all 131 of its calls pass `self.lang` — and every leak was
+  a *shared* helper translating through the global. The worst was the date:
+  every cell of the listing came out in the process's language under a header
+  in the host's, and configuration could not dodge it because the window
+  ignores `time-format`, so the relative branch is always live. Four more:
+  the settings screen (section titles in one language, each option's name and
+  description in the other), the status bar's "this build does not do that"
+  sentence, the palette's `[Extension]`/`[Renamer]` prefixes — which is what
+  breaks the disguise of a plugin titling itself like a built-in, so it cannot
+  read as part of the title — and the `Folder`/`Yes` cells. Each helper gained
+  an `_in(lang)` variant with the ambient one delegating, which is the pattern
+  `header_label` already used in that crate.
+- **The collision dialog dropped the badge on an altered name, on the one
+  screen where overwriting a file is approved.** It masked over
+  `display_lossy()`, which had already put the U+FFFD in — so `display_name`
+  received impeccable UTF-8 and declared the name *faithful*. It also ignored
+  `pane.names-encoding`: in a cp866 pane the terminal asks about `Папка` and
+  the window asked about `??????`. Approving a name that is not the one you
+  have been looking at is not approving. The encoding is now captured **when
+  the operation is launched**, not read when the answer arrives: a collision
+  turns up asynchronously, on top of whatever the reader is doing, and between
+  the send and the question there is room to change slots — which is why the
+  terminal has carried it in its `RetrySpec` since #98.
+- **With no trash, the window deleted permanently without saying so.** The
+  warning was the terminal's alone; the window offered a destructive button,
+  which says that answer deletes, not that there is no way back. It now reads
+  the slot's cached capabilities — and with **three** states, not two. "Not
+  known yet" is not "there is no trash": capabilities arrive behind the
+  listing and on their own, so there is a window (and, if the request fails,
+  a whole session) in which nothing is known, and turning that into "no trash"
+  really deleted in a place that has one. Only an explicit *no* makes the
+  delete permanent; guessing trash where there is none costs an `Unsupported`
+  and a `shift+F8`, and guessing the other way costs the bytes.
+- **An AI rename plan can no longer be approved unread.** The window already
+  required reaching the end and the terminal did not, so a plan of two hundred
+  renames could be signed having seen the first ten — and the ones that matter
+  can be on row a hundred and eighty. The strict rule was the right one, so
+  the terminal moved: one shared `approval_ready`, over a *high-water mark*,
+  because scrolling back up does not un-read what was read.
+- **A slow listing gave the window no signal at all** (#323): `aria-busy` and
+  not one CSS rule painting it. A waiting slot now says what it is doing and
+  where it is going — the verb from the closed vocabulary the two frontends
+  share, so a remote connect says "connecting", not "loading". The 250 ms
+  threshold travels from `busy::THRESHOLD` instead of being a number in a
+  stylesheet. There is deliberately **no "Esc cancels"**: nothing in the
+  window aborts an in-flight listing, and the repo has that doctrine written
+  three times — never a false affordance.
+- **The log panel spoke three vocabularies at once** — `TRACE`, `trace` and
+  «traza», all on screen together. The wire id is an identity that gets
+  compared and the label is what gets read; both travel now. `TRACE` stays
+  untranslated on purpose: it is what you write in `RUST_LOG` and what you
+  scan for in a long list. The level buttons stay translated — they are a
+  control, and the terminal has none to disagree with.
+- **A volume row was written three times, two of them in the same crate**, and
+  all three said "unknown" when the only thing missing was the *total* —
+  throwing away the one number there was. How much is left is the half you
+  look at before copying.
+- **An empty AI instruction ate the dialog.** The terminal leaves the modal
+  open with the error underneath; the window put the message in the status bar
+  over a screen with nowhere left to type. Its twin, the semantic query, had
+  been fixed carefully three files away.
+- **A search that FAILED read as one that finished with no hits.** The host
+  marked every terminal state as "no longer running" and painted
+  `search-status-done`, so a search that broke on the second directory and one
+  that walked the whole tree said the same thing: "0 hits". That is not an
+  imprecision in the UI — it is a false claim about the disk, and whoever
+  reads it stops looking. The outcome is now a four-state value and the
+  sentence comes from the terminal's own family, failure and cancellation
+  included. A search that never got queued at all is fixed on the way: with no
+  task there is no progress to carry the outcome, so the view sat on
+  "searching…" forever while the error went past in the status bar.
+- **Everything that says a listing is not what it looks like now lives in one
+  place** (`norte_frontend::notes`): entries the provider skipped, names being
+  reinterpreted, marks a refresh dropped, what is marked, a listing still
+  filling, what hiding puts aside. Each frontend wrote its own wording and
+  they had already drifted — the window used a key of its own ("N entries were
+  skipped", without the ⚠ that makes it read as a warning) and painted it
+  **also when N was zero**, announcing an incomplete listing that was
+  complete and spending the one signal there is for when something really is
+  missing. The window's header gains the four notes it never had (bridge 55),
+  in the terminal's order: the warnings before the counter, because a
+  truncated warning stops warning while a truncated counter only stops
+  counting.
+- **The destination badge is back to meaning something.** With two panes the
+  destination is "the other one" and the window marked it anyway; a mark that
+  shows up always stops being read, and then it is not there with three panes,
+  where a copy toward whichever slot the engine breaks the tie on is silent
+  data loss (ADR 0058 D7). The count is now one shared decision, applied by
+  the renderer — the DTO's role stays the model, and telling the host to lie
+  about it broke three tests that read it as one.
+- **The window's copy dialog never said "this will not fit" or "this
+  destination cannot confine writes".** Both lines are the terminal's since
+  #149 and #164 and the window had neither: you found out from a failed task,
+  or you did not find out. The dialog now opens without them and a task fills
+  them in — the same split the terminal makes — and the two fail differently
+  on purpose: not being able to enumerate volumes says nothing (silence is
+  the honest answer), while not being able to read the destination's
+  capabilities *warns*, because there the silence would mean "this place holds
+  its writes down" and swallowing the failure would assert it without knowing.
+  That same reasoning is why the dialog says **"checking the destination…"**
+  while it waits (bridge 54, `DestCheckView` — three states, not a list of
+  warnings): with only an empty list, "I have not asked yet" and "I asked and
+  there is nothing to say" reach the renderer identically, and the human can
+  confirm in that gap. The files-dropped dialog asks too, and it is the path
+  that can least afford not to: its operand list is composed by another
+  process. The all-or-nothing rule for the total moved to
+  `norte_frontend::space::total_to_write`: the two sentences were already
+  shared and only the arithmetic behind them was private to the terminal,
+  which is how a warning ends up appearing in one frontend and not the other.
+- **The window's help knew nothing about a location that refuses writes.**
+  `source_read_only` and `dest_read_only` were wired to `false`, with a
+  comment declaring that the host does not keep that count. It does keep it —
+  since #268 it asks each slot for `capabilities` when a listing lands — and
+  it threw everything away but the fold mode, with the `READ_ONLY` flag one
+  field away. Inside a container the terminal dimmed F5/F8 and the window
+  offered them lit: help that invites writes the backend will refuse. The
+  slot now keeps the whole `Capabilities`, `source_read_only` asks the active
+  slot and `dest_read_only` the one holding the target role, and the flag
+  falls back to the scheme the way `App::pane_read_only` does — through one
+  shared `availability::read_only`, since two spellings of that two-step
+  answer is exactly the shape ADR 0077 exists to stop. The startup listing
+  never asked at all, so the first directory of every slot was uncharted
+  until the reader navigated somewhere else — the fold check of #268 was
+  quietly missing there too. And the answer is now tied to the path it was
+  asked about instead of being dropped whenever another one is requested: a
+  landing re-freezes the help's facts three lines after asking, so every
+  re-listing under an open help read "not known" and lit the row back up.
+- **`enterable` said "directory" in the two places that navigate more.**
+  The terminal open-coded the same list `nav::enter_target` decides and the
+  window asked `kind == Dir`, so with the cursor on a `.zip` the archives
+  page — whose first sentence is "Enter on a compressed archive enters it" —
+  offered that very row greyed out. The terminal also asked through
+  `selected()`, which answers `None` on the `..` row on purpose, so the help
+  dimmed `Enter` exactly where the cursor is born after every `cd`; it now
+  asks `nav_enter_target`, which is the predicate that actually runs.
+- **`[ui] confirm_quit` asks in the window too.** Closing it never asked: the
+  `CloseRequested` handler dumped the session and closed. With
+  `confirm_quit = "always"` the terminal guards F10 and the window walked away
+  from a half-finished copy without a word — and `always` is precisely the
+  value that asks for the guard. The three-way decision is the shared one
+  (`settings::quit_needs_confirm`), whose rustdoc already named a
+  `confirm_quit_should_open` on the window side that did not exist; what each
+  frontend computes for itself is what counts as pending work, and here it is
+  a live task on the board. The dialog says how many.
+- **`[ui] quick_search` picks the mode in the window too.** The host started
+  the incremental search hard-wired to `filter`, so `quick_search = "jump"`
+  moved the cursor in `ntc` and narrowed the listing in the window — one key,
+  two behaviours. The DTO already knew how to report both modes; what was
+  missing was reading the key.
+- **`[ui] theme` accepts a path to a `.toml` in the window (ADR 0020).** It
+  called `Theme::preset` alone, so a theme of your own themed the terminal and
+  left the window on the default palette without saying anything — the same
+  shape as the `--layout` bug. Startup now goes through the shared resolver;
+  a profile switch still applies presets only, and that is written down where
+  it happens.
+- **`NORTE_LANG` beats `[ui] lang` in the window, as in the terminal.** Both
+  surfaces documented *opposite* rules and both obeyed their own, so with
+  `NORTE_LANG=en` and `lang = "es"` set, `ntc` came up in English and
+  `norte-gui` in Spanish. The terminal's rule wins: `NORTE_LANG` is
+  norte-specific and set for one run, the same class of thing as `--layout`,
+  which beats `[ui] layout`.
+- **`[ui.columns]` styles the window's columns too (#108).** The window asked
+  for `ColumnStyle::default_for_id` — the factory style — in both the header
+  and the cells, so only the column list and its order survived from the
+  config: a custom `header`, `format`, `align` and `width` were dead here
+  while the terminal honoured them. As a side effect this unblocks the
+  configurable half of a separate debt: the date cell is translated with the
+  process locale, and until now you could not even sidestep it with
+  `format = "iso"`, because the key did nothing.
+- **`norte-gui <DIR>` no longer loses to the saved session.** The directory
+  typed on the command line was overwritten by `aplicar_sesion`, which writes
+  the location of every slot, so the window opened where you were yesterday
+  and ate the argument without saying anything. The terminal closed the same
+  hole in `eb237c61` with `pin_start_dir`; the window never got it. It wins in
+  the active panel only — the other stays where the session left it, which is
+  half a screen of memory nobody asked to throw away.
+- **`openers.toml` now applies in the window too (#28).** The table was read
+  only by the terminal, so a rule saying "PDFs open in zathura" held in `ntc`
+  and was skipped in `norte-gui`, which handed everything to the desktop
+  handler — a whole documented feature honoured by one surface. The desktop
+  handler stays as the last resort: writing configuration cannot be a
+  requirement for opening a PDF.
+- **`[ui] editor` now applies in the window (F4).** `pane.edit` was mapped to
+  `pane.open` unconditionally. The deliberate half of that — not launching
+  `$EDITOR`, a terminal editor in a window that has no terminal (#290) —
+  stands. Ignoring `[ui] editor` was not deliberate: it names an explicit
+  program that can perfectly well be graphical, and its sibling key
+  `[ui] diff` was already honoured here by the same machinery.
+- **The window's panel title did not follow `pane.names-encoding`.** The
+  rows were re-transcoded and the header kept the old reading — the mojibake
+  stayed at the top and the reader could not tell whether the command had
+  done anything, which is exactly the half-fix #57 and #293 rule out. The
+  header travelled only in a full snapshot; it now travels with the rows, in
+  a `browser_header` change that also carries the "N skipped" and "N hidden"
+  notes (stale after `pane.toggle-hidden` for the same reason) and the mark
+  count (not painted yet, and wrong on every marking gesture — a trap for
+  whoever paints it).
+- **The window could not scroll past row 100 in a large directory.** A
+  listing arrives as a first page of 100 and then drains in batches of 500,
+  and every batch — the last one included — answers with a rows patch. But
+  `total_rows` travelled only in a full snapshot, and it is what the renderer
+  sizes its scroll canvas from (`total × cell height`, plus `aria-rowcount`).
+  So a directory of 5 000 files stayed capped at 100 rows for the wheel, with
+  no way to ask for the rest, because the visible range is computed from the
+  scroll position. The total now travels with the rows. The existing drain
+  test missed it because it dispatches `Resync` on every loop — which is
+  exactly what the real renderer does not do.
 - **`Enter` on `..` now lands the cursor where you came from.** It went up in
   both frontends but left the cursor on the first row, while the dedicated
   "go up" command put it on the directory you had just left — the same

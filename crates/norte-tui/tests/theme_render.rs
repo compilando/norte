@@ -30,6 +30,49 @@ fn app_con_dir(depth: ColorDepth) -> App {
     app
 }
 
+/// Un panel CERRADO no se pinta como un bloque encendido.
+///
+/// La barra estilaba `Closed` con `Role::StatusBar`, que es el estilo de la
+/// BARRA DE ESTADO — en la mitad de los temas, fondo vivo y texto oscuro. La
+/// barra de paneles se limpia con el fondo base, así que los botones cerrados
+/// salían como bloques de color sobre ella y los abiertos como texto normal:
+/// el peso visual, al revés. Mirar la barra contestaba lo contrario de lo que
+/// preguntas, y por eso parecía que el estado iba desincronizado.
+///
+/// Lo que se fija es la PROPIEDAD, no un color: un botón cerrado no puede
+/// llevar un fondo distinto del de la barra. Con eso, cualquier tema que
+/// invierta ese rol vuelve a romperlo y se ve aquí.
+#[test]
+fn un_panel_cerrado_no_se_pinta_como_un_bloque_encendido() {
+    for preset in norte_theme::preset_names() {
+        let mut app = app_con_dir(ColorDepth::Truecolor);
+        let theme = norte_theme::Theme::preset(preset)
+            .expect("preset válido")
+            .expect("preset existe");
+        app.theme = TuiTheme::new(theme, ColorDepth::Truecolor);
+        app.panel_bar = true;
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
+        terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+        let buf = terminal.backend().buffer().clone();
+        // La fila 1 es la barra de paneles: la 0 es el menú. Con la `App` de
+        // este test no hay ningún panel lateral abierto, así que TODOS los
+        // botones están cerrados y la fila entera tiene que leerse como
+        // fondo de barra con texto encima.
+        let fondo = buf[(0, 1)].bg;
+        let distintos: Vec<String> = (0..80)
+            .filter(|x| buf[(*x, 1)].bg != fondo)
+            .map(|x| buf[(x, 1)].symbol().to_string())
+            .collect();
+        assert!(
+            distintos.is_empty(),
+            "[{preset}] con todos los paneles CERRADOS, la barra pinta bloques de \
+             color en {distintos:?} — el peso visual al revés: lo apagado \
+             destacando y lo abierto como texto normal"
+        );
+    }
+}
+
 /// `true` si ALGUNA celda del buffer tiene ese color de frente.
 fn hay_fg(app: &App, want: Color) -> bool {
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");

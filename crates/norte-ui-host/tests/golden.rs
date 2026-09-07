@@ -198,6 +198,7 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
         UiAction::ResizeSlot { .. } => "resize_slot",
         UiAction::ProfileActivateRow { .. } => "profile_activate_row",
         UiAction::Resync => "resync",
+        UiAction::RequestQuit => "request_quit",
     }
 }
 
@@ -475,6 +476,7 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             UiAction::AiRenameDecide { approve: true },
         ),
         ("resync", UiAction::Resync),
+        ("request_quit", UiAction::RequestQuit),
         (
             "select_row",
             UiAction::SelectRow {
@@ -580,6 +582,7 @@ fn dialogo_de_referencia() -> DialogView {
         input: Some(String::new()),
         input_hostile: false,
         input_secret: false,
+        dest_check: norte_ui_host::dto::DestCheckView::NotAsked,
     }
 }
 
@@ -633,6 +636,10 @@ fn task_de_referencia() -> TaskView {
 fn disposicion_de_referencia() -> LayoutView {
     LayoutView {
         cells: (120, 40),
+        // La referencia lleva TRES listados, así que la marca de destino dice
+        // algo: con dos es «el otro» y no se pinta. Es la mitad del contrato
+        // que un corpus con `false` no fijaría.
+        mark_target: true,
         // Un grupo de PESTAÑAS, con una cuyo nombre se pinta distinto de lo
         // que es: un directorio hostil dentro de una pestaña es tan hostil
         // como dentro de un listado.
@@ -823,14 +830,25 @@ fn slots_de_referencia() -> Vec<SlotView> {
                 fila_adornada(3, "cambiado.rs"),
             ],
             cursor: Some(RowKey(1)),
-            marks: 0,
+            // DOS, como dice `marked_note`: el número y la frase son dos
+            // vistas de un mismo hecho, y una referencia que las contradice
+            // enseña justo lo contrario de lo que el DTO promete.
+            marks: 2,
             // El provider se saltó dos: se DICE. Un listado al que le faltan
             // entradas y no lo avisa miente por omisión.
-            skipped_note: "se saltaron 2 entradas".to_owned(),
+            skipped_note: "⚠ 2 entradas omitidas (nombres hostiles/límites)".to_owned(),
             // Los dos avisos a la vez, que es el caso real: un provider que
             // se saltó entradas Y una ocultación activa. Si el renderer los
             // pegara en el mismo nodo, esta fixture lo enseñaría.
             hidden_note: "3 ocultas".to_owned(),
+            // Y las cuatro que la ventana no tenía, TODAS a la vez y en la
+            // misma foto: es el caso que el renderer tiene que saber apilar
+            // sin pegarlas en un solo nodo, y el que fija en qué ORDEN van —
+            // los avisos antes que el contador de marcas.
+            names_note: "nombres: cp866".to_owned(),
+            filling_note: "cargando… (3)".to_owned(),
+            pruned_note: "2 marcas caídas, sus entradas ya no están".to_owned(),
+            marked_note: "2 marcadas, 4,0 kB".to_owned(),
             columns: vec![
                 ColumnHeader {
                     id: "name".to_owned(),
@@ -948,6 +966,10 @@ fn slots_de_referencia() -> Vec<SlotView> {
                 norte_ui_host::dto::LogLineView {
                     time: "12:00:00".to_owned(),
                     level: "error".to_owned(),
+                    // La etiqueta va al lado del id, y con OTRA forma: es lo
+                    // que hace visible en el corpus que son dos cosas — una
+                    // se compara y la otra se lee.
+                    level_label: "ERROR".to_owned(),
                     target: "norte_core::connect".to_owned(),
                     message: "no se pudo conectar".to_owned(),
                     hostile: false,
@@ -956,6 +978,7 @@ fn slots_de_referencia() -> Vec<SlotView> {
                 norte_ui_host::dto::LogLineView {
                     time: "12:00:01".to_owned(),
                     level: "info".to_owned(),
+                    level_label: "INFO".to_owned(),
                     target: "norte_ui_host".to_owned(),
                     // Con el reemplazo canónico y MARCADA: un mensaje de
                     // registro puede llevar dentro un nombre que alguien
@@ -967,6 +990,7 @@ fn slots_de_referencia() -> Vec<SlotView> {
             ],
             // El que se ENSEÑA, siempre: es el que los botones controlan.
             level: "info".to_owned(),
+            level_label: "INFO".to_owned(),
             filter: "connect".to_owned(),
             following: false,
             total: 2,
@@ -1800,10 +1824,15 @@ fn actualizaciones() {
                             generation: 5,
                             first_visible: 40,
                             rows: vec![fila(41, "otro.txt", false)],
+                            total_rows: Some(120),
                         },
                         ViewChange::SlotState {
                             slot_id: 1,
-                            state: SlotState::Loading,
+                            state: SlotState::Loading {
+                                verb_key: "busy-listing".to_owned(),
+                                target_display: "⟨mem⟩/casa/docs".to_owned(),
+                                target_hostile: false,
+                            },
                         },
                     ],
                 }),
@@ -2003,8 +2032,17 @@ fn cambios_de_overlay() -> Vec<(&'static str, ViewChange)> {
 /// Los que describen la PANTALLA: disposición, overlays y estado global.
 fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
     let mut casos = cambios_de_overlay();
-    casos.extend(vec![
-        ("layout", ViewChange::Layout(disposicion_de_referencia())),
+    casos.extend(cambios_de_listado());
+    casos.extend(cambios_del_resto());
+    casos
+}
+
+/// Los que describen un LISTADO: sus filas y su cabecera.
+///
+/// Aparte del resto porque `cambios_de_pantalla` se pasó de las cien líneas
+/// al añadir la cabecera, y porque estos dos viajan juntos en el mismo parche.
+fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
+    vec![
         (
             "rows",
             ViewChange::Rows {
@@ -2012,13 +2050,43 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
                 generation: 5,
                 first_visible: 40,
                 rows: vec![fila(41, "otro.txt", false)],
+                total_rows: Some(120),
             },
         ),
+        (
+            // La cabecera viaja con las filas, y sus cuatro textos son de
+            // TERCEROS —una ruta, dos frases con un número, y un nombre
+            // reinterpretado—, así que su forma de cable se fija aquí.
+            "browser_header",
+            ViewChange::BrowserHeader {
+                slot_id: 1,
+                path_display: "⟨mem⟩/casa/caf\u{fffd}".to_owned(),
+                path_hostile: true,
+                skipped_note: "⚠ 2 entradas omitidas (nombres hostiles/límites)".to_owned(),
+                hidden_note: "3 ocultas".to_owned(),
+                names_note: "nombres: cp866".to_owned(),
+                filling_note: "cargando… (3)".to_owned(),
+                pruned_note: "2 marcas caídas, sus entradas ya no están".to_owned(),
+                marked_note: "2 marcadas, 4,0 kB".to_owned(),
+                marks: 4,
+            },
+        ),
+    ]
+}
+
+/// Todo lo demás que puede cambiar de la pantalla.
+fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
+    vec![
+        ("layout", ViewChange::Layout(disposicion_de_referencia())),
         (
             "slot_state",
             ViewChange::SlotState {
                 slot_id: 1,
-                state: SlotState::Loading,
+                state: SlotState::Loading {
+                    verb_key: "busy-listing".to_owned(),
+                    target_display: "⟨mem⟩/casa/docs".to_owned(),
+                    target_hostile: false,
+                },
             },
         ),
         (
@@ -2097,8 +2165,7 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
                 tasks: vec![task_de_referencia()],
             },
         ),
-    ]);
-    casos
+    ]
 }
 
 /// Ningún número del corpus se sale de donde un `f64` es exacto (#258).
@@ -2172,7 +2239,7 @@ mod variantes {
     fn nombre_estado(s: &SlotState) -> &'static str {
         match s {
             SlotState::Ready => "slot_state_ready",
-            SlotState::Loading => "slot_state_loading",
+            SlotState::Loading { .. } => "slot_state_loading",
             SlotState::Error { .. } => "slot_state_error",
         }
     }
@@ -2208,6 +2275,38 @@ mod variantes {
     /// queje: un `None` se pinta igual que un campo que no llegó.
     fn formas_vacias() -> Vec<(&'static str, serde_json::Value)> {
         vec![
+            // Los tres estados de la comprobación del destino, y los tres en
+            // el corpus a propósito: son la única cosa del diálogo donde la
+            // AUSENCIA de una línea afirma algo (que el destino confina), así
+            // que un renderer que confundiera `checking` con `done` sin
+            // avisos lo haría en silencio. La variante llena clava además el
+            // nombre de wire del vector, que con todas las fixtures vacías no
+            // aparecía en el corpus.
+            (
+                "dest_check_not_asked",
+                serde_json::to_value(norte_ui_host::dto::DestCheckView::NotAsked).expect("json"),
+            ),
+            (
+                "dest_check_checking",
+                serde_json::to_value(norte_ui_host::dto::DestCheckView::Checking).expect("json"),
+            ),
+            (
+                "dest_check_done_vacio",
+                serde_json::to_value(norte_ui_host::dto::DestCheckView::Done {
+                    warnings: Vec::new(),
+                })
+                .expect("json"),
+            ),
+            (
+                "dest_check_done_con_avisos",
+                serde_json::to_value(norte_ui_host::dto::DestCheckView::Done {
+                    warnings: vec![
+                        "4,2 GB a escribir y 1,1 GB libres en el destino".to_owned(),
+                        "este destino no puede confinar las escrituras".to_owned(),
+                    ],
+                })
+                .expect("json"),
+            ),
             (
                 "cell_text_none",
                 serde_json::to_value(CellView {
@@ -2271,6 +2370,7 @@ mod variantes {
                     input: None,
                     input_hostile: false,
                     input_secret: false,
+                    dest_check: norte_ui_host::dto::DestCheckView::NotAsked,
                 })
                 .expect("json"),
             ),
@@ -2281,7 +2381,13 @@ mod variantes {
     fn cada_variante_de_enum_tiene_su_fixture() {
         let estados = vec![
             SlotState::Ready,
-            SlotState::Loading,
+            // CON destino, que es la mitad que hace legible que el cuerpo
+            // siga enseñando el listado anterior mientras se espera.
+            SlotState::Loading {
+                verb_key: "busy-listing".to_owned(),
+                target_display: "⟨mem⟩/casa/docs".to_owned(),
+                target_hostile: false,
+            },
             SlotState::Error {
                 reason_key: "err-permission-denied".to_owned(),
                 detail: Some("EACCES".to_owned()),

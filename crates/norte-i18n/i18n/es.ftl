@@ -753,6 +753,10 @@ plugin-output-truncated = la salida se cortó: era más larga de lo que cabe
 # La salida de un programa que la ventana corrió esperándolo (#312).
 program-output-title = Salida del programa
 program-output-compare = Comparar dos ficheros
+# Lo que imprime un programa lanzado por `openers.toml` o por `[ui] editor`,
+# cuando la regla dice que se le espera en vez de soltarlo.
+program-output-open = Abrir
+program-output-edit = Editar
 program-output-failed = el programa no llegó a correr, o se pasó del plazo
 # El programa de `[ui] diff` (o `diff`) no está en el PATH.
 host-program-missing = no hay programa con el que hacerlo: no está en el PATH
@@ -780,6 +784,10 @@ picker-history-empty = este panel no ha estado en ningún otro sitio
 picker-hotlist-title = Favoritos
 picker-hotlist-empty = no hay favoritos configurados
 picker-volume-space = {$free} libres de {$total}
+# Se sabe cuánto queda pero no de cuánto. Pasa —un montaje que contesta a
+# medias— y decir «desconocido» ahí tira el único número que hay: cuánto
+# queda es la mitad que se mira antes de copiar.
+picker-volume-free = {$free} libres
 picker-volume-read-only = solo lectura
 theme-title = Tema
 theme-roles = Con qué se pinta cada papel
@@ -1514,10 +1522,11 @@ hostile-name = ⚠ nombre alterado
 # mensajes porque contestan preguntas distintas: un directorio sin
 # entradas, y un filtro que no casó ninguna.
 listing-empty = vacío
-# El provider no pudo con todas: sin permiso para statearlas, o por
-# encima de un tope suyo. Se DICE, porque lo que falta no está y no hay
-# ninguna fila donde el lector pueda tropezarse con ello.
-listing-skipped = se saltaron { $n } entradas
+# Lo que el provider se saltó lo dice `status-archive-skipped`, que es de los
+# dos frontends (`norte_frontend::notes::skipped`). Aquí hubo una segunda
+# redacción, sin el ⚠ que la hace leerse como aviso, y era la que pintaba la
+# ventana: dos claves para un hecho es cómo dos superficies acaban diciendo
+# cosas distintas de lo mismo.
 palette-empty = nada casa con lo que has tecleado
 gui-menu-acts-on = actúa sobre { $target }
 gui-menu-target-marks = { $n } elementos marcados
@@ -1856,6 +1865,11 @@ processes-has-keyboard = este panel tiene el teclado · Esc lo devuelve
 # filtrando fuera».
 log-title = Registro
 slot-retry = reintentar
+# Esperando un listado (#323). Tres piezas y no una frase: el renderer las
+# compone con la RUTA en su propio nodo, porque una ruta pegada dentro de la
+# frase se lee como parte de ella — y aquí además se ofrece cancelar.
+slot-busy = cargando…
+slot-busy-to = yendo a
 log-keys = e/w/i/d/t nivel · / filtrar · Fin al final · Esc devuelve el teclado
 # Solo se ofrece cuando el daemon sirve su registro (#328): anunciar un mando
 # que recorrería tres vistas del MISMO anillo es prometer algo que no existe.
@@ -1903,6 +1917,11 @@ metadata-kind-other = otro
 # mutación de un agente incluidos.
 dialog-body-truncated = … se enseñan { $shown } de { $total }
 dialog-destination = Destino:
+# Mientras se pregunta si el destino tiene sitio (#149) y si sabe sujetar sus
+# escrituras (#164). Se DICE, en vez de dejar el hueco vacío: sin esta línea,
+# «todavía no lo sé» se lee igual que «lo pregunté y no hay nada que decir», y
+# lo segundo es una afirmación sobre la seguridad del destino.
+dialog-checking-destination = comprobando el destino…
 dialog-confirm = Confirmar
 # Sumas en la ventana (#311). El diálogo es de LECTURA: copiar es lo único que
 # se puede hacer con una lista de digests, y una comprobación no los trae.
@@ -1915,6 +1934,13 @@ err-checksum-sums-utf16 = el fichero de sumas está en UTF-16; guárdalo en UTF-
 err-checksum-partial = el lote no terminó: lo calculado está a medias y no se compara
 err-checksum-failed = el cálculo de sumas falló
 dialog-cancel = Cancelar
+# Cerrar la ventana con `[ui] confirm_quit` pidiendo confirmación.
+dialog-quit = Cerrar
+modal-quit-title = ¿Cerrar norte?
+modal-quit-pending = { $n ->
+    [one] queda una operación en marcha; cerrar la deja a medias
+   *[other] quedan { $n } operaciones en marcha; cerrar las deja a medias
+}
 dialog-approve = Aprobar
 dialog-deny = Denegar
 dialog-overwrite = Sobrescribir

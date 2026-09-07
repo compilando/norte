@@ -9,7 +9,7 @@
 // disponibilidad: eso vive en Rust (ADR 0066, decisión D14).
 
 /** La versión del contrato que este renderer sabe leer. */
-export const BRIDGE_VERSION = 53;
+export const BRIDGE_VERSION = 56;
 
 export type RowKey = number;
 export type ModalId = number;
@@ -46,6 +46,10 @@ export interface LayoutView {
    *  aun así hay que enseñar que está: una ventana con tres pestañas que solo
    *  muestra la de delante esconde trabajo abierto. */
   tabs: TabGroupView[];
+  /** Si la marca de DESTINO dice algo con los listados que hay a la vista.
+   *  Que el rol exista y que se pinte son dos preguntas: `role` es el modelo
+   *  y esto es la pintura, calculada en Rust para no repetir el umbral. */
+  mark_target?: boolean;
 }
 
 export interface TabGroupView {
@@ -93,7 +97,20 @@ export interface RowView {
 
 export type SlotState =
   | { state: "ready" }
-  | { state: "loading" }
+  /** Con A DÓNDE va: el cuerpo sigue enseñando el listado ANTERIOR hasta que
+   *  llegue el nuevo —a propósito, para que un fallo deje al lector donde
+   *  estaba—, y sin decir a dónde va esa mezcla no se puede leer. Vacío = un
+   *  refresco, que no va a ninguna parte. */
+  | {
+      state: "loading";
+      /** La clave Fluent del VERBO, del vocabulario cerrado que la ventana
+       *  comparte con el terminal: `busy-connecting`, `busy-listing`,
+       *  `busy-opening`. «Conectando» y «cargando» no son lo mismo, y el caso
+       *  que destapó #323 era el primero. */
+      verb_key?: string;
+      target_display?: string;
+      target_hostile?: boolean;
+    }
   | { state: "error"; reason_key: string; detail: string | null };
 
 export interface QuickView {
@@ -131,6 +148,16 @@ export interface BrowserSlotView {
    * hay no puede quedarse mudo en cuanto el lector cambie de tecla.
    */
   hidden_note: string;
+  /** Los nombres se REINTERPRETAN con otra codificacion (#57). Vacio = no.
+   *  Permanente mientras dure: lo que se pinta no son los bytes que hay en el
+   *  disco, y eso hay que poder saberlo al decidir copiar o borrar algo. */
+  names_note?: string;
+  /** El listado se esta RELLENANDO todavia, y cuantas van. Vacio = entero. */
+  filling_note?: string;
+  /** Marcas que el ultimo refresco descarto porque su entrada ya no esta. */
+  pruned_note?: string;
+  /** Cuantas hay marcadas y cuanto pesan, ya dicho. Vacio = sin marcas. */
+  marked_note?: string;
   columns: ColumnHeader[];
   state: SlotState;
   quick: QuickView | null;
@@ -183,8 +210,14 @@ export interface ProcessesSlotView {
 export interface LogLineView {
   /** `HH:MM:SS`, en UTC — este árbol no lleva base de datos de husos. */
   time: string;
-  /** Vocabulario CERRADO: error, warn, info, debug, trace. Se colorea por él. */
+  /** Vocabulario CERRADO: error, warn, info, debug, trace. Se colorea por él.
+   *  Es una IDENTIDAD: se compara, no se pinta. */
   level: string;
+  /** Ese nivel tal y como se PINTA (`TRACE`), que es lo que pinta el terminal.
+   *  Sin traducir a propósito: es lo que se escribe en `RUST_LOG` y lo que se
+   *  busca con la vista. Los BOTONES de nivel sí van traducidos — son un
+   *  mando, no un dato. */
+  level_label?: string;
   target: string;
   message: string;
   /** Lo pintado difiere de lo que hay, en el módulo o en el mensaje. */
@@ -200,7 +233,10 @@ export interface LogSlotView {
   slot_id: number;
   /** Solo la VENTANA visible, nunca el anillo entero. */
   lines: LogLineView[];
+  /** Identidad: el renderer marca con ella qué botón está puesto. */
   level: string;
+  /** Ese mismo nivel tal y como se pinta (`TRACE`). */
+  level_label?: string;
   filter: string;
   /** Pegado al final y siguiendo lo que llega. */
   following: boolean;
@@ -338,6 +374,15 @@ export interface DialogChoice {
   destructive: boolean;
 }
 
+/** Qué se sabe del DESTINO de una transferencia mientras se pregunta.
+ *
+ *  Tres estados y no una lista de avisos porque el silencio tiene que
+ *  significar UNA cosa: la ausencia de la línea de #164 significa «este
+ *  destino sujeta sus escrituras», así que «todavía no lo sé» no se puede
+ *  pintar igual que «lo pregunté y está limpio». */
+export type DestCheck =
+  { state: "not_asked" } | { state: "checking" } | { state: "done"; warnings: string[] };
+
 /** Una línea del cuerpo de un diálogo: lo que se pinta, y si difiere de lo real. */
 export interface DialogLine {
   text: string;
@@ -366,6 +411,9 @@ export interface DialogView {
   body: DialogLine[];
   /** El cuerpo enseña menos de lo que la operación toca, ya traducido. */
   overflow_note: string;
+  /** En qué punto está la comprobación del DESTINO. Ausente en un puente
+   *  anterior, y entonces es `not_asked`. */
+  dest_check?: DestCheck;
   choices: DialogChoice[];
   input: string | null;
   input_hostile: boolean;
@@ -1065,6 +1113,24 @@ export type ViewChange =
       generation: number;
       first_visible: number;
       rows: RowView[];
+      /**
+       * Cuántas filas tiene el listado ENTERO. Es la altura del
+       * desplazamiento, y el drenaje paginado solo manda parches de filas.
+       */
+      total_rows: number | null;
+    }
+  | {
+      change: "browser_header";
+      slot_id: number;
+      path_display: string;
+      path_hostile: boolean;
+      skipped_note: string;
+      hidden_note: string;
+      names_note?: string;
+      filling_note?: string;
+      pruned_note?: string;
+      marked_note?: string;
+      marks: number;
     }
   | { change: "slot_state"; slot_id: number; state: SlotState }
   | ({ change: "status" } & StatusView)
@@ -1204,4 +1270,9 @@ export interface HostCatalog {
   theme: Record<string, string>;
   /** Pasada de medición de la tarea 3.6 (`NORTE_GUI_MEASURE=1`). */
   measure: boolean;
+  /** Cuánto se espera antes de ENSEÑAR que se está esperando, en ms. Viaja en
+   *  vez de estar escrito en el CSS porque es una decisión compartida con el
+   *  terminal (`norte_frontend::busy::THRESHOLD`), y un número repetido en
+   *  una hoja de estilos es el tercer sitio donde cambiarlo. */
+  busy_threshold_ms?: number;
 }

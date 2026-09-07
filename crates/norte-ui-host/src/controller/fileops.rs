@@ -186,6 +186,31 @@ impl Estado {
                 }
             }
         }
+        // ¿Hay papelera aquí? El terminal lo pregunta al borrar y de la
+        // respuesta salen DOS cosas: que el borrado sea permanente, y que se
+        // DIGA. La ventana no hacía ninguna de las dos, así que ofrecía el
+        // mismo diálogo para «esto se puede recuperar» y para «esto no».
+        //
+        // **Tres estados, no dos, y esa es la parte que importa.** El
+        // terminal `await`ea un `capabilities` fresco en el momento de
+        // borrar, así que su `is_ok_and` colapsa una respuesta de verdad o un
+        // fallo de verdad — nunca un «todavía no he preguntado». Aquí sale de
+        // la caché del hueco, que llega DESPUÉS del listado y por su cuenta:
+        // hay una ventana entera, entre que las filas se pintan y la
+        // respuesta vuelve, en la que no consta nada. Y si la petición falla,
+        // no consta en toda la sesión.
+        //
+        // Convertir ese «no consta» en «no hay papelera» borraba de verdad en
+        // un sitio que sí la tiene. La asimetría manda, y va al revés de lo
+        // que parece: suponer papelera donde no la hay cuesta un
+        // `Unsupported` y un `shift+F8`; suponer que no la hay donde sí la
+        // hay cuesta los bytes. Así que solo un NO explícito hace permanente
+        // el borrado.
+        let dir = self.hueco().pane.dir().clone();
+        let papelera = self
+            .caps_de_ruta(&dir)
+            .map(|c| c.flags.contains(norte_proto::CapabilityFlags::TRASH));
+        let permanente = permanente || papelera == Some(false);
         // Los nombres del cuerpo son de un atacante potencial: se pintan con
         // el saneado canónico y acotados, igual que en el listado.
         let cuerpo: Vec<crate::dto::DialogLine> = paths
@@ -230,6 +255,22 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            // «⚠ SIN papelera: esto no se puede deshacer», con la clave del
+            // terminal. Va por el mismo canal que los avisos de una copia
+            // porque es la misma pregunta —qué pasa con los bytes cuando esto
+            // termine— y porque un aviso en el CUERPO lo puede suplantar un
+            // nombre de fichero. Un botón destructivo dice que la respuesta
+            // borra; esto dice que no hay vuelta.
+            dest_check: crate::dto::DestCheckView::Done {
+                warnings: if permanente {
+                    vec![clamp_display(norte_i18n::t_in(
+                        self.lang,
+                        "modal-delete-permanent-warning",
+                    ))]
+                } else {
+                    Vec::new()
+                },
+            },
         };
         self.dialogos.push(Dialogo {
             id,
@@ -315,6 +356,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,
@@ -384,6 +426,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,
@@ -501,6 +544,9 @@ impl Estado {
                 from: raiz,
                 to: destino,
                 mover: false,
+                // La del hueco desde el que se desempaqueta, capturada aquí:
+                // ver el campo.
+                enc: self.hueco().pane.name_encoding(),
             },
             norte_proto::CollisionPolicy::Fail,
             backend,
@@ -582,6 +628,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,
@@ -660,6 +707,7 @@ impl Estado {
             input: Some(modo.clone()),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,
@@ -771,6 +819,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,

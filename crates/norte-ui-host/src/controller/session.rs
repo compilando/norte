@@ -46,6 +46,27 @@ impl Estado {
         };
         self.aplicar_sesion(&body);
         self.sesion.leida = body;
+        self.fijar_dir_pedido();
+    }
+
+    /// Devuelve el panel ACTIVO al directorio que se escribió al arrancar.
+    ///
+    /// Va DESPUÉS de aplicar la sesión, y ése es todo el arreglo: la sesión
+    /// escribe el sitio de todos los huecos, así que un argumento de la línea
+    /// de órdenes solo puede ganar volviendo a ponerlo encima. Un directorio
+    /// que alguien acaba de teclear es más específico que dónde cerró ayer —
+    /// la misma regla que hace que `--layout` gane a `[ui] layout`.
+    ///
+    /// Solo el activo: el otro panel se queda donde la sesión lo dejó. Y solo
+    /// el SITIO — el orden y los ocultos son preferencias, y no se tocan.
+    fn fijar_dir_pedido(&mut self) {
+        let Some(dir) = self.dir_pedido.take() else {
+            return;
+        };
+        let activo = self.activo();
+        if let Some(hueco) = self.huecos.get_mut(&activo) {
+            hueco.pane.begin_loading(dir);
+        }
     }
 
     /// Coloca cada hueco donde la sesión dice que estaba.

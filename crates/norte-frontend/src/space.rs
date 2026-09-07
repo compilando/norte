@@ -59,6 +59,75 @@ pub fn warning(total: Option<u64>, free: Option<u64>, lang: Lang) -> Option<Stri
     ))
 }
 
+/// Los bytes que una transferencia va a escribir, o `None` si alguno de los
+/// ítems no lo dice.
+///
+/// La otra mitad del contrato de [`warning`], y la que decide si hay pregunta
+/// que hacer. Es TODO o nada: un directorio no trae tamaño en el listado, así
+/// que sumar solo lo que sí lo trae daría un total menor que el real y
+/// avisaría de menos — que es peor que callar, porque la línea que sí sale se
+/// lee como completa.
+///
+/// Vive aquí y no en un frontend porque los dos hacen la misma pregunta al
+/// abrir el mismo diálogo, y un total calculado con otra regla es una alarma
+/// que aparece en un frontend y no en el otro (ADR 0077).
+///
+/// Un ítem que no está en `entries` tampoco suma: no es que ocupe cero, es
+/// que no se sabe.
+///
+/// ```
+/// use norte_frontend::space::total_to_write;
+/// use norte_proto::{Entry, EntryKind, VPath};
+///
+/// let en = |wire: &str, kind, size| Entry {
+///     attrs: std::collections::BTreeMap::new(),
+///     path: VPath::parse(wire).unwrap(),
+///     kind,
+///     size,
+///     mtime_ms: None,
+/// };
+/// let uno = VPath::parse("file:///a").unwrap();
+/// let dos = VPath::parse("file:///b").unwrap();
+/// let dir = VPath::parse("file:///d").unwrap();
+/// let listado = [
+///     en("file:///a", EntryKind::File, Some(10)),
+///     en("file:///b", EntryKind::File, Some(32)),
+///     en("file:///d", EntryKind::Dir, None),
+/// ];
+///
+/// assert_eq!(total_to_write(&listado, &[uno.clone(), dos]), Some(42));
+/// // Un directorio no dice cuánto ocupa: NO hay total, ni siquiera parcial.
+/// assert_eq!(total_to_write(&listado, &[uno, dir]), None);
+/// ```
+#[must_use]
+pub fn total_to_write(entries: &[norte_proto::Entry], items: &[norte_proto::VPath]) -> Option<u64> {
+    // Por índice cuando el producto se va de las manos, y lineal cuando no.
+    // El caso corriente son tres marcas sobre un listado normal, donde
+    // construir un mapa cuesta más que buscar; el caso que importa son 512
+    // marcas —el tope de un lote— sobre un directorio de cien mil entradas,
+    // que son cincuenta millones de comparaciones de `VPath` con la interfaz
+    // parada, porque esto corre en el hilo del actor antes de emitir el
+    // parche.
+    if items.len().saturating_mul(entries.len()) > 100_000 {
+        let indice: std::collections::HashMap<&norte_proto::VPath, &norte_proto::Entry> =
+            entries.iter().map(|e| (&e.path, e)).collect();
+        return items
+            .iter()
+            .try_fold(0_u64, |total, p| bytes_de(indice.get(p).copied()?, total));
+    }
+    items.iter().try_fold(0_u64, |total, path| {
+        bytes_de(entries.iter().find(|e| &e.path == path)?, total)
+    })
+}
+
+/// Suma una entrada al total, o `None` si esa entrada no dice cuánto ocupa.
+fn bytes_de(entry: &norte_proto::Entry, total: u64) -> Option<u64> {
+    if entry.kind != norte_proto::EntryKind::File {
+        return None;
+    }
+    total.checked_add(entry.size?)
+}
+
 /// El espacio libre del volumen que sirve `path`, o `None` si ninguno lo
 /// sirve o el que lo sirve no contestó.
 ///
@@ -100,6 +169,68 @@ mod tests {
             free_bytes: free,
             read_only: false,
         }
+    }
+
+    fn entrada(wire: &str, kind: norte_proto::EntryKind, size: Option<u64>) -> norte_proto::Entry {
+        norte_proto::Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path: VPath::parse(wire).expect("wire"),
+            kind,
+            size,
+            mtime_ms: None,
+        }
+    }
+
+    /// Las tres formas de «no se sabe», que son las que el doctest no toca y
+    /// las que importan: las tres tienen que dar `None` entero, jamás una
+    /// suma parcial. Un total menor que el real avisa de menos, y la línea
+    /// que sí sale se lee como completa.
+    #[test]
+    fn lo_que_no_se_sabe_no_suma_a_medias() {
+        use norte_proto::EntryKind;
+        let listado = [
+            entrada("file:///a", EntryKind::File, Some(10)),
+            entrada("file:///sin", EntryKind::File, None),
+            entrada("file:///enlace", EntryKind::Symlink, Some(4)),
+        ];
+        let p = |w: &str| VPath::parse(w).expect("wire");
+
+        assert_eq!(
+            total_to_write(&listado, &[p("file:///a"), p("file:///sin")]),
+            None,
+            "un fichero que no dice cuánto ocupa se lleva el total entero"
+        );
+        assert_eq!(
+            total_to_write(&listado, &[p("file:///a"), p("file:///enlace")]),
+            None,
+            "un enlace tampoco: lo que se copia es a lo que apunta, y eso no \
+             está en este listado"
+        );
+        assert_eq!(
+            total_to_write(&listado, &[p("file:///a"), p("file:///fantasma")]),
+            None,
+            "lo que no está en el listado no ocupa cero: no se sabe"
+        );
+        assert_eq!(
+            total_to_write(&listado, &[]),
+            Some(0),
+            "no copiar nada sí se sabe cuánto ocupa"
+        );
+    }
+
+    /// Y una suma que desborda tampoco inventa: `checked_add` calla.
+    #[test]
+    fn una_suma_que_desborda_calla() {
+        use norte_proto::EntryKind;
+        let listado = [
+            entrada("file:///a", EntryKind::File, Some(u64::MAX)),
+            entrada("file:///b", EntryKind::File, Some(1)),
+        ];
+        let items = [
+            VPath::parse("file:///a").expect("wire"),
+            VPath::parse("file:///b").expect("wire"),
+        ];
+        assert_eq!(total_to_write(&listado, &items), None);
     }
 
     /// El montaje más ESPECÍFICO manda: con `/` y `/home` montados aparte,

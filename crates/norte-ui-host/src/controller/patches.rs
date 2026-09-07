@@ -365,17 +365,35 @@ impl Estado {
 
     /// Las filas visibles de UN hueco concreto, no del que tenga el foco.
     pub(super) fn parche_filas_de(&mut self, slot: u32) -> BridgeEnvelope<UiUpdate> {
-        let (generacion, primera, filas) = match self.huecos.get(&slot) {
-            Some(h) => (h.pane.listing_epoch(), h.primera_visible, self.filas_de(h)),
-            None => (0, 0, Vec::new()),
+        let (generacion, primera, filas, total) = match self.huecos.get(&slot) {
+            Some(h) => (
+                h.pane.listing_epoch(),
+                h.primera_visible,
+                self.filas_de(h),
+                Some(h.pane.entries().len() as u64),
+            ),
+            None => (0, 0, Vec::new(), None),
         };
         let cambio = ViewChange::Rows {
             slot_id: slot,
             generation: generacion,
             first_visible: primera,
             rows: filas,
+            // El total va CON las filas: es la altura del desplazamiento del
+            // renderer, y el drenaje paginado no manda otra cosa —tampoco en
+            // el último lote—.
+            total_rows: total,
         };
-        self.parche(vec![cambio])
+        // La cabecera va CON las filas: `pane.names-encoding` retranscribe la
+        // ruta igual que los nombres, y ocultar mueve entradas dentro y fuera
+        // del listado. Mandar solo las filas dejaba el título con la lectura
+        // vieja.
+        let cabecera = self
+            .huecos
+            .get(&slot)
+            .map(|h| self.cabecera_de(slot, h))
+            .into_iter();
+        self.parche(std::iter::once(cambio).chain(cabecera).collect())
     }
 
     /// Lo que cambia una marca o un scroll: las filas visibles.
@@ -385,8 +403,13 @@ impl Estado {
             generation: self.generacion(),
             first_visible: self.hueco().primera_visible,
             rows: self.filas_visibles(),
+            // Marcar u ocultar no cambia solo qué filas se ven: `toggle-hidden`
+            // mueve entradas dentro y fuera del listado, o sea que el total y
+            // la altura del desplazamiento se mueven con ellas.
+            total_rows: Some(self.hueco().pane.entries().len() as u64),
         };
-        self.parche(vec![cambio])
+        let cabecera = self.cabecera_de(self.activo(), self.hueco());
+        self.parche(vec![cambio, cabecera])
     }
 
     pub(super) fn fila(&self, hueco: &Hueco, i: usize, e: &Entry) -> RowView {
@@ -448,8 +471,9 @@ impl Estado {
     /// tamaño, un atributo que el provider no mandó— y viaja como tal: jamás
     /// un `0` fabricado.
     pub(super) fn celdas(&self, hueco: &Hueco, e: &Entry) -> Vec<crate::dto::CellView> {
-        use norte_frontend::columns::{ColumnId, ColumnStyle, styled_cell};
+        use norte_frontend::columns::{ColumnId, styled_cell_in};
         let ahora = ahora_ms();
+        let esquema = hueco.pane.dir().scheme().to_owned();
         self.columnas_de(hueco.pane.dir())
             .iter()
             .filter(|c| !matches!(c, ColumnId::Builtin(norte_frontend::columns::Builtin::Name)))
@@ -461,11 +485,23 @@ impl Estado {
                         &norte_frontend::columns::plugin_display_id(plugin, column),
                         &e.path,
                     ),
-                    otra => styled_cell(
+                    // El estilo CONFIGURADO, igual que la cabecera: con
+                    // `default_for_id` un `format = "iso"` no hacía nada aquí
+                    // mientras el terminal sí lo honraba, y la fecha salía
+                    // siempre relativa.
+                    //
+                    // Y con el IDIOMA del host: la clase, un booleano y la
+                    // fecha relativa traducen, y salían en el del proceso —
+                    // cada celda de fecha del listado bajo una cabecera en
+                    // otro idioma.
+                    otra => styled_cell_in(
                         e,
                         otra,
                         ahora,
-                        &ColumnStyle::default_for_id(otra, self.catalogo_de(&e.path)),
+                        &self
+                            .columnas
+                            .style_for_id(&esquema, otra, self.catalogo_de(&e.path)),
+                        self.lang,
                     ),
                 };
                 crate::dto::CellView {

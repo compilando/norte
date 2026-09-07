@@ -178,6 +178,43 @@ pub fn scheme_is_read_only(scheme: &str) -> bool {
     norte_proto::scheme_archive_format(scheme).is_some()
 }
 
+/// Whether a location refuses mutation: the flags if they have arrived, the
+/// scheme if they have not.
+///
+/// The two-step answer both frontends need, in ONE place. Each had written it
+/// out — `norte_tui::app::App::pane_read_only` and the GUI host's
+/// `solo_lectura` — which is the shape ADR 0077 exists to stop: two spellings
+/// of one decision, drifting quietly. `enter_target` moved here for the same
+/// reason and in the same change.
+///
+/// The ORDER is the decision. The provider's own answer wins, because it knows
+/// about a read-only export or an `ro` mount that no scheme can express; the
+/// scheme answers only while nothing has come back, and it errs towards
+/// writable (see [`scheme_is_read_only`] for why that direction is the safe
+/// one).
+///
+/// ```
+/// use norte_frontend::availability::read_only;
+/// use norte_proto::{Capabilities, CapabilityFlags};
+///
+/// let ro = Capabilities { flags: CapabilityFlags::READ_ONLY, max_path: None };
+/// let rw = Capabilities { flags: CapabilityFlags::CASE_SENSITIVE, max_path: None };
+///
+/// // El flag manda, en los dos sentidos.
+/// assert!(read_only(Some(ro), "sftp"));
+/// assert!(!read_only(Some(rw), "sftp"));
+/// // Sin respuesta todavía, contesta el esquema.
+/// assert!(read_only(None, "zip+file"));
+/// assert!(!read_only(None, "sftp"));
+/// ```
+#[must_use]
+pub fn read_only(caps: Option<norte_proto::Capabilities>, scheme: &str) -> bool {
+    caps.map_or_else(
+        || scheme_is_read_only(scheme),
+        |c| c.flags.contains(norte_proto::CapabilityFlags::READ_ONLY),
+    )
+}
+
 /// Deshabilitado por `reason`.
 fn no(reason: Reason) -> Availability {
     Availability::Unavailable { reason }
@@ -238,9 +275,10 @@ fn first_failure(checks: &[(bool, Reason)]) -> Availability {
 #[must_use]
 pub fn verdict(command: &str, facts: &Facts) -> Availability {
     match command {
-        // Entrar: el llamador decide qué es entrable (un directorio en la
-        // GUI; también un archivo comprimido en la TUI, que le compone el
-        // scheme). La tabla no vuelve a mirar el recuento — el frontend que
+        // Entrar: el llamador dice qué es entrable, y los dos frontends lo
+        // preguntan al mismo sitio ([`crate::nav::enter_target`]) — un
+        // directorio, un enlace y un contenedor, que es al que compone el
+        // scheme. La tabla no vuelve a mirar el recuento: el frontend que
         // exige UNA sola entrada ya lo dobló en el hecho.
         "nav.enter" => gated(facts.enterable, Reason::WrongTarget),
         "pane.view" => gated(facts.viewable, Reason::WrongTarget),

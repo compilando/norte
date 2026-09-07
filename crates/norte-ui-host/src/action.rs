@@ -547,4 +547,11 @@ pub enum UiAction {
     },
     /// Pide un snapshot completo: el renderer perdió el hilo de la secuencia.
     Resync,
+    /// El lector quiere CERRAR la ventana.
+    ///
+    /// No la cierra: pregunta si hay que preguntar. Con `[ui] confirm_quit`
+    /// pidiéndolo —siempre, o solo si queda trabajo— abre el diálogo y espera;
+    /// si no, contesta con [`crate::dto::NativeEffect::CloseWindow`]. Quien
+    /// hospeda no decide esto: es configuración.
+    RequestQuit,
 }

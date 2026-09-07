@@ -558,6 +558,21 @@ impl Estado {
             cells: self.viewport,
             tabs: self.grupos_de_pestanas(),
             placements,
+            // Se cuentan los huecos que PUEDEN ser destino, no los colocados:
+            // un reparto lleva también la barra de estado y la franja de
+            // tareas, y contarlas haría que el «tres o más» se cumpliera
+            // siempre — que es como no tener la regla.
+            mark_target: norte_frontend::layout::target_worth_marking(
+                self.reparto
+                    .placements
+                    .iter()
+                    .filter(|(slot, _)| {
+                        self.arbol
+                            .kind_of(*slot)
+                            .is_some_and(|k| self.kinds.holds_role(k, RoleId::Target))
+                    })
+                    .count(),
+            ),
         }
     }
 

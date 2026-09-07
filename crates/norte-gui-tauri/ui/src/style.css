@@ -728,6 +728,21 @@ body {
   margin-top: 6px;
 }
 
+/* Del DESTINO: que no cabe (#149), que no sabe confinar (#164). Mismo peso
+   visual que el recorte y por el mismo motivo: las tres frases dicen que lo
+   que se va a hacer no es exactamente lo que se lee. */
+.dialog-warning {
+  color: var(--warning-fg);
+  margin-top: 6px;
+}
+
+/* Todavía se está preguntando. Ocupa el mismo alto que un aviso para que la
+   respuesta no empuje los botones bajo el puntero al llegar. */
+.dialog-checking {
+  color: var(--title-fg);
+  margin-top: 6px;
+}
+
 .dialog input {
   width: 100%;
   background: var(--bg);
@@ -2353,6 +2368,94 @@ body {
   unicode-bidi: isolate;
   flex: none;
   margin-left: 8px;
+}
+
+/* Las otras cuatro notas de la cabecera, con la misma forma que las dos de
+   arriba. Sin regla propia eran items flex sin separación —«⚠ 2 entradas
+   omitidasnombres: cp866»— y encogibles, o sea que se recortaban antes que
+   la ruta, que es justo al revés de lo que hay que hacer.
+
+   `flex: none` es la mitad importante: LA RUTA es lo único que cede
+   (`.title-path` es el único `flex: 0 1 auto`), porque un aviso recortado
+   deja de avisar mientras que una ruta recortada sigue diciendo dónde estás.
+   Y `text-overflow` para que, cuando ya no quepa ni así, se vea que se cortó
+   en vez de desaparecer en silencio. */
+.slot-filling,
+.slot-names,
+.slot-pruned,
+.slot-marked {
+  flex: none;
+  margin-left: 8px;
+  unicode-bidi: isolate;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Reinterpretación de nombres y marcas caídas van en el color de AVISO. Lo
+   que se pinta no son los bytes que hay en el disco, y una selección que se
+   vació redirige la siguiente operación en masa al cursor: las dos dicen que
+   la pantalla no describe lo que el lector cree. */
+.slot-names,
+.slot-pruned {
+  color: var(--warning-fg);
+}
+
+/* Rellenando y lo marcado son informativos: uno es temporal y el otro es un
+   contador de algo que el lector acaba de hacer. */
+.slot-filling,
+.slot-marked {
+  color: var(--title-fg);
+}
+
+/* Esperando un listado (#323).
+
+   El UMBRAL vive aquí, y es el sitio correcto: nada se ve antes de 250 ms
+   porque por debajo la operación acaba antes de que el ojo la registre y lo
+   único que queda es un parpadeo. En CSS eso es un `animation-delay` y no
+   cuesta ni un temporizador ni un mensaje, así que el nodo se puede crear ya.
+
+   `opacity: 0` de salida y la animación lo levanta: sin eso, el texto se
+   vería desde el primer frame y el retardo no serviría de nada. */
+@keyframes norte-aparece {
+  to {
+    opacity: 1;
+  }
+}
+
+.slot-busy {
+  /* Encoge ANTES que la ruta no: la ruta es lo único que cede en esta
+     cabecera (`.title-path`), así que este aviso se recorta con puntos
+     suspensivos en vez de desbordar. `nowrap` es lo que hace que
+     `text-overflow` signifique algo. */
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: 8px;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--info-fg, var(--title-fg));
+  opacity: 0;
+  /* El retardo lo pone el host (`--busy-delay`), que lo saca del crate
+     compartido con el terminal. El 250ms de aquí es solo el respaldo para el
+     instante anterior a que llegue el catálogo. */
+  animation: norte-aparece 120ms linear var(--busy-delay, 250ms) forwards;
+}
+
+/* La RUTA a la que se va, en su propio nodo: pegada dentro de la frase se
+   leería como parte de ella, y un directorio puede llamarse «yendo a /otro». */
+.slot-busy-target {
+  unicode-bidi: isolate;
+}
+
+/* Quien pide menos movimiento no ve la animación, y entonces el retardo no
+   puede depender de ella: se ve desde el principio, que es lo honesto — un
+   parpadeo molesta menos que no saber que se está esperando. */
+@media (prefers-reduced-motion: reduce) {
+  .slot-busy {
+    opacity: 1;
+    animation: none;
+  }
 }
 
 /* --- El selector de columnas ------------------------------------------- */

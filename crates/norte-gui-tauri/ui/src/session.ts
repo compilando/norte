@@ -107,10 +107,39 @@ export class Session {
         slot.generation = c.generation;
         slot.first_visible = c.first_visible;
         slot.rows = c.rows;
+        // El TOTAL, que es la altura del desplazamiento. Sin esto el listado
+        // se quedaba con el de la primera página (100) durante todo el
+        // drenaje —también después, porque el último lote también es un
+        // parche—, y un directorio de cinco mil ficheros topaba ahí.
+        if (c.total_rows !== null) {
+          slot.total_rows = c.total_rows;
+        }
         const cur = c.rows.find((r) => r.selected);
         if (cur !== undefined) {
           slot.cursor = cur.key;
         }
+        return true;
+      }
+      case "browser_header": {
+        const slot = browser(s, c.slot_id);
+        if (slot === null) {
+          return true;
+        }
+        // La cabecera se movía solo con la foto entera, así que
+        // `pane.names-encoding` retranscribía las filas y dejaba el título
+        // con la lectura vieja.
+        slot.path_display = c.path_display;
+        slot.path_hostile = c.path_hostile;
+        slot.skipped_note = c.skipped_note;
+        slot.hidden_note = c.hidden_note;
+        // Las cuatro nuevas por el mismo camino: una cabecera que solo se
+        // moviera con la foto entera dejaria el aviso con la lectura vieja,
+        // que es el bug que este parche existe para no repetir.
+        slot.names_note = c.names_note ?? "";
+        slot.filling_note = c.filling_note ?? "";
+        slot.pruned_note = c.pruned_note ?? "";
+        slot.marked_note = c.marked_note ?? "";
+        slot.marks = c.marks;
         return true;
       }
       case "slot_state": {

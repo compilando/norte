@@ -199,6 +199,9 @@
     "action": "refresh_slot",
     "slot_id": 1
   },
+  "request_quit": {
+    "action": "request_quit"
+  },
   "resize_slot": {
     "action": "resize_slot",
     "cells": 42,

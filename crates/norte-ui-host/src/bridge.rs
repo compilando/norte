@@ -185,7 +185,26 @@ use serde::{Deserialize, Serialize};
 /// - **53**: el renderer declara cuántas COLUMNAS tiene el cuerpo del visor
 ///   (`SetViewerCols`), como ya declaraba las filas: es el ancho que el
 ///   previewer recibe.
-pub const BRIDGE_VERSION: u32 = 53;
+/// - **54**: un diálogo de transferencia dice en qué punto está la
+///   COMPROBACIÓN DE SU DESTINO ([`crate::dto::DestCheckView`]): si cabe
+///   (#149) y si sabe sujetar sus escrituras (#164). Sube el número aunque el
+///   campo lleve `serde(default)`, y esa es la razón de subirlo: un renderer
+///   viejo emparejado con este host no conoce el campo, no pintaría la línea
+///   de #164 y no lo diría — y la ausencia de esa línea SIGNIFICA que el
+///   destino confina. El webview va embebido en el binario, así que ese
+///   emparejamiento es lo que sale de olvidarse de `just link-gui`.
+/// - **55**: la cabecera de un listado lleva las CUATRO marcas que le
+///   faltaban y que el terminal tiene desde siempre: que se está rellenando
+///   —y cuántas van—, que los nombres se reinterpretan (#57), que un refresco
+///   se comió marcas, y cuántas hay marcadas y cuánto pesan. Todas bajo la
+///   misma regla: un listado que enseña menos de lo que hay, o que no enseña
+///   lo que hay, jamás es silencioso.
+/// - **56**: un hueco que está CARGANDO dice a dónde va (#323). El cuerpo
+///   sigue enseñando el listado anterior hasta que llegue el nuevo —a
+///   propósito, para que un fallo deje al lector donde estaba—, y sin el
+///   destino esa mezcla no se puede leer. El umbral de 250 ms lo pone el
+///   renderer, que es donde un retardo puramente visual no cuesta nada.
+pub const BRIDGE_VERSION: u32 = 56;
 
 /// Tope de una cadena que cruza al renderer, en bytes.
 ///

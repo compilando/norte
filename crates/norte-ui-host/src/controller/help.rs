@@ -188,10 +188,13 @@ impl Estado {
                 // son otras (`dialog.overwrite`, `dialog.skip`…), y mandar al
                 // lector a la de confirmar le enseñaría las que no valen.
                 Some(Pendiente::Reintentar { .. }) => "dialog.collision",
+                // Cerrar cae aquí por lo mismo: es «responde antes de que
+                // algo se pierda», y lo que se pierde es una copia a medias.
                 Some(
                     Pendiente::Borrar { .. }
                     | Pendiente::Transferir { .. }
-                    | Pendiente::Soltar { .. },
+                    | Pendiente::Soltar { .. }
+                    | Pendiente::Salir,
                 ) => "dialog.confirm",
                 Some(
                     Pendiente::Decidir { .. }
@@ -258,28 +261,47 @@ impl Estado {
 
     /// Los hechos con los que la ayuda atenúa una fila, congelados al abrir.
     ///
-    /// Tres son de la entrada bajo el cursor y se saben. Los dos de solo
-    /// lectura NO se saben todavía —el host no lleva cuenta de si el
-    /// provider de un hueco rehúsa escribir— y se declaran permisivos, que
-    /// es el valor por defecto de la propia tabla compartida: es una lista de
-    /// IMPEDIMENTOS conocidos, y «no lo he mirado» no es uno. Atenuar por lo
-    /// que no se ha comprobado engaña tanto como no atenuar.
+    /// Los dos de solo lectura salen de las capacidades del hueco, que se
+    /// piden al aterrizar cada listado. Estuvieron cableados a `false` con un
+    /// comentario que decía que el host no llevaba esa cuenta: la llevaba
+    /// —desde #268— y tiraba todo menos el modo de plegado, así que dentro de
+    /// un contenedor el terminal atenuaba F5/F8 y esta ventana los ofrecía
+    /// encendidos. El ORIGEN es el hueco activo y el DESTINO es el que tiene
+    /// el rol, que son exactamente los dos huecos por los que pregunta la
+    /// tabla compartida.
+    ///
+    /// Sin destino designado —tres o más huecos sin rol, o ninguno más— la
+    /// respuesta es `false`, y la divergencia con `App::help_facts` del
+    /// terminal es DELIBERADA: allí se contesta con el hueco propio, que
+    /// atenúa F5 diciendo «solo lectura» cuando el impedimento real es que no
+    /// hay a dónde copiar. Una causa falsa enseña al lector algo que no es;
+    /// aquí la tecla se ofrece y el rechazo llega con su nombre
+    /// (`host-no-target-designated`, `host-no-other-slot`), que es
+    /// información. Si alguien iguala los dos frontends, que sea moviendo el
+    /// terminal hacia aquí.
     pub(super) fn hechos(&self) -> norte_frontend::availability::Facts {
         let hueco = self.hueco();
-        let entrada = hueco.pane.entries().get(hueco.pane.cursor());
+        // `cursor_entry`, que es la puerta de DESCRIBIR: con un quick filter
+        // puesto el cursor crudo no se mueve y la fila señalada es otra, así
+        // que indexar `entries()` por él describía una entrada que no es la
+        // que el lector tiene delante.
+        let entrada = hueco.pane.cursor_entry();
         norte_frontend::availability::Facts {
-            // `enterable` SÍ es exactamente `Dir`, porque eso es lo que
-            // acepta la navegación. La asimetría con `viewable` de abajo es
-            // deliberada: cada uno refleja lo que su camino rehúsa.
-            enterable: entrada.is_some_and(|e| e.kind == EntryKind::Dir),
+            // Lo mismo que navega `Activate`, y por el sitio compartido: un
+            // contenedor y un enlace se entran igual que un directorio (ADR
+            // 0077). Preguntarlo aquí por `kind == Dir` era atenuar `enter`
+            // sobre un `.zip` que la tecla abre sin problema.
+            enterable: entrada.is_some_and(|e| norte_frontend::nav::enter_target(e).is_some()),
             // Lo MISMO que rehúsa `pedir_visor`, que solo rehúsa un
             // directorio: un symlink se abre en el visor sin problema, y
             // atenuar F3 sobre uno decía «esto no aplica» de una tecla que
             // funciona. Los dos sitios se mueven juntos.
             viewable: entrada.is_some_and(|e| e.kind != EntryKind::Dir),
             rename_single: hueco.pane.marks_len() <= 1,
-            source_read_only: false,
-            dest_read_only: false,
+            source_read_only: self.solo_lectura(self.activo()),
+            dest_read_only: self
+                .hueco_destino()
+                .is_ok_and(|destino| self.solo_lectura(destino)),
             // `degraded` en la tabla significa que la sesión va SIN CIFRAR,
             // que no es ninguno de los tres estados que este host proyecta
             // (conectado, reintentando, perdido). Mientras el wire de la

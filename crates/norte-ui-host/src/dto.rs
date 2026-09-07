@@ -1469,6 +1469,24 @@ pub struct LayoutView {
     /// ventana con tres pestañas que solo muestra la de delante y no dice que
     /// hay otras dos es una ventana que esconde trabajo abierto.
     pub tabs: Vec<TabGroupView>,
+    /// Si la marca de DESTINO dice algo con los listados que hay a la vista.
+    ///
+    /// Que el rol EXISTA y que se PINTE son dos preguntas. La primera la
+    /// contesta [`SlotPlacement::role`], que es el modelo; ésta es la
+    /// segunda, y viaja calculada porque la decide el crate compartido
+    /// (`layout::target_worth_marking`) y no el renderer: escrita allí era un
+    /// número repetido en TypeScript, o sea la misma decisión en dos sitios
+    /// que esta rama existe para dejar de tener (ADR 0077).
+    ///
+    /// Con dos listados el destino es «el otro» y nadie necesita que se lo
+    /// digan; una marca que sale siempre deja de leerse, y entonces no está
+    /// el día que hay tres y una copia hacia el que el motor desempate solo
+    /// es pérdida de datos silenciosa (ADR 0058 D7).
+    ///
+    /// `#[serde(default)]`: ausente = `false`, que es no marcar. La dirección
+    /// segura, porque la marca de más es la que enseña a ignorarla.
+    #[serde(default)]
+    pub mark_target: bool,
 }
 
 /// Un grupo de pestañas y cuál está delante.
@@ -1635,6 +1653,10 @@ pub struct LogSlotView {
     /// frases traducidas para eso obligaría al renderer a conocer el idioma
     /// del host.
     pub level: String,
+    /// Ese mismo nivel tal y como se PINTA (`TRACE`). Ver
+    /// [`LogLineView::level_label`]: el de arriba se compara, éste se lee.
+    #[serde(default)]
+    pub level_label: String,
     /// El filtro de texto vigente, enmascarado y acotado. Vacío = todo.
     ///
     /// Lo teclea el lector, así que puede traer controles y marcas de
@@ -1740,7 +1762,29 @@ pub struct LogLineView {
     /// mientras sea el mismo.
     pub time: String,
     /// El nivel, en su forma de wire — el renderer lo colorea por esto.
+    ///
+    /// Es una IDENTIDAD, no un texto: se compara, no se pinta. Lo que se
+    /// pinta es [`Self::level_label`].
     pub level: String,
+    /// El nivel tal y como se PINTA (`TRACE`), que es lo que pinta el
+    /// terminal.
+    ///
+    /// Separado del de arriba porque son dos cosas: una identidad estable que
+    /// el renderer usa para colorear y una etiqueta que se lee. Pintar la
+    /// identidad es lo que tenía a la ventana enseñando `trace` en las líneas,
+    /// `trace` en el chip del título y «traza» en sus botones — tres
+    /// vocabularios del mismo nivel, los tres a la vez en pantalla.
+    ///
+    /// NO se traduce, y eso es la decisión: `TRACE` es lo que se escribe en
+    /// `RUST_LOG`, lo que sale en un pegado de un informe de fallo y lo que
+    /// alguien va a buscar con la vista en una lista larga. Los BOTONES de
+    /// nivel de la ventana sí van traducidos: son un mando, no un dato, y el
+    /// terminal no tiene ninguno con el que discrepar.
+    ///
+    /// `#[serde(default)]`: vacío = un puente anterior, y entonces el
+    /// renderer cae a la identidad, que es lo que pintaba antes.
+    #[serde(default)]
+    pub level_label: String,
     /// El módulo que la emitió, enmascarado y acotado.
     pub target: String,
     /// El mensaje, enmascarado y acotado.
@@ -1806,6 +1850,30 @@ pub struct BrowserSlotView {
     /// y traducido aquí por lo mismo — «1 oculta» y «3 ocultas» no se dicen
     /// igual en todos los idiomas.
     pub hidden_note: String,
+    /// Los nombres se REINTERPRETAN con otra codificación (#57). Vacío = no.
+    ///
+    /// La misma disciplina que las dos de arriba, y por eso está aquí y no en
+    /// la barra: lo que se pinta no son los bytes que hay en el disco, y eso
+    /// hay que poder saberlo en el momento de decidir copiar o borrar algo.
+    /// El mensaje del toggle se lo lleva la siguiente tecla.
+    ///
+    /// `#[serde(default)]` NO promete compatibilidad con un puente anterior
+    /// —el renderer rechaza cualquier versión que no sea la suya—: está para
+    /// que las fixtures y los round-trips no tengan que enumerar campos que
+    /// casi siempre van vacíos.
+    #[serde(default)]
+    pub names_note: String,
+    /// El listado se está RELLENANDO todavía, y cuántas van. Vacío = entero.
+    #[serde(default)]
+    pub filling_note: String,
+    /// Marcas que el último refresco descartó porque su entrada ya no está.
+    /// Vacío = no cayó ninguna.
+    #[serde(default)]
+    pub pruned_note: String,
+    /// Cuántas entradas hay marcadas y cuánto pesan, ya dicho. Vacío = sin
+    /// marcas.
+    #[serde(default)]
+    pub marked_note: String,
     /// Las cabeceras de las columnas configuradas, en su orden. Incluye el
     /// nombre, que en las filas viaja aparte (`display_name`).
     pub columns: Vec<ColumnHeader>,
@@ -1835,7 +1903,39 @@ pub enum SlotState {
     /// Listado completo y quieto.
     Ready,
     /// Pidiendo la primera página, o rellenando el resto.
-    Loading,
+    ///
+    /// Lleva A DÓNDE va, que es la mitad que faltaba. El cuerpo sigue
+    /// enseñando el listado ANTERIOR —a propósito: si la conexión falla, el
+    /// lector se queda donde estaba— y sin el destino esa mezcla no se puede
+    /// leer: la pantalla enseña un sitio mientras trabaja en otro, y no dice
+    /// cuál. El terminal pone el destino en la cabecera junto al spinner
+    /// desde #323.
+    ///
+    /// El UMBRAL —nada antes de 250 ms, porque por debajo la operación
+    /// termina antes de que el ojo lo registre y lo único que se ve es un
+    /// parpadeo— es cosa del renderer, y es donde tiene que estar: es un
+    /// retardo puramente visual, y en CSS no cuesta ni un temporizador ni un
+    /// mensaje.
+    Loading {
+        /// La clave Fluent del VERBO, del vocabulario CERRADO compartido
+        /// (`norte_frontend::busy::BusyKind`): `busy-connecting`,
+        /// `busy-listing`, `busy-opening`.
+        ///
+        /// De ahí y no de una clave propia porque ese módulo existe desde
+        /// #323 justamente para que los dos frontends no digan cosas
+        /// distintas de la misma espera — y esta ventana decía «cargando…»
+        /// hasta para una conexión remota, que es el caso que lo destapó.
+        #[serde(default)]
+        verb_key: String,
+        /// La ruta a la que va, ya pintable y con la reinterpretación
+        /// vigente. Vacía = un relleno del sitio en el que ya se está, que no
+        /// va a ninguna parte.
+        #[serde(default)]
+        target_display: String,
+        /// Esa ruta DIFIERE de los bytes reales.
+        #[serde(default)]
+        target_hostile: bool,
+    },
     /// El listado falló. La clave Fluent dice por qué; el detalle ya viene
     /// saneado y acotado.
     Error {
@@ -2308,6 +2408,13 @@ pub struct DialogView {
     /// un renderer no traduce ni sustituye números, y un aviso metido entre
     /// las líneas del cuerpo lo podría suplantar un nombre de fichero.
     pub overflow_note: String,
+    /// En qué punto está la comprobación del DESTINO: si cabe (#149) y si
+    /// sabe sujetar lo que se escriba en él (#164).
+    ///
+    /// `#[serde(default)]`: un renderer de un puente anterior no lo manda, y
+    /// su ausencia es [`DestCheckView::NotAsked`], que es lo que era antes.
+    #[serde(default)]
+    pub dest_check: DestCheckView,
     /// Lo que se puede responder.
     pub choices: Vec<DialogChoice>,
     /// El diálogo pide texto libre, y esto es lo tecleado hasta ahora, YA
@@ -2336,6 +2443,53 @@ pub struct DialogView {
     /// su ausencia significa «no es un secreto», que es lo que era antes.
     #[serde(default)]
     pub input_secret: bool,
+}
+
+/// Qué se sabe de A DÓNDE VAN LOS BYTES, mientras se pregunta.
+///
+/// De una transferencia es el directorio destino; de un borrado es la
+/// papelera, o su ausencia — que es el mismo tipo de hecho y por eso comparte
+/// canal: «⚠ SIN papelera: esto no se puede deshacer» responde a la misma
+/// pregunta que «no cabe» y «este destino no confina». Un canal y no tres
+/// también porque el renderer los pinta en un bloque que un nombre de fichero
+/// no puede suplantar, y tres bloques serían tres sitios donde olvidarse de
+/// esa propiedad.
+///
+/// **Tres estados y no una lista de avisos, porque el silencio tenía que
+/// significar una sola cosa.** Las dos preguntas —¿cabe?, ¿sabe confinar?—
+/// son I/O, así que el diálogo se pinta antes de que vuelvan; con un solo
+/// `Vec` vacío, «todavía no lo he preguntado» y «lo pregunté y no hay nada
+/// que decir» llegaban idénticos, y el humano puede confirmar en ese hueco.
+/// La ausencia de la línea de #164 SIGNIFICA «este destino sujeta sus
+/// escrituras», así que dejarla ambigua es afirmarlo sin saberlo.
+///
+/// El terminal no tiene este problema: pregunta en la cabecera de la vuelta,
+/// antes de pintar, así que su modal nunca se ve sin las respuestas puestas
+/// (`norte_tui::turn`). Esperarlas aquí dejaría F5 sin pintar nada contra un
+/// SFTP lento, que es peor: lo que el humano tiene delante mientras tanto es
+/// la lista de lo que va a copiar, que es lo que vino a leer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum DestCheckView {
+    /// Este diálogo no tiene nada que comprobar sobre a dónde van los bytes,
+    /// y es el valor por defecto. Los que sí: transferir, soltar y borrar.
+    #[default]
+    NotAsked,
+    /// Se preguntó y no ha vuelto. El renderer lo DICE y reserva el sitio:
+    /// una línea que aparece de golpe encima de los botones los mueve bajo
+    /// el puntero de quien iba a pulsar.
+    Checking,
+    /// Volvió. La lista vacía es la respuesta normal y no se pinta: que
+    /// quepa y que confine NO se anuncian, porque una línea en cada copia es
+    /// ruido y el ruido enseña a saltarse la línea el día que dice algo.
+    ///
+    /// Ya traducidas y sin una sola cadena que controle un tercero. Van
+    /// aquí y no entre las líneas del cuerpo por eso mismo: ahí un nombre de
+    /// fichero las podría suplantar.
+    Done {
+        /// Lo que hay que saber antes de decir que sí. Vacío = nada.
+        warnings: Vec<String>,
+    },
 }
 
 /// Una línea del cuerpo de un diálogo.
@@ -2516,6 +2670,72 @@ pub enum ViewChange {
         first_visible: u64,
         /// Las filas.
         rows: Vec<RowView>,
+        /// Cuántas filas tiene el listado ENTERO, no cuántas viajan.
+        ///
+        /// Viaja en el parche y no solo en la foto porque es la ALTURA del
+        /// desplazamiento del renderer (`total * alto_de_celda`, más
+        /// `aria-rowcount`), y el drenaje paginado contesta con parches
+        /// —también el último lote—. Sin esto el renderer se quedaba con el
+        /// total de la primera página para siempre: un directorio de cinco
+        /// mil ficheros topaba en la fila 100, y ni la rueda podía bajar ni
+        /// el rango visible podía pedir el resto.
+        total_rows: Option<u64>,
+    },
+    /// La CABECERA de un listado cambió: su ruta y lo que falta de él.
+    ///
+    /// Aparte de [`ViewChange::Rows`] porque es otra parte de la pantalla —el
+    /// renderer la pinta en `paintHeader`—, y con ella porque se mueven a la
+    /// vez: `pane.names-encoding` retranscribe la ruta igual que las filas, y
+    /// `pane.toggle-hidden` mueve entradas dentro y fuera del listado, lo que
+    /// cambia cuántas se apartan.
+    ///
+    /// Antes solo viajaba en la foto entera, así que las filas se repintaban
+    /// y el título se quedaba con la lectura vieja — el mojibake arriba y el
+    /// lector sin saber si el comando hizo algo (#57, #293).
+    BrowserHeader {
+        /// Hueco.
+        slot_id: u32,
+        /// La ruta, ya pintable y con la reinterpretación vigente.
+        path_display: String,
+        /// Esa ruta DIFIERE de los bytes reales.
+        path_hostile: bool,
+        /// Lo que el provider se saltó, ya dicho. Vacío si no se saltó nada.
+        skipped_note: String,
+        /// Lo que la ocultación aparta. Vacío si no aparta nada.
+        hidden_note: String,
+        /// Los nombres se REINTERPRETAN con otra codificación (#57). Vacío si
+        /// no.
+        ///
+        /// Permanente mientras dure, como en el terminal: lo que se pinta no
+        /// son los bytes que hay en el disco, y eso hay que poder saberlo en
+        /// el momento de decidir copiar o borrar algo — no solo en el mensaje
+        /// del toggle, que la siguiente tecla se lleva.
+        names_note: String,
+        /// El listado se está RELLENANDO todavía, y cuántas van. Vacío si ya
+        /// está entero.
+        ///
+        /// Un listado incompleto jamás es silencioso: sin esto la pantalla
+        /// afirma que eso es todo lo que hay, que es precisamente lo que
+        /// todavía no se sabe.
+        filling_note: String,
+        /// Marcas que el último refresco descartó porque su entrada ya no
+        /// está. Vacío si no cayó ninguna.
+        ///
+        /// El más grave de los avisos de esta cabecera: con la selección
+        /// vacía el embudo del operando cae al CURSOR, así que callarlo
+        /// redirige la siguiente operación en masa a algo que nadie marcó.
+        pruned_note: String,
+        /// Cuántas entradas hay marcadas y cuánto pesan, ya dicho. Vacío sin
+        /// marcas: quien no marca no gana ruido.
+        marked_note: String,
+        /// Cuántas entradas hay marcadas, en crudo.
+        ///
+        /// Sigue viajando al lado de [`Self::BrowserHeader::marked_note`] y
+        /// no es una duplicación: la frase es para PINTAR y este número es
+        /// para decidir (un renderer que quiera marcar el hueco, contar, o
+        /// habilitar algo), y derivar un número de una frase traducida es lo
+        /// que este DTO existe para no obligar a nadie a hacer.
+        marks: u64,
     },
     /// El estado de un hueco cambió (cargando, error, listo).
     SlotState {
@@ -2824,6 +3044,14 @@ pub enum NativeEffect {
         /// Cómo se llama el tema que hay que resolver.
         name: String,
     },
+    /// Ciérrate: el lector lo pidió y, si había que preguntar, ya se
+    /// preguntó.
+    ///
+    /// Quien hospeda vuelca la sesión y destruye la ventana. Va por aquí y no
+    /// por el gesto del gestor de ventanas porque la pregunta la decide el
+    /// host: `[ui] confirm_quit` es configuración, y una ventana que se
+    /// cierra sola con una copia a medias no es una ventana que obedece.
+    CloseWindow,
 }
 
 /// Lo que el host manda al renderer.

@@ -130,6 +130,7 @@ describe("el contrato con el host", () => {
     expect(changes).toEqual([
       "agents",
       "ai_rename",
+      "browser_header",
       "columns",
       "columns_picker",
       "compare",

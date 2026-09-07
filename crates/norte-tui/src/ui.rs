@@ -105,6 +105,18 @@ fn clear_themed(frame: &mut Frame<'_>, area: Rect, theme: &TuiTheme) {
     frame.render_widget(Block::default().style(base_style(theme)), area);
 }
 
+/// Si el panel `i` lleva la marca de DESTINO.
+///
+/// Dos preguntas: quién tiene el rol, y si con estos paneles la marca dice
+/// algo. La segunda la contesta el crate compartido, que es donde la ventana
+/// la contestaba por su cuenta y con otra respuesta (ADR 0077): con dos
+/// paneles el destino es «el otro» y una marca que sale siempre deja de
+/// leerse; a partir de tres, una copia hacia el que el motor desempate solo
+/// es pérdida de datos silenciosa (ADR 0058 D7).
+fn marca_destino(app: &App, i: usize) -> bool {
+    norte_frontend::layout::target_worth_marking(app.panes.len()) && app.target_index() == Some(i)
+}
+
 /// El cuerpo del frame: los dos panes —o el panel que los sustituye—, la
 /// franja de tareas y la barra de estado.
 ///
@@ -165,9 +177,8 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
                 // y cabeceras); sin él se pinta con defaults, jamás se espera.
                 app.attr_catalog(pane.dir().scheme()),
                 tab_strip_for(app, i).as_ref(),
-                // Solo a partir de TRES paneles: con dos, el destino es el
-                // otro y el marcador sería ruido en el caso de siempre.
-                app.panes.len() > 2 && app.target_index() == Some(i),
+                // La cuenta la decide el crate compartido (ADR 0077).
+                marca_destino(app, i),
                 // La espera, solo si es de ESTE panel y ya pasa del umbral: un
                 // trabajo de sesión no puede poner a girar una cabecera a la
                 // que no le está pasando nada.

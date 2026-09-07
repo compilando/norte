@@ -56,6 +56,7 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
     UiHost::start(UiHostOptions {
         backend: Falso::con(&nombres),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -278,6 +279,7 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -666,6 +668,69 @@ async fn mover_el_cursor_no_reenvia_las_filas() {
     );
 }
 
+/// El TOTAL llega sin pedir una foto: es la altura del scroll del renderer.
+///
+/// `total_rows` solo viajaba en la foto entera, y el drenaje paginado contesta
+/// con parches de filas —también el ÚLTIMO lote—. Así que el renderer se
+/// quedaba con el total de la PRIMERA PÁGINA (100) para siempre: pinta el
+/// canvas de scroll a `total * alto_de_celda` y publica `aria-rowcount`, o sea
+/// que un directorio de cinco mil ficheros quedaba topado en la fila 100 para
+/// la rueda, y no había forma de pedir el resto porque el rango visible se
+/// calcula del scroll.
+///
+/// El test de al lado no lo veía porque pide `Resync` en cada vuelta, que es
+/// justo lo que el renderer de verdad NO hace: solo resincroniza tras un hueco
+/// de secuencia o un `Lagged`.
+#[tokio::test]
+async fn el_total_de_un_listado_grande_llega_sin_pedir_foto() {
+    let mut falso = Falso::default();
+    let muchas: Vec<(Vec<u8>, bool)> = (0..5_000u32)
+        .map(|i| (format!("f{i:05}").into_bytes(), false))
+        .collect();
+    falso.pon("mem:///casa", muchas);
+    let (host, snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = host.subscribe();
+    assert!(
+        listado(&snap).total_rows.expect("hay total") <= 100,
+        "de partida, solo la primera página"
+    );
+
+    // SIN `Resync`: solo lo que el host manda por su cuenta mientras drena.
+    let mut ultimo_total = None;
+    let espera = async {
+        loop {
+            match sub.recv().await.expect("host vivo") {
+                Update::Message(m) => match m.payload {
+                    UiUpdate::Patch(p) => {
+                        for c in &p.changes {
+                            if let norte_ui_host::dto::ViewChange::Rows { total_rows, .. } = c {
+                                ultimo_total = *total_rows;
+                            }
+                        }
+                    }
+                    UiUpdate::Snapshot(s) => {
+                        ultimo_total = listado(&s).total_rows;
+                    }
+                    UiUpdate::Notice(_) => {}
+                },
+                // Quedarse atrás es «pide una foto», y el renderer la pide.
+                // No cuenta como que el total llegara solo.
+                Update::Lagged => {}
+            }
+            if ultimo_total == Some(5_000) {
+                return;
+            }
+        }
+    };
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(20), espera)
+            .await
+            .is_ok(),
+        "el renderer nunca se entera de que hay 5.000 filas: se queda topado \
+         en {ultimo_total:?} y no puede desplazarse más abajo"
+    );
+}
+
 /// Un listado grande: la primera página se pinta enseguida, el resto llega
 /// por detrás, y del total solo cruzan las filas visibles.
 #[tokio::test]
@@ -769,6 +834,7 @@ async fn el_contador_lo_resuelve_el_host() {
     let (host, _snap) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         // `vim` es el preset que habilita contadores.
         keymap: norte_ui_host::keys::keymap_de_preset("vim").expect("preset"),
@@ -830,6 +896,7 @@ async fn un_comando_que_el_host_no_hace_no_dispara_nada() {
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("norton").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("norton").expect("preset"),
@@ -907,6 +974,7 @@ async fn host_con_layout(
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -1105,6 +1173,66 @@ async fn la_sesion_coloca_los_huecos() {
     assert!(
         listado(&snap).path_display.ends_with("/casa/docs"),
         "arrancó donde lo dejó la sesión: {}",
+        listado(&snap).path_display
+    );
+}
+
+/// Un directorio ESCRITO en la línea de órdenes gana a la sesión.
+///
+/// `norte-gui /usr/bin` con una sesión guardada abría donde estuvieras ayer y
+/// se comía el argumento sin decir nada: `aplicar_sesion` escribe el dir de
+/// TODOS los huecos, y no había nada que dijera «éste lo acaba de teclear un
+/// humano». El terminal cerró lo mismo en `eb237c61` con `pin_start_dir`, y a
+/// la ventana no llegó.
+///
+/// Gana en el panel ACTIVO y solo ahí: el otro sigue donde la sesión lo dejó,
+/// que es media pantalla de memoria que nadie pidió tirar.
+#[tokio::test]
+async fn el_dir_de_la_linea_de_ordenes_gana_a_la_sesion() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    falso.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+    let (_h, snap) = UiHost::start(UiHostOptions {
+        backend: Arc::new(falso),
+        // Lo que el humano tecleó, que NO es donde lo dejó la sesión.
+        initial_dir: VPath::parse("mem:///casa").expect("vpath"),
+        initial_dir_pedido: true,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+    assert!(
+        listado(&snap).path_display.ends_with("/casa"),
+        "manda lo que se tecleó, no lo que guardó la sesión: {}",
+        listado(&snap).path_display
+    );
+}
+
+/// Y sin argumento, la sesión sigue mandando: es lo de siempre.
+#[tokio::test]
+async fn sin_argumento_la_sesion_sigue_mandando() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    falso.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+    let (_h, snap) = host_arbol(Arc::new(falso)).await;
+    assert!(
+        listado(&snap).path_display.ends_with("/casa/docs"),
+        "sin nada tecleado, donde lo dejaste: {}",
         listado(&snap).path_display
     );
 }
@@ -2092,6 +2220,7 @@ async fn el_catalogo_da_sentido_a_un_attr() {
     let (host, _snap) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -2809,6 +2938,7 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap,
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -3053,6 +3183,7 @@ async fn host_solo_lectura(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewS
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset_con(
             "orthodox",
@@ -3485,6 +3616,7 @@ async fn dos_columnas_que_se_enmascaran_igual_siguen_siendo_dos() {
     let (h, snap) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -3597,6 +3729,7 @@ async fn una_disposicion_sin_listado_no_arranca() {
     let salida = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -3647,6 +3780,7 @@ async fn las_columnas_de_otro_esquema_no_estan_muertas() {
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -3727,6 +3861,7 @@ prepend_keymap = [
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap,
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -4817,6 +4952,7 @@ async fn host_con_rutas(paths: norte_ui_host::settings::HostPaths) -> UiHost {
     UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -5399,6 +5535,7 @@ async fn host_con_tema(theme: norte_ui_host::pickers::HostTheme) -> UiHost {
     UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -5597,6 +5734,7 @@ async fn host_full(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot)
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -5708,6 +5846,7 @@ async fn host_full_con_fila_de_subir(backend: Arc<Falso>) -> (UiHost, norte_ui_h
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -5888,6 +6027,7 @@ async fn host_hoja_sin_visor(backend: Arc<Falso>) -> (UiHost, norte_ui_host::Vie
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -5905,6 +6045,91 @@ async fn host_hoja_sin_visor(backend: Arc<Falso>) -> (UiHost, norte_ui_host::Vie
     })
     .await
     .expect("arranca")
+}
+
+/// Los kinds cuya vista sale del CURSOR del listado al que siguen.
+///
+/// Lista a mano y a propósito, como `paridad.rs::NO_APLICA`: quien añada un
+/// hueco que siga al cursor la edita, y el test de abajo le exige una sonda.
+/// Derivarla del registro de kinds no vale — «seguir» es un vínculo del
+/// hueco, no una propiedad del kind, así que el registro no lo sabe.
+const SIGUEN_AL_CURSOR: &[&str] = &["viewer", "metadata"];
+
+/// Cada uno de ellos tiene camino propio hasta el renderer (ADR 0097, D3).
+///
+/// La ventana habla por PARCHES: uno de filas escribe `generation`,
+/// `first_visible`, `rows` y `cursor`, y nada más. Un panel que se deriva del
+/// cursor y no tiene sonda propia solo se refresca cuando OTRO panel provoca
+/// una foto entera — y la disposición de fábrica (`orthodox`) no coloca
+/// ninguno de los dos, así que ese «otro» no existe para la mayoría.
+///
+/// Así se quedó congelada la hoja de atributos: viajaba de gorra en la foto
+/// del visor. Este test pone cada kind SOLO con un listado, mueve el cursor,
+/// y exige una foto SIN pedir `Resync` — que es lo único que tiene el
+/// renderer de verdad.
+#[tokio::test]
+async fn todo_hueco_que_sigue_al_cursor_tiene_sonda_propia() {
+    use norte_frontend::layout::{Bindings, Dir, Follow, KindId, Node, RoleId, SlotId};
+    for kind in SIGUEN_AL_CURSOR {
+        let arbol_layout = Node::split(
+            Dir::Horizontal,
+            vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot_bound(
+                    SlotId(8),
+                    KindId::new(*kind),
+                    Bindings {
+                        follows: Some(Follow::Role(RoleId::Active)),
+                    },
+                ),
+            ],
+        );
+        let h = UiHost::start(UiHostOptions {
+            backend: arbol(),
+            initial_dir: dir(),
+            initial_dir_pedido: false,
+            locale: "es".to_owned(),
+            keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+            keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+            keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox")
+                .expect("preset"),
+            layout: arbol_layout,
+            viewport: (200, 60),
+            settings: ajustes_de_prueba(),
+            paths: norte_ui_host::settings::HostPaths::default(),
+            theme: norte_ui_host::pickers::HostTheme::default(),
+            user_layouts: Vec::new(),
+            profile: None,
+            columns: norte_ui_host::columnas_por_defecto(),
+            effects: norte_ui_host::commands::Efectos::Completo,
+            log_ring: None,
+        })
+        .await
+        .expect("arranca");
+        let (h, snap) = h;
+        let mut sub = h.subscribe();
+        let listado = primer_listado(&snap);
+
+        h.dispatch(UiAction::SelectRow {
+            slot_id: listado.slot_id,
+            key: norte_ui_host::RowKey(1),
+            generation: listado.generation,
+        })
+        .await
+        .expect("host vivo");
+        asentar().await;
+
+        tokio::time::pause();
+        let llegada =
+            tokio::time::timeout(std::time::Duration::from_secs(5), siguiente_foto(&mut sub)).await;
+        tokio::time::resume();
+        assert!(
+            llegada.is_ok(),
+            "el hueco `{kind}` sigue al cursor y no manda nada al moverlo: \
+             se queda congelado en cualquier disposición que no traiga otro \
+             panel que provoque una foto"
+        );
+    }
 }
 
 /// Pinchar una fila mueve la hoja, aunque no haya visor que arrastre la foto.
@@ -6262,6 +6487,7 @@ async fn un_click_en_la_barra_no_navega_a_otro_sitio_si_la_lista_cambio() {
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(f),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -6368,6 +6594,7 @@ async fn un_favorito_roto_se_ve_y_dice_por_que() {
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(f),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -6575,6 +6802,7 @@ async fn una_disposicion_rota_se_ve_y_no_se_aplica() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -6653,6 +6881,7 @@ async fn una_disposicion_que_esconde_el_listado_deja_el_hueco_vivo() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -6822,6 +7051,174 @@ async fn buscar_abre_su_vista_y_los_hallazgos_llegan_en_lotes() {
         backend.busquedas.lock().expect("mutex").as_slice(),
         &["*.txt".to_owned()],
         "y el patrón llegó al wire tal cual"
+    );
+}
+
+/// Cero omitidas NO es un aviso, y las que hay se leen como aviso.
+///
+/// La ventana usaba una clave propia —«se saltaron N entradas», sin la marca
+/// que la hace leerse como aviso— y la pintaba TAMBIÉN con N igual a cero: o
+/// sea que anunciaba un listado incompleto que estaba completo, gastando la
+/// única señal que hay para cuando de verdad falta algo.
+#[tokio::test]
+async fn el_aviso_de_omitidas_calla_con_cero_y_va_marcado_con_mas() {
+    for (omitidas, espera_aviso) in [(None, false), (Some(0), false), (Some(2), true)] {
+        let mut f = Falso::default();
+        f.arbol.clone_from(&arbol().arbol);
+        f.omitidas = omitidas;
+        let (_h, snap) = host_arbol(Arc::new(f)).await;
+        let nota = &listado_de(&snap, 1).skipped_note;
+
+        assert_eq!(
+            !nota.is_empty(),
+            espera_aviso,
+            "con {omitidas:?} omitidas la nota fue {nota:?}"
+        );
+        if espera_aviso {
+            assert!(
+                nota.contains('⚠'),
+                "un aviso sin marca se lee como un contador: {nota:?}"
+            );
+            assert!(nota.contains('2'), "{nota:?}");
+        }
+    }
+}
+
+/// Y la cabecera dice las otras tres cosas que solo decía el terminal.
+///
+/// Las tres bajo la misma regla: un listado que enseña menos de lo que hay
+/// —o que no enseña lo que hay— jamás es silencioso. La de los NOMBRES es la
+/// que más costaba: la ventana transcribía con otra codificación y no lo
+/// decía en ninguna parte salvo el mensaje del toggle, que se lleva la
+/// siguiente tecla.
+#[tokio::test]
+async fn la_cabecera_dice_que_los_nombres_se_reinterpretan_y_cuanto_hay_marcado() {
+    let (h, snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+    let antes = listado_de(&snap, 1);
+    assert_eq!(antes.names_note, "", "sin reinterpretar no dice nada");
+    assert_eq!(antes.marked_note, "", "quien no marca no gana ruido");
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.names-encoding").await;
+    let con_nombres = foto_hasta(&h, &mut sub, "la cabecera con la codificación", |s| {
+        let b = listado_de(s, 1);
+        (!b.names_note.is_empty()).then(|| b.names_note.clone())
+    })
+    .await;
+    assert!(
+        !con_nombres.contains("status-names"),
+        "traducida, no la clave: {con_nombres}"
+    );
+
+    marca_todo(&h, &mut sub, 1).await;
+    let marcado = foto_hasta(&h, &mut sub, "la cabecera con lo marcado", |s| {
+        let b = listado_de(s, 1);
+        (!b.marked_note.is_empty()).then(|| b.marked_note.clone())
+    })
+    .await;
+    assert!(
+        !marcado.contains("status-marked"),
+        "traducida, no la clave: {marcado}"
+    );
+}
+
+/// Una búsqueda que FALLÓ no se lee como una que terminó sin hallazgos.
+///
+/// El host marcaba cualquier estado terminal como «ya no está viva» y pintaba
+/// `search-status-done`, así que una búsqueda que se rompió al segundo
+/// directorio y otra que recorrió el árbol entero decían lo mismo: «0
+/// hallazgos». Eso no es una imprecisión de la interfaz — es una afirmación
+/// falsa sobre el disco, y quien la lee deja de buscar.
+#[tokio::test]
+async fn una_busqueda_que_fallo_lo_dice_y_no_finge_cero_hallazgos() {
+    let mut f = Falso::default();
+    f.arbol.clone_from(&arbol().arbol);
+    f.desenlace_de_busqueda = Some(norte_proto::TaskState::Failed {
+        error: norte_proto::Error::PermissionDenied,
+    });
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    let _ = buscar(&h, &mut sub, "*.txt").await;
+    let vista = foto_hasta(&h, &mut sub, "la búsqueda con su desenlace", |s| {
+        s.search.clone().filter(|b| !b.running)
+    })
+    .await;
+
+    let cero_hallazgos =
+        norte_i18n::ta_in(norte_i18n::Lang::Es, "search-status-done", &[("n", "0")]);
+    assert_ne!(
+        vista.status, cero_hallazgos,
+        "una búsqueda rota NO es una búsqueda sin resultados"
+    );
+    assert!(
+        vista
+            .status
+            .contains(&norte_frontend::error::error_category_in(
+                norte_i18n::Lang::Es,
+                &norte_proto::Error::PermissionDenied
+            )),
+        "y dice POR QUÉ se rompió: {}",
+        vista.status
+    );
+}
+
+/// Y una que ni llegó a ENCOLARSE deja de decir que busca.
+///
+/// El otro camino, y el que no tenía test: ahí no hay Task, así que no hay
+/// progreso que traiga el desenlace. La vista se quedaba en «buscando…» para
+/// siempre mientras el error pasaba por la barra y se lo llevaba la siguiente
+/// tecla.
+#[tokio::test]
+async fn una_busqueda_que_ni_se_encola_deja_de_decir_que_busca() {
+    let mut f = Falso::default();
+    f.arbol.clone_from(&arbol().arbol);
+    f.error_de_busqueda = Some(norte_proto::Error::ProviderUnavailable { retryable: false });
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    let _ = buscar(&h, &mut sub, "*.txt").await;
+    let vista = foto_hasta(&h, &mut sub, "la búsqueda que no arrancó", |s| {
+        s.search.clone().filter(|b| !b.running)
+    })
+    .await;
+
+    assert!(
+        vista
+            .status
+            .contains(&norte_frontend::error::error_category_in(
+                norte_i18n::Lang::Es,
+                &norte_proto::Error::ProviderUnavailable { retryable: false }
+            )),
+        "dice por qué no arrancó, y de forma persistente: {}",
+        vista.status
+    );
+}
+
+/// Y una que CANCELÓ el lector tampoco: lo encontrado vale, lo que falta no
+/// se llegó a mirar.
+#[tokio::test]
+async fn una_busqueda_cancelada_no_se_lee_como_terminada() {
+    let mut f = Falso::default();
+    f.arbol.clone_from(&arbol().arbol);
+    f.desenlace_de_busqueda = Some(norte_proto::TaskState::Cancelled);
+    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    let _ = buscar(&h, &mut sub, "*.txt").await;
+    let vista = foto_hasta(&h, &mut sub, "la búsqueda cancelada", |s| {
+        s.search.clone().filter(|b| !b.running)
+    })
+    .await;
+
+    assert_eq!(
+        vista.status,
+        norte_i18n::ta_in(
+            norte_i18n::Lang::Es,
+            "search-status-cancelled",
+            &[("n", &vista.rows.len().to_string())]
+        ),
+        "cancelada tiene su propia frase, y la del terminal"
     );
 }
 
@@ -7239,6 +7636,7 @@ async fn ninguna_superficie_enmascara_en_silencio() {
         let (h, snap) = UiHost::start(UiHostOptions {
             backend: Arc::new(f),
             initial_dir: dir(),
+            initial_dir_pedido: false,
             locale: "es".to_owned(),
             keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
             keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -7382,6 +7780,7 @@ async fn a_los_plugins_solo_se_les_pregunta_por_la_ventana() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -7451,6 +7850,7 @@ async fn la_insignia_de_un_plugin_llega_a_la_fila() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -7658,6 +8058,7 @@ async fn encender_una_columna_attr_vuelve_a_listar() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -8387,6 +8788,264 @@ async fn dos_paneles_con_destino_aparte(
     (h, despues)
 }
 
+/// El diálogo de copiar dice si NO CABE y si el destino no sabe confinar.
+///
+/// Las dos líneas son del terminal desde #149 y #164 y la ventana no tenía
+/// ninguna: te enterabas por una task fallida, o no te enterabas. Las dos
+/// preguntas son I/O, así que el diálogo se abre sin ellas y se rellenan
+/// cuando vuelven — el mismo reparto que hace el terminal en su bucle.
+///
+/// Fallan DISTINTO, y es deliberado: el espacio se traga el fallo («no lo sé»
+/// se dice callando) y el confinamiento no, porque ahí el silencio SIGNIFICA
+/// «este destino sujeta sus escrituras» y tragárselo sería afirmarlo sin
+/// saberlo.
+#[tokio::test]
+async fn el_dialogo_de_copia_avisa_de_espacio_y_de_confinamiento() {
+    let (h, mut sub, _b) = Box::pin(dos_paneles_en_disco(volumen_lleno(), sin_confinar())).await;
+    marca_los_ficheros(&h, &mut sub, 1).await;
+
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let _ = siguientes_dialogos(&mut sub).await;
+    asentar().await;
+
+    let avisos = foto_hasta(&h, &mut sub, "el diálogo con sus avisos", |s| {
+        // El ÚLTIMO, que es el que el renderer pinta: con uno solo coinciden,
+        // y así siguen coincidiendo el día que se apilen.
+        match &s.dialogs.last()?.dest_check {
+            norte_ui_host::dto::DestCheckView::Done { warnings } if !warnings.is_empty() => {
+                Some(warnings.clone())
+            }
+            _ => None,
+        }
+    })
+    .await;
+    assert_eq!(avisos.len(), 2, "las dos líneas: {avisos:?}");
+    assert!(
+        avisos[0].contains("libres"),
+        "la del espacio lleva los dos números: {avisos:?}"
+    );
+    assert!(
+        avisos[1].contains("symlink"),
+        "la del confinamiento dice de qué protege: {avisos:?}"
+    );
+}
+
+/// Y un destino que SÍ cabe y SÍ confina no dice nada.
+///
+/// La mitad del contrato que se olvida: una línea en cada copia es ruido, y
+/// el ruido enseña a saltarse la línea justo el día que dice algo.
+#[tokio::test]
+async fn un_destino_que_cabe_y_confina_no_dice_nada() {
+    let (h, mut sub, backend) =
+        Box::pin(dos_paneles_en_disco(volumen_de_sobra(), confinando())).await;
+    marca_los_ficheros(&h, &mut sub, 1).await;
+
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogos.len(), 1, "el diálogo se abre igual");
+    asentar().await;
+
+    let d = foto_hasta(&h, &mut sub, "el destino ya comprobado", |s| {
+        let d = s.dialogs.last()?;
+        matches!(d.dest_check, norte_ui_host::dto::DestCheckView::Done { .. }).then(|| d.clone())
+    })
+    .await;
+    assert_eq!(
+        d.dest_check,
+        norte_ui_host::dto::DestCheckView::Done {
+            warnings: Vec::new()
+        },
+        "nada que avisar, así que nada que decir"
+    );
+    // Y se PREGUNTÓ. Sin esto el test sigue verde si alguien borra el
+    // sondeo: callar por no tener nada que decir y callar por no haber
+    // mirado se pintan igual, que es justo lo que este campo separa.
+    assert!(
+        backend
+            .volumenes_pedidos
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 0,
+        "el silencio es una RESPUESTA, no una omisión"
+    );
+}
+
+/// Un volumen que no contesta no es un volumen lleno.
+///
+/// `free_bytes: None` significa «no contestó a tiempo», JAMÁS cero:
+/// confundirlos convierte cada montaje lento en una falsa alarma. La línea de
+/// confinamiento sí sale, que es la que no depende de esto.
+#[tokio::test]
+async fn un_volumen_que_no_contesta_no_inventa_una_alarma() {
+    let (h, mut sub, _b) = Box::pin(dos_paneles_en_disco(volumen_mudo(), sin_confinar())).await;
+    marca_los_ficheros(&h, &mut sub, 1).await;
+
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let _ = siguientes_dialogos(&mut sub).await;
+    asentar().await;
+
+    let avisos = foto_hasta(&h, &mut sub, "el diálogo con su aviso", |s| {
+        // El ÚLTIMO, que es el que el renderer pinta: con uno solo coinciden,
+        // y así siguen coincidiendo el día que se apilen.
+        match &s.dialogs.last()?.dest_check {
+            norte_ui_host::dto::DestCheckView::Done { warnings } if !warnings.is_empty() => {
+                Some(warnings.clone())
+            }
+            _ => None,
+        }
+    })
+    .await;
+    assert_eq!(
+        avisos.len(),
+        1,
+        "solo la de confinar: del espacio no consta nada ({avisos:?})"
+    );
+    assert!(avisos[0].contains("symlink"), "{avisos:?}");
+}
+
+fn volumen_de_disco(free: Option<u64>) -> Vec<norte_proto::methods::Volume> {
+    vec![norte_proto::methods::Volume {
+        mount: VPath::parse("file:///").expect("wire"),
+        label: None,
+        fs_type: "ext4".to_owned(),
+        kind: norte_proto::methods::VolumeKind::Fixed,
+        total_bytes: Some(1_000_000),
+        free_bytes: free,
+        read_only: false,
+    }]
+}
+
+/// Un disco sin sitio: los ficheros del doble ocupan un byte cada uno, así
+/// que cero libres es «no cabe» sin necesidad de fabricar gigas.
+fn volumen_lleno() -> Vec<norte_proto::methods::Volume> {
+    volumen_de_disco(Some(0))
+}
+
+fn volumen_de_sobra() -> Vec<norte_proto::methods::Volume> {
+    volumen_de_disco(Some(1_000_000))
+}
+
+fn volumen_mudo() -> Vec<norte_proto::methods::Volume> {
+    volumen_de_disco(None)
+}
+
+fn sin_confinar() -> norte_proto::Capabilities {
+    norte_proto::Capabilities {
+        flags: norte_proto::CapabilityFlags::CASE_SENSITIVE,
+        max_path: None,
+    }
+}
+
+fn confinando() -> norte_proto::Capabilities {
+    norte_proto::Capabilities {
+        flags: norte_proto::CapabilityFlags::CASE_SENSITIVE
+            | norte_proto::CapabilityFlags::CONFINED_WRITES,
+        max_path: None,
+    }
+}
+
+/// Dos listados sobre `file://`, que es el único esquema que cuelga de un
+/// volumen de esta máquina: un `mem://` no tiene espacio libre que mirar, así
+/// que estos tests no se pueden escribir sobre el árbol de siempre.
+async fn dos_paneles_en_disco(
+    volumenes: Vec<norte_proto::methods::Volume>,
+    caps_destino: norte_proto::Capabilities,
+) -> (UiHost, norte_ui_host::UiSubscription, Arc<Falso>) {
+    let mut f = Falso::default();
+    f.pon(
+        "file:///casa",
+        vec![
+            (b"docs".to_vec(), true),
+            (b"uno".to_vec(), false),
+            (b"dos".to_vec(), false),
+        ],
+    );
+    f.pon("file:///casa/docs", Vec::new());
+    f.volumenes = volumenes;
+    f.capacidades
+        .insert("file:///casa/docs".to_owned(), caps_destino);
+    let backend = Arc::new(f);
+    let (h, snap) = host_ortodoxo_en(Arc::clone(&backend), "file:///casa").await;
+    let mut sub = h.subscribe();
+    // El hueco 2 baja a `docs`, que es el destino del rol.
+    let b2 = listado_de(&snap, 2);
+    let docs = b2
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("el directorio está");
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host vivo");
+    h.dispatch(UiAction::Activate {
+        slot_id: 2,
+        key: docs.key,
+        generation: b2.generation,
+    })
+    .await
+    .expect("host vivo");
+    esperar_foto(&h, &mut sub, "el destino aterriza en docs", |f| {
+        listado_de(f, 2).path_display.ends_with("/casa/docs")
+    })
+    .await;
+    h.dispatch(UiAction::FocusSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    (h, sub, backend)
+}
+
+/// Marca los FICHEROS de un hueco y deja el directorio fuera: con un
+/// directorio dentro no hay total que sumar (no dice cuánto ocupa) y la
+/// pregunta del espacio no llega a hacerse.
+async fn marca_los_ficheros(h: &UiHost, sub: &mut norte_ui_host::UiSubscription, slot: u32) {
+    let foto = foto(h, sub).await;
+    let b = listado_de(&foto, slot);
+    let claves: Vec<_> = b
+        .rows
+        .iter()
+        .filter(|r| r.display_name == "uno" || r.display_name == "dos")
+        .map(|r| r.key)
+        .collect();
+    assert!(!claves.is_empty(), "hay ficheros que marcar");
+    for key in claves {
+        h.dispatch(UiAction::ToggleMark {
+            slot_id: slot,
+            key,
+            generation: b.generation,
+        })
+        .await
+        .expect("host vivo");
+    }
+}
+
+/// Como [`host_con_layout`] con `orthodox`, pero arrancando donde se diga:
+/// los volúmenes solo responden por `file://`.
+async fn host_ortodoxo_en(
+    backend: Arc<Falso>,
+    inicio: &str,
+) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: VPath::parse(inicio).expect("vpath"),
+        initial_dir_pedido: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca")
+}
+
 /// F5 no copia: abre la confirmación, y esa confirmación DICE a dónde va.
 ///
 /// En una ventana con dos listados el destino no es evidente —no hay «el
@@ -8654,6 +9313,237 @@ async fn comprobar_un_archivo_exige_que_lo_sea() {
     assert!(
         backend.comprobados.lock().expect("comprobados").is_empty(),
         "y no se pide comprobar nada"
+    );
+}
+
+/// Un hueco que espera dice A DÓNDE va.
+///
+/// El cuerpo sigue enseñando el listado ANTERIOR hasta que llegue el nuevo —a
+/// propósito: si la conexión falla, el lector se queda donde estaba—, y sin
+/// el destino esa mezcla no se puede leer. La ventana solo ponía
+/// `aria-busy="true"`, sin una sola regla que lo pintara: contra un SFTP
+/// lento no daba señal ninguna.
+#[tokio::test]
+async fn un_hueco_que_espera_dice_a_donde_va() {
+    let mut f = Falso::default();
+    f.arbol.clone_from(&arbol().arbol);
+    // Con retraso: sin él, el listado aterriza antes de que se pueda mirar el
+    // estado, y el test comprobaría el `Ready` de después.
+    f.retraso_ms = 50;
+    let (h, snap) = host_arbol(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+    let b = listado_de(&snap, 1);
+    let docs = b
+        .rows
+        .iter()
+        .find(|r| r.display_name == "docs")
+        .expect("el directorio está");
+
+    h.dispatch(UiAction::Activate {
+        slot_id: 1,
+        key: docs.key,
+        generation: b.generation,
+    })
+    .await
+    .expect("host vivo");
+
+    let estado = foto_hasta(&h, &mut sub, "el hueco esperando", |s| {
+        match &listado_de(s, 1).state {
+            norte_ui_host::dto::SlotState::Loading { target_display, .. }
+                if !target_display.is_empty() =>
+            {
+                Some(target_display.clone())
+            }
+            _ => None,
+        }
+    })
+    .await;
+    assert!(
+        estado.ends_with("/casa/docs"),
+        "dice a dónde va, no dónde está: {estado}"
+    );
+}
+
+/// La ventana pinta en SU idioma, no en el del proceso.
+///
+/// `norte-ui-host` estaba limpio —sus llamadas pasan `self.lang`— y todas las
+/// fugas venían de helpers COMPARTIDOS que traducían con el global. La peor
+/// era la fecha: cada celda del listado salía en el idioma del proceso bajo
+/// una cabecera en el del host, y no se podía esquivar con configuración
+/// porque la ventana ignora `time-format`, así que la rama relativa está
+/// siempre viva.
+///
+/// Los ajustes de la ventana salen ENTEROS en el idioma del host.
+///
+/// Los títulos de sección ya iban con el suyo y el nombre y la descripción de
+/// cada opción con el del PROCESO, así que la pantalla salía a medias en dos
+/// idiomas. Se comprueba desde fuera —lo que cruza el puente— y no llamando
+/// al helper: lo que se arregló es que la ventana le pase su `lang`, y un
+/// test sobre el helper seguiría verde si dejara de pasárselo.
+#[tokio::test]
+async fn los_ajustes_salen_enteros_en_el_idioma_del_host() {
+    // El PROCESO en inglés y el host en español: lo que se escape sale en
+    // inglés y se ve aquí.
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
+    let (h, _snap) = host_arbol(arbol()).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "app.settings").await;
+    let ajustes = foto_hasta(&h, &mut sub, "la pantalla de ajustes", |s| {
+        s.settings.clone()
+    })
+    .await;
+    let filas: Vec<norte_ui_host::dto::SettingRowView> = ajustes
+        .sections
+        .iter()
+        .filter_map(|s| match s {
+            norte_ui_host::dto::SettingsSectionView::Settings { rows, .. } => Some(rows.clone()),
+            norte_ui_host::dto::SettingsSectionView::Paths { .. } => None,
+        })
+        .flatten()
+        .collect();
+    assert!(!filas.is_empty(), "hay opciones que enseñar");
+
+    let en_español = norte_i18n::t_in(norte_i18n::Lang::Es, "setting-ui-theme-name");
+    let en_ingles = norte_i18n::t_in(norte_i18n::Lang::En, "setting-ui-theme-name");
+    assert_ne!(en_español, en_ingles, "la premisa: la clave se traduce");
+    let fila = filas
+        .iter()
+        .find(|r| r.name == en_español || r.name == en_ingles)
+        .expect("la opción está en el catálogo");
+    assert_eq!(
+        fila.name, en_español,
+        "la fila salió en el idioma del PROCESO, no en el del host"
+    );
+}
+
+/// Sin papelera, el borrado lo DICE y se hace permanente.
+///
+/// «⚠ SIN papelera: esto no se puede deshacer» era solo del terminal. La
+/// ventana compensaba con un botón destructivo, que dice que esa respuesta
+/// borra — no que no haya vuelta. Son dos cosas distintas, y la segunda es la
+/// que decide si alguien pulsa.
+///
+/// La respuesta sale de la caché de capacidades del hueco, que llega con el
+/// listado: sin ella se supone que NO hay papelera, que es la dirección en la
+/// que equivocarse solo cuesta un susto.
+#[tokio::test]
+async fn sin_papelera_el_borrado_avisa_de_que_no_hay_vuelta() {
+    // El tercer caso es el que pierde datos: NO CONSTA. Las capacidades
+    // llegan detrás del listado y por su cuenta, así que hay una ventana
+    // entera —y toda la sesión, si la petición falla— en la que no hay
+    // respuesta. Tratar eso como «no hay papelera» borra de verdad en un
+    // sitio que sí la tiene.
+    for (papelera, avisa) in [(Some(true), false), (Some(false), true), (None, false)] {
+        let mut f = Falso::default();
+        f.arbol.clone_from(&arbol().arbol);
+        if let Some(hay) = papelera {
+            let mut flags = norte_proto::CapabilityFlags::CASE_SENSITIVE;
+            if hay {
+                flags |= norte_proto::CapabilityFlags::TRASH;
+            }
+            f.capacidades.insert(
+                "mem:///casa".to_owned(),
+                norte_proto::Capabilities {
+                    flags,
+                    max_path: None,
+                },
+            );
+        } else {
+            // Ni siquiera contesta: el hueco se queda sin capacidades.
+            f.error_de_capacidades = true;
+        }
+        let (h, _snap) = host_arbol(Arc::new(f)).await;
+        let mut sub = h.subscribe();
+        asentar().await;
+
+        h.dispatch(tecla("F8")).await.expect("host vivo");
+        let d = siguientes_dialogos(&mut sub).await;
+        let borrado = d.last().expect("el diálogo de borrado");
+        let norte_ui_host::dto::DestCheckView::Done { warnings } = &borrado.dest_check else {
+            panic!("un borrado no espera a nadie: {:?}", borrado.dest_check)
+        };
+        assert_eq!(
+            !warnings.is_empty(),
+            avisa,
+            "con papelera={papelera:?} los avisos fueron {warnings:?}"
+        );
+        if avisa {
+            assert!(warnings[0].contains('⚠'), "{warnings:?}");
+            assert_eq!(
+                borrado.title_key, "modal-delete-permanent-title",
+                "y el título lo dice también: sin papelera, esto es permanente"
+            );
+        } else {
+            assert_eq!(
+                borrado.title_key, "modal-delete-title",
+                "con papelera —o sin saberlo— esto NO es un borrado permanente"
+            );
+        }
+    }
+}
+
+/// El diálogo de colisión NO pierde la insignia de un nombre alterado.
+///
+/// Se enmascaraba sobre `display_lossy()`, que YA había metido los U+FFFD:
+/// `display_name` recibía entonces UTF-8 impecable y declaraba el nombre
+/// FIEL. O sea que en la única pantalla donde se aprueba SOBRESCRIBIR un
+/// fichero, el nombre que difiere de los bytes se pintaba como si no
+/// difiriera.
+#[tokio::test]
+async fn el_dialogo_de_colision_marca_el_nombre_alterado() {
+    let backend = arbol();
+    let (h, _snap) = Box::pin(dos_paneles_con_destino_aparte(Arc::clone(&backend))).await;
+    let mut sub = h.subscribe();
+    // El cursor, sobre la entrada cuyo nombre no es UTF-8.
+    let foto = foto(&h, &mut sub).await;
+    let b = listado_de(&foto, 1);
+    let raro = b
+        .rows
+        .iter()
+        .find(|r| r.hostile)
+        .expect("el árbol trae un nombre alterado");
+    h.dispatch(UiAction::SelectRow {
+        slot_id: 1,
+        key: raro.key,
+        generation: b.generation,
+    })
+    .await
+    .expect("host vivo");
+
+    h.dispatch(tecla("F5")).await.expect("host vivo");
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    let _ = siguientes_tasks(&mut sub).await;
+    let tx = backend
+        .progreso
+        .lock()
+        .expect("progreso")
+        .clone()
+        .expect("hay task");
+    tx.send_modify(|p| {
+        p.state = norte_proto::TaskState::Failed {
+            error: norte_proto::Error::Conflict {
+                conflict: norte_proto::ConflictKind::Exists,
+            },
+        };
+    });
+
+    let dialogos = siguientes_dialogos(&mut sub).await;
+    let colision = dialogos.last().expect("el diálogo de colisión");
+    let destino = colision
+        .destination
+        .as_ref()
+        .expect("dice sobre qué fichero pregunta");
+    assert!(
+        destino.hostile,
+        "lo pintado no son los bytes, y esto es lo que se aprueba: {destino:?}"
     );
 }
 
@@ -9665,6 +10555,7 @@ kind = "status"
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -10526,6 +11417,587 @@ async fn el_lote_por_plantilla_se_revisa_como_el_de_la_ia() {
         backend.lotes.lock().expect("lotes").is_empty(),
         "revisar no aplica nada"
     );
+}
+
+/// Sobre una ubicación que rehúsa escribir, la ventana ATENÚA el borrado.
+///
+/// `source_read_only` y `dest_read_only` estaban cableados a `false` con un
+/// comentario que declaraba que el host no lleva esa cuenta. Sí la puede
+/// llevar: PIDE `capabilities` de cada hueco al aterrizar —lo hace desde
+/// #268— y tiraba todo menos el modo de plegado, con el flag `READ_ONLY` a un
+/// campo de distancia. El terminal sí lo mira (`App::pane_read_only`), así que
+/// dentro de un zip el terminal atenuaba F5/F8 y la ventana los ofrecía
+/// encendidos: la ayuda invitaba a escrituras imposibles.
+///
+/// Se miran las filas EJECUTABLES de la página del corpus, que es donde estos
+/// hechos llegan. La hoja de teclado no vale para esto y conviene no
+/// confundirlas: su `avail` es de BUILD —«este frontend implementa el
+/// comando»— y no cambia con el sitio en el que esté el lector.
+///
+/// La prueba usa el FLAG y no el esquema a propósito. `scheme_is_read_only`
+/// contesta que sí a un `zip+file://` sin preguntarle a nadie, así que un
+/// test montado sobre un contenedor pasaría con el respaldo sintáctico puesto
+/// y las capacidades seguidas tirándose. Un `mem:///` que anuncia `READ_ONLY`
+/// —un export SFTP de solo lectura, un montaje `ro`— solo se sabe por el
+/// flag.
+#[tokio::test]
+async fn una_ubicacion_que_rehusa_escribir_atenua_el_borrado() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    falso.capacidades.insert(
+        "mem:///casa".to_owned(),
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::READ_ONLY,
+            max_path: None,
+        },
+    );
+    let (h, _snap) = host_en(Arc::new(falso), "mem:///casa").await;
+    let mut sub = h.subscribe();
+    // Las capacidades se piden al aterrizar el listado y vuelven por su
+    // cuenta: la ayuda congela los hechos AL ABRIRSE, así que abrirla antes
+    // de que lleguen congelaría el «no consta» de siempre.
+    asentar().await;
+
+    // F8 borra en el hueco ACTIVO, que es el origen: es la tecla que
+    // pregunta por `source_read_only` y solo por él.
+    let pagina = pagina_de_copiado(&h, &mut sub).await;
+    let fila = accion(&pagina, "F8");
+    assert!(
+        !fila.enabled,
+        "aquí no se puede borrar y la página lo ofrece apagado: {fila:?}"
+    );
+    assert_eq!(
+        fila.reason,
+        norte_i18n::t_in(norte_i18n::Lang::Es, "reason-read-only"),
+        "y dice POR QUÉ, no solo que no: {fila:?}"
+    );
+}
+
+/// Y un re-listado por debajo NO devuelve la ayuda al «no consta».
+///
+/// Las capacidades se BORRABAN al pedirlas, y el aterrizaje re-congela los
+/// hechos de la ayuda tres líneas después: o sea que toda re-congelación que
+/// saliera de un listado leía `None` —siempre, no a veces— y la fila volvía a
+/// encenderse. Con la ayuda delante basta con que termine una tarea o que
+/// salte el watcher para que F8 pase de atenuada a encendida sin que el sitio
+/// haya cambiado.
+///
+/// Ahora la respuesta va ATADA a su ruta y no se tira al pedir otra: solo un
+/// cambio de directorio la invalida, que es lo único que de verdad la
+/// invalida.
+#[tokio::test]
+async fn un_relistado_no_reenciende_lo_que_el_sitio_sigue_rehusando() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    falso.capacidades.insert(
+        "mem:///casa".to_owned(),
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::READ_ONLY,
+            max_path: None,
+        },
+    );
+    let (h, _snap) = host_en(Arc::new(falso), "mem:///casa").await;
+    let mut sub = h.subscribe();
+    asentar().await;
+    let antes = pagina_de_copiado(&h, &mut sub).await;
+    assert!(
+        !accion(&antes, "F8").enabled,
+        "la premisa: con las capacidades puestas, apagada"
+    );
+
+    // Un re-listado del hueco, que es lo que hace por debajo el fin de una
+    // tarea o el watcher mientras la ayuda sigue abierta.
+    h.dispatch(UiAction::RefreshSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    asentar().await;
+
+    let despues = foto_hasta(&h, &mut sub, "la ayuda tras el re-listado", |s| {
+        s.help.clone()
+    })
+    .await;
+    assert!(
+        !accion(&despues, "F8").enabled,
+        "el sitio no ha cambiado: re-listar no puede encender lo que rehúsa \
+         escribir ({:?})",
+        accion(&despues, "F8")
+    );
+}
+
+/// Y el DESTINO se pregunta al hueco del destino, no al que tiene el foco.
+///
+/// La otra mitad del hecho, y la que un solo hueco no puede probar: con el
+/// origen escribible y el destino de solo lectura, F5 —que escribe allí— se
+/// apaga y F8 —que escribe aquí— sigue encendida. Un `source_read_only`
+/// copiado al `dest_read_only` pasaría el test de arriba y fallaría éste.
+#[tokio::test]
+async fn el_destino_de_solo_lectura_atenua_la_copia_y_no_el_borrado() {
+    let mut falso = Falso::default();
+    falso.pon(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)],
+    );
+    falso.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
+    falso.capacidades.insert(
+        "mem:///casa/docs".to_owned(),
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::READ_ONLY,
+            max_path: None,
+        },
+    );
+    let (h, _snap) = dos_paneles_con_destino_aparte(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    // El helper deja el foco en el hueco que navegó. El caso es el otro: el
+    // lector está en `/casa`, que escribe, mirando a `/casa/docs`, que no.
+    h.dispatch(UiAction::FocusSlot { slot_id: 1 })
+        .await
+        .expect("host vivo");
+    asentar().await;
+
+    let pagina = pagina_de_copiado(&h, &mut sub).await;
+    let copiar = accion(&pagina, "F5");
+    assert!(!copiar.enabled, "el destino no acepta la copia: {copiar:?}");
+    assert_eq!(
+        copiar.reason,
+        norte_i18n::t_in(norte_i18n::Lang::Es, "reason-read-only"),
+        "{copiar:?}"
+    );
+
+    let borrar = accion(&pagina, "F8");
+    assert!(
+        borrar.enabled,
+        "borrar es en el ORIGEN, que sí escribe: atenuarlo sería contar el \
+         impedimento del hueco equivocado ({borrar:?})"
+    );
+}
+
+/// Con el cursor sobre un `.zip`, la ayuda ofrece `Enter`: es lo que hace.
+///
+/// El otro hecho que decía otra cosa que la tecla. `enterable` preguntaba
+/// `kind == Dir`, así que la página de archivos —cuya primera frase es
+/// literalmente «Enter sobre un archivo comprimido entra en él»— ofrecía esa
+/// misma fila apagada y con «no aplica a esto». Ahora lo contesta el sitio
+/// compartido, que es el mismo que navega (ADR 0077).
+#[tokio::test]
+async fn con_el_cursor_en_un_zip_la_ayuda_ofrece_entrar() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"cosas.zip".to_vec(), false)]);
+    let (h, snap) = host_en(Arc::new(falso), "mem:///casa").await;
+    let mut sub = h.subscribe();
+    let b = listado_de(&snap, 1);
+    let zip = b
+        .rows
+        .iter()
+        .find(|r| r.display_name == "cosas.zip")
+        .expect("el archivo está");
+    h.dispatch(UiAction::SelectRow {
+        slot_id: 1,
+        key: zip.key,
+        generation: b.generation,
+    })
+    .await
+    .expect("host vivo");
+
+    let pagina = pagina_de_ayuda(&h, &mut sub, "archives").await;
+    let entrar = accion(&pagina, "Enter");
+    assert!(
+        entrar.enabled,
+        "la página dice que Enter entra en un comprimido, y la fila lo \
+         ofrecía apagada: {entrar:?}"
+    );
+}
+
+/// Abre la ayuda en la página de copiar, borrar y renombrar.
+///
+/// Es la página del corpus que documenta las cuatro teclas que estos hechos
+/// atenúan, y sus filas EJECUTABLES son donde los hechos congelados llegan
+/// —lo que el lector ve—. La hoja de teclado no sirve: su `avail` es de
+/// build, no del sitio en el que está el lector.
+async fn pagina_de_copiado(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+) -> norte_ui_host::dto::HelpView {
+    pagina_de_ayuda(h, sub, "copying").await
+}
+
+/// Abre la ayuda y recorre la lateral hasta una página, como el lector.
+async fn pagina_de_ayuda(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+    topico: &str,
+) -> norte_ui_host::dto::HelpView {
+    let mut pagina = abrir_ayuda(h, sub).await;
+    let mut row = 0;
+    // Sobre la longitud VIGENTE: la lateral crece cuando aterriza el catálogo
+    // de extensiones, así que la de la primera foto se queda corta.
+    while row < u32::try_from(pagina.sidebar.len()).expect("cabe") {
+        if pagina.topic_id == topico {
+            return pagina;
+        }
+        h.dispatch(UiAction::HelpSelectTopic { row })
+            .await
+            .expect("host vivo");
+        pagina = siguiente_ayuda(sub).await.expect("sigue abierta");
+        row += 1;
+    }
+    assert_eq!(pagina.topic_id, topico, "la lateral trae la página");
+    pagina
+}
+
+/// La fila ejecutable de un acorde en una página ya abierta.
+fn accion<'p>(
+    pagina: &'p norte_ui_host::dto::HelpView,
+    chord: &str,
+) -> &'p norte_ui_host::dto::HelpActionView {
+    pagina
+        .actions
+        .iter()
+        .find(|a| !a.opens_topic && a.chord == chord)
+        .unwrap_or_else(|| {
+            panic!(
+                "la página `{}` documenta {chord}: {:?}",
+                pagina.topic_id, pagina.actions
+            )
+        })
+}
+
+/// `Enter` sobre un ARCHIVO comprimido entra en él, no lo abre fuera.
+///
+/// La divergencia número uno del inventario de paridad: el terminal navega al
+/// `zip+file://…/!/` y la ventana se lo daba a `xdg-open`. El host miraba
+/// `kind != Dir` y ahí se acababa la pregunta — mientras su propio comentario
+/// afirmaba que hacía «la misma decisión que el TUI» (ADR 0077), que es
+/// exactamente la afirmación falsa que esa ADR existe para impedir.
+///
+/// La ventana YA conocía `archive_root_for`: la usa para desempaquetar y para
+/// comprobar un contenedor. Lo que faltaba era preguntársela al abrir.
+#[tokio::test]
+async fn entrar_en_un_archivo_comprimido_navega_dentro() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"cosas.zip".to_vec(), false)]);
+    let (h, snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    let primero = listado(&snap);
+
+    h.dispatch(UiAction::Activate {
+        slot_id: primero.slot_id,
+        key: norte_ui_host::RowKey(0),
+        generation: primero.generation,
+    })
+    .await
+    .expect("host vivo");
+
+    let dentro = foto_hasta(&h, &mut sub, "el listado dentro del archivo", |s| {
+        let b = listado(s);
+        b.path_display
+            .contains("zip")
+            .then(|| b.path_display.clone())
+    })
+    .await;
+    assert!(
+        dentro.contains("cosas.zip"),
+        "se entra en el contenedor, no se entrega al escritorio: {dentro}"
+    );
+}
+
+/// Y sobre un SYMLINK se navega, como en el terminal.
+///
+/// La otra mitad de la misma divergencia: el host lo trataba como «no es un
+/// directorio», o sea como un fichero, así que un enlace a una carpeta se
+/// entregaba al escritorio en vez de entrar en ella.
+#[tokio::test]
+async fn entrar_en_un_symlink_navega_como_en_el_terminal() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"atajo".to_vec(), false)]);
+    falso.pon_kind("mem:///casa/atajo", norte_proto::EntryKind::Symlink);
+    falso.pon("mem:///casa/atajo", vec![(b"dentro.txt".to_vec(), false)]);
+    let (h, snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    let primero = listado(&snap);
+
+    let ack = h
+        .dispatch(UiAction::Activate {
+            slot_id: primero.slot_id,
+            key: norte_ui_host::RowKey(0),
+            generation: primero.generation,
+        })
+        .await
+        .expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "ack fue {ack:?}");
+
+    let dentro = foto_hasta(&h, &mut sub, "el listado del enlace", |s| {
+        let b = listado(s);
+        b.path_display
+            .ends_with("atajo")
+            .then(|| b.path_display.clone())
+    })
+    .await;
+    assert!(dentro.ends_with("atajo"), "{dentro}");
+}
+
+/// `[ui] confirm_quit` también pregunta en la VENTANA.
+///
+/// Cerrarla no preguntaba NUNCA: el manejador de `CloseRequested` volcaba la
+/// sesión y cerraba. Con `confirm_quit = "always"` el terminal guarda F10 y la
+/// ventana se iba con una copia a medias sin decir nada — y `always` es
+/// justo el valor que pide la guarda.
+///
+/// La decisión de si hay que preguntar es la COMPARTIDA
+/// (`settings::quit_needs_confirm`), cuyo rustdoc ya nombraba a un
+/// `confirm_quit_should_open` de la ventana que no existía.
+#[tokio::test]
+async fn cerrar_la_ventana_pregunta_si_la_config_lo_dice() {
+    let mut cfg = ajustes_de_prueba();
+    cfg.common.ui_confirm_quit = norte_config::ConfirmQuit::Always;
+    let (h, _snap) = host_en_con(arbol(), "mem:///casa", cfg).await;
+    let mut sub = h.subscribe();
+    let mut efectos = h.native_effects();
+
+    let ack = h.dispatch(UiAction::RequestQuit).await.expect("host vivo");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    let dialogo = foto_hasta(&h, &mut sub, "el diálogo de salir", |s| {
+        s.dialogs.first().cloned()
+    })
+    .await;
+    assert_eq!(dialogo.title_key, "modal-quit-title");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), efectos.recv())
+            .await
+            .is_err(),
+        "preguntar NO cierra: el efecto de cerrar sale al confirmar"
+    );
+
+    // Y al confirmar, ahí sí.
+    h.dispatch(UiAction::Dialog {
+        id: dialogo.id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), efectos.recv())
+        .await
+        .expect("sale el efecto")
+        .expect("canal vivo");
+    assert!(
+        matches!(efecto, norte_ui_host::dto::NativeEffect::CloseWindow),
+        "{efecto:?}"
+    );
+}
+
+/// Con `confirm_quit = "never"` no se pregunta: se cierra y ya.
+#[tokio::test]
+async fn sin_confirmacion_cerrar_no_abre_nada() {
+    let mut cfg = ajustes_de_prueba();
+    cfg.common.ui_confirm_quit = norte_config::ConfirmQuit::Never;
+    let (h, _snap) = host_en_con(arbol(), "mem:///casa", cfg).await;
+    let mut efectos = h.native_effects();
+
+    h.dispatch(UiAction::RequestQuit).await.expect("host vivo");
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), efectos.recv())
+        .await
+        .expect("sale el efecto")
+        .expect("canal vivo");
+    assert!(
+        matches!(efecto, norte_ui_host::dto::NativeEffect::CloseWindow),
+        "{efecto:?}"
+    );
+}
+
+/// `[ui] quick_search` elige el modo también en la VENTANA.
+///
+/// El host arrancaba el buscador incremental en `Filter` a fuego, así que
+/// `quick_search = "jump"` movía el cursor en `ntc` y acotaba el listado en la
+/// ventana: la misma clave con dos comportamientos. El DTO ya sabía decir los
+/// dos modos; lo que faltaba era leer la clave.
+#[tokio::test]
+async fn el_modo_del_buscador_rapido_sale_de_la_config() {
+    let mut cfg = ajustes_de_prueba();
+    cfg.quick_search_mode = norte_frontend::nav::Mode::Jump;
+    let (h, _snap) = host_en_con(arbol(), "mem:///casa", cfg).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.quick-search").await;
+    let modo = foto_hasta(&h, &mut sub, "el buscador abierto", |s| {
+        listado(s).quick.as_ref().map(|q| q.mode.clone())
+    })
+    .await;
+    assert_eq!(modo, "jump", "el modo lo dice la configuración");
+}
+
+/// `[ui.columns]` estiliza las columnas también en la VENTANA (#108).
+///
+/// La ventana pedía el estilo con `ColumnStyle::default_for_id`, o sea el de
+/// FÁBRICA, en la cabecera y en las celdas. Así que la lista de columnas y su
+/// orden salían de la configuración y todo lo demás —`header` propia,
+/// `format`, `align`, `width`— estaba muerto: un bloque de configuración
+/// entero vivo en el terminal y sin efecto aquí.
+///
+/// Se comprueban las dos puertas a la vez, que son las dos que estaban mal:
+/// la cabecera con un rótulo propio y la celda con `format = "iso"`.
+#[tokio::test]
+async fn el_estilo_por_columna_manda_en_la_ventana() {
+    let mut falso = Falso::default();
+    falso.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    let cfg = norte_config::ColumnsConfig {
+        default_columns: Some(vec!["name".to_owned(), "mtime".to_owned()]),
+        specs: [(
+            "mtime".to_owned(),
+            norte_config::ColumnSpec {
+                width: None,
+                align: None,
+                format: Some("iso".to_owned()),
+                header: Some("Cuándo".to_owned()),
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..norte_config::ColumnsConfig::default()
+    };
+    let columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
+    let (h, snap) = UiHost::start(UiHostOptions {
+        backend: Arc::new(falso),
+        initial_dir: dir(),
+        initial_dir_pedido: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: columnas,
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+    let mut sub = h.subscribe();
+
+    let cabecera = listado(&snap)
+        .columns
+        .iter()
+        .find(|c| c.id == "mtime")
+        .expect("la columna está")
+        .clone();
+    assert_eq!(
+        cabecera.label, "Cuándo",
+        "el rótulo propio manda sobre el de fábrica"
+    );
+
+    // La otra mitad del arreglo —el `format` de una CELDA— se comprueba en
+    // `norte-gui-tauri/tests/celdas_locales.rs`: aquí el backend falso no
+    // trae fecha en el listado (#52, el listado es perezoso) y hidratarla
+    // pedía montar medio sondeo para probar un formato. Allí hay ficheros de
+    // verdad, que es donde esa pregunta se contesta sola.
+    let _ = (&h, &mut sub);
+}
+
+/// `openers.toml` manda también en la VENTANA (#28).
+///
+/// La tabla de openers la leía solo el terminal: la ventana entregaba todo al
+/// manejador del escritorio, así que una regla que dice «los PDF con zathura»
+/// valía en `ntc` y no valía en `norte-gui`. Es una feature documentada
+/// entera honrada por una sola superficie.
+#[tokio::test]
+async fn un_opener_declarado_manda_en_la_ventana() {
+    let mut falso = Falso::default();
+    falso.pon("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let mut cfg = ajustes_de_prueba();
+    cfg.openers = norte_frontend::openers::OpenersConfig::parse(
+        "[[opener]]\nmime = \"text/*\"\ncommand = [\"cat\", \"%f\"]\ndetached = false\n",
+    )
+    .expect("config de test");
+    let (h, _snap) = host_en_con(Arc::new(falso), "file:///casa", cfg).await;
+    let mut sub = h.subscribe();
+    let mut efectos = h.native_effects();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.open").await;
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), efectos.recv())
+        .await
+        .expect("sale el efecto")
+        .expect("canal vivo");
+    let norte_ui_host::dto::NativeEffect::RunProgram { argv, cwd, .. } = efecto else {
+        panic!("con una regla declarada se corre ESE programa, no el del escritorio: {efecto:?}");
+    };
+    let como_texto: Vec<String> = argv
+        .iter()
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect();
+    assert!(
+        como_texto[0].ends_with("/cat"),
+        "el programa va resuelto a ruta absoluta ANTES de darle cwd (ADR 0082): {como_texto:?}"
+    );
+    assert!(
+        como_texto[1].ends_with("/casa/notas.txt"),
+        "y `%f` es el fichero señalado: {como_texto:?}"
+    );
+    assert_eq!(
+        cwd.map(|c| String::from_utf8_lossy(&c).into_owned()),
+        Some("/casa".to_owned()),
+        "el hijo abre en el directorio que se está mirando (#144)"
+    );
+}
+
+/// Sin regla para ese mimetype queda el manejador del ESCRITORIO.
+///
+/// El último recurso es el de siempre: escribir configuración no puede ser
+/// requisito para abrir un PDF.
+#[tokio::test]
+async fn sin_regla_declarada_abre_con_el_escritorio() {
+    let mut falso = Falso::default();
+    falso.pon("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let (h, _snap) = host_en(Arc::new(falso), "file:///casa").await;
+    let mut sub = h.subscribe();
+    let mut efectos = h.native_effects();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.open").await;
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), efectos.recv())
+        .await
+        .expect("sale el efecto")
+        .expect("canal vivo");
+    assert!(
+        matches!(efecto, norte_ui_host::dto::NativeEffect::OpenPath { .. }),
+        "sin regla, el escritorio: {efecto:?}"
+    );
+}
+
+/// `[ui] editor` manda en F4, y si no hay, el manejador del escritorio.
+///
+/// La ventana mandaba `pane.edit` al mismo sitio que `pane.open` SIEMPRE. La
+/// parte deliberada de esa decisión es no lanzar `$EDITOR` —un editor de
+/// terminal dentro de una ventana que no tiene terminal—, y sigue en pie.
+/// Lo que no era deliberado es ignorar `[ui] editor`, que nombra un programa
+/// explícito y puede perfectamente ser gráfico: su clave hermana `[ui] diff`
+/// SÍ la honra esta ventana.
+#[tokio::test]
+async fn el_editor_configurado_manda_en_la_ventana() {
+    let mut falso = Falso::default();
+    falso.pon("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let mut cfg = ajustes_de_prueba();
+    cfg.common.ui_editor = Some(vec!["cat".to_owned(), "%f".to_owned()]);
+    let (h, _snap) = host_en_con(Arc::new(falso), "file:///casa", cfg).await;
+    let mut sub = h.subscribe();
+    let mut efectos = h.native_effects();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.edit").await;
+    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), efectos.recv())
+        .await
+        .expect("sale el efecto")
+        .expect("canal vivo");
+    let norte_ui_host::dto::NativeEffect::RunProgram { argv, .. } = efecto else {
+        panic!("con `[ui] editor` puesto se corre ESE editor: {efecto:?}");
+    };
+    let como_texto: Vec<String> = argv
+        .iter()
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect();
+    assert!(como_texto[0].ends_with("/cat"), "{como_texto:?}");
+    assert!(como_texto[1].ends_with("/casa/notas.txt"), "{como_texto:?}");
 }
 
 /// #312: comparar dos ficheros desde la ventana. El operando y el programa
@@ -11978,6 +13450,7 @@ async fn host_con_backend_y_anillo(
     let h = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -14014,6 +15487,7 @@ async fn en_solo_lectura_no_se_para_la_task_de_otro() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(falso),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -14185,6 +15659,7 @@ async fn un_kind_desconocido_con_nombre_alterado_va_marcado() {
     let (_h, snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -14345,6 +15820,41 @@ async fn una_consulta_semantica_vacia_no_se_manda() {
     );
 }
 
+/// Una instrucción de IA vacía deja el campo DELANTE, como su gemela.
+///
+/// El terminal deja el modal abierto con el error debajo. La ventana ya se
+/// había comido el diálogo y ponía el mensaje en la barra: un «escribe una
+/// instrucción» sobre una pantalla sin dónde escribirla no es una negativa,
+/// es un callejón. La consulta semántica —el mismo caso, tres ficheros más
+/// allá— ya se había arreglado así.
+#[tokio::test]
+async fn una_instruccion_de_ia_vacia_devuelve_el_campo() {
+    let backend = Arc::new(arbol_como_falso());
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    ejecutar_por_paleta(&h, &mut sub, "pane.ai-rename").await;
+    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(UiAction::Dialog {
+        id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host vivo");
+    asentar().await;
+
+    let foto = foto(&h, &mut sub).await;
+    assert!(
+        foto.dialogs.iter().any(|d| d.input.is_some()),
+        "el campo vuelve: {:?}",
+        foto.dialogs
+    );
+    assert!(
+        backend.instrucciones.lock().expect("pedidas").is_empty(),
+        "y nada sale hacia el proveedor de IA"
+    );
+}
+
 /// En SOLO LECTURA no se pregunta: la consulta sale del proceso hacia el
 /// proveedor de IA, igual que el plan de renombrado.
 #[tokio::test]
@@ -14354,6 +15864,7 @@ async fn en_solo_lectura_no_hay_busqueda_semantica() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::backend::HostBackend>,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset_con(
             "orthodox",
@@ -16306,6 +17817,7 @@ async fn las_teclas_de_un_dialogo_las_pone_el_preset() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("vim").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("vim").expect("preset"),
@@ -16493,10 +18005,41 @@ async fn editar_uno_nuevo_no_se_ofrece_en_un_panel_remoto() {
 }
 
 /// Un host que arranca en un directorio concreto.
+/// Como [`host_en`], pero con una configuración a medida: los openers y el
+/// editor son claves que la ventana ignoraba, así que los tests las traen.
+async fn host_en_con(
+    backend: Arc<Falso>,
+    inicio: &str,
+    cfg: norte_frontend::config::FrontendConfig,
+) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: VPath::parse(inicio).expect("vpath"),
+        initial_dir_pedido: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: cfg,
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca")
+}
+
 async fn host_en(backend: Arc<Falso>, inicio: &str) -> (UiHost, norte_ui_host::ViewSnapshot) {
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: VPath::parse(inicio).expect("vpath"),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -17269,6 +18812,7 @@ async fn una_tecla_reatada_contesta_el_dialogo() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::backend::HostBackend>,
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -17638,6 +19182,7 @@ async fn host_con_capas_y_favoritos(
     UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -17859,6 +19404,7 @@ async fn con_la_fila_de_subir_el_listado_la_lleva_primera() {
         // Un SUBdirectorio: en una raíz no hay a dónde subir y la fila no
         // aparece por mucho que la configuración la encienda.
         initial_dir: norte_proto::VPath::parse("mem:///casa").expect("wire"),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -18824,6 +20370,107 @@ async fn ciclar_el_encoding_repinta_sin_tocar_los_bytes() {
     );
 }
 
+/// Y la CABECERA se repinta con las filas, sin pedir una foto.
+///
+/// `pane.names-encoding` transcribe los nombres, y la ruta del propio
+/// directorio es un nombre más: si sus bytes no son UTF-8, la cabecera tiene
+/// que reinterpretarse igual que las filas. Contestaba con un parche de filas
+/// y un parche de estado, y la cabecera solo viaja en la foto entera — así que
+/// las filas se retranscribían y el título se quedaba con la lectura vieja,
+/// que es exactamente el medio arreglo que #57 y #293 dicen que no puede
+/// pasar: el mojibake se queda arriba y el lector no sabe si el comando hizo
+/// algo.
+///
+/// Se comprueba SIN `Resync`, que es lo único que tiene el renderer, y sin
+/// pasar por la paleta —abrirla y cerrarla manda fotos que repararían la
+/// cabecera por accidente—: la tecla del preset, como un humano.
+#[tokio::test]
+async fn ciclar_el_encoding_repinta_tambien_la_cabecera() {
+    let mut falso = Falso::default();
+    // Un directorio cuyo PROPIO nombre no es UTF-8.
+    falso.pon("mem:///caf%FF", vec![(b"a.txt".to_vec(), false)]);
+    let (h, snap) = UiHost::start(UiHostOptions {
+        backend: Arc::new(falso),
+        initial_dir: norte_proto::VPath::parse("mem:///caf%FF").expect("wire"),
+        initial_dir_pedido: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: ajustes_de_prueba(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca");
+    let antes = listado(&snap).path_display.clone();
+    assert!(
+        antes.contains('\u{fffd}'),
+        "de partida, los bytes no se pueden pintar: {antes}"
+    );
+    let mut sub = h.subscribe();
+
+    // `alt+e` es `pane.names-encoding` en el preset `orthodox`. A mano y no
+    // por `tecla_mod`, que fija `alt: false`.
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "e".to_owned(),
+        ctrl: false,
+        alt: true,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host vivo");
+    asentar().await;
+
+    let mut cabecera = None;
+    tokio::time::pause();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Update::Message(m) = sub.recv().await.expect("host vivo") {
+                match m.payload {
+                    UiUpdate::Patch(p) => {
+                        for c in &p.changes {
+                            if let norte_ui_host::dto::ViewChange::BrowserHeader {
+                                path_display,
+                                ..
+                            } = c
+                            {
+                                cabecera = Some(path_display.clone());
+                            }
+                        }
+                    }
+                    UiUpdate::Snapshot(s) => {
+                        cabecera = Some(listado(&s).path_display.clone());
+                    }
+                    UiUpdate::Notice(_) => {}
+                }
+                if cabecera.is_some() {
+                    return;
+                }
+            }
+        }
+    })
+    .await;
+    tokio::time::resume();
+
+    let despues = cabecera.expect(
+        "ciclar el encoding no repinta la cabecera: las filas se \
+         retranscriben y el título se queda con la lectura vieja",
+    );
+    assert_ne!(
+        despues, antes,
+        "la ruta se reinterpreta igual que las filas"
+    );
+}
+
 /// `pane.refresh` vuelve a pedir TODOS los listados que se ven, no solo el
 /// enfocado: lo que cambia un directorio por debajo es un cambio en el DISCO,
 /// y un cambio en el disco no respeta el foco.
@@ -19040,8 +20687,8 @@ async fn el_intercambio_repide_la_navegacion_en_vuelo() {
     .await;
     let (izq, der) = (listado_de(&f, 1), listado_de(&f, 2));
     assert!(
-        !matches!(izq.state, norte_ui_host::dto::SlotState::Loading)
-            && !matches!(der.state, norte_ui_host::dto::SlotState::Loading),
+        !matches!(izq.state, norte_ui_host::dto::SlotState::Loading { .. })
+            && !matches!(der.state, norte_ui_host::dto::SlotState::Loading { .. }),
         "ningún panel se queda cargando: {:?} {:?}",
         izq.state,
         der.state
@@ -19251,6 +20898,7 @@ async fn un_favorito_invalido_se_queda_y_se_dice() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
@@ -19437,6 +21085,7 @@ async fn la_config_siembra_la_ocultacion() {
     let (_h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(f),
         initial_dir: dir(),
+        initial_dir_pedido: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),

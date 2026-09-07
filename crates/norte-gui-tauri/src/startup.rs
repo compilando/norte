@@ -342,15 +342,35 @@ fn efectos_declarados(theme: &Theme) -> Vec<String> {
 
 /// El idioma de la ventana, y fijado para todo el proceso.
 ///
-/// La configuración manda sobre el entorno: `[ui] lang` es una decisión que
-/// el usuario escribió, y `LANG` es lo que había puesto.
+/// **`NORTE_LANG` > `[ui] lang` > el entorno del sistema**, que es lo que
+/// hace el terminal (`norte-tui/src/main.rs`). Las dos superficies
+/// documentaban reglas CONTRARIAS y las dos las cumplían: aquí ganaba la
+/// configuración, allí ganaba `NORTE_LANG`, así que con `NORTE_LANG=en` y
+/// `lang = "es"` escritos, `ntc` salía en inglés y `norte-gui` en español.
+///
+/// Manda el terminal porque su regla es la que ya sigue el resto: `NORTE_LANG`
+/// es específico de norte y se pone para UNA ejecución, o sea la misma clase
+/// de cosa que `--layout`, que gana a `[ui] layout`. `LANG` no: ése es el
+/// idioma del sistema, y una decisión escrita en la configuración es más
+/// específica que él.
 fn idioma(pedido: Option<&str>) -> Lang {
-    let lang = match pedido {
-        Some(l) => Lang::negotiate(Some(l)),
-        None => Lang::from_env(),
-    };
+    let explicito = std::env::var("NORTE_LANG").ok().filter(|v| !v.is_empty());
+    let lang = elegir_idioma(explicito.as_deref(), pedido, Lang::from_env());
     let _ = norte_i18n::force(lang);
     lang
+}
+
+/// La regla de precedencia, sin tocar el entorno.
+///
+/// Separada para poder probarla: `std::env::set_var` es `unsafe` desde la
+/// edición 2024 y la regla 5 lo prohíbe, así que lo que se lee del entorno
+/// entra como argumento. Es el mismo arreglo que [`programa_del_daemon`].
+fn elegir_idioma(explicito: Option<&str>, config: Option<&str>, del_entorno: Lang) -> Lang {
+    match (explicito, config) {
+        (Some(e), _) => Lang::negotiate(Some(e)),
+        (None, Some(c)) => Lang::negotiate(Some(c)),
+        (None, None) => del_entorno,
+    }
 }
 
 /// Las dos lecturas de disco del arranque que no son la configuración.
@@ -718,6 +738,9 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     let (host, snapshot) = UiHost::start(UiHostOptions {
         backend: Arc::new(backend),
         initial_dir: inicio,
+        // Lo escribió un humano, así que gana a la sesión en el panel activo
+        // — la misma regla que el terminal cerró en `eb237c61`.
+        initial_dir_pedido: cli.dir.is_some(),
         locale: match lang {
             Lang::Es => "es".to_owned(),
             Lang::En => "en".to_owned(),
@@ -860,18 +883,39 @@ fn nombre_de(v: &std::ffi::OsStr, que: &'static str) -> Result<String, StartupEr
         })
 }
 
+/// El tema pedido, y el nombre del que se va a pintar.
+///
+/// Por `resolve_theme`, que es el resolutor COMPARTIDO: acepta el nombre de
+/// un preset **o la ruta a un `.toml`** (ADR 0020). Aquí se llamaba a
+/// `Theme::preset` a secas, así que un `theme = "~/.config/norte/mio.toml"`
+/// tematizaba el terminal y dejaba la ventana con la paleta por defecto, sin
+/// decir nada — la misma forma que tenía el bug de `--layout`.
+///
+/// Lee del disco cuando el spec es una ruta: va bajo `spawn_blocking`.
+///
+/// Devuelve el nombre del que SE VA A PINTAR y no el del que se pidió: la
+/// vista del tema existe para ver por dentro el que hay, y titularla con un
+/// nombre cuyos colores no son los de debajo es justo lo que esa vista viene
+/// a impedir. Un tema de fichero no tiene nombre de preset, así que va con el
+/// suyo propio si lo declara.
 fn tema(nombre: Option<&str>) -> (Theme, Option<String>) {
-    match nombre {
-        Some(n) => match Theme::preset(n).ok().flatten() {
-            Some(t) => (t, Some(n.to_owned())),
-            // El pedido no cargó. Se devuelve el que SE VA A PINTAR y el
-            // nombre del que se va a pintar, no el del que se pidió: la vista
-            // del tema existe para ver por dentro el que hay, y titularla con
-            // un nombre cuyos colores no son los de debajo es justo lo que
-            // esa vista viene a impedir.
-            None => (Theme::preset_default(), None),
-        },
-        None => (Theme::preset_default(), None),
+    let Some(n) = nombre else {
+        return (Theme::preset_default(), None);
+    };
+    match norte_frontend::theme::resolve_theme(Some(n)) {
+        Ok(t) => {
+            // Un preset se titula con el nombre pedido; uno de fichero, con
+            // el que el propio fichero declare.
+            let titulo = Theme::preset(n)
+                .ok()
+                .flatten()
+                .map_or_else(|| t.name.clone(), |_| Some(n.to_owned()));
+            (t, titulo)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "el tema pedido no cargó: queda el de fábrica");
+            (Theme::preset_default(), None)
+        }
     }
 }
 
@@ -925,6 +969,71 @@ fn logging(cfg: &norte_frontend::config::FrontendConfig) -> Option<norte_config:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `NORTE_LANG` > `[ui] lang` > el entorno del sistema.
+    ///
+    /// Las dos superficies documentaban reglas CONTRARIAS y las dos las
+    /// cumplían: la ventana daba la razón a la configuración y el terminal a
+    /// `NORTE_LANG`, así que con las dos puestas `ntc` salía en un idioma y
+    /// `norte-gui` en otro. Manda el terminal: `NORTE_LANG` es específico de
+    /// norte y se pone para UNA ejecución, o sea la misma clase de cosa que
+    /// `--layout`, que gana a `[ui] layout`.
+    #[test]
+    fn norte_lang_gana_a_la_config_y_la_config_al_entorno() {
+        assert_eq!(
+            elegir_idioma(Some("en"), Some("es"), Lang::Es),
+            Lang::En,
+            "lo que se puso para esta ejecución manda"
+        );
+        assert_eq!(
+            elegir_idioma(None, Some("es"), Lang::En),
+            Lang::Es,
+            "y una decisión escrita manda sobre el idioma del sistema"
+        );
+        assert_eq!(
+            elegir_idioma(None, None, Lang::En),
+            Lang::En,
+            "sin nada, el sistema"
+        );
+    }
+
+    /// `[ui] theme` acepta la RUTA a un `.toml`, no solo un preset (ADR 0020).
+    ///
+    /// La ventana llamaba a `Theme::preset` a secas, así que un tema propio
+    /// tematizaba el terminal y dejaba la ventana con la paleta por defecto,
+    /// sin decir nada.
+    #[test]
+    fn el_tema_puede_ser_un_fichero() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let ruta = dir.path().join("mio.toml");
+        std::fs::write(&ruta, "name = \"mío\"\n").expect("write");
+        let (t, titulo) = tema(Some(&ruta.to_string_lossy()));
+        assert_eq!(
+            t.name.as_deref(),
+            Some("mío"),
+            "se cargó el tema del fichero"
+        );
+        assert_eq!(
+            titulo.as_deref(),
+            Some("mío"),
+            "y se titula con el nombre que el fichero declara"
+        );
+    }
+
+    /// Un preset sigue siendo un preset, y se titula con el nombre pedido.
+    #[test]
+    fn un_preset_sigue_yendo_por_su_nombre() {
+        let (_t, titulo) = tema(Some("nord"));
+        assert_eq!(titulo.as_deref(), Some("nord"));
+    }
+
+    /// Y un tema que no carga deja el de fábrica, sin nombre: la vista del
+    /// tema no puede titularse con unos colores que no son los de debajo.
+    #[test]
+    fn un_tema_que_no_carga_deja_el_de_fabrica() {
+        let (_t, titulo) = tema(Some("/no/existe/ni/de/lejos.toml"));
+        assert_eq!(titulo, None);
+    }
 
     fn escribe_layout(dir: &std::path::Path, fichero: &std::ffi::OsStr, texto: &str) {
         let layouts = dir.join(norte_frontend::layout::config::LAYOUTS_DIR);

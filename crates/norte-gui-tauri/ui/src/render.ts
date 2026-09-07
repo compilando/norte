@@ -132,6 +132,14 @@ interface SlotDom {
   scroller: HTMLElement;
   canvas: HTMLElement;
   rows: Map<number, HTMLElement>;
+  /**
+   * El aviso de «esperando», ESTABLE. No se crea en cada pintada porque su
+   * umbral es un `animation-delay`, y una animación que empieza de cero cada
+   * vez que su nodo nace nunca llega a los 250 ms: `paint()` repinta todos
+   * los huecos en cada actualización, así que el aviso no habría aparecido
+   * jamás en los casos lentos, que son para los que existe.
+   */
+  busy: HTMLElement;
   lastRange: { first: number; count: number } | null;
   /**
    * La generación que se PINTÓ. Toda acción de fila la lleva: sin ella la
@@ -289,13 +297,19 @@ export class Screen {
       this.rebuild(view, cell);
       this.placementsKey = key;
     }
+    // Que el rol EXISTA y que se MARQUE son dos preguntas. La segunda llega
+    // CALCULADA del host (`layout.mark_target`): la decide el crate
+    // compartido, y contarla aquí era repetir en TypeScript un número que ya
+    // vive en Rust — la misma decisión en dos sitios.
+    const marcarDestino = view.layout.mark_target ?? false;
     for (const p of view.layout.placements) {
       const dom = this.slots.get(p.slot_id);
       const slot = view.slots.find((s) => s.slot_id === p.slot_id);
       if (dom === undefined || slot === undefined) {
         continue;
       }
-      dom.root.dataset["role"] = p.role ?? "";
+      const rol = p.role === "target" && !marcarDestino ? null : p.role;
+      dom.root.dataset["role"] = rol ?? "";
       dom.root.setAttribute("aria-current", p.role === "active" ? "true" : "false");
       this.paintTabs(
         dom,
@@ -2685,9 +2699,17 @@ export class Screen {
           if (!el.hasPointerCapture(e.pointerId)) {
             return;
           }
+          // Contra el ORIGEN del tablero, no contra la ventana. `#screen`
+          // baja lo que midan la barra de menú y la de paneles
+          // (`margin-top`), así que un `clientY` crudo le daba al host una
+          // fila de más por cada fila de cromo: el borde saltaba al empezar a
+          // arrastrarlo. En el eje X coincidían por casualidad —el tablero
+          // empieza en la columna 0— y por eso solo se notaba en los bordes
+          // horizontales.
+          const origen = this.root.getBoundingClientRect();
           const cells = vertical
-            ? Math.round(e.clientX / cell.w)
-            : Math.round(e.clientY / cell.h);
+            ? Math.round((e.clientX - origen.left) / cell.w)
+            : Math.round((e.clientY - origen.top) / cell.h);
           this.send({ action: "resize_slot", slot_id: slot, cells });
         });
         this.root.append(el);
@@ -2698,7 +2720,6 @@ export class Screen {
   private rebuild(view: ViewSnapshot, cell: { w: number; h: number }): void {
     this.root.replaceChildren();
     this.slots.clear();
-    this.buildHandles(view, cell);
     for (const p of view.layout.placements) {
       const el = document.createElement("section");
       el.className = "slot";
@@ -2725,6 +2746,9 @@ export class Screen {
       scroller.append(canvas);
       el.append(tabs, title, header, scroller);
       this.root.append(el);
+      const busy = document.createElement("p");
+      busy.className = "slot-busy";
+      busy.hidden = true;
       const dom: SlotDom = {
         root: el,
         tabs,
@@ -2732,6 +2756,7 @@ export class Screen {
         header,
         scroller,
         canvas,
+        busy,
         rows: new Map(),
         lastRange: null,
         generation: 0,
@@ -2739,6 +2764,15 @@ export class Screen {
       this.slots.set(p.slot_id, dom);
       this.wire(p.slot_id, dom);
     }
+    // Los tiradores, DESPUÉS de los huecos y por eso al final.
+    //
+    // Esta hoja de estilos no usa `z-index` en ninguna parte a propósito —lo
+    // dice ella misma en el velo del menú—, así que el apilado lo decide el
+    // ORDEN del documento. Se construían primero, y como un hueco también es
+    // `absolute`, cada panel los tapaba: el `pointerdown` no les llegaba
+    // nunca y no se podía redimensionar con el ratón. Un tirador
+    // transparente de seis píxeles debajo de un panel no es un tirador.
+    this.buildHandles(view, cell);
   }
 
   private wire(slotId: number, dom: SlotDom): void {
@@ -3289,7 +3323,11 @@ export class Screen {
     dom.scroller.className = "log";
     dom.title.replaceChildren(
       document.createTextNode(this.t("log-title")),
-      chip(`${this.t("log-level")}: ${slot.level}`),
+      // La ETIQUETA, no el id de cable: el chip decía `trace` mientras los
+      // botones de al lado decían «traza» y cada línea decía `trace` otra
+      // vez. `TRACE` es lo que pinta el terminal, lo que se escribe en
+      // `RUST_LOG` y lo que alguien busca con la vista en una lista larga.
+      chip(`${this.t("log-level")}: ${slot.level_label ?? slot.level}`),
       ...(slot.filter === "" ? [] : [chip(`/${slot.filter}`)]),
       ...(slot.following ? [] : [chip(this.t("log-detached"))]),
       // Se está guardando MÁS de lo que se ve: quien mira tiene derecho a
@@ -3348,7 +3386,7 @@ export class Screen {
       hora.textContent = l.time;
       const nivel = document.createElement("span");
       nivel.className = "log-level";
-      nivel.textContent = l.level;
+      nivel.textContent = l.level_label ?? l.level;
       const target = document.createElement("span");
       target.className = "log-target";
       target.textContent = l.target;
@@ -3527,24 +3565,40 @@ export class Screen {
     if (slot.path_hostile) {
       ruta.append(badge(this.t("hostile-name")));
     }
-    if (slot.skipped_note !== "") {
-      // Lo que el provider se SALTÓ, ya dicho en Rust. Va en la CABECERA y no
-      // al final de la lista: lo que falta no está, así que no hay ninguna
-      // fila donde el lector pueda tropezarse con ello.
-      const aviso = document.createElement("span");
-      aviso.className = "slot-skipped";
-      aviso.setAttribute("role", "status");
-      aviso.textContent = slot.skipped_note;
-      dom.title.append(aviso);
-    }
-    if (slot.hidden_note !== "") {
-      // Lo que la OCULTACIÓN aparta, por la misma razón y en el mismo sitio:
-      // no hay ninguna fila donde tropezarse con lo que no se pinta.
-      const ocultas = document.createElement("span");
-      ocultas.className = "slot-hidden";
-      ocultas.setAttribute("role", "status");
-      ocultas.textContent = slot.hidden_note;
-      dom.title.append(ocultas);
+    // Todo lo que dice que el listado NO es lo que parece, ya redactado en
+    // Rust. Va en la CABECERA y no al final de la lista: lo que falta no
+    // está, así que no hay ninguna fila donde el lector pueda tropezarse con
+    // ello.
+    //
+    // El ORDEN es la decisión, y es el mismo que la barra del terminal: los
+    // AVISOS —el listado incompleto, la reinterpretación de nombres, las
+    // marcas que se cayeron— van antes que el CONTADOR de lo marcado. El
+    // sitio se acaba, y un aviso recortado deja de avisar mientras que un
+    // contador recortado solo deja de contar.
+    //
+    // `role="status"` solo en los AVISOS. Lo marcado y el relleno son
+    // contadores de algo que el lector acaba de hacer o que está pasando a la
+    // vista: anunciarlos por voz en cada tecla convierte la región viva en
+    // ruido, y entonces el aviso que sí importa llega dentro del ruido.
+    const notas: [string, string, boolean][] = [
+      ["slot-filling", slot.filling_note ?? "", false],
+      ["slot-skipped", slot.skipped_note, true],
+      ["slot-names", slot.names_note ?? "", true],
+      ["slot-pruned", slot.pruned_note ?? "", true],
+      ["slot-hidden", slot.hidden_note, true],
+      ["slot-marked", slot.marked_note ?? "", false],
+    ];
+    for (const [clase, texto, esAviso] of notas) {
+      if (texto === "") {
+        continue;
+      }
+      const nota = document.createElement("span");
+      nota.className = clase;
+      if (esAviso) {
+        nota.setAttribute("role", "status");
+      }
+      nota.textContent = texto;
+      dom.title.append(nota);
     }
     dom.root.setAttribute("aria-label", slot.path_display);
     dom.generation = slot.generation;
@@ -3560,6 +3614,46 @@ export class Screen {
       "aria-busy",
       slot.state.state === "loading" ? "true" : "false",
     );
+    // Esperando (#323). Hasta aquí solo estaba el `aria-busy`, y NINGUNA
+    // regla que lo pintara: contra un SFTP lento la ventana no daba señal.
+    //
+    // El nodo es ESTABLE y se esconde con un atributo, no se crea en cada
+    // pintada. El umbral es un `animation-delay`, y una animación que empieza
+    // de cero cada vez que su nodo nace nunca llega a los 250 ms: `paint()`
+    // repinta todos los huecos en CADA actualización, así que con un listado
+    // grande llegando por páginas —o con el otro panel trabajando— el aviso
+    // no habría aparecido jamás, que es justo el caso para el que existe.
+    //
+    // El VERBO viene del host, del vocabulario cerrado que comparte con el
+    // terminal: «conectando…» y «cargando…» no son lo mismo, y el caso que
+    // destapó #323 era el primero.
+    //
+    // SIN «Esc cancela». La ventana no tiene camino para abortar un listado
+    // en vuelo —nada limpia `en_vuelo`/`drenando` desde una tecla—, y el repo
+    // tiene esa doctrina escrita tres veces en los `.ftl`: jamás una
+    // affordance falsa. El día que exista el aborto, con su test de
+    // cancelación limpia, la frase vuelve.
+    const cargando = slot.state.state === "loading";
+    dom.busy.hidden = !cargando;
+    if (slot.state.state === "loading") {
+      const destino = slot.state.target_display ?? "";
+      const verbo = this.t(slot.state.verb_key ?? "busy-listing");
+      if (destino === "") {
+        // Un refresco: no va a ninguna parte, así que no se inventa un sitio.
+        dom.busy.replaceChildren(verbo);
+      } else {
+        const yendo = document.createElement("span");
+        yendo.className = "slot-busy-target";
+        yendo.textContent = destino;
+        dom.busy.replaceChildren(verbo, " ", yendo);
+        if (slot.state.target_hostile === true) {
+          // La ruta a la que se va se pinta distinta de lo que es. Es la que
+          // el lector está mirando mientras espera, así que va marcada.
+          dom.busy.append(badge(this.t("hostile-name")));
+        }
+      }
+    }
+    dom.title.append(dom.busy);
 
     if (slot.state.state === "error") {
       // Con un REINTENTO, y no solo la frase. Un hueco en error es lo que
@@ -3914,6 +4008,31 @@ export class Screen {
       nota.setAttribute("role", "alert");
       nota.textContent = top.overflow_note;
       box.append(nota);
+    }
+    const chequeo = top.dest_check ?? { state: "not_asked" };
+    if (chequeo.state === "checking") {
+      // Se DICE que se está preguntando, y el sitio queda reservado: un aviso
+      // que aterriza de golpe encima de los botones los mueve bajo el
+      // puntero de quien ya iba a pulsar. Y sobre todo, mientras esto se lea
+      // «comprobando», la ausencia de la línea de #164 no se puede leer como
+      // «este destino confina».
+      const espera = document.createElement("p");
+      espera.className = "dialog-checking";
+      espera.textContent = this.t("dialog-checking-destination");
+      box.append(espera);
+    }
+    if (chequeo.state === "done") {
+      for (const aviso of chequeo.warnings) {
+        // Del DESTINO: que no cabe, que no sabe confinar. Ya traducidos y sin
+        // una sola cadena que controle un tercero, así que van en su propio
+        // bloque y no entre las líneas del cuerpo — donde un nombre de
+        // fichero los podría suplantar.
+        const linea = document.createElement("p");
+        linea.className = "dialog-warning";
+        linea.setAttribute("role", "alert");
+        linea.textContent = aviso;
+        box.append(linea);
+      }
     }
     if (top.input_hostile) {
       // Es la ÚNICA superficie donde se aprueba un nombre: si lo que se pinta

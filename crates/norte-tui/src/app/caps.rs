@@ -82,10 +82,11 @@ impl App {
         let Some(p) = self.panes.get(pane) else {
             return false;
         };
-        match self.caps(p.dir()) {
-            Some(c) => c.flags.contains(norte_proto::CapabilityFlags::READ_ONLY),
-            None => norte_frontend::availability::scheme_is_read_only(p.dir().scheme()),
-        }
+        // El par «flag si lo hay, esquema si no» lo decide el sitio
+        // COMPARTIDO: la ventana lo tenía escrito por su cuenta, que es la
+        // forma que tiene una decisión de divergir sin que nadie lo note
+        // (ADR 0077).
+        norte_frontend::availability::read_only(self.caps(p.dir()).copied(), p.dir().scheme())
     }
 
     /// The context the help's verdict table is asked against.
@@ -125,10 +126,14 @@ impl App {
         let pane = self.focused();
         let sel = pane.selected();
         norte_frontend::availability::Facts {
-            enterable: sel.is_some_and(|e| {
-                matches!(e.kind, EntryKind::Dir | EntryKind::Symlink)
-                    || crate::nav::archive_root_for(e).is_some()
-            }),
+            // El predicado del DESPACHO, entero y sin repetirlo: esta lista
+            // rehacía a mano lo que `enter_target` decide (y la ventana lo
+            // contestaba de una tercera manera, ADR 0077), pero además lo
+            // preguntaba por `selected()`, que sobre la fila `..` contesta
+            // `None` — el embudo del operando— y ahí la ayuda atenuaba una
+            // tecla que sube. `nav_enter_target` es el que corre al pulsarla,
+            // fila de subir incluida.
+            enterable: crate::trail::nav_enter_target(self).is_some(),
             viewable: sel.is_some_and(|e| matches!(e.kind, EntryKind::File | EntryKind::Symlink)),
             rename_single: true,
             source_read_only: self.pane_read_only(self.focus),
@@ -362,6 +367,38 @@ mod tests {
         // Y la degradación del scheme del pane con foco llega al hecho.
         app.note_degraded(degradacion_de_test("mem", "sin-host"));
         assert!(app.help_facts().degraded);
+    }
+
+    /// Y con el cursor sobre `..` la ayuda ofrece `Enter`, que es lo que la
+    /// tecla hace ahí: SUBIR.
+    ///
+    /// El hecho salía de `selected()`, que contesta `None` sobre la fila de
+    /// subir a propósito —ese es el embudo que impide que F8 borre el padre—,
+    /// así que `enterable` era `false` justo donde nace el cursor después de
+    /// cada `cd`. El despacho nunca lo preguntó por ahí: `nav_enter_target`
+    /// mira primero `cursor_is_parent_row()`. O sea la trampa de siempre,
+    /// «describir» leyendo por la puerta de «operar», y la ayuda atenuaba una
+    /// tecla que sube perfectamente.
+    #[test]
+    fn con_el_cursor_en_la_fila_de_subir_la_ayuda_ofrece_entrar() {
+        let mut app = App::new(
+            Pane::new(vp("mem:///casa"), vec![file("a")]),
+            pane_con(&["b"]),
+        );
+        app.set_parent_row(true);
+        assert!(
+            app.focused().cursor_is_parent_row(),
+            "la premisa: el cursor nace en `..`"
+        );
+        assert!(
+            crate::trail::nav_enter_target(&app).is_some(),
+            "la premisa: la tecla SÍ hace algo aquí"
+        );
+
+        assert!(
+            app.help_facts().enterable,
+            "`Enter` sube desde `..`: la ayuda no puede decir «no aplica a esto»"
+        );
     }
 
     /// Con VARIAS marcas la ayuda NO atenúa shift+F6, porque la TUI lo

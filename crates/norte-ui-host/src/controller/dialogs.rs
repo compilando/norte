@@ -64,6 +64,90 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
+    /// El lector quiere cerrar: se pregunta, o se cierra.
+    ///
+    /// La decisión de SI hay que preguntar es la compartida
+    /// (`settings::quit_needs_confirm`), la misma que usa el terminal; lo que
+    /// cada frontend calcula por su cuenta es qué cuenta como «queda trabajo».
+    /// Aquí es que haya alguna task VIVA en el tablero: lo que se perdería al
+    /// cerrar es una copia a medias, no una marca.
+    ///
+    /// Cerrar no preguntaba nunca. El rustdoc de `quit_needs_confirm` ya
+    /// nombraba un `confirm_quit_should_open` de la ventana que no existía.
+    pub(super) fn pedir_salir(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let hay_trabajo = self
+            .tasks
+            .values()
+            .any(|t| t.vista.state == crate::dto::TaskStateView::Running);
+        if !norte_frontend::settings::quit_needs_confirm(
+            self.config.common.ui_confirm_quit,
+            hay_trabajo,
+        ) {
+            self.nativo(crate::dto::NativeEffect::CloseWindow);
+            return (self.aplicada(), Vec::new());
+        }
+        let id = ModalId(self.siguiente_modal);
+        self.siguiente_modal += 1;
+        // El cuerpo DICE cuánto hay en marcha cuando lo hay: «¿seguro?» a
+        // secas no es una pregunta que se pueda contestar.
+        let cuerpo = if hay_trabajo {
+            let n = self
+                .tasks
+                .values()
+                .filter(|t| t.vista.state == crate::dto::TaskStateView::Running)
+                .count();
+            vec![crate::dto::DialogLine {
+                text: clamp_display(norte_i18n::ta_in(
+                    self.lang,
+                    "modal-quit-pending",
+                    &[("n", &n.to_string())],
+                )),
+                hostile: false,
+            }]
+        } else {
+            Vec::new()
+        };
+        self.dialogos.push(Dialogo {
+            id,
+            reconocido: true,
+            vista: DialogView {
+                id,
+                title_key: "modal-quit-title".to_owned(),
+                destination: None,
+                subject: None,
+                asker: None,
+                deadline: None,
+                deadline_at_ms: None,
+                body: cuerpo,
+                overflow_note: String::new(),
+                choices: vec![
+                    DialogChoice {
+                        id: "confirm".to_owned(),
+                        label_key: "dialog-quit".to_owned(),
+                        // Cerrar con trabajo en marcha PIERDE ese trabajo: el
+                        // botón lo dice con su forma, como el de borrar.
+                        destructive: hay_trabajo,
+                    },
+                    DialogChoice {
+                        id: "cancel".to_owned(),
+                        label_key: "dialog-cancel".to_owned(),
+                        destructive: false,
+                    },
+                ],
+                input: None,
+                input_hostile: false,
+                input_secret: false,
+                dest_check: crate::dto::DestCheckView::NotAsked,
+            },
+            tecleado: Tecleado::Texto(String::new()),
+            al_confirmar: Some(Pendiente::Salir),
+        });
+        let cambio = ViewChange::Dialogs {
+            dialogs: self.vistas_de_dialogos(),
+        };
+        (self.aplicada(), vec![self.parche(vec![cambio])])
+    }
+
     /// Responde a un diálogo.
     ///
     /// Un id que no es el del diálogo abierto —porque ya se contestó, porque
@@ -103,6 +187,11 @@ impl Estado {
                 salidas.extend(
                     self.lanzar_plan_de_plantilla(dir, &nombres, &plantilla, backend, buzon),
                 );
+            }
+            Some(Pendiente::Salir) => {
+                // Ya se preguntó y la respuesta fue que sí: quien hospeda
+                // vuelca la sesión y destruye la ventana.
+                self.nativo(crate::dto::NativeEffect::CloseWindow);
             }
             Some(Pendiente::ConsultaSemantica) => {
                 let consulta = dialogo.tecleado.texto().to_owned();
@@ -498,6 +587,41 @@ impl Estado {
         // que quien lee no puede distinguir «se llama así» de «esto está
         // cortado», y en el informe de un lote ese nombre es lo único
         // accionable que hay: se va a teclear a mano.
+        let recortado = texto.len() > crate::bridge::MAX_STRING_BYTES;
+        crate::dto::DialogLine {
+            text: clamp_display(texto),
+            hostile: hostil || recortado,
+        }
+    }
+
+    /// Como [`Self::linea_de_ruta`], pero con una REINTERPRETACIÓN concreta:
+    /// la que había cuando se lanzó la operación por la que se pregunta.
+    ///
+    /// Dos cosas que se hacían mal donde se pregunta por una colisión, y las
+    /// dos hacen que se apruebe otra cosa:
+    ///
+    /// - se enmascaraba sobre `display_lossy()`, que YA había metido los
+    ///   U+FFFD. `display_name` recibía entonces UTF-8 impecable y declaraba
+    ///   la ruta FIEL, así que la insignia de hostil no salía — en la única
+    ///   pantalla donde se aprueba sobrescribir un fichero;
+    /// - no se aplicaba `pane.names-encoding`, así que en un panel cp866 el
+    ///   terminal preguntaba por `Папка` y la ventana por `??????`. Aprobar
+    ///   un nombre que no es el que llevas viendo no es aprobar.
+    ///
+    /// La codificación llega por PARÁMETRO y no se lee del hueco activo: la
+    /// colisión aparece asíncrona, encima de lo que sea que el lector esté
+    /// haciendo, y entre el envío y la pregunta cabe cambiar de hueco o
+    /// ciclar la codificación. Quien lanza la captura (`Reintento::enc`).
+    ///
+    /// Y la ruta ENTERA, no el nombre: «notas.txt» no dice CUÁL notas.txt, y
+    /// con dos paneles y un lote esa es justo la pregunta.
+    pub(super) fn linea_con_encoding(
+        p: &VPath,
+        enc: Option<norte_encoding::NameEncoding>,
+    ) -> crate::dto::DialogLine {
+        let (texto, hostil) = norte_frontend::path_display_with(p, enc);
+        // El RECORTE también altera lo pintado, y la elipsis es un carácter
+        // legal en un nombre: mismo razonamiento que `linea_de_ruta`.
         let recortado = texto.len() > crate::bridge::MAX_STRING_BYTES;
         crate::dto::DialogLine {
             text: clamp_display(texto),

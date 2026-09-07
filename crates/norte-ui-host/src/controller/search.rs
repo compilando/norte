@@ -66,6 +66,7 @@ impl Estado {
                 input: Some(String::new()),
                 input_hostile: false,
                 input_secret: false,
+                dest_check: crate::dto::DestCheckView::NotAsked,
             },
             tecleado: Tecleado::Texto(String::new()),
             al_confirmar: Some(Pendiente::Patron { marcar }),
@@ -136,6 +137,7 @@ impl Estado {
                 input: Some(String::new()),
                 input_hostile: false,
                 input_secret: false,
+                dest_check: crate::dto::DestCheckView::NotAsked,
             },
             tecleado: Tecleado::Texto(String::new()),
             al_confirmar: Some(Pendiente::Buscar { root }),
@@ -179,6 +181,16 @@ impl Estado {
             let (task, mut rx) = match backend.search(params).await {
                 Ok(par) => par,
                 Err(e) => {
+                    // Por los DOS caminos: la barra lo dice una vez y la
+                    // vista de la búsqueda deja de afirmar que sigue
+                    // buscando. Sin lo segundo se quedaba en «buscando…»
+                    // para siempre sobre algo que nunca llegó a existir.
+                    let _ = buzon2
+                        .send(Mensaje::Fondo(Box::new(Fondo::BusquedaRota(
+                            epoca,
+                            Box::new(e.clone()),
+                        ))))
+                        .await;
                     let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
                     return;
                 }
@@ -233,7 +245,7 @@ impl Estado {
             root,
             hits: Vec::new(),
             cursor: 0,
-            viva: true,
+            desenlace: Desenlace::Running,
             tope: Self::MAX_RESULTADOS,
         });
         let cambio = ViewChange::Search {
@@ -311,24 +323,41 @@ impl Estado {
             // SIEMPRE, y con cero hallazgos el `len() - 1` se desbordaba.
             cursor: (!b.hits.is_empty()).then(|| b.cursor.min(b.hits.len() - 1) as u64),
             status: clamp_display(Self::estado_de_busqueda(b, self.lang)),
-            running: b.viva,
+            running: b.desenlace == Desenlace::Running,
         })
+    }
+
+    /// Una búsqueda que no llegó a encolarse: deja de decir que busca.
+    pub(super) fn busqueda_rota(&mut self, epoca: u64, e: &Error) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let categoria = clamp_display(norte_frontend::error::error_category_in(self.lang, e));
+        let Some(b) = self.busqueda.as_mut().filter(|b| b.epoca == epoca) else {
+            return Vec::new();
+        };
+        b.desenlace = Desenlace::Failed(categoria);
+        let cambio = ViewChange::Search {
+            search: self.vista_busqueda(),
+        };
+        vec![self.parche(vec![cambio])]
     }
 
     /// La frase de estado de una búsqueda.
     ///
     /// Reutiliza la familia del TUI (`search-status-*`) en vez de inventar
     /// otra: es la misma información y no hay dos maneras de decirla.
+    ///
+    /// La PRECEDENCIA la decide el crate compartido, que es donde estaba el
+    /// desacuerdo: parar la búsqueda justo en el tope decía «cancelada» en el
+    /// terminal y «hay más» aquí.
+    ///
+    /// El fallo no lleva recuento: lo que hay que leer ahí no es cuántos se
+    /// encontraron, sino que la respuesta está incompleta y por qué.
     pub(super) fn estado_de_busqueda(b: &Busqueda, lang: norte_i18n::Lang) -> String {
-        let n = b.hits.len().to_string();
-        let clave = if b.hits.len() >= usize::try_from(b.tope).unwrap_or(usize::MAX) {
-            "search-status-truncated"
-        } else if b.viva {
-            "search-status-running"
-        } else {
-            "search-status-done"
-        };
-        norte_i18n::ta_in(lang, clave, &[("n", &n)])
+        let al_tope = b.hits.len() >= usize::try_from(b.tope).unwrap_or(usize::MAX);
+        let clave = norte_frontend::search_status::status_key(&b.desenlace, al_tope);
+        if let Desenlace::Failed(categoria) = &b.desenlace {
+            return norte_i18n::ta_in(lang, clave, &[("error", categoria)]);
+        }
+        norte_i18n::ta_in(lang, clave, &[("n", &b.hits.len().to_string())])
     }
 
     /// Las teclas mientras la búsqueda está abierta.
@@ -505,6 +534,7 @@ impl Estado {
             input: Some(String::new()),
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,
@@ -567,7 +597,7 @@ impl Estado {
             root: self.hueco().pane.dir().clone(),
             hits: Vec::new(),
             cursor: 0,
-            viva: true,
+            desenlace: Desenlace::Running,
             tope: norte_proto::methods::INDEX_SEMANTIC_MAX_K,
         });
         let backend = Arc::clone(backend);
@@ -627,7 +657,21 @@ impl Estado {
                     Error::Unsupported => "msg-semantic-unsupported",
                     _ => norte_frontend::error::error_key(&e),
                 };
-                let mut fuera = vec![self.parche(vec![ViewChange::Search { search: None }])];
+                // La vista se QUEDA, diciendo por qué se rompió, en vez de
+                // cerrarse dejando el motivo en la barra: ahí se lo lleva la
+                // siguiente tecla, y entonces el lector se queda sin índice y
+                // sin saberlo. Mismo trato que una búsqueda normal que falla
+                // (`Desenlace::Failed` es persistente); las claves propias de
+                // la semántica —«no hay índice», «no está soportado»— son las
+                // que de verdad explican esto, así que ganan a la categoría
+                // genérica del error.
+                let motivo = clamp_display(norte_i18n::t_in(self.lang, clave));
+                if let Some(b) = self.busqueda.as_mut() {
+                    b.desenlace = Desenlace::Failed(motivo);
+                }
+                let mut fuera = vec![self.parche(vec![ViewChange::Search {
+                    search: self.vista_busqueda(),
+                }])];
                 fuera.extend(self.decir(clave));
                 return fuera;
             }
@@ -643,7 +687,7 @@ impl Estado {
                     score: Some(h.score),
                 })
                 .collect();
-            b.viva = false;
+            b.desenlace = Desenlace::Done;
         }
         let cambio = ViewChange::Search {
             search: self.vista_busqueda(),
@@ -654,12 +698,16 @@ impl Estado {
     /// Abre el prompt de crear directorio, con su campo de texto vacío.
     /// Arranca el buscador incremental del listado.
     ///
-    /// Filtrar es el modo por defecto: es el que no mueve el listado bajo el
-    /// cursor mientras se teclea.
+    /// Filtrar es el modo por DEFECTO —el que no mueve el listado bajo el
+    /// cursor mientras se teclea—, pero lo elige `[ui] quick_search`, igual
+    /// que en el terminal.
     pub(super) fn buscar_rapido(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.hueco_mut()
-            .pane
-            .quick_start(norte_frontend::nav::Mode::Filter);
+        // El modo lo dice `[ui] quick_search`, como en el terminal. Estaba a
+        // fuego en `Filter`, así que `quick_search = "jump"` movía el cursor
+        // en `ntc` y acotaba el listado en la ventana: la misma clave con dos
+        // comportamientos.
+        let modo = self.config.quick_search_mode;
+        self.hueco_mut().pane.quick_start(modo);
         (self.aplicada(), vec![self.parche_filas()])
     }
 }

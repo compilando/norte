@@ -303,6 +303,17 @@ pub struct UiHostOptions {
     pub backend: Arc<dyn HostBackend>,
     /// Dónde empieza el listado.
     pub initial_dir: VPath,
+    /// [`Self::initial_dir`] lo ESCRIBIÓ un humano en la línea de órdenes.
+    ///
+    /// Con `false` es el directorio actual del proceso, o sea un valor por
+    /// defecto que la sesión tiene todo el derecho a pisar. Con `true` es una
+    /// intención, y gana: `norte-gui /usr/bin` con una sesión guardada abría
+    /// donde estuvieras ayer y se comía el argumento sin decir nada.
+    ///
+    /// Solo el panel ACTIVO. El otro se queda donde la sesión lo dejó: media
+    /// pantalla de memoria que nadie pidió tirar. Es la misma regla que
+    /// `App::pin_start_dir` en el terminal.
+    pub initial_dir_pedido: bool,
     /// Idioma ya negociado, para que el renderer pida su catálogo.
     pub locale: String,
     /// El keymap EFECTIVO de la pantalla de listado, ya fusionado
@@ -545,9 +556,10 @@ enum Mensaje {
     /// Una Task recién encolada, con su progreso, su cancelación y los
     /// directorios que dejará distintos.
     TaskNueva(Box<(crate::backend::HostTask, Vec<VPath>, Option<Reintento>)>),
+    /// Qué acepta la ubicación de un hueco: cómo pliega nombres (#268) y si
+    /// rehúsa escribir.
+    Capacidades(u32, VPath, norte_proto::Capabilities),
     /// Encolarla falló. El usuario tiene que enterarse: pidió un borrado.
-    /// Cómo pliega nombres la ubicación de un hueco (#268).
-    Pliegue(u32, VPath, norte_encoding::FoldMode),
     TaskFallida(Box<Error>),
     /// Un rechazo al encolar UNA entrada de un lote (#271). Separado de
     /// [`Self::TaskFallida`] a propósito: aquél lo manda todo el que encola
@@ -676,6 +688,15 @@ enum Fondo {
         u64,
         Result<norte_proto::methods::PluginListResult, Error>,
     ),
+    /// Lo que hay que saber del DESTINO de una transferencia antes de que el
+    /// humano diga que sí: si cabe (#149) y si sabe sujetar sus escrituras
+    /// (#164). Lleva el modal al que pertenece, porque llega tarde.
+    ///
+    /// Las dos van juntas porque son la misma pregunta hecha al mismo sitio
+    /// en el mismo momento, y separarlas costaría dos rondas de I/O por
+    /// diálogo para pintar dos líneas contiguas — el mismo reparto que hace
+    /// el terminal en `DestCheck`.
+    AvisosDeDestino(ModalId, Vec<String>),
     /// La task de un `policy.undo_session` ya tiene id: se ata a su sesión.
     UndoDeSesion(u64, String),
     /// Los perfiles que hay en `profiles/`, ya leídos, y qué se hace con
@@ -793,6 +814,13 @@ enum Fondo {
     /// Llega por su cuenta y no dentro del primer lote porque puede no haber
     /// primer lote: el core no manda lotes vacíos.
     BusquedaViva(u64, norte_proto::TaskId),
+    /// La búsqueda de esta época NO llegó a encolarse, y con qué error.
+    ///
+    /// Ahí no hay Task, así que el desenlace no puede llegar por el progreso:
+    /// sin esto la vista se quedaba diciendo «buscando…» para siempre sobre
+    /// una búsqueda que no existe, mientras el error pasaba por la barra y se
+    /// lo llevaba la siguiente tecla.
+    BusquedaRota(u64, Box<Error>),
     /// Los volúmenes, pedidos por la BARRA LATERAL.
     ///
     /// Aparte de los del selector por el mismo motivo que los dos catálogos
@@ -1169,8 +1197,10 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Pliegue(slot, dir, modo) => {
-                estado.aplicar_pliegue(slot, &dir, modo);
+            Mensaje::Capacidades(slot, dir, caps) => {
+                if let Some(u) = estado.aplicar_capacidades(slot, &dir, caps) {
+                    let _ = updates.send(u);
+                }
             }
             Mensaje::TaskFallida(e) => {
                 for u in estado.task_fallida(&e) {
@@ -1541,7 +1571,27 @@ struct Hueco {
     /// la tecla que más se pulsa. `None` = todavía no ha llegado, y entonces no
     /// se pliega nada — la comprobación es una cortesía y el core es la
     /// autoridad.
-    pliegue: Option<norte_encoding::FoldMode>,
+    ///
+    /// Se guardan ENTERAS y no ya destiladas a un `FoldMode`. La respuesta
+    /// costó una ronda al daemon y trae más de una cosa que este frontend
+    /// necesita: el plegado del destino y, desde la nivelación de la ayuda,
+    /// el `READ_ONLY` con el que se atenúa lo que esta ubicación no va a
+    /// aceptar. Quedarse solo con lo primero es lo que dejó la ayuda de la
+    /// ventana declarando que se puede escribir en cualquier sitio.
+    ///
+    /// Y van ATADAS a la ruta de la que se preguntaron, en vez de borrarse
+    /// cada vez que se piden otras. Lo que las invalida es cambiar de
+    /// DIRECTORIO, no volver a listar el mismo: borrarlas al pedir dejaba una
+    /// ventana determinista —el aterrizaje re-congela los hechos de la ayuda
+    /// tres líneas después de pedirlas— en la que el hueco decía «no consta»
+    /// de un sitio que ya había contestado. Casar por ruta también hace
+    /// inofensiva una respuesta que llega tarde: si es de otro directorio, no
+    /// se lee.
+    ///
+    /// `None`, o una ruta que no casa, significa «todavía no consta», y
+    /// entonces el plegado no se aplica y el solo-lectura lo contesta el
+    /// esquema (`norte_frontend::availability::read_only`).
+    caps: Option<(VPath, norte_proto::Capabilities)>,
     /// El esquema cuyo orden lleva puesto `pane` ahora mismo (#108).
     ///
     /// `[ui.columns] sort` puede dar un orden POR ESQUEMA, y se reaplica
@@ -1644,11 +1694,25 @@ struct Busqueda {
     semantica: bool,
     /// Dónde está el cursor.
     cursor: usize,
-    /// Sigue corriendo.
-    viva: bool,
+    /// En qué acabó, o que sigue corriendo.
+    ///
+    /// Un `bool` decía solo si sigue viva, y entonces TODO desenlace se
+    /// pintaba «N hallazgos» — o sea que una búsqueda que falló al segundo
+    /// directorio y otra que recorrió el árbol entero se leían igual. Eso no
+    /// es una imprecisión de la interfaz: es una afirmación falsa sobre el
+    /// disco, y quien la lee deja de buscar.
+    ///
+    /// El tipo es del crate COMPARTIDO, y con él la precedencia de las
+    /// frases: los dos frontends la decidían aparte y ya discrepaban en el
+    /// par «cancelada justo en el tope» (ADR 0077).
+    desenlace: Desenlace,
     /// El tope que se pidió: alcanzarlo significa que hay más.
     tope: u32,
 }
+
+/// En qué acabó una búsqueda. El tipo y la precedencia de sus frases son del
+/// crate compartido: aquí estaban escritos aparte y ya discrepaban.
+use norte_frontend::search_status::Outcome as Desenlace;
 
 /// Un diálogo abierto y lo que hará si se confirma.
 struct Dialogo {
@@ -1773,6 +1837,8 @@ enum Pendiente {
     /// Preguntar al índice por SIGNIFICADO. Lo que se teclea es la consulta,
     /// y no lleva más operandos: el alcance es el índice entero.
     ConsultaSemantica,
+    /// CERRAR la ventana, ya confirmado (`[ui] confirm_quit`).
+    Salir,
     /// Entregar el secreto de una conexión y REINTENTAR la navegación que
     /// `Error::SecretNeeded` interrumpió (#325/#327).
     ///
@@ -2222,6 +2288,15 @@ pub struct Reintento {
     /// Mover en vez de copiar: el reintento tiene que repetir el mismo verbo,
     /// o un «sobrescribir» sobre una copia se convertiría en un movimiento.
     mover: bool,
+    /// La reinterpretación de nombres que había AL LANZAR.
+    ///
+    /// Se captura aquí y no se lee al llegar, y ese es el punto: la colisión
+    /// llega ASÍNCRONA, encima de lo que el lector esté haciendo, y entre el
+    /// envío y la pregunta cabe cambiar de hueco o ciclar la codificación. El
+    /// diálogo tiene que pintar el MISMO texto por el que se navegó, o se
+    /// está aprobando un nombre distinto del que se vio. El terminal lo lleva
+    /// en su `RetrySpec` desde #98 y lo dice ahí con estas palabras.
+    enc: Option<norte_encoding::NameEncoding>,
 }
 
 /// El selector de tema abierto.
@@ -2655,6 +2730,13 @@ struct Estado {
     /// si el esquema que hay guardado es de una versión que este host no
     /// entiende (ADR 0059).
     sesion: Sesion,
+    /// El directorio que un humano ESCRIBIÓ al arrancar, si escribió alguno.
+    ///
+    /// Se guarda porque la sesión se lee después de montar los huecos y pisa
+    /// el sitio de todos: sin esto, `norte-gui /usr/bin` acababa donde
+    /// estuvieras ayer. Lo consume [`Self::leer_sesion`] y no vuelve a hacer
+    /// falta — una intención de arranque vale una vez.
+    dir_pedido: Option<VPath>,
     status: StatusView,
     conexion: ConnectionView,
     /// Las sesiones de provider que viajan sin cifrar (#44), acotadas por el
@@ -2764,7 +2846,7 @@ impl Hueco {
         pane.set_parent_row(fila_de_subir);
         Self {
             pane,
-            pliegue: None,
+            caps: None,
             esquema_del_orden: esquema,
             historial: History::default(),
             primera_visible: 0,
@@ -2776,7 +2858,9 @@ impl Hueco {
             drenando: None,
             sondeando: false,
             cancelar_sondeo: std::sync::Arc::default(),
-            estado: SlotState::Loading,
+            // Sin destino: un hueco recién nacido no va a ninguna parte, ya
+            // está donde va a estar.
+            estado: Estado::cargando_hacia(None, None),
             sondeados: std::collections::HashSet::new(),
             adornos: std::collections::HashMap::new(),
             celdas_plugin: std::collections::HashMap::new(),
@@ -2863,6 +2947,7 @@ impl Estado {
         let UiHostOptions {
             backend,
             initial_dir,
+            initial_dir_pedido,
             locale,
             keymap,
             keymap_viewer: keymap_visor,
@@ -2978,6 +3063,7 @@ impl Estado {
                 policy: norte_frontend::session::PushPolicy::new(30),
                 leida: norte_frontend::session::SessionBody::default(),
             },
+            dir_pedido: initial_dir_pedido.then(|| initial_dir.clone()),
             status: StatusView::default(),
             conexion: ConnectionView::Connected,
             degradadas: norte_frontend::banners::DegradedSet::default(),
@@ -3108,7 +3194,9 @@ impl Estado {
             .huecos
             .iter()
             .filter(|(id, h)| {
-                !self.oculto(**id) && h.en_vuelo.is_none() && matches!(h.estado, SlotState::Loading)
+                !self.oculto(**id)
+                    && h.en_vuelo.is_none()
+                    && matches!(h.estado, SlotState::Loading { .. })
             })
             .map(|(id, _)| *id)
             .collect();
@@ -3219,6 +3307,13 @@ impl Estado {
             let stream = backend.list(dir.clone(), self.attrs_de(&dir)).await;
             let res = Self::primera_pagina(stream, id, token, buzon.clone()).await;
             self.aterriza_en(id, dir, res);
+            // Lo mismo que hace el aterrizaje de una navegación, y que este
+            // camino no hacía: el PRIMER directorio de un hueco se quedaba sin
+            // capacidades hasta que el lector navegara a otro sitio. O sea que
+            // la ventana que se acaba de abrir dentro de un contenedor
+            // ofrecía escrituras que ese contenedor no acepta —y el plegado
+            // del destino tampoco constaba (#268) mientras nadie se moviera.
+            self.pedir_capacidades(id, backend_arc, buzon);
         }
     }
 
@@ -3430,6 +3525,7 @@ impl Estado {
                 self.decidir_revision_ia(*approve, backend, buzon)
             }
             UiAction::Resync => self.responde_con_foto(),
+            UiAction::RequestQuit => self.pedir_salir(),
             UiAction::MenuOpen { menu } => self.desplegar_menu(*menu),
             UiAction::MenuPointRow { row } => self.apuntar_en_menu(*row),
             UiAction::MenuActivateRow { row } => self.activar_del_menu(*row, backend, buzon),
@@ -3474,7 +3570,9 @@ impl Estado {
             // (crear directorio, renombrar). Decirlo es más honesto que
             // aceptar texto que nadie va a leer.
             UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
-            UiAction::DirectoryPicked { path } => self.destino_elegido(path.clone()),
+            UiAction::DirectoryPicked { path } => {
+                self.destino_elegido(path.clone(), backend, buzon)
+            }
             UiAction::ProgramFinished {
                 title_key,
                 command,
@@ -3482,7 +3580,7 @@ impl Estado {
                 truncated,
                 failed,
             } => self.programa_terminado(title_key, command, output, *truncated, *failed),
-            UiAction::FilesDropped { paths } => self.soltados(paths),
+            UiAction::FilesDropped { paths } => self.soltados(paths, backend, buzon),
             UiAction::WindowFocus { focused } => {
                 self.enfocada = *focused;
                 (self.aplicada(), Vec::new())

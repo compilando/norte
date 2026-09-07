@@ -164,18 +164,10 @@ impl App {
     /// de menos — que sobre «no cabe» es exactamente el error que no se puede
     /// cometer.
     fn transfer_total(&self, pane: usize, items: &[VPath]) -> Option<u64> {
-        let mut total: u64 = 0;
-        for path in items {
-            let entry = self.panes[pane]
-                .entries()
-                .iter()
-                .find(|e| &e.path == path)?;
-            if entry.kind != norte_proto::EntryKind::File {
-                return None;
-            }
-            total = total.checked_add(entry.size?)?;
-        }
-        Some(total)
+        // La REGLA —todo o nada— vive en el crate compartido: la ventana hace
+        // la misma pregunta en el mismo diálogo, y un total calculado con otro
+        // criterio es una alarma que sale en un frontend y no en el otro.
+        norte_frontend::space::total_to_write(self.panes[pane].entries(), items)
     }
 
     /// Abre el modal de borrado (F8, #103 T10) sobre las MARCAS del pane con

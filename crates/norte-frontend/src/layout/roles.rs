@@ -107,6 +107,31 @@ impl Roles {
     }
 }
 
+/// Si el papel de DESTINO merece marcarse en la pantalla, con estos huecos
+/// colocados.
+///
+/// Que el rol EXISTA y que se PINTE son dos preguntas, y esta es la segunda.
+/// Con dos huecos el destino es «el otro» y nadie necesita que se lo digan:
+/// la marca sería ruido en el caso de siempre, y una marca que sale siempre
+/// deja de leerse. A partir de tres, una copia hacia el hueco que el motor
+/// desempate solo es pérdida de datos silenciosa (ADR 0058 D7), y ahí la
+/// marca es lo único que lo dice.
+///
+/// Vive aquí porque la contestaban los dos frontends y ya discrepaban: el
+/// terminal la reserva para tres o más y la ventana la encendía siempre.
+///
+/// ```
+/// use norte_frontend::layout::target_worth_marking;
+///
+/// assert!(!target_worth_marking(1));
+/// assert!(!target_worth_marking(2), "con dos, el destino es el otro");
+/// assert!(target_worth_marking(3));
+/// ```
+#[must_use]
+pub fn target_worth_marking(visible_slots: usize) -> bool {
+    visible_slots > 2
+}
+
 /// A qué hueco mira el hueco `de`. `None` = no mira a nadie.
 ///
 /// Un `follows` a un hueco que ya no existe degrada a seguir al rol `active` y

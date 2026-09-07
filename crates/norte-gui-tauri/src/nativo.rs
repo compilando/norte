@@ -42,9 +42,15 @@ pub async fn bombear(
     mut rx: tokio::sync::broadcast::Receiver<NativeEffect>,
     host: std::sync::Arc<norte_ui_host::UiHost>,
     tema: impl Fn(&str) + Send + 'static,
+    cerrar: impl Fn() + Send + 'static,
 ) {
     loop {
         match rx.recv().await {
+            // CERRAR tampoco se «ejecuta»: destruir la ventana es de este
+            // proceso. El host lo pide cuando ya no queda nada que preguntar
+            // —`[ui] confirm_quit` decide si preguntar, y quién contesta es
+            // el lector—, así que aquí solo se obedece.
+            Ok(NativeEffect::CloseWindow) => cerrar(),
             // El TEMA no se «ejecuta»: se vuelve a resolver aquí, porque los
             // colores cruzan a la webview convertidos en variables CSS y esa
             // conversión es de este proceso. Va sin `spawn_blocking` a
@@ -139,14 +145,15 @@ pub fn ejecutar(efecto: &NativeEffect) -> Resultado {
                 cwd,
             )
         }
-        // El que se ESPERA lo atiende `bombear`: tiene que contestar.
-        NativeEffect::RunProgram { .. } => Resultado::SinPrograma,
-        // Los dos los atiende `bombear`, y ninguno lanza un programa: al
-        // selector de carpeta hay que CONTESTARLE con la ruta, y el tema es un
-        // catálogo que rehacer. Aquí no hay nada que ejecutar.
-        NativeEffect::PickDirectory { .. } | NativeEffect::ThemeChanged { .. } => {
-            Resultado::SinPrograma
-        }
+        // Los cuatro los atiende `bombear`, y ninguno lanza un programa aquí:
+        // el `RunProgram` que se ESPERA tiene que contestar, al selector de
+        // carpeta hay que CONTESTARLE con la ruta, el tema es un catálogo que
+        // rehacer, y cerrar es del bucle de eventos. Aquí no hay nada que
+        // ejecutar.
+        NativeEffect::RunProgram { .. }
+        | NativeEffect::PickDirectory { .. }
+        | NativeEffect::ThemeChanged { .. }
+        | NativeEffect::CloseWindow => Resultado::SinPrograma,
     }
 }
 

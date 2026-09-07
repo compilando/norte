@@ -139,6 +139,7 @@ impl Estado {
             // Los dos que LANZAN un proceso: lo que ese proceso haga con los
             // ficheros no lo decide esta ventana.
             | Efecto::AbrirExterno
+            | Efecto::EditarExterno
             | Efecto::CompararFicheros
             | Efecto::Terminal
                 if self.efectos == crate::commands::Efectos::SoloLectura =>
@@ -151,6 +152,7 @@ impl Estado {
             Efecto::Sumas { verificar } => self.lanzar_sumas(verificar, backend, buzon),
             Efecto::MarcarPatron { marcar } => self.pedir_patron(marcar),
             Efecto::AbrirExterno => self.abrir_externo(),
+            Efecto::EditarExterno => self.editar_externo(),
             Efecto::CompararFicheros => self.comparar_ficheros(),
             Efecto::Terminal => self.abrir_terminal(),
             Efecto::Comparar => self.pedir_comparacion(backend, buzon),
@@ -190,7 +192,7 @@ impl Estado {
             | Efecto::RenameIa
             | Efecto::RenameLote
             | Efecto::Permisos
-            | Efecto::BuscarSemantica => self.efecto_que_muta(efecto),
+            | Efecto::BuscarSemantica => self.efecto_que_muta(efecto, backend, buzon),
         }
     }
 
@@ -380,7 +382,137 @@ impl Estado {
                 fuera,
             );
         }
+        // `openers.toml` manda, y el escritorio es el ÚLTIMO recurso (#28).
+        // La tabla la leía solo el terminal, así que «los PDF con zathura»
+        // valía en `ntc` y no en la ventana: una feature documentada entera
+        // honrada por una sola superficie.
+        if let Some(efecto) = self.programa_declarado(&path) {
+            if !self.nativo(efecto) {
+                return Self::sin_escritorio();
+            }
+            return (self.aplicada(), self.decir("msg-opening-external"));
+        }
         if !self.nativo(crate::dto::NativeEffect::OpenPath { path }) {
+            return Self::sin_escritorio();
+        }
+        (self.aplicada(), self.decir("msg-opening-external"))
+    }
+
+    /// El programa que `openers.toml` declara para este fichero, ya listo
+    /// para correr. `None` si no hay regla para su mimetype, o si el binario
+    /// no está.
+    ///
+    /// El mimetype se adivina del NOMBRE con la misma función que el terminal
+    /// (`openers::guess_mime`): quién abre qué no puede depender de por qué
+    /// superficie se pida.
+    fn programa_declarado(&self, path: &VPath) -> Option<crate::dto::NativeEffect> {
+        let nativo = norte_vfs::native::vpath_to_native(path).ok()?;
+        let mime = norte_frontend::openers::guess_mime(
+            path.file_name()
+                .map_or(&[][..], norte_proto::Segment::as_bytes),
+        );
+        let opener = self.config.openers.resolve(mime)?;
+        // `%d` es el directorio del PANEL, no el del fichero: el hijo abre
+        // donde el lector está mirando (#144).
+        let dir =
+            norte_vfs::native::vpath_to_native(self.hueco().pane.dir()).unwrap_or_else(|_| {
+                nativo
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_default()
+            });
+        let argv = Self::argv_resuelto(opener.argv(&[&nativo], &dir))?;
+        Some(crate::dto::NativeEffect::RunProgram {
+            title_key: "program-output-open".to_owned(),
+            argv,
+            cwd: Some(bytes_de_ruta(&dir)),
+            detached: opener.detached(),
+        })
+    }
+
+    /// Un argv ya interpolado, con su programa resuelto a ruta ABSOLUTA y en
+    /// bytes, listo para `NativeEffect::RunProgram`.
+    ///
+    /// Se resuelve antes de darle un `cwd` (ADR 0082): un nombre suelto con
+    /// `current_dir` puesto se buscaría en el directorio que se está mirando.
+    /// Un binario que no está devuelve `None`, y quien llama decide.
+    ///
+    /// Devuelve el argv y no el efecto entero a propósito: el `title_key` se
+    /// queda como LITERAL en cada llamante, que es lo que el barrido de
+    /// `catalogo_del_host` puede seguir. Una clave escondida detrás de un
+    /// parámetro es una clave que se pintará como su propio identificador el
+    /// día que falte.
+    fn argv_resuelto(mut argv: Vec<std::ffi::OsString>) -> Option<Vec<Vec<u8>>> {
+        use std::os::unix::ffi::OsStrExt as _;
+        let programa = argv
+            .first()
+            .and_then(|p| norte_frontend::openers::resolve_program(p))?;
+        argv[0] = programa.into_os_string();
+        Some(argv.iter().map(|a| a.as_bytes().to_vec()).collect())
+    }
+
+    /// `pane.edit`: el editor que `[ui] editor` nombre, y si no hay, abrir.
+    ///
+    /// **`$EDITOR` no entra, y eso sigue siendo deliberado**: es un editor de
+    /// terminal y esta ventana no tiene uno donde ponerlo (#290). Lo que no
+    /// era deliberado era ignorar también `[ui] editor`, que nombra un
+    /// programa explícito y puede ser perfectamente gráfico — su clave
+    /// hermana `[ui] diff` sí la honra esta ventana, con esta misma
+    /// maquinaria.
+    pub(super) fn editar_externo(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let propio = self
+            .config
+            .common
+            .ui_editor
+            .as_ref()
+            .filter(|c| !c.is_empty())
+            .cloned();
+        let Some(plantilla) = propio else {
+            return self.abrir_externo();
+        };
+        let Some(path) = self.hueco().pane.selected().map(|e| e.path.clone()) else {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-nothing-selected".to_owned(),
+                },
+                Vec::new(),
+            );
+        };
+        let Ok(nativo) = norte_vfs::native::vpath_to_native(&path) else {
+            // Un editor local no puede abrir un `sftp://`, igual que
+            // `xdg-open`: se dice, en vez de lanzar a ciegas.
+            let fuera = self.decir("host-not-local");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-not-local".to_owned(),
+                },
+                fuera,
+            );
+        };
+        let dir =
+            norte_vfs::native::vpath_to_native(self.hueco().pane.dir()).unwrap_or_else(|_| {
+                nativo
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_default()
+            });
+        let plantilla = norte_frontend::openers::expand_argv(&plantilla, &[&nativo], &dir);
+        let Some(argv) = Self::argv_resuelto(plantilla) else {
+            let no = self.decir("host-program-missing");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-program-missing".to_owned(),
+                },
+                no,
+            );
+        };
+        let efecto = crate::dto::NativeEffect::RunProgram {
+            title_key: "program-output-edit".to_owned(),
+            argv,
+            cwd: Some(bytes_de_ruta(&dir)),
+            detached: self.config.common.ui_editor_detached.unwrap_or(false),
+        };
+        if !self.nativo(efecto) {
             return Self::sin_escritorio();
         }
         (self.aplicada(), self.decir("msg-opening-external"))
@@ -596,12 +728,17 @@ impl Estado {
     pub(super) fn efecto_que_muta(
         &mut self,
         efecto: Efecto,
+        backend: &Arc<dyn HostBackend>,
+        buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match efecto {
             Efecto::CrearDirectorio => self.pedir_mkdir(),
             Efecto::CrearFichero => self.pedir_fichero_nuevo(),
             Efecto::Borrar { permanente } => self.pedir_borrado(permanente),
-            Efecto::Transferir { mover } => self.pedir_transferencia(mover),
+            // Con el backend porque, como comparar, sale a preguntar en
+            // cuanto se abre: el diálogo nace sin los avisos del destino y
+            // ellos llegan detrás.
+            Efecto::Transferir { mover } => self.pedir_transferencia(mover, backend, buzon),
             Efecto::Renombrar => self.pedir_rename(),
             Efecto::RenameIa => self.pedir_instruccion_ia(),
             Efecto::RenameLote => self.pedir_plantilla_de_lote(None),
@@ -611,4 +748,14 @@ impl Estado {
             _ => Self::no_muta(),
         }
     }
+}
+
+/// Una ruta nativa en BYTES, que es como cruza el puente.
+///
+/// Función suelta para no repetir el `use` del trait de Unix dentro de cada
+/// método: un `use` a mitad de función es lo que clippy llama
+/// `items_after_statements`.
+fn bytes_de_ruta(p: &std::path::Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt as _;
+    p.as_os_str().as_bytes().to_vec()
 }

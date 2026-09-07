@@ -417,6 +417,8 @@ fn ai_plan_con(plan: norte_frontend::BatchPlan) -> Modal {
             to: "b".into(),
         }],
         offset: 0,
+        // Una sola pareja: se ve entera en cuanto el modal abre.
+        seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
         plan,
     }
 }
@@ -575,6 +577,50 @@ fn el_plan_del_lote_solo_rellena_al_modal_que_lo_esperaba() {
     assert!(!app.settle_ai_batch_plan(&batch_plan(true)));
 }
 
+/// Un plan que no se ha LEÍDO no se puede aprobar.
+///
+/// El terminal solo exigía que el core lo aceptara, así que se podía firmar
+/// un plan de doscientos renombrados habiendo visto los diez primeros — y los
+/// que importan pueden estar en la fila ciento ochenta. La ventana ya lo
+/// exigía: la misma pregunta con dos respuestas, en la superficie donde más
+/// caro sale.
+#[test]
+fn un_plan_sin_leer_no_se_aprueba() {
+    let largo: Vec<norte_proto::methods::AiRenameEntry> = (1..=40)
+        .map(|i| norte_proto::methods::AiRenameEntry {
+            from: format!("f{i}"),
+            to: format!("t{i}"),
+        })
+        .collect();
+    let mut app = app();
+    app.modal = Some(Modal::AiRenamePlan {
+        dir: vp("file:///x"),
+        entries: largo.clone(),
+        offset: 0,
+        seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
+        plan: batch_plan(true),
+    });
+    assert_eq!(
+        dialog_action(app.modal.as_ref().expect("hay modal"), "dialog.confirm"),
+        None,
+        "el core lo acepta, pero el lector se ha quedado en la primera ventana"
+    );
+
+    // Bajar hasta el final: la marca de agua sube, y volver arriba NO
+    // des-lee lo ya leído.
+    for _ in 0..largo.len() {
+        app.ai_plan_scroll(true);
+    }
+    for _ in 0..largo.len() {
+        app.ai_plan_scroll(false);
+    }
+    assert_eq!(
+        dialog_action(app.modal.as_ref().expect("hay modal"), "dialog.confirm"),
+        Some(DialogOutcome::Confirmed),
+        "visto entero, y volver arriba no lo des-lee"
+    );
+}
+
 /// Audit MAJOR-3: el scroll del plan clampa la ventana a `[0, len - 5]`
 /// (jamás pasa de largo ni se hace negativo) y avanza/retrocede de una en
 /// una con numeración estable.
@@ -594,6 +640,7 @@ fn scroll_del_plan_clampa_en_ambos_extremos() {
             })
             .collect(),
         offset: 0,
+        seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
         plan: batch_plan(true),
     });
     app.ai_plan_scroll(false);

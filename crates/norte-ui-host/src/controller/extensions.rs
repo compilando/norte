@@ -42,6 +42,11 @@ impl Estado {
     /// UN sitio para las cinco: todas comprueban lo mismo —que su superficie
     /// siga abierta— y todas contestan lo mismo: los parches que haya que
     /// mandar, o ninguno.
+    ///
+    /// El `match` es una LISTA: cada brazo delega en su método, así que crece
+    /// una línea por respuesta nueva y ninguna de ellas tiene lógica aquí.
+    /// Por eso lleva el `expect` en vez de partirse en dos mitades sin nombre.
+    #[expect(clippy::too_many_lines, reason = "un match que solo reparte")]
     pub(super) fn aplicar_de_fondo(
         &mut self,
         f: Fondo,
@@ -73,6 +78,7 @@ impl Estado {
                 .aplicar_ficha(&id, res.as_ref().ok())
                 .into_iter()
                 .collect(),
+            Fondo::AvisosDeDestino(id, avisos) => self.avisos_de_destino(id, avisos),
             Fondo::UndoDeSesion(task_id, sesion) => {
                 self.agencia.undos.insert(task_id, sesion);
                 Vec::new()
@@ -154,6 +160,7 @@ impl Estado {
                 }
                 Vec::new()
             }
+            Fondo::BusquedaRota(epoca, e) => self.busqueda_rota(epoca, &e),
         }
     }
 
@@ -687,6 +694,7 @@ impl Estado {
             input: None,
             input_hostile: false,
             input_secret: false,
+            dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id: modal,

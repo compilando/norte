@@ -258,6 +258,7 @@ pub fn harvest_ai_rename(
                         dir: ready.dir,
                         entries: ready.entries,
                         offset: 0,
+                        seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
                         plan: ready.plan,
                     });
                 } else {

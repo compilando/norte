@@ -775,6 +775,9 @@ pub async fn on_key(
                                     dir,
                                     entries,
                                     offset: 0,
+                                    // La primera ventana ya se ha visto en
+                                    // cuanto el modal abre.
+                                    seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
                                     plan: norte_frontend::BatchPlan::Pending,
                                 });
                             } else {

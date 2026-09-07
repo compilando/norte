@@ -231,8 +231,13 @@ pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::Pan
     // Cuesta un reparto más por frame, como `tab_zones` y sus vecinas: es el
     // precio de que el cromo diga la verdad sobre un cuerpo que ya se repartió.
     let res = crate::ui::geometry::resolved_frame(app, area);
-    let abiertos: Vec<&str> = res
-        .placements
+    // En ORDEN DE PANTALLA, que es el de los botones: de arriba abajo y, a
+    // igual altura, de izquierda a derecha. El reparto los da en el orden en
+    // que recorre el árbol, que casi siempre coincide y no lo garantiza; y
+    // «casi siempre» en una fila que se aprende con el dedo no vale.
+    let mut colocados: Vec<_> = res.placements.iter().collect();
+    colocados.sort_by_key(|(_, r)| (r.y, r.x));
+    let abiertos: Vec<&str> = colocados
         .iter()
         .map(|(id, _)| *id)
         .filter_map(|id| {
@@ -327,7 +332,23 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
         let estilo = match b.state {
             PanelState::Focused => app.theme.role(Role::Selection),
             PanelState::Open => app.theme.role(Role::Title),
-            PanelState::Closed => app.theme.role(Role::StatusBar),
+            // APAGADO, no otro color: el texto base de la barra atenuado.
+            //
+            // Era `Role::StatusBar`, que es el estilo de la BARRA DE ESTADO —
+            // en la mitad de los temas, fondo vivo y texto oscuro. Esta barra
+            // se limpia con el fondo base, así que los botones CERRADOS
+            // salían como bloques encendidos sobre ella y los ABIERTOS como
+            // texto normal: el peso visual, exactamente al revés. Mirarla
+            // contestaba lo contrario de lo que preguntas, que es lo que hace
+            // que parezca que el estado va por libre.
+            //
+            // El menú de al lado nunca cayó en esto: usa `Title` para lo que
+            // no está abierto y `Selection` para lo que sí, y jamás el rol de
+            // otra superficie.
+            PanelState::Closed => app
+                .theme
+                .role(Role::Regular)
+                .add_modifier(ratatui::style::Modifier::DIM),
         };
         // La letra conserva SIEMPRE el estilo de su estado, y la marca de
         // novedad es un span aparte. Pintar el botón entero de aviso —como
