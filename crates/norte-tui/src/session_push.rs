@@ -133,15 +133,11 @@ async fn restore_slots(app: &mut App, backend: &Backend, presupuesto: std::time:
                     .panes
                     .browser(id)
                     .map_or((None, None), |p| (Some(p.sort()), Some(p.show_hidden())));
-                app.panes.insert_browser(id, pane);
-                if let Some(p) = app.panes.browser_mut(id) {
-                    if let Some(s) = sort {
-                        p.set_sort(s);
-                    }
-                    if let Some(h) = hidden {
-                        p.set_show_hidden(h);
-                    }
-                }
+                // Por la puerta de adopción, que estampa lo de la config (la
+                // fila `..`) y repone lo de la sesión (orden y ocultos) en un
+                // orden solo. Insertándolo a pelo, la fila se caía en cada
+                // arranque con sesión guardada.
+                app.adoptar_pane(id, pane, sort, hidden);
                 app.restore_cursor(id);
             }
             // Un directorio que ya no está NO deja el arranque a medias: el

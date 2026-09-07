@@ -860,6 +860,8 @@ fn slots_de_referencia() -> Vec<SlotView> {
                 hostile: true,
             }],
             note: String::new(),
+            follows_display: "⟨mem⟩/casa".to_owned(),
+            follows_hostile: false,
         })),
         SlotView::Processes {
             slot_id: 6,

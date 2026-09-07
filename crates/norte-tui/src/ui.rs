@@ -238,7 +238,11 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
         // Sin borde de foco NUNCA: la hoja no toma el teclado, y un borde
         // resaltado sobre un panel que no lee ninguna tecla era la mitad
         // visible del control que no hacía lo que decía (#243).
-        draw_metadata(frame, rect, e.as_ref(), app, false);
+        //
+        // El título dice A QUÉ LISTADO sigue: con dos abiertos, «Detalles» a
+        // secas no dice de qué son los detalles.
+        let sigue = crate::metadata::follows(app, &res);
+        draw_metadata(frame, rect, e.as_ref(), sigue.as_ref(), app, false);
     }
     draw_tasks(frame, tasks_area, app);
     draw_status(frame, status_area, app);

@@ -677,22 +677,36 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // a la de siempre, que es lo que el usuario tenía antes de escribir la
     // clave (la misma regla que el TUI). La diferencia es quién lo acaba de
     // teclear.
-    let layout = if let Some(l) = &cli.layout {
-        let nombre = nombre_de(l, "--layout")?;
-        norte_frontend::layout::presets::tree(&nombre).map_err(|_| StartupError::Desconocido {
-            que: "--layout",
-            valor: nombre,
-        })?
-    } else {
-        let nombre = cfg
-            .common
-            .ui_layout
-            .clone()
-            .unwrap_or_else(|| "orthodox".to_owned());
-        norte_frontend::layout::presets::tree(&nombre)
-            .or_else(|_| norte_frontend::layout::presets::tree("orthodox"))
-            .map_err(|e| StartupError::Config(e.to_string()))?
+    //
+    // El fichero se lee FUERA del runtime (regla 2), como en el TUI: es un
+    // TOML pequeño, pero leerlo con `std::fs` dentro de un `async fn` es I/O
+    // bloqueante igual.
+    let (layout, layout_roto) = {
+        let cli_layout = cli.layout.clone();
+        let cfg_layout = cfg.common.ui_layout.clone();
+        let dir = norte_config::user_config_dir();
+        tokio::task::spawn_blocking(move || {
+            arbol_de_arranque(cli_layout.as_deref(), cfg_layout.as_deref(), dir.as_deref())
+        })
+        .await
+        .map_err(|e| StartupError::Config(e.to_string()))??
     };
+    // Un fichero roto NO deja sin pantalla —queda el preset— pero tampoco se
+    // calla: un layout que no parsea y desaparece en silencio es una
+    // configuración que el lector cree puesta. Va al LOG y a la barra de
+    // estado, como en el TUI: el log solo no lo lee nadie que esté mirando
+    // una disposición que no pidió.
+    let aviso_layout = layout_roto.map(|e| {
+        tracing::warn!(error = %e, "la disposición del usuario no cargó: queda la de fábrica");
+        let nombre = cli.layout.clone().unwrap_or_else(|| {
+            std::ffi::OsString::from(cfg.common.ui_layout.as_deref().unwrap_or("orthodox"))
+        });
+        norte_i18n::ta_in(
+            lang,
+            "msg-layout-load-failed",
+            &[("name", &layout_pintable(&nombre)), ("err", &e.to_string())],
+        )
+    });
 
     let columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns);
     // Un id de columna que no parsea no desaparece en silencio: `doctor` lo
@@ -731,13 +745,104 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     })
     .await?;
     let mut snapshot = snapshot;
-    snapshot.status.message = aviso_de_arranque(&cfg, lang, capas_lua_descartadas);
+    // El de la disposición va PRIMERO si lo hay: los otros dos avisan de una
+    // capa ignorada, y éste de que la pantalla que se está mirando no es la
+    // pedida — que es lo que el lector no puede deducir solo.
+    snapshot.status.message =
+        aviso_layout.or_else(|| aviso_de_arranque(&cfg, lang, capas_lua_descartadas));
     Ok(Boot {
         host,
         snapshot,
         lang,
         theme,
     })
+}
+
+/// El nombre de un layout, PINTABLE: lossy marcado y hazards enmascarados.
+///
+/// Solo para mensajes. Los bytes no se tocan —los usa el cargador—, y esto es
+/// lo mismo que hace el TUI en `App::apply_loaded_layout`: sin la máscara, un
+/// `--layout $'a\x1b[31mb'` deja la secuencia CRUDA en `norte-gui.log`, y sin
+/// la marca `$'\xff'` y `$'\xfe'` dan el mismo mensaje.
+fn layout_pintable(name: &std::ffi::OsStr) -> String {
+    let (showable, lossy) = norte_frontend::display_os_name(name);
+    let showable = norte_encoding::mask_terminal_hazards(&showable);
+    if lossy {
+        format!("! {showable}")
+    } else {
+        showable
+    }
+}
+
+/// La disposición con la que arranca la ventana, y el aviso si el fichero del
+/// usuario estaba roto.
+///
+/// Dos fuentes y dos criterios: de `--layout` se exige que exista, porque lo
+/// acaba de teclear un humano; de `[ui] layout` se cae a `orthodox`, que es lo
+/// que se tenía antes de escribir la clave.
+///
+/// **La ventana es más estricta que el TUI en la primera**, y a propósito: el
+/// TUI avisa por la barra y sigue, porque ya tiene una pantalla puesta cuando
+/// eso ocurre; aquí no hay todavía nada que enseñar, y arrancar con una
+/// disposición que no es la pedida es peor que decir que no existe. Lo que sí
+/// se comparte es la REGLA de resolución (`or_preset`) y el motivo: un fichero
+/// ROTO no se anuncia como «no existe», se anuncia con su error de parseo.
+///
+/// Dentro de cada fuente, el fichero del usuario gana al preset de fábrica
+/// —[`norte_frontend::layout::config::or_preset`] es esa regla, compartida—.
+/// Antes esto miraba SOLO los presets, así que un layout guardado no se podía
+/// pedir por la línea de órdenes aunque el selector de esta misma ventana lo
+/// ofreciera.
+///
+/// El nombre viaja como [`std::ffi::OsStr`] y no como `String` (#246): es un
+/// nombre de FICHERO, y colapsar sus bytes manda a `layouts/\u{fffd}.toml` a
+/// dos nombres inválidos distintos.
+///
+/// Lee del disco: va bajo `spawn_blocking`.
+fn arbol_de_arranque(
+    cli: Option<&std::ffi::OsStr>,
+    config: Option<&str>,
+    dir: Option<&std::path::Path>,
+) -> Result<
+    (
+        norte_frontend::layout::Node,
+        Option<norte_frontend::layout::LayoutError>,
+    ),
+    StartupError,
+> {
+    use norte_frontend::layout::{LayoutError, config};
+
+    let leer = |name: &std::ffi::OsStr| {
+        dir.map_or_else(
+            || Err(LayoutError::NotFound(String::new())),
+            |d| config::load(d, name),
+        )
+    };
+    if let Some(name) = cli {
+        return config::or_preset(name, leer(name)).map_err(|e| match e {
+            // No hay fichero ni preset con ese nombre: es un valor que no
+            // existe, y eso es lo que se dice.
+            LayoutError::NotFound(_) | LayoutError::BadName(_) => StartupError::Desconocido {
+                que: "--layout",
+                valor: layout_pintable(name),
+            },
+            // El fichero SÍ está y no sirve. Anunciarlo como «no existe»
+            // manda al lector a buscar un nombre que ya tiene bien escrito:
+            // lo que necesita es el error de parseo.
+            otro => StartupError::Config(format!("--layout {}: {otro}", layout_pintable(name))),
+        });
+    }
+    let name = std::ffi::OsString::from(config.unwrap_or("orthodox"));
+    match config::or_preset(&name, leer(&name)) {
+        Ok(v) => Ok(v),
+        // La clave nombra algo que no existe: se sigue con la de siempre, que
+        // es lo que el lector tenía antes de escribirla.
+        Err(e) => Ok((
+            norte_frontend::layout::presets::tree("orthodox")
+                .map_err(|x| StartupError::Config(x.to_string()))?,
+            Some(e),
+        )),
+    }
 }
 
 /// Un valor de la línea de órdenes que TIENE que ser texto para poder
@@ -820,6 +925,89 @@ fn logging(cfg: &norte_frontend::config::FrontendConfig) -> Option<norte_config:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn escribe_layout(dir: &std::path::Path, fichero: &std::ffi::OsStr, texto: &str) {
+        let layouts = dir.join(norte_frontend::layout::config::LAYOUTS_DIR);
+        std::fs::create_dir_all(&layouts).expect("mkdir");
+        std::fs::write(layouts.join(fichero), texto).expect("write");
+    }
+
+    /// `--layout mio` abre el fichero del USUARIO, igual que en el TUI.
+    ///
+    /// La ventana miraba solo los presets de fábrica, así que un layout
+    /// guardado no se podía pedir por la línea de órdenes — y esta misma
+    /// ventana lo ofrece en su selector, o sea que la lista y la opción
+    /// decían cosas distintas sobre el mismo fichero.
+    #[test]
+    fn el_layout_de_la_linea_de_ordenes_puede_ser_del_usuario() {
+        let dir = tempfile::tempdir().expect("tmp");
+        escribe_layout(
+            dir.path(),
+            std::ffi::OsStr::new("mio.toml"),
+            "[slot]\nid = 1\nkind = \"browser\"\n",
+        );
+        let (arbol, aviso) =
+            arbol_de_arranque(Some(std::ffi::OsStr::new("mio")), None, Some(dir.path()))
+                .expect("carga el del usuario");
+        assert_eq!(
+            arbol.slot_ids().len(),
+            1,
+            "el del fichero, de un solo hueco"
+        );
+        assert!(aviso.is_none());
+    }
+
+    /// Y uno del usuario que se llama como un preset GANA al preset, que es
+    /// la regla del resto de la configuración.
+    #[test]
+    fn el_fichero_del_usuario_gana_al_preset_del_mismo_nombre() {
+        let dir = tempfile::tempdir().expect("tmp");
+        escribe_layout(
+            dir.path(),
+            std::ffi::OsStr::new("simple.toml"),
+            "[slot]\nid = 1\nkind = \"browser\"\n",
+        );
+        let (arbol, _) =
+            arbol_de_arranque(Some(std::ffi::OsStr::new("simple")), None, Some(dir.path()))
+                .expect("carga");
+        assert_eq!(
+            arbol.slot_ids().len(),
+            1,
+            "el `simple` de fábrica tiene tres huecos: éste es el del usuario"
+        );
+    }
+
+    /// Un nombre que no es UTF-8 es un nombre de fichero como cualquier otro
+    /// (#246): se busca, no se rechaza de entrada.
+    #[test]
+    fn un_nombre_de_layout_que_no_es_utf8_se_busca_igual() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().expect("tmp");
+        let nombre = std::ffi::OsStr::from_bytes(b"\xff\xfe");
+        let mut fichero = nombre.to_os_string();
+        fichero.push(".toml");
+        escribe_layout(dir.path(), &fichero, "[slot]\nid = 1\nkind = \"browser\"\n");
+        let (arbol, _) =
+            arbol_de_arranque(Some(nombre), None, Some(dir.path())).expect("carga por bytes");
+        assert_eq!(arbol.slot_ids().len(), 1);
+    }
+
+    /// De la línea de órdenes se EXIGE que exista; de la configuración se cae
+    /// a `orthodox`, que es lo que se tenía antes de escribir la clave.
+    #[test]
+    fn un_nombre_inventado_falla_en_la_orden_y_cae_en_la_config() {
+        let dir = tempfile::tempdir().expect("tmp");
+        assert!(
+            arbol_de_arranque(Some(std::ffi::OsStr::new("nada")), None, Some(dir.path())).is_err(),
+            "lo acaba de teclear un humano: se le dice"
+        );
+        let (arbol, _) = arbol_de_arranque(None, Some("nada"), Some(dir.path()))
+            .expect("la config no deja sin pantalla");
+        assert_eq!(
+            arbol,
+            norte_frontend::layout::presets::tree("orthodox").expect("preset")
+        );
+    }
 
     #[test]
     fn los_flags_se_leen_como_en_el_tui() {

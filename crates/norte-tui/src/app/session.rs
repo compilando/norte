@@ -99,11 +99,14 @@ impl App {
     pub fn pin_start_dir(&mut self, dir: norte_proto::VPath) {
         let idx = self.focus();
         let slot = self.panes.slot_of(idx);
-        let pane = &mut self.panes[idx];
+        let pane = &self.panes[idx];
         let (sort, hidden) = (pane.sort(), pane.show_hidden());
-        *pane = Pane::new(dir, Vec::new());
-        pane.set_sort(sort);
-        pane.set_show_hidden(hidden);
+        // Por la puerta de adopción, como los otros dos listados que nacen
+        // fuera del constructor. Puesto a mano, este se quedaba sin la fila
+        // `..` — y `set_listing` no lo cura después, porque `poner_padre` no
+        // hace nada desde `Apagada`: el panel se quedaba sin ella hasta el
+        // siguiente hot-reload de la config.
+        self.adoptar_pane(slot, Pane::new(dir, Vec::new()), Some(sort), Some(hidden));
         self.session.cursors.remove(&slot.0);
     }
 
@@ -136,16 +139,29 @@ impl App {
         for (raw, estado) in &body.slots {
             let id = norte_frontend::layout::SlotId(*raw);
             self.session.touched.insert(*raw, estado.touched_ms);
-            let Some(pane) = self.panes.browser_mut(id) else {
+            // «¿Tiene ESTE layout el hueco?» se le pregunta al LAYOUT, no al
+            // almacén de panes: los huérfanos siguen en el almacén, así que
+            // `browser(id).is_some()` contestaba que sí para un hueco que la
+            // disposición no coloca — y ese hueco entraba por la puerta de
+            // adopción en vez de conservarse tal cual, que es lo que promete
+            // el párrafo de abajo.
+            if !self.layout.slot_ids().contains(&id) {
                 // Un hueco que este layout no tiene NO se borra: se guarda tal
                 // cual y se vuelve a escribir. Volver a la disposición de ayer
                 // devuelve el panel donde estaba.
                 self.session.orphans.insert(*raw, estado.clone());
                 continue;
-            };
-            *pane = Pane::new(estado.path.clone(), Vec::new());
-            pane.set_sort(estado.sort);
-            pane.set_show_hidden(estado.show_hidden);
+            }
+            // El pane se levanta sobre la ruta guardada y ADOPTA la
+            // configuración de esta sesión: el orden y los ocultos son de la
+            // sesión, la fila `..` es de la config. Poniéndola a mano aquí,
+            // se perdía en cada restauración.
+            self.adoptar_pane(
+                id,
+                Pane::new(estado.path.clone(), Vec::new()),
+                Some(estado.sort),
+                Some(estado.show_hidden),
+            );
             self.session.cursors.insert(*raw, estado.cursor);
             self.history
                 .for_slot_mut(id)
@@ -245,6 +261,12 @@ impl App {
     /// Si el fichero está roto se avisa Y se cae al preset — un layout que no
     /// parsea no puede dejar a norte sin pantalla.
     ///
+    /// La REGLA —fichero del usuario, y si no el preset— vive en
+    /// [`norte_frontend::layout::config::or_preset`], compartida con la
+    /// ventana: aquí estaba escrita a mano y la ventana no la tenía, así que
+    /// `norte-gui --layout mio` no podía abrir un layout del usuario. Lo que
+    /// queda aquí es lo que sí es del TUI: poner el árbol y pintar el aviso.
+    ///
     /// Lee un fichero pequeño de config en el hilo que llama, como el
     /// `[ui] layout` del arranque.
     pub fn apply_loaded_layout(
@@ -252,31 +274,23 @@ impl App {
         name: &std::ffi::OsStr,
         loaded: Result<norte_frontend::layout::Node, norte_frontend::layout::LayoutError>,
     ) -> bool {
-        use norte_frontend::layout::{LayoutError, presets};
         // El nombre se PINTA, y viene de un fichero o de la línea de
         // comandos: lossy marcado y hazards enmascarados, como cualquier otro
         // nombre (#246 m3). Los bytes no se tocan: los usó el cargador.
-        let (showable, _) = norte_frontend::display_os_name(name);
+        // Y con su marca si hubo bytes que no se podían pintar: sin ella
+        // `$'\xff'` y `$'\xfe'` dan el MISMO mensaje y el lector no puede
+        // saber cuál de los dos nombró.
+        let (showable, lossy) = norte_frontend::display_os_name(name);
         let showable = norte_encoding::mask_terminal_hazards(&showable);
-        let broken = match loaded {
-            Ok(tree) => {
-                self.set_layout(tree);
-                return true;
-            }
-            // Que no haya fichero es lo NORMAL para uno de fábrica: no se
-            // avisa de nada.
-            Err(LayoutError::NotFound(_)) => None,
-            Err(e) => Some(e),
+        let showable = if lossy {
+            format!("{} {showable}", crate::ui::HOSTILE_BADGE)
+        } else {
+            showable
         };
-        // Un preset de fábrica se llama por su nombre ASCII: un nombre que no
-        // es texto no puede ser uno de ellos.
-        let factory = name
-            .to_str()
-            .map_or(Err(LayoutError::NotFound(showable.clone())), presets::tree);
-        match factory {
-            Ok(tree) => {
+        match norte_frontend::layout::config::or_preset(name, loaded) {
+            Ok((tree, roto)) => {
                 self.set_layout(tree);
-                if let Some(e) = broken {
+                if let Some(e) = roto {
                     self.message = Some(ta(
                         "msg-layout-load-failed",
                         &[("name", &showable), ("err", &e.to_string())],
@@ -287,10 +301,7 @@ impl App {
             Err(e) => {
                 self.message = Some(ta(
                     "msg-layout-load-failed",
-                    &[
-                        ("name", &showable),
-                        ("err", &broken.unwrap_or(e).to_string()),
-                    ],
+                    &[("name", &showable), ("err", &e.to_string())],
                 ));
                 false
             }

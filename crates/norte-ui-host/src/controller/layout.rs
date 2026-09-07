@@ -86,7 +86,8 @@ impl Estado {
                     // La etiqueta de un `attr:` o un `plugin:` la da su
                     // catálogo, o sea texto de TERCERO. La de un builtin la
                     // da Fluent y es nuestra.
-                    let (label, hostil) = etiqueta_de_columna(r, &esquema, &self.columnas);
+                    let (label, hostil) =
+                        etiqueta_de_columna(r, &esquema, &self.columnas, self.lang);
                     crate::dto::ColumnsPickerRowView {
                         // Identidad: entera o vacía, jamás recortada — es lo
                         // que vuelve para encender, apagar y mover.

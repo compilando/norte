@@ -1246,6 +1246,13 @@ async fn actor(
         for u in estado.sondear_previews(&backend, &buzon) {
             let _ = updates.send(u);
         }
+        // Y la hoja de atributos, por lo MISMO y en el mismo sitio: también
+        // sigue al cursor y tampoco tiene otro camino hasta el renderer. Va
+        // después del visor para que, cuando los dos cambian a la vez, la
+        // foto que se manda ya lleve los dos al día.
+        for u in estado.sondear_hojas() {
+            let _ = updates.send(u);
+        }
     }
 }
 
@@ -1475,15 +1482,16 @@ fn etiqueta_de_columna(
     r: &norte_frontend::columns_picker::PickerRow,
     esquema: &str,
     columnas: &norte_frontend::columns::ColumnsSettings,
+    lang: norte_i18n::Lang,
 ) -> (String, bool) {
-    use norte_frontend::columns::{ColumnId, header_label};
+    use norte_frontend::columns::{ColumnId, header_label_in};
     let Ok(cid) = r.id.parse::<ColumnId>() else {
         // No parsea: el id crudo es lo único que se le puede enseñar, y es
         // texto de un fichero de configuración.
         return norte_frontend::display_name(r.id.as_bytes());
     };
     let estilo = columnas.style_for_id(esquema, &cid, None);
-    norte_frontend::display_name(header_label(&cid, &estilo, None).as_bytes())
+    norte_frontend::display_name(header_label_in(&cid, &estilo, None, lang).as_bytes())
 }
 
 /// Una IDENTIDAD de texto que cruza el bridge: entera, o vacía.
@@ -2476,6 +2484,16 @@ struct Estado {
     /// visor con lo leído o la nota que lo sustituye, y lo que está en
     /// vuelo. Por hueco y no uno solo: el registro permite varios.
     previews: std::collections::BTreeMap<u32, preview::EstadoPreview>,
+    /// Lo ÚLTIMO que se mandó de cada hoja de atributos, por hueco.
+    ///
+    /// La hoja no pide nada y se calcula entera del listado, así que no tiene
+    /// estado propio que guardar — pero sí hace falta saber qué vio el
+    /// renderer, porque el cursor lo mueve cualquier mensaje y la hoja solo
+    /// viaja en la foto entera. Sin esto, viajaba de gorra en la foto que
+    /// provocaba el VISOR al cambiar de nota, y en una disposición con hoja y
+    /// sin visor se quedaba congelada (lo que se veía: pinchar una fila no
+    /// movía «Detalles»).
+    hojas: std::collections::BTreeMap<u32, crate::dto::MetadataSlotView>,
     /// El árbol de directorios, si la disposición coloca uno. Hay UNO como
     /// mucho, por lo mismo que la barra de sitios.
     ramas: Option<norte_frontend::tree::Tree>,
@@ -2901,6 +2919,7 @@ impl Estado {
             log_remoto: logpanel::RegistroRemoto::default(),
             sitios: None,
             previews: std::collections::BTreeMap::new(),
+            hojas: std::collections::BTreeMap::new(),
             gen_sitios: 0,
             ramas: None,
             gen_ramas: 0,

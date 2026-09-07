@@ -138,6 +138,69 @@ pub fn to_toml(tree: &Node) -> Result<String, LayoutError> {
     toml::to_string_pretty(tree).map_err(|e| LayoutError::Parse(e.to_string()))
 }
 
+/// Qué árbol vale para el nombre `name`, dado lo que dio el fichero del
+/// usuario.
+///
+/// **Gana el fichero del usuario**, como en todas las demás capas de
+/// configuración, y un preset se recupera borrando el fichero. Un fichero que
+/// no está es lo NORMAL para un nombre de fábrica y no se avisa de nada; uno
+/// ROTO cae igualmente al preset —un layout que no parsea no puede dejar a
+/// norte sin pantalla— pero se avisa, y ese aviso es el `Some` de la tupla.
+///
+/// Existe aquí, y no dentro de cada frontend, porque es una regla y las
+/// reglas duplicadas divergen: el TUI la tenía y la ventana no, así que
+/// `norte-gui --layout mio` no podía abrir un layout del usuario mientras
+/// `ntc --layout mio` sí — y la MISMA ventana lo ofrecía en su selector.
+///
+/// La lectura del fichero la hace quien llama: cada frontend sabe en qué
+/// hilo puede hacer I/O (la regla 2), y esta función no hace ninguna.
+///
+/// # Errors
+///
+/// El error del fichero del usuario si tampoco hay preset con ese nombre, y
+/// [`LayoutError::NotFound`] si el nombre no es ni siquiera texto —un preset
+/// de fábrica se llama por su nombre ASCII—.
+///
+/// ```
+/// use norte_frontend::layout::{LayoutError, config::or_preset};
+/// use std::ffi::OsStr;
+///
+/// // Sin fichero del usuario queda el preset, y sin aviso.
+/// let (arbol, aviso) =
+///     or_preset(OsStr::new("simple"), Err(LayoutError::NotFound(String::new())))
+///         .expect("`simple` es de fábrica");
+/// assert_eq!(arbol.slot_ids().len(), 3);
+/// assert!(aviso.is_none());
+/// ```
+pub fn or_preset(
+    name: &OsStr,
+    loaded: Result<Node, LayoutError>,
+) -> Result<(Node, Option<LayoutError>), LayoutError> {
+    let roto = match loaded {
+        Ok(tree) => return Ok((tree, None)),
+        // Que no haya fichero es lo NORMAL para uno de fábrica: no se avisa.
+        Err(LayoutError::NotFound(_)) => None,
+        Err(e) => Some(e),
+    };
+    // Un preset de fábrica se llama por su nombre ASCII: un nombre que no es
+    // texto no puede ser uno de ellos.
+    // El nombre entra en un MENSAJE, así que se enmascara: un nombre de
+    // fichero puede llevar un ESC, y `valid_profile_name` no filtra
+    // controles. Los bytes que abren el fichero son los de `name`, intactos.
+    let fabrica = name.to_str().map_or_else(
+        || {
+            Err(LayoutError::NotFound(
+                norte_encoding::mask_terminal_hazards(&crate::display::display_os_name(name).0),
+            ))
+        },
+        super::presets::tree,
+    );
+    match fabrica {
+        Ok(tree) => Ok((tree, roto)),
+        Err(e) => Err(roto.unwrap_or(e)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +231,46 @@ mod tests {
             &to_toml(&arbol()).expect("toml"),
         );
         assert_eq!(load(dir.path(), OsStr::new("mio")).expect("carga"), arbol());
+    }
+
+    /// El fichero del usuario GANA al preset del mismo nombre.
+    #[test]
+    fn el_fichero_del_usuario_gana_al_preset() {
+        let (arbol_puesto, aviso) =
+            or_preset(OsStr::new("simple"), Ok(arbol())).expect("hay árbol");
+        assert_eq!(arbol_puesto, arbol(), "el del usuario, no el de fábrica");
+        assert!(aviso.is_none());
+    }
+
+    /// Uno ROTO cae al preset Y avisa: sin pantalla no se deja a nadie, pero
+    /// tampoco se le oculta que su fichero no sirve.
+    #[test]
+    fn un_fichero_roto_cae_al_preset_avisando() {
+        let (arbol_puesto, aviso) = or_preset(
+            OsStr::new("simple"),
+            Err(LayoutError::Parse("línea 3".to_owned())),
+        )
+        .expect("queda el preset");
+        assert_eq!(
+            arbol_puesto,
+            crate::layout::presets::tree("simple").expect("preset")
+        );
+        assert!(
+            matches!(aviso, Some(LayoutError::Parse(_))),
+            "el motivo llega para pintarlo: {aviso:?}"
+        );
+    }
+
+    /// Y un nombre que no es de fábrica ni tiene fichero devuelve el error
+    /// del FICHERO, que es lo que el lector puede arreglar.
+    #[test]
+    fn sin_fichero_ni_preset_manda_el_error_del_fichero() {
+        let e = or_preset(
+            OsStr::new("mio"),
+            Err(LayoutError::Parse("línea 3".to_owned())),
+        )
+        .expect_err("no hay de dónde sacarlo");
+        assert!(matches!(e, LayoutError::Parse(_)), "{e:?}");
     }
 
     #[test]

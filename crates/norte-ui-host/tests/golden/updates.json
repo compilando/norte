@@ -952,6 +952,8 @@
             "value": "caf�.txt"
           }
         ],
+        "follows_display": "⟨mem⟩/casa",
+        "follows_hostile": false,
         "kind": "metadata",
         "note": "",
         "slot_id": 5

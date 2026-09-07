@@ -5695,6 +5695,337 @@ async fn la_hoja_de_atributos_enfocada_no_se_vacia() {
     );
 }
 
+/// Como [`host_full`], pero con la fila `..` ENCENDIDA — que es lo que trae
+/// la configuración de fábrica y lo que ve cualquiera que abra la ventana.
+///
+/// El resto de esta suite la apaga a propósito (razona sobre índices de
+/// listado). Los tests de los paneles que SIGUEN al cursor no pueden
+/// permitírselo: el cursor nace justo sobre esa fila, así que apagarla es
+/// probar el único estado en el que nadie arranca.
+async fn host_full_con_fila_de_subir(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    let mut cfg = norte_ui_host::ajustes_por_defecto();
+    cfg.common.ui_parent_entry = Some(true);
+    UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("full").expect("layout"),
+        viewport: (200, 60),
+        settings: cfg,
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca")
+}
+
+/// Con el cursor sobre `..` la hoja DESCRIBE esa fila, no se vacía.
+///
+/// El fallo que cierra: la ventana recién abierta enseñaba «nada bajo el
+/// cursor» en cada arranque y después de cada `cd`, porque el cursor nace
+/// sobre `..` y la hoja preguntaba por el OPERANDO —que sobre esa fila es
+/// `None` a propósito— en vez de por lo señalado.
+#[tokio::test]
+async fn la_hoja_describe_la_fila_de_subir_en_vez_de_vaciarse() {
+    let (_h, snap) = host_full_con_fila_de_subir(arbol()).await;
+    let hoja = hoja(&snap).expect("la disposición `full` coloca la hoja");
+    assert!(
+        hoja.note.is_empty(),
+        "sobre `..` hay algo que describir: {hoja:?}"
+    );
+    let filas: Vec<(&str, &str)> = hoja
+        .fields
+        .iter()
+        .map(|f| (f.label.as_str(), f.value.as_str()))
+        .collect();
+    assert_eq!(
+        filas,
+        [
+            ("Nombre", ".."),
+            ("Clase", "carpeta"),
+            ("Destino", "⟨mem⟩/")
+        ],
+        "`..` se llama `..` y dice a dónde lleva, no el nombre del padre"
+    );
+}
+
+/// Subir por la fila `..` deja el cursor sobre el directorio del que se sale.
+///
+/// Igual que `UiAction::Parent`, que es la otra puerta a la MISMA
+/// navegación. Sin esto el cursor aterrizaba en la primera fila del padre
+/// según por cuál de las dos se subiera, y subir-y-bajar dejaba de ser
+/// reversible por una de ellas.
+#[tokio::test]
+async fn subir_por_la_fila_de_subir_deja_el_cursor_donde_estabas() {
+    let (h, snap) = host_full_con_fila_de_subir(arbol()).await;
+    let mut sub = h.subscribe();
+    let listado = primer_listado(&snap);
+    let slot = listado.slot_id;
+
+    // Bajar a `docs` (la fila 1: detrás de `..`).
+    h.dispatch(UiAction::Activate {
+        slot_id: slot,
+        key: norte_ui_host::RowKey(1),
+        generation: listado.generation,
+    })
+    .await
+    .expect("host vivo");
+    let dentro = foto_hasta(&h, &mut sub, "el listado de `docs`", |s| {
+        let b = primer_listado(s);
+        b.path_display.ends_with("docs").then(|| b.clone())
+    })
+    .await;
+
+    // Y volver a subir POR LA FILA `..`, que es la primera.
+    h.dispatch(UiAction::Activate {
+        slot_id: slot,
+        key: norte_ui_host::RowKey(0),
+        generation: dentro.generation,
+    })
+    .await
+    .expect("host vivo");
+    let fuera = foto_hasta(&h, &mut sub, "de vuelta en `casa`", |s| {
+        let b = primer_listado(s);
+        b.path_display.ends_with("casa").then(|| b.clone())
+    })
+    .await;
+    let bajo_el_cursor = fuera
+        .cursor
+        .and_then(|k| fuera.rows.get(usize::try_from(k.0).unwrap_or(0)))
+        .map(|r| r.display_name.clone());
+    assert_eq!(
+        bajo_el_cursor.as_deref(),
+        Some("docs"),
+        "el cursor vuelve al directorio del que se salió, no a la fila 0: {:?}",
+        fuera
+            .rows
+            .iter()
+            .map(|r| &r.display_name)
+            .collect::<Vec<_>>()
+    );
+}
+
+/// La hoja DICE a qué listado sigue, y cambia cuando cambia el foco.
+///
+/// «Detalles» a secas no dice de qué son los detalles: con dos listados
+/// abiertos, la única forma de saber cuál está describiendo era mover el
+/// cursor y ver si la hoja se movía. Ahora lleva la ruta del panel al que
+/// sigue, que es la pregunta que faltaba contestar.
+#[tokio::test]
+async fn la_hoja_dice_a_que_listado_sigue() {
+    let (h, snap) = host_full_con_fila_de_subir(arbol()).await;
+    let mut sub = h.subscribe();
+    let primera = hoja(&snap).expect("colocada");
+    assert_eq!(
+        primera.follows_display,
+        norte_frontend::path_display(&dir()).0,
+        "la ruta del listado al que sigue: {primera:?}"
+    );
+    assert!(!primera.follows_hostile);
+
+    // Con el foco en el OTRO listado, la hoja lo dice: sigue al activo.
+    let otro = snap
+        .slots
+        .iter()
+        .filter_map(|s| match s {
+            SlotView::Browser(b) => Some(b.slot_id),
+            _ => None,
+        })
+        .nth(1)
+        .expect("`full` tiene dos listados");
+    h.dispatch(UiAction::Activate {
+        slot_id: otro,
+        key: norte_ui_host::RowKey(1),
+        generation: 0,
+    })
+    .await
+    .ok();
+    h.dispatch(UiAction::FocusSlot { slot_id: otro })
+        .await
+        .expect("host vivo");
+    let foto = foto_hasta(&h, &mut sub, "el foco en el otro listado", |s| {
+        (s.focus == Some(otro)).then(|| s.clone())
+    })
+    .await;
+    let h2 = hoja(&foto).expect("sigue colocada");
+    assert!(
+        !h2.follows_display.is_empty(),
+        "y sigue diciendo a quién sigue: {h2:?}"
+    );
+}
+
+/// Un listado y una hoja de atributos, SIN visor acoplado.
+///
+/// La disposición `full` tiene los dos, y eso escondía el fallo: la hoja no
+/// tenía forma de actualizarse sola y viajaba de gorra en la foto entera que
+/// el VISOR provocaba al cambiar de nota. Sin visor en la disposición no hay
+/// quien la arrastre, y la hoja se quedaba congelada.
+async fn host_hoja_sin_visor(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    use norte_frontend::layout::{Bindings, Dir, Follow, KindId, Node, RoleId, SlotId};
+    let mut cfg = norte_ui_host::ajustes_por_defecto();
+    cfg.common.ui_parent_entry = Some(true);
+    let arbol = Node::split(
+        Dir::Horizontal,
+        vec![
+            Node::slot(SlotId(1), KindId::browser()),
+            Node::slot_bound(
+                SlotId(8),
+                KindId::new("metadata"),
+                Bindings {
+                    follows: Some(Follow::Role(RoleId::Active)),
+                },
+            ),
+        ],
+    );
+    UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: dir(),
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        layout: arbol,
+        viewport: (200, 60),
+        settings: cfg,
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::columnas_por_defecto(),
+        effects: norte_ui_host::commands::Efectos::Completo,
+        log_ring: None,
+    })
+    .await
+    .expect("arranca")
+}
+
+/// Pinchar una fila mueve la hoja, aunque no haya visor que arrastre la foto.
+///
+/// Lo que veía Oscar: en una disposición con árbol, dos listados y detalles
+/// —sin visor—, hacer clic en cualquier fila de cualquier panel dejaba la
+/// hoja en `..` para siempre. `SelectRow` contesta con un parche de FILAS, y
+/// la hoja solo viaja en la foto entera.
+#[tokio::test]
+async fn pinchar_una_fila_mueve_la_hoja_sin_visor_en_la_disposicion() {
+    let (h, snap) = host_hoja_sin_visor(arbol()).await;
+    let mut sub = h.subscribe();
+    let primera = hoja(&snap).expect("la disposición coloca la hoja");
+    assert_eq!(
+        primera.fields.first().map(|f| f.value.as_str()),
+        Some(".."),
+        "de partida, la fila de subir"
+    );
+    let listado = primer_listado(&snap);
+    let generation = listado.generation;
+    // La fila 2 del listado: `..`, `docs`, y la siguiente.
+    let objetivo = listado
+        .rows
+        .get(2)
+        .expect("hay tercera fila")
+        .display_name
+        .clone();
+
+    h.dispatch(UiAction::SelectRow {
+        slot_id: listado.slot_id,
+        key: norte_ui_host::RowKey(2),
+        generation,
+    })
+    .await
+    .expect("host vivo");
+    asentar().await;
+
+    // SIN `Resync`, y ahí está la gracia: `foto_hasta` pide una foto en cada
+    // vuelta, así que un test escrito con él se pone verde aunque el clic no
+    // mande nada — la foto que examina la provocó el propio test. Lo que se
+    // comprueba aquí es lo que el host manda POR SU CUENTA al pinchar, que es
+    // lo único que tiene el renderer.
+    tokio::time::pause();
+    let llegada =
+        tokio::time::timeout(std::time::Duration::from_secs(5), siguiente_foto(&mut sub)).await;
+    tokio::time::resume();
+    let foto = llegada.expect("pinchar no produjo ninguna foto: la hoja se queda congelada");
+
+    let hoja = hoja(&foto).expect("sigue colocada");
+    assert_eq!(
+        hoja.fields.first().map(|f| f.value.as_str()),
+        Some(objetivo.as_str()),
+        "la hoja describe la fila pinchada: {:?}",
+        hoja.fields
+    );
+}
+
+/// Con un filtro eligiendo otra fila, la hoja describe ESA fila y no `..`.
+///
+/// El cursor REAL no se mueve en modo Filter, así que preguntar
+/// `is_parent_row(cursor())` por un lado y `cursor_entry()` por otro dejaba
+/// la hoja diciendo «`..`, carpeta» mientras el listado resaltaba un fichero
+/// — y el nombre hostil que el lector estaba mirando no se marcaba, que es
+/// justo para lo que se consulta esta hoja.
+#[tokio::test]
+async fn con_un_filtro_la_hoja_describe_la_fila_elegida_y_no_la_de_subir() {
+    let (h, _snap) = host_full_con_fila_de_subir(arbol()).await;
+    let mut sub = h.subscribe();
+    // `caf\xC3(` es la entrada no-UTF-8 del árbol de pruebas: se filtra por
+    // una letra que la fila `..` no tiene.
+    ejecutar_por_paleta(&h, &mut sub, "pane.quick-search").await;
+    for c in "caf".chars() {
+        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+    }
+    // Se espera a la entrada HOSTIL, no a «la primera que no sea `..`»: con
+    // la query a medias («c») el filtro pasa por `docs`, que también es una
+    // fila de verdad y contestaría a esa pregunta sin probar nada.
+    let foto = foto_hasta(&h, &mut sub, "la hoja sobre lo filtrado", |s| {
+        hoja(s)
+            .filter(|m| m.fields.first().is_some_and(|f| f.hostile))
+            .cloned()
+    })
+    .await;
+    let nombre = foto.fields.first().expect("hay nombre");
+    assert!(
+        nombre.hostile,
+        "describe la entrada resaltada, y la marca: {nombre:?}"
+    );
+    assert!(
+        !foto.fields.iter().any(|f| f.label == "Destino"),
+        "y no la fila de subir: {:?}",
+        foto.fields
+    );
+}
+
+/// Y el visor acoplado dice «directorio», no «nada seleccionado».
+///
+/// La misma avería en el otro panel que sigue al cursor, y por la misma
+/// razón: preguntaba por el operando.
+#[tokio::test]
+async fn el_visor_acoplado_sobre_la_fila_de_subir_dice_directorio() {
+    let (h, _snap) = host_full_con_fila_de_subir(arbol()).await;
+    let mut sub = h.subscribe();
+    // Hasta que el listado aterriza no hay cursor, y ESA nota es otra: se
+    // espera a la del directorio, como el resto de los tests del visor.
+    let vista = foto_hasta(&h, &mut sub, "el hueco de preview sobre `..`", |s| {
+        s.slots
+            .iter()
+            .find_map(|v| match v {
+                SlotView::Preview(p) => Some(p.as_ref().clone()),
+                _ => None,
+            })
+            .filter(|p| p.viewer.is_none() && p.note == "directorio")
+    })
+    .await;
+    assert_eq!(
+        vista.note, "directorio",
+        "`..` lleva a una carpeta: eso es lo que hay bajo el cursor"
+    );
+}
+
 /// Un nombre hostil llega a la hoja enmascarado y MARCADO, igual que a una
 /// fila del listado.
 #[tokio::test]

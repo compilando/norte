@@ -48,6 +48,16 @@ impl Estado {
                     };
                 }
                 let destino = entrada.path.clone();
+                // Activar la fila `..` es SUBIR, y al subir el cursor
+                // aterriza sobre el directorio del que se sale — lo mismo que
+                // hace `UiAction::Parent` unas líneas más abajo. Sin esto, la
+                // misma navegación dejaba el cursor en la primera fila según
+                // se hubiera pedido con la fila o con la tecla, y subir y
+                // bajar dejaba de ser reversible por una de las dos puertas.
+                if self.hueco().pane.is_parent_row(i) {
+                    let actual = self.hueco().pane.dir().clone();
+                    self.hueco_mut().pane.set_pending_focus(actual);
+                }
                 (
                     self.aplicada(),
                     self.navegar(&destino, Trail::Record, backend, buzon),

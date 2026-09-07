@@ -2238,6 +2238,8 @@ describe("los huecos que no son listados", () => {
           { label: "Tamaño", value: "1,2 KiB (1258)", hostile: false },
         ],
         note: "",
+        follows_display: "⟨file⟩/home/oscar/Downloads",
+        follows_hostile: false,
       },
     ];
     v.layout.placements = [
@@ -2250,6 +2252,37 @@ describe("los huecos que no son listados", () => {
     const valores = [...document.querySelectorAll(".metadata-fields dd")];
     expect(valores[0]?.getAttribute("data-hostile")).toBe("true");
     expect(valores[1]?.getAttribute("data-hostile")).toBe("false");
+  });
+
+  // «Detalles» a secas no dice de QUÉ son los detalles: con dos listados
+  // abiertos, la única forma de saber cuál se estaba describiendo era mover
+  // el cursor y ver si la hoja se movía.
+  it("la hoja titula con el listado al que sigue", () => {
+    const { screen } = montar();
+    const v = vista({});
+    v.slots = [
+      ...v.slots,
+      {
+        kind: "metadata",
+        slot_id: 7,
+        fields: [{ label: "Nombre", value: "notas.txt", hostile: false }],
+        note: "",
+        follows_display: "⟨file⟩/home/oscar/Downloads",
+        follows_hostile: false,
+      },
+    ];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 0, width: 30, height: 10, role: null, focus_index: 2 },
+    ];
+    screen.paint(v);
+    const titulo = document.querySelector('[data-slot-id="7"] .slot-title');
+    expect(titulo?.textContent).toContain("⟨file⟩/home/oscar/Downloads");
+    // La ruta va en SU nodo: `.slot-title` recorta sin puntos suspensivos, y
+    // una ruta cortada en seco nombra otro directorio que además existe.
+    expect(
+      document.querySelector('[data-slot-id="7"] .slot-title .title-path')?.textContent,
+    ).toBe("⟨file⟩/home/oscar/Downloads");
   });
 
   // #291: el visor acoplado es el MISMO cuerpo que el grande, en un hueco.
@@ -2364,7 +2397,14 @@ describe("los huecos que no son listados", () => {
     const v = vista({});
     v.slots = [
       ...v.slots,
-      { kind: "metadata", slot_id: 7, fields: [], note: "nada bajo el cursor" },
+      {
+        kind: "metadata",
+        slot_id: 7,
+        fields: [],
+        note: "nada bajo el cursor",
+        follows_display: "⟨file⟩/home/oscar",
+        follows_hostile: false,
+      },
     ];
     v.layout.placements = [
       ...v.layout.placements,

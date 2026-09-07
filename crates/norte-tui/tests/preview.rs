@@ -75,6 +75,25 @@ fn el_objetivo_lleva_el_hueco_del_preview() {
     assert_eq!(w, Want::File(vp("file:///izq/uno.txt")));
 }
 
+/// Sobre la fila `..` el visor dice «directorio», no «nada seleccionado».
+///
+/// Con la fila encendida —lo de fábrica— el cursor nace justo ahí, así que
+/// esta era la nota que veía TODO el mundo al abrir. Y sigue sin leer nada:
+/// `..` lleva a una carpeta, y una carpeta no se lee.
+#[test]
+fn sobre_la_fila_de_subir_el_visor_dice_directorio() {
+    let mut app = app_de_prueba();
+    app.set_parent_row(true);
+    app.toggle_preview();
+    assert!(
+        app.panes[0].is_parent_row(app.panes[0].cursor()),
+        "el cursor nace sobre `..`"
+    );
+    let res = resolver(&mut app);
+    let (_, w) = want(&app, &res).expect("hay objetivo");
+    assert_eq!(w, Want::Note("preview-directory"));
+}
+
 /// Un preview detrás de una pestaña no produce objetivo: no hay petición que
 /// contar. En L1b una fuga igual solo la vio un test, así que aquí está.
 #[test]

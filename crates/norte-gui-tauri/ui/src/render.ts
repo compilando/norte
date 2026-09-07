@@ -3132,8 +3132,39 @@ export class Screen {
    * que su columna. Aquí no se formatea nada.
    */
   private paintMetadata(dom: SlotDom, slot: MetadataSlotView): void {
-    dom.root.setAttribute("aria-label", this.t("metadata-title"));
-    dom.title.textContent = this.t("metadata-title");
+    // El título DICE a qué listado sigue. «Detalles» a secas no dice de qué
+    // son los detalles, y con dos listados abiertos la única forma de
+    // averiguarlo era mover el cursor y mirar si la hoja se movía.
+    const titulo =
+      slot.follows_display === ""
+        ? this.t("metadata-title")
+        : `${this.t("metadata-title")} · ${slot.follows_display}`;
+    dom.root.setAttribute("aria-label", titulo);
+    if (slot.follows_display === "") {
+      dom.title.replaceChildren(document.createTextNode(titulo));
+      return this.paintMetadataBody(dom, slot);
+    }
+    // La ruta en su propio nodo y con la clase que la recorta CON puntos
+    // suspensivos, igual que la cabecera de un listado: como texto suelto de
+    // la cabecera, `.slot-title` la corta sin decirlo —`overflow: hidden` y
+    // nada más— y una ruta cortada en seco nombra otro directorio que además
+    // existe.
+    // Espacio DURO detrás del separador: `.slot-title` es un flex, y el
+    // espacio normal al final de un nodo de texto se colapsa contra el span
+    // de al lado — «Detalles ·⟨file⟩/…» pegado.
+    const etiqueta = document.createTextNode(`${this.t("metadata-title")} ·\u00a0`);
+    const ruta = document.createElement("span");
+    ruta.className = "title-path";
+    ruta.textContent = slot.follows_display;
+    dom.title.replaceChildren(etiqueta, ruta);
+    if (slot.follows_hostile) {
+      ruta.append(badge(this.t("hostile-name")));
+    }
+    return this.paintMetadataBody(dom, slot);
+  }
+
+  /** El cuerpo de la hoja: los campos, o la nota que dice por qué no hay. */
+  private paintMetadataBody(dom: SlotDom, slot: MetadataSlotView): void {
     dom.scroller.className = "metadata";
     if (slot.note !== "") {
       dom.scroller.replaceChildren(nota(slot.note));

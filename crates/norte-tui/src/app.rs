@@ -1028,6 +1028,41 @@ impl App {
         self.nuevo_pane(p.dir().clone(), p.real_entries().to_vec())
     }
 
+    /// Mete en `id` un listado que nació FUERA de [`Self::nuevo_pane`] y le
+    /// pone la configuración de esta sesión.
+    ///
+    /// Los tres que nacen fuera son de la SESIÓN: el que `apply_session`
+    /// levanta sobre la ruta guardada, el que el arranque lista para él, y el
+    /// que `pin_start_dir` pone cuando la línea de órdenes nombra un
+    /// directorio. Los tres reponían el orden y los ocultos y ninguno la fila
+    /// `..`, así que `[ui] parent_entry = true` se apagaba solo a partir de
+    /// la primera sesión guardada — y el lector lo veía como que el TUI no
+    /// tiene fila de subir y la ventana sí.
+    ///
+    /// Estampa lo de la CONFIG (la fila `..`) y repone lo de la SESIÓN (el
+    /// orden y los ocultos), en ese orden y en un solo sitio.
+    ///
+    /// Los tres llamantes lo hacían por su cuenta y en órdenes distintos, que
+    /// es cómo uno se dejó la fila; el campo que se añada mañana se dejarían
+    /// dos. `None` en `sort`/`hidden` es «este llamante no tiene nada que
+    /// reponer», no «pon el de fábrica».
+    pub fn adoptar_pane(
+        &mut self,
+        id: norte_frontend::layout::SlotId,
+        mut pane: Pane,
+        sort: Option<norte_frontend::SortSpec>,
+        hidden: Option<bool>,
+    ) {
+        pane.set_parent_row(self.parent_row);
+        if let Some(s) = sort {
+            pane.set_sort(s);
+        }
+        if let Some(h) = hidden {
+            pane.set_show_hidden(h);
+        }
+        self.panes.insert_browser(id, pane);
+    }
+
     /// Enciende o apaga la fila `..` en TODOS los panes (`[ui] parent_entry`).
     ///
     /// En todos y no solo en los visibles: un pane detrás de una pestaña

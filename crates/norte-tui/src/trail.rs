@@ -207,7 +207,7 @@ pub fn nav_enter_target(app: &App) -> Option<VPath> {
     // ella, que es lo que la hace inofensiva— así que subir se pregunta
     // aparte. Es lo único que esa fila sabe hacer.
     let pane = app.focused();
-    if pane.is_parent_row(pane.cursor()) {
+    if pane.cursor_is_parent_row() {
         return pane.parent_target().cloned();
     }
     pane.selected()

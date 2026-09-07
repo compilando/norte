@@ -154,6 +154,10 @@ export interface MetadataSlotView {
   slot_id: number;
   fields: MetadataFieldView[];
   note: string;
+  /** La ruta del listado al que esta hoja SIGUE. Va en el título. */
+  follows_display: string;
+  /** Esa ruta difiere de los bytes reales. */
+  follows_hostile: boolean;
 }
 
 /**
