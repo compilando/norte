@@ -120,7 +120,15 @@ informe original; **A** salvo donde se diga.
    (`busy::BusyKind`: «conectando» no es «cargando») y el umbral viaja en el
    catálogo desde `busy::THRESHOLD`, en vez de ser un número en el CSS.
 9. **Listas de ficheros en los diálogos:** basename/tope 10/«y 2 más» contra
-   ruta entera/tope 16/«mostrando 16 de 200».
+   ruta entera/tope 16/«mostrando 16 de 200». **Se queda, y es una decisión.**
+   Es el único de los diecisiete en el que ninguna de las dos superficies
+   afirma nada falso: las dos frases son completas —10 + «y 190 más» y «se
+   enseñan 16 de 200» dicen lo mismo— y los dos topes son de LEGIBILIDAD,
+   sobre superficies de anchos distintos. Unificarlo costaría un campo de
+   puente y veinticuatro sitios de construcción para que dos pantallas que ya
+   dicen la verdad la digan con las mismas palabras. Si algún día se toca, lo
+   que hay que compartir es la FRASE —para que no puedan divergir hacia decir
+   cosas distintas— y no el tope.
 10. ~~**El diálogo de colisión pierde la insignia de hostil y la
     reinterpretación del panel.**~~ **HECHO**. Y la codificación se captura AL
     LANZAR, no al llegar: la colisión aparece asíncrona y entre el envío y la
