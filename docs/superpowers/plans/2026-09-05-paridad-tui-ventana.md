@@ -210,8 +210,21 @@ Sin esto, arreglar la lista es barrer hacia la puerta.
    **Un arnés de paridad caza divergencia, no error compartido.** Al añadir
    un escenario, sabotea UNA pata y compruébalo rojo: estrechar la primitiva
    estrecha las tres y sale verde igual.
-3. **Un test que enumere los huecos con sonda.** Cada kind que sigue al
-   cursor tiene sonda o está en una lista de «solo foto, a propósito».
+3. ~~**Un test que enumere los huecos con sonda.**~~ **HECHO**:
+   `crates/norte-ui-host/tests/sondas.rs`. No enumera una lista: abre CADA
+   panel que ofrece la barra, mueve el cursor del listado y mira si la vista
+   de ese hueco cambió. Si cambió, el cambio tiene que haber llegado solo. Un
+   panel nuevo entra en la comprobación sin tocar el fichero.
+
+   Son dos tests y hacen falta los dos, porque hay dos averías distintas:
+   quitar la sonda del BUCLE (se calcula y no se manda) falla el primero
+   —cambia y no viajó—; matar la sonda entera (no se calcula) falla el
+   segundo, porque entonces el panel deja de parecer que sigue al cursor.
+   Comprobado saboteando cada una por separado.
+
+   `NO_SIGUEN` lleva el motivo de cada uno y se comprueba en las dos
+   direcciones: un panel declarado ahí que empiece a seguir al cursor falla
+   igual, porque entonces el motivo escrito es falso.
 
 ### F2 — Lo que se queda congelado (clase B)
 
