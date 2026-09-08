@@ -1186,7 +1186,10 @@ fn golden_methods() {
     // 198 → 200 en 0.67.0 (ADR 0095): + `plugin_command_info_renamer` y
     // `plugin_rename_plan_params`.
     // 200 → 201 en 0.68.0 (#332): + `ai_rename_plan_result_refused`.
-    assert_eq!(fixtures.len(), 201, "[methods.json] fixtures sin caso Rust");
+    // 201 → 203 en 0.69.0 (ADR 0100): + `plugin_notice_notify` y
+    // `plugin_notice_hooks_disabled`, UNA POR VALOR del vocabulario de `kind`:
+    // el frontend decide por igualdad si traduce la clase o pinta el texto.
+    assert_eq!(fixtures.len(), 203, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -2057,6 +2060,33 @@ fn check_methods_plugin_help(fixtures: &BTreeMap<String, Value>) {
     clippy::too_many_lines,
     reason = "cada fixture lleva su porqué; partir en mitades escondería cuáles hay"
 )]
+/// `plugin.notice` (0.69.0, ADR 0100): UNA fixtura POR VALOR de `kind`. Con
+/// una sola, renombrar la otra no pondría nada en rojo, y el frontend compara
+/// `kind` por igualdad para decidir si traduce la clase o pinta `text`.
+fn check_methods_plugin_notice(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{PLUGIN_NOTICE_KINDS, PluginNotice};
+    assert_eq!(PLUGIN_NOTICE_KINDS, &["notify", "hooks-disabled"]);
+    check_one(
+        fixtures,
+        "plugin_notice_notify",
+        &PluginNotice {
+            plugin_id: "org.norte.rename-log".into(),
+            kind: "notify".into(),
+            text: Some("renamed 3 files".into()),
+        },
+    );
+    // Sin `text`: la prueba de que no viaja cuando no lo hay.
+    check_one(
+        fixtures,
+        "plugin_notice_hooks_disabled",
+        &PluginNotice {
+            plugin_id: "org.norte.rename-log".into(),
+            kind: "hooks-disabled".into(),
+            text: None,
+        },
+    );
+}
+
 fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
         PluginColumnInfo, PluginCommandInfo, PluginCommandKind, PluginInfo, PluginListResult,
@@ -2225,6 +2255,7 @@ fn check_methods_plugin_governance(fixtures: &BTreeMap<String, Value>) {
     // `plugin.list` sin params: golden vacío, simetría con `task_list_params`.
     check_one(fixtures, "plugin_list_params", &PluginListParams {});
     check_methods_plugin_info(fixtures);
+    check_methods_plugin_notice(fixtures);
     check_one(
         fixtures,
         "plugin_set_approval_params",
@@ -4315,7 +4346,12 @@ fn method_names_frozen() {
     // 0.66.0 (D4): ningún método nuevo — dos campos opcionales, `SpanWire::bg`
     // y `PluginPreviewStyledParams::columns`, para el previewer de imagen que
     // pinta medios bloques y necesita saber a cuántas celdas encoger.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.68.0");
+    // 0.69.0 (ADR 0100): `plugin.notice`, la notificación con la que un
+    // plugin `hook` le dice algo al humano sobre una mutación ya registrada —
+    // o con la que el daemon dice que apagó los hooks de un plugin. Solo a
+    // humanos, como `connection.failed`; un cliente 0.68 la descarta.
+    assert_eq!(methods::PLUGIN_NOTICE, "plugin.notice");
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.69.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

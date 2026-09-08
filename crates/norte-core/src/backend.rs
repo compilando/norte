@@ -367,6 +367,19 @@ impl crate::connect::ConnectionObserver for ChannelFailureObserver {
     }
 }
 
+/// A dónde van los avisos de los hooks en `Backend::Embedded` (ADR 0100): a
+/// un canal que el frontend drena, igual que en modo daemon los difunde el
+/// wire. Sin esto el embebido correría los hooks y se tragaría sus frases.
+struct ChannelHookSink {
+    tx: mpsc::UnboundedSender<norte_proto::methods::PluginNotice>,
+}
+
+impl crate::hooks::HookNoticeSink for ChannelHookSink {
+    fn notice(&self, n: norte_proto::methods::PluginNotice) {
+        let _ = self.tx.send(n);
+    }
+}
+
 /// Sink de avisos del journal perezoso (#177) que los reenvía por un canal: la
 /// vía para que una TUI embebida pinte EN LA SESIÓN que sus mutaciones no están
 /// quedando registradas.
@@ -2110,6 +2123,46 @@ impl Backend {
             }
             #[cfg(unix)]
             Self::Remote(r) => r.take_failed(),
+        }
+    }
+
+    /// Receptor de avisos `plugin.notice` (0.69.0, ADR 0100): la frase de un
+    /// plugin `hook` sobre una mutación ya registrada, o que los hooks de un
+    /// plugin se apagaron tras tres fallos. En `Remote` viene del pump del
+    /// daemon; en `Embedded` ARRANCA el despachador de hooks sobre el journal
+    /// de este engine y le da un canal — así ambos modos corren los mismos
+    /// hooks y surfacean lo mismo. One-shot, como [`Backend::take_failed`]:
+    /// el segundo despachador que se arrancara pisaría al primero.
+    ///
+    /// `None` en `Embedded` si el runtime WASM no se pudo crear: sin runtime
+    /// no corre ningún plugin, y tampoco un hook (fail-closed, con traza).
+    pub fn take_plugin_notices(
+        &self,
+    ) -> Option<mpsc::UnboundedReceiver<norte_proto::methods::PluginNotice>> {
+        match self {
+            Self::Embedded(engine) => {
+                let runtime = match norte_plugin_host::PluginRuntime::new() {
+                    Ok(r) => Arc::new(r),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "hooks: sin runtime de plugins, no corren");
+                        return None;
+                    }
+                };
+                let (tx, rx) = mpsc::unbounded_channel();
+                let sender = crate::hooks::spawn_dispatcher(
+                    crate::connect::config_dir(),
+                    runtime,
+                    Arc::new(ChannelHookSink { tx }),
+                );
+                // Enchufar el journal es `async` (el perezoso guarda el
+                // extremo bajo su lock); una mutación que se adelante a esta
+                // task queda sin hook, y es el arranque: no hay ninguna.
+                let engine = Arc::clone(engine);
+                tokio::spawn(async move { engine.enable_hooks(sender).await });
+                Some(rx)
+            }
+            #[cfg(unix)]
+            Self::Remote(r) => r.take_plugin_notices(),
         }
     }
 

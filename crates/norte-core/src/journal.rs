@@ -650,6 +650,10 @@ pub struct Journal {
     /// (migra), puede ser `false` en [`Journal::open_read_only`] sobre una DB
     /// pre-migración, que no se puede alterar y aun así hay que poder auditar.
     has_batch_id: bool,
+    /// A quién se le ofrece cada fila comprometida (ADR 0100): los hooks. Un
+    /// `RwLock` std porque se lee en cada `record_entry` y se escribe una vez
+    /// al arrancar; `None` hasta que [`Journal::set_hook_sender`] lo ponga.
+    hooks: std::sync::RwLock<Option<crate::hooks::HookSender>>,
 }
 
 /// Todo lo que necesita UNA entrada del journal. Una struct en vez de ocho
@@ -845,6 +849,7 @@ impl Journal {
                 batch_counter,
             }),
             has_batch_id,
+            hooks: std::sync::RwLock::new(None),
         })
     }
 
@@ -976,6 +981,7 @@ impl Journal {
                 batch_counter,
             }),
             has_batch_id: true,
+            hooks: std::sync::RwLock::new(None),
         })
     }
 
@@ -1213,7 +1219,31 @@ impl Journal {
         // Solo tras el insert OK: sin huecos de seq ni cadena rota si falla.
         chain.last_seq = seq;
         chain.last_hash = entry_hash;
+        drop(chain);
+        // Y DESPUÉS de durable, a los hooks (ADR 0100): lo que un hook ve es
+        // exactamente lo que el journal registró. `offer` no espera nunca.
+        let sender = self.hooks.read().ok().and_then(|g| g.clone());
+        if let Some(tx) = sender {
+            tx.offer(crate::hooks::HookEvent {
+                seq,
+                ts_ms,
+                op: op.to_owned(),
+                actor_kind: actor_kind.to_owned(),
+                path: path.to_vec(),
+                path_to: path_to.map(<[u8]>::to_vec),
+                batch_id,
+            });
+        }
         Ok(seq)
+    }
+
+    /// Instala el extremo al que se le ofrece cada fila comprometida (ADR
+    /// 0100). El segundo en instalarse pisa al primero: hay un despachador
+    /// por proceso, y es del arranque.
+    pub fn set_hook_sender(&self, tx: crate::hooks::HookSender) {
+        if let Ok(mut g) = self.hooks.write() {
+            *g = Some(tx);
+        }
     }
 
     /// Número de MUTACIONES (el marcador de formato del `seq 0` no lo es).
@@ -1658,6 +1688,11 @@ impl SqliteJournal {
         &self.journal
     }
 
+    /// Ver [`Journal::set_hook_sender`].
+    pub fn set_hook_sender(&self, tx: crate::hooks::HookSender) {
+        self.journal.set_hook_sender(tx);
+    }
+
     /// Cierra el journal subyacente y espera a que el fichero quede libre
     /// (ver [`Journal::close`]).
     pub async fn close(self) {
@@ -1809,6 +1844,55 @@ impl crate::observer::MutationObserver for SqliteJournal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR 0100: cada fila comprometida se le ofrece al extremo de los hooks,
+    /// con lo que la fila dice — y solo tras el insert, con su `seq`.
+    #[tokio::test]
+    async fn cada_fila_comprometida_se_ofrece_a_los_hooks() {
+        let j = Journal::open_in_memory().await.expect("open");
+        let (tx, mut rx) = crate::hooks::HookSender::for_test(2);
+        j.set_hook_sender(tx.clone());
+        let actor = Actor::Agent {
+            session: "s-1".into(),
+        };
+        let seq = j
+            .record_entry(&NewEntry {
+                op: "renamed",
+                path: b"file:///a/nuevo",
+                path_to: Some(b"file:///a/viejo"),
+                reversal: Reversal::RenameBack,
+                reversal_ref: None,
+                actor: &actor,
+                undoes_seq: None,
+                batch_id: Some(3),
+            })
+            .await
+            .expect("record");
+        let ev = rx.try_recv().expect("un evento por fila");
+        assert_eq!(ev.seq, seq);
+        assert_eq!(ev.op, "renamed");
+        assert_eq!(ev.actor_kind, "agent", "la clase sí; la sesión no viaja");
+        assert_eq!(ev.path, b"file:///a/nuevo".to_vec());
+        assert_eq!(ev.path_to, Some(b"file:///a/viejo".to_vec()));
+        assert_eq!(ev.batch_id, Some(3));
+
+        // Cola llena: la fila se escribe igual y el evento se cuenta como
+        // descartado. Un observador lento jamás frena una mutación.
+        for _ in 0..3 {
+            j.record(
+                "created",
+                b"file:///a/x",
+                None,
+                Reversal::Delete,
+                None,
+                &actor,
+            )
+            .await
+            .expect("record");
+        }
+        assert_eq!(j.count().await.expect("count"), 4);
+        assert_eq!(tx.dropped(), 1, "dos cupieron, el tercero se descartó");
+    }
 
     fn rec(seq: i64) -> Record<'static> {
         Record {

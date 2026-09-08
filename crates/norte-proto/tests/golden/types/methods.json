@@ -1018,6 +1018,15 @@
     ],
     "plugins": []
   },
+  "plugin_notice_hooks_disabled": {
+    "kind": "hooks-disabled",
+    "plugin_id": "org.norte.rename-log"
+  },
+  "plugin_notice_notify": {
+    "kind": "notify",
+    "plugin_id": "org.norte.rename-log",
+    "text": "renamed 3 files"
+  },
   "plugin_preview_params": {
     "path": "file:///home/user/doc.md"
   },

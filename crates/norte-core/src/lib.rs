@@ -17,6 +17,7 @@ pub mod embedded;
 mod engine;
 pub mod ftp_plugin;
 mod hashing;
+pub mod hooks;
 mod index_build;
 mod index_embed;
 pub mod journal;

@@ -45,6 +45,7 @@ plugin.decorate	Request	Direct	methods::PluginDecorateParams	methods::PluginDeco
 plugin.get_config	Request	Direct	methods::PluginGetConfigParams	methods::PluginGetConfigResult	
 plugin.help	Request	Direct	methods::PluginHelpParams	methods::PluginHelpResult	
 plugin.list	Request	Direct	methods::PluginListParams	methods::PluginListResult	
+plugin.notice	Notification	Direct	methods::PluginNotice	()	
 plugin.preview	Request	Direct	methods::PluginPreviewParams	methods::PluginPreviewResult	
 plugin.preview_styled	Request	Direct	methods::PluginPreviewStyledParams	methods::PluginPreviewStyledResult	
 plugin.rename_plan	Request	Direct	methods::PluginRenamePlanParams	methods::AiRenamePlanResult	

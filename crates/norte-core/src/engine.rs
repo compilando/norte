@@ -464,6 +464,21 @@ impl Engine {
         )
     }
 
+    /// Enchufa los hooks (ADR 0100): cada fila que el journal de este engine
+    /// comprometa se le ofrece a `tx`, venga de donde venga la mutación. Sin
+    /// journal no hay filas y no hay hooks — un engine sin journal tampoco
+    /// tiene undo, y es la misma razón.
+    ///
+    /// Con el journal perezoso del modo embebido el extremo se guarda y se
+    /// le pone a cada handle que se abra; por eso es `async`.
+    pub async fn enable_hooks(&self, tx: crate::hooks::HookSender) {
+        match &self.journal {
+            JournalSource::None => {}
+            JournalSource::Open(j) => j.set_hook_sender(tx),
+            JournalSource::Lazy(l) => l.set_hook_sender(tx).await,
+        }
+    }
+
     /// A dónde van los avisos de «esta sesión no queda registrada» (#177).
     ///
     /// No-op si este engine no lleva journal perezoso (el del daemon no puede

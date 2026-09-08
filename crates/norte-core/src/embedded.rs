@@ -405,6 +405,10 @@ pub struct LazyJournal {
     /// [`LazyJournal::attempted`] es síncrono (lo llama un `Debug` y lo llaman
     /// los tests) y porque contar no necesita exclusión.
     intentos: std::sync::atomic::AtomicU64,
+    /// El extremo de los hooks (ADR 0100), si el embebedor lo instaló: se le
+    /// pone a cada handle que se abra, porque el fichero puede abrirse y
+    /// soltarse varias veces en una sesión y el despachador es uno.
+    hooks: Mutex<Option<crate::hooks::HookSender>>,
 }
 
 /// El estado de la ventana de propiedad.
@@ -475,6 +479,19 @@ impl LazyJournal {
             sospecha: SOSPECHA_TRAS,
             sink: Mutex::new(SinkSlot::default()),
             intentos: std::sync::atomic::AtomicU64::new(0),
+            hooks: Mutex::new(None),
+        }
+    }
+
+    /// Instala el extremo de los hooks (ADR 0100): en el handle que haya
+    /// ahora, y en cada uno que se abra después.
+    pub async fn set_hook_sender(&self, tx: crate::hooks::HookSender) {
+        let v = self.estado.lock().await;
+        if let Some(j) = &v.handle {
+            j.set_hook_sender(tx.clone());
+        }
+        if let Ok(mut g) = self.hooks.lock() {
+            *g = Some(tx);
         }
     }
 
@@ -792,6 +809,9 @@ impl LazyJournal {
         };
         match &r {
             Ok(j) => {
+                if let Some(tx) = self.hooks.lock().ok().and_then(|g| g.clone()) {
+                    j.set_hook_sender(tx);
+                }
                 v.handle = Some(Arc::clone(j));
                 v.ultimo_fallo = None;
                 v.ocupado_desde = None;

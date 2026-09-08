@@ -3477,6 +3477,31 @@
       ],
       "type": "object"
     },
+    "PluginNotice": {
+      "description": "Lo que viaja en [`PLUGIN_NOTICE`]: un aviso atribuido a un plugin.\n\n`text` es TEXTO DE UN TERCERO: el daemon lo enmascara (controles, bidi)\ny lo acota antes de que cruce, y el frontend lo pinta como frase de\nestado, atribuida a `plugin_id`, y jamás lo interpreta. No lleva la ruta\ndel fichero que lo motivó: el hook la tuvo, y si quiso nombrarla la puso\nen la frase.",
+      "properties": {
+        "kind": {
+          "description": "Qué clase de aviso, vocabulario cerrado [`PLUGIN_NOTICE_KINDS`]:\n`\"notify\"` es una frase del hook (con `text`); `\"hooks-disabled\"` es\ndel daemon —los hooks de ese plugin se apagaron hasta reactivarlo tras\ntres fallos seguidos— y va sin `text`. Un valor desconocido se enseña\ncomo `text` si lo hay y se descarta si no.",
+          "type": "string"
+        },
+        "plugin_id": {
+          "description": "El plugin del que viene, tal y como lo lista `plugin.list`.",
+          "type": "string"
+        },
+        "text": {
+          "description": "La frase, ya enmascarada y acotada por el daemon. Ausente para los\navisos del daemon, que el frontend traduce por `kind`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "plugin_id",
+        "kind"
+      ],
+      "type": "object"
+    },
     "PluginPreview": {
       "description": "La preview producida por un plugin previewer: los tres campos van JUNTOS\n(all-or-nothing). Ver [`PluginPreviewResult`].",
       "properties": {
@@ -5968,6 +5993,9 @@
     "plugin_load_error": {
       "$ref": "#/$defs/PluginLoadError"
     },
+    "plugin_notice": {
+      "$ref": "#/$defs/PluginNotice"
+    },
     "plugin_preview": {
       "$ref": "#/$defs/PluginPreview"
     },
@@ -6301,6 +6329,7 @@
     "plugin_info",
     "plugin_list_params",
     "plugin_list_result",
+    "plugin_notice",
     "plugin_load_error",
     "plugin_preview",
     "plugin_preview_params",

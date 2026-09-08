@@ -1259,6 +1259,45 @@ impl PluginRegistry {
         })
     }
 
+    /// Los plugins `hook` consentidos (ADR 0100), cada uno con los eventos
+    /// que escucha, en orden de catálogo. Misma forma que
+    /// [`Self::resolve_renamer`]: aprobado y encendido, `.wasm` verificado
+    /// contra el digest aprobado, y con sus settings resueltos.
+    #[must_use]
+    pub fn resolve_hooks(&self) -> Vec<(ResolvedDecorator, Vec<String>)> {
+        self.catalog
+            .plugins
+            .iter()
+            .filter(|e| e.manifest.category == norte_plugin_host::Category::Hook)
+            .filter_map(|e| {
+                let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
+                if !Self::approval_is_current(&st, e) || !st.enabled {
+                    return None;
+                }
+                let wasm = Self::verified_wasm(&e.dir)?;
+                let ons = e
+                    .manifest
+                    .contributions
+                    .hook
+                    .iter()
+                    .map(|h| h.on.clone())
+                    .collect();
+                Some((
+                    (
+                        e.manifest.id.clone(),
+                        e.manifest.name.clone(),
+                        wasm,
+                        e.manifest.capabilities.clone(),
+                        self.settings_of(&e.manifest.id)
+                            .cloned()
+                            .unwrap_or_default(),
+                    ),
+                    ons,
+                ))
+            })
+            .collect()
+    }
+
     /// Como [`Self::resolve_columns`], pero pudiendo exigir QUÉ plugin
     /// (0.35.0, #120).
     ///

@@ -136,6 +136,7 @@ struct ProtocolSchema {
     plugin_info: PluginInfo,
     plugin_list_params: PluginListParams,
     plugin_list_result: PluginListResult,
+    plugin_notice: PluginNotice,
     plugin_load_error: PluginLoadError,
     plugin_preview: PluginPreview,
     plugin_preview_params: PluginPreviewParams,

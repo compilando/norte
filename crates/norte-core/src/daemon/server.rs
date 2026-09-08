@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
@@ -402,6 +402,33 @@ fn may_observe(viewer: &Actor, owner: &Actor) -> bool {
     matches!(viewer, Actor::User) || viewer == owner
 }
 
+/// A dónde van los avisos de los hooks (ADR 0100): a las conexiones humanas,
+/// por `plugin.notice`. `Weak` por lo mismo que el observer de conexión.
+struct DaemonHookSink {
+    shared: Weak<Shared>,
+}
+
+impl crate::hooks::HookNoticeSink for DaemonHookSink {
+    fn notice(&self, n: methods::PluginNotice) {
+        let Some(shared) = self.shared.upgrade() else {
+            return;
+        };
+        // Si la serialización fallara (no puede: struct plano), mejor NO
+        // emitir que emitir una notif con shape corrupto.
+        let Ok(params) = serde_json::to_value(&n) else {
+            return;
+        };
+        let notif = Notification {
+            jsonrpc: norte_proto::wire::JsonRpcVersion,
+            method: methods::PLUGIN_NOTICE.into(),
+            params: Some(params),
+        };
+        if let Ok(frame) = encode_frame(&notif) {
+            shared.broadcast_humans(&Arc::from(frame.into_boxed_slice()));
+        }
+    }
+}
+
 /// Observer de avisos de conexión del daemon (#44): codifica cada aviso como
 /// `connection.degraded` y lo difunde SOLO a humanos (como `policy.*`). `Weak`
 /// rompe el ciclo Shared→engine→observer→Shared.
@@ -774,6 +801,12 @@ impl Daemon {
         // La resolución del path por defecto puede tocar el FS (sonda de uid
         // del fallback /tmp) y el descubrimiento del catálogo de plugins lee el
         // dir de config: TODO I/O síncrono dentro del spawn_blocking (regla 2).
+        // La raíz de plugins también la necesita el despachador de hooks (ADR
+        // 0100), que redescubre el registro por tanda desde este mismo sitio.
+        let plugins_root = cfg
+            .plugins_dir
+            .clone()
+            .unwrap_or_else(crate::connect::config_dir);
         let (listener, uid, socket_path, plugins, plugin_runtime) = tokio::task::spawn_blocking({
             let requested = cfg.socket_path;
             let plugins_dir = cfg.plugins_dir;
@@ -884,6 +917,19 @@ impl Daemon {
                 previo,
             })
         });
+        // ADR 0100: los hooks. El despachador vive lo que el daemon; sus avisos
+        // —una frase de un plugin, o «apagué sus hooks»— van SOLO a humanos por
+        // `plugin.notice`, con el mismo `Weak` que rompe el ciclo arriba. La
+        // fuente de los eventos es el journal del engine, así que una mutación
+        // de un agente por MCP dispara igual que una del humano.
+        let hooks_tx = crate::hooks::spawn_dispatcher(
+            plugins_root,
+            Arc::clone(&shared.plugin_runtime),
+            Arc::new(DaemonHookSink {
+                shared: Arc::downgrade(&shared),
+            }),
+        );
+        shared.engine.enable_hooks(hooks_tx).await;
         // El escritor existe siempre que haya DÓNDE escribir, y es él quien
         // decide si de verdad escribe: arranca con el lock si el bind lo
         // consiguió, y sin él lo vuelve a intentar (#237). Lo que sigue
