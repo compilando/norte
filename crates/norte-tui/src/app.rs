@@ -827,6 +827,10 @@ pub struct App {
     /// efectivo se mueva al `Resolver` compartido. `ui::draw_*` los lee en
     /// vez de una clave Fluent estática.
     pub dialog_hints: crate::hints::DialogHints,
+    /// Versión y revisión del binario (`norte_frontend::version::VERSION_LINE`),
+    /// pintadas en el marco de la ayuda. Vacía = no se pinta: es lo que
+    /// reciben los tests, cuyos snapshots no pueden depender del commit.
+    pub version_line: &'static str,
     /// Resolver of the help's live marks (H3b): rebuilt with the effective
     /// keymaps on every hot reload, exactly like `dialog_hints` and
     /// `help_lines` — a rebind must change the prose, and it does because the
@@ -998,6 +1002,7 @@ impl App {
             subshell_chord: None,
             pending_osc52: None,
             dialog_hints: crate::hints::DialogHints::default(),
+            version_line: "",
             help_chords: default_help_chords(),
             palette: None,
             palette_rows: Vec::new(),

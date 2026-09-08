@@ -294,8 +294,14 @@ first-run checks; those two stay for when you want one of them alone.
 
 **To run the dev build: `just link`, not `just install`.** It symlinks `ntc` and
 `norte` from `~/.local/bin` (which precedes cargo's bin on PATH) to this tree's
-`target/debug`, so the binary is whatever the last build produced — cost zero,
-and never stale while you run tests. **`just link-gui` does the same for
+`target/debug`, so the binary is whatever the last build produced — cost zero.
+**It is stale after any change until something builds the BIN target:** `just t`
+and `just c` compile test binaries and never relink `ntc`, so after a version
+bump `ntc --version` kept saying alpha.2 for hours while every test was green.
+`just link` rebuilds it (~4 min warm); `just link-fresh` installs a wrapper that
+`cargo build`s on every launch if you would rather pay at start-up. `ntc
+--version` and the help frame (F1) print the git revision precisely so this is
+visible. **`just link-gui` does the same for
 `ntc-gui` (plus the `norte-gui` alias)**, and is a separate recipe for the same reason `core_pkgs` keeps
 the window out of the gate: building it drags in WebKitGTK, GTK3, libsoup3 and
 npm, and folding it into `link` would leave any machine without them unable to

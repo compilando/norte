@@ -299,7 +299,13 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     // el menú: es cromo, y el cuerpo ya se repartió el sitio que le queda.
     draw_panel_bar(frame, app);
     if let Some(help) = &app.help {
-        draw_help(frame, help, &app.theme, &app.dialog_hints.help);
+        draw_help(
+            frame,
+            help,
+            &app.theme,
+            &app.dialog_hints.help,
+            app.version_line,
+        );
     }
     if let Some(picker) = &app.theme_picker {
         draw_theme_picker(frame, picker, &app.theme, &app.dialog_hints.picker);

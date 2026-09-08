@@ -155,6 +155,9 @@ async fn main() -> Result<()> {
     let left = initial_pane(&backend, &start, &start_attrs).await?;
     let right = initial_pane(&backend, &start, &start_attrs).await?;
     let mut app = App::new(left, right);
+    // La revisión del binario, para la ayuda (F1). Vacía en los tests, que
+    // construyen `App` sin pasar por aquí y hacen snapshots de la ayuda.
+    app.version_line = norte_frontend::version::VERSION_LINE;
     // `None` si ya había subscriber: entonces nadie escribe en el anillo y el
     // panel lo DICE, en vez de enseñar un vacío que parece que no pasa nada.
     app.log_ring = log_ring;
@@ -638,7 +641,7 @@ fn args_or_exit(args: norte_frontend::cli::Cli) -> Result<Option<norte_frontend:
         return Ok(None);
     }
     if args.version {
-        println!("ntc {}", env!("CARGO_PKG_VERSION"));
+        println!("ntc {}", norte_frontend::version::VERSION_LINE);
         return Ok(None);
     }
     if let Some(flag) = &args.unknown {

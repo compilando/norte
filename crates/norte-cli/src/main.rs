@@ -86,7 +86,7 @@ const EXIT_CANCELLED: u8 = 130;
 #[derive(Parser)]
 #[command(
     name = "norte",
-    version,
+    version = norte_frontend::version::VERSION_LINE,
     about = "file manager ortodoxo — CLI de humo (M0)",
     // H3g: `help` es NUESTRO subcomando (el corpus de ayuda, ADR 0040), no el
     // que clap genera para reimprimir su propio `--help`. Sin esto clap aborta

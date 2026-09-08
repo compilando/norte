@@ -157,7 +157,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if cli.version {
-        println!("norte-gui {}", env!("CARGO_PKG_VERSION"));
+        println!("norte-gui {}", norte_frontend::version::VERSION_LINE);
         return ExitCode::SUCCESS;
     }
     // Se toca aquí para que la referencia sea el arranque del proceso y no la
@@ -193,6 +193,11 @@ fn main() -> ExitCode {
         .invoke_handler(handler())
         .plugin(guardia_de_navegacion())
         .setup(|app| {
+            // Qué binario es este, en el título: versión y revisión del árbol.
+            // La webview no lo necesita saber y el título no pasa por ella.
+            if let Some(v) = app.get_webview_window("main") {
+                let _ = v.set_title(&format!("norte {}", norte_frontend::version::VERSION_LINE));
+            }
             let estado: tauri::State<'_, AppState> = app.state();
             if let Ok(bridge) = estado.bridge() {
                 let sub = bridge.host().subscribe();

@@ -7,6 +7,18 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **Every binary says which build it is.** `ntc --version`, `norte --version`
+  and `ntc-gui --version` print the workspace version followed by the tree's
+  `git describe` (`0.3.0-alpha.3 (v0.3.0-alpha.3-10-g674b0eb9-dirty)`); the
+  TUI shows the same line in the frame of the help screen (F1) and the window
+  carries it in its title. The revision is fixed at compile time by
+  `norte-frontend`'s build script, falls back to `NORTE_REVISION` for
+  packagers and to `unknown` without git. On a development machine `just link`
+  points `ntc` at `target/debug`, and «0.3.0-alpha.3» was the same string ten
+  commits after the tag: now the binary tells you.
+
 ## [0.3.0-alpha.3] - 2026-09-08
 
 ### Fixed
