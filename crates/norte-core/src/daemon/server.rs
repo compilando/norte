@@ -5151,6 +5151,20 @@ fn handle_rename_batch_report(
     to_value(&crate::rename::report_to_proto(&report))
 }
 
+/// Métodos que solo un HUMANO puede pedir: un agente recibe `PolicyDenied`
+/// con la regla `not-approved`, igual que si su scope no alcanzara. Los tres
+/// que lo usan (`ai.rename_plan`, `index.embed`, `index.search_semantic`)
+/// gastan modelo o construyen índice: no es un permiso de ruta, es de quién.
+fn human_only(actor: &Actor) -> Result<(), RpcError> {
+    if matches!(actor, Actor::User) {
+        Ok(())
+    } else {
+        Err(RpcError::from(norte_proto::Error::PolicyDenied {
+            rule: "not-approved".into(),
+        }))
+    }
+}
+
 /// Las familias `fs.*`/`task.*` del dispatch (separadas por tamaño). El
 /// `actor` viene de la conexión (M3-3b): las mutaciones se journalizan y
 /// evalúan bajo él.
@@ -5242,11 +5256,7 @@ async fn dispatch_fs_task(
             // fuera de mi scope» ANTES de que se le denegara — o sea que la
             // respuesta dependía de cosas que él controla, y eso convierte un
             // método vedado en un oráculo sobre el árbol del humano.
-            if !matches!(actor, Actor::User) {
-                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
-                    rule: "not-approved".into(),
-                }));
-            }
+            human_only(&actor)?;
             let p: methods::AiRenamePlanParams = parse_params(req.params)?;
             if p.instruction.len() > MAX_AI_INSTRUCTION_BYTES {
                 return Err(RpcError::protocol(
@@ -5303,11 +5313,7 @@ async fn dispatch_fs_task(
             // audit M4-IA-2): un agente recibe `PolicyDenied` sea cual sea
             // la validez de sus params, y jamás distingue "params malos" de
             // "vedado" — la respuesta no depende de nada que él controle.
-            if !matches!(actor, Actor::User) {
-                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
-                    rule: "not-approved".into(),
-                }));
-            }
+            human_only(&actor)?;
             let p: methods::IndexEmbedParams = parse_params(req.params)?;
             read_gate(&actor, &p.root, shared)?; // #80
             let handle = shared
@@ -5327,11 +5333,7 @@ async fn dispatch_fs_task(
         methods::INDEX_SEARCH_SEMANTIC => {
             // Igual que `index.embed`: gate de actor ANTES del parseo (security
             // audit M4-IA-2), para que un agente vea siempre `PolicyDenied`.
-            if !matches!(actor, Actor::User) {
-                return Err(RpcError::from(norte_proto::Error::PolicyDenied {
-                    rule: "not-approved".into(),
-                }));
-            }
+            human_only(&actor)?;
             let p: methods::IndexSearchSemanticParams = parse_params(req.params)?;
             if p.query.len() > MAX_AI_QUERY_BYTES {
                 return Err(RpcError::protocol(
