@@ -1,0 +1,17 @@
+[plugin]
+id = "org.norte.rename-log"
+name = "Rename log"
+publisher = "norte"
+version = "0.1.0"
+category = "hook"
+description = "After a rename lands in the journal, says how many files it touched."
+
+# One event. A hook only ever sees what the journal already recorded — there
+# is no `before-*` — and the only thing it can do about it is tell you.
+[[contributions.hook]]
+on = "after-renamed"
+
+# No capabilities: the event already says what was renamed. A hook that
+# wanted to look at the result would declare `location = "read"` and get a
+# token for the parent directory of each entry.
+[capabilities]

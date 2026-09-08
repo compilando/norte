@@ -626,6 +626,20 @@ plugin-date-prefix *ARGS:
     cp $origen/target/wasm32-wasip2/release/date_prefix.wasm "$stage/plugin.wasm"
     cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
 
+# El hook que cuenta renombrados (`plugins/rename-log`, demo H1 / ADR 0100).
+plugin-rename-log *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    flag=""; [ "{{ARGS}}" = "force" ] && flag="--force"
+    origen=plugins/rename-log
+    cargo build --release --target wasm32-wasip2 --manifest-path $origen/Cargo.toml
+    stage=target/plugin-stage/rename-log
+    rm -rf "$stage" && mkdir -p "$stage"
+    cp $origen/plugin.toml "$stage/plugin.toml"
+    [ -f $origen/help.md ] && cp $origen/help.md "$stage/help.md" || true
+    cp $origen/target/wasm32-wasip2/release/rename_log.wasm "$stage/plugin.wasm"
+    cargo run --quiet -p norte-cli -- plugin install "$stage" $flag
+
 # Todos los plugins oficiales, de una vez. `just plugins force` reemplaza los
 # ya instalados (y retira su consentimiento, como dice `plugin install`).
 [positional-arguments]
@@ -639,6 +653,7 @@ plugins *ARGS:
     just plugin-markdown "$@"
     just plugin-image-ansi "$@"
     just plugin-date-prefix "$@"
+    just plugin-rename-log "$@"
 
 # ---------- distribución ----------
 
