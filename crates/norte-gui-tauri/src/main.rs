@@ -1,4 +1,5 @@
 //! El binario del renderer: monta el host, abre UNA ventana y bombea.
+#![forbid(unsafe_code)]
 
 use std::process::ExitCode;
 

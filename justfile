@@ -60,9 +60,18 @@ build-ftp-wasm:
 fmt-check:
     cargo fmt --all -- --check
 
-lint: fmt-check
+lint: fmt-check deny-guests
     CARGO_INCREMENTAL=0 cargo clippy {{core_pkgs}} --all-targets {{features}} -- -D warnings
     cargo deny check
+
+# Advisories de los guests WASM, que están FUERA del workspace y del lock (ver
+# deny-guests.toml). Solo `advisories`: no compila nada, resuelve el árbol.
+deny-guests:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for m in crates/norte-plugin-host/examples-wasm/*/Cargo.toml plugins/*/Cargo.toml; do
+        cargo deny --manifest-path "$m" --config deny-guests.toml check -A advisory-not-detected advisories
+    done
 
 # --no-tests=pass: el esqueleto de fase 1 no tiene tests aún; con código real
 # el gate de cobertura (85%) hace imposible un workspace sin tests que pase CI.

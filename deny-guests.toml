@@ -1,0 +1,18 @@
+# cargo-deny para los guests WASM (`crates/norte-plugin-host/examples-wasm/*`,
+# `plugins/*`): NO son miembros del workspace, resuelven su propio árbol y su
+# lock no se commitea, así que el `deny.toml` de la raíz jamás los ve — el
+# `suppaftp` vulnerable de RUSTSEC-2026-0271 vivió un mes dentro del artefacto
+# embebido `norte-core/resources/ftp-provider.wasm` sin que nada se pusiera
+# rojo (ola W9, tarea 4.7). Solo advisories: las ocho excepciones de gtk-rs del
+# fichero raíz no aplican aquí y solo harían ruido.
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # `bincode` 1.x sin mantener, arrastrado por `syntect` (carga de gramáticas
+    # serializadas) en el guest de demostración `previewer-syntect`. No es una
+    # vulnerabilidad, el guest no se distribuye con norte, y syntect no ofrece
+    # hoy otra forma de cargar sus dumps. Volver a mirar cuando syntect suelte
+    # bincode o el previewer deje de ser una demo.
+    "RUSTSEC-2025-0141",
+]

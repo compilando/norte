@@ -16,7 +16,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen = "0.46"
-suppaftp = { version = "6", default-features = false }
+suppaftp = { version = "10", default-features = false }
 
 [profile.release]
 panic = "abort"
