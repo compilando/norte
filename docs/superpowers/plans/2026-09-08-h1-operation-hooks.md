@@ -1,8 +1,8 @@
 # H1 — operation hooks: implementation plan
 
 Approved 2026-09-08 (after-only, `notify` as the single effect). Supersedes
-`docs/superpowers/specs/2026-09-04-operation-hooks-design.md`; the decision
-goes to ADR 0100. Direct work on `main`, one commit per task, ONE `just
+the proposal `specs/2026-09-04-operation-hooks-design.md` (deleted; in git
+history); the decision is ADR 0100. Direct work on `main`, one commit per task, ONE `just
 ci-fast` at the end and ONE `just ci` before the push.
 
 ## What is built

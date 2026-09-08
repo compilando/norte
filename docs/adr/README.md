@@ -105,3 +105,4 @@ edits.
 | [0097](0097-parity-between-the-terminal-and-the-window-is-a-test.md) | Parity between the terminal and the window is a test, not a convention | accepted |
 | [0098](0098-profile-start-is-a-seed-and-the-session-wins.md) | `[profile.start]` is a seed in wire form, and the session wins | accepted |
 | [0099](0099-the-window-reloads-what-a-profile-switch-reloads.md) | The window reloads what a profile switch reloads, and says the rest | accepted |
+| [0100](0100-a-hook-observes-what-the-journal-recorded-and-may-only-speak.md) | A hook observes what the journal recorded, and may only speak | accepted |
