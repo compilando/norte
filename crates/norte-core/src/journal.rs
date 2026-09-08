@@ -1222,7 +1222,11 @@ impl Journal {
         drop(chain);
         // Y DESPUÉS de durable, a los hooks (ADR 0100): lo que un hook ve es
         // exactamente lo que el journal registró. `offer` no espera nunca.
-        let sender = self.hooks.read().ok().and_then(|g| g.clone());
+        let sender = self
+            .hooks
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         if let Some(tx) = sender {
             tx.offer(crate::hooks::HookEvent {
                 seq,
@@ -1241,9 +1245,10 @@ impl Journal {
     /// 0100). El segundo en instalarse pisa al primero: hay un despachador
     /// por proceso, y es del arranque.
     pub fn set_hook_sender(&self, tx: crate::hooks::HookSender) {
-        if let Ok(mut g) = self.hooks.write() {
-            *g = Some(tx);
-        }
+        *self
+            .hooks
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tx);
     }
 
     /// Número de MUTACIONES (el marcador de formato del `seq 0` no lo es).

@@ -435,6 +435,23 @@ pub struct ShutdownReport {
     pub incomplete: bool,
 }
 
+/// Reenvía los `plugin.notice` del backend al buzón del host (ADR 0100). Una
+/// función aparte de `start` porque la lista de bombas ya llenaba el límite
+/// de líneas, y la forma es la de las demás: una task que muere con el canal
+/// que la alimenta.
+fn bombear_avisos_de_plugin(backend: &dyn HostBackend, buzon: mpsc::Sender<Mensaje>) {
+    let Some(mut avisos) = backend.take_plugin_notices() else {
+        return;
+    };
+    tokio::spawn(async move {
+        while let Some(n) = avisos.recv().await {
+            if buzon.send(Mensaje::AvisoPlugin(Box::new(n))).await.is_err() {
+                return;
+            }
+        }
+    });
+}
+
 /// El host: un asa barata de clonar sobre el único escritor.
 #[derive(Clone)]
 pub struct UiHost {
@@ -960,16 +977,7 @@ impl UiHost {
         }
         // Y los avisos de los hooks (ADR 0100), por el mismo buzón: hablan de
         // ficheros que ya cambiaron, así que se leen pueda escribir o no.
-        if let Some(mut avisos) = backend.take_plugin_notices() {
-            let buzon = tx.clone();
-            tokio::spawn(async move {
-                while let Some(n) = avisos.recv().await {
-                    if buzon.send(Mensaje::AvisoPlugin(Box::new(n))).await.is_err() {
-                        return;
-                    }
-                }
-            });
-        }
+        bombear_avisos_de_plugin(backend.as_ref(), tx.clone());
         // Las aprobaciones de policy son una MUTACIÓN por delegación: decir
         // que sí a la operación de un agente. Un frontend que todavía no
         // puede escribir tampoco puede autorizar que escriba otro, así que

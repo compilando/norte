@@ -840,7 +840,7 @@ async fn el_aviso_de_un_hook_llega_a_la_barra_atribuido() {
         text: None,
     })
     .expect("el host escucha");
-    let aviso = super::registro::foto_hasta_notice(&mut sub2, "msg-plugin-notice").await;
+    let aviso = super::registro::foto_hasta_notice(&mut sub2, "msg-plugin-hooks-disabled").await;
     assert!(aviso.contains("org.norte.rename-log"), "{aviso}");
 }
 

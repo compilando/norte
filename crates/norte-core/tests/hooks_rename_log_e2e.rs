@@ -72,6 +72,19 @@ fn install_and_consent(cfg: &Path, wasm: &Path) {
     std::fs::copy(wasm, stage.join("plugin.wasm")).expect("wasm");
     assert_eq!(install(cfg, &stage, false).expect("installs").id, ID);
     let mut reg = PluginRegistry::discover(cfg).expect("discover");
+    // What the human approves names the feed: a hook with no capabilities
+    // still shows what it will receive.
+    let me = reg
+        .list()
+        .plugins
+        .into_iter()
+        .find(|p| p.id == ID)
+        .expect("listed");
+    assert!(
+        me.capabilities.iter().any(|c| c == "hook:after-renamed"),
+        "{:?}",
+        me.capabilities
+    );
     assert!(reg.set_approval(ID, true).expect("approve"));
     assert!(reg.set_enabled(ID, true).expect("enable"));
 }
@@ -103,10 +116,11 @@ async fn a_rename_in_the_journal_reaches_the_hook_and_the_hook_speaks() {
     install_and_consent(cfg.path(), &wasm);
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let sender = spawn_dispatcher(
+    let (sender, _task) = spawn_dispatcher(
         cfg.path().to_path_buf(),
         Arc::new(PluginRuntime::new().expect("runtime")),
         Arc::new(ChanSink(tx)),
+        tokio_util::sync::CancellationToken::new(),
     );
     let journal = norte_core::SqliteJournal::open(&cfg.path().join("journal.db"))
         .await
@@ -138,7 +152,10 @@ async fn a_rename_in_the_journal_reaches_the_hook_and_the_hook_speaks() {
     // sees the group; under load the drain may split them, and then the
     // sentences add up to the same three.
     let mut total = count_of(n.text.as_deref());
-    while total < 3 {
+    for _ in 0..2 {
+        if total >= 3 {
+            break;
+        }
         total += count_of(next_notice(&mut rx).await.text.as_deref());
     }
     assert_eq!(total, 3);

@@ -378,6 +378,11 @@ impl crate::hooks::HookNoticeSink for ChannelHookSink {
     fn notice(&self, n: norte_proto::methods::PluginNotice) {
         let _ = self.tx.send(n);
     }
+
+    /// El frontend soltó el receptor: el despachador termina con él.
+    fn is_closed(&self) -> bool {
+        self.tx.is_closed()
+    }
 }
 
 /// Sink de avisos del journal perezoso (#177) que los reenvía por un canal: la
@@ -2132,15 +2137,24 @@ impl Backend {
     /// daemon; en `Embedded` ARRANCA el despachador de hooks sobre el journal
     /// de este engine y le da un canal — así ambos modos corren los mismos
     /// hooks y surfacean lo mismo. One-shot, como [`Backend::take_failed`]:
-    /// el segundo despachador que se arrancara pisaría al primero.
+    /// el engine tiene UN hueco para el despachador y el segundo que lo pida
+    /// recibe `None`, en vez de arrancar otro que pisara al primero.
     ///
-    /// `None` en `Embedded` si el runtime WASM no se pudo crear: sin runtime
-    /// no corre ningún plugin, y tampoco un hook (fail-closed, con traza).
+    /// `None` también en `Embedded` si el engine no lleva journal (sin filas
+    /// no hay hooks) o si el runtime WASM no se pudo crear: sin runtime no
+    /// corre ningún plugin, y tampoco un hook (fail-closed, con traza). El
+    /// despachador muere solo cuando el receptor devuelto se suelta.
+    ///
+    /// # Panics
+    /// Fuera de un runtime de tokio: arranca tasks.
     pub fn take_plugin_notices(
         &self,
     ) -> Option<mpsc::UnboundedReceiver<norte_proto::methods::PluginNotice>> {
         match self {
             Self::Embedded(engine) => {
+                if !engine.has_journal() || !engine.claim_hooks_slot() {
+                    return None;
+                }
                 let runtime = match norte_plugin_host::PluginRuntime::new() {
                     Ok(r) => Arc::new(r),
                     Err(e) => {
@@ -2149,10 +2163,14 @@ impl Backend {
                     }
                 };
                 let (tx, rx) = mpsc::unbounded_channel();
-                let sender = crate::hooks::spawn_dispatcher(
+                // Sin token de cancelación propio: la vida del despachador
+                // embebido es la del receptor (`is_closed`), y el proceso
+                // que lo hospeda termina con él.
+                let (sender, _task) = crate::hooks::spawn_dispatcher(
                     crate::connect::config_dir(),
                     runtime,
                     Arc::new(ChannelHookSink { tx }),
+                    tokio_util::sync::CancellationToken::new(),
                 );
                 // Enchufar el journal es `async` (el perezoso guarda el
                 // extremo bajo su lock); una mutación que se adelante a esta

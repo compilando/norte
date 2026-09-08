@@ -580,7 +580,20 @@ impl PluginRegistry {
                                     .contributions
                                     .provider
                                     .iter()
-                                    .map(|c| format!("provider:{}", c.scheme)),
+                                    .map(|c| format!("provider:{}", c.scheme))
+                                    // Y los eventos de un hook (ADR 0100), por
+                                    // lo mismo: lo que el plugin va a RECIBIR
+                                    // —la ruta de cada mutación de esa clase—
+                                    // es lo que el humano aprueba, y un hook
+                                    // sin capabilities no puede aprobarse
+                                    // sobre una lista vacía.
+                                    .chain(
+                                        e.manifest
+                                            .contributions
+                                            .hook
+                                            .iter()
+                                            .map(|h| format!("hook:{}", h.on)),
+                                    ),
                             )
                             .collect(),
                         // Aprobación EFECTIVA (issue #69): `approved` en el fichero
@@ -3615,6 +3628,25 @@ impl LocationMint {
         self.protected
             .iter()
             .any(|root| crate::policy::is_under(root, path))
+    }
+
+    /// ¿Es `dir` un techo que no se abre como ubicación de un hook (ADR
+    /// 0100)? La raíz del sistema —un `VPath` sin padre— y la casa: por
+    /// encima de `$HOME` hay sistema, y la casa entera es lo que un hook que
+    /// mira «el directorio de la mutación» no tiene por qué recibir cuando
+    /// la mutación fue un `mkdir ~/proyecto`. Lo que no es `file://` local
+    /// no es un techo: `mint_for` ya lo rehúsa por otro motivo.
+    pub(crate) fn is_ceiling(&self, dir: &norte_proto::VPath) -> bool {
+        if dir.scheme() != "file" || dir.authority().is_some() {
+            return false;
+        }
+        if dir.parent().is_none() {
+            return true;
+        }
+        match (&self.home, norte_vfs_local::vpath_to_native(dir)) {
+            (Some(home), Ok(native)) => std::path::absolute(home).is_ok_and(|h| h == native),
+            _ => false,
+        }
     }
 
     /// El ancestro más cercano que contiene una entrada llamada `marker`, y el

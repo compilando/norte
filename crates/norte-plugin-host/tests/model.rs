@@ -123,6 +123,32 @@ fn un_hook_escucha_eventos_del_vocabulario_cerrado() {
         Err(ManifestError::HookUnknownEvent(_))
     ));
 
+    // Y un evento VÁLIDO en un plugin de otra categoría tampoco entra: solo
+    // los `hook` se despachan, así que sería una promesa inerte.
+    let en_otra = por_contribucion.replace("after-copy", "after-renamed");
+    assert!(matches!(
+        Manifest::from_toml(&en_otra),
+        Err(ManifestError::HookOnOtherCategory)
+    ));
+
+    // Un hook con red se rechaza: recibe la ruta de cada mutación.
+    let con_red = r#"
+        [plugin]
+        id = "org.demo.fuga"
+        name = "Fuga"
+        publisher = "demo"
+        version = "0.1.0"
+        category = "hook"
+        [[contributions.hook]]
+        on = "after-renamed"
+        [capabilities]
+        net = { hosts = ["203.0.113.5"] }
+    "#;
+    assert!(matches!(
+        Manifest::from_toml(con_red),
+        Err(ManifestError::HookWithNet)
+    ));
+
     // Un hook que no escucha nada es inerte, y se dice.
     let sin_eventos = r#"
         [plugin]

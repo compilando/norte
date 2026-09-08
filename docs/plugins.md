@@ -108,16 +108,20 @@ trace.
 
 A hook never changes anything. `on-events` receives the journal entries
 since the last call that match your `on` — `op`, who caused it (`user`,
-`agent` or `plugin`, never which agent), the path in wire form, the old
-name of a rename in `path-to`, the leaf name in raw bytes, and the batch id
-when it was part of one — and returns effects; the only one is
-`notify(text)`, a sentence for the status bar that norte masks, caps and
-prefixes with your plugin id. With `location = "read"` each event also
-carries a token for the entry's parent directory, so you can `stat` the
-result. Fail three calls in a row — a trap, a timeout, an `Err` — and norte
-switches your hooks off until the plugin is re-enabled, and tells the
-reader. There is no `before-*`, on purpose: a veto is a policy decision,
-not a plugin's.
+`agent` or `plugin`, never which agent), the path in wire form (without
+userinfo), the old name of a rename in `path-to`, the leaf name in raw
+bytes, and the batch id when it was part of one — plus `dropped`, how many
+events norte's queue lost since your last call: when it is not zero, count
+with "at least". It returns effects; the only one is `notify(text)`, a
+sentence for the status bar that norte masks, caps and prefixes with your
+plugin id — one per call, four in a burst, then one per second. With
+`location = "read"` each event also carries a token for the entry's parent
+directory, so you can `stat` the result; never for `$HOME` or `/`. A hook
+may not declare `net`. Fail three calls in a row — a trap, a timeout, an
+`Err` — and norte switches your hooks off and tells the reader; disabling
+and re-enabling the plugin re-arms it. The events you listen to show at
+approval as `hook:after-renamed`-style badges. There is no `before-*`, on
+purpose: a veto is a policy decision, not a plugin's.
 
 Contributions are part of the approval digest: they say *when* and *how*
 the plugin fires, which is as much a part of what the human approves as the

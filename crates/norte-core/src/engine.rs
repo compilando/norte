@@ -74,6 +74,8 @@ pub struct Engine {
     connection_observer: RwLock<Option<Arc<dyn crate::connect::ConnectionObserver>>>,
     sched: Scheduler,
     observer: Arc<dyn MutationObserver>,
+    /// Si alguien se llevó ya el despachador de hooks (ADR 0100): es de UNO.
+    hooks_taken: std::sync::atomic::AtomicBool,
     /// De dónde sale el journal de este engine: fuente de LECTURA para el undo
     /// (M3-2) y para el gate de `sync.apply`. Es el MISMO objeto que `observer`
     /// en las dos variantes que tienen uno.
@@ -315,6 +317,7 @@ impl Engine {
             pack_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             checksum_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             anchors: None,
+            hooks_taken: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -477,6 +480,22 @@ impl Engine {
             JournalSource::Open(j) => j.set_hook_sender(tx),
             JournalSource::Lazy(l) => l.set_hook_sender(tx).await,
         }
+    }
+
+    /// ¿Lleva este engine un journal (abierto o perezoso)? Sin él no hay
+    /// filas, y sin filas no hay hooks que despachar.
+    #[must_use]
+    pub fn has_journal(&self) -> bool {
+        !matches!(self.journal, JournalSource::None)
+    }
+
+    /// Reclama el hueco del despachador de hooks: `true` la PRIMERA vez, y
+    /// solo esa. Un engine tiene un despachador; el segundo que se arrancara
+    /// pisaría el extremo del primero en silencio.
+    pub fn claim_hooks_slot(&self) -> bool {
+        !self
+            .hooks_taken
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
     }
 
     /// A dónde van los avisos de «esta sesión no queda registrada» (#177).

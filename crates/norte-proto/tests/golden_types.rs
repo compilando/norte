@@ -2050,16 +2050,6 @@ fn check_methods_plugin_help(fixtures: &BTreeMap<String, Value>) {
     );
 }
 
-/// Casos de [`PluginInfo`]/[`PluginCommandInfo`] (P1, 0.26.0): el shape sin
-/// `description`/`commands`, el shape CON ambos poblados, y el tipo suelto
-/// `PluginCommandInfo`. Función propia para no desbordar el límite de
-/// líneas de `check_methods_plugin_governance`.
-// Una lista LITERAL de casos golden: cada uno es una forma congelada del wire
-// con su porqué, y partirla en mitades arbitrarias solo escondería cuáles hay.
-#[expect(
-    clippy::too_many_lines,
-    reason = "cada fixture lleva su porqué; partir en mitades escondería cuáles hay"
-)]
 /// `plugin.notice` (0.69.0, ADR 0100): UNA fixtura POR VALOR de `kind`. Con
 /// una sola, renombrar la otra no pondría nada en rojo, y el frontend compara
 /// `kind` por igualdad para decidir si traduce la clase o pinta `text`.
@@ -2087,6 +2077,16 @@ fn check_methods_plugin_notice(fixtures: &BTreeMap<String, Value>) {
     );
 }
 
+/// Casos de [`PluginInfo`]/[`PluginCommandInfo`] (P1, 0.26.0): el shape sin
+/// `description`/`commands`, el shape CON ambos poblados, y el tipo suelto
+/// `PluginCommandInfo`. Función propia para no desbordar el límite de
+/// líneas de `check_methods_plugin_governance`.
+// Una lista LITERAL de casos golden: cada uno es una forma congelada del wire
+// con su porqué, y partirla en mitades arbitrarias solo escondería cuáles hay.
+#[expect(
+    clippy::too_many_lines,
+    reason = "cada fixture lleva su porqué; partir en mitades escondería cuáles hay"
+)]
 fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
         PluginColumnInfo, PluginCommandInfo, PluginCommandKind, PluginInfo, PluginListResult,

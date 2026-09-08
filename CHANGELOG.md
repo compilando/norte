@@ -20,11 +20,14 @@ independently through `PROTOCOL_VERSION`.
   the entry after it is durable. The source is the journal's commit path,
   so a hook fires for a human's rename, an agent's, a batch and an undo
   alike, from the daemon and from an embedded `ntc`. The dispatcher runs off
-  the critical path with a bounded queue; three consecutive failures switch
-  that plugin's hooks off for the process and say so. The sentence reaches
-  both frontends as the new `plugin.notice` notification (humans only,
-  `kind` ∈ {`notify`, `hooks-disabled`}), masked, capped and prefixed with
-  the plugin id. Declaring a hook no longer rejects the manifest; an unknown
+  the critical path with a bounded queue, tells the guest how many events
+  it lost, and three consecutive failures switch that plugin's hooks off and
+  say so (disabling the plugin re-arms them). A hook may not declare `net`,
+  is shown nothing under norte's own state directory, and its events appear
+  at approval as `hook:<event>` badges. The sentence reaches both frontends
+  as the new `plugin.notice` notification (humans only, `kind` ∈ {`notify`,
+  `hooks-disabled`}), masked, capped, rate-limited and prefixed with the
+  plugin id. Declaring a hook no longer rejects the manifest; an unknown
   event does. First hook: **`org.norte.rename-log`** (`plugins/rename-log`,
   `just plugin-rename-log`), which says how many files a rename touched. A
   0.68 client ignores the notification: the hook ran, its sentence reached

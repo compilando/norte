@@ -1357,9 +1357,17 @@ impl HookInstance {
         self.store.data_mut().settings = settings;
     }
 
-    /// Le entrega al guest los eventos desde la última llamada. `Ok(Err(frase))`
-    /// es el guest rehusando con una frase para el registro; los topes se
-    /// aplican POST-retorno y rechazan entero.
+    /// El resolutor de ubicación de la PRÓXIMA llamada: la instancia vive
+    /// entre tandas y cada tanda acuña sus propios tokens, así que el host
+    /// se pone antes de `on_events` y se quita después.
+    pub fn set_location(&mut self, location: Option<Arc<dyn LocationHost>>) {
+        self.store.data_mut().location = location;
+    }
+
+    /// Le entrega al guest los eventos desde la última llamada y cuántos se
+    /// descartaron por cola llena desde entonces. `Ok(Err(frase))` es el
+    /// guest rehusando con una frase para el registro; los topes se aplican
+    /// POST-retorno y rechazan entero.
     ///
     /// # Errors
     /// - [`RuntimeError::Trap`] si el guest atrapa (incluido el deadline de
@@ -1369,12 +1377,13 @@ impl HookInstance {
     pub fn on_events(
         &mut self,
         events: &[hook_iface::Event],
+        dropped: u64,
     ) -> Result<Result<Vec<hook_iface::Effect>, String>, RuntimeError> {
         self.rearm();
         let out = self
             .bindings
             .norte_hook_hook()
-            .call_on_events(&mut self.store, events)
+            .call_on_events(&mut self.store, events, dropped)
             .map_err(|e| map_call_error(&e))?;
         let Ok(effects) = out else {
             return Ok(out);

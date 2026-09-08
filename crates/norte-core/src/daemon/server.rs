@@ -427,6 +427,11 @@ impl crate::hooks::HookNoticeSink for DaemonHookSink {
             shared.broadcast_humans(&Arc::from(frame.into_boxed_slice()));
         }
     }
+
+    /// Muerto el daemon, muerto el despachador.
+    fn is_closed(&self) -> bool {
+        self.shared.strong_count() == 0
+    }
 }
 
 /// Observer de avisos de conexión del daemon (#44): codifica cada aviso como
@@ -922,14 +927,19 @@ impl Daemon {
         // `plugin.notice`, con el mismo `Weak` que rompe el ciclo arriba. La
         // fuente de los eventos es el journal del engine, así que una mutación
         // de un agente por MCP dispara igual que una del humano.
-        let hooks_tx = crate::hooks::spawn_dispatcher(
+        // Termina con el apagado del daemon (regla 3): la misma señal que
+        // para todo lo demás.
+        let (hooks_tx, _hooks_task) = crate::hooks::spawn_dispatcher(
             plugins_root,
             Arc::clone(&shared.plugin_runtime),
             Arc::new(DaemonHookSink {
                 shared: Arc::downgrade(&shared),
             }),
+            shared.shutdown.clone(),
         );
-        shared.engine.enable_hooks(hooks_tx).await;
+        if shared.engine.claim_hooks_slot() {
+            shared.engine.enable_hooks(hooks_tx).await;
+        }
         // El escritor existe siempre que haya DÓNDE escribir, y es él quien
         // decide si de verdad escribe: arranca con el lock si el bind lo
         // consiguió, y sin él lo vuelve a intentar (#237). Lo que sigue

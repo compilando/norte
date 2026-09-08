@@ -662,6 +662,20 @@ pub enum ManifestError {
         "`category = \"hook\"` sin ningún `[[contributions.hook]]`: declara qué eventos escucha"
     )]
     HookWithoutEvents,
+    /// `[[contributions.hook]]` en un plugin de otra categoría: solo los de
+    /// `category = "hook"` se despachan, así que esos eventos no sonarían
+    /// nunca — el plugin inerte que el gestor pintaría como uno normal.
+    #[error(
+        "`[[contributions.hook]]` requiere `category = \"hook\"`: un plugin de otra categoría no recibe eventos"
+    )]
+    HookOnOtherCategory,
+    /// `category = "hook"` con `net`: un hook recibe la ruta de cada mutación
+    /// de la máquina, y con red sería un canal para sacarlas fuera. Hasta que
+    /// un ADR diga qué badge lo dice, se rechaza (ADR 0100).
+    #[error(
+        "un `hook` no puede declarar `net`: recibe la ruta de cada mutación, y con red eso es un canal de salida (ADR 0100)"
+    )]
+    HookWithNet,
     /// `capabilities.ai` declarada cuando NADA la honra: no hay interfaz WIT
     /// de IA ni sitio en el host que la linke. Se parseaba, entraba en el
     /// digest y pintaba insignia, así que un humano aprobaba «acceso a IA» y
@@ -912,6 +926,12 @@ impl Manifest {
         }
         if raw.plugin.category == Category::Hook && raw.contributions.hook.is_empty() {
             return Err(ManifestError::HookWithoutEvents);
+        }
+        if raw.plugin.category != Category::Hook && !raw.contributions.hook.is_empty() {
+            return Err(ManifestError::HookOnOtherCategory);
+        }
+        if raw.plugin.category == Category::Hook && raw.capabilities.net.is_some() {
+            return Err(ManifestError::HookWithNet);
         }
         // `ai`: una promesa que nadie cumple.
         // Se mira la PRESENCIA, no el valor: cualquier modo sería igual de

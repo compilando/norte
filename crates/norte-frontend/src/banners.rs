@@ -746,4 +746,22 @@ mod tests {
         };
         assert!(plugin_notice_line(norte_i18n::Lang::En, &raro).is_none());
     }
+
+    /// Toda clase que el proto declara tiene frase en los dos idiomas: un
+    /// valor nuevo en `PLUGIN_NOTICE_KINDS` sin traducción se pinta rojo aquí,
+    /// no en la barra de alguien.
+    #[test]
+    fn toda_clase_declarada_tiene_frase() {
+        for kind in norte_proto::methods::PLUGIN_NOTICE_KINDS {
+            let n = norte_proto::methods::PluginNotice {
+                plugin_id: "org.x.y".to_owned(),
+                kind: (*kind).to_owned(),
+                text: Some("t".to_owned()),
+            };
+            for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+                let l = plugin_notice_line(lang, &n).unwrap_or_else(|| panic!("{kind}"));
+                assert!(l.contains("org.x.y"), "{kind}: {l}");
+            }
+        }
+    }
 }

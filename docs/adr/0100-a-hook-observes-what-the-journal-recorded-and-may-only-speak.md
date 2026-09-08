@@ -51,26 +51,43 @@ mutation is about to happen. Two answers, and they are different products:
    rename batch reaches it as a group when it fits in a drain.
 
 3. **A hook may only speak.** `norte:hook@0.1.0`, world `norte-hook`,
-   exports `on-events(list<event>) -> result<list<effect>, string>`; the
-   only `effect` is `notify(string)`. The event carries `seq`, `ts-ms`,
-   `op`, `actor`, the path in wire form, `path-to`, the leaf `name` in raw
-   bytes, `batch`, and — for a plugin approved for `location = "read"` — a
-   token for the **parent directory** of the entry, so an `after-renamed`
-   hook can `stat` the result. Writing a sidecar or touching an index would
-   be another `effect` variant, would go through the policy engine as
-   `actor_kind = plugin`, and is a separate ADR.
+   exports `on-events(list<event>, dropped: u64) -> result<list<effect>,
+   string>`; the only `effect` is `notify(string)`. The event carries
+   `seq`, `ts-ms`, `op`, `actor`, the path in wire form **without
+   userinfo**, `path-to`, the leaf `name` in raw bytes, `batch`, and — for a
+   plugin approved for `location = "read"` — a token for the **parent
+   directory** of the entry, so an `after-renamed` hook can `stat` the
+   result. `dropped` is how many events the queue lost since the previous
+   call: a hook that counts says "at least". Writing a sidecar or touching
+   an index would be another `effect` variant, would go through the policy
+   engine as `actor_kind = plugin`, and is a separate ADR.
 
 4. **Off the critical path, bounded, and it trips a fuse.** The sender
    never waits: a full queue drops the newest event and counts it. The
-   dispatcher drains up to 256 events, rediscovers the plugin registry once
-   per drain (so an approval given a second ago counts), instantiates each
-   hook plugin once per drain, and mints one location session per distinct
-   parent directory. Three consecutive failures — no instance, a trap, over
-   budget, or the guest's own `Err` — disable that plugin's hooks for the
-   rest of the process and say so. A hook never slows a copy and never
-   makes one fail.
+   dispatcher drains up to 256 events in `seq` order, rediscovers the plugin
+   registry once per drain (so an approval given a second ago counts), keeps
+   one live instance per hook plugin while its `.wasm` is unchanged, and
+   mints one location session per distinct parent directory. Three
+   consecutive failures — no instance, a trap, over budget, or the guest's
+   own `Err` — disable that plugin's hooks and say so; disabling the plugin
+   in the extension manager re-arms the fuse, so the notice's remedy is
+   true. Notices are one per plugin per drain and four in a burst then one
+   per second, so a chatty hook cannot bury the status bar — or the notice
+   about itself. A hook never slows a copy and never makes one fail.
 
-5. **The sentence crosses as `plugin.notice`** (protocol 0.69.0): a Direct
+5. **What a hook is not shown.** Entries under a protected root (the
+   daemon's own state) are withheld entirely, not just their contents;
+   entries recorded before the drain that first saw the plugin consented are
+   not delivered to it (they may predate the approval); the location token
+   is never minted for `$HOME` or the filesystem root — a hook looks at the
+   directory of a mutation, not at the disk — and never climbs to a root
+   marker. **A hook may not declare `net`** (`HookWithNet`): it receives the
+   path of every mutation, and with a socket that is an exfiltration channel
+   the approval badge does not describe. A hook's events show in the
+   approval as `hook:<event>` badges, so a plugin with no other capability
+   is never approved over an empty list.
+
+6. **The sentence crosses as `plugin.notice`** (protocol 0.69.0): a Direct
    notification to human connections only, `{ plugin_id, kind, text }`,
    with `kind` a closed vocabulary — `notify` (the hook's text, masked and
    capped by the daemon as any guest sentence) and `hooks-disabled` (the
@@ -79,7 +96,7 @@ mutation is about to happen. Two answers, and they are different products:
    cannot pass for one of norte's. Embedded frontends run the same
    dispatcher over their own journal and drain the same channel.
 
-6. **Its own WIT package.** As with `norte:renamer` (ADR 0095): adding it
+7. **Its own WIT package.** As with `norte:renamer` (ADR 0095): adding it
    does not move `norte:plugin`, and bumping it later cannot invalidate a
    previewer.
 
@@ -96,8 +113,11 @@ mutation is about to happen. Two answers, and they are different products:
   a parity question for the window, not this decision.
 - A `doctor` finding for a tripped fuse: the fuse is a fact about a running
   process, and `doctor` reads the disk. The notice is where the human is.
-- Listing a hook's events in `PluginInfo`: additive, and not needed for the
-  first hook. The manifest digest already covers them.
+- A cumulative CPU budget across drains: each call has the runtime's epoch
+  deadline, and a hook that spends it every drain holds one blocking thread
+  for as long as mutations arrive. Self-limiting for the daemon — the queue
+  drops and counts — but a way to starve other hooks; a per-plugin budget is
+  a later change.
 
 ## Consequences
 
@@ -109,6 +129,11 @@ mutation is about to happen. Two answers, and they are different products:
   the reader.
 - A journal written by a newer build with an op this binary cannot name is
   skipped per event, not per batch: hooks keep working on the ops they know.
-- The fuse is per process. A plugin whose hooks were disabled comes back on
-  the next start, or when it is disabled and re-enabled in the extension
-  manager — which is what the notice tells the reader to do.
+- The fuse is per process and re-armed by disabling the plugin: a plugin
+  whose hooks were switched off comes back on the next start, or when it is
+  disabled and re-enabled in the extension manager — which is what the
+  notice tells the reader to do, and the dispatcher makes true by dropping
+  the fuse of any plugin that stops being consented.
+- `[[contributions.hook]]` on a plugin of another category is rejected
+  (`HookOnOtherCategory`): only `hook` plugins are dispatched, and a
+  contribution that never fires is the inert plugin this ADR replaces.

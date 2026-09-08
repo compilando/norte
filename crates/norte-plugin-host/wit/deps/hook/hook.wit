@@ -73,11 +73,14 @@ interface hook {
         notify(string),
     }
 
-    /// Los eventos desde la última llamada, en orden de `seq`. Un `err` es
-    /// una frase para el registro del daemon; tres seguidos —o tres traps, o
-    /// tres llamadas fuera de presupuesto— apagan los hooks de este plugin
-    /// hasta que se reactive.
-    on-events: func(events: list<event>) -> result<list<effect>, string>;
+    /// Los eventos desde la última llamada, en orden de `seq`. `dropped` es
+    /// cuántos eventos se descartaron por cola llena desde la llamada
+    /// anterior: si no es cero, lo que hay en `events` NO es todo lo que
+    /// pasó, y una frase que cuente debe decirlo. Un `err` es una frase para
+    /// el registro del daemon; tres seguidos —o tres traps, o tres llamadas
+    /// fuera de presupuesto— apagan los hooks de este plugin hasta que se
+    /// desactive y se reactive.
+    on-events: func(events: list<event>, dropped: u64) -> result<list<effect>, string>;
 }
 
 /// El world de un plugin `hook`: importa lo mismo que `norte-renamer` y

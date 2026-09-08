@@ -1240,8 +1240,15 @@ impl Estado {
         };
         self.status.message = Some(clamp_display(linea.clone()));
         let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);
+        // La clave sigue a `kind`: un renderer que atienda los `Notice` por
+        // clave distingue la frase de un hook del aviso de que se apagó.
+        let key = if n.kind == "hooks-disabled" {
+            "msg-plugin-hooks-disabled"
+        } else {
+            "msg-plugin-notice"
+        };
         let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
-            key: "msg-plugin-notice".to_owned(),
+            key: key.to_owned(),
             detail: Some(linea),
         }));
         vec![parche, aviso]

@@ -394,7 +394,8 @@ pub struct LazyJournal {
     sospecha: std::time::Duration,
     /// A dónde van los avisos, y el aviso que espera a que haya dónde.
     ///
-    /// **Orden de locks: `estado` → `sink`, y jamás al revés.** `emitir` corre
+    /// **Orden de locks: `estado` → `sink` y `estado` → `hooks`, y jamás al
+    /// revés.** `emitir` corre
     /// SIEMPRE con `estado` tomado, y de eso depende algo que no se ve: el «qué
     /// se anunció» vive en `estado` y el «qué queda pendiente» vive aquí, o sea
     /// en dos locks distintos, y solo son coherentes porque los dos se tocan
@@ -490,9 +491,10 @@ impl LazyJournal {
         if let Some(j) = &v.handle {
             j.set_hook_sender(tx.clone());
         }
-        if let Ok(mut g) = self.hooks.lock() {
-            *g = Some(tx);
-        }
+        *self
+            .hooks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tx);
     }
 
     /// Con otro probe de presencia de daemon (#203).
@@ -809,7 +811,12 @@ impl LazyJournal {
         };
         match &r {
             Ok(j) => {
-                if let Some(tx) = self.hooks.lock().ok().and_then(|g| g.clone()) {
+                if let Some(tx) = self
+                    .hooks
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+                {
                     j.set_hook_sender(tx);
                 }
                 v.handle = Some(Arc::clone(j));

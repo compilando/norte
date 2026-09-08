@@ -2075,6 +2075,12 @@ pub const PLUGIN_NOTICE: &str = "plugin.notice";
 /// El vocabulario CERRADO de [`PluginNotice::kind`], en un sitio, por lo
 /// mismo que [`CONNECTION_FAILURE_REASONS`]: quien emite, quien traduce y los
 /// goldens parten de una lista.
+///
+/// ```
+/// use norte_proto::methods::PLUGIN_NOTICE_KINDS;
+/// assert!(PLUGIN_NOTICE_KINDS.contains(&"notify"));
+/// assert!(PLUGIN_NOTICE_KINDS.contains(&"hooks-disabled"));
+/// ```
 pub const PLUGIN_NOTICE_KINDS: &[&str] = &["notify", "hooks-disabled"];
 
 /// Lo que viaja en [`PLUGIN_NOTICE`]: un aviso atribuido a un plugin.
@@ -2084,6 +2090,18 @@ pub const PLUGIN_NOTICE_KINDS: &[&str] = &["notify", "hooks-disabled"];
 /// estado, atribuida a `plugin_id`, y jamás lo interpreta. No lleva la ruta
 /// del fichero que lo motivó: el hook la tuvo, y si quiso nombrarla la puso
 /// en la frase.
+///
+/// Un `kind` desconocido se enseña como `text` si lo hay: eso hace que una
+/// clase FUTURA cuyo texto no deba pintarse tal cual sea un cambio rompedor,
+/// no aditivo.
+///
+/// ```
+/// use norte_proto::methods::PluginNotice;
+/// let n: PluginNotice = serde_json::from_str(
+///     r#"{"plugin_id":"org.norte.rename-log","kind":"hooks-disabled"}"#,
+/// ).unwrap();
+/// assert_eq!(n.text, None);
+/// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginNotice {
