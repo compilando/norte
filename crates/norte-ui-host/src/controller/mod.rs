@@ -581,6 +581,9 @@ enum Mensaje {
     Degradada(Box<norte_proto::methods::ConnectionDegraded>),
     /// Una conexión NO se pudo abrir, y por qué (#322).
     Fallida(Box<norte_proto::methods::ConnectionFailed>),
+    /// Un plugin `hook` dijo algo sobre una mutación ya registrada, o el
+    /// daemon apagó sus hooks (0.69.0, ADR 0100).
+    AvisoPlugin(Box<norte_proto::methods::PluginNotice>),
     /// El secreto se entregó (o no), y con ello qué hacer con la navegación
     /// que `SecretNeeded` había suspendido (#327).
     SecretoEntregado(Box<(u32, VPath, Result<(), Error>)>),
@@ -955,6 +958,18 @@ impl UiHost {
                 }
             });
         }
+        // Y los avisos de los hooks (ADR 0100), por el mismo buzón: hablan de
+        // ficheros que ya cambiaron, así que se leen pueda escribir o no.
+        if let Some(mut avisos) = backend.take_plugin_notices() {
+            let buzon = tx.clone();
+            tokio::spawn(async move {
+                while let Some(n) = avisos.recv().await {
+                    if buzon.send(Mensaje::AvisoPlugin(Box::new(n))).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
         // Las aprobaciones de policy son una MUTACIÓN por delegación: decir
         // que sí a la operación de un agente. Un frontend que todavía no
         // puede escribir tampoco puede autorizar que escriba otro, así que
@@ -1215,6 +1230,11 @@ async fn actor(
             }
             Mensaje::Fallida(f) => {
                 for u in estado.conexion_fallida(&f) {
+                    let _ = updates.send(u);
+                }
+            }
+            Mensaje::AvisoPlugin(n) => {
+                for u in estado.aviso_de_plugin(&n) {
                     let _ = updates.send(u);
                 }
             }

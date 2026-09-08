@@ -1227,6 +1227,26 @@ impl Estado {
         vec![parche, aviso]
     }
 
+    /// Un `plugin.notice` (0.69.0, ADR 0100): la frase de un hook, atribuida
+    /// al plugin, como mensaje de estado — el mismo par parche + aviso que
+    /// [`Self::conexion_fallida`], y por lo mismo. Una clase desconocida sin
+    /// texto no pinta nada.
+    pub(super) fn aviso_de_plugin(
+        &mut self,
+        n: &norte_proto::methods::PluginNotice,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(linea) = norte_frontend::banners::plugin_notice_line(self.lang, n) else {
+            return Vec::new();
+        };
+        self.status.message = Some(clamp_display(linea.clone()));
+        let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);
+        let aviso = self.sobre(UiUpdate::Notice(UiNotice::Message {
+            key: "msg-plugin-notice".to_owned(),
+            detail: Some(linea),
+        }));
+        vec![parche, aviso]
+    }
+
     /// Recompone los avisos persistentes de la barra y devuelve su cambio.
     ///
     /// UN sitio para los tres, y en este orden: el journal habla de TODA la

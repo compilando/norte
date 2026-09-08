@@ -340,6 +340,51 @@ pub fn failure_line(lang: norte_i18n::Lang, f: &norte_proto::methods::Connection
     }
 }
 
+/// Cuántas celdas se le dan al id de un plugin en un aviso. Un id
+/// reverse-DNS real cabe; el techo existe porque el wire puede mandar
+/// cualquier cosa.
+const PLUGIN_ID_MAX: usize = 48;
+
+/// Cuántas celdas se le dan a la frase de un hook. El daemon ya la acotó a
+/// 200 caracteres; esto es el ancho de una barra de estado.
+const PLUGIN_TEXT_MAX: usize = 160;
+
+/// La frase de un `plugin.notice` (0.69.0, ADR 0100), o `None` si no hay
+/// nada que enseñar: una clase desconocida sin texto.
+///
+/// Compartida por lo mismo que las de arriba: es texto de un tercero (el
+/// hook) atribuido a un id que también viene del wire, y dos frontends son
+/// dos sitios donde el enmascarado se olvida. El id va DELANTE y etiquetado
+/// por norte —«⚑ org.x.y: …»—, así que la frase del plugin no puede
+/// hacerse pasar por una de norte.
+#[must_use]
+pub fn plugin_notice_line(
+    lang: norte_i18n::Lang,
+    n: &norte_proto::methods::PluginNotice,
+) -> Option<String> {
+    let (id, _) = crate::display_name(n.plugin_id.as_bytes());
+    let id = crate::middle_ellipsis(&id, PLUGIN_ID_MAX);
+    let text = n.text.as_deref().map(|t| {
+        let (pintable, _) = crate::display_name(t.as_bytes());
+        crate::middle_ellipsis(&pintable, PLUGIN_TEXT_MAX)
+    });
+    match (n.kind.as_str(), text) {
+        ("hooks-disabled", _) => Some(norte_i18n::ta_in(
+            lang,
+            "msg-plugin-hooks-disabled",
+            &[("plugin", &id)],
+        )),
+        // `notify`, y cualquier clase que este binario no conozca pero
+        // traiga texto: el contrato del proto dice apoyarse en él.
+        (_, Some(text)) => Some(norte_i18n::ta_in(
+            lang,
+            "msg-plugin-notice",
+            &[("plugin", &id), ("text", &text)],
+        )),
+        (_, None) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -660,5 +705,45 @@ mod tests {
             format!("h{ultimo}.example"),
             "y el último sigue"
         );
+    }
+
+    /// ADR 0100: la frase de un hook lleva el id DELANTE, enmascarado; una
+    /// clase desconocida se apoya en el texto y sin texto no se enseña nada.
+    #[test]
+    fn el_aviso_de_un_plugin_se_atribuye_y_se_enmascara() {
+        let n = norte_proto::methods::PluginNotice {
+            plugin_id: "org.norte.rename-log".to_owned(),
+            kind: "notify".to_owned(),
+            text: Some("renamed 3 files\u{1b}[31m\u{202e}".to_owned()),
+        };
+        let l = plugin_notice_line(norte_i18n::Lang::En, &n).expect("hay frase");
+        assert!(l.starts_with("⚑ org.norte.rename-log"), "{l}");
+        assert!(l.contains("renamed 3 files"), "{l}");
+        assert!(
+            !l.contains('\u{1b}') && !l.contains('\u{202e}'),
+            "enmascarado: {l}"
+        );
+
+        let off = norte_proto::methods::PluginNotice {
+            plugin_id: "org.norte.rename-log".to_owned(),
+            kind: "hooks-disabled".to_owned(),
+            text: None,
+        };
+        let l = plugin_notice_line(norte_i18n::Lang::Es, &off).expect("hay frase");
+        assert_eq!(
+            l,
+            norte_i18n::ta_in(
+                norte_i18n::Lang::Es,
+                "msg-plugin-hooks-disabled",
+                &[("plugin", "org.norte.rename-log")]
+            )
+        );
+
+        let raro = norte_proto::methods::PluginNotice {
+            plugin_id: "org.x".to_owned(),
+            kind: "sing".to_owned(),
+            text: None,
+        };
+        assert!(plugin_notice_line(norte_i18n::Lang::En, &raro).is_none());
     }
 }

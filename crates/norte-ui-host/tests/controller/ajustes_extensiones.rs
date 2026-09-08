@@ -802,3 +802,51 @@ async fn un_volumen_sin_tamano_lo_dice() {
     }
     panic!("la tabla de montaje nunca llegó");
 }
+
+/// ADR 0100: la frase de un plugin `hook` llega a la barra de la ventana
+/// atribuida al plugin, y como aviso efímero — no como banner: habla de una
+/// mutación que ya pasó. El id va DELANTE, puesto por norte.
+#[tokio::test]
+async fn el_aviso_de_un_hook_llega_a_la_barra_atribuido() {
+    let falso = arbol_como_falso();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *falso.avisos_plugin.lock().expect("avisos_plugin") = Some(rx);
+    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    let mut sub = h.subscribe();
+    tx.send(norte_proto::methods::PluginNotice {
+        plugin_id: "org.norte.rename-log".to_owned(),
+        kind: "notify".to_owned(),
+        text: Some("renamed 3 files".to_owned()),
+    })
+    .expect("el host escucha");
+    let linea = foto_hasta(&h, &mut sub, "el aviso en la barra", |f| {
+        f.status
+            .message
+            .clone()
+            .filter(|m| m.contains("renamed 3 files"))
+    })
+    .await;
+    assert!(linea.starts_with("⚑ org.norte.rename-log"), "{linea}");
+    assert!(
+        f_banners_vacios(&h, &mut sub).await,
+        "un aviso de hook no enciende ningún banner persistente"
+    );
+
+    // Y el aviso viaja también, con la misma línea.
+    let mut sub2 = h.subscribe();
+    tx.send(norte_proto::methods::PluginNotice {
+        plugin_id: "org.norte.rename-log".to_owned(),
+        kind: "hooks-disabled".to_owned(),
+        text: None,
+    })
+    .expect("el host escucha");
+    let aviso = super::registro::foto_hasta_notice(&mut sub2, "msg-plugin-notice").await;
+    assert!(aviso.contains("org.norte.rename-log"), "{aviso}");
+}
+
+async fn f_banners_vacios(
+    h: &norte_ui_host::UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+) -> bool {
+    foto_hasta(h, sub, "los banners", |f| Some(f.status.banners.is_empty())).await
+}

@@ -397,6 +397,10 @@ pub struct Falso {
     pub fallidas: std::sync::Mutex<
         Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionFailed>>,
     >,
+    /// El canal de `plugin.notice` (ADR 0100), para que el test empuje uno.
+    pub avisos_plugin: std::sync::Mutex<
+        Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::PluginNotice>>,
+    >,
     /// Los directorios que se pidió crear.
     pub creados: std::sync::Mutex<Vec<VPath>>,
     /// Qué encuentra un `stat` sobre algo que este falso CREÓ (#303).
@@ -1501,6 +1505,12 @@ impl HostBackend for Falso {
         &self,
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionFailed>> {
         self.fallidas.lock().expect("fallidas").take()
+    }
+
+    fn take_plugin_notices(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::PluginNotice>> {
+        self.avisos_plugin.lock().expect("avisos_plugin").take()
     }
 
     /// #311: apunta el lote de sumas y devuelve una Task ya terminada. El

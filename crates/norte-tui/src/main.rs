@@ -301,6 +301,10 @@ async fn main() -> Result<()> {
     // abierta que viaja mal, y una que no llegó a abrirse— y mezclarlos hace
     // que uno se pinte como el otro.
     let failed = backend.take_failed();
+    // ADR 0100: lo que un plugin `hook` quiso decir sobre una mutación ya
+    // registrada, o que sus hooks se apagaron. En embebido esto ARRANCA el
+    // despachador de hooks sobre el journal de esta sesión.
+    let plugin_notices = backend.take_plugin_notices();
     // #167/#177: el brazo embebido abre el journal en su primera mutación, y si
     // resulta que lo tiene otro proceso, esta sesión muta SIN registro. Eso se
     // dice EN la sesión y en el instante en que ocurre: un `eprintln!` de
@@ -427,6 +431,7 @@ async fn main() -> Result<()> {
         approvals,
         degraded,
         failed,
+        plugin_notices,
         journal_warnings,
     )
     .await;

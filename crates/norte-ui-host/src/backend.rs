@@ -246,6 +246,17 @@ pub trait HostBackend: Send + Sync + 'static {
         &self,
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::ConnectionFailed>>;
 
+    /// El canal de avisos `plugin.notice` (0.69.0, ADR 0100): lo que un
+    /// plugin `hook` quiso decirle al humano sobre una mutación que el
+    /// journal ya registró, o que el daemon apagó los hooks de un plugin.
+    ///
+    /// Aparte de los dos de arriba porque habla de otra cosa: ni de una
+    /// sesión ni de una conexión, sino de un fichero que ya cambió. Es un
+    /// aviso efímero atribuido a un tercero, jamás un banner.
+    fn take_plugin_notices(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::PluginNotice>>;
+
     /// Borra UNA entrada: a la papelera o permanente. Devuelve la Task ya
     /// encolada — el desenlace llega por su progreso, no por esta llamada.
     ///
@@ -880,6 +891,12 @@ impl HostBackend for norte_client::RemoteBackend {
         &self,
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::ConnectionFailed>> {
         norte_client::RemoteBackend::take_failed(self)
+    }
+
+    fn take_plugin_notices(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::PluginNotice>> {
+        norte_client::RemoteBackend::take_plugin_notices(self)
     }
 
     fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>> {

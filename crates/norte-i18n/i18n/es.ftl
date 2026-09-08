@@ -435,6 +435,12 @@ status-degraded-subject = { $banner } — esquema { $scheme }, host { $host } ({
 degraded-reason-ftp-plaintext = FTP sin cifrado
 degraded-reason-tls-auth-rejected = el servidor rechazó TLS
 degraded-reason-unknown = motivo desconocido
+# Un `plugin.notice` (0.69.0, ADR 0100): lo que un plugin hook dijo sobre una
+# mutación que el journal registró, atribuido al plugin — y el daemon diciendo
+# que apagó los hooks de un plugin. `$plugin` y `$text` son texto del wire, ya
+# enmascarado.
+msg-plugin-notice = ⚑ { $plugin }: { $text }
+msg-plugin-hooks-disabled = ⚑ { $plugin }: sus hooks se apagaron tras tres fallos seguidos — desactívalo y vuelve a activarlo en el gestor de extensiones para reintentar
 status-connection-failed = ✗ no se pudo conectar
 status-failed-subject = { $banner } — esquema { $scheme }, host { $host } ({ $reason })
 failed-reason-secret-missing = falta el secreto

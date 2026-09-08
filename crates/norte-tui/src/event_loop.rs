@@ -243,6 +243,9 @@ pub async fn run(
     mut failed: Option<
         tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionFailed>,
     >,
+    mut plugin_notices: Option<
+        tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::PluginNotice>,
+    >,
     mut journal_warnings: Option<
         tokio::sync::mpsc::UnboundedReceiver<norte_core::embedded::JournalStatus>,
     >,
@@ -471,6 +474,18 @@ pub async fn run(
                 // la categoría genérica con la frase concreta, que es el orden
                 // que se quiere.
                 app.note_connection_failed(&f);
+            }
+            Some(n) = async {
+                match &mut plugin_notices {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                // ADR 0100: la frase de un hook, atribuida al plugin, como
+                // mensaje transitorio de la barra — igual que un fallo de
+                // conexión. No es un indicador persistente: habla de una
+                // mutación que ya pasó.
+                app.note_plugin_notice(&n);
             }
             Some(state) = async {
                 match &mut journal_warnings {
