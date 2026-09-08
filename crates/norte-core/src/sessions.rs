@@ -773,7 +773,10 @@ mod tests {
     #[async_trait::async_trait]
     impl Provider for AllPu {
         // La firma la fija el trait (&self → &str): el literal es del test.
-        #[allow(clippy::unnecessary_literal_bound)]
+        #[expect(
+            clippy::unnecessary_literal_bound,
+            reason = "La firma la fija el trait (&self → &str): el literal es del test"
+        )]
         fn scheme(&self) -> &str {
             "sftp"
         }

@@ -16,7 +16,6 @@ use super::geometry::{pane_rects, tab_strip_for};
 use crate::app::App;
 use crate::theme::TuiTheme;
 
-#[allow(clippy::too_many_arguments)] // wiring del render, no API
 /// Las pestañas de un pane: el título de cada una y cuál está activa.
 ///
 /// Los títulos vienen ya SANEADOS (`display_name`): el nombre de un directorio

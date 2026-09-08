@@ -1088,7 +1088,6 @@ impl Journal {
     ///
     /// # Errors
     /// [`JournalError::Sqlx`] al insertar.
-    #[allow(clippy::too_many_arguments)]
     pub async fn record(
         &self,
         op: &str,
@@ -1108,7 +1107,10 @@ impl Journal {
     ///
     /// # Errors
     /// [`JournalError::Sqlx`] al insertar.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "todos los campos de una entrada del journal, en el orden de la tabla"
+    )]
     pub async fn record_undoing(
         &self,
         op: &str,

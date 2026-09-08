@@ -354,7 +354,10 @@ pub(crate) fn undo_units(entries: Vec<JournalEntry>) -> Vec<Vec<JournalEntry>> {
 /// entonces el EFECTO ya ocurrió: el nodo se movió y el journal no lo sabe. Un
 /// conflicto/drift del FS NO es error: se devuelve `Reverted::Blocked`.
 // Dispatch lineal por `Reversal` (4 ramas): más claro junto que fragmentado.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Dispatch lineal por `Reversal` (4 ramas): más claro junto que fragmentado"
+)]
 pub(crate) async fn revert_entry(
     provider: &dyn Provider,
     journal: &SqliteJournal,

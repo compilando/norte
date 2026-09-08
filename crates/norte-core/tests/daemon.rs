@@ -6502,7 +6502,10 @@ struct FakeAi {
 
 #[async_trait]
 impl norte_ai::AiProvider for FakeAi {
-    #[allow(clippy::unnecessary_literal_bound)] // firma del trait (&self→&str)
+    #[expect(
+        clippy::unnecessary_literal_bound,
+        reason = "firma del trait (&self→&str)"
+    )]
     fn id(&self) -> &str {
         "fake"
     }

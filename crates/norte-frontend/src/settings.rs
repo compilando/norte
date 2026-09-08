@@ -865,7 +865,7 @@ impl SettingsState {
             // `min`/`max` are catalog constants, always tiny (today: 8/32) —
             // the precision loss `as f64` could theoretically incur past
             // 2^53 never applies here.
-            #[allow(clippy::cast_precision_loss)]
+            #[expect(clippy::cast_precision_loss, reason = "magnitudes lejos de 2^53")]
             let (min_f, max_f) = (min as f64, max as f64);
             if n < min_f || n > max_f {
                 return Err(SettingsEditError::OutOfRange { min, max });
@@ -876,7 +876,7 @@ impl SettingsState {
             // already renders a whole `f64` WITHOUT a trailing ".0" (Rust's
             // `Display` for floats picks the shortest round-tripping form),
             // so `display` needs no separate branch.
-            #[allow(clippy::cast_possible_truncation)] // n ∈ [min, max], both i64
+            #[expect(clippy::cast_possible_truncation, reason = "n ∈ [min, max], both i64")]
             let value = if n.fract() == 0.0 {
                 toml_edit::Value::from(n as i64)
             } else {

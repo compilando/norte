@@ -38,7 +38,7 @@ use crate::shortcuts_editor::{Maps, build_keymaps, shortcut_rows};
 /// esto aplicó. Un perfil a medio aplicar no es un estado que ese diseño
 /// admita, y el «todo o nada» que esta función ya tenía es justo la semántica
 /// que hace falta.
-#[allow(clippy::too_many_arguments)] // wiring del hot-reload, no API
+#[expect(clippy::too_many_arguments, reason = "wiring del hot-reload, no API")]
 pub async fn reload_config(
     app: &mut App,
     backend: &Backend,

@@ -259,7 +259,10 @@ pub fn compare_key(
 /// del diálogo de búsqueda: no hay vocabulario `dialog.*` para «cambia de
 /// lado» ni para «esconde los iguales». El significado lo decide
 /// [`compare_key`]; esto solo lo ejecuta.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "wiring del panel de comparación, no API"
+)]
 pub async fn on_compare_key(
     app: &mut App,
     backend: &Backend,
@@ -357,7 +360,10 @@ pub async fn on_compare_key(
 /// Un huérfano que el walk emitió como UNA fila sin enumerar su subárbol se
 /// expande así, que es el motivo por el que la fila lleva el `Entry` entero y
 /// no solo un nombre. Sin nada en el lado activo NO se cae al otro: se dice.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "wiring del panel de comparación, no API"
+)]
 pub async fn on_compare_enter(
     app: &mut App,
     backend: &Backend,

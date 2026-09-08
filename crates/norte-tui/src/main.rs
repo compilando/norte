@@ -29,7 +29,10 @@ use norte_vfs_local::LocalProvider;
 use std::sync::Arc;
 
 #[tokio::main]
-#[allow(clippy::too_many_lines)] // wiring del binario, no API — mismo criterio que `run`/`dispatch`
+#[expect(
+    clippy::too_many_lines,
+    reason = "wiring del binario, no API — mismo criterio que `run`/`dispatch`"
+)]
 async fn main() -> Result<()> {
     // Args: DIR posicional + `--preset`/`--daemon`/`--socket`. `--help` y
     // `--version` salen ANTES de tocar el terminal (antes se ignoraban como

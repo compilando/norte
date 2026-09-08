@@ -29,7 +29,7 @@ pub fn human_bytes(n: u64) -> String {
     // below only ever needs ~3 significant digits of `value` to pick a unit
     // and round to one decimal — the precision loss is invisible at that
     // scale (same idiom as `settings.rs`'s `min as f64`/`max as f64`).
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss, reason = "magnitudes lejos de 2^53")]
     let mut value = n as f64 / 1024.0;
     let mut unit = 0usize;
     // Promote on the ROUNDED value, not the raw one (review MAJOR M2): the

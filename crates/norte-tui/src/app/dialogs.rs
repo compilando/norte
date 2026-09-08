@@ -326,7 +326,10 @@ pub const ALLOW_HELP: &[&str] = &[
 // vez es el punto. Partirla movería la frontera de la semántica de seguridad
 // a un sitio arbitrario y haría más difícil ver que no falta ningún modal —
 // mismo criterio, y misma excepción, que `modal_title_body`.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "tabla modal→diálogo; mismo criterio que `modal_title_body`"
+)]
 #[must_use]
 pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
     use norte_proto::CollisionPolicy as P;

@@ -24,7 +24,10 @@ use serde::{Deserialize, Serialize};
 /// un navegador —y cualquier toolkit— entrega el evento, y traducir en el
 /// borde es más barato que obligar a cada adaptador a construir un tipo
 /// nuestro. El chord que sale de aquí ya es el del keymap.
-#[allow(clippy::struct_excessive_bools)] // la forma del evento de entrada, no un estado
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "la forma del evento de entrada, no un estado"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyInput {
     /// Nombre LÓGICO de la tecla. Se aceptan los del navegador

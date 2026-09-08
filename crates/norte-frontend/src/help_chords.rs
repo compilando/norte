@@ -94,7 +94,10 @@ const NO_IMPEDIMENT: Facts = Facts {
 // El campo `chords` repite el nombre del tipo, y es el nombre correcto de las
 // dos cosas: el tipo ES el resolver de acordes y el campo ES su mapa. Cualquier
 // otro nombre («map», «por_comando») describiría peor lo que hay dentro.
-#[allow(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "el tipo ES el resolver de acordes y el campo ES su mapa"
+)]
 pub struct Chords {
     /// Command to its painted chord, filled browse → viewer → dialog.
     ///

@@ -1099,7 +1099,10 @@ pub enum UiError {
 // El REPARTO de mensajes del actor: un brazo por variante, y cada brazo
 // delega. Largo por número de variantes, no por lógica — partirlo en dos
 // mitades arbitrarias solo escondería dónde se atiende cada mensaje.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "reparto de mensajes del actor: largo por variantes, no por lógica"
+)]
 async fn actor(
     mut rx: mpsc::Receiver<Mensaje>,
     mut estado: Estado,
@@ -3009,7 +3012,10 @@ impl Estado {
     /// Largo porque es un LITERAL de estructura: un campo por línea, con el
     /// porqué de los que no son obvios. No hay nada que extraer que no sea
     /// mover campos a una función que los devuelva de uno en uno.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "constructor: un campo por línea con su porqué, nada que extraer"
+    )]
     fn nuevo(instance: InstanceId, options: UiHostOptions) -> (Self, Arc<dyn HostBackend>) {
         let UiHostOptions {
             backend,

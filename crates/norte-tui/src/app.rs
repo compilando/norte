@@ -362,7 +362,7 @@ pub const PAGE: usize = 10;
 // de la TUI, y sus banderas son independientes entre sí, se leen por nombre y
 // jamás viajan juntas como argumentos. Agruparlas en sub-structs por contar
 // bools escondería qué mira cada pintor a cambio de nada.
-#[allow(clippy::struct_excessive_bools, reason = "estado del TUI, no una API")]
+#[expect(clippy::struct_excessive_bools, reason = "estado del TUI, no una API")]
 pub struct App {
     /// Los dos paneles (izquierda, derecha), guardados por hueco.
     pub panes: crate::panel::PaneSlots,

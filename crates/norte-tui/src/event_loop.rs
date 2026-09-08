@@ -98,7 +98,7 @@ fn journal_warning_i18n(why: &norte_core::embedded::NoJournal) -> String {
 /// usuario sobre un listado, y se lee en cada uno ([`launch_pending_open`]).
 /// El resolver de teclas tampoco pasa por aquí: necesita leer `nav_stalled`
 /// ANTES de que el desenlace se consuma, y frena el contador con él.
-#[allow(clippy::too_many_arguments)] // wiring del bucle, no API
+#[expect(clippy::too_many_arguments, reason = "wiring del bucle, no API")]
 pub(crate) async fn run_command(
     app: &mut App,
     backend: &Backend,
@@ -189,7 +189,11 @@ pub(crate) async fn launch_pending(
 /// mal —un listado que no se deja leer, una mutación rechazada, un plugin que
 /// no responde— es un mensaje en la barra, no un error del bucle: la regla es
 /// que el gestor de ficheros no se cae porque el sistema de ficheros diga no.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // wiring del bucle, no API
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "wiring del bucle, no API"
+)]
 pub async fn run(
     terminal: &mut tty::Tui,
     // Captura de ratón: la crea `main` (dueño de la terminal) y la retira
@@ -981,7 +985,7 @@ pub async fn run(
 /// Lo que NO hace falta hacer a mano: tema, keymap, columnas, favoritos y
 /// openers los aplica el paso 2, y la siembra de cada hueco sale de
 /// `apply_session`, que ya sabe leer la disposición bajo la clave del perfil.
-#[allow(clippy::too_many_arguments)] // wiring del bucle, no API
+#[expect(clippy::too_many_arguments, reason = "wiring del bucle, no API")]
 async fn cambia_de_perfil(
     nombre: &std::ffi::OsStr,
     app: &mut App,

@@ -339,7 +339,10 @@ mod styled {
     /// dígitos → `role: "number"`, `TODO`/`FIXME`/`norte` → `role:
     /// "keyword"` + `fg` fijo).
     #[tokio::test]
-    #[allow(clippy::too_many_lines)] // e2e de punta a punta: setup+wire+assert, sin trocear
+    #[expect(
+        clippy::too_many_lines,
+        reason = "e2e de punta a punta: setup+wire+assert, sin trocear"
+    )]
     async fn plugin_preview_styled_e2e_wasm_real_a_traves_del_backend() {
         let Some(wasm) = build_guest("previewer-demo") else {
             eprintln!("SKIP: target wasm32-wasip2 no instalado; no hay .wasm que ejecutar");

@@ -108,7 +108,10 @@ impl LocalProvider {
     /// enraízan en un `TempDir`).
     #[doc(hidden)]
     #[must_use]
-    #[allow(clippy::used_underscore_binding)] // el campo existe solo por su Drop
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "el campo existe solo por su Drop"
+    )]
     pub fn with_guard(mut self, guard: Box<dyn std::any::Any + Send + Sync>) -> Self {
         self._guard = Some(guard);
         self
@@ -1025,7 +1028,10 @@ impl CapsAtCache {
 /// puede poner sobre un directorio no vacío ni quitar. Lo que se invalida aquí
 /// es la identidad, no el veredicto.)
 #[cfg(unix)]
-#[allow(clippy::unnecessary_wraps)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "firma común con Windows, que no tiene inodo; en Unix siempre hay identidad"
+)]
 fn dir_identity(md: &std::fs::Metadata) -> Option<(u64, u64, i64)> {
     use std::os::unix::fs::MetadataExt as _;
     Some((md.dev(), md.ino(), md.ctime_nsec()))
@@ -1058,7 +1064,10 @@ fn probe_capabilities(base: &Path) -> Capabilities {
 #[async_trait]
 impl Provider for LocalProvider {
     // La firma del trait es `-> &str`; devolver un literal aquí es correcto.
-    #[allow(clippy::unnecessary_literal_bound)]
+    #[expect(
+        clippy::unnecessary_literal_bound,
+        reason = "La firma del trait es `-> &str`; devolver un literal aquí es correcto"
+    )]
     fn scheme(&self) -> &str {
         "file"
     }

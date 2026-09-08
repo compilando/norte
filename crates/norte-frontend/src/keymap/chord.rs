@@ -49,7 +49,10 @@ pub enum KeyCode {
 /// que no hay enum en el que colapsarlos. Es el bitset que el teclado
 /// entrega; mismo criterio que `availability::Facts`.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "modificadores independientes de un acorde; mismo criterio que `availability::Facts`"
+)]
 pub struct Mods {
     /// Ctrl.
     pub ctrl: bool,

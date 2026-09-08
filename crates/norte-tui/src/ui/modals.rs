@@ -73,7 +73,7 @@ pub(crate) fn is_warning_modal(modal: &crate::app::Modal) -> bool {
 /// cómo se pinta). Partirla en dos mitades solo movería la frontera a un
 /// punto arbitrario y haría más difícil ver que no falta ninguna. Mismo
 /// criterio, y misma excepción, que la tabla de despacho de `main.rs`.
-#[allow(clippy::too_many_lines)] // tabla modal→texto, no lógica
+#[expect(clippy::too_many_lines, reason = "tabla modal→texto, no lógica")]
 pub(crate) fn modal_title_body(
     modal: &crate::app::Modal,
     reinterpret: Option<norte_encoding::NameEncoding>,

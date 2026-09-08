@@ -262,7 +262,10 @@ mod tests {
     /// quede sin modal que lo produzca, ni al revés.
     // Una lista LITERAL de variantes: crece con el enum, y es lo que hace
     // que un modal nuevo sin contexto de ayuda sea un fallo de compilación.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "lista literal de variantes: un modal nuevo sin ayuda es error de compilación"
+    )]
     fn un_modal_de_cada_variante() -> Vec<Modal> {
         vec![
             Modal::ConfirmDelete {

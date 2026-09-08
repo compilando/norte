@@ -4057,7 +4057,10 @@ impl ColumnPool {
     #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     #[must_use]
-    #[allow(clippy::too_many_arguments)] // la MISMA lista que `run_column_values`, y a propósito
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "la MISMA lista que `run_column_values`, y a propósito"
+    )]
     pub fn column_values_for_test(
         &self,
         runtime: &norte_plugin_host::PluginRuntime,
@@ -4082,7 +4085,10 @@ impl ColumnPool {
     /// Mismo contrato que `run_column_values` hasta en la degradación: lo
     /// que no se puede hacer sale como celdas vacías, jamás como un error que
     /// tumbe el listado. Y BLOQUEANTE igual: va en `spawn_blocking`.
-    #[allow(clippy::too_many_arguments)] // la MISMA lista que `run_column_values`, y a propósito
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "la MISMA lista que `run_column_values`, y a propósito"
+    )]
     pub(crate) fn column_values(
         &self,
         runtime: &norte_plugin_host::PluginRuntime,

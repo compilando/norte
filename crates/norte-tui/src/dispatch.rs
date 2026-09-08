@@ -38,7 +38,11 @@ use norte_proto::EntryKind;
 /// Ejecuta un comando nombrado (ADR 0006: los mismos nombres que verán la
 /// palette y el wire). Un error de listado en un cd NO tumba el TUI: el
 /// pane se queda donde estaba (aviso visible: barra de mensajes, issue #20).
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // tabla de despacho comando→efecto, no API
+#[expect(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    reason = "tabla de despacho comando→efecto, no API"
+)]
 pub async fn dispatch(
     app: &mut App,
     backend: &Backend,

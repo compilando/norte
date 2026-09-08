@@ -747,7 +747,10 @@ impl Daemon {
     // escondería detrás de una indirección y de más parámetros cruzando la
     // frontera. Cruzó las 100 líneas cuando 0.65.0 montó el anillo de
     // registro (`log_ring`) en `Shared` (#328, ADR 0092).
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "arranque del daemon: monta cada pieza de `Shared` una vez y en orden"
+    )]
     #[tracing::instrument(skip(engine, scopes, approvals, cfg))]
     pub async fn bind_with_policy(
         engine: Arc<Engine>,
@@ -2512,7 +2515,10 @@ fn to_value<T: serde::Serialize>(v: &T) -> Result<serde_json::Value, RpcError> {
 // bloque de métodos no reduciría la complejidad real, solo la escondería
 // detrás de una indirección. Mismo criterio que otros dispatchers grandes
 // del árbol (ver `dispatch_fs_task`).
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "tabla plana método→handler; ver `dispatch_fs_task`"
+)]
 #[tracing::instrument(skip_all, fields(method = %req.method))]
 async fn dispatch(
     req: Request,
@@ -4241,7 +4247,10 @@ fn read_gate(
     shared: &Arc<Shared>,
 ) -> Result<(), RpcError> {
     use crate::policy::{DenyReason, ScopeVerdict};
-    #[allow(clippy::match_wildcard_for_single_variants)]
+    #[expect(
+        clippy::match_wildcard_for_single_variants,
+        reason = "las variantes agrupadas se leen mejor que enumeradas"
+    )]
     let denied: Option<DenyReason> = match actor {
         Actor::User => None,
         Actor::Agent { session } => {
@@ -4285,7 +4294,10 @@ fn content_gate(
     shared: &Arc<Shared>,
 ) -> Result<(), RpcError> {
     use crate::policy::{DenyReason, ScopeVerdict};
-    #[allow(clippy::match_wildcard_for_single_variants)]
+    #[expect(
+        clippy::match_wildcard_for_single_variants,
+        reason = "las variantes agrupadas se leen mejor que enumeradas"
+    )]
     let denied: Option<DenyReason> = match actor {
         Actor::User => None,
         Actor::Agent { session } => {
@@ -5170,7 +5182,10 @@ fn human_only(actor: &Actor) -> Result<(), RpcError> {
 /// evalúan bajo él.
 // Lista plana de brazos, un método por brazo — mismo criterio que `dispatch`:
 // trocearla no reduciría la complejidad real, solo la escondería.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "trocearla no reduciría la complejidad real, solo la escondería"
+)]
 async fn dispatch_fs_task(
     req: Request,
     conn_id: u64,

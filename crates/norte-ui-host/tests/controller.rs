@@ -7726,7 +7726,10 @@ async fn un_hallazgo_hostil_va_marcado() {
 #[tokio::test]
 // Larga por TABLA, no por lógica: cada superficie es un bloque con su
 // aserción y su frase, y partirla escondería cuáles se cubren.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "tabla de superficies: una aserción y su frase por bloque"
+)]
 async fn ninguna_superficie_enmascara_en_silencio() {
     let corpus = norte_testkit::corpus::hostile_names();
     assert!(

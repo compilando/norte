@@ -60,7 +60,10 @@ impl Puerta {
 // de dos variantes dejaría cada test escribiendo `Lazy::Si, BorrarDeVerdad::No`
 // para nada: el nombre del campo ya dice a qué pregunta contesta.
 #[derive(Default)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "hechos independientes: cada campo dice a qué pregunta contesta"
+)]
 pub struct Falso {
     /// Un aviso por cada cosa que el doble ANOTA.
     ///

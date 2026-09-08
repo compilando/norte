@@ -35,7 +35,7 @@ use crate::tasks::RetrySpec;
 /// loop, decisión 8). `events` es para el reintento de navegación del modal
 /// TOFU (#45): confiar en la host key relanza el `cd`, que tiene su propio
 /// loop de eventos.
-#[allow(clippy::too_many_arguments)] // wiring del run loop, no API
+#[expect(clippy::too_many_arguments, reason = "wiring del run loop, no API")]
 pub async fn on_dialog_key(
     app: &mut App,
     backend: &Backend,

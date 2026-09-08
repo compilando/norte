@@ -46,7 +46,11 @@ use norte_i18n::{t, ta};
 use norte_proto::VPath;
 
 /// Enruta una tecla por la cadena de precedencia. Ver el módulo.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // wiring del bucle, no API
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "wiring del bucle, no API"
+)]
 pub async fn on_key(
     app: &mut App,
     backend: &Backend,

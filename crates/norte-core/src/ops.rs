@@ -1544,7 +1544,10 @@ async fn copy_symlink_leaf(
 // El octavo argumento es el ancla del destino (#295). Agruparla con `opts`
 // costaría el `Copy` de `TransferOptions`, que se copia en cada paso de un
 // árbol; agruparla con los providers mezclaría el QUÉ con el DÓNDE.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "las opciones viajan sueltas: con los providers mezclarían el QUÉ con el DÓNDE"
+)]
 pub(crate) async fn copy_task(
     src: Arc<dyn Provider>,
     dst: Arc<dyn Provider>,
@@ -1679,7 +1682,10 @@ async fn hydrate_plan(
 /// provenance (un dir sintético de un link expandido se crea como dir
 /// real, issue #19); la provenance manda en el DELETE del move. Devuelve
 /// los paths de ORIGEN saltados por política (el move no debe borrarlos).
-#[allow(clippy::too_many_arguments)] // función interna del módulo, no API
+#[expect(
+    clippy::too_many_arguments,
+    reason = "función interna del módulo, no API"
+)]
 async fn copy_tree(
     src: &Arc<dyn Provider>,
     dst: &Arc<dyn Provider>,
@@ -1766,7 +1772,6 @@ async fn copy_tree(
 /// SOBREVIVE (`keep`) y el reintento continúa desde donde iba
 /// (`open_resumable`) — el `before` que se restaura es la base del archivo,
 /// no cero, y `copy_file` recompone `base + already` en cada intento.
-#[allow(clippy::too_many_arguments)] // función interna del módulo, no API
 pub(crate) async fn copy_file_retrying(
     src: &dyn Provider,
     dest: &Dest<'_>,
@@ -1848,7 +1853,6 @@ async fn hash_source_prefix(
 /// `VerifyPolicy` (#35): Length compara tamaños; Hash compara el digest del
 /// prefijo del origen con el del staging (si el provider lo expone, si no
 /// degrada a Length).
-#[allow(clippy::too_many_arguments)]
 async fn should_discard_partial(
     src: &dyn Provider,
     dest: &Dest<'_>,
@@ -1891,7 +1895,10 @@ async fn should_discard_partial(
 /// al reanudar). Con resume: abre `open_resumable`, descarta el parcial si
 /// no cuadra con el origen (`verify`, #35), lee el origen desde `already`, y
 /// en cancelación/fallo CONSERVA el parcial (`keep`) en vez de abortar.
-#[allow(clippy::too_many_arguments)] // función interna del módulo, no API
+#[expect(
+    clippy::too_many_arguments,
+    reason = "función interna del módulo, no API"
+)]
 async fn copy_file(
     src: &dyn Provider,
     dest: &Dest<'_>,
@@ -2102,7 +2109,10 @@ async fn release(sink: Box<dyn norte_vfs::ByteSink>, to: &VPath, resume: bool) {
 /// pérdida silenciosa.
 #[tracing::instrument(skip_all, fields(from = %from.display_lossy(), to = %to.display_lossy()))]
 // Octavo argumento: el ancla del destino (#295), ver `copy_task`.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Octavo argumento: el ancla del destino (#295), ver `copy_task`"
+)]
 pub(crate) async fn move_task(
     src: Arc<dyn Provider>,
     dst: Arc<dyn Provider>,
@@ -2185,7 +2195,10 @@ enum RenameOutcome {
 // Un brazo por POLÍTICA de colisión, y cada uno con su secuencia completa —
 // stat del origen, stat del destino, comprobación de tipos, borrado, rename,
 // journal—. Partirla escondería cuál de las cinco hace qué.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "cinco fases en orden; partirla escondería cuál hace qué"
+)]
 async fn rename_with_policy(
     src: &dyn Provider,
     from: &VPath,
@@ -2334,9 +2347,15 @@ async fn rename_with_policy(
 // Dos formas del mismo verbo —una hoja y un árbol— cada una con su fase de
 // copia y su fase de borrado. Separarlas duplicaría la guarda de «dentro de sí
 // mismo» y el plan, que es donde estaría el error si se separaran.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "copia y borrado comparten la guarda «dentro de sí mismo» y el plan"
+)]
 // Octavo argumento: el ancla del destino (#295), ver `copy_task`.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Octavo argumento: el ancla del destino (#295), ver `copy_task`"
+)]
 async fn move_by_copy(
     src: Arc<dyn Provider>,
     dst: Arc<dyn Provider>,

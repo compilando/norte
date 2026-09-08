@@ -751,7 +751,10 @@ mod tests {
 
         #[async_trait::async_trait]
         impl Provider for SinDosPuntos {
-            #[allow(clippy::unnecessary_literal_bound)] // la firma del trait es `-> &str`
+            #[expect(
+                clippy::unnecessary_literal_bound,
+                reason = "la firma del trait es `-> &str`"
+            )]
             fn scheme(&self) -> &str {
                 "mem"
             }

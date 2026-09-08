@@ -508,7 +508,10 @@ struct SinRename(Arc<MemProvider>);
 #[async_trait::async_trait]
 impl Provider for SinRename {
     // La firma del trait es `-> &str`; el literal aquí es correcto.
-    #[allow(clippy::unnecessary_literal_bound)]
+    #[expect(
+        clippy::unnecessary_literal_bound,
+        reason = "La firma del trait es `-> &str`; el literal aquí es correcto"
+    )]
     fn scheme(&self) -> &str {
         "mem"
     }
@@ -578,7 +581,10 @@ struct InyectaEnRead {
 #[async_trait::async_trait]
 impl Provider for InyectaEnRead {
     // La firma del trait es `-> &str`; el literal aquí es correcto.
-    #[allow(clippy::unnecessary_literal_bound)]
+    #[expect(
+        clippy::unnecessary_literal_bound,
+        reason = "La firma del trait es `-> &str`; el literal aquí es correcto"
+    )]
     fn scheme(&self) -> &str {
         "src"
     }
@@ -725,7 +731,10 @@ struct Alias(Arc<MemProvider>);
 #[async_trait::async_trait]
 impl Provider for Alias {
     // La firma del trait es `-> &str`; el literal aquí es correcto.
-    #[allow(clippy::unnecessary_literal_bound)]
+    #[expect(
+        clippy::unnecessary_literal_bound,
+        reason = "La firma del trait es `-> &str`; el literal aquí es correcto"
+    )]
     fn scheme(&self) -> &str {
         "src"
     }
