@@ -130,6 +130,28 @@ async fn grant_scope_via_transport(
     human
 }
 
+/// Espera DETERMINISTA a que el copy esté genuinamente suspendido en su Ask:
+/// sondea `policy.pending` hasta verlo no vacío y devuelve el `approval_id`.
+/// Jamás un sleep fijo: «el copy ya llegó al Ask» es un estado del daemon, y
+/// 100 ms sobre UDS local era una apuesta que bajo carga se perdía (ola W10).
+async fn esperar_ask(human: &Client) -> u64 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let res: norte_proto::methods::PolicyPendingResult = human
+            .call(norte_proto::methods::POLICY_PENDING, &serde_json::json!({}))
+            .await
+            .expect("policy.pending");
+        if let Some(p) = res.pending.first() {
+            return p.approval_id;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "el Ask nunca apareció en policy.pending"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 fn copy_call(id: u64) -> serde_json::Value {
     serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{
         "name":"copy",
@@ -142,11 +164,11 @@ fn copy_call(id: u64) -> serde_json::Value {
 async fn ping_responde_con_un_tool_suspendido_en_vuelo() {
     let (_dir, socket, _mem) = spawn_ask_daemon().await;
     let (mut w, mut r) = spawn_transport(&socket).await;
-    let _human = grant_scope_via_transport(&mut w, &mut r, &socket).await;
+    let human = grant_scope_via_transport(&mut w, &mut r, &socket).await;
 
     // El copy queda suspendido en el Ask (nadie decide).
     send_line(&mut w, &copy_call(10)).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    esperar_ask(&human).await;
     // El ping DEBE responder aunque el copy siga en vuelo.
     send_line(
         &mut w,
@@ -166,10 +188,10 @@ async fn ping_responde_con_un_tool_suspendido_en_vuelo() {
 async fn cancelled_abandona_el_tool_en_vuelo_sin_respuesta() {
     let (_dir, socket, _mem) = spawn_ask_daemon().await;
     let (mut w, mut r) = spawn_transport(&socket).await;
-    let _human = grant_scope_via_transport(&mut w, &mut r, &socket).await;
+    let human = grant_scope_via_transport(&mut w, &mut r, &socket).await;
 
     send_line(&mut w, &copy_call(10)).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    esperar_ask(&human).await;
     send_line(
         &mut w,
         &serde_json::json!({"jsonrpc":"2.0","method":"notifications/cancelled",
@@ -203,25 +225,7 @@ async fn cancel_del_agente_retira_el_ask_el_humano_no_ejecuta() {
     // El agente lanza el copy: queda suspendido en el Ask (nadie decide aún).
     send_line(&mut w, &copy_call(10)).await;
 
-    // Espera DETERMINISTA a que el Ask esté genuinamente suspendido: sondea
-    // policy.pending hasta verlo no vacío (jamás un sleep fijo).
-    let approval_id = {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            let res: norte_proto::methods::PolicyPendingResult = human
-                .call(norte_proto::methods::POLICY_PENDING, &serde_json::json!({}))
-                .await
-                .expect("policy.pending");
-            if let Some(p) = res.pending.first() {
-                break p.approval_id;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "el Ask nunca apareció en policy.pending"
-            );
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    };
+    let approval_id = esperar_ask(&human).await;
 
     // El agente CANCELA su tools/call en vuelo.
     send_line(
@@ -301,9 +305,9 @@ async fn eof_con_tool_en_vuelo_termina_limpio() {
     let mut r = BufReader::new(cli_r);
 
     // Concede scope y lanza un copy que queda suspendido en el Ask.
-    let _human = grant_scope_via_transport(&mut cli_w, &mut r, &socket).await;
+    let human = grant_scope_via_transport(&mut cli_w, &mut r, &socket).await;
     send_line(&mut cli_w, &copy_call(10)).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    esperar_ask(&human).await;
 
     // El peer MUERE (dropea su extremo) con el copy en vuelo.
     drop(cli_w);
