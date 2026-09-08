@@ -398,5 +398,10 @@
     "id": "journal_verdict_line_spoof",
     "hex": "656c206a6f75726e616c206c6f2064657363726962653a20756e2064657368616365722070756564652072656d617461726c6f",
     "why": "UN nombre que renderiza la linea de veredicto de un informe de lote ('modal-batch-stuck-journalled'), que es la que le dice al lector que lo que quedo a medias se puede deshacer. Hoy la suplantacion esta DESACTIVADA por el prefijo '<scheme>/' que pone `path_display`, y ESE es su valor: nada afirma que ese prefijo sea el marcador de rol de una linea de ruta, asi que quien lo quite por 'ruido' no encuentra nada rojo."
+  },
+  {
+    "id": "control_crlf",
+    "hex": "610d0a62",
+    "why": "'a\\r\\nb' — CR+LF dentro del nombre. Legal en unix (roundtrip intacto en mem/local), pero en FTP es el TERMINADOR del canal de control: un cliente que interpole el nombre en `RETR`/`DELE` sin filtrar ejecuta dos comandos (RUSTSEC-2026-0271, suppaftp <10.0.2). El guest ftp-provider lo rechaza LIMPIO como InvalidPath antes de tocar el socket (`ftp_provider_contract.rs`, probe `x\\r\\nDELE victima`); el corpus lo lleva para que TODO provider y TODA superficie que pinte nombres se enfrente a los dos controles juntos, no solo al LF de `control_newline`."
   }
 ]
