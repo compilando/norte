@@ -57,25 +57,12 @@ confidence-threshold = 0.9
 [advisories]
 yanked = "deny"
 ignore = [
-    # ─────────────────────────────────────────────────────────────────────
-    # Fase 3 del plan multi-frontend: el árbol de Tauri 2 en Linux (ADR 0067).
-    # NINGUNA es una vulnerabilidad: todas son «sin mantener». Entran solo por
-    # `norte-gui-tauri`, que no se publica y está fuera del gate por defecto.
-    #
-    # Las ocho de gtk-rs son las MISMAS bindings de GTK3 que WRY necesita para
-    # abrir una WebKitGTK, y gtk-rs las declaró sin mantener al pasar a GTK4.
-    # No hay alternativa dentro de Tauri 2: es una consecuencia DIRECTA de la
-    # elección de toolkit, y está anotada como tal en el informe del spike
-    # (`docs/spike-tauri-2026-08-20.md`) — si el spike se convierte en
-    # producto, esto vuelve a la mesa antes de la GA, no después.
-    "RUSTSEC-2024-0411", # gdkwayland-sys
-    "RUSTSEC-2024-0412", # gdk
-    "RUSTSEC-2024-0413", # atk
-    "RUSTSEC-2024-0415", # gtk
-    "RUSTSEC-2024-0416", # atk-sys
-    "RUSTSEC-2024-0418", # gdk-sys
-    "RUSTSEC-2024-0419", # gtk3-macros
-    "RUSTSEC-2024-0420", # gtk-sys
+    # Las ocho «sin mantener» de gtk-rs (RUSTSEC-2024-0411…0420) que vivían
+    # aquí ya no las reporta cargo-deny: bajo `unmaintained = "workspace"`
+    # (el valor por defecto de la config v2) un crate transitivo sin mantener
+    # no cuenta, y gtk3 entra solo por tao/muda/wry. Se quitaron en la ola W10
+    # porque cada una era un `advisory-not-detected` en cada `just lint`. Si
+    # vuelven a saltar, el argumento sigue en `docs/spike-tauri-2026-08-20.md`.
     # `proc-macro-error` 1.x, sin mantener: proc-macro de BUILD-TIME que entra
     # por `gtk3-macros`. Mismo criterio que `proc-macro-error2`, ya ignorado
     # más abajo por el mismo motivo: no hay runtime que atacar.
