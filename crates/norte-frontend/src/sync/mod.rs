@@ -1342,7 +1342,7 @@ mod tests {
         assert_eq!(v.run, SyncRunState::Failed);
         assert_eq!(
             c,
-            crate::error::error_category(&norte_proto::Error::NotFound)
+            crate::error::error_category_in(Lang::En, &norte_proto::Error::NotFound)
         );
 
         // El error de la TASK manda sobre el del informe.
@@ -1358,7 +1358,7 @@ mod tests {
             .expect("un fallo trae su categoría");
         assert_eq!(
             c,
-            crate::error::error_category(&norte_proto::Error::PermissionDenied)
+            crate::error::error_category_in(Lang::En, &norte_proto::Error::PermissionDenied)
         );
 
         // Un estado NO terminal también es fallo: solo se llega a él con los
