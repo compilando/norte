@@ -440,7 +440,7 @@ degraded-reason-unknown = unknown reason
 # text, already masked.
 msg-plugin-notice = ⚑ { $plugin }: { $text }
 msg-plugin-hooks-disabled = ⚑ { $plugin }: its hooks were switched off after three failures in a row — disable and re-enable it in the extension manager to try again
-msg-plugin-effect-denied = ⚑ { $plugin }: your policy denied a file this plugin asked to write (rule for actor "plugin"); it will not be asked again this session
+msg-plugin-effect-denied = ⚑ { $plugin }: your policy denied a file this plugin asked to write (rule for actor "plugin"); said once while norte runs
 status-connection-failed = ✗ could not connect
 status-failed-subject = { $banner } — scheme { $scheme }, host { $host } ({ $reason })
 failed-reason-secret-missing = the secret is missing

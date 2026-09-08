@@ -18,9 +18,9 @@ independently through `PROTOCOL_VERSION`.
   `actor = "plugin", action = "deny"` stops it, and the reader is told once
   with the new `plugin.notice` kind `effect-denied`; an `ask` rule on a
   plugin is a deny) and through the journal (`created`; `replace` trashes
-  the previous file first, so its content has a way back). The guest is also
-  told how many events the queue dropped since its last call. Approval shows
-  `fs-write:<name>` badges. `org.norte.rename-log` now keeps a
+  the previous file first, so its content has a way back; a directory with
+  the name is never touched). Rows a plugin writes never come back to any
+  hook as events. Approval shows `fs-write:<name>` badges. `org.norte.rename-log` now keeps a
   `.norte-renames.log` next to what it renamed, carrying the previous log
   forward. A 0.69 client ignores the new notice kind.
 - **Operation hooks: a plugin can observe what the journal recorded, and

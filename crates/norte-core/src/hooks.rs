@@ -65,7 +65,8 @@ pub struct HookEvent {
     pub actor_kind: String,
     /// Path afectado (bytes `to_wire`).
     pub path: Vec<u8>,
-    /// Destino de un `renamed` / modo nuevo de un `mode_changed`.
+    /// El nombre que HABÍA en un `renamed` (el journal guarda el nuevo en
+    /// `path`) / el modo nuevo de un `mode_changed`.
     pub path_to: Option<Vec<u8>>,
     /// Lote, si formó parte de uno.
     pub batch_id: Option<i64>,
@@ -147,12 +148,18 @@ pub struct SidecarWriter {
     pub engine: std::sync::Weak<crate::Engine>,
     /// El registro de scopes del daemon, si lo hay.
     pub scopes: Option<ScopeRegistry>,
+    /// Las reglas de `policy.toml` cuando el engine NO lleva gate (modo
+    /// embebido): se evalúan aquí para el actor `plugin`, para que la regla
+    /// `actor = "plugin", action = "deny"` valga en el TUI igual que en el
+    /// daemon. `None` = sin fichero, y sin fichero un plugin aprobado escribe
+    /// (su regla es el manifiesto, ADR 0101).
+    pub policy: Option<Arc<crate::PolicyConfig>>,
 }
 
 /// Cuánto vive el scope transitorio que se le concede a un plugin para UNA
-/// escritura: lo que tarda la task en encolarse y pasar el gate. El gate se
-/// evalúa al encolar, así que treinta segundos es holgado.
-const SIDECAR_SCOPE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+/// escritura si algo impidiera revocarlo: el gate se evalúa al encolar, así
+/// que la puerta se cierra con `revoke_all` nada más volver, y esto es la red.
+const SIDECAR_SCOPE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Un sidecar ya validado por el despachador, pendiente de que el engine lo
 /// escriba: el guest pidió `name` junto al evento `seq`; esto es a dónde va.
@@ -362,15 +369,20 @@ pub fn spawn_dispatcher(
                 out = work => out,
             };
             match out {
-                Ok((notices, writes)) => {
+                Ok((notices, pending)) => {
                     for n in notices {
                         sink.notice(n);
                     }
                     // Las escrituras van DESPUÉS de las frases y en el lado
                     // async: cada una es una Task del engine que pasa por el
                     // gate y por el journal como actor `plugin`.
-                    for w in writes {
-                        let denied = apply_write(writer.as_ref(), w).await;
+                    // Secuenciales a propósito: el e2e cuenta con que la tanda
+                    // N+1 no se drena hasta que las escrituras de N acabaron.
+                    for w in pending {
+                        let denied = tokio::select! {
+                            () = cancel.cancelled() => return,
+                            d = apply_write(writer.as_ref(), w) => d,
+                        };
                         if let Some(id) = denied {
                             let first = state
                                 .lock()
@@ -404,18 +416,49 @@ async fn apply_write(writer: Option<&SidecarWriter>, w: PendingWrite) -> Option<
         tracing::debug!(plugin = %w.plugin_id, "sidecar: sin escritor, se descarta");
         return None;
     };
-    let Some(engine) = writer.engine.upgrade() else {
-        return None;
-    };
+    let engine = writer.engine.upgrade()?;
     let actor = crate::journal::Actor::Plugin {
         id: w.plugin_id.clone(),
     };
-    // El scope transitorio: el directorio del evento, crear y enterrar, y
-    // un TTL que sobra. Sin él, el gate del daemon deniega `OutOfScope` — un
-    // plugin no tiene sesión que pida scopes.
-    if let Some(scopes) = &writer.scopes {
+    // Sin gate en el engine (embebido), las reglas del humano se miran aquí:
+    // un `deny` o un `ask` sobre el actor `plugin` es no; sin regla, el
+    // manifiesto aprobado es la regla.
+    if writer.scopes.is_none()
+        && let Some(policy) = &writer.policy
+    {
+        use crate::policy::{Decision, DenyReason, PolicyOp};
+        let ops: &[PolicyOp] = if w.on_exists == crate::ops::OnExists::Replace {
+            &[
+                PolicyOp::Create,
+                PolicyOp::Delete {
+                    mode: norte_proto::DeleteMode::Trash,
+                },
+            ]
+        } else {
+            &[PolicyOp::Create]
+        };
+        for op in ops {
+            match policy.decide(&actor, *op, &[&w.path]) {
+                Decision::Allow | Decision::Deny(DenyReason::NoRule) => {}
+                Decision::Deny(reason) => {
+                    tracing::info!(plugin = %w.plugin_id, ?reason, "sidecar: denegado por policy (embebido)");
+                    return Some(w.plugin_id);
+                }
+                Decision::Ask => {
+                    tracing::info!(plugin = %w.plugin_id, "sidecar: la policy pide confirmación a un plugin: denegado");
+                    return Some(w.plugin_id);
+                }
+            }
+        }
+    }
+    // El scope transitorio: el directorio del evento, crear y enterrar, bajo
+    // la clave del plugin (`plugin:<id>`, nunca la de un agente). Se revoca
+    // nada más volver; el TTL es la red. Sin él, el gate del daemon deniega
+    // `OutOfScope` — un plugin no tiene sesión que pida scopes.
+    let key = crate::policy::scope_key(&actor).map(std::borrow::Cow::into_owned);
+    if let (Some(scopes), Some(key)) = (&writer.scopes, &key) {
         scopes.grant(
-            &w.plugin_id,
+            key,
             Scope {
                 roots: vec![w.parent.clone()],
                 ops: OpSet::of(&["create", "delete"]),
@@ -423,10 +466,13 @@ async fn apply_write(writer: Option<&SidecarWriter>, w: PendingWrite) -> Option<
             },
         );
     }
-    match engine
+    let queued = engine
         .write_file_as(&w.path, w.content, w.on_exists, actor)
-        .await
-    {
+        .await;
+    if let (Some(scopes), Some(key)) = (&writer.scopes, &key) {
+        scopes.revoke_all(key);
+    }
+    match queued {
         Ok(handle) => {
             match handle.join().await {
                 norte_proto::TaskState::Completed => {}
@@ -515,6 +561,12 @@ fn to_wire_events(
     let mut out = Vec::new();
     for ev in batch {
         if ev.ts_ms < since_ms {
+            continue;
+        }
+        // Lo que escribe un plugin —un sidecar— no vuelve como evento a
+        // ningún hook: un hook que escuchara `after-created` y escribiera
+        // un sidecar se llamaría a sí mismo para siempre (ADR 0101).
+        if ev.actor_kind == "plugin" {
             continue;
         }
         let Some(name) = event_name_for(&ev.op) else {
@@ -631,23 +683,22 @@ fn dispatch_batch(
     let protected = crate::policy::protected_roots();
     let now = Instant::now();
     let now_ms = now_ms();
+    // Un acuñador por tanda: acuña tokens para los hooks con `location` y
+    // conoce el techo (`$HOME`, `/`) que ni se lee ni se escribe.
+    let mint = LocationMint::new(norte_vfs_local::Bounds::default());
     for (resolved, ons) in hooks {
         let (id, _name, wasm, caps, settings) = resolved;
         if state.fuse.is_disabled(&id) {
             continue;
         }
         let since = *state.first_seen.entry(id.clone()).or_insert(now_ms);
-        let mint = caps
-            .location
-            .granted()
-            .then(|| LocationMint::new(norte_vfs_local::Bounds::default()));
-        let (events, _sessions) = to_wire_events(batch, &ons, since, &protected, mint.as_ref());
+        let location_mint = caps.location.granted().then_some(&mint);
+        let (events, _sessions) = to_wire_events(batch, &ons, since, &protected, location_mint);
         if events.is_empty() {
             continue;
         }
-        let host: Option<Arc<dyn norte_plugin_host::LocationHost>> = mint
-            .as_ref()
-            .map(|m| Arc::clone(m) as Arc<dyn norte_plugin_host::LocationHost>);
+        let host: Option<Arc<dyn norte_plugin_host::LocationHost>> =
+            location_mint.map(|m| Arc::clone(m) as Arc<dyn norte_plugin_host::LocationHost>);
         let sidecar_names = caps.fs_write.sidecar_names().to_vec();
         let outcome = ensure_live(state, runtime, &id, &wasm, caps).and_then(|live| {
             live.inst.set_location(host);
@@ -668,6 +719,7 @@ fn dispatch_batch(
                     &events,
                     &sidecar_names,
                     &protected,
+                    &mint,
                 );
                 notices.extend(spoken.notices);
                 writes.extend(spoken.writes);
@@ -751,6 +803,10 @@ struct Spoken {
 /// por plugin y tanda, dentro del cupo del plugin (el resto se cuenta, no se
 /// pinta); y un sidecar por cada `write-sidecar` cuyo nombre esté en el
 /// manifiesto y cuyo `seq` sea un evento de ESTA llamada con padre abrible.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "los contextos de una llamada al guest; una struct los escondería"
+)]
 fn speak(
     state: &mut State,
     id: &str,
@@ -759,6 +815,7 @@ fn speak(
     events: &[hook_iface::Event],
     sidecar_names: &[String],
     protected: &[norte_proto::VPath],
+    ceiling: &LocationMint,
 ) -> Spoken {
     let mut out = Spoken::default();
     let mut dropped_effects = 0u32;
@@ -780,8 +837,8 @@ fn speak(
                 });
             }
             hook_iface::Effect::WriteSidecar(sc) => {
-                match sidecar_target(&sc, events, sidecar_names, protected) {
-                    Some((parent, path)) => out.writes.push(PendingWrite {
+                match sidecar_target(&sc, events, sidecar_names, protected, ceiling) {
+                    Ok((parent, path)) => out.writes.push(PendingWrite {
                         plugin_id: id.to_owned(),
                         parent,
                         path,
@@ -791,7 +848,12 @@ fn speak(
                             hook_iface::OnExists::Replace => crate::ops::OnExists::Replace,
                         },
                     }),
-                    None => out.malformed = true,
+                    // Culpa del guest: cuenta. Del entorno: se descarta y se
+                    // dice en el registro.
+                    Err(SidecarFault::Guest) => out.malformed = true,
+                    Err(SidecarFault::Environment) => {
+                        tracing::debug!(plugin = %id, "sidecar: sin sitio donde escribirlo");
+                    }
                 }
             }
         }
@@ -802,35 +864,53 @@ fn speak(
     out
 }
 
-/// A dónde va un sidecar: `(padre, padre/nombre)`, o `None` si el efecto no
-/// vale — nombre fuera del manifiesto, `seq` que no es de esta llamada, un
-/// evento sin padre, un padre protegido o remoto.
+/// Por qué un sidecar no tiene sitio: culpa del guest —cuenta contra el
+/// fusible— o del entorno —no cuenta—.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidecarFault {
+    /// Nombre fuera del manifiesto, o `seq` que no es de esta llamada.
+    Guest,
+    /// Un evento sin padre escribible: remoto, protegido, la casa, la raíz.
+    Environment,
+}
+
+/// A dónde va un sidecar: `(padre, padre/nombre)`. El nombre se vuelve a
+/// validar aquí aunque el manifiesto ya lo hizo: es el único sitio entre el
+/// guest y el disco.
 fn sidecar_target(
     sc: &hook_iface::Sidecar,
     events: &[hook_iface::Event],
     sidecar_names: &[String],
     protected: &[norte_proto::VPath],
-) -> Option<(norte_proto::VPath, norte_proto::VPath)> {
-    if !sidecar_names
+    ceiling: &LocationMint,
+) -> Result<(norte_proto::VPath, norte_proto::VPath), SidecarFault> {
+    let Some(name) = sidecar_names
         .iter()
-        .any(|n| n.as_bytes() == sc.name.as_slice())
-    {
-        return None;
+        .find(|n| n.as_bytes() == sc.name.as_slice())
+    else {
+        return Err(SidecarFault::Guest);
+    };
+    if !norte_plugin_host::is_valid_sidecar_name(name) {
+        return Err(SidecarFault::Guest);
     }
-    let ev = events.iter().find(|e| e.seq == sc.seq)?;
-    let vpath = norte_proto::VPath::parse(&ev.path).ok()?;
-    let parent = vpath.parent()?;
+    let ev = events
+        .iter()
+        .find(|e| e.seq == sc.seq)
+        .ok_or(SidecarFault::Guest)?;
+    let vpath = norte_proto::VPath::parse(&ev.path).map_err(|_| SidecarFault::Environment)?;
+    let parent = vpath.parent().ok_or(SidecarFault::Environment)?;
     if parent.scheme() != "file"
         || parent.authority().is_some()
         || protected
             .iter()
             .any(|root| crate::policy::is_under(root, &parent))
+        || ceiling.is_ceiling(&parent)
     {
-        return None;
+        return Err(SidecarFault::Environment);
     }
-    let segment = norte_proto::Segment::new(sc.name.clone()).ok()?;
+    let segment = norte_proto::Segment::new(sc.name.clone()).map_err(|_| SidecarFault::Guest)?;
     let path = parent.join(segment);
-    Some((parent, path))
+    Ok((parent, path))
 }
 
 /// Las dos clases de aviso, las MISMAS cadenas que el proto declara en
@@ -1023,17 +1103,21 @@ mod tests {
 
     #[test]
     fn un_sidecar_va_junto_a_su_evento_y_solo_con_nombre_del_manifiesto() {
-        let ev = hook_iface::Event {
-            seq: 9,
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = norte_vfs_local::vpath_from_native(dir.path()).expect("vpath");
+        let en = |name: &str| format!("{}/{name}", root.to_wire());
+        let ev = |seq: u64, path: String| hook_iface::Event {
+            seq,
             ts_ms: 0,
             op: hook_iface::Op::Renamed,
             actor: hook_iface::ActorKind::User,
-            path: "file:///d/x.txt".to_owned(),
+            path,
             path_to: None,
             name: b"x.txt".to_vec(),
             batch: None,
             location: None,
         };
+        let events = vec![ev(9, en("x.txt")), ev(10, "file:///top.txt".to_owned())];
         let names = vec![".norte-renames.log".to_owned()];
         let sc = |seq: u64, name: &str| hook_iface::Sidecar {
             seq,
@@ -1041,37 +1125,61 @@ mod tests {
             content: b"x".to_vec(),
             if_exists: hook_iface::OnExists::Replace,
         };
-        let ok = sidecar_target(
-            &sc(9, ".norte-renames.log"),
-            std::slice::from_ref(&ev),
-            &names,
-            &[],
-        )
-        .expect("válido");
-        assert_eq!(ok.0.to_wire(), "file:///d");
-        assert_eq!(ok.1.to_wire(), "file:///d/.norte-renames.log");
-        assert!(
-            sidecar_target(&sc(9, "otro.log"), std::slice::from_ref(&ev), &names, &[]).is_none()
+        let mint = LocationMint::with_protected_and_home(
+            vec![],
+            norte_vfs_local::Bounds::default(),
+            Some(dir.path().join("elsewhere")),
         );
-        assert!(
-            sidecar_target(
-                &sc(8, ".norte-renames.log"),
-                std::slice::from_ref(&ev),
-                &names,
-                &[]
-            )
-            .is_none()
+        let ok = sidecar_target(&sc(9, ".norte-renames.log"), &events, &names, &[], &mint)
+            .expect("válido");
+        assert_eq!(ok.0.to_wire(), root.to_wire());
+        assert_eq!(ok.1.to_wire(), en(".norte-renames.log"));
+        // Culpa del guest: nombre fuera del manifiesto, `seq` ajeno.
+        assert_eq!(
+            sidecar_target(&sc(9, "otro.log"), &events, &names, &[], &mint),
+            Err(SidecarFault::Guest)
         );
-        let protegida = norte_proto::VPath::parse("file:///d").expect("vpath");
-        assert!(
+        assert_eq!(
+            sidecar_target(&sc(8, ".norte-renames.log"), &events, &names, &[], &mint),
+            Err(SidecarFault::Guest)
+        );
+        // Del entorno: la raíz del sistema es techo; una raíz protegida no se
+        // escribe; y la casa tampoco.
+        assert_eq!(
+            sidecar_target(&sc(10, ".norte-renames.log"), &events, &names, &[], &mint),
+            Err(SidecarFault::Environment)
+        );
+        assert_eq!(
             sidecar_target(
                 &sc(9, ".norte-renames.log"),
-                std::slice::from_ref(&ev),
+                &events,
                 &names,
-                &[protegida]
-            )
-            .is_none()
+                std::slice::from_ref(&root),
+                &mint
+            ),
+            Err(SidecarFault::Environment)
         );
+        let home = LocationMint::with_protected_and_home(
+            vec![],
+            norte_vfs_local::Bounds::default(),
+            Some(dir.path().to_path_buf()),
+        );
+        assert_eq!(
+            sidecar_target(&sc(9, ".norte-renames.log"), &events, &names, &[], &home),
+            Err(SidecarFault::Environment)
+        );
+    }
+
+    /// Lo que escribe un plugin no vuelve a ningún hook: sin esto, un hook
+    /// en `after-created` que escribiera un sidecar se llamaría a sí mismo.
+    #[test]
+    fn las_filas_de_un_plugin_no_son_eventos() {
+        let mut propia = ev(1, "created", "file:///a/.norte-renames.log");
+        propia.actor_kind = "plugin".to_owned();
+        let batch = vec![propia, ev(2, "created", "file:///a/b.txt")];
+        let (out, _) = to_wire_events(&batch, &["after-created".to_owned()], 0, &[], None);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].seq, 2);
     }
 
     struct Nadie;

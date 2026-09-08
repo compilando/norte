@@ -2163,24 +2163,42 @@ impl Backend {
                     }
                 };
                 let (tx, rx) = mpsc::unbounded_channel();
-                // Sin token de cancelación propio: la vida del despachador
-                // embebido es la del receptor (`is_closed`), y el proceso
-                // que lo hospeda termina con él.
-                let (sender, _task) = crate::hooks::spawn_dispatcher(
-                    crate::connect::config_dir(),
-                    runtime,
-                    Arc::new(ChannelHookSink { tx }),
-                    tokio_util::sync::CancellationToken::new(),
-                    Some(crate::hooks::SidecarWriter {
-                        engine: Arc::downgrade(engine),
-                        scopes: None,
-                    }),
-                );
                 // Enchufar el journal es `async` (el perezoso guarda el
-                // extremo bajo su lock); una mutación que se adelante a esta
-                // task queda sin hook, y es el arranque: no hay ninguna.
+                // extremo bajo su lock) y leer `policy.toml` es I/O (regla 2):
+                // las dos cosas en una task. Una mutación que se adelante
+                // queda sin hook, y es el arranque: no hay ninguna. Sin token
+                // de cancelación propio: la vida del despachador embebido es
+                // la del receptor (`is_closed`), y el proceso que lo hospeda
+                // termina con él.
                 let engine = Arc::clone(engine);
-                tokio::spawn(async move { engine.enable_hooks(sender).await });
+                tokio::spawn(async move {
+                    // Las reglas del humano valen también aquí (ADR 0101): el
+                    // engine embebido no lleva gate, así que el despachador
+                    // las mira para el actor `plugin`. Un fichero ilegible se
+                    // dice y equivale a ninguno.
+                    let policy = tokio::task::spawn_blocking(crate::PolicyConfig::load)
+                        .await
+                        .ok()
+                        .and_then(|r| match r {
+                            Ok(p) => Some(Arc::new(p)),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "hooks: policy.toml ilegible, sin reglas");
+                                None
+                            }
+                        });
+                    let (sender, _task) = crate::hooks::spawn_dispatcher(
+                        crate::connect::config_dir(),
+                        runtime,
+                        Arc::new(ChannelHookSink { tx }),
+                        tokio_util::sync::CancellationToken::new(),
+                        Some(crate::hooks::SidecarWriter {
+                            engine: Arc::downgrade(&engine),
+                            scopes: None,
+                            policy,
+                        }),
+                    );
+                    engine.enable_hooks(sender).await;
+                });
                 Some(rx)
             }
             #[cfg(unix)]

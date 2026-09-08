@@ -1115,11 +1115,17 @@ use crate::{
 /// escribe como actor `plugin` por el policy engine, y si una regla del
 /// humano lo deniega se le dice una vez por plugin. Sin `text`.
 ///
+/// En el mismo bump, [`PluginInfo::capabilities`] —lista abierta— deja de
+/// llevar el badge fijo `fs-write` y lleva uno por nombre, `fs-write:<nombre>`
+/// (como `provider:<scheme>` y `location-root:<marca>`).
+///
 /// Ventana N=0.70.x / N-1=0.69.x. Aditivo: la forma de `PluginNotice` no
 /// cambia. La pérdida, para un **cliente 0.69 contra un daemon 0.70**: ve un
 /// `kind` que no conoce y sin `text`, y lo descarta como el contrato manda —
 /// no se entera de que su propia policy está impidiendo que un plugin
-/// escriba. Un cliente 0.70 contra un daemon 0.69 no negocia.
+/// escriba; y un cliente que tratara el badge exacto `fs-write` de forma
+/// especial deja de hacerlo. Un cliente 0.70 contra un daemon 0.69 no
+/// negocia.
 pub const PROTOCOL_VERSION: &str = "0.70.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
@@ -2093,6 +2099,7 @@ pub const PLUGIN_NOTICE: &str = "plugin.notice";
 /// use norte_proto::methods::PLUGIN_NOTICE_KINDS;
 /// assert!(PLUGIN_NOTICE_KINDS.contains(&"notify"));
 /// assert!(PLUGIN_NOTICE_KINDS.contains(&"hooks-disabled"));
+/// assert!(PLUGIN_NOTICE_KINDS.contains(&"effect-denied"));
 /// ```
 pub const PLUGIN_NOTICE_KINDS: &[&str] = &["notify", "hooks-disabled", "effect-denied"];
 

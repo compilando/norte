@@ -97,25 +97,26 @@ pub enum FsWriteCap {
     /// Una cadena (`"scoped"` u otra): se rechaza al validar el manifiesto.
     Reserved(String),
     /// `fs-write = { sidecar = ["a", "b"] }`: los nombres, tal cual.
-    Sidecar {
-        /// Nombres de fichero, un segmento cada uno. Validados en el
-        /// manifiesto, no aquí.
-        sidecar: Vec<String>,
-    },
+    Sidecar(SidecarList),
+}
+
+/// La tabla de `fs-write`: una sola clave, y ninguna otra — entra en el
+/// digest de aprobación, así que una clave desconocida es un manifiesto
+/// inválido, no un campo que se ignora.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SidecarList {
+    /// Nombres de fichero, un segmento cada uno. Validados en el manifiesto,
+    /// no aquí.
+    pub sidecar: Vec<String>,
 }
 
 impl FsWriteCap {
-    /// `true` si concede algún acceso (para pintar el badge).
-    #[must_use]
-    pub fn granted(&self) -> bool {
-        matches!(self, FsWriteCap::Sidecar { sidecar } if !sidecar.is_empty())
-    }
-
     /// Los nombres de sidecar concedidos; vacío si no hay escritura.
     #[must_use]
     pub fn sidecar_names(&self) -> &[String] {
         match self {
-            FsWriteCap::Sidecar { sidecar } => sidecar,
+            FsWriteCap::Sidecar(l) => &l.sidecar,
             _ => &[],
         }
     }
@@ -132,10 +133,15 @@ impl FsWriteCap {
             // Nunca llega al digest: se rechaza antes. El byte existe para
             // que, si llegara, no colisionara con `None`.
             FsWriteCap::Reserved(_) => h.update([1u8]),
-            FsWriteCap::Sidecar { sidecar } => {
+            FsWriteCap::Sidecar(l) => {
                 h.update([2u8]);
-                h.update((sidecar.len() as u64).to_le_bytes());
-                for n in sidecar {
+                // Un CONJUNTO, como los hosts de `net`: reordenar dos nombres
+                // en el TOML no es cambiar lo aprobado.
+                let mut names: Vec<&str> = l.sidecar.iter().map(String::as_str).collect();
+                names.sort_unstable();
+                names.dedup();
+                h.update((names.len() as u64).to_le_bytes());
+                for n in names {
                     update_str(h, n);
                 }
             }

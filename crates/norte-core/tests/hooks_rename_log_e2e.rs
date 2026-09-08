@@ -207,7 +207,6 @@ fn count_of(text: Option<&str>) -> usize {
 #[cfg(unix)]
 async fn daemon_over(
     cfg: &Path,
-    files: &Path,
     deny_plugins: bool,
 ) -> (
     norte_core::backend::Backend,
@@ -250,7 +249,6 @@ async fn daemon_over(
     // location mint the hook reads through maps `file://` to native paths,
     // and a rooted provider would put the files where the mint cannot see
     // them.
-    let _ = files;
     engine.register_provider(Arc::new(LocalProvider::rooted("/")) as Arc<dyn Provider>);
     let sock_dir = tempfile::tempdir().expect("tempdir daemon");
     let socket = sock_dir.path().join("d.sock");
@@ -328,7 +326,7 @@ async fn a_move_through_the_daemon_becomes_a_plugin_notice_and_a_sidecar() {
     let files = tempfile::tempdir().expect("files dir");
     std::fs::write(files.path().join("foto.jpg"), b"x").expect("write");
     std::fs::write(files.path().join("otra.jpg"), b"y").expect("write");
-    let (backend, mut notices, _run) = daemon_over(cfg.path(), files.path(), false).await;
+    let (backend, mut notices, _run) = daemon_over(cfg.path(), false).await;
     let root = norte_vfs_local::vpath_from_native(files.path())
         .expect("vpath")
         .to_wire();
@@ -385,7 +383,7 @@ async fn a_policy_rule_denies_the_sidecar_and_the_human_is_told_once() {
     let files = tempfile::tempdir().expect("files dir");
     std::fs::write(files.path().join("a.txt"), b"x").expect("write");
     std::fs::write(files.path().join("b.txt"), b"y").expect("write");
-    let (backend, mut notices, _run) = daemon_over(cfg.path(), files.path(), true).await;
+    let (backend, mut notices, _run) = daemon_over(cfg.path(), true).await;
     let root = norte_vfs_local::vpath_from_native(files.path())
         .expect("vpath")
         .to_wire();

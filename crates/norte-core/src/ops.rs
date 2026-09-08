@@ -2702,7 +2702,7 @@ pub(crate) async fn create_task(
     Ok(())
 }
 
-/// Qué hacer si el destino de [`write_task`] ya existe (ADR 0101).
+/// Qué hacer si el destino de `write_task` ya existe (ADR 0101).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnExists {
     /// `Conflict{Exists}`: no se toca nada.
@@ -2733,8 +2733,13 @@ pub(crate) async fn write_task(
         p.entries_total = Some(1);
         p.current = Some(path.clone());
     });
+    let mut buried: Option<Option<VPath>> = None;
     match with_retry(&ctx.cancel, || provider.stat(&path).boxed()).await {
-        Ok(_) if on_exists == OnExists::Refuse => {
+        // Solo se reemplaza UN FICHERO. Un directorio, un enlace o un
+        // dispositivo con el nombre aprobado no son «el sidecar anterior»: el
+        // badge dice «puede escribir un fichero llamado X», no «puede enterrar
+        // tu `.git`».
+        Ok(entry) if on_exists == OnExists::Refuse || entry.kind != EntryKind::File => {
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
             });
@@ -2770,21 +2775,48 @@ pub(crate) async fn write_task(
                 );
                 return Err(e);
             }
+            buried = Some(dest);
         }
         Err(Error::NotFound) => {}
         Err(e) => return Err(e),
     }
-    let mut sink = provider.write(&path).await?;
-    if let Err(e) = sink.write(bytes::Bytes::from(content)).await {
-        let _ = sink.abort().await;
+    // Si el nuevo no llega a publicarse, el anterior vuelve de la papelera:
+    // «reemplazar» que falla a medias no puede dejar el directorio sin
+    // ninguno de los dos. El journal ya tiene la fila `trashed`; la vuelta se
+    // registra como lo que es, para que la cadena cuente la historia entera.
+    let written = write_new(&*provider, &path, content).await;
+    if let Err(e) = written {
+        if let Some(Some(en)) = &buried {
+            match provider.restore_from(en, &path).await {
+                Ok(()) => {
+                    let _ = observer
+                        .on_mutation(&Mutation::Created(&path), &ctx.actor)
+                        .await;
+                }
+                Err(r) => tracing::error!(
+                    error = %r,
+                    "sidecar: el nuevo no se escribió y el anterior no volvió de la papelera"
+                ),
+            }
+        }
         return Err(e);
     }
-    sink.commit().await?;
     observer
         .on_mutation(&Mutation::Created(&path), &ctx.actor)
         .await?;
     ctx.progress.update(|p| p.entries_done = 1);
     Ok(())
+}
+
+/// Abre, escribe y publica `content` en `path`; el staging se aborta si la
+/// escritura falla.
+async fn write_new(provider: &dyn Provider, path: &VPath, content: Vec<u8>) -> Result<(), Error> {
+    let mut sink = provider.write(path).await?;
+    if let Err(e) = sink.write(bytes::Bytes::from(content)).await {
+        let _ = sink.abort().await;
+        return Err(e);
+    }
+    sink.commit().await
 }
 
 /// Cambia los permisos POSIX de un lote de rutas (#314).
@@ -3861,6 +3893,71 @@ mod tests {
                 .is_err(),
             "nada creado bajo cancelación, ni siquiera vacío"
         );
+    }
+
+    /// Regla 3: `write_task` honra el token cancelado antes de tocar nada, y
+    /// un destino que es un DIRECTORIO no se reemplaza (ADR 0101).
+    #[tokio::test]
+    async fn write_task_honra_el_token_cancelado_y_no_reemplaza_un_directorio() {
+        use crate::journal::Actor;
+        use crate::progress::ProgressReporter;
+        use crate::scheduler::TaskCtx;
+        use norte_proto::{Error, TaskId, TaskKind, VPath};
+        use norte_testkit::MemProvider;
+        use norte_vfs::Provider as _;
+        use std::sync::Arc;
+        use tokio_util::sync::CancellationToken;
+
+        let mem = Arc::new(MemProvider::new());
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let (reporter, _rx) = ProgressReporter::new(TaskId::new(1), TaskKind::Create);
+        let ctx = TaskCtx {
+            cancel,
+            progress: Arc::new(reporter),
+            actor: Actor::Plugin {
+                id: "org.x.y".into(),
+            },
+        };
+        let observer: Arc<dyn crate::MutationObserver> = Arc::new(crate::observer::NoopObserver);
+        let p = VPath::parse("mem:///d/.log").expect("wire");
+        let r = super::write_task(
+            mem.clone(),
+            p.clone(),
+            b"x".to_vec(),
+            super::OnExists::Replace,
+            Arc::clone(&observer),
+            &ctx,
+        )
+        .await;
+        assert!(matches!(r, Err(Error::Cancelled)), "{r:?}");
+        assert!(
+            (*mem).stat(&p).await.is_err(),
+            "nada creado bajo cancelación"
+        );
+
+        // Un directorio con el nombre del sidecar: `Conflict`, y sigue ahí.
+        let (reporter, _rx) = ProgressReporter::new(TaskId::new(2), TaskKind::Create);
+        let ctx = TaskCtx {
+            cancel: CancellationToken::new(),
+            progress: Arc::new(reporter),
+            actor: Actor::Plugin {
+                id: "org.x.y".into(),
+            },
+        };
+        let dir = VPath::parse("mem:///dir").expect("wire");
+        (*mem).mkdir(&dir).await.expect("mkdir");
+        let r = super::write_task(
+            mem.clone(),
+            dir.clone(),
+            b"x".to_vec(),
+            super::OnExists::Replace,
+            observer,
+            &ctx,
+        )
+        .await;
+        assert!(matches!(r, Err(Error::Conflict { .. })), "{r:?}");
+        assert!((*mem).stat(&dir).await.is_ok(), "el directorio sigue");
     }
 
     /// Observer que dice que no a TODO: lo que se prueba en las dos siguientes

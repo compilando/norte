@@ -757,11 +757,18 @@ mod tests {
     /// no en la barra de alguien.
     #[test]
     fn toda_clase_declarada_tiene_frase() {
+        // SIN texto: una clase sin traducción cae en el brazo «desconocida sin
+        // texto» y devuelve `None`, que es lo que pone esto en rojo. Con
+        // texto, cualquier clase pinta algo, y no probaría nada.
         for kind in norte_proto::methods::PLUGIN_NOTICE_KINDS {
             let n = norte_proto::methods::PluginNotice {
                 plugin_id: "org.x.y".to_owned(),
                 kind: (*kind).to_owned(),
-                text: Some("t".to_owned()),
+                text: if *kind == "notify" {
+                    Some("t".to_owned())
+                } else {
+                    None
+                },
             };
             for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
                 let l = plugin_notice_line(lang, &n).unwrap_or_else(|| panic!("{kind}"));

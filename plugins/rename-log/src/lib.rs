@@ -86,7 +86,10 @@ mod guest {
             let mut groups: Vec<(String, Vec<u8>, u64, Vec<(String, String)>)> = Vec::new();
             for e in &renamed {
                 let Some(loc) = &e.location else { continue };
-                let line = (e.path_to.clone().unwrap_or_default(), e.path.clone());
+                // A rename without its origin is a row this build cannot
+                // explain; a line starting with " -> " would be a lie.
+                let Some(from) = e.path_to.clone() else { continue };
+                let line = (from, e.path.clone());
                 match groups.iter_mut().find(|g| g.0 == loc.token) {
                     Some(g) => g.3.push(line),
                     None => groups.push((loc.token.clone(), loc.prefix.clone(), e.seq, vec![line])),

@@ -1189,8 +1189,11 @@ fn golden_methods() {
     // 201 → 203 en 0.69.0 (ADR 0100): + `plugin_notice_notify` y
     // `plugin_notice_hooks_disabled`, UNA POR VALOR del vocabulario de `kind`:
     // el frontend decide por igualdad si traduce la clase o pinta el texto.
-    // 203 → 204 en 0.70.0 (ADR 0101): + `plugin_notice_effect_denied`.
-    assert_eq!(fixtures.len(), 204, "[methods.json] fixtures sin caso Rust");
+    // 203 → 205 en 0.70.0 (ADR 0101): + `plugin_notice_effect_denied` y
+    // `plugin_info_with_hook_badges` — los badges `hook:<evento>` y
+    // `fs-write:<nombre>` que un hook enseña al aprobarse; sin fixtura, su
+    // forma en el wire no la congelaba nada.
+    assert_eq!(fixtures.len(), 205, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -2143,6 +2146,31 @@ fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
             version: "0.1.0".into(),
             category: "previewer".into(),
             capabilities: vec!["fs-read".into()],
+            approved: true,
+            enabled: true,
+            description: None,
+            commands: vec![],
+            columns: vec![],
+            has_help: false,
+            manifest_digest: None,
+        },
+    );
+    // ADR 0100/0101: lo que un hook enseña al aprobarse son sus eventos y
+    // los ficheros que puede escribir, en la lista ABIERTA de badges.
+    check_one(
+        fixtures,
+        "plugin_info_with_hook_badges",
+        &PluginInfo {
+            id: "org.norte.rename-log".into(),
+            name: "Rename log".into(),
+            publisher: "norte".into(),
+            version: "0.1.0".into(),
+            category: "hook".into(),
+            capabilities: vec![
+                "location".into(),
+                "hook:after-renamed".into(),
+                "fs-write:.norte-renames.log".into(),
+            ],
             approved: true,
             enabled: true,
             description: None,

@@ -90,18 +90,28 @@ resolves the target as `parent(event.path) / name`; grants the plugin id a
 `{create, delete(trash)}` and a TTL of one drain; and calls the engine's
 new `write_file_as(path, bytes, Actor::Plugin { id })`, which goes through
 `PolicyGate::evaluate` like any agent op, so `policy.toml` rules with
-`actor = "plugin"` apply and `ask` rules are honoured (the request shows in
-`policy.pending` attributed to the plugin). The scope is dropped after the
-drain whatever happened.
+`actor = "plugin"` apply. The scope is keyed `plugin:<id>` — a plugin id is
+also a valid agent session name, and the two must not share a key — and it
+is revoked as soon as the write is queued; the TTL is only the net. Without
+a matching rule a plugin is **allowed** where an agent is denied: its rule
+is the manifest the human approved with the `fs-write:<name>` badge in
+front. In embedded mode, where the engine has no gate, the dispatcher
+evaluates `policy.toml` for the plugin actor itself, so the deny rule means
+the same thing in the TUI and in the daemon.
 
 `write_file_as` is one new core op: create the file with content when it
 does not exist (journal `created`, reversal `delete`); when it exists and
 `if-exists = replace`, trash the old node first (the provider's trash), then
 create — two consecutive journal entries by the plugin actor, reversal
 `restore_trash` + `delete`, so the previous content has a way back; when it
-exists and `refuse`, the effect fails with `Conflict`. Nothing is ever
-overwritten in place. Never under a protected root, never outside `file://`
-in v1. (The two rows do not share a `batch_id`: `Mutation::Created` and
+exists and `refuse`, the effect fails with `Conflict`; so does an existing
+node that is not a regular file — the badge says "a file called X", not
+"your `.git` directory". Nothing is ever overwritten in place. Never under a
+protected root, never when the parent is `$HOME` or `/` (ADR 0100 decision
+5), never outside `file://` in v1. **Rows written by a plugin are never
+delivered to any hook**: a hook on `after-created` that writes a sidecar
+would otherwise call itself forever. (The two rows do not share a
+`batch_id`: `Mutation::Created` and
 `Mutation::Trashed` carry none, and widening the observer for two rows
 nobody undoes as a unit yet was not worth it.)
 
@@ -169,14 +179,16 @@ Option A, when accepted. Concretely:
    above (plus the event `seq` the sidecar sits next to, since one call
    spans several directories). Guests built against 0.1.0 list as
    mismatched until rebuilt (ADR 0094), which is the rule for every package
-   bump.
+   bump. Sidecar names are printable ASCII without path or Windows-reserved
+   characters: they are shown at approval and written to disk.
 2. `[capabilities] fs-write = { sidecar = [names] }` replaces the reserved
    `fs-write = "scoped"`, which is rejected at parse from now on (ADR 0088).
    Names are validated as single segments, non-empty, not `.`/`..`, at most
    16 per manifest, and enter the approval digest and the badge list.
 3. The core gains `Engine::write_file_as(path, bytes, actor)` with the
    create / trash-then-create / refuse semantics above and a 64 KiB cap,
-   journaled as `created` (+ `trashed` in one batch when replacing).
+   journaled as `created` (+ a preceding `trashed` when replacing; if the
+   new file then fails to publish, the old one is restored from the trash).
 4. The dispatcher grants a transient scope per effect (the event's parent,
    ops `create` + `delete`, 30 s) and routes every write through
    `PolicyGate::evaluate` as `Actor::Plugin { id }`. A `deny` is reported

@@ -63,7 +63,7 @@ pub use ops::OnExists;
 pub use plugins::{PluginRegistry, PluginRunError};
 pub use policy::{
     AllowAll, Decision, DenyReason, OpSet, PolicyConfig, PolicyGate, PolicyOp, Scope,
-    ScopeRegistry, ScopedPolicy,
+    ScopeRegistry, ScopedPolicy, scope_key,
 };
 pub use progress::ProgressReporter;
 pub use scheduler::{Priority, Scheduler, TaskBody, TaskCtx, TaskHandle};

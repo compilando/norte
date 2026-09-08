@@ -35,7 +35,7 @@ mod manifest;
 mod runtime;
 mod wit_imports;
 
-pub use capability::{Capabilities, FsWriteCap, LocationCap, NetCap, Scope};
+pub use capability::{Capabilities, FsWriteCap, LocationCap, NetCap, Scope, SidecarList};
 pub use catalog::{
     Catalog, HelpPresence, LoadError, PluginEntry, Tier, verified_child, wasm_digest_of,
 };

@@ -15,9 +15,9 @@
 // versión viaja en el nombre de cada interfaz y subir esto no puede invalidar
 // a los previewers de terceros. Empieza en 0.1.0 y sube por su cuenta.
 //
-// 0.1.0 → 0.2.0 (ADR 0101): `effect` gana `write-sidecar`, y `on-events`
-// recibe `dropped`. Un guest compilado contra 0.1.0 se lista como desfasado
-// hasta recompilar (ADR 0094). 0.1.0 no llegó a ningún tercero.
+// 0.1.0 → 0.2.0 (ADR 0101): `effect` gana `write-sidecar`. Un guest
+// compilado contra 0.1.0 se lista como desfasado hasta recompilar (ADR
+// 0094). 0.1.0 no llegó a ningún tercero.
 package norte:hook@0.2.0;
 
 /// Un observador de mutaciones. Recibe, en cada llamada, las entradas del
@@ -78,7 +78,14 @@ interface hook {
     /// —el host rechaza cualquier otro— y se escribe en el directorio PADRE
     /// del evento `seq` de esta misma llamada. El host lo escribe como actor
     /// `plugin`, por el policy engine y por el journal; el guest nunca ve la
-    /// ruta. `content` como mucho 64 KiB.
+    /// ruta. `content` como mucho 64 KiB, y como mucho cuatro sidecars por
+    /// llamada: pasarse de cualquiera de los dos rechaza la llamada ENTERA y
+    /// cuenta como un fallo para el fusible. Un nombre que no esté en el
+    /// manifiesto, o un `seq` que no sea de esta llamada, cuentan igual; un
+    /// directorio que el host no escribe —remoto, protegido, la casa, la
+    /// raíz— se descarta en silencio y no cuenta. Las filas que escribe un
+    /// plugin NO vuelven como eventos a ningún hook: un sidecar no dispara
+    /// hooks.
     record sidecar {
         seq: u64,
         name: list<u8>,

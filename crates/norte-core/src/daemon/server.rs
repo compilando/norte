@@ -939,6 +939,8 @@ impl Daemon {
             Some(crate::hooks::SidecarWriter {
                 engine: Arc::downgrade(&shared.engine),
                 scopes: Some(shared.scopes.clone()),
+                // Las reglas las aplica el gate del engine; aquí no hacen falta.
+                policy: None,
             }),
         );
         if shared.engine.claim_hooks_slot() {
