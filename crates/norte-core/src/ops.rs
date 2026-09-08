@@ -2702,6 +2702,91 @@ pub(crate) async fn create_task(
     Ok(())
 }
 
+/// Qué hacer si el destino de [`write_task`] ya existe (ADR 0101).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnExists {
+    /// `Conflict{Exists}`: no se toca nada.
+    Refuse,
+    /// Lo que había va a la papelera lógica ANTES de crear el nuevo: dos
+    /// entradas de journal seguidas (`trashed`, `created`), y el contenido
+    /// anterior con vuelta atrás. Nunca se sobrescribe en sitio.
+    Replace,
+}
+
+/// Escribe un fichero con CONTENIDO desde memoria (ADR 0101): lo que un hook
+/// pide como sidecar. Es [`create_task`] con bytes y con una política de
+/// «ya existe» explícita; no lleva ancla porque no viene de un listado.
+#[tracing::instrument(skip_all, fields(path = %path.display_lossy(), ?on_exists, bytes = content.len()))]
+pub(crate) async fn write_task(
+    provider: Arc<dyn Provider>,
+    path: VPath,
+    content: Vec<u8>,
+    on_exists: OnExists,
+    observer: Arc<dyn MutationObserver>,
+    ctx: &TaskCtx,
+) -> Result<(), Error> {
+    if ctx.cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    let observer = crate::observer::pin_for_task(observer).await?;
+    ctx.progress.update(|p| {
+        p.entries_total = Some(1);
+        p.current = Some(path.clone());
+    });
+    match with_retry(&ctx.cancel, || provider.stat(&path).boxed()).await {
+        Ok(_) if on_exists == OnExists::Refuse => {
+            return Err(Error::Conflict {
+                conflict: ConflictKind::Exists,
+            });
+        }
+        Ok(_) => {
+            // Mismo entierro que `delete_task`, misma vuelta atrás si la fila
+            // no llega (#160).
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+            let trash_id =
+                norte_vfs::trash::TrashId::new(now_ms, ctx.progress.snapshot().task_id.get());
+            let dest = trash_retrying(&*provider, &path, &trash_id, &ctx.cancel).await?;
+            if let Err(e) = observer
+                .on_mutation(
+                    &Mutation::Trashed {
+                        path: &path,
+                        dest: dest.as_ref(),
+                    },
+                    &ctx.actor,
+                )
+                .await
+            {
+                let devuelto = match dest.as_ref() {
+                    Some(en) => provider.restore_from(en, &path).await,
+                    None => Err(Error::Unsupported),
+                };
+                tracing::error!(
+                    error = %e,
+                    enterrado = %crate::engine::span_path(&path),
+                    devuelto = devuelto.is_ok(),
+                    "sidecar: se enterró el anterior y su entrada de journal NO llegó",
+                );
+                return Err(e);
+            }
+        }
+        Err(Error::NotFound) => {}
+        Err(e) => return Err(e),
+    }
+    let mut sink = provider.write(&path).await?;
+    if let Err(e) = sink.write(bytes::Bytes::from(content)).await {
+        let _ = sink.abort().await;
+        return Err(e);
+    }
+    sink.commit().await?;
+    observer
+        .on_mutation(&Mutation::Created(&path), &ctx.actor)
+        .await?;
+    ctx.progress.update(|p| p.entries_done = 1);
+    Ok(())
+}
+
 /// Cambia los permisos POSIX de un lote de rutas (#314).
 ///
 /// **Una entrada de journal POR RUTA**, con el modo anterior como reversa, y

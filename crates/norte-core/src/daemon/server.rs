@@ -936,6 +936,10 @@ impl Daemon {
                 shared: Arc::downgrade(&shared),
             }),
             shared.shutdown.clone(),
+            Some(crate::hooks::SidecarWriter {
+                engine: Arc::downgrade(&shared.engine),
+                scopes: Some(shared.scopes.clone()),
+            }),
         );
         if shared.engine.claim_hooks_slot() {
             shared.engine.enable_hooks(hooks_tx).await;

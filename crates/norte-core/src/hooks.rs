@@ -25,6 +25,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::plugins::{LocationMint, LocationSession, PluginRegistry, guest_reason};
+use crate::policy::{OpSet, Scope, ScopeRegistry};
 
 /// Cuántos eventos caben en la cola entre el journal y el despachador. Por
 /// encima, [`HookSender::offer`] descarta el MÁS NUEVO y lo cuenta: la
@@ -133,6 +134,37 @@ pub trait HookNoticeSink: Send + Sync {
     }
 }
 
+/// Por dónde escribe un sidecar (ADR 0101): el engine, como actor `plugin`,
+/// y el registro de scopes al que se le concede el directorio del evento
+/// durante la escritura. `Weak` porque el engine sostiene el journal, que
+/// sostiene el extremo del despachador: un `Arc` aquí sería un ciclo. Sin
+/// registro (modo embebido, sin policy) el gate es `AllowAll` y lo que acota
+/// es lo que el despachador ya comprobó: nombre del manifiesto, padre del
+/// evento, ni protegido ni techo.
+#[derive(Clone)]
+pub struct SidecarWriter {
+    /// El engine que escribe.
+    pub engine: std::sync::Weak<crate::Engine>,
+    /// El registro de scopes del daemon, si lo hay.
+    pub scopes: Option<ScopeRegistry>,
+}
+
+/// Cuánto vive el scope transitorio que se le concede a un plugin para UNA
+/// escritura: lo que tarda la task en encolarse y pasar el gate. El gate se
+/// evalúa al encolar, así que treinta segundos es holgado.
+const SIDECAR_SCOPE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Un sidecar ya validado por el despachador, pendiente de que el engine lo
+/// escriba: el guest pidió `name` junto al evento `seq`; esto es a dónde va.
+#[derive(Debug)]
+struct PendingWrite {
+    plugin_id: String,
+    parent: norte_proto::VPath,
+    path: norte_proto::VPath,
+    content: Vec<u8>,
+    on_exists: crate::ops::OnExists,
+}
+
 /// El fusible por plugin: cuenta fallos SEGUIDOS y apaga al llegar a
 /// [`HOOK_FUSE_FAILURES`]. Puro, sin reloj, para poder probarlo.
 #[derive(Debug, Default)]
@@ -229,6 +261,9 @@ struct State {
     /// no se le entrega.
     first_seen: HashMap<String, i64>,
     buckets: HashMap<String, Bucket>,
+    /// A quién se le dijo ya que la policy le denegó un efecto: una vez por
+    /// plugin y proceso; después, al registro.
+    denied_told: HashSet<String>,
 }
 
 fn now_ms() -> i64 {
@@ -256,6 +291,7 @@ pub fn spawn_dispatcher(
     runtime: Arc<PluginRuntime>,
     sink: Arc<dyn HookNoticeSink>,
     cancel: CancellationToken,
+    writer: Option<SidecarWriter>,
 ) -> (HookSender, tokio::task::JoinHandle<()>) {
     let (tx, mut rx) = mpsc::channel::<HookEvent>(HOOK_QUEUE);
     let sender = HookSender {
@@ -326,9 +362,29 @@ pub fn spawn_dispatcher(
                 out = work => out,
             };
             match out {
-                Ok(notices) => {
+                Ok((notices, writes)) => {
                     for n in notices {
                         sink.notice(n);
+                    }
+                    // Las escrituras van DESPUÉS de las frases y en el lado
+                    // async: cada una es una Task del engine que pasa por el
+                    // gate y por el journal como actor `plugin`.
+                    for w in writes {
+                        let denied = apply_write(writer.as_ref(), w).await;
+                        if let Some(id) = denied {
+                            let first = state
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .denied_told
+                                .insert(id.clone());
+                            if first {
+                                sink.notice(PluginNotice {
+                                    plugin_id: id,
+                                    kind: KIND_EFFECT_DENIED.to_owned(),
+                                    text: None,
+                                });
+                            }
+                        }
                     }
                 }
                 Err(e) => {
@@ -338,6 +394,62 @@ pub fn spawn_dispatcher(
         }
     });
     (sender, task)
+}
+
+/// Escribe UN sidecar por el engine. Devuelve `Some(plugin_id)` si la policy
+/// del humano lo denegó — el único desenlace que se le cuenta al humano; el
+/// resto va al registro. Un `Conflict` con `refuse` es lo que el guest pidió.
+async fn apply_write(writer: Option<&SidecarWriter>, w: PendingWrite) -> Option<String> {
+    let Some(writer) = writer else {
+        tracing::debug!(plugin = %w.plugin_id, "sidecar: sin escritor, se descarta");
+        return None;
+    };
+    let Some(engine) = writer.engine.upgrade() else {
+        return None;
+    };
+    let actor = crate::journal::Actor::Plugin {
+        id: w.plugin_id.clone(),
+    };
+    // El scope transitorio: el directorio del evento, crear y enterrar, y
+    // un TTL que sobra. Sin él, el gate del daemon deniega `OutOfScope` — un
+    // plugin no tiene sesión que pida scopes.
+    if let Some(scopes) = &writer.scopes {
+        scopes.grant(
+            &w.plugin_id,
+            Scope {
+                roots: vec![w.parent.clone()],
+                ops: OpSet::of(&["create", "delete"]),
+                expires_at: Some(Instant::now() + SIDECAR_SCOPE_TTL),
+            },
+        );
+    }
+    match engine
+        .write_file_as(&w.path, w.content, w.on_exists, actor)
+        .await
+    {
+        Ok(handle) => {
+            match handle.join().await {
+                norte_proto::TaskState::Completed => {}
+                norte_proto::TaskState::Failed {
+                    error: norte_proto::Error::Conflict { .. },
+                } => {
+                    tracing::debug!(plugin = %w.plugin_id, "sidecar: ya existe y el guest pidió no tocarlo");
+                }
+                other => {
+                    tracing::warn!(plugin = %w.plugin_id, ?other, "sidecar: la escritura no terminó bien");
+                }
+            }
+            None
+        }
+        Err(norte_proto::Error::PolicyDenied { rule }) => {
+            tracing::info!(plugin = %w.plugin_id, %rule, "sidecar: denegado por policy");
+            Some(w.plugin_id)
+        }
+        Err(e) => {
+            tracing::warn!(plugin = %w.plugin_id, error = %e, "sidecar: el engine no lo aceptó");
+            None
+        }
+    }
 }
 
 /// El nombre del evento del manifiesto para una op del journal, o `None`
@@ -499,13 +611,14 @@ fn dispatch_batch(
     state: &mut State,
     batch: &[HookEvent],
     dropped: u64,
-) -> Vec<PluginNotice> {
+) -> (Vec<PluginNotice>, Vec<PendingWrite>) {
     let mut notices = Vec::new();
+    let mut writes = Vec::new();
     let reg = match PluginRegistry::discover(config_dir) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "hooks: no se pudo leer el registro de plugins");
-            return notices;
+            return (notices, writes);
         }
     };
     let hooks = reg.resolve_hooks();
@@ -535,6 +648,7 @@ fn dispatch_batch(
         let host: Option<Arc<dyn norte_plugin_host::LocationHost>> = mint
             .as_ref()
             .map(|m| Arc::clone(m) as Arc<dyn norte_plugin_host::LocationHost>);
+        let sidecar_names = caps.fs_write.sidecar_names().to_vec();
         let outcome = ensure_live(state, runtime, &id, &wasm, caps).and_then(|live| {
             live.inst.set_location(host);
             live.inst.set_settings(settings);
@@ -546,8 +660,28 @@ fn dispatch_batch(
         });
         match outcome {
             Ok(Ok(effects)) => {
-                state.fuse.record_ok(&id);
-                notices.extend(speak(state, &id, effects, now));
+                let spoken = speak(
+                    state,
+                    &id,
+                    effects,
+                    now,
+                    &events,
+                    &sidecar_names,
+                    &protected,
+                );
+                notices.extend(spoken.notices);
+                writes.extend(spoken.writes);
+                // Un efecto malformado —un nombre fuera del manifiesto, un
+                // `seq` que no está en la llamada— es fallo del guest, aunque
+                // el resto de la llamada valiera.
+                if spoken.malformed {
+                    tracing::warn!(plugin = %id, "hook: efecto malformado");
+                    if state.fuse.record_failure(&id) {
+                        notices.push(disabled_notice(&id));
+                    }
+                } else {
+                    state.fuse.record_ok(&id);
+                }
             }
             Ok(Err(frase)) => {
                 tracing::warn!(plugin = %id, reason = %guest_reason(&frase), "hook: el guest rehusó");
@@ -565,7 +699,7 @@ fn dispatch_batch(
             }
         }
     }
-    notices
+    (notices, writes)
 }
 
 /// La instancia viva de `id`, reutilizada mientras el `.wasm` sea el mismo
@@ -604,15 +738,29 @@ fn ensure_live<'s>(
         .ok_or_else(|| "instancia perdida".to_owned())
 }
 
-/// Los efectos de una llamada convertidos en avisos: UNA frase por plugin y
-/// tanda, y dentro del cupo del plugin; el resto se cuenta, no se pinta.
+/// Lo que sale de los efectos de una llamada.
+#[derive(Default)]
+struct Spoken {
+    notices: Vec<PluginNotice>,
+    writes: Vec<PendingWrite>,
+    /// Algún efecto no valía: cuenta contra el fusible.
+    malformed: bool,
+}
+
+/// Los efectos de una llamada convertidos en avisos y escrituras: UNA frase
+/// por plugin y tanda, dentro del cupo del plugin (el resto se cuenta, no se
+/// pinta); y un sidecar por cada `write-sidecar` cuyo nombre esté en el
+/// manifiesto y cuyo `seq` sea un evento de ESTA llamada con padre abrible.
 fn speak(
     state: &mut State,
     id: &str,
     effects: Vec<hook_iface::Effect>,
     now: Instant,
-) -> Vec<PluginNotice> {
-    let mut out = Vec::new();
+    events: &[hook_iface::Event],
+    sidecar_names: &[String],
+    protected: &[norte_proto::VPath],
+) -> Spoken {
+    let mut out = Spoken::default();
     let mut dropped_effects = 0u32;
     for eff in effects {
         match eff {
@@ -621,15 +769,30 @@ fn speak(
                     .buckets
                     .entry(id.to_owned())
                     .or_insert_with(|| Bucket::new(now));
-                if !out.is_empty() || !bucket.take(now) {
+                if !out.notices.is_empty() || !bucket.take(now) {
                     dropped_effects += 1;
                     continue;
                 }
-                out.push(PluginNotice {
+                out.notices.push(PluginNotice {
                     plugin_id: id.to_owned(),
                     kind: KIND_NOTIFY.to_owned(),
                     text: Some(guest_reason(&text)),
                 });
+            }
+            hook_iface::Effect::WriteSidecar(sc) => {
+                match sidecar_target(&sc, events, sidecar_names, protected) {
+                    Some((parent, path)) => out.writes.push(PendingWrite {
+                        plugin_id: id.to_owned(),
+                        parent,
+                        path,
+                        content: sc.content,
+                        on_exists: match sc.if_exists {
+                            hook_iface::OnExists::Refuse => crate::ops::OnExists::Refuse,
+                            hook_iface::OnExists::Replace => crate::ops::OnExists::Replace,
+                        },
+                    }),
+                    None => out.malformed = true,
+                }
             }
         }
     }
@@ -639,10 +802,42 @@ fn speak(
     out
 }
 
+/// A dónde va un sidecar: `(padre, padre/nombre)`, o `None` si el efecto no
+/// vale — nombre fuera del manifiesto, `seq` que no es de esta llamada, un
+/// evento sin padre, un padre protegido o remoto.
+fn sidecar_target(
+    sc: &hook_iface::Sidecar,
+    events: &[hook_iface::Event],
+    sidecar_names: &[String],
+    protected: &[norte_proto::VPath],
+) -> Option<(norte_proto::VPath, norte_proto::VPath)> {
+    if !sidecar_names
+        .iter()
+        .any(|n| n.as_bytes() == sc.name.as_slice())
+    {
+        return None;
+    }
+    let ev = events.iter().find(|e| e.seq == sc.seq)?;
+    let vpath = norte_proto::VPath::parse(&ev.path).ok()?;
+    let parent = vpath.parent()?;
+    if parent.scheme() != "file"
+        || parent.authority().is_some()
+        || protected
+            .iter()
+            .any(|root| crate::policy::is_under(root, &parent))
+    {
+        return None;
+    }
+    let segment = norte_proto::Segment::new(sc.name.clone()).ok()?;
+    let path = parent.join(segment);
+    Some((parent, path))
+}
+
 /// Las dos clases de aviso, las MISMAS cadenas que el proto declara en
 /// `PLUGIN_NOTICE_KINDS`; un test lo ata.
 const KIND_NOTIFY: &str = "notify";
 const KIND_HOOKS_DISABLED: &str = "hooks-disabled";
+const KIND_EFFECT_DENIED: &str = "effect-denied";
 
 fn disabled_notice(id: &str) -> PluginNotice {
     tracing::warn!(
@@ -678,9 +873,10 @@ mod tests {
         use norte_proto::methods::PLUGIN_NOTICE_KINDS;
         assert!(PLUGIN_NOTICE_KINDS.contains(&KIND_NOTIFY));
         assert!(PLUGIN_NOTICE_KINDS.contains(&KIND_HOOKS_DISABLED));
+        assert!(PLUGIN_NOTICE_KINDS.contains(&KIND_EFFECT_DENIED));
         assert_eq!(
             PLUGIN_NOTICE_KINDS.len(),
-            2,
+            3,
             "una clase nueva llega con su emisor"
         );
     }
@@ -825,6 +1021,59 @@ mod tests {
         assert!(sessions.is_empty());
     }
 
+    #[test]
+    fn un_sidecar_va_junto_a_su_evento_y_solo_con_nombre_del_manifiesto() {
+        let ev = hook_iface::Event {
+            seq: 9,
+            ts_ms: 0,
+            op: hook_iface::Op::Renamed,
+            actor: hook_iface::ActorKind::User,
+            path: "file:///d/x.txt".to_owned(),
+            path_to: None,
+            name: b"x.txt".to_vec(),
+            batch: None,
+            location: None,
+        };
+        let names = vec![".norte-renames.log".to_owned()];
+        let sc = |seq: u64, name: &str| hook_iface::Sidecar {
+            seq,
+            name: name.as_bytes().to_vec(),
+            content: b"x".to_vec(),
+            if_exists: hook_iface::OnExists::Replace,
+        };
+        let ok = sidecar_target(
+            &sc(9, ".norte-renames.log"),
+            std::slice::from_ref(&ev),
+            &names,
+            &[],
+        )
+        .expect("válido");
+        assert_eq!(ok.0.to_wire(), "file:///d");
+        assert_eq!(ok.1.to_wire(), "file:///d/.norte-renames.log");
+        assert!(
+            sidecar_target(&sc(9, "otro.log"), std::slice::from_ref(&ev), &names, &[]).is_none()
+        );
+        assert!(
+            sidecar_target(
+                &sc(8, ".norte-renames.log"),
+                std::slice::from_ref(&ev),
+                &names,
+                &[]
+            )
+            .is_none()
+        );
+        let protegida = norte_proto::VPath::parse("file:///d").expect("vpath");
+        assert!(
+            sidecar_target(
+                &sc(9, ".norte-renames.log"),
+                std::slice::from_ref(&ev),
+                &names,
+                &[protegida]
+            )
+            .is_none()
+        );
+    }
+
     struct Nadie;
     impl HookNoticeSink for Nadie {
         fn notice(&self, _n: PluginNotice) {}
@@ -841,6 +1090,7 @@ mod tests {
             Arc::new(PluginRuntime::new().expect("runtime")),
             Arc::new(Nadie),
             cancel.clone(),
+            None,
         );
         tx.offer(ev(1, "created", "file:///a"));
         cancel.cancel();
@@ -869,6 +1119,7 @@ mod tests {
             Arc::new(PluginRuntime::new().expect("runtime")),
             Arc::new(Cerrado),
             CancellationToken::new(),
+            None,
         );
         tx.offer(ev(1, "created", "file:///a"));
         tokio::time::timeout(std::time::Duration::from_secs(5), task)

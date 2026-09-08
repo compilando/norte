@@ -106,4 +106,4 @@ edits.
 | [0098](0098-profile-start-is-a-seed-and-the-session-wins.md) | `[profile.start]` is a seed in wire form, and the session wins | accepted |
 | [0099](0099-the-window-reloads-what-a-profile-switch-reloads.md) | The window reloads what a profile switch reloads, and says the rest | accepted |
 | [0100](0100-a-hook-observes-what-the-journal-recorded-and-may-only-speak.md) | A hook observes what the journal recorded, and may only speak | accepted |
-| [0101](0101-a-hook-may-write-a-sidecar-through-the-policy-engine-as-a-plugin-actor.md) | A hook may write a sidecar, through the policy engine, as a plugin actor | proposed |
+| [0101](0101-a-hook-may-write-a-sidecar-through-the-policy-engine-as-a-plugin-actor.md) | A hook may write a sidecar, through the policy engine, as a plugin actor | accepted |

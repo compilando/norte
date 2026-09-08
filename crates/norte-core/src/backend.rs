@@ -2171,6 +2171,10 @@ impl Backend {
                     runtime,
                     Arc::new(ChannelHookSink { tx }),
                     tokio_util::sync::CancellationToken::new(),
+                    Some(crate::hooks::SidecarWriter {
+                        engine: Arc::downgrade(engine),
+                        scopes: None,
+                    }),
                 );
                 // Enchufar el journal es `async` (el perezoso guarda el
                 // extremo bajo su lock); una mutación que se adelante a esta

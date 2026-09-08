@@ -117,7 +117,13 @@ sentence for the status bar that norte masks, caps and prefixes with your
 plugin id — one per call, four in a burst, then one per second. With
 `location = "read"` each event also carries a token for the entry's parent
 directory, so you can `stat` the result; never for `$HOME` or `/`. A hook
-may not declare `net`. Fail three calls in a row — a trap, a timeout, an
+may not declare `net`. With `fs-write = { sidecar = [names] }` a hook may
+also return `write-sidecar { seq, name, content, if-exists }`: norte writes
+`name` (one of the declared ones) in the parent directory of event `seq`, as
+a plugin actor through the policy engine, journaled and undoable —
+`replace` sends the previous file to the trash first. A rule
+`actor = "plugin", action = "deny"` in `policy.toml` stops every such write,
+and the reader is told once (ADR 0101). Fail three calls in a row — a trap, a timeout, an
 `Err` — and norte switches your hooks off and tells the reader; disabling
 and re-enabling the plugin re-arms it. The events you listen to show at
 approval as `hook:after-renamed`-style badges. There is no `before-*`, on
@@ -135,7 +141,7 @@ Absent means denied.
 | Key | Values | What it grants |
 | --- | --- | --- |
 | `fs-read` | `"scoped"` | the `host-log::read-scoped` door: read a blob the host seeded under a token. A previewer gets the file's bytes in `preview-input` without it — declare it only if you call `read-scoped` |
-| `fs-write` | `"scoped"` | reserved; no host door uses it yet |
+| `fs-write` | `{ sidecar = [".norte-renames.log"] }` | **hooks only** (ADR 0101): the exact file names the hook may ask norte to write next to what changed, via `write-sidecar`. norte writes them as a plugin actor through the policy engine and the journal; `replace` trashes the old file first. At most 16 names, 64 KiB each. `"scoped"` is rejected. |
 | `net` | `{ hosts = ["203.0.113.5", "198.51.100.7:8443", "[2001:db8::1]:443"] }` | outbound TCP to exactly those addresses (bare IP = any port). Matched as text against the address the guest connects to, so write IPv6 the way Rust prints it (`::1`, `[::1]:443`). A provider also gets the connection's own `ip:port`, resolved by the host. No DNS: the guest connects by IP. |
 | `location` | `"read"` | `read`, `read-prefix` (at most N bytes — what a header needs), `stat` and `list-dir` under an opaque token for the directory being listed (columns). Every call and every byte is charged against a per-page budget; the guest never learns the path. |
 | `location-root-marker` | `".git"` | with `location`: the host opens the nearest ancestor containing that name instead of the listed directory, and tells you the prefix |

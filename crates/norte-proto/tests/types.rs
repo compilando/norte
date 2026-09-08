@@ -1308,10 +1308,12 @@ fn version_ventana_actual() {
     // 0.69.0 (ADR 0100): un cliente 0.68 descarta `plugin.notice` (ADR 0004).
     // El hook corrió —la fuente es el journal— y su frase no llegó a nadie;
     // tampoco se enteró de que los hooks de un plugin se apagaron.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.69.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.68.0"), "N-1");
+    // 0.70.0 (ADR 0101): un cliente 0.69 descarta el `kind` `effect-denied`
+    // y no se entera de que su policy está impidiendo que un plugin escriba.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.70.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.69.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.67.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.68.9"),
         "N-2 fuera de la ventana"
     );
 }

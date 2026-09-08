@@ -441,6 +441,7 @@ degraded-reason-unknown = motivo desconocido
 # enmascarado.
 msg-plugin-notice = ⚑ { $plugin }: { $text }
 msg-plugin-hooks-disabled = ⚑ { $plugin }: sus hooks se apagaron tras tres fallos seguidos — desactívalo y vuelve a activarlo en el gestor de extensiones para reintentar
+msg-plugin-effect-denied = ⚑ { $plugin }: tu policy denegó un fichero que este plugin pidió escribir (regla para actor "plugin"); no se volverá a avisar en esta sesión
 status-connection-failed = ✗ no se pudo conectar
 status-failed-subject = { $banner } — esquema { $scheme }, host { $host } ({ $reason })
 failed-reason-secret-missing = falta el secreto

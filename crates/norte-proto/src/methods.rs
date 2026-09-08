@@ -1107,7 +1107,20 @@ use crate::{
 /// el journal, no el frontend— y su frase no le llega a nadie; y tampoco se
 /// entera de que los hooks de un plugin se apagaron. Un cliente 0.69 contra
 /// un daemon 0.68 no negocia.
-pub const PROTOCOL_VERSION: &str = "0.69.0";
+///
+/// # 0.70.0 — la policy le dice no a un sidecar (ADR 0101)
+///
+/// Un valor nuevo en [`PLUGIN_NOTICE_KINDS`]: `effect-denied`. Un hook puede
+/// pedir que el daemon escriba un sidecar junto a lo que cambió; el daemon lo
+/// escribe como actor `plugin` por el policy engine, y si una regla del
+/// humano lo deniega se le dice una vez por plugin. Sin `text`.
+///
+/// Ventana N=0.70.x / N-1=0.69.x. Aditivo: la forma de `PluginNotice` no
+/// cambia. La pérdida, para un **cliente 0.69 contra un daemon 0.70**: ve un
+/// `kind` que no conoce y sin `text`, y lo descarta como el contrato manda —
+/// no se entera de que su propia policy está impidiendo que un plugin
+/// escriba. Un cliente 0.70 contra un daemon 0.69 no negocia.
+pub const PROTOCOL_VERSION: &str = "0.70.0";
 
 /// `initialize` — handshake OBLIGATORIO antes de cualquier otro método
 /// (ADR 0011). Rechaza versiones incompatibles (ver
@@ -2081,7 +2094,7 @@ pub const PLUGIN_NOTICE: &str = "plugin.notice";
 /// assert!(PLUGIN_NOTICE_KINDS.contains(&"notify"));
 /// assert!(PLUGIN_NOTICE_KINDS.contains(&"hooks-disabled"));
 /// ```
-pub const PLUGIN_NOTICE_KINDS: &[&str] = &["notify", "hooks-disabled"];
+pub const PLUGIN_NOTICE_KINDS: &[&str] = &["notify", "hooks-disabled", "effect-denied"];
 
 /// Lo que viaja en [`PLUGIN_NOTICE`]: un aviso atribuido a un plugin.
 ///
@@ -2110,8 +2123,10 @@ pub struct PluginNotice {
     /// Qué clase de aviso, vocabulario cerrado [`PLUGIN_NOTICE_KINDS`]:
     /// `"notify"` es una frase del hook (con `text`); `"hooks-disabled"` es
     /// del daemon —los hooks de ese plugin se apagaron hasta reactivarlo tras
-    /// tres fallos seguidos— y va sin `text`. Un valor desconocido se enseña
-    /// como `text` si lo hay y se descarta si no.
+    /// tres fallos seguidos— y va sin `text`; `"effect-denied"` (0.70.0, ADR
+    /// 0101) es del daemon también: la policy del humano denegó un sidecar
+    /// que el plugin pidió escribir, dicho una vez por plugin. Un valor
+    /// desconocido se enseña como `text` si lo hay y se descarta si no.
     pub kind: String,
     /// La frase, ya enmascarada y acotada por el daemon. Ausente para los
     /// avisos del daemon, que el frontend traduce por `kind`.

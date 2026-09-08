@@ -14,7 +14,11 @@
 // Paquete propio, como `norte:renamer` (ADR 0041 decisión 4, ADR 0094): la
 // versión viaja en el nombre de cada interfaz y subir esto no puede invalidar
 // a los previewers de terceros. Empieza en 0.1.0 y sube por su cuenta.
-package norte:hook@0.1.0;
+//
+// 0.1.0 → 0.2.0 (ADR 0101): `effect` gana `write-sidecar`, y `on-events`
+// recibe `dropped`. Un guest compilado contra 0.1.0 se lista como desfasado
+// hasta recompilar (ADR 0094). 0.1.0 no llegó a ningún tercero.
+package norte:hook@0.2.0;
 
 /// Un observador de mutaciones. Recibe, en cada llamada, las entradas del
 /// journal que llegaron desde la anterior y que casan con los eventos de su
@@ -64,13 +68,31 @@ interface hook {
         location: option<location-ref>,
     }
 
-    /// Lo que un hook puede pedir. Hoy una cosa: una frase para el humano,
-    /// que el host enmascara (controles, bidi) y acota antes de enseñarla,
-    /// atribuida al plugin. Escribir un sidecar o tocar un índice sería otra
-    /// variante, pasaría por el policy engine como `actor = plugin`, y es
-    /// otro ADR.
+    /// Qué hacer si el sidecar ya existe. `replace` no sobrescribe en sitio:
+    /// el host lleva el fichero que había a la papelera lógica y crea el
+    /// nuevo, así que el contenido anterior tiene vuelta atrás.
+    enum on-exists { refuse, replace }
+
+    /// Un fichero JUNTO a lo que cambió (ADR 0101): `name` es uno de los
+    /// nombres que el manifiesto declara en `fs-write = { sidecar = [...] }`
+    /// —el host rechaza cualquier otro— y se escribe en el directorio PADRE
+    /// del evento `seq` de esta misma llamada. El host lo escribe como actor
+    /// `plugin`, por el policy engine y por el journal; el guest nunca ve la
+    /// ruta. `content` como mucho 64 KiB.
+    record sidecar {
+        seq: u64,
+        name: list<u8>,
+        content: list<u8>,
+        if-exists: on-exists,
+    }
+
+    /// Lo que un hook puede pedir: una frase para el humano, que el host
+    /// enmascara (controles, bidi) y acota antes de enseñarla, atribuida al
+    /// plugin; o un sidecar. Un efecto que la policy del humano deniega no
+    /// es un fallo del hook: se le dice al humano una vez y se sigue.
     variant effect {
         notify(string),
+        write-sidecar(sidecar),
     }
 
     /// Los eventos desde la última llamada, en orden de `seq`. `dropped` es

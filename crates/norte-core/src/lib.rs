@@ -59,6 +59,7 @@ pub use norte_plugin_host::is_valid_plugin_id;
 /// `norte-vfs-archive` (regla 7: hablan con el core).
 pub use norte_vfs_archive::Limits as ArchiveLimits;
 pub use observer::{Mutation, MutationObserver};
+pub use ops::OnExists;
 pub use plugins::{PluginRegistry, PluginRunError};
 pub use policy::{
     AllowAll, Decision, DenyReason, OpSet, PolicyConfig, PolicyGate, PolicyOp, Scope,

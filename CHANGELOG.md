@@ -9,6 +9,20 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **A hook may write a sidecar** (ADR 0101, protocol **0.70.0**,
+  `norte:hook@0.2.0`). A hook plugin can now return `write-sidecar`: a file
+  with one of the exact names its manifest declares in
+  `fs-write = { sidecar = [...] }` — the only form `fs-write` takes; the old
+  reserved `"scoped"` is rejected — written by the core **as a plugin actor**
+  in the parent directory of the event, through the policy engine (a rule
+  `actor = "plugin", action = "deny"` stops it, and the reader is told once
+  with the new `plugin.notice` kind `effect-denied`; an `ask` rule on a
+  plugin is a deny) and through the journal (`created`; `replace` trashes
+  the previous file first, so its content has a way back). The guest is also
+  told how many events the queue dropped since its last call. Approval shows
+  `fs-write:<name>` badges. `org.norte.rename-log` now keeps a
+  `.norte-renames.log` next to what it renamed, carrying the previous log
+  forward. A 0.69 client ignores the new notice kind.
 - **Operation hooks: a plugin can observe what the journal recorded, and
   say so** (ADR 0100, protocol **0.69.0**). A new plugin kind, `hook`, with
   its own WIT package `norte:hook@0.1.0`: the manifest names the journal

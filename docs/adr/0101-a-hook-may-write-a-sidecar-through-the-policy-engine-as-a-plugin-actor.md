@@ -1,7 +1,7 @@
 # 0101 — A hook may write a sidecar, through the policy engine, as a plugin actor
 
-- Status: proposed
-- Date: 2026-09-08
+- Status: accepted
+- Date: 2026-09-08 (proposed and accepted the same day; built as H2)
 - Decision makers: Oscar González
 - Related: ADR 0100 (hooks observe and may only speak), ADR 0022 (manifest
   and sandbox), ADR 0023 (the journal), ADR 0024 (policy for agents), ADR
@@ -96,12 +96,14 @@ drain whatever happened.
 
 `write_file_as` is one new core op: create the file with content when it
 does not exist (journal `created`, reversal `delete`); when it exists and
-`if-exists = replace`, trash the old node to the logical trash first, then
-create (two entries, one `batch_id`: reversal `restore_trash` + `delete`,
-so undo restores the previous content); when it exists and `refuse`, the
-effect fails with a reason. Nothing is ever overwritten in place. Never
-under a protected root, never when the parent is `$HOME` or `/` (ADR 0100
-decision 5), never outside `file://` in v1.
+`if-exists = replace`, trash the old node first (the provider's trash), then
+create — two consecutive journal entries by the plugin actor, reversal
+`restore_trash` + `delete`, so the previous content has a way back; when it
+exists and `refuse`, the effect fails with `Conflict`. Nothing is ever
+overwritten in place. Never under a protected root, never outside `file://`
+in v1. (The two rows do not share a `batch_id`: `Mutation::Created` and
+`Mutation::Trashed` carry none, and widening the observer for two rows
+nobody undoes as a unit yet was not worth it.)
 
 `PolicyOp::Create` widens its meaning from "an empty file" to "a file, with
 or without content": the permission is the same one — bringing a name into
@@ -112,11 +114,11 @@ Undo: plugin rows belong to the plugin actor. The human's `undo_session`
 does not touch them and does not see them; `norte audit` does. A later
 `plugin.undo <id>` can revert a plugin's rows as a unit if a case appears.
 
-Fuse: a policy `Deny` or a pending `Ask` is a verdict, not a failure of the
-guest, and does not count towards the fuse. It is reported once per plugin
-per drain as a new `plugin.notice` kind, `effect-denied`, rate-limited like
-`notify`. A malformed effect — a name not in the manifest, content over the
-cap, a bad `on-exists` — is the guest's fault and counts.
+Fuse: a policy `Deny` is a verdict, not a failure of the guest, and does
+not count towards the fuse. It is reported **once per plugin per process**
+as a new `plugin.notice` kind, `effect-denied`, and afterwards only to the
+daemon log. A malformed effect — a name not in the manifest, a `seq` that is
+not in the call, content over the cap — is the guest's fault and counts.
 
 - Good: reuses the gate, the scope registry, the journal, the trash, the
   approval digest and the notice channel; nothing new is invented, every
@@ -164,8 +166,10 @@ the TUI's Lua statusbar hook, or an opener.
 Option A, when accepted. Concretely:
 
 1. `norte:hook@0.2.0` adds `write-sidecar` to `effect` with the record
-   above. Guests built against 0.1.0 list as mismatched until rebuilt
-   (ADR 0094), which is the rule for every package bump.
+   above (plus the event `seq` the sidecar sits next to, since one call
+   spans several directories). Guests built against 0.1.0 list as
+   mismatched until rebuilt (ADR 0094), which is the rule for every package
+   bump.
 2. `[capabilities] fs-write = { sidecar = [names] }` replaces the reserved
    `fs-write = "scoped"`, which is rejected at parse from now on (ADR 0088).
    Names are validated as single segments, non-empty, not `.`/`..`, at most
@@ -173,10 +177,14 @@ Option A, when accepted. Concretely:
 3. The core gains `Engine::write_file_as(path, bytes, actor)` with the
    create / trash-then-create / refuse semantics above and a 64 KiB cap,
    journaled as `created` (+ `trashed` in one batch when replacing).
-4. The dispatcher grants a transient scope per effect and routes every
-   write through `PolicyGate::evaluate` as `Actor::Plugin { id }`. Policy
-   verdicts are reported as `plugin.notice` kind `effect-denied`
-   (protocol 0.70.0, additive) and do not trip the fuse.
+4. The dispatcher grants a transient scope per effect (the event's parent,
+   ops `create` + `delete`, 30 s) and routes every write through
+   `PolicyGate::evaluate` as `Actor::Plugin { id }`. A `deny` is reported
+   as `plugin.notice` kind `effect-denied` (protocol 0.70.0, additive),
+   once per plugin per process, and does not trip the fuse. **An `ask` rule
+   on a plugin actor is a deny**: a hook runs unattended, and a pending
+   approval nobody is looking at expires by TTL either way; the log says
+   which rule asked.
 5. Plugin rows are outside the human's undo and inside the audit.
 6. A demo, `plugins/rename-log` grows `after-renamed → .norte-renames.log`
    with `replace`, appending the batch to the previous content it reads
@@ -199,11 +207,11 @@ Option A, when accepted. Concretely:
   because 0.1.0 shipped to nobody; the rule stays that a bump costs every
   guest a rebuild.
 
-## Open before acceptance
+## The two questions that were open, and how they closed
 
-- Whether `effect-denied` should reach the human at all, or only the daemon
-  log: it is the user's own policy speaking, and a notice per denied write
-  could read as the plugin nagging.
-- Whether the `ask` action should be honoured for plugins at all, or mapped
-  to `deny` with a one-time notice: a hook fires unattended, and a pending
-  approval that nobody is looking at expires by TTL either way.
+- `effect-denied` reaches the human **once per plugin per process**, then
+  only the log. Once is what tells the reader why the file they expected is
+  not there; more than once is the plugin nagging about the reader's own
+  rule.
+- `ask` for a plugin actor **is a deny**. Both are one line to flip
+  (`hooks.rs` `denied_told`; `engine.rs` `PolicyChecker::check`).

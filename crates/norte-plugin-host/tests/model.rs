@@ -35,7 +35,7 @@ fn manifiesto_completo_parsea() {
         vec!["text/*", "application/json"]
     );
     assert_eq!(m.capabilities.fs_read, Scope::Scoped);
-    assert_eq!(m.capabilities.fs_write, Scope::None);
+    assert_eq!(m.capabilities.fs_write, norte_plugin_host::FsWriteCap::None);
     assert_eq!(m.capabilities.badges(), vec!["fs-read".to_owned()]);
 }
 
@@ -129,6 +129,65 @@ fn un_hook_escucha_eventos_del_vocabulario_cerrado() {
     assert!(matches!(
         Manifest::from_toml(&en_otra),
         Err(ManifestError::HookOnOtherCategory)
+    ));
+
+    // `fs-write` (ADR 0101): sidecars, solo para hooks, nombres de verdad.
+    let hook_con_sidecar = r#"
+        [plugin]
+        id = "org.demo.log"
+        name = "Log"
+        publisher = "demo"
+        version = "0.1.0"
+        category = "hook"
+        [[contributions.hook]]
+        on = "after-renamed"
+        [capabilities]
+        fs-write = { sidecar = [".norte-renames.log", "renames.json"] }
+    "#;
+    let m = Manifest::from_toml(hook_con_sidecar).expect("sidecars válidos");
+    assert_eq!(
+        m.capabilities.fs_write.sidecar_names(),
+        &[".norte-renames.log".to_owned(), "renames.json".to_owned()]
+    );
+    assert_eq!(
+        m.capabilities.badges(),
+        vec![
+            "fs-write:.norte-renames.log".to_owned(),
+            "fs-write:renames.json".to_owned()
+        ]
+    );
+    // Un control dentro no llega a ser TOML válido, así que se prueba en la
+    // función: el manifiesto lo rechaza antes por otro camino.
+    assert!(!norte_plugin_host::is_valid_sidecar_name("x\u{1b}y"));
+    for malo in ["a/b", "..", ""] {
+        let src = hook_con_sidecar.replace("renames.json", malo);
+        assert!(
+            matches!(
+                Manifest::from_toml(&src),
+                Err(ManifestError::SidecarName(_))
+            ),
+            "{malo:?}"
+        );
+    }
+    let repetido = hook_con_sidecar.replace("renames.json", ".norte-renames.log");
+    assert!(matches!(
+        Manifest::from_toml(&repetido),
+        Err(ManifestError::SidecarName(_))
+    ));
+    let reservado = hook_con_sidecar.replace(
+        r#"fs-write = { sidecar = [".norte-renames.log", "renames.json"] }"#,
+        r#"fs-write = "scoped""#,
+    );
+    assert!(matches!(
+        Manifest::from_toml(&reservado),
+        Err(ManifestError::FsWriteReserved(ref s)) if s == "scoped"
+    ));
+    let en_previewer = hook_con_sidecar
+        .replace(r#"category = "hook""#, r#"category = "previewer""#)
+        .replace("[[contributions.hook]]\n        on = \"after-renamed\"", "");
+    assert!(matches!(
+        Manifest::from_toml(&en_previewer),
+        Err(ManifestError::SidecarNotForCategory)
     ));
 
     // Un hook con red se rechaza: recibe la ruta de cada mutación.
@@ -526,7 +585,7 @@ fn catalogo_descubre_ordena_y_agrupa() {
         version = "0.1.0"
         category = "command"
         [capabilities]
-        fs-write = "scoped"
+        fs-read = "scoped"
     "#,
     );
     // Uno inválido: no debe desaparecer en silencio, va a `errors`.

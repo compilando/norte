@@ -121,6 +121,7 @@ async fn a_rename_in_the_journal_reaches_the_hook_and_the_hook_speaks() {
         Arc::new(PluginRuntime::new().expect("runtime")),
         Arc::new(ChanSink(tx)),
         tokio_util::sync::CancellationToken::new(),
+        None,
     );
     let journal = norte_core::SqliteJournal::open(&cfg.path().join("journal.db"))
         .await
@@ -200,52 +201,76 @@ fn count_of(text: Option<&str>) -> usize {
     n.unwrap_or_else(|| panic!("unexpected sentence {t:?}"))
 }
 
-/// Over the wire: a human moves a file through the daemon, the daemon's
-/// journal records the rename, the hook says so, and `plugin.notice` carries
-/// the sentence to the frontend's channel, attributed to the plugin.
+/// A daemon over `files`, with the plugin dir `cfg`, and a remote backend on
+/// it. With `deny_plugins`, the policy denies every plugin actor and allows
+/// everyone else — the human moves, the hook may not write.
 #[cfg(unix)]
-#[tokio::test]
-async fn a_move_through_the_daemon_becomes_a_plugin_notice() {
+async fn daemon_over(
+    cfg: &Path,
+    files: &Path,
+    deny_plugins: bool,
+) -> (
+    norte_core::backend::Backend,
+    mpsc::UnboundedReceiver<PluginNotice>,
+    tokio::task::JoinHandle<Result<(), norte_core::daemon::DaemonError>>,
+) {
     use norte_core::Engine;
     use norte_core::backend::Backend;
-    use norte_core::daemon::{Daemon, DaemonConfig};
+    use norte_core::daemon::{Daemon, DaemonApprovalResolver, DaemonConfig};
     use norte_proto::methods::ClientInfo;
     use norte_vfs::Provider;
     use norte_vfs_local::LocalProvider;
 
-    let Some(wasm) = build_plugin() else {
-        return;
-    };
-    let cfg = tempfile::tempdir().expect("tempdir");
-    install_and_consent(cfg.path(), &wasm);
-
-    let files = tempfile::tempdir().expect("files dir");
-    std::fs::write(files.path().join("foto.jpg"), b"x").expect("write");
-    // A rooted provider serves `file:///` FROM `files`: the wire path is
-    // relative to the root, not the native one.
-    let from = norte_proto::VPath::parse("file:///foto.jpg").expect("from");
-    let to = norte_proto::VPath::parse("file:///2025_foto.jpg").expect("to");
-
-    let journal = norte_core::SqliteJournal::open(&cfg.path().join("journal.db"))
+    let journal = norte_core::SqliteJournal::open(&cfg.join("journal.db"))
         .await
         .expect("journal");
-    let engine = Arc::new(Engine::with_journal(Arc::new(journal)));
-    engine.register_provider(Arc::new(LocalProvider::rooted(files.path())) as Arc<dyn Provider>);
+    let engine = Engine::with_journal(Arc::new(journal));
+    let scopes = norte_core::ScopeRegistry::new();
+    let approvals = Arc::new(DaemonApprovalResolver::default());
+    let engine = if deny_plugins {
+        let policy = norte_core::PolicyConfig::parse(
+            r#"
+            [[rule]]
+            actor = "plugin"
+            action = "deny"
+            [[rule]]
+            action = "allow"
+            "#,
+        )
+        .expect("policy");
+        engine.with_policy(
+            Arc::new(norte_core::ScopedPolicy::new(scopes.clone(), policy)),
+            Arc::clone(&approvals) as _,
+        )
+    } else {
+        engine
+    };
+    let engine = Arc::new(engine);
+    // The provider serves the REAL filesystem (`file:///tmp/...`): the
+    // location mint the hook reads through maps `file://` to native paths,
+    // and a rooted provider would put the files where the mint cannot see
+    // them.
+    let _ = files;
+    engine.register_provider(Arc::new(LocalProvider::rooted("/")) as Arc<dyn Provider>);
     let sock_dir = tempfile::tempdir().expect("tempdir daemon");
     let socket = sock_dir.path().join("d.sock");
-    let daemon = Daemon::bind(
-        engine,
-        DaemonConfig {
-            socket_path: Some(socket.clone()),
-            idle_timeout: None,
-            listing_ttl: Duration::from_mins(2),
-            plugins_dir: Some(cfg.path().to_path_buf()),
-            state_dir: None,
-        },
-    )
-    .await
+    let daemon_cfg = DaemonConfig {
+        socket_path: Some(socket.clone()),
+        idle_timeout: None,
+        listing_ttl: Duration::from_mins(2),
+        plugins_dir: Some(cfg.to_path_buf()),
+        state_dir: None,
+    };
+    let daemon = if deny_plugins {
+        Daemon::bind_with_policy(engine, scopes, approvals, daemon_cfg).await
+    } else {
+        Daemon::bind(engine, daemon_cfg).await
+    }
     .expect("bind");
-    let _run = tokio::spawn(daemon.run());
+    let run = tokio::spawn(async move {
+        let _keep = sock_dir;
+        daemon.run().await
+    });
     let remote = norte_core::backend::remote::RemoteBackend::connect(
         socket,
         None,
@@ -256,11 +281,22 @@ async fn a_move_through_the_daemon_becomes_a_plugin_notice() {
     )
     .await
     .expect("connect");
-    let mut notices = remote
+    let notices = remote
         .take_plugin_notices()
         .expect("the first owner takes it");
-    let backend = Backend::Remote(remote);
+    (Backend::Remote(remote), notices, run)
+}
 
+#[cfg(unix)]
+async fn move_through(backend: &norte_core::backend::Backend, from: &str, to: &str) {
+    let from = norte_proto::VPath::parse(from).expect("from");
+    let to = norte_proto::VPath::parse(to).expect("to");
+    eprintln!(
+        "MOVE {} -> {} ; stat={:?}",
+        from.to_wire(),
+        to.to_wire(),
+        backend.stat(&from).await.map(|_| ())
+    );
     let task = backend
         .move_(&from, &to, norte_core::TransferOptions::default())
         .await
@@ -273,10 +309,106 @@ async fn a_move_through_the_daemon_becomes_a_plugin_notice() {
         norte_proto::TaskState::Completed,
         "the move finished"
     );
-    assert!(files.path().join("2025_foto.jpg").exists());
+}
 
+/// Over the wire: a human moves a file through the daemon, the daemon's
+/// journal records the rename, the hook says so, and `plugin.notice` carries
+/// the sentence to the frontend's channel, attributed to the plugin. And the
+/// hook's sidecar (ADR 0101) lands next to the file, written by the core as
+/// the plugin actor: the second move's notice arrives only after the first
+/// batch's writes finished, which is the deterministic wait for the file.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_move_through_the_daemon_becomes_a_plugin_notice_and_a_sidecar() {
+    let Some(wasm) = build_plugin() else {
+        return;
+    };
+    let cfg = tempfile::tempdir().expect("tempdir");
+    install_and_consent(cfg.path(), &wasm);
+    let files = tempfile::tempdir().expect("files dir");
+    std::fs::write(files.path().join("foto.jpg"), b"x").expect("write");
+    std::fs::write(files.path().join("otra.jpg"), b"y").expect("write");
+    let (backend, mut notices, _run) = daemon_over(cfg.path(), files.path(), false).await;
+    let root = norte_vfs_local::vpath_from_native(files.path())
+        .expect("vpath")
+        .to_wire();
+    let at = |name: &str| format!("{root}/{name}");
+
+    move_through(&backend, &at("foto.jpg"), &at("2025_foto.jpg")).await;
+    assert!(files.path().join("2025_foto.jpg").exists());
     let n = next_notice(&mut notices).await;
     assert_eq!(n.plugin_id, ID);
     assert_eq!(n.kind, "notify");
     assert_eq!(n.text.as_deref(), Some("renamed 1 file"), "{n:?}");
+
+    move_through(&backend, &at("otra.jpg"), &at("2025_otra.jpg")).await;
+    let n = next_notice(&mut notices).await;
+    assert_eq!(n.kind, "notify", "{n:?}");
+    // By now the first batch's sidecar is written: the dispatcher applies a
+    // batch's writes before it drains the next one.
+    let log = std::fs::read(files.path().join(".norte-renames.log")).expect("the sidecar exists");
+    let log = String::from_utf8(log).expect("utf-8 lines");
+    assert!(
+        log.contains(&format!("{} -> {}\n", at("foto.jpg"), at("2025_foto.jpg"))),
+        "{log:?}"
+    );
+    // The second rename lands in the same log after the next batch: one more
+    // move is the wait, as above.
+    move_through(&backend, &at("2025_otra.jpg"), &at("2026_otra.jpg")).await;
+    let _ = next_notice(&mut notices).await;
+    let log = std::fs::read_to_string(files.path().join(".norte-renames.log")).expect("log");
+    assert!(
+        log.contains(&format!("{} -> {}\n", at("otra.jpg"), at("2025_otra.jpg"))),
+        "{log:?}"
+    );
+    assert!(
+        log.starts_with(&at("foto.jpg")),
+        "the previous content is carried forward: {log:?}"
+    );
+    // Replacing went through the trash, not over the file: the carried-forward
+    // first line above is the proof the guest read the previous log, and the
+    // journal holds a `trashed` row by the plugin actor for it. The trash
+    // itself is the provider's (FreeDesktop), not a folder next to the file.
+}
+
+/// The human's policy has the last word: `actor = "plugin", action = "deny"`
+/// stops the sidecar, the daemon says so ONCE per plugin, and the hook keeps
+/// speaking — a denial is a verdict, not a failure of the guest.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_policy_rule_denies_the_sidecar_and_the_human_is_told_once() {
+    let Some(wasm) = build_plugin() else {
+        return;
+    };
+    let cfg = tempfile::tempdir().expect("tempdir");
+    install_and_consent(cfg.path(), &wasm);
+    let files = tempfile::tempdir().expect("files dir");
+    std::fs::write(files.path().join("a.txt"), b"x").expect("write");
+    std::fs::write(files.path().join("b.txt"), b"y").expect("write");
+    let (backend, mut notices, _run) = daemon_over(cfg.path(), files.path(), true).await;
+    let root = norte_vfs_local::vpath_from_native(files.path())
+        .expect("vpath")
+        .to_wire();
+    let at = |name: &str| format!("{root}/{name}");
+
+    move_through(&backend, &at("a.txt"), &at("a2.txt")).await;
+    let first = next_notice(&mut notices).await;
+    assert_eq!(first.kind, "notify", "{first:?}");
+    let denied = next_notice(&mut notices).await;
+    assert_eq!(denied.kind, "effect-denied", "{denied:?}");
+    assert_eq!(denied.plugin_id, ID);
+    assert_eq!(denied.text, None);
+
+    // Second rename: the sentence again, and NOT a second denial — the next
+    // notice after the second move's `notify` belongs to a third move.
+    move_through(&backend, &at("b.txt"), &at("b2.txt")).await;
+    let n = next_notice(&mut notices).await;
+    assert_eq!(n.kind, "notify", "{n:?}");
+    move_through(&backend, &at("b2.txt"), &at("b3.txt")).await;
+    let n = next_notice(&mut notices).await;
+    assert_eq!(n.kind, "notify", "a denial is told once per plugin: {n:?}");
+    assert!(
+        !files.path().join(".norte-renames.log").exists(),
+        "denied means not written"
+    );
 }

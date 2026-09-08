@@ -3481,7 +3481,7 @@
       "description": "Lo que viaja en [`PLUGIN_NOTICE`]: un aviso atribuido a un plugin.\n\n`text` es TEXTO DE UN TERCERO: el daemon lo enmascara (controles, bidi)\ny lo acota antes de que cruce, y el frontend lo pinta como frase de\nestado, atribuida a `plugin_id`, y jamás lo interpreta. No lleva la ruta\ndel fichero que lo motivó: el hook la tuvo, y si quiso nombrarla la puso\nen la frase.\n\nUn `kind` desconocido se enseña como `text` si lo hay: eso hace que una\nclase FUTURA cuyo texto no deba pintarse tal cual sea un cambio rompedor,\nno aditivo.\n\n```\nuse norte_proto::methods::PluginNotice;\nlet n: PluginNotice = serde_json::from_str(\n    r#\"{\"plugin_id\":\"org.norte.rename-log\",\"kind\":\"hooks-disabled\"}\"#,\n).unwrap();\nassert_eq!(n.text, None);\n```",
       "properties": {
         "kind": {
-          "description": "Qué clase de aviso, vocabulario cerrado [`PLUGIN_NOTICE_KINDS`]:\n`\"notify\"` es una frase del hook (con `text`); `\"hooks-disabled\"` es\ndel daemon —los hooks de ese plugin se apagaron hasta reactivarlo tras\ntres fallos seguidos— y va sin `text`. Un valor desconocido se enseña\ncomo `text` si lo hay y se descarta si no.",
+          "description": "Qué clase de aviso, vocabulario cerrado [`PLUGIN_NOTICE_KINDS`]:\n`\"notify\"` es una frase del hook (con `text`); `\"hooks-disabled\"` es\ndel daemon —los hooks de ese plugin se apagaron hasta reactivarlo tras\ntres fallos seguidos— y va sin `text`; `\"effect-denied\"` (0.70.0, ADR\n0101) es del daemon también: la policy del humano denegó un sidecar\nque el plugin pidió escribir, dicho una vez por plugin. Un valor\ndesconocido se enseña como `text` si lo hay y se descarta si no.",
           "type": "string"
         },
         "plugin_id": {

@@ -1018,6 +1018,10 @@
     ],
     "plugins": []
   },
+  "plugin_notice_effect_denied": {
+    "kind": "effect-denied",
+    "plugin_id": "org.norte.rename-log"
+  },
   "plugin_notice_hooks_disabled": {
     "kind": "hooks-disabled",
     "plugin_id": "org.norte.rename-log"

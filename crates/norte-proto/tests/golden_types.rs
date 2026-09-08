@@ -1189,7 +1189,8 @@ fn golden_methods() {
     // 201 → 203 en 0.69.0 (ADR 0100): + `plugin_notice_notify` y
     // `plugin_notice_hooks_disabled`, UNA POR VALOR del vocabulario de `kind`:
     // el frontend decide por igualdad si traduce la clase o pinta el texto.
-    assert_eq!(fixtures.len(), 203, "[methods.json] fixtures sin caso Rust");
+    // 203 → 204 en 0.70.0 (ADR 0101): + `plugin_notice_effect_denied`.
+    assert_eq!(fixtures.len(), 204, "[methods.json] fixtures sin caso Rust");
 }
 
 /// `log.tail` y `log.level` (0.65.0, #328): el registro del DAEMON.
@@ -2055,7 +2056,10 @@ fn check_methods_plugin_help(fixtures: &BTreeMap<String, Value>) {
 /// `kind` por igualdad para decidir si traduce la clase o pinta `text`.
 fn check_methods_plugin_notice(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{PLUGIN_NOTICE_KINDS, PluginNotice};
-    assert_eq!(PLUGIN_NOTICE_KINDS, &["notify", "hooks-disabled"]);
+    assert_eq!(
+        PLUGIN_NOTICE_KINDS,
+        &["notify", "hooks-disabled", "effect-denied"]
+    );
     check_one(
         fixtures,
         "plugin_notice_notify",
@@ -2072,6 +2076,15 @@ fn check_methods_plugin_notice(fixtures: &BTreeMap<String, Value>) {
         &PluginNotice {
             plugin_id: "org.norte.rename-log".into(),
             kind: "hooks-disabled".into(),
+            text: None,
+        },
+    );
+    check_one(
+        fixtures,
+        "plugin_notice_effect_denied",
+        &PluginNotice {
+            plugin_id: "org.norte.rename-log".into(),
+            kind: "effect-denied".into(),
             text: None,
         },
     );
@@ -4351,7 +4364,9 @@ fn method_names_frozen() {
     // o con la que el daemon dice que apagó los hooks de un plugin. Solo a
     // humanos, como `connection.failed`; un cliente 0.68 la descarta.
     assert_eq!(methods::PLUGIN_NOTICE, "plugin.notice");
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.69.0");
+    // 0.70.0 (ADR 0101): ningún método nuevo — un valor más en el
+    // vocabulario de `PluginNotice::kind`, `effect-denied`.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.70.0");
 }
 
 /// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,

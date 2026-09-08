@@ -374,6 +374,11 @@ pub fn plugin_notice_line(
             "msg-plugin-hooks-disabled",
             &[("plugin", &id)],
         )),
+        ("effect-denied", _) => Some(norte_i18n::ta_in(
+            lang,
+            "msg-plugin-effect-denied",
+            &[("plugin", &id)],
+        )),
         // `notify`, y cualquier clase que este binario no conozca pero
         // traiga texto: el contrato del proto dice apoyarse en él.
         (_, Some(text)) => Some(norte_i18n::ta_in(

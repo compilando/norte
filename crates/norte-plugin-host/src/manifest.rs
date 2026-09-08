@@ -137,6 +137,35 @@ pub struct HookContrib {
     pub on: String,
 }
 
+/// Cuántos sidecars puede declarar un hook. Dieciséis es «varios ficheros
+/// de trabajo»; por encima es un plugin que quiere un directorio, y eso es
+/// otra capacidad.
+pub const SIDECAR_MAX_NAMES: usize = 16;
+
+/// Tope de bytes del nombre de un sidecar: `NAME_MAX` en los sistemas de
+/// ficheros corrientes.
+const SIDECAR_NAME_MAX_BYTES: usize = 255;
+
+/// `true` si `name` es UN nombre de fichero que el host aceptará escribir
+/// junto a un evento: no vacío, cabe en `NAME_MAX`, ni `.` ni `..`, sin
+/// separadores de ruta ni controles.
+///
+/// ```
+/// use norte_plugin_host::is_valid_sidecar_name;
+/// assert!(is_valid_sidecar_name(".norte-renames.log"));
+/// assert!(!is_valid_sidecar_name("a/b"));
+/// assert!(!is_valid_sidecar_name(".."));
+/// ```
+#[must_use]
+pub fn is_valid_sidecar_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= SIDECAR_NAME_MAX_BYTES
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', '\0'])
+        && !name.chars().any(char::is_control)
+}
+
 /// El vocabulario CERRADO de `[[contributions.hook]].on` (ADR 0100): las
 /// operaciones del journal, en pasado, porque un hook solo ve lo que ya
 /// quedó registrado. No hay `before-*` — eso sería policy, no un plugin.
@@ -676,6 +705,26 @@ pub enum ManifestError {
         "un `hook` no puede declarar `net`: recibe la ruta de cada mutación, y con red eso es un canal de salida (ADR 0100)"
     )]
     HookWithNet,
+    /// `fs-write = "scoped"` (o cualquier cadena): un valor RESERVADO que
+    /// ninguna puerta del host honraba y que desde ADR 0088 se rechaza en vez
+    /// de aprobarse en vano. Lo que existe es `fs-write = { sidecar = [...] }`
+    /// (ADR 0101).
+    #[error(
+        "`fs-write = \"{0}\"` no existe: la escritura de un plugin es `fs-write = {{ sidecar = [\"nombre\"] }}`, y solo para un `hook` (ADR 0101)"
+    )]
+    FsWriteReserved(String),
+    /// `fs-write = { sidecar = [...] }` en un plugin que no es `hook`: solo un
+    /// hook tiene un evento junto al que escribir, así que en otra categoría
+    /// sería una capacidad aprobada que nadie usa (ADR 0088).
+    #[error("`fs-write` con sidecars solo lo puede declarar un `hook` (ADR 0101)")]
+    SidecarNotForCategory,
+    /// Un nombre de sidecar que no es UN nombre de fichero: vacío, `.`/`..`,
+    /// con separador o con controles; o repetido; o más de
+    /// [`SIDECAR_MAX_NAMES`] nombres. Lleva el valor para que sea accionable.
+    #[error(
+        "nombre de sidecar inválido `{0}`: un segmento, sin `/` ni controles, ni `.`/`..`, ni repetido, como mucho {SIDECAR_MAX_NAMES}"
+    )]
+    SidecarName(String),
     /// `capabilities.ai` declarada cuando NADA la honra: no hay interfaz WIT
     /// de IA ni sitio en el host que la linke. Se parseaba, entraba en el
     /// digest y pintaba insignia, así que un humano aprobaba «acceso a IA» y
@@ -932,6 +981,29 @@ impl Manifest {
         }
         if raw.plugin.category == Category::Hook && raw.capabilities.net.is_some() {
             return Err(ManifestError::HookWithNet);
+        }
+        // `fs-write` (ADR 0101): solo sidecars, solo en hooks, nombres de
+        // verdad. Un `"scoped"` heredado se rechaza con lo que hay que poner.
+        match &raw.capabilities.fs_write {
+            crate::capability::FsWriteCap::None => {}
+            crate::capability::FsWriteCap::Reserved(s) => {
+                return Err(ManifestError::FsWriteReserved(s.clone()));
+            }
+            crate::capability::FsWriteCap::Sidecar { sidecar } => {
+                if raw.plugin.category != Category::Hook {
+                    return Err(ManifestError::SidecarNotForCategory);
+                }
+                if sidecar.is_empty() || sidecar.len() > SIDECAR_MAX_NAMES {
+                    return Err(ManifestError::SidecarName(
+                        sidecar.first().cloned().unwrap_or_default(),
+                    ));
+                }
+                for (i, n) in sidecar.iter().enumerate() {
+                    if !is_valid_sidecar_name(n) || sidecar[..i].contains(n) {
+                        return Err(ManifestError::SidecarName(n.clone()));
+                    }
+                }
+            }
         }
         // `ai`: una promesa que nadie cumple.
         // Se mira la PRESENCIA, no el valor: cualquier modo sería igual de

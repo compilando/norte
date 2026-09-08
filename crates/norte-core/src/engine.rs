@@ -12,6 +12,7 @@ use norte_vfs::{EntryStream, Provider};
 
 use crate::observer::{MutationObserver, NoopObserver};
 use crate::ops;
+use crate::ops::OnExists;
 use crate::scheduler::{Priority, Scheduler, TaskHandle};
 use crate::sessions::SessionPool;
 
@@ -235,6 +236,16 @@ impl PolicyChecker {
             Decision::Deny(reason) => {
                 tracing::info!(?reason, op = op.kind(), "policy denegó la operación");
                 Err(denied(reason))
+            }
+            // Un plugin corre sin nadie delante (ADR 0101): una regla `ask`
+            // sobre él es un `deny` con su motivo, no un modal que nadie mira
+            // y que vence por TTL igual.
+            Decision::Ask if matches!(actor, crate::journal::Actor::Plugin { .. }) => {
+                tracing::info!(
+                    op = op.kind(),
+                    "policy pide confirmación a un plugin: denegado"
+                );
+                Err(denied(DenyReason::NotApproved))
             }
             Decision::Ask => {
                 let req = crate::approval::ApprovalRequest {
@@ -3561,6 +3572,57 @@ impl Engine {
             Box::new(move |ctx| {
                 Box::pin(async move {
                     ops::create_task(provider, path, dest_anchor, observer, &ctx).await
+                })
+            }),
+        ))
+    }
+
+    /// Escribe un fichero con contenido desde memoria como Task (ADR 0101):
+    /// el sidecar de un hook. Gateado PRE-efecto por
+    /// [`crate::policy::PolicyOp::Create`] y, si `on_exists` es
+    /// [`OnExists::Replace`], también por `Delete{Trash}`: reemplazar es
+    /// enterrar lo que había y crear, dos permisos.
+    ///
+    /// # Errors
+    /// [`Error::InvalidPath`] si `content` supera
+    /// [`norte_plugin_host::MAX_SIDECAR_BYTES`]; [`Error::JournalUnavailable`]
+    /// si el journal no se puede abrir (#178); [`Error::PolicyDenied`] si la
+    /// policy deniega; [`Error::Unsupported`] sin provider para el scheme.
+    #[tracing::instrument(skip(self, actor, content), fields(path = %span_path(path)))]
+    pub async fn write_file_as(
+        &self,
+        path: &VPath,
+        content: Vec<u8>,
+        on_exists: OnExists,
+        actor: crate::journal::Actor,
+    ) -> Result<TaskHandle, Error> {
+        if content.len() > norte_plugin_host::MAX_SIDECAR_BYTES {
+            return Err(Error::InvalidPath);
+        }
+        self.gate(&actor, crate::policy::PolicyOp::Create, &[path])
+            .await?;
+        if on_exists == OnExists::Replace {
+            self.gate(
+                &actor,
+                crate::policy::PolicyOp::Delete {
+                    mode: norte_proto::DeleteMode::Trash,
+                },
+                &[path],
+            )
+            .await?;
+        }
+        let provider = self.provider_for(path).await?;
+        let observer = Arc::clone(&self.observer);
+        let path = path.clone();
+        let key = path.scheme().to_owned();
+        Ok(self.sched.submit(
+            &key,
+            TaskKind::Create,
+            Priority::Normal,
+            actor,
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    ops::write_task(provider, path, content, on_exists, observer, &ctx).await
                 })
             }),
         ))

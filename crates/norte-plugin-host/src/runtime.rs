@@ -1332,6 +1332,15 @@ pub use crate::bindings::hook_world::exports::norte::hook::hook as hook_iface;
 /// rechaza ENTERO, fail-closed.
 pub const MAX_HOOK_EFFECTS: usize = 64;
 
+/// Tope de bytes del contenido de UN sidecar (ADR 0101). Un log o un índice
+/// pequeño cabe; por encima de esto lo que se escribe es un fichero de datos,
+/// y un hook no es un provider.
+pub const MAX_SIDECAR_BYTES: usize = 64 * 1024;
+
+/// Tope de sidecars por llamada. Una llamada trae eventos de a lo sumo unos
+/// pocos directorios; cuatro ficheros de trabajo por tanda es generoso.
+pub const MAX_SIDECAR_EFFECTS: usize = 4;
+
 /// Un guest `hook` instanciado (world `norte-hook`).
 pub struct HookInstance {
     store: Store<HostState>,
@@ -1394,12 +1403,29 @@ impl HookInstance {
                 cap: MAX_HOOK_EFFECTS,
             });
         }
-        let total: usize = effects
-            .iter()
-            .map(|e| match e {
-                hook_iface::Effect::Notify(s) => s.len(),
-            })
-            .sum();
+        let mut sidecars = 0usize;
+        let mut total = 0usize;
+        for e in &effects {
+            match e {
+                hook_iface::Effect::Notify(s) => total += s.len(),
+                hook_iface::Effect::WriteSidecar(sc) => {
+                    sidecars += 1;
+                    if sc.content.len() > MAX_SIDECAR_BYTES {
+                        return Err(RuntimeError::ReturnTooLarge {
+                            len: sc.content.len(),
+                            cap: MAX_SIDECAR_BYTES,
+                        });
+                    }
+                    total += sc.name.len() + sc.content.len();
+                }
+            }
+        }
+        if sidecars > MAX_SIDECAR_EFFECTS {
+            return Err(RuntimeError::ReturnTooLarge {
+                len: sidecars,
+                cap: MAX_SIDECAR_EFFECTS,
+            });
+        }
         cap_total_bytes(total)?;
         Ok(Ok(effects))
     }
