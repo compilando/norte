@@ -1593,7 +1593,10 @@ struct ArchiveAccum {
 ///
 /// # Errors
 /// [`ConfigError::Toml`] if `font_size` is outside `[8.0, 32.0]`.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fusión campo a campo de las fuentes de la UI"
+)]
 fn merge_ui_fonts(
     ui_font: &mut Option<String>,
     ui_mono_font: &mut Option<String>,
@@ -2072,7 +2075,10 @@ fn merge_profile_section(
 // escondería justo eso, y cambiaría un lint por otro
 // (`too_many_arguments`). Lo que sí se ha sacado son las decisiones con
 // nombre propio: `parse_layer`, `merge_quick_search` y los `merge_*_layer`.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "una pasada por capa; lo que tiene nombre propio ya está fuera"
+)]
 pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut preset: Option<String> = None;
     let mut ui_lang: Option<String> = None;

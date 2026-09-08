@@ -3701,7 +3701,10 @@ mod label_wire {
     // `ref_option` (pedantic) wants `Option<&T>` here, but serde's `with =`
     // codegen calls this with `&self.label` — the field's actual type,
     // `&Option<Vec<u8>>` — not something this function gets to choose.
-    #[allow(clippy::ref_option)]
+    #[expect(
+        clippy::ref_option,
+        reason = "serde `with` fija la firma `&Option<Vec<u8>>`"
+    )]
     pub(super) fn serialize<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
         match v {
             Some(bytes) => s.serialize_str(&encode_bytes_b64(bytes)),

@@ -637,7 +637,10 @@ async fn drop_del_stream_durante_el_descarte_corta_el_hilo() {
         x ^= x << 13;
         x ^= x >> 7;
         x ^= x << 17;
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "xorshift: se quiere el byte bajo"
+        )]
         {
             *b = x as u8;
         }

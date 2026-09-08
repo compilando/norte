@@ -323,8 +323,7 @@ async fn tar_passthrough_corto_es_corrupt_no_datos_cortos() {
     }
     #[async_trait::async_trait]
     impl norte_vfs::Provider for Truncating {
-        // La firma del trait es `-> &str`; literal correcto aquí.
-        #[allow(clippy::unnecessary_literal_bound)]
+        #[expect(clippy::unnecessary_literal_bound, reason = "firma del trait")]
         fn scheme(&self) -> &str {
             "mem"
         }

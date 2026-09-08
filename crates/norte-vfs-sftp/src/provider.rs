@@ -306,7 +306,10 @@ fn entry_from(
 
 #[async_trait]
 impl Provider for SftpProvider {
-    #[allow(clippy::unnecessary_literal_bound)]
+    #[expect(
+        clippy::unnecessary_literal_bound,
+        reason = "la firma del trait es `-> &str`"
+    )]
     fn scheme(&self) -> &str {
         "sftp"
     }

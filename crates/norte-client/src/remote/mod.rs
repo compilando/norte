@@ -2393,7 +2393,10 @@ fn map_column_values_result(
 /// externo se suelta, `Inner` se libera, el `Client` interno cierra la
 /// conexión, `recv()` devuelve `None` y la bomba SALE — sin ciclo de
 /// Arc ni reconexión eterna.
-#[allow(clippy::too_many_lines)] // tabla de despacho notif→destino + reconexión
+#[expect(
+    clippy::too_many_lines,
+    reason = "tabla de despacho notif→destino + reconexión"
+)]
 async fn pump_loop(
     weak: Weak<Inner>,
     mut notifications: mpsc::UnboundedReceiver<norte_proto::wire::Notification>,

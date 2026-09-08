@@ -263,7 +263,10 @@ fn golden_capabilities() {
 // La tabla CONGELADA de la taxonomía entera. Trocearla por longitud
 // escondería justo lo que `check_family` comprueba —cobertura 1:1 entre
 // fixture y variante—, así que aquí la longitud es la propiedad.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "una aserción por fixture y variante: la longitud es la propiedad"
+)]
 #[test]
 fn golden_error() {
     check_family(
@@ -476,7 +479,10 @@ fn golden_task_state() {
 // Una fixture por `TaskKind` que el core emite, con la SEMÁNTICA de progreso
 // de cada uno escrita al lado. Es una tabla: trocearla por longitud escondería
 // que la cobertura es una por clase.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "una aserción por clase de progreso: la longitud es la cobertura"
+)]
 #[test]
 fn golden_task_progress() {
     check_family(
@@ -2047,7 +2053,10 @@ fn check_methods_plugin_help(fixtures: &BTreeMap<String, Value>) {
 /// líneas de `check_methods_plugin_governance`.
 // Una lista LITERAL de casos golden: cada uno es una forma congelada del wire
 // con su porqué, y partirla en mitades arbitrarias solo escondería cuáles hay.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "cada fixture lleva su porqué; partir en mitades escondería cuáles hay"
+)]
 fn check_methods_plugin_info(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{
         PluginColumnInfo, PluginCommandInfo, PluginCommandKind, PluginInfo, PluginListResult,
@@ -3942,7 +3951,10 @@ fn rpc_codes_y_limites_congelados() {
 // Partirla en dos mitades arbitrarias escondería la mitad, y lo que hace útil
 // una lista congelada es verla entera — mismo criterio que la tabla de
 // `efecto_de` en la ventana.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "un nombre por método, congelados de una vez"
+)]
 fn method_names_frozen() {
     use norte_proto::methods;
     assert_eq!(methods::FS_LIST, "fs.list");

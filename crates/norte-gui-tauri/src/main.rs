@@ -36,7 +36,10 @@ impl UpdateSink for VentanaSink {
 
 // `tauri::State` va POR VALOR en un comando: es lo que el macro genera, y no
 // hay una versión por referencia. El lint no conoce esa restricción.
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "`tauri::command` exige `State` por valor"
+)]
 #[tauri::command]
 fn initial_snapshot(state: tauri::State<'_, AppState>) -> Result<BridgeEnvelope<UiUpdate>, String> {
     tracing::info!(ms = ARRANQUE.elapsed().as_millis(), "primera foto pedida");
@@ -106,7 +109,10 @@ async fn image_bytes(state: tauri::State<'_, AppState>) -> Result<tauri::ipc::Re
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "`tauri::command` exige `State` por valor"
+)]
 #[tauri::command]
 fn catalog(
     state: tauri::State<'_, AppState>,

@@ -243,7 +243,10 @@ impl ZipSmith {
         })
     }
 
-    #[allow(clippy::cast_possible_truncation)] // fixtures pequeñas por diseño
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "fixtures pequeñas por diseño"
+    )]
     fn build_end(self, end: &ZipEnd) -> Vec<u8> {
         let mut out = Vec::new();
         let mut central = Vec::new();
@@ -334,7 +337,10 @@ struct ZipWire<'a> {
 }
 
 impl ZipEntry {
-    #[allow(clippy::cast_possible_truncation)] // fixtures pequeñas por diseño
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "fixtures pequeñas por diseño"
+    )]
     fn wire(&self) -> ZipWire<'_> {
         match self {
             ZipEntry::File {
@@ -401,7 +407,10 @@ impl ZipEntry {
 
 /// Emite el final del zip: EOCD clásico o cadena EOCD64 + locator + EOCD
 /// con marcadores (#59). El comentario lo escribe el caller a continuación.
-#[allow(clippy::cast_possible_truncation)] // fixtures pequeñas por diseño
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "fixtures pequeñas por diseño"
+)]
 fn emit_zip_end(out: &mut Vec<u8>, end: &ZipEnd, real_count: u16, cd_offset: u64, cd_size: u64) {
     match end {
         ZipEnd::Classic { claimed } => {

@@ -630,7 +630,7 @@ fn aviso(frase: &str) {
     let _ = writeln!(std::io::stderr(), "aviso: {frase}");
 }
 
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines, reason = "un brazo por subcomando")]
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // Tracing con el cap de seguridad `suppaftp=info` (issue #43, regla 10):
     // sin esto un `RUST_LOG=trace` volcaría `PASS <password>` de suppaftp.
@@ -2195,7 +2195,7 @@ async fn make_backend(
 /// `Unsupported` a los dos métodos de registro, que es lo que el frontend
 /// necesita para degradar diciendo por qué.
 #[cfg(unix)]
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines, reason = "un brazo por subcomando del daemon")]
 async fn daemon_cmd(
     cmd: DaemonCmd,
     anillo: Option<norte_config::logring::LogRing>,
