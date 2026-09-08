@@ -71,3 +71,18 @@ pub mod renamer_world {
         },
     });
 }
+
+/// Bindings del world `norte-hook` (H1, ADR 0100). Mismo patrón que
+/// [`renamer_world`]: las tres interfaces importadas son las de los otros
+/// worlds, servidas por el mismo `HostState`.
+pub mod hook_world {
+    wasmtime::component::bindgen!({
+        world: "norte:hook/norte-hook",
+        path: "wit",
+        with: {
+            "norte:host/host-log": crate::bindings::norte::host::host_log,
+            "norte:host/host-config": crate::bindings::norte::host::host_config,
+            "norte:location/location": crate::bindings::columns_world::norte::location::location,
+        },
+    });
+}

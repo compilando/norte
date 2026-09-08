@@ -88,23 +88,26 @@ fn exec_distinto_de_none_se_rechaza() {
 /// nombra los hooks entre las interfaces que WIT debe cubrir, así que quitarla
 /// alejaría el código de la especificación en vez de acercarlo.
 #[test]
-fn un_hook_se_rechaza_porque_no_lo_ejecuta_nadie() {
-    // Por categoría primaria.
-    let por_categoria = r#"
+fn un_hook_escucha_eventos_del_vocabulario_cerrado() {
+    // Un evento fuera del vocabulario se rechaza CON el valor: `before-*` no
+    // existe a propósito (ADR 0100), y el error lo dice.
+    let desconocido = r#"
         [plugin]
         id = "org.demo.hooker"
         name = "Hooker"
         publisher = "demo"
         version = "0.1.0"
         category = "hook"
+        [[contributions.hook]]
+        on = "before-copy"
     "#;
     assert!(matches!(
-        Manifest::from_toml(por_categoria),
-        Err(ManifestError::HookNotImplemented)
+        Manifest::from_toml(desconocido),
+        Err(ManifestError::HookUnknownEvent(ref e)) if e == "before-copy"
     ));
 
-    // Y por contribución, aunque la categoría primaria sea otra: es la
-    // declaración la que promete algo, no el campo que la clasifica.
+    // También como contribución de un plugin de otra categoría: es la
+    // declaración la que se valida, no el campo que clasifica.
     let por_contribucion = r#"
         [plugin]
         id = "org.demo.sneaky"
@@ -113,24 +116,45 @@ fn un_hook_se_rechaza_porque_no_lo_ejecuta_nadie() {
         version = "0.1.0"
         category = "command"
         [[contributions.hook]]
-        on = "before-copy"
+        on = "after-copy"
     "#;
     assert!(matches!(
         Manifest::from_toml(por_contribucion),
-        Err(ManifestError::HookNotImplemented)
+        Err(ManifestError::HookUnknownEvent(_))
     ));
 
-    // El mismo manifiesto sin el hook entra sin problema: lo que se rechaza es
-    // la promesa vacía, no el plugin.
-    let sin_hook = r#"
+    // Un hook que no escucha nada es inerte, y se dice.
+    let sin_eventos = r#"
         [plugin]
-        id = "org.demo.sneaky"
-        name = "Sneaky"
+        id = "org.demo.mudo"
+        name = "Mudo"
         publisher = "demo"
         version = "0.1.0"
-        category = "command"
+        category = "hook"
     "#;
-    assert!(Manifest::from_toml(sin_hook).is_ok());
+    assert!(matches!(
+        Manifest::from_toml(sin_eventos),
+        Err(ManifestError::HookWithoutEvents)
+    ));
+
+    // Y con los cinco eventos que existen, entra; el vocabulario del código
+    // es el que la constante publica.
+    for on in norte_plugin_host::HOOK_EVENTS {
+        let bueno = format!(
+            r#"
+            [plugin]
+            id = "org.demo.oyente"
+            name = "Oyente"
+            publisher = "demo"
+            version = "0.1.0"
+            category = "hook"
+            [[contributions.hook]]
+            on = "{on}"
+        "#
+        );
+        let m = Manifest::from_toml(&bueno).unwrap_or_else(|e| panic!("{on}: {e}"));
+        assert_eq!(m.contributions.hook[0].on, *on);
+    }
 }
 
 #[test]

@@ -626,6 +626,30 @@ impl PluginRuntime {
         })
     }
 
+    /// Instancia un guest HOOK (world `norte-hook`, ADR 0100) con el MISMO
+    /// sandbox y límites que [`Self::instantiate_renamer_with_location`], y
+    /// el mismo resolutor de ubicación. Devuelve una [`HookInstance`].
+    ///
+    /// # Errors
+    /// Igual que [`Self::instantiate`].
+    pub fn instantiate_hook_with_location(
+        &self,
+        wasm_path: &Path,
+        caps: Capabilities,
+        location: Option<Arc<dyn LocationHost>>,
+    ) -> Result<HookInstance, RuntimeError> {
+        use crate::bindings::hook_world::NorteHook;
+        let (mut store, component, linker) = self.prepare(wasm_path, caps)?;
+        store.data_mut().location = location;
+        let bindings = NorteHook::instantiate(&mut store, &component, &linker)
+            .map_err(|e| RuntimeError::Instantiate(e.to_string()))?;
+        Ok(HookInstance {
+            store,
+            bindings,
+            epoch_deadline: self.epoch_deadline,
+        })
+    }
+
     /// Como [`Self::instantiate_provider`] pero desde los BYTES de un componente
     /// en memoria (ADR 0033: el guest FTP va EMBEBIDO en el binario de norte, ya
     /// que el target `wasm32-wasip2` puede faltar en el host de compilación).
@@ -1293,6 +1317,82 @@ impl RenamerInstance {
             .sum();
         cap_total_bytes(total)?;
         Ok(Ok(pares))
+    }
+}
+
+/// Los tipos que la interfaz `hook` (paquete `norte:hook`, ADR 0100) pone en
+/// el cable: [`hook_iface::Event`], [`hook_iface::Effect`],
+/// [`hook_iface::Op`], [`hook_iface::ActorKind`] y
+/// [`hook_iface::LocationRef`].
+pub use crate::bindings::hook_world::exports::norte::hook::hook as hook_iface;
+
+/// Tope de efectos que un hook puede devolver por llamada. Un hook recibe a
+/// lo sumo unos cientos de eventos por llamada y un efecto es una frase para
+/// el humano: por encima de esto no es un aviso, es un canal de spam, y se
+/// rechaza ENTERO, fail-closed.
+pub const MAX_HOOK_EFFECTS: usize = 64;
+
+/// Un guest `hook` instanciado (world `norte-hook`).
+pub struct HookInstance {
+    store: Store<HostState>,
+    bindings: crate::bindings::hook_world::NorteHook,
+    /// Los ticks de época de CADA llamada. Ver [`PluginInstance::rearm`].
+    epoch_deadline: u64,
+}
+
+impl std::fmt::Debug for HookInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HookInstance").finish_non_exhaustive()
+    }
+}
+
+impl HookInstance {
+    fn rearm(&mut self) {
+        self.store.set_epoch_deadline(self.epoch_deadline);
+    }
+
+    /// Los valores VALIDADOS de `[config]` que el guest verá. Llamar ANTES
+    /// de `on_events`.
+    pub fn set_settings(&mut self, settings: BTreeMap<String, String>) {
+        self.store.data_mut().settings = settings;
+    }
+
+    /// Le entrega al guest los eventos desde la última llamada. `Ok(Err(frase))`
+    /// es el guest rehusando con una frase para el registro; los topes se
+    /// aplican POST-retorno y rechazan entero.
+    ///
+    /// # Errors
+    /// - [`RuntimeError::Trap`] si el guest atrapa (incluido el deadline de
+    ///   época).
+    /// - [`RuntimeError::ReturnTooLarge`] si devuelve más efectos que
+    ///   [`MAX_HOOK_EFFECTS`] o más bytes que el tope de retorno.
+    pub fn on_events(
+        &mut self,
+        events: &[hook_iface::Event],
+    ) -> Result<Result<Vec<hook_iface::Effect>, String>, RuntimeError> {
+        self.rearm();
+        let out = self
+            .bindings
+            .norte_hook_hook()
+            .call_on_events(&mut self.store, events)
+            .map_err(|e| map_call_error(&e))?;
+        let Ok(effects) = out else {
+            return Ok(out);
+        };
+        if effects.len() > MAX_HOOK_EFFECTS {
+            return Err(RuntimeError::ReturnTooLarge {
+                len: effects.len(),
+                cap: MAX_HOOK_EFFECTS,
+            });
+        }
+        let total: usize = effects
+            .iter()
+            .map(|e| match e {
+                hook_iface::Effect::Notify(s) => s.len(),
+            })
+            .sum();
+        cap_total_bytes(total)?;
+        Ok(Ok(effects))
     }
 }
 

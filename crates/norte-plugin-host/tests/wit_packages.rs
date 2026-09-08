@@ -88,7 +88,12 @@ fn las_puertas_del_host_estan_en_su_paquete() {
 /// fallo aparece como un `bindgen!` roto, lejos del WIT que lo causó.
 #[test]
 fn las_referencias_cruzadas_llevan_version() {
-    for fichero in ["norte-plugin.wit", "deps/provider/provider.wit"] {
+    for fichero in [
+        "norte-plugin.wit",
+        "deps/provider/provider.wit",
+        "deps/renamer/renamer.wit",
+        "deps/hook/hook.wit",
+    ] {
         let src = leer(fichero);
         for (i, linea) in src.lines().enumerate() {
             let l = linea.trim();
@@ -117,6 +122,7 @@ fn served_wit_matches_the_package_files() {
         "deps/provider/provider.wit",
         "deps/location/location.wit",
         "deps/renamer/renamer.wit",
+        "deps/hook/hook.wit",
     ] {
         let src = leer(fichero);
         let linea = src

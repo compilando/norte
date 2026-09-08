@@ -146,8 +146,8 @@ fn reemplazar_retira_el_consentimiento() {
 #[test]
 fn un_manifiesto_invalido_no_deja_rastro() {
     let cfg = tempfile::tempdir().expect("tempdir");
-    // `category = "hook"` es rechazado desde A2 — sirve de manifiesto inválido
-    // real en vez de un TOML roto, que probaría otra cosa.
+    // Un hook sin eventos se rechaza (ADR 0100) — sirve de manifiesto
+    // inválido real en vez de un TOML roto, que probaría otra cosa.
     let malo = MANIFEST.replace(r#"category = "previewer""#, r#"category = "hook""#);
     let src = origen(cfg.path(), &malo, b"\0asm");
 

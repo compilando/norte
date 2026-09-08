@@ -22,12 +22,11 @@ pub enum Category {
     Command,
     /// Columnas custom en el listado.
     Columns,
-    /// Hooks before/after de operaciones. **Declararlo se RECHAZA hoy**
-    /// ([`ManifestError::HookNotImplemented`]): no existe interfaz WIT `hook`,
-    /// ni world, ni sitio en el host desde el que llamarla, así que aceptarlo
-    /// instalaría un plugin inerte. La variante se conserva porque spec §7.1
-    /// nombra los hooks entre las interfaces que WIT debe cubrir — y porque su
-    /// `digest_tag` es parte del digest de aprobación, que no se reordena.
+    /// Observa las mutaciones que el journal ya registró (H1, ADR 0100,
+    /// interfaz WIT `hook` del paquete `norte:hook`, world `norte-hook`).
+    /// Solo `after-*`: un hook no veta ni muta, y su único efecto es una
+    /// frase para el humano. Los eventos que escucha van en
+    /// `[[contributions.hook]]`, del vocabulario [`HOOK_EVENTS`].
     Hook,
     /// Decora entradas visibles con un badge/rol tipo "git status" (ADR
     /// 0037 decisión 2, interfaz WIT `decorator`, world `norte-decorator`).
@@ -132,9 +131,26 @@ pub struct RenamerContrib {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HookContrib {
-    /// Evento (`before-copy`, `after-copy`, `after-delete`, …).
+    /// Evento, uno de [`HOOK_EVENTS`] (`after-renamed`, …). Cerrado y
+    /// validado al parsear: un valor que no esté es
+    /// [`ManifestError::HookUnknownEvent`], como una capability desconocida.
     pub on: String,
 }
+
+/// El vocabulario CERRADO de `[[contributions.hook]].on` (ADR 0100): las
+/// operaciones del journal, en pasado, porque un hook solo ve lo que ya
+/// quedó registrado. No hay `before-*` — eso sería policy, no un plugin.
+///
+/// Está aquí y no en el core porque las tres piezas que tienen que estar de
+/// acuerdo —quien lo valida (este crate), quien lo dispara (`norte-core`) y
+/// la guía— parten de una lista; sin ella cada una guarda su copia.
+pub const HOOK_EVENTS: &[&str] = &[
+    "after-created",
+    "after-removed",
+    "after-trashed",
+    "after-renamed",
+    "after-mode-changed",
+];
 
 /// Un decorator declarado (ADR 0037 decisión 2): marcador VACÍO — a
 /// diferencia de [`PreviewerContrib`]/[`ColumnContrib`], un decorator no
@@ -631,27 +647,27 @@ pub enum ManifestError {
         "`location-root-marker` sin `location = \"read\"`: declara la capacidad o quita el marcador"
     )]
     LocationMarkerWithoutCap,
-    /// Un hook declarado —como categoría primaria o como contribución— cuando
-    /// NADA lo ejecuta: no hay interfaz WIT `hook`, ni world, ni sitio en el
-    /// host que la llame. Aceptarlo instalaría algo inerte que el gestor
-    /// pintaría como un plugin normal, y su autor se enteraría porque nunca
-    /// pasa nada.
-    ///
-    /// La categoría [`Category::Hook`] NO se retira: spec §7.1 nombra los
-    /// hooks entre las interfaces que WIT debe cubrir, así que borrarla
-    /// alejaría el código de la especificación. Lo que se retira es la
-    /// pretensión de que declarar uno sirva de algo hoy.
+    /// `[[contributions.hook]].on` con un valor fuera de [`HOOK_EVENTS`]. El
+    /// vocabulario es cerrado a propósito: un `before-copy` que se aceptara
+    /// instalaría un hook que nunca dispara, y su autor se enteraría porque
+    /// nunca pasa nada. Lleva el valor para que el error sea accionable.
     #[error(
-        "los hooks aún no están implementados: no hay interfaz WIT que los ejecute, \
-         así que declarar uno instalaría un plugin inerte"
+        "evento de hook desconocido `{0}`: los que existen son after-created, after-removed, after-trashed, after-renamed y after-mode-changed"
     )]
-    HookNotImplemented,
+    HookUnknownEvent(String),
+    /// `category = "hook"` sin ningún `[[contributions.hook]]`: un plugin que
+    /// dice observar y no escucha nada es inerte, y el gestor lo pintaría
+    /// como uno normal.
+    #[error(
+        "`category = \"hook\"` sin ningún `[[contributions.hook]]`: declara qué eventos escucha"
+    )]
+    HookWithoutEvents,
     /// `capabilities.ai` declarada cuando NADA la honra: no hay interfaz WIT
     /// de IA ni sitio en el host que la linke. Se parseaba, entraba en el
     /// digest y pintaba insignia, así que un humano aprobaba «acceso a IA» y
-    /// concedía nada — la capability declarada que nadie honra (ADR 0088),
-    /// con la misma firma que los hooks y el mismo remedio: se rechaza al
-    /// parsear y el campo se queda porque spec §7.1 lo nombra.
+    /// concedía nada — la capability declarada que nadie honra (ADR 0088).
+    /// Se rechaza al parsear y el campo se queda porque spec §7.1 lo nombra;
+    /// los hooks tuvieron el mismo rechazo hasta ADR 0100.
     #[error(
         "la capability `ai` aún no está implementada: no hay interfaz WIT que la sirva, \
          así que declararla aprobaría un permiso que no concede nada"
@@ -882,17 +898,22 @@ impl Manifest {
         if !is_valid_plugin_id(&raw.plugin.id) {
             return Err(ManifestError::Id);
         }
-        // Hooks: declarados pero sin nadie que los ejecute. Se mira la
-        // categoría Y las contribuciones — es la DECLARACIÓN la que promete
-        // algo, no el campo que clasifica al plugin.
-        //
-        // DESPUÉS del id a propósito: un manifiesto cuyo id no es de fiar se
-        // rechaza por el id, que es lo accionable. Decirle a su autor que los
-        // hooks no están implementados le mandaría a arreglar lo otro.
-        if raw.plugin.category == Category::Hook || !raw.contributions.hook.is_empty() {
-            return Err(ManifestError::HookNotImplemented);
+        // Hooks (ADR 0100): cada evento del vocabulario cerrado, y un plugin
+        // que se declara hook escucha al menos uno. DESPUÉS del id a
+        // propósito: un manifiesto cuyo id no es de fiar se rechaza por el
+        // id, que es lo accionable.
+        if let Some(h) = raw
+            .contributions
+            .hook
+            .iter()
+            .find(|h| !HOOK_EVENTS.contains(&h.on.as_str()))
+        {
+            return Err(ManifestError::HookUnknownEvent(h.on.clone()));
         }
-        // `ai`: misma familia que los hooks — una promesa que nadie cumple.
+        if raw.plugin.category == Category::Hook && raw.contributions.hook.is_empty() {
+            return Err(ManifestError::HookWithoutEvents);
+        }
+        // `ai`: una promesa que nadie cumple.
         // Se mira la PRESENCIA, no el valor: cualquier modo sería igual de
         // inerte.
         if raw.capabilities.ai.is_some() {
