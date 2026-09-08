@@ -377,7 +377,10 @@ async fn undo_cancellation_is_clean() {
     }
     // Latencia por op → ventana determinista para cancelar antes de terminar.
     mem.faults()
-        .set_latency_per_op(Some(std::time::Duration::from_millis(40)));
+        // No se puede pausar el reloj aquí: el journal sqlx agota el pool
+        // (`PoolTimedOut`) cuando tokio adelanta el tiempo. Ventana ancha en
+        // su lugar: 200 ms por op frente a 15 ms de espera, 50x de margen.
+        .set_latency_per_op(Some(std::time::Duration::from_millis(200)));
 
     let (h, report) = engine.undo_session(Actor::User).await.expect("submit");
     tokio::time::sleep(std::time::Duration::from_millis(15)).await;

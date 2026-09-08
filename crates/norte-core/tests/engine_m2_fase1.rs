@@ -612,7 +612,9 @@ async fn move_follow_cross_provider_expande_y_borra_solo_el_link() {
 
 /// Cancelación durante una copia con Follow: limpia, sin cuelgue (regla 3
 /// aplica también al walk con expansión).
-#[tokio::test]
+// Reloj pausado: la latencia por op del MemProvider corre en el reloj de
+// tokio, así que «dormir y cancelar» deja de ser una carrera con la máquina.
+#[tokio::test(start_paused = true)]
 async fn follow_cancelacion_durante_walk_es_limpia() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
@@ -742,7 +744,9 @@ async fn follow_expande_con_nombres_hostiles_byte_exactos() {
 
 /// Cancelar DURANTE el backoff de un retry de mutación responde rápido
 /// (regla 3): jamás espera a agotar los reintentos.
-#[tokio::test]
+// Reloj pausado: la latencia por op del MemProvider corre en el reloj de
+// tokio, así que «dormir y cancelar» deja de ser una carrera con la máquina.
+#[tokio::test(start_paused = true)]
 async fn cancelacion_durante_backoff_de_mutacion_es_rapida() {
     let (engine, mem) = engine_with_mem();
     write_file(&mem, "mem:///victima", b"x").await;

@@ -125,7 +125,9 @@ async fn resume_no_reinicia_la_barra() {
 
 /// resume=Off (default): cancelar deja el destino LIMPIO — el contrato de
 /// M1 intacto, sin parcial que reanudar.
-#[tokio::test]
+// Reloj pausado: la latencia por op del MemProvider corre en el reloj de
+// tokio, así que «dormir y cancelar» deja de ser una carrera con la máquina.
+#[tokio::test(start_paused = true)]
 async fn sin_resume_cancelar_deja_limpio() {
     let (engine, mem) = engine_with_mem();
     let content: Vec<u8> = (0..50_000)
@@ -386,7 +388,9 @@ async fn resume_con_defaults_del_trait_degrada_limpio() {
 
 /// Regla 3: cancelar una copia con resume=On es limpio (keep durabiliza el
 /// parcial sin cuelgue) y la reanudación posterior completa.
-#[tokio::test]
+// Reloj pausado: la latencia por op del MemProvider corre en el reloj de
+// tokio, así que «dormir y cancelar» deja de ser una carrera con la máquina.
+#[tokio::test(start_paused = true)]
 async fn resume_cancelacion_es_limpia_y_reanuda() {
     let (engine, mem) = engine_with_mem();
     let content: Vec<u8> = (0..80_000)

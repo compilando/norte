@@ -1120,7 +1120,9 @@ async fn retry_gives_up_against_permanent_outage() {
     }
 }
 
-#[tokio::test]
+// Reloj pausado: la latencia por op del MemProvider corre en el reloj de
+// tokio, así que «dormir y cancelar» deja de ser una carrera con la máquina.
+#[tokio::test(start_paused = true)]
 async fn cancel_during_backoff_is_prompt() {
     let (engine, mem) = engine_with_mem();
     write_file(&mem, "mem:///src.bin", b"datos").await;
