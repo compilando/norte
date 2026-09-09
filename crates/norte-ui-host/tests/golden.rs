@@ -250,10 +250,6 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
                 delta: 3,
             },
         ),
-        (
-            "viewer_scroll",
-            UiAction::ViewerScroll { lines: 3, cols: -8 },
-        ),
         ("log_follow", UiAction::LogFollow),
         ("log_cycle_source", UiAction::LogCycleSource),
         (
@@ -453,6 +449,12 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("set_viewer_rows", UiAction::SetViewerRows { rows: 40 }),
+        // La rueda sobre el visor, con los dos ejes: un solo gesto los
+        // produce (`shift` va de lado).
+        (
+            "viewer_scroll",
+            UiAction::ViewerScroll { lines: 3, cols: -8 },
+        ),
         ("set_viewer_cols", UiAction::SetViewerCols { cols: 110 }),
         (
             "set_viewport",
