@@ -4,7 +4,7 @@ expression: text.clone()
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "                                                                                "
-"┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
+"┌/casa─────────────────────────────────┐┌/otro─────────────────────────────────┐"
 "│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
 "│  /docs                               ││   cosa                  1 B          │"
 "│  /src                                ││                                      │"
@@ -25,4 +25,4 @@ expression: text.clone()
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
-" ⟨file⟩/casa  2/5                                                               "
+" /casa  2/5                                                                     "

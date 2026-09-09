@@ -4,7 +4,7 @@ expression: render_80x24(&app)
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "                                                                                "
-"┌ Comparar — ⟨file⟩/casa ↔ ⟨file⟩/otro ────────────────────────────────────────┐"
+"┌ Comparar — /casa ↔ /otro ────────────────────────────────────────────────────┐"
 "│ izquierda                                derecha                             │"
 "│ probado.bin                  1.0 KiB =! probado.bin                  2.0 KiB │"
 "│ supuesto.bin                 1.0 KiB =~ supuesto.bin                 2.0 KiB │"
@@ -25,4 +25,4 @@ expression: render_80x24(&app)
 "│1+iguales 3 · 2+distintas 1 · 3+solo izq. 1 · 4+solo der. 1 · 5+problemas 2   │"
 "│tab lado · 1-5 filtro · ins marcar · s sinc · m espejo · enter ir · esc cerrar│"
 "└ comparación: 8 filas · actuando sobre: izquierdo ────────────────────────────┘"
-" ⟨file⟩/casa  2/5                                                               "
+" /casa  2/5                                                                     "

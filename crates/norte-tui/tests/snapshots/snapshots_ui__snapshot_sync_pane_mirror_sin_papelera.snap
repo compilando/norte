@@ -4,7 +4,7 @@ expression: render_80x24(&app)
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 " S  V  P  D  Á  R                                                               "
-"┌ sincronizar (espejo) — ⟨file⟩/casa → ⟨file⟩/otro ────────────────────────────┐"
+"┌ sincronizar (espejo) — /casa → /otro ────────────────────────────────────────┐"
 "│nada de esto lo puede deshacer norte                                          │"
 "│el destino no tiene papelera: lo que esto sustituya o borre no se guarda en   │"
 "│ningún sitio                                                                  │"
@@ -25,4 +25,4 @@ expression: render_80x24(&app)
 "│y confirmar · cualquier otra tecla cancela                                    │"
 "│                                                                              │"
 "└ 4 pasos · pulsa a para aprobar ──────────────────────────────────────────────┘"
-" ⟨file⟩/casa  2/5                                                               "
+" /casa  2/5                                                                     "

@@ -4,7 +4,7 @@ expression: render(&app)
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "                                                                                "
-"┌⟨file⟩/casa───────────────────────────┐┌⟨file⟩/otro───────────────────────────┐"
+"┌/casa─────────────────────────────────┐┌/otro─────────────────────────────────┐"
 "│Nombre▲               Tamaño     Fecha││Nombre▲               Tamaño     Fecha│"
 "│ ┌¿Ejecutar el init.lua del proyecto?───────────────────────────────────────┐ │"
 "│ │repo/.norte/init.lua (sha256 ab12cd34ef56ab78ab12cd34ef56ab78) se         │ │"
@@ -17,4 +17,4 @@ expression: render(&app)
 "│                                      ││                                      │"
 "│                                      ││                                      │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
-" ⟨file⟩/casa  2/5                                                               "
+" /casa  2/5                                                                     "

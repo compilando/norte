@@ -822,12 +822,24 @@ mod draw_pane_attr_tests {
             esperando.contains("alli"),
             "la cabecera no dice el destino: {esperando}"
         );
-        // El marcador de rol (`⟨scheme⟩/`) va delante SIEMPRE: es lo que impide
-        // que un directorio llamado «⠋ conectando…» se haga pasar por la
-        // cabecera de una espera.
+        // El marcador de rol va delante SIEMPRE, y es lo que impide que un
+        // directorio llamado «⠋ conectando…» se haga pasar por la cabecera de
+        // una espera. Para un esquema que no es el de siempre, ese marcador es
+        // `⟨scheme⟩`; para `file` es la `/` inicial, que un nombre no puede
+        // llevar. Los DOS se comprueban: la afirmación «⟨ va siempre» dejó de
+        // ser cierta el día que lo local dejó de anunciarse, y este test seguía
+        // verde porque solo probaba `mem`.
         assert!(
             esperando.contains('⟨'),
             "la cabecera perdió el marcador de esquema: {esperando}"
+        );
+        let local = VPath::parse("file:///alli").unwrap();
+        let mut busy_local = Busy::new(BusyKind::Connecting, Some(local), Some(0));
+        busy_local.elapsed = norte_frontend::busy::THRESHOLD;
+        let esperando_local = pintar(Some(&busy_local));
+        assert!(
+            esperando_local.contains("/alli"),
+            "lo local lleva su barra por delante: {esperando_local}"
         );
         assert!(
             esperando.contains(busy.frame()),

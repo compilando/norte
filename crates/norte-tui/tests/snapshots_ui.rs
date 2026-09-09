@@ -868,6 +868,54 @@ fn snapshot_modal_confirm_transfer_cjk() {
     insta::assert_snapshot!(render(&app));
 }
 
+/// **El modal de nombre editable, pintado.** No tenía ni una foto: se podía
+/// reordenar entero, romper el relleno del campo o dejar la caja corta con el
+/// gate en verde.
+///
+/// Tres cosas se leen aquí y en ningún test de unidad: que la etiqueta va
+/// ENCIMA del campo, que el fondo del campo llega al borde de la caja, y que
+/// el cuerpo cabe en el alto declarado.
+#[test]
+fn snapshot_modal_transfer_name() {
+    let mut app = app_base();
+    app.modal = Some(Modal::TransferName {
+        kind: TransferKind::Copy,
+        from: vp("file:///casa/Captura de pantalla_20260909_083914.png"),
+        to_dir: vp("file:///otro/test1"),
+        name: "Captura de pantalla_20260909_083914.png".to_owned(),
+        original: b"Captura de pantalla_20260909_083914.png".to_vec(),
+        touched: false,
+        from_marks: false,
+        enc: None,
+        error: None,
+        space: None,
+        confine: None,
+    });
+    insta::assert_snapshot!(render(&app));
+}
+
+/// Y con un nombre CJK más ancho que la caja: el recorte se DICE, el cursor
+/// sobrevive, y el relleno del campo no desborda con celdas dobles.
+#[test]
+fn snapshot_modal_transfer_name_cjk_largo() {
+    let mut app = app_base();
+    let largo = "日本語のファイル名".repeat(6);
+    app.modal = Some(Modal::TransferName {
+        kind: TransferKind::Move,
+        from: vp("file:///casa/x.txt"),
+        to_dir: vp("file:///otro"),
+        name: largo.clone(),
+        original: largo.into_bytes(),
+        touched: true,
+        from_marks: false,
+        enc: None,
+        error: None,
+        space: None,
+        confine: None,
+    });
+    insta::assert_snapshot!(render(&app));
+}
+
 #[test]
 fn snapshot_modal_papelera_y_permanente() {
     let mut app = app_base();

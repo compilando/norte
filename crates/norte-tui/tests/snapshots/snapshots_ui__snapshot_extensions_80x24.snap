@@ -4,7 +4,7 @@ expression: text.clone()
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "                                                                                "
-"┌⟨f┌ Extensiones ───────────────────────────────────────────────────────────┐──┐"
+"┌/c┌ Extensiones ───────────────────────────────────────────────────────────┐──┐"
 "│No│previewer                                                               │ha│"
 "│  │> Demo v1.0.0 [fs-read] ✓ ⚠ sin aprobar                                 │  │"
 "│  │                                                                        │  │"
@@ -25,4 +25,4 @@ expression: text.clone()
 "│  │                                                                        │  │"
 "│  └ [Enter] confirmar [y] aprobar [Esc] cancelar [e] activar ──────────────┘  │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
-" ⟨file⟩/casa  2/5                                                               "
+" /casa  2/5                                                                     "

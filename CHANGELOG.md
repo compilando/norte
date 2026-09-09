@@ -7,6 +7,51 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Changed
+
+- **A terminal modal can have a hierarchy now** (ADR 0103)**, and the copy
+  dialog is the first to use it.** A modal's body was ONE string painted as a flat
+  paragraph, so the editable field, the paths, the hint and the keys all came
+  out in the same colour and the same weight: the last thing you found was the
+  only thing you could touch. Each line now declares its ROLE — data, label or
+  hint, destination, field, warning, error — and the theme decides how it is
+  painted. A modal that declares nothing looks exactly as it did, so the 56 of
+  them migrate one at a time.
+  In `TransferName`: the destination stands out and the source dims, the label
+  sits ABOVE the field (it was below — you read the name and then found out
+  what it was), and the field is painted as a field, its background running to
+  the border. The source now shows the DIRECTORY instead of repeating the file
+  name, which appeared twice in a five-line body. Labels «From»/«To» replace
+  the arrow: `→` is legitimate inside a name and is not masked, so
+  `docs → /home/BURN` manufactured a line that reads as two paths — that is
+  the corpus's `arrow_join_spoof` fixture, and what the host already did in
+  `DialogView::destination`. A test finally ties the declared height to the
+  body that gets composed: the module's own rustdoc had warned from the start
+  that the two halves drift apart and the modal gets clipped, and nothing
+  checked it.
+  Two more things reviews caught. **A rename now names the file it renames**:
+  a rename opens with `to_dir = from.parent()`, so showing only the directory
+  made «From» and «To» identical and the name being changed vanished from the
+  screen the moment you typed — confirming a mutation whose operand is not
+  visible, which is what ADR 0070 forbids. And **`ConfirmTransfer` loses its
+  arrow too**: it marked its destination with `→` directly above a list of
+  somebody else's file names, and dropping `⟨file⟩` made that line cheaper to
+  forge — slash homoglyphs (U+2215, U+2044, U+FF0F) are legal on ext4, APFS
+  and NTFS, so `→ ∕srv∕publico` is a legal file name that renders a complete
+  destination line. What distinguishes it now is its ROLE, which a name cannot
+  write. Both spoofs are in the corpus.
+- **`tail_window` budgets in CELLS, not chars.** Fifty chars of CJK are a
+  hundred cells, so a Japanese name overflowed its box anyway and the overflow
+  ate the cursor at the end — you kept typing and the screen stopped changing.
+  It affected all six free-text fields; the first snapshot of the transfer
+  modal is what made it visible.
+- **`⟨file⟩` stops announcing itself on local paths.** It is the default case
+  — this machine, this disk — so its label distinguished nothing at all, and
+  it was painted on every path of every listing, header and modal, spending
+  eight columns exactly where room is scarce. What informs is the scheme that
+  is NOT the usual one: `sftp`, `s3`, `zip` and friends still say so, and a
+  `file` WITH an authority does too — that one is another machine.
+
 ### Added
 
 - **The viewer scrolls sideways** (`viewer.left`, `viewer.right`, bound to

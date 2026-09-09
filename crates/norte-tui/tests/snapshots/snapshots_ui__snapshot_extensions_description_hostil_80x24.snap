@@ -4,7 +4,7 @@ expression: text
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "                                                                                "
-"┌⟨f┌ Extensiones ───────────────────────────────────────────────────────────┐──┐"
+"┌/c┌ Extensiones ───────────────────────────────────────────────────────────┐──┐"
 "│No│previewer                                                               │ha│"
 "│  │> Demo v1.0.0 [fs-read] ✓                                               │  │"
 "│  │   abc�gpj.exe                                                          │  │"
@@ -25,4 +25,4 @@ expression: text
 "│  │                                                                        │  │"
 "│  └ [Enter] confirmar [y] aprobar [Esc] cancelar [e] activar ──────────────┘  │"
 "└──────────────────────────────────────┘└──────────────────────────────────────┘"
-" ⟨file⟩/casa  2/5                                                               "
+" /casa  2/5                                                                     "

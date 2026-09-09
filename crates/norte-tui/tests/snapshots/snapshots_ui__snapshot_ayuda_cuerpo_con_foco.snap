@@ -4,7 +4,7 @@ expression: text
 ---
 " Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                         "
 "  ┌ Ayuda ───────────────────────────────────────────────────────────────────┐  "
-"┌⟨│  Esto es norte             █ comprobable.                               ║│─┐"
+"┌/│  Esto es norte             █ comprobable.                               ║│─┐"
 "│N│  Dos paneles, un destino   █                                            ║│a│"
 "│ │  Pestañas en un panel      █ ⚠ Un lote se RECHAZA por encima de 4096    ║│ │"
 "│ │  Marcar sobre qué se actúa █   rutas en vez de recortarse. Una lista    ║│ │"
@@ -17,4 +17,4 @@ expression: text
 "│ │  Copiar, mover, renombrar …║   F6        mover la selección al otro pane█│ │"
 "│ │ [Tab] índice ↔ texto [PgDn] bajar [PgUp] subir [/] filtrar …     231/257 │ │"
 "└─└──────────────────────────────────────────────────────────────────────────┘─┘"
-" ⟨file⟩/casa  2/5                                                               "
+" /casa  2/5                                                                     "

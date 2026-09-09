@@ -120,6 +120,16 @@
     "why": "'a → mem_b.txt': contiene el joiner visual '→' (U+2192, legítimo, no enmascarable) — un nombre simula DOS rutas en cualquier UI que concatene con separador in-band; etiquetar fuera de banda (posición/estilo), jamás por joiner"
   },
   {
+    "id": "slash_homoglyph_row_spoof",
+    "hex": "e2869220e28895737276e288957075626c69636f",
+    "why": "'→ ∕srv∕publico': la mitad que le faltaba a arrow_join_spoof y arrow_leading_row_spoof. Aquellos falsifican el joiner y el papel de la fila; a este le añaden lo único que impedía falsificar una fila de RUTA entera — la barra. Un nombre no puede llevar '/' en ningún sistema soportado, y por eso las superficies que listan nombres y destinos juntos se apoyaban en eso; U+2215 DIVISION SLASH (y U+2044, U+FF0F) sí son legales en ext4, APFS y NTFS, no son peligro de terminal, display_name no los enmascara y no marcan. Desde que un esquema `file` no se anuncia, una ruta local se pinta '/srv/publico' sin ninguna otra marca, así que un solo fichero produce una línea de destino creíble encima de la lista que él mismo encabeza. Pinea que el papel de una línea de destino viva en un elemento —columna, estilo o etiqueta—, jamás en glifos que un nombre reproduce"
+  },
+  {
+    "id": "scheme_badge_name_spoof",
+    "hex": "e29fa873667470206e61732d3031e29fa9",
+    "why": "'⟨sftp nas-01⟩': un nombre que reproduce el MARCADOR DE ESQUEMA que path_display pone delante de una ruta. U+27E8 y U+27E9 son Ps/Pe imprimibles, no son is_terminal_hazard, display_name los deja crudos y devuelve hostile=false; son legales en ext4, APFS y NTFS (el reservado de Windows es '<' U+003C). Mientras lo local se anunciaba, la fila de este directorio empezaba por '⟨file⟩' y no engañaba a nadie; desde que no se anuncia, en una lista que mezcla esquemas —sidebar de sitios, popup de volúmenes, favoritos, pickers— esta fila y la raíz sftp de verdad se distinguen por un solo '/'. Pinea que anunciar o no un esquema es una decisión sobre AMBAS filas de la lista, no sobre una"
+  },
+  {
     "id": "cause_join_spoof",
     "hex": "696e666f726d65203ae2869220636f7069612e7478743a207065726d697373696f6e2064656e696564",
     "why": "'informe :→ copia.txt: permission denied': UN nombre que lleva LOS DOS joiners in-band de una fila de fallo de sincronizacion (sync.report) — el ' → ' que separa las dos ortografias y el ': ' que separa la causa (cli-sync-failure). Todo es imprimible corriente, asi que display_name_with no enmascara nada y el marcador '!' del CLI no salta: un solo fichero imprime una fila de fallo COMPLETA y fabricada despues de un Mirror destructivo. Legal en ext4 y APFS; el ':' no lo es en NTFS, y por eso es el lado ORIGEN el que tiene que poder producirlo. Pinea que la causa y la ortografia del destino se separen FUERA de banda (GUI: elementos hermanos; CLI: un marcador que un nombre no puede falsificar)"

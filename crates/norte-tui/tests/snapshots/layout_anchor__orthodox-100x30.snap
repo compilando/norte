@@ -4,7 +4,7 @@ expression: "lines.join(\"\\n\")"
 ---
  Archivo  Marcar  Paneles  Pestañas  Buscar  Ver  Ayuda                                             
  S  V  P  D  Á  R                                                                                   
-┌⟨file⟩/casa─────────────────────────────────────┐┌⟨file⟩/casa─────────────────────────────────────┐
+┌/casa───────────────────────────────────────────┐┌/casa───────────────────────────────────────────┐
 │Nombre▲                         Tamaño     Fecha││Nombre▲                         Tamaño     Fecha│
 │   f00                             1 B          ││   f00                             1 B          │
 │   f01                             1 B          ││   f01                             1 B          │
@@ -31,4 +31,4 @@ expression: "lines.join(\"\\n\")"
 │   f22                             1 B          ││   f22                             1 B          │
 │   f23                             1 B          ││   f23                             1 B          │
 └────────────────────────────────────────────────┘└────────────────────────────────────────────────┘
- ⟨file⟩/casa  1/60
+ /casa  1/60

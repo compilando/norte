@@ -854,12 +854,21 @@ fn el_modal_de_un_lote_pinta_una_ruta_por_linea_y_resume_el_resto() {
         painted.lines().any(|l| l.contains('…') && l.contains('4')),
         "falta el resumen de los que no caben: {painted}"
     );
-    // El destino, en su propia línea y con la flecha fuera de banda.
+    // El destino, en su propia línea y con la ETIQUETA fuera de banda. La
+    // flecha se retiró: `→` es legítimo en un nombre y no se enmascara, y con
+    // los homóglifos de barra (U+2215 y compañía, también legales) un fichero
+    // llamado `→ ∕srv∕publico` fabricaba esta línea entera encima de la lista
+    // de nombres. Lo que la distingue ahora es su PAPEL —se pinta con el rol
+    // del destino, no con el del cuerpo— y eso un nombre no lo escribe.
     assert!(
         painted
             .lines()
-            .any(|l| l.contains('→') && l.contains("/otro")),
+            .any(|l| l.contains(&norte_i18n::t("modal-transfer-to")) && l.contains("/otro")),
         "el destino va en su línea: {painted}"
+    );
+    assert!(
+        !painted.contains('→'),
+        "y ya no lleva una flecha que un nombre pueda imitar: {painted}"
     );
 }
 

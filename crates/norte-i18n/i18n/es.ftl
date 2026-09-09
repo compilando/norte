@@ -70,6 +70,11 @@ modal-new-file-hint = nombre del fichero nuevo
 modal-transfer-name-copy = Copiar a
 modal-transfer-name-move = Mover a
 modal-transfer-name-hint = nombre en el destino (edítalo para renombrar)
+# Las dos etiquetas van en su COLUMNA, jamás dentro del texto: un directorio
+# puede llamarse `docs → /casa/BORRAR`, y con la flecha in-band esa línea se
+# lee como dos rutas.
+modal-transfer-from = De
+modal-transfer-to = A
 # El destino tecleado: F5/F6 cuando no hay otro panel al que copiar (la
 # disposición `simple`). La dirección va en forma wire, la misma que acepta
 # `[[hotlist]]`, prellenada con la del propio panel.

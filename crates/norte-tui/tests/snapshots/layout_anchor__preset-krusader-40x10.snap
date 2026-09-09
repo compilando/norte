@@ -4,11 +4,11 @@ expression: "lines.join(\"\\n\")"
 ---
  Archivo  Marcar  Paneles  Pestañas     
  S  V  P  D  Á  R                       
-┌ Sitios ──────┐┌⟨file⟩/cas┐┌⟨file⟩/cas┐
+┌ Sitios ──────┐┌/casa─────┐┌/casa─────┐
 │▾ Unidades    ││Nombre▲   ││Nombre▲   │
 │▾ Favoritos   ││   f00    ││   f00    │
 │              ││   f01    ││   f01    │
 │              ││   f02    ││   f02    │
 │              ││   f03    ││   f03    │
 └──────────────┘└──────────┘└──────────┘
- ⟨file⟩/casa  1/60
+ /casa  1/60
