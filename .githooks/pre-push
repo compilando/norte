@@ -43,9 +43,32 @@ cd "$RAIZ" || exit 1
 # Así, reordenar commits o cambiar un mensaje no invalida nada, y cambiar un
 # byte de código sí. Correr `just ci` (o `ci-fast`) y empujar a continuación es
 # instantáneo; solo paga quien no lo corrió.
+# DOS sellos, y eso es lo que arregla un agujero que este hook tuvo: `just ci`
+# EXCLUYE la ventana (`--exclude norte-gui-tauri`), así que su sello no dice
+# nada de `gui-ci`. Con un solo sello, correr `just ci` y empujar un cambio de
+# la ventana salía por el atajo de arriba y se saltaba `gui-ci` en silencio —
+# exactamente lo que este hook existe para que no pase (ver la cabecera). Se
+# comprobó en dos pushes seguidos que tocaban `render/*.ts`.
 SELLO="$RAIZ/target/.norte-gate-ok"
+SELLO_GUI="$RAIZ/target/.norte-gui-gate-ok"
 HUELLA="$(git ls-files -z | xargs -0 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1)"
-if [[ -f "$SELLO" ]] && [[ "$(cat "$SELLO" 2>/dev/null)" == "$HUELLA" ]]; then
+
+sellado() {
+    [[ -f "$1" ]] && [[ "$(cat "$1" 2>/dev/null)" == "$HUELLA" ]]
+}
+
+# ¿El push toca la ventana, o algo que entra en ella? Es la misma lista que
+# `.github/workflows/gui.yml`, y por el mismo motivo: un cambio en
+# `norte-ui-host` puede romper la ventana mientras el gate portable sigue
+# verde.
+base="$(git rev-parse --verify -q origin/main 2>/dev/null || echo HEAD~1)"
+toca_ventana=0
+if git diff --name-only "$base"...HEAD 2>/dev/null | grep -qE \
+    '^(crates/norte-(gui-tauri|ui-host|client|frontend|proto)/|Cargo\.(toml|lock)$|justfile$)'; then
+    toca_ventana=1
+fi
+
+if sellado "$SELLO" && { [[ $toca_ventana -eq 0 ]] || sellado "$SELLO_GUI"; }; then
     echo "pre-push: el gate ya pasó sobre este contenido (${HUELLA:0:8})"
     exit 0
 fi
@@ -65,15 +88,9 @@ corre() {
 
 echo "pre-push:"
 fallo=0
-corre "ci-fast" just ci-fast || fallo=1
+sellado "$SELLO" || corre "ci-fast" just ci-fast || fallo=1
 
-# El gate de la ventana solo si el push la toca — o toca algo que entra en
-# ella. Es la misma lista que `.github/workflows/gui.yml`, y por el mismo
-# motivo: un cambio en `norte-ui-host` puede romper la ventana mientras el
-# gate portable sigue verde.
-base="$(git rev-parse --verify -q origin/main 2>/dev/null || echo HEAD~1)"
-if git diff --name-only "$base"...HEAD 2>/dev/null | grep -qE \
-    '^(crates/norte-(gui-tauri|ui-host|client|frontend|proto)/|Cargo\.(toml|lock)$|justfile$)'; then
+if [[ $toca_ventana -eq 1 ]] && ! sellado "$SELLO_GUI"; then
     corre "gui-ci" just gui-ci || fallo=1
 fi
 
@@ -85,6 +102,9 @@ if [[ $fallo -eq 0 ]]; then
     # comprobó.
     mkdir -p "$(dirname "$SELLO")" 2>/dev/null || true
     printf '%s\n' "$HUELLA" >"$SELLO" 2>/dev/null || true
+    if [[ $toca_ventana -eq 1 ]]; then
+        printf '%s\n' "$HUELLA" >"$SELLO_GUI" 2>/dev/null || true
+    fi
     exit 0
 fi
 

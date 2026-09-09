@@ -176,6 +176,9 @@ ci-fast: _disk lint test docs
 _sellar:
     @just _huella > target/.norte-gate-ok 2>/dev/null || true
 
+_sellar-gui:
+    @just _huella > target/.norte-gui-gate-ok 2>/dev/null || true
+
 # La huella del contenido seguido por git, tal como está en el disco.
 _huella:
     @git ls-files -z | xargs -0 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1
@@ -746,10 +749,16 @@ gui-lint-ui:
 
 # El gate de la ventana, entero. `gui-build` va ANTES de los tests de Rust porque
 # uno de ellos audita el bundle empaquetado (`el_bundle_no_llama_a_casa`).
+#
+# Sella APARTE (`_sellar-gui`), y eso no es simetría: `just ci` excluye
+# `norte-gui-tauri`, así que su sello no dice nada de esto. Con un solo sello,
+# el hook de pre-push salía por el atajo del gate portable y se saltaba este
+# gate en silencio sobre cambios de la ventana.
 gui-ci: gui-lint-ui gui-test-ui gui-build
     CARGO_INCREMENTAL=0 cargo clippy -p norte-gui-tauri --all-targets {{gui_features}} -- -D warnings
     CARGO_INCREMENTAL=0 cargo nextest run -p norte-gui-tauri {{gui_features}} --no-tests=pass
     CARGO_INCREMENTAL=0 cargo test -p norte-gui-tauri {{gui_features}} --doc
+    @just _sellar-gui
 
 # Arranca el renderer contra el daemon. Necesita un daemon vivo.
 gui-run *args: gui-build

@@ -59,9 +59,13 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
   }
   // La fila y la COLUMNA, en palabras: es lo que lee quien no ve las barras,
   // que son indicadores visuales y van `aria-hidden`.
-  marcas.push(`${String(viewer.first_line + 1)}/${String(Math.max(1, viewer.total_rows))}`);
+  marcas.push(
+    `${String(viewer.first_line + 1)}/${String(Math.max(1, viewer.total_rows))}`,
+  );
   if (viewer.first_col > 0) {
-    marcas.push(`${String(viewer.first_col + 1)}/${String(Math.max(1, viewer.total_cols))}`);
+    marcas.push(
+      `${String(viewer.first_col + 1)}/${String(Math.max(1, viewer.total_cols))}`,
+    );
   }
   meta.textContent = marcas.join(" · ");
   head.append(meta);
@@ -113,7 +117,12 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
     lienzo.append(vertical);
   }
   box.append(head, lienzo);
-  const horizontal = viewerBar(false, viewer.total_cols, viewer.first_col, this.viewerCols);
+  const horizontal = viewerBar(
+    false,
+    viewer.total_cols,
+    viewer.first_col,
+    this.viewerCols,
+  );
   if (horizontal !== null) {
     box.append(horizontal);
   }
